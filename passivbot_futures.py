@@ -207,7 +207,7 @@ class Bot:
             'origType': e['origType'],
             'time': int(e['time']),
             'updateTime': int(e['updateTime'])
-        } for e in open_orders]
+        } for e in open_orders if e['symbol'] == self.symbol]
 
         self.positions = {e['symbol']: {
             'symbol': e['symbol'],
