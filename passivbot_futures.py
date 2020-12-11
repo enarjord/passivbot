@@ -413,7 +413,7 @@ class Bot:
             self.ts_released['verify_orders'] = time()
             self.flush_stuck_locks()
             await self.create_exits()
-            if time() - self.ts_released['update_state'] > 15:
+            if time() - self.ts_released['update_state'] > 5:
                 await self.update_state()
             line = f"\r{self.symbol} "
             if self.symbol in self.positions:
