@@ -811,7 +811,7 @@ async def main() -> None:
     await start_bot()
 
 
-async def start_bot(n_tries=0) -> None:
+async def start_bot(n_tries: int = 0) -> None:
     user = sys.argv[1]
     settings = load_settings(user)
     max_n_tries = 10
