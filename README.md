@@ -32,4 +32,4 @@ make a copy of `settings/binance_futures/default.json`
 
 rename the copy `your_user_name.json` and make desired changes
 
-run in terminal: `python3.8 passivbot_futures.py your_user_name`
+run in terminal: `python3 passivbot_futures.py your_user_name`
