@@ -118,6 +118,7 @@ def load_settings(user: str = 'default') -> dict:
     except FileNotFoundError:
         print(f'settings for user {user} not found, using default settings')
         settings = json.load(open(f'{fpath}default.json'))
+    print('\nloaded settings:')
     pprint.pprint(settings)
     return settings
 
