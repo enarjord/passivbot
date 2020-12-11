@@ -39,6 +39,8 @@ overview
 
 the bot's purpose is to accumulate usdt
 
+it is intended to work with leverage of 75x and higher
+
 if long and price moves up or short and price moves down it will close entire position at given markup
 
 if long and price moves down or short and price moves up it will double down at liquidation price before position is liquidated
