@@ -41,11 +41,13 @@ the bot's purpose is to accumulate usdt
 
 it is intended to work with leverage of 75x and higher
 
+will make entries automatically, but will also work with user making manual entries
+
 if long and price moves up or short and price moves down it will close entire position at given markup
 
 if long and price moves down or short and price moves up it will double down at liquidation price before position is liquidated
 
-position size is doubled after each double down
+position size is doubled after each doubling down
 
 with initial entry amount of 0.001, size will be 0.002, 0.004, 0.008, 0.016 etc until either position is closed or no more funds are available
 
