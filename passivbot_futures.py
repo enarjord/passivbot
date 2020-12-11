@@ -811,7 +811,7 @@ async def main() -> None:
 
 
 async def start_bot(n_tries=0) -> None:
-    user = 'e_futures'
+    user = sys.argv[1]
     settings = load_settings(user)
     max_n_tries = 10
     try:
