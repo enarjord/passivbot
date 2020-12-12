@@ -264,7 +264,7 @@ class Bot:
                 'quantity': amount,
                 'price': price,
                 'timeInForce': 'GTC'})
-            print_(['\r created order', symbol, o['side'], o['origQty'], o['price']])
+            print_([' created order', symbol, o['side'], o['origQty'], o['price'], '\n'], r=True)
             await self.update_state()
         except Exception as e:
             if e.args:
@@ -287,7 +287,7 @@ class Bot:
                 'quantity': amount,
                 'price': price,
                 'timeInForce': 'GTC'})
-            print_(['\r created order', symbol, o['side'], o['origQty'], o['price']])
+            print_([' created order', symbol, o['side'], o['origQty'], o['price'], '\n'], r=True)
             await self.update_state()
         except Exception as e:
             if e.args:
@@ -312,7 +312,8 @@ class Bot:
         canceled_orders = await asyncio.gather(*deletions)
         for o in canceled_orders:
             try:
-                print_(['\rcanceled order', o['symbol'], o['side'], o['origQty'], o['price']])
+                print_(['canceled order', o['symbol'], o['side'], o['origQty'], o['price'], '\n'],
+                       r=True)
             except Exception as e:
                 print(e)
                 continue
@@ -429,7 +430,7 @@ class Bot:
             await self.create_exits()
             if time() - self.ts_released['update_state'] > 5:
                 await self.update_state()
-            line = f"\r{self.symbol} "
+            line = f"{self.symbol} "
             if self.symbol in self.positions:
                 if self.positions[self.symbol]['positionAmt'] > 0.0:
                     line += f"long {self.positions[self.symbol]['positionAmt']} @ "
@@ -442,7 +443,7 @@ class Bot:
                 line += f"bid {self.ema * self.bid_ema_multiplier:.{self.price_precision}f} "
                 line += f"ask {self.ema * self.ask_ema_multiplier:.{self.price_precision}f} "
             line += f'last {self.price:.{self.price_precision}f} '
-            sys.stdout.write(line)
+            print_([line], r=True)
         self.ts_released['decide'] = time()
 
     async def start_websocket(self) -> None:
