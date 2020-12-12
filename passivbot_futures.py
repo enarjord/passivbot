@@ -144,11 +144,13 @@ class Bot:
                                       'secret': ks[1]})
 
         self.ts_locked = {'create_bid': 0, 'create_ask': 0, 'cancel_all_open_orders': 0,
-                          'verify_orders': 0, 'decide': 0, 'update_state': 0}
+                          'verify_orders': 0, 'decide': 0, 'update_state': 0, 'order_taken': 0}
         self.ts_released = {k: 1 for k in self.ts_locked}
 
         self.positions = {}
         self.open_orders = []
+        self.highest_bid = 0.0
+        self.lowest_ask = 9.9e9
         self.ema = 0
         self.agg_id = 0
         self.price = 0
@@ -156,8 +158,8 @@ class Bot:
         self.ema_alpha_ = 1 - self.ema_alpha
         self.bid_ema_multiplier = 1 - self.flashcrash_factor
         self.ask_ema_multiplier = 1 + self.flashcrash_factor
-        self.bid_trigger_ema_multiplier = 1 - self.flashcrash_factor * 0.95
-        self.ask_trigger_ema_multiplier = 1 + self.flashcrash_factor * 0.95
+        self.bid_trigger_ema_multiplier = 1 - self.flashcrash_factor * 0.9
+        self.ask_trigger_ema_multiplier = 1 + self.flashcrash_factor * 0.9
 
         self.exit_price = 0.0
         self.double_down_price = 0.0
@@ -175,6 +177,42 @@ class Bot:
                 break
         await self.update_state()
 
+    async def update_open_orders(self) -> None:
+        open_orders = await self.cc.fapiPrivate_get_openorders()
+        self.open_orders = []
+        self.highest_bid, self.lowest_ask = 0.0, 9.9e9
+        for e in open_orders:
+            if e['symbol'] != self.symbol:
+                continue
+            self.open_orders.append({
+                'orderId': int(e['orderId']),
+                'symbol': e['symbol'],
+                'status': e['status'],
+                'clientOrderId': e['clientOrderId'],
+                'price': float(e['price']),
+                'avgPrice': float(e['avgPrice']),
+                'origQty': float(e['origQty']),
+                'executedQty': float(e['executedQty']),
+                'cumQuote': float(e['cumQuote']),
+                'timeInForce': e['timeInForce'],
+                'type': e['type'],
+                'reduceOnly': e['reduceOnly'],
+                'closePosition': e['closePosition'],
+                'side': e['side'],
+                'positionSide': e['positionSide'],
+                'stopPrice': float(e['stopPrice']),
+                'workingType': e['workingType'],
+                'priceProtect': e['priceProtect'],
+                'origType': e['origType'],
+                'time': int(e['time']),
+                'updateTime': int(e['updateTime'])
+            })
+            if self.open_orders[-1]['side'] == 'BUY':
+                self.highest_bid = max(self.highest_bid, self.open_orders[-1]['price'])
+            else:
+                self.lowest_ask = min(self.lowest_ask, self.open_orders[-1]['price'])
+
+
     async def update_state(self) -> None:
         if self.ts_locked['update_state'] > self.ts_released['update_state']:
             return
@@ -182,32 +220,8 @@ class Bot:
         positions, account, open_orders = await asyncio.gather(
             self.cc.fapiPrivate_get_positionrisk(),
             self.cc.fapiPrivate_get_account(),
-            self.cc.fapiPrivate_get_openorders()
+            self.update_open_orders()
         )
-
-        self.open_orders = [{
-            'orderId': int(e['orderId']),
-            'symbol': e['symbol'],
-            'status': e['status'],
-            'clientOrderId': e['clientOrderId'],
-            'price': float(e['price']),
-            'avgPrice': float(e['avgPrice']),
-            'origQty': float(e['origQty']),
-            'executedQty': float(e['executedQty']),
-            'cumQuote': float(e['cumQuote']),
-            'timeInForce': e['timeInForce'],
-            'type': e['type'],
-            'reduceOnly': e['reduceOnly'],
-            'closePosition': e['closePosition'],
-            'side': e['side'],
-            'positionSide': e['positionSide'],
-            'stopPrice': float(e['stopPrice']),
-            'workingType': e['workingType'],
-            'priceProtect': e['priceProtect'],
-            'origType': e['origType'],
-            'time': int(e['time']),
-            'updateTime': int(e['updateTime'])
-        } for e in open_orders if e['symbol'] == self.symbol]
 
         self.positions = {e['symbol']: {
             'symbol': e['symbol'],
@@ -250,7 +264,7 @@ class Bot:
                 'quantity': amount,
                 'price': price,
                 'timeInForce': 'GTC'})
-            print_([' created order', symbol, o['side'], o['origQty'], o['price']], n=True)
+            print_(['\r created order', symbol, o['side'], o['origQty'], o['price']])
             await self.update_state()
         except Exception as e:
             if e.args:
@@ -273,7 +287,7 @@ class Bot:
                 'quantity': amount,
                 'price': price,
                 'timeInForce': 'GTC'})
-            print_([' created order', symbol, o['side'], o['origQty'], o['price']], n=True)
+            print_(['\r created order', symbol, o['side'], o['origQty'], o['price']])
             await self.update_state()
         except Exception as e:
             if e.args:
@@ -286,20 +300,23 @@ class Bot:
         if self.ts_locked['cancel_all_open_orders'] > self.ts_released['cancel_all_open_orders']:
             return
         self.ts_locked['cancel_all_open_orders'] = time()
-        canceled_orders = []
-        canceled_ids = set()
+        deletions = []
         for oc in orders_to_cancel:
             try:
-                o = await self.cc.fapiPrivate_delete_order(params={
+                deletion = self.cc.fapiPrivate_delete_order(params={
                     'symbol': oc['symbol'], 'orderId': oc['orderId']
                 })
-                print_(['canceled order', o['symbol'], o['side'], o['origQty'], o['price']], n=True)
-                canceled_orders.append(o)
-                canceled_ids.add(oc['orderId'])
+                deletions.append(deletion)
             except Exception as e:
-                await self.update_state()
                 print(e)
-        self.open_orders = [o_ for o_ in self.open_orders if o_['orderId'] not in canceled_ids]
+        canceled_orders = await asyncio.gather(*deletions)
+        for o in canceled_orders:
+            try:
+                print_(['\rcanceled order', o['symbol'], o['side'], o['origQty'], o['price']])
+            except Exception as e:
+                print(e)
+                continue
+        await self.update_open_orders()
         self.ts_released['cancel_all_open_orders'] = time()
         return canceled_orders
 
@@ -366,35 +383,32 @@ class Bot:
         results = await asyncio.gather(*tasks)
         return results
 
+    def check_if_order_taken(self):
+        if self.price <= self.highest_bid:
+            self.ts_released['order_taken'] = time()
+            print('\nbid maybe taken')
+        elif self.price >= self.lowest_ask:
+            self.ts_released['order_taken'] = time()
+            print('\nask maybe taken')
+
     async def decide(self) -> None:
+        self.check_if_order_taken()
         if 0 < self.ts_locked['decide'] - self.ts_released['decide'] < 2:
             return
         self.ts_locked['decide'] = time()
-        if self.symbol in self.positions:
-            for o in self.open_orders:
-                if o['side'] == 'BUY':
-                    if self.price <= o['price']:
-                        print('\nbid maybe taken')
-                        await asyncio.sleep(0.1)
-                        await self.update_state()
-                        await self.create_exits()
-                        self.ts_released['decide'] = time()
-                        return
-                else:
-                    if self.price >= o['price']:
-                        print('\nask maybe taken')
-                        await asyncio.sleep(0.1)
-                        await self.update_state()
-                        await self.create_exits()
-                        self.ts_released['decide'] = time()
-                        return
-        else:
+        if time() - self.ts_released['order_taken'] < 2.0:
+            await asyncio.sleep(0.1)
+            await self.update_state()
+            await self.create_exits()
+            self.ts_released['decide'] = time()
+            return
+        elif self.symbol not in self.positions:
             if self.price <= self.ema * self.bid_trigger_ema_multiplier:
                 await self.create_bid(self.symbol,
                                       self.entry_amount,
                                       round_dn(self.ema * self.bid_ema_multiplier,
                                                self.price_precision))
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(0.25)
                 await self.update_state()
                 await self.create_exits()
                 self.ts_released['decide'] = time()
@@ -404,7 +418,7 @@ class Bot:
                                       self.entry_amount,
                                       round_up(self.ema * self.ask_ema_multiplier,
                                                self.price_precision))
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(0.25)
                 await self.update_state()
                 await self.create_exits()
                 self.ts_released['decide'] = time()
@@ -427,7 +441,7 @@ class Bot:
                 line += f'no pos '
                 line += f"bid {self.ema * self.bid_ema_multiplier:.{self.price_precision}f} "
                 line += f"ask {self.ema * self.ask_ema_multiplier:.{self.price_precision}f} "
-            line += f'ratio {self.ratio:.5f} last {self.price:.{self.price_precision}f} '
+            line += f'last {self.price:.{self.price_precision}f} '
             sys.stdout.write(line)
         self.ts_released['decide'] = time()
 
