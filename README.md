@@ -43,15 +43,15 @@ it is intended to work with leverage of 75x and higher
 
 will make entries automatically, but will also work with user making manual entries
 
-if long and price moves up or short and price moves down it will close entire position at given markup
+it can go both long and short, takeing profit at set static markup
 
-if long and price moves down or short and price moves up it will double down at liquidation price before position is liquidated
+if price moves up when short or down when long, it will double down on its position at liquidation price, thus pushing liquidation further away
+
+depending on initial entry amount and funds available in futures wallet, it can double down repeatedly until funds run out or position is closed
 
 position size is doubled after each doubling down
 
-with initial entry amount of 0.001, size will be 0.002, 0.004, 0.008, 0.016 etc until either position is closed or no more funds are available
-
-more specifically:
+more detailed:
 
 if there is no position, it will make small long entry if price / ema < (1 - flashcrash_factor) or small short entry if price / ema > (1 + flashcrash_factor)
 
@@ -59,4 +59,8 @@ if there is a long position, it will make a bid of amount equal to position size
 
 if there is a short position, it will make an ask of amount equal to position size and price equal to entry_price * (1 + (1 / leverage) / 2), which is liquidation price at given leverage, and a bid whose amount is equal to position size and price is entry_price * (1 - markup)
 
+a backtester and procedure to download historical trades are included
 
+feel free to make a donation to show support of the work
+
+XMR: 49gUQ1jasDK23tJTMCvP4mQUUwndeLWAwSgdCFn6ovmRKXZAjQnVp2JZ2K4UuDDdYMNam1HE8ELZoWdeJPRfYEa9QSEK6XZ
