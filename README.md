@@ -61,6 +61,8 @@ if there is a short position, it will make an ask of amount equal to position si
 
 a backtester and procedure to download historical trades are included
 
+------------------------------------------------------------------
+
 feel free to make a donation to show support of the work
 
 XMR: 49gUQ1jasDK23tJTMCvP4mQUUwndeLWAwSgdCFn6ovmRKXZAjQnVp2JZ2K4UuDDdYMNam1HE8ELZoWdeJPRfYEa9QSEK6XZ
