@@ -158,8 +158,8 @@ class Bot:
         self.ema_alpha_ = 1 - self.ema_alpha
         self.bid_ema_multiplier = 1 - self.flashcrash_factor
         self.ask_ema_multiplier = 1 + self.flashcrash_factor
-        self.bid_trigger_ema_multiplier = 1 - self.flashcrash_factor * 0.9
-        self.ask_trigger_ema_multiplier = 1 + self.flashcrash_factor * 0.9
+        self.bid_trigger_ema_multiplier = 1 - self.flashcrash_factor * 0.95
+        self.ask_trigger_ema_multiplier = 1 + self.flashcrash_factor * 0.95
 
         self.exit_price = 0.0
         self.double_down_price = 0.0
@@ -586,7 +586,7 @@ def backtest(adf: pd.DataFrame, settings: dict) -> ([dict], [dict], pd.DataFrame
     roe = markup * leverage
 
     enter_long = True
-    enter_shrt = False
+    enter_shrt = True
 
 
     max_n_double_downs = 20
