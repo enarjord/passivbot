@@ -41,7 +41,7 @@ the bot's purpose is to accumulate usdt
 
 it is intended to work with leverage of 75x and higher
 
-will make entries automatically, but will also work with user making manual entries
+will make entries automatically, but will also work with user making manual entries and adding to or removing from positions
 
 it can go both long and short, takeing profit at set static markup
 
