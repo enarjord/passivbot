@@ -93,12 +93,11 @@ def print_(args, r=False, n=False):
     str_args = '{} ' * len(args)
     line += str_args.format(*args)
     if n:
-        line = '\n' + line
-    if r:
-        sys.stdout.write('\r' + line + '   ')
+        print('\n' + line, end=' ')
+    elif r:
+        print('\r' + line, end=' ')
     else:
         print(line)
-    sys.stdout.flush()
     return line
 
 
@@ -264,7 +263,7 @@ class Bot:
                 'quantity': amount,
                 'price': price,
                 'timeInForce': 'GTC'})
-            print_([' created order', symbol, o['side'], o['origQty'], o['price'], '\n'], r=True)
+            print_([' created order', symbol, o['side'], o['origQty'], o['price']], n=True)
             await self.update_state()
         except Exception as e:
             if e.args:
@@ -278,7 +277,6 @@ class Bot:
             return
         self.ts_locked['create_ask'] = time()
         try:
-            print(self.account['available_shrt_balance'] * self.account['leverage'] / price)
             assert self.account['available_shrt_balance'] * self.account['leverage'] / price > amount
             o = await self.cc.fapiPrivate_post_order(params={
                 'symbol': symbol,
@@ -287,7 +285,7 @@ class Bot:
                 'quantity': amount,
                 'price': price,
                 'timeInForce': 'GTC'})
-            print_([' created order', symbol, o['side'], o['origQty'], o['price'], '\n'], r=True)
+            print_([' created order', symbol, o['side'], o['origQty'], o['price']], n=True)
             await self.update_state()
         except Exception as e:
             if e.args:
@@ -312,8 +310,7 @@ class Bot:
         canceled_orders = await asyncio.gather(*deletions)
         for o in canceled_orders:
             try:
-                print_(['canceled order', o['symbol'], o['side'], o['origQty'], o['price'], '\n'],
-                       r=True)
+                print_(['canceled order', o['symbol'], o['side'], o['origQty'], o['price']], n=True)
             except Exception as e:
                 print(e)
                 continue
@@ -503,15 +500,30 @@ class Bot:
 
     async def load_trades(self, symbol: str, n_days: float) -> pd.DataFrame:
         filepath = make_get_filepath(f'historical_data/agg_trades_futures/{symbol}/')
+        cache_filepath = make_get_filepath(f'historical_data/agg_trades_futures/{symbol}_cache/')
+        cache_filenames = [f for f in os.listdir(cache_filepath) if f.endswith('.csv')]
+        ids = set()
+        if cache_filenames:
+            print('loaded cached trades')
+            cached_trades = pd.concat([pd.read_csv(cache_filepath + f) for f in cache_filenames],
+                                      axis=0)
+            cached_trades = cached_trades.set_index('agg_id').sort_index()
+            cached_trades = cached_trades[~cached_trades.index.duplicated()]
+            ids.update(cached_trades.index)
+        else:
+            cached_trades = None
         age_limit = time() - 60 * 60 * 24 * n_days
         age_limit_millis = age_limit * 1000
         print('age_limit', ts_to_date(age_limit))
         chunk_iterator = self.iter_chunks(symbol)
         chunk = next(chunk_iterator)
         chunks = {} if chunk is None else {int(chunk.index[0]): chunk}
-        ids = set() if chunk is None else set(chunk.index)
+        if chunk is not None:
+            ids.update(chunk.index)
         min_id = min(ids) if ids else 0
         new_trades = await self.fetch_trades(symbol)
+        cached_ids = set()
+        k = 0
         while True:
             if new_trades[0]['timestamp'] <= age_limit_millis:
                 break
@@ -540,8 +552,15 @@ class Bot:
                     break
             from_id -= 999
             new_trades = await self.fetch_trades(symbol, from_id=from_id) + new_trades
+            k += 1
+            if k % 20 == 0:
+                print('dumping cache')
+                cache_df = pd.DataFrame([t for t in new_trades
+                                         if t['agg_id'] not in cached_ids]).set_index('agg_id')
+                cache_df.to_csv(cache_filepath + str(int(time() * 1000)) + '.csv')
+                cached_ids.update(cache_df.index)
         new_trades_df = pd.DataFrame(new_trades).set_index('agg_id')
-        trades_updated = pd.concat(list(chunks.values()) + [new_trades_df], axis=0)
+        trades_updated = pd.concat(list(chunks.values()) + [new_trades_df, cached_trades], axis=0)
         no_dup = trades_updated[~trades_updated.index.duplicated()]
         no_dup_sorted = no_dup.sort_index()
         chunk_size = 100000
@@ -550,6 +569,8 @@ class Bot:
             if g[0] not in chunks or len(chunks[g[0]]) != chunk_size:
                 print('dumping chunk', g[0])
                 g[1].to_csv(f'{filepath}{str(g[0])}.csv')
+        for f in [f_ for f_ in os.listdir(cache_filepath) if f_.endswith('.csv')]:
+            os.remove(cache_filepath + f)
         return no_dup_sorted[no_dup_sorted.timestamp >= age_limit_millis]
 
     async def fetch_my_trades(self, symbol: str) -> [dict]:
@@ -593,8 +614,6 @@ def backtest(adf: pd.DataFrame, settings: dict) -> ([dict], [dict], pd.DataFrame
     max_margin = 10000
 
     liq_multiplier = (1 / leverage) / 2
-    #reentry_markup = liq_multiplier / 2
-    reentry_markup = liq_multiplier * 2
     print('roe', roe)
     print('liq_multiplier', liq_multiplier)
     print('max n double downs', max_n_double_downs)
@@ -609,15 +628,19 @@ def backtest(adf: pd.DataFrame, settings: dict) -> ([dict], [dict], pd.DataFrame
     realized_pnl_sum = 0.0
     n_double_downs = 0
     initial_margin_max = 0
+    record_double_downs = 0
 
     trades = []
     logs = []
 
-    if 'ratio' not in adf.columns:
+    ema_name = 'ema_' + str(ema_span)
+    ratio_name = 'ratio_' + str(ema_span)
+    if ratio_name not in adf.columns:
+        print('calculating price / ema ratio...')
         ema = adf.price.ewm(span=ema_span, adjust=False).mean()
-        ema.name = 'ema'
+        ema.name = ema_name
         ratio = adf.price / ema
-        ratio.name = 'ratio'
+        ratio.name = ratio_name
         adf_ = adf.join(ema).join(ratio)
     else:
         adf_ = adf
@@ -627,37 +650,37 @@ def backtest(adf: pd.DataFrame, settings: dict) -> ([dict], [dict], pd.DataFrame
     for row in adf_.itertuples():
         if pos_amount == 0.0:
             # no position
-            if enter_shrt and row.ratio > thp:
+            if enter_shrt and getattr(row, ratio_name) > thp:
                 pos_amount = -entry_amount
                 entry_price = row.price
                 liq_price = entry_price * (1 + liq_multiplier)
                 exit_price = entry_price * (1 - markup)
-                reentry_price = entry_price * (1 + reentry_markup)
                 double_down_price = liq_price
                 realized_pnl_sum -= entry_amount * row.price * taker_fee
                 trades.append({'timestamp': row.timestamp, 'side': 'sel', 'type': 'entry',
                                'agg_id': row.Index, 'price': row.price, 'amount': -entry_amount})
                 line = f'\r{(row.Index - adf.index[0]) / idxrange:.4f} {realized_pnl_sum:.2f} '
                 line += f'{initial_margin_max:.2f} '
-                line += f'pos_amount {pos_amount}   '
+                line += f'pos_amount {pos_amount} '
+                line += f'max n double downs {record_double_downs}   '
                 sys.stdout.write(line)
                 logs.append({'timestamp': row.timestamp, 'agg_id': row.Index,
                              'initial_margin_max': initial_margin_max,
                              'pos_amount': pos_amount, 'entry_price': entry_price,
                              'liq_price': liq_price, 'exit_price': exit_price})
-            elif enter_long and row.ratio < thm:
+            elif enter_long and getattr(row, ratio_name) < thm:
                 pos_amount = entry_amount
                 entry_price = row.price
                 liq_price = entry_price * (1 - liq_multiplier)
                 exit_price = entry_price * (1 + markup)
-                reentry_price = entry_price * (1 - reentry_markup)
                 double_down_price = liq_price
                 realized_pnl_sum -= entry_amount * row.price * taker_fee
                 trades.append({'timestamp': row.timestamp, 'side': 'buy', 'type': 'entry',
                                'agg_id': row.Index, 'price': row.price, 'amount': entry_amount})
                 line = f'\r{(row.Index - adf.index[0]) / idxrange:.4f} {realized_pnl_sum:.2f} '
                 line += f'{initial_margin_max:.2f} '
-                line += f'pos_amount {pos_amount}   '
+                line += f'pos_amount {pos_amount} '
+                line += f'max n double downs {record_double_downs}   '
                 sys.stdout.write(line)
                 logs.append({'timestamp': row.timestamp, 'agg_id': row.Index,
                              'initial_margin_max': initial_margin_max,
@@ -675,7 +698,8 @@ def backtest(adf: pd.DataFrame, settings: dict) -> ([dict], [dict], pd.DataFrame
                                'realized_pnl': realized_pnl})
                 line = f'\r{(row.Index - adf.index[0]) / idxrange:.4f} {realized_pnl_sum:.2f} '
                 line += f'{initial_margin_max:.2f} '
-                line += f'pos_amount {pos_amount}   '
+                line += f'pos_amount {pos_amount} '
+                line += f'max n double downs {record_double_downs}   '
                 sys.stdout.write(line)
                 logs.append({'timestamp': row.timestamp, 'agg_id': row.Index,
                              'initial_margin_max': initial_margin_max,
@@ -685,8 +709,8 @@ def backtest(adf: pd.DataFrame, settings: dict) -> ([dict], [dict], pd.DataFrame
                              'initial_margin': initial_margin})
 
                 (pos_amount, entry_price, liq_price, exit_price,
-                 double_down_price, n_double_downs, reentry_price) = \
-                    0.0, 0.0, 0.0, 0.0, 0.0, 0, 0.0
+                 double_down_price, n_double_downs) = \
+                    0.0, 0.0, 0.0, 0.0, 0.0, 0
             elif row.price <= double_down_price:
                 if n_double_downs > max_n_double_downs or \
                         pos_amount * double_down_price / leverage > max_margin:
@@ -697,10 +721,11 @@ def backtest(adf: pd.DataFrame, settings: dict) -> ([dict], [dict], pd.DataFrame
                     realized_pnl = pos_amount * double_down_price / leverage
                     realized_pnl_sum -= realized_pnl
                     (pos_amount, entry_price, liq_price, exit_price,
-                     double_down_price, n_double_downs, reentry_price) = \
-                        0.0, 0.0, 0.0, 0.0, 0.0, 0, 0.0
+                     double_down_price, n_double_downs) = \
+                        0.0, 0.0, 0.0, 0.0, 0.0, 0
                 else:
                     n_double_downs += 1
+                    record_double_downs = max(record_double_downs, n_double_downs)
                     trades.append({'timestamp': row.timestamp, 'side': 'buy', 'type': 'entry',
                                    'agg_id': row.Index, 'price': row.price, 'amount': pos_amount})
                     realized_pnl_sum -= pos_amount * double_down_price * maker_fee
@@ -708,38 +733,16 @@ def backtest(adf: pd.DataFrame, settings: dict) -> ([dict], [dict], pd.DataFrame
                     entry_price = (entry_price + double_down_price) / 2
                     liq_price = entry_price * (1 - liq_multiplier)
                     exit_price = entry_price * (1 + markup)
-                    reentry_price = entry_price * (1 - reentry_markup)
                     double_down_price = liq_price
                     line = f'\r{(row.Index - adf.index[0]) / idxrange:.4f} {realized_pnl_sum:.2f} '
                     line += f'{initial_margin_max:.2f} '
-                    line += f'pos_amount {pos_amount}   '
+                    line += f'pos_amount {pos_amount} '
+                    line += f'max n double downs {record_double_downs}   '
                     sys.stdout.write(line)
                     logs.append({'timestamp': row.timestamp, 'agg_id': row.Index,
                                  'initial_margin_max': initial_margin_max,
                                  'pos_amount': pos_amount, 'entry_price': entry_price,
                                  'liq_price': liq_price, 'exit_price': exit_price})
-            elif row.price <= reentry_price and \
-                    pos_amount * double_down_price / leverage < max_margin:
-                trades.append({'timestamp': row.timestamp, 'side': 'buy', 'type': 'reentry',
-                               'agg_id': row.Index, 'price': reentry_price,
-                               'amount': entry_amount})
-                realized_pnl_sum -= entry_amount * reentry_price * maker_fee
-                new_pos_amount = pos_amount + entry_amount
-                entry_price = (entry_price * (pos_amount / new_pos_amount) +
-                               reentry_price * (entry_amount / new_pos_amount))
-                pos_amount = new_pos_amount
-                liq_price = entry_price * (1 - liq_multiplier)
-                exit_price = entry_price * (1 + markup)
-                reentry_price = entry_price * (1 - reentry_markup)
-                double_down_price = liq_price
-                line = f'\r{(row.Index - adf.index[0]) / idxrange:.4f} {realized_pnl_sum:.2f} '
-                line += f'{initial_margin_max:.2f} '
-                line += f'pos_amount {pos_amount}   '
-                sys.stdout.write(line)
-                logs.append({'timestamp': row.timestamp, 'agg_id': row.Index,
-                             'initial_margin_max': initial_margin_max,
-                             'pos_amount': pos_amount, 'entry_price': entry_price,
-                             'liq_price': liq_price, 'exit_price': exit_price})
 
         else:
             # shrt position
@@ -753,7 +756,8 @@ def backtest(adf: pd.DataFrame, settings: dict) -> ([dict], [dict], pd.DataFrame
                                'realized_pnl': realized_pnl})
                 line = f'\r{(row.Index - adf.index[0]) / idxrange:.4f} {realized_pnl_sum:.2f} '
                 line += f'{initial_margin_max:.2f} '
-                line += f'pos_amount {pos_amount}   '
+                line += f'pos_amount {pos_amount} '
+                line += f'max n double downs {record_double_downs}   '
                 sys.stdout.write(line)
                 logs.append({'timestamp': row.timestamp, 'agg_id': row.Index,
                              'initial_margin_max': initial_margin_max,
@@ -763,8 +767,8 @@ def backtest(adf: pd.DataFrame, settings: dict) -> ([dict], [dict], pd.DataFrame
                              'initial_margin': initial_margin})
 
                 (pos_amount, entry_price, liq_price, exit_price,
-                 double_down_price, n_double_downs, reentry_price) = \
-                    0.0, 0.0, 0.0, 0.0, 0.0, 0, 0.0
+                 double_down_price, n_double_downs) = \
+                    0.0, 0.0, 0.0, 0.0, 0.0, 0
             elif row.price >= double_down_price:
                 if n_double_downs > max_n_double_downs or \
                         abs(pos_amount) * double_down_price / leverage > max_margin:
@@ -775,10 +779,11 @@ def backtest(adf: pd.DataFrame, settings: dict) -> ([dict], [dict], pd.DataFrame
                     realized_pnl = abs(pos_amount) * double_down_price / leverage
                     realized_pnl_sum -= realized_pnl
                     (pos_amount, entry_price, liq_price, exit_price,
-                     double_down_price, n_double_downs, reentry_price) = \
-                        0.0, 0.0, 0.0, 0.0, 0.0, 0, 0.0
+                     double_down_price, n_double_downs) = \
+                        0.0, 0.0, 0.0, 0.0, 0.0, 0
                 else:
                     n_double_downs += 1
+                    record_double_downs = max(record_double_downs, n_double_downs)
                     trades.append({'timestamp': row.timestamp, 'side': 'sel', 'type': 'entry',
                                    'agg_id': row.Index, 'price': row.price, 'amount': pos_amount})
                     realized_pnl_sum -= abs(pos_amount) * double_down_price * maker_fee
@@ -786,38 +791,16 @@ def backtest(adf: pd.DataFrame, settings: dict) -> ([dict], [dict], pd.DataFrame
                     entry_price = (entry_price + double_down_price) / 2
                     liq_price = entry_price * (1 + liq_multiplier)
                     exit_price = entry_price * (1 - markup)
-                    reentry_price = entry_price * (1 + reentry_markup)
                     double_down_price = liq_price
                     line = f'\r{(row.Index - adf.index[0]) / idxrange:.4f} {realized_pnl_sum:.2f} '
                     line += f'{initial_margin_max:.2f} '
-                    line += f'pos_amount {pos_amount}   '
+                    line += f'pos_amount {pos_amount} '
+                    line += f'max n double downs {record_double_downs}   '
                     sys.stdout.write(line)
                     logs.append({'timestamp': row.timestamp, 'agg_id': row.Index,
                                  'initial_margin_max': initial_margin_max,
                                  'pos_amount': pos_amount, 'entry_price': entry_price,
                                  'liq_price': liq_price, 'exit_price': exit_price})
-            elif row.price >= reentry_price:
-                trades.append({'timestamp': row.timestamp, 'side': 'sel', 'type': 'reentry',
-                               'agg_id': row.Index, 'price': reentry_price,
-                               'amount': -entry_amount})
-                abs_pos_amount = abs(pos_amount)
-                realized_pnl_sum -= entry_amount * reentry_price * maker_fee
-                new_pos_amount = abs_pos_amount + entry_amount
-                entry_price = (entry_price * (abs_pos_amount / new_pos_amount) +
-                               reentry_price * (entry_amount / new_pos_amount))
-                pos_amount = -new_pos_amount
-                liq_price = entry_price * (1 + liq_multiplier)
-                exit_price = entry_price * (1 - markup)
-                reentry_price = entry_price * (1 + reentry_markup)
-                double_down_price = liq_price
-                line = f'\r{(row.Index - adf.index[0]) / idxrange:.4f} {realized_pnl_sum:.2f} '
-                line += f'{initial_margin_max:.2f} '
-                line += f'pos_amount {pos_amount}   '
-                sys.stdout.write(line)
-                logs.append({'timestamp': row.timestamp, 'agg_id': row.Index,
-                             'initial_margin_max': initial_margin_max,
-                             'pos_amount': pos_amount, 'entry_price': entry_price,
-                             'liq_price': liq_price, 'exit_price': exit_price})
 
     return logs, trades, adf_
 
