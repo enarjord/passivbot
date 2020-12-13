@@ -61,7 +61,7 @@ if there is a short position, it will make an ask of amount equal to position si
 
 ------------------------------------------------------------------
 
-a backtester and procedure to download historical trades are included
+a backtester is included
 
 settings:
 
