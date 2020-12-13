@@ -157,8 +157,8 @@ class Bot:
         self.ema_alpha_ = 1 - self.ema_alpha
         self.bid_ema_multiplier = 1 - self.flashcrash_factor
         self.ask_ema_multiplier = 1 + self.flashcrash_factor
-        self.bid_trigger_ema_multiplier = 1 - self.flashcrash_factor * 0.95
-        self.ask_trigger_ema_multiplier = 1 + self.flashcrash_factor * 0.95
+        self.bid_trigger_ema_multiplier = 1 - self.flashcrash_factor * 0.98
+        self.ask_trigger_ema_multiplier = 1 + self.flashcrash_factor * 0.98
 
         self.exit_price = 0.0
         self.double_down_price = 0.0
