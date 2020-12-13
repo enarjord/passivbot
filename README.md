@@ -43,11 +43,11 @@ it is intended to work with leverage of 75x and higher
 
 will make entries automatically, but will also work with user making manual entries and adding to or removing from positions
 
-it can go both long and short, takeing profit at set static markup
+it can go both long and short, taking profit at set static markup
 
 if price moves up when short or down when long, it will double down on its position at liquidation price, thus pushing liquidation further away
 
-depending on initial entry amount and funds available in futures wallet, it can double down repeatedly until funds run out or position is closed
+depending on initial entry amount and funds available in futures wallet, it can double down repeatedly until position is closed or funds run out
 
 position size is doubled after each doubling down
 
@@ -59,7 +59,31 @@ if there is a long position, it will make a bid of amount equal to position size
 
 if there is a short position, it will make an ask of amount equal to position size and price equal to entry_price * (1 + (1 / leverage) / 2), which is liquidation price at given leverage, and a bid whose amount is equal to position size and price is entry_price * (1 - markup)
 
+------------------------------------------------------------------
+
 a backtester and procedure to download historical trades are included
+
+settings:
+
+
+{
+
+    "ema_span": 1000,             # ema is calculated based on sequence of trades, not ohlcvs.
+    
+                                  # so 50 trades during one minute is the same as 50 trades during one hour
+                                  
+    "entry_amount": 0.001,        # initial entry amount
+    
+    "flashcrash_factor": 0.001,   # if no position, enters long at ema * (1 - flashcrash_factor) and short at ema * (1 + flashcrash_factor)
+    
+    "leverage": 100,              # leverage.  bot will set leverage to this value at startup
+    
+    "markup": 0.0014,             # markup does not take fees into account
+    
+    "symbol": "BTCUSDT"           # only one symbol at a time
+    
+}
+
 
 ------------------------------------------------------------------
 
