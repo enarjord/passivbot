@@ -380,6 +380,8 @@ class Bot:
             elif o['side'] == 'SELL':
                 tasks.append(self.create_ask(self.symbol, o['origQty'], o['price']))
         results = await asyncio.gather(*tasks)
+        if results:
+            print()
         return results
 
     def check_if_order_taken(self):
@@ -604,11 +606,12 @@ def backtest(adf: pd.DataFrame, settings: dict) -> ([dict], [dict], pd.DataFrame
     enter_long = settings['enter_long']
     enter_shrt = settings['enter_shrt']
 
+    assert enter_long or enter_shrt
+
     thp = 1 + flashcrash_factor
     thm = 1 - flashcrash_factor
     maker_fee = round(0.018 * 0.01, 8)
     taker_fee = round(0.036 * 0.01, 8)
-    print('maker_fee, taker_fee', maker_fee, taker_fee)
     roe = markup * leverage
 
 
@@ -617,10 +620,6 @@ def backtest(adf: pd.DataFrame, settings: dict) -> ([dict], [dict], pd.DataFrame
     max_margin = 10000
 
     liq_multiplier = (1 / leverage) / 2
-    print('roe', roe)
-    print('liq_multiplier', liq_multiplier)
-    print('max n double downs', max_n_double_downs)
-    print('max_margin', max_margin)
 
     pos_amount = 0.0
     entry_price = 0.0
@@ -653,15 +652,15 @@ def backtest(adf: pd.DataFrame, settings: dict) -> ([dict], [dict], pd.DataFrame
     for row in adf_.itertuples():
         if pos_amount == 0.0:
             # no position
-            if enter_shrt and getattr(row, ratio_name) > thp:
-                pos_amount = -entry_amount
+            if enter_long and getattr(row, ratio_name) < thm:
+                pos_amount = entry_amount
                 entry_price = row.price
-                liq_price = entry_price * (1 + liq_multiplier)
-                exit_price = entry_price * (1 - markup)
+                liq_price = entry_price * (1 - liq_multiplier)
+                exit_price = entry_price * (1 + markup)
                 double_down_price = liq_price
                 realized_pnl_sum -= entry_amount * row.price * taker_fee
-                trades.append({'timestamp': row.timestamp, 'side': 'sel', 'type': 'entry',
-                               'agg_id': row.Index, 'price': row.price, 'amount': -entry_amount})
+                trades.append({'timestamp': row.timestamp, 'side': 'buy', 'type': 'entry',
+                               'agg_id': row.Index, 'price': row.price, 'amount': entry_amount})
                 line = f'\r{(row.Index - adf.index[0]) / idxrange:.4f} {realized_pnl_sum:.2f} '
                 line += f'{initial_margin_max:.2f} '
                 line += f'pos_amount {pos_amount} '
@@ -671,15 +670,15 @@ def backtest(adf: pd.DataFrame, settings: dict) -> ([dict], [dict], pd.DataFrame
                              'initial_margin_max': initial_margin_max,
                              'pos_amount': pos_amount, 'entry_price': entry_price,
                              'liq_price': liq_price, 'exit_price': exit_price})
-            elif enter_long and getattr(row, ratio_name) < thm:
-                pos_amount = entry_amount
+            elif enter_shrt and getattr(row, ratio_name) > thp:
+                pos_amount = -entry_amount
                 entry_price = row.price
-                liq_price = entry_price * (1 - liq_multiplier)
-                exit_price = entry_price * (1 + markup)
+                liq_price = entry_price * (1 + liq_multiplier)
+                exit_price = entry_price * (1 - markup)
                 double_down_price = liq_price
                 realized_pnl_sum -= entry_amount * row.price * taker_fee
-                trades.append({'timestamp': row.timestamp, 'side': 'buy', 'type': 'entry',
-                               'agg_id': row.Index, 'price': row.price, 'amount': entry_amount})
+                trades.append({'timestamp': row.timestamp, 'side': 'sel', 'type': 'entry',
+                               'agg_id': row.Index, 'price': row.price, 'amount': -entry_amount})
                 line = f'\r{(row.Index - adf.index[0]) / idxrange:.4f} {realized_pnl_sum:.2f} '
                 line += f'{initial_margin_max:.2f} '
                 line += f'pos_amount {pos_amount} '
