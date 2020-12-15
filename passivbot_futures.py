@@ -138,6 +138,9 @@ class Bot:
         self.entry_amount = settings['entry_amount']
         self.flashcrash_factor = settings['flashcrash_factor']
         self.leverage = settings['leverage']
+        self.enter_long = settings['enter_long']
+        self.enter_shrt = settings['enter_shrt']
+
 
         self.cc = ccxt_async.binance({'apiKey': (ks := load_key_secret('binance', user))[0],
                                       'secret': ks[1]})
@@ -166,8 +169,6 @@ class Bot:
         self.stop_websocket = False
 
     async def _init(self):
-        print(await self.cc.fapiPrivate_post_leverage(params={'symbol': self.symbol,
-                                                              'leverage': self.leverage}))
         exchange_info = await self.cc.fapiPublic_get_exchangeinfo()
         for e in exchange_info['symbols']:
             if e['symbol'] == self.symbol:
@@ -401,7 +402,7 @@ class Bot:
             self.ts_released['decide'] = time()
             return
         elif self.symbol not in self.positions:
-            if self.price <= self.ema * self.bid_trigger_ema_multiplier:
+            if self.enter_long and self.price <= self.ema * self.bid_trigger_ema_multiplier:
                 await self.create_bid(self.symbol,
                                       self.entry_amount,
                                       round_dn(self.ema * self.bid_ema_multiplier,
@@ -411,7 +412,7 @@ class Bot:
                 await self.create_exits()
                 self.ts_released['decide'] = time()
                 return
-            elif self.price >= self.ema * self.ask_trigger_ema_multiplier:
+            elif self.enter_shrt and self.price >= self.ema * self.ask_trigger_ema_multiplier:
                 await self.create_ask(self.symbol,
                                       self.entry_amount,
                                       round_up(self.ema * self.ask_ema_multiplier,
@@ -447,6 +448,8 @@ class Bot:
         self.stop_websocket = False
         uri = f"wss://fstream.binance.com/ws/{self.symbol.lower()}@aggTrade"
         print_([uri])
+        print(await self.cc.fapiPrivate_post_leverage(params={'symbol': self.symbol,
+                                                              'leverage': self.leverage}))
         await self.update_state()
         await self.init_ema()
         async with websockets.connect(uri) as ws:
@@ -598,6 +601,8 @@ def backtest(adf: pd.DataFrame, settings: dict) -> ([dict], [dict], pd.DataFrame
     markup = settings['markup']
     leverage = settings['leverage']
     entry_amount = settings['entry_amount']
+    enter_long = settings['enter_long']
+    enter_shrt = settings['enter_shrt']
 
     thp = 1 + flashcrash_factor
     thm = 1 - flashcrash_factor
@@ -606,8 +611,6 @@ def backtest(adf: pd.DataFrame, settings: dict) -> ([dict], [dict], pd.DataFrame
     print('maker_fee, taker_fee', maker_fee, taker_fee)
     roe = markup * leverage
 
-    enter_long = True
-    enter_shrt = True
 
 
     max_n_double_downs = 20
