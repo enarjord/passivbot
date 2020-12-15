@@ -1,5 +1,7 @@
 {
     "ema_span": 1000,
+    "enter_long": true,
+    "enter_shrt": true,
     "entry_amount": 0.001,
     "flashcrash_factor": 0.001,
     "leverage": 100,
