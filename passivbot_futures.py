@@ -160,8 +160,8 @@ class Bot:
         self.ema_alpha_ = 1 - self.ema_alpha
         self.bid_ema_multiplier = 1 - self.flashcrash_factor
         self.ask_ema_multiplier = 1 + self.flashcrash_factor
-        self.bid_trigger_ema_multiplier = 1 - self.flashcrash_factor * 0.98
-        self.ask_trigger_ema_multiplier = 1 + self.flashcrash_factor * 0.98
+        self.bid_trigger_ema_multiplier = 1 - self.flashcrash_factor * 0.99
+        self.ask_trigger_ema_multiplier = 1 + self.flashcrash_factor * 0.99
 
         self.exit_price = 0.0
         self.double_down_price = 0.0
@@ -308,7 +308,11 @@ class Bot:
                 deletions.append(deletion)
             except Exception as e:
                 print(e)
-        canceled_orders = await asyncio.gather(*deletions)
+        try:
+            canceled_orders = await asyncio.gather(*deletions)
+        except Exception as e:
+            print(e)
+            canceled_orders = []
         for o in canceled_orders:
             try:
                 print_(['canceled order', o['symbol'], o['side'], o['origQty'], o['price']], n=True)
@@ -665,7 +669,7 @@ def backtest(adf: pd.DataFrame, settings: dict) -> ([dict], [dict], pd.DataFrame
                 line += f'{initial_margin_max:.2f} '
                 line += f'pos_amount {pos_amount} '
                 line += f'max n double downs {record_double_downs}   '
-                sys.stdout.write(line)
+                print(line, end=' ')
                 logs.append({'timestamp': row.timestamp, 'agg_id': row.Index,
                              'initial_margin_max': initial_margin_max,
                              'pos_amount': pos_amount, 'entry_price': entry_price,
@@ -683,7 +687,7 @@ def backtest(adf: pd.DataFrame, settings: dict) -> ([dict], [dict], pd.DataFrame
                 line += f'{initial_margin_max:.2f} '
                 line += f'pos_amount {pos_amount} '
                 line += f'max n double downs {record_double_downs}   '
-                sys.stdout.write(line)
+                print(line, end=' ')
                 logs.append({'timestamp': row.timestamp, 'agg_id': row.Index,
                              'initial_margin_max': initial_margin_max,
                              'pos_amount': pos_amount, 'entry_price': entry_price,
@@ -702,7 +706,7 @@ def backtest(adf: pd.DataFrame, settings: dict) -> ([dict], [dict], pd.DataFrame
                 line += f'{initial_margin_max:.2f} '
                 line += f'pos_amount {pos_amount} '
                 line += f'max n double downs {record_double_downs}   '
-                sys.stdout.write(line)
+                print(line, end=' ')
                 logs.append({'timestamp': row.timestamp, 'agg_id': row.Index,
                              'initial_margin_max': initial_margin_max,
                              'pos_amount': pos_amount, 'entry_price': entry_price,
@@ -740,7 +744,7 @@ def backtest(adf: pd.DataFrame, settings: dict) -> ([dict], [dict], pd.DataFrame
                     line += f'{initial_margin_max:.2f} '
                     line += f'pos_amount {pos_amount} '
                     line += f'max n double downs {record_double_downs}   '
-                    sys.stdout.write(line)
+                    print(line, end=' ')
                     logs.append({'timestamp': row.timestamp, 'agg_id': row.Index,
                                  'initial_margin_max': initial_margin_max,
                                  'pos_amount': pos_amount, 'entry_price': entry_price,
@@ -760,7 +764,7 @@ def backtest(adf: pd.DataFrame, settings: dict) -> ([dict], [dict], pd.DataFrame
                 line += f'{initial_margin_max:.2f} '
                 line += f'pos_amount {pos_amount} '
                 line += f'max n double downs {record_double_downs}   '
-                sys.stdout.write(line)
+                print(line, end=' ')
                 logs.append({'timestamp': row.timestamp, 'agg_id': row.Index,
                              'initial_margin_max': initial_margin_max,
                              'pos_amount': pos_amount, 'entry_price': entry_price,
@@ -798,7 +802,7 @@ def backtest(adf: pd.DataFrame, settings: dict) -> ([dict], [dict], pd.DataFrame
                     line += f'{initial_margin_max:.2f} '
                     line += f'pos_amount {pos_amount} '
                     line += f'max n double downs {record_double_downs}   '
-                    sys.stdout.write(line)
+                    print(line, end=' ')
                     logs.append({'timestamp': row.timestamp, 'agg_id': row.Index,
                                  'initial_margin_max': initial_margin_max,
                                  'pos_amount': pos_amount, 'entry_price': entry_price,
