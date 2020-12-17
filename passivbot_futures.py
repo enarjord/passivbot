@@ -178,7 +178,7 @@ class Bot:
         await self.update_state()
 
     async def update_open_orders(self) -> None:
-        open_orders = await self.cc.fapiPrivate_get_openorders()
+        open_orders = await self.cc.fapiPrivate_get_openorders(params={'symbol': self.symbol})
         self.open_orders = []
         self.highest_bid, self.lowest_ask = 0.0, 9.9e9
         for e in open_orders:
@@ -432,7 +432,7 @@ class Bot:
             self.ts_released['verify_orders'] = time()
             self.flush_stuck_locks()
             await self.create_exits()
-            if time() - self.ts_released['update_state'] > 10:
+            if time() - self.ts_released['update_state'] > 5:
                 await self.update_state()
             line = f"{self.symbol} "
             if self.symbol in self.positions:
