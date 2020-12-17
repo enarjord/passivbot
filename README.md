@@ -61,6 +61,22 @@ if there is a short position, it will make an ask of amount equal to position si
 
 ------------------------------------------------------------------
 
+risk may be ascertained by the number of double downs funds allow
+
+given 100x BTCUSDT with initial entry amount of 0.001, then doubling down 9 times builds a position of 0.001 * 2**9 == 0.512
+
+at 20000 usd/btc, that requires margin of around 20000 * 0.512 / 100 == 102.4 usdt
+
+so with 102.4+ usdt available, the bot may double down up to 9 times
+
+at 100x each doubling down pushes liquidation price (1 / 100) / 2 == 0.25% away
+
+so 9 double downs pushes liquidation price 9 * 0.25 == 2.25% away from initial liquidation price
+
+use backtester for further research
+
+------------------------------------------------------------------
+
 a backtester is included
 
 settings:
