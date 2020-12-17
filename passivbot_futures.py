@@ -413,7 +413,7 @@ class Bot:
                                       self.entry_amount,
                                       round_dn(self.ema * self.bid_ema_multiplier,
                                                self.price_precision))
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(0.25)
                 await self.update_state()
                 await self.create_exits()
                 self.ts_released['decide'] = time()
@@ -423,7 +423,7 @@ class Bot:
                                       self.entry_amount,
                                       round_up(self.ema * self.ask_ema_multiplier,
                                                self.price_precision))
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(0.25)
                 await self.update_state()
                 await self.create_exits()
                 self.ts_released['decide'] = time()
