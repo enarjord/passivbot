@@ -5,6 +5,6 @@
     "entry_amount": 0.001,
     "flashcrash_factor": 0.001,
     "leverage": 100,
-    "markup": 0.0014,
+    "markup": 0.0015,
     "symbol": "BTCUSDT"
 }
