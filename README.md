@@ -43,11 +43,9 @@ it is intended to work with leverage of 75x and higher
 
 will make entries automatically, but will also work with user making manual entries and adding to or removing from positions
 
-it can go both long and short, taking profit at set static markup
+it works by entering small, then either closing position at static markup or doubling down at liquidation price
 
-if price moves up when short or down when long, it will double down on its position at liquidation price, thus pushing liquidation further away
-
-depending on initial entry amount and funds available in futures wallet, it can double down repeatedly until position is closed or funds run out
+depending on initial entry amount and funds available in futures wallet, it will double down repeatedly until position is closed or funds run out
 
 position size is doubled after each doubling down
 
@@ -55,9 +53,11 @@ more detailed:
 
 if there is no position, it will make small long entry if price / ema < (1 - flashcrash_factor) or small short entry if price / ema > (1 + flashcrash_factor)
 
-if there is a long position, it will make a bid of amount equal to position size and price equal to entry_price * (1 - (1 / leverage) / 2), which is liquidation price at given leverage, and an ask whose amount is equal to position size and price is entry_price * (1 + markup)
+if there is a long position, it will make a double down bid of amount equal to position size and price equal to entry_price * (1 - (1 / leverage) / 2), and an exit ask whose amount is equal to position size and price is entry_price * (1 + markup)
 
-if there is a short position, it will make an ask of amount equal to position size and price equal to entry_price * (1 + (1 / leverage) / 2), which is liquidation price at given leverage, and a bid whose amount is equal to position size and price is entry_price * (1 - markup)
+if there is a short position, it will make a double down ask of amount equal to position size and price equal to entry_price * (1 + (1 / leverage) / 2), and an exit bid whose amount is equal to position size and price is entry_price * (1 - markup)
+
+it listens to websocket live stream of aggregated trades, and updates its orders continuously
 
 ------------------------------------------------------------------
 
@@ -94,7 +94,7 @@ settings:
     
     "leverage": 100,              # leverage.  bot will set leverage to this value at startup
     
-    "markup": 0.0014,             # markup does not take fees into account
+    "markup": 0.0015,             # markup does not take fees into account
     
     "symbol": "BTCUSDT"           # only one symbol at a time
     
