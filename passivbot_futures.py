@@ -646,7 +646,6 @@ def backtest(adf: pd.DataFrame, settings: dict) -> ([dict], [dict], pd.DataFrame
         adf_ = adf.join(bid_prices).join(ask_prices)
     else:
         adf_ = adf
-    print(adf_.columns)
 
     idxrange = adf_.index[-1] - adf_.index[0]
     add_to_log = False
@@ -737,7 +736,6 @@ def backtest(adf: pd.DataFrame, settings: dict) -> ([dict], [dict], pd.DataFrame
                          'n_double_downs': n_double_downs,
                          'realized_pnl_sum': realized_pnl_sum,
                          'pos_amount': pos_amount})
-
 
     return logs, trades, adf_
 
