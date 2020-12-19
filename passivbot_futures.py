@@ -613,8 +613,8 @@ def backtest(adf: pd.DataFrame, settings: dict) -> ([dict], [dict], pd.DataFrame
 
     threshold_plus = 1 + flashcrash_factor
     threshold_minus = 1 - flashcrash_factor
-    maker_fee = round(-0.025 * 0.01, 8)
-    taker_fee = round(0.075 * 0.01, 8)
+    maker_fee = round(0.018 * 0.01, 8)
+    taker_fee = round(0.036 * 0.01, 8)
     roe = markup * leverage
 
     liq_multiplier = (1 / leverage) / 2
@@ -748,7 +748,7 @@ async def main() -> None:
 async def start_bot(n_tries: int = 0) -> None:
     user = sys.argv[1]
     settings = load_settings(user)
-    max_n_tries = 10
+    max_n_tries = 15
     try:
         bot = await create_bot(user, settings)
         await bot.start_websocket()
