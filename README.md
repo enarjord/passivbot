@@ -21,7 +21,7 @@ released freely -- anybody may copy, redistribute, modify, use for commercial, n
 
 usage:
 
-binance account needs futures enabled
+binance account and api key need futures enabled
 
 add api key and secret as json file in dir `api_key_secret/binance/your_user_name.json`
 
