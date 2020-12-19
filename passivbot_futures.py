@@ -327,7 +327,7 @@ class Bot:
         agg_trades = await self.fetch_trades(self.symbol)
         additional_agg_trades = await asyncio.gather(
             *[self.fetch_trades(self.symbol, from_id=agg_trades[0]['agg_id'] - 1000 * i)
-              for i in range(1, 10)])
+              for i in range(1, 15)])
         agg_trades = sorted(agg_trades + flatten(additional_agg_trades), key=lambda x: x['agg_id'])
         ema = agg_trades[0]['price']
         for t in agg_trades:
@@ -633,8 +633,8 @@ def backtest(adf: pd.DataFrame, settings: dict) -> ([dict], [dict], pd.DataFrame
     trades = []
     logs = []
 
-    bid_name = 'entry_bid_' + str(ema_span)
-    ask_name = 'entry_ask_' + str(ema_span)
+    bid_name = f'entry_bid_{ema_span}_{flashcrash_factor}'.replace('.', '_')
+    ask_name = f'entry_ask_{ema_span}_{flashcrash_factor}'.replace('.', '_')
 
     if bid_name not in adf.columns:
         print('calculating entry prices...')
@@ -646,8 +646,9 @@ def backtest(adf: pd.DataFrame, settings: dict) -> ([dict], [dict], pd.DataFrame
         adf_ = adf.join(bid_prices).join(ask_prices)
     else:
         adf_ = adf
+    print(adf_.columns)
 
-    idxrange = adf.index[-1] - adf.index[0]
+    idxrange = adf_.index[-1] - adf_.index[0]
     add_to_log = False
     for row in adf_.itertuples():
         add_to_log = False
