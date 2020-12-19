@@ -77,8 +77,6 @@ use backtester for further research
 
 ------------------------------------------------------------------
 
-a backtester is included
-
 settings:
 
 
