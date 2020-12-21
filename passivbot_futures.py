@@ -412,9 +412,9 @@ class Bot:
             if self.enter_long and self.price <= self.ema * self.bid_trigger_ema_multiplier:
                 await self.create_bid(self.symbol,
                                       self.entry_amount,
-                                      min(self.price, round_dn(self.ema * self.bid_ema_multiplier,
-                                                               self.price_precision)))
-                await asyncio.sleep(1.0)
+                                      round_dn(self.ema * self.bid_ema_multiplier,
+                                               self.price_precision))
+                await asyncio.sleep(0.5)
                 await self.update_state()
                 await self.create_exits()
                 self.ts_released['decide'] = time()
@@ -422,9 +422,9 @@ class Bot:
             elif self.enter_shrt and self.price >= self.ema * self.ask_trigger_ema_multiplier:
                 await self.create_ask(self.symbol,
                                       self.entry_amount,
-                                      max(self.price, round_up(self.ema * self.ask_ema_multiplier,
-                                                               self.price_precision)))
-                await asyncio.sleep(1.0)
+                                      round_up(self.ema * self.ask_ema_multiplier,
+                                               self.price_precision))
+                await asyncio.sleep(0.5)
                 await self.update_state()
                 await self.create_exits()
                 self.ts_released['decide'] = time()
@@ -600,7 +600,9 @@ class Bot:
                  'buyer': mt['maker']} for mt in my_trades]
 
 
-def backtest(adf: pd.DataFrame, settings: dict) -> ([dict], [dict], pd.DataFrame):
+def backtest(adf: pd.DataFrame,
+             settings: dict,
+             margin_cost_limit: float = 0.0) -> ([dict], [dict], pd.DataFrame):
     flashcrash_factor = settings['flashcrash_factor']
     ema_span = settings['ema_span']
     markup = settings['markup']
@@ -625,12 +627,9 @@ def backtest(adf: pd.DataFrame, settings: dict) -> ([dict], [dict], pd.DataFrame
     exit_price = 0.0
     double_down_price = 0.0
 
-    n_double_downs = 0
     margin_cost_max = 0
     margin_cost = 0.0
     realized_pnl_sum = 0.0
-
-    # break_at = 500
 
     trades = []
 
@@ -664,7 +663,8 @@ def backtest(adf: pd.DataFrame, settings: dict) -> ([dict], [dict], pd.DataFrame
                 trades.append({'timestamp': row.timestamp, 'side': 'buy', 'type': 'entry',
                                'agg_id': row.Index, 'price': row.price, 'amount': entry_amount,
                                'margin_cost': cost / leverage, 'realized_pnl': 0.0,
-                               'fee': cost * taker_fee})
+                               'fee': cost * taker_fee,
+                               'n_double_downs': int(round(np.log2(pos_amount / entry_amount)))})
                 do_print = True
             elif enter_shrt and getattr(row, 'price') >= getattr(row, ask_name):
                 pos_amount = -entry_amount
@@ -676,7 +676,8 @@ def backtest(adf: pd.DataFrame, settings: dict) -> ([dict], [dict], pd.DataFrame
                 trades.append({'timestamp': row.timestamp, 'side': 'sel', 'type': 'entry',
                                'agg_id': row.Index, 'price': row.price, 'amount': -entry_amount,
                                'margin_cost': cost / leverage, 'realized_pnl': 0.0,
-                               'fee': cost * taker_fee})
+                               'fee': cost * taker_fee,
+                               'n_double_downs': int(round(np.log2(-pos_amount / entry_amount)))})
                 do_print = True
         elif pos_amount > 0.0:
             # long position
@@ -687,18 +688,18 @@ def backtest(adf: pd.DataFrame, settings: dict) -> ([dict], [dict], pd.DataFrame
                 trades.append({'timestamp': row.timestamp, 'side': 'sel', 'type': 'exit',
                                'agg_id': row.Index, 'price': exit_price, 'amount': pos_amount,
                                'margin_cost': cost / leverage, 'realized_pnl': realized_pnl,
-                               'fee': cost * maker_fee})
+                               'fee': cost * maker_fee,
+                               'n_double_downs': int(round(np.log2(pos_amount / entry_amount)))})
                 do_print = True
                 (pos_amount, entry_price, liq_price, exit_price,
-                 double_down_price, n_double_downs) = \
-                    0.0, 0.0, 0.0, 0.0, 0.0, 0
+                 double_down_price) = 0.0, 0.0, 0.0, 0.0, 0.0
             elif row.price <= double_down_price:
-                n_double_downs += 1
                 cost = pos_amount * double_down_price
                 trades.append({'timestamp': row.timestamp, 'side': 'buy', 'type': 'entry',
                                'agg_id': row.Index, 'price': double_down_price,
                                'amount': pos_amount, 'margin_cost': cost / leverage,
-                               'realized_pnl': 0.0, 'fee': cost * maker_fee})
+                               'realized_pnl': 0.0, 'fee': cost * maker_fee,
+                               'n_double_downs': int(round(np.log2(pos_amount / entry_amount)))})
                 pos_amount *= 2
                 entry_price = (entry_price + double_down_price) / 2
                 liq_price = entry_price * (1 - liq_multiplier)
@@ -714,18 +715,18 @@ def backtest(adf: pd.DataFrame, settings: dict) -> ([dict], [dict], pd.DataFrame
                 trades.append({'timestamp': row.timestamp, 'side': 'buy', 'type': 'exit',
                                'agg_id': row.Index, 'price': exit_price, 'amount': pos_amount,
                                'margin_cost': margin_cost, 'realized_pnl': realized_pnl,
-                               'fee': cost * maker_fee})
+                               'fee': cost * maker_fee,
+                               'n_double_downs': int(round(np.log2(-pos_amount / entry_amount)))})
                 do_print = True
                 (pos_amount, entry_price, liq_price, exit_price,
-                 double_down_price, n_double_downs) = \
-                    0.0, 0.0, 0.0, 0.0, 0.0, 0
+                 double_down_price) = 0.0, 0.0, 0.0, 0.0, 0.0
             elif row.price >= double_down_price:
-                n_double_downs += 1
                 cost = -pos_amount * double_down_price
                 trades.append({'timestamp': row.timestamp, 'side': 'sel', 'type': 'entry',
                                'agg_id': row.Index, 'price': double_down_price,
                                'amount': pos_amount, 'margin_cost': cost / leverage,
-                               'realized_pnl': 0.0, 'fee': cost * maker_fee})
+                               'realized_pnl': 0.0, 'fee': cost * maker_fee,
+                               'n_double_downs': int(round(np.log2(-pos_amount / entry_amount)))})
                 pos_amount *= 2
                 entry_price = (entry_price + double_down_price) / 2
                 liq_price = entry_price * (1 + liq_multiplier)
@@ -738,11 +739,9 @@ def backtest(adf: pd.DataFrame, settings: dict) -> ([dict], [dict], pd.DataFrame
             line = f'\r{(row.Index - adf.index[0]) / idxrange:.4f} {realized_pnl_sum:.2f} '
             line += f'{margin_cost_max:.2f} '
             print(line, end=' ')
-            '''
-            if margin_cost_max >= break_at:
-                print('max margin_cost exceeded')
+            if margin_cost_limit and margin_cost_max >= margin_cost_limit:
+                print('margin_cost_limit exceeded')
                 break
-            '''
 
 
     return trades, adf_
