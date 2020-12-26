@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import pprint
 import asyncio
-from time import time
+from time import time, sleep
 from typing import Iterator
 
 
@@ -403,7 +403,7 @@ async def start_bot(bot, n_tries: int = 0) -> None:
             return
         n_tries += 1
         for k in range(10, -1, -1):
-            sys.stdout.write(f'\rrestarting bot in {k} seconds   ')
+            print(f'\rrestarting bot in {k} seconds   ', end=' ')
             sleep(1)
         await start_bot(bot, n_tries + 1)
 
