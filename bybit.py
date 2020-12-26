@@ -127,7 +127,7 @@ class BybitBot(Bot):
     async def fetch_trades(self, from_id: int = None):
         return await fetch_trades(self.cc, self.symbol, from_id)
 
-    def get_margin_cost(self, amount: float, price: float) -> float:
+    def calc_margin_cost(self, amount: float, price: float) -> float:
         return amount / price / self.leverage
 
     async def start_websocket(self) -> None:
