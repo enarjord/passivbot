@@ -240,12 +240,15 @@ class Bot:
             ask_price = self.round_up(max(self.emas.values()) * self.spread_plus)
             bid_diff = self.price / bid_price
             ask_diff = ask_price / self.price
-            if bid_diff < 1.00007:
-                orders.append({'symbol': self.symbol, 'side': 'buy', 'amount': self.entry_amount,
-                               'price': bid_price})
-            if ask_diff < 1.00007:
-                orders.append({'symbol': self.symbol, 'side': 'sell', 'amount': self.entry_amount,
-                               'price': ask_price})
+            threshold = 1.00007
+            if bid_diff < ask_diff:
+                if bid_diff < threshold:
+                    orders.append({'symbol': self.symbol, 'side': 'buy',
+                                   'amount': self.entry_amount, 'price': bid_price})
+            else:
+                if ask_diff < threshold:
+                    orders.append({'symbol': self.symbol, 'side': 'sell',
+                                   'amount': self.entry_amount, 'price': ask_price})
         else:
             available_balance = self.position['equity']
             if self.position['size'] > 0.0:
@@ -257,7 +260,7 @@ class Bot:
                 ))
 
                 for k in range(3):
-                    margin_cost = self.get_margin_cost(ddown_amount, ddown_price)
+                    margin_cost = self.calc_margin_cost(ddown_amount, ddown_price)
                     if margin_cost < available_balance:
                         orders.append({'side': 'buy', 'amount': ddown_amount,
                                        'price': ddown_price})
@@ -283,7 +286,7 @@ class Bot:
                 ))
 
                 for k in range(3):
-                    margin_cost = self.get_margin_cost(ddown_amount, ddown_price)
+                    margin_cost = self.calc_margin_cost(ddown_amount, ddown_price)
 
                     if margin_cost < available_balance:
                         orders.append({'side': 'sell', 'amount': ddown_amount,
@@ -343,8 +346,8 @@ class Bot:
             self.ts_released['print'] = time()
             line = f"{self.symbol} "
             if self.position['size'] == 0:
-                bid_price = self.round_dn(min(self.emas.values()))
-                ask_price = self.round_up(max(self.emas.values()))
+                bid_price = self.round_dn(min(self.emas.values()) * self.spread_minus)
+                ask_price = self.round_up(max(self.emas.values()) * self.spread_plus)
                 line += f"no position bid {bid_price} ask {ask_price} "
                 ratio = 0.0
             elif self.position['size'] > 0.0:
