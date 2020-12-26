@@ -40,9 +40,7 @@ run in terminal: `python3 {exchange}.py your_user_name`
 ------------------------------------------------------------------
 overview
 
-the bot's purpose is to accumulate usdt
-
-it is intended to work with leverage of 75x and higher
+the bot's purpose is to accumulate usdt in binance futures, btc in bybit inverse
 
 will make entries automatically, but will also work with user making manual entries and adding to or removing from positions
 
@@ -66,7 +64,7 @@ it listens to websocket live stream of aggregated trades, and updates its orders
 
 risk may be ascertained by the number of double downs funds allows
 
-given BTCUSDT with leverage of 100x and initial entry amount of 0.001, doubling down 9 times builds a position of 0.001 * 2**9 == 0.512
+given binance BTCUSDT with leverage of 100x and initial entry amount of 0.001, doubling down 9 times builds a position of 0.001 * 2**9 == 0.512
 
 at 20000 usd/btc, that requires margin of around 20000 * 0.512 / 100 == 102.4 usdt
 
