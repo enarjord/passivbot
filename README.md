@@ -1,5 +1,5 @@
 # passivbot_futures
-trading bot running on binance usdt futures
+trading bot running on binance usdt futures and bybit inverse futures
 
 use at own risk
 
@@ -10,7 +10,7 @@ requires python >= 3.8
 dependencies, install with pip:
 
 
-`python3 -m pip install matplotlib pandas websockets ccxt`
+`python3 -m pip install matplotlib pandas websockets ccxt ciso8601`
 
 
 ------------------------------------------------------------------
@@ -21,25 +21,26 @@ released freely -- anybody may copy, redistribute, modify, use for commercial, n
 
 usage:
 
+supports exchanges binance and bybit
+
 binance account and api key need futures enabled
 
-add api key and secret as json file in dir `api_key_secret/binance/your_user_name.json`
+add api key and secret as json file in dir `api_key_secret/{exchange}/your_user_name.json`
+
 
 formatted like this: `["KEY", "SECRET"]`
 
 
-make a copy of `settings/binance_futures/default.json`
+make a copy of `settings/{exchange}/default.json`
 
 rename the copy `your_user_name.json` and make desired changes
 
-run in terminal: `python3 passivbot_futures.py your_user_name`
+run in terminal: `python3 {exchange}.py your_user_name`
 
 ------------------------------------------------------------------
 overview
 
-the bot's purpose is to accumulate usdt
-
-it is intended to work with leverage of 75x and higher
+the bot's purpose is to accumulate usdt in binance futures, btc in bybit inverse
 
 will make entries automatically, but will also work with user making manual entries and adding to or removing from positions
 
@@ -63,7 +64,7 @@ it listens to websocket live stream of aggregated trades, and updates its orders
 
 risk may be ascertained by the number of double downs funds allows
 
-given BTCUSDT with leverage of 100x and initial entry amount of 0.001, doubling down 9 times builds a position of 0.001 * 2**9 == 0.512
+given binance BTCUSDT with leverage of 100x and initial entry amount of 0.001, doubling down 9 times builds a position of 0.001 * 2**9 == 0.512
 
 at 20000 usd/btc, that requires margin of around 20000 * 0.512 / 100 == 102.4 usdt
 
@@ -82,13 +83,15 @@ settings:
 
 {
 
-    "ema_span": 1000,             # ema is calculated based on sequence of trades, not ohlcvs.
+    "ema_spans": [1000, ...],     # emas are calculated based on sequence of trades, not ohlcvs.
     
                                   # so 50 trades during one minute is the same as 50 trades during one hour
                                   
+                                  # entry bid is < min(emas) and entry ask is > max(emas)
+                                  
     "entry_amount": 0.001,        # initial entry amount
     
-    "flashcrash_factor": 0.001,   # if no position, enters long at ema * (1 - flashcrash_factor) and short at ema * (1 + flashcrash_factor)
+    "spread": 0.001,              # if no position, enters long at min(emas) * (1 - spread) and short at max(emas) * (1 + spread)
     
     "leverage": 100,              # leverage.  bot will set leverage to this value at startup
     
