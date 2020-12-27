@@ -42,7 +42,7 @@ overview
 
 the bot's purpose is to accumulate usdt in binance futures, btc in bybit inverse
 
-will make entries automatically, but will also work with user making manual entries and adding to or removing from positions
+will make entries automatically, but will also work with user making manual entries and adding to or removing from positions while the bot is active
 
 it works by entering small, then either closing position at static markup or doubling down at liquidation price
 
@@ -52,13 +52,13 @@ position size is doubled after each doubling down
 
 more detailed:
 
-if there is no position, it will make small long entry if price / ema < (1 - flashcrash_factor) or small short entry if price / ema > (1 + flashcrash_factor)
+if there is no position, it will enter long if price < min(emas) * (1 - spread), or short if price > max(emas) * (1 + spread)
 
 if there is a long position, it will make a double down bid of amount equal to position size and price equal to entry_price * (1 - (1 / leverage) / 2), and an exit ask whose amount is equal to position size and price is entry_price * (1 + markup)
 
 if there is a short position, it will make a double down ask of amount equal to position size and price equal to entry_price * (1 + (1 / leverage) / 2), and an exit bid whose amount is equal to position size and price is entry_price * (1 - markup)
 
-it listens to websocket live stream of aggregated trades, and updates its orders continuously
+it listens to websocket live stream of trades, and updates its orders continuously
 
 ------------------------------------------------------------------
 
