@@ -4,8 +4,9 @@ import pandas as pd
 import asyncio
 import os
 from time import time
-from passivbot import init_ccxt, make_get_filepath, ts_to_date, print_, load_settings
-from binance import load_trades
+from passivbot import init_ccxt, make_get_filepath, ts_to_date, print_
+from binance import fetch_trades as binance_fetch_trades
+from bybit import fetch_trades as bybit_fetch_trades
 from typing import Iterator
 
 
@@ -196,18 +197,18 @@ def jackrabbit(agg_trades: pd.DataFrame):
 
 
     #((57096.0, 84029.0), 85.0, 0.00295)
-    best = {'ema_spans': (57096, 84029),
-            'leverage': 85,
-            'markup': 0.00295,
+    best = {'ema_spans': (50000, 50000),
+            'leverage': 90,
+            'markup': 0.0015,
             'spread': 0.0}
 
 
     ranges = {'ema_spans': (1000, 300000, 0),
               'leverage':  (50, 125, 0),
-              'markup': (0.0002, 0.006, 5),
-              'spread': (-0.002, 0.002, 5)}
+              'markup': (0.001, 0.006, 6),
+              'spread': (-0.002, 0.002, 6)}
 
-    margin_cost_limit = 500
+    margin_cost_limit = 1000
 
     results = {}
     best_gain = 0
@@ -226,14 +227,11 @@ def jackrabbit(agg_trades: pd.DataFrame):
     results_filename = make_get_filepath(f'jackrabbit_results/{ts_to_date(time())[:19]}.txt')
     results_filename_csv = make_get_filepath(f'jackrabbit_results/{ts_to_date(time())[:19]}.csv')
 
-    symbol = 'BTCUSDT'
-    n_days = 10
-
     conditions = [
         lambda r: r['n_trades'] > 100
     ]
 
-    while k < ks:
+    while k < ks - 1:
         try:
             k += 1
             adf = agg_trades
@@ -281,6 +279,110 @@ def jackrabbit(agg_trades: pd.DataFrame):
         except KeyboardInterrupt:
             return results
     return results
+
+
+def iter_chunks(exchange: str, symbol: str) -> Iterator[pd.DataFrame]:
+    chunk_size = 100000
+    filepath = f'historical_data/{exchange}/agg_trades_futures/{symbol}/'
+    if os.path.isdir(filepath):
+        filenames = sorted([f for f in os.listdir(filepath) if f.endswith('.csv')])
+        for f in filenames[::-1]:
+            chunk = pd.read_csv(filepath + f).set_index('trade_id')
+            if chunk is not None:
+                print('loaded chunk of trades', f, ts_to_date(chunk.timestamp.iloc[0] / 1000))
+                yield chunk
+            else:
+                yield None
+        yield None
+    else:
+        yield None
+
+
+async def load_trades(exchange: str, symbol: str, n_days: float) -> pd.DataFrame:
+    cc = init_ccxt(exchange, 'example_user')
+    if exchange == 'binance':
+        fetch_trades_func = binance_fetch_trades
+    elif exchange == 'bybit':
+        fetch_trades_func = bybit_fetch_trades
+    else:
+        print(exchange, 'not found')
+        return
+    filepath = make_get_filepath(f'historical_data/{exchange}/agg_trades_futures/{symbol}/')
+    cache_filepath = make_get_filepath(
+        f'historical_data/{exchange}/agg_trades_futures/{symbol}_cache/'
+    )
+    cache_filenames = [f for f in os.listdir(cache_filepath) if f.endswith('.csv')]
+    ids = set()
+    if cache_filenames:
+        print('loaded cached trades')
+        cached_trades = pd.concat([pd.read_csv(cache_filepath + f) for f in cache_filenames],
+                                  axis=0)
+        cached_trades = cached_trades.set_index('trade_id').sort_index()
+        cached_trades = cached_trades[~cached_trades.index.duplicated()]
+        ids.update(cached_trades.index)
+    else:
+        cached_trades = None
+    age_limit = time() - 60 * 60 * 24 * n_days
+    age_limit_millis = age_limit * 1000
+    print('age_limit', ts_to_date(age_limit))
+    chunk_iterator = iter_chunks(exchange, symbol)
+    chunk = next(chunk_iterator)
+    chunks = {} if chunk is None else {int(chunk.index[0]): chunk}
+    if chunk is not None:
+        ids.update(chunk.index)
+    min_id = min(ids) if ids else 0
+    new_trades = await fetch_trades_func(cc, symbol)
+    cached_ids = set()
+    k = 0
+    while True:
+        if new_trades[0]['timestamp'] <= age_limit_millis:
+            break
+        from_id = new_trades[0]['trade_id'] - 1
+        while True:
+            if chunk is None:
+                min_id = 0
+                break
+            if from_id in ids:
+                print('skipping from', from_id)
+                while from_id in ids:
+                    from_id -= 1
+                print('           to', from_id)
+            if from_id < min_id:
+                chunk = next(chunk_iterator)
+                if chunk is None:
+                    min_id = 0
+                    break
+                else:
+                    chunks[int(chunk.index[0])] = chunk
+                    ids.update(chunk.index)
+                    min_id = min(ids)
+                    if chunk.timestamp.max() < age_limit_millis:
+                        break
+            else:
+                break
+        from_id -= 999
+        new_trades = await fetch_trades_func(cc, symbol, from_id=from_id) + new_trades
+        k += 1
+        if k % 20 == 0:
+            print('dumping cache')
+            cache_df = pd.DataFrame([t for t in new_trades
+                                     if t['trade_id'] not in cached_ids]).set_index('trade_id')
+            cache_df.to_csv(cache_filepath + str(int(time() * 1000)) + '.csv')
+            cached_ids.update(cache_df.index)
+    new_trades_df = pd.DataFrame(new_trades).set_index('trade_id')
+    trades_updated = pd.concat(list(chunks.values()) + [new_trades_df, cached_trades], axis=0)
+    no_dup = trades_updated[~trades_updated.index.duplicated()]
+    no_dup_sorted = no_dup.sort_index()
+    chunk_size = 100000
+    chunk_ids = no_dup_sorted.index // chunk_size * chunk_size
+    for g in no_dup_sorted.groupby(chunk_ids):
+        if g[0] not in chunks or len(chunks[g[0]]) != chunk_size:
+            print('dumping chunk', g[0])
+            g[1].to_csv(f'{filepath}{str(g[0])}.csv')
+    for f in [f_ for f_ in os.listdir(cache_filepath) if f_.endswith('.csv')]:
+        os.remove(cache_filepath + f)
+    await cc.close()
+    return no_dup_sorted[no_dup_sorted.timestamp >= age_limit_millis]
 
 
 async def main():
