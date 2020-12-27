@@ -4,7 +4,7 @@ import pandas as pd
 import asyncio
 import os
 from time import time
-from passivbot import init_ccxt, make_get_filepath, ts_to_date, print_
+from passivbot import init_ccxt, make_get_filepath, ts_to_date, print_, load_settings
 from binance import fetch_trades as binance_fetch_trades
 from bybit import fetch_trades as bybit_fetch_trades
 from typing import Iterator
@@ -29,7 +29,6 @@ def backtest(adf: pd.DataFrame,
     liq_multiplier = (1 / leverage) / 2
 
     margin_cost_max = 0
-    margin_cost = 0.0
     realized_pnl_sum = 0.0
     n_double_downs = 0
 
@@ -37,7 +36,6 @@ def backtest(adf: pd.DataFrame,
     entry_price = 0.0
     exit_price = 0.0
     liq_price = 0.0
-    double_down_price = 0.0
 
     trades = []
 
@@ -68,7 +66,6 @@ def backtest(adf: pd.DataFrame,
                 entry_price = row.price
                 liq_price = entry_price * (1 - liq_multiplier)
                 exit_price = entry_price * (1 + markup)
-                double_down_price = liq_price
                 cost = entry_amount * entry_price
                 trades.append({'timestamp': row.timestamp, 'side': 'buy', 'type': 'entry',
                                'trade_id': row.Index, 'price': entry_price,
@@ -76,13 +73,12 @@ def backtest(adf: pd.DataFrame,
                                'margin_cost': cost / leverage, 'realized_pnl': 0.0,
                                'fee': cost * taker_fee,
                                'n_double_downs': -1})
-                realized_pnl_sum -= trades[-1]['fee']
+                do_print = True
             elif row.price > getattr(row, max_name) * spread_plus:
                 pos_amount = -entry_amount
                 entry_price = row.price
                 liq_price = entry_price * (1 + liq_multiplier)
                 exit_price = entry_price * (1 - markup)
-                double_down_price = liq_price
                 cost = entry_amount * entry_price
                 trades.append({'timestamp': row.timestamp, 'side': 'sel', 'type': 'entry',
                                'trade_id': row.Index, 'price': entry_price,
@@ -90,7 +86,7 @@ def backtest(adf: pd.DataFrame,
                                'margin_cost': cost / leverage, 'realized_pnl': 0.0,
                                'fee': cost * taker_fee,
                                'n_double_downs': -1})
-                realized_pnl_sum -= trades[-1]['fee']
+                do_print = True
         elif pos_amount > 0.0:
             # long position
             if row.price >= exit_price:
@@ -101,27 +97,37 @@ def backtest(adf: pd.DataFrame,
                                'margin_cost': cost / leverage, 'realized_pnl': realized_pnl,
                                'fee': cost * maker_fee,
                                'n_double_downs': -1})
-                realized_pnl_sum += trades[-1]['realized_pnl'] - trades[-1]['fee']
-                margin_cost_max = max(margin_cost_max, trades[-1]['margin_cost'])
                 do_print = True
                 pos_amount = 0.0
                 n_double_downs = 0
-            elif row.price <= double_down_price:
-                n_double_downs += 1
-                cost = pos_amount * double_down_price
-                trades.append({'timestamp': row.timestamp, 'side': 'buy', 'type': 'entry',
-                               'trade_id': row.Index, 'price': double_down_price,
-                               'amount': pos_amount, 'margin_cost': cost / leverage,
-                               'realized_pnl': 0.0, 'fee': cost * maker_fee,
-                               'n_double_downs': n_double_downs})
-                realized_pnl_sum += trades[-1]['realized_pnl'] - trades[-1]['fee']
-                margin_cost_max = max(margin_cost_max, trades[-1]['margin_cost'])
-                entry_price = (entry_price + double_down_price) / 2
-                pos_amount *= 2
-                liq_price = entry_price * (1 - liq_multiplier)
-                exit_price = entry_price * (1 + markup)
-                double_down_price = liq_price
-                do_print = True
+            elif row.price <= liq_price:
+                cost = pos_amount * liq_price
+                margin_cost = cost / leverage
+                if margin_cost >= margin_cost_limit / 2:
+                    # liquidation
+                    realized_pnl = -margin_cost
+                    trades.append({'timestamp': row.timestamp, 'side': 'sel', 'type': 'liquidation',
+                                   'trade_id': row.Index, 'price': liq_price,
+                                   'amount': pos_amount,
+                                   'margin_cost': margin_cost, 'realized_pnl': realized_pnl,
+                                   'fee': 0.0,
+                                   'n_double_downs': -1})
+                    do_print = True
+                    pos_amount = 0.0
+                    n_double_downs = 0
+                else:
+                    # double down
+                    n_double_downs += 1
+                    trades.append({'timestamp': row.timestamp, 'side': 'buy', 'type': 'ddown',
+                                   'trade_id': row.Index, 'price': liq_price,
+                                   'amount': pos_amount, 'margin_cost': margin_cost,
+                                   'realized_pnl': 0.0, 'fee': cost * maker_fee,
+                                   'n_double_downs': n_double_downs})
+                    entry_price = (entry_price + liq_price) / 2
+                    pos_amount *= 2
+                    liq_price = entry_price * (1 - liq_multiplier)
+                    exit_price = entry_price * (1 + markup)
+                    do_print = True
         else:
             # shrt position
             if row.price <= exit_price:
@@ -132,34 +138,46 @@ def backtest(adf: pd.DataFrame,
                                'margin_cost': cost / leverage, 'realized_pnl': realized_pnl,
                                'fee': cost * maker_fee,
                                'n_double_downs': -1})
-                realized_pnl_sum += trades[-1]['realized_pnl'] - trades[-1]['fee']
-                margin_cost_max = max(margin_cost_max, trades[-1]['margin_cost'])
                 do_print = True
                 pos_amount = 0.0
                 n_double_downs = 0
-            elif row.price >= double_down_price:
-                n_double_downs += 1
-                cost = -pos_amount * double_down_price
-                trades.append({'timestamp': row.timestamp, 'side': 'sel', 'type': 'entry',
-                               'trade_id': row.Index, 'price': double_down_price,
-                               'amount': pos_amount, 'margin_cost': cost / leverage,
-                               'realized_pnl': 0.0, 'fee': cost * maker_fee,
-                               'n_double_downs': n_double_downs})
-                realized_pnl_sum += trades[-1]['realized_pnl'] - trades[-1]['fee']
-                margin_cost_max = max(margin_cost_max, trades[-1]['margin_cost'])
-                entry_price = (entry_price + double_down_price) / 2
-                pos_amount *= 2
-                liq_price = entry_price * (1 + liq_multiplier)
-                exit_price = entry_price * (1 - markup)
-                double_down_price = liq_price
-                do_print = True
+            elif row.price >= liq_price:
+                cost = -pos_amount * liq_price
+                margin_cost = cost / leverage
+                #print('margin_cost', margin_cost)
+                if margin_cost >= margin_cost_limit / 2:
+                    # liquidation
+                    cost = -pos_amount * exit_price
+                    realized_pnl = -margin_cost
+                    trades.append({'timestamp': row.timestamp, 'side': 'buy', 'type': 'liquidation',
+                                   'trade_id': row.Index, 'price': exit_price, 'amount': pos_amount,
+                                   'margin_cost': margin_cost, 'realized_pnl': realized_pnl,
+                                   'fee': 0.0,
+                                   'n_double_downs': -1})
+                    do_print = True
+                    pos_amount = 0.0
+                    n_double_downs = 0
+                else:
+                    n_double_downs += 1
+                    trades.append({'timestamp': row.timestamp, 'side': 'sel', 'type': 'ddown',
+                                   'trade_id': row.Index, 'price': liq_price,
+                                   'amount': pos_amount, 'margin_cost': cost / leverage,
+                                   'realized_pnl': 0.0, 'fee': cost * maker_fee,
+                                   'n_double_downs': n_double_downs})
+                    entry_price = (entry_price + liq_price) / 2
+                    pos_amount *= 2
+                    liq_price = entry_price * (1 + liq_multiplier)
+                    exit_price = entry_price * (1 - markup)
+                    do_print = True
         if do_print:
+            realized_pnl_sum += trades[-1]['realized_pnl'] - trades[-1]['fee']
+            margin_cost_max = max(margin_cost_max, trades[-1]['margin_cost'])
             line = f'\r{(row.Index - adf.index[0]) / idxrange:.4f} {realized_pnl_sum:.2f} '
             line += f'{margin_cost_max:.2f} '
             print(line, end=' ')
-            if margin_cost_limit and margin_cost_max >= margin_cost_limit:
-                print('margin_cost_limit exceeded')
-                break
+            #if margin_cost_limit and margin_cost_max >= margin_cost_limit:
+            #    print('margin_cost_limit exceeded')
+            #    break
 
 
     return trades, adf
@@ -203,12 +221,12 @@ def jackrabbit(agg_trades: pd.DataFrame):
             'spread': 0.0}
 
 
-    ranges = {'ema_spans': (1000, 300000, 0),
-              'leverage':  (50, 125, 0),
+    ranges = {'ema_spans': (1000, 250000, 0),
+              'leverage':  (40, 125, 0),
               'markup': (0.001, 0.006, 6),
               'spread': (-0.002, 0.002, 6)}
 
-    margin_cost_limit = 1000
+    margin_cost_limit = 160
 
     results = {}
     best_gain = 0
@@ -263,6 +281,7 @@ def jackrabbit(agg_trades: pd.DataFrame):
             result['max_n_ddown'] = tdf.n_double_downs.max()
             result['mean_n_ddown'] = tdf[tdf.n_double_downs >= 0].n_double_downs.mean()
             result['margin_cost_max'] = tdf.margin_cost.max()
+            result['n_liquidations'] = len(tdf[tdf.type == 'liquidation'])
             result['gain'] = (result['net_pnl'] + result['margin_cost_max']) / \
                 result['margin_cost_max']
             results[key] = result
@@ -386,9 +405,16 @@ async def load_trades(exchange: str, symbol: str, n_days: float) -> pd.DataFrame
 
 
 async def main():
-    n_days = 40
+    n_days = 21
+    exchange = 'binance'
     symbol = 'BTCUSDT'
-    agg_trades = await load_trades(symbol, n_days)
+    filename = f'btcusdt_agg_trades_{n_days}_days_{ts_to_date(time())[:10]}.csv'
+    if os.path.isfile(filename):
+        print('loading trades...')
+        agg_trades = pd.read_csv(filename).set_index('trade_id')
+    else:
+        agg_trades = await load_trades(exchange, symbol, n_days)
+        agg_trades.to_csv(filename)
     jackrabbit(agg_trades)
 
 
