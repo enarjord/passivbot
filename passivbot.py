@@ -259,7 +259,7 @@ class Bot:
                     self.position['liquidation_price'] + 0.000001
                 ))
 
-                for k in range(3):
+                for k in range(4):
                     margin_cost = self.calc_margin_cost(ddown_amount, ddown_price)
                     if margin_cost < available_balance:
                         orders.append({'side': 'buy', 'amount': ddown_amount,
@@ -285,7 +285,7 @@ class Bot:
                     self.position['liquidation_price'] - 0.000001
                 ))
 
-                for k in range(3):
+                for k in range(4):
                     margin_cost = self.calc_margin_cost(ddown_amount, ddown_price)
 
                     if margin_cost < available_balance:
