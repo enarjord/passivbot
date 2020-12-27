@@ -136,7 +136,7 @@ class BinanceBot(Bot):
         uri = f"wss://fstream.binance.com/ws/{self.symbol.lower()}@aggTrade"
         print_([uri])
         try:
-            print(await self.cc.fapiPrivate_post_marginType(params={'symbol': self.symbol,
+            print(await self.cc.fapiPrivate_post_margintype(params={'symbol': self.symbol,
                                                                     'marginType': 'CROSSED'}))
         except Exception as e:
             print(e)
