@@ -103,10 +103,9 @@ def backtest(adf: pd.DataFrame,
             # long position
             if row.price > exit_price:
                 cost = calc_cost(pos_amount, exit_price)
-                realized_pnl = cost * markup
                 trades.append({'timestamp': row.timestamp, 'side': 'sel', 'type': 'exit',
                                'trade_id': row.Index, 'price': exit_price, 'amount': pos_amount,
-                               'margin_cost': cost / leverage, 'realized_pnl': realized_pnl,
+                               'margin_cost': cost / leverage, 'realized_pnl': cost * markup,
                                'fee': cost * maker_fee,
                                'n_double_downs': -1})
                 do_print = True
@@ -117,11 +116,10 @@ def backtest(adf: pd.DataFrame,
                 margin_cost = cost / leverage
                 if margin_cost >= margin_cost_limit / 2:
                     # liquidation
-                    realized_pnl = -margin_cost
                     trades.append({'timestamp': row.timestamp, 'side': 'sel', 'type': 'liquidation',
                                    'trade_id': row.Index, 'price': liq_price,
                                    'amount': pos_amount,
-                                   'margin_cost': margin_cost, 'realized_pnl': realized_pnl,
+                                   'margin_cost': margin_cost, 'realized_pnl': -margin_cost,
                                    'fee': 0.0,
                                    'n_double_downs': -1})
                     do_print = True
@@ -144,10 +142,9 @@ def backtest(adf: pd.DataFrame,
             # shrt position
             if row.price < exit_price:
                 cost = calc_cost(-pos_amount, exit_price)
-                realized_pnl = cost * markup
                 trades.append({'timestamp': row.timestamp, 'side': 'buy', 'type': 'exit',
                                'trade_id': row.Index, 'price': exit_price, 'amount': pos_amount,
-                               'margin_cost': cost / leverage, 'realized_pnl': realized_pnl,
+                               'margin_cost': cost / leverage, 'realized_pnl': cost * markup,
                                'fee': cost * maker_fee,
                                'n_double_downs': -1})
                 do_print = True
@@ -158,10 +155,9 @@ def backtest(adf: pd.DataFrame,
                 margin_cost = cost / leverage
                 if margin_cost >= margin_cost_limit / 2:
                     # liquidation
-                    realized_pnl = -margin_cost
                     trades.append({'timestamp': row.timestamp, 'side': 'buy', 'type': 'liquidation',
                                    'trade_id': row.Index, 'price': exit_price, 'amount': pos_amount,
-                                   'margin_cost': margin_cost, 'realized_pnl': realized_pnl,
+                                   'margin_cost': margin_cost, 'realized_pnl': -margin_cost,
                                    'fee': 0.0,
                                    'n_double_downs': -1})
                     do_print = True
@@ -204,7 +200,7 @@ def get_new_candidate(ranges: dict, best: dict, m=0.2):
             new_candidate[key] = tuple(sorted([calc_new_val(e, ranges[key]) for e in best[key]]))
         else:
             new_candidate[key] = calc_new_val(best[key], ranges[key])
-    return new_candidate
+    return {k_: new_candidate[k_] for k_ in sorted(new_candidate)}
 
 
 def jackrabbit(exchange: str, agg_trades: pd.DataFrame):
@@ -221,12 +217,7 @@ def jackrabbit(exchange: str, agg_trades: pd.DataFrame):
 
 
 
-    #((57096.0, 84029.0), 85.0, 0.00295)
-    best = {'ema_spans': (50000, 50000),
-            'leverage': 90,
-            'markup': 0.0015,
-            'spread': 0.0}
-
+    '''
     best = {'ema_spans': (39256.0, 90333.0),
             'leverage': 79.0,
             'markup': 0.002025,
@@ -236,21 +227,29 @@ def jackrabbit(exchange: str, agg_trades: pd.DataFrame):
             "spread": -0.000149,
             "leverage": 91,
             "markup": 0.00093}
-
+    '''
 
 
     if exchange == 'bybit':
+        best = {'ema_spans': (20174, 61286),
+                'leverage': 86.7,
+                'markup': 0.0009,
+                'spread': 0.0}
         ranges = {'ema_spans': (2000, 250000, 0),
                   'leverage':  (40, 100, 1),
                   'markup': (0.0003, 0.006, 6),
                   'spread': (-0.002, 0.002, 6)}
         price_step = 0.5
         inverse = True
-        margin_cost_limit = 0.001
+        margin_cost_limit = 0.004
         maker_fee = -0.00025
         taker_fee = 0.00075
         settings['entry_amount'] = 1
     elif exchange == 'binance':
+        best = {'ema_spans': (50000, 50000),
+                'leverage': 90,
+                'markup': 0.0015,
+                'spread': 0.0}
         ranges = {'ema_spans': (2000, 250000, 0),
                   'leverage':  (40, 125, 0),
                   'markup': (0.0006, 0.006, 6),
@@ -264,8 +263,10 @@ def jackrabbit(exchange: str, agg_trades: pd.DataFrame):
     else:
         raise Exception(f'exchage {exchange} not found')
 
+    best = {k_: best[k_] for k_ in sorted(best)}
+
     results = {}
-    best_gain = 0
+    best_gain = -99999
     candidate = best
 
     ks = 200
@@ -277,10 +278,10 @@ def jackrabbit(exchange: str, agg_trades: pd.DataFrame):
         f'jackrabbit_results/{exchange}/{ts_to_date(time())[:19]}'
     )
 
-    min_n_trades = len(agg_trades) / 10000
+    min_n_trades = len(agg_trades) / 5000
     print('min_n_trades', min_n_trades)
     conditions = [
-        lambda r: r['n_trades'] > len(agg_trades) / 5000
+        lambda r: r['n_trades'] > min_n_trades
     ]
 
     while k < ks - 1:
@@ -354,90 +355,99 @@ def iter_chunks(exchange: str, symbol: str) -> Iterator[pd.DataFrame]:
 
 
 async def load_trades(exchange: str, user: str, symbol: str, n_days: float) -> pd.DataFrame:
+
+    def skip_ids(id_, ids_):
+        if id_ in ids_:
+            print('skipping from', id_)
+            while id_ in ids_:
+                id_ -= 1
+            print('           to', from_id)
+        return id_
+
     cc = init_ccxt(exchange, user)
-    if exchange == 'binance':
-        fetch_trades_func = binance_fetch_trades
-    elif exchange == 'bybit':
-        fetch_trades_func = bybit_fetch_trades
-    else:
-        print(exchange, 'not found')
-        return
-    filepath = make_get_filepath(f'historical_data/{exchange}/agg_trades_futures/{symbol}/')
-    cache_filepath = make_get_filepath(
-        f'historical_data/{exchange}/agg_trades_futures/{symbol}_cache/'
-    )
-    cache_filenames = [f for f in os.listdir(cache_filepath) if f.endswith('.csv')]
-    ids = set()
-    if cache_filenames:
-        print('loading cached trades...')
-        cached_trades = pd.concat([pd.read_csv(cache_filepath + f) for f in cache_filenames],
-                                  axis=0)
-        cached_trades = cached_trades.set_index('trade_id').sort_index()
-        cached_trades = cached_trades[~cached_trades.index.duplicated()]
-        ids.update(cached_trades.index)
-    else:
-        cached_trades = None
-    age_limit = time() - 60 * 60 * 24 * n_days
-    age_limit_millis = age_limit * 1000
-    print('age_limit', ts_to_date(age_limit))
-    chunk_iterator = iter_chunks(exchange, symbol)
-    chunk = next(chunk_iterator)
-    chunks = {} if chunk is None else {int(chunk.index[0]): chunk}
-    if chunk is not None:
-        ids.update(chunk.index)
-    min_id = min(ids) if ids else 0
-    new_trades = await fetch_trades_func(cc, symbol)
-    cached_ids = set()
-    k = 0
-    while True:
-        if new_trades[0]['timestamp'] <= age_limit_millis:
-            break
-        from_id = new_trades[0]['trade_id'] - 1
+    try:
+        if exchange == 'binance':
+            fetch_trades_func = binance_fetch_trades
+        elif exchange == 'bybit':
+            fetch_trades_func = bybit_fetch_trades
+        else:
+            print(exchange, 'not found')
+            return
+        filepath = make_get_filepath(f'historical_data/{exchange}/agg_trades_futures/{symbol}/')
+        cache_filepath = make_get_filepath(
+            f'historical_data/{exchange}/agg_trades_futures/{symbol}_cache/'
+        )
+        cache_filenames = [f for f in os.listdir(cache_filepath) if f.endswith('.csv')]
+        ids = set()
+        if cache_filenames:
+            print('loading cached trades...')
+            cached_trades = pd.concat([pd.read_csv(cache_filepath + f) for f in cache_filenames],
+                                      axis=0)
+            cached_trades = cached_trades.set_index('trade_id').sort_index()
+            cached_trades = cached_trades[~cached_trades.index.duplicated()]
+            ids.update(cached_trades.index)
+        else:
+            cached_trades = None
+        age_limit = time() - 60 * 60 * 24 * n_days
+        age_limit_millis = age_limit * 1000
+        print('age_limit', ts_to_date(age_limit))
+        chunk_iterator = iter_chunks(exchange, symbol)
+        chunk = next(chunk_iterator)
+        chunks = {} if chunk is None else {int(chunk.index[0]): chunk}
+        if chunk is not None:
+            ids.update(chunk.index)
+        min_id = min(ids) if ids else 0
+        new_trades = await fetch_trades_func(cc, symbol)
+        cached_ids = set()
+        k = 0
         while True:
-            if chunk is None:
-                min_id = 0
+            if new_trades[0]['timestamp'] <= age_limit_millis:
                 break
-            if from_id in ids:
-                print('skipping from', from_id)
-                while from_id in ids:
-                    from_id -= 1
-                print('           to', from_id)
-            if from_id < min_id:
-                chunk = next(chunk_iterator)
+            from_id = new_trades[0]['trade_id'] - 1
+            while True:
                 if chunk is None:
                     min_id = 0
                     break
-                else:
-                    chunks[int(chunk.index[0])] = chunk
-                    ids.update(chunk.index)
-                    min_id = min(ids)
-                    if chunk.timestamp.max() < age_limit_millis:
+                from_id = skip_ids(from_id, ids)
+                if from_id < min_id:
+                    chunk = next(chunk_iterator)
+                    if chunk is None:
+                        min_id = 0
                         break
-            else:
-                break
-        from_id -= 999
-        new_trades = await fetch_trades_func(cc, symbol, from_id=from_id) + new_trades
-        k += 1
-        if k % 20 == 0:
-            print('dumping cache')
-            cache_df = pd.DataFrame([t for t in new_trades
-                                     if t['trade_id'] not in cached_ids]).set_index('trade_id')
-            cache_df.to_csv(cache_filepath + str(int(time() * 1000)) + '.csv')
-            cached_ids.update(cache_df.index)
-    new_trades_df = pd.DataFrame(new_trades).set_index('trade_id')
-    trades_updated = pd.concat(list(chunks.values()) + [new_trades_df, cached_trades], axis=0)
-    no_dup = trades_updated[~trades_updated.index.duplicated()]
-    no_dup_sorted = no_dup.sort_index()
-    chunk_size = 100000
-    chunk_ids = no_dup_sorted.index // chunk_size * chunk_size
-    for g in no_dup_sorted.groupby(chunk_ids):
-        if g[0] not in chunks or len(chunks[g[0]]) != chunk_size:
-            print('dumping chunk', g[0])
-            g[1].to_csv(f'{filepath}{str(g[0])}.csv')
-    for f in [f_ for f_ in os.listdir(cache_filepath) if f_.endswith('.csv')]:
-        os.remove(cache_filepath + f)
-    await cc.close()
-    return no_dup_sorted[no_dup_sorted.timestamp >= age_limit_millis]
+                    else:
+                        chunks[int(chunk.index[0])] = chunk
+                        ids.update(chunk.index)
+                        min_id = min(ids)
+                        if chunk.timestamp.max() < age_limit_millis:
+                            break
+                else:
+                    break
+            from_id = skip_ids(from_id, ids)
+            from_id -= 999
+            new_trades = await fetch_trades_func(cc, symbol, from_id=from_id) + new_trades
+            k += 1
+            if k % 20 == 0:
+                print('dumping cache')
+                cache_df = pd.DataFrame([t for t in new_trades
+                                         if t['trade_id'] not in cached_ids]).set_index('trade_id')
+                cache_df.to_csv(cache_filepath + str(int(time() * 1000)) + '.csv')
+                cached_ids.update(cache_df.index)
+        new_trades_df = pd.DataFrame(new_trades).set_index('trade_id')
+        trades_updated = pd.concat(list(chunks.values()) + [new_trades_df, cached_trades], axis=0)
+        no_dup = trades_updated[~trades_updated.index.duplicated()]
+        no_dup_sorted = no_dup.sort_index()
+        chunk_size = 100000
+        chunk_ids = no_dup_sorted.index // chunk_size * chunk_size
+        for g in no_dup_sorted.groupby(chunk_ids):
+            if g[0] not in chunks or len(chunks[g[0]]) != chunk_size:
+                print('dumping chunk', g[0])
+                g[1].to_csv(f'{filepath}{str(g[0])}.csv')
+        for f in [f_ for f_ in os.listdir(cache_filepath) if f_.endswith('.csv')]:
+            os.remove(cache_filepath + f)
+        await cc.close()
+        return no_dup_sorted[no_dup_sorted.timestamp >= age_limit_millis]
+    except KeyboardInterrupt:
+        await cc.close()
 
 
 async def main():
