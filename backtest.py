@@ -227,28 +227,40 @@ def jackrabbit(exchange: str, agg_trades: pd.DataFrame):
             'markup': 0.0015,
             'spread': 0.0}
 
-    best = {'ema_spans': (39256.0, 90333.0), 'leverage': 79.0,
-            'markup': 0.002025, 'spread': 0.000239}
+    best = {'ema_spans': (39256.0, 90333.0),
+            'leverage': 79.0,
+            'markup': 0.002025,
+            'spread': 0.000239}
 
+    best = {"ema_spans": (45876, 67689),
+            "spread": -0.000149,
+            "leverage": 91,
+            "markup": 0.00093}
 
-    ranges = {'ema_spans': (5000, 250000, 0),
-              'leverage':  (40, 125, 0),
-              'markup': (0.001, 0.006, 6),
-              'spread': (-0.002, 0.002, 6)}
 
 
     if exchange == 'bybit':
+        ranges = {'ema_spans': (2000, 250000, 0),
+                  'leverage':  (40, 100, 1),
+                  'markup': (0.0003, 0.006, 6),
+                  'spread': (-0.002, 0.002, 6)}
         price_step = 0.5
         inverse = True
-        margin_cost_limit = 0.0045
+        margin_cost_limit = 0.001
         maker_fee = -0.00025
         taker_fee = 0.00075
+        settings['entry_amount'] = 1
     elif exchange == 'binance':
+        ranges = {'ema_spans': (2000, 250000, 0),
+                  'leverage':  (40, 125, 0),
+                  'markup': (0.0006, 0.006, 6),
+                  'spread': (-0.002, 0.002, 6)}
         price_step = 0.01
         inverse = False
         margin_cost_limit = 160
         maker_fee = 0.00018
         taker_fee = 0.00036
+        settings['entry_amount'] = 0.001
     else:
         raise Exception(f'exchage {exchange} not found')
 
@@ -268,7 +280,7 @@ def jackrabbit(exchange: str, agg_trades: pd.DataFrame):
     min_n_trades = len(agg_trades) / 10000
     print('min_n_trades', min_n_trades)
     conditions = [
-        lambda r: r['n_trades'] > len(agg_trades) / 10000
+        lambda r: r['n_trades'] > len(agg_trades) / 5000
     ]
 
     while k < ks - 1:
@@ -357,7 +369,7 @@ async def load_trades(exchange: str, user: str, symbol: str, n_days: float) -> p
     cache_filenames = [f for f in os.listdir(cache_filepath) if f.endswith('.csv')]
     ids = set()
     if cache_filenames:
-        print('loaded cached trades')
+        print('loading cached trades...')
         cached_trades = pd.concat([pd.read_csv(cache_filepath + f) for f in cache_filenames],
                                   axis=0)
         cached_trades = cached_trades.set_index('trade_id').sort_index()
