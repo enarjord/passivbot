@@ -255,7 +255,7 @@ class Bot:
                 entry_price = self.position['entry_price']
                 ddown_amount = self.position['size']
                 ddown_price = self.round_up(max(
-                    entry_price * (1 - (1 / self.position['leverage']) / 2),
+                    entry_price * (1 - (1 / self.leverage) / 2),
                     self.position['liquidation_price'] + 0.000001
                 ))
 
@@ -269,7 +269,7 @@ class Bot:
                         break
                     entry_price = (ddown_price + entry_price) / 2
                     ddown_price = self.round_up(
-                        entry_price * (1 - (1 / self.position['leverage']) / 2)
+                        entry_price * (1 - (1 / self.leverage) / 2)
                     )
                     ddown_amount *= 2
                 orders.append({
@@ -281,7 +281,7 @@ class Bot:
                 ddown_amount = pos_size
                 entry_price = self.position['entry_price']
                 ddown_price = self.round_dn(min(
-                    entry_price * (1 + (1 / self.position['leverage']) / 2),
+                    entry_price * (1 + (1 / self.leverage) / 2),
                     self.position['liquidation_price'] - 0.000001
                 ))
 
@@ -296,7 +296,7 @@ class Bot:
                         break
                     entry_price = (ddown_price + entry_price) / 2
                     ddown_price = self.round_dn(
-                        entry_price * (1 + (1 / self.position['leverage']) / 2)
+                        entry_price * (1 + (1 / self.leverage) / 2)
                     )
                     ddown_amount *= 2
                 orders.append({
