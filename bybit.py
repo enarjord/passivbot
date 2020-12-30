@@ -106,7 +106,7 @@ class BybitBot(Bot):
     async def execute_bid(self, amount: float, price: float) -> dict:
         o = await self.cc.private_post_order_create(
             params={'symbol': self.symbol, 'side': 'Buy', 'order_type': 'Limit',
-                    'time_in_force': 'PostOnly', 'qty': amount, 'price': price}
+                    'time_in_force': 'GoodTillCancel', 'qty': amount, 'price': price}
         )
         return {'symbol': o['result']['symbol'],
                 'side': 'buy',
@@ -117,7 +117,7 @@ class BybitBot(Bot):
     async def execute_ask(self, amount: float, price: float) -> dict:
         o = await self.cc.private_post_order_create(
             params={'symbol': self.symbol, 'side': 'Sell', 'order_type': 'Limit',
-                    'time_in_force': 'PostOnly', 'qty': amount, 'price': price}
+                    'time_in_force': 'GoodTillCancel', 'qty': amount, 'price': price}
         )
         return {'symbol': o['result']['symbol'],
                 'side': 'sell',
