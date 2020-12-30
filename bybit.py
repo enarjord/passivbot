@@ -7,22 +7,23 @@ import sys
 import numpy as np
 import pandas as pd
 import pprint
-import datetime
-import ciso8601
+from datetime import datetime
 from math import ceil
 from math import floor
 from time import time, sleep
 from typing import Callable, Iterator
 from passivbot import init_ccxt, load_key_secret, load_settings, make_get_filepath, print_, \
     ts_to_date, flatten, calc_new_ema, filter_orders, Bot, start_bot
+from binance import fetch_trades as fetch_trades_binance
 
 
 async def fetch_trades(cc, symbol: str, from_id: int = None) -> [dict]:
+
     params = {'symbol': symbol, 'limit': 1000}
     if from_id:
         params['from'] = from_id
     fetched_trades = await cc.public_get_trading_records(params=params)
-    trades = [{'trade_id': t['id'],
+    trades = [{'trade_id': int(t['id']),
                'side': t['side'],
                'price': t['price'],
                'amount': t['qty'],
@@ -32,18 +33,23 @@ async def fetch_trades(cc, symbol: str, from_id: int = None) -> [dict]:
     return trades
 
 def date_to_ts(date: str):
-    return ciso8601.parse_datetime(date).timestamp() * 1000
-
+    try:
+        return datetime.strptime(date.replace('Z', ''), "%Y-%m-%dT%H:%M:%S.%f").timestamp() * 1000
+    except ValueError:
+        formats = ["%Y-%m-%dT%H:%M:%S"]
+        for f in formats:
+            try:
+                return datetime.strptime(date.replace('Z', ''), f).timestamp() * 1000
+            except ValueError:
+                continue
+    raise Exception(f'unable to convert date {date} to timestamp')
 
 def round_up(n: float, step: float, safety_rounding=8) -> float:
-    n_mod = n % step
-    if n_mod == 0.0:
-        return n
-    return round(n - n_mod + step, safety_rounding)
+    return np.ceil(n / step) * step
 
 
 def round_dn(n: float, step: float, safety_rounding=8) -> float:
-    return round(n - n % step, safety_rounding)
+    return np.floor(n / step) * step
 
 
 async def create_bot(user: str, settings: str):
@@ -56,6 +62,7 @@ class BybitBot(Bot):
     def __init__(self, user: str, settings: dict):
         super().__init__(user, settings)
         self.cc = init_ccxt('bybit', user)
+        self.binance_cc = init_ccxt('binance', 'example_user')
 
     async def _init(self):
         info = await self.cc.public_get_symbols()
@@ -125,7 +132,13 @@ class BybitBot(Bot):
                 'amount': o['result']['qty'], 'price': o['result']['price']}
 
     async def fetch_trades(self, from_id: int = None):
-        return await fetch_trades(self.cc, self.symbol, from_id)
+        #### QUICK FIX
+        #### bybit returns empty list when attempting to fetch trade history
+        #### use binance USDT data instead
+        #### until bybit works again
+        ####
+        #return await fetch_trades(self.cc, self.symbol, from_id)
+        return await fetch_trades_binance(self.binance_cc, self.symbol.replace('USD', 'USDT'), from_id)
 
     def calc_margin_cost(self, amount: float, price: float) -> float:
         return amount / price / self.leverage
