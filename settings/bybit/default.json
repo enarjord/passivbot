@@ -1,10 +1,10 @@
 {
-    "ema_spans": [45876, 67689],
+    "ema_spans": [73147, 239456],
     "enter_long": true,
     "enter_shrt": true,
     "entry_amount": 1,
-    "spread": -0.000149,
-    "leverage": 91,
-    "markup": 0.00093,
+    "spread": -0.001881,
+    "leverage": 47.5,
+    "markup": 0.001984,
     "symbol": "BTCUSD"
 }
