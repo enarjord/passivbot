@@ -47,7 +47,7 @@ def init_ccxt(exchange: str = None, user: str = None):
         return getattr(ccxt_async, exchange)({'apiKey': (ks := load_key_secret(exchange, user))[0],
                                               'secret': ks[1]})
     except Exception as e:
-        print(e)
+        print('error init ccxt', e)
         return getattr(ccxt_async, exchange)
 
 
@@ -188,17 +188,17 @@ class Bot:
                 else:
                     creations.append(self.execute_ask(oc['amount'], oc['price']))
             except Exception as e:
-                print(e)
+                print('error creating orders a', orders_to_create, e)
         try:
             created_orders = await asyncio.gather(*creations)
         except Exception as e:
-            print(e)
+            print('error creating orders b', orders_to_create, e)
             created_orders = []
         for o in created_orders:
             try:
                 print_([' created order', o['symbol'], o['side'], o['amount'], o['price']], n=True)
             except Exception as e:
-                print(e)
+                print('error creating orders c', orders_to_create, e)
         await self.update_position()
         self.ts_released['create_orders'] = time()
         return created_orders
@@ -212,17 +212,17 @@ class Bot:
             try:
                 deletions.append(self.execute_cancellation(oc['order_id']))
             except Exception as e:
-                print(e)
+                print('error cancelling orders a', orders_to_cancel, e)
         try:
             canceled_orders = await asyncio.gather(*deletions)
         except Exception as e:
-            print(e)
+            print('error cancelling orders b', orders_to_cancel, e)
             canceled_orders = []
         for o in canceled_orders:
             try:
                 print_(['canceled order', o['symbol'], o['side'], o['amount'], o['price']], n=True)
             except Exception as e:
-                print(e)
+                print('error cancelling orders c', orders_to_cancel, e)
         await self.update_open_orders()
         self.ts_released['cancel_orders'] = time()
         return canceled_orders
