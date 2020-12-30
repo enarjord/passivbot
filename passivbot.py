@@ -11,14 +11,14 @@ from typing import Iterator
 
 
 def calc_liq_price(amount: float, entry_price: float, leverage: float):
-    cost = amount / entry_price
     if not entry_price:
         return 0.0
+    cost = amount / entry_price
     margin = abs(cost / leverage)
     margin_plus_cost = margin + cost
     if not margin_plus_cost:
         return 0.0
-    return amount / (margin + cost)
+    return amount / margin_plus_cost
 
 
 def make_get_filepath(filepath: str) -> str:
