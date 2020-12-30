@@ -46,11 +46,11 @@ def date_to_ts(date: str):
     raise Exception(f'unable to convert date {date} to timestamp')
 
 def round_up(n: float, step: float, safety_rounding=8) -> float:
-    return np.ceil(n / step) * step
+    return round(np.ceil(n / step) * step, safety_rounding)
 
 
 def round_dn(n: float, step: float, safety_rounding=8) -> float:
-    return np.floor(n / step) * step
+    return round(np.floor(n / step) * step, safety_rounding)
 
 
 async def create_bot(user: str, settings: str):
@@ -157,7 +157,7 @@ class BybitBot(Bot):
                     params={'symbol': self.symbol, 'leverage': 0}
                 ))
             except Exception as e:
-                print(e)
+                print('error starting websocket', e)
         await self.init_emas()
         param = {'op': 'subscribe', 'args': ['trade.' + self.symbol]}
         k = 1
@@ -181,7 +181,7 @@ class BybitBot(Bot):
                             self.ob[0] = e['price']
                 except Exception as e:
                     if 'success' not in data:
-                        print(e)
+                        print('error in websocket streamed data', e)
                 if self.ts_locked['decide'] < self.ts_released['decide']:
                     asyncio.create_task(self.decide())
                 elif k % 10 == 0:
