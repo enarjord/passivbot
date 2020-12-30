@@ -95,7 +95,7 @@ class BinanceBot(Bot):
             'type': 'LIMIT',
             'quantity': amount,
             'price': price,
-            'timeInForce': 'GTC'
+            'timeInForce': 'GTX'
         })
         return {'symbol': self.symbol,
                 'side': 'buy',
@@ -110,7 +110,7 @@ class BinanceBot(Bot):
             'type': 'LIMIT',
             'quantity': amount,
             'price': price,
-            'timeInForce': 'GTC'
+            'timeInForce': 'GTX'
         })
         return {'symbol': self.symbol,
                 'side': 'sell',
@@ -160,6 +160,10 @@ class BinanceBot(Bot):
                                                    self.emas[span],
                                                    alpha=self.ema_alphas[span],
                                                    n_steps=trade_id - self.trade_id)
+                if data['m']:
+                    self.ob[0] = price
+                else:
+                    self.ob[1] = price
                 self.trade_id = trade_id
                 self.price = price
                 if self.ts_locked['decide'] < self.ts_released['decide']:
