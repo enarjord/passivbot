@@ -50,8 +50,8 @@ class BinanceBot(Bot):
                 self.quot = e['quoteAsset']
                 self.margin_coin = e['marginAsset']
                 price_precision = e['pricePrecision']
-                self.round_up = lambda n: ceil(n * (dexp := 10**price_precision)) / dexp
-                self.round_dn = lambda n: floor(n * (dexp := 10**price_precision)) / dexp
+                self.round_up = lambda n: round(ceil(n * (dexp := 10**price_precision)) / dexp, 8)
+                self.round_dn = lambda n: round(floor(n * (dexp := 10**price_precision)) / dexp, 8)
                 break
         await self.update_position()
 
@@ -95,7 +95,7 @@ class BinanceBot(Bot):
             'type': 'LIMIT',
             'quantity': amount,
             'price': price,
-            'timeInForce': 'GTX'
+            'timeInForce': 'GTC'
         })
         return {'symbol': self.symbol,
                 'side': 'buy',
@@ -110,7 +110,7 @@ class BinanceBot(Bot):
             'type': 'LIMIT',
             'quantity': amount,
             'price': price,
-            'timeInForce': 'GTX'
+            'timeInForce': 'GTC'
         })
         return {'symbol': self.symbol,
                 'side': 'sell',
