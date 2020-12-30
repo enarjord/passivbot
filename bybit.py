@@ -33,13 +33,14 @@ async def fetch_trades(cc, symbol: str, from_id: int = None) -> [dict]:
     return trades
 
 def date_to_ts(date: str):
+    date = date[:23].replace('Z', '')
     try:
-        return datetime.strptime(date.replace('Z', ''), "%Y-%m-%dT%H:%M:%S.%f").timestamp() * 1000
+        return datetime.strptime(date, "%Y-%m-%dT%H:%M:%S.%f").timestamp() * 1000
     except ValueError:
         formats = ["%Y-%m-%dT%H:%M:%S"]
         for f in formats:
             try:
-                return datetime.strptime(date.replace('Z', ''), f).timestamp() * 1000
+                return datetime.strptime(date, f).timestamp() * 1000
             except ValueError:
                 continue
     raise Exception(f'unable to convert date {date} to timestamp')
@@ -133,12 +134,14 @@ class BybitBot(Bot):
 
     async def fetch_trades(self, from_id: int = None):
         #### QUICK FIX
-        #### bybit returns empty list when attempting to fetch trade history
-        #### use binance USDT data instead
-        #### until bybit works again
+        #### bybit returns empty list when attempting to fetch btcusd trade history,
+        #### works for other symbols.
+        #### use binance BTCUSDT data instead until bybit works again
         ####
-        #return await fetch_trades(self.cc, self.symbol, from_id)
-        return await fetch_trades_binance(self.binance_cc, self.symbol.replace('USD', 'USDT'), from_id)
+        if self.symbol == 'BTCUSD':
+            return await fetch_trades_binance(self.binance_cc, self.symbol.replace('USD', 'USDT'),
+                                              from_id)
+        return await fetch_trades(self.cc, self.symbol, from_id)
 
     def calc_margin_cost(self, amount: float, price: float) -> float:
         return amount / price / self.leverage
