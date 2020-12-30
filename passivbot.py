@@ -10,6 +10,17 @@ from time import time, sleep
 from typing import Iterator
 
 
+def calc_liq_price(amount: float, entry_price: float, leverage: float):
+    cost = amount / entry_price
+    if not entry_price:
+        return 0.0
+    margin = abs(cost / leverage)
+    margin_plus_cost = margin + cost
+    if not margin_plus_cost:
+        return 0.0
+    return amount / (margin + cost)
+
+
 def make_get_filepath(filepath: str) -> str:
     '''
     if not is path, creates dir and subdirs for path, returns path
@@ -141,6 +152,7 @@ class Bot:
         self.lowest_ask = 9.9e9
         self.price = 0
         self.ema_alphas = {span: 2 / (span + 1) for span in self.ema_spans}
+        self.ob = [0.0, 0.0]
 
         self.stop_websocket = False
 
@@ -229,15 +241,91 @@ class Bot:
         self.price = t['price']
         self.trade_id = t['trade_id']
         self.emas = emas
+        self.ob = [self.price, self.price]
 
     def stop(self) -> None:
         self.stop_websocket = True
 
-    def calc_orders(self):
+    def calc_orders_new(self):
         orders = []
         if self.position['size'] == 0:
             bid_price = self.round_dn(min(self.emas.values()) * self.spread_minus)
             ask_price = self.round_up(max(self.emas.values()) * self.spread_plus)
+            bid_diff = self.price / bid_price
+            ask_diff = ask_price / self.price
+            threshold = 1.00007
+            if bid_diff < ask_diff:
+                if bid_diff < threshold:
+                    orders.append({'symbol': self.symbol, 'side': 'buy',
+                                   'amount': self.entry_amount, 'price': bid_price})
+            else:
+                if ask_diff < threshold:
+                    orders.append({'symbol': self.symbol, 'side': 'sell',
+                                   'amount': self.entry_amount, 'price': ask_price})
+        else:
+            available_balance = self.position['equity']
+            if self.position['size'] > 0.0:
+                entry_price = self.position['entry_price']
+                ddown_amount = self.position['size'] * self.ddown_m
+                ddown_price = self.round_up(max(
+                    entry_price * (1 - (1 / self.leverage) / 2),
+                    self.position['liquidation_price'] + 0.000001
+                ))
+
+                for k in range(4):
+                    margin_cost = self.calc_margin_cost(ddown_amount, ddown_price)
+                    if margin_cost < available_balance:
+                        orders.append({'side': 'buy', 'amount': ddown_amount,
+                                       'price': ddown_price})
+                        available_balance -= margin_cost
+                    else:
+                        break
+                    ddown_amount = ddown_amount + ddown_amount * self.ddown_m
+                    ddown_amount *= self.ddown_m
+                    entry_price = (ddown_price + entry_price) / 2
+                    ddown_price = self.round_up(
+                        entry_price * (1 - (1 / self.leverage) / 2)
+                    )
+                    ddown_amount *= 2
+                orders.append({
+                    'symbol': self.symbol, 'side': 'sell', 'amount': self.position['size'],
+                    'price': self.round_up(self.position['entry_price'] * (1 + self.markup))
+                })
+            else:
+                pos_size = abs(self.position['size'])
+                ddown_amount = pos_size
+                entry_price = self.position['entry_price']
+                ddown_price = self.round_dn(min(
+                    entry_price * (1 + (1 / self.leverage) / 2),
+                    self.position['liquidation_price'] - 0.000001
+                ))
+
+                for k in range(4):
+                    margin_cost = self.calc_margin_cost(ddown_amount, ddown_price)
+
+                    if margin_cost < available_balance:
+                        orders.append({'side': 'sell', 'amount': ddown_amount,
+                                       'price': ddown_price})
+                        available_balance -= margin_cost
+                    else:
+                        break
+                    entry_price = (ddown_price + entry_price) / 2
+                    ddown_price = self.round_dn(
+                        entry_price * (1 + (1 / self.leverage) / 2)
+                    )
+                    ddown_amount *= 2
+                orders.append({
+                    'side': 'buy', 'amount': pos_size,
+                    'price': self.round_dn(self.position['entry_price'] * (1 - self.markup))
+                })
+        return orders
+
+
+    def calc_orders(self):
+        orders = []
+        if self.position['size'] == 0:
+            bid_price = min(self.round_dn(min(self.emas.values()) * self.spread_minus), self.ob[0])
+            ask_price = max(self.round_up(max(self.emas.values()) * self.spread_plus), self.ob[1])
             bid_diff = self.price / bid_price
             ask_diff = ask_price / self.price
             threshold = 1.00007
