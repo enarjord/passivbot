@@ -105,7 +105,7 @@ class BybitBot(Bot):
     async def execute_bid(self, amount: float, price: float) -> dict:
         o = await self.cc.private_post_order_create(
             params={'symbol': self.symbol, 'side': 'Buy', 'order_type': 'Limit',
-                    'time_in_force': 'GoodTillCancel', 'qty': amount, 'price': price}
+                    'time_in_force': 'PostOnly', 'qty': amount, 'price': price}
         )
         return {'symbol': o['result']['symbol'],
                 'side': 'buy',
@@ -116,7 +116,7 @@ class BybitBot(Bot):
     async def execute_ask(self, amount: float, price: float) -> dict:
         o = await self.cc.private_post_order_create(
             params={'symbol': self.symbol, 'side': 'Sell', 'order_type': 'Limit',
-                    'time_in_force': 'GoodTillCancel', 'qty': amount, 'price': price}
+                    'time_in_force': 'PostOnly', 'qty': amount, 'price': price}
         )
         return {'symbol': o['result']['symbol'],
                 'side': 'sell',
@@ -172,6 +172,10 @@ class BybitBot(Bot):
                                                            self.emas[span],
                                                            alpha=self.ema_alphas[span])
                         self.price = e['price']
+                        if e['side'] == 'Buy':
+                            self.ob[1] = e['price']
+                        elif e['side'] == 'Sell':
+                            self.ob[0] = e['price']
                 except Exception as e:
                     if 'success' not in data:
                         print(e)
