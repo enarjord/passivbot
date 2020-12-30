@@ -10,7 +10,7 @@ requires python >= 3.8
 dependencies, install with pip:
 
 
-`python3 -m pip install matplotlib pandas websockets ccxt ciso8601`
+`python3 -m pip install matplotlib pandas websockets ccxt`
 
 
 ------------------------------------------------------------------
