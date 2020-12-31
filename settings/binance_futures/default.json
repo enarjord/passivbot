@@ -6,5 +6,6 @@
     "spread": -0.000583,
     "leverage": 114,
     "markup": 0.001606,
-    "symbol": "BTCUSDT"
+    "symbol": "BTCUSDT",
+    "ddown_limit": 10
 }
