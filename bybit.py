@@ -64,6 +64,7 @@ class BybitBot(Bot):
         super().__init__(user, settings)
         self.cc = init_ccxt('bybit', user)
         self.binance_cc = init_ccxt('binance', 'example_user')
+        self.max_leverage = 100
 
     async def _init(self):
         info = await self.cc.public_get_symbols()
@@ -97,11 +98,15 @@ class BybitBot(Bot):
             self.cc.private_get_wallet_balance()
         )
         pos = position['result']
-        return {'size': pos['size'] * (-1 if pos['side'] == 'Sell' else 1),
-                'entry_price': float(pos['entry_price']),
-                'leverage': float(pos['leverage']),
-                'liquidation_price': float(pos['liq_price']),
-                'equity': balance['result'][self.coin]['equity']}
+        result = {'size': pos['size'] * (-1 if pos['side'] == 'Sell' else 1),
+                 'entry_price': float(pos['entry_price']),
+                 'leverage': float(pos['leverage']),
+                 'liquidation_price': float(pos['liq_price']),
+                 'equity': balance['result'][self.coin]['equity']}
+        if self.settings['entry_amount'] == -1:
+            self.entry_amount = \
+                round(result['equity'] * self.price * 100 / (2**self.settings['ddown_limit']) - 10)
+        return result
 
     async def execute_bid(self, amount: float, price: float) -> dict:
         o = await self.cc.private_post_order_create(
@@ -138,13 +143,16 @@ class BybitBot(Bot):
         #### works for other symbols.
         #### use binance BTCUSDT data instead until bybit works again
         ####
-        if self.symbol == 'BTCUSD':
+        #### update:
+        #### BTCUSD works again
+        #if self.symbol == 'BTCUSD':
+        if False:
             return await fetch_trades_binance(self.binance_cc, self.symbol.replace('USD', 'USDT'),
                                               from_id)
         return await fetch_trades(self.cc, self.symbol, from_id)
 
     def calc_margin_cost(self, amount: float, price: float) -> float:
-        return amount / price / self.leverage
+        return amount / price / self.max_leverage
 
     async def start_websocket(self) -> None:
         self.stop_websocket = False
