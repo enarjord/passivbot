@@ -104,8 +104,8 @@ class BybitBot(Bot):
                  'liquidation_price': float(pos['liq_price']),
                  'equity': balance['result'][self.coin]['equity']}
         if self.settings['entry_amount'] == -1:
-            self.entry_amount = \
-                round(result['equity'] * self.price * 100 / (2**self.settings['ddown_limit']) - 10)
+            self.entry_amount = round((result['equity'] * self.price * self.max_leverage /
+                                       (2**self.settings['ddown_limit']) * 0.83))
         return result
 
     async def execute_bid(self, amount: float, price: float) -> dict:
