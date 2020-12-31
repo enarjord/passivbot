@@ -50,8 +50,11 @@ class BinanceBot(Bot):
                 self.quot = e['quoteAsset']
                 self.margin_coin = e['marginAsset']
                 price_precision = e['pricePrecision']
+                amount_precision = e['quantityPrecision']
                 self.round_up = lambda n: round(ceil(n * (dexp := 10**price_precision)) / dexp, 8)
                 self.round_dn = lambda n: round(floor(n * (dexp := 10**price_precision)) / dexp, 8)
+                self.ar_up = lambda n: round(ceil(n * (dexp := 10**amount_precision)) / dexp, 8)
+                self.ar_dn = lambda n: round(floor(n * (dexp := 10**amount_precision)) / dexp, 8)
                 break
         await self.update_position()
 
@@ -86,6 +89,18 @@ class BinanceBot(Bot):
             if e['asset'] == 'USDT':
                 position['equity'] = float(e['balance'])
                 break
+        if self.settings['entry_amount'] == -1:
+            try:
+                entry_amount = self.ar_dn(
+                    (position['equity'] / self.price * self.leverage /
+                     (2**self.settings['ddown_limit']))
+                )
+                assert entry_amount > 0
+                self.entry_amount = entry_amount
+            except Exception as e:
+                entry_amount = self.ar_up(9e-9)
+                print(f'error adjusting entry amount, setting to default {entry_amount}', e)
+                self.entry_amount = entry_amount
         return position
 
     async def execute_bid(self, amount: float, price: float) -> dict:
