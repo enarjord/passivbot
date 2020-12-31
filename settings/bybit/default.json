@@ -6,5 +6,6 @@
     "spread": -0.001881,
     "leverage": 47.5,
     "markup": 0.001984,
-    "symbol": "BTCUSD"
+    "symbol": "BTCUSD",
+    "ddown_limit": 8
 }
