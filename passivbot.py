@@ -159,7 +159,10 @@ class Bot:
     async def update_open_orders(self) -> None:
         if self.ts_locked['update_open_orders'] > self.ts_released['update_open_orders']:
             return
-        self.open_orders = await self.fetch_open_orders()
+        try:
+            self.open_orders = await self.fetch_open_orders()
+        except Exception as e:
+            print('error with update open orders', e)
         self.highest_bid, self.lowest_ask = 0.0, 9.9e9
         for o in self.open_orders:
             if o['side'] == 'buy':
@@ -173,7 +176,11 @@ class Bot:
         if self.ts_locked['update_position'] > self.ts_released['update_position']:
             return
         self.ts_locked['update_position'] = time()
-        self.position, _ = await asyncio.gather(self.fetch_position(), self.update_open_orders())
+        try:
+            self.position, _ = await asyncio.gather(self.fetch_position(),
+                                                    self.update_open_orders())
+        except Exception as e:
+            print('error with update position', e)
         self.ts_released['update_position'] = time()
 
     async def create_orders(self, orders_to_create: [dict]) -> dict:
@@ -199,7 +206,6 @@ class Bot:
                 print_([' created order', o['symbol'], o['side'], o['amount'], o['price']], n=True)
             except Exception as e:
                 print('error creating orders c', orders_to_create, e)
-        await self.update_position()
         self.ts_released['create_orders'] = time()
         return created_orders
 
@@ -249,8 +255,8 @@ class Bot:
     def calc_orders(self):
         orders = []
         if self.position['size'] == 0:
-            bid_price = min(self.round_dn(min(self.emas.values()) * self.spread_minus), self.ob[0])
-            ask_price = max(self.round_up(max(self.emas.values()) * self.spread_plus), self.ob[1])
+            bid_price = min(self.round_dn(min(self.emas.values()) * self.spread_minus), self.ob[1])
+            ask_price = max(self.round_up(max(self.emas.values()) * self.spread_plus), self.ob[0])
             bid_diff = self.price / bid_price
             ask_diff = ask_price / self.price
             threshold = 1.00007
@@ -272,7 +278,7 @@ class Bot:
                     self.position['liquidation_price'] + 0.000001
                 ))
 
-                for k in range(4):
+                for k in range(9):
                     margin_cost = self.calc_margin_cost(ddown_amount, ddown_price)
                     if margin_cost < available_balance:
                         orders.append({'side': 'buy', 'amount': ddown_amount,
@@ -298,7 +304,7 @@ class Bot:
                     self.position['liquidation_price'] - 0.000001
                 ))
 
-                for k in range(4):
+                for k in range(9):
                     margin_cost = self.calc_margin_cost(ddown_amount, ddown_price)
 
                     if margin_cost < available_balance:
