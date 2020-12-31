@@ -89,7 +89,7 @@ settings:
                                   
                                   # entry bid is < min(emas) and entry ask is > max(emas)
                                   
-    "entry_amount": 0.001,        # initial entry amount
+    "entry_amount": 0.001,        # initial entry amount.  set to -1 for dynamic adjustment based on double_down_limit
     
     "spread": 0.001,              # if no position, enters long at min(emas) * (1 - spread) and short at max(emas) * (1 + spread)
     
@@ -97,7 +97,9 @@ settings:
     
     "markup": 0.0015,             # markup does not take fees into account
     
-    "symbol": "BTCUSDT"           # only one symbol at a time
+    "symbol": "BTCUSDT",          # only one symbol at a time
+    
+    "ddown_limit": 10             # used for dynamically adjusted initial entry amount based on max n double downs allowed
     
 }
 
