@@ -269,7 +269,7 @@ class Bot:
                     orders.append({'symbol': self.symbol, 'side': 'sell',
                                    'amount': self.entry_amount, 'price': ask_price})
         else:
-            available_balance = self.position['equity']
+            available_balance = self.position['equity'] * 0.85
             if self.position['size'] > 0.0:
                 entry_price = self.position['entry_price']
                 ddown_amount = self.position['size']
