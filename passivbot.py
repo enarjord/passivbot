@@ -10,6 +10,14 @@ from time import time, sleep
 from typing import Iterator
 
 
+def sort_dict_keys(d):
+    if type(d) == list:
+        return [sort_dict_keys(e) for e in d]
+    if type(d) != dict:
+        return d
+    return {key: sort_dict_keys(d[key]) for key in sorted(d)}
+
+
 def calc_liq_price(amount: float, entry_price: float, leverage: float):
     if not entry_price:
         return 0.0
@@ -269,7 +277,7 @@ class Bot:
                     orders.append({'symbol': self.symbol, 'side': 'sell',
                                    'amount': self.entry_amount, 'price': ask_price})
         else:
-            available_balance = self.position['equity'] * 0.85
+            available_balance = self.position['equity'] * 0.87
             if self.position['size'] > 0.0:
                 entry_price = self.position['entry_price']
                 ddown_amount = self.position['size']
@@ -278,7 +286,7 @@ class Bot:
                     self.position['liquidation_price'] + 0.000001
                 ))
 
-                for k in range(9):
+                for k in range(7):
                     margin_cost = self.calc_margin_cost(ddown_amount, ddown_price)
                     if margin_cost < available_balance:
                         orders.append({'side': 'buy', 'amount': ddown_amount,
@@ -304,7 +312,7 @@ class Bot:
                     self.position['liquidation_price'] - 0.000001
                 ))
 
-                for k in range(9):
+                for k in range(7):
                     margin_cost = self.calc_margin_cost(ddown_amount, ddown_price)
 
                     if margin_cost < available_balance:
