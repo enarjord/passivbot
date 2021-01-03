@@ -13,7 +13,9 @@ from math import floor
 from time import time, sleep
 from typing import Callable, Iterator
 from passivbot import init_ccxt, load_key_secret, load_settings, make_get_filepath, print_, \
-    ts_to_date, flatten, calc_new_ema, filter_orders, Bot, start_bot, round_up, round_dn
+    ts_to_date, flatten, calc_new_ema, filter_orders, Bot, start_bot, round_up, round_dn, \
+    calc_initial_long_entry_qty, calc_initial_shrt_entry_qty, calc_shrt_entry_qty, \
+    calc_shrt_entry_price, calc_long_entry_qty, calc_long_entry_price
 from binance import fetch_trades as fetch_trades_binance
 
 
@@ -74,6 +76,47 @@ class BybitBot(Bot):
         self.prup = lambda n: round_up(n, self.price_step)
         self.ardn = lambda n: round_dn(n, self.qty_step)
         self.arup = lambda n: round_up(n, self.qty_step)
+
+        self.calc_initial_long_entry_qty = lambda equity_, price_: calc_initial_long_entry_qty(
+            self.min_qty, self.qty_step, self.entry_qty_equity_multiplier, equity_, price_
+        )
+        self.calc_initial_shrt_entry_qty = lambda equity_, price_: calc_initial_shrt_entry_qty(
+            self.min_qty, self.qty_step, self.entry_qty_equity_multiplier, equity_, price_
+        )
+
+        self.calc_long_entry_qty = lambda equity_, pos_size_, pos_price_: calc_long_entry_qty(
+            self.min_qty,
+            self.qty_step,
+            self.leverage,
+            self.entry_qty_scaling_factor,
+            self.entry_qty_equity_multiplier,
+            equity_,
+            pos_size_,
+            pos_price_,
+        )
+
+        self.calc_shrt_entry_qty = lambda equity_, pos_size_, pos_price_: calc_shrt_entry_qty(
+            self.min_qty,
+            self.qty_step,
+            self.leverage,
+            self.entry_qty_scaling_factor,
+            self.entry_qty_equity_multiplier,
+            equity_,
+            pos_size_,
+            pos_price_,
+        )
+
+        self.calc_long_entry_price = lambda pos_price_: calc_long_entry_price(
+            self.price_step,
+            self.grid_spacing,
+            pos_price_,
+        )
+
+        self.calc_shrt_entry_price = lambda pos_price_: calc_shrt_entry_price(
+            self.price_step,
+            self.grid_spacing,
+            pos_price_,
+        )
 
     async def fetch_open_orders(self) -> [dict]:
         fetched = await self.cc.private_get_order(params={'symbol': self.symbol})
