@@ -13,7 +13,7 @@ from math import floor
 from time import time, sleep
 from typing import Callable, Iterator
 from passivbot import init_ccxt, load_key_secret, load_settings, make_get_filepath, print_, \
-    ts_to_date, flatten, calc_new_ema, filter_orders, Bot, start_bot
+    ts_to_date, flatten, calc_new_ema, filter_orders, Bot, start_bot, round_up, round_dn
 from binance import fetch_trades as fetch_trades_binance
 
 
@@ -26,7 +26,7 @@ async def fetch_trades(cc, symbol: str, from_id: int = None) -> [dict]:
     trades = [{'trade_id': int(t['id']),
                'side': t['side'],
                'price': t['price'],
-               'amount': t['qty'],
+               'qty': t['qty'],
                'timestamp': date_to_ts(t['time'][:-1])} for t in fetched_trades['result']]
     print_(['fetched trades', symbol, trades[0]['trade_id'],
             ts_to_date(trades[0]['timestamp'] / 1000)])
@@ -44,14 +44,6 @@ def date_to_ts(date: str):
             except ValueError:
                 continue
     raise Exception(f'unable to convert date {date} to timestamp')
-
-def round_up(n: float, step: float, safety_rounding=8) -> float:
-    return round(np.ceil(n / step) * step, safety_rounding)
-
-
-def round_dn(n: float, step: float, safety_rounding=8) -> float:
-    return round(np.floor(n / step) * step, safety_rounding)
-
 
 async def create_bot(user: str, settings: str):
     bot = BybitBot(user, settings)
@@ -75,9 +67,13 @@ class BybitBot(Bot):
             raise Exception('symbol missing')
         self.coin = e['base_currency']
         self.quot = e['quote_currency']
-        price_step = float(e['price_filter']['tick_size'])
-        self.round_up = lambda n: round_up(n, price_step)
-        self.round_dn = lambda n: round_dn(n, price_step)
+        self.price_step = float(e['price_filter']['tick_size'])
+        self.qty_step = float(e['lot_size_filter']['qty_step'])
+        self.min_qty = float(e['lot_size_filter']['min_trading_qty'])
+        self.prdn = lambda n: round_dn(n, self.price_step)
+        self.prup = lambda n: round_up(n, self.price_step)
+        self.ardn = lambda n: round_dn(n, self.qty_step)
+        self.arup = lambda n: round_up(n, self.qty_step)
 
     async def fetch_open_orders(self) -> [dict]:
         fetched = await self.cc.private_get_order(params={'symbol': self.symbol})
@@ -85,7 +81,7 @@ class BybitBot(Bot):
             {'order_id': e['order_id'],
              'symbol': e['symbol'],
              'price': float(e['price']),
-             'amount': float(e['qty']),
+             'qty': float(e['qty']),
              'side': e['side'].lower(),
              'timestamp': date_to_ts(e['created_at'])}
             for e in fetched['result']
@@ -99,35 +95,32 @@ class BybitBot(Bot):
         )
         pos = position['result']
         result = {'size': pos['size'] * (-1 if pos['side'] == 'Sell' else 1),
-                 'entry_price': float(pos['entry_price']),
-                 'leverage': float(pos['leverage']),
-                 'liquidation_price': float(pos['liq_price']),
-                 'equity': balance['result'][self.coin]['equity']}
-        if self.settings['entry_amount'] == -1:
-            self.entry_amount = round((result['equity'] * self.price * self.max_leverage /
-                                       (2**self.settings['ddown_limit']) * 0.8))
+                  'entry_price': float(pos['entry_price']),
+                  'leverage': float(pos['leverage']),
+                  'liquidation_price': float(pos['liq_price']),
+                  'equity': balance['result'][self.coin]['equity']}
         return result
 
-    async def execute_bid(self, amount: float, price: float) -> dict:
+    async def execute_bid(self, qty: float, price: float) -> dict:
         o = await self.cc.private_post_order_create(
             params={'symbol': self.symbol, 'side': 'Buy', 'order_type': 'Limit',
-                    'time_in_force': 'GoodTillCancel', 'qty': amount, 'price': price}
+                    'time_in_force': 'PostOnly', 'qty': qty, 'price': price}
         )
         return {'symbol': o['result']['symbol'],
                 'side': 'buy',
                 'type': 'limit',
-                'amount': o['result']['qty'],
+                'qty': o['result']['qty'],
                 'price': o['result']['price']}
 
-    async def execute_ask(self, amount: float, price: float) -> dict:
+    async def execute_ask(self, qty: float, price: float) -> dict:
         o = await self.cc.private_post_order_create(
             params={'symbol': self.symbol, 'side': 'Sell', 'order_type': 'Limit',
-                    'time_in_force': 'GoodTillCancel', 'qty': amount, 'price': price}
+                    'time_in_force': 'PostOnly', 'qty': qty, 'price': price}
         )
         return {'symbol': o['result']['symbol'],
                 'side': 'sell',
                 'type': 'limit',
-                'amount': o['result']['qty'],
+                'qty': o['result']['qty'],
                 'price': o['result']['price']}
 
     async def execute_cancellation(self, id_: [dict]) -> [dict]:
@@ -135,7 +128,7 @@ class BybitBot(Bot):
             params={'symbol': self.symbol, 'order_id': id_}
         )
         return {'symbol': o['result']['symbol'], 'side': o['result']['side'].lower(),
-                'amount': o['result']['qty'], 'price': o['result']['price']}
+                'qty': o['result']['qty'], 'price': o['result']['price']}
 
     async def fetch_trades(self, from_id: int = None):
         #### QUICK FIX
@@ -151,8 +144,8 @@ class BybitBot(Bot):
                                               from_id)
         return await fetch_trades(self.cc, self.symbol, from_id)
 
-    def calc_margin_cost(self, amount: float, price: float) -> float:
-        return amount / price / self.max_leverage
+    def calc_margin_cost(self, qty: float, price: float) -> float:
+        return qty / price / self.max_leverage
 
     async def start_websocket(self) -> None:
         self.stop_websocket = False
@@ -175,27 +168,31 @@ class BybitBot(Bot):
                 if msg is None:
                     continue
                 data = json.loads(msg)
+                price_changed = False
                 try:
                     for e in data['data']:
-                        for span in self.ema_spans:
-                            self.emas[span] = calc_new_ema(self.price,
-                                                           e['price'],
-                                                           self.emas[span],
-                                                           alpha=self.ema_alphas[span])
-                        self.price = e['price']
-                        if e['side'] == 'Buy':
-                            self.ob[1] = e['price']
-                        elif e['side'] == 'Sell':
-                            self.ob[0] = e['price']
+                        if e['price'] != self.price:
+                            for span in self.ema_spans:
+                                self.emas[span] = calc_new_ema(self.price,
+                                                               e['price'],
+                                                               self.emas[span],
+                                                               alpha=self.ema_alphas[span])
+                            self.price = e['price']
+                            if e['side'] == 'Buy':
+                                self.ob[1] = e['price']
+                            elif e['side'] == 'Sell':
+                                self.ob[0] = e['price']
+                            price_changed = True
                 except Exception as e:
                     if 'success' not in data:
                         print('error in websocket streamed data', e)
-                if self.ts_locked['decide'] < self.ts_released['decide']:
-                    asyncio.create_task(self.decide())
-                elif k % 10 == 0:
-                    self.flush_stuck_locks()
-                    k = 1
-                k += 1
+                if price_changed:
+                    if self.ts_locked['decide'] < self.ts_released['decide']:
+                        asyncio.create_task(self.decide())
+                    elif k % 10 == 0:
+                        self.flush_stuck_locks()
+                        k = 1
+                    k += 1
 
 
 async def main() -> None:
