@@ -158,55 +158,6 @@ def calc_shrt_close(markup: float, price_step: float, pos_size: float, pos_price
     return [-pos_size, round_dn(pos_price * (1 - markup), price_step)]
 
 
-def calc_long_closes(min_bet: float,
-                     amount_step: float,
-                     price_step: float,
-                     markup: float,
-                     pos_amount: float,
-                     pos_price: float):
-    n = 10
-    prices = round_up(np.linspace(pos_price,
-                                  round_up(pos_price * (1 + markup),
-                                  price_step), n), price_step)
-    if pos_amount < n:
-        amounts = np.zeros(n)
-        remainder = int(pos_amount)
-    else:
-        amounts = round_dn(np.linspace(min_bet, pos_amount / n * 2 - 1, n), amount_step)
-        remainder = pos_amount % amounts.sum()
-    print(amounts, remainder)
-    for i in range(n - 1, -1, -1):
-        if remainder < min_bet:
-            break
-        amounts[i] += min_bet
-        remainder -= min_bet
-    return list(zip(-amounts, prices))
-
-
-def calc_shrt_closes(min_bet: float,
-                     amount_step: float,
-                     price_step: float,
-                     markup: float,
-                     pos_amount: float,
-                     pos_price: float):
-    n = 10
-    prices = round_dn(np.linspace(pos_price,
-                                  round_up(pos_price * (1 - markup),
-                                  price_step), n), price_step)
-    if -pos_amount < n:
-        amounts = np.zeros(n)
-        remainder = int(-pos_amount)
-    else:
-        amounts = round_dn(np.linspace(min_bet, -pos_amount / n * 2 - 1, n), amount_step)
-        remainder = -pos_amount % amounts.sum()
-    for i in range(n - 1, -1, -1):
-        amounts[i] += min_bet
-        remainder -= min_bet
-        if remainder < min_bet:
-            break
-    return list(zip(amounts, prices))
-
-
 def backtest(df: pd.DataFrame, settings: dict):
 
     # bybit
