@@ -13,7 +13,9 @@ from math import floor
 from time import time, sleep
 from typing import Callable, Iterator
 from passivbot import init_ccxt, load_key_secret, load_settings, make_get_filepath, print_, \
-    ts_to_date, flatten, calc_new_ema, filter_orders, Bot, start_bot
+    ts_to_date, flatten, calc_new_ema, filter_orders, Bot, start_bot, round_dn, round_up, \
+    calc_initial_long_entry_qty, calc_initial_shrt_entry_qty, calc_long_entry_qty, \
+    calc_shrt_entry_qty, calc_long_entry_price, calc_shrt_entry_price
 
 
 async def fetch_trades(cc, symbol: str, from_id: int = None) -> [dict]:
@@ -23,7 +25,7 @@ async def fetch_trades(cc, symbol: str, from_id: int = None) -> [dict]:
     fetched_trades = await cc.fapiPublic_get_aggtrades(params=params)
     trades = [{'trade_id': t['a'],
                'price': float(t['p']),
-               'amount': float(t['q']),
+               'qty': float(t['q']),
                'timestamp': t['T'],
                'is_buyer_maker': t['m']} for t in fetched_trades]
     print_(['fetched trades', symbol, trades[0]['trade_id'],
@@ -50,12 +52,60 @@ class BinanceBot(Bot):
                 self.quot = e['quoteAsset']
                 self.margin_coin = e['marginAsset']
                 price_precision = e['pricePrecision']
-                amount_precision = e['quantityPrecision']
-                self.round_up = lambda n: round(ceil(n * (dexp := 10**price_precision)) / dexp, 8)
-                self.round_dn = lambda n: round(floor(n * (dexp := 10**price_precision)) / dexp, 8)
-                self.ar_up = lambda n: round(ceil(n * (dexp := 10**amount_precision)) / dexp, 8)
-                self.ar_dn = lambda n: round(floor(n * (dexp := 10**amount_precision)) / dexp, 8)
+                qty_precision = e['quantityPrecision']
+                for q in e['filters']:
+                    if q['filterType'] == 'LOT_SIZE':
+                        self.min_qty = float(q['minQty'])
+                    elif q['filterType'] == 'MARKET_LOT_SIZE':
+                        self.qty_step = float(q['stepSize'])
+                    elif q['filterType'] == 'PRICE_FILTER':
+                        self.price_step = float(q['tickSize'])
+                self.ardn = lambda n: round_dn(n, self.qty_step)
+                self.arup = lambda n: round_up(n, self.qty_step)
+                self.prdn = lambda n: round_dn(n, self.price_step)
+                self.prup = lambda n: round_up(n, self.price_step)
                 break
+        self.calc_initial_long_entry_qty = lambda equity_, price_: calc_initial_long_entry_qty(
+            self.min_qty, self.qty_step, self.entry_qty_equity_multiplier, equity_, 1 / price_
+        )
+        self.calc_initial_shrt_entry_qty = lambda equity_, price_: calc_initial_shrt_entry_qty(
+            self.min_qty, self.qty_step, self.entry_qty_equity_multiplier, equity_, 1 / price_
+        )
+
+        self.calc_long_entry_qty = lambda equity_, pos_size_, pos_price_: calc_long_entry_qty(
+            self.min_qty,
+            self.qty_step,
+            self.leverage,
+            self.entry_qty_scaling_factor,
+            self.entry_qty_equity_multiplier,
+            equity_,
+            pos_size_,
+            1 / pos_price_,
+        )
+
+        self.calc_shrt_entry_qty = lambda equity_, pos_size_, pos_price_: calc_shrt_entry_qty(
+            self.min_qty,
+            self.qty_step,
+            self.leverage,
+            self.entry_qty_scaling_factor,
+            self.entry_qty_equity_multiplier,
+            equity_,
+            pos_size_,
+            1 / pos_price_,
+        )
+
+        self.calc_long_entry_price = lambda pos_price_: calc_long_entry_price(
+            self.price_step,
+            self.grid_spacing,
+            pos_price_,
+        )
+
+        self.calc_shrt_entry_price = lambda pos_price_: calc_shrt_entry_price(
+            self.price_step,
+            self.grid_spacing,
+            pos_price_,
+        )
+
         await self.update_position()
 
     async def fetch_open_orders(self) -> [dict]:
@@ -63,7 +113,7 @@ class BinanceBot(Bot):
             {'order_id': int(e['orderId']),
              'symbol': e['symbol'],
              'price': float(e['price']),
-             'amount': float(e['origQty']),
+             'qty': float(e['origQty']),
              'type': e['type'].lower(),
              'side': e['side'].lower(),
              'timestamp': int(e['time'])}
@@ -89,48 +139,36 @@ class BinanceBot(Bot):
             if e['asset'] == 'USDT':
                 position['equity'] = float(e['balance'])
                 break
-        if self.settings['entry_amount'] == -1:
-            try:
-                entry_amount = self.ar_dn(
-                    (position['equity'] / self.price * self.leverage /
-                     (2**self.settings['ddown_limit']))
-                )
-                assert entry_amount > 0
-                self.entry_amount = entry_amount
-            except Exception as e:
-                entry_amount = self.ar_up(9e-9)
-                print(f'error adjusting entry amount, setting to default {entry_amount}', e)
-                self.entry_amount = entry_amount
         return position
 
-    async def execute_bid(self, amount: float, price: float) -> dict:
+    async def execute_bid(self, qty: float, price: float) -> dict:
         o = await self.cc.fapiPrivate_post_order(params={
             'symbol': self.symbol,
             'side': 'BUY',
             'type': 'LIMIT',
-            'quantity': amount,
+            'quantity': qty,
             'price': price,
             'timeInForce': 'GTC'
         })
         return {'symbol': self.symbol,
                 'side': 'buy',
                 'type': 'limit',
-                'amount': float(o['origQty']),
+                'qty': float(o['origQty']),
                 'price': float(o['price'])}
 
-    async def execute_ask(self, amount: float, price: float) -> dict:
+    async def execute_ask(self, qty: float, price: float) -> dict:
         o = await self.cc.fapiPrivate_post_order(params={
             'symbol': self.symbol,
             'side': 'SELL',
             'type': 'LIMIT',
-            'quantity': amount,
+            'quantity': qty,
             'price': price,
             'timeInForce': 'GTC'
         })
         return {'symbol': self.symbol,
                 'side': 'sell',
                 'type': 'limit',
-                'amount': float(o['origQty']),
+                'qty': float(o['origQty']),
                 'price': float(o['price'])}
 
     async def execute_cancellation(self, id_: [dict]) -> [dict]:
@@ -138,13 +176,13 @@ class BinanceBot(Bot):
             'symbol': self.symbol, 'orderId': id_
         })
         return {'symbol': self.symbol, 'side': cancellation['side'].lower(),
-                'amount': float(cancellation['origQty']), 'price': float(cancellation['price'])}
+                'qty': float(cancellation['origQty']), 'price': float(cancellation['price'])}
 
     async def fetch_trades(self, from_id: int = None):
         return await fetch_trades(self.cc, self.symbol, from_id)
 
-    def calc_margin_cost(self, amount: float, price: float) -> float:
-        return amount * price / self.leverage
+    def calc_margin_cost(self, qty: float, price: float) -> float:
+        return qty * price / self.leverage
 
     async def start_websocket(self) -> None:
         self.stop_websocket = False
@@ -169,12 +207,13 @@ class BinanceBot(Bot):
                 data = json.loads(msg)
                 price = float(data['p'])
                 trade_id = data['a']
-                for span in self.ema_spans:
-                    self.emas[span] = calc_new_ema(self.price,
-                                                   price,
-                                                   self.emas[span],
-                                                   alpha=self.ema_alphas[span],
-                                                   n_steps=trade_id - self.trade_id)
+                if price != self.price:
+                    for span in self.ema_spans:
+                        self.emas[span] = calc_new_ema(self.price,
+                                                       price,
+                                                       self.emas[span],
+                                                       alpha=self.ema_alphas[span],
+                                                       n_steps=trade_id - self.trade_id)
                 if data['m']:
                     self.ob[0] = price
                 else:
