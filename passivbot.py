@@ -34,6 +34,48 @@ def calc_shrt_liq_price(price, leverage):
     return (price * leverage) / (leverage - 1)
 
 
+def calc_long_entry_qty(min_qty: float,
+                        qty_step: float,
+                        leverage: float,
+                        entry_qty_scaling_factor: float,
+                        entry_qty_equity_multiplier: float,
+                        equity: float,
+                        pos_size: float,
+                        pos_price: float):
+    return round_dn(min(equity * pos_price * leverage - pos_size,
+                        max([pos_size * entry_qty_scaling_factor,
+                             min_qty,
+                             equity * entry_qty_equity_multiplier * pos_price])), qty_step)
+
+
+def calc_long_entry_price(price_step: float,
+                          grid_spacing: float,
+                          pos_price: float):
+    return round_dn(pos_price * (1 - grid_spacing),
+                    round_up(pos_price * grid_spacing / 4, price_step))
+
+
+def calc_shrt_entry_qty(min_qty: float,
+                        qty_step: float,
+                        leverage: float,
+                        entry_qty_scaling_factor: float,
+                        entry_qty_equity_multiplier: float,
+                        equity: float,
+                        pos_size: float,
+                        pos_price: float):
+    return -round_dn(min(equity * pos_price * leverage + pos_size,
+                         max([-pos_size * entry_qty_scaling_factor,
+                              min_qty,
+                              equity * entry_qty_equity_multiplier * pos_price])), qty_step)
+
+
+def calc_shrt_entry_price(price_step: float,
+                          grid_spacing: float,
+                          pos_price: float):
+    return round_up(pos_price * (1 + grid_spacing),
+                    round_up(pos_price * grid_spacing / 4, price_step))
+
+
 def calc_long_entry(min_qty: float,
                     qty_step: float,
                     price_step: float,
@@ -315,7 +357,7 @@ class Bot:
         trades = await self.fetch_trades()
         additional_trades = await asyncio.gather(
             *[self.fetch_trades(from_id=trades[0]['trade_id'] - 1000 * i)
-              for i in range(1, min(50, (max(self.ema_spans) // 1000) * 2))])
+              for i in range(1, min(50, int((max(self.ema_spans) // 1000) * 2)))])
         trades = sorted(trades + flatten(additional_trades), key=lambda x: x['trade_id'])
         emas = {span: trades[0]['price'] for span in self.ema_spans}
         for i in range(1, len(trades)):
@@ -343,20 +385,14 @@ class Bot:
             threshold = 1.00007
             if bid_diff < ask_diff:
                 if bid_diff < threshold:
-                    bid_qty = calc_initial_long_entry_qty(self.min_qty,
-                                                          self.qty_step,
-                                                          self.entry_qty_equity_multiplier,
-                                                          self.position['equity'],
-                                                          self.ob[0])
+                    bid_qty = self.calc_initial_long_entry_qty(self.position['equity'],
+                                                               self.ob[0])
                     if bid_qty >= self.min_qty:
                         orders.append({'side': 'buy', 'qty': bid_qty, 'price': bid_price})
             else:
                 if ask_diff < threshold:
-                    ask_qty = -calc_initial_shrt_entry_qty(self.min_qty,
-                                                           self.qty_step,
-                                                           self.entry_qty_equity_multiplier,
-                                                           self.position['equity'],
-                                                           self.ob[1])
+                    ask_qty = -self.calc_initial_shrt_entry_qty(self.position['equity'],
+                                                                self.ob[1])
                     if ask_qty >= self.min_qty:
                         orders.append({'side': 'sell', 'qty': ask_qty, 'price': ask_price})
         else:
@@ -364,18 +400,10 @@ class Bot:
             pos_price = self.position['entry_price']
             if self.position['size'] > 0.0:
                 for k in range(n_orders):
-                    bid_qty, bid_price = calc_long_entry(
-                        self.min_qty,
-                        self.qty_step,
-                        self.price_step,
-                        self.leverage,
-                        self.entry_qty_scaling_factor,
-                        self.grid_spacing,
-                        self.entry_qty_equity_multiplier,
-                        self.position['equity'] * 0.95,
-                        pos_size,
-                        pos_price
-                    )
+                    bid_qty = self.calc_long_entry_qty(self.position['equity'],
+                                                       pos_size,
+                                                       pos_price)
+                    bid_price = self.calc_long_entry_price(pos_price)
                     if bid_qty < self.min_qty:
                         break
                     if bid_price <= self.ob[0]:
@@ -391,18 +419,10 @@ class Bot:
                 })
             else:
                 for k in range(n_orders):
-                    ask_qty, ask_price = calc_shrt_entry(
-                        self.min_qty,
-                        self.qty_step,
-                        self.price_step,
-                        self.leverage,
-                        self.entry_qty_scaling_factor,
-                        self.grid_spacing,
-                        self.entry_qty_equity_multiplier,
-                        self.position['equity'] * 0.95,
-                        pos_size,
-                        pos_price
-                    )
+                    ask_qty = self.calc_shrt_entry_qty(self.position['equity'],
+                                                       pos_size,
+                                                       pos_price)
+                    ask_price = self.calc_shrt_entry_price(pos_price)
                     if -ask_qty < self.min_qty:
                         break
                     if ask_price >= self.ob[1]:
