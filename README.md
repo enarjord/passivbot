@@ -67,7 +67,7 @@ settings:
     ],
     "ema_spread": -0.000468,                   # if no position, enters long at min(emas) * (1 - spread / 2) and short at max(emas) * (1 + spread / 2)
     "entry_qty_equity_multiplier": 0.00192,    # initial entry qty is equity * entry_qty_equity_multiplier * price
-    "entry_qty_scaling_factor": 0.413,         # next entry qty is pos_size * entry_qty_scaling_factor
+    "ddown_factor": 0.413,                     # next entry qty is pos_size * ddown_factor
     "grid_spacing": 0.0047,                    # next entry qty is pos_price (1 +- grid_spacing)
     "initial_equity": 0.001,                   # used in backtesting
     "leverage": 84.0,                          # used in backtesting to determine liquidation price and limit entries.  live leverage is set to cross mode
