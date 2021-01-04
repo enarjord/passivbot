@@ -5,7 +5,7 @@
     ],
     "ema_spread": -0.000468,
     "entry_qty_equity_multiplier": 0.00192,
-    "entry_qty_scaling_factor": 0.413,
+    "ddown_factor": 0.413,
     "grid_spacing": 0.0047,
     "initial_equity": 0.001,
     "leverage": 84.0,
