@@ -25,25 +25,25 @@ def sort_dict_keys(d):
         return d
     return {key: sort_dict_keys(d[key]) for key in sorted(d)}
 
-
+'''
 def calc_long_liq_price(price, leverage):
     return (price * leverage) / (leverage + 1)
 
 
 def calc_shrt_liq_price(price, leverage):
     return (price * leverage) / (leverage - 1)
-
+'''
 
 def calc_long_entry_qty(min_qty: float,
                         qty_step: float,
                         leverage: float,
-                        entry_qty_scaling_factor: float,
+                        ddown_factor: float,
                         entry_qty_equity_multiplier: float,
                         equity: float,
                         pos_size: float,
                         pos_price: float):
     return round_dn(min(equity * pos_price * leverage - pos_size,
-                        max([pos_size * entry_qty_scaling_factor,
+                        max([pos_size * ddown_factor,
                              min_qty,
                              equity * entry_qty_equity_multiplier * pos_price])), qty_step)
 
@@ -58,13 +58,13 @@ def calc_long_entry_price(price_step: float,
 def calc_shrt_entry_qty(min_qty: float,
                         qty_step: float,
                         leverage: float,
-                        entry_qty_scaling_factor: float,
+                        ddown_factor: float,
                         entry_qty_equity_multiplier: float,
                         equity: float,
                         pos_size: float,
                         pos_price: float):
     return -round_dn(min(equity * pos_price * leverage + pos_size,
-                         max([-pos_size * entry_qty_scaling_factor,
+                         max([-pos_size * ddown_factor,
                               min_qty,
                               equity * entry_qty_equity_multiplier * pos_price])), qty_step)
 
@@ -80,14 +80,14 @@ def calc_long_entry(min_qty: float,
                     qty_step: float,
                     price_step: float,
                     leverage: float,
-                    entry_qty_scaling_factor: float,
+                    ddown_factor: float,
                     grid_spacing: float,
                     entry_qty_equity_multiplier: float,
                     equity: float,
                     pos_size: float,
                     pos_price: float):
     qty = round_dn(min(equity * pos_price * leverage - pos_size,
-                       max([pos_size * entry_qty_scaling_factor,
+                       max([pos_size * ddown_factor,
                             min_qty,
                             equity * entry_qty_equity_multiplier * pos_price])), qty_step)
     price = round_dn(pos_price * (1 - grid_spacing),
@@ -99,14 +99,14 @@ def calc_shrt_entry(min_qty: float,
                     qty_step: float,
                     price_step: float,
                     leverage: float,
-                    entry_qty_scaling_factor: float,
+                    ddown_factor: float,
                     grid_spacing: float,
                     entry_qty_equity_multiplier: float,
                     equity: float,
                     pos_size: float,
                     pos_price: float):
     qty = -round_dn(min(equity * pos_price * leverage + pos_size,
-                        max([-pos_size * entry_qty_scaling_factor,
+                        max([-pos_size * ddown_factor,
                              min_qty,
                              equity * entry_qty_equity_multiplier * pos_price])), qty_step)
     price = round_up(pos_price * (1 + grid_spacing),
@@ -259,7 +259,7 @@ class Bot:
         self.spread_minus = 1 - settings['ema_spread'] / 2
         self.spread_plus = 1 + settings['ema_spread'] / 2
         self.entry_qty_equity_multiplier = settings['entry_qty_equity_multiplier']
-        self.entry_qty_scaling_factor = settings['entry_qty_scaling_factor']
+        self.ddown_factor = settings['ddown_factor']
         self.grid_spacing = settings['grid_spacing']
         self.markup = settings['markup']
         self.ts_locked = {'cancel_orders': 0, 'decide': 0, 'update_open_orders': 0,
@@ -375,7 +375,7 @@ class Bot:
         self.stop_websocket = True
 
     def calc_orders(self):
-        n_orders = 11
+        n_orders = 23
         orders = []
         if self.position['size'] == 0:
             bid_price = min(self.prdn(min(self.emas.values()) * self.spread_minus), self.ob[0])

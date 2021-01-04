@@ -19,6 +19,32 @@ from passivbot import init_ccxt, load_key_secret, load_settings, make_get_filepa
 from binance import fetch_trades as fetch_trades_binance
 
 
+def calc_long_liq_price(leverage, price, maintenance_margin_rate=0.005):
+    return (price * leverage) / (leverage + 1 - (maintenance_margin_rate * leverage))
+
+def calc_long_bankruptcy_price(qty, order_value, equity, order_margin, fee_to_open):
+    return (1.00075 * qty) / (order_value + (equity - order_margin - fee_to_open))
+
+def calc_long_liq_price_cross(leverage, equity, qty, order_margin, entry_price, maintenance_margin_rate=0.005):
+    bankruptcy_price = 0.0
+    return (4000 * bankruptcy_price * entry_price * qty) / \
+        (4000 * equity * bankruptcy_price * entry_price - 4000 * bankruptcy_price * ((maintenance_margin_rate - 1) * qty + entry_price * order_margin))
+
+'''
+
+qty * (1 / price - 1 / liq_price) == -(equity - order_margin - (qty / price) * maintenance_margin_rate - (qty * 0.00075 / bankruptcy_price))
+'''
+
+def calc_shrt_liq_price(leverage, price, maintenance_margin_rate=0.005):
+    return (price * leverage) / (leverage - 1 + (maintenance_margin_rate * leverage))
+
+def calc_shrt_bankruptcy_price():
+    pass
+
+def calc_shrt_liq_price_cross(leverage, price, maintenance_margin_rate=0.005):
+    pass
+
+
 async def fetch_trades(cc, symbol: str, from_id: int = None) -> [dict]:
 
     params = {'symbol': symbol, 'limit': 1000}
@@ -88,7 +114,7 @@ class BybitBot(Bot):
             self.min_qty,
             self.qty_step,
             self.leverage,
-            self.entry_qty_scaling_factor,
+            self.ddown_factor,
             self.entry_qty_equity_multiplier,
             equity_,
             pos_size_,
@@ -99,7 +125,7 @@ class BybitBot(Bot):
             self.min_qty,
             self.qty_step,
             self.leverage,
-            self.entry_qty_scaling_factor,
+            self.ddown_factor,
             self.entry_qty_equity_multiplier,
             equity_,
             pos_size_,
