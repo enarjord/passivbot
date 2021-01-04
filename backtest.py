@@ -45,17 +45,17 @@ def jackrabbit(agg_trades: pd.DataFrame):
     }
 
     best = {
-        'ddown_factor': 1.583,
-        'ema_spans': (131145.0, 460409.0),
-        'ema_spread': 0.002,
+        'ddown_factor': 0.0,
+        'ema_spans': (0, 0),
+        'ema_spread': 0.0,
         'entry_qty_equity_multiplier': 0.0,
-        'grid_spacing': 0.0242,
-        'initial_equity': 1.0,
-        'leverage': 100.0,
-        'markup': 0.026647
+        'grid_spacing': 0.0,
+        'initial_equity': 0.0,
+        'leverage': 0.0,
+        'markup': 0.0
     }
 
-
+    # set random settings to start
     for key in best:
         if type(best[key]) == tuple:
             best[key] = tuple(sorted([calc_new_val((ranges[key][1] - ranges[key][0]) / 2,
@@ -63,20 +63,7 @@ def jackrabbit(agg_trades: pd.DataFrame):
                                       for _ in best[key]]))
         else:
             best[key] = calc_new_val((ranges[key][1] - ranges[key][0]) / 2, ranges[key], 1.0)
-    '''
-    best = {'bet_m': 0.05,
-            'bet_purse_pct': 0.001,
-            'ema_spans': (10000, 20000),
-            'markup': 0.002,
-            'spread': 0.001,
-            'price_step': 3.5}
-    best = {'ema_spans': (129788.0, 275785.0),
-            'ema_spread': 0.001437,
-            'markup': 0.002345,
-            'grid_spacing': 0.0026,
-            'ddown_factor': 0.38,
-            'entry_qty_equity_multiplier': 0.00171}
-    best = {k_: settings[k_] for k_ in sorted(ranges)}
+    # optional: uncomment to manually set starting settings.
     '''
     best = {
         'ddown_factor': 1.146,
@@ -88,6 +75,7 @@ def jackrabbit(agg_trades: pd.DataFrame):
         'leverage': 100.0,
         'markup': 0.028971
     }
+    '''
 
     settings = sort_dict_keys(settings)
     best = sort_dict_keys(best)
