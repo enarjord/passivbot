@@ -44,23 +44,25 @@ def jackrabbit(agg_trades: pd.DataFrame):
         'markup': (0.0001, 0.03, 0.000001),
     }
 
-    best = {
-        'ddown_factor': 0.0,
-        'ema_spans': (0, 0),
-        'ema_spread': 0.0,
+        tweakable = {
+        'ddown_factor': 1.583,
+        'ema_spans': (131145.0, 460409.0),
+        'ema_spread': 0.002,
         'entry_qty_equity_multiplier': 0.0,
-        'grid_spacing': 0.0,
-        'initial_equity': 0.0,
-        'leverage': 0.0,
-        'markup': 0.0
+        'grid_spacing': 0.0242,
+        'initial_equity': 1.0,
+        'leverage': 100.0,
+        'markup': 0.026647
     }
 
-    # set random settings to start
-    for key in best:
-        if type(best[key]) == tuple:
-            best[key] = tuple(sorted([calc_new_val((ranges[key][1] - ranges[key][0]) / 2,
-                                                   ranges[key], 1.0)
-                                      for _ in best[key]]))
+    best = {}
+
+    for key in tweakable:
+        if type(tweakable[key]) == tuple:
+            best[key] = tuple(sorted([
+                calc_new_val((ranges[key][1] - ranges[key][0]) / 2, ranges[key], 1.0)
+                for _ in tweakable[key]
+            ]))
         else:
             best[key] = calc_new_val((ranges[key][1] - ranges[key][0]) / 2, ranges[key], 1.0)
     # optional: uncomment to manually set starting settings.
