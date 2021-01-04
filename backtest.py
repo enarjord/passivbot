@@ -44,7 +44,7 @@ def jackrabbit(agg_trades: pd.DataFrame):
         'markup': (0.0001, 0.03, 0.000001),
     }
 
-        tweakable = {
+    tweakable = {
         'ddown_factor': 1.583,
         'ema_spans': (131145.0, 460409.0),
         'ema_spread': 0.002,
