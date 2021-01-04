@@ -1,11 +1,18 @@
 {
-    "ema_spans": [38935, 99848],
-    "enter_long": true,
-    "enter_shrt": true,
-    "entry_amount": 0.001,
-    "spread": -0.000583,
-    "leverage": 114,
-    "markup": 0.001606,
-    "symbol": "BTCUSDT",
-    "ddown_limit": 10
+    "ema_spans": [
+        37328.0,
+        51671.0
+    ],
+    "ema_spread": -0.000468,
+    "entry_qty_equity_multiplier": 0.00192,
+    "ddown_factor": 0.413,
+    "grid_spacing": 0.0047,
+    "initial_equity": 0.001,
+    "leverage": 84.0,
+    "maker_fee": -0.00025,
+    "markup": 0.00723,
+    "min_qty": 0.001,
+    "price_step": 0.01,
+    "qty_step": 0.001,
+    "symbol": "BTCUSDT"
 }
