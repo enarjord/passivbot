@@ -64,48 +64,40 @@ class BinanceBot(Bot):
                 self.prdn = lambda n: round_dn(n, self.price_step)
                 self.prup = lambda n: round_up(n, self.price_step)
                 break
-        self.calc_initial_long_entry_qty = lambda equity_, price_: calc_initial_long_entry_qty(
-            self.min_qty, self.qty_step, self.entry_qty_equity_multiplier, equity_, 1 / price_
-        )
-        self.calc_initial_shrt_entry_qty = lambda equity_, price_: calc_initial_shrt_entry_qty(
-            self.min_qty, self.qty_step, self.entry_qty_equity_multiplier, equity_, 1 / price_
-        )
-
-        self.calc_long_entry_qty = lambda equity_, pos_size_, pos_price_: calc_long_entry_qty(
-            self.min_qty,
-            self.qty_step,
-            self.leverage,
-            self.ddown_factor,
-            self.entry_qty_equity_multiplier,
-            equity_,
-            pos_size_,
-            1 / pos_price_,
-        )
-
-        self.calc_shrt_entry_qty = lambda equity_, pos_size_, pos_price_: calc_shrt_entry_qty(
-            self.min_qty,
-            self.qty_step,
-            self.leverage,
-            self.ddown_factor,
-            self.entry_qty_equity_multiplier,
-            equity_,
-            pos_size_,
-            1 / pos_price_,
-        )
-
-        self.calc_long_entry_price = lambda pos_price_: calc_long_entry_price(
-            self.price_step,
-            self.grid_spacing,
-            pos_price_,
-        )
-
-        self.calc_shrt_entry_price = lambda pos_price_: calc_shrt_entry_price(
-            self.price_step,
-            self.grid_spacing,
-            pos_price_,
-        )
-
         await self.update_position()
+        await self.init_order_book()
+
+    async def init_order_book(self):
+        ticker = await self.cc.fapiPublic_get_ticker_bookticker(params={'symbol': self.symbol})
+        self.ob = [float(ticker['bidPrice']), float(ticker['askPrice'])]
+        self.price = np.random.choice(self.ob)
+
+    def calc_entry_qty(self, equity_, pos_size_, pos_price_):
+        return calc_entry_qty(self.qty_step,
+                              self.min_qty,
+                              self.ddown_factor,
+                              self.leverage,
+                              equity_,
+                              pos_size_,
+                              pos_price_)
+
+    def calc_long_entry_price(self, equity_, pos_size_, pos_price_):
+        return calc_long_entry_price(self.price_step,
+                                     self.leverage,
+                                     self.grid_spacing,
+                                     self.grid_spacing_coefficient,
+                                     equity_,
+                                     pos_size_,
+                                     pos_price_)
+
+    def calc_shrt_entry_price(self, equity_, pos_size_, pos_price_):
+        return calc_shrt_entry_price(self.price_step,
+                                     self.leverage,
+                                     self.grid_spacing,
+                                     self.grid_spacing_coefficient,
+                                     equity_,
+                                     pos_size_,
+                                     pos_price_)
 
     async def fetch_open_orders(self) -> [dict]:
         return [
@@ -147,7 +139,7 @@ class BinanceBot(Bot):
             'type': 'LIMIT',
             'quantity': qty,
             'price': price,
-            'timeInForce': 'GTC'
+            'timeInForce': 'GTX'
         })
         return {'symbol': self.symbol,
                 'side': 'buy',
@@ -162,7 +154,7 @@ class BinanceBot(Bot):
             'type': 'LIMIT',
             'quantity': qty,
             'price': price,
-            'timeInForce': 'GTC'
+            'timeInForce': 'GTX'
         })
         return {'symbol': self.symbol,
                 'side': 'sell',
