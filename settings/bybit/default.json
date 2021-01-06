@@ -1,17 +1,16 @@
 {
-    "ema_spans": [
-        37328.0,
-        51671.0
-    ],
-    "ema_spread": -0.000468,
-    "entry_qty_equity_multiplier": 0.00192,
-    "ddown_factor": 0.413,
-    "grid_spacing": 0.0047,
+    "compounding": false,
+    "ddown_factor": 0.01,
+    "grid_spacing": 0.003,
+    "grid_spacing_coefficient": 20.0,
     "initial_equity": 0.001,
-    "leverage": 84.0,
+    "isolated_mode": false,
+    "leverage": 100.0,
+    "liq_modifier": 0.001,
     "maker_fee": -0.00025,
-    "markup": 0.00723,
+    "markup": 0.0019,
     "min_qty": 1.0,
+    "n_days": 6.958305266203703,
     "price_step": 0.5,
     "qty_step": 1.0,
     "symbol": "BTCUSD"
