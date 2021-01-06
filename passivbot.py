@@ -266,8 +266,8 @@ class Bot:
             pos_price = self.position['entry_price']
             if self.position['size'] > 0.0:
                 for k in range(n_orders):
-                    bid_qty = self.calc_entry_qty(self.self.initial_equity, pos_size, pos_price)
-                    bid_price = self.calc_long_entry_price(self.self.initial_equity,
+                    bid_qty = self.calc_entry_qty(self.initial_equity, pos_size, pos_price)
+                    bid_price = self.calc_long_entry_price(self.initial_equity,
                                                            pos_size,
                                                            pos_price)
                     if bid_qty < self.min_qty or self.price / bid_price > max_diff_from_last_price:
@@ -285,8 +285,8 @@ class Bot:
                 })
             else:
                 for k in range(n_orders):
-                    ask_qty = -self.calc_entry_qty(self.self.initial_equity, pos_size, pos_price)
-                    ask_price = self.calc_shrt_entry_price(self.self.initial_equity,
+                    ask_qty = -self.calc_entry_qty(self.initial_equity, pos_size, pos_price)
+                    ask_price = self.calc_shrt_entry_price(self.initial_equity,
                                                            pos_size,
                                                            pos_price)
                     if -ask_qty < self.min_qty or ask_price / self.price > max_diff_from_last_price:
