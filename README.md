@@ -42,11 +42,11 @@ the bot's purpose is to accumulate btc in bybit inverse
 
 will make entries automatically, but will also work with user making manual entries and adding to or removing from positions while the bot is active
 
-it works by entering small, then either closing position at static markup or reentering at intervals
+it works by entering small, then either closing position at static markup or reentering at in price intervals
 
 depending on initial entry amount and funds available in futures wallet, it will double down repeatedly until position is closed or funds run out
 
-if there is no position, it will enter long if price < min(emas) * (1 - spread / 2), or short if price > max(emas) * (1 + spread / 2)
+if there is no position, it will make a bid at order book's highest bid and ask at order book's lowest ask
 
 it listens to websocket live stream of trades, and updates its orders continuously
 
@@ -61,22 +61,23 @@ settings:
 
 {
 
-    "ema_spans": [                             # emas are not calculated based on ohlcvs,
-        37328.0,                               # but rather on sequence of trades filtered to remove consecutive price duplicates.
-        51671.0
-    ],
-    "ema_spread": -0.000468,                   # if no position, enters long at min(emas) * (1 - spread / 2) and short at max(emas) * (1 + spread / 2)
-    "entry_qty_equity_multiplier": 0.00192,    # initial entry qty is equity * entry_qty_equity_multiplier * price
-    "ddown_factor": 0.413,                     # next entry qty is pos_size * ddown_factor
-    "grid_spacing": 0.0047,                    # next entry qty is pos_price (1 +- grid_spacing)
-    "initial_equity": 0.001,                   # used in backtesting
-    "leverage": 84.0,                          # used in backtesting to determine liquidation price and limit entries.  live leverage is set to cross mode
-    "maker_fee": -0.00025,                     # used in backtesting
-    "markup": 0.00723,                         # closes entire position at pos_price * (1 +- markup)
-    "min_qty": 1.0,                            # used in backtesting
-    "price_step": 0.5,                         # used in backtesting
-    "qty_step": 1.0,                           # used in backtesting
-    "symbol": "BTCUSD"                         # only one symbol at a time
+        'compounding': False,               # used in backtesting
+        'ddown_factor': 0.01,               # next entry_qty is pos_size * ddown_factor
+        'grid_spacing': 0.003,              # next entry_price is pos_price * (1 +- grid_spacing * grid_spacing_modifier)
+                                            # where grid_spacing_modifier is (1 + pos_margin_to_equity_ratio * grid_spacing_coefficient)
+                                            # where pos_margin_to_equity_ratio is (pos_size / pos_price) / (equity * leverage)
+        'grid_spacing_coefficient': 20.0,   # the purpose of the coefficient is to increase grid spacing when pos_size is high
+        'initial_equity': 0.001,            # used in backtesting.  also limits the bot's max allowed pos_size
+        'isolated_mode': False,             # used in backtesting.  cross mode if False.  only tested with cross mode, isolated mode not recommended
+        'leverage': 100.0,                  # irrelevant because cross mode in bybit is always 100x leverage
+        'liq_modifier': 0.001,              # used in backtesting to simulate mark price for liquidations
+        'maker_fee': -0.00025,              # used in backtesting.  bot uses only post_only limit orders -- no takers
+        'markup': 0.0019,                   # bot closes any position at pos_price * (1 +- markup)
+        'min_qty': 1.0,                     # minimum order quantity.  bybit's minimum is 1.0, user may set higher minimum
+        'n_days': 0.0,                      # used in backtesting
+        'price_step': 0.5,                  # price step
+        'qty_step': 1.0,                    # quantity step
+        'symbol': 'BTCUSD'                  # only one symbol at a time
 
 }
 
