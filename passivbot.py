@@ -53,7 +53,7 @@ def calc_shrt_entry_price(price_step,
                           equity,
                           pos_size,
                           pos_price):
-    pos_margin_to_equity_ratio = (-pos_size / pos_price_) / (equity * leverage)
+    pos_margin_to_equity_ratio = (-pos_size / pos_price) / (equity * leverage)
     grid_spacing_modifier = (1 + pos_margin_to_equity_ratio * grid_spacing_coefficient)
     return round_up(pos_price * (1 + grid_spacing * grid_spacing_modifier),
                     round_up(pos_price * grid_spacing / 4, price_step))
@@ -286,7 +286,7 @@ class Bot:
             else:
                 for k in range(n_orders):
                     ask_qty = -self.calc_entry_qty(self.position['equity'], pos_size, pos_price)
-                    bid_price = self.calc_shrt_entry_price(self.position['equity'],
+                    ask_price = self.calc_shrt_entry_price(self.position['equity'],
                                                            pos_size,
                                                            pos_price)
                     if -ask_qty < self.min_qty or ask_price / self.price > max_diff_from_last_price:
