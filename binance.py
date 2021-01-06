@@ -13,9 +13,8 @@ from math import floor
 from time import time, sleep
 from typing import Callable, Iterator
 from passivbot import init_ccxt, load_key_secret, load_settings, make_get_filepath, print_, \
-    ts_to_date, flatten, calc_new_ema, filter_orders, Bot, start_bot, round_dn, round_up, \
-    calc_initial_long_entry_qty, calc_initial_shrt_entry_qty, calc_long_entry_qty, \
-    calc_shrt_entry_qty, calc_long_entry_price, calc_shrt_entry_price
+    ts_to_date, flatten, filter_orders, Bot, start_bot, round_up, round_dn, \
+    calc_long_entry_price, calc_shrt_entry_price, calc_entry_qty
 
 
 async def fetch_trades(cc, symbol: str, from_id: int = None) -> [dict]:
@@ -199,7 +198,6 @@ class BinanceBot(Bot):
         except Exception as e:
             print(e)
         await self.update_position()
-        await self.init_emas()
         async with websockets.connect(uri) as ws:
             async for msg in ws:
                 if msg is None:
@@ -207,13 +205,6 @@ class BinanceBot(Bot):
                 data = json.loads(msg)
                 price = float(data['p'])
                 trade_id = data['a']
-                if price != self.price:
-                    for span in self.ema_spans:
-                        self.emas[span] = calc_new_ema(self.price,
-                                                       price,
-                                                       self.emas[span],
-                                                       alpha=self.ema_alphas[span],
-                                                       n_steps=trade_id - self.trade_id)
                 if data['m']:
                     self.ob[0] = price
                 else:

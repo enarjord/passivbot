@@ -13,9 +13,8 @@ from math import floor
 from time import time, sleep
 from typing import Callable, Iterator
 from passivbot import init_ccxt, load_key_secret, load_settings, make_get_filepath, print_, \
-    ts_to_date, flatten, calc_new_ema, filter_orders, Bot, start_bot, round_up, round_dn, \
-    calc_initial_long_entry_qty, calc_initial_shrt_entry_qty, calc_shrt_entry_qty, \
-    calc_shrt_entry_price, calc_long_entry_qty, calc_long_entry_price
+    ts_to_date, flatten, filter_orders, Bot, start_bot, round_up, round_dn, \
+    calc_long_entry_price, calc_shrt_entry_price, calc_entry_qty
 from binance import fetch_trades as fetch_trades_binance
 
 
@@ -102,47 +101,39 @@ class BybitBot(Bot):
         self.prup = lambda n: round_up(n, self.price_step)
         self.ardn = lambda n: round_dn(n, self.qty_step)
         self.arup = lambda n: round_up(n, self.qty_step)
+        await self.init_order_book()
 
-        self.calc_initial_long_entry_qty = lambda equity_, price_: calc_initial_long_entry_qty(
-            self.min_qty, self.qty_step, self.entry_qty_equity_multiplier, equity_, price_
-        )
-        self.calc_initial_shrt_entry_qty = lambda equity_, price_: calc_initial_shrt_entry_qty(
-            self.min_qty, self.qty_step, self.entry_qty_equity_multiplier, equity_, price_
-        )
+    async def init_order_book(self):
+        ticker = await self.cc.public_get_tickers(params={'symbol': self.symbol})
+        self.ob = [float(ticker['result'][0]['bid_price']), float(ticker['result'][0]['ask_price'])]
+        self.price = float(ticker['result'][0]['last_price'])
 
-        self.calc_long_entry_qty = lambda equity_, pos_size_, pos_price_: calc_long_entry_qty(
-            self.min_qty,
-            self.qty_step,
-            self.leverage,
-            self.ddown_factor,
-            self.entry_qty_equity_multiplier,
-            equity_,
-            pos_size_,
-            pos_price_,
-        )
+    def calc_entry_qty(self, equity_, pos_size_, pos_price_):
+        return calc_entry_qty(self.qty_step,
+                              self.min_qty,
+                              self.ddown_factor,
+                              self.leverage,
+                              equity_,
+                              pos_size_,
+                              pos_price_)
 
-        self.calc_shrt_entry_qty = lambda equity_, pos_size_, pos_price_: calc_shrt_entry_qty(
-            self.min_qty,
-            self.qty_step,
-            self.leverage,
-            self.ddown_factor,
-            self.entry_qty_equity_multiplier,
-            equity_,
-            pos_size_,
-            pos_price_,
-        )
+    def calc_long_entry_price(self, equity_, pos_size_, pos_price_):
+        return calc_long_entry_price(self.price_step,
+                                     self.leverage,
+                                     self.grid_spacing,
+                                     self.grid_spacing_coefficient,
+                                     equity_,
+                                     pos_size_,
+                                     pos_price_)
 
-        self.calc_long_entry_price = lambda pos_price_: calc_long_entry_price(
-            self.price_step,
-            self.grid_spacing,
-            pos_price_,
-        )
-
-        self.calc_shrt_entry_price = lambda pos_price_: calc_shrt_entry_price(
-            self.price_step,
-            self.grid_spacing,
-            pos_price_,
-        )
+    def calc_shrt_entry_price(self, equity_, pos_size_, pos_price_):
+        return calc_shrt_entry_price(self.price_step,
+                                     self.leverage,
+                                     self.grid_spacing,
+                                     self.grid_spacing_coefficient,
+                                     equity_,
+                                     pos_size_,
+                                     pos_price_)
 
     async def fetch_open_orders(self) -> [dict]:
         fetched = await self.cc.private_get_order(params={'symbol': self.symbol})
@@ -228,7 +219,6 @@ class BybitBot(Bot):
                 ))
             except Exception as e:
                 print('error starting websocket', e)
-        await self.init_emas()
         param = {'op': 'subscribe', 'args': ['trade.' + self.symbol]}
         k = 1
         async with websockets.connect(uri) as ws:
@@ -241,16 +231,11 @@ class BybitBot(Bot):
                 try:
                     for e in data['data']:
                         if e['price'] != self.price:
-                            for span in self.ema_spans:
-                                self.emas[span] = calc_new_ema(self.price,
-                                                               e['price'],
-                                                               self.emas[span],
-                                                               alpha=self.ema_alphas[span])
-                            self.price = e['price']
                             if e['side'] == 'Buy':
                                 self.ob[1] = e['price']
                             elif e['side'] == 'Sell':
                                 self.ob[0] = e['price']
+                            self.price = e['price']
                             price_changed = True
                 except Exception as e:
                     if 'success' not in data:

@@ -6,8 +6,7 @@ import asyncio
 import os
 from time import time
 from passivbot import init_ccxt, make_get_filepath, ts_to_date, print_, load_settings, \
-    sort_dict_keys, calc_long_entry, calc_shrt_entry, \
-    round_up, round_dn, calc_initial_long_entry_qty, calc_initial_shrt_entry_qty
+    sort_dict_keys, round_up, round_dn
 from binance import fetch_trades as binance_fetch_trades
 from bybit import fetch_trades as bybit_fetch_trades, calc_long_liq_price, calc_shrt_liq_price
 from typing import Iterator
@@ -16,43 +15,36 @@ from bisect import insort_left
 
 def jackrabbit(agg_trades: pd.DataFrame):
     settings = {
-        'ema_spans': [5000, 2500],
-        'ema_spread': -0.0004,
-        'entry_qty_equity_multiplier': 0.002,
+        'compounding': False,
         'ddown_factor': 0.05,
         'grid_spacing': 0.002,
+        'grid_spacing_coefficient': 20.0,
         'initial_equity': 0.001,
+        'isolated_mode': False,
         'leverage': 100.0,
+        'liq_modifier': 0.002,
         'maker_fee': -0.00025,
         'markup': 0.003,
         'min_qty': 1.0,
         'price_step': 0.5,
         'qty_step': 1.0,
-        'symbol': 'BTCUSD',
-        'compounding': False,
-        'liq_modifier': 0.005
+        'symbol': 'BTCUSD'
     }
 
     ranges = {
-        'ema_spans': (50, 500000, 1),
-        'ema_spread': (-0.003, 0.003, 0.000001),
-        'entry_qty_equity_multiplier': (0.0, 0.0, 0.00001),
-        'ddown_factor': (0.001, 2.0, 0.001),
-        'grid_spacing': (0.0001, 0.06, 0.0001),
-        'initial_equity': (1.0, 1.0, 0.001),
-        'leverage': (100, 100, 1),
-        'markup': (0.0001, 0.03, 0.000001),
+        'ddown_factor': (0.0001, 2.0, 0.0001),
+        'grid_spacing': (0.0001, 0.1, 0.0001),
+        'grid_spacing_coefficient': (0.0, 100.0, 0.01),
+        'initial_equity': (0.001, 0.001, 0.0001),
+        'markup': (0.0001, 0.04, 0.000001),
     }
 
     tweakable = {
-        'ddown_factor': 1.583,
-        'ema_spans': (131145.0, 460409.0),
-        'ema_spread': 0.002,
-        'entry_qty_equity_multiplier': 0.0,
-        'grid_spacing': 0.0242,
-        'initial_equity': 1.0,
-        'leverage': 100.0,
-        'markup': 0.026647
+        'ddown_factor': 0.0,
+        'grid_spacing': 0.0,
+        'grid_spacing_coefficient': 0.0,
+        'initial_equity': 0.0,
+        'markup': 0.0
     }
 
     best = {}
@@ -65,19 +57,10 @@ def jackrabbit(agg_trades: pd.DataFrame):
             ]))
         else:
             best[key] = calc_new_val((ranges[key][1] - ranges[key][0]) / 2, ranges[key], 1.0)
+    '''
+    best = {k_: settings[k_] for k_ in sorted(ranges)}
+    '''
     # optional: uncomment to manually set starting settings.
-    '''
-    best = {
-        'ddown_factor': 1.146,
-        'ema_spans': (218120.0, 369024.0),
-        'ema_spread': 0.002,
-        'entry_qty_equity_multiplier': 0.0,
-        'grid_spacing': 0.0338,
-        'initial_equity': 1.0,
-        'leverage': 100.0,
-        'markup': 0.028971
-    }
-    '''
 
     settings = sort_dict_keys(settings)
     best = sort_dict_keys(best)
@@ -99,10 +82,20 @@ def jackrabbit(agg_trades: pd.DataFrame):
     settings['n_days'] = n_days
     print('n_days', n_days)
 
+    # conditions for result approval
+    conditions = [
+        lambda r: r['n_trades'] > 10 * n_days,
+        #lambda r: r['max_margin_cost'] > 0.00001,
+        #lambda r: r['max_margin_cost'] < 0.004,
+        lambda r: r['n_liqs'] == 0,
+        lambda r: True,
+    ]
+
+    df = prep_df(agg_trades)
+
     while k < ks - 1:
         try:
             k += 1
-            adf = agg_trades
             key = tuple([candidate[k_] for k_ in sorted(candidate)])
             if key in results:
                 print('skipping', key)
@@ -113,7 +106,6 @@ def jackrabbit(agg_trades: pd.DataFrame):
             print(line)
             settings_ = {k_: candidate[k_] if k_ in candidate else settings[k_]
                          for k_ in sorted(settings)}
-            df = prep_df(adf, settings_)
             trades = backtest(df, settings_)
             if not trades:
                 print('\nno trades')
@@ -125,14 +117,14 @@ def jackrabbit(agg_trades: pd.DataFrame):
             pnl_sum = tdf.pnl.sum()
             max_margin_cost = tdf.margin_cost.max()
             gain = (pnl_sum + max_margin_cost) / max_margin_cost
-            results[key] = {'n_liqs': n_liqs, 'n_closes': n_closes, 'pnl_sum': pnl_sum,
-                            'equity_start': settings_['initial_equity'], 
-                            'equity_end': tdf.equity.iloc[-1],
-                            'max_margin_cost': max_margin_cost,
-                            'gain': gain, 'n_trades': len(tdf)}
-            print('\n', results[key])
+            n_trades = len(tdf)
+            result = {'n_liqs': n_liqs, 'n_closes': n_closes, 'pnl_sum': pnl_sum,
+                      'max_margin_cost': max_margin_cost,
+                      'gain': gain, 'n_trades': n_trades}
+            print('\n', result)
+            results[key] = result
 
-            if gain > best_gain:
+            if gain > best_gain and all([c(results[key]) for c in conditions]):
                 best = candidate
                 best_gain = gain
                 print('\n\nnew best', best, '\n', gain, '\n')
@@ -145,29 +137,15 @@ def jackrabbit(agg_trades: pd.DataFrame):
     return results
 
 
-def prep_df(adf: pd.DataFrame, settings: dict):
+def prep_df(adf: pd.DataFrame):
     # bybit
-    # assumes consecutive duplicates in price are removed
-    spread = settings['ema_spread']
-    ema_spans = settings['ema_spans']
-    emas = pd.concat([adf.price.ewm(span=span, adjust=False).mean() for span in ema_spans], axis=1)
-    bid_thr = emas.min(axis=1) * (1 - spread / 2)
-    bid_thr.name = 'bid_thr'
-    ask_thr = emas.max(axis=1) * (1 + spread / 2)
-    ask_thr.name = 'ask_thr'
-    buyer_maker = adf.side == 'Sell'
+    dfc = adf[adf.price != adf.price.shift(1)]
+    buyer_maker = dfc.side == 'Sell'
     buyer_maker.name = 'buyer_maker'
-    df = pd.concat([adf.price, buyer_maker, bid_thr, ask_thr], axis=1)
+    df = pd.concat([dfc.price, buyer_maker], axis=1)
     df.index = np.arange(len(df))
     return df
 
-
-def calc_long_close(markup: float, price_step: float, pos_size: float, pos_price: float):
-    return [-pos_size, round_up(pos_price * (1 + markup), price_step)]
-
-
-def calc_shrt_close(markup: float, price_step: float, pos_size: float, pos_price: float):
-    return [-pos_size, round_dn(pos_price * (1 - markup), price_step)]
 
 
 def calc_long_closes(min_bet: float,
@@ -221,6 +199,24 @@ def calc_shrt_closes(min_bet: float,
 
 def backtest(df: pd.DataFrame, settings: dict):
 
+    def calc_long_entry_price(equity_, pos_size_, pos_price_):
+        pos_margin_to_equity_ratio = (pos_size_ / pos_price_) / (equity_ * leverage)
+        grid_spacing_modifier = (1 + pos_margin_to_equity_ratio * grid_spacing_coefficient)
+        return round_dn(pos_price_ * (1 - grid_spacing * grid_spacing_modifier),
+                        round_up(pos_price_ * grid_spacing / 4, price_step))
+
+    def calc_shrt_entry_price(equity_, pos_size_, pos_price_):
+        pos_margin_to_equity_ratio = (-pos_size_ / pos_price_) / (equity_ * leverage)
+        grid_spacing_modifier = (1 + pos_margin_to_equity_ratio * grid_spacing_coefficient)
+        return round_up(pos_price_ * (1 + grid_spacing * grid_spacing_modifier),
+                        round_up(pos_price_ * grid_spacing / 4, price_step))
+
+    def calc_entry_qty(equity_, pos_size_, pos_price_):
+        abs_pos_size = abs(pos_size_)
+        return min(equity_ * pos_price_ * leverage - abs_pos_size,
+                   max(min_qty, round_up(min_qty * abs_pos_size * ddown_factor, qty_step)))
+
+
     # bybit
     maker_fee = settings['maker_fee']
     min_qty = settings['min_qty']
@@ -231,57 +227,35 @@ def backtest(df: pd.DataFrame, settings: dict):
     leverage = settings['leverage']
     markup = settings['markup']
     grid_spacing = settings['grid_spacing']
-    entry_qty_equity_multiplier = settings['entry_qty_equity_multiplier']
 
     compounding = settings['compounding']
     liq_modifier = settings['liq_modifier']
     n_days = settings['n_days']
-
-    calc_long_entry_ = lambda equity_, pos_size_, pos_price_: calc_long_entry(
-        min_qty, qty_step, price_step, leverage, ddown_factor, grid_spacing,
-        entry_qty_equity_multiplier, equity_, pos_size_, pos_price_
-    )
-
-    calc_shrt_entry_ = lambda equity_, pos_size_, pos_price_: calc_shrt_entry(
-        min_qty, qty_step, price_step, leverage, ddown_factor, grid_spacing,
-        entry_qty_equity_multiplier, equity_, pos_size_, pos_price_
-    )
-
-    calc_long_close_ = lambda pos_size_, pos_price_: calc_long_close(
-        markup, price_step, pos_size_, pos_price
-    )
-    calc_shrt_close_ = lambda pos_size_, pos_price_: calc_shrt_close(
-        markup, price_step, pos_size_, pos_price
-    )
-
-    calc_initial_long_entry_qty_ = lambda equity_, price_: calc_initial_long_entry_qty(
-        min_qty, qty_step, entry_qty_equity_multiplier, equity_, price_
-    )
-
-    calc_initial_shrt_entry_qty_ = lambda equity_, price_: calc_initial_shrt_entry_qty(
-        min_qty, qty_step, entry_qty_equity_multiplier, equity_, price_
-    )
+    isolated_mode = settings['isolated_mode']
+    grid_spacing_coefficient = settings['grid_spacing_coefficient']
 
     pos_size = 0.0
     liq_price = np.nan
     pos_price = 0.0
     equity = settings['initial_equity']
     ob = [df.iloc[:2].price.min(), df.iloc[:2].price.max()]
-    bid = [calc_initial_long_entry_qty_(equity, ob[0]), ob[0]]
-    ask = [calc_initial_shrt_entry_qty_(equity, ob[1]), ob[1]]
+    bid_price = ob[0]
+    bid_qty = min_qty
+    ask_price = ob[1]
+    ask_qty = -min_qty
 
     trades = []
     prev_len_trades = 0
 
-    # df needs columns price: float, buyer_maker: bool, bid_thr: float, ask_thr: float
+    # df needs columns price: float, buyer_maker: bool
     for row in df.itertuples():
         if row.buyer_maker:
             ob[0] = row.price
             if pos_size == 0:
-                ask = [calc_initial_shrt_entry_qty_(equity, ob[1]),
-                       max(ob[1], round_up(row.ask_thr, price_step))]
+                ask_price, ask_qty = ob[1], -min_qty
             elif pos_size < 0:
-                ask = calc_shrt_entry_(equity, pos_size, pos_price)
+                ask_price = calc_shrt_entry_price(equity, pos_size, pos_price)
+                ask_qty = -calc_entry_qty(equity, pos_size, pos_price)
             if liq_price and pos_size > 0 and row.price <= liq_price:
                 # liquidate long pos
                 cost = pos_size / liq_price
@@ -298,60 +272,67 @@ def backtest(df: pd.DataFrame, settings: dict):
                                'close_price': round_up(pos_price * (1 + markup), price_step)})
                 liq_price = np.nan
                 pos_size = 0
-                bid = [calc_initial_long_entry_qty_(equity, ob[0]), min(ob[0], row.bid_thr)]
-                ask = [calc_initial_shrt_entry_qty_(equity, ob[1]), max(ob[1], row.ask_thr)]
-            elif row.price < bid[1]:
+                bid_price, bid_qty = ob[0], min_qty
+                ask_price, ask_qty = ob[1], -min_qty
+            elif row.price < bid_price:
                 if pos_size >= 0:
                     # add more to or create long pos
-                    while row.price < bid[1]:
-                        if bid[0] < min_qty:
-                            bid = [0.0, 0.0]
+                    while row.price < bid_price:
+                        if bid_qty < min_qty:
+                            bid_price, bid_qty = 0.0, 0.0
                             liq_price = calc_long_liq_price(leverage, pos_price) * (1 + liq_modifier)
                             break
-                        new_pos_size = pos_size + bid[0]
-                        cost = bid[0] / bid[1]
+                        new_pos_size = pos_size + bid_qty
+                        cost = bid_qty / bid_price
                         margin_cost = cost / leverage
                         pnl = -cost * maker_fee
                         if compounding:
                             equity += pnl
+                        if isolated_mode:
+                            liq_price = calc_long_liq_price(
+                                leverage, pos_price) * (1 + liq_modifier
+                            )
                         pos_price = pos_price * (pos_size / new_pos_size) + \
-                            bid[1] * (bid[0] / new_pos_size)
+                            bid_price * (bid_qty / new_pos_size)
                         pos_size = new_pos_size
+                        pos_cost = pos_size / pos_price
                         close_price = round_up(pos_price * (1 + markup), price_step)
                         trades.append({'trade_id': row.Index, 'side': 'long', 'type': 'entry',
-                                       'qty': bid[0], 'price': bid[1],
+                                       'qty': bid_qty, 'price': bid_price,
                                        'pos_size': pos_size, 'pos_price': pos_price,
                                        'liq_price': liq_price, 'pnl': pnl,
                                        'margin_cost': margin_cost, 'equity': equity,
                                        'equity_available': equity - pos_size / row.price / leverage,
                                        'close_price': close_price})
-                        bid = calc_long_entry_(equity, pos_size, bid[1])
-                    ask = calc_long_close_(pos_size, pos_price)
+                        bid_price = calc_long_entry_price(equity, pos_size, pos_price)
+                        bid_qty = calc_entry_qty(equity, pos_size, pos_price)
+                    ask_price = round_up(pos_price * (1 + markup), price_step)
+                    ask_qty = -pos_size
                 else:
                     # close short pos
-                    if row.price < bid[1]:
-                        cost = -pos_size / bid[1]
+                    if row.price < bid_price:
+                        cost = -pos_size / bid_price
                         margin_cost = cost / leverage
-                        pnl = cost * (pos_price / bid[1] - 1) - cost * maker_fee
+                        pnl = cost * (pos_price / bid_price - 1) - cost * maker_fee
                         if compounding:
                             equity += pnl
                         liq_price = np.nan
                         trades.append({'trade_id': row.Index, 'side': 'shrt', 'type': 'close',
-                                       'qty': -pos_size, 'price': bid[1],
+                                       'qty': -pos_size, 'price': bid_price,
                                        'pos_size': 0, 'pos_price': np.nan,
                                        'liq_price': np.nan, 'pnl': pnl,
                                        'margin_cost': margin_cost, 'equity': equity,
                                        'equity_available': equity, 'close_price': np.nan})
                         pos_size = 0
-                        bid = [calc_initial_long_entry_qty_(equity, ob[0]), min(ob[0], row.bid_thr)]
-                        ask = [calc_initial_shrt_entry_qty_(equity, ob[1]), max(ob[1], row.ask_thr)]
+                        bid_price, bid_qty = ob[0], min_qty
+                        ask_price, ask_qty = ob[1], -min_qty
         else:
             ob[1] = row.price
             if pos_size == 0:
-                bid = [calc_initial_long_entry_qty_(equity, ob[0]),
-                       round_dn(min(ob[0], row.bid_thr), price_step)]
+                bid_price, bid_qty = ob[0], min_qty
             elif pos_size > 0:
-                bid = calc_long_entry_(equity, pos_size, pos_price)
+                bid_price = calc_long_entry_price(equity, pos_size, pos_price)
+                bid_qty = calc_entry_qty(equity, pos_size, pos_price)
             if liq_price and pos_size < 0 and row.price > liq_price:
                 # liquidate shrt pos
                 cost = -pos_size / liq_price
@@ -368,54 +349,61 @@ def backtest(df: pd.DataFrame, settings: dict):
                                'close_price': round_dn(pos_price * (1 - markup), price_step)})
                 liq_price = np.nan
                 pos_size = 0
-                bid = [calc_initial_long_entry_qty_(equity, ob[0]), min(ob[0], row.bid_thr)]
-                ask = [calc_initial_shrt_entry_qty_(equity, ob[1]), max(ob[1], row.ask_thr)]
-            if row.price > ask[1]:
+                bid_price, bid_qty = ob[0], min_qty
+                ask_price, ask_qty = ob[1], -min_qty
+            if row.price > ask_price:
                 if pos_size <= 0:
                     # adding more to or creating shrt pos
-                    while row.price > ask[1]:
-                        if -ask[0] < min_qty:
+                    while row.price > ask_price:
+                        if -ask_qty < min_qty:
                             ask = [0.0, 9.9e-9]
                             liq_price = calc_shrt_liq_price(leverage, pos_price) * (1 - liq_modifier)
                             break
-                        new_pos_size = pos_size + ask[0]
-                        cost = -ask[0] / ask[1]
+                        new_pos_size = pos_size + ask_qty
+                        cost = -ask_qty / ask_price
                         margin_cost = cost / leverage
                         pnl = -cost * maker_fee
                         if compounding:
                             equity += pnl
+                        if isolated_mode:
+                            liq_price = calc_shrt_liq_price(
+                                leverage, pos_price) * (1 - liq_modifier
+                            )
                         pos_price = pos_price * (pos_size / new_pos_size) + \
-                            ask[1] * (ask[0] / new_pos_size)
+                            ask_price * (ask_qty / new_pos_size)
                         pos_size = new_pos_size
 
                         close_price = round_dn(pos_price * (1 - markup), price_step)
                         trades.append({'trade_id': row.Index, 'side': 'shrt', 'type': 'entry',
-                                       'qty': ask[0], 'price': ask[1],
+                                       'qty': ask_qty, 'price': ask_price,
                                        'pos_size': pos_size, 'pos_price': pos_price,
                                        'liq_price': liq_price, 'pnl': pnl,
                                        'margin_cost': margin_cost, 'equity': equity,
                                        'equity_available': equity + pos_size / row.price / leverage,
                                        'close_price': close_price})
-                        ask = calc_shrt_entry_(equity, pos_size, ask[1])
-                    bid = calc_shrt_close_(pos_size, pos_price)
+                        ask_price = calc_shrt_entry_price(equity, pos_size, pos_price)
+                        ask_qty = -calc_entry_qty(equity, pos_size, pos_price)
+
+                    bid_price = round_dn(pos_price * (1 - markup), price_step)
+                    bid_qty = -pos_size
                 else:
-                    if row.price > ask[1]:
+                    if row.price > ask_price:
                         # close long pos
-                        cost = pos_size / ask[1]
+                        cost = pos_size / ask_price
                         margin_cost = cost / leverage
-                        pnl = cost * (ask[1] / pos_price - 1) - cost * maker_fee
+                        pnl = cost * (ask_price / pos_price - 1) - cost * maker_fee
                         if compounding:
                             equity += pnl
                         trades.append({'trade_id': row.Index, 'side': 'long', 'type': 'close',
-                                       'qty': -pos_size, 'price': ask[1],
+                                       'qty': -pos_size, 'price': ask_price,
                                        'pos_size': 0, 'pos_price': np.nan,
                                        'liq_price': np.nan, 'pnl': pnl,
                                        'margin_cost': margin_cost, 'equity': equity,
                                        'equity_available': equity, 'close_price': np.nan})
                         pos_size = 0
                         liq_price = np.nan
-                        bid = [calc_initial_long_entry_qty_(equity, ob[0]), min(ob[0], row.bid_thr)]
-                        ask = [calc_initial_shrt_entry_qty_(equity, ob[1]), max(ob[1], row.ask_thr)]
+                        bid_price, bid_qty = ob[0], min_qty
+                        ask_price, ask_qty = ob[1], -min_qty
         if len(trades) > prev_len_trades + 100:
             prev_len_trades = len(trades)
             n_liqs = len([t for t in trades if t['type'] == 'liq'])
