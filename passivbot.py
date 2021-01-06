@@ -43,7 +43,7 @@ def calc_long_entry_price(price_step,
                           pos_price):
     pos_margin_to_equity_ratio = (pos_size / pos_price) / (equity * leverage)
     grid_spacing_modifier = (1 + pos_margin_to_equity_ratio * grid_spacing_coefficient)
-    return round_dn(pos_price * (1 - grid_spacing * grid_spacing_modifier),
+    return round_dn((pos_price - 9e-9) * (1 - grid_spacing * grid_spacing_modifier),
                     round_up(pos_price * grid_spacing / 4, price_step))
 
 def calc_shrt_entry_price(price_step,
@@ -55,7 +55,7 @@ def calc_shrt_entry_price(price_step,
                           pos_price):
     pos_margin_to_equity_ratio = (-pos_size / pos_price) / (equity * leverage)
     grid_spacing_modifier = (1 + pos_margin_to_equity_ratio * grid_spacing_coefficient)
-    return round_up(pos_price * (1 + grid_spacing * grid_spacing_modifier),
+    return round_up((pos_price + 9e-9) * (1 + grid_spacing * grid_spacing_modifier),
                     round_up(pos_price * grid_spacing / 4, price_step))
 
 def calc_entry_qty(qty_step, min_qty, ddown_factor, leverage, equity, pos_size, pos_price):
