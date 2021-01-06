@@ -101,6 +101,7 @@ class BybitBot(Bot):
         self.prup = lambda n: round_up(n, self.price_step)
         self.ardn = lambda n: round_dn(n, self.qty_step)
         self.arup = lambda n: round_up(n, self.qty_step)
+        await self.update_position()
         await self.init_order_book()
 
     async def init_order_book(self):
