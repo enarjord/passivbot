@@ -87,7 +87,7 @@ class BinanceBot(Bot):
                                      self.grid_spacing,
                                      self.grid_spacing_coefficient,
                                      equity_,
-                                     pos_size_,
+                                     pos_size_ * pos_price_**2,
                                      pos_price_)
 
     def calc_shrt_entry_price(self, equity_, pos_size_, pos_price_):
@@ -96,7 +96,7 @@ class BinanceBot(Bot):
                                      self.grid_spacing,
                                      self.grid_spacing_coefficient,
                                      equity_,
-                                     pos_size_,
+                                     pos_size_ * pos_price_**2,
                                      pos_price_)
 
     async def fetch_open_orders(self) -> [dict]:
