@@ -34,6 +34,7 @@ def calc_shrt_liq_price(price, leverage):
     return (price * leverage) / (leverage - 1)
 '''
 
+
 def calc_long_entry_price(price_step,
                           leverage,
                           grid_spacing,
@@ -45,6 +46,7 @@ def calc_long_entry_price(price_step,
     grid_spacing_modifier = (1 + pos_margin_to_equity_ratio * grid_spacing_coefficient)
     return round_dn((pos_price - 9e-9) * (1 - grid_spacing * grid_spacing_modifier),
                     round_up(pos_price * grid_spacing / 4, price_step))
+
 
 def calc_shrt_entry_price(price_step,
                           leverage,
@@ -58,10 +60,11 @@ def calc_shrt_entry_price(price_step,
     return round_up((pos_price + 9e-9) * (1 + grid_spacing * grid_spacing_modifier),
                     round_up(pos_price * grid_spacing / 4, price_step))
 
+
 def calc_entry_qty(qty_step, min_qty, ddown_factor, leverage, equity, pos_size, pos_price):
     abs_pos_size = abs(pos_size)
-    return min(equity * pos_price * leverage - abs_pos_size,
-               max(min_qty, round_up(min_qty * abs_pos_size * ddown_factor, qty_step)))
+    return min(max(0.0, round_dn(equity * pos_price * leverage - abs_pos_size, qty_step)),
+               max(min_qty, round_up(abs_pos_size * ddown_factor, qty_step)))
 
 
 def make_get_filepath(filepath: str) -> str:
