@@ -1,5 +1,5 @@
 # passivbot_futures
-trading bot running on bybit inverse futures, binance support may be added in future
+trading bot running on bybit inverse futures and binance usdt futures
 
 use at own risk
 
@@ -21,7 +21,7 @@ released freely -- anybody may copy, redistribute, modify, use for commercial, n
 
 usage:
 
-supports exchange bybit
+supports exchange bybit and binance
 
 add api key and secret as json file in dir `api_key_secret/{exchange}/your_user_name.json`
 
@@ -38,13 +38,9 @@ run in terminal: `python3 {exchange}.py your_user_name`
 ------------------------------------------------------------------
 overview
 
-the bot's purpose is to accumulate btc in bybit inverse
+the bot's purpose is to accumulate btc in bybit inverse, usdt in binance usdt futures
 
-will make entries automatically, but will also work with user making manual entries and adding to or removing from positions while the bot is active
-
-it works by entering small, then either closing position at static markup or reentering at in price intervals
-
-depending on initial entry amount and funds available in futures wallet, it will double down repeatedly until position is closed or funds run out
+it is a market maker bot, making a grid of limit orders and one closing order at static markup
 
 if there is no position, it will make a bid at order book's highest bid and ask at order book's lowest ask
 
