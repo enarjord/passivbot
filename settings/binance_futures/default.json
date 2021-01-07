@@ -12,6 +12,6 @@
     "min_qty": 10.0,
     "n_days": 0.0,
     "price_step": 0.5,
-    "qty_step": 1.0,
-    "symbol": "BTCUSD"
+    "qty_step": 0.001,
+    "symbol": "BTCUSDT"
 }
