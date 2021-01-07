@@ -79,7 +79,7 @@ class BinanceBot(Bot):
                               self.leverage,
                               equity_,
                               pos_size_,
-                              pos_price_)
+                              1 / pos_price_)
 
     def calc_long_entry_price(self, equity_, pos_size_, pos_price_):
         return calc_long_entry_price(self.price_step,
