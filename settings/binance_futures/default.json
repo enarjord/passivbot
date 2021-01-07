@@ -3,7 +3,7 @@
     "ddown_factor": 0.2087,
     "grid_spacing": 0.0017,
     "grid_spacing_coefficient": 42.55,
-    "initial_equity": 10,
+    "margin_limit": 10,
     "isolated_mode": false,
     "leverage": 100.0,
     "liq_modifier": 0.001,
