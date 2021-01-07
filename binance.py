@@ -186,7 +186,7 @@ class BinanceBot(Bot):
             print(e)
         try:
             print(await self.cc.fapiPrivate_post_leverage(params={'symbol': self.symbol,
-                                                                  'leverage': self.leverage}))
+                                                                  'leverage': int(self.leverage)}))
         except Exception as e:
             print(e)
         await self.update_position()
