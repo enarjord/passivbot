@@ -273,6 +273,7 @@ class Bot:
                     bid_price = self.calc_long_entry_price(self.initial_equity,
                                                            pos_size,
                                                            pos_price)
+                    bid_price = max(bid_price, self.prup(self.position['liquidation_price'] * 1.001))
                     if bid_qty < self.min_qty or self.price / bid_price > max_diff_from_last_price:
                         break
                     if bid_price <= self.ob[0]:
@@ -292,6 +293,7 @@ class Bot:
                     ask_price = self.calc_shrt_entry_price(self.initial_equity,
                                                            pos_size,
                                                            pos_price)
+                    ask_price = min(ask_price, self.prdn(self.position['liquidation_price'] * 0.999))
                     if -ask_qty < self.min_qty or ask_price / self.price > max_diff_from_last_price:
                         break
                     if ask_price >= self.ob[1]:
