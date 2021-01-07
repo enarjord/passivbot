@@ -18,6 +18,10 @@ def round_dn(n: float, step: float, safety_rounding=10) -> float:
     return np.round(np.floor(n / step) * step, safety_rounding)
 
 
+def round_(n: float, step: float, safety_rounding=10) -> float:
+    return np.round(np.round(n / step) * step, safety_rounding)
+
+
 def sort_dict_keys(d):
     if type(d) == list:
         return [sort_dict_keys(e) for e in d]
@@ -162,7 +166,7 @@ class Bot:
         self.ddown_factor = settings['ddown_factor']
         self.grid_spacing = settings['grid_spacing']
         self.grid_spacing_coefficient = settings['grid_spacing_coefficient']
-        self.initial_equity = settings['initial_equity']
+        self.margin_limit = settings['margin_limit']
         self.markup = settings['markup']
         self.ts_locked = {'cancel_orders': 0, 'decide': 0, 'update_open_orders': 0,
                           'update_position': 0, 'print': 0, 'create_orders': 0}
@@ -258,7 +262,7 @@ class Bot:
         self.stop_websocket = True
 
     def calc_orders(self):
-        n_orders = 27
+        n_orders = 23
         max_diff_from_last_price = 1.12
         orders = []
         if self.position['size'] == 0:
@@ -269,8 +273,8 @@ class Bot:
             pos_price = self.position['entry_price']
             if self.position['size'] > 0.0:
                 for k in range(n_orders):
-                    bid_qty = self.calc_entry_qty(self.initial_equity, pos_size, pos_price)
-                    bid_price = self.calc_long_entry_price(self.initial_equity,
+                    bid_qty = self.calc_entry_qty(self.margin_limit, pos_size, pos_price)
+                    bid_price = self.calc_long_entry_price(self.margin_limit,
                                                            pos_size,
                                                            pos_price)
                     bid_price = max(bid_price, self.prup(self.position['liquidation_price'] * 1.001))
@@ -289,8 +293,8 @@ class Bot:
                 })
             else:
                 for k in range(n_orders):
-                    ask_qty = -self.calc_entry_qty(self.initial_equity, pos_size, pos_price)
-                    ask_price = self.calc_shrt_entry_price(self.initial_equity,
+                    ask_qty = -self.calc_entry_qty(self.margin_limit, pos_size, pos_price)
+                    ask_price = self.calc_shrt_entry_price(self.margin_limit,
                                                            pos_size,
                                                            pos_price)
                     ask_price = min(ask_price, self.prdn(self.position['liquidation_price'] * 0.999))
