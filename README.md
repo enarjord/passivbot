@@ -52,7 +52,7 @@ use backtesting_notes.ipynb in jupyter notebook or jupiter-lab
 
 to test multiple settings,
 
-open backtester.py, got to jackrabbit, adjust starting settings, n_iterations, ranges, etc
+open backtester.py, go to def jackrabbit, adjust starting settings, n_iterations, ranges, etc
 
 and run backtester.py:
 
