@@ -3,8 +3,7 @@
     "grid_step": 65,
     "leverage": 125,
     "margin_limit": 20,
-    "max_markup": 0.001,
-    "min_markup": 0.001,
+    "markups": [0.0005, 0.005],
     "n_close_orders": 10,
     "n_entry_orders": 10,
     "symbol": "BTCUSDT"
