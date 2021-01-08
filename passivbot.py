@@ -38,7 +38,8 @@ def calc_long_closes(price_step: float,
                      pos_size: float,
                      pos_price: float,
                      lowest_ask: float,
-                     n_orders: int = 10):
+                     n_orders: int = 10,
+                     single_order_price_diff_threshold: float = 1.003):
     n_orders = int(round(min(n_orders, pos_size / min_qty)))
     prices = round_up(np.linspace(pos_price * (1 + min_markup), pos_price * (1 + max_markup),
                                   n_orders),
@@ -47,6 +48,12 @@ def calc_long_closes(price_step: float,
     prices = prices[np.where(prices >= lowest_ask)]
     if len(prices) == 0:
         return np.array([-pos_size]), np.array([lowest_ask])
+    elif len(prices) == 1:
+        return np.array([-pos_size]), prices
+    elif prices[1] / prices[0] > single_order_price_diff_threshold:
+        # too great spacing between prices, return single order
+        return (np.array([-pos_size]), 
+                np.array([max(lowest_ask, round_up(pos_price * (1 + min_markup), price_step))]))
     qtys = round_up(np.repeat(pos_size / len(prices), len(prices)), qty_step)
     qtys_sum = qtys.sum()
     while qtys_sum > pos_size:
@@ -66,16 +73,23 @@ def calc_shrt_closes(price_step: float,
                      pos_size: float,
                      pos_price: float,
                      highest_bid: float,
-                     n_orders: int = 10):
+                     n_orders: int = 10,
+                     single_order_price_diff_threshold: float = 1.003):
     abs_pos_size = abs(pos_size)
     n_orders = int(round(min(n_orders, abs_pos_size / min_qty)))
     prices = round_dn(np.linspace(pos_price * (1 - min_markup), pos_price * (1 - max_markup),
                                   n_orders),
                       price_step)
     prices = np.unique(prices)
-    prices = prices[np.where(prices <= highest_bid)]
+    prices = -np.sort(-prices[np.where(prices <= highest_bid)])
     if len(prices) == 0:
         return np.array([-pos_size]), np.array([highest_bid])
+    elif len(prices) == 1:
+        return np.array([-pos_size]), prices
+    elif prices[0] / prices[1] > single_order_price_diff_threshold:
+        # too great spacing between prices, return single order
+        return (np.array([-pos_size]),
+                np.array([min(highest_bid, round_dn(pos_price * (1 - min_markup), price_step))]))
     qtys = round_up(np.repeat(abs_pos_size / len(prices), len(prices)), qty_step)
     qtys_sum = qtys.sum()
     while qtys_sum > abs_pos_size:
