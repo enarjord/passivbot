@@ -1,10 +1,9 @@
 {
     "default_qty": 1,
-    "grid_step": 25,
+    "grid_step": 45,
     "leverage": 100,
     "margin_limit": 0.001,
-    "max_markup": 0.02,
-    "min_markup": 0.0005,
+    "markups": [0.0005, 0.005]
     "n_close_orders": 10,
     "n_entry_orders": 10,
     "symbol": "BTCUSD"
