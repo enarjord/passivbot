@@ -56,23 +56,15 @@ settings, bybit example:
 
 
 {
-
-        'compounding': False,               # used in backtesting
-        'ddown_factor': 0.01,               # next entry_qty is pos_size * ddown_factor
-        'grid_spacing': 0.003,              # next entry_price is pos_price * (1 +- grid_spacing * grid_spacing_modifier)
-                                            # where grid_spacing_modifier is (1 + pos_margin_to_equity_ratio * grid_spacing_coefficient)
-                                            # where pos_margin_to_equity_ratio is (pos_size / pos_price) / (equity * leverage)
-        'grid_spacing_coefficient': 20.0,   # the purpose of the coefficient is to increase grid spacing when pos_size is high
-        'margin_limit': 0.001,              # limits the bot's max allowed pos_size.  set it lower than actual account balance
-        'isolated_mode': False,             # used in backtesting.  cross mode if False.  only tested with cross mode, isolated mode not recommended
+        
+        'default_qty': 1.0                  # entry qty
+        'grid_step': 25.0                   # grid spacing
         'leverage': 100.0,                  # irrelevant because cross mode in bybit is always 100x leverage
-        'liq_modifier': 0.001,              # used in backtesting to simulate mark price for liquidations
-        'maker_fee': -0.00025,              # used in backtesting.  bot uses only post_only limit orders -- no takers
-        'markup': 0.0019,                   # bot closes any position at pos_price * (1 +- markup)
-        'min_qty': 1.0,                     # minimum order quantity.  bybit's minimum is 1.0 usd, binance 0.001 btc.  user may set higher minimum
-        'n_days': 0.0,                      # used in backtesting
-        'price_step': 0.5,                  # price step
-        'qty_step': 1.0,                    # quantity step
+        'margin_limit': 0.001,              # limits the bot's max allowed pos_size.  set it lower than actual account balance
+        'min_markup': 0.0005,               # bot makes closing limit orders in a grid
+        'max_markup': 0.01,                 # 
+        'n_close_orders': 10,               # max n close orders
+        'n_entry_orders': 10,               # max n entry orders
         'symbol': 'BTCUSD'                  # only one symbol at a time
 
 }
