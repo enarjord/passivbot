@@ -21,7 +21,7 @@ released freely -- anybody may copy, redistribute, modify, use for commercial, n
 
 usage:
 
-supports exchange bybit and binance
+supports exchanges bybit and binance
 
 add api key and secret as json file in dir `api_key_secret/{exchange}/your_user_name.json`
 
@@ -59,8 +59,8 @@ settings, bybit example:
         'grid_step': 25.0                   # grid price spacing
         'leverage': 100.0,                  # leverage (irrelevant in bybit because cross mode in is always 100x leverage)
         'margin_limit': 0.001,              # limits the bot's max allowed pos_size.  set it lower than actual account balance
-        'min_markup': 0.0005,               #
-        'max_markup': 0.01,                 #
+        'min_markup': 0.0005,               # when there's a position, bot makes a grid of n_close_orders whose prices are
+        'max_markup': 0.01,                 # evenly distributed between min and max markup, and whose qtys are pos_size // n_close_orders
         'n_close_orders': 10,               # max n close orders
         'n_entry_orders': 10,               # max n entry orders
         'symbol': 'BTCUSD'                  # only one symbol at a time
