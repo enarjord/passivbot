@@ -1,6 +1,6 @@
 {
     "default_qty": 0.001,
-    "grid_step": 65,
+    "grid_step": 105,
     "leverage": 125,
     "margin_limit": 20,
     "markups": [0.0005, 0.005],
