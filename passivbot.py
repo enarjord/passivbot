@@ -47,6 +47,7 @@ def calc_long_closes(price_step: float,
     prices = round_up(np.linspace(pos_price * (1 + min_markup), pos_price * (1 + max_markup),
                                   min(n_orders, int(pos_size / min_qty))),
                       price_step)
+    prices = np.unique(prices)
     prices = prices[np.where(prices >= lowest_ask)]
     if len(prices) == 0:
         return np.array([-pos_size]), np.array([lowest_ask])
@@ -78,6 +79,7 @@ def calc_shrt_closes(price_step: float,
     prices = round_dn(np.linspace(pos_price * (1 - min_markup), pos_price * (1 - max_markup),
                                   min(n_orders, int(abs_pos_size / min_qty))),
                       price_step)
+    prices = np.unique(prices)
     prices = prices[np.where(prices <= highest_bid)]
     if len(prices) == 0:
         return np.array([-pos_size]), np.array([highest_bid])
@@ -186,8 +188,8 @@ class Bot:
         self.leverage = settings['leverage']
         self.grid_step = settings['grid_step']
         self.margin_limit = settings['margin_limit']
-        self.min_markup = settings['min_markup']
-        self.max_markup = settings['max_markup']
+        self.min_markup = sorted(settings['markups'])[0]
+        self.max_markup = sorted(settings['markups'])[-1]
         self.default_qty = settings['default_qty']
         self.n_entry_orders = settings['n_entry_orders']
         self.n_close_orders = settings['n_close_orders']
@@ -293,7 +295,7 @@ class Bot:
         if self.position['size'] == 0: # no pos
             bid_price = self.pgrdn(self.ob[0])
             ask_price = self.pgrup(self.ob[1])
-            for k in range(self.n_entry_orders):
+            for k in range(max(5, self.n_entry_orders // 2)):
                 if self.price / bid_price > max_diff_from_last_price:
                     break
                 orders.append({'side': 'buy', 'qty': self.default_qty, 'price': bid_price})
@@ -319,8 +321,8 @@ class Bot:
                                                     self.position['price'],
                                                     self.ob[1],
                                                     self.n_close_orders)
-            orders += [{'side': 'sell', 'qty': float(-qty_), 'price': float(price_)}
-                       for qty_, price_ in zip(ask_qtys, ask_prices)]
+            orders += [{'side': 'sell', 'qty': float(abs_qty), 'price': float(price_)}
+                       for qty_, price_ in zip(ask_qtys, ask_prices) if (abs_qty := abs(qty_)) > 0.0]
             if self.position['margin_cost'] > self.margin_limit:
                 orders.append({'side': 'sell', 'qty': self.default_qty,
                                'price': self.pgrup(self.ob[1])})
@@ -344,7 +346,7 @@ class Bot:
                                                     self.ob[0],
                                                     self.n_close_orders)
             orders += [{'side': 'buy', 'qty': float(qty_), 'price': float(price_)}
-                       for qty_, price_ in zip(bid_qtys, bid_prices)]
+                       for qty_, price_ in zip(bid_qtys, bid_prices) if qty_ > 0.0]
             if self.position['margin_cost'] > self.margin_limit:
                 orders.append({'side': 'buy', 'qty': self.default_qty,
                                'price': self.pgrdn(self.ob[0])})
