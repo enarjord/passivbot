@@ -1,9 +1,9 @@
 {
     "default_qty": 0.001,
-    "grid_step": 345,
+    "grid_step": 303,
     "leverage": 125,
     "margin_limit": 60,
-    "markups": [0.00285],
+    "markups": [0.0022],
     "n_close_orders": 1,
     "n_entry_orders": 10,
     "symbol": "BTCUSDT"
