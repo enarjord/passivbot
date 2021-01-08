@@ -46,7 +46,19 @@ it listens to websocket live stream of trades, and updates its orders continuous
 
 ------------------------------------------------------------------
 
-use backtester for research
+a backtester is included
+
+use backtesting_notes.ipynb in jupyter notebook or jupiter-lab
+
+to test multiple settings,
+
+open backtester.py, got to jackrabbit, adjust starting settings, n_iterations, ranges, etc
+
+and run backtester.py:
+
+`python3 backtester.py exchange your_user_name n_days`
+
+
 
 ------------------------------------------------------------------
 
