@@ -39,13 +39,9 @@ def calc_long_closes(price_step: float,
                      pos_price: float,
                      lowest_ask: float,
                      n_orders: int = 10):
-    n_orders = min(n_orders, int(pos_size / min_qty))
-    if n_orders <= min_qty * 4:
-        return (np.array([-pos_size]),
-                np.array([max(lowest_ask, round_up(pos_price * (1 + min_markup), price_step))]))
-
+    n_orders = int(round(min(n_orders, pos_size / min_qty)))
     prices = round_up(np.linspace(pos_price * (1 + min_markup), pos_price * (1 + max_markup),
-                                  min(n_orders, int(pos_size / min_qty))),
+                                  n_orders),
                       price_step)
     prices = np.unique(prices)
     prices = prices[np.where(prices >= lowest_ask)]
@@ -72,12 +68,9 @@ def calc_shrt_closes(price_step: float,
                      highest_bid: float,
                      n_orders: int = 10):
     abs_pos_size = abs(pos_size)
-    n_orders = min(n_orders, int(abs_pos_size / min_qty))
-    if n_orders <= min_qty * 4:
-        return (np.array([-pos_size]),
-                np.array([min(highest_bid, round_dn(pos_price * (1 - min_markup), price_step))]))
+    n_orders = int(round(min(n_orders, abs_pos_size / min_qty)))
     prices = round_dn(np.linspace(pos_price * (1 - min_markup), pos_price * (1 - max_markup),
-                                  min(n_orders, int(abs_pos_size / min_qty))),
+                                  n_orders),
                       price_step)
     prices = np.unique(prices)
     prices = prices[np.where(prices <= highest_bid)]
@@ -393,10 +386,8 @@ class Bot:
             self.ts_released['print'] = time()
             line = f"{self.symbol} "
             if self.position['size'] == 0:
-                bid_price = self.ob[0]
-                ask_price = self.ob[1]
-                line += f"no position bid {bid_price} ask {ask_price} "
-                ratio = 0.0
+                line += f"no position bid {self.highest_bid} ask {self.lowest_ask} "
+                ratio = (self.price - self.highest_bid) / (self.lowest_ask - self.highest_bid)
             elif self.position['size'] > 0.0:
                 line += f"long {self.position['size']} @ {self.position['price']:.2f} "
                 line += f"exit {self.lowest_ask} ddown {self.highest_bid} "
