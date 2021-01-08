@@ -6,94 +6,22 @@ import asyncio
 import os
 from time import time
 from passivbot import init_ccxt, make_get_filepath, ts_to_date, print_, load_settings, \
-    sort_dict_keys, round_up, round_dn, round_
+    sort_dict_keys, round_up, round_dn, round_, calc_long_closes, calc_shrt_closes
 from binance import fetch_trades as binance_fetch_trades
 from bybit import fetch_trades as bybit_fetch_trades
 from typing import Iterator
 from bisect import insort_left
 
 
-def calc_bid_ask(price_step, pos_price, ob, take_loss=False):
-    if take_loss:
-        bid_price = round_dn(ob[0], price_step)
-        ask_price = round_up(ob[1], price_step)
-    else:
-        bid_price = round_dn(min(ob[0], pos_price if pos_price else ob[0]), price_step)
-        ask_price = round_up(max(ob[1], pos_price), price_step)
-    return bid_price, ask_price
-
-
-def calc_long_closes(price_step: float,
-                     qty_step: float,
-                     min_qty: float,
-                     min_markup: float,
-                     max_markup: float,
-                     pos_size: float,
-                     pos_price: float,
-                     lowest_ask: float,
-                     n_orders: int = 10):
-    n_orders = min(n_orders, int(pos_size / min_qty))
-    if n_orders <= min_qty * 4:
-        return (np.array([-pos_size]),
-                np.array([max(lowest_ask, round_up(pos_price * (1 + min_markup), price_step))]))
-
-    prices = round_up(np.linspace(pos_price * (1 + min_markup), pos_price * (1 + max_markup),
-                                  min(n_orders, int(pos_size / min_qty))),
-                      price_step)
-    prices = prices[np.where(prices >= lowest_ask)]
-    if len(prices) == 0:
-        return np.array([-pos_size]), np.array([lowest_ask])
-    qtys = round_up(np.repeat(pos_size / len(prices), len(prices)), qty_step)
-    qtys_sum = qtys.sum()
-    while qtys_sum > pos_size:
-        for i in range(len(qtys)):
-            qtys[i] = round_(qtys[i] - min_qty, qty_step)
-            qtys_sum = round_(qtys_sum - min_qty, qty_step)
-            if qtys_sum <= pos_size:
-                break
-    return qtys * -1, prices
-
-
-def calc_shrt_closes(price_step: float,
-                     qty_step: float,
-                     min_qty: float,
-                     min_markup: float,
-                     max_markup: float,
-                     pos_size: float,
-                     pos_price: float,
-                     highest_bid: float,
-                     n_orders: int = 10):
-    abs_pos_size = abs(pos_size)
-    n_orders = min(n_orders, int(abs_pos_size / min_qty))
-    if n_orders <= min_qty * 4:
-        return (np.array([-pos_size]),
-                np.array([min(highest_bid, round_dn(pos_price * (1 - min_markup), price_step))]))
-    prices = round_dn(np.linspace(pos_price * (1 - min_markup), pos_price * (1 - max_markup),
-                                  min(n_orders, int(abs_pos_size / min_qty))),
-                      price_step)
-    prices = prices[np.where(prices <= highest_bid)]
-    if len(prices) == 0:
-        return np.array([-pos_size]), np.array([highest_bid])
-    qtys = round_up(np.repeat(abs_pos_size / len(prices), len(prices)), qty_step)
-    qtys_sum = qtys.sum()
-    while qtys_sum > abs_pos_size:
-        for i in range(len(qtys) - 1, -1, -1):
-            qtys[i] = round_(qtys[i] - min_qty, qty_step)
-            qtys_sum = round_(qtys_sum - min_qty, qty_step)
-            if qtys_sum <= abs_pos_size:
-                break
-    return qtys, prices
-
-
-def backtest_controlled_loss(df: pd.DataFrame, settings: dict):
+def backtest(df: pd.DataFrame, settings: dict):
 
     grid_step = settings['grid_step']
     price_step = settings['price_step']
     qty_step = settings['qty_step']
 
     min_qty = settings['min_qty']
-    min_markup = settings['min_markup']
-    max_markup = settings['max_markup']
+    min_markup = sorted(settings['markups'])[0]
+    max_markup = sorted(settings['markups'])[-1]
     n_close_orders = settings['n_close_orders']
 
     default_qty = settings['default_qty']
@@ -114,24 +42,27 @@ def backtest_controlled_loss(df: pd.DataFrame, settings: dict):
 
     for row in df.itertuples():
         if row.buyer_maker:
-            if pos_size == 0.0:                                    # no pos
+            if pos_size == 0.0:                                     # no pos
                 bid_qty = default_qty
                 bid_price = round_dn(ob[0], grid_step)
-            elif pos_size > 0.0:                                   # long pos
-                if pos_size / pos_price / leverage > margin_limit: # controlled loss
+            elif pos_size > 0.0:                                    # long pos
+                if pos_size / pos_price / leverage > margin_limit:  # limit reached; enter no more
                     bid_qty = 0.0
-                    bid_price = round_dn(ob[0], grid_step)
-                else:                                              # long reentry
+                    bid_price = 0.0
+                else:                                               # long reentry
                     bid_qty = default_qty
                     bid_price = round_dn(min(ob[0], pos_price), grid_step)
-            else:                                                  # shrt pos
-                if row.price <= pos_price:                         # shrt close
+            else:                                                   # shrt pos
+                if row.price <= pos_price:                          # shrt close
                     qtys, prices = calc_shrt_closes(price_step, qty_step, default_qty, min_markup,
                                                     max_markup, pos_size, pos_price, ob[0],
                                                     n_close_orders)
                     bid_qty = qtys[0]
                     bid_price = prices[0]
-                else:                                              # no shrt close
+                elif -pos_size / pos_price / leverage > margin_limit: # controlled shrt loss
+                    bid_qty = default_qty
+                    bid_price = round_dn(ob[0], grid_step)
+                else:                                               # no shrt close
                     bid_qty = 0.0
                     bid_price = 0.0
             ob[0] = row.price
@@ -162,24 +93,27 @@ def backtest_controlled_loss(df: pd.DataFrame, settings: dict):
                                    'pos_size': pos_size, 'pos_price': pos_price, 'roe': roe,
                                    'margin_cost': margin_cost})
         else:
-            if pos_size == 0.0:                                     # no pos
+            if pos_size == 0.0:                                      # no pos
                 ask_qty = -default_qty
                 ask_price = round_up(ob[1], grid_step)
-            elif pos_size < 0.0:                                    # shrt pos
-                if -pos_size / pos_price / leverage > margin_limit: # controlled loss
+            elif pos_size < 0.0:                                     # shrt pos
+                if -pos_size / pos_price / leverage > margin_limit:  # limit reached; enter no more
                     ask_qty = 0.0
-                    ask_price = round_up(ob[1], grid_step)
-                else:                                               # shrt reentry
+                    ask_price = 9.9e9
+                else:                                                # shrt reentry
                     ask_qty = -default_qty
                     ask_price = round_up(max(ob[1], pos_price), grid_step)
-            else:                                                   # long pos
-                if row.price >= pos_price:                          # close long pos
+            else:                                                    # long pos
+                if row.price >= pos_price:                           # close long pos
                     qtys, prices = calc_long_closes(price_step, qty_step, default_qty, min_markup,
                                                     max_markup, pos_size, pos_price, ob[1],
                                                     n_close_orders)
                     ask_qty = qtys[0]
                     ask_price = prices[0]
-                else:                                               # no close
+                elif pos_size / pos_price / leverage > margin_limit: # controlled long loss
+                    ask_qty = -default_qty
+                    ask_price = round_up(ob[1])
+                else:                                                # no close
                     ask_qty = 0.0
                     ask_price = 9.9e9
             ob[1] = row.price
@@ -217,37 +151,34 @@ def backtest_controlled_loss(df: pd.DataFrame, settings: dict):
 
 def jackrabbit(agg_trades: pd.DataFrame):
     settings = {
-        "compounding": False,
-        "ddown_factor": 0.2087,
-        "grid_spacing": 0.0017,
-        "grid_spacing_coefficient": 42.55,
-        "margin_limit": 0.0006,
-        "isolated_mode": False,
-        "leverage": 100.0,
-        "liq_modifier": 0.001,
+        "default_qty": 1,
+        "grid_step": 23,
+        "leverage": 100,
         "maker_fee": -0.00025,
-        "markup": 0.002149,
+        "margin_limit": 0.001,
+        "markups": (0.0005, 0.01),
         "min_qty": 1.0,
-        "n_days": 0.0,
+        "n_close_orders": 10,
+        "n_entry_orders": 10,
         "price_step": 0.5,
         "qty_step": 1.0,
         "symbol": "BTCUSD"
     }
 
     ranges = {
-        'ddown_factor': (0.0, 2.0, 0.0001),
-        'grid_spacing': (0.0001, 0.1, 0.0001),
-        'grid_spacing_coefficient': (0.0, 100.0, 0.01),
-        'margin_limit': (0.0001, 0.001, 0.0001),
-        'markup': (0.0001, 0.005, 0.000001),
+        'default_qty': (1, 50, 1),
+        'grid_step': (1, 400, 1),
+        'markups': (0.0001, 0.1, 0.0001),
+        'margin_limit': (0.001, 0.001, 0.0001),
+        'n_close_orders': (1, 10, 1),
     }
 
     tweakable = {
-        'ddown_factor': 0.0,
-        'grid_spacing': 0.0,
-        'grid_spacing_coefficient': 0.0,
+        'default_qty': 0.0,
+        'grid_step': 0.0,
+        'markups': (0.0, 0.0),
         'margin_limit': 0.0,
-        'markup': 0.0
+        'n_close_orders': 0.0
     }
 
     best = {}
@@ -287,7 +218,6 @@ def jackrabbit(agg_trades: pd.DataFrame):
     # conditions for result approval
     conditions = [
         lambda r: r['n_trades'] > 100 * n_days,
-        lambda r: r['n_liqs'] == 0,
         lambda r: True,
     ]
 
@@ -312,13 +242,13 @@ def jackrabbit(agg_trades: pd.DataFrame):
                 candidate = get_new_candidate(ranges, best)
                 continue
             tdf = pd.DataFrame(trades).set_index('trade_id')
-            n_liqs = len(tdf[tdf.type == 'liq'])
             n_closes = len(tdf[tdf.type == 'close'])
             pnl_sum = tdf.pnl.sum()
-            max_margin_cost = tdf.margin_cost.max()
+            max_positions = tdf.pos_size.abs()
+            max_margin_cost = (max_positions / tdf.pos_price / settings_['leverage']).max()
             gain = (pnl_sum + max_margin_cost) / max_margin_cost
             n_trades = len(tdf)
-            result = {'n_liqs': n_liqs, 'n_closes': n_closes, 'pnl_sum': pnl_sum,
+            result = {'n_closes': n_closes, 'pnl_sum': pnl_sum,
                       'max_margin_cost': max_margin_cost,
                       'gain': gain, 'n_trades': n_trades}
             print('\n', result)
