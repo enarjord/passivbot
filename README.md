@@ -40,9 +40,7 @@ overview
 
 the bot's purpose is to accumulate btc in bybit inverse, usdt in binance usdt futures
 
-it is a market maker bot, making a grid of limit orders and one closing order at static markup
-
-if there is no position, it will make a bid at order book's highest bid and ask at order book's lowest ask
+it is a market maker bot, making a grid of limit orders above and below price
 
 it listens to websocket live stream of trades, and updates its orders continuously
 
@@ -58,11 +56,11 @@ settings, bybit example:
 {
         
         'default_qty': 1.0                  # entry qty
-        'grid_step': 25.0                   # grid spacing
-        'leverage': 100.0,                  # irrelevant because cross mode in bybit is always 100x leverage
+        'grid_step': 25.0                   # grid price spacing
+        'leverage': 100.0,                  # leverage (irrelevant in bybit because cross mode in is always 100x leverage)
         'margin_limit': 0.001,              # limits the bot's max allowed pos_size.  set it lower than actual account balance
-        'min_markup': 0.0005,               # bot makes closing limit orders in a grid
-        'max_markup': 0.01,                 # 
+        'min_markup': 0.0005,               #
+        'max_markup': 0.01,                 #
         'n_close_orders': 10,               # max n close orders
         'n_entry_orders': 10,               # max n entry orders
         'symbol': 'BTCUSD'                  # only one symbol at a time
