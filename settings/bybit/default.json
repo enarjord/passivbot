@@ -3,7 +3,7 @@
     "grid_step": 45,
     "leverage": 100,
     "margin_limit": 0.001,
-    "markups": [0.0005, 0.005]
+    "markups": [0.0005, 0.005],
     "n_close_orders": 10,
     "n_entry_orders": 10,
     "symbol": "BTCUSD"
