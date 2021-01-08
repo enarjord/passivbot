@@ -7,11 +7,8 @@ import os
 from time import time
 from passivbot import init_ccxt, make_get_filepath, ts_to_date, print_, load_settings, \
     sort_dict_keys, round_up, round_dn, round_
-from passivbot import calc_long_entry_price as calc_long_entry_price_
-from passivbot import calc_shrt_entry_price as calc_shrt_entry_price_
-from passivbot import calc_entry_qty as calc_entry_qty_
 from binance import fetch_trades as binance_fetch_trades
-from bybit import fetch_trades as bybit_fetch_trades, calc_long_liq_price, calc_shrt_liq_price
+from bybit import fetch_trades as bybit_fetch_trades
 from typing import Iterator
 from bisect import insort_left
 
@@ -35,10 +32,17 @@ def calc_long_closes(price_step: float,
                      pos_price: float,
                      lowest_ask: float,
                      n_orders: int = 10):
+    n_orders = min(n_orders, int(pos_size / min_qty))
+    if n_orders <= min_qty * 4:
+        return (np.array([-pos_size]),
+                np.array([max(lowest_ask, round_up(pos_price * (1 + min_markup), price_step))]))
+
     prices = round_up(np.linspace(pos_price * (1 + min_markup), pos_price * (1 + max_markup),
                                   min(n_orders, int(pos_size / min_qty))),
                       price_step)
     prices = prices[np.where(prices >= lowest_ask)]
+    if len(prices) == 0:
+        return np.array([-pos_size]), np.array([lowest_ask])
     qtys = round_up(np.repeat(pos_size / len(prices), len(prices)), qty_step)
     qtys_sum = qtys.sum()
     while qtys_sum > pos_size:
@@ -47,19 +51,55 @@ def calc_long_closes(price_step: float,
             qtys_sum = round_(qtys_sum - min_qty, qty_step)
             if qtys_sum <= pos_size:
                 break
+    return qtys * -1, prices
+
+
+def calc_shrt_closes(price_step: float,
+                     qty_step: float,
+                     min_qty: float,
+                     min_markup: float,
+                     max_markup: float,
+                     pos_size: float,
+                     pos_price: float,
+                     highest_bid: float,
+                     n_orders: int = 10):
+    abs_pos_size = abs(pos_size)
+    n_orders = min(n_orders, int(abs_pos_size / min_qty))
+    if n_orders <= min_qty * 4:
+        return (np.array([-pos_size]),
+                np.array([min(highest_bid, round_dn(pos_price * (1 - min_markup), price_step))]))
+    prices = round_dn(np.linspace(pos_price * (1 - min_markup), pos_price * (1 - max_markup),
+                                  min(n_orders, int(abs_pos_size / min_qty))),
+                      price_step)
+    prices = prices[np.where(prices <= highest_bid)]
+    if len(prices) == 0:
+        return np.array([-pos_size]), np.array([highest_bid])
+    qtys = round_up(np.repeat(abs_pos_size / len(prices), len(prices)), qty_step)
+    qtys_sum = qtys.sum()
+    while qtys_sum > abs_pos_size:
+        for i in range(len(qtys) - 1, -1, -1):
+            qtys[i] = round_(qtys[i] - min_qty, qty_step)
+            qtys_sum = round_(qtys_sum - min_qty, qty_step)
+            if qtys_sum <= abs_pos_size:
+                break
     return qtys, prices
 
 
 def backtest_controlled_loss(df: pd.DataFrame, settings: dict):
 
+    grid_step = settings['grid_step']
     price_step = settings['price_step']
+    qty_step = settings['qty_step']
 
-    entry_qty = settings['entry_qty']
-    loss_qty = settings['loss_qty']
-    close_qty = settings['close_qty']
+    min_qty = settings['min_qty']
+    min_markup = settings['min_markup']
+    max_markup = settings['max_markup']
+    n_close_orders = settings['n_close_orders']
+
+    default_qty = settings['default_qty']
 
     leverage = settings['leverage']
-    pos_margin_loss_threshold = settings['pos_margin_loss_threshold']
+    margin_limit = settings['margin_limit']
     maker_fee = -0.00025
 
     trades = []
@@ -69,102 +109,107 @@ def backtest_controlled_loss(df: pd.DataFrame, settings: dict):
     pos_size = 0.0
     pos_price = 0.0
 
-    bid_price = round_dn(ob[0], price_step)
-    ask_price = round_up(ob[1], price_step)
-
+    bid_price = round_dn(ob[0], grid_step)
+    ask_price = round_up(ob[1], grid_step)
 
     for row in df.itertuples():
         if row.buyer_maker:
+            if pos_size == 0.0:                                    # no pos
+                bid_qty = default_qty
+                bid_price = round_dn(ob[0], grid_step)
+            elif pos_size > 0.0:                                   # long pos
+                if pos_size / pos_price / leverage > margin_limit: # controlled loss
+                    bid_qty = 0.0
+                    bid_price = round_dn(ob[0], grid_step)
+                else:                                              # long reentry
+                    bid_qty = default_qty
+                    bid_price = round_dn(min(ob[0], pos_price), grid_step)
+            else:                                                  # shrt pos
+                if row.price <= pos_price:                         # shrt close
+                    qtys, prices = calc_shrt_closes(price_step, qty_step, default_qty, min_markup,
+                                                    max_markup, pos_size, pos_price, ob[0],
+                                                    n_close_orders)
+                    bid_qty = qtys[0]
+                    bid_price = prices[0]
+                else:                                              # no shrt close
+                    bid_qty = 0.0
+                    bid_price = 0.0
             ob[0] = row.price
             if row.price < bid_price:
                 if pos_size >= 0.0:
                     # create or add to long pos
                     cost = bid_qty / bid_price
-                    margin_cost = cost * leverage
+                    margin_cost = cost / leverage
                     pnl = -cost * maker_fee
                     new_pos_size = pos_size + bid_qty
                     pos_price = pos_price * (pos_size / new_pos_size) + \
                         bid_price * (bid_qty / new_pos_size)
                     pos_size = new_pos_size
                     trades.append({'trade_id': row.Index, 'side': 'long', 'type': 'entry',
-                                   'price': bid_price, 'qty': bid_qty, 'pnl': pnl, 'pos_size': pos_size,
-                                   'pos_price': pos_price, 'roe': np.nan,
+                                   'price': bid_price, 'qty': bid_qty, 'pnl': pnl,
+                                   'pos_size': pos_size, 'pos_price': pos_price, 'roe': np.nan,
                                    'margin_cost': margin_cost})
                 else:
-                    # close short pos
-                    '''
-                    if bid_price < pos_price:
-                        bid_qty = -pos_size
-                    '''
+                    # close shrt pos
                     cost = bid_qty / bid_price
-                    margin_cost = cost * leverage
+                    margin_cost = cost / leverage
                     gain = (pos_price / bid_price - 1)
                     pnl = cost * gain - cost * maker_fee
                     pos_size += bid_qty
                     roe = gain * leverage
                     trades.append({'trade_id': row.Index, 'side': 'shrt', 'type': 'close',
-                                   'price': bid_price, 'qty': bid_qty, 'pnl': pnl, 'pos_size': pos_size,
-                                   'pos_price': pos_price, 'roe': roe,
+                                   'price': bid_price, 'qty': bid_qty, 'pnl': pnl,
+                                   'pos_size': pos_size, 'pos_price': pos_price, 'roe': roe,
                                    'margin_cost': margin_cost})
         else:
+            if pos_size == 0.0:                                     # no pos
+                ask_qty = -default_qty
+                ask_price = round_up(ob[1], grid_step)
+            elif pos_size < 0.0:                                    # shrt pos
+                if -pos_size / pos_price / leverage > margin_limit: # controlled loss
+                    ask_qty = 0.0
+                    ask_price = round_up(ob[1], grid_step)
+                else:                                               # shrt reentry
+                    ask_qty = -default_qty
+                    ask_price = round_up(max(ob[1], pos_price), grid_step)
+            else:                                                   # long pos
+                if row.price >= pos_price:                          # close long pos
+                    qtys, prices = calc_long_closes(price_step, qty_step, default_qty, min_markup,
+                                                    max_markup, pos_size, pos_price, ob[1],
+                                                    n_close_orders)
+                    ask_qty = qtys[0]
+                    ask_price = prices[0]
+                else:                                               # no close
+                    ask_qty = 0.0
+                    ask_price = 9.9e9
             ob[1] = row.price
             if row.price > ask_price:
                 if pos_size <= 0.0:
                     # add to or create short pos
                     cost = -ask_qty / ask_price
-                    margin_cost = cost * leverage
+                    margin_cost = cost / leverage
                     pnl = -cost * maker_fee
                     new_pos_size = pos_size + ask_qty
                     pos_price = pos_price * (pos_size / new_pos_size) + \
                         ask_price * (ask_qty / new_pos_size)
                     pos_size = new_pos_size
                     trades.append({'trade_id': row.Index, 'side': 'shrt', 'type': 'entry',
-                                   'price': ask_price, 'qty': ask_qty, 'pnl': pnl, 'pos_size': pos_size,
-                                   'pos_price': pos_price, 'roe': np.nan,
+                                   'price': ask_price, 'qty': ask_qty, 'pnl': pnl,
+                                   'pos_size': pos_size, 'pos_price': pos_price, 'roe': np.nan,
                                    'margin_cost': margin_cost})
                 else:
                     # close long pos
-                    '''
-                    if ask_price > pos_price:
-                        ask_qty = -pos_size
-                    '''
                     cost = -ask_qty / ask_price
-                    margin_cost = cost * leverage
+                    margin_cost = cost / leverage
                     gain = (ask_price / pos_price - 1)
                     pnl = cost * gain - cost * maker_fee
                     pos_size += ask_qty
                     roe = gain * leverage
                     trades.append({'trade_id': row.Index, 'side': 'long', 'type': 'close',
-                                   'price': ask_price, 'qty': ask_qty, 'pnl': pnl, 'pos_size': pos_size,
-                                   'pos_price': pos_price, 'roe': roe,
+                                   'price': ask_price, 'qty': ask_qty, 'pnl': pnl,
+                                   'pos_size': pos_size, 'pos_price': pos_price, 'roe': roe,
                                    'margin_cost': margin_cost})
-        if pos_size == 0.0:
-            bid_price = round_dn(ob[0], price_step)
-            ask_price = round_up(ob[1], price_step)
-            bid_qty, ask_qty = entry_qty, -entry_qty
-        elif pos_size > 0.0:
-            if pos_size / pos_price > pos_margin_loss_threshold * leverage:
-                bid_price = round_dn(ob[0], price_step)
-                ask_price = round_up(ob[1], price_step)
-                bid_qty, ask_qty = entry_qty, -loss_qty
-            else:
-                bid_price = round_dn(min(ob[0], pos_price), price_step)
-                ask_price = round_up(max(ob[1], pos_price), price_step)
-                bid_qty, ask_qty = entry_qty, -close_qty
-        else:
-            if -pos_size / pos_price > pos_margin_loss_threshold * leverage:
-                bid_price = round_dn(ob[0], price_step)
-                ask_price = round_up(ob[1], price_step)
-                bid_qty, ask_qty = loss_qty, -entry_qty
-            else:
-                bid_price = round_dn(min(ob[0], pos_price), price_step)
-                ask_price = round_up(max(ob[1], pos_price), price_step)
-                bid_qty, ask_qty = close_qty, -entry_qty
     return trades
-
-    
-
-
 
 
 
@@ -300,284 +345,6 @@ def prep_df(adf: pd.DataFrame):
     df = pd.concat([dfc.price, buyer_maker], axis=1)
     df.index = np.arange(len(df))
     return df
-
-
-
-def calc_long_closes_old(min_bet: float,
-                         amount_step: float,
-                         price_step: float,
-                         markup: float,
-                         pos_amount: float,
-                         pos_price: float):
-    n = 10
-    prices = round_up(np.linspace(pos_price,
-                                  round_up(pos_price * (1 + markup),
-                                  price_step), n), price_step)
-    if pos_amount < n:
-        amounts = np.zeros(n)
-        remainder = int(pos_amount)
-    else:
-        amounts = round_dn(np.linspace(min_bet, pos_amount / n * 2 - 1, n), amount_step)
-        remainder = pos_amount % amounts.sum()
-    print(amounts, remainder)
-    for i in range(n - 1, -1, -1):
-        if remainder < min_bet:
-            break
-        amounts[i] += min_bet
-        remainder -= min_bet
-    return list(zip(-amounts, prices))
-
-
-def calc_shrt_closes_old(min_bet: float,
-                         amount_step: float,
-                         price_step: float,
-                         markup: float,
-                         pos_amount: float,
-                         pos_price: float):
-    n = 10
-    prices = round_dn(np.linspace(pos_price,
-                                  round_up(pos_price * (1 - markup),
-                                  price_step), n), price_step)
-    if -pos_amount < n:
-        amounts = np.zeros(n)
-        remainder = int(-pos_amount)
-    else:
-        amounts = round_dn(np.linspace(min_bet, -pos_amount / n * 2 - 1, n), amount_step)
-        remainder = -pos_amount % amounts.sum()
-    for i in range(n - 1, -1, -1):
-        amounts[i] += min_bet
-        remainder -= min_bet
-        if remainder < min_bet:
-            break
-    return list(zip(amounts, prices))
-
-
-def backtest(df: pd.DataFrame, settings: dict):
-
-    def calc_long_entry_price(equity_, pos_size_, pos_price_):
-        return calc_long_entry_price_(price_step,
-                                      leverage,
-                                      grid_spacing,
-                                      grid_spacing_coefficient,
-                                      equity_,
-                                      pos_size_,
-                                      pos_price_)
-
-    def calc_shrt_entry_price(equity_, pos_size_, pos_price_):
-        return calc_shrt_entry_price_(price_step,
-                                      leverage,
-                                      grid_spacing,
-                                      grid_spacing_coefficient,
-                                      equity_,
-                                      pos_size_,
-                                      pos_price_)
-
-    def calc_entry_qty(equity_, pos_size_, pos_price_):
-        return calc_entry_qty_(qty_step, min_qty, ddown_factor, leverage,
-                               equity_, pos_size_, pos_price_)
-
-    # bybit
-    maker_fee = settings['maker_fee']
-    min_qty = settings['min_qty']
-    qty_step = settings['qty_step']
-    price_step = settings['price_step']
-
-    ddown_factor = settings['ddown_factor']
-    leverage = settings['leverage']
-    markup = settings['markup']
-    grid_spacing = settings['grid_spacing']
-
-    compounding = settings['compounding']
-    liq_modifier = settings['liq_modifier']
-    n_days = settings['n_days']
-    isolated_mode = settings['isolated_mode']
-    grid_spacing_coefficient = settings['grid_spacing_coefficient']
-
-    pos_size = 0.0
-    liq_price = np.nan
-    pos_price = 0.0
-    equity = settings['margin_limit']
-    ob = [df.iloc[:2].price.min(), df.iloc[:2].price.max()]
-    bid_price = ob[0]
-    bid_qty = min_qty
-    ask_price = ob[1]
-    ask_qty = -min_qty
-
-    trades = []
-    prev_len_trades = 0
-
-    # df needs columns price: float, buyer_maker: bool
-    for row in df.itertuples():
-        if row.buyer_maker:
-            ob[0] = row.price
-            if pos_size == 0:
-                ask_price, ask_qty = ob[1], -min_qty
-            elif pos_size < 0:
-                ask_price = calc_shrt_entry_price(equity, pos_size, pos_price)
-                ask_qty = -calc_entry_qty(equity, pos_size, pos_price)
-            if liq_price and pos_size > 0 and row.price <= liq_price:
-                # liquidate long pos
-                cost = pos_size / liq_price
-                margin_cost = cost / leverage
-                pnl = -margin_cost
-                if compounding:
-                    equity = max(settings['margin_limit'], equity + pnl) # reset equity
-                trades.append({'trade_id': row.Index, 'side': 'long', 'type': 'liq',
-                               'qty': -pos_size, 'price': liq_price,
-                               'pos_size': 0, 'pos_price': np.nan,
-                               'liq_price': liq_price, 'pnl': pnl,
-                               'margin_cost': margin_cost, 'equity': equity,
-                               'equity_available': equity,
-                               'close_price': round_up(pos_price * (1 + markup), price_step)})
-                liq_price = np.nan
-                pos_size = 0
-                bid_price, bid_qty = ob[0], min_qty
-                ask_price, ask_qty = ob[1], -min_qty
-            elif row.price < bid_price:
-                if pos_size >= 0:
-                    # add more to or create long pos
-                    while row.price < bid_price:
-                        if bid_qty < min_qty:
-                            bid_price, bid_qty = 0.0, 0.0
-                            liq_price = calc_long_liq_price(leverage, pos_price) * (1 + liq_modifier)
-                            break
-                        new_pos_size = pos_size + bid_qty
-                        cost = bid_qty / bid_price
-                        margin_cost = cost / leverage
-                        pnl = -cost * maker_fee
-                        if compounding:
-                            equity += pnl
-                        if isolated_mode:
-                            liq_price = calc_long_liq_price(
-                                leverage, pos_price) * (1 + liq_modifier
-                            )
-                        pos_price = pos_price * (pos_size / new_pos_size) + \
-                            bid_price * (bid_qty / new_pos_size)
-                        pos_size = new_pos_size
-                        pos_cost = pos_size / pos_price
-                        close_price = round_up(pos_price * (1 + markup), price_step)
-                        trades.append({'trade_id': row.Index, 'side': 'long', 'type': 'entry',
-                                       'qty': bid_qty, 'price': bid_price,
-                                       'pos_size': pos_size, 'pos_price': pos_price,
-                                       'liq_price': liq_price, 'pnl': pnl,
-                                       'margin_cost': margin_cost, 'equity': equity,
-                                       'equity_available': equity - pos_size / row.price / leverage,
-                                       'close_price': close_price})
-                        bid_price = calc_long_entry_price(equity, pos_size, pos_price)
-                        bid_qty = calc_entry_qty(equity, pos_size, pos_price)
-                    ask_price = round_up(pos_price * (1 + markup), price_step)
-                    ask_qty = -pos_size
-                else:
-                    # close short pos
-                    if row.price < bid_price:
-                        cost = -pos_size / bid_price
-                        margin_cost = cost / leverage
-                        pnl = cost * (pos_price / bid_price - 1) - cost * maker_fee
-                        if compounding:
-                            equity += pnl
-                        liq_price = np.nan
-                        trades.append({'trade_id': row.Index, 'side': 'shrt', 'type': 'close',
-                                       'qty': -pos_size, 'price': bid_price,
-                                       'pos_size': 0, 'pos_price': np.nan,
-                                       'liq_price': np.nan, 'pnl': pnl,
-                                       'margin_cost': margin_cost, 'equity': equity,
-                                       'equity_available': equity, 'close_price': np.nan})
-                        pos_size = 0
-                        bid_price, bid_qty = ob[0], min_qty
-                        ask_price, ask_qty = ob[1], -min_qty
-        else:
-            ob[1] = row.price
-            if pos_size == 0:
-                bid_price, bid_qty = ob[0], min_qty
-            elif pos_size > 0:
-                bid_price = calc_long_entry_price(equity, pos_size, pos_price)
-                bid_qty = calc_entry_qty(equity, pos_size, pos_price)
-            if liq_price and pos_size < 0 and row.price > liq_price:
-                # liquidate shrt pos
-                cost = -pos_size / liq_price
-                margin_cost = cost / leverage
-                pnl = -margin_cost
-                if compounding:
-                    equity = max(settings['margin_limit'], equity + pnl)
-                trades.append({'trade_id': row.Index, 'side': 'shrt', 'type': 'liq',
-                               'qty': -pos_size, 'price': liq_price,
-                               'pos_size': 0, 'pos_price': np.nan,
-                               'liq_price': liq_price, 'pnl': pnl,
-                               'margin_cost': margin_cost, 'equity': equity,
-                               'equity_available': equity,
-                               'close_price': round_dn(pos_price * (1 - markup), price_step)})
-                liq_price = np.nan
-                pos_size = 0
-                bid_price, bid_qty = ob[0], min_qty
-                ask_price, ask_qty = ob[1], -min_qty
-            if row.price > ask_price:
-                if pos_size <= 0:
-                    # adding more to or creating shrt pos
-                    while row.price > ask_price:
-                        if -ask_qty < min_qty:
-                            ask = [0.0, 9.9e-9]
-                            liq_price = calc_shrt_liq_price(leverage, pos_price) * (1 - liq_modifier)
-                            break
-                        new_pos_size = pos_size + ask_qty
-                        cost = -ask_qty / ask_price
-                        margin_cost = cost / leverage
-                        pnl = -cost * maker_fee
-                        if compounding:
-                            equity += pnl
-                        if isolated_mode:
-                            liq_price = calc_shrt_liq_price(
-                                leverage, pos_price) * (1 - liq_modifier
-                            )
-                        pos_price = pos_price * (pos_size / new_pos_size) + \
-                            ask_price * (ask_qty / new_pos_size)
-                        pos_size = new_pos_size
-
-                        close_price = round_dn(pos_price * (1 - markup), price_step)
-                        trades.append({'trade_id': row.Index, 'side': 'shrt', 'type': 'entry',
-                                       'qty': ask_qty, 'price': ask_price,
-                                       'pos_size': pos_size, 'pos_price': pos_price,
-                                       'liq_price': liq_price, 'pnl': pnl,
-                                       'margin_cost': margin_cost, 'equity': equity,
-                                       'equity_available': equity + pos_size / row.price / leverage,
-                                       'close_price': close_price})
-                        ask_price = calc_shrt_entry_price(equity, pos_size, pos_price)
-                        ask_qty = -calc_entry_qty(equity, pos_size, pos_price)
-
-                    bid_price = round_dn(pos_price * (1 - markup), price_step)
-                    bid_qty = -pos_size
-                else:
-                    if row.price > ask_price:
-                        # close long pos
-                        cost = pos_size / ask_price
-                        margin_cost = cost / leverage
-                        pnl = cost * (ask_price / pos_price - 1) - cost * maker_fee
-                        if compounding:
-                            equity += pnl
-                        trades.append({'trade_id': row.Index, 'side': 'long', 'type': 'close',
-                                       'qty': -pos_size, 'price': ask_price,
-                                       'pos_size': 0, 'pos_price': np.nan,
-                                       'liq_price': np.nan, 'pnl': pnl,
-                                       'margin_cost': margin_cost, 'equity': equity,
-                                       'equity_available': equity, 'close_price': np.nan})
-                        pos_size = 0
-                        liq_price = np.nan
-                        bid_price, bid_qty = ob[0], min_qty
-                        ask_price, ask_qty = ob[1], -min_qty
-        if len(trades) > prev_len_trades + 100:
-            prev_len_trades = len(trades)
-            n_liqs = len([t for t in trades if t['type'] == 'liq'])
-            max_margin_cost = max([abs(t['margin_cost']) for t in trades])
-            line = f'\r{row.Index / len(df):.2f} '
-            line += f"start_equity: {settings['margin_limit']} equity {equity:.6f} "
-            line += f"pnl sum {sum([t['pnl'] for t in trades]):.6f} "
-            line += f"n liqs {n_liqs} "
-            line += f"max margin cost {max_margin_cost:.6f} "
-            print(line, end=' ')
-            max_n_liqs_per_day = 1
-            max_n_liqs = n_days * max_n_liqs_per_day
-            if n_liqs > max_n_liqs:
-                break
-    return trades
 
 
 def calc_new_val(val, range_, m):

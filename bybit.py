@@ -13,35 +13,8 @@ from math import floor
 from time import time, sleep
 from typing import Callable, Iterator
 from passivbot import init_ccxt, load_key_secret, load_settings, make_get_filepath, print_, \
-    ts_to_date, flatten, filter_orders, Bot, start_bot, round_up, round_dn, \
-    calc_long_entry_price, calc_shrt_entry_price, calc_entry_qty
+    ts_to_date, flatten, filter_orders, Bot, start_bot, round_up, round_dn
 from binance import fetch_trades as fetch_trades_binance
-
-
-def calc_long_liq_price(leverage, price, maintenance_margin_rate=0.005):
-    return (price * leverage) / (leverage + 1 - (maintenance_margin_rate * leverage))
-
-def calc_long_bankruptcy_price(qty, order_value, equity, order_margin, fee_to_open):
-    return (1.00075 * qty) / (order_value + (equity - order_margin - fee_to_open))
-
-def calc_long_liq_price_cross(leverage, equity, qty, order_margin, entry_price, maintenance_margin_rate=0.005):
-    bankruptcy_price = 0.0
-    return (4000 * bankruptcy_price * entry_price * qty) / \
-        (4000 * equity * bankruptcy_price * entry_price - 4000 * bankruptcy_price * ((maintenance_margin_rate - 1) * qty + entry_price * order_margin))
-
-'''
-
-qty * (1 / price - 1 / liq_price) == -(equity - order_margin - (qty / price) * maintenance_margin_rate - (qty * 0.00075 / bankruptcy_price))
-'''
-
-def calc_shrt_liq_price(leverage, price, maintenance_margin_rate=0.005):
-    return (price * leverage) / (leverage - 1 + (maintenance_margin_rate * leverage))
-
-def calc_shrt_bankruptcy_price():
-    pass
-
-def calc_shrt_liq_price_cross(leverage, price, maintenance_margin_rate=0.005):
-    pass
 
 
 async def fetch_trades(cc, symbol: str, from_id: int = None) -> [dict]:
@@ -156,10 +129,12 @@ class BybitBot(Bot):
         )
         pos = position['result']
         result = {'size': pos['size'] * (-1 if pos['side'] == 'Sell' else 1),
-                  'entry_price': float(pos['entry_price']),
+                  'price': float(pos['entry_price']),
                   'leverage': float(pos['leverage']),
                   'liquidation_price': float(pos['liq_price']),
                   'equity': balance['result'][self.coin]['equity']}
+        result['cost'] = result['size'] / result['price'] if result['price'] else 0.0
+        result['margin_cost'] = result['cost'] / self.leverage
         return result
 
     async def execute_bid(self, qty: float, price: float) -> dict:
@@ -206,7 +181,7 @@ class BybitBot(Bot):
         return await fetch_trades(self.cc, self.symbol, from_id)
 
     def calc_margin_cost(self, qty: float, price: float) -> float:
-        return qty / price / self.max_leverage
+        return qty / price / self.leverage
 
     async def start_websocket(self) -> None:
         self.stop_websocket = False

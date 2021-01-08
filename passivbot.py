@@ -29,46 +29,67 @@ def sort_dict_keys(d):
         return d
     return {key: sort_dict_keys(d[key]) for key in sorted(d)}
 
-'''
-def calc_long_liq_price(price, leverage):
-    return (price * leverage) / (leverage + 1)
+
+def calc_long_closes(price_step: float,
+                     qty_step: float,
+                     min_qty: float,
+                     min_markup: float,
+                     max_markup: float,
+                     pos_size: float,
+                     pos_price: float,
+                     lowest_ask: float,
+                     n_orders: int = 10):
+    n_orders = min(n_orders, int(pos_size / min_qty))
+    if n_orders <= min_qty * 4:
+        return (np.array([-pos_size]),
+                np.array([max(lowest_ask, round_up(pos_price * (1 + min_markup), price_step))]))
+
+    prices = round_up(np.linspace(pos_price * (1 + min_markup), pos_price * (1 + max_markup),
+                                  min(n_orders, int(pos_size / min_qty))),
+                      price_step)
+    prices = prices[np.where(prices >= lowest_ask)]
+    if len(prices) == 0:
+        return np.array([-pos_size]), np.array([lowest_ask])
+    qtys = round_up(np.repeat(pos_size / len(prices), len(prices)), qty_step)
+    qtys_sum = qtys.sum()
+    while qtys_sum > pos_size:
+        for i in range(len(qtys)):
+            qtys[i] = round_(qtys[i] - min_qty, qty_step)
+            qtys_sum = round_(qtys_sum - min_qty, qty_step)
+            if qtys_sum <= pos_size:
+                break
+    return qtys * -1, prices
 
 
-def calc_shrt_liq_price(price, leverage):
-    return (price * leverage) / (leverage - 1)
-'''
-
-
-def calc_long_entry_price(price_step,
-                          leverage,
-                          grid_spacing,
-                          grid_spacing_coefficient,
-                          equity,
-                          pos_size,
-                          pos_price):
-    pos_margin_to_equity_ratio = (pos_size / pos_price) / (equity * leverage)
-    grid_spacing_modifier = (1 + pos_margin_to_equity_ratio * grid_spacing_coefficient)
-    return round_dn((pos_price - 9e-9) * (1 - grid_spacing * grid_spacing_modifier),
-                    round_up(pos_price * grid_spacing / 4, price_step))
-
-
-def calc_shrt_entry_price(price_step,
-                          leverage,
-                          grid_spacing,
-                          grid_spacing_coefficient,
-                          equity,
-                          pos_size,
-                          pos_price):
-    pos_margin_to_equity_ratio = (-pos_size / pos_price) / (equity * leverage)
-    grid_spacing_modifier = (1 + pos_margin_to_equity_ratio * grid_spacing_coefficient)
-    return round_up((pos_price + 9e-9) * (1 + grid_spacing * grid_spacing_modifier),
-                    round_up(pos_price * grid_spacing / 4, price_step))
-
-
-def calc_entry_qty(qty_step, min_qty, ddown_factor, leverage, equity, pos_size, pos_price):
+def calc_shrt_closes(price_step: float,
+                     qty_step: float,
+                     min_qty: float,
+                     min_markup: float,
+                     max_markup: float,
+                     pos_size: float,
+                     pos_price: float,
+                     highest_bid: float,
+                     n_orders: int = 10):
     abs_pos_size = abs(pos_size)
-    return min(max(0.0, round_dn(equity * pos_price * leverage - abs_pos_size, qty_step)),
-               max(min_qty, round_up(abs_pos_size * ddown_factor, qty_step)))
+    n_orders = min(n_orders, int(abs_pos_size / min_qty))
+    if n_orders <= min_qty * 4:
+        return (np.array([-pos_size]),
+                np.array([min(highest_bid, round_dn(pos_price * (1 - min_markup), price_step))]))
+    prices = round_dn(np.linspace(pos_price * (1 - min_markup), pos_price * (1 - max_markup),
+                                  min(n_orders, int(abs_pos_size / min_qty))),
+                      price_step)
+    prices = prices[np.where(prices <= highest_bid)]
+    if len(prices) == 0:
+        return np.array([-pos_size]), np.array([highest_bid])
+    qtys = round_up(np.repeat(abs_pos_size / len(prices), len(prices)), qty_step)
+    qtys_sum = qtys.sum()
+    while qtys_sum > abs_pos_size:
+        for i in range(len(qtys) - 1, -1, -1):
+            qtys[i] = round_(qtys[i] - min_qty, qty_step)
+            qtys_sum = round_(qtys_sum - min_qty, qty_step)
+            if qtys_sum <= abs_pos_size:
+                break
+    return qtys, prices
 
 
 def make_get_filepath(filepath: str) -> str:
@@ -163,11 +184,16 @@ class Bot:
         self.user = user
         self.symbol = settings['symbol']
         self.leverage = settings['leverage']
-        self.ddown_factor = settings['ddown_factor']
-        self.grid_spacing = settings['grid_spacing']
-        self.grid_spacing_coefficient = settings['grid_spacing_coefficient']
+        self.grid_step = settings['grid_step']
         self.margin_limit = settings['margin_limit']
-        self.markup = settings['markup']
+        self.min_markup = settings['min_markup']
+        self.max_markup = settings['max_markup']
+        self.default_qty = settings['default_qty']
+        self.n_entry_orders = settings['n_entry_orders']
+        self.n_close_orders = settings['n_close_orders']
+        self.pgrdn = lambda n: round_dn(n, self.grid_step)
+        self.pgrup = lambda n: round_up(n, self.grid_step)
+
         self.ts_locked = {'cancel_orders': 0, 'decide': 0, 'update_open_orders': 0,
                           'update_position': 0, 'print': 0, 'create_orders': 0}
         self.ts_released = {k: 1 for k in self.ts_locked}
@@ -262,55 +288,66 @@ class Bot:
         self.stop_websocket = True
 
     def calc_orders(self):
-        n_orders = 23
         max_diff_from_last_price = 1.12
         orders = []
-        if self.position['size'] == 0:
-            orders.append({'side': 'buy', 'qty': self.min_qty, 'price': self.ob[0]})
-            orders.append({'side': 'sell', 'qty': self.min_qty, 'price': self.ob[1]})
-        else:
+        if self.position['size'] == 0: # no pos
+            bid_price = self.pgrdn(self.ob[0])
+            ask_price = self.pgrup(self.ob[1])
+            for k in range(self.n_entry_orders):
+                if self.price / bid_price > max_diff_from_last_price:
+                    break
+                orders.append({'side': 'buy', 'qty': self.default_qty, 'price': bid_price})
+                orders.append({'side': 'sell', 'qty': self.default_qty, 'price': ask_price})
+                bid_price = self.pgrdn(bid_price - 9e-9)
+                ask_price = self.pgrup(ask_price + 9e-9)
+        elif self.position['size'] > 0.0: # long pos
+            bid_price = self.pgrdn(min(self.ob[0], self.position['price']))
             pos_size = self.position['size']
-            pos_price = self.position['entry_price']
-            if self.position['size'] > 0.0:
-                for k in range(n_orders):
-                    bid_qty = self.calc_entry_qty(self.margin_limit, pos_size, pos_price)
-                    bid_price = self.calc_long_entry_price(self.margin_limit,
-                                                           pos_size,
-                                                           pos_price)
-                    bid_price = max(bid_price, self.prup(self.position['liquidation_price'] * 1.001))
-                    if bid_qty < self.min_qty or self.price / bid_price > max_diff_from_last_price:
-                        break
-                    if bid_price <= self.ob[0]:
-                        orders.append({'side': 'buy', 'qty': bid_qty, 'price': bid_price})
-                    new_pos_size = pos_size + bid_qty
-                    pos_price = pos_price * (pos_size / new_pos_size) + \
-                        bid_price * (bid_qty / new_pos_size)
-                    pos_size = new_pos_size
-                orders.append({
-                    'side': 'sell', 'qty': self.position['size'],
-                    'price': max(self.prup(self.position['entry_price'] * (1 + self.markup)),
-                                 self.ob[1])
-                })
-            else:
-                for k in range(n_orders):
-                    ask_qty = -self.calc_entry_qty(self.margin_limit, pos_size, pos_price)
-                    ask_price = self.calc_shrt_entry_price(self.margin_limit,
-                                                           pos_size,
-                                                           pos_price)
-                    ask_price = min(ask_price, self.prdn(self.position['liquidation_price'] * 0.999))
-                    if -ask_qty < self.min_qty or ask_price / self.price > max_diff_from_last_price:
-                        break
-                    if ask_price >= self.ob[1]:
-                        orders.append({'side': 'sell', 'qty': -ask_qty, 'price': ask_price})
-                    new_pos_size = pos_size + ask_qty
-                    pos_price = pos_price * (pos_size / new_pos_size) + \
-                        ask_price * (ask_qty / new_pos_size)
-                    pos_size = new_pos_size
-                orders.append({
-                    'side': 'buy', 'qty': -self.position['size'],
-                    'price': min(self.prdn(self.position['entry_price'] * (1 - self.markup)),
-                                 self.ob[0])
-                })
+            for k in range(self.n_entry_orders):
+                pos_size += self.default_qty
+                if self.calc_margin_cost(pos_size, self.position['price']) > self.margin_limit or \
+                        self.price / bid_price > max_diff_from_last_price:
+                    break
+                orders.append({'side': 'buy', 'qty': self.default_qty, 'price': bid_price})
+                bid_price = self.pgrdn(bid_price - 9e-9)
+            ask_qtys, ask_prices = calc_long_closes(self.price_step,
+                                                    self.qty_step,
+                                                    self.min_qty,
+                                                    self.min_markup,
+                                                    self.max_markup,
+                                                    self.position['size'],
+                                                    self.position['price'],
+                                                    self.ob[1],
+                                                    self.n_close_orders)
+            orders += [{'side': 'sell', 'qty': float(-qty_), 'price': float(price_)}
+                       for qty_, price_ in zip(ask_qtys, ask_prices)]
+            if self.position['margin_cost'] > self.margin_limit:
+                orders.append({'side': 'sell', 'qty': self.default_qty,
+                               'price': self.pgrup(self.ob[1])})
+        else: # shrt pos
+            ask_price = self.pgrup(max(self.ob[1], self.position['price']))
+            pos_size = -self.position['size']
+            for k in range(self.n_entry_orders):
+                pos_size += self.default_qty
+                if self.calc_margin_cost(pos_size, self.position['price']) > self.margin_limit or \
+                        ask_price / self.price > max_diff_from_last_price:
+                    break
+                orders.append({'side': 'sell', 'qty': self.default_qty, 'price': ask_price})
+                ask_price = self.pgrup(ask_price + 9e-9)
+            bid_qtys, bid_prices = calc_shrt_closes(self.price_step,
+                                                    self.qty_step,
+                                                    self.min_qty,
+                                                    self.min_markup,
+                                                    self.max_markup,
+                                                    self.position['size'],
+                                                    self.position['price'],
+                                                    self.ob[0],
+                                                    self.n_close_orders)
+            orders += [{'side': 'buy', 'qty': float(qty_), 'price': float(price_)}
+                       for qty_, price_ in zip(bid_qtys, bid_prices)]
+            if self.position['margin_cost'] > self.margin_limit:
+                orders.append({'side': 'buy', 'qty': self.default_qty,
+                               'price': self.pgrdn(self.ob[0])})
         return orders
 
     async def cancel_and_create(self):
@@ -359,11 +396,11 @@ class Bot:
                 line += f"no position bid {bid_price} ask {ask_price} "
                 ratio = 0.0
             elif self.position['size'] > 0.0:
-                line += f"long {self.position['size']} @ {self.position['entry_price']:.2f} "
+                line += f"long {self.position['size']} @ {self.position['price']:.2f} "
                 line += f"exit {self.lowest_ask} ddown {self.highest_bid} "
                 ratio = (self.price - self.highest_bid) / (self.lowest_ask - self.highest_bid)
             else:
-                line += f"shrt {self.position['size']} @ {self.position['entry_price']:.2f} "
+                line += f"shrt {self.position['size']} @ {self.position['price']:.2f} "
                 ratio = 1 - (self.price - self.highest_bid) / (self.lowest_ask - self.highest_bid)
                 line += f"exit {self.highest_bid} ddown {self.lowest_ask } "
 

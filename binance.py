@@ -13,8 +13,7 @@ from math import floor
 from time import time, sleep
 from typing import Callable, Iterator
 from passivbot import init_ccxt, load_key_secret, load_settings, make_get_filepath, print_, \
-    ts_to_date, flatten, filter_orders, Bot, start_bot, round_up, round_dn, \
-    calc_long_entry_price, calc_shrt_entry_price, calc_entry_qty
+    ts_to_date, flatten, filter_orders, Bot, start_bot, round_up, round_dn
 
 
 async def fetch_trades(cc, symbol: str, from_id: int = None) -> [dict]:
@@ -118,14 +117,16 @@ class BinanceBot(Bot):
         )
         if positions:
             position = {'size': float(positions[0]['positionAmt']),
-                        'entry_price': float(positions[0]['entryPrice']),
+                        'price': float(positions[0]['entryPrice']),
                         'liquidation_price': float(positions[0]['liquidationPrice']),
                         'leverage': float(positions[0]['leverage'])}
         else:
             position = {'size': 0.0,
-                        'entry_price': 0.0,
+                        'price': 0.0,
                         'liquidation_price': 0.0,
                         'leverage': 1.0}
+        position['cost'] = position['size'] * position['price']
+        position['margin_cost'] = position['cost'] / self.leverage
         for e in balance:
             if e['asset'] == 'USDT':
                 position['equity'] = float(e['balance'])
