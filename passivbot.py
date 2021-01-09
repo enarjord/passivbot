@@ -289,7 +289,6 @@ class Bot:
                 print_(['canceled order', o['symbol'], o['side'], o['qty'], o['price']], n=True)
             except Exception as e:
                 print('error cancelling orders c', orders_to_cancel, e)
-        await self.update_open_orders()
         self.ts_released['cancel_orders'] = time()
         return canceled_orders
 
@@ -328,11 +327,14 @@ class Bot:
                                                     self.position['price'],
                                                     self.ob[1],
                                                     self.n_close_orders)
-            orders += [{'side': 'sell', 'qty': float(abs_qty), 'price': float(price_)}
-                       for qty_, price_ in zip(ask_qtys, ask_prices) if (abs_qty := abs(qty_)) > 0.0]
+            close_orders = sorted([{'side': 'sell', 'qty': abs_qty, 'price': float(price_)}
+                                   for qty_, price_ in zip(ask_qtys, ask_prices)
+                                   if (abs_qty := abs(float(qty_))) > 0.0],
+                                  key=lambda x: x['price'])[:self.n_entry_orders]
+            orders += close_orders
             if self.position['margin_cost'] > self.margin_limit:
-                orders.append({'side': 'sell', 'qty': self.default_qty,
-                               'price': self.pgrup(self.ob[1])})
+                # make limit long close at a loss
+                orders.append({'side': 'sell', 'qty': self.default_qty, 'price': self.ob[1]})
         else: # shrt pos
             ask_price = self.pgrup(max(self.ob[1], self.position['price']))
             pos_size = -self.position['size']
@@ -352,14 +354,19 @@ class Bot:
                                                     self.position['price'],
                                                     self.ob[0],
                                                     self.n_close_orders)
-            orders += [{'side': 'buy', 'qty': float(qty_), 'price': float(price_)}
-                       for qty_, price_ in zip(bid_qtys, bid_prices) if qty_ > 0.0]
+            close_orders = sorted([{'side': 'buy', 'qty': float(qty_), 'price': float(price_)}
+                                   for qty_, price_ in zip(bid_qtys, bid_prices) if qty_ > 0.0],
+                                  key=lambda x: x['price'], reverse=True)[:self.n_entry_orders]
+            orders += close_orders
             if self.position['margin_cost'] > self.margin_limit:
-                orders.append({'side': 'buy', 'qty': self.default_qty,
-                               'price': self.pgrdn(self.ob[0])})
+                # make limit shrt close at a loss
+                orders.append({'side': 'buy', 'qty': self.default_qty, 'price': self.ob[0]})
         return orders
 
     async def cancel_and_create(self):
+        await asyncio.sleep(0.1)
+        await self.update_position()
+        await asyncio.sleep(0.1)
         to_cancel, to_create = filter_orders(self.open_orders,
                                              self.calc_orders(),
                                              keys=['side', 'qty', 'price'])
@@ -379,20 +386,17 @@ class Bot:
         if self.price <= self.highest_bid:
             self.ts_locked['decide'] = time()
             print_(['bid maybe taken'], n=True)
-            await self.update_position()
             await self.cancel_and_create()
             self.ts_released['decide'] = time()
             return
         if self.price >= self.lowest_ask:
             self.ts_locked['decide'] = time()
             print_(['ask maybe taken'], n=True)
-            await self.update_position()
             await self.cancel_and_create()
             self.ts_released['decide'] = time()
             return
         if time() - self.ts_locked['decide'] > 5:
             self.ts_locked['decide'] = time()
-            await self.update_position()
             await self.cancel_and_create()
             self.ts_released['decide'] = time()
             return
