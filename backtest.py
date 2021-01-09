@@ -29,8 +29,10 @@ def backtest(df: pd.DataFrame, settings: dict):
     maker_fee = settings['maker_fee']
 
     min_qty = settings['min_qty']
-    min_markup = sorted(settings['markups'])[0]
+    min_markup = settings['min_markup'] \
+        if 'min_markup' in settings else sorted(settings['markups'])[0]
     max_markup = sorted(settings['markups'])[-1]
+    print('min max markups', min_markup, max_markup)
     n_close_orders = settings['n_close_orders']
 
     default_qty = settings['default_qty']
@@ -65,7 +67,7 @@ def backtest(df: pd.DataFrame, settings: dict):
                     bid_price = round_dn(min(ob[0], pos_price), grid_step)
             else:                                                   # shrt pos
                 if row.price <= pos_price:                          # shrt close
-                    qtys, prices = calc_shrt_closes(price_step, qty_step, default_qty, min_markup,
+                    qtys, prices = calc_shrt_closes(price_step, qty_step, min_qty, min_markup,
                                                     max_markup, pos_size, pos_price, ob[0],
                                                     n_close_orders)
                     bid_qty = qtys[0]
@@ -95,7 +97,7 @@ def backtest(df: pd.DataFrame, settings: dict):
                                    'pos_size': pos_size, 'pos_price': pos_price, 'roe': np.nan,
                                    'margin_cost': margin_cost})
                     pnl_sum += pnl
-                    print(f'\r{row.Index / len(df):.2f} pnl sum {pnl_sum:.4f} pos_size {pos_size:.3f} ',
+                    print(f'\r{row.Index / len(df):.2f} pnl sum {pnl_sum:.6f} pos_size {pos_size:.3f} ',
                           end='    ')
                 else:
                     # close shrt pos
@@ -110,7 +112,7 @@ def backtest(df: pd.DataFrame, settings: dict):
                                    'pos_size': pos_size, 'pos_price': pos_price, 'roe': roe,
                                    'margin_cost': margin_cost})
                     pnl_sum += pnl
-                    print(f'\r{row.Index / len(df):.2f} pnl sum {pnl_sum:.4f} pos_size {pos_size:.3f} ',
+                    print(f'\r{row.Index / len(df):.2f} pnl sum {pnl_sum:.6f} pos_size {pos_size:.3f} ',
                           end='    ')
         else:
             if pos_size == 0.0:                                      # no pos
@@ -126,7 +128,7 @@ def backtest(df: pd.DataFrame, settings: dict):
                     ask_price = round_up(max(ob[1], pos_price), grid_step)
             else:                                                    # long pos
                 if row.price >= pos_price:                           # close long pos
-                    qtys, prices = calc_long_closes(price_step, qty_step, default_qty, min_markup,
+                    qtys, prices = calc_long_closes(price_step, qty_step, min_qty, min_markup,
                                                     max_markup, pos_size, pos_price, ob[1],
                                                     n_close_orders)
                     ask_qty = qtys[0]
@@ -156,7 +158,7 @@ def backtest(df: pd.DataFrame, settings: dict):
                                    'pos_size': pos_size, 'pos_price': pos_price, 'roe': np.nan,
                                    'margin_cost': margin_cost})
                     pnl_sum += pnl
-                    print(f'\r{row.Index / len(df):.2f} pnl sum {pnl_sum:.4f} pos_size {pos_size:.3f} ',
+                    print(f'\r{row.Index / len(df):.2f} pnl sum {pnl_sum:.6f} pos_size {pos_size:.3f} ',
                           end='    ')
                 else:
                     # close long pos
@@ -171,50 +173,24 @@ def backtest(df: pd.DataFrame, settings: dict):
                                    'pos_size': pos_size, 'pos_price': pos_price, 'roe': roe,
                                    'margin_cost': margin_cost})
                     pnl_sum += pnl
-                    print(f'\r{row.Index / len(df):.2f} pnl sum {pnl_sum:.4f} pos_size {pos_size:.3f} ',
+                    print(f'\r{row.Index / len(df):.2f} pnl sum {pnl_sum:.6f} pos_size {pos_size:.3f} ',
                           end='    ')
     return trades
 
 
-
-
-
 def jackrabbit(agg_trades: pd.DataFrame):
-    '''
-    # settings for binance
-    settings = {
-        "default_qty": 0.001,
-        "grid_step": 344,
-        "leverage": 125,
-        "maker_fee": 0.00018,
-        "margin_limit": 60,
-        "markups": (0.0038,),
-        "min_qty": 0.001,
-        "n_close_orders": 1,
-        "n_entry_orders": 7,
-        "price_step": 0.01,
-        "qty_step": 0.001,
-        "symbol": "BTCUSDT",
-        "inverse": False,
-        "break_on_loss": True,
-    }
-    ranges = {
-        'default_qty': (settings['min_qty'], settings['min_qty'] * 1, settings['qty_step']),
-        'grid_step': (10, 400, 1),
-        'markups': (0.0005, 0.005, 0.0001),
-        'n_close_orders': (1, 1, 1),
-    }
     '''
     # settings for bybit
     settings = {
         "default_qty": 1.0,
-        "grid_step": 344,
+        "grid_step": 101,
         "leverage": 100,
         "maker_fee": -0.00025,
-        "margin_limit": 0.001,
-        "markups": (0.0038,),
+        "margin_limit": 0.0007,
+        "markups": (0.0159,),
+        "min_markup": 0.0001,
         "min_qty": 1.0,
-        "n_close_orders": 1,
+        "n_close_orders": 14,
         "n_entry_orders": 7,
         "price_step": 0.5,
         "qty_step": 1.0,
@@ -223,18 +199,39 @@ def jackrabbit(agg_trades: pd.DataFrame):
         "break_on_loss": True,
     }
     ranges = {
-        'default_qty': (1, 30, 1),
+        #'default_qty': (1, 10, 1),
         'grid_step': (1, 400, 1),
-        'margin_limit': (0.001, 0.001, 0.0001),
-        'markups': (0.0001, 0.01, 0.0001),
-        'n_close_orders': (1, 10, 1),
+        'markups': (0.0, 0.02, 0.0001),
+    }
+    '''
+    # settings for binance
+    settings = {
+        "default_qty": 0.001,
+        "grid_step": 240,
+        "leverage": 125,
+        "maker_fee": 0.00018,
+        "margin_limit": 40,
+        "markups": (0.01,),
+        "min_markup": 0.0005, # will override min(markups) in backtest
+        "min_qty": 0.001,
+        "n_close_orders": 14,
+        "n_entry_orders": 7,
+        "price_step": 0.01,
+        "qty_step": 0.001,
+        "symbol": "BTCUSDT",
+        "inverse": False,
+        "break_on_loss": True,
+    }
+
+    ranges = {
+        'grid_step': (10, 500, 1),
+        'markups': (0.0005, 0.04, 0.0001),
     }
 
     tweakable = {
-        'default_qty': 0.0,
+        #'default_qty': 0.0,
         'grid_step': 0.0,
-        'markups': (0.0, 0.0),
-        'n_close_orders': 0.0
+        'markups': (0.0,),
     }
 
     best = {}
@@ -249,7 +246,7 @@ def jackrabbit(agg_trades: pd.DataFrame):
             best[key] = calc_new_val((ranges[key][1] - ranges[key][0]) / 2, ranges[key], 1.0)
 
     # optional: uncomment to use settings as start candidate.
-    #best = {k_: settings[k_] for k_ in sorted(ranges)}
+    best = {k_: settings[k_] for k_ in sorted(ranges)}
 
     settings = sort_dict_keys(settings)
     best = sort_dict_keys(best)
@@ -258,8 +255,8 @@ def jackrabbit(agg_trades: pd.DataFrame):
     best_gain = -99999999
     candidate = best
 
-    ks = 200
-    k = 0
+    ks = 120
+    k = 7
     ms = np.array([1/(i/2 + 16) for i in range(ks)])
     ms = ((ms - ms.min()) / (ms.max() - ms.min()))
 
@@ -307,10 +304,12 @@ def jackrabbit(agg_trades: pd.DataFrame):
                 max_margin_cost = (abs_pos_sizes / tdf.pos_price / settings_['leverage']).max()
             else:
                 max_margin_cost = (abs_pos_sizes * tdf.pos_price / settings_['leverage']).max()
-            gain = (pnl_sum + settings_['margin_limit']) / settings_['margin_limit']
+            #gain = (pnl_sum + settings_['margin_limit']) / settings_['margin_limit']
+            gain = (pnl_sum + max_margin_cost) / max_margin_cost
+            average_daily_gain = gain ** (1 / n_days)
             n_trades = len(tdf)
             result = {'n_closes': n_closes, 'pnl_sum': pnl_sum, 'loss_sum': loss_sum,
-                      'max_margin_cost': max_margin_cost,
+                      'max_margin_cost': max_margin_cost, 'average_daily_gain': average_daily_gain,
                       'gain': gain, 'n_trades': n_trades}
             print('\n', result)
             results[key] = result
