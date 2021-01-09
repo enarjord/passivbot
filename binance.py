@@ -125,7 +125,7 @@ class BinanceBot(Bot):
                         'price': 0.0,
                         'liquidation_price': 0.0,
                         'leverage': 1.0}
-        position['cost'] = position['size'] * position['price']
+        position['cost'] = abs(position['size']) * position['price']
         position['margin_cost'] = position['cost'] / self.leverage
         for e in balance:
             if e['asset'] == 'USDT':
