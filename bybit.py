@@ -133,7 +133,7 @@ class BybitBot(Bot):
                   'leverage': float(pos['leverage']),
                   'liquidation_price': float(pos['liq_price']),
                   'equity': balance['result'][self.coin]['equity']}
-        result['cost'] = result['size'] / result['price'] if result['price'] else 0.0
+        result['cost'] = abs(result['size']) / result['price'] if result['price'] else 0.0
         result['margin_cost'] = result['cost'] / self.leverage
         return result
 
