@@ -241,11 +241,11 @@ def jackrabbit(agg_trades: pd.DataFrame):
         "grid_step": 101,
         "leverage": 100,
         "maker_fee": -0.00025,
-        "margin_limit": 0.0007,
+        "margin_limit": 0.0015,
         "markups": (0.0159,),
         "min_markup": 0.0002,
         "min_qty": 1.0,
-        "n_close_orders": 14,
+        "n_close_orders": 20,
         "n_entry_orders": 7,
         "price_step": 0.5,
         "qty_step": 1.0,
@@ -254,13 +254,13 @@ def jackrabbit(agg_trades: pd.DataFrame):
         "break_on_loss": True,
     }
     ranges = {
-        #'default_qty': (1, 10, 1),
-        'grid_step': (1, 400, 1),
+        'default_qty': (1, 10, 1),
+        'grid_step': (1, 500, 1),
         'markups': (0.0, 0.02, 0.0001),
     }
 
     tweakable = {
-        #'default_qty': 0.0,
+        'default_qty': 0.0,
         'grid_step': 0.0,
         'markups': (0.0,),
     }
@@ -291,13 +291,14 @@ def jackrabbit(agg_trades: pd.DataFrame):
     ms = np.array([1/(i/2 + 16) for i in range(ks)])
     ms = ((ms - ms.min()) / (ms.max() - ms.min()))
 
+    n_days = (agg_trades.timestamp.iloc[-1] - agg_trades.timestamp.iloc[0]) / 1000 / 60 / 60 / 24
+
     results_filename = make_get_filepath(
-        f'jackrabbit_results_grid/{ts_to_date(time())[:19]}'
+        f'jackrabbit_results_grid/{ts_to_date(time())[:19]}_{int(round(n_days))}'
     )
     if settings['inverse']:
         results_filename += '_inverse'
 
-    n_days = (agg_trades.timestamp.iloc[-1] - agg_trades.timestamp.iloc[0]) / 1000 / 60 / 60 / 24
     settings['n_days'] = n_days
     print('n_days', n_days)
 
@@ -327,6 +328,7 @@ def jackrabbit(agg_trades: pd.DataFrame):
                 candidate = get_new_candidate(ranges, best)
                 continue
             tdf = pd.DataFrame(trades).set_index('trade_id')
+            closest_liq = ((tdf.price - tdf.liq_price).abs() / tdf.price).min()
             n_closes = len(tdf[tdf.type == 'close'])
             pnl_sum = tdf.pnl.sum()
             loss_sum = tdf[tdf.pnl < 0.0].pnl.sum()
@@ -335,13 +337,13 @@ def jackrabbit(agg_trades: pd.DataFrame):
                 max_margin_cost = (abs_pos_sizes / tdf.pos_price / settings_['leverage']).max()
             else:
                 max_margin_cost = (abs_pos_sizes * tdf.pos_price / settings_['leverage']).max()
-            #gain = (pnl_sum + settings_['margin_limit']) / settings_['margin_limit']
-            gain = (pnl_sum + max_margin_cost) / max_margin_cost
+            #gain = (pnl_sum + max_margin_cost) / max_margin_cost
+            gain = (pnl_sum + settings_['margin_limit']) / settings_['margin_limit']
             average_daily_gain = gain ** (1 / n_days)
             n_trades = len(tdf)
             result = {'n_closes': n_closes, 'pnl_sum': pnl_sum, 'loss_sum': loss_sum,
                       'max_margin_cost': max_margin_cost, 'average_daily_gain': average_daily_gain,
-                      'gain': gain, 'n_trades': n_trades}
+                      'gain': gain, 'n_trades': n_trades, 'closest_liq': closest_liq}
             print('\n', result)
             results[key] = result
 
