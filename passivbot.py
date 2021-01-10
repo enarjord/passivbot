@@ -322,6 +322,7 @@ class Bot:
 
     def calc_orders(self):
         max_diff_from_last_price = 1.12
+        stop_loss_pos_reduction = 0.05
         orders = []
         if self.position['size'] == 0: # no pos
             bid_price = self.pgrdn(self.ob[0])
@@ -337,7 +338,10 @@ class Bot:
             if abs(self.position['liquidation_price'] - self.price) / self.price < \
                     self.liq_dist_threshold:
                 # controlled long loss
-                orders.append({'side': 'sell', 'qty': self.default_qty, 'price': self.ob[1]})
+                orders.append({'side': 'sell',
+                               'qty': round_up(self.position['size'] * stop_loss_pos_reduction,
+                                               self.qty_step),
+                               'price': self.ob[1]})
             else:
                 pos_size = self.position['size']
                 pos_price = self.position['price']
@@ -381,7 +385,10 @@ class Bot:
             if abs(self.position['liquidation_price'] - self.price) / self.price < \
                     self.liq_dist_threshold:
                 # controlled shrt loss
-                orders.append({'side': 'buy', 'qty': self.default_qty, 'price': self.ob[0]})
+                orders.append({'side': 'buy',
+                               'qty': round_up(-self.position['size'] * stop_loss_pos_reduction,
+                                               self.qty_step),
+                               'price': self.ob[0]})
             else:
                 pos_size = self.position['size']
                 pos_price = self.position['price']
