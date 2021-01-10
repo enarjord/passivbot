@@ -17,6 +17,48 @@ from passivbot import init_ccxt, load_key_secret, load_settings, make_get_filepa
 from binance import fetch_trades as fetch_trades_binance
 
 
+def calc_cross_long_liq_price(equity,
+                              pos_size,
+                              pos_price,
+                              mm=0.005,
+                              leverage=100):
+    order_cost = pos_size / pos_price
+    order_margin = order_cost / leverage
+    bankruptcy_price = calc_cross_long_bankruptcy_price(pos_size, order_cost, equity, order_margin)
+    if bankruptcy_price == 0.0:
+        return 0.0
+    rhs = -(equity - order_margin - (pos_size / pos_price) * mm - \
+        (pos_size * 0.00075) / bankruptcy_price)
+    return (pos_price * pos_size) / (pos_size - pos_price * rhs)
+
+
+def calc_cross_long_bankruptcy_price(pos_size, order_cost, equity, order_margin):
+    return (1.00075 * pos_size) / (order_cost + (equity - order_margin))
+
+
+def calc_cross_shrt_liq_price(equity,
+                              pos_size,
+                              pos_price,
+                              mm=0.005,
+                              leverage=100):
+    _pos_size = abs(pos_size)
+    order_cost = _pos_size / pos_price
+    order_margin = order_cost / leverage
+    bankruptcy_price = calc_cross_shrt_bankruptcy_price(_pos_size, order_cost, equity, order_margin)
+    if bankruptcy_price == 0.0:
+        return 9e9
+    rhs = -(equity - order_margin - (_pos_size / pos_price) * mm - \
+        (_pos_size * 0.00075) / bankruptcy_price)
+    shrt_liq_price = (pos_price * _pos_size) / (pos_price * rhs + _pos_size)
+    if shrt_liq_price <= 0.0:
+        return 9e9
+    return shrt_liq_price
+
+
+def calc_cross_shrt_bankruptcy_price(pos_size, order_cost, equity, order_margin):
+    return (0.99925 * pos_size) / (order_cost - (equity - order_margin))
+
+
 async def fetch_trades(cc, symbol: str, from_id: int = None) -> [dict]:
 
     params = {'symbol': symbol, 'limit': 1000}
@@ -188,13 +230,12 @@ class BybitBot(Bot):
         uri = f"wss://stream.bybit.com/realtime"
         print_([uri])
         await self.update_position()
-        if self.position['leverage'] != self.leverage:
-            try:
-                print(await self.cc.user_post_leverage_save(
-                    params={'symbol': self.symbol, 'leverage': 0}
-                ))
-            except Exception as e:
-                print('error starting websocket', e)
+        try:
+            print(await self.cc.user_post_leverage_save(
+                params={'symbol': self.symbol, 'leverage': int(self.leverage)}
+            ))
+        except Exception as e:
+            print('error starting websocket', e)
         param = {'op': 'subscribe', 'args': ['trade.' + self.symbol]}
         k = 1
         async with websockets.connect(uri) as ws:
