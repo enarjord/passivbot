@@ -232,7 +232,7 @@ class BybitBot(Bot):
         await self.update_position()
         try:
             print(await self.cc.user_post_leverage_save(
-                params={'symbol': self.symbol, 'leverage': int(self.leverage)}
+                params={'symbol': self.symbol, 'leverage': 0}
             ))
         except Exception as e:
             print('error starting websocket', e)
