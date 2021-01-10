@@ -6,7 +6,8 @@ import asyncio
 import os
 from time import time
 from passivbot import init_ccxt, make_get_filepath, ts_to_date, print_, load_settings, \
-    sort_dict_keys, round_up, round_dn, round_, calc_long_closes, calc_shrt_closes
+    sort_dict_keys, round_up, round_dn, round_, calc_long_closes, calc_shrt_closes, \
+    calc_long_reentry_price, calc_shrt_reentry_price
 from binance import fetch_trades as binance_fetch_trades
 from bybit import fetch_trades as bybit_fetch_trades
 from bybit import calc_cross_long_liq_price as bybit_calc_cross_long_liq_price
@@ -19,206 +20,13 @@ from bisect import insort_left
 def backtest(df: pd.DataFrame, settings: dict):
 
     grid_step = settings['grid_step']
-    price_step = settings['price_step']
-    qty_step = settings['qty_step']
-    inverse = settings['inverse']
-    break_on_loss = settings['break_on_loss']
-
-    if inverse:
-        calc_cost = lambda qty_, price_: qty_ / price_
-        calc_long_liq_price = lambda equity_, pos_size_, pos_price_: \
-            bybit_calc_cross_long_liq_price(equity_, pos_size_, pos_price_)
-        calc_shrt_liq_price = lambda equity_, pos_size_, pos_price_: \
-            bybit_calc_cross_shrt_liq_price(equity_, pos_size_, pos_price_)
-    else:
-        calc_cost = lambda qty_, price_: qty_ * price_
-
-    maker_fee = settings['maker_fee']
-
-    min_qty = settings['min_qty']
-    min_markup = settings['min_markup'] \
-        if 'min_markup' in settings else sorted(settings['markups'])[0]
-    max_markup = sorted(settings['markups'])[-1]
-    print('min max markups', min_markup, max_markup)
-    n_close_orders = settings['n_close_orders']
-
-    default_qty = settings['default_qty']
-
-    leverage = settings['leverage']
-    margin_limit = settings['margin_limit']
-
-    trades = []
-
-    ob = [df.iloc[:2].price.min(), df.iloc[:2].price.max()]
-
-    pos_size = 0.0
-    pos_price = 0.0
-
-    bid_price = round_dn(ob[0], grid_step)
-    ask_price = round_up(ob[1], grid_step)
-
-    long_liq_price, shrt_liq_price = 0.0, 9e9
-
-    pnl_sum = 0.0
-
-    for row in df.itertuples():
-        if row.buyer_maker:
-            if pos_size == 0.0:                                     # no pos
-                bid_qty = default_qty
-                bid_price = round_dn(ob[0], grid_step)
-            elif pos_size > 0.0:                                    # long pos
-                if calc_cost(pos_size, pos_price) / leverage > margin_limit:
-                    # limit reached; enter no more
-                    bid_qty = 0.0
-                    bid_price = 0.0
-                else:                                               # long reentry
-                    bid_qty = default_qty
-                    bid_price = round_dn(min(ob[0], pos_price), grid_step)
-            else:                                                   # shrt pos
-                if row.price <= pos_price:                          # shrt close
-                    qtys, prices = calc_shrt_closes(price_step, qty_step, min_qty, min_markup,
-                                                    max_markup, pos_size, pos_price, ob[0],
-                                                    n_close_orders)
-                    bid_qty = qtys[0]
-                    bid_price = prices[0]
-                elif -calc_cost(pos_size, pos_price) / leverage > margin_limit:
-                    if break_on_loss:
-                        print('shrt break on loss')
-                        return []
-                    # controlled shrt loss
-                    bid_qty = default_qty
-                    bid_price = ob[0]
-                else:                                               # no shrt close
-                    bid_qty = 0.0
-                    bid_price = 0.0
-            ob[0] = row.price
-            if row.price < long_liq_price:
-                print('long liquidation', long_liq_price)
-                return []
-            if row.price < bid_price:
-                if pos_size >= 0.0:
-                    # create or add to long pos
-                    cost = calc_cost(bid_qty, bid_price)
-                    margin_cost = cost / leverage
-                    pnl = -cost * maker_fee
-                    new_pos_size = pos_size + bid_qty
-                    pos_price = pos_price * (pos_size / new_pos_size) + \
-                        bid_price * (bid_qty / new_pos_size)
-                    pos_size = new_pos_size
-                    long_liq_price = calc_long_liq_price(margin_limit, pos_size, pos_price)
-                    trades.append({'trade_id': row.Index, 'side': 'long', 'type': 'entry',
-                                   'price': bid_price, 'qty': bid_qty, 'pnl': pnl,
-                                   'pos_size': pos_size, 'pos_price': pos_price, 'roe': np.nan,
-                                   'margin_cost': margin_cost, 'liq_price': long_liq_price})
-                    pnl_sum += pnl
-                    line = f'\r{row.Index / len(df):.2f} pnl sum {pnl_sum:.6f} '
-                    liq_dist = row.price / long_liq_price if long_liq_price else 0.0
-                    line += f'liq distance {liq_dist:.2f} '
-                    line += f'pos_size {pos_size:.3f} '
-                    print(line, end='    ')
-                else:
-                    # close shrt pos
-                    cost = calc_cost(bid_qty, bid_price)
-                    margin_cost = cost / leverage
-                    gain = (pos_price / bid_price - 1)
-                    pnl = cost * gain - cost * maker_fee
-                    pos_size += bid_qty
-                    roe = gain * leverage
-                    shrt_liq_price = calc_shrt_liq_price(margin_limit, pos_size, pos_price)
-                    trades.append({'trade_id': row.Index, 'side': 'shrt', 'type': 'close',
-                                   'price': bid_price, 'qty': bid_qty, 'pnl': pnl,
-                                   'pos_size': pos_size, 'pos_price': pos_price, 'roe': roe,
-                                   'margin_cost': margin_cost, 'liq_price': shrt_liq_price})
-                    pnl_sum += pnl
-                    line = f'\r{row.Index / len(df):.2f} pnl sum {pnl_sum:.6f} '
-                    line += f'liq distance {shrt_liq_price / row.price:.2f} '
-                    line += f'pos_size {pos_size:.3f} '
-                    print(line, end='    ')
-        else:
-            if pos_size == 0.0:                                      # no pos
-                ask_qty = -default_qty
-                ask_price = round_up(ob[1], grid_step)
-            elif pos_size < 0.0:                                     # shrt pos
-                if -calc_cost(pos_size, pos_price) / leverage > margin_limit: 
-                    # limit reached; enter no more
-                    ask_qty = 0.0
-                    ask_price = 9.9e9
-                else:                                                # shrt reentry
-                    ask_qty = -default_qty
-                    ask_price = round_up(max(ob[1], pos_price), grid_step)
-            else:                                                    # long pos
-                if row.price >= pos_price:                           # close long pos
-                    qtys, prices = calc_long_closes(price_step, qty_step, min_qty, min_markup,
-                                                    max_markup, pos_size, pos_price, ob[1],
-                                                    n_close_orders)
-                    ask_qty = qtys[0]
-                    ask_price = prices[0]
-                elif calc_cost(pos_size, pos_price) / leverage > margin_limit:
-                    if break_on_loss:
-                        print('break on loss')
-                        return []
-                    # controlled long loss
-                    ask_qty = -default_qty
-                    ask_price = ob[1]
-                else:                                                # no close
-                    ask_qty = 0.0
-                    ask_price = 9.9e9
-            ob[1] = row.price
-            if row.price > shrt_liq_price:
-                print('shrt liquidation', row.price, shrt_liq_price, pos_size, pos_price)
-                return []
-            if row.price > ask_price:
-                if pos_size <= 0.0:
-                    # add to or create short pos
-                    cost = -calc_cost(ask_qty, ask_price)
-                    margin_cost = cost / leverage
-                    pnl = -cost * maker_fee
-                    new_pos_size = pos_size + ask_qty
-                    pos_price = pos_price * (pos_size / new_pos_size) + \
-                        ask_price * (ask_qty / new_pos_size)
-                    pos_size = new_pos_size
-                    shrt_liq_price = calc_shrt_liq_price(margin_limit, pos_size, pos_price)
-                    trades.append({'trade_id': row.Index, 'side': 'shrt', 'type': 'entry',
-                                   'price': ask_price, 'qty': ask_qty, 'pnl': pnl,
-                                   'pos_size': pos_size, 'pos_price': pos_price, 'roe': np.nan,
-                                   'margin_cost': margin_cost, 'liq_price': shrt_liq_price})
-                    pnl_sum += pnl
-                    line = f'\r{row.Index / len(df):.2f} pnl sum {pnl_sum:.6f} '
-                    line += f'liq distance {shrt_liq_price / row.price:.2f} '
-                    line += f'pos_size {pos_size:.3f} '
-                    print(line, end='    ')
-                else:
-                    # close long pos
-                    cost = -calc_cost(ask_qty, ask_price)
-                    margin_cost = cost / leverage
-                    gain = (ask_price / pos_price - 1)
-                    pnl = cost * gain - cost * maker_fee
-                    pos_size += ask_qty
-                    roe = gain * leverage
-                    long_liq_price = calc_long_liq_price(margin_limit, pos_size, pos_price)
-                    trades.append({'trade_id': row.Index, 'side': 'long', 'type': 'close',
-                                   'price': ask_price, 'qty': ask_qty, 'pnl': pnl,
-                                   'pos_size': pos_size, 'pos_price': pos_price, 'roe': roe,
-                                   'margin_cost': margin_cost, 'liq_price': long_liq_price})
-                    pnl_sum += pnl
-                    line = f'\r{row.Index / len(df):.2f} pnl sum {pnl_sum:.6f} '
-                    liq_dist = row.price / long_liq_price if long_liq_price else 0.0
-                    line += f'liq distance {liq_dist:.2f} '
-                    line += f'pos_size {pos_size:.3f} '
-                    print(line, end='    ')
-    return trades
-
-
-def backtest_dynamic_grid(df: pd.DataFrame, settings: dict):
-
-    grid_step = settings['grid_step']
     grid_spacing = settings['grid_spacing']
     grid_coefficient = settings['grid_coefficient']
     price_step = settings['price_step']
     qty_step = settings['qty_step']
     inverse = settings['inverse']
     break_on_loss = settings['break_on_loss']
-    soft_loss_margin_threshold = settings['soft_loss_margin_threshold']
+    liq_dist_threshold = settings['liq_dist_threshold']
 
     if inverse:
         calc_cost = lambda qty_, price_: qty_ / price_
@@ -263,18 +71,19 @@ def backtest_dynamic_grid(df: pd.DataFrame, settings: dict):
                 bid_qty = default_qty
                 bid_price = round_dn(ob[0], grid_step)
             elif pos_size > 0.0:                                    # long pos
-                if calc_cost(pos_size, pos_price) / leverage > soft_loss_margin_threshold:
+                if long_liq_price and row.price / long_liq_price < liq_dist_threshold:
                     # limit reached; enter no more
                     bid_qty = 0.0
                     bid_price = 0.0
                 else:                                               # long reentry
                     bid_qty = default_qty
                     pos_margin = calc_cost(pos_size, pos_price) / leverage
-                    modified_grid_spacing = grid_spacing * \
-                        (1 + pos_margin / margin_limit * grid_coefficient)
-                    bid_price = min(ob[0], round_dn(pos_price * (1 - modified_grid_spacing),
-                                                    round_up(pos_price * grid_spacing / 4,
-                                                             price_step)))
+                    bid_price = min(ob[0], calc_long_reentry_price(price_step,
+                                                                   grid_spacing,
+                                                                   grid_coefficient,
+                                                                   margin_limit,
+                                                                   pos_margin,
+                                                                   pos_price))
             else:                                                   # shrt pos
                 if row.price <= pos_price:                          # shrt close
                     qtys, prices = calc_shrt_closes(price_step, qty_step, min_qty, min_markup,
@@ -282,13 +91,13 @@ def backtest_dynamic_grid(df: pd.DataFrame, settings: dict):
                                                     n_close_orders)
                     bid_qty = qtys[0]
                     bid_price = prices[0]
-                elif -calc_cost(pos_size, pos_price) / leverage > soft_loss_margin_threshold:
+                elif shrt_liq_price and shrt_liq_price / row.price < liq_dist_threshold:
                     if break_on_loss:
                         print('shrt break on loss')
                         return []
                     # controlled shrt loss
                     bid_qty = default_qty
-                    bid_price = ob[0]
+                    bid_price = round_dn(ob[0], grid_step)
                 else:                                               # no shrt close
                     bid_qty = 0.0
                     bid_price = 0.0
@@ -340,7 +149,7 @@ def backtest_dynamic_grid(df: pd.DataFrame, settings: dict):
                 ask_qty = -default_qty
                 ask_price = round_up(ob[1], grid_step)
             elif pos_size < 0.0:                                     # shrt pos
-                if -calc_cost(pos_size, pos_price) / leverage > soft_loss_margin_threshold: 
+                if shrt_liq_price and shrt_liq_price / row.price < liq_dist_threshold:
                     # limit reached; enter no more
                     ask_qty = 0.0
                     ask_price = 9.9e9
@@ -349,11 +158,12 @@ def backtest_dynamic_grid(df: pd.DataFrame, settings: dict):
                     ask_price = round_up(max(ob[1], pos_price), grid_step)
 
                     pos_margin = calc_cost(-pos_size, pos_price) / leverage
-                    modified_grid_spacing = grid_spacing * \
-                        (1 + pos_margin / margin_limit * grid_coefficient)
-                    ask_price = max(ob[1], round_up(pos_price * (1 + modified_grid_spacing),
-                                                    round_up(pos_price * grid_spacing / 4,
-                                                             price_step)))
+                    ask_price = max(ob[1], calc_shrt_reentry_price(price_step,
+                                                                   grid_spacing,
+                                                                   grid_coefficient,
+                                                                   margin_limit,
+                                                                   pos_margin,
+                                                                   pos_price))
             else:                                                    # long pos
                 if row.price >= pos_price:                           # close long pos
                     qtys, prices = calc_long_closes(price_step, qty_step, min_qty, min_markup,
@@ -361,13 +171,13 @@ def backtest_dynamic_grid(df: pd.DataFrame, settings: dict):
                                                     n_close_orders)
                     ask_qty = qtys[0]
                     ask_price = prices[0]
-                elif calc_cost(pos_size, pos_price) / leverage > soft_loss_margin_threshold:
+                elif long_liq_price and row.price / long_liq_price < liq_dist_threshold:
                     if break_on_loss:
                         print('break on loss')
                         return []
                     # controlled long loss
                     ask_qty = -default_qty
-                    ask_price = ob[1]
+                    ask_price = round_up(ob[1], grid_step)
                 else:                                                # no close
                     ask_qty = 0.0
                     ask_price = 9.9e9
@@ -417,61 +227,59 @@ def backtest_dynamic_grid(df: pd.DataFrame, settings: dict):
     return trades
 
 
-def jackrabbit(agg_trades: pd.DataFrame):
-    '''
-    # settings for binance
-    settings = {
-        "default_qty": 0.001,
-        "grid_step": 380,
-        "leverage": 125,
-        "maker_fee": 0.00018,
-        "margin_limit": 50,
-        "markups": (0.01,),
-        "min_markup": 0.00075, # will override min(markups) in backtest
-        "min_qty": 0.001,
-        "n_close_orders": 14,
-        "n_entry_orders": 7,
-        "price_step": 0.01,
-        "qty_step": 0.001,
-        "symbol": "BTCUSDT",
-        "inverse": False,
-        "break_on_loss": True,
-    }
+def jackrabbit(agg_trades: pd.DataFrame, exchange: str = 'bybit'):
+    if exchange == 'bybit':
+        settings = {
+            'break_on_loss': False,
+            'default_qty': 1.0,
+            'grid_coefficient': 198.0,
+            'grid_spacing': 0.002,
+            'grid_step': 15,
+            'inverse': True,
+            'leverage': 100,
+            'liq_dist_threshold': 1.05,
+            'maker_fee': -0.00025,
+            'margin_limit': 0.0015,
+            'markups': (0.0002, 0.016),
+            "min_markup": 0.0002, # will override min(markups) in backtest
+            'min_qty': 1.0,
+            'n_close_orders': 20,
+            'n_entry_orders': 10,
+            'price_step': 0.5,
+            'qty_step': 1.0,
+            'symbol': 'BTCUSD'
+        }
+    elif exchange == 'binance':
+        # settings for binance
+        settings = {
+            "default_qty": 0.001,
+            "grid_step": 380,
+            "grid_coefficient": 80.0,
+            "grid_spacing": 0.002,
+            "leverage": 125,
+            "liq_dist_threshold": 1.05,
+            "maker_fee": 0.00018,
+            "margin_limit": 50,
+            "markups": (0.01,),
+            "min_markup": 0.00075, # will override min(markups) in backtest
+            "min_qty": 0.001,
+            "n_close_orders": 14,
+            "n_entry_orders": 7,
+            "price_step": 0.01,
+            "qty_step": 0.001,
+            "symbol": "BTCUSDT",
+            "inverse": False,
+            "break_on_loss": True,
+        }
 
     ranges = {
-        'grid_step': (10, 500, 1),
-        'markups': (0.0005, 0.025, 0.0001),
-    }
-    '''
-    # settings for bybit
-    settings = {
-        'break_on_loss': True,
-        'default_qty': 1.0,
-        'grid_coefficient': 40.0,
-        'grid_spacing': 0.006,
-        'grid_step': 25,
-        'inverse': True,
-        'leverage': 100,
-        'maker_fee': -0.00025,
-        'margin_limit': 0.0015,
-        'markups': (0.0159,),
-        'min_qty': 1.0,
-        'n_close_orders': 20,
-        'n_entry_orders': 10,
-        'price_step': 0.5,
-        'qty_step': 1.0,
-        'symbol': 'BTCUSD'
-    }
-    ranges = {
         'grid_spacing': (0.0005, 0.02, 0.0001),
-        'grid_coefficient': (0.0, 200, 0.01),
-        'markups': (0.0, 0.02, 0.0001),
+        'grid_coefficient': (0.0, 400, 0.01),
     }
 
     tweakable = {
         'grid_spacing': 0.0,
         'grid_coefficient': 0.0,
-        'markups': (0.0,),
     }
 
     best = {}
@@ -531,7 +339,7 @@ def jackrabbit(agg_trades: pd.DataFrame):
             print(line)
             settings_ = {k_: candidate[k_] if k_ in candidate else settings[k_]
                          for k_ in sorted(settings)}
-            trades = backtest_dynamic_grid(df, settings_)
+            trades = backtest(df, settings_)
             if not trades:
                 print('\nno trades')
                 candidate = get_new_candidate(ranges, best)
@@ -570,10 +378,17 @@ def jackrabbit(agg_trades: pd.DataFrame):
 
 
 def prep_df(adf: pd.DataFrame):
-    # bybit
     dfc = adf[adf.price != adf.price.shift(1)]
-    buyer_maker = dfc.side == 'Sell'
-    buyer_maker.name = 'buyer_maker'
+    if 'side' in dfc.columns:
+        # bybit
+        buyer_maker = dfc.side == 'Sell'
+        buyer_maker.name = 'buyer_maker'
+    elif 'is_buyer_maker' in dfc.columns:
+        # binance
+        buyer_maker = dfc.is_buyer_maker
+        buyer_maker.name = 'buyer_maker'
+    else:
+        raise Exception('trades of unknown format')
     df = pd.concat([dfc.price, buyer_maker], axis=1)
     df.index = np.arange(len(df))
     return df
@@ -712,14 +527,14 @@ async def load_trades(exchange: str, user: str, symbol: str, n_days: float) -> p
 async def main():
     exchange = sys.argv[1]
     user = sys.argv[2]
-    n_days = int(sys.argv[3])
+    n_days = round(float(sys.argv[3]), 2)
     if exchange == 'bybit':
         symbol = 'BTCUSD'
     elif exchange == 'binance':
         symbol = 'BTCUSDT'
     else:
         raise Exception(f'exchange {exchange} not found')
-    filename = f'btcusdt_agg_trades_{exchange}_{n_days}_days_{ts_to_date(time())[:10]}.csv'
+    filename = f'{symbol}_agg_trades_{exchange}_{n_days}_days_{ts_to_date(time())[:10]}.csv'
     if os.path.isfile(filename):
         print('loading trades...')
         adf = pd.read_csv(filename).set_index('trade_id')
@@ -728,7 +543,7 @@ async def main():
         agg_trades = await load_trades(exchange, user, symbol, n_days)
         adf = agg_trades.loc[agg_trades.price != agg_trades.price.shift(1)]
         adf.to_csv(filename)
-    jackrabbit(adf)
+    jackrabbit(adf, exchange)
 
 
 if __name__ == '__main__':
