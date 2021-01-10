@@ -216,6 +216,7 @@ class Bot:
         self.symbol = settings['symbol']
         self.leverage = settings['leverage']
         self.liq_dist_threshold = settings['liq_dist_threshold']
+        self.stop_loss_pos_reduction = settings['stop_loss_pos_reduction']
         self.grid_step = settings['grid_step']
         self.grid_spacing = settings['grid_spacing']
         self.grid_coefficient = settings['grid_coefficient']
@@ -322,7 +323,6 @@ class Bot:
 
     def calc_orders(self):
         max_diff_from_last_price = 1.12
-        stop_loss_pos_reduction = 0.05
         orders = []
         if self.position['size'] == 0: # no pos
             bid_price = self.pgrdn(self.ob[0])
