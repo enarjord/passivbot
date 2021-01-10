@@ -217,7 +217,6 @@ class Bot:
         self.leverage = settings['leverage']
         self.liq_dist_threshold = settings['liq_dist_threshold']
         self.stop_loss_pos_reduction = settings['stop_loss_pos_reduction']
-        self.grid_step = settings['grid_step']
         self.grid_spacing = settings['grid_spacing']
         self.grid_coefficient = settings['grid_coefficient']
         self.margin_limit = settings['margin_limit']
@@ -226,8 +225,6 @@ class Bot:
         self.default_qty = settings['default_qty']
         self.n_entry_orders = settings['n_entry_orders']
         self.n_close_orders = settings['n_close_orders']
-        self.pgrdn = lambda n: round_dn(n, self.grid_step)
-        self.pgrup = lambda n: round_up(n, self.grid_step)
 
         self.ts_locked = {'cancel_orders': 0, 'decide': 0, 'update_open_orders': 0,
                           'update_position': 0, 'print': 0, 'create_orders': 0}
@@ -325,21 +322,21 @@ class Bot:
         max_diff_from_last_price = 1.12
         orders = []
         if self.position['size'] == 0: # no pos
-            bid_price = self.pgrdn(self.ob[0])
-            ask_price = self.pgrup(self.ob[1])
+            bid_price = self.ob[0]
+            ask_price = self.ob[1]
             for k in range(max(5, self.n_entry_orders // 2)):
                 if self.price / bid_price > max_diff_from_last_price:
                     break
                 orders.append({'side': 'buy', 'qty': self.default_qty, 'price': bid_price})
                 orders.append({'side': 'sell', 'qty': self.default_qty, 'price': ask_price})
-                bid_price = self.pgrdn(bid_price - 9e-9)
-                ask_price = self.pgrup(ask_price + 9e-9)
+                bid_price = self.round_dn(bid_price * (1 - grid_spacing), self.price_step)
+                ask_price = self.round_up(ask_price * (1 + grid_spacing), self.price_step)
         elif self.position['size'] > 0.0: # long pos
             if abs(self.position['liquidation_price'] - self.price) / self.price < \
                     self.liq_dist_threshold:
                 # controlled long loss
                 orders.append({'side': 'sell',
-                               'qty': round_up(self.position['size'] * stop_loss_pos_reduction,
+                               'qty': round_up(self.position['size'] * self.stop_loss_pos_reduction,
                                                self.qty_step),
                                'price': self.ob[1]})
             else:
@@ -386,7 +383,7 @@ class Bot:
                     self.liq_dist_threshold:
                 # controlled shrt loss
                 orders.append({'side': 'buy',
-                               'qty': round_up(-self.position['size'] * stop_loss_pos_reduction,
+                               'qty': round_up(-self.position['size'] * self.stop_loss_pos_reduction,
                                                self.qty_step),
                                'price': self.ob[0]})
             else:
