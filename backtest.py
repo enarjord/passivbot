@@ -27,6 +27,7 @@ def backtest(df: pd.DataFrame, settings: dict):
     inverse = settings['inverse']
     break_on_loss = settings['break_on_loss']
     liq_dist_threshold = settings['liq_dist_threshold']
+    stop_loss_pos_reduction = settings['stop_loss_pos_reduction']
 
     if inverse:
         calc_cost = lambda qty_, price_: qty_ / price_
@@ -71,7 +72,7 @@ def backtest(df: pd.DataFrame, settings: dict):
                 bid_qty = default_qty
                 bid_price = round_dn(ob[0], grid_step)
             elif pos_size > 0.0:                                    # long pos
-                if long_liq_price and row.price / long_liq_price < liq_dist_threshold:
+                if abs(long_liq_price - row.price) / row.price < liq_dist_threshold:
                     # limit reached; enter no more
                     bid_qty = 0.0
                     bid_price = 0.0
@@ -91,12 +92,12 @@ def backtest(df: pd.DataFrame, settings: dict):
                                                     n_close_orders)
                     bid_qty = qtys[0]
                     bid_price = prices[0]
-                elif shrt_liq_price and shrt_liq_price / row.price < liq_dist_threshold:
+                elif abs(shrt_liq_price - row.price) / row.price < liq_dist_threshold:
                     if break_on_loss:
                         print('shrt break on loss')
                         return []
                     # controlled shrt loss
-                    bid_qty = default_qty
+                    bid_qty = round_up(-pos_size * stop_loss_pos_reduction, qty_step)
                     bid_price = ob[0]
                 else:                                               # no shrt close
                     bid_qty = 0.0
@@ -149,7 +150,7 @@ def backtest(df: pd.DataFrame, settings: dict):
                 ask_qty = -default_qty
                 ask_price = round_up(ob[1], grid_step)
             elif pos_size < 0.0:                                     # shrt pos
-                if shrt_liq_price and shrt_liq_price / row.price < liq_dist_threshold:
+                if abs(shrt_liq_price - row.price) / row.price < liq_dist_threshold:
                     # limit reached; enter no more
                     ask_qty = 0.0
                     ask_price = 9.9e9
@@ -171,12 +172,12 @@ def backtest(df: pd.DataFrame, settings: dict):
                                                     n_close_orders)
                     ask_qty = qtys[0]
                     ask_price = prices[0]
-                elif long_liq_price and row.price / long_liq_price < liq_dist_threshold:
+                elif abs(long_liq_price - row.price) / row.price < liq_dist_threshold:
                     if break_on_loss:
                         print('break on loss')
                         return []
                     # controlled long loss
-                    ask_qty = -default_qty
+                    ask_qty = -round_up(pos_size * stop_loss_pos_reduction, qty_step)
                     ask_price = ob[1]
                 else:                                                # no close
                     ask_qty = 0.0
@@ -237,7 +238,7 @@ def jackrabbit(agg_trades: pd.DataFrame, exchange: str = 'bybit'):
             'grid_step': 15,
             'inverse': True,
             'leverage': 100,
-            'liq_dist_threshold': 1.05,
+            'liq_dist_threshold': 0.03,
             'maker_fee': -0.00025,
             'margin_limit': 0.00154,
             'markups': (0.0002, 0.016),
@@ -245,6 +246,7 @@ def jackrabbit(agg_trades: pd.DataFrame, exchange: str = 'bybit'):
             'min_qty': 1.0,
             'n_close_orders': 20,
             'n_entry_orders': 10,
+            'stop_loss_pos_reduction': 0.05,
             'price_step': 0.5,
             'qty_step': 1.0,
             'symbol': 'BTCUSD'
@@ -257,7 +259,7 @@ def jackrabbit(agg_trades: pd.DataFrame, exchange: str = 'bybit'):
             "grid_coefficient": 80.0,
             "grid_spacing": 0.002,
             "leverage": 125,
-            "liq_dist_threshold": 1.05,
+            "liq_dist_threshold": 0.03,
             "maker_fee": 0.00018,
             "margin_limit": 50,
             "markups": (0.01,),
