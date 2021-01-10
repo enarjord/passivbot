@@ -19,7 +19,6 @@ from bisect import insort_left
 
 def backtest(df: pd.DataFrame, settings: dict):
 
-    grid_step = settings['grid_step']
     grid_spacing = settings['grid_spacing']
     grid_coefficient = settings['grid_coefficient']
     price_step = settings['price_step']
@@ -59,8 +58,8 @@ def backtest(df: pd.DataFrame, settings: dict):
     pos_size = 0.0
     pos_price = 0.0
 
-    bid_price = round_dn(ob[0], grid_step)
-    ask_price = round_up(ob[1], grid_step)
+    bid_price = ob[0]
+    ask_price = ob[1]
 
     long_liq_price, shrt_liq_price = 0.0, 9e9
 
@@ -70,7 +69,7 @@ def backtest(df: pd.DataFrame, settings: dict):
         if row.buyer_maker:
             if pos_size == 0.0:                                     # no pos
                 bid_qty = default_qty
-                bid_price = round_dn(ob[0], grid_step)
+                bid_price = ob[0]
             elif pos_size > 0.0:                                    # long pos
                 if abs(long_liq_price - row.price) / row.price < liq_dist_threshold:
                     # limit reached; enter no more
@@ -148,7 +147,7 @@ def backtest(df: pd.DataFrame, settings: dict):
         else:
             if pos_size == 0.0:                                      # no pos
                 ask_qty = -default_qty
-                ask_price = round_up(ob[1], grid_step)
+                ask_price = ob[1]
             elif pos_size < 0.0:                                     # shrt pos
                 if abs(shrt_liq_price - row.price) / row.price < liq_dist_threshold:
                     # limit reached; enter no more
@@ -156,8 +155,6 @@ def backtest(df: pd.DataFrame, settings: dict):
                     ask_price = 9.9e9
                 else:                                                # shrt reentry
                     ask_qty = -default_qty
-                    ask_price = round_up(max(ob[1], pos_price), grid_step)
-
                     pos_margin = calc_cost(-pos_size, pos_price) / leverage
                     ask_price = max(ob[1], calc_shrt_reentry_price(price_step,
                                                                    grid_spacing,
@@ -235,7 +232,6 @@ def jackrabbit(agg_trades: pd.DataFrame, exchange: str = 'bybit'):
             'default_qty': 1.0,
             'grid_coefficient': 198.0,
             'grid_spacing': 0.002,
-            'grid_step': 15,
             'inverse': True,
             'leverage': 100,
             'liq_dist_threshold': 0.03,
@@ -255,7 +251,6 @@ def jackrabbit(agg_trades: pd.DataFrame, exchange: str = 'bybit'):
         # settings for binance
         settings = {
             "default_qty": 0.001,
-            "grid_step": 380,
             "grid_coefficient": 80.0,
             "grid_spacing": 0.002,
             "leverage": 125,
