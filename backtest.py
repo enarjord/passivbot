@@ -97,7 +97,7 @@ def backtest(df: pd.DataFrame, settings: dict):
                         return []
                     # controlled shrt loss
                     bid_qty = default_qty
-                    bid_price = round_dn(ob[0], grid_step)
+                    bid_price = ob[0]
                 else:                                               # no shrt close
                     bid_qty = 0.0
                     bid_price = 0.0
@@ -177,7 +177,7 @@ def backtest(df: pd.DataFrame, settings: dict):
                         return []
                     # controlled long loss
                     ask_qty = -default_qty
-                    ask_price = round_up(ob[1], grid_step)
+                    ask_price = ob[1]
                 else:                                                # no close
                     ask_qty = 0.0
                     ask_price = 9.9e9
@@ -239,7 +239,7 @@ def jackrabbit(agg_trades: pd.DataFrame, exchange: str = 'bybit'):
             'leverage': 100,
             'liq_dist_threshold': 1.05,
             'maker_fee': -0.00025,
-            'margin_limit': 0.0015,
+            'margin_limit': 0.00154,
             'markups': (0.0002, 0.016),
             "min_markup": 0.0002, # will override min(markups) in backtest
             'min_qty': 1.0,
@@ -303,7 +303,7 @@ def jackrabbit(agg_trades: pd.DataFrame, exchange: str = 'bybit'):
     best_gain = -99999999
     candidate = best
 
-    ks = 120
+    ks = 200
     k = 0
     ms = np.array([1/(i/2 + 16) for i in range(ks)])
     ms = ((ms - ms.min()) / (ms.max() - ms.min()))
