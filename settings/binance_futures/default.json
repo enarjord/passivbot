@@ -1,10 +1,12 @@
 {
-    "default_qty": 0.001,
-    "grid_step": 303,
-    "leverage": 125,
-    "margin_limit": 600,
-    "markups": [0.0006, 0.0044],
-    "n_close_orders": 10,
-    "n_entry_orders": 10,
-    "symbol": "BTCUSDT"
+    "grid_coefficient": 160.0,
+    "grid_spacing": 0.003,
+    "liq_diff_threshold": 0.02,
+    "leverage": 100,
+    "markups": [0.0006, 0.0159],
+    "n_close_orders": 20,
+    "n_entry_orders": 8,
+    "qty_equity_pct": 0.00005,
+    "stop_loss_pos_reduction": 0.02,
+    "symbol": "ETHUSDT"
 }
