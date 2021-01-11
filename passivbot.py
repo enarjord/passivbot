@@ -52,6 +52,13 @@ def calc_shrt_reentry_price(price_step: float,
                     round_up(pos_price * grid_spacing / 4, price_step))
 
 
+def calc_default_qty(qty_step: float,
+                     min_qty: float,
+                     qty_equity_pct: float,
+                     equity: float):
+    return max(min_qty, round_dn(equity * qty_equity_pct, qty_step))
+
+
 def calc_long_closes(price_step: float,
                      qty_step: float,
                      min_qty: float,
@@ -219,12 +226,11 @@ class Bot:
         self.stop_loss_pos_reduction = settings['stop_loss_pos_reduction']
         self.grid_spacing = settings['grid_spacing']
         self.grid_coefficient = settings['grid_coefficient']
-        self.margin_limit = settings['margin_limit']
         self.min_markup = sorted(settings['markups'])[0]
         self.max_markup = sorted(settings['markups'])[-1]
-        self.default_qty = settings['default_qty']
         self.n_entry_orders = settings['n_entry_orders']
         self.n_close_orders = settings['n_close_orders']
+        self.qty_equity_pct = settings['qty_equity_pct']
 
         self.ts_locked = {'cancel_orders': 0, 'decide': 0, 'update_open_orders': 0,
                           'update_position': 0, 'print': 0, 'create_orders': 0}
@@ -321,16 +327,20 @@ class Bot:
     def calc_orders(self):
         max_diff_from_last_price = 1.12
         orders = []
+        default_qty = self.default_qty = calc_default_qty(self.qty_step,
+                                                          self.min_qty,
+                                                          self.qty_equity_pct,
+                                                          self.position['equity'])
         if self.position['size'] == 0: # no pos
             bid_price = self.ob[0]
             ask_price = self.ob[1]
             for k in range(max(5, self.n_entry_orders // 2)):
                 if self.price / bid_price > max_diff_from_last_price:
                     break
-                orders.append({'side': 'buy', 'qty': self.default_qty, 'price': bid_price})
-                orders.append({'side': 'sell', 'qty': self.default_qty, 'price': ask_price})
-                bid_price = self.round_dn(bid_price * (1 - grid_spacing), self.price_step)
-                ask_price = self.round_up(ask_price * (1 + grid_spacing), self.price_step)
+                orders.append({'side': 'buy', 'qty': default_qty, 'price': bid_price})
+                orders.append({'side': 'sell', 'qty': default_qty, 'price': ask_price})
+                bid_price = round_dn(bid_price * (1 - self.grid_spacing), self.price_step)
+                ask_price = round_up(ask_price * (1 + self.grid_spacing), self.price_step)
         elif self.position['size'] > 0.0: # long pos
             if abs(self.position['liquidation_price'] - self.price) / self.price < \
                     self.liq_dist_threshold:
@@ -346,22 +356,22 @@ class Bot:
                 bid_price = min(self.ob[0], calc_long_reentry_price(self.price_step,
                                                                     self.grid_spacing,
                                                                     self.grid_coefficient,
-                                                                    self.margin_limit,
+                                                                    self.position['equity'],
                                                                     pos_margin,
                                                                     pos_price))
                 for k in range(self.n_entry_orders):
-                    new_pos_size = pos_size + self.default_qty
-                    pos_price = pos_price * (self.default_qty / new_pos_size) + \
+                    new_pos_size = pos_size + default_qty
+                    pos_price = pos_price * (default_qty / new_pos_size) + \
                         bid_price * (pos_size / new_pos_size)
                     pos_size = new_pos_size
                     pos_margin = self.calc_margin_cost(pos_size, pos_price)
                     if self.price / bid_price > max_diff_from_last_price:
                         break
-                    orders.append({'side': 'buy', 'qty': self.default_qty, 'price': bid_price})
+                    orders.append({'side': 'buy', 'qty': default_qty, 'price': bid_price})
                     bid_price = min(self.ob[0], calc_long_reentry_price(self.price_step,
                                                                         self.grid_spacing,
                                                                         self.grid_coefficient,
-                                                                        self.margin_limit,
+                                                                        self.position['equity'],
                                                                         pos_margin,
                                                                         pos_price))
                 ask_qtys, ask_prices = calc_long_closes(self.price_step,
@@ -393,22 +403,22 @@ class Bot:
                 ask_price = max(self.ob[1], calc_shrt_reentry_price(self.price_step,
                                                                     self.grid_spacing,
                                                                     self.grid_coefficient,
-                                                                    self.margin_limit,
+                                                                    self.position['equity'],
                                                                     pos_margin,
                                                                     pos_price))
                 for k in range(self.n_entry_orders):
-                    new_pos_size = pos_size - self.default_qty
-                    pos_price = pos_price * (-self.default_qty / new_pos_size) + \
+                    new_pos_size = pos_size - default_qty
+                    pos_price = pos_price * (-default_qty / new_pos_size) + \
                         ask_price * (pos_size / new_pos_size)
                     pos_size = new_pos_size
                     pos_margin = self.calc_margin_cost(-pos_size, pos_price)
                     if ask_price / self.price > max_diff_from_last_price:
                         break
-                    orders.append({'side': 'sell', 'qty': self.default_qty, 'price': ask_price})
+                    orders.append({'side': 'sell', 'qty': default_qty, 'price': ask_price})
                     ask_price = max(self.ob[1], calc_shrt_reentry_price(self.price_step,
                                                                         self.grid_spacing,
                                                                         self.grid_coefficient,
-                                                                        self.margin_limit,
+                                                                        self.position['equity'],
                                                                         pos_margin,
                                                                         pos_price))
                 bid_qtys, bid_prices = calc_shrt_closes(self.price_step,
@@ -430,13 +440,16 @@ class Bot:
         await asyncio.sleep(0.1)
         await self.update_position()
         await asyncio.sleep(0.1)
+        n_orders_limit = 6
         to_cancel, to_create = filter_orders(self.open_orders,
                                              self.calc_orders(),
                                              keys=['side', 'qty', 'price'])
+        to_cancel = sorted(to_cancel, key=lambda x: abs(x['price'] - self.price) / self.price)
+        to_create = sorted(to_create, key=lambda x: abs(x['price'] - self.price) / self.price)
         tasks = []
         if to_cancel:
-            tasks.append(self.cancel_orders(to_cancel))
-        tasks.append(self.create_orders(to_create))
+            tasks.append(self.cancel_orders(to_cancel[:n_orders_limit]))
+        tasks.append(self.create_orders(to_create[:n_orders_limit]))
         results = await asyncio.gather(*tasks)
         await asyncio.sleep(0.1)
         await self.update_position()
@@ -478,7 +491,8 @@ class Bot:
                 ratio = 1 - (self.price - self.highest_bid) / (self.lowest_ask - self.highest_bid)
                 line += f"exit {self.highest_bid} ddown {self.lowest_ask } "
 
-            line += f"pct {ratio:.2f} last {self.price}   "
+            liq_dist = abs(self.price - self.position['liquidation_price']) / self.price
+            line += f"pct {ratio:.2f} liq_dist {liq_dist:.3f} last {self.price}   "
             print_([line], r=True)
 
 
