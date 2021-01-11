@@ -177,6 +177,7 @@ class BybitBot(Bot):
                   'equity': balance['result'][self.coin]['equity']}
         result['cost'] = abs(result['size']) / result['price'] if result['price'] else 0.0
         result['margin_cost'] = result['cost'] / self.leverage
+        result['rounded_equity'] = round_dn(result['equity'], 0.0001)
         return result
 
     async def execute_bid(self, qty: float, price: float) -> dict:
