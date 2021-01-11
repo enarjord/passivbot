@@ -7,7 +7,7 @@ import os
 from time import time
 from passivbot import init_ccxt, make_get_filepath, ts_to_date, print_, load_settings, \
     sort_dict_keys, round_up, round_dn, round_, calc_long_closes, calc_shrt_closes, \
-    calc_long_reentry_price, calc_shrt_reentry_price
+    calc_long_reentry_price, calc_shrt_reentry_price, calc_default_qty
 from binance import fetch_trades as binance_fetch_trades
 from bybit import fetch_trades as bybit_fetch_trades
 from bybit import calc_cross_long_liq_price as bybit_calc_cross_long_liq_price
@@ -27,29 +27,33 @@ def backtest(df: pd.DataFrame, settings: dict):
     break_on_loss = settings['break_on_loss']
     liq_dist_threshold = settings['liq_dist_threshold']
     stop_loss_pos_reduction = settings['stop_loss_pos_reduction']
+    qty_equity_pct = settings['qty_equity_pct']
+    min_qty = settings['min_qty']
+
+    leverage = settings['leverage']
+    margin_limit = settings['margin_limit']
+    compounding = settings['compounding']
 
     if inverse:
         calc_cost = lambda qty_, price_: qty_ / price_
-        calc_long_liq_price = lambda equity_, pos_size_, pos_price_: \
-            bybit_calc_cross_long_liq_price(equity_, pos_size_, pos_price_)
-        calc_shrt_liq_price = lambda equity_, pos_size_, pos_price_: \
-            bybit_calc_cross_shrt_liq_price(equity_, pos_size_, pos_price_)
+        calc_liq_price = lambda equity_, pos_size_, pos_price_: \
+            bybit_calc_cross_shrt_liq_price(equity_, pos_size_, pos_price_) \
+                if pos_size_ < 0.0 else \
+                bybit_calc_cross_long_liq_price(equity_, pos_size_, pos_price_)
     else:
         calc_cost = lambda qty_, price_: qty_ * price_
 
+    equity = margin_limit
+    default_qty = calc_default_qty(qty_step, min_qty, qty_equity_pct, equity)
+
     maker_fee = settings['maker_fee']
 
-    min_qty = settings['min_qty']
     min_markup = settings['min_markup'] \
         if 'min_markup' in settings else sorted(settings['markups'])[0]
     max_markup = sorted(settings['markups'])[-1]
     print('min max markups', min_markup, max_markup)
     n_close_orders = settings['n_close_orders']
 
-    default_qty = settings['default_qty']
-
-    leverage = settings['leverage']
-    margin_limit = settings['margin_limit']
 
     trades = []
 
@@ -61,7 +65,7 @@ def backtest(df: pd.DataFrame, settings: dict):
     bid_price = ob[0]
     ask_price = ob[1]
 
-    long_liq_price, shrt_liq_price = 0.0, 9e9
+    liq_price = 0.0
 
     pnl_sum = 0.0
 
@@ -71,7 +75,7 @@ def backtest(df: pd.DataFrame, settings: dict):
                 bid_qty = default_qty
                 bid_price = ob[0]
             elif pos_size > 0.0:                                    # long pos
-                if abs(long_liq_price - row.price) / row.price < liq_dist_threshold:
+                if abs(liq_price - row.price) / row.price < liq_dist_threshold:
                     # limit reached; enter no more
                     bid_qty = 0.0
                     bid_price = 0.0
@@ -81,7 +85,7 @@ def backtest(df: pd.DataFrame, settings: dict):
                     bid_price = min(ob[0], calc_long_reentry_price(price_step,
                                                                    grid_spacing,
                                                                    grid_coefficient,
-                                                                   margin_limit,
+                                                                   equity,
                                                                    pos_margin,
                                                                    pos_price))
             else:                                                   # shrt pos
@@ -91,7 +95,7 @@ def backtest(df: pd.DataFrame, settings: dict):
                                                     n_close_orders)
                     bid_qty = qtys[0]
                     bid_price = prices[0]
-                elif abs(shrt_liq_price - row.price) / row.price < liq_dist_threshold:
+                elif abs(liq_price - row.price) / row.price < liq_dist_threshold:
                     if break_on_loss:
                         print('shrt break on loss')
                         return []
@@ -102,8 +106,8 @@ def backtest(df: pd.DataFrame, settings: dict):
                     bid_qty = 0.0
                     bid_price = 0.0
             ob[0] = row.price
-            if row.price < long_liq_price:
-                print('long liquidation', long_liq_price)
+            if pos_size > 0.0 and liq_price and row.price < liq_price:
+                print('long liquidation', liq_price)
                 return []
             if row.price < bid_price:
                 if pos_size >= 0.0:
@@ -115,14 +119,18 @@ def backtest(df: pd.DataFrame, settings: dict):
                     pos_price = pos_price * (pos_size / new_pos_size) + \
                         bid_price * (bid_qty / new_pos_size)
                     pos_size = new_pos_size
-                    long_liq_price = calc_long_liq_price(margin_limit, pos_size, pos_price)
+                    liq_price = calc_liq_price(equity, pos_size, pos_price)
                     trades.append({'trade_id': row.Index, 'side': 'long', 'type': 'entry',
                                    'price': bid_price, 'qty': bid_qty, 'pnl': pnl,
                                    'pos_size': pos_size, 'pos_price': pos_price, 'roe': np.nan,
-                                   'margin_cost': margin_cost, 'liq_price': long_liq_price})
+                                   'margin_cost': margin_cost, 'liq_price': liq_price})
                     pnl_sum += pnl
+                    if compounding:
+                        equity += pnl
+                        default_qty = calc_default_qty(qty_step, min_qty, qty_equity_pct, equity)
                     line = f'\r{row.Index / len(df):.2f} pnl sum {pnl_sum:.6f} '
-                    liq_dist = row.price / long_liq_price if long_liq_price else 0.0
+                    liq_dist = abs(liq_price - row.price) / row.price
+                    line += f'default qty {equity * qty_equity_pct:.6f} equity {equity:.6f} '
                     line += f'liq distance {liq_dist:.2f} '
                     line += f'pos_size {pos_size:.3f} '
                     print(line, end='    ')
@@ -134,14 +142,20 @@ def backtest(df: pd.DataFrame, settings: dict):
                     pnl = cost * gain - cost * maker_fee
                     pos_size += bid_qty
                     roe = gain * leverage
-                    shrt_liq_price = calc_shrt_liq_price(margin_limit, pos_size, pos_price)
+                    liq_price = calc_liq_price(equity, pos_size, pos_price)
                     trades.append({'trade_id': row.Index, 'side': 'shrt', 'type': 'close',
                                    'price': bid_price, 'qty': bid_qty, 'pnl': pnl,
                                    'pos_size': pos_size, 'pos_price': pos_price, 'roe': roe,
-                                   'margin_cost': margin_cost, 'liq_price': shrt_liq_price})
+                                   'margin_cost': margin_cost, 'liq_price': liq_price})
                     pnl_sum += pnl
+                    if compounding:
+                        equity += pnl
+                        default_qty = calc_default_qty(qty_step, min_qty, qty_equity_pct, equity)
                     line = f'\r{row.Index / len(df):.2f} pnl sum {pnl_sum:.6f} '
-                    line += f'liq distance {shrt_liq_price / row.price:.2f} '
+                    liq_dist = abs(liq_price - row.price) / row.price
+
+                    line += f'default qty {equity * qty_equity_pct:.6f} equity {equity:.6f} '
+                    line += f'liq distance {liq_dist:.2f} '
                     line += f'pos_size {pos_size:.3f} '
                     print(line, end='    ')
         else:
@@ -149,7 +163,7 @@ def backtest(df: pd.DataFrame, settings: dict):
                 ask_qty = -default_qty
                 ask_price = ob[1]
             elif pos_size < 0.0:                                     # shrt pos
-                if abs(shrt_liq_price - row.price) / row.price < liq_dist_threshold:
+                if abs(liq_price - row.price) / row.price < liq_dist_threshold:
                     # limit reached; enter no more
                     ask_qty = 0.0
                     ask_price = 9.9e9
@@ -159,7 +173,7 @@ def backtest(df: pd.DataFrame, settings: dict):
                     ask_price = max(ob[1], calc_shrt_reentry_price(price_step,
                                                                    grid_spacing,
                                                                    grid_coefficient,
-                                                                   margin_limit,
+                                                                   equity,
                                                                    pos_margin,
                                                                    pos_price))
             else:                                                    # long pos
@@ -169,19 +183,21 @@ def backtest(df: pd.DataFrame, settings: dict):
                                                     n_close_orders)
                     ask_qty = qtys[0]
                     ask_price = prices[0]
-                elif abs(long_liq_price - row.price) / row.price < liq_dist_threshold:
+                elif abs(liq_price - row.price) / row.price < liq_dist_threshold:
                     if break_on_loss:
                         print('break on loss')
                         return []
                     # controlled long loss
+                    print(abs(liq_price - row.price) / row.price)
+                    print(liq_price, row.price)
                     ask_qty = -round_up(pos_size * stop_loss_pos_reduction, qty_step)
                     ask_price = ob[1]
                 else:                                                # no close
                     ask_qty = 0.0
                     ask_price = 9.9e9
             ob[1] = row.price
-            if row.price > shrt_liq_price:
-                print('shrt liquidation', row.price, shrt_liq_price, pos_size, pos_price)
+            if pos_size < 0.0 and liq_price and row.price > liq_price:
+                print('shrt liquidation', row.price, liq_price, pos_size, pos_price)
                 return []
             if row.price > ask_price:
                 if pos_size <= 0.0:
@@ -193,14 +209,19 @@ def backtest(df: pd.DataFrame, settings: dict):
                     pos_price = pos_price * (pos_size / new_pos_size) + \
                         ask_price * (ask_qty / new_pos_size)
                     pos_size = new_pos_size
-                    shrt_liq_price = calc_shrt_liq_price(margin_limit, pos_size, pos_price)
+                    liq_price = calc_liq_price(equity, pos_size, pos_price)
                     trades.append({'trade_id': row.Index, 'side': 'shrt', 'type': 'entry',
                                    'price': ask_price, 'qty': ask_qty, 'pnl': pnl,
                                    'pos_size': pos_size, 'pos_price': pos_price, 'roe': np.nan,
-                                   'margin_cost': margin_cost, 'liq_price': shrt_liq_price})
+                                   'margin_cost': margin_cost, 'liq_price': liq_price})
                     pnl_sum += pnl
+                    if compounding:
+                        equity += pnl
+                        default_qty = calc_default_qty(qty_step, min_qty, qty_equity_pct, equity)
                     line = f'\r{row.Index / len(df):.2f} pnl sum {pnl_sum:.6f} '
-                    line += f'liq distance {shrt_liq_price / row.price:.2f} '
+                    liq_dist = abs(liq_price - row.price) / row.price
+                    line += f'default qty {equity * qty_equity_pct:.6f} equity {equity:.6f} '
+                    line += f'liq distance {liq_dist:.2f} '
                     line += f'pos_size {pos_size:.3f} '
                     print(line, end='    ')
                 else:
@@ -211,14 +232,18 @@ def backtest(df: pd.DataFrame, settings: dict):
                     pnl = cost * gain - cost * maker_fee
                     pos_size += ask_qty
                     roe = gain * leverage
-                    long_liq_price = calc_long_liq_price(margin_limit, pos_size, pos_price)
+                    liq_price = calc_liq_price(equity, pos_size, pos_price)
                     trades.append({'trade_id': row.Index, 'side': 'long', 'type': 'close',
                                    'price': ask_price, 'qty': ask_qty, 'pnl': pnl,
                                    'pos_size': pos_size, 'pos_price': pos_price, 'roe': roe,
-                                   'margin_cost': margin_cost, 'liq_price': long_liq_price})
+                                   'margin_cost': margin_cost, 'liq_price': liq_price})
                     pnl_sum += pnl
+                    if compounding:
+                        equity += pnl
+                        default_qty = calc_default_qty(qty_step, min_qty, qty_equity_pct, equity)
                     line = f'\r{row.Index / len(df):.2f} pnl sum {pnl_sum:.6f} '
-                    liq_dist = row.price / long_liq_price if long_liq_price else 0.0
+                    liq_dist = abs(liq_price - row.price) / row.price
+                    line += f'default qty {equity * qty_equity_pct:.6f} equity {equity:.6f} '
                     line += f'liq distance {liq_dist:.2f} '
                     line += f'pos_size {pos_size:.3f} '
                     print(line, end='    ')
@@ -228,24 +253,27 @@ def backtest(df: pd.DataFrame, settings: dict):
 def jackrabbit(agg_trades: pd.DataFrame, exchange: str = 'bybit'):
     if exchange == 'bybit':
         settings = {
-            'break_on_loss': False,
-            'default_qty': 1.0,
-            'grid_coefficient': 198.0,
-            'grid_spacing': 0.002,
             'inverse': True,
-            'leverage': 100,
-            'liq_dist_threshold': 0.03,
             'maker_fee': -0.00025,
-            'margin_limit': 0.00154,
-            'markups': (0.0002, 0.016),
-            "min_markup": 0.0002, # will override min(markups) in backtest
-            'min_qty': 1.0,
-            'n_close_orders': 20,
-            'n_entry_orders': 10,
-            'stop_loss_pos_reduction': 0.05,
             'price_step': 0.5,
             'qty_step': 1.0,
-            'symbol': 'BTCUSD'
+            'symbol': 'BTCUSD',
+            'n_entry_orders': 10,
+            'leverage': 100,
+            'min_qty': 1.0,
+            
+            'break_on_loss': False,
+            'compounding': True,
+            'min_markup': 0.0002, # will override min(markups) in backtest
+            'stop_loss_pos_reduction': 0.02,
+            'qty_equity_pct': 2000,
+
+            'liq_dist_threshold': 0.02,
+            'margin_limit': 0.00154,
+            'grid_coefficient': 160.0,
+            'grid_spacing': 0.003,
+            'markups': (0.0002, 0.0159),
+            'n_close_orders': 17,
         }
     elif exchange == 'binance':
         # settings for binance
@@ -271,7 +299,7 @@ def jackrabbit(agg_trades: pd.DataFrame, exchange: str = 'bybit'):
 
     ranges = {
         'grid_spacing': (0.0005, 0.02, 0.0001),
-        'grid_coefficient': (0.0, 400, 0.01),
+        'grid_coefficient': (0.0, 800, 0.01),
     }
 
     tweakable = {
@@ -343,6 +371,7 @@ def jackrabbit(agg_trades: pd.DataFrame, exchange: str = 'bybit'):
                 continue
             tdf = pd.DataFrame(trades).set_index('trade_id')
             closest_liq = ((tdf.price - tdf.liq_price).abs() / tdf.price).min()
+            biggest_pos_size = tdf.pos_size.abs().max()
             n_closes = len(tdf[tdf.type == 'close'])
             pnl_sum = tdf.pnl.sum()
             loss_sum = tdf[tdf.pnl < 0.0].pnl.sum()
@@ -357,7 +386,8 @@ def jackrabbit(agg_trades: pd.DataFrame, exchange: str = 'bybit'):
             n_trades = len(tdf)
             result = {'n_closes': n_closes, 'pnl_sum': pnl_sum, 'loss_sum': loss_sum,
                       'max_margin_cost': max_margin_cost, 'average_daily_gain': average_daily_gain,
-                      'gain': gain, 'n_trades': n_trades, 'closest_liq': closest_liq}
+                      'gain': gain, 'n_trades': n_trades, 'closest_liq': closest_liq,
+                      'biggest_pos_size': biggest_pos_size}
             print('\n', result)
             results[key] = result
 
