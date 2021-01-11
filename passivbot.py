@@ -356,7 +356,7 @@ class Bot:
                 bid_price = min(self.ob[0], calc_long_reentry_price(self.price_step,
                                                                     self.grid_spacing,
                                                                     self.grid_coefficient,
-                                                                    self.position['equity'],
+                                                                    self.position['rounded_equity'],
                                                                     pos_margin,
                                                                     pos_price))
                 for k in range(self.n_entry_orders):
@@ -371,7 +371,7 @@ class Bot:
                     bid_price = min(self.ob[0], calc_long_reentry_price(self.price_step,
                                                                         self.grid_spacing,
                                                                         self.grid_coefficient,
-                                                                        self.position['equity'],
+                                                                        self.position['rounded_equity'],
                                                                         pos_margin,
                                                                         pos_price))
                 ask_qtys, ask_prices = calc_long_closes(self.price_step,
@@ -403,7 +403,7 @@ class Bot:
                 ask_price = max(self.ob[1], calc_shrt_reentry_price(self.price_step,
                                                                     self.grid_spacing,
                                                                     self.grid_coefficient,
-                                                                    self.position['equity'],
+                                                                    self.position['rounded_equity'],
                                                                     pos_margin,
                                                                     pos_price))
                 for k in range(self.n_entry_orders):
@@ -418,7 +418,7 @@ class Bot:
                     ask_price = max(self.ob[1], calc_shrt_reentry_price(self.price_step,
                                                                         self.grid_spacing,
                                                                         self.grid_coefficient,
-                                                                        self.position['equity'],
+                                                                        self.position['rounded_equity'],
                                                                         pos_margin,
                                                                         pos_price))
                 bid_qtys, bid_prices = calc_shrt_closes(self.price_step,
@@ -440,7 +440,7 @@ class Bot:
         await asyncio.sleep(0.1)
         await self.update_position()
         await asyncio.sleep(0.1)
-        n_orders_limit = 6
+        n_orders_limit = 4
         to_cancel, to_create = filter_orders(self.open_orders,
                                              self.calc_orders(),
                                              keys=['side', 'qty', 'price'])
