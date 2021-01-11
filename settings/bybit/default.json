@@ -5,7 +5,7 @@
     "leverage": 100,
     "markups": [0.0002, 0.0159],
     "n_close_orders": 20,
-    "n_entry_orders": 10,
+    "n_entry_orders": 8,
     "qty_equity_pct": 1400,
     "stop_loss_pos_reduction": 0.02,
     "symbol": "BTCUSD"
