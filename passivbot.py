@@ -22,6 +22,10 @@ def round_(n: float, step: float, safety_rounding=10) -> float:
     return np.round(np.round(n / step) * step, safety_rounding)
 
 
+def calc_diff(x, y):
+    return abs(x - y) / abs(y)
+
+
 def sort_dict_keys(d):
     if type(d) == list:
         return [sort_dict_keys(e) for e in d]
@@ -325,7 +329,7 @@ class Bot:
         self.stop_websocket = True
 
     def calc_orders(self):
-        max_diff_from_last_price = 1.12
+        last_price_diff_limit = 0.05
         orders = []
         default_qty = self.default_qty = calc_default_qty(self.qty_step,
                                                           self.min_qty,
@@ -335,7 +339,7 @@ class Bot:
             bid_price = self.ob[0]
             ask_price = self.ob[1]
             for k in range(max(5, self.n_entry_orders // 2)):
-                if self.price / bid_price > max_diff_from_last_price:
+                if calc_diff(bid_price, self.price) > last_price_diff_limit:
                     break
                 orders.append({'side': 'buy', 'qty': default_qty, 'price': bid_price})
                 orders.append({'side': 'sell', 'qty': default_qty, 'price': ask_price})
@@ -365,7 +369,7 @@ class Bot:
                         bid_price * (pos_size / new_pos_size)
                     pos_size = new_pos_size
                     pos_margin = self.calc_margin_cost(pos_size, pos_price)
-                    if self.price / bid_price > max_diff_from_last_price:
+                    if calc_diff(bid_price, self.price) > last_price_diff_limit:
                         break
                     orders.append({'side': 'buy', 'qty': default_qty, 'price': bid_price})
                     bid_price = min(self.ob[0], calc_long_reentry_price(self.price_step,
@@ -385,7 +389,8 @@ class Bot:
                                                         self.n_close_orders)
                 close_orders = sorted([{'side': 'sell', 'qty': abs_qty, 'price': float(price_)}
                                        for qty_, price_ in zip(ask_qtys, ask_prices)
-                                       if (abs_qty := abs(float(qty_))) > 0.0],
+                                       if (abs_qty := abs(float(qty_))) > 0.0
+                                       and calc_diff(price_, self.price) < last_price_diff_limit],
                                       key=lambda x: x['price'])[:self.n_entry_orders]
                 orders += close_orders
         else: # shrt pos
@@ -412,7 +417,7 @@ class Bot:
                         ask_price * (pos_size / new_pos_size)
                     pos_size = new_pos_size
                     pos_margin = self.calc_margin_cost(-pos_size, pos_price)
-                    if ask_price / self.price > max_diff_from_last_price:
+                    if calc_diff(ask_price, self.price) > last_price_diff_limit:
                         break
                     orders.append({'side': 'sell', 'qty': default_qty, 'price': ask_price})
                     ask_price = max(self.ob[1], calc_shrt_reentry_price(self.price_step,
