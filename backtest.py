@@ -188,8 +188,6 @@ def backtest(df: pd.DataFrame, settings: dict):
                         print('break on loss')
                         return []
                     # controlled long loss
-                    print(abs(liq_price - row.price) / row.price)
-                    print(liq_price, row.price)
                     ask_qty = -round_up(pos_size * stop_loss_pos_reduction, qty_step)
                     ask_price = ob[1]
                 else:                                                # no close
@@ -266,14 +264,14 @@ def jackrabbit(agg_trades: pd.DataFrame, exchange: str = 'bybit'):
             'compounding': True,
             'min_markup': 0.0002, # will override min(markups) in backtest
             'stop_loss_pos_reduction': 0.02,
-            'qty_equity_pct': 2000,
-
-            'liq_dist_threshold': 0.02,
+            'n_close_orders': 17,
             'margin_limit': 0.00154,
+            'markups': (0.0002, 0.0159),
+            'liq_dist_threshold': 0.02,
+
+            'qty_equity_pct': 2000,
             'grid_coefficient': 160.0,
             'grid_spacing': 0.003,
-            'markups': (0.0002, 0.0159),
-            'n_close_orders': 17,
         }
     elif exchange == 'binance':
         # settings for binance
@@ -300,11 +298,13 @@ def jackrabbit(agg_trades: pd.DataFrame, exchange: str = 'bybit'):
     ranges = {
         'grid_spacing': (0.0005, 0.02, 0.0001),
         'grid_coefficient': (0.0, 800, 0.01),
+        'qty_equity_pct': (0.0, 10000, 10),
     }
 
     tweakable = {
         'grid_spacing': 0.0,
         'grid_coefficient': 0.0,
+        'qty_equity_pct': 0.0,
     }
 
     best = {}
