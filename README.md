@@ -1,5 +1,5 @@
 # passivbot_futures
-trading bot running on bybit inverse futures and binance usdt futures
+trading bot running on bybit inverse futures
 
 use at own risk
 
@@ -21,7 +21,7 @@ released freely -- anybody may copy, redistribute, modify, use for commercial, n
 
 usage:
 
-supports exchanges bybit and binance
+supports exchange bybit, binance support maybe added in future
 
 add api key and secret as json file in dir `api_key_secret/{exchange}/your_user_name.json`
 
@@ -38,7 +38,7 @@ run in terminal: `python3 {exchange}.py your_user_name`
 ------------------------------------------------------------------
 overview
 
-the bot's purpose is to accumulate btc in bybit inverse, usdt in binance usdt futures
+the bot's purpose is to accumulate btc in bybit inverse
 
 it is a market maker bot, making a grid of limit orders above and below price
 
@@ -64,18 +64,19 @@ and run backtester.py:
 
 settings, bybit example:
 
-
 {
-        
-        'default_qty': 1.0                  # entry qty
-        'grid_step': 25.0                   # grid price spacing
-        'leverage': 100.0,                  # leverage (irrelevant in bybit because cross mode in is always 100x leverage)
-        'margin_limit': 0.001,              # limits the bot's max allowed pos_size.  set it lower than actual account balance
-        'markups': [0.0005, 0.01],          # when there's a position, bot makes a grid of n_close_orders whose prices are
-                                            # evenly distributed between min and max markup, and whose qtys are pos_size // n_close_orders
-        'n_close_orders': 10,               # max n close orders
-        'n_entry_orders': 10,               # max n entry orders
-        'symbol': 'BTCUSD'                  # only one symbol at a time
+
+    "grid_coefficient": 160.0,
+    "grid_spacing": 0.003,                # next entry price is pos_price * (1 +- grid_spacing * (1 + pos_margin / account_equity * grid_coefficient))
+    "liq_dist_threshold": 0.02,           # if difference between liquidation price and last price is less than 2%, reduce position by 2% at a loss
+    "leverage": 100,                      # leverage (irrelevant in bybit because cross mode in is always 100x leverage)
+    "markups": [0.0002, 0.0159],          # when there's a position, bot makes a grid of n_close_orders whose prices are
+                                          # evenly distributed between min and max markup, and whose qtys are pos_size // n_close_orders
+    "n_close_orders": 20,,                # max n close orders
+    "n_entry_orders": 10,,                # max n entry orders
+    "qty_equity_pct": 1400,               # entry quantity is round_dn(account_equity * qty_equity_pct)
+    "stop_loss_pos_reduction": 0.02,      # if difference between liquidation price and last price is less than 2%, reduce position by 2% at a loss
+    "symbol": "BTCUSD"                    # only one symbol at a time
 
 }
 
