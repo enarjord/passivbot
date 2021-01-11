@@ -46,12 +46,12 @@ def calc_cross_shrt_liq_price(equity,
     order_margin = order_cost / leverage
     bankruptcy_price = calc_cross_shrt_bankruptcy_price(_pos_size, order_cost, equity, order_margin)
     if bankruptcy_price == 0.0:
-        return 9e9
+        return 0.0
     rhs = -(equity - order_margin - (_pos_size / pos_price) * mm - \
         (_pos_size * 0.00075) / bankruptcy_price)
     shrt_liq_price = (pos_price * _pos_size) / (pos_price * rhs + _pos_size)
     if shrt_liq_price <= 0.0:
-        return 9e9
+        return 0.0
     return shrt_liq_price
 
 
