@@ -131,6 +131,7 @@ class BinanceBot(Bot):
             if e['asset'] == 'USDT':
                 position['equity'] = float(e['balance'])
                 break
+        position['rounded_equity'] = round_dn(position['equity'], 1)
         return position
 
     async def execute_bid(self, qty: float, price: float) -> dict:
