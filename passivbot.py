@@ -37,10 +37,10 @@ def sort_dict_keys(d):
 def calc_long_reentry_price(price_step: float,
                             grid_spacing: float,
                             grid_coefficient: float,
-                            equity: float,
+                            balance: float,
                             pos_margin: float,
                             pos_price: float):
-    modified_grid_spacing = grid_spacing * (1 + pos_margin / equity * grid_coefficient)
+    modified_grid_spacing = grid_spacing * (1 + pos_margin / balance * grid_coefficient)
     return round_dn(pos_price * (1 - modified_grid_spacing),
                     round_up(pos_price * grid_spacing / 4, price_step))
 
@@ -48,10 +48,10 @@ def calc_long_reentry_price(price_step: float,
 def calc_shrt_reentry_price(price_step: float,
                             grid_spacing: float,
                             grid_coefficient: float,
-                            equity: float,
+                            balance: float,
                             pos_margin: float,
                             pos_price: float):
-    modified_grid_spacing = grid_spacing * (1 + pos_margin / equity * grid_coefficient)
+    modified_grid_spacing = grid_spacing * (1 + pos_margin / balance * grid_coefficient)
     return round_up(pos_price * (1 + modified_grid_spacing),
                     round_up(pos_price * grid_spacing / 4, price_step))
 
@@ -363,7 +363,7 @@ class Bot:
             bid_price = self.pgrdn(self.ob[0])
             ask_price = self.pgrup(self.ob[1])
             for k in range(max(5, self.n_entry_orders // 2)):
-                if self.price / bid_price > max_diff_from_last_price:
+                if calc_diff(bid_price, self.price) > last_price_diff_limit:
                     break
                 orders.append({'side': 'buy', 'qty': self.default_qty, 'price': bid_price})
                 orders.append({'side': 'sell', 'qty': self.default_qty, 'price': ask_price})
