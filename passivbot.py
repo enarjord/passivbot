@@ -37,10 +37,10 @@ def sort_dict_keys(d):
 def calc_long_reentry_price(price_step: float,
                             grid_spacing: float,
                             grid_coefficient: float,
-                            margin_limit: float,
+                            equity: float,
                             pos_margin: float,
                             pos_price: float):
-    modified_grid_spacing = grid_spacing * (1 + pos_margin / margin_limit * grid_coefficient)
+    modified_grid_spacing = grid_spacing * (1 + pos_margin / equity * grid_coefficient)
     return round_dn(pos_price * (1 - modified_grid_spacing),
                     round_up(pos_price * grid_spacing / 4, price_step))
 
@@ -48,10 +48,10 @@ def calc_long_reentry_price(price_step: float,
 def calc_shrt_reentry_price(price_step: float,
                             grid_spacing: float,
                             grid_coefficient: float,
-                            margin_limit: float,
+                            equity: float,
                             pos_margin: float,
                             pos_price: float):
-    modified_grid_spacing = grid_spacing * (1 + pos_margin / margin_limit * grid_coefficient)
+    modified_grid_spacing = grid_spacing * (1 + pos_margin / equity * grid_coefficient)
     return round_up(pos_price * (1 + modified_grid_spacing),
                     round_up(pos_price * grid_spacing / 4, price_step))
 
@@ -72,7 +72,7 @@ def calc_long_closes(price_step: float,
                      pos_price: float,
                      lowest_ask: float,
                      n_orders: int = 10,
-                     single_order_price_diff_threshold: float = 1.003):
+                     single_order_price_diff_threshold: float = 0.003):
     n_orders = int(round(min(n_orders, pos_size / min_qty)))
     prices = round_up(np.linspace(pos_price * (1 + min_markup), pos_price * (1 + max_markup),
                                   n_orders),
@@ -83,7 +83,7 @@ def calc_long_closes(price_step: float,
         return np.array([-pos_size]), np.array([lowest_ask])
     elif len(prices) == 1:
         return np.array([-pos_size]), prices
-    elif prices[1] / prices[0] > single_order_price_diff_threshold:
+    elif calc_diff(prices[1], prices[0]) > single_order_price_diff_threshold:
         # too great spacing between prices, return single order
         return (np.array([-pos_size]), 
                 np.array([max(lowest_ask, round_up(pos_price * (1 + min_markup), price_step))]))
@@ -107,7 +107,7 @@ def calc_shrt_closes(price_step: float,
                      pos_price: float,
                      highest_bid: float,
                      n_orders: int = 10,
-                     single_order_price_diff_threshold: float = 1.003):
+                     single_order_price_diff_threshold: float = 0.003):
     abs_pos_size = abs(pos_size)
     n_orders = int(round(min(n_orders, abs_pos_size / min_qty)))
     prices = round_dn(np.linspace(pos_price * (1 - min_markup), pos_price * (1 - max_markup),
@@ -119,7 +119,7 @@ def calc_shrt_closes(price_step: float,
         return np.array([-pos_size]), np.array([highest_bid])
     elif len(prices) == 1:
         return np.array([-pos_size]), prices
-    elif prices[0] / prices[1] > single_order_price_diff_threshold:
+    elif calc_diff(prices[0], prices[1]) > single_order_price_diff_threshold:
         # too great spacing between prices, return single order
         return (np.array([-pos_size]),
                 np.array([min(highest_bid, round_dn(pos_price * (1 - min_markup), price_step))]))
@@ -226,12 +226,13 @@ class Bot:
         self.user = user
         self.symbol = settings['symbol']
         self.leverage = settings['leverage']
-        self.liq_dist_threshold = settings['liq_dist_threshold']
+        self.liq_diff_threshold = settings['liq_diff_threshold']
         self.stop_loss_pos_reduction = settings['stop_loss_pos_reduction']
         self.grid_spacing = settings['grid_spacing']
         self.grid_coefficient = settings['grid_coefficient']
         self.min_markup = sorted(settings['markups'])[0]
         self.max_markup = sorted(settings['markups'])[-1]
+        self.margin_limit = settings['margin_limit']
         self.n_entry_orders = settings['n_entry_orders']
         self.n_close_orders = settings['n_close_orders']
         self.qty_equity_pct = settings['qty_equity_pct']
@@ -334,7 +335,7 @@ class Bot:
         default_qty = self.default_qty = calc_default_qty(self.qty_step,
                                                           self.min_qty,
                                                           self.qty_equity_pct,
-                                                          self.position['equity'])
+                                                          self.margin_limit)
         if self.position['size'] == 0: # no pos
             bid_price = self.ob[0]
             ask_price = self.ob[1]
@@ -346,8 +347,7 @@ class Bot:
                 bid_price = round_dn(bid_price * (1 - self.grid_spacing), self.price_step)
                 ask_price = round_up(ask_price * (1 + self.grid_spacing), self.price_step)
         elif self.position['size'] > 0.0: # long pos
-            if abs(self.position['liquidation_price'] - self.price) / self.price < \
-                    self.liq_dist_threshold:
+            if calc_diff(self.position['liquidation_price'], self.price) < self.liq_diff_threshold:
                 # controlled long loss
                 orders.append({'side': 'sell',
                                'qty': round_up(self.position['size'] * self.stop_loss_pos_reduction,
@@ -360,7 +360,7 @@ class Bot:
                 bid_price = min(self.ob[0], calc_long_reentry_price(self.price_step,
                                                                     self.grid_spacing,
                                                                     self.grid_coefficient,
-                                                                    self.position['rounded_equity'],
+                                                                    self.margin_limit,
                                                                     pos_margin,
                                                                     pos_price))
                 for k in range(self.n_entry_orders):
@@ -375,7 +375,7 @@ class Bot:
                     bid_price = min(self.ob[0], calc_long_reentry_price(self.price_step,
                                                                         self.grid_spacing,
                                                                         self.grid_coefficient,
-                                                                        self.position['rounded_equity'],
+                                                                        self.margin_limit,
                                                                         pos_margin,
                                                                         pos_price))
                 ask_qtys, ask_prices = calc_long_closes(self.price_step,
@@ -394,8 +394,7 @@ class Bot:
                                       key=lambda x: x['price'])[:self.n_entry_orders]
                 orders += close_orders
         else: # shrt pos
-            if abs(self.position['liquidation_price'] - self.price) / self.price < \
-                    self.liq_dist_threshold:
+            if calc_diff(self.position['liquidation_price'], self.price) < self.liq_diff_threshold:
                 # controlled shrt loss
                 orders.append({'side': 'buy',
                                'qty': round_up(-self.position['size'] * self.stop_loss_pos_reduction,
@@ -408,7 +407,7 @@ class Bot:
                 ask_price = max(self.ob[1], calc_shrt_reentry_price(self.price_step,
                                                                     self.grid_spacing,
                                                                     self.grid_coefficient,
-                                                                    self.position['rounded_equity'],
+                                                                    self.margin_limit,
                                                                     pos_margin,
                                                                     pos_price))
                 for k in range(self.n_entry_orders):
@@ -423,7 +422,7 @@ class Bot:
                     ask_price = max(self.ob[1], calc_shrt_reentry_price(self.price_step,
                                                                         self.grid_spacing,
                                                                         self.grid_coefficient,
-                                                                        self.position['rounded_equity'],
+                                                                        self.margin_limit,
                                                                         pos_margin,
                                                                         pos_price))
                 bid_qtys, bid_prices = calc_shrt_closes(self.price_step,
@@ -449,8 +448,8 @@ class Bot:
         to_cancel, to_create = filter_orders(self.open_orders,
                                              self.calc_orders(),
                                              keys=['side', 'qty', 'price'])
-        to_cancel = sorted(to_cancel, key=lambda x: abs(x['price'] - self.price) / self.price)
-        to_create = sorted(to_create, key=lambda x: abs(x['price'] - self.price) / self.price)
+        to_cancel = sorted(to_cancel, key=lambda x: calc_diff(x['price'], self.price))
+        to_create = sorted(to_create, key=lambda x: calc_diff(x['price'], self.price))
         tasks = []
         if to_cancel:
             tasks.append(self.cancel_orders(to_cancel[:n_orders_limit]))
@@ -496,8 +495,8 @@ class Bot:
                 ratio = 1 - (self.price - self.highest_bid) / (self.lowest_ask - self.highest_bid)
                 line += f"exit {self.highest_bid} ddown {self.lowest_ask } "
 
-            liq_dist = abs(self.price - self.position['liquidation_price']) / self.price
-            line += f"pct {ratio:.2f} liq_dist {liq_dist:.3f} last {self.price}   "
+            liq_diff = calc_diff(self.position['liquidation_price'], self.price)
+            line += f"pct {ratio:.2f} liq_diff {liq_diff:.3f} last {self.price}   "
             print_([line], r=True)
 
 
