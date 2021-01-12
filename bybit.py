@@ -202,6 +202,28 @@ class BybitBot(Bot):
                 'qty': o['result']['qty'],
                 'price': o['result']['price']}
 
+    async def execute_market_buy(self, qty: float):
+        o = await self.cc.private_post_order_create(
+            params={'symbol': self.symbol, 'side': 'Buy', 'order_type': 'Market',
+                    'time_in_force': 'GoodTillCancel', 'qty': qty, 'reduce_only': True}
+        )
+        return {'symbol': o['result']['symbol'],
+                'side': 'buy',
+                'type': 'market',
+                'qty': o['result']['qty'],
+                'price': o['result']['price']}
+
+    async def execute_market_sell(self, qty: float):
+        o = await self.cc.private_post_order_create(
+            params={'symbol': self.symbol, 'side': 'Sell', 'order_type': 'Market',
+                    'time_in_force': 'GoodTillCancel', 'qty': qty, 'reduce_only': True}
+        )
+        return {'symbol': o['result']['symbol'],
+                'side': 'buy',
+                'type': 'market',
+                'qty': o['result']['qty'],
+                'price': o['result']['price']}
+
     async def execute_cancellation(self, id_: [dict]) -> [dict]:
         o = await self.cc.private_post_order_cancel(
             params={'symbol': self.symbol, 'order_id': id_}
