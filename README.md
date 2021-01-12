@@ -38,7 +38,7 @@ run in terminal: `python3 {exchange}.py your_user_name`
 ------------------------------------------------------------------
 overview
 
-the bot's purpose is to accumulate btc in bybit inverse and usdt in binance usdt futures
+the bot's purpose is to accumulate btc (or another coin) in bybit inverse and usdt in binance usdt futures
 
 it is a market maker bot, making a grid of limit orders above and below price
 
