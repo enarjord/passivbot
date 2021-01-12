@@ -71,30 +71,30 @@ class BinanceBot(Bot):
         self.ob = [float(ticker['bidPrice']), float(ticker['askPrice'])]
         self.price = np.random.choice(self.ob)
 
-    def calc_entry_qty(self, equity_, pos_size_, pos_price_):
+    def calc_entry_qty(self, balance_, pos_size_, pos_price_):
         return calc_entry_qty(self.qty_step,
                               self.min_qty,
                               self.ddown_factor,
                               self.leverage,
-                              equity_,
+                              balance_,
                               pos_size_,
                               1 / pos_price_)
 
-    def calc_long_entry_price(self, equity_, pos_size_, pos_price_):
+    def calc_long_entry_price(self, balance_, pos_size_, pos_price_):
         return calc_long_entry_price(self.price_step,
                                      self.leverage,
                                      self.grid_spacing,
                                      self.grid_spacing_coefficient,
-                                     equity_,
+                                     balance_,
                                      pos_size_ * pos_price_**2,
                                      pos_price_)
 
-    def calc_shrt_entry_price(self, equity_, pos_size_, pos_price_):
+    def calc_shrt_entry_price(self, balance_, pos_size_, pos_price_):
         return calc_shrt_entry_price(self.price_step,
                                      self.leverage,
                                      self.grid_spacing,
                                      self.grid_spacing_coefficient,
-                                     equity_,
+                                     balance_,
                                      pos_size_ * pos_price_**2,
                                      pos_price_)
 
@@ -129,9 +129,8 @@ class BinanceBot(Bot):
         position['margin_cost'] = position['cost'] / self.leverage
         for e in balance:
             if e['asset'] == 'USDT':
-                position['equity'] = float(e['balance'])
+                position['balance'] = float(e['balance'])
                 break
-        position['rounded_equity'] = round_dn(position['equity'], 1)
         return position
 
     async def execute_bid(self, qty: float, price: float) -> dict:
