@@ -284,9 +284,16 @@ class Bot:
         for oc in sorted(orders_to_create, key=lambda x: x['qty']):
             try:
                 if oc['side'] == 'buy':
-                    creations.append(self.execute_bid(oc['qty'], oc['price']))
+                    if 'type' in oc and oc['type'] == 'market':
+                        creations.append(self.execute_market_buy(oc['qty']))
+                    else:
+                        creations.append(self.execute_bid(oc['qty'], oc['price']))
+
                 else:
-                    creations.append(self.execute_ask(oc['qty'], oc['price']))
+                    if 'type' in oc and oc['type'] == 'market':
+                        creations.append(self.execute_market_sell(oc['qty']))
+                    else:
+                        creations.append(self.execute_ask(oc['qty'], oc['price']))
             except Exception as e:
                 print('error creating orders a', orders_to_create, e)
         try:
@@ -333,13 +340,13 @@ class Bot:
         if calc_diff(self.position['liquidation_price'], self.price) < self.liq_diff_threshold:
             if self.position['size'] > 0.0:
                 # controlled long loss
-                return [{'side': 'sell',
+                return [{'side': 'sell', 'type': 'market',
                          'qty': round_up(self.position['size'] * self.stop_loss_pos_reduction,
                                          self.qty_step),
                          'price': self.ob[1]}]
             else:
                 # controlled shrt loss
-                return [{'side': 'buy',
+                return [{'side': 'buy', 'type': 'market',
                          'qty': round_up(-self.position['size'] * self.stop_loss_pos_reduction,
                                          self.qty_step),
                          'price': self.ob[0]}]
