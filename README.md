@@ -66,15 +66,18 @@ settings, bybit example:
 
 {
 
-    "grid_coefficient": 160.0,
-    "grid_spacing": 0.003,                # next entry price is pos_price * (1 +- grid_spacing * (1 + pos_margin / account_equity * grid_coefficient))
-    "liq_dist_threshold": 0.02,           # if difference between liquidation price and last price is less than 2%, reduce position by 2% at a loss
+    "dynamic_grid": True,                 # bot has two modes: dynamic grid and static grid.
+    "grid_coefficient": 160.0,            # used in dynamic grid mode.
+    "grid_spacing": 0.003,                # used in dynamic grid mode.
+                                          # next entry price is pos_price * (1 +- grid_spacing * (1 + pos_margin / account_equity * grid_coefficient))
+    "liq_diff_threshold": 0.02,           # if difference between liquidation price and last price is less than 2%, reduce position by 2% at a loss
     "leverage": 100,                      # leverage (irrelevant in bybit because cross mode in is always 100x leverage)
-    "markups": [0.0002, 0.0159],          # when there's a position, bot makes a grid of n_close_orders whose prices are
-                                          # evenly distributed between min and max markup, and whose qtys are pos_size // n_close_orders
-    "n_close_orders": 20,,                # max n close orders
-    "n_entry_orders": 10,,                # max n entry orders
-    "qty_equity_pct": 1400,               # entry quantity is round_dn(account_equity * qty_equity_pct)
+    "min_markup": 0.0002,                 # when there's a position, bot makes a grid of n_close_orders whose prices are
+    "max_markup": 0.0159,                 # evenly distributed between min and max markup, and whose qtys are pos_size // n_close_orders
+                                          
+    "n_close_orders": 20,                 # max n close orders
+    "n_entry_orders": 10,                 # max n entry orders
+    "default_qty": 1.0,                   # entry quantity
     "stop_loss_pos_reduction": 0.02,      # if difference between liquidation price and last price is less than 2%, reduce position by 2% at a loss
     "symbol": "BTCUSD"                    # only one symbol at a time
 
