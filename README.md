@@ -1,5 +1,5 @@
 # passivbot_futures
-trading bot running on bybit inverse futures
+trading bot running on bybit inverse futures and binance usdt futures
 
 use at own risk
 
@@ -21,7 +21,7 @@ released freely -- anybody may copy, redistribute, modify, use for commercial, n
 
 usage:
 
-supports exchange bybit, binance support maybe added in future
+supports exchanges bybit inverse and binance usdt futures
 
 add api key and secret as json file in dir `api_key_secret/{exchange}/your_user_name.json`
 
@@ -38,11 +38,17 @@ run in terminal: `python3 {exchange}.py your_user_name`
 ------------------------------------------------------------------
 overview
 
-the bot's purpose is to accumulate btc in bybit inverse
+the bot's purpose is to accumulate btc in bybit inverse and usdt in binance usdt futures
 
 it is a market maker bot, making a grid of limit orders above and below price
 
 it listens to websocket live stream of trades, and updates its orders continuously
+
+there are two modes, static grid and dynamic grid, set by user in settings
+
+static grid mode places entries at fixed absolute price intervals
+
+dynamic grid mode places entries at a percentage distance from position price, modified by pos_margin / margin_limit
 
 ------------------------------------------------------------------
 
@@ -50,7 +56,7 @@ a backtester is included
 
 use backtesting_notes.ipynb in jupyter notebook or jupiter-lab
 
-to test multiple settings,
+to iterate multiple settings,
 
 open backtester.py, go to def jackrabbit, adjust starting settings, n_iterations, ranges, etc
 
@@ -66,19 +72,24 @@ settings, bybit example:
 
 {
 
-    "dynamic_grid": True,                 # bot has two modes: dynamic grid and static grid.
+    "default_qty": 1.0,                   # entry quantity
+    "dynamic_grid": True,                 # bot has two modes: dynamic grid and static grid. True for dynamic mode, False for static mode.
     "grid_coefficient": 160.0,            # used in dynamic grid mode.
     "grid_spacing": 0.003,                # used in dynamic grid mode.
-                                          # next entry price is pos_price * (1 +- grid_spacing * (1 + pos_margin / account_equity * grid_coefficient))
-    "liq_diff_threshold": 0.02,           # if difference between liquidation price and last price is less than 2%, reduce position by 2% at a loss
+                                          # next entry price is pos_price * (1 +- grid_spacing * (1 + pos_margin / margin_limit * grid_coefficient))
+                                          
+    "liq_diff_threshold": 0.02,           # if difference between liquidation price and last price is less than 2%, reduce position by 2% at a loss,
+    "stop_loss_pos_reduction": 0.02,      # reduce position by 2% at a loss
+    
+    
     "leverage": 100,                      # leverage (irrelevant in bybit because cross mode in is always 100x leverage)
     "min_markup": 0.0002,                 # when there's a position, bot makes a grid of n_close_orders whose prices are
     "max_markup": 0.0159,                 # evenly distributed between min and max markup, and whose qtys are pos_size // n_close_orders
+    
+    "margin_limit": 0.0015                # keep this lower than actual account equity
                                           
     "n_close_orders": 20,                 # max n close orders
     "n_entry_orders": 10,                 # max n entry orders
-    "default_qty": 1.0,                   # entry quantity
-    "stop_loss_pos_reduction": 0.02,      # if difference between liquidation price and last price is less than 2%, reduce position by 2% at a loss
     "symbol": "BTCUSD"                    # only one symbol at a time
 
 }
