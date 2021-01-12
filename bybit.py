@@ -17,26 +17,26 @@ from passivbot import init_ccxt, load_key_secret, load_settings, make_get_filepa
 from binance import fetch_trades as fetch_trades_binance
 
 
-def calc_cross_long_liq_price(equity,
+def calc_cross_long_liq_price(balance,
                               pos_size,
                               pos_price,
                               mm=0.005,
                               leverage=100):
     order_cost = pos_size / pos_price
     order_margin = order_cost / leverage
-    bankruptcy_price = calc_cross_long_bankruptcy_price(pos_size, order_cost, equity, order_margin)
+    bankruptcy_price = calc_cross_long_bankruptcy_price(pos_size, order_cost, balance, order_margin)
     if bankruptcy_price == 0.0:
         return 0.0
-    rhs = -(equity - order_margin - (pos_size / pos_price) * mm - \
+    rhs = -(balance - order_margin - (pos_size / pos_price) * mm - \
         (pos_size * 0.00075) / bankruptcy_price)
     return (pos_price * pos_size) / (pos_size - pos_price * rhs)
 
 
-def calc_cross_long_bankruptcy_price(pos_size, order_cost, equity, order_margin):
-    return (1.00075 * pos_size) / (order_cost + (equity - order_margin))
+def calc_cross_long_bankruptcy_price(pos_size, order_cost, balance, order_margin):
+    return (1.00075 * pos_size) / (order_cost + (balance - order_margin))
 
 
-def calc_cross_shrt_liq_price(equity,
+def calc_cross_shrt_liq_price(balance,
                               pos_size,
                               pos_price,
                               mm=0.005,
@@ -44,10 +44,10 @@ def calc_cross_shrt_liq_price(equity,
     _pos_size = abs(pos_size)
     order_cost = _pos_size / pos_price
     order_margin = order_cost / leverage
-    bankruptcy_price = calc_cross_shrt_bankruptcy_price(_pos_size, order_cost, equity, order_margin)
+    bankruptcy_price = calc_cross_shrt_bankruptcy_price(_pos_size, order_cost, balance, order_margin)
     if bankruptcy_price == 0.0:
         return 0.0
-    rhs = -(equity - order_margin - (_pos_size / pos_price) * mm - \
+    rhs = -(balance - order_margin - (_pos_size / pos_price) * mm - \
         (_pos_size * 0.00075) / bankruptcy_price)
     shrt_liq_price = (pos_price * _pos_size) / (pos_price * rhs + _pos_size)
     if shrt_liq_price <= 0.0:
@@ -55,8 +55,8 @@ def calc_cross_shrt_liq_price(equity,
     return shrt_liq_price
 
 
-def calc_cross_shrt_bankruptcy_price(pos_size, order_cost, equity, order_margin):
-    return (0.99925 * pos_size) / (order_cost - (equity - order_margin))
+def calc_cross_shrt_bankruptcy_price(pos_size, order_cost, balance, order_margin):
+    return (0.99925 * pos_size) / (order_cost - (balance - order_margin))
 
 
 async def fetch_trades(cc, symbol: str, from_id: int = None) -> [dict]:
@@ -124,30 +124,30 @@ class BybitBot(Bot):
         self.ob = [float(ticker['result'][0]['bid_price']), float(ticker['result'][0]['ask_price'])]
         self.price = float(ticker['result'][0]['last_price'])
 
-    def calc_entry_qty(self, equity_, pos_size_, pos_price_):
+    def calc_entry_qty(self, balance_, pos_size_, pos_price_):
         return calc_entry_qty(self.qty_step,
                               self.min_qty,
                               self.ddown_factor,
                               self.leverage,
-                              equity_,
+                              balance_,
                               pos_size_,
                               pos_price_)
 
-    def calc_long_entry_price(self, equity_, pos_size_, pos_price_):
+    def calc_long_entry_price(self, balance_, pos_size_, pos_price_):
         return calc_long_entry_price(self.price_step,
                                      self.leverage,
                                      self.grid_spacing,
                                      self.grid_spacing_coefficient,
-                                     equity_,
+                                     balance_,
                                      pos_size_,
                                      pos_price_)
 
-    def calc_shrt_entry_price(self, equity_, pos_size_, pos_price_):
+    def calc_shrt_entry_price(self, balance_, pos_size_, pos_price_):
         return calc_shrt_entry_price(self.price_step,
                                      self.leverage,
                                      self.grid_spacing,
                                      self.grid_spacing_coefficient,
-                                     equity_,
+                                     balance_,
                                      pos_size_,
                                      pos_price_)
 
@@ -174,10 +174,9 @@ class BybitBot(Bot):
                   'price': float(pos['entry_price']),
                   'leverage': float(pos['leverage']),
                   'liquidation_price': float(pos['liq_price']),
-                  'equity': balance['result'][self.coin]['equity']}
+                  'balance': balance['result'][self.coin]['wallet_balance']}
         result['cost'] = abs(result['size']) / result['price'] if result['price'] else 0.0
         result['margin_cost'] = result['cost'] / self.leverage
-        result['rounded_equity'] = round_dn(result['equity'], 0.0001)
         return result
 
     async def execute_bid(self, qty: float, price: float) -> dict:
