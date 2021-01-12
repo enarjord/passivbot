@@ -66,10 +66,8 @@ def backtest(df: pd.DataFrame, settings: dict):
 
     maker_fee = settings['maker_fee']
 
-    min_markup = settings['min_markup'] \
-        if 'min_markup' in settings else sorted(settings['markups'])[0]
-    max_markup = sorted(settings['markups'])[-1]
-    print('min max markups', min_markup, max_markup)
+    min_markup = settings['min_markup']
+    max_markup = settings['max_markup']
     print('dynamic grid' if settings['dynamic_grid'] else 'static grid')
     n_close_orders = settings['n_close_orders']
 
@@ -140,7 +138,7 @@ def backtest(df: pd.DataFrame, settings: dict):
                                    'margin_cost': margin_cost, 'liq_price': liq_price})
                     pnl_sum += pnl
                     if compounding:
-                        equity += pnl
+                        equity = max(margin_limit, equity + pnl)
                     line = f'\r{row.Index / len(df):.2f} pnl sum {pnl_sum:.6f} '
                     liq_diff = abs(liq_price - row.price) / row.price
                     line += f'equity {equity:.6f} '
@@ -162,7 +160,7 @@ def backtest(df: pd.DataFrame, settings: dict):
                                    'margin_cost': margin_cost, 'liq_price': liq_price})
                     pnl_sum += pnl
                     if compounding:
-                        equity += pnl
+                        equity = max(margin_limit, equity + pnl)
                     line = f'\r{row.Index / len(df):.2f} pnl sum {pnl_sum:.6f} '
                     liq_diff = abs(liq_price - row.price) / row.price
 
@@ -221,7 +219,7 @@ def backtest(df: pd.DataFrame, settings: dict):
                                    'margin_cost': margin_cost, 'liq_price': liq_price})
                     pnl_sum += pnl
                     if compounding:
-                        equity += pnl
+                        equity = max(margin_limit, equity + pnl)
                     line = f'\r{row.Index / len(df):.2f} pnl sum {pnl_sum:.6f} '
                     liq_diff = abs(liq_price - row.price) / row.price
                     line += f'equity {equity:.6f} '
@@ -243,7 +241,7 @@ def backtest(df: pd.DataFrame, settings: dict):
                                    'margin_cost': margin_cost, 'liq_price': liq_price})
                     pnl_sum += pnl
                     if compounding:
-                        equity += pnl
+                        equity = max(margin_limit, equity + pnl)
                     line = f'\r{row.Index / len(df):.2f} pnl sum {pnl_sum:.6f} '
                     liq_diff = abs(liq_price - row.price) / row.price
                     line += f'equity {equity:.6f} '
@@ -265,10 +263,12 @@ def jackrabbit(agg_trades: pd.DataFrame, exchange: str = 'bybit'):
             'n_entry_orders': 10,
             'leverage': 100,
             'min_qty': 1.0,
+
+            'dynamic_grid': True,
             
             'break_on_loss': True,
             'compounding': False,
-            'min_markup': 0.0002, # will override min(markups) in backtest
+            'min_markup': 0.0002,
             'margin_limit': 0.00194,
 
             'default_qty': 2.0,
@@ -276,7 +276,8 @@ def jackrabbit(agg_trades: pd.DataFrame, exchange: str = 'bybit'):
 
             'grid_coefficient': 100.89,
             'grid_spacing': 0.0054,
-            'markups': (0.0002, 0.0159),
+            'grid_step': 116.5,
+            'max_markup': 0.0159,
             'n_close_orders': 17,
             'stop_loss_pos_reduction': 0.02,
         }
@@ -290,8 +291,8 @@ def jackrabbit(agg_trades: pd.DataFrame, exchange: str = 'bybit'):
             "liq_diff_threshold": 0.03,
             "maker_fee": 0.00018,
             "margin_limit": 50,
-            "markups": (0.01,),
-            "min_markup": 0.00075, # will override min(markups) in backtest
+            "min_markup": 0.00075,
+            "max_markup": 0.0159,
             "min_qty": 0.001,
             "n_close_orders": 14,
             "n_entry_orders": 7,
@@ -305,14 +306,16 @@ def jackrabbit(agg_trades: pd.DataFrame, exchange: str = 'bybit'):
     ranges = {
         'grid_spacing': (0.001, 0.02, 0.0001),
         'grid_coefficient': (0.0, 800, 0.01),
-        'markups': (0.0003, 0.03, 0.0001),
+        'min_markup': (0.0002, 0.0006, 0.0001),
+        'max_markup': (0.002, 0.03, 0.0001),
         'n_close_orders': (8, 25, 1),
     }
 
     tweakable = {
         'grid_spacing': 0.0,
         'grid_coefficient': 0.0,
-        'markups': (0.0,),
+        'min_markup': 0.0, 
+        'max_markup': 0.0,
         'n_close_orders': 0.0,
     }
 
