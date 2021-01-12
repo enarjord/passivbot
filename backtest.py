@@ -46,19 +46,19 @@ def backtest(df: pd.DataFrame, settings: dict):
     if settings['dynamic_grid']:
         calc_long_initial_bid = lambda highest_bid: highest_bid
         calc_shrt_initial_ask = lambda lowest_ask: lowest_ask
-        calc_long_reentry_price_ = lambda equity_, pos_margin_, pos_price_: \
-            calc_long_reentry_price(price_step, grid_spacing, grid_coefficient,
-                                    equity_, pos_margin_, pos_price_)
-        calc_shrt_reentry_price_ = lambda equity_, pos_margin_, pos_price_: \
-            calc_shrt_reentry_price(price_step, grid_spacing, grid_coefficient,
-                                    equity_, pos_margin_, pos_price_)
+        calc_long_reentry_price_ = lambda equity_, pos_margin_, pos_price_, highest_bid_: \
+            min(highest_bid_, calc_long_reentry_price(price_step, grid_spacing, grid_coefficient,
+                                               equity_, pos_margin_, pos_price_))
+        calc_shrt_reentry_price_ = lambda equity_, pos_margin_, pos_price_, lowest_ask_: \
+            max(lowest_ask_, calc_shrt_reentry_price(price_step, grid_spacing, grid_coefficient,
+                                                     equity_, pos_margin_, pos_price_))
     else:
         calc_long_initial_bid = lambda highest_bid: round_dn(highest_bid, grid_step)
         calc_shrt_initial_ask = lambda lowest_ask: round_up(lowest_ask, grid_step)
-        calc_long_reentry_price_ = lambda equity_, pos_margin_, pos_price_: \
-            round_dn(pos_price_ - 9e-9, grid_step)
-        calc_shrt_reentry_price_ = lambda equity_, pos_margin_, pos_price_: \
-            round_up(pos_price_ + 9e-9, grid_step)
+        calc_long_reentry_price_ = lambda equity_, pos_margin_, pos_price_, highest_bid_: \
+            round_dn(min(pos_price_ - 9e-9, highest_bid_), grid_step)
+        calc_shrt_reentry_price_ = lambda equity_, pos_margin_, pos_price_, lowest_ask_: \
+            round_up(max(pos_price_ + 9e-9, lowest_ask_), grid_step)
 
 
     equity = margin_limit
@@ -99,7 +99,7 @@ def backtest(df: pd.DataFrame, settings: dict):
                 else:                                               # long reentry
                     bid_qty = default_qty
                     pos_margin = calc_cost(pos_size, pos_price) / leverage
-                    bid_price = min(ob[0], calc_long_reentry_price_(equity, pos_margin, pos_price))
+                    bid_price = calc_long_reentry_price_(equity, pos_margin, pos_price, ob[0])
             else:                                                   # shrt pos
                 if row.price <= pos_price:                          # shrt close
                     qtys, prices = calc_shrt_closes(price_step, qty_step, min_qty, min_markup,
@@ -180,7 +180,7 @@ def backtest(df: pd.DataFrame, settings: dict):
                 else:                                                # shrt reentry
                     ask_qty = -default_qty
                     pos_margin = calc_cost(-pos_size, pos_price) / leverage
-                    ask_price = max(ob[1], calc_shrt_reentry_price_(equity, pos_margin, pos_price))
+                    ask_price = calc_shrt_reentry_price_(equity, pos_margin, pos_price, ob[1])
             else:                                                    # long pos
                 if row.price >= pos_price:                           # close long pos
                     qtys, prices = calc_long_closes(price_step, qty_step, min_qty, min_markup,
@@ -253,36 +253,7 @@ def backtest(df: pd.DataFrame, settings: dict):
 
 
 def jackrabbit(agg_trades: pd.DataFrame, exchange: str = 'bybit'):
-    if exchange == 'bybit':
-        settings = {
-            'inverse': True,
-            'maker_fee': -0.00025,
-            'price_step': 0.5,
-            'qty_step': 1.0,
-            'symbol': 'BTCUSD',
-            'n_entry_orders': 10,
-            'leverage': 100,
-            'min_qty': 1.0,
-
-            'dynamic_grid': True,
-            
-            'break_on_loss': True,
-            'compounding': False,
-            'min_markup': 0.0002,
-            'margin_limit': 0.00194,
-
-            'default_qty': 2.0,
-            'liq_diff_threshold': 0.05,
-
-            'grid_coefficient': 100.89,
-            'grid_spacing': 0.0054,
-            'grid_step': 116.5,
-            'max_markup': 0.0159,
-            'n_close_orders': 17,
-            'stop_loss_pos_reduction': 0.02,
-        }
-    elif exchange == 'binance':
-        # settings for binance
+    if exchange == 'binance':
         settings = {
             "default_qty": 0.001,
             "grid_coefficient": 80.0,
@@ -302,22 +273,55 @@ def jackrabbit(agg_trades: pd.DataFrame, exchange: str = 'bybit'):
             "inverse": False,
             "break_on_loss": True,
         }
+    elif exchange == 'bybit':
+        settings = {
+            'inverse': True,
+            'maker_fee': -0.00025,
+            'price_step': 0.5,
+            'qty_step': 1.0,
+            'symbol': 'BTCUSD',
+            'n_entry_orders': 10,
+            'leverage': 100,
+            'min_qty': 1.0,
 
-    ranges = {
-        'grid_spacing': (0.001, 0.02, 0.0001),
-        'grid_coefficient': (0.0, 800, 0.01),
-        'min_markup': (0.0002, 0.0006, 0.0001),
-        'max_markup': (0.002, 0.03, 0.0001),
-        'n_close_orders': (8, 25, 1),
-    }
+            'dynamic_grid': False,
+            
+            'break_on_loss': True,
+            'compounding': False,
+            'min_markup': 0.0002,
+            'margin_limit': 0.00194,
 
-    tweakable = {
-        'grid_spacing': 0.0,
-        'grid_coefficient': 0.0,
-        'min_markup': 0.0, 
-        'max_markup': 0.0,
-        'n_close_orders': 0.0,
-    }
+            'default_qty': 1.0,
+            'liq_diff_threshold': 0.02,
+
+            'grid_step': 230.5,
+
+            'grid_coefficient': 100.89,
+            'grid_spacing': 0.0054,
+            'max_markup': 0.0159,
+            'n_close_orders': 17,
+            'stop_loss_pos_reduction': 0.02,
+        }
+
+    # dynamic grid mode
+    if settings['dynamic_grid']:
+        ranges = {
+            'grid_spacing': (0.001, 0.02, 0.00001),
+            'grid_coefficient': (0.0, 800, 0.01),
+            'min_markup': (0.0002, 0.0006, 0.00001),
+            'max_markup': (0.002, 0.03, 0.00001),
+            'n_close_orders': (8, 25, 1),
+        }
+    else:
+        ranges = {
+            'grid_step': (10, 400, 0.5),
+            'max_markup': (0.002, 0.03, 0.00001),
+            'n_close_orders': (8, 25, 1),
+            #'stop_loss_pos_reduction': (0.001, 0.1, 0.001),
+            #'liq_diff_threshold': (0.005, 0.12, 0.0001),
+        }
+
+    tweakable = {k_: 0.0 for k_ in ranges}
 
     best = {}
 
