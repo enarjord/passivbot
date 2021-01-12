@@ -75,7 +75,7 @@ settings, bybit example:
     "default_qty": 1.0,                   # entry quantity.
     "dynamic_grid": True,                 # bot has two modes: dynamic grid and static grid. True for dynamic mode, False for static mode.
     "grid_coefficient": 245.0,            # used in dynamic grid mode.
-    "grid_spacing": 0.0026,                # used in dynamic grid mode.
+    "grid_spacing": 0.0026,               # used in dynamic grid mode.
                                           # next entry price is pos_price * (1 +- grid_spacing * (1 + pos_margin / margin_limit * grid_coefficient)).
                                           
     "grid_step": 116.5                    # used in static mode.  absolute price interval.
@@ -87,7 +87,8 @@ settings, bybit example:
     "min_markup": 0.0002,                 # when there's a position, bot makes a grid of n_close_orders whose prices are
     "max_markup": 0.0159,                 # evenly distributed between min and max markup, and whose qtys are pos_size // n_close_orders.
     
-    "margin_limit": 0.0015                # keep this lower than actual account equity.
+    "margin_limit": 0.0015                # used to limit pos size and to modify grid spacing in dynamic mode.
+                                          # set margin_limit to -1 to use account balance fetched from exchange as margin limit.
                                           
     "n_close_orders": 20,                 # max n close orders.
     "n_entry_orders": 8,                  # max n entry orders.
