@@ -1,12 +1,13 @@
 {
-    "grid_coefficient": 160.0,
-    "grid_spacing": 0.003,
-    "liq_dist_threshold": 0.02,
+    "grid_coefficient": 100.89,
+    "grid_spacing": 0.0054,
+    "liq_diff_threshold": 0.02,
     "leverage": 100,
+    "margin_limit": 0.0014,
     "markups": [0.0002, 0.0159],
-    "n_close_orders": 20,
+    "n_close_orders": 25,
     "n_entry_orders": 8,
-    "qty_equity_pct": 1400,
+    "qty_equity_pct": 1500,
     "stop_loss_pos_reduction": 0.02,
     "symbol": "BTCUSD"
 }
