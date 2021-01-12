@@ -1,8 +1,9 @@
 {
-    "grid_coefficient": 160.0,
-    "grid_spacing": 0.003,
+    "grid_coefficient": 100.0,
+    "grid_spacing": 0.0054,
     "liq_diff_threshold": 0.02,
     "leverage": 100,
+    "margin_limit": 10,
     "markups": [0.0006, 0.0159],
     "n_close_orders": 20,
     "n_entry_orders": 8,
