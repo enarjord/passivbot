@@ -164,6 +164,32 @@ class BinanceBot(Bot):
                 'qty': float(o['origQty']),
                 'price': float(o['price'])}
 
+    async def execute_market_buy(self, qty: float) -> dict:
+        o = await self.cc.fapiPrivate_post_order(params={
+            'symbol': self.symbol,
+            'side': 'BUY',
+            'type': 'MARKET',
+            'quantity': qty,
+        })
+        return {'symbol': self.symbol,
+                'side': 'buy',
+                'type': 'market',
+                'qty': float(o['origQty']),
+                'price': float(o['price'])}
+
+    async def execute_market_sell(self, qty: float) -> dict:
+        o = await self.cc.fapiPrivate_post_order(params={
+            'symbol': self.symbol,
+            'side': 'SELL',
+            'type': 'MARKET',
+            'quantity': qty,
+        })
+        return {'symbol': self.symbol,
+                'side': 'sell',
+                'type': 'market',
+                'qty': float(o['origQty']),
+                'price': float(o['price'])}
+
     async def execute_cancellation(self, id_: [dict]) -> [dict]:
         cancellation = await self.cc.fapiPrivate_delete_order(params={
             'symbol': self.symbol, 'orderId': id_
