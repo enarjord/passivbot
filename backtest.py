@@ -7,7 +7,7 @@ import os
 from time import time
 from passivbot import init_ccxt, make_get_filepath, ts_to_date, print_, load_settings, \
     sort_dict_keys, round_up, round_dn, round_, calc_long_closes, calc_shrt_closes, \
-    calc_long_reentry_price, calc_shrt_reentry_price, calc_default_qty
+    calc_long_reentry_price, calc_shrt_reentry_price, calc_default_qty, calc_diff
 from binance import fetch_trades as binance_fetch_trades
 from bybit import fetch_trades as bybit_fetch_trades
 from bybit import calc_cross_long_liq_price as bybit_calc_cross_long_liq_price
@@ -25,7 +25,7 @@ def backtest(df: pd.DataFrame, settings: dict):
     qty_step = settings['qty_step']
     inverse = settings['inverse']
     break_on_loss = settings['break_on_loss']
-    liq_dist_threshold = settings['liq_dist_threshold']
+    liq_diff_threshold = settings['liq_diff_threshold']
     stop_loss_pos_reduction = settings['stop_loss_pos_reduction']
     qty_equity_pct = settings['qty_equity_pct']
     min_qty = settings['min_qty']
@@ -75,7 +75,7 @@ def backtest(df: pd.DataFrame, settings: dict):
                 bid_qty = default_qty
                 bid_price = ob[0]
             elif pos_size > 0.0:                                    # long pos
-                if abs(liq_price - row.price) / row.price < liq_dist_threshold:
+                if calc_diff(liq_price, row.price) < liq_diff_threshold:
                     # limit reached; enter no more
                     bid_qty = 0.0
                     bid_price = 0.0
@@ -95,7 +95,7 @@ def backtest(df: pd.DataFrame, settings: dict):
                                                     n_close_orders)
                     bid_qty = qtys[0]
                     bid_price = prices[0]
-                elif abs(liq_price - row.price) / row.price < liq_dist_threshold:
+                elif calc_diff(liq_price, row.price) < liq_diff_threshold:
                     if break_on_loss:
                         print('shrt break on loss')
                         return []
@@ -129,9 +129,9 @@ def backtest(df: pd.DataFrame, settings: dict):
                         equity += pnl
                         default_qty = calc_default_qty(qty_step, min_qty, qty_equity_pct, equity)
                     line = f'\r{row.Index / len(df):.2f} pnl sum {pnl_sum:.6f} '
-                    liq_dist = abs(liq_price - row.price) / row.price
+                    liq_diff = abs(liq_price - row.price) / row.price
                     line += f'default qty {equity * qty_equity_pct:.6f} equity {equity:.6f} '
-                    line += f'liq distance {liq_dist:.2f} '
+                    line += f'liq distance {liq_diff:.2f} '
                     line += f'pos_size {pos_size:.3f} '
                     print(line, end='    ')
                 else:
@@ -152,10 +152,10 @@ def backtest(df: pd.DataFrame, settings: dict):
                         equity += pnl
                         default_qty = calc_default_qty(qty_step, min_qty, qty_equity_pct, equity)
                     line = f'\r{row.Index / len(df):.2f} pnl sum {pnl_sum:.6f} '
-                    liq_dist = abs(liq_price - row.price) / row.price
+                    liq_diff = abs(liq_price - row.price) / row.price
 
                     line += f'default qty {equity * qty_equity_pct:.6f} equity {equity:.6f} '
-                    line += f'liq distance {liq_dist:.2f} '
+                    line += f'liq distance {liq_diff:.2f} '
                     line += f'pos_size {pos_size:.3f} '
                     print(line, end='    ')
         else:
@@ -163,7 +163,7 @@ def backtest(df: pd.DataFrame, settings: dict):
                 ask_qty = -default_qty
                 ask_price = ob[1]
             elif pos_size < 0.0:                                     # shrt pos
-                if abs(liq_price - row.price) / row.price < liq_dist_threshold:
+                if abs(liq_price - row.price) / row.price < liq_diff_threshold:
                     # limit reached; enter no more
                     ask_qty = 0.0
                     ask_price = 9.9e9
@@ -183,7 +183,7 @@ def backtest(df: pd.DataFrame, settings: dict):
                                                     n_close_orders)
                     ask_qty = qtys[0]
                     ask_price = prices[0]
-                elif abs(liq_price - row.price) / row.price < liq_dist_threshold:
+                elif abs(liq_price - row.price) / row.price < liq_diff_threshold:
                     if break_on_loss:
                         print('break on loss')
                         return []
@@ -217,9 +217,9 @@ def backtest(df: pd.DataFrame, settings: dict):
                         equity += pnl
                         default_qty = calc_default_qty(qty_step, min_qty, qty_equity_pct, equity)
                     line = f'\r{row.Index / len(df):.2f} pnl sum {pnl_sum:.6f} '
-                    liq_dist = abs(liq_price - row.price) / row.price
+                    liq_diff = abs(liq_price - row.price) / row.price
                     line += f'default qty {equity * qty_equity_pct:.6f} equity {equity:.6f} '
-                    line += f'liq distance {liq_dist:.2f} '
+                    line += f'liq distance {liq_diff:.2f} '
                     line += f'pos_size {pos_size:.3f} '
                     print(line, end='    ')
                 else:
@@ -240,9 +240,9 @@ def backtest(df: pd.DataFrame, settings: dict):
                         equity += pnl
                         default_qty = calc_default_qty(qty_step, min_qty, qty_equity_pct, equity)
                     line = f'\r{row.Index / len(df):.2f} pnl sum {pnl_sum:.6f} '
-                    liq_dist = abs(liq_price - row.price) / row.price
+                    liq_diff = abs(liq_price - row.price) / row.price
                     line += f'default qty {equity * qty_equity_pct:.6f} equity {equity:.6f} '
-                    line += f'liq distance {liq_dist:.2f} '
+                    line += f'liq distance {liq_diff:.2f} '
                     line += f'pos_size {pos_size:.3f} '
                     print(line, end='    ')
     return trades
@@ -261,17 +261,17 @@ def jackrabbit(agg_trades: pd.DataFrame, exchange: str = 'bybit'):
             'min_qty': 1.0,
             
             'break_on_loss': False,
-            'compounding': True,
+            'compounding': False,
             'min_markup': 0.0002, # will override min(markups) in backtest
-            'stop_loss_pos_reduction': 0.02,
-            'n_close_orders': 17,
             'margin_limit': 0.00154,
-            'markups': (0.0002, 0.0159),
-            'liq_dist_threshold': 0.02,
+            'qty_equity_pct': 1500,
 
-            'qty_equity_pct': 2000,
-            'grid_coefficient': 160.0,
-            'grid_spacing': 0.003,
+            'grid_coefficient': 100.89,
+            'grid_spacing': 0.0054,
+            'liq_diff_threshold': 0.02,
+            'markups': (0.0002, 0.0159),
+            'n_close_orders': 17,
+            'stop_loss_pos_reduction': 0.02,
         }
     elif exchange == 'binance':
         # settings for binance
@@ -280,7 +280,7 @@ def jackrabbit(agg_trades: pd.DataFrame, exchange: str = 'bybit'):
             "grid_coefficient": 80.0,
             "grid_spacing": 0.002,
             "leverage": 125,
-            "liq_dist_threshold": 0.03,
+            "liq_diff_threshold": 0.03,
             "maker_fee": 0.00018,
             "margin_limit": 50,
             "markups": (0.01,),
@@ -296,15 +296,21 @@ def jackrabbit(agg_trades: pd.DataFrame, exchange: str = 'bybit'):
         }
 
     ranges = {
-        'grid_spacing': (0.0005, 0.02, 0.0001),
+        'grid_spacing': (0.001, 0.02, 0.0001),
         'grid_coefficient': (0.0, 800, 0.01),
-        'qty_equity_pct': (0.0, 10000, 10),
+        'liq_diff_threshold': (0.005, 0.1, 0.001),
+        'stop_loss_pos_reduction': (0.001, 0.12, 0.001),
+        'markups': (0.0003, 0.03, 0.0001),
+        'n_close_orders': (8, 25, 1),
     }
 
     tweakable = {
         'grid_spacing': 0.0,
         'grid_coefficient': 0.0,
-        'qty_equity_pct': 0.0,
+        'liq_diff_threshold': 0.0,
+        'stop_loss_pos_reduction': 0.0,
+        'markups': (0.0,),
+        'n_close_orders': 0.0,
     }
 
     best = {}
