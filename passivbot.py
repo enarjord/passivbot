@@ -358,6 +358,7 @@ class Bot:
 
     def calc_static_orders(self):
         last_price_diff_limit = 0.05
+        margin_limit = self.position['balance'] if self.margin_limit <= 0 else self.margin_limit
         orders = []
         if self.position['size'] == 0: # no pos
             bid_price = self.pgrdn(self.ob[0])
@@ -374,8 +375,7 @@ class Bot:
             pos_size = self.position['size']
             for k in range(self.n_entry_orders):
                 pos_size += self.default_qty
-                if self.calc_margin_cost(pos_size, self.position['price']) > \
-                        self.margin_limit or \
+                if self.calc_margin_cost(pos_size, self.position['price']) > margin_limit or \
                         calc_diff(bid_price, self.price) > last_price_diff_limit:
                     break
                 orders.append({'side': 'buy', 'qty': self.default_qty, 'price': bid_price})
@@ -400,8 +400,7 @@ class Bot:
             pos_size = -self.position['size']
             for k in range(self.n_entry_orders):
                 pos_size += self.default_qty
-                if self.calc_margin_cost(pos_size, self.position['price']) > \
-                        self.margin_limit or \
+                if self.calc_margin_cost(pos_size, self.position['price']) > margin_limit or \
                         calc_diff(ask_price, self.price) > last_price_diff_limit:
                     break
                 orders.append({'side': 'sell', 'qty': self.default_qty, 'price': ask_price})
@@ -424,6 +423,7 @@ class Bot:
 
     def calc_dynamic_orders(self):
         last_price_diff_limit = 0.05
+        margin_limit = self.position['balance'] if self.margin_limit <= 0 else self.margin_limit
         orders = []
         if self.position['size'] == 0: # no pos
             bid_price = self.ob[0]
@@ -449,7 +449,7 @@ class Bot:
                 bid_price = min(self.ob[0], calc_long_reentry_price(self.price_step,
                                                                     self.grid_spacing,
                                                                     self.grid_coefficient,
-                                                                    self.margin_limit,
+                                                                    margin_limit,
                                                                     pos_margin,
                                                                     pos_price))
                 for k in range(self.n_entry_orders):
@@ -464,7 +464,7 @@ class Bot:
                     bid_price = min(self.ob[0], calc_long_reentry_price(self.price_step,
                                                                         self.grid_spacing,
                                                                         self.grid_coefficient,
-                                                                        self.margin_limit,
+                                                                        margin_limit,
                                                                         pos_margin,
                                                                         pos_price))
                 ask_qtys, ask_prices = calc_long_closes(self.price_step,
@@ -496,7 +496,7 @@ class Bot:
                 ask_price = max(self.ob[1], calc_shrt_reentry_price(self.price_step,
                                                                     self.grid_spacing,
                                                                     self.grid_coefficient,
-                                                                    self.margin_limit,
+                                                                    margin_limit,
                                                                     pos_margin,
                                                                     pos_price))
                 for k in range(self.n_entry_orders):
@@ -511,7 +511,7 @@ class Bot:
                     ask_price = max(self.ob[1], calc_shrt_reentry_price(self.price_step,
                                                                         self.grid_spacing,
                                                                         self.grid_coefficient,
-                                                                        self.margin_limit,
+                                                                        margin_limit,
                                                                         pos_margin,
                                                                         pos_price))
                 bid_qtys, bid_prices = calc_shrt_closes(self.price_step,
