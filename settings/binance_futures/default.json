@@ -1,4 +1,6 @@
 {
+    "default_qty": 0.001,
+    "dynamic_grid": true,
     "grid_coefficient": 100.0,
     "grid_spacing": 0.0054,
     "liq_diff_threshold": 0.02,
@@ -7,7 +9,6 @@
     "markups": [0.0006, 0.0159],
     "n_close_orders": 20,
     "n_entry_orders": 8,
-    "qty_equity_pct": 0.00005,
     "stop_loss_pos_reduction": 0.02,
     "symbol": "ETHUSDT"
 }
