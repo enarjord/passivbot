@@ -3,6 +3,7 @@
     "dynamic_grid": true,
     "grid_coefficient": 100.0,
     "grid_spacing": 0.0054,
+    "grid_step": 3.6,
     "liq_diff_threshold": 0.02,
     "leverage": 100,
     "margin_limit": 10,
