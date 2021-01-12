@@ -113,7 +113,8 @@ def backtest(df: pd.DataFrame, settings: dict):
                         return []
                     # controlled shrt loss
                     bid_qty = round_up(-pos_size * stop_loss_pos_reduction, qty_step)
-                    bid_price = ob[0]
+                    bid_price = round_up(row.price + 9e-9, price_step) # market order
+
                 else:                                               # no shrt close
                     bid_qty = 0.0
                     bid_price = 0.0
@@ -194,7 +195,7 @@ def backtest(df: pd.DataFrame, settings: dict):
                         return []
                     # controlled long loss
                     ask_qty = -round_up(pos_size * stop_loss_pos_reduction, qty_step)
-                    ask_price = ob[1]
+                    ask_price = round_dn(ob[0] - 9e-9, price_step) # market order
                 else:                                                # no close
                     ask_qty = 0.0
                     ask_price = 9.9e9
@@ -286,39 +287,45 @@ def jackrabbit(agg_trades: pd.DataFrame, exchange: str = 'bybit'):
 
             'dynamic_grid': False,
             
-            'break_on_loss': True,
+            'break_on_loss': False,
             'compounding': False,
             'min_markup': 0.0002,
             'margin_limit': 0.00194,
 
             'default_qty': 1.0,
-            'liq_diff_threshold': 0.02,
+            'liq_diff_threshold': 0.01,
 
-            'grid_step': 230.5,
+            'max_markup': 0.01773,
+            'n_close_orders': 16,
+            'stop_loss_pos_reduction': 0.015,
 
+            # static mode settings
+            'grid_step': 77.5,
+
+            # dynamic mode settings
             'grid_coefficient': 100.89,
             'grid_spacing': 0.0054,
-            'max_markup': 0.0159,
-            'n_close_orders': 17,
-            'stop_loss_pos_reduction': 0.02,
         }
 
     # dynamic grid mode
     if settings['dynamic_grid']:
         ranges = {
+            'default_qty': (1.0, 12.0, 1),
             'grid_spacing': (0.001, 0.02, 0.00001),
             'grid_coefficient': (0.0, 800, 0.01),
-            'min_markup': (0.0002, 0.0006, 0.00001),
+            'liq_diff_threshold': (0.005, 0.12, 0.0001),
             'max_markup': (0.002, 0.03, 0.00001),
             'n_close_orders': (8, 25, 1),
+            'stop_loss_pos_reduction': (0.001, 0.1, 0.001),
         }
     else:
         ranges = {
+            'default_qty': (1.0, 12.0, 1),
             'grid_step': (10, 400, 0.5),
+            'liq_diff_threshold': (0.005, 0.12, 0.0001),
             'max_markup': (0.002, 0.03, 0.00001),
             'n_close_orders': (8, 25, 1),
-            #'stop_loss_pos_reduction': (0.001, 0.1, 0.001),
-            #'liq_diff_threshold': (0.005, 0.12, 0.0001),
+            'stop_loss_pos_reduction': (0.001, 0.1, 0.001),
         }
 
     tweakable = {k_: 0.0 for k_ in ranges}
@@ -335,6 +342,7 @@ def jackrabbit(agg_trades: pd.DataFrame, exchange: str = 'bybit'):
             best[key] = calc_new_val((ranges[key][1] - ranges[key][0]) / 2, ranges[key], 1.0)
 
     # optional: uncomment to use settings as start candidate.
+    # otherwise starting candidate is randomized
     best = {k_: settings[k_] for k_ in sorted(ranges)}
 
     settings = sort_dict_keys(settings)
@@ -359,6 +367,7 @@ def jackrabbit(agg_trades: pd.DataFrame, exchange: str = 'bybit'):
 
     settings['n_days'] = n_days
     print('n_days', n_days)
+    print(json.dumps(settings, indent=4, sort_keys=True))
 
     # conditions for result approval
     conditions = [
