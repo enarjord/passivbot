@@ -73,6 +73,18 @@ settings, bybit example:
 {
 
     "default_qty": 1.0,                   # entry quantity.
+                                          # scalable entry quantity mode:
+                                          # if "default_qty" is set to a negative value,
+                                          # it becomes a percentage of margin_limit (which is actual account balance if margin_limit is set to -1).
+                                          # the bot will calculate entry qty using the following formula:
+                                          # default_qty = max(minimum_qty, round_dn(balance_in_terms_of_contracts * abs(settings["default_qty"]), qty_step))
+                                          # bybit BTCUSD example:
+                                          # if "default_qty"  is set to -0.06, last price is 37000 and wallet balance is 0.001 btc,
+                                          # default_qty = 0.001 * 37000 * 0.06 == 2.22.  rounded down is 2.0 usd.
+                                          # binance ETHUSDT example:
+                                          # if "default_qty" is set to -0.07, last price was 1100 and wallet balance is 60 usdt,
+                                          # default_qty = 60 / 1100 * 0.07 == 0.003818.  rounded down is 0.003 eth.
+                                          
     "dynamic_grid": True,                 # bot has two modes: dynamic grid and static grid. True for dynamic mode, False for static mode.
     "grid_coefficient": 245.0,            # used in dynamic grid mode.
     "grid_spacing": 0.0026,               # used in dynamic grid mode.
