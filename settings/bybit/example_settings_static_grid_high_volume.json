@@ -1,0 +1,15 @@
+{
+    "default_qty": 4.0,
+    "dynamic_grid": false,
+    "grid_coefficient": 94.53,
+    "grid_step": 23,
+    "grid_spacing": 0.005,
+    "liq_diff_threshold": 0.006,
+    "leverage": 100,
+    "margin_limit": 0.002,
+    "markups": [0.0002, 0.00348],
+    "n_close_orders": 16,
+    "n_entry_orders": 8,
+    "stop_loss_pos_reduction": 0.001,
+    "symbol": "BTCUSD"
+}
