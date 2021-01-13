@@ -13,7 +13,7 @@ from math import floor
 from time import time, sleep
 from typing import Callable, Iterator
 from passivbot import init_ccxt, load_key_secret, load_settings, make_get_filepath, print_, \
-    ts_to_date, flatten, filter_orders, Bot, start_bot, round_up, round_dn
+    ts_to_date, flatten, filter_orders, Bot, start_bot, round_up, round_dn, calc_default_qty
 
 
 async def fetch_trades(cc, symbol: str, from_id: int = None) -> [dict]:
@@ -62,6 +62,11 @@ class BinanceBot(Bot):
                 self.arup = lambda n: round_up(n, self.qty_step)
                 self.prdn = lambda n: round_dn(n, self.price_step)
                 self.prup = lambda n: round_up(n, self.price_step)
+                self.calc_default_qty = lambda balance_, last_price: \
+                    calc_default_qty(self.min_qty,
+                                     self.qty_step,
+                                     balance_ / last_price,
+                                     self.default_qty)
                 break
         await self.update_position()
         await self.init_order_book()
