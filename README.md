@@ -87,6 +87,8 @@ settings, bybit example:
     "min_markup": 0.0002,                 # when there's a position, bot makes a grid of n_close_orders whose prices are
     "max_markup": 0.0159,                 # evenly distributed between min and max markup, and whose qtys are pos_size // n_close_orders.
     
+    "market_stop_loss": true,             # if true will soft stop with market orders, otherwise soft stops with limit orders at order book's higest_bid/lowest_ask
+    
     "margin_limit": 0.0015                # used to limit pos size and to modify grid spacing in dynamic mode.
                                           # set margin_limit to -1 to use account balance fetched from exchange as margin limit.
                                           
