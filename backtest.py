@@ -7,7 +7,7 @@ import os
 from time import time
 from passivbot import init_ccxt, make_get_filepath, ts_to_date, print_, load_settings, \
     sort_dict_keys, round_up, round_dn, round_, calc_long_closes, calc_shrt_closes, \
-    calc_long_reentry_price, calc_shrt_reentry_price, calc_diff
+    calc_long_reentry_price, calc_shrt_reentry_price, calc_diff, calc_default_qty
 from binance import fetch_trades as binance_fetch_trades
 from bybit import fetch_trades as bybit_fetch_trades
 from bybit import calc_cross_long_liq_price as bybit_calc_cross_long_liq_price
@@ -40,8 +40,18 @@ def backtest(df: pd.DataFrame, settings: dict):
             bybit_calc_cross_shrt_liq_price(balance_, pos_size_, pos_price_) \
                 if pos_size_ < 0.0 else \
                 bybit_calc_cross_long_liq_price(balance_, pos_size_, pos_price_)
+        if settings['default_qty'] <= 0.0:
+            calc_default_qty_ = lambda balance_, last_price: \
+                calc_default_qty(min_qty, qty_step, balance_ * last_price, settings['default_qty'])
+        else:
+            calc_default_qty_ = lambda balance_, last_price: settings['default_qty']
     else:
         calc_cost = lambda qty_, price_: qty_ * price_
+        if settings['default_qty'] <= 0.0:
+            calc_default_qty_ = lambda balance_, last_price: \
+                calc_default_qty(min_qty, qty_step, balance_ / last_price, settings['default_qty'])
+        else:
+            calc_default_qty_ = lambda balance_, last_price: settings['default_qty']
 
     if settings['dynamic_grid']:
         calc_long_initial_bid = lambda highest_bid: highest_bid
@@ -62,7 +72,7 @@ def backtest(df: pd.DataFrame, settings: dict):
 
 
     balance = margin_limit
-    default_qty = settings['default_qty']
+    print('default_qty', calc_default_qty_(balance, df.price.iloc[0]))
 
     maker_fee = settings['maker_fee']
     taker_fee = settings['taker_fee']
@@ -90,7 +100,7 @@ def backtest(df: pd.DataFrame, settings: dict):
     for row in df.itertuples():
         if row.buyer_maker:
             if pos_size == 0.0:                                     # no pos
-                bid_qty = default_qty
+                bid_qty = calc_default_qty_(balance, ob[0])
                 bid_price = calc_long_initial_bid(ob[0])
             elif pos_size > 0.0:                                    # long pos
                 if calc_diff(liq_price, row.price) < liq_diff_threshold:
@@ -98,7 +108,7 @@ def backtest(df: pd.DataFrame, settings: dict):
                     bid_qty = 0.0
                     bid_price = 0.0
                 else:                                               # long reentry
-                    bid_qty = default_qty
+                    bid_qty = calc_default_qty_(balance, ob[0])
                     pos_margin = calc_cost(pos_size, pos_price) / leverage
                     bid_price = calc_long_reentry_price_(balance, pos_margin, pos_price, ob[0])
             else:                                                   # shrt pos
@@ -161,6 +171,7 @@ def backtest(df: pd.DataFrame, settings: dict):
                     liq_diff = abs(liq_price - row.price) / row.price
                     line += f'balance {balance:.6f} '
                     line += f'liq diff {liq_diff:.2f} '
+                    line += f'qty {calc_default_qty_(balance, ob[0]):.3f} '
                     line += f'pos_size {pos_size:.3f} '
                     print(line, end='    ')
                 else:
@@ -184,11 +195,12 @@ def backtest(df: pd.DataFrame, settings: dict):
 
                     line += f'balance {balance:.6f} '
                     line += f'liq diff {liq_diff:.2f} '
+                    line += f'qty {calc_default_qty_(balance, ob[0]):.3f} '
                     line += f'pos_size {pos_size:.3f} '
                     print(line, end='    ')
         else:
             if pos_size == 0.0:                                      # no pos
-                ask_qty = -default_qty
+                ask_qty = -calc_default_qty_(balance, ob[1])
                 ask_price = calc_shrt_initial_ask(ob[1])
             elif pos_size < 0.0:                                     # shrt pos
                 if abs(liq_price - row.price) / row.price < liq_diff_threshold:
@@ -196,7 +208,7 @@ def backtest(df: pd.DataFrame, settings: dict):
                     ask_qty = 0.0
                     ask_price = 9.9e9
                 else:                                                # shrt reentry
-                    ask_qty = -default_qty
+                    ask_qty = -calc_default_qty_(balance, ob[1])
                     pos_margin = calc_cost(-pos_size, pos_price) / leverage
                     ask_price = calc_shrt_reentry_price_(balance, pos_margin, pos_price, ob[1])
             else:                                                    # long pos
@@ -235,7 +247,7 @@ def backtest(df: pd.DataFrame, settings: dict):
                     ask_price = 9.9e9
             ob[1] = row.price
             if pos_size < 0.0 and liq_price and row.price > liq_price:
-                print('shrt liquidation', row.price, liq_price, pos_size, pos_price)
+                print('shrt liquidation', row.price, liq_price, pos_size, pos_price, balance)
                 return []
             if row.price > ask_price:
                 if pos_size <= 0.0:
@@ -259,6 +271,7 @@ def backtest(df: pd.DataFrame, settings: dict):
                     liq_diff = abs(liq_price - row.price) / row.price
                     line += f'balance {balance:.6f} '
                     line += f'liq diff {liq_diff:.2f} '
+                    line += f'qty {calc_default_qty_(balance, ob[0]):.3f} '
                     line += f'pos_size {pos_size:.3f} '
                     print(line, end='    ')
                 else:
@@ -281,6 +294,7 @@ def backtest(df: pd.DataFrame, settings: dict):
                     liq_diff = abs(liq_price - row.price) / row.price
                     line += f'balance {balance:.6f} '
                     line += f'liq diff {liq_diff:.2f} '
+                    line += f'qty {calc_default_qty_(balance, ob[0]):.3f} '
                     line += f'pos_size {pos_size:.3f} '
                     print(line, end='    ')
     return trades
@@ -322,7 +336,7 @@ def jackrabbit(agg_trades: pd.DataFrame, exchange: str = 'bybit'):
             'leverage': 100,
             'min_qty': 1.0,
 
-            'dynamic_grid': False,
+            'dynamic_grid': True,
             'market_stop_loss': False,
             
             'break_on_loss': False,
@@ -331,30 +345,30 @@ def jackrabbit(agg_trades: pd.DataFrame, exchange: str = 'bybit'):
             'margin_limit': 0.002,
 
             'default_qty': 3.0,
-            'liq_diff_threshold': 0.008,
+            'liq_diff_threshold': 0.1,
 
-            'max_markup': 0.002,
-            'n_close_orders': 12,
-            'stop_loss_pos_reduction': 0.005,
+            'max_markup': 0.02,
+            'n_close_orders': 17,
+            'stop_loss_pos_reduction': 0.001,
 
             # static mode settings
             'grid_step': 10.0,
 
             # dynamic mode settings
-            'grid_coefficient': 100.89,
-            'grid_spacing': 0.0054,
+            'grid_coefficient': 10.0,
+            'grid_spacing': 0.0033,
         }
 
     # dynamic grid mode
     if settings['dynamic_grid']:
         ranges = {
-            'default_qty': (1.0, 12.0, 1),
+            'default_qty': (1.0, 15.0, 1),
             'grid_spacing': (0.001, 0.02, 0.00001),
             'grid_coefficient': (0.0, 800, 0.01),
-            'liq_diff_threshold': (0.005, 0.12, 0.0001),
-            'max_markup': (0.002, 0.03, 0.00001),
+            'liq_diff_threshold': (0.005, 0.2, 0.0001),
+            'max_markup': (0.001, 0.03, 0.00001),
             'n_close_orders': (8, 25, 1),
-            'stop_loss_pos_reduction': (0.001, 0.1, 0.001),
+            'stop_loss_pos_reduction': (0.001, 0.3, 0.001),
         }
     else:
         ranges = {
@@ -366,7 +380,7 @@ def jackrabbit(agg_trades: pd.DataFrame, exchange: str = 'bybit'):
             'stop_loss_pos_reduction': (0.001, 0.1, 0.001),
         }
 
-    tweakable = {k_: 0.0 for k_ in ranges}
+    tweakable = {k_: 0.0 for k_ in sorted(ranges)}
 
     best = {}
 
@@ -381,7 +395,7 @@ def jackrabbit(agg_trades: pd.DataFrame, exchange: str = 'bybit'):
 
     # optional: uncomment to use settings as start candidate.
     # otherwise starting candidate is randomized
-    best = {k_: settings[k_] for k_ in sorted(ranges)}
+    #best = {k_: settings[k_] for k_ in sorted(ranges)}
 
     settings = sort_dict_keys(settings)
     best = sort_dict_keys(best)
@@ -390,7 +404,7 @@ def jackrabbit(agg_trades: pd.DataFrame, exchange: str = 'bybit'):
     best_gain = -99999999
     candidate = best
 
-    ks = 200
+    ks = 130
     k = 0
     ms = np.array([1/(i/2 + 16) for i in range(ks)])
     ms = ((ms - ms.min()) / (ms.max() - ms.min()))
@@ -450,7 +464,7 @@ def jackrabbit(agg_trades: pd.DataFrame, exchange: str = 'bybit'):
             result = {'n_closes': n_closes, 'pnl_sum': pnl_sum, 'loss_sum': loss_sum,
                       'max_margin_cost': max_margin_cost, 'average_daily_gain': average_daily_gain,
                       'gain': gain, 'n_trades': n_trades, 'closest_liq': closest_liq,
-                      'biggest_pos_size': biggest_pos_size}
+                      'biggest_pos_size': biggest_pos_size, 'n_days': n_days}
             result = {**result, **settings_}
             print('\n', result)
             results[key] = result
