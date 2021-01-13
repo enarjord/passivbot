@@ -114,24 +114,24 @@ def backtest(df: pd.DataFrame, settings: dict):
                         return []
                     # controlled shrt loss
                     bid_qty = round_up(-pos_size * stop_loss_pos_reduction, qty_step)
-                    bid_price = round_up(row.price + 9e-9, price_step) # market order
-                    cost = calc_cost(bid_qty, bid_price)
-                    margin_cost = cost / leverage
-                    gain = (pos_price / bid_price - 1)
-                    pnl = cost * gain - cost * taker_fee
-                    pos_size += bid_qty
-                    roe = gain * leverage
-                    liq_price = calc_liq_price(balance, pos_size, pos_price)
-                    trades.append({'trade_id': row.Index, 'side': 'shrt', 'type': 'stop_loss',
-                                   'price': bid_price, 'qty': bid_qty, 'pnl': pnl,
-                                   'pos_size': pos_size, 'pos_price': pos_price, 'roe': roe,
-                                   'margin_cost': margin_cost, 'liq_price': liq_price})
-                    pnl_sum += pnl
-                    if compounding:
-                        balance = max(margin_limit, balance + pnl)
-                    continue
-
-
+                    if settings['market_stop_loss']:
+                        bid_price = round_up(row.price + 9e-9, price_step) # market order
+                        cost = calc_cost(bid_qty, bid_price)
+                        margin_cost = cost / leverage
+                        gain = (pos_price / bid_price - 1)
+                        pnl = cost * gain - cost * taker_fee
+                        pos_size += bid_qty
+                        roe = gain * leverage
+                        liq_price = calc_liq_price(balance, pos_size, pos_price)
+                        trades.append({'trade_id': row.Index, 'side': 'shrt', 'type': 'stop_loss',
+                                       'price': bid_price, 'qty': bid_qty, 'pnl': pnl,
+                                       'pos_size': pos_size, 'pos_price': pos_price, 'roe': roe,
+                                       'margin_cost': margin_cost, 'liq_price': liq_price})
+                        pnl_sum += pnl
+                        if compounding:
+                            balance = max(margin_limit, balance + pnl)
+                        continue
+                    bid_price = ob[0]
                 else:                                               # no shrt close
                     bid_qty = 0.0
                     bid_price = 0.0
@@ -212,22 +212,24 @@ def backtest(df: pd.DataFrame, settings: dict):
                         return []
                     # controlled long loss
                     ask_qty = -round_up(pos_size * stop_loss_pos_reduction, qty_step)
-                    ask_price = round_dn(ob[0] - 9e-9, price_step) # market order
-                    cost = -calc_cost(ask_qty, ask_price)
-                    margin_cost = cost / leverage
-                    gain = (ask_price / pos_price - 1)
-                    pnl = cost * gain - cost * taker_fee
-                    pos_size += ask_qty
-                    roe = gain * leverage
-                    liq_price = calc_liq_price(balance, pos_size, pos_price)
-                    trades.append({'trade_id': row.Index, 'side': 'long', 'type': 'stop_loss',
-                                   'price': ask_price, 'qty': ask_qty, 'pnl': pnl,
-                                   'pos_size': pos_size, 'pos_price': pos_price, 'roe': roe,
-                                   'margin_cost': margin_cost, 'liq_price': liq_price})
-                    pnl_sum += pnl
-                    if compounding:
-                        balance = max(margin_limit, balance + pnl)
-                    continue
+                    if settings['market_stop_loss']:
+                        ask_price = round_dn(ob[0] - 9e-9, price_step) # market order
+                        cost = -calc_cost(ask_qty, ask_price)
+                        margin_cost = cost / leverage
+                        gain = (ask_price / pos_price - 1)
+                        pnl = cost * gain - cost * taker_fee
+                        pos_size += ask_qty
+                        roe = gain * leverage
+                        liq_price = calc_liq_price(balance, pos_size, pos_price)
+                        trades.append({'trade_id': row.Index, 'side': 'long', 'type': 'stop_loss',
+                                       'price': ask_price, 'qty': ask_qty, 'pnl': pnl,
+                                       'pos_size': pos_size, 'pos_price': pos_price, 'roe': roe,
+                                       'margin_cost': margin_cost, 'liq_price': liq_price})
+                        pnl_sum += pnl
+                        if compounding:
+                            balance = max(margin_limit, balance + pnl)
+                        continue
+                    ask_price = ob[1]
                 else:                                                # no close
                     ask_qty = 0.0
                     ask_price = 9.9e9
@@ -296,6 +298,7 @@ def jackrabbit(agg_trades: pd.DataFrame, exchange: str = 'bybit'):
             "maker_fee": 0.00018,
             "taker_fee": 0.00036,
             "margin_limit": 50,
+            "market_stop_loss": False,
             "min_markup": 0.00075,
             "max_markup": 0.0159,
             "min_qty": 0.001,
@@ -320,14 +323,15 @@ def jackrabbit(agg_trades: pd.DataFrame, exchange: str = 'bybit'):
             'min_qty': 1.0,
 
             'dynamic_grid': False,
+            'market_stop_loss': False,
             
             'break_on_loss': False,
             'compounding': False,
             'min_markup': 0.0002,
-            'margin_limit': 0.00194,
+            'margin_limit': 0.002,
 
             'default_qty': 3.0,
-            'liq_diff_threshold': 0.0081,
+            'liq_diff_threshold': 0.008,
 
             'max_markup': 0.002,
             'n_close_orders': 12,
@@ -354,9 +358,9 @@ def jackrabbit(agg_trades: pd.DataFrame, exchange: str = 'bybit'):
         }
     else:
         ranges = {
-            'default_qty': (1.0, 12.0, 1),
-            'grid_step': (10, 400, 0.5),
-            'liq_diff_threshold': (0.005, 0.12, 0.0001),
+            'default_qty': (1.0, 20.0, 1),
+            'grid_step': (3, 400, 0.5),
+            'liq_diff_threshold': (0.006, 0.18, 0.0001),
             'max_markup': (0.001, 0.03, 0.00001),
             'n_close_orders': (8, 25, 1),
             'stop_loss_pos_reduction': (0.001, 0.1, 0.001),
@@ -418,8 +422,8 @@ def jackrabbit(agg_trades: pd.DataFrame, exchange: str = 'bybit'):
                 print('skipping', key)
                 candidate = get_new_candidate(ranges, best)
                 continue
-            line = f'\n{k} m={ms[k]:.4f} best {tuple(best.values())}, '
-            line += f'candidate {tuple(candidate.values())}'
+            line = f'\n{k} m={ms[k]:.4f} best {best}, '
+            line += f'candidate {candidate}'
             print(line)
             settings_ = {k_: candidate[k_] if k_ in candidate else settings[k_]
                          for k_ in sorted(settings)}
@@ -447,6 +451,7 @@ def jackrabbit(agg_trades: pd.DataFrame, exchange: str = 'bybit'):
                       'max_margin_cost': max_margin_cost, 'average_daily_gain': average_daily_gain,
                       'gain': gain, 'n_trades': n_trades, 'closest_liq': closest_liq,
                       'biggest_pos_size': biggest_pos_size}
+            result = {**result, **settings_}
             print('\n', result)
             results[key] = result
 
