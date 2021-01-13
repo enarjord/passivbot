@@ -9,6 +9,7 @@
     "margin_limit": 10,
     "min_markup": 0.0006,
     "max_markup": 0.0159,
+    "market_stop_loss": true,
     "n_close_orders": 20,
     "n_entry_orders": 8,
     "stop_loss_pos_reduction": 0.02,
