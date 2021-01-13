@@ -1,9 +1,9 @@
 {
     "default_qty": 4.0,
     "dynamic_grid": false,
-    "grid_coefficient": 94.53,
+    "grid_coefficient": 0.0,
     "grid_step": 23,
-    "grid_spacing": 0.005,
+    "grid_spacing": 0.0,
     "liq_diff_threshold": 0.006,
     "leverage": 100,
     "margin_limit": 0.002,
