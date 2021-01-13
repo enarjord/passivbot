@@ -7,6 +7,7 @@
     "liq_diff_threshold": 0.03,
     "leverage": 100,
     "margin_limit": 0.00194,
+    "market_stop_loss": false,
     "min_markup": 0.0002,
     "max_markup": 0.0159,
     "n_close_orders": 23,
