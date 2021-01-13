@@ -232,6 +232,7 @@ class Bot:
         self.default_qty = settings['default_qty']
 
         self.dynamic_grid = settings['dynamic_grid']
+        self.market_stop_loss = settings['market_stop_loss']
 
         self.pgrdn = lambda n: round_dn(n, self.grid_step)
         self.pgrup = lambda n: round_up(n, self.grid_step)
@@ -340,13 +341,13 @@ class Bot:
         if calc_diff(self.position['liquidation_price'], self.price) < self.liq_diff_threshold:
             if self.position['size'] > 0.0:
                 # controlled long loss
-                return [{'side': 'sell', 'type': 'market',
+                return [{'side': 'sell', 'type': 'market' if self.market_stop_loss else 'limit',
                          'qty': round_up(self.position['size'] * self.stop_loss_pos_reduction,
                                          self.qty_step),
                          'price': self.ob[1]}]
             else:
                 # controlled shrt loss
-                return [{'side': 'buy', 'type': 'market',
+                return [{'side': 'buy', 'type': 'market' if self.market_stop_loss else 'limit',
                          'qty': round_up(-self.position['size'] * self.stop_loss_pos_reduction,
                                          self.qty_step),
                          'price': self.ob[0]}]
