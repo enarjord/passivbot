@@ -31,6 +31,7 @@ def backtest(df: pd.DataFrame, settings: dict):
     stop_loss_pos_reduction = settings['stop_loss_pos_reduction']
     min_qty = settings['min_qty']
     grid_step = settings['grid_step']
+    ddown_factor = settings['ddown_factor']
 
     leverage = settings['leverage']
     margin_limit = settings['margin_limit']
@@ -570,6 +571,7 @@ async def main():
         starting_candidate = None
     trades_filename = f'{symbol}_agg_trades_{exchange}_{n_days}_days_{ts_to_date(time())[:10]}.csv'
     if os.path.exists(trades_filename):
+        print('loading cached trades')
         df = pd.read_csv(trades_filename)
     else:
         agg_trades = await load_trades(exchange, user, symbol, n_days)
