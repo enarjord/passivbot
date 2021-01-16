@@ -409,8 +409,9 @@ def jackrabbit(df: pd.DataFrame,
         pd.DataFrame(results).T.to_csv(base_filepath + 'results.csv')
 
 
-def prep_df(adf: pd.DataFrame):
-    dfc = adf[adf.price != adf.price.shift(1)]
+def prep_df(adf: pd.DataFrame, settings: dict):
+    dfc = adf.drop('price', axis=1).join(round_(adf.price, settings['price_step']))
+    dfc = dfc[dfc.price != dfc.price.shift(1)]
     if 'side' in dfc.columns:
         # bybit
         buyer_maker = dfc.side == 'Sell'
@@ -447,7 +448,8 @@ def iter_chunks(exchange: str, symbol: str) -> Iterator[pd.DataFrame]:
     chunk_size = 100000
     filepath = f'historical_data/{exchange}/agg_trades_futures/{symbol}/'
     if os.path.isdir(filepath):
-        filenames = sorted([f for f in os.listdir(filepath) if f.endswith('.csv')])
+        filenames = sorted([f for f in os.listdir(filepath) if f.endswith('.csv')],
+                           key=lambda x: int(x.replace('.csv', '')))
         for f in filenames[::-1]:
             chunk = pd.read_csv(filepath + f).set_index('trade_id')
             if chunk is not None:
@@ -467,7 +469,7 @@ async def load_trades(exchange: str, user: str, symbol: str, n_days: float) -> p
             print('skipping from', id_)
             while id_ in ids_:
                 id_ -= 1
-            print('           to', from_id)
+            print('           to', id_)
         return id_
 
     cc = init_ccxt(exchange, user)
@@ -569,13 +571,15 @@ async def main():
     else:
         print('using randomized starting candidate')
         starting_candidate = None
-    trades_filename = f'{symbol}_agg_trades_{exchange}_{n_days}_days_{ts_to_date(time())[:10]}.csv'
+    trades_filename = f'{symbol}_agg_trades_{exchange}_{n_days}_days_{ts_to_date(time())[:10]}'
+    trades_filename += f"_price_step_{str(backtesting_settings['price_step']).replace('.', '_')}"
+    trades_filename += ".csv"
     if os.path.exists(trades_filename):
-        print('loading cached trades')
+        print('loading cached trade dataframe')
         df = pd.read_csv(trades_filename)
     else:
         agg_trades = await load_trades(exchange, user, symbol, n_days)
-        df = prep_df(agg_trades)
+        df = prep_df(agg_trades, backtesting_settings)
         df.to_csv(trades_filename)
     jackrabbit(df, backtesting_settings, ranges, starting_candidate)
 
