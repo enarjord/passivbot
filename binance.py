@@ -16,6 +16,34 @@ from passivbot import init_ccxt, load_key_secret, load_settings, make_get_filepa
     ts_to_date, flatten, filter_orders, Bot, start_bot, round_up, round_dn, calc_default_qty
 
 
+def get_maintenance_margin_rate(pos_size_ito_usdt: float) -> float:
+    kvs = [(50000, 0.004), (250000, 0.005), (5000000, 0.025), (20000000, 0.05), (50000000, 0.1),
+           (100000000, 0.125), (200000000, 0.15), (-1, 0.25)]
+    for kv in kvs:
+        if pos_size_ito_usdt < kv[0]:
+            return kv[1]
+    return kvs[-1][1]
+
+
+def calc_cross_long_liq_price(balance,
+                              pos_size,
+                              pos_price,
+                              mm=0.004,
+                              leverage=100):
+    pos_margin = pos_size * pos_price / leverage
+    return (balance + pos_margin - pos_size * pos_price) / (pos_size * mm - pos_size)
+
+
+def calc_cross_shrt_liq_price(balance,
+                              pos_size,
+                              pos_price,
+                              mm=0.004,
+                              leverage=100):
+    abs_pos_size = abs(pos_size)
+    pos_margin = abs_pos_size * pos_price / leverage
+    return (balance + pos_margin - pos_size * pos_price) / (abs_pos_size * mm - pos_size)
+
+
 async def fetch_trades(cc, symbol: str, from_id: int = None) -> [dict]:
     params = {'symbol': symbol, 'limit': 1000}
     if from_id:
@@ -138,59 +166,19 @@ class BinanceBot(Bot):
                 break
         return position
 
-    async def execute_bid(self, qty: float, price: float) -> dict:
-        o = await self.cc.fapiPrivate_post_order(params={
-            'symbol': self.symbol,
-            'side': 'BUY',
-            'type': 'LIMIT',
-            'quantity': qty,
-            'price': price,
-            'timeInForce': 'GTX'
-        })
+    async def execute_order(self, order: dict) -> dict:
+        params = {'symbol': self.symbol,
+                  'side': order['side'].upper(),
+                  'type': order['type'].upper(),
+                  'quantity': order['qty'],
+                  'reduceOnly': order['reduce_only']}
+        if params['type'] == 'LIMIT':
+            params['timeInForce'] = 'GTX'
+            params['price'] = order['price']
+        o = await self.cc.fapiPrivate_post_order(params=params)
         return {'symbol': self.symbol,
-                'side': 'buy',
-                'type': 'limit',
-                'qty': float(o['origQty']),
-                'price': float(o['price'])}
-
-    async def execute_ask(self, qty: float, price: float) -> dict:
-        o = await self.cc.fapiPrivate_post_order(params={
-            'symbol': self.symbol,
-            'side': 'SELL',
-            'type': 'LIMIT',
-            'quantity': qty,
-            'price': price,
-            'timeInForce': 'GTX'
-        })
-        return {'symbol': self.symbol,
-                'side': 'sell',
-                'type': 'limit',
-                'qty': float(o['origQty']),
-                'price': float(o['price'])}
-
-    async def execute_market_buy(self, qty: float) -> dict:
-        o = await self.cc.fapiPrivate_post_order(params={
-            'symbol': self.symbol,
-            'side': 'BUY',
-            'type': 'MARKET',
-            'quantity': qty,
-        })
-        return {'symbol': self.symbol,
-                'side': 'buy',
-                'type': 'market',
-                'qty': float(o['origQty']),
-                'price': float(o['price'])}
-
-    async def execute_market_sell(self, qty: float) -> dict:
-        o = await self.cc.fapiPrivate_post_order(params={
-            'symbol': self.symbol,
-            'side': 'SELL',
-            'type': 'MARKET',
-            'quantity': qty,
-        })
-        return {'symbol': self.symbol,
-                'side': 'sell',
-                'type': 'market',
+                'side': o['side'].lower(),
+                'type': o['type'].lower(),
                 'qty': float(o['origQty']),
                 'price': float(o['price'])}
 
@@ -206,6 +194,9 @@ class BinanceBot(Bot):
 
     def calc_margin_cost(self, qty: float, price: float) -> float:
         return qty * price / self.leverage
+
+    def calc_max_pos_size(self, margin_limit: float, price: float):
+        return (margin_limit / price) * self.leverage
 
     async def start_websocket(self) -> None:
         self.stop_websocket = False
