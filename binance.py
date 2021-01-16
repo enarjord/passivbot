@@ -31,7 +31,10 @@ def calc_cross_long_liq_price(balance,
                               mm=0.004,
                               leverage=100):
     pos_margin = pos_size * pos_price / leverage
-    return (balance + pos_margin - pos_size * pos_price) / (pos_size * mm - pos_size)
+    d = (pos_size * mm - pos_size)
+    if d == 0.0:
+        return 0.0
+    return (balance + pos_margin - pos_size * pos_price) / d
 
 
 def calc_cross_shrt_liq_price(balance,
@@ -41,7 +44,10 @@ def calc_cross_shrt_liq_price(balance,
                               leverage=100):
     abs_pos_size = abs(pos_size)
     pos_margin = abs_pos_size * pos_price / leverage
-    return (balance + pos_margin - pos_size * pos_price) / (abs_pos_size * mm - pos_size)
+    d = (abs_pos_size * mm - pos_size)
+    if d == 0.0:
+        return 0.0
+    return (balance + pos_margin - pos_size * pos_price) / d
 
 
 async def fetch_trades(cc, symbol: str, from_id: int = None) -> [dict]:
