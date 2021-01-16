@@ -17,6 +17,10 @@ from passivbot import init_ccxt, load_key_secret, load_settings, make_get_filepa
 from binance import fetch_trades as fetch_trades_binance
 
 
+def first_capitalized(s: str):
+    return s[0].upper() + s[1:].lower()
+
+
 def calc_cross_long_liq_price(balance,
                               pos_size,
                               pos_price,
@@ -181,47 +185,21 @@ class BybitBot(Bot):
         result['margin_cost'] = result['cost'] / self.leverage
         return result
 
-    async def execute_bid(self, qty: float, price: float) -> dict:
-        o = await self.cc.private_post_order_create(
-            params={'symbol': self.symbol, 'side': 'Buy', 'order_type': 'Limit',
-                    'time_in_force': 'PostOnly', 'qty': qty, 'price': price}
-        )
+    async def execute_order(self, order: dict) -> dict:
+        params = {'symbol': self.symbol,
+                  'side':  first_capitalized(order['side']),
+                  'reduce_only': order['reduce_only'],
+                  'order_type': first_capitalized(order['type']),
+                  'qty': order['qty']}
+        if params['order_type'] == 'Limit':
+            params['time_in_force'] = 'PostOnly'
+            params['price'] = order['price']
+        else:
+            params['time_in_force'] = 'GoodTillCancel'
+        o = await self.cc.private_post_order_create(params=params)
         return {'symbol': o['result']['symbol'],
-                'side': 'buy',
-                'type': 'limit',
-                'qty': o['result']['qty'],
-                'price': o['result']['price']}
-
-    async def execute_ask(self, qty: float, price: float) -> dict:
-        o = await self.cc.private_post_order_create(
-            params={'symbol': self.symbol, 'side': 'Sell', 'order_type': 'Limit',
-                    'time_in_force': 'PostOnly', 'qty': qty, 'price': price}
-        )
-        return {'symbol': o['result']['symbol'],
-                'side': 'sell',
-                'type': 'limit',
-                'qty': o['result']['qty'],
-                'price': o['result']['price']}
-
-    async def execute_market_buy(self, qty: float, reduce_only: bool = True):
-        o = await self.cc.private_post_order_create(
-            params={'symbol': self.symbol, 'side': 'Buy', 'order_type': 'Market',
-                    'time_in_force': 'GoodTillCancel', 'qty': qty, 'reduce_only': reduce_only}
-        )
-        return {'symbol': o['result']['symbol'],
-                'side': 'buy',
-                'type': 'market',
-                'qty': o['result']['qty'],
-                'price': o['result']['price']}
-
-    async def execute_market_sell(self, qty: float, reduce_only: bool = True):
-        o = await self.cc.private_post_order_create(
-            params={'symbol': self.symbol, 'side': 'Sell', 'order_type': 'Market',
-                    'time_in_force': 'GoodTillCancel', 'qty': qty, 'reduce_only': reduce_only}
-        )
-        return {'symbol': o['result']['symbol'],
-                'side': 'buy',
-                'type': 'market',
+                'side': o['result']['side'].lower(),
+                'type': o['result']['order_type'].lower(),
                 'qty': o['result']['qty'],
                 'price': o['result']['price']}
 
@@ -248,6 +226,9 @@ class BybitBot(Bot):
 
     def calc_margin_cost(self, qty: float, price: float) -> float:
         return qty / price / self.leverage
+
+    def calc_max_pos_size(self, margin_limit: float, price: float):
+        return margin_limit * price * self.leverage
 
     async def start_websocket(self) -> None:
         self.stop_websocket = False
