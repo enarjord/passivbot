@@ -58,11 +58,11 @@ use backtesting_notes.ipynb in jupyter notebook or jupiter-lab
 
 to iterate multiple settings,
 
-open backtester.py, go to def jackrabbit, adjust starting settings, n_iterations, ranges, etc
+go to backtesting_settings/{exchange}/, adjust backtesting_settings.json and ranges.json
 
 and run backtester.py:
 
-`python3 backtester.py exchange your_user_name n_days`
+`python3 backtester.py exchange your_user_name`
 
 
 
@@ -84,6 +84,9 @@ settings, bybit example:
                                           # binance ETHUSDT example:
                                           # if "default_qty" is set to -0.07, last price was 1100 and wallet balance is 60 usdt,
                                           # default_qty = 60 / 1100 * 0.07 == 0.003818.  rounded down is 0.003 eth.
+    
+    "ddown_factor": 0.0,                  # next reentry_qty is max(default_qty, abs(pos_size) * ddown_factor).
+                                          # if set to 1.0, each reentry qty will be equal to pos size, i.e. doubling pos size after every reentry.
                                           
     "dynamic_grid": True,                 # bot has two modes: dynamic grid and static grid. True for dynamic mode, False for static mode.
     "grid_coefficient": 245.0,            # used in dynamic grid mode.
