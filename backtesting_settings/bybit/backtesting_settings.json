@@ -20,7 +20,7 @@
     "default_qty": -0.1575,
     "grid_coefficient": 612.11,
     "grid_spacing": 0.00605,
-    "grid_step": 0.0,
+    "grid_step": 111.5,
     "liq_diff_threshold": 0.0991,
     "max_markup": 0.01037,
     "min_markup": 0.00091,
