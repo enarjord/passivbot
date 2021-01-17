@@ -17,13 +17,13 @@
     "taker_fee": 0.00036,
 
     "ddown_factor": 0.0,
-    "max_markup": 0.0,
+    "max_markup": 0.0139,
     "min_markup": 0.0006,
-    "stop_loss_pos_reduction": 0.005,
-    "liq_diff_threshold": 0.0,
-    "grid_coefficient": 0.0,
-    "grid_spacing": 0.0,
-    "grid_step": 0.0,
-    "default_qty": 0.0,
-    "n_close_orders": 0
+    "stop_loss_pos_reduction": 0.01,
+    "liq_diff_threshold": 0.05,
+    "grid_coefficient": 245.0,
+    "grid_spacing": 0.0026,
+    "grid_step": 10.0,
+    "default_qty": -0.03,
+    "n_close_orders": 23
 }
