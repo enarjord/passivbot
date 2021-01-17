@@ -196,7 +196,8 @@ def backtest(df: pd.DataFrame, settings: dict):
                     pos_size += bid_qty
                     roe = gain * leverage
                     liq_price = calc_liq_price(balance, pos_size, pos_price)
-                    trades.append({'trade_id': row.Index, 'side': 'shrt', 'type': 'close',
+                    trades.append({'trade_id': row.Index, 'side': 'shrt',
+                                   'type': 'close' if gain > 0.0 else 'stop_loss',
                                    'price': bid_price, 'qty': bid_qty, 'pnl': pnl,
                                    'pos_size': pos_size, 'pos_price': pos_price, 'roe': roe,
                                    'margin_cost': margin_cost, 'liq_price': liq_price})
@@ -299,7 +300,8 @@ def backtest(df: pd.DataFrame, settings: dict):
                     pos_size += ask_qty
                     roe = gain * leverage
                     liq_price = calc_liq_price(balance, pos_size, pos_price)
-                    trades.append({'trade_id': row.Index, 'side': 'long', 'type': 'close',
+                    trades.append({'trade_id': row.Index, 'side': 'long',
+                                   'type': 'close' if gain > 0.0 else 'stop_loss',
                                    'price': ask_price, 'qty': ask_qty, 'pnl': pnl,
                                    'pos_size': pos_size, 'pos_price': pos_price, 'roe': roe,
                                    'margin_cost': margin_cost, 'liq_price': liq_price})
@@ -362,7 +364,12 @@ def jackrabbit(df: pd.DataFrame,
     json.dump(backtesting_settings, open(base_filepath + 'backtesting_settings.json', 'w'),
               indent=4, sort_keys=True)
 
+    print(backtesting_settings)
+
     while k < ks - 1:
+
+        if candidate['min_markup'] >= candidate['max_markup']:
+            candidate['min_markup'] = candidate['max_markup']
 
         k += 1
         settings_ = {**backtesting_settings, **candidate}
@@ -566,11 +573,12 @@ async def main():
     symbol = backtesting_settings['symbol']
     n_days = backtesting_settings['n_days']
     ranges = json.load(open(f'{base_filepath}/ranges.json'))
-    if os.path.exists((ss_fp := f'{base_filepath}/starting_candidate.json')):
-        starting_candidate = json.load(open(ss_fp))
-    else:
+    print(base_filepath)
+    if 'random' in sys.argv:
         print('using randomized starting candidate')
         starting_candidate = None
+    else:
+        starting_candidate = {k: backtesting_settings[k] for k in ranges}
     trades_filename = f'{symbol}_agg_trades_{exchange}_{n_days}_days_{ts_to_date(time())[:10]}'
     trades_filename += f"_price_step_{str(backtesting_settings['price_step']).replace('.', '_')}"
     trades_filename += ".csv"
