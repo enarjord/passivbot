@@ -17,6 +17,10 @@ from passivbot import init_ccxt, load_key_secret, load_settings, make_get_filepa
 from binance import fetch_trades as fetch_trades_binance
 
 
+def first_capitalized(s: str):
+    return s[0].upper() + s[1:].lower()
+
+
 def calc_cross_long_liq_price(balance,
                               pos_size,
                               pos_price,
@@ -64,7 +68,7 @@ async def fetch_trades(cc, symbol: str, from_id: int = None) -> [dict]:
     params = {'symbol': symbol, 'limit': 1000}
     if from_id:
         params['from'] = from_id
-    fetched_trades = await cc.public_get_trading_records(params=params)
+    fetched_trades = await cc.v2_public_get_trading_records(params=params)
     trades = [{'trade_id': int(t['id']),
                'side': t['side'],
                'price': t['price'],
@@ -101,7 +105,7 @@ class BybitBot(Bot):
         self.max_leverage = 100
 
     async def _init(self):
-        info = await self.cc.public_get_symbols()
+        info = await self.cc.v2_public_get_symbols()
         for e in info['result']:
             if e['name'] == self.symbol:
                 break
@@ -122,7 +126,7 @@ class BybitBot(Bot):
         await self.init_order_book()
 
     async def init_order_book(self):
-        ticker = await self.cc.public_get_tickers(params={'symbol': self.symbol})
+        ticker = await self.cc.v2_public_get_tickers(params={'symbol': self.symbol})
         self.ob = [float(ticker['result'][0]['bid_price']), float(ticker['result'][0]['ask_price'])]
         self.price = float(ticker['result'][0]['last_price'])
 
@@ -154,7 +158,7 @@ class BybitBot(Bot):
                                      pos_price_)
 
     async def fetch_open_orders(self) -> [dict]:
-        fetched = await self.cc.private_get_order(params={'symbol': self.symbol})
+        fetched = await self.cc.v2_private_get_order(params={'symbol': self.symbol})
         return [
             {'order_id': e['order_id'],
              'symbol': e['symbol'],
@@ -168,8 +172,8 @@ class BybitBot(Bot):
     async def fetch_position(self) -> None:
 
         position, balance = await asyncio.gather(
-            self.cc.private_get_position_list(params={'symbol': self.symbol}),
-            self.cc.private_get_wallet_balance()
+            self.cc.v2_private_get_position_list(params={'symbol': self.symbol}),
+            self.cc.v2_private_get_wallet_balance()
         )
         pos = position['result']
         result = {'size': pos['size'] * (-1 if pos['side'] == 'Sell' else 1),
@@ -181,52 +185,26 @@ class BybitBot(Bot):
         result['margin_cost'] = result['cost'] / self.leverage
         return result
 
-    async def execute_bid(self, qty: float, price: float) -> dict:
-        o = await self.cc.private_post_order_create(
-            params={'symbol': self.symbol, 'side': 'Buy', 'order_type': 'Limit',
-                    'time_in_force': 'PostOnly', 'qty': qty, 'price': price}
-        )
+    async def execute_order(self, order: dict) -> dict:
+        params = {'symbol': self.symbol,
+                  'side':  first_capitalized(order['side']),
+                  'reduce_only': order['reduce_only'],
+                  'order_type': first_capitalized(order['type']),
+                  'qty': order['qty']}
+        if params['order_type'] == 'Limit':
+            params['time_in_force'] = 'PostOnly'
+            params['price'] = order['price']
+        else:
+            params['time_in_force'] = 'GoodTillCancel'
+        o = await self.cc.v2_private_post_order_create(params=params)
         return {'symbol': o['result']['symbol'],
-                'side': 'buy',
-                'type': 'limit',
-                'qty': o['result']['qty'],
-                'price': o['result']['price']}
-
-    async def execute_ask(self, qty: float, price: float) -> dict:
-        o = await self.cc.private_post_order_create(
-            params={'symbol': self.symbol, 'side': 'Sell', 'order_type': 'Limit',
-                    'time_in_force': 'PostOnly', 'qty': qty, 'price': price}
-        )
-        return {'symbol': o['result']['symbol'],
-                'side': 'sell',
-                'type': 'limit',
-                'qty': o['result']['qty'],
-                'price': o['result']['price']}
-
-    async def execute_market_buy(self, qty: float, reduce_only: bool = True):
-        o = await self.cc.private_post_order_create(
-            params={'symbol': self.symbol, 'side': 'Buy', 'order_type': 'Market',
-                    'time_in_force': 'GoodTillCancel', 'qty': qty, 'reduce_only': reduce_only}
-        )
-        return {'symbol': o['result']['symbol'],
-                'side': 'buy',
-                'type': 'market',
-                'qty': o['result']['qty'],
-                'price': o['result']['price']}
-
-    async def execute_market_sell(self, qty: float, reduce_only: bool = True):
-        o = await self.cc.private_post_order_create(
-            params={'symbol': self.symbol, 'side': 'Sell', 'order_type': 'Market',
-                    'time_in_force': 'GoodTillCancel', 'qty': qty, 'reduce_only': reduce_only}
-        )
-        return {'symbol': o['result']['symbol'],
-                'side': 'buy',
-                'type': 'market',
+                'side': o['result']['side'].lower(),
+                'type': o['result']['order_type'].lower(),
                 'qty': o['result']['qty'],
                 'price': o['result']['price']}
 
     async def execute_cancellation(self, id_: [dict]) -> [dict]:
-        o = await self.cc.private_post_order_cancel(
+        o = await self.cc.v2_private_post_order_cancel(
             params={'symbol': self.symbol, 'order_id': id_}
         )
         return {'symbol': o['result']['symbol'], 'side': o['result']['side'].lower(),
@@ -249,13 +227,16 @@ class BybitBot(Bot):
     def calc_margin_cost(self, qty: float, price: float) -> float:
         return qty / price / self.leverage
 
+    def calc_max_pos_size(self, margin_limit: float, price: float):
+        return margin_limit * price * self.leverage
+
     async def start_websocket(self) -> None:
         self.stop_websocket = False
         uri = f"wss://stream.bybit.com/realtime"
         print_([uri])
         await self.update_position()
         try:
-            print(await self.cc.user_post_leverage_save(
+            print(await self.cc.v2_private_post_position_leverage_save(
                 params={'symbol': self.symbol, 'leverage': 0}
             ))
         except Exception as e:

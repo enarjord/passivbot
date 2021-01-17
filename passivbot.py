@@ -99,6 +99,16 @@ def calc_default_qty(min_qty: float,
     return max(min_qty, round_dn(balance_ito_contracts * abs(qty_balance_pct), qty_step))
 
 
+def calc_entry_qty(qty_step: float,
+                   ddown_factor: float,
+                   default_qty: float,
+                   max_pos_size: float,
+                   pos_size: float):
+    abs_pos_size = abs(pos_size)
+    return max(default_qty, round_dn(min(abs_pos_size * ddown_factor, max_pos_size - abs_pos_size),
+                                     qty_step))
+
+
 def calc_shrt_closes(price_step: float,
                      qty_step: float,
                      min_qty: float,
@@ -238,6 +248,7 @@ class Bot:
         self.n_entry_orders = settings['n_entry_orders']
         self.n_close_orders = settings['n_close_orders']
         self.default_qty = settings['default_qty']
+        self.ddown_factor = settings['ddown_factor']
 
         self.dynamic_grid = settings['dynamic_grid']
         self.market_stop_loss = settings['market_stop_loss']
@@ -292,17 +303,7 @@ class Bot:
         creations = []
         for oc in sorted(orders_to_create, key=lambda x: x['qty']):
             try:
-                if oc['side'] == 'buy':
-                    if 'type' in oc and oc['type'] == 'market':
-                        creations.append(self.execute_market_buy(oc['qty']))
-                    else:
-                        creations.append(self.execute_bid(oc['qty'], oc['price']))
-
-                else:
-                    if 'type' in oc and oc['type'] == 'market':
-                        creations.append(self.execute_market_sell(oc['qty']))
-                    else:
-                        creations.append(self.execute_ask(oc['qty'], oc['price']))
+                creations.append(self.execute_order(oc))
             except Exception as e:
                 print('error creating orders a', orders_to_create, e)
         try:
@@ -352,22 +353,56 @@ class Bot:
                 return [{'side': 'sell', 'type': 'market' if self.market_stop_loss else 'limit',
                          'qty': round_up(self.position['size'] * self.stop_loss_pos_reduction,
                                          self.qty_step),
-                         'price': self.ob[1]}]
+                         'price': self.ob[1], 'reduce_only': True}]
             else:
                 # controlled shrt loss
                 return [{'side': 'buy', 'type': 'market' if self.market_stop_loss else 'limit',
                          'qty': round_up(-self.position['size'] * self.stop_loss_pos_reduction,
                                          self.qty_step),
-                         'price': self.ob[0]}]
+                         'price': self.ob[0], 'reduce_only': True}]
         else:
             last_price_diff_limit = 0.05
             margin_limit = self.position['balance'] if self.margin_limit <= 0 else self.margin_limit
             default_qty = self.default_qty if self.default_qty > 0.0 else \
                 self.calc_default_qty(margin_limit, self.price)
             if self.dynamic_grid:
-                return self.calc_dynamic_orders(last_price_diff_limit, margin_limit, default_qty)
+                orders = self.calc_dynamic_orders(last_price_diff_limit, margin_limit, default_qty)
             else:
-                return self.calc_static_orders(last_price_diff_limit, margin_limit, default_qty)
+                orders = self.calc_static_orders(last_price_diff_limit, margin_limit, default_qty)
+            if self.position['size'] > 0.0:
+                ask_qtys, ask_prices = calc_long_closes(self.price_step,
+                                                        self.qty_step,
+                                                        self.min_qty,
+                                                        self.min_markup,
+                                                        self.max_markup,
+                                                        self.position['size'],
+                                                        self.position['price'],
+                                                        self.ob[1],
+                                                        self.n_close_orders)
+                close_orders = sorted([{'side': 'sell', 'qty': abs_qty, 'price': float(price_),
+                                        'type': 'limit', 'reduce_only': True}
+                                       for qty_, price_ in zip(ask_qtys, ask_prices)
+                                       if (abs_qty := abs(float(qty_))) > 0.0
+                                       and calc_diff(price_, self.price) < last_price_diff_limit],
+                                      key=lambda x: x['price'])[:self.n_entry_orders]
+                orders += close_orders
+            elif self.position['size'] < 0.0:
+                bid_qtys, bid_prices = calc_shrt_closes(self.price_step,
+                                                        self.qty_step,
+                                                        self.min_qty,
+                                                        self.min_markup,
+                                                        self.max_markup,
+                                                        self.position['size'],
+                                                        self.position['price'],
+                                                        self.ob[0],
+                                                        self.n_close_orders)
+                close_orders = sorted([{'side': 'buy', 'qty': float(qty_), 'price': float(price_),
+                                        'type': 'limit', 'reduce_only': True}
+                                       for qty_, price_ in zip(bid_qtys, bid_prices) if qty_ > 0.0],
+                                      key=lambda x: x['price'], reverse=True)[:self.n_entry_orders]
+                orders += close_orders
+            return orders
+
 
     def calc_static_orders(self, last_price_diff_limit, margin_limit, default_qty):
         orders = []
@@ -377,58 +412,38 @@ class Bot:
             for k in range(max(5, self.n_entry_orders // 2)):
                 if calc_diff(bid_price, self.price) > last_price_diff_limit:
                     break
-                orders.append({'side': 'buy', 'qty': default_qty, 'price': bid_price})
-                orders.append({'side': 'sell', 'qty': default_qty, 'price': ask_price})
+                orders.append({'side': 'buy', 'qty': default_qty, 'price': bid_price,
+                               'type': 'limit', 'reduce_only': False})
+                orders.append({'side': 'sell', 'qty': default_qty, 'price': ask_price,
+                               'type': 'limit', 'reduce_only': False})
                 bid_price = self.pgrdn(bid_price - 9e-9)
                 ask_price = self.pgrup(ask_price + 9e-9)
         elif self.position['size'] > 0.0:
             bid_price = self.pgrdn(min(self.ob[0], self.position['price']))
             pos_size = self.position['size']
             for k in range(self.n_entry_orders):
-                pos_size += default_qty
+                bid_qty = calc_entry_qty(self.qty_step, self.ddown_factor, default_qty,
+                                         self.calc_max_pos_size(margin_limit, bid_price), pos_size)
+                pos_size += bid_qty
                 if self.calc_margin_cost(pos_size, self.position['price']) > margin_limit or \
                         calc_diff(bid_price, self.price) > last_price_diff_limit:
                     break
-                orders.append({'side': 'buy', 'qty': default_qty, 'price': bid_price})
+                orders.append({'side': 'buy', 'qty': bid_qty, 'price': bid_price, 'type': 'limit',
+                               'reduce_only': False})
                 bid_price = self.pgrdn(bid_price - 9e-9)
-            ask_qtys, ask_prices = calc_long_closes(self.price_step,
-                                                    self.qty_step,
-                                                    self.min_qty,
-                                                    self.min_markup,
-                                                    self.max_markup,
-                                                    self.position['size'],
-                                                    self.position['price'],
-                                                    self.ob[1],
-                                                    self.n_close_orders)
-            close_orders = sorted([{'side': 'sell', 'qty': abs_qty, 'price': float(price_)}
-                                   for qty_, price_ in zip(ask_qtys, ask_prices)
-                                   if (abs_qty := abs(float(qty_))) > 0.0
-                                   and calc_diff(price_, self.price) < last_price_diff_limit],
-                                  key=lambda x: x['price'])[:self.n_entry_orders]
-            orders += close_orders
         else: # shrt pos
             ask_price = self.pgrup(max(self.ob[1], self.position['price']))
             pos_size = -self.position['size']
             for k in range(self.n_entry_orders):
-                pos_size += default_qty
+                ask_qty = calc_entry_qty(self.qty_step, self.ddown_factor, default_qty,
+                                         self.calc_max_pos_size(margin_limit, ask_price), pos_size)
+                pos_size += ask_qty
                 if self.calc_margin_cost(pos_size, self.position['price']) > margin_limit or \
                         calc_diff(ask_price, self.price) > last_price_diff_limit:
                     break
-                orders.append({'side': 'sell', 'qty': default_qty, 'price': ask_price})
+                orders.append({'side': 'sell', 'qty': ask_qty, 'price': ask_price, 'type': 'limit',
+                               'reduce_only': False})
                 ask_price = self.pgrup(ask_price + 9e-9)
-            bid_qtys, bid_prices = calc_shrt_closes(self.price_step,
-                                                    self.qty_step,
-                                                    self.min_qty,
-                                                    self.min_markup,
-                                                    self.max_markup,
-                                                    self.position['size'],
-                                                    self.position['price'],
-                                                    self.ob[0],
-                                                    self.n_close_orders)
-            close_orders = sorted([{'side': 'buy', 'qty': float(qty_), 'price': float(price_)}
-                                   for qty_, price_ in zip(bid_qtys, bid_prices) if qty_ > 0.0],
-                                  key=lambda x: x['price'], reverse=True)[:self.n_entry_orders]
-            orders += close_orders
         return orders
 
 
@@ -440,102 +455,70 @@ class Bot:
             for k in range(max(5, self.n_entry_orders // 2)):
                 if calc_diff(bid_price, self.price) > last_price_diff_limit:
                     break
-                orders.append({'side': 'buy', 'qty': default_qty, 'price': bid_price})
-                orders.append({'side': 'sell', 'qty': default_qty, 'price': ask_price})
+                orders.append({'side': 'buy', 'qty': default_qty, 'price': bid_price,
+                               'type': 'limit', 'reduce_only': False})
+                orders.append({'side': 'sell', 'qty': default_qty, 'price': ask_price,
+                               'type': 'limit', 'reduce_only': False})
                 bid_price = round_dn(bid_price * (1 - self.grid_spacing), self.price_step)
                 ask_price = round_up(ask_price * (1 + self.grid_spacing), self.price_step)
         elif self.position['size'] > 0.0: # long pos
-            if calc_diff(self.position['liquidation_price'], self.price) < self.liq_diff_threshold:
-                # controlled long loss
-                orders.append({'side': 'sell',
-                               'qty': round_up(self.position['size'] * self.stop_loss_pos_reduction,
-                                               self.qty_step),
-                               'price': self.ob[1]})
-            else:
-                pos_size = self.position['size']
-                pos_price = self.position['price']
+            pos_size = self.position['size']
+            pos_price = self.position['price']
+            pos_margin = self.calc_margin_cost(pos_size, pos_price)
+            bid_price = min(self.ob[0], calc_long_reentry_price(self.price_step,
+                                                                self.grid_spacing,
+                                                                self.grid_coefficient,
+                                                                margin_limit,
+                                                                pos_margin,
+                                                                pos_price))
+            for k in range(self.n_entry_orders):
+                bid_qty = calc_entry_qty(self.qty_step, self.ddown_factor, default_qty,
+                                         self.calc_max_pos_size(margin_limit, bid_price),
+                                         pos_size)
+                new_pos_size = pos_size + bid_qty
+                pos_price = pos_price * (bid_qty / new_pos_size) + \
+                    bid_price * (pos_size / new_pos_size)
+                pos_size = new_pos_size
                 pos_margin = self.calc_margin_cost(pos_size, pos_price)
+                if calc_diff(bid_price, self.price) > last_price_diff_limit:
+                    break
+                orders.append({'side': 'buy', 'qty': bid_qty, 'price': bid_price, 'type': 'limit',
+                               'reduce_only': False})
                 bid_price = min(self.ob[0], calc_long_reentry_price(self.price_step,
                                                                     self.grid_spacing,
                                                                     self.grid_coefficient,
                                                                     margin_limit,
                                                                     pos_margin,
                                                                     pos_price))
-                for k in range(self.n_entry_orders):
-                    new_pos_size = pos_size + default_qty
-                    pos_price = pos_price * (default_qty / new_pos_size) + \
-                        bid_price * (pos_size / new_pos_size)
-                    pos_size = new_pos_size
-                    pos_margin = self.calc_margin_cost(pos_size, pos_price)
-                    if calc_diff(bid_price, self.price) > last_price_diff_limit:
-                        break
-                    orders.append({'side': 'buy', 'qty': default_qty, 'price': bid_price})
-                    bid_price = min(self.ob[0], calc_long_reentry_price(self.price_step,
-                                                                        self.grid_spacing,
-                                                                        self.grid_coefficient,
-                                                                        margin_limit,
-                                                                        pos_margin,
-                                                                        pos_price))
-                ask_qtys, ask_prices = calc_long_closes(self.price_step,
-                                                        self.qty_step,
-                                                        self.min_qty,
-                                                        self.min_markup,
-                                                        self.max_markup,
-                                                        self.position['size'],
-                                                        self.position['price'],
-                                                        self.ob[1],
-                                                        self.n_close_orders)
-                close_orders = sorted([{'side': 'sell', 'qty': abs_qty, 'price': float(price_)}
-                                       for qty_, price_ in zip(ask_qtys, ask_prices)
-                                       if (abs_qty := abs(float(qty_))) > 0.0
-                                       and calc_diff(price_, self.price) < last_price_diff_limit],
-                                      key=lambda x: x['price'])[:self.n_entry_orders]
-                orders += close_orders
         else: # shrt pos
-            if calc_diff(self.position['liquidation_price'], self.price) < self.liq_diff_threshold:
-                # controlled shrt loss
-                orders.append({'side': 'buy',
-                               'qty': round_up(-self.position['size'] * self.stop_loss_pos_reduction,
-                                               self.qty_step),
-                               'price': self.ob[0]})
-            else:
-                pos_size = self.position['size']
-                pos_price = self.position['price']
+            pos_size = self.position['size']
+            pos_price = self.position['price']
+            pos_margin = self.calc_margin_cost(-pos_size, pos_price)
+            ask_price = max(self.ob[1], calc_shrt_reentry_price(self.price_step,
+                                                                self.grid_spacing,
+                                                                self.grid_coefficient,
+                                                                margin_limit,
+                                                                pos_margin,
+                                                                pos_price))
+            for k in range(self.n_entry_orders):
+                ask_qty = calc_entry_qty(self.qty_step, self.ddown_factor, default_qty,
+                                         self.calc_max_pos_size(margin_limit, ask_price),
+                                         pos_size)
+                new_pos_size = pos_size - ask_qty
+                pos_price = pos_price * (-ask_qty / new_pos_size) + \
+                    ask_price * (pos_size / new_pos_size)
+                pos_size = new_pos_size
                 pos_margin = self.calc_margin_cost(-pos_size, pos_price)
+                if calc_diff(ask_price, self.price) > last_price_diff_limit:
+                    break
+                orders.append({'side': 'sell', 'qty': ask_qty, 'price': ask_price,
+                    'type': 'limit', 'reduce_only': False})
                 ask_price = max(self.ob[1], calc_shrt_reentry_price(self.price_step,
                                                                     self.grid_spacing,
                                                                     self.grid_coefficient,
                                                                     margin_limit,
                                                                     pos_margin,
                                                                     pos_price))
-                for k in range(self.n_entry_orders):
-                    new_pos_size = pos_size - default_qty
-                    pos_price = pos_price * (-default_qty / new_pos_size) + \
-                        ask_price * (pos_size / new_pos_size)
-                    pos_size = new_pos_size
-                    pos_margin = self.calc_margin_cost(-pos_size, pos_price)
-                    if calc_diff(ask_price, self.price) > last_price_diff_limit:
-                        break
-                    orders.append({'side': 'sell', 'qty': default_qty, 'price': ask_price})
-                    ask_price = max(self.ob[1], calc_shrt_reentry_price(self.price_step,
-                                                                        self.grid_spacing,
-                                                                        self.grid_coefficient,
-                                                                        margin_limit,
-                                                                        pos_margin,
-                                                                        pos_price))
-                bid_qtys, bid_prices = calc_shrt_closes(self.price_step,
-                                                        self.qty_step,
-                                                        self.min_qty,
-                                                        self.min_markup,
-                                                        self.max_markup,
-                                                        self.position['size'],
-                                                        self.position['price'],
-                                                        self.ob[0],
-                                                        self.n_close_orders)
-                close_orders = sorted([{'side': 'buy', 'qty': float(qty_), 'price': float(price_)}
-                                       for qty_, price_ in zip(bid_qtys, bid_prices) if qty_ > 0.0],
-                                      key=lambda x: x['price'], reverse=True)[:self.n_entry_orders]
-                orders += close_orders
         return orders
 
     async def cancel_and_create(self):

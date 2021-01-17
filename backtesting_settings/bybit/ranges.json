@@ -1,0 +1,52 @@
+{
+    "default_qty": [
+        -0.5,
+        -0.001,
+        0.0001
+    ],
+    "ddown_factor": [
+        0.0,
+        3.0,
+        0.001
+    ],
+    "grid_coefficient": [
+        0.0,
+        800,
+        0.01
+    ],
+    "grid_spacing": [
+        0.0005,
+        0.02,
+        1e-05
+    ],
+    "grid_step": [
+        2.0,
+        500.0,
+        0.5
+    ],
+    "liq_diff_threshold": [
+        0.04,
+        0.2,
+        0.0001
+    ],
+    "max_markup": [
+        0.001,
+        0.03,
+        0.00001
+    ],
+    "min_markup": [
+        0.0,
+        0.002,
+        0.00001
+    ],
+    "n_close_orders": [
+        8,
+        25,
+        1
+    ],
+    "stop_loss_pos_reduction": [
+        0.001,
+        0.3,
+        0.001
+    ]
+}

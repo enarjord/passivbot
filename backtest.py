@@ -7,14 +7,16 @@ import os
 from time import time
 from passivbot import init_ccxt, make_get_filepath, ts_to_date, print_, load_settings, \
     sort_dict_keys, round_up, round_dn, round_, calc_long_closes, calc_shrt_closes, \
-    calc_long_reentry_price, calc_shrt_reentry_price, calc_diff, calc_default_qty
+    calc_long_reentry_price, calc_shrt_reentry_price, calc_diff, calc_default_qty, \
+    calc_entry_qty
 from binance import fetch_trades as binance_fetch_trades
 from bybit import fetch_trades as bybit_fetch_trades
 from bybit import calc_cross_long_liq_price as bybit_calc_cross_long_liq_price
 from bybit import calc_cross_shrt_liq_price as bybit_calc_cross_shrt_liq_price
+from binance import calc_cross_long_liq_price as binance_calc_cross_long_liq_price
+from binance import calc_cross_shrt_liq_price as binance_calc_cross_shrt_liq_price
 
 from typing import Iterator
-from bisect import insort_left
 
 
 def backtest(df: pd.DataFrame, settings: dict):
@@ -29,6 +31,7 @@ def backtest(df: pd.DataFrame, settings: dict):
     stop_loss_pos_reduction = settings['stop_loss_pos_reduction']
     min_qty = settings['min_qty']
     grid_step = settings['grid_step']
+    ddown_factor = settings['ddown_factor']
 
     leverage = settings['leverage']
     margin_limit = settings['margin_limit']
@@ -45,13 +48,20 @@ def backtest(df: pd.DataFrame, settings: dict):
                 calc_default_qty(min_qty, qty_step, balance_ * last_price, settings['default_qty'])
         else:
             calc_default_qty_ = lambda balance_, last_price: settings['default_qty']
+        calc_max_pos_size = lambda margin_limit_, price_: margin_limit_ * price_ * leverage
     else:
         calc_cost = lambda qty_, price_: qty_ * price_
+        calc_liq_price = lambda balance_, pos_size_, pos_price_: \
+            binance_calc_cross_shrt_liq_price(balance_, pos_size_, pos_price_, leverage=leverage) \
+                if pos_size_ < 0.0 else \
+                binance_calc_cross_long_liq_price(balance_, pos_size_, pos_price_, leverage=leverage)
         if settings['default_qty'] <= 0.0:
             calc_default_qty_ = lambda balance_, last_price: \
                 calc_default_qty(min_qty, qty_step, balance_ / last_price, settings['default_qty'])
         else:
             calc_default_qty_ = lambda balance_, last_price: settings['default_qty']
+        calc_max_pos_size = lambda margin_limit_, price_: margin_limit_ / price_ * leverage
+
 
     if settings['dynamic_grid']:
         calc_long_initial_bid = lambda highest_bid: highest_bid
@@ -108,9 +118,12 @@ def backtest(df: pd.DataFrame, settings: dict):
                     bid_qty = 0.0
                     bid_price = 0.0
                 else:                                               # long reentry
-                    bid_qty = calc_default_qty_(balance, ob[0])
                     pos_margin = calc_cost(pos_size, pos_price) / leverage
                     bid_price = calc_long_reentry_price_(balance, pos_margin, pos_price, ob[0])
+                    max_pos_size = calc_max_pos_size(balance, bid_price)
+                    bid_qty = calc_entry_qty(qty_step, ddown_factor,
+                                             calc_default_qty_(balance, ob[0]), max_pos_size,
+                                             pos_size)
             else:                                                   # shrt pos
                 if row.price <= pos_price:                          # shrt close
                     qtys, prices = calc_shrt_closes(price_step, qty_step, min_qty, min_markup,
@@ -183,7 +196,8 @@ def backtest(df: pd.DataFrame, settings: dict):
                     pos_size += bid_qty
                     roe = gain * leverage
                     liq_price = calc_liq_price(balance, pos_size, pos_price)
-                    trades.append({'trade_id': row.Index, 'side': 'shrt', 'type': 'close',
+                    trades.append({'trade_id': row.Index, 'side': 'shrt',
+                                   'type': 'close' if gain > 0.0 else 'stop_loss',
                                    'price': bid_price, 'qty': bid_qty, 'pnl': pnl,
                                    'pos_size': pos_size, 'pos_price': pos_price, 'roe': roe,
                                    'margin_cost': margin_cost, 'liq_price': liq_price})
@@ -208,9 +222,12 @@ def backtest(df: pd.DataFrame, settings: dict):
                     ask_qty = 0.0
                     ask_price = 9.9e9
                 else:                                                # shrt reentry
-                    ask_qty = -calc_default_qty_(balance, ob[1])
                     pos_margin = calc_cost(-pos_size, pos_price) / leverage
                     ask_price = calc_shrt_reentry_price_(balance, pos_margin, pos_price, ob[1])
+                    max_pos_size = calc_max_pos_size(margin_limit, ask_price)
+                    ask_qty = -calc_entry_qty(qty_step, ddown_factor,
+                                              calc_default_qty_(balance, ob[1]), max_pos_size,
+                                              pos_size)
             else:                                                    # long pos
                 if row.price >= pos_price:                           # close long pos
                     qtys, prices = calc_long_closes(price_step, qty_step, min_qty, min_markup,
@@ -283,7 +300,8 @@ def backtest(df: pd.DataFrame, settings: dict):
                     pos_size += ask_qty
                     roe = gain * leverage
                     liq_price = calc_liq_price(balance, pos_size, pos_price)
-                    trades.append({'trade_id': row.Index, 'side': 'long', 'type': 'close',
+                    trades.append({'trade_id': row.Index, 'side': 'long',
+                                   'type': 'close' if gain > 0.0 else 'stop_loss',
                                    'price': ask_price, 'qty': ask_qty, 'pnl': pnl,
                                    'pos_size': pos_size, 'pos_price': pos_price, 'roe': roe,
                                    'margin_cost': margin_cost, 'liq_price': liq_price})
@@ -300,190 +318,107 @@ def backtest(df: pd.DataFrame, settings: dict):
     return trades
 
 
+def format_dict(d: dict):
+    r = ''
+    for key in sorted(d):
+        r += f'&{key}={round(d[key], 10) if type(d[key]) in [float, int] else str(d[key])}'
+    return r[1:]
 
-def jackrabbit(agg_trades: pd.DataFrame, exchange: str = 'bybit'):
-    if exchange == 'binance':
-        settings = {
-            "default_qty": 0.001,
-            "grid_coefficient": 80.0,
-            "grid_spacing": 0.002,
-            "leverage": 125,
-            "liq_diff_threshold": 0.03,
-            "maker_fee": 0.00018,
-            "taker_fee": 0.00036,
-            "margin_limit": 50,
-            "market_stop_loss": False,
-            "min_markup": 0.00075,
-            "max_markup": 0.0159,
-            "min_qty": 0.001,
-            "n_close_orders": 14,
-            "n_entry_orders": 7,
-            "price_step": 0.01,
-            "qty_step": 0.001,
-            "symbol": "BTCUSDT",
-            "inverse": False,
-            "break_on_loss": True,
-        }
-    elif exchange == 'bybit':
-        settings = {
-            'inverse': True,
-            'maker_fee': -0.00025,
-            'taker_fee': 0.00075,
-            'price_step': 0.5,
-            'qty_step': 1.0,
-            'symbol': 'BTCUSD',
-            'n_entry_orders': 10,
-            'leverage': 100,
-            'min_qty': 1.0,
+def unformat_dict(d: str):
+    kv = d.split('&')
+    kvs = [kv.split('=') for kv in d.split('&')]
+    result = {}
+    for kv in kvs:
+        try:
+            result[kv[0]] = eval(kv[1])
+        except:
+            result[kv[0]] = kv[1]
+    return result
 
-            'dynamic_grid': True,
-            'market_stop_loss': False,
-            
-            'break_on_loss': False,
-            'compounding': False,
-            'min_markup': 0.0002,
-            'margin_limit': 0.002,
 
-            'default_qty': 3.0,
-            'liq_diff_threshold': 0.1,
-
-            'max_markup': 0.02,
-            'n_close_orders': 17,
-            'stop_loss_pos_reduction': 0.001,
-
-            # static mode settings
-            'grid_step': 10.0,
-
-            # dynamic mode settings
-            'grid_coefficient': 10.0,
-            'grid_spacing': 0.0033,
-        }
-
-    # dynamic grid mode
-    if settings['dynamic_grid']:
-        ranges = {
-            'default_qty': (1.0, 15.0, 1),
-            'grid_spacing': (0.001, 0.02, 0.00001),
-            'grid_coefficient': (0.0, 800, 0.01),
-            'liq_diff_threshold': (0.005, 0.2, 0.0001),
-            'max_markup': (0.001, 0.03, 0.00001),
-            'n_close_orders': (8, 25, 1),
-            'stop_loss_pos_reduction': (0.001, 0.3, 0.001),
-        }
+def jackrabbit(df: pd.DataFrame,
+               backtesting_settings: dict,
+               ranges: dict,
+               starting_candidate: dict = None):
+    if starting_candidate is None:
+        # randomized starting settings
+        best = {key: calc_new_val((ranges[key][1] - ranges[key][0]) / 2, ranges[key], 1.0)
+                for key in sorted(ranges)}
     else:
-        ranges = {
-            'default_qty': (1.0, 20.0, 1),
-            'grid_step': (3, 400, 0.5),
-            'liq_diff_threshold': (0.006, 0.18, 0.0001),
-            'max_markup': (0.001, 0.03, 0.00001),
-            'n_close_orders': (8, 25, 1),
-            'stop_loss_pos_reduction': (0.001, 0.1, 0.001),
-        }
+        best = sort_dict_keys(starting_candidate)
 
-    tweakable = {k_: 0.0 for k_ in sorted(ranges)}
-
-    best = {}
-
-    for key in tweakable:
-        if type(tweakable[key]) == tuple:
-            best[key] = tuple(sorted([
-                calc_new_val((ranges[key][1] - ranges[key][0]) / 2, ranges[key], 1.0)
-                for _ in tweakable[key]
-            ]))
-        else:
-            best[key] = calc_new_val((ranges[key][1] - ranges[key][0]) / 2, ranges[key], 1.0)
-
-    # optional: uncomment to use settings as start candidate.
-    # otherwise starting candidate is randomized
-    #best = {k_: settings[k_] for k_ in sorted(ranges)}
-
-    settings = sort_dict_keys(settings)
-    best = sort_dict_keys(best)
-
+    n_days = backtesting_settings['n_days']
     results = {}
-    best_gain = -99999999
+    best_gain = -9e9
     candidate = best
 
     ks = 130
     k = 0
     ms = np.array([1/(i/2 + 16) for i in range(ks)])
     ms = ((ms - ms.min()) / (ms.max() - ms.min()))
-
-    n_days = (agg_trades.timestamp.iloc[-1] - agg_trades.timestamp.iloc[0]) / 1000 / 60 / 60 / 24
-
-    results_filename = make_get_filepath(
-        f'jackrabbit_results_grid/{ts_to_date(time())[:19]}_{int(round(n_days))}'
+    base_filepath = make_get_filepath(
+        f"backtesting_results/{backtesting_settings['exchange']}/" +
+        f"{ts_to_date(time())[:19]}_{int(round(n_days))}/"
     )
-    if settings['inverse']:
-        results_filename += '_inverse'
+    trades_filepath = make_get_filepath(base_filepath + 'trades/')
+    json.dump(backtesting_settings, open(base_filepath + 'backtesting_settings.json', 'w'),
+              indent=4, sort_keys=True)
 
-    settings['n_days'] = n_days
-    print('n_days', n_days)
-    print(json.dumps(settings, indent=4, sort_keys=True))
-
-    # conditions for result approval
-    conditions = [
-        lambda r: True,
-    ]
-
-    df = prep_df(agg_trades)
+    print(backtesting_settings)
 
     while k < ks - 1:
-        try:
-            k += 1
-            key = tuple([candidate[k_] for k_ in sorted(candidate)])
-            if key in results:
-                print('skipping', key)
-                candidate = get_new_candidate(ranges, best)
-                continue
-            line = f'\n{k} m={ms[k]:.4f} best {best}, '
-            line += f'candidate {candidate}'
-            print(line)
-            settings_ = {k_: candidate[k_] if k_ in candidate else settings[k_]
-                         for k_ in sorted(settings)}
-            trades = backtest(df, settings_)
-            if not trades:
-                print('\nno trades')
-                candidate = get_new_candidate(ranges, best)
-                continue
-            tdf = pd.DataFrame(trades).set_index('trade_id')
-            closest_liq = ((tdf.price - tdf.liq_price).abs() / tdf.price).min()
-            biggest_pos_size = tdf.pos_size.abs().max()
-            n_closes = len(tdf[tdf.type == 'close'])
-            pnl_sum = tdf.pnl.sum()
-            loss_sum = tdf[tdf.pnl < 0.0].pnl.sum()
-            abs_pos_sizes = tdf.pos_size.abs()
-            if settings['inverse']:
-                max_margin_cost = (abs_pos_sizes / tdf.pos_price / settings_['leverage']).max()
-            else:
-                max_margin_cost = (abs_pos_sizes * tdf.pos_price / settings_['leverage']).max()
-            #gain = (pnl_sum + max_margin_cost) / max_margin_cost
-            gain = (pnl_sum + settings_['margin_limit']) / settings_['margin_limit']
-            average_daily_gain = gain ** (1 / n_days)
-            n_trades = len(tdf)
-            result = {'n_closes': n_closes, 'pnl_sum': pnl_sum, 'loss_sum': loss_sum,
-                      'max_margin_cost': max_margin_cost, 'average_daily_gain': average_daily_gain,
-                      'gain': gain, 'n_trades': n_trades, 'closest_liq': closest_liq,
-                      'biggest_pos_size': biggest_pos_size, 'n_days': n_days}
-            result = {**result, **settings_}
-            print('\n', result)
-            results[key] = result
 
-            if gain > best_gain and all([c(results[key]) for c in conditions]):
-                best = candidate
-                best_gain = gain
-                print('\n\nnew best', best, '\n', gain, '\n')
-                print(settings_)
-                print(results[key], '\n\n')
-            candidate = get_new_candidate(ranges, best, m=ms[k])
-            pd.DataFrame(results).T.to_csv(results_filename + '.csv')
-        except KeyboardInterrupt:
-            return results
-    return results
+        if candidate['min_markup'] >= candidate['max_markup']:
+            candidate['min_markup'] = candidate['max_markup']
+
+        k += 1
+        settings_ = {**backtesting_settings, **candidate}
+        key = format_dict(candidate)
+        if key in results:
+            print('\nskipping', key)
+            candidate = get_new_candidate(ranges, best)
+            continue
+        print(f'k={k}, m={ms[k]:.4f} candidate', candidate)
+        trades = backtest(df, settings_)
+        if not trades:
+            print('\nno trades')
+            candidate = get_new_candidate(ranges, best)
+            continue
+        tdf = pd.DataFrame(trades).set_index('trade_id')
+        tdf.to_csv(trades_filepath + key + '.csv')
+        closest_liq = ((tdf.price - tdf.liq_price).abs() / tdf.price).min()
+        biggest_pos_size = tdf.pos_size.abs().max()
+        n_closes = len(tdf[tdf.type == 'close'])
+        pnl_sum = tdf.pnl.sum()
+        loss_sum = tdf[tdf.type == 'stop_loss'].pnl.sum()
+        abs_pos_sizes = tdf.pos_size.abs()
+        if backtesting_settings['inverse']:
+            max_margin_cost = (abs_pos_sizes / tdf.pos_price / settings_['leverage']).max()
+        else:
+            max_margin_cost = (abs_pos_sizes * tdf.pos_price / settings_['leverage']).max()
+        gain = (pnl_sum + settings_['margin_limit']) / settings_['margin_limit']
+        average_daily_gain = gain ** (1 / n_days)
+        n_trades = len(tdf)
+        result = {'n_closes': n_closes, 'pnl_sum': pnl_sum, 'loss_sum': loss_sum,
+                  'max_margin_cost': max_margin_cost, 'average_daily_gain': average_daily_gain,
+                  'gain': gain, 'n_trades': n_trades, 'closest_liq': closest_liq,
+                  'biggest_pos_size': biggest_pos_size, 'n_days': n_days}
+        print('\n', result)
+        results[key] = {**result, **candidate}
+
+        if gain > best_gain:
+            best = candidate
+            best_gain = gain
+            print('\n\n\n###############\nnew best', best, '\n', gain, '\n\n')
+            print(settings_)
+            print(results[key], '\n\n')
+        candidate = get_new_candidate(ranges, best, m=ms[k])
+        pd.DataFrame(results).T.to_csv(base_filepath + 'results.csv')
 
 
-def prep_df(adf: pd.DataFrame):
-    dfc = adf[adf.price != adf.price.shift(1)]
+def prep_df(adf: pd.DataFrame, settings: dict):
+    dfc = adf.drop('price', axis=1).join(round_(adf.price, settings['price_step']))
+    dfc = dfc[dfc.price != dfc.price.shift(1)]
     if 'side' in dfc.columns:
         # bybit
         buyer_maker = dfc.side == 'Sell'
@@ -520,7 +455,8 @@ def iter_chunks(exchange: str, symbol: str) -> Iterator[pd.DataFrame]:
     chunk_size = 100000
     filepath = f'historical_data/{exchange}/agg_trades_futures/{symbol}/'
     if os.path.isdir(filepath):
-        filenames = sorted([f for f in os.listdir(filepath) if f.endswith('.csv')])
+        filenames = sorted([f for f in os.listdir(filepath) if f.endswith('.csv')],
+                           key=lambda x: int(x.replace('.csv', '')))
         for f in filenames[::-1]:
             chunk = pd.read_csv(filepath + f).set_index('trade_id')
             if chunk is not None:
@@ -540,7 +476,7 @@ async def load_trades(exchange: str, user: str, symbol: str, n_days: float) -> p
             print('skipping from', id_)
             while id_ in ids_:
                 id_ -= 1
-            print('           to', from_id)
+            print('           to', id_)
         return id_
 
     cc = init_ccxt(exchange, user)
@@ -632,23 +568,28 @@ async def load_trades(exchange: str, user: str, symbol: str, n_days: float) -> p
 async def main():
     exchange = sys.argv[1]
     user = sys.argv[2]
-    n_days = round(float(sys.argv[3]), 2)
-    if exchange == 'bybit':
-        symbol = 'BTCUSD'
-    elif exchange == 'binance':
-        symbol = 'BTCUSDT'
+    base_filepath = f'backtesting_settings/{exchange}/'
+    backtesting_settings = json.load(open(f'{base_filepath}/backtesting_settings.json'))
+    symbol = backtesting_settings['symbol']
+    n_days = backtesting_settings['n_days']
+    ranges = json.load(open(f'{base_filepath}/ranges.json'))
+    print(base_filepath)
+    if 'random' in sys.argv:
+        print('using randomized starting candidate')
+        starting_candidate = None
     else:
-        raise Exception(f'exchange {exchange} not found')
-    filename = f'{symbol}_agg_trades_{exchange}_{n_days}_days_{ts_to_date(time())[:10]}.csv'
-    if os.path.isfile(filename):
-        print('loading trades...')
-        adf = pd.read_csv(filename).set_index('trade_id')
+        starting_candidate = {k: backtesting_settings[k] for k in ranges}
+    trades_filename = f'{symbol}_agg_trades_{exchange}_{n_days}_days_{ts_to_date(time())[:10]}'
+    trades_filename += f"_price_step_{str(backtesting_settings['price_step']).replace('.', '_')}"
+    trades_filename += ".csv"
+    if os.path.exists(trades_filename):
+        print('loading cached trade dataframe')
+        df = pd.read_csv(trades_filename)
     else:
-        print('fetching trades')
         agg_trades = await load_trades(exchange, user, symbol, n_days)
-        adf = agg_trades.loc[agg_trades.price != agg_trades.price.shift(1)]
-        adf.to_csv(filename)
-    jackrabbit(adf, exchange)
+        df = prep_df(agg_trades, backtesting_settings)
+        df.to_csv(trades_filename)
+    jackrabbit(df, backtesting_settings, ranges, starting_candidate)
 
 
 if __name__ == '__main__':
