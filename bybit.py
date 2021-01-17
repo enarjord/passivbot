@@ -68,7 +68,7 @@ async def fetch_trades(cc, symbol: str, from_id: int = None) -> [dict]:
     params = {'symbol': symbol, 'limit': 1000}
     if from_id:
         params['from'] = from_id
-    fetched_trades = await cc.public_get_trading_records(params=params)
+    fetched_trades = await cc.v2_public_get_trading_records(params=params)
     trades = [{'trade_id': int(t['id']),
                'side': t['side'],
                'price': t['price'],
@@ -105,7 +105,7 @@ class BybitBot(Bot):
         self.max_leverage = 100
 
     async def _init(self):
-        info = await self.cc.public_get_symbols()
+        info = await self.cc.v2_public_get_symbols()
         for e in info['result']:
             if e['name'] == self.symbol:
                 break
@@ -126,7 +126,7 @@ class BybitBot(Bot):
         await self.init_order_book()
 
     async def init_order_book(self):
-        ticker = await self.cc.public_get_tickers(params={'symbol': self.symbol})
+        ticker = await self.cc.v2_public_get_tickers(params={'symbol': self.symbol})
         self.ob = [float(ticker['result'][0]['bid_price']), float(ticker['result'][0]['ask_price'])]
         self.price = float(ticker['result'][0]['last_price'])
 
@@ -158,7 +158,7 @@ class BybitBot(Bot):
                                      pos_price_)
 
     async def fetch_open_orders(self) -> [dict]:
-        fetched = await self.cc.private_get_order(params={'symbol': self.symbol})
+        fetched = await self.cc.v2_private_get_order(params={'symbol': self.symbol})
         return [
             {'order_id': e['order_id'],
              'symbol': e['symbol'],
@@ -172,8 +172,8 @@ class BybitBot(Bot):
     async def fetch_position(self) -> None:
 
         position, balance = await asyncio.gather(
-            self.cc.private_get_position_list(params={'symbol': self.symbol}),
-            self.cc.private_get_wallet_balance()
+            self.cc.v2_private_get_position_list(params={'symbol': self.symbol}),
+            self.cc.v2_private_get_wallet_balance()
         )
         pos = position['result']
         result = {'size': pos['size'] * (-1 if pos['side'] == 'Sell' else 1),
@@ -196,7 +196,7 @@ class BybitBot(Bot):
             params['price'] = order['price']
         else:
             params['time_in_force'] = 'GoodTillCancel'
-        o = await self.cc.private_post_order_create(params=params)
+        o = await self.cc.v2_private_post_order_create(params=params)
         return {'symbol': o['result']['symbol'],
                 'side': o['result']['side'].lower(),
                 'type': o['result']['order_type'].lower(),
@@ -204,7 +204,7 @@ class BybitBot(Bot):
                 'price': o['result']['price']}
 
     async def execute_cancellation(self, id_: [dict]) -> [dict]:
-        o = await self.cc.private_post_order_cancel(
+        o = await self.cc.v2_private_post_order_cancel(
             params={'symbol': self.symbol, 'order_id': id_}
         )
         return {'symbol': o['result']['symbol'], 'side': o['result']['side'].lower(),
@@ -236,7 +236,7 @@ class BybitBot(Bot):
         print_([uri])
         await self.update_position()
         try:
-            print(await self.cc.user_post_leverage_save(
+            print(await self.cc.v2_private_post_position_leverage_save(
                 params={'symbol': self.symbol, 'leverage': 0}
             ))
         except Exception as e:
