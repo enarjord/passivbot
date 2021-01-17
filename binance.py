@@ -241,7 +241,7 @@ class BinanceBot(Bot):
 
 
 async def main() -> None:
-    bot = await create_bot(sys.argv[1], load_settings('binance_futures', sys.argv[1]))
+    bot = await create_bot(sys.argv[1], load_settings('binance', sys.argv[1]))
     await start_bot(bot)
 
 
