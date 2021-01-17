@@ -55,7 +55,7 @@ async def fetch_trades(cc, symbol: str, from_id: int = None) -> [dict]:
     if from_id:
         params['fromId'] = from_id
     fetched_trades = await cc.fapiPublic_get_aggtrades(params=params)
-    trades = [{'trade_id': t['a'],
+    trades = [{'trade_id': int(t['a']),
                'price': float(t['p']),
                'qty': float(t['q']),
                'timestamp': t['T'],
