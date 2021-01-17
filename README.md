@@ -64,11 +64,13 @@ and run backtester.py:
 
 `python3 backtester.py exchange your_user_name`
 
+add keyword `random` for randomized starting candidate, otherwise will use backtesting_settings as starting candidate
+
 
 
 ------------------------------------------------------------------
 
-settings, bybit example:
+about settings, bybit example:
 
 {
 
