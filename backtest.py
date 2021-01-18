@@ -359,7 +359,7 @@ def jackrabbit(df: pd.DataFrame,
     base_filepath = make_get_filepath(
         os.path.join('backtesting_results', backtesting_settings['exchange'],
                      ts_to_date(time())[:19],
-                     int(round(n_days)),
+                     str(int(round(n_days))),
                      '')
     )
     trades_filepath = make_get_filepath(os.path.join(base_filepath, 'trades', ''))
