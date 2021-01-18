@@ -357,10 +357,12 @@ def jackrabbit(df: pd.DataFrame,
     ms = np.array([1/(i/2 + 16) for i in range(ks)])
     ms = ((ms - ms.min()) / (ms.max() - ms.min()))
     base_filepath = make_get_filepath(
-        f"backtesting_results/{backtesting_settings['exchange']}/" +
-        f"{ts_to_date(time())[:19]}_{int(round(n_days))}/"
+        os.path.join('backtesting_results', backtesting_settings['exchange'],
+                     ts_to_date(time())[:19],
+                     int(round(n_days)),
+                     '')
     )
-    trades_filepath = make_get_filepath(base_filepath + 'trades/')
+    trades_filepath = make_get_filepath(os.path.join(base_filepath, 'trades', ''))
     json.dump(backtesting_settings, open(base_filepath + 'backtesting_settings.json', 'w'),
               indent=4, sort_keys=True)
 
@@ -453,7 +455,8 @@ def get_new_candidate(ranges: dict, best: dict, m=0.2):
 
 def iter_chunks(exchange: str, symbol: str) -> Iterator[pd.DataFrame]:
     chunk_size = 100000
-    filepath = f'historical_data/{exchange}/agg_trades_futures/{symbol}/'
+    filepath = os.path.join('historical_data', exchange, 'agg_trades_futures', symbol, '')
+
     if os.path.isdir(filepath):
         filenames = sorted([f for f in os.listdir(filepath) if f.endswith('.csv')],
                            key=lambda x: int(x.replace('.csv', '')))
@@ -488,9 +491,10 @@ async def load_trades(exchange: str, user: str, symbol: str, n_days: float) -> p
         else:
             print(exchange, 'not found')
             return
-        filepath = make_get_filepath(f'historical_data/{exchange}/agg_trades_futures/{symbol}/')
+        filepath = make_get_filepath(os.path.join('historical_data', exchange, 'agg_trades_futures',
+                                                  symbol, ''))
         cache_filepath = make_get_filepath(
-            f'historical_data/{exchange}/agg_trades_futures/{symbol}_cache/'
+            os.path.join('historical_data', exchange, 'agg_trades_futures', symbol + '_cache', '')
         )
         cache_filenames = [f for f in os.listdir(cache_filepath) if f.endswith('.csv')]
         ids = set()
@@ -568,11 +572,11 @@ async def load_trades(exchange: str, user: str, symbol: str, n_days: float) -> p
 async def main():
     exchange = sys.argv[1]
     user = sys.argv[2]
-    base_filepath = f'backtesting_settings/{exchange}/'
-    backtesting_settings = json.load(open(f'{base_filepath}/backtesting_settings.json'))
+    base_filepath = os.path.join('backtesting_settings', exchange, '')
+    backtesting_settings = json.load(open(os.path.join(base_filepath, 'backtesting_settings.json')))
     symbol = backtesting_settings['symbol']
     n_days = backtesting_settings['n_days']
-    ranges = json.load(open(f'{base_filepath}/ranges.json'))
+    ranges = json.load(open(os.path.join(base_filepath, 'ranges.json')))
     print(base_filepath)
     if 'random' in sys.argv:
         print('using randomized starting candidate')
