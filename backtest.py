@@ -358,7 +358,7 @@ def jackrabbit(df: pd.DataFrame,
     ms = ((ms - ms.min()) / (ms.max() - ms.min()))
     base_filepath = make_get_filepath(
         os.path.join('backtesting_results', backtesting_settings['exchange'],
-                     ts_to_date(time())[:19],
+                     ts_to_date(time())[:19].replace(':', '_'),
                      str(int(round(n_days))),
                      '')
     )
