@@ -95,7 +95,6 @@ def calc_default_qty(min_qty: float,
                      qty_step: float,
                      balance_ito_contracts: float,
                      qty_balance_pct: float) -> float:
-    #print(balance_ito_contracts, qty_balance_pct, balance_ito_contracts * qty_balance_pct)
     return max(min_qty, round_dn(balance_ito_contracts * abs(qty_balance_pct), qty_step))
 
 
@@ -244,7 +243,7 @@ class Bot:
         self.grid_step = settings['grid_step']
         self.min_markup = settings['min_markup']
         self.max_markup = settings['max_markup']
-        self.margin_limit = settings['margin_limit']
+        self.balance = settings['balance']
         self.n_entry_orders = settings['n_entry_orders']
         self.n_close_orders = settings['n_close_orders']
         self.default_qty = settings['default_qty']
@@ -362,13 +361,13 @@ class Bot:
                          'price': self.ob[0], 'reduce_only': True}]
         else:
             last_price_diff_limit = 0.05
-            margin_limit = self.position['balance'] if self.margin_limit <= 0 else self.margin_limit
+            balance = self.position['balance'] if self.balance <= 0 else self.balance
             default_qty = self.default_qty if self.default_qty > 0.0 else \
-                self.calc_default_qty(margin_limit, self.price)
+                self.calc_default_qty(balance, self.price)
             if self.dynamic_grid:
-                orders = self.calc_dynamic_orders(last_price_diff_limit, margin_limit, default_qty)
+                orders = self.calc_dynamic_orders(last_price_diff_limit, balance, default_qty)
             else:
-                orders = self.calc_static_orders(last_price_diff_limit, margin_limit, default_qty)
+                orders = self.calc_static_orders(last_price_diff_limit, balance, default_qty)
             if self.position['size'] > 0.0:
                 ask_qtys, ask_prices = calc_long_closes(self.price_step,
                                                         self.qty_step,
@@ -404,7 +403,7 @@ class Bot:
             return orders
 
 
-    def calc_static_orders(self, last_price_diff_limit, margin_limit, default_qty):
+    def calc_static_orders(self, last_price_diff_limit, balance, default_qty):
         orders = []
         if self.position['size'] == 0: # no pos
             bid_price = self.pgrdn(self.ob[0])
@@ -423,9 +422,9 @@ class Bot:
             pos_size = self.position['size']
             for k in range(self.n_entry_orders):
                 bid_qty = calc_entry_qty(self.qty_step, self.ddown_factor, default_qty,
-                                         self.calc_max_pos_size(margin_limit, bid_price), pos_size)
+                                         self.calc_max_pos_size(balance, bid_price), pos_size)
                 pos_size += bid_qty
-                if self.calc_margin_cost(pos_size, self.position['price']) > margin_limit or \
+                if self.calc_margin_cost(pos_size, self.position['price']) > balance or \
                         calc_diff(bid_price, self.price) > last_price_diff_limit:
                     break
                 orders.append({'side': 'buy', 'qty': bid_qty, 'price': bid_price, 'type': 'limit',
@@ -436,9 +435,9 @@ class Bot:
             pos_size = -self.position['size']
             for k in range(self.n_entry_orders):
                 ask_qty = calc_entry_qty(self.qty_step, self.ddown_factor, default_qty,
-                                         self.calc_max_pos_size(margin_limit, ask_price), pos_size)
+                                         self.calc_max_pos_size(balance, ask_price), pos_size)
                 pos_size += ask_qty
-                if self.calc_margin_cost(pos_size, self.position['price']) > margin_limit or \
+                if self.calc_margin_cost(pos_size, self.position['price']) > balance or \
                         calc_diff(ask_price, self.price) > last_price_diff_limit:
                     break
                 orders.append({'side': 'sell', 'qty': ask_qty, 'price': ask_price, 'type': 'limit',
@@ -447,7 +446,7 @@ class Bot:
         return orders
 
 
-    def calc_dynamic_orders(self, last_price_diff_limit, margin_limit, default_qty):
+    def calc_dynamic_orders(self, last_price_diff_limit, balance, default_qty):
         orders = []
         if self.position['size'] == 0: # no pos
             bid_price = self.ob[0]
@@ -468,12 +467,12 @@ class Bot:
             bid_price = min(self.ob[0], calc_long_reentry_price(self.price_step,
                                                                 self.grid_spacing,
                                                                 self.grid_coefficient,
-                                                                margin_limit,
+                                                                balance,
                                                                 pos_margin,
                                                                 pos_price))
             for k in range(self.n_entry_orders):
                 bid_qty = calc_entry_qty(self.qty_step, self.ddown_factor, default_qty,
-                                         self.calc_max_pos_size(margin_limit, bid_price),
+                                         self.calc_max_pos_size(balance, bid_price),
                                          pos_size)
                 new_pos_size = pos_size + bid_qty
                 pos_price = pos_price * (bid_qty / new_pos_size) + \
@@ -487,7 +486,7 @@ class Bot:
                 bid_price = min(self.ob[0], calc_long_reentry_price(self.price_step,
                                                                     self.grid_spacing,
                                                                     self.grid_coefficient,
-                                                                    margin_limit,
+                                                                    balance,
                                                                     pos_margin,
                                                                     pos_price))
         else: # shrt pos
@@ -497,12 +496,12 @@ class Bot:
             ask_price = max(self.ob[1], calc_shrt_reentry_price(self.price_step,
                                                                 self.grid_spacing,
                                                                 self.grid_coefficient,
-                                                                margin_limit,
+                                                                balance,
                                                                 pos_margin,
                                                                 pos_price))
             for k in range(self.n_entry_orders):
                 ask_qty = calc_entry_qty(self.qty_step, self.ddown_factor, default_qty,
-                                         self.calc_max_pos_size(margin_limit, ask_price),
+                                         self.calc_max_pos_size(balance, ask_price),
                                          pos_size)
                 new_pos_size = pos_size - ask_qty
                 pos_price = pos_price * (-ask_qty / new_pos_size) + \
@@ -516,7 +515,7 @@ class Bot:
                 ask_price = max(self.ob[1], calc_shrt_reentry_price(self.price_step,
                                                                     self.grid_spacing,
                                                                     self.grid_coefficient,
-                                                                    margin_limit,
+                                                                    balance,
                                                                     pos_margin,
                                                                     pos_price))
         return orders

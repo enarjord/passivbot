@@ -201,8 +201,8 @@ class BinanceBot(Bot):
     def calc_margin_cost(self, qty: float, price: float) -> float:
         return qty * price / self.leverage
 
-    def calc_max_pos_size(self, margin_limit: float, price: float):
-        return (margin_limit / price) * self.leverage
+    def calc_max_pos_size(self, balance: float, price: float):
+        return (balance / price) * self.leverage
 
     async def start_websocket(self) -> None:
         self.stop_websocket = False

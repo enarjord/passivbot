@@ -24,6 +24,15 @@ a recent update to ccxt broke the bybit bot, upgrade it to fix:
 
 
 ------------------------------------------------------------------
+change log
+
+2021-01-19
+- renamed settings["margin_limit"] to settings["balance"]
+- bug fixes and changes in trade data downloading
+- if there already is historical trade data downloaded, run the script `rename_trade_data_csvs.py` to rename all files
+
+
+------------------------------------------------------------------
 
 released freely -- anybody may copy, redistribute, modify, use for commercial, non-commercial, educational or non-educational purposes, censor, claim as one's own or otherwise do or not do whatever without permission from anybody
 
@@ -50,7 +59,7 @@ overview
 
 the bot's purpose is to accumulate btc (or another coin) in bybit inverse and usdt in binance usdt futures
 
-it is a market maker bot, making a grid of limit orders above and below price
+it is a market maker bot, making a grid of post only limit orders above and below price
 
 it listens to websocket live stream of trades, and updates its orders continuously
 
@@ -58,7 +67,7 @@ there are two modes, static grid and dynamic grid, set by user in settings
 
 static grid mode places entries at fixed absolute price intervals
 
-dynamic grid mode places entries at a percentage distance from position price, modified by pos_margin / margin_limit
+dynamic grid mode places entries at a percentage distance from position price, modified by pos_margin / balance
 
 ------------------------------------------------------------------
 
@@ -87,7 +96,7 @@ about settings, bybit example:
     "default_qty": 1.0,                   # entry quantity.
                                           # scalable entry quantity mode:
                                           # if "default_qty" is set to a negative value,
-                                          # it becomes a percentage of margin_limit (which is actual account balance if margin_limit is set to -1).
+                                          # it becomes a percentage of balance (which is actual account balance if settings["balance"] is set to -1).
                                           # the bot will calculate entry qty using the following formula:
                                           # default_qty = max(minimum_qty, round_dn(balance_in_terms_of_contracts * abs(settings["default_qty"]), qty_step))
                                           # bybit BTCUSD example:
@@ -103,7 +112,7 @@ about settings, bybit example:
     "dynamic_grid": True,                 # bot has two modes: dynamic grid and static grid. True for dynamic mode, False for static mode.
     "grid_coefficient": 245.0,            # used in dynamic grid mode.
     "grid_spacing": 0.0026,               # used in dynamic grid mode.
-                                          # next entry price is pos_price * (1 +- grid_spacing * (1 + pos_margin / margin_limit * grid_coefficient)).
+                                          # next entry price is pos_price * (1 +- grid_spacing * (1 + pos_margin / balance * grid_coefficient)).
                                           
     "grid_step": 116.5                    # used in static mode.  absolute price interval.
                                           
@@ -116,8 +125,8 @@ about settings, bybit example:
     
     "market_stop_loss": true,             # if true will soft stop with market orders, otherwise soft stops with limit orders at order book's higest_bid/lowest_ask
     
-    "margin_limit": 0.0015                # used to limit pos size and to modify grid spacing in dynamic mode.
-                                          # set margin_limit to -1 to use account balance fetched from exchange as margin limit.
+    "balance": 0.0015                     # used to limit pos size and to modify grid spacing in dynamic mode.
+                                          # set settings["balance"] to -1 to use account balance fetched from exchange as balance.
                                           
     "n_close_orders": 20,                 # max n close orders.
     "n_entry_orders": 8,                  # max n entry orders.

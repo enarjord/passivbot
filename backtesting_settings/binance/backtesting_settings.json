@@ -6,7 +6,7 @@
     "inverse": false,
     "leverage": 100,
     "maker_fee": 0.00018,
-    "margin_limit": 12.0,
+    "balance": 12.0,
     "market_stop_loss": false,
     "min_qty": 0.001,
     "n_entry_orders": 10,
