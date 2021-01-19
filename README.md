@@ -24,6 +24,15 @@ a recent update to ccxt broke the bybit bot, upgrade it to fix:
 
 
 ------------------------------------------------------------------
+change log
+
+2021-01-19
+- renamed settings["margin_limit"] to settings["balance"]
+- bug fixes in downloading trade data
+- if there already is historical trade data downloaded, run the script `rename_trade_data_csvs.py` to rename all files
+
+
+------------------------------------------------------------------
 
 released freely -- anybody may copy, redistribute, modify, use for commercial, non-commercial, educational or non-educational purposes, censor, claim as one's own or otherwise do or not do whatever without permission from anybody
 
