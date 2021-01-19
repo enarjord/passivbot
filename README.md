@@ -16,6 +16,12 @@ join telegram group for assistance and discussion of settings and live results
 
 https://t.me/joinchat/Fpwl8dVn0xAH8-ML
 
+note:
+
+a recent update to ccxt broke the bybit bot, upgrade it to fix:
+
+`python3 -m pip install --upgrade ccxt`
+
 
 ------------------------------------------------------------------
 
