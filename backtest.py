@@ -452,23 +452,27 @@ def get_new_candidate(ranges: dict, best: dict, m=0.2):
     return {k_: new_candidate[k_] for k_ in sorted(new_candidate)}
 
 
-def iter_chunks(exchange: str, symbol: str) -> Iterator[pd.DataFrame]:
-    chunk_size = 100000
-    filepath = os.path.join('historical_data', exchange, 'agg_trades_futures', symbol, '')
-
+def get_downloaded_trades(filepath: str, age_limit_millis: float) -> (pd.DataFrame, dict):
     if os.path.isdir(filepath):
         filenames = sorted([f for f in os.listdir(filepath) if f.endswith('.csv')],
                            key=lambda x: int(x.replace('.csv', '')))
+        chunks = []
+        chunk_lengths = {}
         for f in filenames[::-1]:
             chunk = pd.read_csv(filepath + f).set_index('trade_id')
-            if chunk is not None:
-                print('loaded chunk of trades', f, ts_to_date(chunk.timestamp.iloc[0] / 1000))
-                yield chunk
-            else:
-                yield None
-        yield None
+            chunk_lengths[f] = len(chunk)
+            print('\rloaded chunk of trades', f, ts_to_date(chunk.timestamp.iloc[0] / 1000),
+                  end='     ')
+            chunks.append(chunk)
+            if chunk.timestamp.iloc[0] < age_limit_millis:
+                break
+        if chunks:
+            df = pd.concat(chunks, axis=0).sort_index()
+            return df[~df.index.duplicated()], chunk_lengths
+        else:
+            return None, {}
     else:
-        yield None
+        return None, {}
 
 
 async def load_trades(exchange: str, user: str, symbol: str, n_days: float) -> pd.DataFrame:
@@ -481,98 +485,85 @@ async def load_trades(exchange: str, user: str, symbol: str, n_days: float) -> p
             print('           to', id_)
         return id_
 
-    cc = init_ccxt(exchange, user)
-    try:
-        if exchange == 'binance':
-            fetch_trades_func = binance_fetch_trades
-        elif exchange == 'bybit':
-            fetch_trades_func = bybit_fetch_trades
-        else:
-            print(exchange, 'not found')
-            return
-        filepath = make_get_filepath(os.path.join('historical_data', exchange, 'agg_trades_futures',
-                                                  symbol, ''))
-        cache_filepath = make_get_filepath(
-            os.path.join('historical_data', exchange, 'agg_trades_futures', symbol + '_cache', '')
-        )
-        cache_filenames = [f for f in os.listdir(cache_filepath) if f.endswith('.csv')]
-        ids = set()
+    def load_cache():
+        cache_filenames = [f for f in os.listdir(cache_filepath) if '.csv' in f]
         if cache_filenames:
-            print('loading cached trades...')
-            cached_trades = pd.concat([pd.read_csv(cache_filepath + f) for f in cache_filenames],
-                                      axis=0)
-            cached_trades = cached_trades.set_index('trade_id').sort_index()
-            cached_trades = cached_trades[~cached_trades.index.duplicated()]
-            ids.update(cached_trades.index)
-        else:
-            cached_trades = None
-        age_limit = time() - 60 * 60 * 24 * n_days
-        age_limit_millis = age_limit * 1000
-        print('age_limit', ts_to_date(age_limit))
-        chunk_iterator = iter_chunks(exchange, symbol)
-        chunk = next(chunk_iterator)
-        chunks = {} if chunk is None else {int(chunk.index[0]): chunk}
-        if chunk is not None:
-            ids.update(chunk.index)
-        min_id = min(ids) if ids else 0
-        new_trades = await fetch_trades_func(cc, symbol)
-        cached_ids = set()
-        k = 0
-        print('debug a')
-        print('min max', min(ids), max(ids))
+            print('loading cached trades')
+            cache_df = pd.concat([pd.read_csv(cache_filepath + f) for f in cache_filenames], axis=0)
+            cache_df = cache_df.set_index('trade_id')
+            return cache_df
+        return None
+
+    if exchange == 'binance':
+        fetch_trades_func = binance_fetch_trades
+    elif exchange == 'bybit':
+        fetch_trades_func = bybit_fetch_trades
+    else:
+        print(exchange, 'not found')
+        return
+    cc = init_ccxt(exchange, user)
+    filepath = make_get_filepath(os.path.join('historical_data', exchange, 'agg_trades_futures',
+                                              symbol, ''))
+    cache_filepath = make_get_filepath(filepath.replace(symbol, symbol + '_cache'))
+    age_limit = time() - 60 * 60 * 24 * n_days
+    age_limit_millis = age_limit * 1000
+    print('age_limit', ts_to_date(age_limit))
+    cache_df = load_cache()
+    trades_df, chunk_lengths = get_downloaded_trades(filepath, age_limit_millis)
+    ids = set()
+    if trades_df is not None:
+        ids.update(trades_df.index)
+    if cache_df is not None:
+        ids.update(cache_df.index)
+    gaps = []
+    if trades_df is not None and len(trades_df) > 0:
+        # 
         sids = sorted(ids)
         for i in range(1, len(sids)):
             if sids[i-1] + 1 != sids[i]:
-                print('gap', sids[i-1], sids[i])
-        print('debug b')
-        while True:
-            if new_trades[0]['timestamp'] <= age_limit_millis:
-                break
-            from_id = new_trades[0]['trade_id'] - 1
-            while True:
-                if chunk is None:
-                    min_id = 0
-                    break
-                from_id = skip_ids(from_id, ids)
-                if from_id < min_id:
-                    chunk = next(chunk_iterator)
-                    if chunk is None:
-                        min_id = 0
-                        break
-                    else:
-                        chunks[int(chunk.index[0])] = chunk
-                        ids.update(chunk.index)
-                        min_id = min(ids)
-                        if chunk.timestamp.max() < age_limit_millis:
-                            break
-                else:
-                    break
-            from_id = skip_ids(from_id, ids)
-            from_id -= 999
-            new_trades = await fetch_trades_func(cc, symbol, from_id=from_id) + new_trades
-            k += 1
-            if k % 20 == 0:
-                print('dumping cache')
-                cache_df = pd.DataFrame([t for t in new_trades
-                                         if t['trade_id'] not in cached_ids]).set_index('trade_id')
-                cache_df.to_csv(cache_filepath + str(int(time() * 1000)) + '.csv')
-                cached_ids.update(cache_df.index)
-        new_trades_df = pd.DataFrame(new_trades).set_index('trade_id')
-        trades_updated = pd.concat(list(chunks.values()) + [new_trades_df, cached_trades], axis=0)
-        no_dup = trades_updated[~trades_updated.index.duplicated()]
-        no_dup_sorted = no_dup.sort_index()
-        chunk_size = 100000
-        chunk_ids = no_dup_sorted.index // chunk_size * chunk_size
-        for g in no_dup_sorted.groupby(chunk_ids):
-            if g[0] not in chunks or len(chunks[g[0]]) != chunk_size:
-                print('dumping chunk', g[0])
-                g[1].to_csv(f'{filepath}{str(g[0])}.csv')
-        for f in [f_ for f_ in os.listdir(cache_filepath) if f_.endswith('.csv')]:
-            os.remove(cache_filepath + f)
-        await cc.close()
-        return no_dup_sorted[no_dup_sorted.timestamp >= age_limit_millis]
-    except KeyboardInterrupt:
-        await cc.close()
+                gaps.append((sids[i-1], sids[i]))
+        if gaps:
+            print('gaps', gaps)
+        # 
+    new_trades = await fetch_trades_func(cc, symbol)
+    k = 0
+    while True:
+        if new_trades[0]['timestamp'] <= age_limit_millis:
+            new_trades_df = pd.DataFrame(new_trades).set_index('trade_id')
+            new_trades_df.to_csv(f'{cache_filepath}{new_trades_df.index[0]}.csv')
+            break
+        from_id = skip_ids(new_trades[0]['trade_id'] - 1, ids) - 999
+        new_trades = await fetch_trades_func(cc, symbol, from_id=from_id) + new_trades
+        ids.update([e['trade_id'] for e in new_trades])
+        k += 1
+        if k % 20 == 0:
+            print('caching trades...')
+            new_tdf = pd.DataFrame(new_trades).set_index('trade_id')
+            cache_filename = f'{cache_filepath}{new_tdf.index[0]}_{new_tdf.index[-1]}.csv'
+            new_tdf.to_csv(cache_filename)
+            new_trades = [new_trades[0]]
+    tdf = pd.concat([load_cache(), trades_df], axis=0).sort_index()
+    tdf = tdf[~tdf.index.duplicated()]
+    dump_chunks(filepath, tdf, chunk_lengths)
+    cache_filenames = [f for f in os.listdir(cache_filepath) if '.csv' in f]
+    print('removing cache...\n')
+    for filename in cache_filenames:
+        print(f'\rremoving {filename}', end='   ')
+        os.remove(cache_filepath + filename)
+    await cc.close()
+    return tdf[tdf.timestamp >= age_limit_millis]
+
+
+def dump_chunks(filepath: str, tdf: pd.DataFrame, chunk_lengths: dict, chunk_size=100000):
+    chunk_ids = tdf.index // chunk_size * chunk_size
+    for g in tdf.groupby(chunk_ids):
+        filename = f'{g[1].index[0]}_{g[1].index[-1]}.csv'
+        if filename in chunk_lengths and chunk_lengths[filename] == chunk_size:
+            print('chunk already complete', filename)
+            continue
+        else:
+            print('dumping chunk', filename)
+            g[1].to_csv(f'{filepath}{filename}')
 
 
 async def main():
