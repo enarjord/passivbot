@@ -40,9 +40,9 @@ def backtest(df: pd.DataFrame, settings: dict):
     if inverse:
         calc_cost = lambda qty_, price_: qty_ / price_
         calc_liq_price = lambda balance_, pos_size_, pos_price_: \
-            bybit_calc_cross_shrt_liq_price(balance_, pos_size_, pos_price_) \
+            bybit_calc_cross_shrt_liq_price(balance_, pos_size_, pos_price_, leverage=leverage) \
                 if pos_size_ < 0.0 else \
-                bybit_calc_cross_long_liq_price(balance_, pos_size_, pos_price_)
+                bybit_calc_cross_long_liq_price(balance_, pos_size_, pos_price_, leverage=leverage)
         if settings['default_qty'] <= 0.0:
             calc_default_qty_ = lambda balance_, last_price: \
                 calc_default_qty(min_qty, qty_step, balance_ * last_price, settings['default_qty'])
@@ -135,7 +135,7 @@ def backtest(df: pd.DataFrame, settings: dict):
                     if break_on_loss:
                         print('shrt break on loss')
                         return []
-                    # controlled shrt loss
+                    # shrt soft stop
                     bid_qty = round_up(-pos_size * stop_loss_pos_reduction, qty_step)
                     if settings['market_stop_loss']:
                         bid_price = round_up(row.price + 9e-9, price_step) # market order
@@ -352,8 +352,11 @@ def jackrabbit(df: pd.DataFrame,
     best_gain = -9e9
     candidate = best
 
-    ks = 130
-    k = 0
+    if 'n_jackrabbit_iterations' in backtesting_settings:
+        ks = backtesting_settings['n_jackrabbit_iterations']
+    else:
+        ks = 130
+    k = backtesting_settings['starting_k'] if 'starting_k' in backtesting_settings else 0
     ms = np.array([1/(i/2 + 16) for i in range(ks)])
     ms = ((ms - ms.min()) / (ms.max() - ms.min()))
     base_filepath = make_get_filepath(
