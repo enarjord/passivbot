@@ -34,7 +34,7 @@ def backtest(df: pd.DataFrame, settings: dict):
     ddown_factor = settings['ddown_factor']
 
     leverage = settings['leverage']
-    margin_limit = settings['margin_limit']
+    starting_balance = settings['balance']
     compounding = settings['compounding']
 
     if inverse:
@@ -48,7 +48,7 @@ def backtest(df: pd.DataFrame, settings: dict):
                 calc_default_qty(min_qty, qty_step, balance_ * last_price, settings['default_qty'])
         else:
             calc_default_qty_ = lambda balance_, last_price: settings['default_qty']
-        calc_max_pos_size = lambda margin_limit_, price_: margin_limit_ * price_ * leverage
+        calc_max_pos_size = lambda balance_, price_: balance_ * price_ * leverage
     else:
         calc_cost = lambda qty_, price_: qty_ * price_
         calc_liq_price = lambda balance_, pos_size_, pos_price_: \
@@ -60,7 +60,7 @@ def backtest(df: pd.DataFrame, settings: dict):
                 calc_default_qty(min_qty, qty_step, balance_ / last_price, settings['default_qty'])
         else:
             calc_default_qty_ = lambda balance_, last_price: settings['default_qty']
-        calc_max_pos_size = lambda margin_limit_, price_: margin_limit_ / price_ * leverage
+        calc_max_pos_size = lambda balance_, price_: balance_ / price_ * leverage
 
 
     if settings['dynamic_grid']:
@@ -81,7 +81,7 @@ def backtest(df: pd.DataFrame, settings: dict):
             round_up(max(pos_price_ + 9e-9, lowest_ask_), grid_step)
 
 
-    balance = margin_limit
+    balance = starting_balance
     print('default_qty', calc_default_qty_(balance, df.price.iloc[0]))
 
     maker_fee = settings['maker_fee']
@@ -152,7 +152,7 @@ def backtest(df: pd.DataFrame, settings: dict):
                                        'margin_cost': margin_cost, 'liq_price': liq_price})
                         pnl_sum += pnl
                         if compounding:
-                            balance = max(margin_limit, balance + pnl)
+                            balance = max(starting_balance, balance + pnl)
                         continue
                     bid_price = ob[0]
                 else:                                               # no shrt close
@@ -179,7 +179,7 @@ def backtest(df: pd.DataFrame, settings: dict):
                                    'margin_cost': margin_cost, 'liq_price': liq_price})
                     pnl_sum += pnl
                     if compounding:
-                        balance = max(margin_limit, balance + pnl)
+                        balance = max(starting_balance, balance + pnl)
                     line = f'\r{row.Index / len(df):.2f} pnl sum {pnl_sum:.6f} '
                     liq_diff = abs(liq_price - row.price) / row.price
                     line += f'balance {balance:.6f} '
@@ -203,7 +203,7 @@ def backtest(df: pd.DataFrame, settings: dict):
                                    'margin_cost': margin_cost, 'liq_price': liq_price})
                     pnl_sum += pnl
                     if compounding:
-                        balance = max(margin_limit, balance + pnl)
+                        balance = max(starting_balance, balance + pnl)
                     line = f'\r{row.Index / len(df):.2f} pnl sum {pnl_sum:.6f} '
                     liq_diff = abs(liq_price - row.price) / row.price
 
@@ -224,7 +224,7 @@ def backtest(df: pd.DataFrame, settings: dict):
                 else:                                                # shrt reentry
                     pos_margin = calc_cost(-pos_size, pos_price) / leverage
                     ask_price = calc_shrt_reentry_price_(balance, pos_margin, pos_price, ob[1])
-                    max_pos_size = calc_max_pos_size(margin_limit, ask_price)
+                    max_pos_size = calc_max_pos_size(balance, ask_price)
                     ask_qty = -calc_entry_qty(qty_step, ddown_factor,
                                               calc_default_qty_(balance, ob[1]), max_pos_size,
                                               pos_size)
@@ -256,7 +256,7 @@ def backtest(df: pd.DataFrame, settings: dict):
                                        'margin_cost': margin_cost, 'liq_price': liq_price})
                         pnl_sum += pnl
                         if compounding:
-                            balance = max(margin_limit, balance + pnl)
+                            balance = max(starting_balance, balance + pnl)
                         continue
                     ask_price = ob[1]
                 else:                                                # no close
@@ -283,7 +283,7 @@ def backtest(df: pd.DataFrame, settings: dict):
                                    'margin_cost': margin_cost, 'liq_price': liq_price})
                     pnl_sum += pnl
                     if compounding:
-                        balance = max(margin_limit, balance + pnl)
+                        balance = max(starting_balance, balance + pnl)
                     line = f'\r{row.Index / len(df):.2f} pnl sum {pnl_sum:.6f} '
                     liq_diff = abs(liq_price - row.price) / row.price
                     line += f'balance {balance:.6f} '
@@ -307,7 +307,7 @@ def backtest(df: pd.DataFrame, settings: dict):
                                    'margin_cost': margin_cost, 'liq_price': liq_price})
                     pnl_sum += pnl
                     if compounding:
-                        balance = max(margin_limit, balance + pnl)
+                        balance = max(starting_balance, balance + pnl)
                     line = f'\r{row.Index / len(df):.2f} pnl sum {pnl_sum:.6f} '
                     liq_diff = abs(liq_price - row.price) / row.price
                     line += f'balance {balance:.6f} '
@@ -397,7 +397,7 @@ def jackrabbit(df: pd.DataFrame,
             max_margin_cost = (abs_pos_sizes / tdf.pos_price / settings_['leverage']).max()
         else:
             max_margin_cost = (abs_pos_sizes * tdf.pos_price / settings_['leverage']).max()
-        gain = (pnl_sum + settings_['margin_limit']) / settings_['margin_limit']
+        gain = (pnl_sum + settings_['balance']) / settings_['balance']
         average_daily_gain = gain ** (1 / n_days)
         n_trades = len(tdf)
         result = {'n_closes': n_closes, 'pnl_sum': pnl_sum, 'loss_sum': loss_sum,
@@ -518,6 +518,13 @@ async def load_trades(exchange: str, user: str, symbol: str, n_days: float) -> p
         new_trades = await fetch_trades_func(cc, symbol)
         cached_ids = set()
         k = 0
+        print('debug a')
+        print('min max', min(ids), max(ids))
+        sids = sorted(ids)
+        for i in range(1, len(sids)):
+            if sids[i-1] + 1 != sids[i]:
+                print('gap', sids[i-1], sids[i])
+        print('debug b')
         while True:
             if new_trades[0]['timestamp'] <= age_limit_millis:
                 break
