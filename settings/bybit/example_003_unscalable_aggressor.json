@@ -1,0 +1,18 @@
+{
+    "default_qty": 2.0,
+    "ddown_factor": 0.0,
+    "dynamic_grid": true,
+    "grid_coefficient": 0.0,
+    "grid_spacing": 0.0033,
+    "grid_step": 0.0,
+    "liq_diff_threshold": 0.033,
+    "leverage": 100,
+    "balance": -1,
+    "market_stop_loss": false,
+    "min_markup": 0.0002,
+    "max_markup": 0.0239,
+    "n_close_orders": 22,
+    "n_entry_orders": 10,
+    "stop_loss_pos_reduction": 0.0037,
+    "symbol": "BTCUSD"
+}
