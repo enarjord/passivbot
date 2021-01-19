@@ -28,7 +28,7 @@ change log
 
 2021-01-19
 - renamed settings["margin_limit"] to settings["balance"]
-- bug fixes in downloading trade data
+- bug fixes and changes in trade data downloading
 - if there already is historical trade data downloaded, run the script `rename_trade_data_csvs.py` to rename all files
 
 
