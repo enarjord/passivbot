@@ -14,7 +14,7 @@ dependencies, install with pip:
 
 join telegram group for assistance and discussion of settings and live results
 
-https://t.me/joinchat/Fpwl8dVn0xAH8-ML
+https://t.me/passivbot_futures
 
 note:
 
