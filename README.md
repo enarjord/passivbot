@@ -79,9 +79,9 @@ to iterate multiple settings,
 
 go to backtesting_settings/{exchange}/, adjust backtesting_settings.json and ranges.json
 
-and run backtester.py:
+and run backtest.py:
 
-`python3 backtester.py exchange your_user_name`
+`python3 backtest.py exchange your_user_name`
 
 add keyword `random` for randomized starting candidate, otherwise will use backtesting_settings as starting candidate
 
