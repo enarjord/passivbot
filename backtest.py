@@ -458,7 +458,7 @@ def get_new_candidate(ranges: dict, best: dict, m=0.2):
 def get_downloaded_trades(filepath: str, age_limit_millis: float) -> (pd.DataFrame, dict):
     if os.path.isdir(filepath):
         filenames = sorted([f for f in os.listdir(filepath) if f.endswith('.csv')],
-                           key=lambda x: int(x.replace('.csv', '')))
+                           key=lambda x: int(x[:x.find('_')].replace('.cs', '').replace('v', '')))
         chunks = []
         chunk_lengths = {}
         for f in filenames[::-1]:
