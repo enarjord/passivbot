@@ -15,6 +15,8 @@
     "qty_step": 0.001,
     "symbol": "ETHUSDT",
     "taker_fee": 0.00036,
+    "n_jackrabbit_iterations": 140,
+    "starting_k": 0,
 
     "ddown_factor": 0.0,
     "max_markup": 0.0139,
