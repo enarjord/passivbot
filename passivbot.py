@@ -475,6 +475,8 @@ class Bot:
                                          self.calc_max_pos_size(balance, bid_price),
                                          pos_size)
                 new_pos_size = pos_size + bid_qty
+                if new_pos_size >= self.calc_max_pos_size(balance, bid_price):
+                    break
                 pos_price = pos_price * (bid_qty / new_pos_size) + \
                     bid_price * (pos_size / new_pos_size)
                 pos_size = new_pos_size
@@ -504,6 +506,8 @@ class Bot:
                                          self.calc_max_pos_size(balance, ask_price),
                                          pos_size)
                 new_pos_size = pos_size - ask_qty
+                if abs(new_pos_size) >= self.calc_max_pos_size(balance, ask_price):
+                    break
                 pos_price = pos_price * (-ask_qty / new_pos_size) + \
                     ask_price * (pos_size / new_pos_size)
                 pos_size = new_pos_size
