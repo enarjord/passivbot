@@ -14,7 +14,6 @@ from time import time, sleep
 from typing import Callable, Iterator
 from passivbot import init_ccxt, load_key_secret, load_settings, make_get_filepath, print_, \
     ts_to_date, flatten, filter_orders, Bot, start_bot, round_up, round_dn, calc_default_qty
-from binance import fetch_trades as fetch_trades_binance
 
 
 def first_capitalized(s: str):
@@ -101,7 +100,6 @@ class BybitBot(Bot):
     def __init__(self, user: str, settings: dict):
         super().__init__(user, settings)
         self.cc = init_ccxt('bybit', user)
-        self.binance_cc = init_ccxt('binance', 'example_user')
         self.max_leverage = 100
 
     async def _init(self):
@@ -211,17 +209,6 @@ class BybitBot(Bot):
                 'qty': o['result']['qty'], 'price': o['result']['price']}
 
     async def fetch_trades(self, from_id: int = None):
-        #### QUICK FIX
-        #### bybit returns empty list when attempting to fetch btcusd trade history,
-        #### works for other symbols.
-        #### use binance BTCUSDT data instead until bybit works again
-        ####
-        #### update:
-        #### BTCUSD works again
-        #if self.symbol == 'BTCUSD':
-        if False:
-            return await fetch_trades_binance(self.binance_cc, self.symbol.replace('USD', 'USDT'),
-                                              from_id)
         return await fetch_trades(self.cc, self.symbol, from_id)
 
     def calc_margin_cost(self, qty: float, price: float) -> float:
