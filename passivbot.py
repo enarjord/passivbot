@@ -542,39 +542,40 @@ class Bot:
 
     async def decide(self):
         if self.price <= self.highest_bid:
+            self.ts_locked['decide'] = time()
             print_(['bid maybe taken'], n=True)
             await self.cancel_and_create()
             self.ts_released['decide'] = time()
             return
-        elif self.price >= self.lowest_ask:
+        if self.price >= self.lowest_ask:
+            self.ts_locked['decide'] = time()
             print_(['ask maybe taken'], n=True)
             await self.cancel_and_create()
             self.ts_released['decide'] = time()
             return
-        elif time() - self.ts_locked['decide'] > 5:
+        if time() - self.ts_locked['decide'] > 5:
+            self.ts_locked['decide'] = time()
             await self.cancel_and_create()
             self.ts_released['decide'] = time()
             return
-        else:
-            if time() - self.ts_released['print'] >= 0.5:
-                self.ts_released['print'] = time()
-                line = f"{self.symbol} "
-                if self.position['size'] == 0:
-                    line += f"no position bid {self.highest_bid} ask {self.lowest_ask} "
-                    ratio = (self.price - self.highest_bid) / (self.lowest_ask - self.highest_bid)
-                elif self.position['size'] > 0.0:
-                    line += f"long {self.position['size']} @ {self.position['price']:.2f} "
-                    line += f"exit {self.lowest_ask} ddown {self.highest_bid} "
-                    ratio = (self.price - self.highest_bid) / (self.lowest_ask - self.highest_bid)
-                else:
-                    line += f"shrt {self.position['size']} @ {self.position['price']:.2f} "
-                    ratio = 1 - (self.price - self.highest_bid) / (self.lowest_ask - self.highest_bid)
-                    line += f"exit {self.highest_bid} ddown {self.lowest_ask } "
-    
-                liq_diff = calc_diff(self.position['liquidation_price'], self.price)
-                line += f"pct {ratio:.2f} liq_diff {liq_diff:.3f} last {self.price}   "
-                print_([line], r=True)
-            self.ts_released['decide'] = time()
+        if time() - self.ts_released['print'] >= 0.5:
+            self.ts_released['print'] = time()
+            line = f"{self.symbol} "
+            if self.position['size'] == 0:
+                line += f"no position bid {self.highest_bid} ask {self.lowest_ask} "
+                ratio = (self.price - self.highest_bid) / (self.lowest_ask - self.highest_bid)
+            elif self.position['size'] > 0.0:
+                line += f"long {self.position['size']} @ {self.position['price']:.2f} "
+                line += f"exit {self.lowest_ask} ddown {self.highest_bid} "
+                ratio = (self.price - self.highest_bid) / (self.lowest_ask - self.highest_bid)
+            else:
+                line += f"shrt {self.position['size']} @ {self.position['price']:.2f} "
+                ratio = 1 - (self.price - self.highest_bid) / (self.lowest_ask - self.highest_bid)
+                line += f"exit {self.highest_bid} ddown {self.lowest_ask } "
+
+            liq_diff = calc_diff(self.position['liquidation_price'], self.price)
+            line += f"pct {ratio:.2f} liq_diff {liq_diff:.3f} last {self.price}   "
+            print_([line], r=True)
 
 
     async def fetch_my_trades(self, symbol: str) -> [dict]:
@@ -620,4 +621,3 @@ async def start_bot(bot, n_tries: int = 0) -> None:
             print(f'\rrestarting bot in {k} seconds   ', end=' ')
             sleep(1)
         await start_bot(bot, n_tries + 1)
-
