@@ -241,8 +241,9 @@ class Bot:
         self.grid_coefficient = settings['grid_coefficient']
         self.grid_spacing = settings['grid_spacing']
         self.grid_step = settings['grid_step']
-        self.min_markup = settings['min_markup']
         self.max_markup = settings['max_markup']
+        self.min_markup = settings['min_markup'] if self.max_markup >= settings['min_markup'] \
+            else settings['max_markup']
         self.balance = settings['balance']
         self.n_entry_orders = settings['n_entry_orders']
         self.n_close_orders = settings['n_close_orders']
@@ -545,16 +546,16 @@ class Bot:
             await self.cancel_and_create()
             self.ts_released['decide'] = time()
             return
-        if self.price >= self.lowest_ask:
+        elif self.price >= self.lowest_ask:
             print_(['ask maybe taken'], n=True)
             await self.cancel_and_create()
             self.ts_released['decide'] = time()
             return
-        if time() - self.ts_locked['decide'] > 5:
+        elif time() - self.ts_locked['decide'] > 5:
             await self.cancel_and_create()
             self.ts_released['decide'] = time()
             return
-        if time() - self.ts_released['print'] >= 0.5:
+        elif time() - self.ts_released['print'] >= 0.5:
             self.ts_released['print'] = time()
             line = f"{self.symbol} "
             if self.position['size'] == 0:
@@ -572,6 +573,8 @@ class Bot:
             liq_diff = calc_diff(self.position['liquidation_price'], self.price)
             line += f"pct {ratio:.2f} liq_diff {liq_diff:.3f} last {self.price}   "
             print_([line], r=True)
+        else:
+            self.ts_released['decide'] = time()
 
 
     async def fetch_my_trades(self, symbol: str) -> [dict]:
