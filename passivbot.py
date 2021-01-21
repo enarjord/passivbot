@@ -555,25 +555,25 @@ class Bot:
             await self.cancel_and_create()
             self.ts_released['decide'] = time()
             return
-        elif time() - self.ts_released['print'] >= 0.5:
-            self.ts_released['print'] = time()
-            line = f"{self.symbol} "
-            if self.position['size'] == 0:
-                line += f"no position bid {self.highest_bid} ask {self.lowest_ask} "
-                ratio = (self.price - self.highest_bid) / (self.lowest_ask - self.highest_bid)
-            elif self.position['size'] > 0.0:
-                line += f"long {self.position['size']} @ {self.position['price']:.2f} "
-                line += f"exit {self.lowest_ask} ddown {self.highest_bid} "
-                ratio = (self.price - self.highest_bid) / (self.lowest_ask - self.highest_bid)
-            else:
-                line += f"shrt {self.position['size']} @ {self.position['price']:.2f} "
-                ratio = 1 - (self.price - self.highest_bid) / (self.lowest_ask - self.highest_bid)
-                line += f"exit {self.highest_bid} ddown {self.lowest_ask } "
-
-            liq_diff = calc_diff(self.position['liquidation_price'], self.price)
-            line += f"pct {ratio:.2f} liq_diff {liq_diff:.3f} last {self.price}   "
-            print_([line], r=True)
-        else:
+        else
+            if time() - self.ts_released['print'] >= 0.5:
+                self.ts_released['print'] = time()
+                line = f"{self.symbol} "
+                if self.position['size'] == 0:
+                    line += f"no position bid {self.highest_bid} ask {self.lowest_ask} "
+                    ratio = (self.price - self.highest_bid) / (self.lowest_ask - self.highest_bid)
+                elif self.position['size'] > 0.0:
+                    line += f"long {self.position['size']} @ {self.position['price']:.2f} "
+                    line += f"exit {self.lowest_ask} ddown {self.highest_bid} "
+                    ratio = (self.price - self.highest_bid) / (self.lowest_ask - self.highest_bid)
+                else:
+                    line += f"shrt {self.position['size']} @ {self.position['price']:.2f} "
+                    ratio = 1 - (self.price - self.highest_bid) / (self.lowest_ask - self.highest_bid)
+                    line += f"exit {self.highest_bid} ddown {self.lowest_ask } "
+    
+                liq_diff = calc_diff(self.position['liquidation_price'], self.price)
+                line += f"pct {ratio:.2f} liq_diff {liq_diff:.3f} last {self.price}   "
+                print_([line], r=True)
             self.ts_released['decide'] = time()
 
 
