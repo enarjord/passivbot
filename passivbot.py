@@ -449,17 +449,10 @@ class Bot:
     def calc_dynamic_orders(self, last_price_diff_limit, balance, default_qty):
         orders = []
         if self.position['size'] == 0: # no pos
-            bid_price = self.ob[0]
-            ask_price = self.ob[1]
-            for k in range(max(5, self.n_entry_orders // 2)):
-                if calc_diff(bid_price, self.price) > last_price_diff_limit:
-                    break
-                orders.append({'side': 'buy', 'qty': default_qty, 'price': bid_price,
-                               'type': 'limit', 'reduce_only': False})
-                orders.append({'side': 'sell', 'qty': default_qty, 'price': ask_price,
-                               'type': 'limit', 'reduce_only': False})
-                bid_price = round_dn(bid_price * (1 - self.grid_spacing), self.price_step)
-                ask_price = round_up(ask_price * (1 + self.grid_spacing), self.price_step)
+            orders.append({'side': 'buy', 'qty': default_qty, 'price': self.ob[0],
+                           'type': 'limit', 'reduce_only': False})
+            orders.append({'side': 'sell', 'qty': default_qty, 'price': self.ob[1],
+                           'type': 'limit', 'reduce_only': False})
         elif self.position['size'] > 0.0: # long pos
             pos_size = self.position['size']
             pos_price = self.position['price']
