@@ -555,7 +555,7 @@ class Bot:
             await self.cancel_and_create()
             self.ts_released['decide'] = time()
             return
-        else
+        else:
             if time() - self.ts_released['print'] >= 0.5:
                 self.ts_released['print'] = time()
                 line = f"{self.symbol} "
