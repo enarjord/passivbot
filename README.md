@@ -119,7 +119,7 @@ about settings, bybit example:
     "liq_diff_threshold": 0.02,           # if difference between liquidation price and last price is less than 2%, reduce position by 2% at a loss,
     "stop_loss_pos_reduction": 0.02,      # reduce position by 2% at a loss.
     
-    "leverage": 100,                      # leverage (irrelevant in bybit because cross mode in is always 100x leverage).
+    "leverage": 100,                      # leverage (irrelevant in bybit because cross mode in is always max leverage).
     "min_markup": 0.0002,                 # when there's a position, bot makes a grid of n_close_orders whose prices are
     "max_markup": 0.0159,                 # evenly distributed between min and max markup, and whose qtys are pos_size // n_close_orders.
     
@@ -144,6 +144,8 @@ XMR: 49gUQ1jasDK23tJTMCvP4mQUUwndeLWAwSgdCFn6ovmRKXZAjQnVp2JZ2K4UuDDdYMNam1HE8EL
 Nano: nano_1nf3knbhapee5ruwg7i8sqekx3zmifdeijr8495t9kgp3uyunik7b9cuyhf5
 
 EOS: nbt4rhnhpjan
+
+XLM: GDSTC6KQR6BCTA7BH45B3MTSY52EVZ4UZTPZEBAZHJMJHTUQQ5SM57S7
 
 bybit ref:
 https://www.bybit.com/invite?ref=PQEGz
