@@ -251,7 +251,6 @@ class BybitBot(Bot):
                         print('error in websocket streamed data', e)
                 if price_changed:
                     if self.ts_locked['decide'] < self.ts_released['decide']:
-                        self.ts_locked['decide'] = time()
                         asyncio.create_task(self.decide())
                     elif k % 10 == 0:
                         self.flush_stuck_locks()
