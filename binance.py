@@ -233,7 +233,6 @@ class BinanceBot(Bot):
                 self.trade_id = trade_id
                 self.price = price
                 if self.ts_locked['decide'] < self.ts_released['decide']:
-                    self.ts_locked['decide'] = time()
                     asyncio.create_task(self.decide())
                 elif self.trade_id % 10 == 0:
                     self.flush_stuck_locks()
