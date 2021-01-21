@@ -145,4 +145,4 @@ bybit ref:
 https://www.bybit.com/invite?ref=PQEGz
 
 binance ref:
-
+https://www.binance.cc/en/register?ref=TII4B07C
