@@ -141,6 +141,8 @@ feel free to make a donation to show support of the work
 
 XMR: 49gUQ1jasDK23tJTMCvP4mQUUwndeLWAwSgdCFn6ovmRKXZAjQnVp2JZ2K4UuDDdYMNam1HE8ELZoWdeJPRfYEa9QSEK6XZ
 
+Nano: nano_1nf3knbhapee5ruwg7i8sqekx3zmifdeijr8495t9kgp3uyunik7b9cuyhf5
+
 bybit ref:
 https://www.bybit.com/invite?ref=PQEGz
 
