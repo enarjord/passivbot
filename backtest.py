@@ -151,6 +151,10 @@ def backtest(df: pd.DataFrame, settings: dict):
                                        'pos_size': pos_size, 'pos_price': pos_price, 'roe': roe,
                                        'margin_cost': margin_cost, 'liq_price': liq_price})
                         pnl_sum += pnl
+                        if pnl_sum + balance < 0.0:
+                            if row.Index / len(df) > 0.1:
+                                print('break on negative pnl sum')
+                                return []
                         if compounding:
                             balance = max(starting_balance, balance + pnl)
                         continue
@@ -178,6 +182,10 @@ def backtest(df: pd.DataFrame, settings: dict):
                                    'pos_size': pos_size, 'pos_price': pos_price, 'roe': np.nan,
                                    'margin_cost': margin_cost, 'liq_price': liq_price})
                     pnl_sum += pnl
+                    if pnl_sum + balance < 0.0:
+                        if row.Index / len(df) > 0.1:
+                            print('break on negative pnl sum')
+                            return []
                     if compounding:
                         balance = max(starting_balance, balance + pnl)
                     line = f'\r{row.Index / len(df):.2f} pnl sum {pnl_sum:.6f} '
@@ -202,6 +210,10 @@ def backtest(df: pd.DataFrame, settings: dict):
                                    'pos_size': pos_size, 'pos_price': pos_price, 'roe': roe,
                                    'margin_cost': margin_cost, 'liq_price': liq_price})
                     pnl_sum += pnl
+                    if pnl_sum + balance < 0.0:
+                        if row.Index / len(df) > 0.1:
+                            print('break on negative pnl sum')
+                            return []
                     if compounding:
                         balance = max(starting_balance, balance + pnl)
                     line = f'\r{row.Index / len(df):.2f} pnl sum {pnl_sum:.6f} '
@@ -255,6 +267,10 @@ def backtest(df: pd.DataFrame, settings: dict):
                                        'pos_size': pos_size, 'pos_price': pos_price, 'roe': roe,
                                        'margin_cost': margin_cost, 'liq_price': liq_price})
                         pnl_sum += pnl
+                        if pnl_sum + balance < 0.0:
+                            if row.Index / len(df) > 0.1:
+                                print('break on negative pnl sum')
+                                return []
                         if compounding:
                             balance = max(starting_balance, balance + pnl)
                         continue
@@ -282,6 +298,10 @@ def backtest(df: pd.DataFrame, settings: dict):
                                    'pos_size': pos_size, 'pos_price': pos_price, 'roe': np.nan,
                                    'margin_cost': margin_cost, 'liq_price': liq_price})
                     pnl_sum += pnl
+                    if pnl_sum + balance < 0.0:
+                        if row.Index / len(df) > 0.1:
+                            print('break on negative pnl sum')
+                            return []
                     if compounding:
                         balance = max(starting_balance, balance + pnl)
                     line = f'\r{row.Index / len(df):.2f} pnl sum {pnl_sum:.6f} '
@@ -306,6 +326,10 @@ def backtest(df: pd.DataFrame, settings: dict):
                                    'pos_size': pos_size, 'pos_price': pos_price, 'roe': roe,
                                    'margin_cost': margin_cost, 'liq_price': liq_price})
                     pnl_sum += pnl
+                    if pnl_sum + balance < 0.0:
+                        if row.Index / len(df) > 0.1:
+                            print('break on negative pnl sum')
+                            return []
                     if compounding:
                         balance = max(starting_balance, balance + pnl)
                     line = f'\r{row.Index / len(df):.2f} pnl sum {pnl_sum:.6f} '
@@ -587,7 +611,7 @@ async def main():
     trades_filename += f"_price_step_{str(backtesting_settings['price_step']).replace('.', '_')}"
     trades_filename += ".csv"
     if os.path.exists(trades_filename):
-        print('loading cached trade dataframe')
+        print('loading cached trade dataframe', trades_filename)
         df = pd.read_csv(trades_filename)
     else:
         agg_trades = await load_trades(exchange, user, symbol, n_days)
