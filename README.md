@@ -140,3 +140,9 @@ about settings, bybit example:
 feel free to make a donation to show support of the work
 
 XMR: 49gUQ1jasDK23tJTMCvP4mQUUwndeLWAwSgdCFn6ovmRKXZAjQnVp2JZ2K4UuDDdYMNam1HE8ELZoWdeJPRfYEa9QSEK6XZ
+
+bybit ref:
+https://www.bybit.com/invite?ref=PQEGz
+
+binance ref:
+
