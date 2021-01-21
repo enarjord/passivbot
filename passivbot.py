@@ -541,19 +541,16 @@ class Bot:
 
     async def decide(self):
         if self.price <= self.highest_bid:
-            self.ts_locked['decide'] = time()
             print_(['bid maybe taken'], n=True)
             await self.cancel_and_create()
             self.ts_released['decide'] = time()
             return
         if self.price >= self.lowest_ask:
-            self.ts_locked['decide'] = time()
             print_(['ask maybe taken'], n=True)
             await self.cancel_and_create()
             self.ts_released['decide'] = time()
             return
         if time() - self.ts_locked['decide'] > 5:
-            self.ts_locked['decide'] = time()
             await self.cancel_and_create()
             self.ts_released['decide'] = time()
             return
