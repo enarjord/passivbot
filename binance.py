@@ -72,8 +72,9 @@ async def create_bot(user: str, settings: str):
 
 class BinanceBot(Bot):
     def __init__(self, user: str, settings: dict):
+        self.exchange = 'binance'
         super().__init__(user, settings)
-        self.cc = init_ccxt('binance', user)
+        self.cc = init_ccxt(self.exchange, user)
         self.trade_id = 0
 
     async def _init(self):
@@ -218,7 +219,9 @@ class BinanceBot(Bot):
                                                                   'leverage': int(self.leverage)}))
         except Exception as e:
             print(e)
+        await self.init_indicators()
         await self.update_position()
+        k = 1
         async with websockets.connect(uri) as ws:
             async for msg in ws:
                 if msg is None:
@@ -230,14 +233,19 @@ class BinanceBot(Bot):
                     self.ob[0] = price
                 else:
                     self.ob[1] = price
-                self.trade_id = trade_id
                 self.price = price
+                self.update_indicators({'timestamp': data['T'],
+                                        'price': price,
+                                        'side': 'sell' if data['m'] else 'buy',
+                                        'qty': float(data['q'])})
                 if self.ts_locked['decide'] < self.ts_released['decide']:
                     asyncio.create_task(self.decide())
-                elif self.trade_id % 10 == 0:
+                elif k % 10 == 0:
                     self.flush_stuck_locks()
+                    k = 1
                 if self.stop_websocket:
                     break
+                k += 1
 
 
 async def main() -> None:
