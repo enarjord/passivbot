@@ -17,6 +17,7 @@
     "taker_fee": 0.00075,
     "n_jackrabbit_iterations": 140,
     "starting_k": 0,
+    "break_on_negative_pnl": 1.0,
 
     "ddown_factor": 2.421,
     "default_qty": -0.1575,
