@@ -104,8 +104,8 @@ def calc_entry_qty(qty_step: float,
                    max_pos_size: float,
                    pos_size: float):
     abs_pos_size = abs(pos_size)
-    return max(default_qty, round_dn(min(abs_pos_size * ddown_factor, max_pos_size - abs_pos_size),
-                                     qty_step))
+    qty_available = max(0.0, round_dn(max_pos_size - abs_pos_size, qty_step))
+    return min(qty_available, max(default_qty, round_dn(abs_pos_size * ddown_factor, qty_step)))
 
 
 def calc_shrt_closes(price_step: float,
@@ -582,6 +582,7 @@ class Bot:
             print_([line], r=True)
 
     async def init_indicators(self):
+        # called upon websocket start
         # example indicator ema 1000 tick span
         print_(['initiating ema...'])
         ema_span = 1000
