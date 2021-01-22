@@ -151,10 +151,9 @@ def backtest(df: pd.DataFrame, settings: dict):
                                        'pos_size': pos_size, 'pos_price': pos_price, 'roe': roe,
                                        'margin_cost': margin_cost, 'liq_price': liq_price})
                         pnl_sum += pnl
-                        if pnl_sum + balance < 0.0:
-                            if row.Index / len(df) > 0.1:
-                                print('break on negative pnl sum')
-                                return []
+                        if pnl_sum < 0.0 and row.Index / len(df) > settings['break_on_negative_pnl']:
+                            print('break on negative pnl sum')
+                            return []
                         if compounding:
                             balance = max(starting_balance, balance + pnl)
                         continue
@@ -168,62 +167,59 @@ def backtest(df: pd.DataFrame, settings: dict):
                 return []
             if row.price < bid_price:
                 if pos_size >= 0.0:
-                    # create or add to long pos
-                    cost = calc_cost(bid_qty, bid_price)
-                    margin_cost = cost / leverage
-                    pnl = -cost * maker_fee
-                    new_pos_size = pos_size + bid_qty
-                    pos_price = pos_price * (pos_size / new_pos_size) + \
-                        bid_price * (bid_qty / new_pos_size)
-                    pos_size = new_pos_size
-                    liq_price = calc_liq_price(balance, pos_size, pos_price)
-                    trades.append({'trade_id': row.Index, 'side': 'long', 'type': 'entry',
-                                   'price': bid_price, 'qty': bid_qty, 'pnl': pnl,
-                                   'pos_size': pos_size, 'pos_price': pos_price, 'roe': np.nan,
-                                   'margin_cost': margin_cost, 'liq_price': liq_price})
-                    pnl_sum += pnl
-                    if pnl_sum + balance < 0.0:
-                        if row.Index / len(df) > 0.1:
-                            print('break on negative pnl sum')
-                            return []
-                    if compounding:
-                        balance = max(starting_balance, balance + pnl)
-                    line = f'\r{row.Index / len(df):.2f} pnl sum {pnl_sum:.6f} '
-                    liq_diff = abs(liq_price - row.price) / row.price
-                    line += f'balance {balance:.6f} '
-                    line += f'liq diff {liq_diff:.2f} '
-                    line += f'qty {calc_default_qty_(balance, ob[0]):.3f} '
-                    line += f'pos_size {pos_size:.3f} '
-                    print(line, end='    ')
+                    if bid_qty > 0.0:
+                        # create or add to long pos
+                        cost = calc_cost(bid_qty, bid_price)
+                        margin_cost = cost / leverage
+                        pnl = -cost * maker_fee
+                        new_pos_size = pos_size + bid_qty
+                        pos_price = pos_price * (pos_size / new_pos_size) + \
+                            bid_price * (bid_qty / new_pos_size)
+                        pos_size = new_pos_size
+                        liq_price = calc_liq_price(balance, pos_size, pos_price)
+                        trades.append({'trade_id': row.Index, 'side': 'long', 'type': 'entry',
+                                       'price': bid_price, 'qty': bid_qty, 'pnl': pnl,
+                                       'pos_size': pos_size, 'pos_price': pos_price, 'roe': np.nan,
+                                       'margin_cost': margin_cost, 'liq_price': liq_price})
+                        pnl_sum += pnl
+                        if compounding:
+                            balance = max(starting_balance, balance + pnl)
+                        line = f'\r{row.Index / len(df):.2f} pnl sum {pnl_sum:.6f} '
+                        liq_diff = abs(liq_price - row.price) / row.price
+                        line += f'balance {balance:.6f} '
+                        line += f'liq diff {liq_diff:.2f} '
+                        line += f'qty {calc_default_qty_(balance, ob[0]):.3f} '
+                        line += f'pos_size {pos_size:.3f} '
+                        print(line, end='    ')
                 else:
                     # close shrt pos
-                    cost = calc_cost(bid_qty, bid_price)
-                    margin_cost = cost / leverage
-                    gain = (pos_price / bid_price - 1)
-                    pnl = cost * gain - cost * maker_fee
-                    pos_size += bid_qty
-                    roe = gain * leverage
-                    liq_price = calc_liq_price(balance, pos_size, pos_price)
-                    trades.append({'trade_id': row.Index, 'side': 'shrt',
-                                   'type': 'close' if gain > 0.0 else 'stop_loss',
-                                   'price': bid_price, 'qty': bid_qty, 'pnl': pnl,
-                                   'pos_size': pos_size, 'pos_price': pos_price, 'roe': roe,
-                                   'margin_cost': margin_cost, 'liq_price': liq_price})
-                    pnl_sum += pnl
-                    if pnl_sum + balance < 0.0:
-                        if row.Index / len(df) > 0.1:
+                    if bid_qty > 0.0:
+                        cost = calc_cost(bid_qty, bid_price)
+                        margin_cost = cost / leverage
+                        gain = (pos_price / bid_price - 1)
+                        pnl = cost * gain - cost * maker_fee
+                        pos_size += bid_qty
+                        roe = gain * leverage
+                        liq_price = calc_liq_price(balance, pos_size, pos_price)
+                        trades.append({'trade_id': row.Index, 'side': 'shrt',
+                                       'type': 'close' if gain > 0.0 else 'stop_loss',
+                                       'price': bid_price, 'qty': bid_qty, 'pnl': pnl,
+                                       'pos_size': pos_size, 'pos_price': pos_price, 'roe': roe,
+                                       'margin_cost': margin_cost, 'liq_price': liq_price})
+                        pnl_sum += pnl
+                        if pnl_sum < 0.0 and row.Index / len(df) > settings['break_on_negative_pnl']:
                             print('break on negative pnl sum')
                             return []
-                    if compounding:
-                        balance = max(starting_balance, balance + pnl)
-                    line = f'\r{row.Index / len(df):.2f} pnl sum {pnl_sum:.6f} '
-                    liq_diff = abs(liq_price - row.price) / row.price
-
-                    line += f'balance {balance:.6f} '
-                    line += f'liq diff {liq_diff:.2f} '
-                    line += f'qty {calc_default_qty_(balance, ob[0]):.3f} '
-                    line += f'pos_size {pos_size:.3f} '
-                    print(line, end='    ')
+                        if compounding:
+                            balance = max(starting_balance, balance + pnl)
+                        line = f'\r{row.Index / len(df):.2f} pnl sum {pnl_sum:.6f} '
+                        liq_diff = abs(liq_price - row.price) / row.price
+    
+                        line += f'balance {balance:.6f} '
+                        line += f'liq diff {liq_diff:.2f} '
+                        line += f'qty {calc_default_qty_(balance, ob[0]):.3f} '
+                        line += f'pos_size {pos_size:.3f} '
+                        print(line, end='    ')
         else:
             if pos_size == 0.0:                                      # no pos
                 ask_qty = -calc_default_qty_(balance, ob[1])
@@ -267,10 +263,9 @@ def backtest(df: pd.DataFrame, settings: dict):
                                        'pos_size': pos_size, 'pos_price': pos_price, 'roe': roe,
                                        'margin_cost': margin_cost, 'liq_price': liq_price})
                         pnl_sum += pnl
-                        if pnl_sum + balance < 0.0:
-                            if row.Index / len(df) > 0.1:
-                                print('break on negative pnl sum')
-                                return []
+                        if pnl_sum < 0.0 and row.Index / len(df) > settings['break_on_negative_pnl']:
+                            print('break on negative pnl sum')
+                            return []
                         if compounding:
                             balance = max(starting_balance, balance + pnl)
                         continue
@@ -285,60 +280,57 @@ def backtest(df: pd.DataFrame, settings: dict):
             if row.price > ask_price:
                 if pos_size <= 0.0:
                     # add to or create short pos
-                    cost = -calc_cost(ask_qty, ask_price)
-                    margin_cost = cost / leverage
-                    pnl = -cost * maker_fee
-                    new_pos_size = pos_size + ask_qty
-                    pos_price = pos_price * (pos_size / new_pos_size) + \
-                        ask_price * (ask_qty / new_pos_size)
-                    pos_size = new_pos_size
-                    liq_price = calc_liq_price(balance, pos_size, pos_price)
-                    trades.append({'trade_id': row.Index, 'side': 'shrt', 'type': 'entry',
-                                   'price': ask_price, 'qty': ask_qty, 'pnl': pnl,
-                                   'pos_size': pos_size, 'pos_price': pos_price, 'roe': np.nan,
-                                   'margin_cost': margin_cost, 'liq_price': liq_price})
-                    pnl_sum += pnl
-                    if pnl_sum + balance < 0.0:
-                        if row.Index / len(df) > 0.1:
-                            print('break on negative pnl sum')
-                            return []
-                    if compounding:
-                        balance = max(starting_balance, balance + pnl)
-                    line = f'\r{row.Index / len(df):.2f} pnl sum {pnl_sum:.6f} '
-                    liq_diff = abs(liq_price - row.price) / row.price
-                    line += f'balance {balance:.6f} '
-                    line += f'liq diff {liq_diff:.2f} '
-                    line += f'qty {calc_default_qty_(balance, ob[0]):.3f} '
-                    line += f'pos_size {pos_size:.3f} '
-                    print(line, end='    ')
+                    if ask_qty != 0.0:
+                        cost = -calc_cost(ask_qty, ask_price)
+                        margin_cost = cost / leverage
+                        pnl = -cost * maker_fee
+                        new_pos_size = pos_size + ask_qty
+                        pos_price = pos_price * (pos_size / new_pos_size) + \
+                            ask_price * (ask_qty / new_pos_size)
+                        pos_size = new_pos_size
+                        liq_price = calc_liq_price(balance, pos_size, pos_price)
+                        trades.append({'trade_id': row.Index, 'side': 'shrt', 'type': 'entry',
+                                       'price': ask_price, 'qty': ask_qty, 'pnl': pnl,
+                                       'pos_size': pos_size, 'pos_price': pos_price, 'roe': np.nan,
+                                       'margin_cost': margin_cost, 'liq_price': liq_price})
+                        pnl_sum += pnl
+                        if compounding:
+                            balance = max(starting_balance, balance + pnl)
+                        line = f'\r{row.Index / len(df):.2f} pnl sum {pnl_sum:.6f} '
+                        liq_diff = abs(liq_price - row.price) / row.price
+                        line += f'balance {balance:.6f} '
+                        line += f'liq diff {liq_diff:.2f} '
+                        line += f'qty {calc_default_qty_(balance, ob[0]):.3f} '
+                        line += f'pos_size {pos_size:.3f} '
+                        print(line, end='    ')
                 else:
                     # close long pos
-                    cost = -calc_cost(ask_qty, ask_price)
-                    margin_cost = cost / leverage
-                    gain = (ask_price / pos_price - 1)
-                    pnl = cost * gain - cost * maker_fee
-                    pos_size += ask_qty
-                    roe = gain * leverage
-                    liq_price = calc_liq_price(balance, pos_size, pos_price)
-                    trades.append({'trade_id': row.Index, 'side': 'long',
-                                   'type': 'close' if gain > 0.0 else 'stop_loss',
-                                   'price': ask_price, 'qty': ask_qty, 'pnl': pnl,
-                                   'pos_size': pos_size, 'pos_price': pos_price, 'roe': roe,
-                                   'margin_cost': margin_cost, 'liq_price': liq_price})
-                    pnl_sum += pnl
-                    if pnl_sum + balance < 0.0:
-                        if row.Index / len(df) > 0.1:
+                    if ask_qty != 0.0:
+                        cost = -calc_cost(ask_qty, ask_price)
+                        margin_cost = cost / leverage
+                        gain = (ask_price / pos_price - 1)
+                        pnl = cost * gain - cost * maker_fee
+                        pos_size += ask_qty
+                        roe = gain * leverage
+                        liq_price = calc_liq_price(balance, pos_size, pos_price)
+                        trades.append({'trade_id': row.Index, 'side': 'long',
+                                       'type': 'close' if gain > 0.0 else 'stop_loss',
+                                       'price': ask_price, 'qty': ask_qty, 'pnl': pnl,
+                                       'pos_size': pos_size, 'pos_price': pos_price, 'roe': roe,
+                                       'margin_cost': margin_cost, 'liq_price': liq_price})
+                        pnl_sum += pnl
+                        if pnl_sum < 0.0 and row.Index / len(df) > settings['break_on_negative_pnl']:
                             print('break on negative pnl sum')
                             return []
-                    if compounding:
-                        balance = max(starting_balance, balance + pnl)
-                    line = f'\r{row.Index / len(df):.2f} pnl sum {pnl_sum:.6f} '
-                    liq_diff = abs(liq_price - row.price) / row.price
-                    line += f'balance {balance:.6f} '
-                    line += f'liq diff {liq_diff:.2f} '
-                    line += f'qty {calc_default_qty_(balance, ob[0]):.3f} '
-                    line += f'pos_size {pos_size:.3f} '
-                    print(line, end='    ')
+                        if compounding:
+                            balance = max(starting_balance, balance + pnl)
+                        line = f'\r{row.Index / len(df):.2f} pnl sum {pnl_sum:.6f} '
+                        liq_diff = abs(liq_price - row.price) / row.price
+                        line += f'balance {balance:.6f} '
+                        line += f'liq diff {liq_diff:.2f} '
+                        line += f'qty {calc_default_qty_(balance, ob[0]):.3f} '
+                        line += f'pos_size {pos_size:.3f} '
+                        print(line, end='    ')
     return trades
 
 
@@ -399,7 +391,6 @@ def jackrabbit(df: pd.DataFrame,
         if candidate['min_markup'] >= candidate['max_markup']:
             candidate['min_markup'] = candidate['max_markup']
 
-        k += 1
         settings_ = {**backtesting_settings, **candidate}
         key = format_dict(candidate)
         if key in results:
@@ -412,6 +403,7 @@ def jackrabbit(df: pd.DataFrame,
             print('\nno trades')
             candidate = get_new_candidate(ranges, best)
             continue
+        k += 1
         tdf = pd.DataFrame(trades).set_index('trade_id')
         tdf.to_csv(trades_filepath + key + '.csv')
         closest_liq = ((tdf.price - tdf.liq_price).abs() / tdf.price).min()
@@ -555,20 +547,18 @@ async def load_trades(exchange: str, user: str, symbol: str, n_days: float) -> p
     new_trades = await fetch_trades_func(cc, symbol)
     k = 0
     while True:
-        if new_trades[0]['timestamp'] <= age_limit_millis:
-            new_trades_df = pd.DataFrame(new_trades).set_index('trade_id')
-            new_trades_df.to_csv(f'{cache_filepath}{new_trades_df.index[0]}.csv')
-            break
-        from_id = skip_ids(new_trades[0]['trade_id'] - 1, ids) - 999
-        new_trades = await fetch_trades_func(cc, symbol, from_id=from_id) + new_trades
-        ids.update([e['trade_id'] for e in new_trades])
         k += 1
-        if k % 20 == 0:
+        if (break_ := new_trades[0]['timestamp'] <= age_limit_millis) or k % 20 == 0:
             print('caching trades...')
             new_tdf = pd.DataFrame(new_trades).set_index('trade_id')
             cache_filename = f'{cache_filepath}{new_tdf.index[0]}_{new_tdf.index[-1]}.csv'
             new_tdf.to_csv(cache_filename)
             new_trades = [new_trades[0]]
+            if break_:
+                break
+        from_id = skip_ids(new_trades[0]['trade_id'] - 1, ids) - 999
+        new_trades = await fetch_trades_func(cc, symbol, from_id=from_id) + new_trades
+        ids.update([e['trade_id'] for e in new_trades])
     tdf = pd.concat([load_cache(), trades_df], axis=0).sort_index()
     tdf = tdf[~tdf.index.duplicated()]
     dump_chunks(filepath, tdf, chunk_lengths)
@@ -585,10 +575,7 @@ def dump_chunks(filepath: str, tdf: pd.DataFrame, chunk_lengths: dict, chunk_siz
     chunk_ids = tdf.index // chunk_size * chunk_size
     for g in tdf.groupby(chunk_ids):
         filename = f'{g[1].index[0]}_{g[1].index[-1]}.csv'
-        if filename in chunk_lengths and chunk_lengths[filename] == chunk_size:
-            print('chunk already complete', filename)
-            continue
-        else:
+        if filename not in chunk_lengths or chunk_lengths[filename] != chunk_size:
             print('dumping chunk', filename)
             g[1].to_csv(f'{filepath}{filename}')
 
