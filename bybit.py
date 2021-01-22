@@ -98,9 +98,9 @@ async def create_bot(user: str, settings: str):
 
 class BybitBot(Bot):
     def __init__(self, user: str, settings: dict):
+        self.exchange = 'bybit'
         super().__init__(user, settings)
-        self.cc = init_ccxt('bybit', user)
-        self.max_leverage = 100
+        self.cc = init_ccxt(self.exchange, user)
 
     async def _init(self):
         info = await self.cc.v2_public_get_symbols()
@@ -221,6 +221,7 @@ class BybitBot(Bot):
         self.stop_websocket = False
         uri = f"wss://stream.bybit.com/realtime"
         print_([uri])
+        await self.init_indicators()
         await self.update_position()
         try:
             print(await self.cc.v2_private_post_position_leverage_save(
@@ -246,6 +247,10 @@ class BybitBot(Bot):
                                 self.ob[0] = e['price']
                             self.price = e['price']
                             price_changed = True
+                            self.update_indicators({'timestamp': e['trade_time_ms'],
+                                                    'price': e['price'],
+                                                    'side': e['side'].lower(),
+                                                    'qty': e['size']})
                 except Exception as e:
                     if 'success' not in data:
                         print('error in websocket streamed data', e)
