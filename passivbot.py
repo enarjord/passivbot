@@ -618,6 +618,6 @@ async def start_bot(bot, n_tries: int = 0) -> None:
             return
         n_tries += 1
         for k in range(10, -1, -1):
-            print(f'\rrestarting bot in {k} seconds   ', end=' ')
+            print(f'\rrestarting bot in {k} seconds    ', end=' ')
             sleep(1)
         await start_bot(bot, n_tries + 1)
