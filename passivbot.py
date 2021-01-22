@@ -267,6 +267,9 @@ class Bot:
         self.price = 0
         self.ob = [0.0, 0.0]
 
+        self.indicators = {}
+        self.indicator_settings = {}
+
         self.stop_websocket = False
 
     async def update_open_orders(self) -> None:
@@ -450,9 +453,11 @@ class Bot:
     def calc_dynamic_orders(self, last_price_diff_limit, balance, default_qty):
         orders = []
         if self.position['size'] == 0: # no pos
-            orders.append({'side': 'buy', 'qty': default_qty, 'price': self.ob[0],
+            bid_price = min(self.ob[0], round_dn(self.indicators['ema'], self.price_step))
+            ask_price = max(self.ob[1], round_up(self.indicators['ema'], self.price_step))
+            orders.append({'side': 'buy', 'qty': default_qty, 'price': bid_price,
                            'type': 'limit', 'reduce_only': False})
-            orders.append({'side': 'sell', 'qty': default_qty, 'price': self.ob[1],
+            orders.append({'side': 'sell', 'qty': default_qty, 'price': ask_price,
                            'type': 'limit', 'reduce_only': False})
         elif self.position['size'] > 0.0: # long pos
             pos_size = self.position['size']
@@ -539,7 +544,6 @@ class Bot:
             print()
         return results
 
-
     async def decide(self):
         if self.price <= self.highest_bid:
             self.ts_locked['decide'] = time()
@@ -577,6 +581,29 @@ class Bot:
             line += f"pct {ratio:.2f} liq_diff {liq_diff:.3f} last {self.price}   "
             print_([line], r=True)
 
+    async def init_indicators(self):
+        # example indicator ema 1000 tick span
+        print_(['initiating ema...'])
+        ema_span = 1000
+        n_trades_to_fetch = 2000 # each fetch contains 1000 trades
+        trades = await self.fetch_trades()
+        additional_trades = await asyncio.gather(
+            *[self.fetch_trades(from_id=trades[0]['trade_id'] - 1000 * i)
+              for i in range(1, min(50, n_trades_to_fetch // 1000))])
+        trades = sorted(trades + flatten(additional_trades), key=lambda x: x['trade_id'])
+        ema = trades[0]['price']
+        alpha = 2 / (ema_span + 1)
+        for t in trades:
+            ema = ema * (1 - alpha) + t['price'] * alpha
+        self.indicators['ema'] = ema
+        self.indicator_settings['ema'] = {'alpha': alpha, 'alpha_': 1 - alpha}
+
+    def update_indicators(self, websocket_tick: dict):
+        # called each websocket tick
+        # {'price': float, 'qty': float, 'timestamp': int, 'side': 'buy'|'sell'}
+        self.indicators['ema'] = \
+            self.indicators['ema'] * self.indicator_settings['ema']['alpha_'] + \
+            websocket_tick['price'] * self.indicator_settings['ema']['alpha']
 
     async def fetch_my_trades(self, symbol: str) -> [dict]:
         my_trades = await self.cc.fapiPrivate_get_usertrades(params={'symbol': symbol})
@@ -618,6 +645,6 @@ async def start_bot(bot, n_tries: int = 0) -> None:
             return
         n_tries += 1
         for k in range(10, -1, -1):
-            print(f'\rrestarting bot in {k} seconds    ', end=' ')
+            print(f'\rrestarting bot in {k} seconds   ', end=' ')
             sleep(1)
         await start_bot(bot, n_tries + 1)
