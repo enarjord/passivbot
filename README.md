@@ -16,12 +16,6 @@ join telegram group for assistance and discussion of settings and live results
 
 https://t.me/passivbot_futures
 
-note:
-
-a recent update to ccxt broke the bybit bot, upgrade it to fix:
-
-`python3 -m pip install --upgrade ccxt`
-
 
 ------------------------------------------------------------------
 change log
@@ -31,6 +25,10 @@ change log
 - bug fixes and changes in trade data downloading
 - if there already is historical trade data downloaded, run the script `rename_trade_data_csvs.py` to rename all files
 
+20201-01-23
+- removed static mode
+- added indicator ema
+- rewrote backtester
 
 ------------------------------------------------------------------
 
@@ -59,33 +57,69 @@ overview
 
 the bot's purpose is to accumulate btc (or another coin) in bybit inverse and usdt in binance usdt futures
 
-it is a market maker bot, making a grid of post only limit orders above and below price
+it is a market maker bot, making a multiple post only limit orders above and below price
 
 it listens to websocket live stream of trades, and updates its orders continuously
 
-there are two modes, static grid and dynamic grid, set by user in settings
+when there is no position, it enters long if price < ema, short if price > ema
 
-static grid mode places entries at fixed absolute price intervals
+if there is a long position, it creates 8 (changable) reentry bids below pos price, and up to 20 reduce only asks above pos price
 
-dynamic grid mode places entries at a percentage distance from position price, modified by pos_margin / balance
+reentry_bid_price = pos_price * (1 - grid_spacing * (1 + (position_margin / wallet_balance) * grid_coefficient))
+
+inversely,
+
+if there is a short position, it creates 8 (changable) reentry asks above pos price, and up to 20 reduce only closing bids above pos price
+
+reentry_ask_price = pos_price * (1 + grid_spacing * (1 + (position_margin / wallet_balance) * grid_coefficient))
+
 
 ------------------------------------------------------------------
 
 a backtester is included
 
-use backtesting_notes.ipynb in jupyter notebook or jupiter-lab
-
-to iterate multiple settings,
-
 go to backtesting_settings/{exchange}/, adjust backtesting_settings.json and ranges.json
 
-and run backtest.py:
+run with 
 
 `python3 backtest.py exchange your_user_name`
 
-add keyword `random` for randomized starting candidate, otherwise will use backtesting_settings as starting candidate
+open backtesting_notes.ipynb in jupyter notebook or jupiter-lab for plotting and analysis
 
 
+about backtesting settings
+
+{
+
+    "break_on_loss": true,                   # if true, will break backtest upon first soft stop
+    "break_on_negative_pnl": 0.3,            # if pnl_sum < 0, will break if backtest progress > 0.3 (where 1.0 is done)
+    "exchange": "binance",
+    "inverse": false,                        # inverse is true for bybit, false for binance
+    "maker_fee": 0.00018,                    # 0.00018 for binance (with bnb discount), -0.00025 for bybit
+    "balance": 10.0,                         # backtest starting balance
+    "min_qty": 0.001,                        # minimum allowed contract qty
+    "n_days": 32,                            # n days to backtest
+    "price_step": 0.01,
+    "qty_step": 0.001,
+    "symbol": "XMRUSDT",
+    "taker_fee": 0.00036,                    # 0.00036 for binance (with bnb discount), 0.00075 for bybit
+    "n_jackrabbit_iterations": 200,          # see below for more info on jackrabbit
+    "starting_k": 0,                         # k is incremented by 1 per iteration until k == n_jackrabbit_iterations
+    "random_starting_candidate": false,      # if false, will use settings given as starting candidate
+
+}
+
+jackrabbit is a pet name given to a simple algorithm for optimizing settings.
+
+for each iteration, settings are mutated to new values within given range defined in ranges.json.
+
+if the new candidate's backtest yields higher gain than best candidate's backtest,
+
+the superior settings becomes the parent of the next candidate.
+
+the mutation coefficient m determines the mutation range, and is inversely proportional to k, which is a simple counter
+
+in other words, at first new candidates will vary wildly from the best settings, towards the end they will vary less
 
 ------------------------------------------------------------------
 
@@ -109,12 +143,9 @@ about settings, bybit example:
     "ddown_factor": 0.0,                  # next reentry_qty is max(default_qty, abs(pos_size) * ddown_factor).
                                           # if set to 1.0, each reentry qty will be equal to pos size, i.e. doubling pos size after every reentry.
                                           
-    "dynamic_grid": True,                 # bot has two modes: dynamic grid and static grid. True for dynamic mode, False for static mode.
     "grid_coefficient": 245.0,            # used in dynamic grid mode.
     "grid_spacing": 0.0026,               # used in dynamic grid mode.
                                           # next entry price is pos_price * (1 +- grid_spacing * (1 + pos_margin / balance * grid_coefficient)).
-                                          
-    "grid_step": 116.5                    # used in static mode.  absolute price interval.
                                           
     "liq_diff_threshold": 0.02,           # if difference between liquidation price and last price is less than 2%, reduce position by 2% at a loss,
     "stop_loss_pos_reduction": 0.02,      # reduce position by 2% at a loss.
