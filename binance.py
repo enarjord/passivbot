@@ -25,6 +25,39 @@ def get_maintenance_margin_rate(pos_size_ito_usdt: float) -> float:
     return kvs[-1][1]
 
 
+def get_max_pos_size_ito_usdt(symbol: str, leverage: int) -> float:
+    if symbol == 'BTCUSDT':
+        kvs = [(100, 50000), (50, 250000), (20, 1000000), (10, 5000000), (5, 20000000),
+               (4, 50000000), (3, 100000000), (2, 200000000)]
+    elif symbol == 'ETHUSDT':
+        kvs = [(75, 10000), (50, 100000), (25, 500000), (10, 1000000), (5, 2000000),
+               (4, 5000000), (3, 10000000), (2, 20000000)]
+    elif symbol in ['ADAUSDT', 'BNBUSDT', 'DOTUSDT', 'EOSUSDT', 'ETCUSDT', 'LINKUSDT', 'LTCUSDT',
+                    'TRXUSDT', 'XLMUSDT', 'XMRUSDT', 'XRPUSDT', 'XTZUSDT', 'BCHUSDT']:
+        kvs = [(50, 10000), (25, 50000), (10, 250000), (5, 1000000), (4, 2000000),
+               (3, 5000000), (2, 10000000)]
+    elif symbol in ['AAVEUSDT', 'ALGOUSDT', 'ALPHAUSDT', 'ATOMUSDT', 'AVAXUSDT', 'AXSUSDT',
+                    'BALUSDT', 'BANDUSDT', 'BATUSDT', 'BELUSDT', 'BLZUSDT', 'BZRXUSDT', 'COMPUSDT',
+                    'CRVUSDT', 'CVCUSDT', 'DASHUSDT', 'DEFIUSDT', 'DOGEUSDT', 'EGLDUSDT', 'ENJUSDT',
+                    'FILUSDT', 'FLMUSDT', 'FTMUSDT', 'HNTUSDT', 'ICXUSDT', 'IOSTUSDT', 'IOTAUSDT',
+                    'KAVAUSDT', 'KNCUSDT', 'KSMUSDT', 'LRCUSDT', 'MATICUSDT', 'MKRUSDT', 'NEARUSDT',
+                    'NEOUSDT', 'OCEANUSDT', 'OMGUSDT', 'ONTUSDT', 'QTUMUSDT', 'RENUSDT', 'RLCUSDT',
+                    'RSRUSDT', 'RUNEUSDT', 'SNXUSDT', 'SOLUSDT', 'SRMUSDT', 'STORJUSDT',
+                    'SUSHIUSDT', 'SXPUSDT', 'THETAUSDT', 'TOMOUSDT', 'TRBUSDT', 'UNIUSDT',
+                    'VETUSDT', 'WAVESUSDT', 'YFIIUSDT', 'YFIUSDT', 'ZECUSDT', 'ZILUSDT', 'ZRXUSDT',
+                    'ZENUSDT', 'SKLUSDT', 'GRTUSDT', '1INCHUSDT']:
+        kvs = [(20, 5000), (10, 25000), (5, 100000), (2, 250000), (1, 1000000)]
+    elif symbol in ['CTKUSDT']:
+        kvs = [(10, 5000), (5, 25000), (4, 100000), (2, 250000), (1, 1000000)]
+    else:
+        raise Exception(f'{symbol} unknown symbol')
+    for kv in kvs:
+        if leverage > kv[0]:
+            return kv[1]
+    return 9e12
+
+
+
 def calc_cross_long_liq_price(balance,
                               pos_size,
                               pos_price,
@@ -74,6 +107,8 @@ class BinanceBot(Bot):
     def __init__(self, user: str, settings: dict):
         self.exchange = 'binance'
         super().__init__(user, settings)
+        self.max_pos_size_ito_usdt = get_max_pos_size_ito_usdt(settings['symbol'],
+                                                               settings['leverage'])
         self.cc = init_ccxt(self.exchange, user)
         self.trade_id = 0
 
@@ -203,7 +238,7 @@ class BinanceBot(Bot):
         return qty * price / self.leverage
 
     def calc_max_pos_size(self, balance: float, price: float):
-        return (balance / price) * self.leverage
+        return min((balance / price) * self.leverage, self.max_pos_size_ito_usdt * 0.95 / price)
 
     async def start_websocket(self) -> None:
         self.stop_websocket = False
