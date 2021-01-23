@@ -63,13 +63,13 @@ it listens to websocket live stream of trades, and updates its orders continuous
 
 when there is no position, it enters long if price < ema, short if price > ema
 
-if there is a long position, it creates 8 (changable) reentry bids below pos price, and up to 20 reduce only asks above pos price
+if there is a long position, it creates 8 reentry bids below pos price, and up to 20 reduce only asks above pos price
 
 reentry_bid_price = pos_price * (1 - grid_spacing * (1 + (position_margin / wallet_balance) * grid_coefficient))
 
 inversely,
 
-if there is a short position, it creates 8 (changable) reentry asks above pos price, and up to 20 reduce only closing bids above pos price
+if there is a short position, it creates 8 reentry asks above pos price, and up to 20 reduce only closing bids above pos price
 
 reentry_ask_price = pos_price * (1 + grid_spacing * (1 + (position_margin / wallet_balance) * grid_coefficient))
 
