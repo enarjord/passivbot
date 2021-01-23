@@ -128,10 +128,6 @@ class BinanceBot(Bot):
                         self.qty_step = float(q['stepSize'])
                     elif q['filterType'] == 'PRICE_FILTER':
                         self.price_step = float(q['tickSize'])
-                self.ardn = lambda n: round_dn(n, self.qty_step)
-                self.arup = lambda n: round_up(n, self.qty_step)
-                self.prdn = lambda n: round_dn(n, self.price_step)
-                self.prup = lambda n: round_up(n, self.price_step)
                 self.calc_default_qty = lambda balance_, last_price: \
                     calc_default_qty(self.min_qty,
                                      self.qty_step,
@@ -268,11 +264,12 @@ class BinanceBot(Bot):
                     self.ob[0] = price
                 else:
                     self.ob[1] = price
+                if price != self.price:
+                    self.update_indicators({'timestamp': data['T'],
+                                            'price': price,
+                                            'side': 'sell' if data['m'] else 'buy',
+                                            'qty': float(data['q'])})
                 self.price = price
-                self.update_indicators({'timestamp': data['T'],
-                                        'price': price,
-                                        'side': 'sell' if data['m'] else 'buy',
-                                        'qty': float(data['q'])})
                 if self.ts_locked['decide'] < self.ts_released['decide']:
                     asyncio.create_task(self.decide())
                 elif k % 10 == 0:

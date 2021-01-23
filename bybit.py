@@ -114,10 +114,6 @@ class BybitBot(Bot):
         self.price_step = float(e['price_filter']['tick_size'])
         self.qty_step = float(e['lot_size_filter']['qty_step'])
         self.min_qty = float(e['lot_size_filter']['min_trading_qty'])
-        self.prdn = lambda n: round_dn(n, self.price_step)
-        self.prup = lambda n: round_up(n, self.price_step)
-        self.ardn = lambda n: round_dn(n, self.qty_step)
-        self.arup = lambda n: round_up(n, self.qty_step)
         self.calc_default_qty = lambda balance_, last_price: \
             calc_default_qty(self.min_qty, self.qty_step, balance_ * last_price, self.default_qty)
         await self.update_position()
@@ -247,10 +243,11 @@ class BybitBot(Bot):
                                 self.ob[0] = e['price']
                             self.price = e['price']
                             price_changed = True
-                            self.update_indicators({'timestamp': e['trade_time_ms'],
-                                                    'price': e['price'],
-                                                    'side': e['side'].lower(),
-                                                    'qty': e['size']})
+                    if price_changed:
+                        self.update_indicators({'timestamp': e['trade_time_ms'],
+                                                'price': e['price'],
+                                                'side': e['side'].lower(),
+                                                'qty': e['size']})
                 except Exception as e:
                     if 'success' not in data:
                         print('error in websocket streamed data', e)
