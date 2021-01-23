@@ -267,7 +267,11 @@ def backtest(trades_list: [dict], settings: dict):
         k += 1
         if k % 10000 == 0 or len(trades) != prev_len_trades:
             prev_len_trades = len(trades)
-            line = f"\r{k / len(trades_list):.3f} pnl sum {pnl_sum:.6f} "
+            progress = k / len(trades_list)
+            if pnl_sum < 0.0 and progress >= settings['break_on_negative_pnl']:
+                print('break on negative pnl')
+                return trades
+            line = f"\r{progress:.3f} pnl sum {pnl_sum:.6f} "
             line += f"loss sum {loss_sum:.6f} balance {balance:.6f} "
             line += f"qty {calc_default_qty_(balance, ob[0]):.4f} "
             line += f"liq diff {min(1.0, calc_diff(trades[-1]['liq_price'], ob[0])):.3f} "
