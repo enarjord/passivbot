@@ -257,6 +257,7 @@ def backtest(trades_list: [dict], settings: dict):
                 if break_on_loss:
                     print('break on loss')
                     return trades
+            balance = max(balance, settings['balance'])
             prev_len_trades = len(trades)
             progress = k / len(trades_list)
             if pnl_sum < 0.0 and progress >= settings['break_on_negative_pnl']:
@@ -328,7 +329,9 @@ def jackrabbit(trades_list: [dict],
             candidate = get_new_candidate(ranges, best)
             continue
         print(f'k={k}, m={ms[k]:.4f} candidate:\n', candidate)
+        start_time = time()
         trades = backtest(trades_list, settings_)
+        print('\ntime elapsed', round(time() - start_time, 1), 'seconds')
         if not trades:
             print('\nno trades')
             candidate = get_new_candidate(ranges, best)
