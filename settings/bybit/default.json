@@ -5,6 +5,7 @@
     "grid_coefficient": 245.04,
     "grid_spacing": 0.0026,
     "grid_step": 0.0,
+    "indicator_settings": {"ema": {"span": 10000}},
     "liq_diff_threshold": 0.05,
     "leverage": 100,
     "balance": -1,
