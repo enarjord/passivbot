@@ -24,7 +24,6 @@
     "default_qty": -0.03,
     "grid_coefficient": 245.0,
     "grid_spacing": 0.0026,
-    "grid_step": 0.0,
     "leverage": 100,
     "liq_diff_threshold": 0.05,
     "max_markup": 0.014,
