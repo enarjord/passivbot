@@ -172,14 +172,7 @@ def backtest(trades_list: [dict], settings: dict):
                     trade_side = 'shrt'
                     gain = pos_price / bid_price - 1
                     pnl += cost * gain
-                    if gain > 0.0:
-                        trade_type = 'close'
-                    else:
-                        trade_type = 'stop_loss'
-                        loss_sum += pnl
-                        if break_on_loss:
-                            print('break on loss')
-                            return trades
+                    trade_type = 'close' if gain > 0.0 else 'stop_loss'
                     pos_size = pos_size + bid_qty
                     roi = gain * leverage
                 balance += pnl
@@ -247,14 +240,7 @@ def backtest(trades_list: [dict], settings: dict):
                     trade_side = 'long'
                     gain = ask_price / pos_price - 1
                     pnl += cost * gain
-                    if gain > 0.0:
-                        trade_type = 'close'
-                    else:
-                        trade_type = 'stop_loss'
-                        loss_sum += pnl
-                        if break_on_loss:
-                            print('break on loss')
-                            return trades
+                    trade_type = 'close' if gain > 0.0 else 'stop_loss'
                     pos_size = pos_size + ask_qty
                     roi = gain * leverage
                 balance += pnl
@@ -266,12 +252,17 @@ def backtest(trades_list: [dict], settings: dict):
         ema = ema * ema_alpha_ + t['price'] * ema_alpha
         k += 1
         if k % 10000 == 0 or len(trades) != prev_len_trades:
+            if trades and trades[-1]['type'] == 'stop_loss':
+                loss_sum += pnl
+                if break_on_loss:
+                    print('break on loss')
+                    return trades
             prev_len_trades = len(trades)
             progress = k / len(trades_list)
             if pnl_sum < 0.0 and progress >= settings['break_on_negative_pnl']:
                 print('break on negative pnl')
                 return trades
-            line = f"\r{progress:.3f} pnl sum {pnl_sum:.6f} "
+            line = f"\r{progress:.3f} pnl sum {pnl_sum:.8f} "
             line += f"loss sum {loss_sum:.6f} balance {balance:.6f} "
             line += f"qty {calc_default_qty_(balance, ob[0]):.4f} "
             line += f"liq diff {min(1.0, calc_diff(trades[-1]['liq_price'], ob[0])):.3f} "
