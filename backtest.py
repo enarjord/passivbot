@@ -296,7 +296,7 @@ def jackrabbit(trades_list: [dict],
                base_filepath: str):
 
     if backtesting_settings['random_starting_candidate']:
-        best = {key: calc_new_val((ranges[key][1] - ranges[key][0]) / 2, ranges[key], 1.0)
+        best = {key: calc_new_val((abs(ranges[key][1]) - abs(ranges[key][0])) / 2, ranges[key], 1.0)
                 for key in sorted(ranges)}
         print('random starting candidate:', best)
     else:
@@ -328,7 +328,7 @@ def jackrabbit(trades_list: [dict],
             print('\nskipping', key)
             candidate = get_new_candidate(ranges, best)
             continue
-        print(f'k={k}, m={ms[k]:.4f} candidate:\n', candidate)
+        print(f'\nk={k}, m={ms[k]:.4f} candidate:\n', candidate)
         start_time = time()
         trades = backtest(trades_list, settings_)
         print('\ntime elapsed', round(time() - start_time, 1), 'seconds')
