@@ -87,12 +87,12 @@ run with
 open backtesting_notes.ipynb in jupyter notebook or jupiter-lab for plotting and analysis
 
 
-about backtesting settings
+about backtesting settings, binance XMRUSDT example
 
 {
 
-    "break_on_loss": true,                   # if true, will break backtest upon first soft stop
-    "break_on_negative_pnl": 0.3,            # if pnl_sum < 0, will break if backtest progress > 0.3 (where 1.0 is done)
+    "break_on_loss": true,                   # if true, will break backtest upon first soft stop.
+    "break_on_negative_pnl": 0.3,            # if pnl_sum < 0, will break if backtest progress > 0.3 (where 1.0 means backtest is done)
     "exchange": "binance",
     "inverse": false,                        # inverse is true for bybit, false for binance
     "maker_fee": 0.00018,                    # 0.00018 for binance (with bnb discount), -0.00025 for bybit
@@ -117,9 +117,9 @@ if the new candidate's backtest yields higher gain than best candidate's backtes
 
 the superior settings becomes the parent of the next candidate.
 
-the mutation coefficient m determines the mutation range, and is inversely proportional to k, which is a simple counter
+the mutation coefficient m determines the mutation range, and is inversely proportional to k, which is a simple counter.
 
-in other words, at first new candidates will vary wildly from the best settings, towards the end they will vary less
+in other words, at first new candidates will vary wildly from the best settings, towards the end they will vary less, "fine tuning" the settings.
 
 ------------------------------------------------------------------
 
@@ -137,15 +137,21 @@ about settings, bybit example:
                                           # if "default_qty"  is set to -0.06, last price is 37000 and wallet balance is 0.001 btc,
                                           # default_qty = 0.001 * 37000 * 0.06 == 2.22.  rounded down is 2.0 usd.
                                           # binance ETHUSDT example:
-                                          # if "default_qty" is set to -0.07, last price was 1100 and wallet balance is 60 usdt,
+                                          # if "default_qty" is set to -0.07, last price is 1100 and wallet balance is 60 usdt,
                                           # default_qty = 60 / 1100 * 0.07 == 0.003818.  rounded down is 0.003 eth.
     
-    "ddown_factor": 0.0,                  # next reentry_qty is max(default_qty, abs(pos_size) * ddown_factor).
-                                          # if set to 1.0, each reentry qty will be equal to pos size, i.e. doubling pos size after every reentry.
+    "ddown_factor": 0.02,                 # next reentry_qty is max(default_qty, abs(pos_size) * ddown_factor).
+                                          # if set to 1.0, each reentry qty will be equal to 1x pos size, i.e. doubling pos size after every reentry.
+                                          # if set to 0.0, each reentry qty will be equal to default_qty.
                                           
-    "grid_coefficient": 245.0,            # used in dynamic grid mode.
-    "grid_spacing": 0.0026,               # used in dynamic grid mode.
-                                          # next entry price is pos_price * (1 +- grid_spacing * (1 + pos_margin / balance * grid_coefficient)).
+    "indicator_settings": {"ema": {"span": 10000}},
+                                          # indicators may be used to determine long or short initial entry.  they are updated on each websocket trade tick.
+                                          # ema is not based on ohlcvs, but calculated based on sequence of raw trades.
+                                          # when no pos, bid = min(ema, highest_bid), ask = max(ema, lowest_ask)
+                                          # more indicators may be added in future.
+                                          
+    "grid_coefficient": 245.0,            # next entry price is pos_price * (1 +- grid_spacing * (1 + (pos_margin / balance) * grid_coefficient)).
+    "grid_spacing": 0.0026,               # 
                                           
     "liq_diff_threshold": 0.02,           # if difference between liquidation price and last price is less than 2%, reduce position by 2% at a loss,
     "stop_loss_pos_reduction": 0.02,      # reduce position by 2% at a loss.
@@ -154,10 +160,11 @@ about settings, bybit example:
     "min_markup": 0.0002,                 # when there's a position, bot makes a grid of n_close_orders whose prices are
     "max_markup": 0.0159,                 # evenly distributed between min and max markup, and whose qtys are pos_size // n_close_orders.
     
-    "market_stop_loss": true,             # if true will soft stop with market orders, otherwise soft stops with limit orders at order book's higest_bid/lowest_ask
+    "market_stop_loss": false,            # if true will soft stop with market orders, if false soft stops with limit orders at order book's higest_bid/lowest_ask
     
-    "balance": 0.0015                     # used to limit pos size and to modify grid spacing in dynamic mode.
+    "balance": 0.001,                     # balance bot sees.  used to limit pos size and to modify grid spacing
                                           # set settings["balance"] to -1 to use account balance fetched from exchange as balance.
+                                          # if using static balance, binance balance is quoted in usdt, bybit inverse balance is quoted in coin.
                                           
     "n_close_orders": 20,                 # max n close orders.
     "n_entry_orders": 8,                  # max n entry orders.
