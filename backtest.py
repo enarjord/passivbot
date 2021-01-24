@@ -291,9 +291,10 @@ def unformat_dict(d: str):
 
 def jackrabbit(trades_list: [dict],
                backtesting_settings: dict,
-               ranges: dict):
+               ranges: dict,
+               base_filepath: str):
+
     if backtesting_settings['random_starting_candidate']:
-        # randomized starting settings
         best = {key: calc_new_val((ranges[key][1] - ranges[key][0]) / 2, ranges[key], 1.0)
                 for key in sorted(ranges)}
         print('random starting candidate:', best)
@@ -305,18 +306,10 @@ def jackrabbit(trades_list: [dict],
     best_gain = -9e9
     candidate = best
 
-    if 'n_jackrabbit_iterations' in backtesting_settings:
-        ks = backtesting_settings['n_jackrabbit_iterations']
-    else:
-        ks = 130
-    k = backtesting_settings['starting_k'] if 'starting_k' in backtesting_settings else 0
-    ms = np.array([1/(i/2 + 16) for i in range(ks)])
+    ks = backtesting_settings['n_jackrabbit_iterations']
+    k = backtesting_settings['starting_k']
+    ms = np.array([1 / (i / 2 + 16) for i in range(ks)])
     ms = ((ms - ms.min()) / (ms.max() - ms.min()))
-    base_filepath = make_get_filepath(
-        os.path.join('backtesting_results', backtesting_settings['exchange'],
-                     ts_to_date(time())[:19].replace(':', '_') + f'_{int(round(n_days))}',
-                     '')
-    )
     trades_filepath = make_get_filepath(os.path.join(base_filepath, 'trades', ''))
     json.dump(backtesting_settings, open(base_filepath + 'backtesting_settings.json', 'w'),
               indent=4, sort_keys=True)
@@ -500,24 +493,32 @@ def dump_chunks(filepath: str, tdf: pd.DataFrame, chunk_lengths: dict, chunk_siz
 async def main():
     exchange = sys.argv[1]
     user = sys.argv[2]
-    base_filepath = os.path.join('backtesting_settings', exchange, '')
-    backtesting_settings = json.load(open(os.path.join(base_filepath, 'backtesting_settings.json')))
+
+    settings_filepath = os.path.join('backtesting_settings', exchange, '')
+    backtesting_settings = \
+        json.load(open(os.path.join(settings_filepath, 'backtesting_settings.json')))
     symbol = backtesting_settings['symbol']
     n_days = backtesting_settings['n_days']
-    ranges = json.load(open(os.path.join(base_filepath, 'ranges.json')))
-    print(base_filepath)
-    trades_filename = f'{symbol}_agg_trades_{exchange}_{n_days}_days_{ts_to_date(time())[:10]}'
-    trades_filename += f"_price_step_{str(backtesting_settings['price_step']).replace('.', '_')}"
-    trades_filename += ".npy"
-    if os.path.exists(trades_filename):
-        print('loading cached trade list', trades_filename)
-        trades_list = np.load(trades_filename, allow_pickle=True)
+    ranges = json.load(open(os.path.join(settings_filepath, 'ranges.json')))
+    print(settings_filepath)
+    results_filepath = make_get_filepath(
+        os.path.join('backtesting_results', exchange,
+                     ts_to_date(time())[:19].replace(':', '_') + f'_{int(round(n_days))}',
+                     '')
+    )
+
+    trade_cache_filepath = make_get_filepath(os.path.join(settings_filepath, 'trade_cache', ''))
+    trades_filename = f'{symbol}_raw_trades_{exchange}_{n_days}_days_{ts_to_date(time())[:10]}.npy'
+    trades_filepath = f"{trade_cache_filepath}{trades_filename}"
+    if os.path.exists(trades_filepath):
+        print('loading cached trade list', trades_filepath)
+        trades_list = np.load(trades_filepath, allow_pickle=True)
     else:
         agg_trades = await load_trades(exchange, user, symbol, n_days)
         print('preparing trades...')
         trades_list = prep_trades_list(agg_trades)
-        np.save(trades_filename, trades_list)
-    jackrabbit(trades_list, backtesting_settings, ranges)
+        np.save(trades_filepath, trades_list)
+    jackrabbit(trades_list, backtesting_settings, ranges, results_filepath)
 
 
 if __name__ == '__main__':
