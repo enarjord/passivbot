@@ -58,6 +58,8 @@ def backtest(trades_list: [dict], settings: dict):
     n_close_orders = settings['n_close_orders']
     break_on_loss = settings['break_on_loss']
 
+    min_notional = settings['min_notional'] if 'min_notional' in settings else 0.0
+
     if inverse:
         calc_cost = lambda qty_, price_: qty_ / price_
         calc_liq_price = lambda balance_, pos_size_, pos_price_: \
@@ -78,9 +80,11 @@ def backtest(trades_list: [dict], settings: dict):
                 binance_calc_cross_long_liq_price(balance_, pos_size_, pos_price_, leverage=leverage)
         if settings['default_qty'] <= 0.0:
             calc_default_qty_ = lambda balance_, last_price: \
-                calc_default_qty(min_qty, qty_step, balance_ / last_price, settings['default_qty'])
+                calc_default_qty(max(min_qty, round_up(min_notional / last_price, qty_step)),
+                                 qty_step, balance_ / last_price, settings['default_qty'])
         else:
-            calc_default_qty_ = lambda balance_, last_price: settings['default_qty']
+            calc_default_qty_ = lambda balance_, last_price: \
+                max(settings['default_qty'], round_up(min_notional / last_price, qty_step))
         calc_max_pos_size = lambda balance_, price_: balance_ / price_ * leverage
 
     calc_long_reentry_price_ = lambda balance_, pos_margin_, pos_price_, highest_bid_: \
