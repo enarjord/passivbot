@@ -128,8 +128,11 @@ class BinanceBot(Bot):
                         self.qty_step = float(q['stepSize'])
                     elif q['filterType'] == 'PRICE_FILTER':
                         self.price_step = float(q['tickSize'])
+                    elif q['filterType'] == 'MIN_NOTIONAL':
+                        self.min_notional = float(q['notional'])
                 self.calc_default_qty = lambda balance_, last_price: \
-                    calc_default_qty(self.min_qty,
+                    calc_default_qty(max(self.min_qty, round_up(self.min_notional / last_price,
+                                                                self.qty_step)),
                                      self.qty_step,
                                      balance_ / last_price,
                                      self.default_qty)
