@@ -1,7 +1,6 @@
 {
     "break_on_loss": true,
     "break_on_negative_pnl": 0.3,
-    "compounding": true,
     "exchange": "binance",
     "inverse": false,
     "maker_fee": 0.00018,
