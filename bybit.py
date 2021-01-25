@@ -211,7 +211,7 @@ class BybitBot(Bot):
         return qty / price / self.leverage
 
     def calc_max_pos_size(self, balance: float, price: float):
-        return balance * price * self.leverage
+        return balance * price * self.leverage * 0.95
 
     async def start_websocket(self) -> None:
         self.stop_websocket = False
