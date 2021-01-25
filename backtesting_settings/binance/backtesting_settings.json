@@ -17,6 +17,8 @@
     "n_jackrabbit_iterations": 200,
     "starting_k": 0,
     "random_starting_candidate": false,
+    
+    "min_notional": 1.0,
 
     "ddown_factor": 0.009,
     "default_qty": -0.0294,
