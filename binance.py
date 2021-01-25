@@ -234,7 +234,7 @@ class BinanceBot(Bot):
         return qty * price / self.leverage
 
     def calc_max_pos_size(self, balance: float, price: float):
-        return min((balance / price) * self.leverage, self.max_pos_size_ito_usdt * 0.95 / price)
+        return min((balance / price) * self.leverage, self.max_pos_size_ito_usdt / price) * 0.95
 
     async def start_websocket(self) -> None:
         self.stop_websocket = False
