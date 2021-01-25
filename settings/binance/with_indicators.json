@@ -1,0 +1,31 @@
+{
+    "balance": -1,
+    "cross_mode": true,
+    "ddown_factor": 0.071,
+    "default_qty": -0.0813,
+    "grid_coefficient": 191.43,
+    "grid_spacing": 0.00254,
+    "indicator_settings": {
+        "tick": {
+            "ema": {
+                "span": 21641
+            }
+        },
+        "ohlcv": {
+            "atr": {
+                "n_periods": 14,
+                "period_ms": 90000
+            }
+        },
+        "max_periods_in_memory": 3000
+    },
+    "leverage": 75,
+    "liq_diff_threshold": 0.02,
+    "market_stop_loss": false,
+    "max_markup": 0.00701,
+    "min_markup": 0.00086,
+    "n_close_orders": 9,
+    "n_entry_orders": 8,
+    "stop_loss_pos_reduction": 0.005,
+    "symbol": "XMRUSDT"
+}
