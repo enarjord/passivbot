@@ -57,6 +57,23 @@ def get_max_pos_size_ito_usdt(symbol: str, leverage: int) -> float:
     return 9e12
 
 
+def calc_isolated_long_liq_price(balance,
+                                 pos_size,
+                                 pos_price,
+                                 mm=0.004,
+                                 leverage=100):
+    return calc_cross_long_liq_price(pos_size * pos_price / leverage, pos_size, pos_price, mm,
+                                     leverage=leverage)
+
+
+def calc_isolated_shrt_liq_price(balance,
+                                 pos_size,
+                                 pos_price,
+                                 mm=0.004,
+                                 leverage=100):
+    return calc_cross_shrt_liq_price(abs(pos_size) * pos_price / leverage, pos_size, pos_price, mm,
+                                     leverage=leverage)
+
 
 def calc_cross_long_liq_price(balance,
                               pos_size,
@@ -244,8 +261,9 @@ class BinanceBot(Bot):
         uri = f"wss://fstream.binance.com/ws/{self.symbol.lower()}@aggTrade"
         print_([uri])
         try:
+            mode = 'CROSSED' if self.settings['cross_mode'] else 'ISOLATED'
             print(await self.cc.fapiPrivate_post_margintype(params={'symbol': self.symbol,
-                                                                    'marginType': 'CROSSED'}))
+                                                                    'marginType': mode}))
         except Exception as e:
             print(e)
         try:
