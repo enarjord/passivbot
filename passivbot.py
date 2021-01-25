@@ -369,6 +369,9 @@ class Bot:
                                      self.qty_step),
                      'price': self.ob[0], 'reduce_only': True}
                 )
+            stop_loss_qty = orders[-1]['qty']
+        else:
+            stop_loss_qty = 0.0
         if self.position['size'] == 0: # no pos
             bid_price = min(self.ob[0], round_dn(self.indicators['ema'], self.price_step))
             ask_price = max(self.ob[1], round_up(self.indicators['ema'], self.price_step))
@@ -444,7 +447,7 @@ class Bot:
                                                     self.min_qty,
                                                     self.min_markup,
                                                     self.max_markup,
-                                                    self.position['size'],
+                                                    self.position['size'] - stop_loss_qty,
                                                     self.position['price'],
                                                     self.ob[1],
                                                     self.n_close_orders)
@@ -461,7 +464,7 @@ class Bot:
                                                     self.min_qty,
                                                     self.min_markup,
                                                     self.max_markup,
-                                                    self.position['size'],
+                                                    self.position['size'] + stop_loss_qty,
                                                     self.position['price'],
                                                     self.ob[0],
                                                     self.n_close_orders)
