@@ -1,7 +1,6 @@
 {
     "break_on_loss": true,
     "break_on_negative_pnl": 1.0,
-    "compounding": true,
     "exchange": "bybit",
     "inverse": true,
     "maker_fee": -0.00025,
