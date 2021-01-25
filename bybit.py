@@ -20,6 +20,22 @@ def first_capitalized(s: str):
     return s[0].upper() + s[1:].lower()
 
 
+def calc_isolated_long_liq_price(balance,
+                                 pos_size,
+                                 pos_price,
+                                 mm=0.005,
+                                 leverage=100):
+    return (pos_price * leverage) / (leverage + 1 - mm * leverage)
+
+
+def calc_isolated_shrt_liq_price(balance,
+                                 pos_size,
+                                 pos_price,
+                                 mm=0.005,
+                                 leverage=100):
+    return (pos_price * leverage) / (leverage - 1 + mm * leverage)
+
+
 def calc_cross_long_liq_price(balance,
                               pos_size,
                               pos_price,
@@ -220,8 +236,9 @@ class BybitBot(Bot):
         await self.init_indicators()
         await self.update_position()
         try:
+            leverage_ = 0 if self.settings['cross_mode'] else self.leverage
             print(await self.cc.v2_private_post_position_leverage_save(
-                params={'symbol': self.symbol, 'leverage': 0}
+                params={'symbol': self.symbol, 'leverage': leverage_}
             ))
         except Exception as e:
             print('error starting websocket', e)
