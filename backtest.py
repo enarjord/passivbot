@@ -13,8 +13,12 @@ from binance import fetch_trades as binance_fetch_trades
 from bybit import fetch_trades as bybit_fetch_trades
 from bybit import calc_cross_long_liq_price as bybit_calc_cross_long_liq_price
 from bybit import calc_cross_shrt_liq_price as bybit_calc_cross_shrt_liq_price
+from bybit import calc_isolated_long_liq_price as bybit_calc_isolated_long_liq_price
+from bybit import calc_isolated_shrt_liq_price as bybit_calc_isolated_shrt_liq_price
 from binance import calc_cross_long_liq_price as binance_calc_cross_long_liq_price
 from binance import calc_cross_shrt_liq_price as binance_calc_cross_shrt_liq_price
+from binance import calc_isolated_long_liq_price as binance_calc_isolated_long_liq_price
+from binance import calc_isolated_shrt_liq_price as binance_calc_isolated_shrt_liq_price
 
 from typing import Iterator
 
@@ -56,16 +60,34 @@ def backtest(trades_list: [dict], settings: dict):
     min_markup = settings['min_markup']
     max_markup = settings['max_markup']
     n_close_orders = settings['n_close_orders']
-    break_on_loss = settings['break_on_loss']
 
     min_notional = settings['min_notional'] if 'min_notional' in settings else 0.0
+    cross_mode = settings['cross_mode'] if 'cross_mode' in settings else True
 
     if inverse:
         calc_cost = lambda qty_, price_: qty_ / price_
-        calc_liq_price = lambda balance_, pos_size_, pos_price_: \
-            bybit_calc_cross_shrt_liq_price(balance_, pos_size_, pos_price_, leverage=leverage) \
-                if pos_size_ < 0.0 else \
-                bybit_calc_cross_long_liq_price(balance_, pos_size_, pos_price_, leverage=leverage)
+        if settings['cross_mode']:
+            calc_liq_price = lambda balance_, pos_size_, pos_price_: \
+                bybit_calc_cross_shrt_liq_price(balance_,
+                                                pos_size_,
+                                                pos_price_,
+                                                leverage=leverage) \
+                    if pos_size_ < 0.0 else \
+                    bybit_calc_cross_long_liq_price(balance_,
+                                                    pos_size_,
+                                                    pos_price_,
+                                                    leverage=leverage)
+        else:
+            calc_liq_price = lambda balance_, pos_size_, pos_price_: \
+                bybit_calc_isolated_shrt_liq_price(balance_,
+                                                   pos_size_,
+                                                   pos_price_,
+                                                   leverage=leverage) \
+                    if pos_size_ < 0.0 else \
+                    bybit_calc_isolated_long_liq_price(balance_,
+                                                       pos_size_,
+                                                       pos_price_,
+                                                       leverage=leverage)
         if settings['default_qty'] <= 0.0:
             calc_default_qty_ = lambda balance_, last_price: \
                 calc_default_qty(min_qty, qty_step, balance_ * last_price, settings['default_qty'])
@@ -74,10 +96,28 @@ def backtest(trades_list: [dict], settings: dict):
         calc_max_pos_size = lambda balance_, price_: balance_ * price_ * leverage
     else:
         calc_cost = lambda qty_, price_: qty_ * price_
-        calc_liq_price = lambda balance_, pos_size_, pos_price_: \
-            binance_calc_cross_shrt_liq_price(balance_, pos_size_, pos_price_, leverage=leverage) \
-                if pos_size_ < 0.0 else \
-                binance_calc_cross_long_liq_price(balance_, pos_size_, pos_price_, leverage=leverage)
+        if settings['cross_mode']:
+            calc_liq_price = lambda balance_, pos_size_, pos_price_: \
+                binance_calc_cross_shrt_liq_price(balance_,
+                                                  pos_size_,
+                                                  pos_price_,
+                                                  leverage=leverage) \
+                    if pos_size_ < 0.0 else \
+                    binance_calc_cross_long_liq_price(balance_,
+                                                      pos_size_,
+                                                      pos_price_,
+                                                      leverage=leverage)
+        else:
+            calc_liq_price = lambda balance_, pos_size_, pos_price_: \
+                binance_calc_isolated_shrt_liq_price(balance_,
+                                                     pos_size_,
+                                                     pos_price_,
+                                                     leverage=leverage) \
+                    if pos_size_ < 0.0 else \
+                    binance_calc_isolated_long_liq_price(balance_,
+                                                         pos_size_,
+                                                         pos_price_,
+                                                         leverage=leverage)
         if settings['default_qty'] <= 0.0:
             calc_default_qty_ = lambda balance_, last_price: \
                 calc_default_qty(max(min_qty, round_up(min_notional / last_price, qty_step)),
@@ -108,6 +148,7 @@ def backtest(trades_list: [dict], settings: dict):
 
     pnl_sum = 0.0
     loss_sum = 0.0
+    profit_sum = 0.0
 
     ema_alpha = 2 / (settings['ema_span'] + 1)
     ema_alpha_ = 1 - ema_alpha
@@ -115,6 +156,15 @@ def backtest(trades_list: [dict], settings: dict):
 
     k = 0
     prev_len_trades = 0
+
+    break_on = {
+        #'too large pos size': lambda t_: \
+        #    t_['pos_size'] > calc_max_pos_size(t_['balance'], t_['pos_price']) * 0.8,
+        'neg pnl sum': lambda t_: \
+            t_['pnl_sum'] < 0.0 and t_['trade_id'] > int(len(trades_list) * 0.1),
+        'profit to loss ratio': lambda t_: \
+            t_['profit_sum'] / als < 2.0 if (als := abs(t_['loss_sum'])) > 0.0 else False,
+    }
 
     for t in trades_list:
         if t['buyer_maker']:
@@ -176,14 +226,21 @@ def backtest(trades_list: [dict], settings: dict):
                     trade_side = 'shrt'
                     gain = pos_price / bid_price - 1
                     pnl += cost * gain
-                    trade_type = 'close' if gain > 0.0 else 'stop_loss'
+                    if gain > 0.0:
+                        trade_type = 'close'
+                        profit_sum += pnl
+                    else:
+                        trade_type = 'stop_loss'
+                        loss_sum += pnl
                     pos_size = pos_size + bid_qty
                     roi = gain * leverage
                 balance += pnl
                 pnl_sum += pnl
                 trades.append({'trade_id': k, 'side': trade_side, 'type': trade_type,
                                'price': bid_price, 'qty': bid_qty, 'pnl': pnl, 'roi': roi,
-                               'pos_size': pos_size, 'pos_price': pos_price,
+                               'pos_size': pos_size, 'pos_price': pos_price, 'balance': balance,
+                               'max_pos_size': calc_max_pos_size(balance, t['price']),
+                               'pnl_sum': pnl_sum, 'loss_sum': loss_sum, 'profit_sum': profit_sum,
                                'liq_price': calc_liq_price(balance, pos_size, pos_price)})
         else:
             # sell
@@ -244,34 +301,41 @@ def backtest(trades_list: [dict], settings: dict):
                     trade_side = 'long'
                     gain = ask_price / pos_price - 1
                     pnl += cost * gain
-                    trade_type = 'close' if gain > 0.0 else 'stop_loss'
+                    if gain > 0.0:
+                        trade_type = 'close'
+                        profit_sum += pnl
+                    else:
+                        trade_type = 'stop_loss'
+                        loss_sum += pnl
                     pos_size = pos_size + ask_qty
                     roi = gain * leverage
                 balance += pnl
                 pnl_sum += pnl
                 trades.append({'trade_id': k, 'side': trade_side, 'type': trade_type,
                                'price': ask_price, 'qty': ask_qty, 'pnl': pnl, 'roi': roi,
-                               'pos_size': pos_size, 'pos_price': pos_price,
+                               'pos_size': pos_size, 'pos_price': pos_price, 'balance': balance,
+                               'max_pos_size': calc_max_pos_size(balance, t['price']),
+                               'pnl_sum': pnl_sum, 'loss_sum': loss_sum, 'profit_sum': profit_sum,
                                'liq_price': calc_liq_price(balance, pos_size, pos_price)})
         ema = ema * ema_alpha_ + t['price'] * ema_alpha
         k += 1
         if k % 10000 == 0 or len(trades) != prev_len_trades:
-            if trades and trades[-1]['type'] == 'stop_loss':
-                loss_sum += pnl
-                if break_on_loss:
-                    print('break on loss')
-                    return trades
+            for key, condition in break_on.items():
+                if condition(trades[-1]):
+                    print('break on', key)
+                    return []
             balance = max(balance, settings['balance'])
             prev_len_trades = len(trades)
             progress = k / len(trades_list)
-            if pnl_sum < 0.0 and progress >= settings['break_on_negative_pnl']:
-                print('break on negative pnl')
-                return trades
             line = f"\r{progress:.3f} pnl sum {pnl_sum:.8f} "
-            line += f"loss sum {loss_sum:.6f} balance {balance:.6f} "
+            line += f"loss sum {loss_sum:.5f} balance {balance:.5f} "
+            plr = trades[-1]['profit_sum'] / ls_ if \
+                (ls_ := abs(trades[-1]['loss_sum'])) > 0.0 else 9.0
+            line += f"profit to loss ratio {plr:.3f} "
             line += f"qty {calc_default_qty_(balance, ob[0]):.4f} "
+            line += f"max pos pct {abs(pos_size) / calc_max_pos_size(balance, t['price']):.3f} "
             line += f"liq diff {min(1.0, calc_diff(trades[-1]['liq_price'], ob[0])):.3f} "
-            line += f"pos size {pos_size:.6f} "
+            line += f"pos size {pos_size:.4f} "
             print(line, end=' ')
     return trades
 
@@ -302,7 +366,7 @@ def jackrabbit(trades_list: [dict],
     if backtesting_settings['random_starting_candidate']:
         best = {key: calc_new_val((abs(ranges[key][1]) - abs(ranges[key][0])) / 2, ranges[key], 1.0)
                 for key in sorted(ranges)}
-        print('random starting candidate:', best)
+        print('\nrandom starting candidate:', best)
     else:
         best = sort_dict_keys({k_: backtesting_settings[k_] for k_ in ranges})
 
@@ -319,7 +383,7 @@ def jackrabbit(trades_list: [dict],
     json.dump(backtesting_settings, open(base_filepath + 'backtesting_settings.json', 'w'),
               indent=4, sort_keys=True)
 
-    print(backtesting_settings, '\n\n')
+    print('\n', backtesting_settings, '\n\n')
 
     while k < ks - 1:
 
@@ -360,13 +424,12 @@ def jackrabbit(trades_list: [dict],
         results[key] = {**result, **candidate}
 
         if gain > best_gain:
-            if not backtesting_settings['break_on_loss'] or len(tdf[tdf.type == 'stop_loss']) == 0:
-                best = candidate
-                best_gain = gain
-                print('\n\n\n###############\nnew best', best, '\naverage daily gain:',
-                      round(average_daily_gain, 5), '\n\n')
-                print(settings_, '\n')
-                print(results[key], '\n\n')
+            best = candidate
+            best_gain = gain
+            print('\n\n\n###############\nnew best', best, '\naverage daily gain:',
+                  round(average_daily_gain, 5), '\n\n')
+            print(settings_, '\n')
+            print(results[key], '\n\n')
         candidate = get_new_candidate(ranges, best, m=ms[k])
         pd.DataFrame(results).T.to_csv(base_filepath + 'results.csv')
 
