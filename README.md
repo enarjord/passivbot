@@ -25,7 +25,7 @@ change log
 - bug fixes and changes in trade data downloading
 - if there already is historical trade data downloaded, run the script `rename_trade_data_csvs.py` to rename all files
 
-20201-01-23
+2021-01-23
 - removed static mode
 - added indicator ema
 - rewrote backtester
