@@ -475,8 +475,8 @@ async def load_trades(exchange: str, user: str, symbol: str, n_days: float) -> p
             if break_:
                 break
         from_id = skip_ids(new_trades[0]['trade_id'] - 1, ids) - 999
-        # wait at least 0.5 sec between each fetch
-        sleep_for = max(0.0, 0.5 - (time() - prev_fetch_ts))
+        # wait at least 0.75 sec between each fetch
+        sleep_for = max(0.0, 0.75 - (time() - prev_fetch_ts))
         await asyncio.sleep(sleep_for)
         prev_fetch_ts = time()
         new_trades = await fetch_trades_func(cc, symbol, from_id=from_id) + new_trades
