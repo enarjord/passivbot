@@ -165,13 +165,16 @@ def load_key_secret(exchange: str, user: str) -> (str, str):
 
 def init_ccxt(exchange: str = None, user: str = None):
     if user is None:
-        return getattr(ccxt_async, exchange)
+        cc = getattr(ccxt_async, exchange)
     try:
-        return getattr(ccxt_async, exchange)({'apiKey': (ks := load_key_secret(exchange, user))[0],
-                                              'secret': ks[1]})
+        cc = getattr(ccxt_async, exchange)({'apiKey': (ks := load_key_secret(exchange, user))[0],
+                                            'secret': ks[1]})
     except Exception as e:
         print('error init ccxt', e)
-        return getattr(ccxt_async, exchange)
+        cc = getattr(ccxt_async, exchange)
+    print('ccxt enableRateLimit true')
+    cc.enableRateLimit = True
+    return cc
 
 
 def print_(args, r=False, n=False):
