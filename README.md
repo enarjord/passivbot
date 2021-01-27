@@ -164,8 +164,8 @@ about settings, bybit example:
     
     "balance": 0.001,                     # balance bot sees.  used to limit pos size and to modify grid spacing.
                                           # scalable balance mode:
-                                          # if settings["balance"] < 0.0, will use exchange_fetched_balance * abs(settings["balance"]) as balance.
-                                          # e.g. if settings["balance"] = -1.0, will us 100% of balance.
+                                          # if settings["balance"] < 0.0, will use exchange_fetched_balance * min(1.0, abs(settings["balance"])) as balance.
+                                          # e.g. if settings["balance"] = -1.0, will use 100% of balance.
                                           # if settings["balance"] = -0.35, will us 35% of balance.
                                           # if using static balance, binance balance is quoted in usdt, bybit inverse balance is quoted in coin.
                                           
