@@ -351,7 +351,7 @@ class Bot:
 
     def calc_orders(self):
         last_price_diff_limit = 0.05
-        balance = self.position['balance'] * abs(self.balance) \
+        balance = self.position['balance'] * min(1.0, abs(self.balance)) \
             if self.balance <= 0 else self.balance
         default_qty = self.default_qty if self.default_qty > 0.0 else \
             self.calc_default_qty(balance, self.price)
