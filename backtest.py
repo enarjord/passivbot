@@ -360,13 +360,23 @@ def jackrabbit(trades_list: [dict],
         results[key] = {**result, **candidate}
 
         if gain > best_gain:
-            if not backtesting_settings['break_on_loss'] or len(tdf[tdf.type == 'stop_loss']) == 0:
-                best = candidate
-                best_gain = gain
-                print('\n\n\n###############\nnew best', best, '\naverage daily gain:',
-                      round(average_daily_gain, 5), '\n\n')
-                print(settings_, '\n')
-                print(results[key], '\n\n')
+            best = candidate
+            best_gain = gain
+            print('\n\n\n###############\nnew best', best, '\naverage daily gain:',
+                  round(average_daily_gain, 5), '\n\n')
+            print(settings_, '\n')
+            print(results[key], '\n\n')
+            default_live_settings = load_settings(settings_['exchange'], print_=False)
+            live_settings = {k: settings_[k] if k in settings_ else default_live_settings[k]
+                             for k in default_live_settings}
+            live_settings['indicator_settings'] = {'ema': {'span': best['ema_span']}}
+            json.dump(live_settings,
+                      open(base_filepath + 'best_result_live_settings.json', 'w'),
+                      indent=4,
+                      sort_keys=True)
+            json.dump(results[key], open(base_filepath + 'best_result.json', 'w'),
+                      indent=4,
+                      sort_keys=True)
         candidate = get_new_candidate(ranges, best, m=ms[k])
         pd.DataFrame(results).T.to_csv(base_filepath + 'results.csv')
 
