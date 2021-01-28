@@ -54,7 +54,7 @@ def backtest(trades_list: [dict], settings: dict):
     min_qty = settings['min_qty']
     ddown_factor = settings['ddown_factor']
     leverage = settings['leverage']
-    starting_balance = settings['balance']
+    max_leverage = settings['max_leverage']
     maker_fee = settings['maker_fee']
     taker_fee = settings['taker_fee']
     min_markup = settings['min_markup']
@@ -71,12 +71,12 @@ def backtest(trades_list: [dict], settings: dict):
                 bybit_calc_cross_shrt_liq_price(balance_,
                                                 pos_size_,
                                                 pos_price_,
-                                                leverage=leverage) \
+                                                leverage=max_leverage) \
                     if pos_size_ < 0.0 else \
                     bybit_calc_cross_long_liq_price(balance_,
                                                     pos_size_,
                                                     pos_price_,
-                                                    leverage=leverage)
+                                                    leverage=max_leverage)
         else:
             calc_liq_price = lambda balance_, pos_size_, pos_price_: \
                 bybit_calc_isolated_shrt_liq_price(balance_,
@@ -133,7 +133,7 @@ def backtest(trades_list: [dict], settings: dict):
     calc_shrt_reentry_price_ = lambda balance_, pos_margin_, pos_price_, lowest_ask_: \
         max(lowest_ask_, calc_shrt_reentry_price(price_step, grid_spacing, grid_coefficient,
                                                  balance_, pos_margin_, pos_price_))
-    balance = starting_balance
+    balance = settings['starting_balance']
     trades = []
     ob = [min(trades_list[0]['price'], trades_list[1]['price']),
           max(trades_list[0]['price'], trades_list[1]['price'])]
@@ -156,16 +156,7 @@ def backtest(trades_list: [dict], settings: dict):
 
     k = 0
     prev_len_trades = 0
-
-    break_on = {
-        #'too large pos size': lambda t_: \
-        #    t_['pos_size'] > calc_max_pos_size(t_['balance'], t_['pos_price']) * 0.8,
-        'neg pnl sum': lambda t_: \
-            t_['pnl_sum'] < 0.0 and t_['trade_id'] > int(len(trades_list) * 0.1),
-        'profit to loss ratio': lambda t_: \
-            t_['profit_sum'] / als < 2.0 if (als := abs(t_['loss_sum'])) > 0.0 else False,
-    }
-
+    break_on = {e[0]: eval(e[1]) for e in settings['break_on']}
     for t in trades_list:
         if t['buyer_maker']:
             # buy
@@ -241,6 +232,7 @@ def backtest(trades_list: [dict], settings: dict):
                                'pos_size': pos_size, 'pos_price': pos_price, 'balance': balance,
                                'max_pos_size': calc_max_pos_size(balance, t['price']),
                                'pnl_sum': pnl_sum, 'loss_sum': loss_sum, 'profit_sum': profit_sum,
+                               "progress": k / len(trades_list),
                                'liq_price': calc_liq_price(balance, pos_size, pos_price)})
         else:
             # sell
@@ -316,6 +308,7 @@ def backtest(trades_list: [dict], settings: dict):
                                'pos_size': pos_size, 'pos_price': pos_price, 'balance': balance,
                                'max_pos_size': calc_max_pos_size(balance, t['price']),
                                'pnl_sum': pnl_sum, 'loss_sum': loss_sum, 'profit_sum': profit_sum,
+                               "progress": k / len(trades_list),
                                'liq_price': calc_liq_price(balance, pos_size, pos_price)})
         ema = ema * ema_alpha_ + t['price'] * ema_alpha
         k += 1
@@ -324,7 +317,7 @@ def backtest(trades_list: [dict], settings: dict):
                 if condition(trades[-1]):
                     print('break on', key)
                     return []
-            balance = max(balance, settings['balance'])
+            balance = max(balance, settings['starting_balance'])
             prev_len_trades = len(trades)
             progress = k / len(trades_list)
             line = f"\r{progress:.3f} pnl sum {pnl_sum:.8f} "
@@ -385,7 +378,7 @@ def jackrabbit(trades_list: [dict],
 
     print('\n', backtesting_settings, '\n\n')
 
-    while k < ks - 1:
+    while k - 1 < ks:
 
         if candidate['min_markup'] >= candidate['max_markup']:
             candidate['min_markup'] = candidate['max_markup']
@@ -413,7 +406,7 @@ def jackrabbit(trades_list: [dict],
         pnl_sum = tdf.pnl.sum()
         loss_sum = tdf[tdf.type == 'stop_loss'].pnl.sum()
         abs_pos_sizes = tdf.pos_size.abs()
-        gain = (pnl_sum + settings_['balance']) / settings_['balance']
+        gain = (pnl_sum + settings_['starting_balance']) / settings_['starting_balance']
         average_daily_gain = gain ** (1 / n_days)
         n_trades = len(tdf)
         result = {'n_closes': n_closes, 'pnl_sum': pnl_sum, 'loss_sum': loss_sum,
@@ -430,13 +423,29 @@ def jackrabbit(trades_list: [dict],
                   round(average_daily_gain, 5), '\n\n')
             print(settings_, '\n')
             print(results[key], '\n\n')
+            default_live_settings = load_settings(settings_['exchange'], print_=False)
+            live_settings = {k: settings_[k] if k in settings_ else default_live_settings[k]
+                             for k in default_live_settings}
+            live_settings['indicator_settings'] = {'ema': {'span': best['ema_span']}}
+            json.dump(live_settings,
+                      open(base_filepath + 'best_result_live_settings.json', 'w'),
+                      indent=4,
+                      sort_keys=True)
+            print('\n\n', json.dumps(live_settings, indent=4, sort_keys=True), '\n\n')
+            json.dump(results[key], open(base_filepath + 'best_result.json', 'w'),
+                      indent=4,
+                      sort_keys=True)
         candidate = get_new_candidate(ranges, best, m=ms[k])
-        pd.DataFrame(results).T.to_csv(base_filepath + 'results.csv')
+        rdf = pd.DataFrame(results).T.sort_values('gain', ascending=False)
+        rdf.to_csv(base_filepath + 'results.csv')
 
 
 def calc_new_val(val, range_, m):
-    new_val = val + (np.random.random() - 0.5) * (range_[1] - range_[0]) * max(0.0001, m)
-    return round(round(max(min(new_val, range_[1]), range_[0]) / range_[2]) * range_[2], 10)
+    choice_span = (range_[1] - range_[0]) * m / 2
+    biased_mid_point = max(range_[0] + choice_span, min(val, range_[1] - choice_span))
+    choice_range = (biased_mid_point - choice_span, biased_mid_point + choice_span)
+    new_val = np.random.choice(np.linspace(choice_range[0], choice_range[1], 200))
+    return round_(new_val, range_[2])
 
 
 def get_new_candidate(ranges: dict, best: dict, m=0.2):
@@ -524,6 +533,7 @@ async def load_trades(exchange: str, user: str, symbol: str, n_days: float) -> p
         if gaps:
             print('gaps', gaps)
         # 
+    prev_fetch_ts = time()
     new_trades = await fetch_trades_func(cc, symbol)
     k = 0
     while True:
@@ -537,6 +547,10 @@ async def load_trades(exchange: str, user: str, symbol: str, n_days: float) -> p
             if break_:
                 break
         from_id = skip_ids(new_trades[0]['trade_id'] - 1, ids) - 999
+        # wait at least 0.75 sec between each fetch
+        sleep_for = max(0.0, 0.75 - (time() - prev_fetch_ts))
+        await asyncio.sleep(sleep_for)
+        prev_fetch_ts = time()
         new_trades = await fetch_trades_func(cc, symbol, from_id=from_id) + new_trades
         ids.update([e['trade_id'] for e in new_trades])
     tdf = pd.concat([load_cache(), trades_df], axis=0).sort_index()
@@ -572,11 +586,10 @@ async def main():
     ranges = json.load(open(os.path.join(settings_filepath, 'ranges.json')))
     print(settings_filepath)
     results_filepath = make_get_filepath(
-        os.path.join('backtesting_results', exchange,
-                     ts_to_date(time())[:19].replace(':', '_') + f'_{int(round(n_days))}',
-                     '')
+        os.path.join('backtesting_results', exchange, symbol, backtesting_settings['session_name'],
+                     ts_to_date(time())[:19].replace(':', '_'), '')
     )
-
+    print(results_filepath)
     trade_cache_filepath = make_get_filepath(os.path.join(settings_filepath, 'trade_cache', ''))
     trades_filename = f'{symbol}_raw_trades_{exchange}_{n_days}_days_{ts_to_date(time())[:10]}.npy'
     trades_filepath = f"{trade_cache_filepath}{trades_filename}"
