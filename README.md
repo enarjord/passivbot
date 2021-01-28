@@ -30,6 +30,12 @@ change log
 - added indicator ema
 - rewrote backtester
 
+2021-01-28
+- changed backtesting results formatting
+- fixed insufficient margin error
+- added possiblility of using more indicators
+- many other fixes and changes...
+
 ------------------------------------------------------------------
 
 released freely -- anybody may copy, redistribute, modify, use for commercial, non-commercial, educational or non-educational purposes, censor, claim as one's own or otherwise do or not do whatever without permission from anybody
@@ -91,23 +97,35 @@ about backtesting settings, binance XMRUSDT example
 
 {
 
-    "break_on_loss": true,                   # if true, will break backtest upon first soft stop.
-    "break_on_negative_pnl": 0.3,            # if pnl_sum < 0, will break if backtest progress > 0.3 (where 1.0 means backtest is done)
+    "session_name": "unnamed_session",
     "exchange": "binance",
+    "symbol": "XMRUSDT",
+    "n_days": 41,                            # n days to backtest
+
+    "random_starting_candidate": false,      # if false, will use settings given as starting candidate
+    "starting_k": 0,                         # k is incremented by 1 per iteration until k == n_jackrabbit_iterations
+    "n_jackrabbit_iterations": 200,          # see below for more info on jackrabbit
+    
+    "min_notional": 1.0,                     # used with binance: entry qty must be greater than min_notional / price
+    
+    "break_on": [
+        ["break on first soft stop", "lambda x: x['type'] == 'soft_stop'"],
+        ["neg pnl sum", "lambda x: x['pnl_sum'] < 0.0 and x['progress'] > 0.1"]
+    ],
+                                             # conditions to break backtest prematurely ["name", if true: break.  x is last trade]
+
     "inverse": false,                        # inverse is true for bybit, false for binance
     "maker_fee": 0.00018,                    # 0.00018 for binance (with bnb discount), -0.00025 for bybit
     "balance": 10.0,                         # backtest starting balance
     "min_qty": 0.001,                        # minimum allowed contract qty
-    "n_days": 32,                            # n days to backtest
     "price_step": 0.01,
     "qty_step": 0.001,
-    "symbol": "XMRUSDT",
     "taker_fee": 0.00036,                    # 0.00036 for binance (with bnb discount), 0.00075 for bybit
-    "n_jackrabbit_iterations": 200,          # see below for more info on jackrabbit
-    "starting_k": 0,                         # k is incremented by 1 per iteration until k == n_jackrabbit_iterations
-    "random_starting_candidate": false,      # if false, will use settings given as starting candidate
 
 }
+
+
+in ranges.json are defined which settings are to be mutated: [min, max, step]
 
 jackrabbit is a pet name given to a simple algorithm for optimizing settings.
 
@@ -144,7 +162,7 @@ about settings, bybit example:
                                           # if set to 1.0, each reentry qty will be equal to 1x pos size, i.e. doubling pos size after every reentry.
                                           # if set to 0.0, each reentry qty will be equal to default_qty.
                                           
-    "indicator_settings": {"ema": {"span": 10000}},
+    "indicator_settings": {"tick_ema": {"span": 10000}},
                                           # indicators may be used to determine long or short initial entry.  they are updated on each websocket trade tick.
                                           # ema is not based on ohlcvs, but calculated based on sequence of raw trades.
                                           # when no pos, bid = min(ema, highest_bid), ask = max(ema, lowest_ask)
