@@ -1,32 +1,40 @@
 {
-    "break_on_loss": true,
-    "break_on_negative_pnl": 1.0,
+    "session_name": "conservative_btc",
     "exchange": "bybit",
+    "symbol": "BTCUSD",
+    "n_days": 41,
+
+    "random_starting_candidate": true,
+    "starting_k": 0,
+    "n_jackrabbit_iterations": 200,
+
+    "starting_balance": 0.001,
     "inverse": true,
     "maker_fee": -0.00025,
-    "balance": 0.001,
+    "taker_fee": 0.00075,
     "market_stop_loss": false,
     "min_qty": 1.0,
-    "n_entry_orders": 10,
-    "n_days": 50,
     "price_step": 0.5,
     "qty_step": 1.0,
-    "symbol": "BTCUSD",
-    "taker_fee": 0.00075,
-    "n_jackrabbit_iterations": 150,
-    "starting_k": 100,
-    "random_starting_candidate": false,
 
-    "ema_span": 10000,
+    "min_notional": 0.0,
+    "cross_mode": true,
+    "max_leverage": 100,
 
-    "ddown_factor": 0.0,
-    "default_qty": -0.03,
-    "grid_coefficient": 245.0,
-    "grid_spacing": 0.0026,
-    "leverage": 100,
-    "liq_diff_threshold": 0.05,
-    "max_markup": 0.014,
-    "min_markup": 0.0002,
-    "stop_loss_pos_reduction": 0.01,
-    "n_close_orders": 23
+    "break_on": [
+        ["break on first soft stop", "lambda x: x['type'] == 'stop_loss'"],
+        ["neg pnl sum", "lambda x: x['pnl_sum'] < 0.0 and x['progress'] > 0.1"]
+    ],
+
+    "ddown_factor": 0.554,
+    "default_qty": -0.0202,
+    "ema_span": 23323.0,
+    "grid_coefficient": 0.0,
+    "grid_spacing": 0.00401,
+    "leverage": 17,
+    "liq_diff_threshold": 0.02,
+    "max_markup": 0.0152,
+    "min_markup": 0.00152,
+    "n_close_orders": 22,
+    "stop_loss_pos_reduction": 0.005
 }
