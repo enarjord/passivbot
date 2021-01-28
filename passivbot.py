@@ -165,13 +165,16 @@ def load_key_secret(exchange: str, user: str) -> (str, str):
 
 def init_ccxt(exchange: str = None, user: str = None):
     if user is None:
-        return getattr(ccxt_async, exchange)
+        cc = getattr(ccxt_async, exchange)
     try:
-        return getattr(ccxt_async, exchange)({'apiKey': (ks := load_key_secret(exchange, user))[0],
-                                              'secret': ks[1]})
+        cc = getattr(ccxt_async, exchange)({'apiKey': (ks := load_key_secret(exchange, user))[0],
+                                            'secret': ks[1]})
     except Exception as e:
         print('error init ccxt', e)
-        return getattr(ccxt_async, exchange)
+        cc = getattr(ccxt_async, exchange)
+    #print('ccxt enableRateLimit true')
+    #cc.enableRateLimit = True
+    return cc
 
 
 def print_(args, r=False, n=False):
@@ -187,15 +190,21 @@ def print_(args, r=False, n=False):
     return line
 
 
-def load_settings(exchange: str, user: str = 'default') -> dict:
-    fpath = f'settings/{exchange}/'
+def log_(event: dict, r=False, n=False):
+    # print to terminal and save log entry
+    pass
+
+
+def load_settings(exchange: str, user: str = 'default', print_=True) -> dict:
+    fpath = f'live_settings/{exchange}/'
     try:
         settings = json.load(open(f'{fpath}{user}.json'))
     except FileNotFoundError:
-        print(f'settings for user {user} not found, using default settings')
+        print_(f'settings for user {user} not found, using default settings')
         settings = json.load(open(f'{fpath}default.json'))
-    print('\nloaded settings:')
-    pprint.pprint(settings)
+    if print_:
+        print('\nloaded settings:')
+        pprint.pprint(settings)
     return settings
 
 
@@ -266,7 +275,9 @@ class Bot:
         self.indicators = {'tick': {}, 'ohlcv': {}}
         self.ohlcvs = {}
 
-        self.logs_base_filepath = make_get_filepath(f"logs/{self.exchange}/")
+        self.logs_base_filepath = make_get_filepath(
+            f"logs/{self.exchange}/{ts_to_date(time())[:19].replace(':', '_')}.txt"
+        )
         self.log_level = 0
 
         self.stop_websocket = False
@@ -347,14 +358,19 @@ class Bot:
     def stop(self) -> None:
         self.stop_websocket = True
 
+    def determine_entry_side(self):
+        # using indicators
+        pass
+
     def calc_initial_bid_ask(self):
-        bid_price = min(self.ob[0], round_dn(self.indicators['tick']['ema'], self.price_step))
-        ask_price = max(self.ob[1], round_up(self.indicators['tick']['ema'], self.price_step))
+        bid_price = min(self.ob[0], round_dn(self.indicators['tick_ema'], self.price_step))
+        ask_price = max(self.ob[1], round_up(self.indicators['tick_ema'], self.price_step))
         return bid_price, ask_price
 
     def calc_orders(self):
         last_price_diff_limit = 0.05
-        balance = self.position['balance'] if self.balance <= 0 else self.balance
+        balance = self.position['wallet_balance'] * min(1.0, abs(self.balance)) \
+            if self.balance <= 0 else self.balance
         default_qty = self.default_qty if self.default_qty > 0.0 else \
             self.calc_default_qty(balance, self.price)
         orders = []
@@ -395,11 +411,14 @@ class Bot:
                                                                 pos_margin,
                                                                 pos_price))
             for k in range(self.n_entry_orders):
+                max_pos_size = self.calc_max_pos_size(min(balance, self.position['equity']),
+                                                      bid_price)
                 bid_qty = calc_entry_qty(self.qty_step, self.ddown_factor, default_qty,
-                                         self.calc_max_pos_size(balance, bid_price),
-                                         pos_size)
+                                         max_pos_size, pos_size)
+                if bid_qty < default_qty:
+                    break
                 new_pos_size = pos_size + bid_qty
-                if new_pos_size >= self.calc_max_pos_size(balance, bid_price):
+                if new_pos_size >= max_pos_size:
                     break
                 pos_price = pos_price * (bid_qty / new_pos_size) + \
                     bid_price * (pos_size / new_pos_size)
@@ -426,11 +445,14 @@ class Bot:
                                                                 pos_margin,
                                                                 pos_price))
             for k in range(self.n_entry_orders):
+                max_pos_size = self.calc_max_pos_size(min(balance, self.position['equity']),
+                                                      ask_price)
                 ask_qty = calc_entry_qty(self.qty_step, self.ddown_factor, default_qty,
-                                         self.calc_max_pos_size(balance, ask_price),
-                                         pos_size)
+                                         max_pos_size, pos_size)
+                if ask_qty < default_qty:
+                    break
                 new_pos_size = pos_size - ask_qty
-                if abs(new_pos_size) >= self.calc_max_pos_size(balance, ask_price):
+                if abs(new_pos_size) >= max_pos_size:
                     break
                 pos_price = pos_price * (-ask_qty / new_pos_size) + \
                     ask_price * (pos_size / new_pos_size)
@@ -540,31 +562,30 @@ class Bot:
 
     def init_tick_ema(self, trades: [dict]):
         print_(['initiating tick ema...'])
-        ema_span = self.indicator_settings['tick']['ema']['span']
+        ema_span = self.indicator_settings['tick_ema']['span']
         ema = trades[0]['price']
         alpha = 2 / (ema_span + 1)
         for t in trades:
             ema = ema * (1 - alpha) + t['price'] * alpha
-        self.indicators['tick']['ema'] = ema
-        self.indicator_settings['tick']['ema']['alpha'] = alpha
-        self.indicator_settings['tick']['ema']['alpha_'] = 1 - alpha
+        self.indicators['tick_ema'] = ema
+        self.indicator_settings['tick_ema']['alpha'] = alpha
+        self.indicator_settings['tick_ema']['alpha_'] = 1 - alpha
 
     def update_tick_ema(self, websocket_tick):
-        self.indicators['tick']['ema'] = \
-            self.indicators['tick']['ema'] * self.indicator_settings['tick']['ema']['alpha_'] + \
-            websocket_tick['price'] * self.indicator_settings['tick']['ema']['alpha']
+        self.indicators['tick_ema'] = \
+            self.indicators['tick_ema'] * self.indicator_settings['tick_ema']['alpha_'] + \
+            websocket_tick['price'] * self.indicator_settings['tick_ema']['alpha']
 
-
-    def init_adx(self, trades: [dict]):
-        self.init_ohlcv(self.indicator_settings['ohlcv']['adx']['period_ms'], trades)
-
-    def update_adx(self, websocket_tick: dict):
+    def init_fancy_indicator_001(self, trades: [dict]):
         pass
 
-    def init_atr(self, trades: [dict]):
+    def update_fancy_indicator_001(self, websocket_tick: dict):
         pass
 
-    def update_atr(self, websocket_tick: dict):
+    def init_fancy_indicator_002(self, trades: [dict]):
+        pass
+
+    def update_fancy_indicator_002(self, websocket_tick: dict):
         pass
 
     async def init_indicators(self):
@@ -576,14 +597,11 @@ class Bot:
               for i in range(1, min(50, n_trades_to_fetch // 1000))])
         trades = sorted(trades + flatten(additional_trades), key=lambda x: x['trade_id'])
         self.init_tick_ema(trades)
-        self.init_adx(trades)
-        self.init_atr(trades)
 
     def update_indicators(self, websocket_tick: dict):
         # called each websocket tick
         # {'price': float, 'qty': float, 'timestamp': int, 'side': 'buy'|'sell'}
         self.update_tick_ema(websocket_tick)
-        self.update_adx(websocket_tick)
 
     def init_ohlcv(self, period_ms: int, trades: [dict]):
         print_([f'initiating ohlcvs {period_ms}...'])
@@ -638,9 +656,8 @@ class Bot:
     def dump_log(self, event: dict):
         # unfinished
         if self.log_level > 0:
-            filename = f"{self.logs_base_filepath}{event['type']}.txt"
-            with open(filename, 'a') as f:
-                f.write(json.dumps({**event, **{'timestamp': self.cc.milliseconds()}}))
+            with open(self.logs_base_filepath, 'a') as f:
+                f.write(json.dumps({**event, **{'timestamp': self.cc.milliseconds()}}) + '\n')
 
     async def fetch_my_trades(self, symbol: str) -> [dict]:
         my_trades = await self.cc.fapiPrivate_get_usertrades(params={'symbol': symbol})
