@@ -23,24 +23,24 @@ def first_capitalized(s: str):
 def calc_isolated_long_liq_price(balance,
                                  pos_size,
                                  pos_price,
-                                 mm=0.005,
-                                 leverage=100):
+                                 leverage,
+                                 mm=0.005) -> float:
     return (pos_price * leverage) / (leverage + 1 - mm * leverage)
 
 
 def calc_isolated_shrt_liq_price(balance,
                                  pos_size,
                                  pos_price,
-                                 mm=0.005,
-                                 leverage=100):
+                                 leverage,
+                                 mm=0.005) -> float:
     return (pos_price * leverage) / (leverage - 1 + mm * leverage)
 
 
 def calc_cross_long_liq_price(balance,
                               pos_size,
                               pos_price,
-                              mm=0.005,
-                              leverage=100):
+                              leverage,
+                              mm=0.005) -> float:
     order_cost = pos_size / pos_price
     order_margin = order_cost / leverage
     bankruptcy_price = calc_cross_long_bankruptcy_price(pos_size, order_cost, balance, order_margin)
@@ -51,15 +51,15 @@ def calc_cross_long_liq_price(balance,
     return (pos_price * pos_size) / (pos_size - pos_price * rhs)
 
 
-def calc_cross_long_bankruptcy_price(pos_size, order_cost, balance, order_margin):
+def calc_cross_long_bankruptcy_price(pos_size, order_cost, balance, order_margin) -> float:
     return (1.00075 * pos_size) / (order_cost + (balance - order_margin))
 
 
 def calc_cross_shrt_liq_price(balance,
                               pos_size,
                               pos_price,
-                              mm=0.005,
-                              leverage=100):
+                              leverage,
+                              mm=0.005) -> float:
     _pos_size = abs(pos_size)
     order_cost = _pos_size / pos_price
     order_margin = order_cost / leverage
@@ -74,7 +74,7 @@ def calc_cross_shrt_liq_price(balance,
     return shrt_liq_price
 
 
-def calc_cross_shrt_bankruptcy_price(pos_size, order_cost, balance, order_margin):
+def calc_cross_shrt_bankruptcy_price(pos_size, order_cost, balance, order_margin) -> float:
     return (0.99925 * pos_size) / (order_cost - (balance - order_margin))
 
 
@@ -125,6 +125,7 @@ class BybitBot(Bot):
                 break
         else:
             raise Exception('symbol missing')
+        self.max_leverage = e['leverage_filter']['max_leverage']
         self.coin = e['base_currency']
         self.quot = e['quote_currency']
         self.price_step = float(e['price_filter']['tick_size'])
@@ -190,7 +191,8 @@ class BybitBot(Bot):
                   'price': float(pos['entry_price']),
                   'leverage': float(pos['leverage']),
                   'liquidation_price': float(pos['liq_price']),
-                  'balance': balance['result'][self.coin]['wallet_balance']}
+                  'equity': balance['result'][self.coin]['equity'],
+                  'wallet_balance': balance['result'][self.coin]['wallet_balance']}
         result['cost'] = abs(result['size']) / result['price'] if result['price'] else 0.0
         result['margin_cost'] = result['cost'] / self.leverage
         return result
