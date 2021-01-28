@@ -22,7 +22,7 @@
     "max_leverage": 75,
 
     "break_on": [
-        ["break on first soft stop", "lambda x: x['type'] == 'soft_stop'"],
+        ["break on first soft stop", "lambda x: x['type'] == 'stop_loss'"],
         ["neg pnl sum", "lambda x: x['pnl_sum'] < 0.0 and x['progress'] > 0.1"]
     ],
 
