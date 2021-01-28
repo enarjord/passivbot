@@ -1,34 +1,40 @@
 {
-    "break_on_loss": true,
-    "break_on_negative_pnl": 0.3,
+    "session_name": "aggressive_xmr",
     "exchange": "binance",
+    "symbol": "XMRUSDT",
+    "n_days": 41,
+
+    "random_starting_candidate": false,
+    "starting_k": 150,
+    "n_jackrabbit_iterations": 200,
+
+    "starting_balance": 10.0,
     "inverse": false,
     "maker_fee": 0.00018,
-    "balance": 10.0,
     "market_stop_loss": false,
     "min_qty": 0.001,
-    "n_entry_orders": 10,
-    "n_days": 32,
     "price_step": 0.01,
     "qty_step": 0.001,
-    "symbol": "XMRUSDT",
     "taker_fee": 0.00036,
-    "n_jackrabbit_iterations": 200,
-    "starting_k": 0,
-    "random_starting_candidate": false,
-    
+
     "min_notional": 1.0,
+    "cross_mode": true,
+    "max_leverage": 75,
 
-    "ddown_factor": 0.009,
-    "default_qty": -0.0294,
-    "ema_span": 19759.0,
-    "grid_coefficient": 281.52,
-    "grid_spacing": 0.0024,
-    "liq_diff_threshold": 0.06,
-    "leverage": 75,
-    "min_markup": 0.0005,
-    "max_markup": 0.01433,
-    "n_close_orders": 16,
-    "stop_loss_pos_reduction": 0.01
+    "break_on": [
+        ["break on first soft stop", "lambda x: x['type'] == 'soft_stop'"],
+        ["neg pnl sum", "lambda x: x['pnl_sum'] < 0.0 and x['progress'] > 0.1"]
+    ],
+
+    "ddown_factor": 0.554,
+    "default_qty": -0.0202,
+    "ema_span": 23323.0,
+    "grid_coefficient": 0.0,
+    "grid_spacing": 0.00401,
+    "leverage": 17,
+    "liq_diff_threshold": 0.02,
+    "max_markup": 0.0152,
+    "min_markup": 0.00152,
+    "n_close_orders": 22,
+    "stop_loss_pos_reduction": 0.005
 }
-
