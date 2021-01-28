@@ -60,8 +60,8 @@ def get_max_pos_size_ito_usdt(symbol: str, leverage: int) -> float:
 def calc_isolated_long_liq_price(balance,
                                  pos_size,
                                  pos_price,
-                                 mm=0.004,
-                                 leverage=100):
+                                 leverage,
+                                 mm=0.004) -> float:
     return calc_cross_long_liq_price(pos_size * pos_price / leverage, pos_size, pos_price, mm,
                                      leverage=leverage)
 
@@ -69,8 +69,8 @@ def calc_isolated_long_liq_price(balance,
 def calc_isolated_shrt_liq_price(balance,
                                  pos_size,
                                  pos_price,
-                                 mm=0.004,
-                                 leverage=100):
+                                 leverage,
+                                 mm=0.004) -> float:
     return calc_cross_shrt_liq_price(abs(pos_size) * pos_price / leverage, pos_size, pos_price, mm,
                                      leverage=leverage)
 
@@ -78,8 +78,8 @@ def calc_isolated_shrt_liq_price(balance,
 def calc_cross_long_liq_price(balance,
                               pos_size,
                               pos_price,
-                              mm=0.004,
-                              leverage=100):
+                              leverage,
+                              mm=0.004) -> float:
     pos_margin = pos_size * pos_price / leverage
     d = (pos_size * mm - pos_size)
     if d == 0.0:
@@ -90,8 +90,8 @@ def calc_cross_long_liq_price(balance,
 def calc_cross_shrt_liq_price(balance,
                               pos_size,
                               pos_price,
-                              mm=0.004,
-                              leverage=100):
+                              leverage,
+                              mm=0.004) -> float:
     abs_pos_size = abs(pos_size)
     pos_margin = abs_pos_size * pos_price / leverage
     d = (abs_pos_size * mm - pos_size)
@@ -202,9 +202,9 @@ class BinanceBot(Bot):
         ]
 
     async def fetch_position(self) -> None:
-        positions, balance = await asyncio.gather(
+        positions, account = await asyncio.gather(
             self.cc.fapiPrivate_get_positionrisk(params={'symbol': self.symbol}),
-            self.cc.fapiPrivate_get_balance(),
+            self.cc.fapiPrivate_get_account()
         )
         if positions:
             position = {'size': float(positions[0]['positionAmt']),
@@ -218,9 +218,10 @@ class BinanceBot(Bot):
                         'leverage': 1.0}
         position['cost'] = abs(position['size']) * position['price']
         position['margin_cost'] = position['cost'] / self.leverage
-        for e in balance:
+        for e in account['assets']:
             if e['asset'] == 'USDT':
-                position['balance'] = float(e['balance'])
+                position['equity'] = float(e['marginBalance'])
+                position['wallet_balance'] = float(e['walletBalance'])
                 break
         return position
 
@@ -254,7 +255,7 @@ class BinanceBot(Bot):
         return qty * price / self.leverage
 
     def calc_max_pos_size(self, balance: float, price: float):
-        return min((balance / price) * self.leverage, self.max_pos_size_ito_usdt / price) * 0.95
+        return min((balance / price) * self.leverage, self.max_pos_size_ito_usdt / price) * 0.92
 
     async def start_websocket(self) -> None:
         self.stop_websocket = False
@@ -267,8 +268,10 @@ class BinanceBot(Bot):
         except Exception as e:
             print(e)
         try:
-            print(await self.cc.fapiPrivate_post_leverage(params={'symbol': self.symbol,
-                                                                  'leverage': int(self.leverage)}))
+            lev = await self.cc.fapiPrivate_post_leverage(params={'symbol': self.symbol,
+                                                                  'leverage': int(self.leverage)})
+            self.max_pos_size_ito_usdt = float(lev['maxNotionalValue'])
+            print('max pos size in terms of usdt', self.max_pos_size_ito_usdt)
         except Exception as e:
             print(e)
         await self.init_indicators()
