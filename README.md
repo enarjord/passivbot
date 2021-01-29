@@ -56,7 +56,7 @@ make a copy of `settings/{exchange}/default.json`
 
 rename the copy `your_user_name.json` and make desired changes
 
-run in terminal: `python3 {exchange}.py your_user_name`
+run in terminal: `python3 start_bot.py exchange your_user_name`
 
 ------------------------------------------------------------------
 overview
