@@ -6,9 +6,7 @@ exchange = sys.argv[1]
 user = sys.argv[2]
 
 max_n_restarts = 30
-
 restart_k = 0
-
 
 while True:
     print(f"\nStarting {exchange} {user}")
