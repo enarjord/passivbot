@@ -156,7 +156,7 @@ def backtest(trades_list: [dict], settings: dict):
 
     k = 0
     prev_len_trades = 0
-    break_on = {e[0]: eval(e[1]) for e in settings['break_on']}
+    break_on = {e[0]: eval(e[1]) for e in settings['break_on'] if e[0].startswith('ON:')}
     for t in trades_list:
         if t['buyer_maker']:
             # buy
@@ -165,22 +165,16 @@ def backtest(trades_list: [dict], settings: dict):
                 bid_price = min(ob[0], round_dn(ema, price_step))
                 bid_qty = calc_default_qty_(balance, ob[0])
             elif pos_size > 0.0:
-                # long pos
-                liq_price = calc_liq_price(balance, pos_size, pos_price)
-                if calc_diff(liq_price, ob[0]) < liq_diff_threshold:
-                    # long soft stop, no reentry
-                    bid_price = 0.0
+                # long reentry
+                bid_qty = calc_entry_qty(qty_step, ddown_factor,
+                                         calc_default_qty_(balance, ob[0]),
+                                         calc_max_pos_size(balance, ob[0]),
+                                         pos_size)
+                if bid_qty >= min_qty:
+                    pos_margin = calc_cost(pos_size, pos_price) / leverage
+                    bid_price = calc_long_reentry_price_(balance, pos_margin, pos_price, ob[0])
                 else:
-                    # long reentry
-                    bid_qty = calc_entry_qty(qty_step, ddown_factor,
-                                             calc_default_qty_(balance, ob[0]),
-                                             calc_max_pos_size(balance, ob[0]),
-                                             pos_size)
-                    if bid_qty >= min_qty:
-                        pos_margin = calc_cost(pos_size, pos_price) / leverage
-                        bid_price = calc_long_reentry_price_(balance, pos_margin, pos_price, ob[0])
-                    else:
-                        bid_price = 0.0
+                    bid_price = 0.0
             else:
                 # short pos
                 liq_price = calc_liq_price(balance, pos_size, pos_price)
@@ -258,22 +252,16 @@ def backtest(trades_list: [dict], settings: dict):
                     else:
                         ask_price = 9e9
             else:
-                # short pos
-                liq_price = calc_liq_price(balance, pos_size, pos_price)
-                if calc_diff(liq_price, ob[1]) < liq_diff_threshold:
-                    # shrt soft stop, no reentry
-                    ask_price = 9e9
+                # shrt reentry
+                ask_qty = -calc_entry_qty(qty_step, ddown_factor,
+                                          calc_default_qty_(balance, ob[1]),
+                                          calc_max_pos_size(balance, ob[1]),
+                                          pos_size)
+                if -ask_qty >= min_qty:
+                    pos_margin = calc_cost(-pos_size, pos_price) / leverage
+                    ask_price = calc_shrt_reentry_price_(balance, pos_margin, pos_price, ob[0])
                 else:
-                    # shrt reentry
-                    ask_qty = -calc_entry_qty(qty_step, ddown_factor,
-                                              calc_default_qty_(balance, ob[1]),
-                                              calc_max_pos_size(balance, ob[1]),
-                                              pos_size)
-                    if -ask_qty >= min_qty:
-                        pos_margin = calc_cost(-pos_size, pos_price) / leverage
-                        ask_price = calc_shrt_reentry_price_(balance, pos_margin, pos_price, ob[0])
-                    else:
-                        ask_price = 9e9
+                    ask_price = 9e9
             ob[1] = t['price']
             if t['price'] > ask_price:
                 # filled trade
@@ -393,11 +381,11 @@ def jackrabbit(trades_list: [dict],
         start_time = time()
         trades = backtest(trades_list, settings_)
         print('\ntime elapsed', round(time() - start_time, 1), 'seconds')
+        k += 1
         if not trades:
             print('\nno trades')
             candidate = get_new_candidate(ranges, best)
             continue
-        k += 1
         tdf = pd.DataFrame(trades).set_index('trade_id')
         tdf.to_csv(trades_filepath + key + '.csv')
         closest_liq = ((tdf.price - tdf.liq_price).abs() / tdf.price).min()
