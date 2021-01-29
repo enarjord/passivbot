@@ -12,7 +12,11 @@ dependencies, install with pip:
 
 `python3 -m pip install matplotlib pandas websockets ccxt`
 
-join telegram group for assistance and discussion of settings and live results
+discord
+
+https://discord.gg/QAF2H2UmzZ
+
+telegram
 
 https://t.me/passivbot_futures
 
