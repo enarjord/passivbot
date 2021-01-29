@@ -1,11 +1,11 @@
 {
-    "session_name": "conservative_btc",
+    "session_name": "aggressive_btc",
     "exchange": "bybit",
     "symbol": "BTCUSD",
-    "n_days": 41,
+    "n_days": 60,
 
-    "random_starting_candidate": true,
-    "starting_k": 0,
+    "random_starting_candidate": false,
+    "starting_k": 100,
     "n_jackrabbit_iterations": 200,
 
     "starting_balance": 0.001,
@@ -22,19 +22,19 @@
     "max_leverage": 100,
 
     "break_on": [
-        ["break on first soft stop", "lambda x: x['type'] == 'stop_loss'"],
-        ["neg pnl sum", "lambda x: x['pnl_sum'] < 0.0 and x['progress'] > 0.1"]
+        ["OFF: break on first soft stop", "lambda x: x['type'] == 'stop_loss'"],
+        ["ON: neg pnl sum", "lambda x: x['pnl_sum'] < 0.0 and x['progress'] > 0.5"]
     ],
 
-    "ddown_factor": 0.554,
-    "default_qty": -0.0202,
-    "ema_span": 23323.0,
-    "grid_coefficient": 0.0,
-    "grid_spacing": 0.00401,
-    "leverage": 17,
-    "liq_diff_threshold": 0.02,
-    "max_markup": 0.0152,
-    "min_markup": 0.00152,
-    "n_close_orders": 22,
-    "stop_loss_pos_reduction": 0.005
+    "ddown_factor": 0.02,
+    "default_qty": -0.09,
+    "ema_span": 16318.0,
+    "grid_coefficient": 283.0,
+    "grid_spacing": 0.001,
+    "leverage": 100,
+    "liq_diff_threshold": 0.07,
+    "max_markup": 0.01085,
+    "min_markup": 0.0002,
+    "n_close_orders": 12,
+    "stop_loss_pos_reduction": 0.001
 }
