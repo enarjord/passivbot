@@ -4,8 +4,8 @@
     "symbol": "XMRUSDT",
     "n_days": 41,
 
-    "random_starting_candidate": false,
-    "starting_k": 150,
+    "random_starting_candidate": true,
+    "starting_k": 0,
     "n_jackrabbit_iterations": 200,
 
     "starting_balance": 10.0,
@@ -22,8 +22,8 @@
     "max_leverage": 75,
 
     "break_on": [
-        ["break on first soft stop", "lambda x: x['type'] == 'stop_loss'"],
-        ["neg pnl sum", "lambda x: x['pnl_sum'] < 0.0 and x['progress'] > 0.1"]
+        ["OFF: break on first soft stop", "lambda x: x['type'] == 'stop_loss'"],
+        ["ON: neg pnl sum", "lambda x: x['pnl_sum'] < 0.0 and x['progress'] > 0.5"]
     ],
 
     "ddown_factor": 0.554,
