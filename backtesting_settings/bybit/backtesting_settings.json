@@ -1,12 +1,12 @@
 {
-    "session_name": "aggressive_btc",
+    "session_name": "unnamed_session_001",
     "exchange": "bybit",
     "symbol": "BTCUSD",
-    "n_days": 60,
+    "n_days": 30,
 
-    "random_starting_candidate": false,
-    "starting_k": 100,
-    "n_jackrabbit_iterations": 200,
+    "random_starting_candidate": true,
+    "starting_k": 0,
+    "n_jackrabbit_iterations": 100,
 
     "starting_balance": 0.001,
     "inverse": true,
@@ -23,18 +23,18 @@
 
     "break_on": [
         ["OFF: break on first soft stop", "lambda x: x['type'] == 'stop_loss'"],
-        ["ON: neg pnl sum", "lambda x: x['pnl_sum'] < 0.0 and x['progress'] > 0.5"]
+        ["ON: neg pnl sum", "lambda x: x['pnl_sum'] < 0.0 and x['progress'] > 0.4"]
     ],
 
-    "ddown_factor": 0.02,
-    "default_qty": -0.09,
+    "ddown_factor": 0.014,
+    "default_qty": -0.0603,
+    "grid_coefficient": 283.55,
+    "grid_spacing": 0.0042,
     "ema_span": 16318.0,
-    "grid_coefficient": 283.0,
-    "grid_spacing": 0.001,
     "leverage": 100,
-    "liq_diff_threshold": 0.07,
+    "liq_diff_threshold": 0.04,
     "max_markup": 0.01085,
-    "min_markup": 0.0002,
+    "min_markup": 0.00007,
     "n_close_orders": 12,
     "stop_loss_pos_reduction": 0.001
 }
