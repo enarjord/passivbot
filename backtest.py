@@ -399,6 +399,7 @@ def jackrabbit(trades_list: [dict],
         key = format_dict(candidate)
         if key in results:
             print('\nskipping', key)
+            best = json.load(open(best_filepath))
             candidate = get_new_candidate(ranges, best)
             continue
         print(f'\nk={k}, m={mutation_coefficient:.4f} candidate:\n', candidate)
@@ -408,6 +409,7 @@ def jackrabbit(trades_list: [dict],
         k += 1
         if not trades:
             print('\nno trades')
+            best = json.load(open(best_filepath))
             candidate = get_new_candidate(ranges, best)
             continue
         tdf = pd.DataFrame(trades).set_index('trade_id')
