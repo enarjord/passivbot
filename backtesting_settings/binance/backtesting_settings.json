@@ -1,12 +1,12 @@
 {
-    "session_name": "aggressive_xmr",
+    "session_name": "unnamed_session_001",
     "exchange": "binance",
     "symbol": "XMRUSDT",
-    "n_days": 41,
+    "n_days": 28,
 
     "random_starting_candidate": true,
     "starting_k": 0,
-    "n_jackrabbit_iterations": 200,
+    "n_jackrabbit_iterations": 100,
 
     "starting_balance": 10.0,
     "inverse": false,
@@ -23,18 +23,19 @@
 
     "break_on": [
         ["OFF: break on first soft stop", "lambda x: x['type'] == 'stop_loss'"],
-        ["ON: neg pnl sum", "lambda x: x['pnl_sum'] < 0.0 and x['progress'] > 0.5"]
+        ["ON: neg pnl sum", "lambda x: x['pnl_sum'] < 0.0 and x['progress'] > 0.35"]
     ],
 
-    "ddown_factor": 0.554,
-    "default_qty": -0.0202,
-    "ema_span": 23323.0,
+    "ddown_factor": 0.673,
+    "default_qty": -0.0416,
     "grid_coefficient": 0.0,
-    "grid_spacing": 0.00401,
-    "leverage": 17,
-    "liq_diff_threshold": 0.02,
-    "max_markup": 0.0152,
-    "min_markup": 0.00152,
-    "n_close_orders": 22,
-    "stop_loss_pos_reduction": 0.005
+    "grid_spacing": 0.00287,
+    "ema_span": 10836,
+    "leverage": 15,
+    "liq_diff_threshold": 0.0293,
+    "min_markup": 0.00154,
+    "max_markup": 0.02676,
+    "n_close_orders": 14,
+    "stop_loss_pos_reduction": 0.024
 }
+
