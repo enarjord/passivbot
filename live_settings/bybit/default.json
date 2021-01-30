@@ -6,8 +6,8 @@
     "grid_spacing": 0.0038,
     "indicator_settings": {
         "tick_ema": {"span": 16318},
-        "long": true,
-        "shrt": true
+        "do_long": true,
+        "do_shrt": true
     },
     "liq_diff_threshold": 0.04,
     "leverage": 100,
