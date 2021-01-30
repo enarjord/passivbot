@@ -209,7 +209,8 @@ class BybitBot(Bot):
         else:
             params['time_in_force'] = 'GoodTillCancel'
         if 'custom_id' in order:
-            params['order_link_id'] = f"{order['custom_id']}_{int(time() * 100000)}"
+            params['order_link_id'] = \
+                f"{order['custom_id']}_{int(time() * 1000)}_{np.random.random():.3f}"
         o = await self.cc.v2_private_post_order_create(params=params)
         return {'symbol': o['result']['symbol'],
                 'side': o['result']['side'].lower(),
