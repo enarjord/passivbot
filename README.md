@@ -184,8 +184,11 @@ about settings, bybit example:
     
     "market_stop_loss": false,            # if true will soft stop with market orders, if false soft stops with limit orders at order book's higest_bid/lowest_ask
     
-    "balance": 0.001,                     # balance bot sees.  used to limit pos size and to modify grid spacing
-                                          # set settings["balance"] to -1 to use account balance fetched from exchange as balance.
+    "balance": 0.001,                     # balance bot sees.  used to limit pos size and to modify grid spacing.
+                                          # scalable balance mode:
+                                          # if settings["balance"] < 0.0, will use exchange_fetched_balance * min(1.0, abs(settings["balance"])) as balance.
+                                          # e.g. if settings["balance"] = -1.0, will use 100% of balance.
+                                          # if settings["balance"] = -0.35, will us 35% of balance.
                                           # if using static balance, binance balance is quoted in usdt, bybit inverse balance is quoted in coin.
                                           
     "n_close_orders": 20,                 # max n close orders.

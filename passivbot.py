@@ -190,11 +190,6 @@ def print_(args, r=False, n=False):
     return line
 
 
-def log_(event: dict, r=False, n=False):
-    # print to terminal and save log entry
-    pass
-
-
 def load_settings(exchange: str, user: str = 'default', print_=True) -> dict:
     fpath = f'live_settings/{exchange}/'
     try:
