@@ -260,7 +260,8 @@ class BinanceBot(Bot):
             params['timeInForce'] = 'GTX'
             params['price'] = order['price']
         if 'custom_id' in order:
-            params['newClientOrderId'] = f"{order['custom_id']}_{int(time() * 100000)}"
+            params['newClientOrderId'] = \
+                f"{order['custom_id']}_{int(time() * 1000)}_{np.random.random():.3f}"
         o = await self.cc.fapiPrivate_post_order(params=params)
         return {'symbol': self.symbol,
                 'side': o['side'].lower(),
