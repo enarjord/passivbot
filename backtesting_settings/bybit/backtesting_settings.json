@@ -1,25 +1,27 @@
 {
-    "session_name": "unnamed_session_001",
+    "session_name": "eos_test_002",
     "exchange": "bybit",
-    "symbol": "BTCUSD",
-    "n_days": 30,
+    "symbol": "EOSUSD",
+    "n_days": 7,
 
     "random_starting_candidate": true,
     "starting_k": 0,
     "n_jackrabbit_iterations": 100,
 
-    "starting_balance": 0.001,
+    "starting_balance": 10.0,
     "inverse": true,
     "maker_fee": -0.00025,
     "taker_fee": 0.00075,
     "market_stop_loss": false,
     "min_qty": 1.0,
-    "price_step": 0.5,
+    "price_step": 0.001,
     "qty_step": 1.0,
 
     "min_notional": 0.0,
     "cross_mode": true,
-    "max_leverage": 100,
+    "max_leverage": 50,
+    "do_long": true,
+    "do_shrt": true,
 
     "break_on": [
         ["OFF: break on first soft stop", "lambda x: x['type'] == 'stop_loss'"],
@@ -31,7 +33,7 @@
     "grid_coefficient": 283.55,
     "grid_spacing": 0.0042,
     "ema_span": 16318.0,
-    "leverage": 100,
+    "leverage": 50,
     "liq_diff_threshold": 0.04,
     "max_markup": 0.01085,
     "min_markup": 0.00007,
