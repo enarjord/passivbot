@@ -172,8 +172,8 @@ def init_ccxt(exchange: str = None, user: str = None):
     except Exception as e:
         print('error init ccxt', e)
         cc = getattr(ccxt_async, exchange)
-    print('ccxt enableRateLimit true')
-    cc.enableRateLimit = True
+    #print('ccxt enableRateLimit true')
+    #cc.enableRateLimit = True
     return cc
 
 
@@ -191,7 +191,7 @@ def print_(args, r=False, n=False):
 
 
 def load_settings(exchange: str, user: str = 'default', print_=True) -> dict:
-    fpath = f'settings/{exchange}/'
+    fpath = f'live_settings/{exchange}/'
     try:
         settings = json.load(open(f'{fpath}{user}.json'))
     except FileNotFoundError:
@@ -267,9 +267,12 @@ class Bot:
         self.price = 0
         self.ob = [0.0, 0.0]
 
-        self.indicators = {}
+        self.indicators = {'tick': {}, 'ohlcv': {}}
+        self.ohlcvs = {}
 
-        self.logs_base_filepath = make_get_filepath(f"logs/{self.exchange}/")
+        self.logs_base_filepath = make_get_filepath(
+            f"logs/{self.exchange}/{ts_to_date(time())[:19].replace(':', '_')}.txt"
+        )
         self.log_level = 0
 
         self.stop_websocket = False
@@ -350,9 +353,20 @@ class Bot:
     def stop(self) -> None:
         self.stop_websocket = True
 
+    def determine_entry_side(self):
+        # using indicators
+        pass
+
+    def calc_initial_bid_ask(self):
+        bid_price = min(self.ob[0], round_dn(self.indicators['tick_ema'], self.price_step)) \
+            if self.indicator_settings['long'] else 0.0
+        ask_price = max(self.ob[1], round_up(self.indicators['tick_ema'], self.price_step)) \
+            if self.indicator_settings['shrt'] else 9e9
+        return bid_price, ask_price
+
     def calc_orders(self):
         last_price_diff_limit = 0.05
-        balance = self.position['balance'] * min(1.0, abs(self.balance)) \
+        balance = self.position['wallet_balance'] * min(1.0, abs(self.balance)) \
             if self.balance <= 0 else self.balance
         default_qty = self.default_qty if self.default_qty > 0.0 else \
             self.calc_default_qty(balance, self.price)
@@ -364,7 +378,7 @@ class Bot:
                     {'side': 'sell', 'type': 'market' if self.market_stop_loss else 'limit',
                      'qty': round_up(self.position['size'] * self.stop_loss_pos_reduction,
                                      self.qty_step),
-                     'price': self.ob[1], 'reduce_only': True}
+                     'price': self.ob[1], 'reduce_only': True, 'custom_id': 'long_close_stop_loss'}
                 )
             else:
                 # controlled shrt loss
@@ -372,18 +386,17 @@ class Bot:
                     {'side': 'buy', 'type': 'market' if self.market_stop_loss else 'limit',
                      'qty': round_up(-self.position['size'] * self.stop_loss_pos_reduction,
                                      self.qty_step),
-                     'price': self.ob[0], 'reduce_only': True}
+                     'price': self.ob[0], 'reduce_only': True, 'custom_id': 'shrt_close_stop_loss'}
                 )
             stop_loss_qty = orders[-1]['qty']
         else:
             stop_loss_qty = 0.0
         if self.position['size'] == 0: # no pos
-            bid_price = min(self.ob[0], round_dn(self.indicators['ema'], self.price_step))
-            ask_price = max(self.ob[1], round_up(self.indicators['ema'], self.price_step))
+            bid_price, ask_price = self.calc_initial_bid_ask()
             orders.append({'side': 'buy', 'qty': default_qty, 'price': bid_price,
-                           'type': 'limit', 'reduce_only': False})
+                           'type': 'limit', 'reduce_only': False, 'custom_id': 'entry'})
             orders.append({'side': 'sell', 'qty': default_qty, 'price': ask_price,
-                           'type': 'limit', 'reduce_only': False})
+                           'type': 'limit', 'reduce_only': False, 'custom_id': 'entry'})
         elif self.position['size'] > 0.0: # long pos
             pos_size = self.position['size']
             pos_price = self.position['price']
@@ -395,13 +408,14 @@ class Bot:
                                                                 pos_margin,
                                                                 pos_price))
             for k in range(self.n_entry_orders):
+                max_pos_size = self.calc_max_pos_size(min(balance, self.position['equity']),
+                                                      bid_price)
                 bid_qty = calc_entry_qty(self.qty_step, self.ddown_factor, default_qty,
-                                         self.calc_max_pos_size(balance, bid_price),
-                                         pos_size)
+                                         max_pos_size, pos_size)
                 if bid_qty < default_qty:
                     break
                 new_pos_size = pos_size + bid_qty
-                if new_pos_size >= self.calc_max_pos_size(balance, bid_price):
+                if new_pos_size >= max_pos_size:
                     break
                 pos_price = pos_price * (bid_qty / new_pos_size) + \
                     bid_price * (pos_size / new_pos_size)
@@ -410,7 +424,7 @@ class Bot:
                 if calc_diff(bid_price, self.price) > last_price_diff_limit:
                     break
                 orders.append({'side': 'buy', 'qty': bid_qty, 'price': bid_price,
-                               'type': 'limit', 'reduce_only': False})
+                               'type': 'limit', 'reduce_only': False, 'custom_id': 'entry'})
                 bid_price = min(self.ob[0], calc_long_reentry_price(self.price_step,
                                                                     self.grid_spacing,
                                                                     self.grid_coefficient,
@@ -428,13 +442,14 @@ class Bot:
                                                                 pos_margin,
                                                                 pos_price))
             for k in range(self.n_entry_orders):
+                max_pos_size = self.calc_max_pos_size(min(balance, self.position['equity']),
+                                                      ask_price)
                 ask_qty = calc_entry_qty(self.qty_step, self.ddown_factor, default_qty,
-                                         self.calc_max_pos_size(balance, ask_price),
-                                         pos_size)
+                                         max_pos_size, pos_size)
                 if ask_qty < default_qty:
                     break
                 new_pos_size = pos_size - ask_qty
-                if abs(new_pos_size) >= self.calc_max_pos_size(balance, ask_price):
+                if abs(new_pos_size) >= max_pos_size:
                     break
                 pos_price = pos_price * (-ask_qty / new_pos_size) + \
                     ask_price * (pos_size / new_pos_size)
@@ -443,7 +458,7 @@ class Bot:
                 if calc_diff(ask_price, self.price) > last_price_diff_limit:
                     break
                 orders.append({'side': 'sell', 'qty': ask_qty, 'price': ask_price,
-                    'type': 'limit', 'reduce_only': False})
+                    'type': 'limit', 'reduce_only': False, 'custom_id': 'entry'})
                 ask_price = max(self.ob[1], calc_shrt_reentry_price(self.price_step,
                                                                     self.grid_spacing,
                                                                     self.grid_coefficient,
@@ -461,7 +476,7 @@ class Bot:
                                                     self.ob[1],
                                                     self.n_close_orders)
             close_orders = sorted([{'side': 'sell', 'qty': abs_qty, 'price': float(price_),
-                                    'type': 'limit', 'reduce_only': True}
+                                    'type': 'limit', 'reduce_only': True, 'custom_id': 'close'}
                                    for qty_, price_ in zip(ask_qtys, ask_prices)
                                    if (abs_qty := abs(float(qty_))) > 0.0
                                    and calc_diff(price_, self.price) < last_price_diff_limit],
@@ -478,12 +493,11 @@ class Bot:
                                                     self.ob[0],
                                                     self.n_close_orders)
             close_orders = sorted([{'side': 'buy', 'qty': float(qty_), 'price': float(price_),
-                                    'type': 'limit', 'reduce_only': True}
+                                    'type': 'limit', 'reduce_only': True, 'custom_id': 'close'}
                                    for qty_, price_ in zip(bid_qtys, bid_prices) if qty_ > 0.0],
                                   key=lambda x: x['price'], reverse=True)[:self.n_entry_orders]
             orders += close_orders
         return orders
-
 
     async def cancel_and_create(self):
         await asyncio.sleep(0.1)
@@ -543,42 +557,104 @@ class Bot:
             line += f"pct {ratio:.2f} liq_diff {liq_diff:.3f} last {self.price}   "
             print_([line], r=True)
 
+    def init_tick_ema(self, trades: [dict]):
+        print_(['initiating tick ema...'])
+        ema_span = self.indicator_settings['tick_ema']['span']
+        ema = trades[0]['price']
+        alpha = 2 / (ema_span + 1)
+        for t in trades:
+            ema = ema * (1 - alpha) + t['price'] * alpha
+        self.indicators['tick_ema'] = ema
+        self.indicator_settings['tick_ema']['alpha'] = alpha
+        self.indicator_settings['tick_ema']['alpha_'] = 1 - alpha
+
+    def update_tick_ema(self, websocket_tick):
+        self.indicators['tick_ema'] = \
+            self.indicators['tick_ema'] * self.indicator_settings['tick_ema']['alpha_'] + \
+            websocket_tick['price'] * self.indicator_settings['tick_ema']['alpha']
+
+    def init_fancy_indicator_001(self, trades: [dict]):
+        pass
+
+    def update_fancy_indicator_001(self, websocket_tick: dict):
+        pass
+
+    def init_fancy_indicator_002(self, trades: [dict]):
+        pass
+
+    def update_fancy_indicator_002(self, websocket_tick: dict):
+        pass
+
     async def init_indicators(self):
         # called upon websocket start
-        # example indicator ema 1000 tick span
-        print_(['initiating ema...'])
-        ema_span = self.indicator_settings['ema']['span']
-        n_trades_to_fetch = int(ema_span) # each fetch contains 1000 trades
+        n_trades_to_fetch = 20000 # each fetch contains 1000 trades
         trades = await self.fetch_trades()
         additional_trades = await asyncio.gather(
             *[self.fetch_trades(from_id=trades[0]['trade_id'] - 1000 * i)
               for i in range(1, min(50, n_trades_to_fetch // 1000))])
         trades = sorted(trades + flatten(additional_trades), key=lambda x: x['trade_id'])
-        ema = trades[0]['price']
-        alpha = 2 / (ema_span + 1)
-        for t in trades:
-            ema = ema * (1 - alpha) + t['price'] * alpha
-        self.indicators['ema'] = ema
-        self.indicator_settings['ema']['alpha'] = alpha
-        self.indicator_settings['ema']['alpha_'] = 1 - alpha
+        self.init_tick_ema(trades)
 
     def update_indicators(self, websocket_tick: dict):
         # called each websocket tick
         # {'price': float, 'qty': float, 'timestamp': int, 'side': 'buy'|'sell'}
-        self.indicators['ema'] = \
-            self.indicators['ema'] * self.indicator_settings['ema']['alpha_'] + \
-            websocket_tick['price'] * self.indicator_settings['ema']['alpha']
+        self.update_tick_ema(websocket_tick)
 
+    def init_ohlcv(self, period_ms: int, trades: [dict]):
+        print_([f'initiating ohlcvs {period_ms}...'])
+        self.ohlcvs[period_ms] = [{
+            'timestamp': trades[0]['timestamp'] - trades[0]['timestamp'] % 10000,
+            'open': trades[0]['price'],
+            'high': trades[0]['price'],
+            'low': trades[0]['price'],
+            'close': trades[0]['price'],
+            'volume': trades[0]['qty']
+        }]
+        for t in trades[1:]:
+            self.update_ohlcv(period_ms, t)
 
+    def update_ohlcv(self, period_ms, websocket_tick):
+
+        if websocket_tick['timestamp'] > round(self.ohlcvs[period_ms][-1]['timestamp'] + period_ms):
+            while websocket_tick['timestamp'] > \
+                    round(self.ohlcvs[period_ms][-1]['timestamp'] + period_ms * 2):
+                # fill empty ohlcvs
+                self.ohlcvs[period_ms].append({
+                    'timestamp': int(round(self.ohlcvs[period_ms][-1]['timestamp'] + period_ms)),
+                    'open': self.ohlcvs[period_ms][-1]['close'],
+                    'high': self.ohlcvs[period_ms][-1]['close'],
+                    'low': self.ohlcvs[period_ms][-1]['close'],
+                    'close': self.ohlcvs[period_ms][-1]['close'],
+                    'volume': 0.0
+                })
+            # new ohlcv
+            self.ohlcvs[period_ms].append({
+                'timestamp': int(round(self.ohlcvs[period_ms][-1]['timestamp'] + period_ms)),
+                'open': websocket_tick['price'],
+                'high': websocket_tick['price'],
+                'low': websocket_tick['price'],
+                'close': websocket_tick['price'],
+                'volume': websocket_tick['qty']
+            })
+        else:
+            # update current ohlcv
+            self.ohlcvs[period_ms][-1]['high'] = \
+                max(self.ohlcvs[period_ms][-1]['high'], websocket_tick['price'])
+            self.ohlcvs[period_ms][-1]['low'] = \
+                min(self.ohlcvs[period_ms][-1]['low'], websocket_tick['price'])
+            self.ohlcvs[period_ms][-1]['close'] = \
+                websocket_tick['price']
+            self.ohlcvs[period_ms][-1]['volume'] = \
+                round(self.ohlcvs[period_ms][-1]['volume'] + websocket_tick['qty'], 10)
+        if len(self.ohlcvs[period_ms]) > self.indicator_settings['max_periods_in_memory'] + 20:
+            self.ohlcvs[period_ms] = \
+                self.ohlcvs[period_ms][-self.indicator_settings['max_periods_in_memory']:]
 
     def dump_log(self, event: dict):
         # unfinished
         if self.log_level > 0:
-            filename = f"{self.logs_base_filepath}{event['type']}.txt"
-            with open(filename, 'a') as f:
-                f.write(json.dumps({**event, **{'timestamp': self.cc.milliseconds()}}))
-
-
+            with open(self.logs_base_filepath, 'a') as f:
+                f.write(json.dumps({**event, **{'timestamp': self.cc.milliseconds()}}) + '\n')
 
     async def fetch_my_trades(self, symbol: str) -> [dict]:
         my_trades = await self.cc.fapiPrivate_get_usertrades(params={'symbol': symbol})
@@ -607,19 +683,6 @@ class Bot:
                     self.ts_released[key] = now
 
 
-async def start_bot(bot, n_tries: int = 0) -> None:
-    max_n_tries = 30
-    try:
-        await bot.start_websocket()
-    except KeyboardInterrupt:
-        await bot.cc.close()
-    except Exception as e:
-        await bot.cc.close()
-        print(e)
-        if n_tries >= max_n_tries:
-            return
-        n_tries += 1
-        for k in range(10, -1, -1):
-            print(f'\rrestarting bot in {k} seconds   ', end=' ')
-            sleep(1)
-        await start_bot(bot, n_tries + 1)
+async def start_bot(bot):
+    await bot.start_websocket()
+

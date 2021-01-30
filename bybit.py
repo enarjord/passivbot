@@ -20,11 +20,27 @@ def first_capitalized(s: str):
     return s[0].upper() + s[1:].lower()
 
 
+def calc_isolated_long_liq_price(balance,
+                                 pos_size,
+                                 pos_price,
+                                 leverage,
+                                 mm=0.005) -> float:
+    return (pos_price * leverage) / (leverage + 1 - mm * leverage)
+
+
+def calc_isolated_shrt_liq_price(balance,
+                                 pos_size,
+                                 pos_price,
+                                 leverage,
+                                 mm=0.005) -> float:
+    return (pos_price * leverage) / (leverage - 1 + mm * leverage)
+
+
 def calc_cross_long_liq_price(balance,
                               pos_size,
                               pos_price,
-                              mm=0.005,
-                              leverage=100):
+                              leverage,
+                              mm=0.005) -> float:
     order_cost = pos_size / pos_price
     order_margin = order_cost / leverage
     bankruptcy_price = calc_cross_long_bankruptcy_price(pos_size, order_cost, balance, order_margin)
@@ -35,15 +51,15 @@ def calc_cross_long_liq_price(balance,
     return (pos_price * pos_size) / (pos_size - pos_price * rhs)
 
 
-def calc_cross_long_bankruptcy_price(pos_size, order_cost, balance, order_margin):
+def calc_cross_long_bankruptcy_price(pos_size, order_cost, balance, order_margin) -> float:
     return (1.00075 * pos_size) / (order_cost + (balance - order_margin))
 
 
 def calc_cross_shrt_liq_price(balance,
                               pos_size,
                               pos_price,
-                              mm=0.005,
-                              leverage=100):
+                              leverage,
+                              mm=0.005) -> float:
     _pos_size = abs(pos_size)
     order_cost = _pos_size / pos_price
     order_margin = order_cost / leverage
@@ -58,7 +74,7 @@ def calc_cross_shrt_liq_price(balance,
     return shrt_liq_price
 
 
-def calc_cross_shrt_bankruptcy_price(pos_size, order_cost, balance, order_margin):
+def calc_cross_shrt_bankruptcy_price(pos_size, order_cost, balance, order_margin) -> float:
     return (0.99925 * pos_size) / (order_cost - (balance - order_margin))
 
 
@@ -109,6 +125,7 @@ class BybitBot(Bot):
                 break
         else:
             raise Exception('symbol missing')
+        self.max_leverage = e['leverage_filter']['max_leverage']
         self.coin = e['base_currency']
         self.quot = e['quote_currency']
         self.price_step = float(e['price_filter']['tick_size'])
@@ -174,7 +191,8 @@ class BybitBot(Bot):
                   'price': float(pos['entry_price']),
                   'leverage': float(pos['leverage']),
                   'liquidation_price': float(pos['liq_price']),
-                  'balance': balance['result'][self.coin]['wallet_balance']}
+                  'equity': balance['result'][self.coin]['equity'],
+                  'wallet_balance': balance['result'][self.coin]['wallet_balance']}
         result['cost'] = abs(result['size']) / result['price'] if result['price'] else 0.0
         result['margin_cost'] = result['cost'] / self.leverage
         return result
@@ -190,6 +208,8 @@ class BybitBot(Bot):
             params['price'] = order['price']
         else:
             params['time_in_force'] = 'GoodTillCancel'
+        if 'custom_id' in order:
+            params['order_link_id'] = f"{order['custom_id']}_{int(time() * 100000)}"
         o = await self.cc.v2_private_post_order_create(params=params)
         return {'symbol': o['result']['symbol'],
                 'side': o['result']['side'].lower(),
@@ -203,6 +223,25 @@ class BybitBot(Bot):
         )
         return {'symbol': o['result']['symbol'], 'side': o['result']['side'].lower(),
                 'qty': o['result']['qty'], 'price': o['result']['price']}
+
+    async def fetch_my_trades(self, n_pages=1):
+        trades = await asyncio.gather(*
+            [self.cc.v2_private_get_execution_list(params={'symbol': self.symbol, 'limit': 200,
+                                                           'order': 'desc', 'page': page})
+             for page in range(1, n_pages + 1)]
+        )
+        mt = {t['exec_id']: {'custom_id': t['order_link_id'],
+                             'symbol': t['symbol'],
+                             'side': t['side'].lower(),
+                             'type': t['order_type'].lower(),
+                             'price': float(t['order_price']),
+                             'qty': float(t['order_qty']),
+                             'timestamp': t['trade_time_ms']}
+              for t in flatten([t_['result']['trade_list'] for t_ in trades]) if t['order_type']}
+        return sorted(mt.values(), key=lambda t: t['timestamp'])
+
+    async def update_my_trades(self):
+        pass
 
     async def fetch_trades(self, from_id: int = None):
         return await fetch_trades(self.cc, self.symbol, from_id)
@@ -220,8 +259,9 @@ class BybitBot(Bot):
         await self.init_indicators()
         await self.update_position()
         try:
+            leverage_ = 0 if self.settings['cross_mode'] else self.leverage
             print(await self.cc.v2_private_post_position_leverage_save(
-                params={'symbol': self.symbol, 'leverage': 0}
+                params={'symbol': self.symbol, 'leverage': leverage_}
             ))
         except Exception as e:
             print('error starting websocket', e)

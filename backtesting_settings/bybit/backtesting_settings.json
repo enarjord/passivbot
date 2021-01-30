@@ -1,32 +1,40 @@
 {
-    "break_on_loss": true,
-    "break_on_negative_pnl": 1.0,
+    "session_name": "unnamed_session_001",
     "exchange": "bybit",
+    "symbol": "BTCUSD",
+    "n_days": 30,
+
+    "random_starting_candidate": true,
+    "starting_k": 0,
+    "n_jackrabbit_iterations": 100,
+
+    "starting_balance": 0.001,
     "inverse": true,
     "maker_fee": -0.00025,
-    "balance": 0.001,
+    "taker_fee": 0.00075,
     "market_stop_loss": false,
     "min_qty": 1.0,
-    "n_entry_orders": 10,
-    "n_days": 50,
     "price_step": 0.5,
     "qty_step": 1.0,
-    "symbol": "BTCUSD",
-    "taker_fee": 0.00075,
-    "n_jackrabbit_iterations": 150,
-    "starting_k": 100,
-    "random_starting_candidate": false,
 
-    "ema_span": 10000,
+    "min_notional": 0.0,
+    "cross_mode": true,
+    "max_leverage": 100,
 
-    "ddown_factor": 0.0,
-    "default_qty": -0.03,
-    "grid_coefficient": 245.0,
-    "grid_spacing": 0.0026,
+    "break_on": [
+        ["OFF: break on first soft stop", "lambda x: x['type'] == 'stop_loss'"],
+        ["ON: neg pnl sum", "lambda x: x['pnl_sum'] < 0.0 and x['progress'] > 0.4"]
+    ],
+
+    "ddown_factor": 0.014,
+    "default_qty": -0.0603,
+    "grid_coefficient": 283.55,
+    "grid_spacing": 0.0042,
+    "ema_span": 16318.0,
     "leverage": 100,
-    "liq_diff_threshold": 0.05,
-    "max_markup": 0.014,
-    "min_markup": 0.0002,
-    "stop_loss_pos_reduction": 0.01,
-    "n_close_orders": 23
+    "liq_diff_threshold": 0.04,
+    "max_markup": 0.01085,
+    "min_markup": 0.00007,
+    "n_close_orders": 12,
+    "stop_loss_pos_reduction": 0.001
 }
