@@ -208,6 +208,8 @@ class BybitBot(Bot):
             params['price'] = order['price']
         else:
             params['time_in_force'] = 'GoodTillCancel'
+        if 'custom_id' in order:
+            params['order_link_id'] = f"{order['custom_id']}_{int(time() * 100000)}"
         o = await self.cc.v2_private_post_order_create(params=params)
         return {'symbol': o['result']['symbol'],
                 'side': o['result']['side'].lower(),
@@ -221,6 +223,25 @@ class BybitBot(Bot):
         )
         return {'symbol': o['result']['symbol'], 'side': o['result']['side'].lower(),
                 'qty': o['result']['qty'], 'price': o['result']['price']}
+
+    async def fetch_my_trades(self, n_pages=1):
+        trades = await asyncio.gather(*
+            [self.cc.v2_private_get_execution_list(params={'symbol': self.symbol, 'limit': 200,
+                                                           'order': 'desc', 'page': page})
+             for page in range(1, n_pages + 1)]
+        )
+        mt = {t['exec_id']: {'custom_id': t['order_link_id'],
+                             'symbol': t['symbol'],
+                             'side': t['side'].lower(),
+                             'type': t['order_type'].lower(),
+                             'price': float(t['order_price']),
+                             'qty': float(t['order_qty']),
+                             'timestamp': t['trade_time_ms']}
+              for t in flatten([t_['result']['trade_list'] for t_ in trades]) if t['order_type']}
+        return sorted(mt.values(), key=lambda t: t['timestamp'])
+
+    async def update_my_trades(self):
+        pass
 
     async def fetch_trades(self, from_id: int = None):
         return await fetch_trades(self.cc, self.symbol, from_id)
