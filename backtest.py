@@ -238,7 +238,7 @@ def backtest(trades_list: [dict], settings: dict):
                                'max_pos_size': calc_max_pos_size(balance, t['price']),
                                'pnl_sum': pnl_sum, 'loss_sum': loss_sum, 'profit_sum': profit_sum,
                                'progress': k / len(trades_list),
-                               'liq_price': liq_price})
+                               'liq_price': liq_price, 'liq_diff': calc_diff(liq_price, t['price'])})
         else:
             # sell
             if pos_size == 0.0:
@@ -316,14 +316,14 @@ def backtest(trades_list: [dict], settings: dict):
                                'max_pos_size': calc_max_pos_size(balance, t['price']),
                                'pnl_sum': pnl_sum, 'loss_sum': loss_sum, 'profit_sum': profit_sum,
                                'progress': k / len(trades_list),
-                               'liq_price': liq_price})
+                               'liq_price': liq_price, 'liq_diff': calc_diff(liq_price, t['price'])})
         ema = ema * ema_alpha_ + t['price'] * ema_alpha
         k += 1
         if k % 10000 == 0 or len(trades) != prev_len_trades:
             for key, condition in break_on.items():
                 if condition(trades[-1]):
                     print('break on', key)
-                    return trades
+                    return []
             balance = max(balance, settings['starting_balance'])
             prev_len_trades = len(trades)
             progress = k / len(trades_list)
@@ -399,7 +399,8 @@ def jackrabbit(trades_list: [dict],
         key = format_dict(candidate)
         if key in results:
             print('\nskipping', key)
-            best = json.load(open(best_filepath))
+            if os.path.exists(best_filepath):
+                best = json.load(open(best_filepath))
             candidate = get_new_candidate(ranges, best)
             continue
         print(f'\nk={k}, m={mutation_coefficient:.4f} candidate:\n', candidate)
