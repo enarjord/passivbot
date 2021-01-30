@@ -359,9 +359,9 @@ class Bot:
 
     def calc_initial_bid_ask(self):
         bid_price = min(self.ob[0], round_dn(self.indicators['tick_ema'], self.price_step)) \
-            if self.indicator_settings['long'] else 0.0
+            if self.indicator_settings['do_long'] else 0.0
         ask_price = max(self.ob[1], round_up(self.indicators['tick_ema'], self.price_step)) \
-            if self.indicator_settings['shrt'] else 9e9
+            if self.indicator_settings['do_shrt'] else 9e9
         return bid_price, ask_price
 
     def calc_orders(self):
@@ -649,12 +649,6 @@ class Bot:
         if len(self.ohlcvs[period_ms]) > self.indicator_settings['max_periods_in_memory'] + 20:
             self.ohlcvs[period_ms] = \
                 self.ohlcvs[period_ms][-self.indicator_settings['max_periods_in_memory']:]
-
-    def dump_log(self, event: dict):
-        # unfinished
-        if self.log_level > 0:
-            with open(self.logs_base_filepath, 'a') as f:
-                f.write(json.dumps({**event, **{'timestamp': self.cc.milliseconds()}}) + '\n')
 
     async def fetch_my_trades(self, symbol: str) -> [dict]:
         my_trades = await self.cc.fapiPrivate_get_usertrades(params={'symbol': symbol})
