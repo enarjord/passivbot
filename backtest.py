@@ -366,6 +366,7 @@ def jackrabbit(trades_list: [dict],
     if backtesting_settings['random_starting_candidate']:
         best = {key: calc_new_val((abs(ranges[key][1]) - abs(ranges[key][0])) / 2, ranges[key], 1.0)
                 for key in sorted(ranges)}
+        best['gain'] = -9e9
         print('\nrandom starting candidate:', best)
     elif os.path.exists(best_filepath):
         best = json.load(open(best_filepath))
@@ -373,10 +374,10 @@ def jackrabbit(trades_list: [dict],
         print()
     else:
         best = sort_dict_keys({k_: backtesting_settings[k_] for k_ in ranges})
+        best['gain'] = -9e9
 
     n_days = backtesting_settings['n_days']
     results = {}
-    best_gain = -9e9
     candidate = best
 
     ks = backtesting_settings['n_jackrabbit_iterations']
@@ -422,6 +423,7 @@ def jackrabbit(trades_list: [dict],
         loss_sum = tdf[tdf.type == 'stop_loss'].pnl.sum()
         abs_pos_sizes = tdf.pos_size.abs()
         gain = (pnl_sum + settings_['starting_balance']) / settings_['starting_balance']
+        candidate['gain'] = gain
         average_daily_gain = gain ** (1 / n_days)
         n_trades = len(tdf)
         result = {'n_closes': n_closes, 'pnl_sum': pnl_sum, 'loss_sum': loss_sum,
@@ -433,11 +435,9 @@ def jackrabbit(trades_list: [dict],
 
         if os.path.exists(best_filepath):
             best = json.load(open(best_filepath))
-            best_gain = best['gain']
 
-        if gain > best_gain:
+        if candidate['gain'] > best['gain']:
             best = candidate
-            best_gain = gain
             print('\n\n\n###############\nnew best', best, '\naverage daily gain:',
                   round(average_daily_gain, 5), '\n\n')
             print(settings_, '\n')
