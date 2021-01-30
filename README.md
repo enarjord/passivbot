@@ -34,11 +34,11 @@ change log
 - added indicator ema
 - rewrote backtester
 
-2021-01-28
+2021-01-30
 - changed backtesting results formatting
 - fixed insufficient margin error
-- added possiblility of using more indicators
 - many other fixes and changes...
+- added possibility of running same backtest in two or more terminals for better cpu utilization
 
 ------------------------------------------------------------------
 
@@ -113,8 +113,8 @@ about backtesting settings, binance XMRUSDT example
     "min_notional": 1.0,                     # used with binance: entry qty must be greater than min_notional / price
     
     "break_on": [
-        ["break on first soft stop", "lambda x: x['type'] == 'soft_stop'"],
-        ["neg pnl sum", "lambda x: x['pnl_sum'] < 0.0 and x['progress'] > 0.1"]
+        ["OFF: break on first soft stop", "lambda x: x['type'] == 'soft_stop'"],
+        ["ON: neg pnl sum", "lambda x: x['pnl_sum'] < 0.0 and x['progress'] > 0.4"]
     ],
                                              # conditions to break backtest prematurely ["name", if true: break.  x is last trade]
 
@@ -143,6 +143,12 @@ the mutation coefficient m determines the mutation range, and is inversely propo
 
 in other words, at first new candidates will vary wildly from the best settings, towards the end they will vary less, "fine tuning" the settings.
 
+it is possible to run the same backtest in two or more terminals simultaneously.  they will share best candidate and dump results in same file for later analysis.
+
+if you wish to do so, be sure to start only one and let it finish downloading trades and making a trades_list cache before starting the others.
+
+also be sure to give a new unique session_name.
+
 ------------------------------------------------------------------
 
 about settings, bybit example:
@@ -166,7 +172,11 @@ about settings, bybit example:
                                           # if set to 1.0, each reentry qty will be equal to 1x pos size, i.e. doubling pos size after every reentry.
                                           # if set to 0.0, each reentry qty will be equal to default_qty.
                                           
-    "indicator_settings": {"tick_ema": {"span": 10000}},
+    "indicator_settings": {
+        "tick_ema": {"span": 10000},
+        "do_long": true,                  # if true, will allow long positions
+        "do_shrt": true                   # if true, will allow short posisions
+    },
                                           # indicators may be used to determine long or short initial entry.  they are updated on each websocket trade tick.
                                           # ema is not based on ohlcvs, but calculated based on sequence of raw trades.
                                           # when no pos, bid = min(ema, highest_bid), ask = max(ema, lowest_ask)
