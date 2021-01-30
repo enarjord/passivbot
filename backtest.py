@@ -226,7 +226,7 @@ def backtest(trades_list: [dict], settings: dict):
                                'pos_size': pos_size, 'pos_price': pos_price, 'balance': balance,
                                'max_pos_size': calc_max_pos_size(balance, t['price']),
                                'pnl_sum': pnl_sum, 'loss_sum': loss_sum, 'profit_sum': profit_sum,
-                               "progress": k / len(trades_list),
+                               'progress': k / len(trades_list),
                                'liq_price': calc_liq_price(balance, pos_size, pos_price)})
         else:
             # sell
@@ -296,7 +296,7 @@ def backtest(trades_list: [dict], settings: dict):
                                'pos_size': pos_size, 'pos_price': pos_price, 'balance': balance,
                                'max_pos_size': calc_max_pos_size(balance, t['price']),
                                'pnl_sum': pnl_sum, 'loss_sum': loss_sum, 'profit_sum': profit_sum,
-                               "progress": k / len(trades_list),
+                               'progress': k / len(trades_list),
                                'liq_price': calc_liq_price(balance, pos_size, pos_price)})
         ema = ema * ema_alpha_ + t['price'] * ema_alpha
         k += 1
@@ -304,7 +304,7 @@ def backtest(trades_list: [dict], settings: dict):
             for key, condition in break_on.items():
                 if condition(trades[-1]):
                     print('break on', key)
-                    return []
+                    return trades
             balance = max(balance, settings['starting_balance'])
             prev_len_trades = len(trades)
             progress = k / len(trades_list)
@@ -343,11 +343,13 @@ def jackrabbit(trades_list: [dict],
                backtesting_settings: dict,
                ranges: dict,
                base_filepath: str):
-
+    best_filepath = base_filepath[:-20] + 'best.json'
     if backtesting_settings['random_starting_candidate']:
         best = {key: calc_new_val((abs(ranges[key][1]) - abs(ranges[key][0])) / 2, ranges[key], 1.0)
                 for key in sorted(ranges)}
         print('\nrandom starting candidate:', best)
+    elif os.path.exists(best_filepath):
+        best = json.load(open(best_filepath))
     else:
         best = sort_dict_keys({k_: backtesting_settings[k_] for k_ in ranges})
 
@@ -404,6 +406,10 @@ def jackrabbit(trades_list: [dict],
         print('\n\n', result)
         results[key] = {**result, **candidate}
 
+        if os.path.exists(best_filepath):
+            best = json.load(open(best_filepath))
+            best_gain = best['gain']
+
         if gain > best_gain:
             best = candidate
             best_gain = gain
@@ -417,12 +423,12 @@ def jackrabbit(trades_list: [dict],
             live_settings['indicator_settings'] = {'ema': {'span': best['ema_span']}}
             json.dump(live_settings,
                       open(base_filepath + 'best_result_live_settings.json', 'w'),
-                      indent=4,
-                      sort_keys=True)
+                      indent=4, sort_keys=True)
             print('\n\n', json.dumps(live_settings, indent=4, sort_keys=True), '\n\n')
             json.dump(results[key], open(base_filepath + 'best_result.json', 'w'),
-                      indent=4,
-                      sort_keys=True)
+                      indent=4, sort_keys=True)
+            json.dump({**{'gain': result['gain']}, **best}, open(best_filepath, 'w'),
+                      indent=4, sort_keys=True)
         candidate = get_new_candidate(ranges, best, m=ms[k])
         rdf = pd.DataFrame(results).T.sort_values('gain', ascending=False)
         rdf.to_csv(base_filepath + 'results.csv')
