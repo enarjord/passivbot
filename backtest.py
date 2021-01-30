@@ -599,13 +599,20 @@ async def main():
     settings_filepath = os.path.join('backtesting_settings', exchange, '')
     backtesting_settings = \
         json.load(open(os.path.join(settings_filepath, 'backtesting_settings.json')))
+
+    try:
+        session_name = sys.argv[3]
+        print('\n\nusing given session name.', session_name, '\n\n')
+    except IndexError:
+        session_name = backtesting_settings['session_name']
+        print('\n\nusing session name from backtesting_settings.json.', session_name, '\n\n')
+
     symbol = backtesting_settings['symbol']
     n_days = backtesting_settings['n_days']
     ranges = json.load(open(os.path.join(settings_filepath, 'ranges.json')))
     print(settings_filepath)
     results_filepath = make_get_filepath(
-        os.path.join('backtesting_results', exchange, symbol,
-                     backtesting_settings['session_name'], '')
+        os.path.join('backtesting_results', exchange, symbol, session_name, '')
     )
     print(results_filepath)
     trades_list_filepath = os.path.join(results_filepath, f"{n_days}_days_trades_list_cache.npy")
