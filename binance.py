@@ -201,7 +201,7 @@ class BinanceBot(Bot):
             for e in await self.cc.fapiPrivate_get_openorders(params={'symbol': self.symbol})
         ]
 
-    async def fetch_position(self) -> None:
+    async def fetch_position(self) -> dict:
         positions, account = await asyncio.gather(
             self.cc.fapiPrivate_get_positionrisk(params={'symbol': self.symbol}),
             self.cc.fapiPrivate_get_account()
@@ -225,6 +225,31 @@ class BinanceBot(Bot):
                 break
         return position
 
+    async def fetch_my_trades(self) -> [dict]:
+        start_time = (time() - 60 * 60 * 24 * 4) * 1000
+        mt = await self.cc.fapiPrivate_get_allorders(params={'symbol': self.symbol, 'limit': 1000,
+                                                             'startTime': start_time})
+        mt = sorted(mt, key=lambda x: x['orderId'])
+        while True:
+            if not mt:
+                break
+            print(f"fetching my trades {ts_to_date(mt[0]['time'] / 1000)}")
+            new_mt = await self.cc.fapiPrivate_get_allorders(
+                params={'symbol': self.symbol, 'limit': 1000, 'orderId': mt[-1]['orderId']}
+            )
+            new_mt = sorted(new_mt, key=lambda x: x['orderId'])
+            if mt[-1]['orderId'] == new_mt[-1]['orderId']:
+                break
+            mt = mt + new_mt
+        return sorted([{'custom_id': t['clientOrderId'],
+                        'symbol': t['symbol'],
+                        'side': t['side'].lower(),
+                        'type': t['type'].lower(),
+                        'price': float(t['avgPrice']),
+                        'qty': float(t['executedQty']),
+                        'timestamp': t['time']}
+                       for t in mt if t['status'] == 'FILLED'], key=lambda x: x['timestamp'])
+
     async def execute_order(self, order: dict) -> dict:
         params = {'symbol': self.symbol,
                   'side': order['side'].upper(),
@@ -234,6 +259,8 @@ class BinanceBot(Bot):
         if params['type'] == 'LIMIT':
             params['timeInForce'] = 'GTX'
             params['price'] = order['price']
+        if 'custom_id' in order:
+            params['newClientOrderId'] = f"{order['custom_id']}_{int(time() * 100000)}"
         o = await self.cc.fapiPrivate_post_order(params=params)
         return {'symbol': self.symbol,
                 'side': o['side'].lower(),
