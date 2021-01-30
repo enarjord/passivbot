@@ -363,8 +363,10 @@ class Bot:
         pass
 
     def calc_initial_bid_ask(self):
-        bid_price = min(self.ob[0], round_dn(self.indicators['tick_ema'], self.price_step))
-        ask_price = max(self.ob[1], round_up(self.indicators['tick_ema'], self.price_step))
+        bid_price = min(self.ob[0], round_dn(self.indicators['tick_ema'], self.price_step)) \
+            if self.indicator_settings['long'] else 0.0
+        ask_price = max(self.ob[1], round_up(self.indicators['tick_ema'], self.price_step)) \
+            if self.indicator_settings['shrt'] else 9e9
         return bid_price, ask_price
 
     def calc_orders(self):
@@ -381,7 +383,7 @@ class Bot:
                     {'side': 'sell', 'type': 'market' if self.market_stop_loss else 'limit',
                      'qty': round_up(self.position['size'] * self.stop_loss_pos_reduction,
                                      self.qty_step),
-                     'price': self.ob[1], 'reduce_only': True}
+                     'price': self.ob[1], 'reduce_only': True, 'custom_id': 'long_close_stop_loss'}
                 )
             else:
                 # controlled shrt loss
@@ -389,7 +391,7 @@ class Bot:
                     {'side': 'buy', 'type': 'market' if self.market_stop_loss else 'limit',
                      'qty': round_up(-self.position['size'] * self.stop_loss_pos_reduction,
                                      self.qty_step),
-                     'price': self.ob[0], 'reduce_only': True}
+                     'price': self.ob[0], 'reduce_only': True, 'custom_id': 'shrt_close_stop_loss'}
                 )
             stop_loss_qty = orders[-1]['qty']
         else:
@@ -397,9 +399,9 @@ class Bot:
         if self.position['size'] == 0: # no pos
             bid_price, ask_price = self.calc_initial_bid_ask()
             orders.append({'side': 'buy', 'qty': default_qty, 'price': bid_price,
-                           'type': 'limit', 'reduce_only': False})
+                           'type': 'limit', 'reduce_only': False, 'custom_id': 'entry'})
             orders.append({'side': 'sell', 'qty': default_qty, 'price': ask_price,
-                           'type': 'limit', 'reduce_only': False})
+                           'type': 'limit', 'reduce_only': False, 'custom_id': 'entry'})
         elif self.position['size'] > 0.0: # long pos
             pos_size = self.position['size']
             pos_price = self.position['price']
@@ -427,7 +429,7 @@ class Bot:
                 if calc_diff(bid_price, self.price) > last_price_diff_limit:
                     break
                 orders.append({'side': 'buy', 'qty': bid_qty, 'price': bid_price,
-                               'type': 'limit', 'reduce_only': False})
+                               'type': 'limit', 'reduce_only': False, 'custom_id': 'entry'})
                 bid_price = min(self.ob[0], calc_long_reentry_price(self.price_step,
                                                                     self.grid_spacing,
                                                                     self.grid_coefficient,
@@ -461,7 +463,7 @@ class Bot:
                 if calc_diff(ask_price, self.price) > last_price_diff_limit:
                     break
                 orders.append({'side': 'sell', 'qty': ask_qty, 'price': ask_price,
-                    'type': 'limit', 'reduce_only': False})
+                    'type': 'limit', 'reduce_only': False, 'custom_id': 'entry'})
                 ask_price = max(self.ob[1], calc_shrt_reentry_price(self.price_step,
                                                                     self.grid_spacing,
                                                                     self.grid_coefficient,
@@ -479,7 +481,7 @@ class Bot:
                                                     self.ob[1],
                                                     self.n_close_orders)
             close_orders = sorted([{'side': 'sell', 'qty': abs_qty, 'price': float(price_),
-                                    'type': 'limit', 'reduce_only': True}
+                                    'type': 'limit', 'reduce_only': True, 'custom_id': 'close'}
                                    for qty_, price_ in zip(ask_qtys, ask_prices)
                                    if (abs_qty := abs(float(qty_))) > 0.0
                                    and calc_diff(price_, self.price) < last_price_diff_limit],
@@ -496,7 +498,7 @@ class Bot:
                                                     self.ob[0],
                                                     self.n_close_orders)
             close_orders = sorted([{'side': 'buy', 'qty': float(qty_), 'price': float(price_),
-                                    'type': 'limit', 'reduce_only': True}
+                                    'type': 'limit', 'reduce_only': True, 'custom_id': 'close'}
                                    for qty_, price_ in zip(bid_qtys, bid_prices) if qty_ > 0.0],
                                   key=lambda x: x['price'], reverse=True)[:self.n_entry_orders]
             orders += close_orders
@@ -686,19 +688,6 @@ class Bot:
                     self.ts_released[key] = now
 
 
-async def start_bot(bot, n_tries: int = 0) -> None:
-    max_n_tries = 30
-    try:
-        await bot.start_websocket()
-    except KeyboardInterrupt:
-        await bot.cc.close()
-    except Exception as e:
-        await bot.cc.close()
-        print(e)
-        if n_tries >= max_n_tries:
-            return
-        n_tries += 1
-        for k in range(10, -1, -1):
-            print(f'\rrestarting bot in {k} seconds   ', end=' ')
-            sleep(1)
-        await start_bot(bot, n_tries + 1)
+async def start_bot(bot):
+    await bot.start_websocket()
+
