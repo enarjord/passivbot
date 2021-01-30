@@ -411,7 +411,8 @@ def jackrabbit(trades_list: [dict],
         k += 1
         if not trades:
             print('\nno trades')
-            best = json.load(open(best_filepath))
+            if os.path.exists(best_filepath):
+                best = json.load(open(best_filepath))
             candidate = get_new_candidate(ranges, best)
             continue
         tdf = pd.DataFrame(trades).set_index('trade_id')
