@@ -1,13 +1,17 @@
 {
-    "balance": -1,
     "cross_mode": true,
     "ddown_factor": 0.014,
     "default_qty": -0.0903,
     "grid_coefficient": 183.55,
     "grid_spacing": 0.0038,
-    "indicator_settings": {"tick_ema": {"span": 16318}},
+    "indicator_settings": {
+        "tick_ema": {"span": 16318},
+        "long": true,
+        "shrt": true
+    },
     "liq_diff_threshold": 0.04,
     "leverage": 100,
+    "balance": -0.99,
     "market_stop_loss": false,
     "max_markup": 0.01085,
     "min_markup": 0.00007,
