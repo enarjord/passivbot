@@ -94,6 +94,12 @@ run with
 
 `python3 backtest.py exchange your_user_name`
 
+optional:  specify session name as arg:
+
+`python3 backtest.py exchange your_user_name session_name`
+
+otherwise will use session_name given in backtesting_settings.json
+
 open backtesting_notes.ipynb in jupyter notebook or jupiter-lab for plotting and analysis
 
 
