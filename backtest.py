@@ -61,6 +61,9 @@ def backtest(trades_list: [dict], settings: dict):
     max_markup = settings['max_markup']
     n_close_orders = settings['n_close_orders']
 
+    do_long = settings['do_long']
+    do_shrt = settings['do_shrt']
+
     min_notional = settings['min_notional'] if 'min_notional' in settings else 0.0
     cross_mode = settings['cross_mode'] if 'cross_mode' in settings else True
 
@@ -162,9 +165,17 @@ def backtest(trades_list: [dict], settings: dict):
             # buy
             if pos_size == 0.0:
                 # no pos
-                bid_price = min(ob[0], round_dn(ema, price_step))
-                bid_qty = calc_default_qty_(balance, ob[0])
+                if do_long:
+                    bid_price = min(ob[0], round_dn(ema, price_step))
+                    bid_qty = calc_default_qty_(balance, ob[0])
+                else:
+                    bid_price = 0.0
+                    bid_qty = 0.0
             elif pos_size > 0.0:
+                if calc_diff(liq_price, ob[1]) < liq_diff_threshold and t['price'] <= liq_price:
+                    # long liq
+                    print(f'break on long liquidation, liq price: {liq_price}')
+                    return []
                 # long reentry
                 bid_qty = calc_entry_qty(qty_step, ddown_factor,
                                          calc_default_qty_(balance, ob[0]),
@@ -177,7 +188,6 @@ def backtest(trades_list: [dict], settings: dict):
                     bid_price = 0.0
             else:
                 # short pos
-                liq_price = calc_liq_price(balance, pos_size, pos_price)
                 if calc_diff(liq_price, ob[0]) < liq_diff_threshold:
                     # short soft stop
                     bid_price = ob[0]
@@ -193,7 +203,7 @@ def backtest(trades_list: [dict], settings: dict):
                     else:
                         bid_price = 0.0
             ob[0] = t['price']
-            if t['price'] < bid_price:
+            if t['price'] < bid_price and bid_qty >= min_qty:
                 # filled trade
                 cost = calc_cost(bid_qty, bid_price)
                 pnl = -cost * maker_fee
@@ -221,22 +231,26 @@ def backtest(trades_list: [dict], settings: dict):
                     roi = gain * leverage
                 balance += pnl
                 pnl_sum += pnl
+                liq_price = calc_liq_price(balance, pos_size, pos_price)
                 trades.append({'trade_id': k, 'side': trade_side, 'type': trade_type,
                                'price': bid_price, 'qty': bid_qty, 'pnl': pnl, 'roi': roi,
                                'pos_size': pos_size, 'pos_price': pos_price, 'balance': balance,
                                'max_pos_size': calc_max_pos_size(balance, t['price']),
                                'pnl_sum': pnl_sum, 'loss_sum': loss_sum, 'profit_sum': profit_sum,
                                'progress': k / len(trades_list),
-                               'liq_price': calc_liq_price(balance, pos_size, pos_price)})
+                               'liq_price': liq_price})
         else:
             # sell
             if pos_size == 0.0:
                 # no pos
-                ask_price = max(ob[1], round_up(ema, price_step))
-                ask_qty = -calc_default_qty_(balance, ob[1])
+                if do_shrt:
+                    ask_price = max(ob[1], round_up(ema, price_step))
+                    ask_qty = -calc_default_qty_(balance, ob[1])
+                else:
+                    ask_price = 9e9
+                    ask_qty = 0.0
             elif pos_size > 0.0:
                 # long pos
-                liq_price = calc_liq_price(balance, pos_size, pos_price)
                 if calc_diff(liq_price, ob[1]) < liq_diff_threshold:
                     # long soft stop
                     ask_price = ob[1]
@@ -252,6 +266,10 @@ def backtest(trades_list: [dict], settings: dict):
                     else:
                         ask_price = 9e9
             else:
+                if calc_diff(liq_price, ob[1]) < liq_diff_threshold and t['price'] >= liq_price:
+                    # shrt liq
+                    print(f'break on shrt liquidation, liq price: {liq_price}')
+                    return []
                 # shrt reentry
                 ask_qty = -calc_entry_qty(qty_step, ddown_factor,
                                           calc_default_qty_(balance, ob[1]),
@@ -263,7 +281,7 @@ def backtest(trades_list: [dict], settings: dict):
                 else:
                     ask_price = 9e9
             ob[1] = t['price']
-            if t['price'] > ask_price:
+            if t['price'] > ask_price and abs(ask_qty) >= min_qty:
                 # filled trade
                 cost = calc_cost(-ask_qty, ask_price)
                 pnl = -cost * maker_fee
@@ -291,13 +309,14 @@ def backtest(trades_list: [dict], settings: dict):
                     roi = gain * leverage
                 balance += pnl
                 pnl_sum += pnl
+                liq_price = calc_liq_price(balance, pos_size, pos_price)
                 trades.append({'trade_id': k, 'side': trade_side, 'type': trade_type,
                                'price': ask_price, 'qty': ask_qty, 'pnl': pnl, 'roi': roi,
                                'pos_size': pos_size, 'pos_price': pos_price, 'balance': balance,
                                'max_pos_size': calc_max_pos_size(balance, t['price']),
                                'pnl_sum': pnl_sum, 'loss_sum': loss_sum, 'profit_sum': profit_sum,
                                'progress': k / len(trades_list),
-                               'liq_price': calc_liq_price(balance, pos_size, pos_price)})
+                               'liq_price': liq_price})
         ema = ema * ema_alpha_ + t['price'] * ema_alpha
         k += 1
         if k % 10000 == 0 or len(trades) != prev_len_trades:
@@ -343,13 +362,15 @@ def jackrabbit(trades_list: [dict],
                backtesting_settings: dict,
                ranges: dict,
                base_filepath: str):
-    best_filepath = base_filepath[:-20] + 'best.json'
+    best_filepath = base_filepath + 'best.json'
     if backtesting_settings['random_starting_candidate']:
         best = {key: calc_new_val((abs(ranges[key][1]) - abs(ranges[key][0])) / 2, ranges[key], 1.0)
                 for key in sorted(ranges)}
         print('\nrandom starting candidate:', best)
     elif os.path.exists(best_filepath):
         best = json.load(open(best_filepath))
+        print('\nloaded best candidate', best)
+        print()
     else:
         best = sort_dict_keys({k_: backtesting_settings[k_] for k_ in ranges})
 
@@ -362,14 +383,15 @@ def jackrabbit(trades_list: [dict],
     k = backtesting_settings['starting_k']
     ms = np.array([1 / (i / 2 + 16) for i in range(ks)])
     ms = ((ms - ms.min()) / (ms.max() - ms.min()))
-    trades_filepath = make_get_filepath(os.path.join(base_filepath, 'trades', ''))
+    trades_filepath = make_get_filepath(os.path.join(base_filepath, 'backtest_trades', ''))
     json.dump(backtesting_settings, open(base_filepath + 'backtesting_settings.json', 'w'),
               indent=4, sort_keys=True)
+    results_filename = base_filepath + 'results.txt'    
 
     print('\n', backtesting_settings, '\n\n')
 
-    while k - 1 < ks:
-
+    while k < ks:
+        mutation_coefficient = ms[k]
         if candidate['min_markup'] >= candidate['max_markup']:
             candidate['min_markup'] = candidate['max_markup']
 
@@ -379,7 +401,7 @@ def jackrabbit(trades_list: [dict],
             print('\nskipping', key)
             candidate = get_new_candidate(ranges, best)
             continue
-        print(f'\nk={k}, m={ms[k]:.4f} candidate:\n', candidate)
+        print(f'\nk={k}, m={mutation_coefficient:.4f} candidate:\n', candidate)
         start_time = time()
         trades = backtest(trades_list, settings_)
         print('\ntime elapsed', round(time() - start_time, 1), 'seconds')
@@ -420,7 +442,7 @@ def jackrabbit(trades_list: [dict],
             default_live_settings = load_settings(settings_['exchange'], print_=False)
             live_settings = {k: settings_[k] if k in settings_ else default_live_settings[k]
                              for k in default_live_settings}
-            live_settings['indicator_settings'] = {'ema': {'span': best['ema_span']}}
+            live_settings['indicator_settings'] = {'tick_ema': {'span': best['ema_span']}}
             json.dump(live_settings,
                       open(base_filepath + 'best_result_live_settings.json', 'w'),
                       indent=4, sort_keys=True)
@@ -429,9 +451,9 @@ def jackrabbit(trades_list: [dict],
                       indent=4, sort_keys=True)
             json.dump({**{'gain': result['gain']}, **best}, open(best_filepath, 'w'),
                       indent=4, sort_keys=True)
-        candidate = get_new_candidate(ranges, best, m=ms[k])
-        rdf = pd.DataFrame(results).T.sort_values('gain', ascending=False)
-        rdf.to_csv(base_filepath + 'results.csv')
+        candidate = get_new_candidate(ranges, best, m=mutation_coefficient)
+        with open(results_filename, 'a') as f:
+            f.write(json.dumps(results[key]) + '\n')
 
 
 def calc_new_val(val, range_, m):
@@ -580,21 +602,19 @@ async def main():
     ranges = json.load(open(os.path.join(settings_filepath, 'ranges.json')))
     print(settings_filepath)
     results_filepath = make_get_filepath(
-        os.path.join('backtesting_results', exchange, symbol, backtesting_settings['session_name'],
-                     ts_to_date(time())[:19].replace(':', '_'), '')
+        os.path.join('backtesting_results', exchange, symbol,
+                     backtesting_settings['session_name'], '')
     )
     print(results_filepath)
-    trade_cache_filepath = make_get_filepath(os.path.join(settings_filepath, 'trade_cache', ''))
-    trades_filename = f'{symbol}_raw_trades_{exchange}_{n_days}_days_{ts_to_date(time())[:10]}.npy'
-    trades_filepath = f"{trade_cache_filepath}{trades_filename}"
-    if os.path.exists(trades_filepath):
-        print('loading cached trade list', trades_filepath)
-        trades_list = np.load(trades_filepath, allow_pickle=True)
+    trades_list_filepath = os.path.join(results_filepath, f"{n_days}_days_trades_list_cache.npy")
+    if os.path.exists(trades_list_filepath):
+        print('loading cached trade list', trades_list_filepath)
+        trades_list = np.load(trades_list_filepath, allow_pickle=True)
     else:
         agg_trades = await load_trades(exchange, user, symbol, n_days)
         print('preparing trades...')
         trades_list = prep_trades_list(agg_trades)
-        np.save(trades_filepath, trades_list)
+        np.save(trades_list_filepath, trades_list)
     jackrabbit(trades_list, backtesting_settings, ranges, results_filepath)
 
 
