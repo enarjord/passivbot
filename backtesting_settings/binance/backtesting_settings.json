@@ -32,7 +32,6 @@
     "default_qty": -0.0416,
     "grid_coefficient": 0.0,
     "grid_spacing": 0.00287,
-    "indicator_settings": {"ema": {"span": 10836}},
     "ema_span": 10836,
     "leverage": 15,
     "liq_diff_threshold": 0.0293,
@@ -41,7 +40,6 @@
     "min_markup": 0.00154,
     "max_markup": 0.02676,
     "n_close_orders": 14,
-    "n_entry_orders": 10,
     "stop_loss_pos_reduction": 0.024,
     "symbol": "XMRUSDT"
 }
