@@ -319,7 +319,7 @@ def backtest(trades_list: [dict], settings: dict):
                                'liq_price': liq_price, 'liq_diff': calc_diff(liq_price, t['price'])})
         ema = ema * ema_alpha_ + t['price'] * ema_alpha
         k += 1
-        if k % 10000 == 0 or len(trades) != prev_len_trades:
+        if (k % 10000 == 0 and trades) or len(trades) != prev_len_trades:
             for key, condition in break_on.items():
                 if condition(trades[-1]):
                     print('break on', key)
