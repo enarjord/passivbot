@@ -35,7 +35,6 @@
     "ema_span": 10836,
     "leverage": 15,
     "liq_diff_threshold": 0.0293,
-    "market_stop_loss": false,
     "min_markup": 0.00154,
     "max_markup": 0.02676,
     "n_close_orders": 14,
