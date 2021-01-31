@@ -270,9 +270,11 @@ class Bot:
         self.indicators = {'tick': {}, 'ohlcv': {}}
         self.ohlcvs = {}
 
-        self.logs_base_filepath = make_get_filepath(
-            f"logs/{self.exchange}/{ts_to_date(time())[:19].replace(':', '_')}.txt"
-        )
+        self.my_trades = []
+        self.my_trades_cache_filepath = \
+            make_get_filepath(os.path.join('historical_data', self.exchange, 'my_trades',
+                                           self.symbol, 'my_trades.txt'))
+
         self.log_level = 0
 
         self.stop_websocket = False
@@ -650,23 +652,23 @@ class Bot:
             self.ohlcvs[period_ms] = \
                 self.ohlcvs[period_ms][-self.indicator_settings['max_periods_in_memory']:]
 
-    async def fetch_my_trades(self, symbol: str) -> [dict]:
-        my_trades = await self.cc.fapiPrivate_get_usertrades(params={'symbol': symbol})
-        return [{'symbol': mt['symbol'],
-                 'id': mt['id'],
-                 'orderId': mt['orderId'],
-                 'side': mt['side'],
-                 'price': float(mt['price']),
-                 'qty': float(mt['qty']),
-                 'realizedPnl': float(mt['realizedPnl']),
-                 'marginAsset': mt['marginAsset'],
-                 'quoteQty': float(mt['quoteQty']),
-                 'commission': float(mt['commission']),
-                 'commissionAsset': mt['commissionAsset'],
-                 'timestamp': mt['time'],
-                 'positionSide': mt['positionSide'],
-                 'maker': mt['maker'],
-                 'buyer': mt['maker']} for mt in my_trades]
+    def load_cached_my_trades(self) -> [dict]:
+        if os.path.exists(self.my_trades_cache_filepath):
+            with open(self.my_trades_cache_filepath) as f:
+                mtd = {(t := json.loads(line))['order_id']: t for line in f.readlines()}
+            return sorted(mtd.values(), key=lambda x: x['timestamp'])
+        return []
+
+    async def update_my_trades(self):
+        mt = await self.fetch_my_trades()
+        if self.my_trades:
+            mt = [e for e in mt if e['timestamp'] >= self.my_trades[-1]['timestamp']]
+            if mt[0]['order_id'] == self.my_trades[-1]['order_id']:
+                mt = mt[1:]
+        with open(self.my_trades_cache_filepath, 'a') as f:
+            for t in mt:
+                f.write(json.dumps(t) + '\n')
+        self.my_trades += mt
 
     def flush_stuck_locks(self, timeout: float = 4.0) -> None:
         now = time()
