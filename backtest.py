@@ -327,12 +327,10 @@ def backtest(trades_list: [dict], settings: dict):
             balance = max(balance, settings['starting_balance'])
             prev_len_trades = len(trades)
             progress = k / len(trades_list)
-            line = f"\r{progress:.3f} pnl sum {pnl_sum:.8f} "
-            line += f"loss sum {loss_sum:.5f} balance {balance:.5f} "
-            plr = trades[-1]['profit_sum'] / ls_ if \
-                (ls_ := abs(trades[-1]['loss_sum'])) > 0.0 else 9.0
-            line += f"profit to loss ratio {plr:.3f} "
-            line += f"qty {calc_default_qty_(balance, ob[0]):.4f} "
+            line = f"\r{progress:.3f} net pnl {pnl_sum:.8f} "
+            line += f"profit sum {profit_sum:.5f} "
+            line += f"loss sum {loss_sum:.5f} "
+            line += f"balance {balance:.5f} qty {calc_default_qty_(balance, ob[0]):.4f} "
             line += f"max pos pct {abs(pos_size) / calc_max_pos_size(balance, t['price']):.3f} "
             line += f"liq diff {min(1.0, calc_diff(trades[-1]['liq_price'], ob[0])):.3f} "
             line += f"pos size {pos_size:.4f} "
