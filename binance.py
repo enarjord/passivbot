@@ -125,6 +125,7 @@ class BinanceBot(Bot):
         super().__init__(user, settings)
         self.max_pos_size_ito_usdt = get_max_pos_size_ito_usdt(settings['symbol'],
                                                                settings['leverage'])
+
         self.cc = init_ccxt(self.exchange, user)
         self.trade_id = 0
 
@@ -224,23 +225,44 @@ class BinanceBot(Bot):
                 break
         return position
 
-    async def fetch_my_trades(self) -> [dict]:
-        start_time = (time() - 60 * 60 * 24 * 4) * 1000
-        mt = await self.cc.fapiPrivate_get_allorders(params={'symbol': self.symbol, 'limit': 1000,
-                                                             'startTime': start_time})
-        mt = sorted(mt, key=lambda x: x['orderId'])
+    async def init_my_trades(self, age_limit_days: float = 7.0) -> [dict]:
+        age_limit = self.cc.milliseconds() - 1000 * 60 * 60 * 24 * age_limit_days
+        mtl = self.load_cached_my_trades()
+        print(f'loaded {len(mtl)} cached my trades')
+        if not mtl:
+            mtl = await self.fetch_my_trades(start_time_ms=age_limit)
+        else:
+            mtl += await self.fetch_my_trades(start_time_ms=mtl[-1]['timestamp'])
+        mtd = {t['order_id']: t for t in mtl}
+        mt = sorted(mtd.values(), key=lambda x: x['timestamp'])
+        if len(mt) == 0:
+            return
         while True:
-            if not mt:
+            print('fetching my trades', ts_to_date(mt[-1]['timestamp'] / 1000))
+            new_mt = await self.fetch_my_trades(order_id=mt[-1]['order_id'] + 1)
+            if len(new_mt) == 0:
                 break
-            print(f"fetching my trades {ts_to_date(mt[0]['time'] / 1000)}")
-            new_mt = await self.cc.fapiPrivate_get_allorders(
-                params={'symbol': self.symbol, 'limit': 1000, 'orderId': mt[-1]['orderId']}
-            )
-            new_mt = sorted(new_mt, key=lambda x: x['orderId'])
-            if mt[-1]['orderId'] == new_mt[-1]['orderId']:
-                break
-            mt = mt + new_mt
+            mt += new_mt
+        mtd = {t['order_id']: t for t in mt}
+        my_trades = sorted(mtd.values(), key=lambda x: x['order_id'])
+        print('dumping trades to cache...')
+        with open(self.my_trades_cache_filepath, 'w') as f:
+            for t in my_trades:
+                f.write(json.dumps(t) + '\n')
+        self.my_trades = my_trades
+
+    async def fetch_my_trades(self,
+                              start_time_ms: int = -1,
+                              order_id: int = -1,
+                              limit: int = 1000) -> [dict]:
+        params = {'symbol': self.symbol, 'limit': limit}
+        if order_id != -1:
+            params['orderId'] = order_id
+        elif start_time_ms != -1:
+            params['startTime'] = int(start_time_ms)
+        mt = await self.cc.fapiPrivate_get_allorders(params=params)
         return sorted([{'custom_id': t['clientOrderId'],
+                        'order_id': int(t['orderId']),
                         'symbol': t['symbol'],
                         'side': t['side'].lower(),
                         'type': t['type'].lower(),
@@ -260,7 +282,7 @@ class BinanceBot(Bot):
             params['price'] = order['price']
         if 'custom_id' in order:
             params['newClientOrderId'] = \
-                f"{order['custom_id']}_{int(time() * 1000)}_{np.random.random():.3f}"
+                f"{order['custom_id']}_{int(time() * 1000)}_{int(np.random.random() * 1000)}"
         o = await self.cc.fapiPrivate_post_order(params=params)
         return {'symbol': self.symbol,
                 'side': o['side'].lower(),
