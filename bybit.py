@@ -209,7 +209,7 @@ class BybitBot(Bot):
             params['time_in_force'] = 'GoodTillCancel'
         if 'custom_id' in order:
             params['order_link_id'] = \
-                f"{order['custom_id']}_{int(time() * 1000)}_{np.random.random():.3f}"
+                f"{order['custom_id']}_{int(time() * 1000)}_{int(np.random.random() * 1000)}"
         o = await self.cc.v2_private_post_order_create(params=params)
         return {'symbol': o['result']['symbol'],
                 'side': o['result']['side'].lower(),
@@ -224,24 +224,42 @@ class BybitBot(Bot):
         return {'symbol': o['result']['symbol'], 'side': o['result']['side'].lower(),
                 'qty': o['result']['qty'], 'price': o['result']['price']}
 
-    async def fetch_my_trades(self, n_pages=1):
-        trades = await asyncio.gather(*
-            [self.cc.v2_private_get_execution_list(params={'symbol': self.symbol, 'limit': 200,
-                                                           'order': 'desc', 'page': page})
-             for page in range(1, n_pages + 1)]
-        )
+    async def init_my_trades(self, age_limit_days: float = 7.0) -> [dict]:
+        age_limit = self.cc.milliseconds() - 1000 * 60 * 60 * 24 * age_limit_days
+        mtl = await self.fetch_my_trades()
+        print('loading my trades cache...')
+        mtl += self.load_cached_my_trades()
+        mtd = {t['order_id']: t for t in mtl}
+        mt = sorted(mtd.values(), key=lambda x: x['timestamp'])
+        page = 2
+        while mt[0]['timestamp'] > age_limit:
+            print('fetching my trades', ts_to_date(mt[0]['timestamp'] / 1000))
+            new_mt = await self.fetch_my_trades(page)
+            if len(new_mt) == 0 or new_mt[0]['order_id'] in mtd:
+                break
+            page += 1
+            mtd = {t['order_id']: t for t in mt + new_mt}
+            mt = sorted(mtd.values(), key=lambda x: x['timestamp'])
+        my_trades = [t for t in mt if t['timestamp'] > age_limit]
+        print('dumping trades to cache...')
+        with open(self.my_trades_cache_filepath, 'w') as f:
+            for t in my_trades:
+                f.write(json.dumps(t) + '\n')
+        self.my_trades = my_trades
+
+    async def fetch_my_trades(self, page: int = 1):
+        params = {'symbol': self.symbol, 'limit': 200, 'order': 'desc', 'page': page}
+        fetched = await self.cc.v2_private_get_execution_list(params=params)
         mt = {t['exec_id']: {'custom_id': t['order_link_id'],
+                             'order_id': t['order_id'],
                              'symbol': t['symbol'],
                              'side': t['side'].lower(),
                              'type': t['order_type'].lower(),
                              'price': float(t['order_price']),
                              'qty': float(t['order_qty']),
                              'timestamp': t['trade_time_ms']}
-              for t in flatten([t_['result']['trade_list'] for t_ in trades]) if t['order_type']}
+              for t in fetched['result']['trade_list']}
         return sorted(mt.values(), key=lambda t: t['timestamp'])
-
-    async def update_my_trades(self):
-        pass
 
     async def fetch_trades(self, from_id: int = None):
         return await fetch_trades(self.cc, self.symbol, from_id)
