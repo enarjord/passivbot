@@ -446,7 +446,9 @@ def jackrabbit(trades_list: [dict],
             default_live_settings = load_settings(settings_['exchange'], print_=False)
             live_settings = {k: settings_[k] if k in settings_ else default_live_settings[k]
                              for k in default_live_settings}
-            live_settings['indicator_settings'] = {'tick_ema': {'span': best['ema_span']}}
+            live_settings['indicator_settings'] = {'tick_ema': {'span': best['ema_span']},
+                                                   'do_long': backtesting_settings['do_long'],
+                                                   'do_shrt': backtesting_settings['do_shrt']}
             json.dump(live_settings,
                       open(base_filepath + 'best_result_live_settings.json', 'w'),
                       indent=4, sort_keys=True)
