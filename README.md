@@ -107,7 +107,7 @@ about backtesting settings, binance XMRUSDT example
 
 {
 
-    "session_name": "unnamed_session",
+    "session_name": "unnamed_session",       # arbitrary name.
     "exchange": "binance",
     "symbol": "XMRUSDT",
     "n_days": 41,                            # n days to backtest
@@ -151,9 +151,7 @@ in other words, at first new candidates will vary wildly from the best settings,
 
 it is possible to run the same backtest in two or more terminals simultaneously.  they will share best candidate and dump results in same file for later analysis.
 
-if you wish to do so, be sure to start only one and let it finish downloading trades and making a trades_list cache before starting the others.
-
-also be sure to give a new unique session_name.
+if you wish to do so, use the same session name for all and be sure to start with only one and let it finish downloading trades and making a trades_list cache before starting the others.
 
 ------------------------------------------------------------------
 
