@@ -344,6 +344,7 @@ def format_dict(d: dict):
         r += f'&{key}={round(d[key], 10) if type(d[key]) in [float, int] else str(d[key])}'
     return r[1:]
 
+
 def unformat_dict(d: str):
     kv = d.split('&')
     kvs = [kv.split('=') for kv in d.split('&')]
@@ -360,77 +361,78 @@ def jackrabbit(trades_list: [dict],
                backtesting_settings: dict,
                ranges: dict,
                base_filepath: str):
-    best_filepath = base_filepath + 'best.json'
-    if backtesting_settings['random_starting_candidate']:
-        best = {key: calc_new_val((abs(ranges[key][1]) - abs(ranges[key][0])) / 2, ranges[key], 1.0)
-                for key in sorted(ranges)}
-        best['gain'] = -9e9
-        print('\nrandom starting candidate:', best)
-    elif os.path.exists(best_filepath):
-        best = json.load(open(best_filepath))
-        print('\nloaded best candidate', best)
-        print()
-    else:
-        best = sort_dict_keys({k_: backtesting_settings[k_] for k_ in ranges})
-        best['gain'] = -9e9
-
-    n_days = backtesting_settings['n_days']
-    results = {}
-    candidate = best
-
     ks = backtesting_settings['n_jackrabbit_iterations']
     k = backtesting_settings['starting_k']
     ms = np.array([1 / (i / 2 + 16) for i in range(ks)])
     ms = ((ms - ms.min()) / (ms.max() - ms.min()))
+
+    best_filepath = base_filepath + 'best.json'
+
+    if os.path.exists(best_filepath):
+        best = json.load(open(best_filepath))
+        candidate = get_new_candidate(ranges, best, ms[k])
+        print('\ncurrent best')
+    else:
+        best = {k_: backtesting_settings[k_] for k_ in ranges}
+        best['gain'] = -9e9
+        if backtesting_settings['random_starting_candidate']:
+            candidate = get_new_candidate(ranges, best, m=1.0)
+            print('\nusing random starting candidate')
+        else:
+            candidate = best
+            print('\nusing starting candidate from backtesting_settings')
+    print(json.dumps(best, indent=4, sort_keys=True))
+
+    results = {}
+    n_days = backtesting_settings['n_days']
+
     trades_filepath = make_get_filepath(os.path.join(base_filepath, 'backtest_trades', ''))
+    results_filename = base_filepath + 'results.txt'    
     json.dump(backtesting_settings, open(base_filepath + 'backtesting_settings.json', 'w'),
               indent=4, sort_keys=True)
-    json.dump(ranges, open(base_filepath + 'ranges.json', 'w'),
-              indent=4, sort_keys=True)
-    results_filename = base_filepath + 'results.txt'    
-
-    print('\n', backtesting_settings, '\n\n')
-
+    json.dump(ranges, open(base_filepath + 'ranges.json', 'w'), indent=4, sort_keys=True)
+    
     while k < ks:
         mutation_coefficient = ms[k]
         if candidate['min_markup'] >= candidate['max_markup']:
             candidate['min_markup'] = candidate['max_markup']
 
-        settings_ = {**backtesting_settings, **candidate}
-        key = format_dict({k_: candidate[k_] for k_ in ranges})
+        settings = {**backtesting_settings, **candidate}
+        key = np.format_float_positional(hash(json.dumps({k_: candidate[k_] for k_ in ranges})),
+                                         trim='-')[1:20]
         if key in results:
-            print('\nskipping', key)
             if os.path.exists(best_filepath):
                 best = json.load(open(best_filepath))
-            candidate = get_new_candidate(ranges, best)
+            candidate = get_new_candidate(ranges, best, mutation_coefficient)
             continue
         print(f'\nk={k}, m={mutation_coefficient:.4f} candidate:\n', candidate)
         start_time = time()
-        trades = backtest(trades_list, settings_)
+        trades = backtest(trades_list, settings)
         print('\ntime elapsed', round(time() - start_time, 1), 'seconds')
         k += 1
         if not trades:
             print('\nno trades')
             if os.path.exists(best_filepath):
                 best = json.load(open(best_filepath))
-            candidate = get_new_candidate(ranges, best)
+            candidate = get_new_candidate(ranges, best, mutation_coefficient)
             continue
+
         tdf = pd.DataFrame(trades).set_index('trade_id')
-        tdf.to_csv(trades_filepath + key + '.csv')
         closest_liq = ((tdf.price - tdf.liq_price).abs() / tdf.price).min()
         biggest_pos_size = tdf.pos_size.abs().max()
         n_closes = len(tdf[tdf.type == 'close'])
         pnl_sum = tdf.pnl.sum()
         loss_sum = tdf[tdf.type == 'stop_loss'].pnl.sum()
         abs_pos_sizes = tdf.pos_size.abs()
-        gain = (pnl_sum + settings_['starting_balance']) / settings_['starting_balance']
+        gain = (pnl_sum + settings['starting_balance']) / settings['starting_balance']
         candidate['gain'] = gain
         average_daily_gain = gain ** (1 / n_days)
         n_trades = len(tdf)
         result = {'n_closes': n_closes, 'pnl_sum': pnl_sum, 'loss_sum': loss_sum,
                   'average_daily_gain': average_daily_gain,
                   'gain': gain, 'n_trades': n_trades, 'closest_liq': closest_liq,
-                  'biggest_pos_size': biggest_pos_size, 'n_days': n_days}
+                  'biggest_pos_size': biggest_pos_size, 'n_days': n_days, 'key': key}
+        tdf.to_csv(f'{trades_filepath}{key}.csv')
         print('\n\n', result)
         results[key] = {**result, **candidate}
 
@@ -441,10 +443,10 @@ def jackrabbit(trades_list: [dict],
             best = candidate
             print('\n\n\n###############\nnew best', best, '\naverage daily gain:',
                   round(average_daily_gain, 5), '\n\n')
-            print(settings_, '\n')
+            print(settings, '\n')
             print(results[key], '\n\n')
-            default_live_settings = load_settings(settings_['exchange'], print_=False)
-            live_settings = {k: settings_[k] if k in settings_ else default_live_settings[k]
+            default_live_settings = load_settings(settings['exchange'], print_=False)
+            live_settings = {k: settings[k] if k in settings else default_live_settings[k]
                              for k in default_live_settings}
             live_settings['indicator_settings'] = {'tick_ema': {'span': best['ema_span']},
                                                    'do_long': backtesting_settings['do_long'],
@@ -453,8 +455,6 @@ def jackrabbit(trades_list: [dict],
                       open(base_filepath + 'best_result_live_settings.json', 'w'),
                       indent=4, sort_keys=True)
             print('\n\n', json.dumps(live_settings, indent=4, sort_keys=True), '\n\n')
-            json.dump(results[key], open(base_filepath + 'best_result.json', 'w'),
-                      indent=4, sort_keys=True)
             json.dump({**{'gain': result['gain']}, **best}, open(best_filepath, 'w'),
                       indent=4, sort_keys=True)
         candidate = get_new_candidate(ranges, best, m=mutation_coefficient)
