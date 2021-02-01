@@ -380,7 +380,7 @@ class Bot:
                     {'side': 'sell', 'type': 'market' if self.market_stop_loss else 'limit',
                      'qty': round_up(self.position['size'] * self.stop_loss_pos_reduction,
                                      self.qty_step),
-                     'price': self.ob[1], 'reduce_only': True, 'custom_id': 'long_close_stop_loss'}
+                     'price': self.ob[1], 'reduce_only': True, 'custom_id': 'stop_loss'}
                 )
             else:
                 # controlled shrt loss
@@ -388,7 +388,7 @@ class Bot:
                     {'side': 'buy', 'type': 'market' if self.market_stop_loss else 'limit',
                      'qty': round_up(-self.position['size'] * self.stop_loss_pos_reduction,
                                      self.qty_step),
-                     'price': self.ob[0], 'reduce_only': True, 'custom_id': 'shrt_close_stop_loss'}
+                     'price': self.ob[0], 'reduce_only': True, 'custom_id': 'stop_loss'}
                 )
             stop_loss_qty = orders[-1]['qty']
         else:
