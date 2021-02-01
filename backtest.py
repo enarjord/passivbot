@@ -385,6 +385,8 @@ def jackrabbit(trades_list: [dict],
     trades_filepath = make_get_filepath(os.path.join(base_filepath, 'backtest_trades', ''))
     json.dump(backtesting_settings, open(base_filepath + 'backtesting_settings.json', 'w'),
               indent=4, sort_keys=True)
+    json.dump(ranges, open(base_filepath + 'ranges.json', 'w'),
+              indent=4, sort_keys=True)
     results_filename = base_filepath + 'results.txt'    
 
     print('\n', backtesting_settings, '\n\n')
@@ -395,7 +397,7 @@ def jackrabbit(trades_list: [dict],
             candidate['min_markup'] = candidate['max_markup']
 
         settings_ = {**backtesting_settings, **candidate}
-        key = format_dict(candidate)
+        key = format_dict({k_: candidate[k_] for k_ in ranges})
         if key in results:
             print('\nskipping', key)
             if os.path.exists(best_filepath):
@@ -602,10 +604,10 @@ async def main():
 
     try:
         session_name = sys.argv[3]
-        print('\n\nusing given session name.', session_name, '\n\n')
+        print('\n\nusing given session name', session_name, '\n\n')
     except IndexError:
         session_name = backtesting_settings['session_name']
-        print('\n\nusing session name from backtesting_settings.json.', session_name, '\n\n')
+        print('\n\nusing session name from backtesting_settings.json', session_name, '\n\n')
 
     symbol = backtesting_settings['symbol']
     n_days = backtesting_settings['n_days']
