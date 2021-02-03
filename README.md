@@ -3,12 +3,9 @@ trading bot running on bybit inverse futures and binance usdt futures
 
 use at own risk
 
-
 requires python >= 3.8
 
-
 dependencies, install with pip:
-
 
 `python3 -m pip install matplotlib pandas websockets ccxt`
 
@@ -39,6 +36,10 @@ change log
 - fixed insufficient margin error
 - many other fixes and changes...
 - added possibility of running same backtest in two or more terminals for better cpu utilization
+
+2021-02-03
+- backtester break conditions change
+- bug fixes
 
 ------------------------------------------------------------------
 
@@ -119,10 +120,19 @@ about backtesting settings, binance XMRUSDT example
     "min_notional": 1.0,                     # used with binance: entry qty must be greater than min_notional / price
     
     "break_on": [
-        ["OFF: break on first soft stop", "lambda x: x['type'] == 'soft_stop'"],
-        ["ON: neg pnl sum", "lambda x: x['pnl_sum'] < 0.0 and x['progress'] > 0.4"]
+        ["OFF: break on first soft stop",
+         "lambda trade, tick: trade['type'] == 'stop_loss'"],
+        ["ON: neg pnl sum",
+         "lambda trade, tick: trade['pnl_sum'] < 0.0 and trade['progress'] > 0.4"],
+        ["ON: liq diff too small",
+         "lambda trade, tick: trade['liq_diff'] < 0.02"],
+        ["ON: time between consec trades",
+         "lambda trade, tick: tick['timestamp'] - trade['timestamp'] > 1000 * 60 * 60 * 24"],
+        ["ON: pos price last price diff",
+         "lambda trade, tick: calc_diff(trade['price'], tick['price']) > 1.05"]
     ],
-                                             # conditions to break backtest prematurely ["name", if true: break.  x is last trade]
+                                             # conditions to break backtest prematurely ["name", if true: break.  trade is last trade, tick is last price tick]
+                                             # if startswith "OFF", will ignore condition
 
     "inverse": false,                        # inverse is true for bybit, false for binance
     "maker_fee": 0.00018,                    # 0.00018 for binance (with bnb discount), -0.00025 for bybit
@@ -182,8 +192,8 @@ about settings, bybit example:
         "do_shrt": true                   # if true, will allow short posisions
     },
                                           # indicators may be used to determine long or short initial entry.  they are updated on each websocket trade tick.
-                                          # ema is not based on ohlcvs, but calculated based on sequence of raw trades.
-                                          # when no pos, bid = min(ema, highest_bid), ask = max(ema, lowest_ask)
+                                          # tick ema is not based on ohlcvs, but calculated based on sequence of raw trades.
+                                          # when no pos, bid = min(tick_ema, highest_bid), ask = max(tick_ema, lowest_ask)
                                           # more indicators may be added in future.
                                           
     "grid_coefficient": 245.0,            # next entry price is pos_price * (1 +- grid_spacing * (1 + (pos_margin / balance) * grid_coefficient)).
