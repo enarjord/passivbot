@@ -2,7 +2,7 @@
     "session_name": "unnamed_session_001",
     "exchange": "binance",
     "symbol": "XMRUSDT",
-    "n_days": 28,
+    "n_days": 7,
 
     "random_starting_candidate": true,
     "starting_k": 0,
@@ -24,20 +24,27 @@
     "do_shrt": true,
 
     "break_on": [
-        ["OFF: break on first soft stop", "lambda x: x['type'] == 'stop_loss'"],
-        ["ON: neg pnl sum", "lambda x: x['pnl_sum'] < 0.0 and x['progress'] > 0.35"]
+        ["ON: break on first soft stop",
+         "lambda trade, tick: trade['type'] == 'stop_loss'"],
+        ["ON: neg pnl sum",
+         "lambda trade, tick: trade['pnl_sum'] < 0.0 and trade['progress'] > 0.4"],
+        ["ON: liq diff too small",
+         "lambda trade, tick: calc_diff(trade['liq_price'], tick['price']) < 0.05"],
+        ["ON: time between consec trades",
+         "lambda trade, tick: tick['timestamp'] - trade['timestamp'] > 1000 * 60 * 60 * 16"],
+        ["OFF: pos price last price diff",
+         "lambda trade, tick: calc_diff(trade['price'], tick['price']) > 0.12"]
     ],
 
-    "ddown_factor": 0.673,
-    "default_qty": -0.0416,
-    "grid_coefficient": 0.0,
-    "grid_spacing": 0.00287,
-    "ema_span": 10836,
-    "leverage": 15,
-    "liq_diff_threshold": 0.0293,
-    "min_markup": 0.00154,
-    "max_markup": 0.02676,
-    "n_close_orders": 14,
-    "stop_loss_pos_reduction": 0.024
+    "ddown_factor": 0.6,
+    "default_qty": -0.2624,
+    "grid_coefficient": 280.0,
+    "grid_spacing": 0.002,
+    "ema_span": 16500.0,
+    "leverage": 24.0,
+    "liq_diff_threshold": 0.02,
+    "max_markup": 0.01694,
+    "min_markup": 0.00072,
+    "n_close_orders": 10.0,
+    "stop_loss_pos_reduction": 0.001
 }
-
