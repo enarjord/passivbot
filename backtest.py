@@ -445,7 +445,7 @@ def jackrabbit(trades_list: [dict],
                   round(average_daily_gain, 5), '\n\n')
             print(settings, '\n')
             print(results[key], '\n\n')
-            default_live_settings = load_settings(settings['exchange'], print_=False)
+            default_live_settings = load_settings(settings['exchange'], do_print=False)
             live_settings = {k: settings[k] if k in settings else default_live_settings[k]
                              for k in default_live_settings}
             live_settings['indicator_settings'] = {'tick_ema': {'span': best['ema_span']},
