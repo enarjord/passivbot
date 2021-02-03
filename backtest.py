@@ -36,7 +36,7 @@ def prep_trades_list(df: pd.DataFrame):
         buyer_maker.name = 'buyer_maker'
     else:
         raise Exception('trades of unknown format')
-    dfcc = pd.concat([dfc.price, buyer_maker], axis=1)
+    dfcc = pd.concat([dfc.price, buyer_maker, dfc.timestamp], axis=1)
     return list(dfcc.to_dict(orient='index').values())
 
 
@@ -181,7 +181,7 @@ def backtest(trades_list: [dict], settings: dict):
                                          calc_default_qty_(balance, ob[0]),
                                          calc_max_pos_size(balance, ob[0]),
                                          pos_size)
-                if bid_qty >= min_qty:
+                if bid_qty >= max(min_qty, min_notional / t['price']):
                     pos_margin = calc_cost(pos_size, pos_price) / leverage
                     bid_price = calc_long_reentry_price_(balance, pos_margin, pos_price, ob[0])
                 else:
@@ -198,8 +198,11 @@ def backtest(trades_list: [dict], settings: dict):
                         qtys, prices = calc_shrt_closes(price_step, qty_step, min_qty, min_markup,
                                                         max_markup, pos_size, pos_price, ob[0],
                                                         n_close_orders)
-                        bid_qty = qtys[0]
-                        bid_price = prices[0]
+                        if len(qtys) > 0:
+                            bid_qty = qtys[0]
+                            bid_price = prices[0]
+                        else:
+                            bid_price = 0.0
                     else:
                         bid_price = 0.0
             ob[0] = t['price']
@@ -238,7 +241,8 @@ def backtest(trades_list: [dict], settings: dict):
                                'max_pos_size': calc_max_pos_size(balance, t['price']),
                                'pnl_sum': pnl_sum, 'loss_sum': loss_sum, 'profit_sum': profit_sum,
                                'progress': k / len(trades_list),
-                               'liq_price': liq_price, 'liq_diff': calc_diff(liq_price, t['price'])})
+                               'liq_price': liq_price, 'liq_diff': calc_diff(liq_price, t['price']),
+                               'timestamp': t['timestamp']})
         else:
             # sell
             if pos_size == 0.0:
@@ -261,8 +265,11 @@ def backtest(trades_list: [dict], settings: dict):
                         qtys, prices = calc_long_closes(price_step, qty_step, min_qty, min_markup,
                                                         max_markup, pos_size, pos_price, ob[1],
                                                         n_close_orders)
-                        ask_qty = qtys[0]
-                        ask_price = prices[0]
+                        if len(qtys) > 0:
+                            ask_qty = qtys[0]
+                            ask_price = prices[0]
+                        else:
+                            ask_price = 9e9
                     else:
                         ask_price = 9e9
             else:
@@ -275,7 +282,7 @@ def backtest(trades_list: [dict], settings: dict):
                                           calc_default_qty_(balance, ob[1]),
                                           calc_max_pos_size(balance, ob[1]),
                                           pos_size)
-                if -ask_qty >= min_qty:
+                if -ask_qty >= max(min_qty, min_notional / t['price']):
                     pos_margin = calc_cost(-pos_size, pos_price) / leverage
                     ask_price = calc_shrt_reentry_price_(balance, pos_margin, pos_price, ob[0])
                 else:
@@ -316,12 +323,13 @@ def backtest(trades_list: [dict], settings: dict):
                                'max_pos_size': calc_max_pos_size(balance, t['price']),
                                'pnl_sum': pnl_sum, 'loss_sum': loss_sum, 'profit_sum': profit_sum,
                                'progress': k / len(trades_list),
-                               'liq_price': liq_price, 'liq_diff': calc_diff(liq_price, t['price'])})
+                               'liq_price': liq_price, 'liq_diff': calc_diff(liq_price, t['price']),
+                               'timestamp': t['timestamp']})
         ema = ema * ema_alpha_ + t['price'] * ema_alpha
         k += 1
-        if (k % 10000 == 0 and trades) or len(trades) != prev_len_trades:
+        if (k % 5000 == 0 and trades) or len(trades) != prev_len_trades:
             for key, condition in break_on.items():
-                if condition(trades[-1]):
+                if condition(trades[-1], t):
                     print('break on', key)
                     return []
             balance = max(balance, settings['starting_balance'])
@@ -372,6 +380,7 @@ def jackrabbit(trades_list: [dict],
         best = json.load(open(best_filepath))
         candidate = get_new_candidate(ranges, best, ms[k])
         print('\ncurrent best')
+        print(json.dumps(best, indent=4, sort_keys=True))
     else:
         best = {k_: backtesting_settings[k_] for k_ in ranges}
         best['gain'] = -9e9
@@ -379,9 +388,9 @@ def jackrabbit(trades_list: [dict],
             candidate = get_new_candidate(ranges, best, m=1.0)
             print('\nusing random starting candidate')
         else:
-            candidate = best
+            candidate = best.copy()
             print('\nusing starting candidate from backtesting_settings')
-    print(json.dumps(best, indent=4, sort_keys=True))
+        print(json.dumps(candidate, indent=4, sort_keys=True))
 
     results = {}
     n_days = backtesting_settings['n_days']
