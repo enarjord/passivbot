@@ -1,12 +1,12 @@
 {
-    "session_name": "eos_test_002",
+    "session_name": "eos_test_001",
     "exchange": "bybit",
     "symbol": "EOSUSD",
-    "n_days": 7,
+    "n_days": 6,
 
     "random_starting_candidate": true,
     "starting_k": 0,
-    "n_jackrabbit_iterations": 100,
+    "n_jackrabbit_iterations": 140,
 
     "starting_balance": 10.0,
     "inverse": true,
@@ -24,8 +24,16 @@
     "do_shrt": true,
 
     "break_on": [
-        ["OFF: break on first soft stop", "lambda x: x['type'] == 'stop_loss'"],
-        ["ON: neg pnl sum", "lambda x: x['pnl_sum'] < 0.0 and x['progress'] > 0.4"]
+        ["OFF: break on first soft stop",
+         "lambda trade, tick: trade['type'] == 'stop_loss'"],
+        ["ON: neg pnl sum",
+         "lambda trade, tick: trade['pnl_sum'] < 0.0 and trade['progress'] > 0.4"],
+        ["ON: liq diff too small",
+         "lambda trade, tick: trade['liq_diff'] < 0.02"],
+        ["ON: time between consec trades",
+         "lambda trade, tick: tick['timestamp'] - trade['timestamp'] > 1000 * 60 * 60 * 24"],
+        ["ON: pos price last price diff",
+         "lambda trade, tick: calc_diff(trade['price'], tick['price']) > 1.05"]
     ],
 
     "ddown_factor": 0.014,
