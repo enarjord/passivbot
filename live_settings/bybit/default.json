@@ -14,6 +14,7 @@
     "balance": -0.99,
     "market_stop_loss": false,
     "max_markup": 0.01085,
+    "min_close_qty_multiplier": 0.5,
     "min_markup": 0.00007,
     "n_close_orders": 12,
     "n_entry_orders": 8,
