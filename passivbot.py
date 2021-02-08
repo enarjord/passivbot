@@ -61,12 +61,13 @@ def calc_long_closes(price_step: float,
                      min_qty: float,
                      min_markup: float,
                      max_markup: float,
+                     min_close_qty: float,
                      pos_size: float,
                      pos_price: float,
                      lowest_ask: float,
                      n_orders: int = 10,
                      single_order_price_diff_threshold: float = 0.003):
-    n_orders = int(round(min(n_orders, pos_size / min_qty)))
+    n_orders = int(round(min(n_orders, pos_size / min_close_qty)))
     prices = round_up(np.linspace(pos_price * (1 + min_markup), pos_price * (1 + max_markup),
                                   n_orders),
                       price_step)
@@ -84,8 +85,8 @@ def calc_long_closes(price_step: float,
     qtys_sum = qtys.sum()
     while qtys_sum > pos_size:
         for i in range(len(qtys)):
-            qtys[i] = round_(qtys[i] - min_qty, qty_step)
-            qtys_sum = round_(qtys_sum - min_qty, qty_step)
+            qtys[i] = round_(qtys[i] - qty_step, qty_step)
+            qtys_sum = round_(qtys_sum - qty_step, qty_step)
             if qtys_sum <= pos_size:
                 break
     return qtys * -1, prices
@@ -113,13 +114,14 @@ def calc_shrt_closes(price_step: float,
                      min_qty: float,
                      min_markup: float,
                      max_markup: float,
+                     min_close_qty: float,
                      pos_size: float,
                      pos_price: float,
                      highest_bid: float,
                      n_orders: int = 10,
                      single_order_price_diff_threshold: float = 0.003):
     abs_pos_size = abs(pos_size)
-    n_orders = int(round(min(n_orders, abs_pos_size / min_qty)))
+    n_orders = int(round(min(n_orders, abs_pos_size / min_close_qty)))
     prices = round_dn(np.linspace(pos_price * (1 - min_markup), pos_price * (1 - max_markup),
                                   n_orders),
                       price_step)
@@ -137,8 +139,8 @@ def calc_shrt_closes(price_step: float,
     qtys_sum = qtys.sum()
     while qtys_sum > abs_pos_size:
         for i in range(len(qtys) - 1, -1, -1):
-            qtys[i] = round_(qtys[i] - min_qty, qty_step)
-            qtys_sum = round_(qtys_sum - min_qty, qty_step)
+            qtys[i] = round_(qtys[i] - qty_step, qty_step)
+            qtys_sum = round_(qtys_sum - qty_step, qty_step)
             if qtys_sum <= abs_pos_size:
                 break
     return qtys, prices
@@ -372,6 +374,7 @@ class Bot:
             if self.balance <= 0 else self.balance
         default_qty = self.default_qty if self.default_qty > 0.0 else \
             self.calc_default_qty(balance, self.price)
+        min_close_qty = max(self.min_qty, round_dn(default_qty * 0.5, self.qty_step))
         orders = []
         if calc_diff(self.position['liquidation_price'], self.price) < self.liq_diff_threshold:
             if self.position['size'] > 0.0:
@@ -433,6 +436,23 @@ class Bot:
                                                                     balance,
                                                                     pos_margin,
                                                                     pos_price))
+            ask_qtys, ask_prices = calc_long_closes(self.price_step,
+                                                    self.qty_step,
+                                                    self.min_qty,
+                                                    self.min_markup,
+                                                    self.max_markup,
+                                                    min_close_qty,
+                                                    self.position['size'] - stop_loss_qty,
+                                                    self.position['price'],
+                                                    self.ob[1],
+                                                    self.n_close_orders)
+            close_orders = sorted([{'side': 'sell', 'qty': abs_qty, 'price': float(price_),
+                                    'type': 'limit', 'reduce_only': True, 'custom_id': 'close'}
+                                   for qty_, price_ in zip(ask_qtys, ask_prices)
+                                   if (abs_qty := abs(float(qty_))) > 0.0
+                                   and calc_diff(price_, self.price) < last_price_diff_limit],
+                                  key=lambda x: x['price'])[:self.n_entry_orders]
+            orders += close_orders
         else: # shrt pos
             pos_size = self.position['size']
             pos_price = self.position['price']
@@ -467,29 +487,12 @@ class Bot:
                                                                     balance,
                                                                     pos_margin,
                                                                     pos_price))
-        if self.position['size'] > 0.0:
-            ask_qtys, ask_prices = calc_long_closes(self.price_step,
-                                                    self.qty_step,
-                                                    self.min_qty,
-                                                    self.min_markup,
-                                                    self.max_markup,
-                                                    self.position['size'] - stop_loss_qty,
-                                                    self.position['price'],
-                                                    self.ob[1],
-                                                    self.n_close_orders)
-            close_orders = sorted([{'side': 'sell', 'qty': abs_qty, 'price': float(price_),
-                                    'type': 'limit', 'reduce_only': True, 'custom_id': 'close'}
-                                   for qty_, price_ in zip(ask_qtys, ask_prices)
-                                   if (abs_qty := abs(float(qty_))) > 0.0
-                                   and calc_diff(price_, self.price) < last_price_diff_limit],
-                                  key=lambda x: x['price'])[:self.n_entry_orders]
-            orders += close_orders
-        elif self.position['size'] < 0.0:
             bid_qtys, bid_prices = calc_shrt_closes(self.price_step,
                                                     self.qty_step,
                                                     self.min_qty,
                                                     self.min_markup,
                                                     self.max_markup,
+                                                    min_close_qty,
                                                     self.position['size'] + stop_loss_qty,
                                                     self.position['price'],
                                                     self.ob[0],
