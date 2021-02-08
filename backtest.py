@@ -158,9 +158,9 @@ def backtest(trades_list: [dict], settings: dict):
     ema = trades_list[0]['price']
 
     k = 0
-    prev_len_trades = 0
     break_on = {e[0]: eval(e[1]) for e in settings['break_on'] if e[0].startswith('ON:')}
     for t in trades_list:
+        append_trade = False
         if t['buyer_maker']:
             # buy
             if pos_size == 0.0:
@@ -195,9 +195,12 @@ def backtest(trades_list: [dict], settings: dict):
                 else:
                     if t['price'] <= pos_price:
                         # short close
+                        min_close_qty = \
+                            max(min_qty,
+                                round_dn(calc_default_qty_(balance, ob[0]) * 0.5, qty_step))
                         qtys, prices = calc_shrt_closes(price_step, qty_step, min_qty, min_markup,
-                                                        max_markup, pos_size, pos_price, ob[0],
-                                                        n_close_orders)
+                                                        max_markup, min_close_qty, pos_size,
+                                                        pos_price, ob[0], n_close_orders)
                         if len(qtys) > 0:
                             bid_qty = qtys[0]
                             bid_price = prices[0]
@@ -208,6 +211,8 @@ def backtest(trades_list: [dict], settings: dict):
             ob[0] = t['price']
             if t['price'] < bid_price and bid_qty >= min_qty:
                 # filled trade
+                qty = bid_qty
+                price = bid_price
                 cost = calc_cost(bid_qty, bid_price)
                 pnl = -cost * maker_fee
                 if pos_size >= 0.0:
@@ -235,14 +240,7 @@ def backtest(trades_list: [dict], settings: dict):
                 balance += pnl
                 pnl_sum += pnl
                 liq_price = calc_liq_price(balance, pos_size, pos_price)
-                trades.append({'trade_id': k, 'side': trade_side, 'type': trade_type,
-                               'price': bid_price, 'qty': bid_qty, 'pnl': pnl, 'roi': roi,
-                               'pos_size': pos_size, 'pos_price': pos_price, 'balance': balance,
-                               'max_pos_size': calc_max_pos_size(balance, t['price']),
-                               'pnl_sum': pnl_sum, 'loss_sum': loss_sum, 'profit_sum': profit_sum,
-                               'progress': k / len(trades_list),
-                               'liq_price': liq_price, 'liq_diff': calc_diff(liq_price, t['price']),
-                               'timestamp': t['timestamp']})
+                append_trade = True
         else:
             # sell
             if pos_size == 0.0:
@@ -262,9 +260,12 @@ def backtest(trades_list: [dict], settings: dict):
                 else:
                     if t['price'] >= pos_price:
                         # long close
+                        min_close_qty = \
+                            max(min_qty,
+                                round_dn(calc_default_qty_(balance, ob[1]) * 0.5, qty_step))
                         qtys, prices = calc_long_closes(price_step, qty_step, min_qty, min_markup,
-                                                        max_markup, pos_size, pos_price, ob[1],
-                                                        n_close_orders)
+                                                        max_markup, min_close_qty, pos_size,
+                                                        pos_price, ob[1], n_close_orders)
                         if len(qtys) > 0:
                             ask_qty = qtys[0]
                             ask_price = prices[0]
@@ -290,6 +291,8 @@ def backtest(trades_list: [dict], settings: dict):
             ob[1] = t['price']
             if t['price'] > ask_price and abs(ask_qty) >= min_qty:
                 # filled trade
+                qty = ask_qty
+                price = ask_price
                 cost = calc_cost(-ask_qty, ask_price)
                 pnl = -cost * maker_fee
                 if pos_size <= 0.0:
@@ -317,32 +320,38 @@ def backtest(trades_list: [dict], settings: dict):
                 balance += pnl
                 pnl_sum += pnl
                 liq_price = calc_liq_price(balance, pos_size, pos_price)
-                trades.append({'trade_id': k, 'side': trade_side, 'type': trade_type,
-                               'price': ask_price, 'qty': ask_qty, 'pnl': pnl, 'roi': roi,
-                               'pos_size': pos_size, 'pos_price': pos_price, 'balance': balance,
-                               'max_pos_size': calc_max_pos_size(balance, t['price']),
-                               'pnl_sum': pnl_sum, 'loss_sum': loss_sum, 'profit_sum': profit_sum,
-                               'progress': k / len(trades_list),
-                               'liq_price': liq_price, 'liq_diff': calc_diff(liq_price, t['price']),
-                               'timestamp': t['timestamp']})
-        ema = ema * ema_alpha_ + t['price'] * ema_alpha
-        k += 1
-        if (k % 5000 == 0 and trades) or len(trades) != prev_len_trades:
-            for key, condition in break_on.items():
-                if condition(trades[-1], t):
-                    print('break on', key)
-                    return []
-            balance = max(balance, settings['starting_balance'])
-            prev_len_trades = len(trades)
+                append_trade = True
+        if append_trade:
             progress = k / len(trades_list)
+            total_gain = (pnl_sum + settings['starting_balance']) / settings['starting_balance']
+            n_days_ = (t['timestamp'] - trades_list[0]['timestamp']) / (1000 * 60 * 60 * 24)
+            adg = total_gain ** (1 / n_days_)
+            trades.append({'trade_id': k, 'side': trade_side, 'type': trade_type,
+                           'price': price, 'qty': qty, 'pnl': pnl, 'roi': roi,
+                           'pos_size': pos_size, 'pos_price': pos_price, 'balance': balance,
+                           'max_pos_size': calc_max_pos_size(balance, t['price']),
+                           'pnl_sum': pnl_sum, 'loss_sum': loss_sum, 'profit_sum': profit_sum,
+                           'progress': progress,
+                           'liq_price': liq_price, 'gain': total_gain,
+                           'n_days': n_days_, 'average_daily_gain': adg,
+                           'liq_diff': min(1.0, calc_diff(liq_price, t['price'])),
+                           'timestamp': t['timestamp']})
+            balance = max(balance, settings['starting_balance'])
             line = f"\r{progress:.3f} net pnl {pnl_sum:.8f} "
             line += f"profit sum {profit_sum:.5f} "
             line += f"loss sum {loss_sum:.5f} "
             line += f"balance {balance:.5f} qty {calc_default_qty_(balance, ob[0]):.4f} "
+            line += f"adg {trades[-1]['average_daily_gain']:.3f} "
             line += f"max pos pct {abs(pos_size) / calc_max_pos_size(balance, t['price']):.3f} "
             line += f"liq diff {min(1.0, calc_diff(trades[-1]['liq_price'], ob[0])):.3f} "
             line += f"pos size {pos_size:.4f} "
             print(line, end=' ')
+            for key, condition in break_on.items():
+                if condition(trades[-1], t):
+                    print('break on', key)
+                    return []
+        ema = ema * ema_alpha_ + t['price'] * ema_alpha
+        k += 1
     return trades
 
 
@@ -376,7 +385,8 @@ def jackrabbit(trades_list: [dict],
 
     best_filepath = base_filepath + 'best.json'
 
-    if os.path.exists(best_filepath):
+    if backtesting_settings['starting_candidate_preference'][0] == 'best' and \
+            os.path.exists(best_filepath):
         best = json.load(open(best_filepath))
         candidate = get_new_candidate(ranges, best, ms[k])
         print('\ncurrent best')
@@ -384,12 +394,12 @@ def jackrabbit(trades_list: [dict],
     else:
         best = {k_: backtesting_settings[k_] for k_ in ranges}
         best['gain'] = -9e9
-        if backtesting_settings['random_starting_candidate']:
-            candidate = get_new_candidate(ranges, best, m=1.0)
-            print('\nusing random starting candidate')
-        else:
+        if 'given' in  backtesting_settings['starting_candidate_preference'][:2]:
             candidate = best.copy()
             print('\nusing starting candidate from backtesting_settings')
+        else:
+            candidate = get_new_candidate(ranges, best, m=1.0)
+            print('\nusing random starting candidate')
         print(json.dumps(candidate, indent=4, sort_keys=True))
 
     results = {}
