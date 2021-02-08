@@ -60,6 +60,8 @@ def backtest(trades_list: [dict], settings: dict):
     min_markup = settings['min_markup']
     max_markup = settings['max_markup']
     n_close_orders = settings['n_close_orders']
+    min_close_qty_multiplier = settings['min_close_qty_multiplier'] \
+        if 'min_close_qty_multiplier' in settings else 0.0
 
     do_long = settings['do_long']
     do_shrt = settings['do_shrt']
@@ -195,9 +197,11 @@ def backtest(trades_list: [dict], settings: dict):
                 else:
                     if t['price'] <= pos_price:
                         # short close
-                        min_close_qty = \
-                            max(min_qty,
-                                round_dn(calc_default_qty_(balance, ob[0]) * 0.5, qty_step))
+                        min_close_qty = max(
+                            min_qty,
+                            round_dn(calc_default_qty_(balance, ob[0]) * min_close_qty_multiplier,
+                                     qty_step)
+                        )
                         qtys, prices = calc_shrt_closes(price_step, qty_step, min_qty, min_markup,
                                                         max_markup, min_close_qty, pos_size,
                                                         pos_price, ob[0], n_close_orders)
@@ -260,9 +264,11 @@ def backtest(trades_list: [dict], settings: dict):
                 else:
                     if t['price'] >= pos_price:
                         # long close
-                        min_close_qty = \
-                            max(min_qty,
-                                round_dn(calc_default_qty_(balance, ob[1]) * 0.5, qty_step))
+                        min_close_qty = max(
+                            min_qty,
+                            round_dn(calc_default_qty_(balance, ob[0]) * min_close_qty_multiplier,
+                                     qty_step)
+                        )
                         qtys, prices = calc_long_closes(price_step, qty_step, min_qty, min_markup,
                                                         max_markup, min_close_qty, pos_size,
                                                         pos_price, ob[1], n_close_orders)
