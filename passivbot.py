@@ -550,11 +550,13 @@ class Bot:
                 line += f"no position bid {self.highest_bid} ask {self.lowest_ask} "
                 ratio = (self.price - self.highest_bid) / (self.lowest_ask - self.highest_bid)
             elif self.position['size'] > 0.0:
-                line += f"long {self.position['size']} @ {self.position['price']:.2f} "
+                line += f"long {self.position['size']} "
+                line += f"@ {round_(self.position['price'], self.price_step)} "
                 line += f"exit {self.lowest_ask} ddown {self.highest_bid} "
                 ratio = (self.price - self.highest_bid) / (self.lowest_ask - self.highest_bid)
             else:
-                line += f"shrt {self.position['size']} @ {self.position['price']:.2f} "
+                line += f"shrt {self.position['size']} "
+                line += f"@ {round_(self.position['price'], self.price_step)} "
                 ratio = 1 - (self.price - self.highest_bid) / (self.lowest_ask - self.highest_bid)
                 line += f"exit {self.highest_bid} ddown {self.lowest_ask } "
 
