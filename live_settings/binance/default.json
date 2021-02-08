@@ -16,6 +16,7 @@
     "liq_diff_threshold": 0.035,
     "market_stop_loss": false,
     "max_markup": 0.00849,
+    "min_close_qty_multiplier": 0.5,
     "min_markup": 0.00097,
     "n_close_orders": 15.0,
     "n_entry_orders": 8,
