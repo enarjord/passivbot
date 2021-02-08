@@ -205,6 +205,9 @@ about settings, bybit example:
     "leverage": 100,                      # leverage (irrelevant in bybit because cross mode in is always max leverage).
     "min_markup": 0.0002,                 # when there's a position, bot makes a grid of n_close_orders whose prices are
     "max_markup": 0.0159,                 # evenly distributed between min and max markup, and whose qtys are pos_size // n_close_orders.
+    "min_close_qty_multiplier": 0.5       # optional setting, will default to 0.0 if not present.
+                                          # min_close_qty = max(min_qty, default_qty * min_close_qty_multiplier)
+    
     
     "market_stop_loss": false,            # if true will soft stop with market orders, if false soft stops with limit orders at order book's higest_bid/lowest_ask
     
