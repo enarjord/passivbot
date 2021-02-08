@@ -4,7 +4,7 @@
     "symbol": "XMRUSDT",
     "n_days": 7,
 
-    "random_starting_candidate": true,
+    "starting_candidate_preference": ["best", "given", "random"],
     "starting_k": 0,
     "n_jackrabbit_iterations": 100,
 
@@ -26,14 +26,16 @@
     "break_on": [
         ["ON: break on first soft stop",
          "lambda trade, tick: trade['type'] == 'stop_loss'"],
-        ["ON: neg pnl sum",
-         "lambda trade, tick: trade['pnl_sum'] < 0.0 and trade['progress'] > 0.4"],
+        ["OFF: neg pnl sum",
+         "lambda trade, tick: trade['pnl_sum'] < 0.0 and trade['progress'] > 0.3"],
         ["ON: liq diff too small",
-         "lambda trade, tick: calc_diff(trade['liq_price'], tick['price']) < 0.05"],
-        ["ON: time between consec trades",
-         "lambda trade, tick: tick['timestamp'] - trade['timestamp'] > 1000 * 60 * 60 * 16"],
+         "lambda trade, tick: trade['liq_diff'] < 0.05"],
+        ["OFF: time between consec trades",
+         "lambda trade, tick: tick['timestamp'] - trade['timestamp'] > 1000 * 60 * 60 * 24"],
         ["OFF: pos price last price diff",
-         "lambda trade, tick: calc_diff(trade['price'], tick['price']) > 0.12"]
+         "lambda trade, tick: calc_diff(trade['price'], tick['price']) > 1.05"],
+        ["ON: adg too low",
+         "lambda trade, tick: trade['average_daily_gain'] < 1.01 and trade['progress'] >= 0.1"]
     ],
 
     "ddown_factor": 0.6,
