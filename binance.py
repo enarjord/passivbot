@@ -61,8 +61,7 @@ def calc_isolated_long_liq_price(balance,
                                  pos_price,
                                  leverage,
                                  mm=0.004) -> float:
-    return calc_cross_long_liq_price(pos_size * pos_price / leverage, pos_size, pos_price, mm,
-                                     leverage=leverage)
+    return calc_cross_long_liq_price(pos_size * pos_price / leverage, pos_size, pos_price, leverage, mm)
 
 
 def calc_isolated_shrt_liq_price(balance,
@@ -70,8 +69,7 @@ def calc_isolated_shrt_liq_price(balance,
                                  pos_price,
                                  leverage,
                                  mm=0.004) -> float:
-    return calc_cross_shrt_liq_price(abs(pos_size) * pos_price / leverage, pos_size, pos_price, mm,
-                                     leverage=leverage)
+    return calc_cross_shrt_liq_price(abs(pos_size) * pos_price / leverage, pos_size, pos_price, leverage, mm)
 
 
 def calc_cross_long_liq_price(balance,
