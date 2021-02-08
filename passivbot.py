@@ -256,6 +256,9 @@ class Bot:
         self.default_qty = settings['default_qty']
         self.ddown_factor = settings['ddown_factor']
 
+        self.min_close_qty_multiplier = settings['min_close_qty_multiplier'] \
+            if 'min_close_qty_multiplier' in settings else 0.0
+
         self.market_stop_loss = settings['market_stop_loss']
 
         self.ts_locked = {'cancel_orders': 0, 'decide': 0, 'update_open_orders': 0,
@@ -374,7 +377,8 @@ class Bot:
             if self.balance <= 0 else self.balance
         default_qty = self.default_qty if self.default_qty > 0.0 else \
             self.calc_default_qty(balance, self.price)
-        min_close_qty = max(self.min_qty, round_dn(default_qty * 0.5, self.qty_step))
+        min_close_qty = max(self.min_qty,
+                            round_dn(default_qty * self.min_close_qty_multiplier, self.qty_step))
         orders = []
         if calc_diff(self.position['liquidation_price'], self.price) < self.liq_diff_threshold:
             if self.position['size'] > 0.0:
