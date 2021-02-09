@@ -4,7 +4,7 @@
     "symbol": "EOSUSD",
     "n_days": 6,
 
-   "starting_candidate_preference": ["best", "random", "given"],
+    "starting_candidate_preference": ["best", "random", "given"],
     "starting_k": 0,
     "n_jackrabbit_iterations": 140,
 
@@ -16,6 +16,8 @@
     "min_qty": 1.0,
     "price_step": 0.001,
     "qty_step": 1.0,
+    "min_close_qty_multiplier": 0.5,
+
 
     "min_notional": 0.0,
     "cross_mode": true,
@@ -44,7 +46,8 @@
     "grid_spacing": 0.0042,
     "ema_span": 16318.0,
     "leverage": 50,
-    "liq_diff_threshold": 0.04,
+    "stop_loss_liq_diff": 0.04,
+    "stop_loss_pos_price_diff": 0.04,
     "max_markup": 0.01085,
     "min_markup": 0.00007,
     "n_close_orders": 12,

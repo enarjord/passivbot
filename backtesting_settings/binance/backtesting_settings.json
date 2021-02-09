@@ -16,6 +16,8 @@
     "price_step": 0.01,
     "qty_step": 0.001,
     "taker_fee": 0.00036,
+    "min_close_qty_multiplier": 0.5,
+
 
     "min_notional": 1.0,
     "cross_mode": true,
@@ -44,7 +46,8 @@
     "grid_spacing": 0.002,
     "ema_span": 16500.0,
     "leverage": 24.0,
-    "liq_diff_threshold": 0.02,
+    "stop_loss_liq_diff": 0.04,
+    "stop_loss_pos_price_diff": 0.04,
     "max_markup": 0.01694,
     "min_markup": 0.00072,
     "n_close_orders": 10.0,

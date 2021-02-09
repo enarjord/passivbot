@@ -41,6 +41,12 @@ change log
 - backtester break conditions change
 - bug fixes
 
+2021-02-08
+- added min_close_qty_multiplier
+
+2021-02-09
+- added classic stop loss
+
 ------------------------------------------------------------------
 
 released freely -- anybody may copy, redistribute, modify, use for commercial, non-commercial, educational or non-educational purposes, censor, claim as one's own or otherwise do or not do whatever without permission from anybody
@@ -141,6 +147,8 @@ about backtesting settings, binance XMRUSDT example
     "price_step": 0.01,
     "qty_step": 0.001,
     "taker_fee": 0.00036,                    # 0.00036 for binance (with bnb discount), 0.00075 for bybit
+    "min_close_qty_multiplier": 0.5,         # min_close_qty = default_qty * min_close_qty_multiplier
+
 
 }
 
@@ -199,7 +207,9 @@ about settings, bybit example:
     "grid_coefficient": 245.0,            # next entry price is pos_price * (1 +- grid_spacing * (1 + (pos_margin / balance) * grid_coefficient)).
     "grid_spacing": 0.0026,               # 
                                           
-    "liq_diff_threshold": 0.02,           # if difference between liquidation price and last price is less than 2%, reduce position by 2% at a loss,
+    "stop_loss_liq_diff": 0.02,           # if difference between liquidation price and last price is less than 2%, ...
+    "stop_loss_pos_price_diff": 0.04,     # ... or if difference between pos price and last price is greater than 4%, reduce position by 2% at a loss,
+
     "stop_loss_pos_reduction": 0.02,      # reduce position by 2% at a loss.
     
     "leverage": 100,                      # leverage (irrelevant in bybit because cross mode in is always max leverage).

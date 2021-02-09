@@ -49,7 +49,8 @@ def backtest(trades_list: [dict], settings: dict):
     price_step = settings['price_step']
     qty_step = settings['qty_step']
     inverse = settings['inverse']
-    liq_diff_threshold = settings['liq_diff_threshold']
+    stop_loss_liq_diff = settings['stop_loss_liq_diff']
+    stop_loss_pos_price_diff = settings['stop_loss_pos_price_diff']
     stop_loss_pos_reduction = settings['stop_loss_pos_reduction']
     min_qty = settings['min_qty']
     ddown_factor = settings['ddown_factor']
@@ -174,7 +175,7 @@ def backtest(trades_list: [dict], settings: dict):
                     bid_price = 0.0
                     bid_qty = 0.0
             elif pos_size > 0.0:
-                if calc_diff(liq_price, ob[1]) < liq_diff_threshold and t['price'] <= liq_price:
+                if calc_diff(liq_price, ob[1]) < stop_loss_liq_diff and t['price'] <= liq_price:
                     # long liq
                     print(f'break on long liquidation, liq price: {liq_price}')
                     return []
@@ -190,7 +191,8 @@ def backtest(trades_list: [dict], settings: dict):
                     bid_price = 0.0
             else:
                 # short pos
-                if calc_diff(liq_price, ob[0]) < liq_diff_threshold:
+                if calc_diff(liq_price, ob[0]) < stop_loss_liq_diff or \
+                        calc_diff(pos_price, ob[0]) > stop_loss_pos_price_diff:
                     # short soft stop
                     bid_price = ob[0]
                     bid_qty = round_up(-pos_size * stop_loss_pos_reduction, qty_step)
@@ -257,7 +259,8 @@ def backtest(trades_list: [dict], settings: dict):
                     ask_qty = 0.0
             elif pos_size > 0.0:
                 # long pos
-                if calc_diff(liq_price, ob[1]) < liq_diff_threshold:
+                if calc_diff(liq_price, ob[1]) < stop_loss_liq_diff or \
+                        calc_diff(pos_price, ob[1]) > stop_loss_pos_price_diff:
                     # long soft stop
                     ask_price = ob[1]
                     ask_qty = -round_up(pos_size * stop_loss_pos_reduction, qty_step)
@@ -280,7 +283,7 @@ def backtest(trades_list: [dict], settings: dict):
                     else:
                         ask_price = 9e9
             else:
-                if calc_diff(liq_price, ob[1]) < liq_diff_threshold and t['price'] >= liq_price:
+                if calc_diff(liq_price, ob[1]) < stop_loss_liq_diff and t['price'] >= liq_price:
                     # shrt liq
                     print(f'break on shrt liquidation, liq price: {liq_price}')
                     return []

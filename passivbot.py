@@ -243,7 +243,8 @@ class Bot:
         self.user = user
         self.symbol = settings['symbol']
         self.leverage = settings['leverage']
-        self.liq_diff_threshold = settings['liq_diff_threshold']
+        self.stop_loss_liq_diff = settings['stop_loss_liq_diff']
+        self.stop_loss_pos_price_diff = settings['stop_loss_pos_price_diff']
         self.stop_loss_pos_reduction = settings['stop_loss_pos_reduction']
         self.grid_coefficient = settings['grid_coefficient']
         self.grid_spacing = settings['grid_spacing']
@@ -380,7 +381,8 @@ class Bot:
         min_close_qty = max(self.min_qty,
                             round_dn(default_qty * self.min_close_qty_multiplier, self.qty_step))
         orders = []
-        if calc_diff(self.position['liquidation_price'], self.price) < self.liq_diff_threshold:
+        if calc_diff(self.position['liquidation_price'], self.price) < self.stop_loss_liq_diff or \
+                calc_diff(self.position['price'], self.price) > self.stop_loss_pos_price_diff:
             if self.position['size'] > 0.0:
                 # controlled long loss
                 orders.append(
