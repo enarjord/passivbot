@@ -49,7 +49,7 @@
         0.002,
         0.00001
     ],
-    "min_qty_multiplier": [
+    "min_close_qty_multiplier": [
         0.0,
         1.0,
         0.1
