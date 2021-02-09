@@ -598,7 +598,12 @@ async def load_trades(exchange: str, user: str, symbol: str, n_days: float) -> p
         sleep_for = max(0.0, 0.75 - (time() - prev_fetch_ts))
         await asyncio.sleep(sleep_for)
         prev_fetch_ts = time()
-        new_trades = await fetch_trades_func(cc, symbol, from_id=from_id) + new_trades
+        fetched_new_trades = await fetch_trades_func(cc, symbol, from_id=from_id)
+        while fetched_new_trades[0]['trade_id'] == new_trades[0]['trade_id']:
+            print('gaps in ids', from_id)
+            from_id -= 1000
+            fetched_new_trades = await fetch_trades_func(cc, symbol, from_id=from_id)
+        new_trades = fetched_new_trades + new_trades
         ids.update([e['trade_id'] for e in new_trades])
     tdf = pd.concat([load_cache(), trades_df], axis=0).sort_index()
     tdf = tdf[~tdf.index.duplicated()]
