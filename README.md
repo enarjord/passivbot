@@ -41,6 +41,9 @@ change log
 - backtester break conditions change
 - bug fixes
 
+2021-02-08
+- added min_close_qty_multiplier
+
 2021-02-09
 - added classic stop loss
 
