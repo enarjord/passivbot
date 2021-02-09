@@ -13,7 +13,8 @@
         }
     },
     "leverage": 47.0,
-    "liq_diff_threshold": 0.035,
+    "stop_loss_liq_diff": 0.04,
+    "stop_loss_pos_price_diff": 0.9,
     "market_stop_loss": false,
     "max_markup": 0.00849,
     "min_close_qty_multiplier": 0.5,
