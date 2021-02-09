@@ -11,7 +11,7 @@
     },
     "liq_diff_threshold": 0.04,
     "leverage": 100,
-    "balance": -0.99,
+    "balance": -0.667,
     "market_stop_loss": false,
     "max_markup": 0.01085,
     "min_close_qty_multiplier": 0.5,
