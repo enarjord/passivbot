@@ -1,18 +1,20 @@
 {
+    "balance_pct": 0.667,
     "cross_mode": true,
     "ddown_factor": 0.014,
-    "default_qty": -0.0903,
+    "entry_qty_pct": 0.0903,
     "grid_coefficient": 183.55,
     "grid_spacing": 0.0038,
     "indicator_settings": {
-        "tick_ema": {"span": 16318},
         "do_long": true,
-        "do_shrt": true
+        "do_shrt": true,
+        "tick_ema": {
+            "span": 16318
+        }
     },
     "stop_loss_liq_diff": 0.04,
     "stop_loss_pos_price_diff": 0.9,
     "leverage": 100,
-    "balance": -0.667,
     "market_stop_loss": false,
     "max_markup": 0.01085,
     "min_close_qty_multiplier": 0.5,
