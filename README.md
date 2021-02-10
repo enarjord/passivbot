@@ -128,7 +128,11 @@ about backtesting settings, binance XMRUSDT example
     "symbol": "XMRUSDT",
     "n_days": 41,                            # n days to backtest
 
-    "random_starting_candidate": false,      # if false, will use settings given as starting candidate
+    "starting_candidate_preference": ["best", "random", "given"],
+                                             # starting candidate preference from left to right.
+                                             # if best is first and there is a best.json file present, will build on best.
+                                             # otherwise, starting candidate will be either random or given, depending which is before the other.
+    
     "starting_k": 0,                         # k is incremented by 1 per iteration until k == n_jackrabbit_iterations
     "n_jackrabbit_iterations": 200,          # see below for more info on jackrabbit
     
