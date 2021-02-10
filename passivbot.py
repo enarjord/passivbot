@@ -92,21 +92,22 @@ def calc_long_closes(price_step: float,
     return qtys * -1, prices
 
 
-def calc_default_qty(min_qty: float,
-                     qty_step: float,
-                     balance_ito_contracts: float,
-                     qty_balance_pct: float) -> float:
+def calc_initial_entry_qty(min_qty: float,
+                           qty_step: float,
+                           balance_ito_contracts: float,
+                           qty_balance_pct: float) -> float:
     return max(min_qty, round_dn(balance_ito_contracts * abs(qty_balance_pct), qty_step))
 
 
-def calc_entry_qty(qty_step: float,
-                   ddown_factor: float,
-                   default_qty: float,
-                   max_pos_size: float,
-                   pos_size: float):
+def calc_reentry_qty(qty_step: float,
+                     ddown_factor: float,
+                     initial_entry_qty: float,
+                     max_pos_size: float,
+                     pos_size: float):
     abs_pos_size = abs(pos_size)
     qty_available = max(0.0, round_dn(max_pos_size - abs_pos_size, qty_step))
-    return min(qty_available, max(default_qty, round_dn(abs_pos_size * ddown_factor, qty_step)))
+    return min(qty_available,
+               max(initial_entry_qty, round_dn(abs_pos_size * ddown_factor, qty_step)))
 
 
 def calc_shrt_closes(price_step: float,
@@ -251,10 +252,10 @@ class Bot:
         self.max_markup = settings['max_markup']
         self.min_markup = settings['min_markup'] if self.max_markup >= settings['min_markup'] \
             else settings['max_markup']
-        self.balance = settings['balance']
+        self.balance_pct = settings['balance_pct']
         self.n_entry_orders = settings['n_entry_orders']
         self.n_close_orders = settings['n_close_orders']
-        self.default_qty = settings['default_qty']
+        self.entry_qty_pct = settings['entry_qty_pct']
         self.ddown_factor = settings['ddown_factor']
 
         self.min_close_qty_multiplier = settings['min_close_qty_multiplier'] \
@@ -374,12 +375,11 @@ class Bot:
 
     def calc_orders(self):
         last_price_diff_limit = 0.05
-        balance = self.position['wallet_balance'] * min(1.0, abs(self.balance)) \
-            if self.balance <= 0 else self.balance
-        default_qty = self.default_qty if self.default_qty > 0.0 else \
-            self.calc_default_qty(balance, self.price)
+        balance = self.position['wallet_balance'] * min(1.0, abs(self.balance_pct))
+        initial_entry_qty = self.calc_initial_entry_qty(balance, self.price)
         min_close_qty = max(self.min_qty,
-                            round_dn(default_qty * self.min_close_qty_multiplier, self.qty_step))
+                            round_dn(initial_entry_qty * self.min_close_qty_multiplier,
+                                     self.qty_step))
         orders = []
         if calc_diff(self.position['liquidation_price'], self.price) < self.stop_loss_liq_diff or \
                 calc_diff(self.position['price'], self.price) > self.stop_loss_pos_price_diff:
@@ -405,9 +405,9 @@ class Bot:
             stop_loss_qty = 0.0
         if self.position['size'] == 0: # no pos
             bid_price, ask_price = self.calc_initial_bid_ask()
-            orders.append({'side': 'buy', 'qty': default_qty, 'price': bid_price,
+            orders.append({'side': 'buy', 'qty': initial_entry_qty, 'price': bid_price,
                            'type': 'limit', 'reduce_only': False, 'custom_id': 'entry'})
-            orders.append({'side': 'sell', 'qty': default_qty, 'price': ask_price,
+            orders.append({'side': 'sell', 'qty': initial_entry_qty, 'price': ask_price,
                            'type': 'limit', 'reduce_only': False, 'custom_id': 'entry'})
         elif self.position['size'] > 0.0: # long pos
             pos_size = self.position['size']
@@ -422,9 +422,9 @@ class Bot:
             for k in range(self.n_entry_orders):
                 max_pos_size = self.calc_max_pos_size(min(balance, self.position['equity']),
                                                       bid_price)
-                bid_qty = calc_entry_qty(self.qty_step, self.ddown_factor, default_qty,
-                                         max_pos_size, pos_size)
-                if bid_qty < default_qty:
+                bid_qty = calc_reentry_qty(self.qty_step, self.ddown_factor, initial_entry_qty,
+                                           max_pos_size, pos_size)
+                if bid_qty < initial_entry_qty:
                     break
                 new_pos_size = pos_size + bid_qty
                 if new_pos_size >= max_pos_size:
@@ -473,9 +473,9 @@ class Bot:
             for k in range(self.n_entry_orders):
                 max_pos_size = self.calc_max_pos_size(min(balance, self.position['equity']),
                                                       ask_price)
-                ask_qty = calc_entry_qty(self.qty_step, self.ddown_factor, default_qty,
-                                         max_pos_size, pos_size)
-                if ask_qty < default_qty:
+                ask_qty = calc_reentry_qty(self.qty_step, self.ddown_factor, initial_entry_qty,
+                                           max_pos_size, pos_size)
+                if ask_qty < initial_entry_qty:
                     break
                 new_pos_size = pos_size - ask_qty
                 if abs(new_pos_size) >= max_pos_size:
