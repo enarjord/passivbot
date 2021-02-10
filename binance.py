@@ -160,15 +160,6 @@ class BinanceBot(Bot):
         self.ob = [float(ticker['bidPrice']), float(ticker['askPrice'])]
         self.price = np.random.choice(self.ob)
 
-    def calc_entry_qty(self, balance_, pos_size_, pos_price_):
-        return calc_entry_qty(self.qty_step,
-                              self.min_qty,
-                              self.ddown_factor,
-                              self.leverage,
-                              balance_,
-                              pos_size_,
-                              1 / pos_price_)
-
     def calc_long_entry_price(self, balance_, pos_size_, pos_price_):
         return calc_long_entry_price(self.price_step,
                                      self.leverage,
