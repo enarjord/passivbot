@@ -140,15 +140,6 @@ class BybitBot(Bot):
         self.ob = [float(ticker['result'][0]['bid_price']), float(ticker['result'][0]['ask_price'])]
         self.price = float(ticker['result'][0]['last_price'])
 
-    def calc_entry_qty(self, balance_, pos_size_, pos_price_):
-        return calc_entry_qty(self.qty_step,
-                              self.min_qty,
-                              self.ddown_factor,
-                              self.leverage,
-                              balance_,
-                              pos_size_,
-                              pos_price_)
-
     def calc_long_entry_price(self, balance_, pos_size_, pos_price_):
         return calc_long_entry_price(self.price_step,
                                      self.leverage,
