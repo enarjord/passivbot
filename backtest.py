@@ -8,7 +8,7 @@ from time import time
 from passivbot import init_ccxt, make_get_filepath, ts_to_date, print_, load_settings, \
     sort_dict_keys, round_up, round_dn, round_, calc_long_closes, calc_shrt_closes, \
     calc_long_reentry_price, calc_shrt_reentry_price, calc_diff, calc_initial_entry_qty, \
-    calc_entry_qty
+    calc_reentry_qty
 from binance import fetch_trades as binance_fetch_trades
 from bybit import fetch_trades as bybit_fetch_trades
 from bybit import calc_cross_long_liq_price as bybit_calc_cross_long_liq_price
@@ -175,10 +175,10 @@ def backtest(trades_list: [dict], settings: dict):
                     print(f'break on long liquidation, liq price: {liq_price}')
                     return []
                 # long reentry
-                bid_qty = calc_entry_qty(qty_step, ddown_factor,
-                                         calc_initial_entry_qty_(balance, ob[0]),
-                                         calc_max_pos_size(balance, ob[0]),
-                                         pos_size)
+                bid_qty = calc_reentry_qty(qty_step, ddown_factor,
+                                           calc_initial_entry_qty_(balance, ob[0]),
+                                           calc_max_pos_size(balance, ob[0]),
+                                           pos_size)
                 if bid_qty >= max(min_qty, min_notional / t['price']):
                     pos_margin = calc_cost(pos_size, pos_price) / leverage
                     bid_price = calc_long_reentry_price_(balance, pos_margin, pos_price, ob[0])
@@ -283,10 +283,10 @@ def backtest(trades_list: [dict], settings: dict):
                     print(f'break on shrt liquidation, liq price: {liq_price}')
                     return []
                 # shrt reentry
-                ask_qty = -calc_entry_qty(qty_step, ddown_factor,
-                                          calc_initial_entry_qty_(balance, ob[1]),
-                                          calc_max_pos_size(balance, ob[1]),
-                                          pos_size)
+                ask_qty = -calc_reentry_qty(qty_step, ddown_factor,
+                                            calc_initial_entry_qty_(balance, ob[1]),
+                                            calc_max_pos_size(balance, ob[1]),
+                                            pos_size)
                 if -ask_qty >= max(min_qty, min_notional / t['price']):
                     pos_margin = calc_cost(-pos_size, pos_price) / leverage
                     ask_price = calc_shrt_reentry_price_(balance, pos_margin, pos_price, ob[0])
