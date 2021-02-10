@@ -17,6 +17,7 @@
     "price_step": 0.001,
     "qty_step": 1.0,
     "min_close_qty_multiplier": 0.5,
+    "balance_pct": 1.0,
 
 
     "min_notional": 0.0,
@@ -41,7 +42,7 @@
     ],
 
     "ddown_factor": 0.014,
-    "default_qty": -0.0603,
+    "entry_qty_pct": 0.0603,
     "grid_coefficient": 283.55,
     "grid_spacing": 0.0042,
     "ema_span": 16318.0,
