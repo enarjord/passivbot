@@ -383,23 +383,24 @@ class Bot:
         orders = []
         if calc_diff(self.position['liquidation_price'], self.price) < self.stop_loss_liq_diff or \
                 calc_diff(self.position['price'], self.price) > self.stop_loss_pos_price_diff:
-            if self.position['size'] > 0.0:
-                # controlled long loss
-                orders.append(
-                    {'side': 'sell', 'type': 'market' if self.market_stop_loss else 'limit',
-                     'qty': round_up(self.position['size'] * self.stop_loss_pos_reduction,
-                                     self.qty_step),
-                     'price': self.ob[1], 'reduce_only': True, 'custom_id': 'stop_loss'}
-                )
-            else:
-                # controlled shrt loss
-                orders.append(
-                    {'side': 'buy', 'type': 'market' if self.market_stop_loss else 'limit',
-                     'qty': round_up(-self.position['size'] * self.stop_loss_pos_reduction,
-                                     self.qty_step),
-                     'price': self.ob[0], 'reduce_only': True, 'custom_id': 'stop_loss'}
-                )
-            stop_loss_qty = orders[-1]['qty']
+            abs_pos_size = abs(self.position['size'])
+            stop_loss_qty = min(abs_pos_size, round_up(abs_pos_size * self.stop_loss_pos_reduction,
+                                                       self.qty_step))
+            if stop_loss_qty > 0.0:
+                if self.position['size'] > 0.0:
+                    # controlled long loss
+                    orders.append(
+                        {'side': 'sell', 'type': 'market' if self.market_stop_loss else 'limit',
+                         'qty': stop_loss_qty,
+                         'price': self.ob[1], 'reduce_only': True, 'custom_id': 'stop_loss'}
+                    )
+                else:
+                    # controlled shrt loss
+                    orders.append(
+                        {'side': 'buy', 'type': 'market' if self.market_stop_loss else 'limit',
+                         'qty': stop_loss_qty,
+                         'price': self.ob[0], 'reduce_only': True, 'custom_id': 'stop_loss'}
+                    )
         else:
             stop_loss_qty = 0.0
         if self.position['size'] == 0: # no pos
