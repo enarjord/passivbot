@@ -142,12 +142,12 @@ about backtesting settings, binance XMRUSDT example
 
     "inverse": false,                        # inverse is true for bybit, false for binance
     "maker_fee": 0.00018,                    # 0.00018 for binance (with bnb discount), -0.00025 for bybit
-    "balance": 10.0,                         # backtest starting balance
+    "starting_balance": 10.0,                # backtest starting balance
     "min_qty": 0.001,                        # minimum allowed contract qty
     "price_step": 0.01,
     "qty_step": 0.001,
     "taker_fee": 0.00036,                    # 0.00036 for binance (with bnb discount), 0.00075 for bybit
-    "min_close_qty_multiplier": 0.5,         # min_close_qty = default_qty * min_close_qty_multiplier
+    "min_close_qty_multiplier": 0.5,         # min_close_qty = initial_entry_qty * min_close_qty_multiplier
 
 
 }
@@ -177,22 +177,20 @@ about settings, bybit example:
 
 {
 
-    "default_qty": 1.0,                   # entry quantity.
-                                          # scalable entry quantity mode:
-                                          # if "default_qty" is set to a negative value,
-                                          # it becomes a percentage of balance (which is actual account balance if settings["balance"] is set to -1).
-                                          # the bot will calculate entry qty using the following formula:
-                                          # default_qty = max(minimum_qty, round_dn(balance_in_terms_of_contracts * abs(settings["default_qty"]), qty_step))
+    "entry_qty_pct": 0.05,                # 
+                                          # percentage of balance used as initial entry qty.
+                                          # the bot will calculate initial entry qty using the following formula:
+                                          # initial_entry_qty = max(minimum_qty, round_dn(balance_in_terms_of_contracts * abs(settings["entry_qty_pct"]), qty_step))
                                           # bybit BTCUSD example:
-                                          # if "default_qty"  is set to -0.06, last price is 37000 and wallet balance is 0.001 btc,
-                                          # default_qty = 0.001 * 37000 * 0.06 == 2.22.  rounded down is 2.0 usd.
+                                          # if "entry_qty_pct"  is set to 0.06, last price is 37000 and wallet balance is 0.001 btc,
+                                          # initial_entry_qty = 0.001 * 37000 * 0.06 == 2.22.  rounded down is 2.0 usd.
                                           # binance ETHUSDT example:
-                                          # if "default_qty" is set to -0.07, last price is 1100 and wallet balance is 60 usdt,
-                                          # default_qty = 60 / 1100 * 0.07 == 0.003818.  rounded down is 0.003 eth.
+                                          # if "entry_qty_pct" is set to 0.07, last price is 1100 and wallet balance is 60 usdt,
+                                          # initial_entry_qty = 60 / 1100 * 0.07 == 0.003818.  rounded down is 0.003 eth.
     
-    "ddown_factor": 0.02,                 # next reentry_qty is max(default_qty, abs(pos_size) * ddown_factor).
+    "ddown_factor": 0.02,                 # next reentry_qty is max(initial_entry_qty, abs(pos_size) * ddown_factor).
                                           # if set to 1.0, each reentry qty will be equal to 1x pos size, i.e. doubling pos size after every reentry.
-                                          # if set to 0.0, each reentry qty will be equal to default_qty.
+                                          # if set to 0.0, each reentry qty will be equal to initial_entry_qty.
                                           
     "indicator_settings": {
         "tick_ema": {"span": 10000},
@@ -216,17 +214,13 @@ about settings, bybit example:
     "min_markup": 0.0002,                 # when there's a position, bot makes a grid of n_close_orders whose prices are
     "max_markup": 0.0159,                 # evenly distributed between min and max markup, and whose qtys are pos_size // n_close_orders.
     "min_close_qty_multiplier": 0.5       # optional setting, will default to 0.0 if not present.
-                                          # min_close_qty = max(min_qty, default_qty * min_close_qty_multiplier)
+                                          # min_close_qty = max(min_qty, initial_entry_qty * min_close_qty_multiplier)
     
     
     "market_stop_loss": false,            # if true will soft stop with market orders, if false soft stops with limit orders at order book's higest_bid/lowest_ask
     
-    "balance": 0.001,                     # balance bot sees.  used to limit pos size and to modify grid spacing.
-                                          # scalable balance mode:
-                                          # if settings["balance"] < 0.0, will use exchange_fetched_balance * min(1.0, abs(settings["balance"])) as balance.
-                                          # e.g. if settings["balance"] = -1.0, will use 100% of balance.
-                                          # if settings["balance"] = -0.35, will us 35% of balance.
-                                          # if using static balance, binance balance is quoted in usdt, bybit inverse balance is quoted in coin.
+    "balance_pct": 0.5,                   # if settings["balance_pct"] = 1.0, will use 100% of balance.
+                                          # if settings["balance_pct"] = 0.35, will us 35% of balance.
                                           
     "n_close_orders": 20,                 # max n close orders.
     "n_entry_orders": 8,                  # max n entry orders.
