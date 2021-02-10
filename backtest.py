@@ -334,7 +334,7 @@ def backtest(trades_list: [dict], settings: dict):
             progress = k / len(trades_list)
             total_gain = (pnl_sum + settings['starting_balance']) / settings['starting_balance']
             n_days_ = (t['timestamp'] - trades_list[0]['timestamp']) / (1000 * 60 * 60 * 24)
-            adg = total_gain ** (1 / n_days_)
+            adg = total_gain ** (1 / n_days_) if n_days_ > 0.0 else 1.0
             trades.append({'trade_id': k, 'side': trade_side, 'type': trade_type,
                            'price': price, 'qty': qty, 'pnl': pnl, 'roi': roi,
                            'pos_size': pos_size, 'pos_price': pos_price, 'balance': balance,
