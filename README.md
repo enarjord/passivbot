@@ -47,6 +47,15 @@ change log
 2021-02-09
 - added classic stop loss
 
+2021-02-10
+- renamed settings["default_qty"] to settings["entry_qty_pct"]
+- settings["entry_qty_pct"] may now also be a positive value
+- renamed settings["balance"] to settings["balance_pct"]
+- settings["balance_pct"] may now also be a positive value
+- added balance_pct to backtester.  backtester will now behave like live bot, taking balance_pct into account
+    - actual balance is used for liq price calc, otherwise balance * balance_pct is used
+
+
 ------------------------------------------------------------------
 
 released freely -- anybody may copy, redistribute, modify, use for commercial, non-commercial, educational or non-educational purposes, censor, claim as one's own or otherwise do or not do whatever without permission from anybody
