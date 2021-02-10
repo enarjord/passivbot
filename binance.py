@@ -150,7 +150,7 @@ class BinanceBot(Bot):
                                                                       self.qty_step)),
                                            self.qty_step,
                                            balance_ / last_price,
-                                           self.default_qty)
+                                           self.entry_qty_pct)
                 break
         await self.update_position()
         await self.init_order_book()
