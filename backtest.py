@@ -7,7 +7,7 @@ import os
 from time import time
 from passivbot import init_ccxt, make_get_filepath, ts_to_date, print_, load_settings, \
     sort_dict_keys, round_up, round_dn, round_, calc_long_closes, calc_shrt_closes, \
-    calc_long_reentry_price, calc_shrt_reentry_price, calc_diff, calc_default_qty, \
+    calc_long_reentry_price, calc_shrt_reentry_price, calc_diff, calc_initial_entry_qty, \
     calc_entry_qty
 from binance import fetch_trades as binance_fetch_trades
 from bybit import fetch_trades as bybit_fetch_trades
@@ -63,6 +63,7 @@ def backtest(trades_list: [dict], settings: dict):
     n_close_orders = settings['n_close_orders']
     min_close_qty_multiplier = settings['min_close_qty_multiplier'] \
         if 'min_close_qty_multiplier' in settings else 0.0
+    balance_pct = settings['balance_pct'] if 'balance_pct' in settings else 1.0
 
     do_long = settings['do_long']
     do_shrt = settings['do_shrt']
@@ -94,11 +95,9 @@ def backtest(trades_list: [dict], settings: dict):
                                                        pos_size_,
                                                        pos_price_,
                                                        leverage=leverage)
-        if settings['default_qty'] <= 0.0:
-            calc_default_qty_ = lambda balance_, last_price: \
-                calc_default_qty(min_qty, qty_step, balance_ * last_price, settings['default_qty'])
-        else:
-            calc_default_qty_ = lambda balance_, last_price: settings['default_qty']
+        calc_initial_entry_qty_ = lambda balance_, last_price: \
+            calc_initial_entry_qty(min_qty, qty_step, balance_ * last_price,
+                                   settings['entry_qty_pct'])
         calc_max_pos_size = lambda balance_, price_: balance_ * price_ * leverage
     else:
         calc_cost = lambda qty_, price_: qty_ * price_
@@ -124,13 +123,9 @@ def backtest(trades_list: [dict], settings: dict):
                                                          pos_size_,
                                                          pos_price_,
                                                          leverage=leverage)
-        if settings['default_qty'] <= 0.0:
-            calc_default_qty_ = lambda balance_, last_price: \
-                calc_default_qty(max(min_qty, round_up(min_notional / last_price, qty_step)),
-                                 qty_step, balance_ / last_price, settings['default_qty'])
-        else:
-            calc_default_qty_ = lambda balance_, last_price: \
-                max(settings['default_qty'], round_up(min_notional / last_price, qty_step))
+        calc_initial_entry_qty_ = lambda balance_, last_price: \
+            calc_initial_entry_qty(max(min_qty, round_up(min_notional / last_price, qty_step)),
+                                   qty_step, balance_ / last_price, settings['entry_qty_pct'])
         calc_max_pos_size = lambda balance_, price_: balance_ / price_ * leverage
 
     calc_long_reentry_price_ = lambda balance_, pos_margin_, pos_price_, highest_bid_: \
@@ -139,7 +134,7 @@ def backtest(trades_list: [dict], settings: dict):
     calc_shrt_reentry_price_ = lambda balance_, pos_margin_, pos_price_, lowest_ask_: \
         max(lowest_ask_, calc_shrt_reentry_price(price_step, grid_spacing, grid_coefficient,
                                                  balance_, pos_margin_, pos_price_))
-    balance = settings['starting_balance']
+    balance = settings['starting_balance'] * balance_pct
     trades = []
     ob = [min(trades_list[0]['price'], trades_list[1]['price']),
           max(trades_list[0]['price'], trades_list[1]['price'])]
@@ -170,7 +165,7 @@ def backtest(trades_list: [dict], settings: dict):
                 # no pos
                 if do_long:
                     bid_price = min(ob[0], round_dn(ema, price_step))
-                    bid_qty = calc_default_qty_(balance, ob[0])
+                    bid_qty = calc_initial_entry_qty_(balance, ob[0])
                 else:
                     bid_price = 0.0
                     bid_qty = 0.0
@@ -181,7 +176,7 @@ def backtest(trades_list: [dict], settings: dict):
                     return []
                 # long reentry
                 bid_qty = calc_entry_qty(qty_step, ddown_factor,
-                                         calc_default_qty_(balance, ob[0]),
+                                         calc_initial_entry_qty_(balance, ob[0]),
                                          calc_max_pos_size(balance, ob[0]),
                                          pos_size)
                 if bid_qty >= max(min_qty, min_notional / t['price']):
@@ -201,7 +196,7 @@ def backtest(trades_list: [dict], settings: dict):
                         # short close
                         min_close_qty = max(
                             min_qty,
-                            round_dn(calc_default_qty_(balance, ob[0]) * min_close_qty_multiplier,
+                            round_dn(calc_initial_entry_qty_(balance, ob[0]) * min_close_qty_multiplier,
                                      qty_step)
                         )
                         qtys, prices = calc_shrt_closes(price_step, qty_step, min_qty, min_markup,
@@ -245,7 +240,7 @@ def backtest(trades_list: [dict], settings: dict):
                     roi = gain * leverage
                 balance += pnl
                 pnl_sum += pnl
-                liq_price = calc_liq_price(balance, pos_size, pos_price)
+                liq_price = calc_liq_price(balance / balance_pct, pos_size, pos_price)
                 append_trade = True
         else:
             # sell
@@ -253,7 +248,7 @@ def backtest(trades_list: [dict], settings: dict):
                 # no pos
                 if do_shrt:
                     ask_price = max(ob[1], round_up(ema, price_step))
-                    ask_qty = -calc_default_qty_(balance, ob[1])
+                    ask_qty = -calc_initial_entry_qty_(balance, ob[1])
                 else:
                     ask_price = 9e9
                     ask_qty = 0.0
@@ -269,7 +264,7 @@ def backtest(trades_list: [dict], settings: dict):
                         # long close
                         min_close_qty = max(
                             min_qty,
-                            round_dn(calc_default_qty_(balance, ob[0]) * min_close_qty_multiplier,
+                            round_dn(calc_initial_entry_qty_(balance, ob[0]) * min_close_qty_multiplier,
                                      qty_step)
                         )
                         qtys, prices = calc_long_closes(price_step, qty_step, min_qty, min_markup,
@@ -289,7 +284,7 @@ def backtest(trades_list: [dict], settings: dict):
                     return []
                 # shrt reentry
                 ask_qty = -calc_entry_qty(qty_step, ddown_factor,
-                                          calc_default_qty_(balance, ob[1]),
+                                          calc_initial_entry_qty_(balance, ob[1]),
                                           calc_max_pos_size(balance, ob[1]),
                                           pos_size)
                 if -ask_qty >= max(min_qty, min_notional / t['price']):
@@ -328,7 +323,7 @@ def backtest(trades_list: [dict], settings: dict):
                     roi = gain * leverage
                 balance += pnl
                 pnl_sum += pnl
-                liq_price = calc_liq_price(balance, pos_size, pos_price)
+                liq_price = calc_liq_price(balance / balance_pct, pos_size, pos_price)
                 append_trade = True
         if append_trade:
             progress = k / len(trades_list)
@@ -338,6 +333,7 @@ def backtest(trades_list: [dict], settings: dict):
             trades.append({'trade_id': k, 'side': trade_side, 'type': trade_type,
                            'price': price, 'qty': qty, 'pnl': pnl, 'roi': roi,
                            'pos_size': pos_size, 'pos_price': pos_price, 'balance': balance,
+                           'actual_balance': balance / balance_pct,
                            'max_pos_size': calc_max_pos_size(balance, t['price']),
                            'pnl_sum': pnl_sum, 'loss_sum': loss_sum, 'profit_sum': profit_sum,
                            'progress': progress,
@@ -345,11 +341,12 @@ def backtest(trades_list: [dict], settings: dict):
                            'n_days': n_days_, 'average_daily_gain': adg,
                            'liq_diff': min(1.0, calc_diff(liq_price, t['price'])),
                            'timestamp': t['timestamp']})
-            balance = max(balance, settings['starting_balance'])
+            balance = max(balance, settings['starting_balance'] * balance_pct)
             line = f"\r{progress:.3f} net pnl {pnl_sum:.8f} "
             line += f"profit sum {profit_sum:.5f} "
             line += f"loss sum {loss_sum:.5f} "
-            line += f"balance {balance:.5f} qty {calc_default_qty_(balance, ob[0]):.4f} "
+            line += f"balance {balance / balance_pct:.5f} "
+            line += f"qty {calc_initial_entry_qty_(balance, ob[0]):.4f} "
             line += f"adg {trades[-1]['average_daily_gain']:.3f} "
             line += f"max pos pct {abs(pos_size) / calc_max_pos_size(balance, t['price']):.3f} "
             line += f"liq diff {min(1.0, calc_diff(trades[-1]['liq_price'], ob[0])):.3f} "
