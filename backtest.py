@@ -61,9 +61,8 @@ def backtest(trades_list: [dict], settings: dict):
     min_markup = settings['min_markup']
     max_markup = settings['max_markup']
     n_close_orders = settings['n_close_orders']
-    min_close_qty_multiplier = settings['min_close_qty_multiplier'] \
-        if 'min_close_qty_multiplier' in settings else 0.0
-    balance_pct = settings['balance_pct'] if 'balance_pct' in settings else 1.0
+    min_close_qty_multiplier = settings['min_close_qty_multiplier']
+    balance_pct = settings['balance_pct']
 
     do_long = settings['do_long']
     do_shrt = settings['do_shrt']
@@ -134,7 +133,8 @@ def backtest(trades_list: [dict], settings: dict):
     calc_shrt_reentry_price_ = lambda balance_, pos_margin_, pos_price_, lowest_ask_: \
         max(lowest_ask_, calc_shrt_reentry_price(price_step, grid_spacing, grid_coefficient,
                                                  balance_, pos_margin_, pos_price_))
-    balance = settings['starting_balance'] * balance_pct
+    actual_balance = settings['starting_balance']
+    apparent_balance = actual_balance * balance_pct
     trades = []
     ob = [min(trades_list[0]['price'], trades_list[1]['price']),
           max(trades_list[0]['price'], trades_list[1]['price'])]
@@ -165,7 +165,7 @@ def backtest(trades_list: [dict], settings: dict):
                 # no pos
                 if do_long:
                     bid_price = min(ob[0], round_dn(ema, price_step))
-                    bid_qty = calc_initial_entry_qty_(balance, ob[0])
+                    bid_qty = calc_initial_entry_qty_(apparent_balance, ob[0])
                 else:
                     bid_price = 0.0
                     bid_qty = 0.0
@@ -176,12 +176,13 @@ def backtest(trades_list: [dict], settings: dict):
                     return []
                 # long reentry
                 bid_qty = calc_reentry_qty(qty_step, ddown_factor,
-                                           calc_initial_entry_qty_(balance, ob[0]),
-                                           calc_max_pos_size(balance, ob[0]),
+                                           calc_initial_entry_qty_(apparent_balance, ob[0]),
+                                           calc_max_pos_size(apparent_balance, ob[0]),
                                            pos_size)
                 if bid_qty >= max(min_qty, min_notional / t['price']):
                     pos_margin = calc_cost(pos_size, pos_price) / leverage
-                    bid_price = calc_long_reentry_price_(balance, pos_margin, pos_price, ob[0])
+                    bid_price = calc_long_reentry_price_(apparent_balance, pos_margin, pos_price,
+                                                         ob[0])
                 else:
                     bid_price = 0.0
             else:
@@ -196,7 +197,8 @@ def backtest(trades_list: [dict], settings: dict):
                         # short close
                         min_close_qty = max(
                             min_qty,
-                            round_dn(calc_initial_entry_qty_(balance, ob[0]) * min_close_qty_multiplier,
+                            round_dn(calc_initial_entry_qty_(apparent_balance,
+                                                             ob[0]) * min_close_qty_multiplier,
                                      qty_step)
                         )
                         qtys, prices = calc_shrt_closes(price_step, qty_step, min_qty, min_markup,
@@ -230,7 +232,7 @@ def backtest(trades_list: [dict], settings: dict):
                     trade_side = 'shrt'
                     gain = pos_price / bid_price - 1
                     pnl += cost * gain
-                    if gain > 0.0:
+                    if gain >= 0.0:
                         trade_type = 'close'
                         profit_sum += pnl
                     else:
@@ -238,9 +240,10 @@ def backtest(trades_list: [dict], settings: dict):
                         loss_sum += pnl
                     pos_size = pos_size + bid_qty
                     roi = gain * leverage
-                balance += pnl
+                actual_balance += pnl
+                apparent_balance = actual_balance * balance_pct
                 pnl_sum += pnl
-                liq_price = calc_liq_price(balance / balance_pct, pos_size, pos_price)
+                liq_price = calc_liq_price(actual_balance, pos_size, pos_price)
                 append_trade = True
         else:
             # sell
@@ -248,7 +251,7 @@ def backtest(trades_list: [dict], settings: dict):
                 # no pos
                 if do_shrt:
                     ask_price = max(ob[1], round_up(ema, price_step))
-                    ask_qty = -calc_initial_entry_qty_(balance, ob[1])
+                    ask_qty = -calc_initial_entry_qty_(apparent_balance, ob[1])
                 else:
                     ask_price = 9e9
                     ask_qty = 0.0
@@ -264,7 +267,8 @@ def backtest(trades_list: [dict], settings: dict):
                         # long close
                         min_close_qty = max(
                             min_qty,
-                            round_dn(calc_initial_entry_qty_(balance, ob[0]) * min_close_qty_multiplier,
+                            round_dn(calc_initial_entry_qty_(apparent_balance,
+                                                             ob[0]) * min_close_qty_multiplier,
                                      qty_step)
                         )
                         qtys, prices = calc_long_closes(price_step, qty_step, min_qty, min_markup,
@@ -284,12 +288,13 @@ def backtest(trades_list: [dict], settings: dict):
                     return []
                 # shrt reentry
                 ask_qty = -calc_reentry_qty(qty_step, ddown_factor,
-                                            calc_initial_entry_qty_(balance, ob[1]),
-                                            calc_max_pos_size(balance, ob[1]),
+                                            calc_initial_entry_qty_(apparent_balance, ob[1]),
+                                            calc_max_pos_size(apparent_balance, ob[1]),
                                             pos_size)
                 if -ask_qty >= max(min_qty, min_notional / t['price']):
                     pos_margin = calc_cost(-pos_size, pos_price) / leverage
-                    ask_price = calc_shrt_reentry_price_(balance, pos_margin, pos_price, ob[0])
+                    ask_price = calc_shrt_reentry_price_(apparent_balance, pos_margin, pos_price,
+                                                         ob[0])
                 else:
                     ask_price = 9e9
             ob[1] = t['price']
@@ -313,7 +318,7 @@ def backtest(trades_list: [dict], settings: dict):
                     trade_side = 'long'
                     gain = ask_price / pos_price - 1
                     pnl += cost * gain
-                    if gain > 0.0:
+                    if gain >= 0.0:
                         trade_type = 'close'
                         profit_sum += pnl
                     else:
@@ -321,9 +326,10 @@ def backtest(trades_list: [dict], settings: dict):
                         loss_sum += pnl
                     pos_size = pos_size + ask_qty
                     roi = gain * leverage
-                balance += pnl
+                actual_balance += pnl
+                apparent_balance = actual_balance * balance_pct
                 pnl_sum += pnl
-                liq_price = calc_liq_price(balance / balance_pct, pos_size, pos_price)
+                liq_price = calc_liq_price(actual_balance, pos_size, pos_price)
                 append_trade = True
         if append_trade:
             progress = k / len(trades_list)
@@ -332,24 +338,26 @@ def backtest(trades_list: [dict], settings: dict):
             adg = total_gain ** (1 / n_days_) if n_days_ > 0.0 else 1.0
             trades.append({'trade_id': k, 'side': trade_side, 'type': trade_type,
                            'price': price, 'qty': qty, 'pnl': pnl, 'roi': roi,
-                           'pos_size': pos_size, 'pos_price': pos_price, 'balance': balance,
-                           'actual_balance': balance / balance_pct,
-                           'max_pos_size': calc_max_pos_size(balance, t['price']),
+                           'pos_size': pos_size, 'pos_price': pos_price,
+                           'apparent_balance': apparent_balance,
+                           'actual_balance': actual_balance,
+                           'max_pos_size': calc_max_pos_size(apparent_balance, t['price']),
                            'pnl_sum': pnl_sum, 'loss_sum': loss_sum, 'profit_sum': profit_sum,
                            'progress': progress,
                            'liq_price': liq_price, 'gain': total_gain,
                            'n_days': n_days_, 'average_daily_gain': adg,
                            'liq_diff': min(1.0, calc_diff(liq_price, t['price'])),
                            'timestamp': t['timestamp']})
-            balance = max(balance, settings['starting_balance'] * balance_pct)
+            actual_balance = max(actual_balance, settings['starting_balance'])
+            apparent_balance = actual_balance * balance_pct
             line = f"\r{progress:.3f} net pnl {pnl_sum:.8f} "
             line += f"profit sum {profit_sum:.5f} "
             line += f"loss sum {loss_sum:.5f} "
-            line += f"balance {balance / balance_pct:.5f} "
-            line += f"qty {calc_initial_entry_qty_(balance, ob[0]):.4f} "
+            line += f"actual_bal {actual_balance:.4f} "
+            line += f"apparent_bal {apparent_balance:.4f} "
+            line += f"qty {calc_initial_entry_qty_(apparent_balance, ob[0]):.4f} "
             line += f"adg {trades[-1]['average_daily_gain']:.3f} "
-            line += f"max pos pct {abs(pos_size) / calc_max_pos_size(balance, t['price']):.3f} "
-            line += f"liq diff {min(1.0, calc_diff(trades[-1]['liq_price'], ob[0])):.3f} "
+            line += f"max pos pct {abs(pos_size) / calc_max_pos_size(apparent_balance, t['price']):.3f} "
             line += f"pos size {pos_size:.4f} "
             print(line, end=' ')
             for key, condition in break_on.items():
@@ -399,7 +407,6 @@ def jackrabbit(trades_list: [dict],
         print(json.dumps(best, indent=4, sort_keys=True))
     else:
         best = {k_: backtesting_settings[k_] for k_ in ranges}
-        best['gain'] = -9e9
         if 'given' in  backtesting_settings['starting_candidate_preference'][:2]:
             candidate = best.copy()
             print('\nusing starting candidate from backtesting_settings')
@@ -407,12 +414,18 @@ def jackrabbit(trades_list: [dict],
             candidate = get_new_candidate(ranges, best, m=1.0)
             print('\nusing random starting candidate')
         print(json.dumps(candidate, indent=4, sort_keys=True))
+        best['gain'] = -9e9
 
-    results = {}
     n_days = backtesting_settings['n_days']
 
     trades_filepath = make_get_filepath(os.path.join(base_filepath, 'backtest_trades', ''))
     results_filename = base_filepath + 'results.txt'    
+    if os.path.exists(results_filename):
+        with open(results_filename) as f:
+            lines = f.readlines()
+        results = {(e := json.loads(line))['key']: e for line in lines}
+    else:
+        results = {}
     json.dump(backtesting_settings, open(base_filepath + 'backtesting_settings.json', 'w'),
               indent=4, sort_keys=True)
     json.dump(ranges, open(base_filepath + 'ranges.json', 'w'), indent=4, sort_keys=True)
@@ -473,9 +486,10 @@ def jackrabbit(trades_list: [dict],
             default_live_settings = load_settings(settings['exchange'], do_print=False)
             live_settings = {k: settings[k] if k in settings else default_live_settings[k]
                              for k in default_live_settings}
-            live_settings['indicator_settings'] = {'tick_ema': {'span': best['ema_span']},
-                                                   'do_long': backtesting_settings['do_long'],
-                                                   'do_shrt': backtesting_settings['do_shrt']}
+            live_settings['indicator_settings'] = default_live_settings['indicator_settings']
+            live_settings['indicator_settings']['tick_ema']['span'] = best['ema_span']
+            live_settings['indicator_settings']['do_long'] = backtesting_settings['do_long']
+            live_settings['indicator_settings']['do_shrt'] = backtesting_settings['do_shrt']
             json.dump(live_settings,
                       open(base_filepath + 'best_result_live_settings.json', 'w'),
                       indent=4, sort_keys=True)
