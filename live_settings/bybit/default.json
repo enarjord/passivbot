@@ -8,6 +8,11 @@
     "indicator_settings": {
         "do_long": true,
         "do_shrt": true,
+        "funding_fee_collect_mode": false,
+        "ohlcv_rsi": {
+            "n_periods": 21,
+            "period_ms": 1800000
+        },
         "tick_ema": {
             "span": 16318
         }
