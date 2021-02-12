@@ -94,9 +94,9 @@ def calc_long_closes(price_step: float,
 
 def calc_initial_entry_qty(min_qty: float,
                            qty_step: float,
-                           balance_ito_contracts: float,
+                           leveraged_balance_ito_contracts: float,
                            qty_balance_pct: float) -> float:
-    return max(min_qty, round_dn(balance_ito_contracts * abs(qty_balance_pct), qty_step))
+    return max(min_qty, round_dn(leveraged_balance_ito_contracts * abs(qty_balance_pct), qty_step))
 
 
 def calc_reentry_qty(qty_step: float,
