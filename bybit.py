@@ -131,7 +131,8 @@ class BybitBot(Bot):
         self.qty_step = float(e['lot_size_filter']['qty_step'])
         self.min_qty = float(e['lot_size_filter']['min_trading_qty'])
         self.calc_initial_entry_qty = lambda balance_, last_price: \
-            calc_initial_entry_qty(self.min_qty, self.qty_step, balance_ * last_price,
+            calc_initial_entry_qty(self.min_qty, self.qty_step,
+                                   balance_ * last_price * self.leverage,
                                    self.entry_qty_pct)
         await self.update_position()
         await self.init_order_book()
