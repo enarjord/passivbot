@@ -1,5 +1,6 @@
 {
     "balance_pct": 0.75,
+    "config_name": "XMRUSDT_unnamed",
     "cross_mode": true,
     "ddown_factor": 0.877,
     "entry_qty_pct": 0.00705,
