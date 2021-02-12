@@ -149,7 +149,7 @@ class BinanceBot(Bot):
                     calc_initial_entry_qty(max(self.min_qty, round_up(self.min_notional / last_price,
                                                                       self.qty_step)),
                                            self.qty_step,
-                                           balance_ / last_price,
+                                           (balance_ / last_price) * self.leverage,
                                            self.entry_qty_pct)
                 break
         await self.update_position()
