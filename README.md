@@ -55,6 +55,11 @@ change log
 - added balance_pct to backtester.  backtester will now behave like live bot, taking balance_pct into account
     - actual balance is used for liq price calc, otherwise balance * balance_pct is used
 
+2021-02-12
+- added indicator_settings["funding_fee_collect_mode"]
+    - if true, will enter long only if predicted fundig rate is negative and enter short only if predicted funding rate is positive
+- added indicator rsi (not finished, not active)
+
 
 ------------------------------------------------------------------
 
