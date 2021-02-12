@@ -16,7 +16,6 @@
     "price_step": 0.01,
     "qty_step": 0.001,
     "taker_fee": 0.00036,
-    "min_close_qty_multiplier": 0.5,
     "balance_pct": 1.0,
 
 
@@ -53,6 +52,7 @@
     "stop_loss_pos_price_diff": 0.04,
     "max_markup": 0.01694,
     "min_markup": 0.00072,
+    "min_close_qty_multiplier": 0.5,
     "n_close_orders": 10.0,
     "stop_loss_pos_reduction": 0.001
 }
