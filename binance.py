@@ -191,9 +191,10 @@ class BinanceBot(Bot):
         ]
 
     async def fetch_position(self) -> dict:
-        positions, account = await asyncio.gather(
+        positions, account, funding = await asyncio.gather(
             self.cc.fapiPrivate_get_positionrisk(params={'symbol': self.symbol}),
-            self.cc.fapiPrivate_get_account()
+            self.cc.fapiPrivate_get_account(),
+            self.cc.fapiPublic_get_fundingrate()
         )
         if positions:
             position = {'size': float(positions[0]['positionAmt']),
@@ -207,6 +208,10 @@ class BinanceBot(Bot):
                         'leverage': 1.0}
         position['cost'] = abs(position['size']) * position['price']
         position['margin_cost'] = position['cost'] / self.leverage
+        for e in funding:
+            if e['symbol'] == self.symbol:
+                position['predicted_funding_rate'] = float(e['fundingRate'])
+                break
         for e in account['assets']:
             if e['asset'] == 'USDT':
                 position['equity'] = float(e['marginBalance'])
