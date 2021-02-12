@@ -59,6 +59,9 @@ change log
 - added indicator_settings["funding_fee_collect_mode"]
     - if true, will enter long only if predicted fundig rate is negative and enter short only if predicted funding rate is positive
 - added indicator rsi (not finished, not active)
+- changed entry_qty_pct formula
+    - before initial_entry_qty = balance_ito_contracts * entry_qty_pct
+    - now    initial_entry_qty = balance_ito_contracts * leverage * entry_qty_pct
 
 
 ------------------------------------------------------------------
