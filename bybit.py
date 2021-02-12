@@ -173,9 +173,10 @@ class BybitBot(Bot):
 
     async def fetch_position(self) -> None:
 
-        position, balance = await asyncio.gather(
+        position, balance, funding = await asyncio.gather(
             self.cc.v2_private_get_position_list(params={'symbol': self.symbol}),
-            self.cc.v2_private_get_wallet_balance()
+            self.cc.v2_private_get_wallet_balance(),
+            self.cc.v2_private_get_funding_predicted_funding(params={'symbol': self.symbol})
         )
         pos = position['result']
         result = {'size': pos['size'] * (-1 if pos['side'] == 'Sell' else 1),
@@ -186,6 +187,7 @@ class BybitBot(Bot):
                   'wallet_balance': balance['result'][self.coin]['wallet_balance']}
         result['cost'] = abs(result['size']) / result['price'] if result['price'] else 0.0
         result['margin_cost'] = result['cost'] / self.leverage
+        result['predicted_funding_rate'] = funding['result']['predicted_funding_rate']
         return result
 
     async def execute_order(self, order: dict) -> dict:
