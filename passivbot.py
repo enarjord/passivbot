@@ -258,8 +258,7 @@ class Bot:
         self.entry_qty_pct = settings['entry_qty_pct']
         self.ddown_factor = settings['ddown_factor']
 
-        self.min_close_qty_multiplier = settings['min_close_qty_multiplier'] \
-            if 'min_close_qty_multiplier' in settings else 0.0
+        self.min_close_qty_multiplier = settings['min_close_qty_multiplier']
 
         self.market_stop_loss = settings['market_stop_loss']
 
@@ -362,15 +361,20 @@ class Bot:
     def stop(self) -> None:
         self.stop_websocket = True
 
-    def determine_entry_side(self):
-        # using indicators
-        pass
-
     def calc_initial_bid_ask(self):
-        bid_price = min(self.ob[0], round_dn(self.indicators['tick_ema'], self.price_step)) \
-            if self.indicator_settings['do_long'] else 0.0
-        ask_price = max(self.ob[1], round_up(self.indicators['tick_ema'], self.price_step)) \
-            if self.indicator_settings['do_shrt'] else 9e9
+        if self.indicator_settings['do_long'] and \
+                (not self.indicator_settings['funding_fee_collect_mode'] or
+                 self.position['predicted_funding_rate'] < 0.0):
+            bid_price = min(self.ob[0], round_dn(self.indicators['tick_ema'], self.price_step))
+        else:
+            bid_price = -1.0
+
+        if self.indicator_settings['do_shrt'] and \
+                (not self.indicator_settings['funding_fee_collect_mode'] or
+                 self.position['predicted_funding_rate'] > 0.0):
+            ask_price = max(self.ob[1], round_up(self.indicators['tick_ema'], self.price_step))
+        else:
+            ask_price = -1.0
         return bid_price, ask_price
 
     def calc_orders(self):
@@ -405,10 +409,12 @@ class Bot:
             stop_loss_qty = 0.0
         if self.position['size'] == 0: # no pos
             bid_price, ask_price = self.calc_initial_bid_ask()
-            orders.append({'side': 'buy', 'qty': initial_entry_qty, 'price': bid_price,
-                           'type': 'limit', 'reduce_only': False, 'custom_id': 'entry'})
-            orders.append({'side': 'sell', 'qty': initial_entry_qty, 'price': ask_price,
-                           'type': 'limit', 'reduce_only': False, 'custom_id': 'entry'})
+            if bid_price > 0.0:
+                orders.append({'side': 'buy', 'qty': initial_entry_qty, 'price': bid_price,
+                               'type': 'limit', 'reduce_only': False, 'custom_id': 'entry'})
+            if ask_price > 0.0:
+                orders.append({'side': 'sell', 'qty': initial_entry_qty, 'price': ask_price,
+                               'type': 'limit', 'reduce_only': False, 'custom_id': 'entry'})
         elif self.position['size'] > 0.0: # long pos
             pos_size = self.position['size']
             pos_price = self.position['price']
@@ -571,12 +577,12 @@ class Bot:
             line += f"pct {ratio:.2f} liq_diff {liq_diff:.3f} last {self.price}   "
             print_([line], r=True)
 
-    def init_tick_ema(self, trades: [dict]):
+    def init_tick_ema(self, ticks: [dict]):
         print_(['initiating tick ema...'])
         ema_span = self.indicator_settings['tick_ema']['span']
-        ema = trades[0]['price']
+        ema = ticks[0]['price']
         alpha = 2 / (ema_span + 1)
-        for t in trades:
+        for t in ticks:
             ema = ema * (1 - alpha) + t['price'] * alpha
         self.indicators['tick_ema'] = ema
         self.indicator_settings['tick_ema']['alpha'] = alpha
@@ -587,49 +593,111 @@ class Bot:
             self.indicators['tick_ema'] * self.indicator_settings['tick_ema']['alpha_'] + \
             websocket_tick['price'] * self.indicator_settings['tick_ema']['alpha']
 
-    def init_fancy_indicator_001(self, trades: [dict]):
+    def init_fancy_indicator_001(self, ticks: [dict]):
         pass
 
     def update_fancy_indicator_001(self, websocket_tick: dict):
         pass
 
-    def init_fancy_indicator_002(self, trades: [dict]):
+    def init_fancy_indicator_002(self, ticks: [dict]):
         pass
 
     def update_fancy_indicator_002(self, websocket_tick: dict):
         pass
 
+    def init_tick_rsi(self):
+        pass
+
+    def init_ohlcv_rsi(self, ticks: [dict]):
+        print_(['initiation ohlcv rsi'])
+        self.indicator_settings['max_periods_in_memory'] = \
+            self.indicator_settings['ohlcv_rsi']['n_periods']
+        n_periods = self.indicator_settings['ohlcv_rsi']['n_periods']
+        self.init_ohlcv(self.indicator_settings['ohlcv_rsi']['period_ms'], ticks)
+        ohlcvs = self.ohlcvs[self.indicator_settings['ohlcv_rsi']['period_ms']]
+        upchange_smoothed = 0.0
+        dnchange_smoothed = 0.0
+        for i in range(1, len(ohlcvs)):
+            if ohlcvs[i]['close'] == ohlcvs[i - 1]['close']:
+                upchange = 0
+                dnchange = 0
+            elif ohlcvs[i]['close'] > ohlcvs[i - 1]['close']:
+                upchange = ohlcvs[i]['close'] - ohlcvs[i - 1]['close']
+                dnchange = 0
+            else:
+                upchange = 0
+                dnchange = ohlcvs[i - 1]['close'] - ohlcvs[i]['close']
+            upchange_smoothed = (upchange_smoothed * (n_periods - 1) + upchange) / n_periods
+            dnchange_smoothed = (dnchange_smoothed * (n_periods - 1) + dnchange) / n_periods
+            self.indicator_settings['ohlcv_rsi']['upchange_smoothed'] = upchange_smoothed
+            self.indicator_settings['ohlcv_rsi']['dnchange_smoothed'] = dnchange_smoothed
+            rs = upchange_smoothed / dnchange_smoothed if dnchange_smoothed > 0.0 else 9e9
+            rsi = 100 - 100 / (1 + rs)
+        self.indicators['ohlcv_rsi'] = rsi
+
+    def update_ohlcv_rsi(self, websocket_tick: dict):
+        ohlcvs = self.ohlcvs[self.indicator_settings['ohlcv_rsi']['period_ms']]
+        if self.update_ohlcv(self.indicator_settings['ohlcv_rsi']['period_ms'], websocket_tick):
+            if ohlcvs[-1]['close'] == ohlcvs[-2]['close']:
+                upchange = 0
+                dnchange = 0
+            elif ohlcvs[-1]['close'] > ohlcvs[-2]['close']:
+                upchange = ohlcvs[i]['close'] - ohlcvs[-2]['close']
+                dnchange = 0
+            else:
+                upchange = 0
+                dnchange = ohlcvs[i - 1]['close'] - ohlcvs[i]['close']
+            upchange_smoothed = (self.indicator_settings['ohlcv_rsi']['upchange_smoothed'] *
+                                 (n_periods - 1) + upchange) / n_periods
+            dnchange_smoothed = (self.indicator_settings['ohlcv_rsi']['dnchange_smoothed'] *
+                                 (n_periods - 1) + dnchange) / n_periods
+            rs = upchange_smoothed / dnchange_smoothed if dnchange_smoothed > 0.0 else 9e9
+            rsi = 100 - 100 / (1 + rs)
+            self.indicators['ohlcv_rsi'] = rsi
+            self.indicator_settings['ohlcv_rsi']['upchange_smoothed'] = upchange_smoothed
+            self.indicator_settings['ohlcv_rsi']['dnchange_smoothed'] = dnchange_smoothed
+
+
+    async def fetch_ticks(self):
+        n_ticks_to_fetch = 80000 # each fetch contains 1000 ticks
+        ticks = await self.fetch_trades()
+        additional_ticks = await asyncio.gather(
+            *[self.fetch_trades(from_id=ticks[0]['trade_id'] - 1000 * i)
+              for i in range(1, min(50, n_ticks_to_fetch // 1000))])
+        ticks = sorted(ticks + flatten(additional_ticks), key=lambda x: x['trade_id'])
+        condensed_ticks = [ticks[0]]
+        for i in range(1, len(ticks)):
+            if ticks[i]['price'] != condensed_ticks[-1]['price']:
+                condensed_ticks.append(ticks[i])
+        return condensed_ticks
+
     async def init_indicators(self):
         # called upon websocket start
-        n_trades_to_fetch = 20000 # each fetch contains 1000 trades
-        trades = await self.fetch_trades()
-        additional_trades = await asyncio.gather(
-            *[self.fetch_trades(from_id=trades[0]['trade_id'] - 1000 * i)
-              for i in range(1, min(50, n_trades_to_fetch // 1000))])
-        trades = sorted(trades + flatten(additional_trades), key=lambda x: x['trade_id'])
-        self.init_tick_ema(trades)
+        ticks = await self.fetch_ticks()
+        self.init_tick_ema(ticks)
+        #self.init_ohlcv_rsi(ticks)
 
     def update_indicators(self, websocket_tick: dict):
         # called each websocket tick
         # {'price': float, 'qty': float, 'timestamp': int, 'side': 'buy'|'sell'}
         self.update_tick_ema(websocket_tick)
 
-    def init_ohlcv(self, period_ms: int, trades: [dict]):
+    def init_ohlcv(self, period_ms: int, ticks: [dict]):
         print_([f'initiating ohlcvs {period_ms}...'])
         self.ohlcvs[period_ms] = [{
-            'timestamp': trades[0]['timestamp'] - trades[0]['timestamp'] % 10000,
-            'open': trades[0]['price'],
-            'high': trades[0]['price'],
-            'low': trades[0]['price'],
-            'close': trades[0]['price'],
-            'volume': trades[0]['qty']
+            'timestamp': ticks[0]['timestamp'] - ticks[0]['timestamp'] % 10000,
+            'open': ticks[0]['price'],
+            'high': ticks[0]['price'],
+            'low': ticks[0]['price'],
+            'close': ticks[0]['price'],
+            'volume': ticks[0]['qty']
         }]
-        for t in trades[1:]:
+        for t in ticks[1:]:
             self.update_ohlcv(period_ms, t)
 
-    def update_ohlcv(self, period_ms, websocket_tick):
-
+    def update_ohlcv(self, period_ms, websocket_tick) -> bool:
         if websocket_tick['timestamp'] > round(self.ohlcvs[period_ms][-1]['timestamp'] + period_ms):
+            new_ohlcv = True
             while websocket_tick['timestamp'] > \
                     round(self.ohlcvs[period_ms][-1]['timestamp'] + period_ms * 2):
                 # fill empty ohlcvs
@@ -651,6 +719,7 @@ class Bot:
                 'volume': websocket_tick['qty']
             })
         else:
+            new_ohlcv = False
             # update current ohlcv
             self.ohlcvs[period_ms][-1]['high'] = \
                 max(self.ohlcvs[period_ms][-1]['high'], websocket_tick['price'])
@@ -663,6 +732,7 @@ class Bot:
         if len(self.ohlcvs[period_ms]) > self.indicator_settings['max_periods_in_memory'] + 20:
             self.ohlcvs[period_ms] = \
                 self.ohlcvs[period_ms][-self.indicator_settings['max_periods_in_memory']:]
+        return new_ohlcv
 
     def load_cached_my_trades(self) -> [dict]:
         if os.path.exists(self.my_trades_cache_filepath):
