@@ -95,7 +95,7 @@ def backtest(trades_list: [dict], settings: dict):
                                                        pos_price_,
                                                        leverage=leverage)
         calc_initial_entry_qty_ = lambda balance_, last_price: \
-            calc_initial_entry_qty(min_qty, qty_step, balance_ * last_price,
+            calc_initial_entry_qty(min_qty, qty_step, balance_ * last_price * leverage,
                                    settings['entry_qty_pct'])
         calc_max_pos_size = lambda balance_, price_: balance_ * price_ * leverage
     else:
@@ -124,7 +124,8 @@ def backtest(trades_list: [dict], settings: dict):
                                                          leverage=leverage)
         calc_initial_entry_qty_ = lambda balance_, last_price: \
             calc_initial_entry_qty(max(min_qty, round_up(min_notional / last_price, qty_step)),
-                                   qty_step, balance_ / last_price, settings['entry_qty_pct'])
+                                   qty_step, (balance_ / last_price) * leverage,
+                                   settings['entry_qty_pct'])
         calc_max_pos_size = lambda balance_, price_: balance_ / price_ * leverage
 
     calc_long_reentry_price_ = lambda balance_, pos_margin_, pos_price_, highest_bid_: \
