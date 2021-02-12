@@ -2,7 +2,7 @@
     "balance_pct": 0.75,
     "cross_mode": true,
     "ddown_factor": 0.877,
-    "entry_qty_pct": 0.3312,
+    "entry_qty_pct": 0.00705,
     "grid_coefficient": 212.92,
     "grid_spacing": 0.00215,
     "indicator_settings": {
