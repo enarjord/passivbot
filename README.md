@@ -62,6 +62,8 @@ change log
 - changed entry_qty_pct formula
     - before initial_entry_qty = balance_ito_contracts * entry_qty_pct
     - now    initial_entry_qty = balance_ito_contracts * leverage * entry_qty_pct
+- added logging
+- added "config_name" to live settings
 
 
 ------------------------------------------------------------------
