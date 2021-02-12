@@ -276,6 +276,8 @@ class Bot:
         self.indicators = {'tick': {}, 'ohlcv': {}}
         self.ohlcvs = {}
 
+        self.log_filepath = make_get_filepath(f"logs/{self.exchange}/{settings['config_name']}.log")
+
         self.my_trades = []
         self.my_trades_cache_filepath = \
             make_get_filepath(os.path.join('historical_data', self.exchange, 'my_trades',
@@ -285,19 +287,26 @@ class Bot:
 
         self.stop_websocket = False
 
+    def dump_log(self, data) -> None:
+        with open(self.log_filepath, 'a') as f:
+            f.write(json.dumps({**{'log_timestamp': self.cc.milliseconds()}, **data}) + '\n')
+
     async def update_open_orders(self) -> None:
         if self.ts_locked['update_open_orders'] > self.ts_released['update_open_orders']:
             return
         try:
-            self.open_orders = await self.fetch_open_orders()
+            open_orders = await self.fetch_open_orders()
         except Exception as e:
             print('error with update open orders', e)
         self.highest_bid, self.lowest_ask = 0.0, 9.9e9
-        for o in self.open_orders:
+        for o in open_orders:
             if o['side'] == 'buy':
                 self.highest_bid = max(self.highest_bid, o['price'])
             elif o['side'] == 'sell':
                 self.lowest_ask = min(self.lowest_ask, o['price'])
+        if self.open_orders != open_orders:
+            self.dump_log({'log_type': 'open_orders', 'data': open_orders})
+        self.open_orders = open_orders
         self.ts_released['update_open_orders'] = time()
 
     async def update_position(self) -> None:
@@ -306,10 +315,13 @@ class Bot:
             return
         self.ts_locked['update_position'] = time()
         try:
-            self.position, _ = await asyncio.gather(self.fetch_position(),
-                                                    self.update_open_orders())
+            position, _ = await asyncio.gather(self.fetch_position(),
+                                               self.update_open_orders())
         except Exception as e:
             print('error with update position', e)
+        if self.position != position:
+            self.dump_log({'log_type': 'position', 'data': position})
+        self.position = position
         self.ts_released['update_position'] = time()
 
     async def create_orders(self, orders_to_create: [dict]) -> dict:
@@ -319,19 +331,20 @@ class Bot:
         creations = []
         for oc in sorted(orders_to_create, key=lambda x: x['qty']):
             try:
-                creations.append(self.execute_order(oc))
+                creations.append((oc, asyncio.create_task(self.execute_order(oc))))
             except Exception as e:
-                print('error creating orders a', orders_to_create, e)
-        try:
-            created_orders = await asyncio.gather(*creations)
-        except Exception as e:
-            print('error creating orders b', orders_to_create, e)
-            created_orders = []
-        for o in created_orders:
+                print_(['error creating order a', oc, e], n=True)
+        created_orders = []
+        for oc, c in creations:
             try:
+                o = await c
+                created_orders.append(o)
                 print_([' created order', o['symbol'], o['side'], o['qty'], o['price']], n=True)
+                self.dump_log({'log_type': 'create_order', 'data': o})
             except Exception as e:
-                print('error creating orders c', orders_to_create, e)
+                print_(['error creating order b', oc, c.exception(), e], n=True)
+                self.dump_log({'log_type': 'create_order', 'data': {'result': str(c.exception()),
+                               'error': repr(e), 'data': oc}})
         self.ts_released['create_orders'] = time()
         return created_orders
 
@@ -342,19 +355,21 @@ class Bot:
         deletions = []
         for oc in orders_to_cancel:
             try:
-                deletions.append(self.execute_cancellation(oc['order_id']))
+                deletions.append((oc,
+                                  asyncio.create_task(self.execute_cancellation(oc['order_id']))))
             except Exception as e:
-                print('error cancelling orders a', orders_to_cancel, e)
-        try:
-            canceled_orders = await asyncio.gather(*deletions)
-        except Exception as e:
-            print('error cancelling orders b', orders_to_cancel, e)
-            canceled_orders = []
-        for o in canceled_orders:
+                print_(['error cancelling order', oc, e])
+        canceled_orders = []
+        for oc, c in deletions:
             try:
-                print_(['canceled order', o['symbol'], o['side'], o['qty'], o['price']], n=True)
+                o = await c
+                canceled_orders.append(o)
+                print_(['cancelled order', o['symbol'], o['side'], o['qty'], o['price']], n=True)
+                self.dump_log({'log_type': 'cancel_order', 'data': o})
             except Exception as e:
-                print('error cancelling orders c', orders_to_cancel, e)
+                print_(['error cancelling order', oc, c.exception(), e], n=True)
+                self.dump_log({'log_type': 'cancel_order', 'data': {'result': str(c.exception()),
+                               'error': repr(e), 'data': oc}})
         self.ts_released['cancel_orders'] = time()
         return canceled_orders
 
