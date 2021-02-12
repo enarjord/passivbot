@@ -27,22 +27,24 @@
     "do_shrt": true,
 
     "break_on": [
-        ["ON: break on first soft stop",
+        ["OFF: break on first soft stop",
          "lambda trade, tick: trade['type'] == 'stop_loss'"],
-        ["OFF: neg pnl sum",
-         "lambda trade, tick: trade['pnl_sum'] < 0.0 and trade['progress'] > 0.3"],
-        ["ON: liq diff too small",
-         "lambda trade, tick: trade['liq_diff'] < 0.05"],
-        ["OFF: time between consec trades",
+        ["ON: neg pnl sum",
+         "lambda trade, tick: trade['pnl_sum'] < 0.0 and trade['progress'] > 0.333"],
+        ["OFF: liq diff too small",
+         "lambda trade, tick: trade['liq_diff'] < 0.02"],
+        ["ON: time between consec trades",
          "lambda trade, tick: tick['timestamp'] - trade['timestamp'] > 1000 * 60 * 60 * 24"],
         ["OFF: pos price last price diff",
          "lambda trade, tick: calc_diff(trade['price'], tick['price']) > 1.05"],
-        ["ON: adg too low",
-         "lambda trade, tick: trade['average_daily_gain'] < 1.01 and trade['progress'] >= 0.1"]
+        ["OFF: adg too low",
+         "lambda trade, tick: trade['average_daily_gain'] < 1.002 and trade['progress'] >= 0.25"],
+        ["OFF: no soft stops",
+         "lambda trade, tick: trade['loss_sum'] == 0.0 and trade['progress'] >= 0.5"]
     ],
 
     "ddown_factor": 0.6,
-    "entry_qty_pct": 0.2624,
+    "entry_qty_pct": 0.01,
     "grid_coefficient": 280.0,
     "grid_spacing": 0.002,
     "ema_span": 16500.0,
