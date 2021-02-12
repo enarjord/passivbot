@@ -1,5 +1,6 @@
 {
     "balance_pct": 0.667,
+    "config_name": "BTCUSD_unnamed",
     "cross_mode": true,
     "ddown_factor": 0.014,
     "entry_qty_pct": 0.0009,
