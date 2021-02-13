@@ -37,7 +37,9 @@
         ["OFF: pos price last price diff",
          "lambda trade, tick: calc_diff(trade['price'], tick['price']) > 1.05"],
         ["OFF: adg too low",
-         "lambda trade, tick: trade['average_daily_gain'] < 1.002 and trade['progress'] >= 0.1"]
+         "lambda trade, tick: trade['average_daily_gain'] < 1.002 and trade['progress'] >= 0.1"],
+        ["ON: balance + pnl below starting_balance",
+         "lambda trade, tick: trade['actual_balance'] + trade['pnl_sum'] < 0.0"]
     ],
 
     "ddown_factor": 0.014,
