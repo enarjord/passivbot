@@ -288,8 +288,9 @@ class Bot:
         self.stop_websocket = False
 
     def dump_log(self, data) -> None:
-        with open(self.log_filepath, 'a') as f:
-            f.write(json.dumps({**{'log_timestamp': self.cc.milliseconds()}, **data}) + '\n')
+        if self.settings['logging_level'] > 0:
+            with open(self.log_filepath, 'a') as f:
+                f.write(json.dumps({**{'log_timestamp': self.cc.milliseconds()}, **data}) + '\n')
 
     async def update_open_orders(self) -> None:
         if self.ts_locked['update_open_orders'] > self.ts_released['update_open_orders']:
@@ -623,6 +624,9 @@ class Bot:
     def init_tick_rsi(self):
         pass
 
+    def update_tick_rsi(self):
+        pass
+
     def init_ohlcv_rsi(self, ticks: [dict]):
         print_(['initiation ohlcv rsi'])
         self.indicator_settings['max_periods_in_memory'] = \
@@ -672,7 +676,6 @@ class Bot:
             self.indicator_settings['ohlcv_rsi']['upchange_smoothed'] = upchange_smoothed
             self.indicator_settings['ohlcv_rsi']['dnchange_smoothed'] = dnchange_smoothed
 
-
     async def fetch_ticks(self):
         n_ticks_to_fetch = 80000 # each fetch contains 1000 ticks
         ticks = await self.fetch_trades()
@@ -696,6 +699,7 @@ class Bot:
         # called each websocket tick
         # {'price': float, 'qty': float, 'timestamp': int, 'side': 'buy'|'sell'}
         self.update_tick_ema(websocket_tick)
+        #self.update_ohlcv_rsi(websocket_tick)
 
     def init_ohlcv(self, period_ms: int, ticks: [dict]):
         print_([f'initiating ohlcvs {period_ms}...'])
