@@ -677,7 +677,8 @@ class Bot:
             self.indicator_settings['ohlcv_rsi']['dnchange_smoothed'] = dnchange_smoothed
 
     async def fetch_ticks(self):
-        n_ticks_to_fetch = 80000 # each fetch contains 1000 ticks
+        n_ticks_to_fetch = int(self.indicator_settings['tick_ema']['span'])
+        # each fetch contains 1000 ticks
         ticks = await self.fetch_trades()
         additional_ticks = await asyncio.gather(
             *[self.fetch_trades(from_id=ticks[0]['trade_id'] - 1000 * i)
