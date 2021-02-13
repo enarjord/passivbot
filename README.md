@@ -142,11 +142,17 @@ about backtesting settings, binance XMRUSDT example
                                              # starting candidate preference from left to right.
                                              # if best is first and there is a best.json file present, will build on best.
                                              # otherwise, starting candidate will be either random or given, depending which is before the other.
+                                             # after first iteration, will build on best regardless of starting_candidate_preference
     
     "starting_k": 0,                         # k is incremented by 1 per iteration until k == n_jackrabbit_iterations
     "n_jackrabbit_iterations": 200,          # see below for more info on jackrabbit
     
     "min_notional": 1.0,                     # used with binance: entry qty must be greater than min_notional / price
+    "cross_mode": true,                      # true for cross mode, false for isolated mode
+    "max_leverage": 75,                      # max allowed leverage for symbol
+    "do_long": true,
+    "do_shrt": true,
+
     
     "break_on": [
         ["OFF: break on first soft stop",
@@ -165,7 +171,11 @@ about backtesting settings, binance XMRUSDT example
 
     "inverse": false,                        # inverse is true for bybit, false for binance
     "maker_fee": 0.00018,                    # 0.00018 for binance (with bnb discount), -0.00025 for bybit
+
     "starting_balance": 10.0,                # backtest starting balance
+                                             # backtest balance never goes lower than starting balance,
+                                             # as if topping up wallet back to starting balance each time balance goes below starting balance
+    
     "min_qty": 0.001,                        # minimum allowed contract qty
     "price_step": 0.01,
     "qty_step": 0.001,
