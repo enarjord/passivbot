@@ -68,7 +68,7 @@ change log
     - now    initial_entry_qty = balance_ito_contracts * leverage * entry_qty_pct
 - added logging
 - added "config_name" and "logging_level" to live settings
-- added break_on condition: break if balance + pnl < starting_balance by enarjord
+- added break_on condition: break if balance + pnl < starting_balance
 
 
 ------------------------------------------------------------------
