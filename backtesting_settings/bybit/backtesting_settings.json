@@ -8,20 +8,18 @@
     "starting_k": 0,
     "n_jackrabbit_iterations": 140,
 
-    "starting_balance": 10.0,
     "inverse": true,
     "maker_fee": -0.00025,
     "taker_fee": 0.00075,
-    "market_stop_loss": false,
     "min_qty": 1.0,
-    "price_step": 0.001,
     "qty_step": 1.0,
-    "balance_pct": 1.0,
-
-
+    "price_step": 0.001,
     "min_notional": 0.0,
-    "cross_mode": true,
     "max_leverage": 50,
+
+    "starting_balance": 10.0,
+    "market_stop_loss": false,
+    "cross_mode": true,
     "do_long": true,
     "do_shrt": true,
 
@@ -44,17 +42,21 @@
          "lambda trade, tick: trade['actual_balance'] + trade['pnl_sum'] < 0.0"]
     ],
 
+    "balance_pct": 1.0,
     "ddown_factor": 0.014,
     "entry_qty_pct": 0.0603,
-    "grid_coefficient": 283.55,
-    "grid_spacing": 0.0042,
-    "ema_span": 16318.0,
+    "min_close_qty_multiplier": 0.5,
     "leverage": 50,
+    "n_close_orders": 12,
+
+    "grid_spacing": 0.0042,
+    "grid_coefficient": 283.55,
+    "min_markup": 0.00007,
+    "max_markup": 0.01085,
+
+    "ema_span": 16318.0,
+
     "stop_loss_liq_diff": 0.04,
     "stop_loss_pos_price_diff": 0.04,
-    "max_markup": 0.01085,
-    "min_markup": 0.00007,
-    "min_close_qty_multiplier": 0.5,
-    "n_close_orders": 12,
     "stop_loss_pos_reduction": 0.001
 }
