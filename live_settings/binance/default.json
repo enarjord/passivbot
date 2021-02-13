@@ -12,8 +12,8 @@
     "n_entry_orders": 8,
     "n_close_orders": 15.0,
 
-    "grid_coefficient": 212.92,
     "grid_spacing": 0.00215,
+    "grid_coefficient": 212.92,
     "min_markup": 0.00097,
     "max_markup": 0.00849,
 
