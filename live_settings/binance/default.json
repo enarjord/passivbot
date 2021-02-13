@@ -1,6 +1,6 @@
 {
     "balance_pct": 0.75,
-    "config_name": "XMRUSDT_unnamed",
+    "config_name": "XMRUSDT_default",
     "cross_mode": true,
     "ddown_factor": 0.877,
     "entry_qty_pct": 0.00705,
@@ -19,6 +19,7 @@
         }
     },
     "leverage": 47.0,
+    "logging_level": 0,
     "stop_loss_liq_diff": 0.04,
     "stop_loss_pos_price_diff": 0.9,
     "market_stop_loss": false,
