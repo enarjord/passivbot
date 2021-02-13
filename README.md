@@ -166,8 +166,9 @@ about backtesting settings, binance XMRUSDT example
         ["ON: pos price last price diff",
          "lambda trade, tick: calc_diff(trade['price'], tick['price']) > 1.05"]
     ],
-                                             # conditions to break backtest prematurely ["name", if true: break.  trade is last trade, tick is last price tick]
-                                             # if startswith "OFF", will ignore condition
+                                             # conditions to break backtest prematurely and returns empty list of trades.
+                                             # ["name", if true: break.  trade is last trade, tick is last price tick]
+                                             # if startswith "OFF", will ignore condition.
 
     "inverse": false,                        # inverse is true for bybit, false for binance
     "maker_fee": 0.00018,                    # 0.00018 for binance (with bnb discount), -0.00025 for bybit
