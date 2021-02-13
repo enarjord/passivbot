@@ -17,6 +17,10 @@ telegram
 
 https://t.me/passivbot_futures
 
+for a repository of settings and their backtesting results, see
+
+https://github.com/JohnKearney1/PassivBot-Configurations
+
 
 ------------------------------------------------------------------
 change log
