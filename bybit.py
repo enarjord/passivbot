@@ -12,7 +12,7 @@ from math import floor
 from time import time, sleep
 from typing import Callable, Iterator
 from passivbot import init_ccxt, load_key_secret, load_settings, make_get_filepath, print_, \
-    ts_to_date, flatten, filter_orders, Bot, start_bot, round_up, round_dn, calc_default_qty
+    ts_to_date, flatten, filter_orders, Bot, start_bot, round_up, round_dn, calc_initial_entry_qty
 
 
 def first_capitalized(s: str):
@@ -130,8 +130,10 @@ class BybitBot(Bot):
         self.price_step = float(e['price_filter']['tick_size'])
         self.qty_step = float(e['lot_size_filter']['qty_step'])
         self.min_qty = float(e['lot_size_filter']['min_trading_qty'])
-        self.calc_default_qty = lambda balance_, last_price: \
-            calc_default_qty(self.min_qty, self.qty_step, balance_ * last_price, self.default_qty)
+        self.calc_initial_entry_qty = lambda balance_, last_price: \
+            calc_initial_entry_qty(self.min_qty, self.qty_step,
+                                   balance_ * last_price * self.leverage,
+                                   self.entry_qty_pct)
         await self.update_position()
         await self.init_order_book()
 
@@ -139,15 +141,6 @@ class BybitBot(Bot):
         ticker = await self.cc.v2_public_get_tickers(params={'symbol': self.symbol})
         self.ob = [float(ticker['result'][0]['bid_price']), float(ticker['result'][0]['ask_price'])]
         self.price = float(ticker['result'][0]['last_price'])
-
-    def calc_entry_qty(self, balance_, pos_size_, pos_price_):
-        return calc_entry_qty(self.qty_step,
-                              self.min_qty,
-                              self.ddown_factor,
-                              self.leverage,
-                              balance_,
-                              pos_size_,
-                              pos_price_)
 
     def calc_long_entry_price(self, balance_, pos_size_, pos_price_):
         return calc_long_entry_price(self.price_step,
@@ -181,9 +174,10 @@ class BybitBot(Bot):
 
     async def fetch_position(self) -> None:
 
-        position, balance = await asyncio.gather(
+        position, balance, funding = await asyncio.gather(
             self.cc.v2_private_get_position_list(params={'symbol': self.symbol}),
-            self.cc.v2_private_get_wallet_balance()
+            self.cc.v2_private_get_wallet_balance(),
+            self.cc.v2_private_get_funding_predicted_funding(params={'symbol': self.symbol})
         )
         pos = position['result']
         result = {'size': pos['size'] * (-1 if pos['side'] == 'Sell' else 1),
@@ -194,6 +188,7 @@ class BybitBot(Bot):
                   'wallet_balance': balance['result'][self.coin]['wallet_balance']}
         result['cost'] = abs(result['size']) / result['price'] if result['price'] else 0.0
         result['margin_cost'] = result['cost'] / self.leverage
+        result['predicted_funding_rate'] = funding['result']['predicted_funding_rate']
         return result
 
     async def execute_order(self, order: dict) -> dict:

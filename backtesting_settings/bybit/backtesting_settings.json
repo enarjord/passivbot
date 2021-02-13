@@ -16,7 +16,7 @@
     "min_qty": 1.0,
     "price_step": 0.001,
     "qty_step": 1.0,
-    "min_close_qty_multiplier": 0.5,
+    "balance_pct": 1.0,
 
 
     "min_notional": 0.0,
@@ -38,12 +38,14 @@
          "lambda trade, tick: calc_diff(trade['price'], tick['price']) > 1.05"],
         ["OFF: adg too low",
          "lambda trade, tick: trade['average_daily_gain'] < 1.002 and trade['progress'] >= 0.1"],
+        ["OFF: no soft stops",
+         "lambda trade, tick: trade['loss_sum'] == 0.0 and trade['progress'] >= 0.5"],
         ["ON: balance + pnl below starting_balance",
          "lambda trade, tick: trade['actual_balance'] + trade['pnl_sum'] < 0.0"]
     ],
 
     "ddown_factor": 0.014,
-    "default_qty": -0.0603,
+    "entry_qty_pct": 0.0603,
     "grid_coefficient": 283.55,
     "grid_spacing": 0.0042,
     "ema_span": 16318.0,
@@ -52,6 +54,7 @@
     "stop_loss_pos_price_diff": 0.04,
     "max_markup": 0.01085,
     "min_markup": 0.00007,
+    "min_close_qty_multiplier": 0.5,
     "n_close_orders": 12,
     "stop_loss_pos_reduction": 0.001
 }

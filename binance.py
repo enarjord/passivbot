@@ -12,7 +12,7 @@ from math import floor
 from time import time, sleep
 from typing import Callable, Iterator
 from passivbot import init_ccxt, load_key_secret, load_settings, make_get_filepath, print_, \
-    ts_to_date, flatten, filter_orders, Bot, start_bot, round_up, round_dn, calc_default_qty
+    ts_to_date, flatten, filter_orders, Bot, start_bot, round_up, round_dn, calc_initial_entry_qty
 
 
 def get_maintenance_margin_rate(pos_size_ito_usdt: float) -> float:
@@ -145,12 +145,12 @@ class BinanceBot(Bot):
                         self.price_step = float(q['tickSize'])
                     elif q['filterType'] == 'MIN_NOTIONAL':
                         self.min_notional = float(q['notional'])
-                self.calc_default_qty = lambda balance_, last_price: \
-                    calc_default_qty(max(self.min_qty, round_up(self.min_notional / last_price,
-                                                                self.qty_step)),
-                                     self.qty_step,
-                                     balance_ / last_price,
-                                     self.default_qty)
+                self.calc_initial_entry_qty = lambda balance_, last_price: \
+                    calc_initial_entry_qty(max(self.min_qty, round_up(self.min_notional / last_price,
+                                                                      self.qty_step)),
+                                           self.qty_step,
+                                           (balance_ / last_price) * self.leverage,
+                                           self.entry_qty_pct)
                 break
         await self.update_position()
         await self.init_order_book()
@@ -159,15 +159,6 @@ class BinanceBot(Bot):
         ticker = await self.cc.fapiPublic_get_ticker_bookticker(params={'symbol': self.symbol})
         self.ob = [float(ticker['bidPrice']), float(ticker['askPrice'])]
         self.price = np.random.choice(self.ob)
-
-    def calc_entry_qty(self, balance_, pos_size_, pos_price_):
-        return calc_entry_qty(self.qty_step,
-                              self.min_qty,
-                              self.ddown_factor,
-                              self.leverage,
-                              balance_,
-                              pos_size_,
-                              1 / pos_price_)
 
     def calc_long_entry_price(self, balance_, pos_size_, pos_price_):
         return calc_long_entry_price(self.price_step,
@@ -200,9 +191,10 @@ class BinanceBot(Bot):
         ]
 
     async def fetch_position(self) -> dict:
-        positions, account = await asyncio.gather(
+        positions, account, funding = await asyncio.gather(
             self.cc.fapiPrivate_get_positionrisk(params={'symbol': self.symbol}),
-            self.cc.fapiPrivate_get_account()
+            self.cc.fapiPrivate_get_account(),
+            self.cc.fapiPublic_get_fundingrate()
         )
         if positions:
             position = {'size': float(positions[0]['positionAmt']),
@@ -216,6 +208,10 @@ class BinanceBot(Bot):
                         'leverage': 1.0}
         position['cost'] = abs(position['size']) * position['price']
         position['margin_cost'] = position['cost'] / self.leverage
+        for e in funding:
+            if e['symbol'] == self.symbol:
+                position['predicted_funding_rate'] = float(e['fundingRate'])
+                break
         for e in account['assets']:
             if e['asset'] == 'USDT':
                 position['equity'] = float(e['marginBalance'])

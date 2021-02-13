@@ -47,6 +47,26 @@ change log
 2021-02-09
 - added classic stop loss
 
+2021-02-10
+- renamed settings["default_qty"] to settings["entry_qty_pct"]
+- settings["entry_qty_pct"] may now also be a positive value
+- renamed settings["balance"] to settings["balance_pct"]
+- settings["balance_pct"] may now also be a positive value
+- added balance_pct to backtester.  backtester will now behave like live bot, taking balance_pct into account
+    - actual balance is used for liq price calc, otherwise balance * balance_pct is used
+
+2021-02-12
+- added indicator_settings["funding_fee_collect_mode"]
+    - if true, will enter long only if predicted fundig rate is negative and enter short only if predicted funding rate is positive
+- added indicator rsi (not finished, not active)
+- changed entry_qty_pct formula
+    - before initial_entry_qty = balance_ito_contracts * entry_qty_pct
+    - now    initial_entry_qty = balance_ito_contracts * leverage * entry_qty_pct
+- added logging
+- added "config_name" and "logging_level" to live settings
+- added break_on condition: break if balance + pnl < starting_balance by enarjord
+
+
 ------------------------------------------------------------------
 
 released freely -- anybody may copy, redistribute, modify, use for commercial, non-commercial, educational or non-educational purposes, censor, claim as one's own or otherwise do or not do whatever without permission from anybody
@@ -119,11 +139,21 @@ about backtesting settings, binance XMRUSDT example
     "symbol": "XMRUSDT",
     "n_days": 41,                            # n days to backtest
 
-    "random_starting_candidate": false,      # if false, will use settings given as starting candidate
+    "starting_candidate_preference": ["best", "random", "given"],
+                                             # starting candidate preference from left to right.
+                                             # if best is first and there is a best.json file present, will build on best.
+                                             # otherwise, starting candidate will be either random or given, depending which is before the other.
+                                             # after first iteration, will build on best regardless of starting_candidate_preference
+    
     "starting_k": 0,                         # k is incremented by 1 per iteration until k == n_jackrabbit_iterations
     "n_jackrabbit_iterations": 200,          # see below for more info on jackrabbit
     
     "min_notional": 1.0,                     # used with binance: entry qty must be greater than min_notional / price
+    "cross_mode": true,                      # true for cross mode, false for isolated mode
+    "max_leverage": 75,                      # max allowed leverage for symbol
+    "do_long": true,
+    "do_shrt": true,
+
     
     "break_on": [
         ["OFF: break on first soft stop",
@@ -137,17 +167,22 @@ about backtesting settings, binance XMRUSDT example
         ["ON: pos price last price diff",
          "lambda trade, tick: calc_diff(trade['price'], tick['price']) > 1.05"]
     ],
-                                             # conditions to break backtest prematurely ["name", if true: break.  trade is last trade, tick is last price tick]
-                                             # if startswith "OFF", will ignore condition
+                                             # conditions to break backtest prematurely and returns empty list of trades.
+                                             # ["name", if true: break.  trade is last trade, tick is last price tick]
+                                             # if startswith "OFF", will ignore condition.
 
     "inverse": false,                        # inverse is true for bybit, false for binance
     "maker_fee": 0.00018,                    # 0.00018 for binance (with bnb discount), -0.00025 for bybit
-    "balance": 10.0,                         # backtest starting balance
+
+    "starting_balance": 10.0,                # backtest starting balance
+                                             # backtest balance never goes lower than starting balance,
+                                             # as if topping up wallet back to starting balance each time balance goes below starting balance
+    
     "min_qty": 0.001,                        # minimum allowed contract qty
     "price_step": 0.01,
     "qty_step": 0.001,
     "taker_fee": 0.00036,                    # 0.00036 for binance (with bnb discount), 0.00075 for bybit
-    "min_close_qty_multiplier": 0.5,         # min_close_qty = default_qty * min_close_qty_multiplier
+    "min_close_qty_multiplier": 0.5,         # min_close_qty = initial_entry_qty * min_close_qty_multiplier
 
 
 }
@@ -177,32 +212,37 @@ about settings, bybit example:
 
 {
 
-    "default_qty": 1.0,                   # entry quantity.
-                                          # scalable entry quantity mode:
-                                          # if "default_qty" is set to a negative value,
-                                          # it becomes a percentage of balance (which is actual account balance if settings["balance"] is set to -1).
-                                          # the bot will calculate entry qty using the following formula:
-                                          # default_qty = max(minimum_qty, round_dn(balance_in_terms_of_contracts * abs(settings["default_qty"]), qty_step))
+    "balance_pct": 0.5,                   # if settings["balance_pct"] = 1.0, will use 100% of balance.
+                                          # if settings["balance_pct"] = 0.35, will us 35% of balance.
+    "config_name": "BTCUSD_default",      # arbitrary name given to settings.
+    "cross_mode": true,                   # true for cross, false for isolated.
+                                          # use isolated mode with care.  depending on settings, there is high risk of accidental liquidations.
+
+    "entry_qty_pct": 0.005,               # percentage of balance * leverage used as initial entry qty.
+                                          # the bot will calculate initial entry qty using the following formula:
+                                          # initial_entry_qty = round_dn(balance_in_terms_of_contracts * leverage * abs(settings["entry_qty_pct"]), qty_step)
                                           # bybit BTCUSD example:
-                                          # if "default_qty"  is set to -0.06, last price is 37000 and wallet balance is 0.001 btc,
-                                          # default_qty = 0.001 * 37000 * 0.06 == 2.22.  rounded down is 2.0 usd.
+                                          # if "entry_qty_pct"  is set to 0.0021, last price is 37000, leverage is 50 and wallet balance is 0.001 btc,
+                                          # initial_entry_qty = 0.001 * 37000 * 50 * 0.0021 == 3.885.  rounded down is 3.0 usd.
                                           # binance ETHUSDT example:
-                                          # if "default_qty" is set to -0.07, last price is 1100 and wallet balance is 60 usdt,
-                                          # default_qty = 60 / 1100 * 0.07 == 0.003818.  rounded down is 0.003 eth.
+                                          # if "entry_qty_pct" is set to 0.07, last price is 1100, leverage is 33 and wallet balance is 40 usdt,
+                                          # initial_entry_qty = (40 / 1100) * 33 * 0.07 == 0.084.  rounded down is 0.084 eth.
     
-    "ddown_factor": 0.02,                 # next reentry_qty is max(default_qty, abs(pos_size) * ddown_factor).
+    "ddown_factor": 0.02,                 # next reentry_qty is max(initial_entry_qty, abs(pos_size) * ddown_factor).
                                           # if set to 1.0, each reentry qty will be equal to 1x pos size, i.e. doubling pos size after every reentry.
-                                          # if set to 0.0, each reentry qty will be equal to default_qty.
+                                          # if set to 1.5, each reentry qty will be equal to 1.5x pos size.
+                                          # if set to 0.0, each reentry qty will be equal to initial_entry_qty.
                                           
     "indicator_settings": {
-        "tick_ema": {"span": 10000},
+        "tick_ema": {                     # tick ema is not based on ohlcvs, but calculated based on sequence of raw trades.
+            "span": 10000                 # if no pos, bid = min(ema, highest_bid) and ask = max(ema, lowest_ask)
+        },                                # if ema span is set to 1.0, ema is always equal to last price, which will disable ema smoothing of initial entries
+
+        "funding_fee_collect_mode": false,# if true, will enter long only if predicted funding fee is < 0.0, and short only if predicted funding fee is > 0.0
+
         "do_long": true,                  # if true, will allow long positions
         "do_shrt": true                   # if true, will allow short posisions
     },
-                                          # indicators may be used to determine long or short initial entry.  they are updated on each websocket trade tick.
-                                          # tick ema is not based on ohlcvs, but calculated based on sequence of raw trades.
-                                          # when no pos, bid = min(tick_ema, highest_bid), ask = max(tick_ema, lowest_ask)
-                                          # more indicators may be added in future.
                                           
     "grid_coefficient": 245.0,            # next entry price is pos_price * (1 +- grid_spacing * (1 + (pos_margin / balance) * grid_coefficient)).
     "grid_spacing": 0.0026,               # 
@@ -213,20 +253,14 @@ about settings, bybit example:
     "stop_loss_pos_reduction": 0.02,      # reduce position by 2% at a loss.
     
     "leverage": 100,                      # leverage (irrelevant in bybit because cross mode in is always max leverage).
+    "logging_level": 0,                   # if logging_level > 0,
+                                          # will log positions, open orders, order creations and order cancellations in logs/{exchange}/{config_name}.log.
+
     "min_markup": 0.0002,                 # when there's a position, bot makes a grid of n_close_orders whose prices are
     "max_markup": 0.0159,                 # evenly distributed between min and max markup, and whose qtys are pos_size // n_close_orders.
-    "min_close_qty_multiplier": 0.5       # optional setting, will default to 0.0 if not present.
-                                          # min_close_qty = max(min_qty, default_qty * min_close_qty_multiplier)
-    
+    "min_close_qty_multiplier": 0.5       # min_close_qty = max(min_qty, initial_entry_qty * min_close_qty_multiplier)
     
     "market_stop_loss": false,            # if true will soft stop with market orders, if false soft stops with limit orders at order book's higest_bid/lowest_ask
-    
-    "balance": 0.001,                     # balance bot sees.  used to limit pos size and to modify grid spacing.
-                                          # scalable balance mode:
-                                          # if settings["balance"] < 0.0, will use exchange_fetched_balance * min(1.0, abs(settings["balance"])) as balance.
-                                          # e.g. if settings["balance"] = -1.0, will use 100% of balance.
-                                          # if settings["balance"] = -0.35, will us 35% of balance.
-                                          # if using static balance, binance balance is quoted in usdt, bybit inverse balance is quoted in coin.
                                           
     "n_close_orders": 20,                 # max n close orders.
     "n_entry_orders": 8,                  # max n entry orders.
