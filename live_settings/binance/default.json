@@ -1,11 +1,22 @@
 {
-    "balance_pct": 0.75,
     "config_name": "XMRUSDT_default",
+    "symbol": "XMRUSDT",
+    "logging_level": 0,
     "cross_mode": true,
+
+    "balance_pct": 0.75,
     "ddown_factor": 0.877,
     "entry_qty_pct": 0.00705,
+    "min_close_qty_multiplier": 0.5,
+    "leverage": 47.0,
+    "n_entry_orders": 8,
+    "n_close_orders": 15.0,
+
     "grid_coefficient": 212.92,
     "grid_spacing": 0.00215,
+    "min_markup": 0.00097,
+    "max_markup": 0.00849,
+
     "indicator_settings": {
         "do_long": true,
         "do_shrt": true,
@@ -18,16 +29,9 @@
             "span": 27235.0
         }
     },
-    "leverage": 47.0,
-    "logging_level": 0,
+
+    "market_stop_loss": false,
     "stop_loss_liq_diff": 0.04,
     "stop_loss_pos_price_diff": 0.9,
-    "market_stop_loss": false,
-    "max_markup": 0.00849,
-    "min_close_qty_multiplier": 0.5,
-    "min_markup": 0.00097,
-    "n_close_orders": 15.0,
-    "n_entry_orders": 8,
-    "stop_loss_pos_reduction": 0.035,
-    "symbol": "XMRUSDT"
+    "stop_loss_pos_reduction": 0.035
 }
