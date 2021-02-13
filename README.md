@@ -285,6 +285,8 @@ EOS: nbt4rhnhpjan
 
 XLM: GDSTC6KQR6BCTA7BH45B3MTSY52EVZ4UZTPZEBAZHJMJHTUQQ5SM57S7
 
+USDT TRC20 (binance): TJr3KYY8Bz7wRU7QLwoYQHk88LcaBJqQN5
+
 bybit ref:
 https://www.bybit.com/invite?ref=PQEGz
 
