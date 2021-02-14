@@ -4,18 +4,18 @@
     "logging_level": 0,
     "cross_mode": true,
 
-    "balance_pct": 0.75,
-    "ddown_factor": 0.877,
-    "entry_qty_pct": 0.00705,
-    "min_close_qty_multiplier": 0.5,
-    "leverage": 47.0,
+    "balance_pct": 0.93,
+    "ddown_factor": 0.868,
+    "entry_qty_pct": 0.00271,
+    "min_close_qty_multiplier": 0.22,
+    "leverage": 30.0,
     "n_entry_orders": 8,
-    "n_close_orders": 15.0,
+    "n_close_orders": 13.0,
 
-    "grid_spacing": 0.00215,
-    "grid_coefficient": 212.92,
-    "min_markup": 0.00097,
-    "max_markup": 0.00849,
+    "grid_spacing": 0.00185,
+    "grid_coefficient": 272.24,
+    "min_markup": 0.00128,
+    "max_markup": 0.02233,
 
     "indicator_settings": {
         "do_long": true,
@@ -26,12 +26,12 @@
             "period_ms": 1800000
         },
         "tick_ema": {
-            "span": 27235.0
+            "span": 53395.0
         }
     },
 
     "market_stop_loss": false,
-    "stop_loss_liq_diff": 0.04,
-    "stop_loss_pos_price_diff": 0.9,
-    "stop_loss_pos_reduction": 0.035
-}
+    "stop_loss_liq_diff": 0.0908,
+    "stop_loss_pos_price_diff": 0.1125,
+    "stop_loss_pos_reduction": 0.108
+} 
