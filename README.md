@@ -21,6 +21,9 @@ for a repository of settings and their backtesting results, see
 
 https://github.com/JohnKearney1/PassivBot-Configurations
 
+for more detailed documentation on this project, see the wiki at:
+
+https://github.com/enarjord/passivbot_futures/wiki
 
 ------------------------------------------------------------------
 change log
