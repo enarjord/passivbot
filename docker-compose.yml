@@ -1,0 +1,11 @@
+version: "3"
+services:
+  bot1:
+    image: jalanga/passivbot_futures:latest
+    command: bash -c "python3 ./start_bot_docker.py binance"
+    environment:
+      API_KEY: YOUR_API_KEY
+      API_SECRET: YOUR_API_SECRE
+      CONFIG_FILE: ./config.json
+    volumes:
+      - ./config.json:/passivbot_futures/config.json

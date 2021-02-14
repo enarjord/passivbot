@@ -28,6 +28,10 @@ for more detailed documentation on this project, see the wiki at:
 
 https://github.com/enarjord/passivbot_futures/wiki
 
+github:
+
+https://github.com/enarjord/passivbot_futures
+
 ------------------------------------------------------------------
 change log
 
@@ -113,6 +117,20 @@ make a copy of `settings/{exchange}/default.json`
 rename the copy `your_user_name.json` and make desired changes
 
 run in terminal: `python3 start_bot.py exchange your_user_name`
+
+usage docker-compose:
+
+install docker: https://docs.docker.com/engine/install/
+install docker-compose: https://docs.docker.com/engine/install/
+
+1. copy docker-compose.yml file: https://github.com/enarjord/passivbot_futures/blob/master/docker-compose.yml
+2. create a config file
+3. edit the ```docker-compose.yml``` file and in the environment section, add your keys, and the path to the config file.
+4. run ```docker-compose up``` or ```docker-compose up -d ```(for daemon)
+
+PS: You can add how many bots, just duplicate the service "bot1", and redo steps 2 and 3 
+To stop the bot run ```docker-compose stop```
+
 
 ------------------------------------------------------------------
 overview
