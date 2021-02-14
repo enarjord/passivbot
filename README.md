@@ -125,10 +125,11 @@ install docker-compose: https://docs.docker.com/engine/install/
 
 1. copy docker-compose.yml file: https://github.com/enarjord/passivbot_futures/blob/master/docker-compose.yml
 2. create a config file
-3. edit the ```docker-compose.yml``` file and in the environment section, add your keys, and the path to the config file.
-4. run ```docker-compose up``` or ```docker-compose up -d ```(for daemon)
+3. edit the ```docker-compose.yml``` file and in the environment section, add your keys, and the path to the config file if is different.
+4. In the command section change exchange with binance or bybit
+5. run ```docker-compose up``` or ```docker-compose up -d ```(for daemon)
 
-PS: You can add how many bots, just duplicate the service "bot1", and redo steps 2 and 3 
+PS: You can add how many bots, just duplicate the service "bot1", and redo steps 2, 3, 4 
 To stop the bot run ```docker-compose stop```
 
 
