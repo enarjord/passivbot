@@ -485,16 +485,17 @@ def jackrabbit(trades_list: [dict],
             print(settings, '\n')
             print(results[key], '\n\n')
             default_live_settings = load_settings(settings['exchange'], do_print=False)
-            live_settings = {k: settings[k] if k in settings else default_live_settings[k]
-                             for k in default_live_settings}
+            live_settings = {k_: settings[k_] if k_ in settings else default_live_settings[k_]
+                             for k_ in default_live_settings}
             live_settings['indicator_settings'] = default_live_settings['indicator_settings']
             live_settings['indicator_settings']['tick_ema']['span'] = best['ema_span']
             live_settings['indicator_settings']['do_long'] = backtesting_settings['do_long']
             live_settings['indicator_settings']['do_shrt'] = backtesting_settings['do_shrt']
+            live_settings['config_name'] = backtesting_settings['session_name']
+            print('\n\n', json.dumps(live_settings, indent=4), '\n\n')
             json.dump(live_settings,
                       open(base_filepath + 'best_result_live_settings.json', 'w'),
-                      indent=4, sort_keys=True)
-            print('\n\n', json.dumps(live_settings, indent=4, sort_keys=True), '\n\n')
+                      indent=4)
             json.dump({**{'gain': result['gain']}, **best}, open(best_filepath, 'w'),
                       indent=4, sort_keys=True)
         candidate = get_new_candidate(ranges, best, m=mutation_coefficient)
