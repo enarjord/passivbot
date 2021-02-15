@@ -14,7 +14,7 @@ with open('./api_key_secrets/{exchange}/passivbot.json'.format(exchange=exchange
         )
     )
 
-with open('{0}'.format(os.getenv('CONFIG_FILE')), 'r') as from_file, \
+with open('./config.json', 'r') as from_file, \
         open('./live_settings/{exchange}/passivbot.json'.format(exchange=exchange), 'w+') as to_file:
     to_file.truncate(0)
     for line in from_file:

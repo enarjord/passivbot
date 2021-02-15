@@ -6,6 +6,5 @@ services:
     environment:
       API_KEY: YOUR_API_KEY
       API_SECRET: YOUR_API_SECRE
-      CONFIG_FILE: ./config.json
     volumes:
       - ./config.json:/passivbot_futures/config.json
