@@ -1,6 +1,6 @@
 # passivbot_futures
 
-**Version: 1.0.2**
+**Version: 1.1.0**
 
 trading bot running on bybit inverse futures and binance usdt futures
 
@@ -75,6 +75,10 @@ change log
 - added logging
 - added "config_name" and "logging_level" to live settings
 - added break_on condition: break if balance + pnl < starting_balance
+
+2021-02-16
+- bug fixes v1.0.2
+- updated default bybit live settings v1.1.0
 
 
 ------------------------------------------------------------------
