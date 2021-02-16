@@ -318,12 +318,12 @@ class Bot:
         try:
             position, _ = await asyncio.gather(self.fetch_position(),
                                                self.update_open_orders())
+            if self.position != position:
+                self.dump_log({'log_type': 'position', 'data': position})
+            self.position = position
+            self.ts_released['update_position'] = time()
         except Exception as e:
             print('error with update position', e)
-        if self.position != position:
-            self.dump_log({'log_type': 'position', 'data': position})
-        self.position = position
-        self.ts_released['update_position'] = time()
 
     async def create_orders(self, orders_to_create: [dict]) -> dict:
         if self.ts_locked['create_orders'] > self.ts_released['create_orders']:
