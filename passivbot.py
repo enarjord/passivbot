@@ -297,18 +297,18 @@ class Bot:
             return
         try:
             open_orders = await self.fetch_open_orders()
+            self.highest_bid, self.lowest_ask = 0.0, 9.9e9
+            for o in open_orders:
+                if o['side'] == 'buy':
+                    self.highest_bid = max(self.highest_bid, o['price'])
+                elif o['side'] == 'sell':
+                    self.lowest_ask = min(self.lowest_ask, o['price'])
+            if self.open_orders != open_orders:
+                self.dump_log({'log_type': 'open_orders', 'data': open_orders})
+            self.open_orders = open_orders
+            self.ts_released['update_open_orders'] = time()
         except Exception as e:
             print('error with update open orders', e)
-        self.highest_bid, self.lowest_ask = 0.0, 9.9e9
-        for o in open_orders:
-            if o['side'] == 'buy':
-                self.highest_bid = max(self.highest_bid, o['price'])
-            elif o['side'] == 'sell':
-                self.lowest_ask = min(self.lowest_ask, o['price'])
-        if self.open_orders != open_orders:
-            self.dump_log({'log_type': 'open_orders', 'data': open_orders})
-        self.open_orders = open_orders
-        self.ts_released['update_open_orders'] = time()
 
     async def update_position(self) -> None:
         # also updates open orders
