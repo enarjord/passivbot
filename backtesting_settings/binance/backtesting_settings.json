@@ -45,6 +45,7 @@
     "min_markup": 0.00149,
 
     "ema_span": 87268.0,
+    "ema_spread": 0.0,
 
     "stop_loss_liq_diff": 0.0895,
     "stop_loss_pos_price_diff": 0.0987,
