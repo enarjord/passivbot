@@ -158,6 +158,7 @@ def backtest(trades_list: [dict], settings: dict):
     ema_alpha = 2 / (settings['ema_span'] + 1)
     ema_alpha_ = 1 - ema_alpha
     ema = trades_list[0]['price']
+    ema_spread = settings['ema_spread'] if 'ema_spread' in settings else 0.0
 
     k = 0
     break_on = {e[0]: eval(e[1]) for e in settings['break_on'] if e[0].startswith('ON:')}
@@ -168,7 +169,7 @@ def backtest(trades_list: [dict], settings: dict):
             if pos_size == 0.0:
                 # no pos
                 if do_long:
-                    bid_price = min(ob[0], round_dn(ema, price_step))
+                    bid_price = min(ob[0], round_dn(ema * (1 - ema_spread), price_step))
                     bid_qty = calc_initial_entry_qty_(apparent_balance, ob[0])
                 else:
                     bid_price = 0.0
@@ -254,7 +255,7 @@ def backtest(trades_list: [dict], settings: dict):
             if pos_size == 0.0:
                 # no pos
                 if do_shrt:
-                    ask_price = max(ob[1], round_up(ema, price_step))
+                    ask_price = max(ob[1], round_up(ema * (1 + ema_spread), price_step))
                     ask_qty = -calc_initial_entry_qty_(apparent_balance, ob[1])
                 else:
                     ask_price = 9e9
@@ -496,6 +497,7 @@ def jackrabbit(trades_list: [dict],
                              for k_ in default_live_settings}
             live_settings['indicator_settings'] = default_live_settings['indicator_settings']
             live_settings['indicator_settings']['tick_ema']['span'] = best['ema_span']
+            live_settings['indicator_settings']['tick_ema']['spread'] = best['ema_spread']
             live_settings['indicator_settings']['do_long'] = backtesting_settings['do_long']
             live_settings['indicator_settings']['do_shrt'] = backtesting_settings['do_shrt']
             live_settings['config_name'] = backtesting_settings['session_name']
