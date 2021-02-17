@@ -257,6 +257,8 @@ class Bot:
         self.n_close_orders = settings['n_close_orders']
         self.entry_qty_pct = settings['entry_qty_pct']
         self.ddown_factor = settings['ddown_factor']
+        self.ema_spread = settings['indicator_settings']['tick_ema']['spread'] \
+            if 'spread' in settings['indicator_settings']['tick_ema'] else 0.0
 
         self.min_close_qty_multiplier = settings['min_close_qty_multiplier']
 
@@ -381,14 +383,18 @@ class Bot:
         if self.indicator_settings['do_long'] and \
                 (not self.indicator_settings['funding_fee_collect_mode'] or
                  self.position['predicted_funding_rate'] < 0.0):
-            bid_price = min(self.ob[0], round_dn(self.indicators['tick_ema'], self.price_step))
+            bid_price = min(self.ob[0],
+                            round_dn(self.indicators['tick_ema'] * (1 - self.ema_spread),
+                                     self.price_step))
         else:
             bid_price = -1.0
 
         if self.indicator_settings['do_shrt'] and \
                 (not self.indicator_settings['funding_fee_collect_mode'] or
                  self.position['predicted_funding_rate'] > 0.0):
-            ask_price = max(self.ob[1], round_up(self.indicators['tick_ema'], self.price_step))
+            ask_price = max(self.ob[1],
+                            round_up(self.indicators['tick_ema'] * (1 + self.ema_spread),
+                                     self.price_step))
         else:
             ask_price = -1.0
         return bid_price, ask_price
