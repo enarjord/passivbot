@@ -676,6 +676,8 @@ async def main():
     backtesting_settings['price_step'] = bot.price_step
     backtesting_settings['max_leverage'] = bot.max_leverage
     await bot.cc.close()
+    
+    print(json.dumps(backtesting_settings, indent=4))
 
     try:
         session_name = sys.argv[3]
