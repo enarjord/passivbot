@@ -1,6 +1,6 @@
 # passivbot_futures
 
-**Version: 1.1.1**
+**Version: 1.2.0**
 
 trading bot running on bybit inverse futures and binance usdt futures
 
@@ -79,6 +79,13 @@ change log
 2021-02-16
 - bug fixes v1.0.2
 - updated default bybit live settings v1.1.0
+
+2021-02-17 v1.2.0
+- bug fixes
+- change in backtesting_notes.ipynb
+    - automatic plot dump
+    - other changes
+- backtester now fetches relevant data from exchanges instead of user having to input them manually
 
 
 ------------------------------------------------------------------
