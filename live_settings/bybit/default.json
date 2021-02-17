@@ -27,7 +27,7 @@
         },
         "tick_ema": {
             "span": 6355.0,
-            "spread": 0.0,
+            "spread": 0.0
         }
     },
  
