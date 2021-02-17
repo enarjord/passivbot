@@ -89,7 +89,7 @@ change log
 
 2021-02-17 v1.2.1
 - backtester will cache exchange fetched settings after first run
-- backtester will prevent using leverage higher than max leverage
+- backtester will prevent using leverage higher than max leverage, in case max leverage set in ranges.json was too high
 
 
 ------------------------------------------------------------------
