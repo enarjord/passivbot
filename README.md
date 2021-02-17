@@ -156,7 +156,6 @@ about backtesting settings, binance XMRUSDT example
 {
 
     "session_name": "unnamed_session",       # arbitrary name.
-    "exchange": "binance",
     "symbol": "XMRUSDT",
     "n_days": 41,                            # n days to backtest
 
@@ -169,7 +168,6 @@ about backtesting settings, binance XMRUSDT example
     "starting_k": 0,                         # k is incremented by 1 per iteration until k == n_jackrabbit_iterations
     "n_jackrabbit_iterations": 200,          # see below for more info on jackrabbit
     
-    "min_notional": 1.0,                     # used with binance: entry qty must be greater than min_notional / price
     "cross_mode": true,                      # true for cross mode, false for isolated mode
     "max_leverage": 75,                      # max allowed leverage for symbol
     "do_long": true,
@@ -192,18 +190,10 @@ about backtesting settings, binance XMRUSDT example
                                              # ["name", if true: break.  trade is last trade, tick is last price tick]
                                              # if startswith "OFF", will ignore condition.
 
-    "inverse": false,                        # inverse is true for bybit, false for binance
-    "maker_fee": 0.00018,                    # 0.00018 for binance (with bnb discount), -0.00025 for bybit
 
     "starting_balance": 10.0,                # backtest starting balance
                                              # backtest balance never goes lower than starting balance,
-                                             # as if topping up wallet back to starting balance each time balance goes below starting balance
-    
-    "min_qty": 0.001,                        # minimum allowed contract qty
-    "price_step": 0.01,
-    "qty_step": 0.001,
-    "taker_fee": 0.00036,                    # 0.00036 for binance (with bnb discount), 0.00075 for bybit
-    "min_close_qty_multiplier": 0.5,         # min_close_qty = initial_entry_qty * min_close_qty_multiplier
+                                             # as if topping up wallet back to starting balance each time balance goes below starting balance.
 
 
 }
