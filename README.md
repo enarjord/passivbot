@@ -1,6 +1,6 @@
 # passivbot_futures
 
-**Version: 1.2.0**
+**Version: 1.2.1**
 
 trading bot running on bybit inverse futures and binance usdt futures
 
@@ -86,6 +86,10 @@ change log
     - automatic plot dump
     - other changes
 - backtester now fetches relevant data from exchanges instead of user having to input them manually
+
+2021-02-17 v1.2.1
+- backtester will cache exchange fetched settings after first run
+- backtester will prevent using leverage higher than max leverage
 
 
 ------------------------------------------------------------------
