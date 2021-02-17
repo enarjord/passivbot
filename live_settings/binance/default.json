@@ -26,7 +26,8 @@
             "period_ms": 1800000
         },
         "tick_ema": {
-            "span": 59854.0
+            "span": 59854.0,
+            "spread": 0.0
         }
     },
 
