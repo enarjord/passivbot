@@ -1,6 +1,6 @@
 # passivbot_futures
 
-**Version: 1.2.1**
+**Version: 1.3.0**
 
 trading bot running on bybit inverse futures and binance usdt futures
 
@@ -90,6 +90,11 @@ change log
 2021-02-17 v1.2.1
 - backtester will cache exchange fetched settings after first run
 - backtester will prevent using leverage higher than max leverage, in case max leverage set in ranges.json was too high
+
+2021-02-17 v1.3.0
+- added indicator_settings["tick_ema"]["spread"] to live bot and backtester
+    - optional setting -- ema_spread defaults to 0.0 if not present in config file
+
 
 
 ------------------------------------------------------------------
@@ -250,7 +255,8 @@ about settings, bybit example:
                                           
     "indicator_settings": {
         "tick_ema": {                     # tick ema is not based on ohlcvs, but calculated based on sequence of raw trades.
-            "span": 10000                 # if no pos, bid = min(ema, highest_bid) and ask = max(ema, lowest_ask)
+            "span": 10000,                # if no pos, bid = min(ema * (1 - spread), highest_bid) and ask = max(ema * (1 + spread), lowest_ask)
+            "spread": 0.001
         },                                # if ema span is set to 1.0, ema is always equal to last price, which will disable ema smoothing of initial entries
 
         "funding_fee_collect_mode": false,# if true, will enter long only if predicted funding fee is < 0.0, and short only if predicted funding fee is > 0.0
