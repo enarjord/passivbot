@@ -702,6 +702,12 @@ async def main():
         settings_from_exchange['max_leverage'] = bot.max_leverage
         await bot.cc.close()
         json.dump(settings_from_exchange, open(settings_from_exchange_fp, 'w'), indent=4)
+    if 'leverage' in ranges:
+        ranges['leverage'][1] = min(ranges['leverage'][1],
+                                    settings_from_exchange['max_leverage'])
+        ranges['leverage'][0] = min(ranges['leverage'][0],
+                                    ranges['leverage'][1])
+
     backtesting_settings = {**backtesting_settings, **settings_from_exchange}
     print(json.dumps(backtesting_settings, indent=4))
     trades_list_filepath = os.path.join(results_filepath, f"{n_days}_days_trades_list_cache.npy")
