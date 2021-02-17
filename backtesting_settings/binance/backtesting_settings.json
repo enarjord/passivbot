@@ -1,6 +1,5 @@
 {
     "session_name": "xmr_session_001_62_days_break_on_0.07_liq_diff",
-    "exchange": "binance",
     "symbol": "XMRUSDT",
     "n_days": 62,
 
@@ -9,17 +8,8 @@
     "n_jackrabbit_iterations": 200,
 
     "starting_balance": 10.0,
-    "inverse": false,
-    "maker_fee": 0.00018,
-    "market_stop_loss": false,
-    "min_qty": 0.001,
-    "price_step": 0.01,
-    "qty_step": 0.001,
-    "taker_fee": 0.00036,
 
-    "min_notional": 1.0,
     "cross_mode": true,
-    "max_leverage": 75,
     "do_long": true,
     "do_shrt": true,
 

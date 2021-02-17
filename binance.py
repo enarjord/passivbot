@@ -12,7 +12,8 @@ from math import floor
 from time import time, sleep
 from typing import Callable, Iterator
 from passivbot import init_ccxt, load_key_secret, load_settings, make_get_filepath, print_, \
-    ts_to_date, flatten, filter_orders, Bot, start_bot, round_up, round_dn, calc_initial_entry_qty
+    ts_to_date, flatten, filter_orders, Bot, start_bot, round_up, round_dn, \
+    calc_initial_entry_qty
 
 
 def get_maintenance_margin_rate(pos_size_ito_usdt: float) -> float:
@@ -128,7 +129,10 @@ class BinanceBot(Bot):
         self.trade_id = 0
 
     async def _init(self):
-        exchange_info = await self.cc.fapiPublic_get_exchangeinfo()
+        exchange_info, leverage_bracket = await asyncio.gather(
+            self.cc.fapiPublic_get_exchangeinfo(),
+            self.cc.fapiPrivate_get_leveragebracket()
+        )
         for e in exchange_info['symbols']:
             if e['symbol'] == self.symbol:
                 self.coin = e['baseAsset']
@@ -152,6 +156,13 @@ class BinanceBot(Bot):
                                            (balance_ / last_price) * self.leverage,
                                            self.entry_qty_pct)
                 break
+        max_lev = 0
+        for e in leverage_bracket:
+            if e['symbol'] == self.symbol:
+                for br in e['brackets']:
+                    max_lev = max(max_lev, br['initialLeverage'])
+                break
+        self.max_leverage = max_lev
         await self.update_position()
         await self.init_order_book()
 

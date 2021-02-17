@@ -4,17 +4,20 @@ import numpy as np
 import pandas as pd
 import asyncio
 import os
+import pprint
 from time import time
 from passivbot import init_ccxt, make_get_filepath, ts_to_date, print_, load_settings, \
     sort_dict_keys, round_up, round_dn, round_, calc_long_closes, calc_shrt_closes, \
     calc_long_reentry_price, calc_shrt_reentry_price, calc_diff, calc_initial_entry_qty, \
     calc_reentry_qty
-from binance import fetch_trades as binance_fetch_trades
+from bybit import create_bot as create_bot_bybit
 from bybit import fetch_trades as bybit_fetch_trades
 from bybit import calc_cross_long_liq_price as bybit_calc_cross_long_liq_price
 from bybit import calc_cross_shrt_liq_price as bybit_calc_cross_shrt_liq_price
 from bybit import calc_isolated_long_liq_price as bybit_calc_isolated_long_liq_price
 from bybit import calc_isolated_shrt_liq_price as bybit_calc_isolated_shrt_liq_price
+from binance import create_bot as create_bot_binance
+from binance import fetch_trades as binance_fetch_trades
 from binance import calc_cross_long_liq_price as binance_calc_cross_long_liq_price
 from binance import calc_cross_shrt_liq_price as binance_calc_cross_shrt_liq_price
 from binance import calc_isolated_long_liq_price as binance_calc_isolated_long_liq_price
@@ -428,8 +431,11 @@ def jackrabbit(trades_list: [dict],
     else:
         results = {}
     json.dump(backtesting_settings, open(base_filepath + 'backtesting_settings.json', 'w'),
-              indent=4, sort_keys=True)
-    json.dump(ranges, open(base_filepath + 'ranges.json', 'w'), indent=4, sort_keys=True)
+              indent=4)
+    json.dump(ranges, open(base_filepath + 'ranges.json', 'w'), indent=4)
+
+    pprint.pprint({e[0]: eval(e[1])
+                   for e in backtesting_settings['break_on'] if e[0].startswith('ON:')})
     
     while k < ks:
         mutation_coefficient = ms[k]
@@ -649,6 +655,29 @@ async def main():
     settings_filepath = os.path.join('backtesting_settings', exchange, '')
     backtesting_settings = \
         json.load(open(os.path.join(settings_filepath, 'backtesting_settings.json')))
+
+    tmp_live_settings = load_settings(exchange, do_print=False)
+    tmp_live_settings['symbol'] = backtesting_settings['symbol']
+    if exchange == 'binance':
+        bot = await create_bot_binance(user, tmp_live_settings)
+        backtesting_settings['inverse'] = False
+        backtesting_settings['maker_fee'] = 0.00018
+        backtesting_settings['taker_fee'] = 0.00036
+        backtesting_settings['exchange'] = 'binance'
+    elif exchange == 'bybit':
+        bot = await create_bot_bybit(user, tmp_live_settings)
+        backtesting_settings['inverse'] = True
+        backtesting_settings['maker_fee'] = -0.00025
+        backtesting_settings['taker_fee'] = 0.00075
+        backtesting_settings['exchange'] = 'bybit'
+    backtesting_settings['min_qty'] = bot.min_qty
+    backtesting_settings['min_notional'] = bot.min_notional
+    backtesting_settings['qty_step'] = bot.qty_step
+    backtesting_settings['price_step'] = bot.price_step
+    backtesting_settings['max_leverage'] = bot.max_leverage
+    await bot.cc.close()
+    
+    print(json.dumps(backtesting_settings, indent=4))
 
     try:
         session_name = sys.argv[3]

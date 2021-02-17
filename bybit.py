@@ -114,6 +114,7 @@ async def create_bot(user: str, settings: str):
 class BybitBot(Bot):
     def __init__(self, user: str, settings: dict):
         self.exchange = 'bybit'
+        self.min_notional = 0.0
         super().__init__(user, settings)
         self.cc = init_ccxt(self.exchange, user)
 

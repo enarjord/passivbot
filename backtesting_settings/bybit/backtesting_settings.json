@@ -1,21 +1,11 @@
 {
     "session_name": "btc_001_52_days_break_on_liq_diff_0.07",
-    "exchange": "bybit",
     "symbol": "BTCUSD",
     "n_days": 52,
 
     "starting_candidate_preference": ["best", "random", "given"],
     "starting_k": 0,
     "n_jackrabbit_iterations": 200,
-
-    "inverse": true,
-    "maker_fee": -0.00025,
-    "taker_fee": 0.00075,
-    "min_qty": 1.0,
-    "qty_step": 1.0,
-    "price_step": 0.5,
-    "min_notional": 0.0,
-    "max_leverage": 100,
 
     "starting_balance": 0.001,
     "market_stop_loss": false,
