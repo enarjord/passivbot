@@ -441,6 +441,7 @@ def jackrabbit(trades_list: [dict],
         mutation_coefficient = ms[k]
         if candidate['min_markup'] >= candidate['max_markup']:
             candidate['min_markup'] = candidate['max_markup']
+        candidate['leverage'] = min(backtesting_settings['max_leverage'], candidate['leverage'])
 
         settings = {**backtesting_settings, **candidate}
         key = np.format_float_positional(hash(json.dumps({k_: candidate[k_] for k_ in ranges})),
@@ -656,28 +657,7 @@ async def main():
     backtesting_settings = \
         json.load(open(os.path.join(settings_filepath, 'backtesting_settings.json')))
 
-    tmp_live_settings = load_settings(exchange, do_print=False)
-    tmp_live_settings['symbol'] = backtesting_settings['symbol']
-    if exchange == 'binance':
-        bot = await create_bot_binance(user, tmp_live_settings)
-        backtesting_settings['inverse'] = False
-        backtesting_settings['maker_fee'] = 0.00018
-        backtesting_settings['taker_fee'] = 0.00036
-        backtesting_settings['exchange'] = 'binance'
-    elif exchange == 'bybit':
-        bot = await create_bot_bybit(user, tmp_live_settings)
-        backtesting_settings['inverse'] = True
-        backtesting_settings['maker_fee'] = -0.00025
-        backtesting_settings['taker_fee'] = 0.00075
-        backtesting_settings['exchange'] = 'bybit'
-    backtesting_settings['min_qty'] = bot.min_qty
-    backtesting_settings['min_notional'] = bot.min_notional
-    backtesting_settings['qty_step'] = bot.qty_step
-    backtesting_settings['price_step'] = bot.price_step
-    backtesting_settings['max_leverage'] = bot.max_leverage
-    await bot.cc.close()
-    
-    print(json.dumps(backtesting_settings, indent=4))
+
 
     try:
         session_name = sys.argv[3]
@@ -689,11 +669,39 @@ async def main():
     symbol = backtesting_settings['symbol']
     n_days = backtesting_settings['n_days']
     ranges = json.load(open(os.path.join(settings_filepath, 'ranges.json')))
-    print(settings_filepath)
     results_filepath = make_get_filepath(
         os.path.join('backtesting_results', exchange, symbol, session_name, '')
     )
     print(results_filepath)
+
+    settings_from_exchange_fp = results_filepath + 'settings_from_exchange.json'
+    if os.path.exists(settings_from_exchange_fp):
+        settings_from_exchange = json.load(open(settings_from_exchange_fp))
+    else:
+        tmp_live_settings = load_settings(exchange, do_print=False)
+        tmp_live_settings['symbol'] = backtesting_settings['symbol']
+        settings_from_exchange = {}
+        if exchange == 'binance':
+            bot = await create_bot_binance(user, tmp_live_settings)
+            settings_from_exchange['inverse'] = False
+            settings_from_exchange['maker_fee'] = 0.00018
+            settings_from_exchange['taker_fee'] = 0.00036
+            settings_from_exchange['exchange'] = 'binance'
+        elif exchange == 'bybit':
+            bot = await create_bot_bybit(user, tmp_live_settings)
+            settings_from_exchange['inverse'] = True
+            settings_from_exchange['maker_fee'] = -0.00025
+            settings_from_exchange['taker_fee'] = 0.00075
+            settings_from_exchange['exchange'] = 'bybit'
+        settings_from_exchange['min_qty'] = bot.min_qty
+        settings_from_exchange['min_notional'] = bot.min_notional
+        settings_from_exchange['qty_step'] = bot.qty_step
+        settings_from_exchange['price_step'] = bot.price_step
+        settings_from_exchange['max_leverage'] = bot.max_leverage
+        await bot.cc.close()
+        json.dump(settings_from_exchange, open(settings_from_exchange_fp, 'w'), indent=4)
+    backtesting_settings = {**backtesting_settings, **settings_from_exchange}
+    print(json.dumps(backtesting_settings, indent=4))
     trades_list_filepath = os.path.join(results_filepath, f"{n_days}_days_trades_list_cache.npy")
     if os.path.exists(trades_list_filepath):
         print('loading cached trade list', trades_list_filepath)
