@@ -1,6 +1,6 @@
 # passivbot_futures
 
-**Version: 1.3.2**
+**Version: 1.3.3**
 
 trading bot running on bybit inverse futures and binance usdt futures
 
@@ -94,6 +94,9 @@ change log
 2021-02-17 v1.3.0
 - added indicator_settings["tick_ema"]["spread"] to live bot and backtester
     - optional setting -- ema_spread defaults to 0.0 if not present in config file
+
+2021-02-18 v1.3.3
+- minor refactoring
 
 
 
