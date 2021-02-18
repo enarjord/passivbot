@@ -206,9 +206,8 @@ def backtest(trades_list: [dict], settings: dict):
                                                              ob[0]) * min_close_qty_multiplier,
                                      qty_step)
                         )
-                        qtys, prices = calc_shrt_closes(price_step, qty_step, min_qty, min_markup,
-                                                        max_markup, min_close_qty, pos_size,
-                                                        pos_price, ob[0], n_close_orders)
+                        qtys, prices = calc_shrt_closes(price_step, qty_step, min_close_qty, min_markup,
+                                                        max_markup, pos_size, pos_price, ob[0], n_close_orders)
                         if len(qtys) > 0:
                             bid_qty = qtys[0]
                             bid_price = prices[0]
@@ -276,9 +275,8 @@ def backtest(trades_list: [dict], settings: dict):
                                                              ob[0]) * min_close_qty_multiplier,
                                      qty_step)
                         )
-                        qtys, prices = calc_long_closes(price_step, qty_step, min_qty, min_markup,
-                                                        max_markup, min_close_qty, pos_size,
-                                                        pos_price, ob[1], n_close_orders)
+                        qtys, prices = calc_long_closes(price_step, qty_step, min_close_qty, min_markup,
+                                                        max_markup, pos_size, pos_price, ob[1], n_close_orders)
                         if len(qtys) > 0:
                             ask_qty = qtys[0]
                             ask_price = prices[0]
