@@ -542,7 +542,10 @@ class Bot:
     async def cancel_and_create(self):
         await asyncio.sleep(0.1)
         await self.update_position()
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(0.01)
+        if any([self.ts_locked[k_] > self.ts_released[k_]
+                for k_ in [x for x in self.ts_locked if x != 'decide']]):
+            return
         n_orders_limit = 4
         to_cancel, to_create = filter_orders(self.open_orders,
                                              self.calc_orders(),
