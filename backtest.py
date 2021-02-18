@@ -443,7 +443,7 @@ def jackrabbit(trades_list: [dict],
         candidate['leverage'] = min(backtesting_settings['max_leverage'], candidate['leverage'])
 
         settings = {**backtesting_settings, **candidate}
-        key = np.format_float_positional(hash(json.dumps({k_: candidate[k_] for k_ in ranges})),
+        key = np.format_float_positional(hash(json.dumps({k_: candidate[k_] for k_ in ranges if k_ in candidate})),
                                          trim='-')[1:20]
         if key in results:
             if os.path.exists(best_filepath):
