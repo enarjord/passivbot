@@ -497,7 +497,8 @@ def jackrabbit(trades_list: [dict],
                              for k_ in default_live_settings}
             live_settings['indicator_settings'] = default_live_settings['indicator_settings']
             live_settings['indicator_settings']['tick_ema']['span'] = best['ema_span']
-            live_settings['indicator_settings']['tick_ema']['spread'] = best['ema_spread']
+            live_settings['indicator_settings']['tick_ema']['spread'] = best['ema_spread'] \
+                if 'ema_spread' in best else 0.0
             live_settings['indicator_settings']['do_long'] = backtesting_settings['do_long']
             live_settings['indicator_settings']['do_shrt'] = backtesting_settings['do_shrt']
             live_settings['config_name'] = backtesting_settings['session_name']
