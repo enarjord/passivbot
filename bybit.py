@@ -143,24 +143,6 @@ class BybitBot(Bot):
         self.ob = [float(ticker['result'][0]['bid_price']), float(ticker['result'][0]['ask_price'])]
         self.price = float(ticker['result'][0]['last_price'])
 
-    def calc_long_entry_price(self, balance_, pos_size_, pos_price_):
-        return calc_long_entry_price(self.price_step,
-                                     self.leverage,
-                                     self.grid_spacing,
-                                     self.grid_spacing_coefficient,
-                                     balance_,
-                                     pos_size_,
-                                     pos_price_)
-
-    def calc_shrt_entry_price(self, balance_, pos_size_, pos_price_):
-        return calc_shrt_entry_price(self.price_step,
-                                     self.leverage,
-                                     self.grid_spacing,
-                                     self.grid_spacing_coefficient,
-                                     balance_,
-                                     pos_size_,
-                                     pos_price_)
-
     async def fetch_open_orders(self) -> [dict]:
         fetched = await self.cc.v2_private_get_order(params={'symbol': self.symbol})
         return [

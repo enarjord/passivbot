@@ -61,13 +61,12 @@ def calc_long_closes(price_step: float,
                      min_qty: float,
                      min_markup: float,
                      max_markup: float,
-                     min_close_qty: float,
                      pos_size: float,
                      pos_price: float,
                      lowest_ask: float,
                      n_orders: int = 10,
                      single_order_price_diff_threshold: float = 0.003):
-    n_orders = int(round(min(n_orders, pos_size / min_close_qty)))
+    n_orders = int(round(min(n_orders, pos_size / min_qty)))
     prices = round_up(np.linspace(pos_price * (1 + min_markup), pos_price * (1 + max_markup),
                                   n_orders),
                       price_step)
@@ -115,14 +114,13 @@ def calc_shrt_closes(price_step: float,
                      min_qty: float,
                      min_markup: float,
                      max_markup: float,
-                     min_close_qty: float,
                      pos_size: float,
                      pos_price: float,
                      highest_bid: float,
                      n_orders: int = 10,
                      single_order_price_diff_threshold: float = 0.003):
     abs_pos_size = abs(pos_size)
-    n_orders = int(round(min(n_orders, abs_pos_size / min_close_qty)))
+    n_orders = int(round(min(n_orders, abs_pos_size / min_qty)))
     prices = round_dn(np.linspace(pos_price * (1 - min_markup), pos_price * (1 - max_markup),
                                   n_orders),
                       price_step)
@@ -473,10 +471,9 @@ class Bot:
                                                                     pos_price))
             ask_qtys, ask_prices = calc_long_closes(self.price_step,
                                                     self.qty_step,
-                                                    self.min_qty,
+                                                    min_close_qty,
                                                     self.min_markup,
                                                     self.max_markup,
-                                                    min_close_qty,
                                                     self.position['size'] - stop_loss_qty,
                                                     self.position['price'],
                                                     self.ob[1],
@@ -524,10 +521,9 @@ class Bot:
                                                                     pos_price))
             bid_qtys, bid_prices = calc_shrt_closes(self.price_step,
                                                     self.qty_step,
-                                                    self.min_qty,
+                                                    min_close_qty,
                                                     self.min_markup,
                                                     self.max_markup,
-                                                    min_close_qty,
                                                     self.position['size'] + stop_loss_qty,
                                                     self.position['price'],
                                                     self.ob[0],
