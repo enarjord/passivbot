@@ -1,32 +1,28 @@
 import sys
 import json
+import hjson
 import numpy as np
 import pandas as pd
 import asyncio
 import os
 import pprint
+from hashlib import sha256
+from multiprocessing import Pool
 from time import time
-from passivbot import init_ccxt, make_get_filepath, ts_to_date, print_, load_settings, \
-    sort_dict_keys, round_up, round_dn, round_, calc_long_closes, calc_shrt_closes, \
-    calc_long_reentry_price, calc_shrt_reentry_price, calc_diff, calc_initial_entry_qty, \
-    calc_reentry_qty
+from passivbot import *
 from bybit import create_bot as create_bot_bybit
 from bybit import fetch_trades as bybit_fetch_trades
 from bybit import calc_cross_long_liq_price as bybit_calc_cross_long_liq_price
 from bybit import calc_cross_shrt_liq_price as bybit_calc_cross_shrt_liq_price
-from bybit import calc_isolated_long_liq_price as bybit_calc_isolated_long_liq_price
-from bybit import calc_isolated_shrt_liq_price as bybit_calc_isolated_shrt_liq_price
 from binance import create_bot as create_bot_binance
 from binance import fetch_trades as binance_fetch_trades
 from binance import calc_cross_long_liq_price as binance_calc_cross_long_liq_price
 from binance import calc_cross_shrt_liq_price as binance_calc_cross_shrt_liq_price
-from binance import calc_isolated_long_liq_price as binance_calc_isolated_long_liq_price
-from binance import calc_isolated_shrt_liq_price as binance_calc_isolated_shrt_liq_price
 
 from typing import Iterator
 
 
-def prep_trades_list(df: pd.DataFrame):
+def prep_ticks(df: pd.DataFrame):
     dfc = df[df.price != df.price.shift(1)] # drop consecutive same price trades
     dfc.index = np.arange(len(dfc))
     if 'side' in dfc.columns:
@@ -43,472 +39,260 @@ def prep_trades_list(df: pd.DataFrame):
     return list(dfcc.to_dict(orient='index').values())
 
 
-def backtest(trades_list: [dict], settings: dict):
-    # trades format is [{price: float, buyer_maker: bool}]
+def backtest(ticks: [dict], settings: dict):
 
-    # no static mode
-    grid_spacing = settings['grid_spacing']
-    grid_coefficient = settings['grid_coefficient']
-    price_step = settings['price_step']
-    qty_step = settings['qty_step']
-    inverse = settings['inverse']
-    stop_loss_liq_diff = settings['stop_loss_liq_diff']
-    stop_loss_pos_price_diff = settings['stop_loss_pos_price_diff']
-    stop_loss_pos_reduction = settings['stop_loss_pos_reduction']
-    min_qty = settings['min_qty']
-    ddown_factor = settings['ddown_factor']
-    leverage = settings['leverage']
-    max_leverage = settings['max_leverage']
-    maker_fee = settings['maker_fee']
-    taker_fee = settings['taker_fee']
-    min_markup = settings['min_markup']
-    max_markup = settings['max_markup']
-    n_close_orders = settings['n_close_orders']
-    min_close_qty_multiplier = settings['min_close_qty_multiplier']
-    balance_pct = settings['balance_pct']
+    ss = settings
 
-    do_long = settings['do_long']
-    do_shrt = settings['do_shrt']
+    pos_size, pos_price, reentry_price, reentry_qty, liq_price = 0.0, 0.0, 0.0, 0.0, 0.0
+    closest_long_liq, closest_shrt_liq = 1.0, 1.0
+    stop_loss_price = 0.0
+    actual_balance = ss['starting_balance']
+    apparent_balance = actual_balance * ss['balance_pct']
 
-    min_notional = settings['min_notional'] if 'min_notional' in settings else 0.0
-    cross_mode = settings['cross_mode'] if 'cross_mode' in settings else True
+    pnl_sum, loss_sum, profit_sum = 0.0, 0.0, 0.0
 
-    if inverse:
-        calc_cost = lambda qty_, price_: qty_ / price_
-        if settings['cross_mode']:
-            calc_liq_price = lambda balance_, pos_size_, pos_price_: \
-                bybit_calc_cross_shrt_liq_price(balance_,
-                                                pos_size_,
-                                                pos_price_,
-                                                leverage=max_leverage) \
-                    if pos_size_ < 0.0 else \
-                    bybit_calc_cross_long_liq_price(balance_,
-                                                    pos_size_,
-                                                    pos_price_,
-                                                    leverage=max_leverage)
-        else:
-            calc_liq_price = lambda balance_, pos_size_, pos_price_: \
-                bybit_calc_isolated_shrt_liq_price(balance_,
-                                                   pos_size_,
-                                                   pos_price_,
-                                                   leverage=leverage) \
-                    if pos_size_ < 0.0 else \
-                    bybit_calc_isolated_long_liq_price(balance_,
-                                                       pos_size_,
-                                                       pos_price_,
-                                                       leverage=leverage)
-        calc_initial_entry_qty_ = lambda balance_, last_price: \
-            calc_initial_entry_qty(min_qty, qty_step, balance_ * last_price * leverage,
-                                   settings['entry_qty_pct'])
-        calc_max_pos_size = lambda balance_, price_: balance_ * price_ * leverage
+    if ss['inverse']:
+        min_qty_f = calc_min_qty_inverse
+        long_pnl_f = calc_long_pnl_inverse
+        shrt_pnl_f = calc_shrt_pnl_inverse
+        cost_f = calc_cost_inverse
+        pos_margin_f = calc_margin_cost_inverse
+        max_pos_size_f = calc_max_pos_size_inverse
+        min_entry_qty_f = calc_min_entry_qty_inverse
+        long_liq_price_f = bybit_calc_cross_long_liq_price
+        shrt_liq_price_f = bybit_calc_cross_shrt_liq_price
     else:
-        calc_cost = lambda qty_, price_: qty_ * price_
-        if settings['cross_mode']:
-            calc_liq_price = lambda balance_, pos_size_, pos_price_: \
-                binance_calc_cross_shrt_liq_price(balance_,
-                                                  pos_size_,
-                                                  pos_price_,
-                                                  leverage=leverage) \
-                    if pos_size_ < 0.0 else \
-                    binance_calc_cross_long_liq_price(balance_,
-                                                      pos_size_,
-                                                      pos_price_,
-                                                      leverage=leverage)
-        else:
-            calc_liq_price = lambda balance_, pos_size_, pos_price_: \
-                binance_calc_isolated_shrt_liq_price(balance_,
-                                                     pos_size_,
-                                                     pos_price_,
-                                                     leverage=leverage) \
-                    if pos_size_ < 0.0 else \
-                    binance_calc_isolated_long_liq_price(balance_,
-                                                         pos_size_,
-                                                         pos_price_,
-                                                         leverage=leverage)
-        calc_initial_entry_qty_ = lambda balance_, last_price: \
-            calc_initial_entry_qty(max(min_qty, round_up(min_notional / last_price, qty_step)),
-                                   qty_step, (balance_ / last_price) * leverage,
-                                   settings['entry_qty_pct'])
-        calc_max_pos_size = lambda balance_, price_: balance_ / price_ * leverage
+        min_qty_f = calc_min_qty_linear
+        long_pnl_f = calc_long_pnl_linear
+        shrt_pnl_f = calc_shrt_pnl_linear
+        cost_f = calc_cost_linear
+        pos_margin_f = calc_margin_cost_linear
+        max_pos_size_f = calc_max_pos_size_linear
+        min_entry_qty_f = calc_min_entry_qty_linear
+        long_liq_price_f = binance_calc_cross_long_liq_price
+        shrt_liq_price_f = binance_calc_cross_shrt_liq_price
 
-    calc_long_reentry_price_ = lambda balance_, pos_margin_, pos_price_, highest_bid_: \
-        min(highest_bid_, calc_long_reentry_price(price_step, grid_spacing, grid_coefficient,
-                                           balance_, pos_margin_, pos_price_))
-    calc_shrt_reentry_price_ = lambda balance_, pos_margin_, pos_price_, lowest_ask_: \
-        max(lowest_ask_, calc_shrt_reentry_price(price_step, grid_spacing, grid_coefficient,
-                                                 balance_, pos_margin_, pos_price_))
-    actual_balance = settings['starting_balance']
-    apparent_balance = actual_balance * balance_pct
-    trades = []
-    ob = [min(trades_list[0]['price'], trades_list[1]['price']),
-          max(trades_list[0]['price'], trades_list[1]['price'])]
-
-    pos_size = 0.0
-    pos_price = 0.0
-
-    bid_price = ob[0]
-    ask_price = ob[1]
-
-    liq_price = 0.0
-
-    pnl_sum = 0.0
-    loss_sum = 0.0
-    profit_sum = 0.0
-
-    ema_alpha = 2 / (settings['ema_span'] + 1)
-    ema_alpha_ = 1 - ema_alpha
-    ema = trades_list[0]['price']
-    ema_spread = settings['ema_spread'] if 'ema_spread' in settings else 0.0
-
-    k = 0
     break_on = {e[0]: eval(e[1]) for e in settings['break_on'] if e[0].startswith('ON:')}
-    for t in trades_list:
-        append_trade = False
+
+    ema = ticks[0]['price']
+    ema_alpha = 2 / (ss['ema_span'] + 1)
+    ema_alpha_ = 1 - ema_alpha
+
+    trades = []
+    ob = [min(ticks[0]['price'], ticks[1]['price']),
+          max(ticks[0]['price'], ticks[1]['price'])]
+    for k, t in enumerate(ticks):
+        did_trade = False
         if t['buyer_maker']:
-            # buy
+            # maker buy, taker sel
             if pos_size == 0.0:
-                # no pos
-                if do_long:
-                    bid_price = min(ob[0], round_dn(ema * (1 - ema_spread), price_step))
-                    bid_qty = calc_initial_entry_qty_(apparent_balance, ob[0])
-                else:
-                    bid_price = 0.0
-                    bid_qty = 0.0
+                # create long pos
+                if ss['do_long']:
+                    price = min(ob[0], round_dn(ema * (1 - ss['ema_spread']), ss['price_step']))
+                    if t['price'] < price and ss['do_long']:
+                        did_trade = True
+                        qty = min_entry_qty_f(ss['qty_step'], ss['min_qty'], ss['min_cost'],
+                                              ss['entry_qty_pct'], ss['leverage'], apparent_balance,
+                                              price)
+                        trade_type, trade_side = 'entry', 'long'
+                        pnl = -cost_f(qty, price) * ss['maker_fee']
             elif pos_size > 0.0:
-                if calc_diff(liq_price, ob[1]) < stop_loss_liq_diff and t['price'] <= liq_price:
-                    # long liq
-                    print(f'break on long liquidation, liq price: {liq_price}')
+                closest_long_liq = min(calc_diff(liq_price, t['price']), closest_long_liq)
+                if t['price'] <= liq_price and closest_long_liq < 0.2:
+                    # long liquidation
+                    print('\nlong liquidation')
                     return []
-                # long reentry
-                bid_qty = calc_reentry_qty(qty_step, ddown_factor,
-                                           calc_initial_entry_qty_(apparent_balance, ob[0]),
-                                           calc_max_pos_size(apparent_balance, ob[0]),
-                                           pos_size)
-                if bid_qty >= max(min_qty, min_notional / t['price']):
-                    pos_margin = calc_cost(pos_size, pos_price) / leverage
-                    bid_price = calc_long_reentry_price_(apparent_balance, pos_margin, pos_price,
-                                                         ob[0])
-                else:
-                    bid_price = 0.0
+                if t['price'] < reentry_price:
+                    # add to long pos
+                    did_trade, qty, price = True, reentry_qty, reentry_price
+                    trade_type, trade_side = 'entry', 'long'
+                    pnl = -cost_f(qty, price) * ss['maker_fee']
             else:
-                # short pos
-                if calc_diff(liq_price, ob[0]) < stop_loss_liq_diff or \
-                        calc_diff(pos_price, ob[0]) > stop_loss_pos_price_diff:
-                    # short soft stop
-                    bid_price = ob[0]
-                    bid_qty = round_up(-pos_size * stop_loss_pos_reduction, qty_step)
-                else:
-                    if t['price'] <= pos_price:
-                        # short close
-                        min_close_qty = max(
-                            min_qty,
-                            round_dn(calc_initial_entry_qty_(apparent_balance,
-                                                             ob[0]) * min_close_qty_multiplier,
-                                     qty_step)
-                        )
-                        qtys, prices = calc_shrt_closes(price_step, qty_step, min_close_qty, min_markup,
-                                                        max_markup, pos_size, pos_price, ob[0], n_close_orders)
-                        if len(qtys) > 0:
-                            bid_qty = qtys[0]
-                            bid_price = prices[0]
-                        else:
-                            bid_price = 0.0
-                    else:
-                        bid_price = 0.0
+                if t['price'] <= pos_price:
+                    # close shrt pos
+                    min_close_qty = calc_min_close_qty(
+                        ss['qty_step'], ss['min_qty'], ss['min_close_qty_multiplier'],
+                        min_entry_qty_f(ss['qty_step'], ss['min_qty'], ss['min_cost'],
+                                        ss['entry_qty_pct'], ss['leverage'], apparent_balance,
+                                        t['price'])
+                    )
+                    qtys, prices = calc_shrt_closes(ss['price_step'],
+                                                    ss['qty_step'],
+                                                    min_close_qty,
+                                                    ss['min_markup'],
+                                                    ss['max_markup'],
+                                                    pos_size,
+                                                    pos_price,
+                                                    ob[0],
+                                                    ss['n_close_orders'])
+                    if t['price'] < prices[0]:
+                        did_trade, qty, price = True, qtys[0], prices[0]
+                        trade_type, trade_side = 'close', 'shrt'
+                        pnl = shrt_pnl_f(pos_price, price, qty) - \
+                            cost_f(qty, price) * ss['maker_fee']
+                elif t['price'] >= stop_loss_price:
+                    # shrt stop loss
+                    did_trade = True
+                    qty = min(-pos_size, round_up(-pos_size * ss['stop_loss_pos_reduction'],
+                                                  ss['qty_step']))
+                    price = ob[0]
+                    trade_type, trade_side = 'stop_loss', 'shrt'
+                    pnl = shrt_pnl_f(pos_price, price, qty) - \
+                        cost_f(qty, price) * ss['maker_fee']
+
             ob[0] = t['price']
-            if t['price'] < bid_price and bid_qty >= min_qty:
-                # filled trade
-                qty = bid_qty
-                price = bid_price
-                cost = calc_cost(bid_qty, bid_price)
-                pnl = -cost * maker_fee
-                if pos_size >= 0.0:
-                    # create or increase long pos
-                    trade_side = 'long'
-                    trade_type = 'entry'
-                    new_pos_size = pos_size + bid_qty
-                    pos_price = pos_price * (pos_size / new_pos_size) + \
-                        bid_price * (bid_qty / new_pos_size)
-                    pos_size = new_pos_size
-                    roi = 0.0
-                else:
-                    # close short pos
-                    trade_side = 'shrt'
-                    gain = pos_price / bid_price - 1
-                    pnl += cost * gain
-                    if gain >= 0.0:
-                        trade_type = 'close'
-                        profit_sum += pnl
-                    else:
-                        trade_type = 'stop_loss'
-                        loss_sum += pnl
-                    pos_size = pos_size + bid_qty
-                    roi = gain * leverage
-                actual_balance += pnl
-                apparent_balance = actual_balance * balance_pct
-                pnl_sum += pnl
-                liq_price = calc_liq_price(actual_balance, pos_size, pos_price)
-                append_trade = True
         else:
-            # sell
+            # maker sel, taker buy
             if pos_size == 0.0:
-                # no pos
-                if do_shrt:
-                    ask_price = max(ob[1], round_up(ema * (1 + ema_spread), price_step))
-                    ask_qty = -calc_initial_entry_qty_(apparent_balance, ob[1])
-                else:
-                    ask_price = 9e9
-                    ask_qty = 0.0
-            elif pos_size > 0.0:
-                # long pos
-                if calc_diff(liq_price, ob[1]) < stop_loss_liq_diff or \
-                        calc_diff(pos_price, ob[1]) > stop_loss_pos_price_diff:
-                    # long soft stop
-                    ask_price = ob[1]
-                    ask_qty = -round_up(pos_size * stop_loss_pos_reduction, qty_step)
-                else:
-                    if t['price'] >= pos_price:
-                        # long close
-                        min_close_qty = max(
-                            min_qty,
-                            round_dn(calc_initial_entry_qty_(apparent_balance,
-                                                             ob[0]) * min_close_qty_multiplier,
-                                     qty_step)
-                        )
-                        qtys, prices = calc_long_closes(price_step, qty_step, min_close_qty, min_markup,
-                                                        max_markup, pos_size, pos_price, ob[1], n_close_orders)
-                        if len(qtys) > 0:
-                            ask_qty = qtys[0]
-                            ask_price = prices[0]
-                        else:
-                            ask_price = 9e9
-                    else:
-                        ask_price = 9e9
-            else:
-                if calc_diff(liq_price, ob[1]) < stop_loss_liq_diff and t['price'] >= liq_price:
-                    # shrt liq
-                    print(f'break on shrt liquidation, liq price: {liq_price}')
+                # create shrt pos
+                if ss['do_shrt']:
+                    price = max(ob[1], round_up(ema * (1 + ss['ema_spread']), ss['price_step']))
+                    if t['price'] > price:
+                        did_trade = True
+                        qty = -min_entry_qty_f(ss['qty_step'], ss['min_qty'], ss['min_cost'],
+                                               ss['entry_qty_pct'], ss['leverage'],
+                                               apparent_balance, price)
+                        trade_type, trade_side = 'entry', 'shrt'
+                        pnl = -cost_f(-qty, price) * ss['maker_fee']
+            elif pos_size < 0.0:
+                closest_shrt_liq = min(calc_diff(liq_price, t['price']), closest_shrt_liq)
+                if t['price'] >= liq_price and closest_shrt_liq < 0.2:
+                    # shrt liquidation
+                    print('\nshrt liquidation')
                     return []
-                # shrt reentry
-                ask_qty = -calc_reentry_qty(qty_step, ddown_factor,
-                                            calc_initial_entry_qty_(apparent_balance, ob[1]),
-                                            calc_max_pos_size(apparent_balance, ob[1]),
-                                            pos_size)
-                if -ask_qty >= max(min_qty, min_notional / t['price']):
-                    pos_margin = calc_cost(-pos_size, pos_price) / leverage
-                    ask_price = calc_shrt_reentry_price_(apparent_balance, pos_margin, pos_price,
-                                                         ob[0])
-                else:
-                    ask_price = 9e9
+                if t['price'] > reentry_price:
+                    # add to shrt pos
+                    did_trade, qty, price = True, reentry_qty, reentry_price
+                    trade_type, trade_side = 'entry', 'shrt'
+                    pnl = -cost_f(-qty, price) * ss['maker_fee']
+            else:
+                # close long pos
+                if t['price'] >= pos_price:
+                    min_close_qty = calc_min_close_qty(
+                        ss['qty_step'], ss['min_qty'], ss['min_close_qty_multiplier'],
+                        min_entry_qty_f(ss['qty_step'], ss['min_qty'], ss['min_cost'],
+                                        ss['entry_qty_pct'], ss['leverage'], apparent_balance,
+                                        t['price'])
+                    )
+                    qtys, prices = calc_long_closes(ss['price_step'],
+                                                    ss['qty_step'],
+                                                    min_close_qty,
+                                                    ss['min_markup'],
+                                                    ss['max_markup'],
+                                                    pos_size,
+                                                    pos_price,
+                                                    ob[1],
+                                                    ss['n_close_orders'])
+                    if t['price'] > prices[0]:
+                        did_trade, qty, price = True, qtys[0], prices[0]
+                        trade_type, trade_side = 'close', 'long'
+                        pnl = long_pnl_f(pos_price, price, -qty) - \
+                            cost_f(-qty, price) * ss['maker_fee']
+                elif t['price'] <= stop_loss_price:
+                    # long stop loss
+                    did_trade = True
+                    qty = -min(pos_size, round_up(pos_size * ss['stop_loss_pos_reduction'],
+                                                  ss['qty_step']))
+                    price = ob[1]
+                    trade_type, trade_side = 'stop_loss', 'long'
+                    pnl = long_pnl_f(pos_price, price, qty) - \
+                        cost_f(-qty, price) * ss['maker_fee']
             ob[1] = t['price']
-            if t['price'] > ask_price and abs(ask_qty) >= min_qty:
-                # filled trade
-                qty = ask_qty
-                price = ask_price
-                cost = calc_cost(-ask_qty, ask_price)
-                pnl = -cost * maker_fee
-                if pos_size <= 0.0:
-                    # create or increase shrt pos
-                    trade_side = 'shrt'
-                    trade_type = 'entry'
-                    new_pos_size = pos_size + ask_qty
-                    pos_price = pos_price * (pos_size / new_pos_size) + \
-                        ask_price * (ask_qty / new_pos_size)
-                    pos_size = new_pos_size
-                    roi = 0.0
-                else:
-                    # close long pos
-                    trade_side = 'long'
-                    gain = ask_price / pos_price - 1
-                    pnl += cost * gain
-                    if gain >= 0.0:
-                        trade_type = 'close'
-                        profit_sum += pnl
-                    else:
-                        trade_type = 'stop_loss'
-                        loss_sum += pnl
-                    pos_size = pos_size + ask_qty
-                    roi = gain * leverage
-                actual_balance += pnl
-                apparent_balance = actual_balance * balance_pct
-                pnl_sum += pnl
-                liq_price = calc_liq_price(actual_balance, pos_size, pos_price)
-                append_trade = True
-        if append_trade:
-            progress = k / len(trades_list)
+        ema = ema * ema_alpha_ + t['price'] * ema_alpha
+        if did_trade:
+            new_pos_size = round(pos_size + qty, 10)
+            if trade_type == 'entry':
+                pos_price = pos_price * abs(pos_size / new_pos_size) + \
+                    price * abs(qty / new_pos_size) if new_pos_size else np.nan
+            pos_size = new_pos_size
+            actual_balance += pnl
+            actual_balance = max(ss['starting_balance'], actual_balance + pnl)
+            apparent_balance = actual_balance * ss['balance_pct']
+            if pos_size == 0.0:
+                liq_price = 0.0
+            elif pos_size > 0.0:
+                liq_price = long_liq_price_f(actual_balance, pos_size, pos_price, ss['leverage'])
+            else:
+                liq_price = shrt_liq_price_f(actual_balance, pos_size, pos_price, ss['leverage'])
+            progress = k / len(ticks)
+            pnl_sum += pnl
+            if trade_type == 'stop_loss':
+                loss_sum += pnl
+            else:
+                profit_sum += pnl
             total_gain = (pnl_sum + settings['starting_balance']) / settings['starting_balance']
-            n_days_ = (t['timestamp'] - trades_list[0]['timestamp']) / (1000 * 60 * 60 * 24)
-            adg = total_gain ** (1 / n_days_) if n_days_ > 0.0 else 1.0
-            trades.append({'trade_id': k, 'side': trade_side, 'type': trade_type,
-                           'price': price, 'qty': qty, 'pnl': pnl, 'roi': roi,
-                           'pos_size': pos_size, 'pos_price': pos_price,
-                           'apparent_balance': apparent_balance,
-                           'actual_balance': actual_balance,
-                           'max_pos_size': calc_max_pos_size(apparent_balance, t['price']),
-                           'pnl_sum': pnl_sum, 'loss_sum': loss_sum, 'profit_sum': profit_sum,
-                           'progress': progress,
-                           'liq_price': liq_price, 'gain': total_gain,
-                           'n_days': n_days_, 'average_daily_gain': adg,
-                           'liq_diff': min(1.0, calc_diff(liq_price, t['price'])),
-                           'timestamp': t['timestamp']})
-            actual_balance = max(actual_balance, settings['starting_balance'])
-            apparent_balance = actual_balance * balance_pct
+            n_days_ = (t['timestamp'] - ticks[0]['timestamp']) / (1000 * 60 * 60 * 24)
+            adg = total_gain ** (1 / n_days_) if (n_days_ > 0.0 and total_gain > 0.0) else 0.0
+            trades.append({'trade_id': k, 'side': trade_side, 'type': trade_type, 'price': price,
+                           'qty': qty, 'pos_price': pos_price, 'pos_size': pos_size, 'pnl': pnl,
+                           'liq_price': liq_price, 'apparent_balance': apparent_balance,
+                           'actual_balance': actual_balance, 'pnl_sum': pnl_sum,
+                           'loss_sum': loss_sum, 'profit_sum': profit_sum,
+                           'average_daily_gain': adg, 'timestamp': t['timestamp'],
+                           'closest_long_liq': closest_long_liq,
+                           'closest_shrt_liq': closest_shrt_liq,
+                           'progress': progress})
+            closest_long_liq, closest_shrt_liq = 1.0, 1.0
+            for key, condition in break_on.items():
+                if condition(trades[-1], t):
+                    print('break on', key)
+                    return []
+            if pos_size > 0.0:
+                stop_loss_price = max(pos_price * (1 - ss['stop_loss_pos_price_diff']),
+                                      liq_price * (1 + ss['stop_loss_liq_diff']))
+                reentry_price = min(
+                    ob[0],
+                    calc_long_reentry_price(ss['price_step'], ss['grid_spacing'],
+                                            ss['grid_coefficient'], apparent_balance,
+                                            pos_margin_f(ss['leverage'], pos_size, pos_price),
+                                            pos_price)
+                )
+                reentry_qty = calc_reentry_qty(ss['qty_step'],
+                                               ss['ddown_factor'],
+                                               min_entry_qty_f(ss['qty_step'], ss['min_qty'],
+                                                               ss['min_cost'], ss['entry_qty_pct'],
+                                                               ss['leverage'], apparent_balance,
+                                                               reentry_price),
+                                               max_pos_size_f(ss['leverage'], apparent_balance,
+                                                              reentry_price),
+                                               pos_size)
+                if reentry_qty < min_qty_f(ss['qty_step'], ss['min_qty'],
+                                           ss['min_cost'], reentry_price):
+                    reentry_price = 9e-12
+            elif pos_size < 0.0:
+                stop_loss_price = min(pos_price * (1 + ss['stop_loss_pos_price_diff']),
+                                      liq_price * (1 - ss['stop_loss_liq_diff']))
+                reentry_price = max(
+                    ob[1],
+                    calc_shrt_reentry_price(ss['price_step'], ss['grid_spacing'],
+                                            ss['grid_coefficient'], apparent_balance,
+                                            pos_margin_f(ss['leverage'], pos_size, pos_price),
+                                            pos_price)
+                )
+                reentry_qty = -calc_reentry_qty(ss['qty_step'],
+                                                ss['ddown_factor'],
+                                                min_entry_qty_f(ss['qty_step'], ss['min_qty'],
+                                                                ss['min_cost'], ss['entry_qty_pct'],
+                                                                ss['leverage'], apparent_balance,
+                                                                reentry_price),
+                                                max_pos_size_f(ss['leverage'], apparent_balance,
+                                                                  reentry_price),
+                                                pos_size)
+                if -reentry_qty < min_qty_f(ss['qty_step'], ss['min_qty'],
+                                            ss['min_cost'], reentry_price):
+                    reentry_price = 9e12
+
             line = f"\r{progress:.3f} net pnl {pnl_sum:.8f} "
             line += f"profit sum {profit_sum:.5f} "
             line += f"loss sum {loss_sum:.5f} "
             line += f"actual_bal {actual_balance:.4f} "
             line += f"apparent_bal {apparent_balance:.4f} "
-            line += f"qty {calc_initial_entry_qty_(apparent_balance, ob[0]):.4f} "
-            line += f"adg {trades[-1]['average_daily_gain']:.3f} "
-            line += f"max pos pct {abs(pos_size) / calc_max_pos_size(apparent_balance, t['price']):.3f} "
+            #line += f"qty {calc_min_entry_qty_(apparent_balance, ob[0]):.4f} "
+            #line += f"adg {trades[-1]['average_daily_gain']:.3f} "
+            #line += f"max pos pct {abs(pos_size) / calc_max_pos_size(apparent_balance, t['price']):.3f} "
             line += f"pos size {pos_size:.4f} "
             print(line, end=' ')
-            for key, condition in break_on.items():
-                if condition(trades[-1], t):
-                    print('break on', key)
-                    return []
-        ema = ema * ema_alpha_ + t['price'] * ema_alpha
-        k += 1
     return trades
-
-
-def format_dict(d: dict):
-    r = ''
-    for key in sorted(d):
-        r += f'&{key}={round(d[key], 10) if type(d[key]) in [float, int] else str(d[key])}'
-    return r[1:]
-
-
-def unformat_dict(d: str):
-    kv = d.split('&')
-    kvs = [kv.split('=') for kv in d.split('&')]
-    result = {}
-    for kv in kvs:
-        try:
-            result[kv[0]] = eval(kv[1])
-        except:
-            result[kv[0]] = kv[1]
-    return result
-
-
-def jackrabbit(trades_list: [dict],
-               backtesting_settings: dict,
-               ranges: dict,
-               base_filepath: str):
-    ks = backtesting_settings['n_jackrabbit_iterations']
-    k = backtesting_settings['starting_k']
-    ms = np.array([1 / (i / 2 + 16) for i in range(ks)])
-    ms = ((ms - ms.min()) / (ms.max() - ms.min()))
-
-    best_filepath = base_filepath + 'best.json'
-
-    if backtesting_settings['starting_candidate_preference'][0] == 'best' and \
-            os.path.exists(best_filepath):
-        best = json.load(open(best_filepath))
-        candidate = get_new_candidate(ranges, best, ms[k])
-        print('\ncurrent best')
-        print(json.dumps(best, indent=4, sort_keys=True))
-    else:
-        best = {k_: backtesting_settings[k_] for k_ in ranges}
-        if 'given' in  backtesting_settings['starting_candidate_preference'][:2]:
-            candidate = best.copy()
-            print('\nusing starting candidate from backtesting_settings')
-        else:
-            candidate = get_new_candidate(ranges, best, m=1.0)
-            print('\nusing random starting candidate')
-        print(json.dumps(candidate, indent=4, sort_keys=True))
-        best['gain'] = -9e9
-
-    n_days = backtesting_settings['n_days']
-
-    trades_filepath = make_get_filepath(os.path.join(base_filepath, 'backtest_trades', ''))
-    results_filename = base_filepath + 'results.txt'    
-    if os.path.exists(results_filename):
-        with open(results_filename) as f:
-            lines = f.readlines()
-        results = {(e := json.loads(line))['key']: e for line in lines}
-    else:
-        results = {}
-    json.dump(backtesting_settings, open(base_filepath + 'backtesting_settings.json', 'w'),
-              indent=4)
-    json.dump(ranges, open(base_filepath + 'ranges.json', 'w'), indent=4)
-
-    pprint.pprint({e[0]: eval(e[1])
-                   for e in backtesting_settings['break_on'] if e[0].startswith('ON:')})
-    
-    while k < ks:
-        mutation_coefficient = ms[k]
-        if candidate['min_markup'] >= candidate['max_markup']:
-            candidate['min_markup'] = candidate['max_markup']
-        candidate['leverage'] = min(backtesting_settings['max_leverage'], candidate['leverage'])
-
-        settings = {**backtesting_settings, **candidate}
-        key = np.format_float_positional(hash(json.dumps({k_: candidate[k_] for k_ in ranges if k_ in candidate})),
-                                         trim='-')[1:20]
-        if key in results:
-            if os.path.exists(best_filepath):
-                best = json.load(open(best_filepath))
-            candidate = get_new_candidate(ranges, best, mutation_coefficient)
-            continue
-        print(f'\nk={k}, m={mutation_coefficient:.4f} candidate:\n', candidate)
-        start_time = time()
-        trades = backtest(trades_list, settings)
-        print('\ntime elapsed', round(time() - start_time, 1), 'seconds')
-        k += 1
-        if not trades:
-            print('\nno trades')
-            if os.path.exists(best_filepath):
-                best = json.load(open(best_filepath))
-            candidate = get_new_candidate(ranges, best, mutation_coefficient)
-            continue
-
-        tdf = pd.DataFrame(trades).set_index('trade_id')
-        closest_liq = ((tdf.price - tdf.liq_price).abs() / tdf.price).min()
-        biggest_pos_size = tdf.pos_size.abs().max()
-        n_closes = len(tdf[tdf.type == 'close'])
-        pnl_sum = tdf.pnl.sum()
-        loss_sum = tdf[tdf.type == 'stop_loss'].pnl.sum()
-        abs_pos_sizes = tdf.pos_size.abs()
-        gain = (pnl_sum + settings['starting_balance']) / settings['starting_balance']
-        candidate['gain'] = gain
-        average_daily_gain = gain ** (1 / n_days)
-        n_trades = len(tdf)
-        result = {'n_closes': n_closes, 'pnl_sum': pnl_sum, 'loss_sum': loss_sum,
-                  'average_daily_gain': average_daily_gain,
-                  'gain': gain, 'n_trades': n_trades, 'closest_liq': closest_liq,
-                  'biggest_pos_size': biggest_pos_size, 'n_days': n_days, 'key': key}
-        tdf.to_csv(f'{trades_filepath}{key}.csv')
-        print('\n\n', result)
-        results[key] = {**result, **candidate}
-
-        if os.path.exists(best_filepath):
-            best = json.load(open(best_filepath))
-
-        if candidate['gain'] > best['gain']:
-            best = candidate
-            print('\n\n\n###############\nnew best', best, '\naverage daily gain:',
-                  round(average_daily_gain, 5), '\n\n')
-            print(settings, '\n')
-            print(results[key], '\n\n')
-            default_live_settings = load_settings(settings['exchange'], do_print=False)
-            live_settings = {k_: settings[k_] if k_ in settings else default_live_settings[k_]
-                             for k_ in default_live_settings}
-            live_settings['indicator_settings'] = default_live_settings['indicator_settings']
-            live_settings['indicator_settings']['tick_ema']['span'] = best['ema_span']
-            live_settings['indicator_settings']['tick_ema']['spread'] = best['ema_spread'] \
-                if 'ema_spread' in best else 0.0
-            live_settings['indicator_settings']['do_long'] = backtesting_settings['do_long']
-            live_settings['indicator_settings']['do_shrt'] = backtesting_settings['do_shrt']
-            live_settings['config_name'] = backtesting_settings['session_name']
-            print('\n\n', json.dumps(live_settings, indent=4), '\n\n')
-            json.dump(live_settings,
-                      open(base_filepath + 'best_result_live_settings.json', 'w'),
-                      indent=4)
-            json.dump({**{'gain': result['gain']}, **best}, open(best_filepath, 'w'),
-                      indent=4, sort_keys=True)
-        candidate = get_new_candidate(ranges, best, m=mutation_coefficient)
-        with open(results_filename, 'a') as f:
-            f.write(json.dumps(results[key]) + '\n')
 
 
 def calc_new_val(val, range_, m):
@@ -650,75 +434,253 @@ def dump_chunks(filepath: str, tdf: pd.DataFrame, chunk_lengths: dict, chunk_siz
             g[1].to_csv(f'{filepath}{filename}')
 
 
-async def main():
-    exchange = sys.argv[1]
-    user = sys.argv[2]
+async def fetch_market_specific_settings(exchange: str, user: str, symbol: str):
+    tmp_live_settings = load_live_settings(exchange, do_print=False)
+    tmp_live_settings['symbol'] = symbol
+    settings_from_exchange = {}
+    if exchange == 'binance':
+        bot = await create_bot_binance(user, tmp_live_settings)
+        settings_from_exchange['inverse'] = False
+        settings_from_exchange['maker_fee'] = 0.00018
+        settings_from_exchange['taker_fee'] = 0.00036
+        settings_from_exchange['exchange'] = 'binance'
+    elif exchange == 'bybit':
+        bot = await create_bot_bybit(user, tmp_live_settings)
+        settings_from_exchange['inverse'] = True
+        settings_from_exchange['maker_fee'] = -0.00025
+        settings_from_exchange['taker_fee'] = 0.00075
+        settings_from_exchange['exchange'] = 'bybit'
+    else:
+        raise Exception(f'unknown exchange {exchange}')
+    settings_from_exchange['max_leverage'] = bot.max_leverage
+    settings_from_exchange['min_qty'] = bot.min_qty
+    settings_from_exchange['min_cost'] = bot.min_notional
+    settings_from_exchange['qty_step'] = bot.qty_step
+    settings_from_exchange['price_step'] = bot.price_step
+    settings_from_exchange['max_leverage'] = bot.max_leverage
+    await bot.cc.close()
+    return settings_from_exchange
 
-    settings_filepath = os.path.join('backtesting_settings', exchange, '')
-    backtesting_settings = \
-        json.load(open(os.path.join(settings_filepath, 'backtesting_settings.json')))
+
+def live_settings_to_candidate(live_settings: dict, ranges: dict) -> dict:
+    candidate = {k: live_settings[k] for k in ranges if k in live_settings}
+    for k in ['span', 'spread']:
+        if k in live_settings['indicator_settings']['tick_ema']:
+            candidate['ema_' + k] = live_settings['indicator_settings']['tick_ema'][k]
+    for k in ['do_long', 'do_shrt']:
+        candidate[k] = live_settings['indicator_settings'][k]
+    return candidate
 
 
+def candidate_to_live_settings(exchange: str, candidate: dict) -> dict:
+    live_settings = load_live_settings(exchange, do_print=False)
+    live_settings['config_name'] = candidate['session_name']
+    live_settings['symbol'] = candidate['symbol']
+    for k in candidate:
+        if k in live_settings:
+            live_settings[k] = candidate[k]
+    for k in ['ema_span', 'ema_spread']:
+        live_settings['indicator_settings']['tick_ema'][k[4:]] = candidate[k]
+    for k in ['do_long', 'do_shrt']:
+        live_settings['indicator_settings'][k] = bool(candidate[k])
+    return live_settings
 
+
+def calc_candidate_hash_key(candidate: dict, keys: [str]) -> str:
+    return sha256(json.dumps({k: candidate[k] for k in sorted(keys)}).encode()).hexdigest()
+
+
+def load_results(results_filepath: str) -> dict:
+    if os.path.exists(results_filepath):
+        with open(results_filepath) as f:
+            lines = f.readlines()
+        results = {(e := json.loads(line))['key']: e for line in lines}
+    else:
+        results = {}
+    return results
+
+
+def jackrabbit(ticks: [dict], backtest_config: dict):
+    results = load_results(backtest_config['session_dirpath'] + 'results.txt')
+    k = backtest_config['starting_k']
+    ks = backtest_config['n_jackrabbit_iterations']
+    ms = np.array([1 / (i / 2 + 16) for i in range(ks)])
+    ms = ((ms - ms.min()) / (ms.max() - ms.min()))
     try:
-        session_name = sys.argv[3]
-        print('\n\nusing given session name', session_name, '\n\n')
-    except IndexError:
-        session_name = backtesting_settings['session_name']
-        print('\n\nusing session name from backtesting_settings.json', session_name, '\n\n')
-
-    symbol = backtesting_settings['symbol']
-    n_days = backtesting_settings['n_days']
-    ranges = json.load(open(os.path.join(settings_filepath, 'ranges.json')))
-    results_filepath = make_get_filepath(
-        os.path.join('backtesting_results', exchange, symbol, session_name, '')
-    )
-    print(results_filepath)
-
-    settings_from_exchange_fp = results_filepath + 'settings_from_exchange.json'
-    if os.path.exists(settings_from_exchange_fp):
-        settings_from_exchange = json.load(open(settings_from_exchange_fp))
+        best_result = json.load(open(backtest_config['session_dirpath'] + 'best_result.json'))
+    except Exception as e:
+        print(e)
+        best_result = {}
+    try:
+        candidate = live_settings_to_candidate(
+            json.load(open(backtest_config['starting_candidate_filepath'])),
+            backtest_config['ranges']
+        )
+    except Exception as e:
+        print(e, f"starting candidate {backtest_config['starting_candidate_filepath']} not found.")
+        if best_result:
+            print('building on current best')
+            candidate = get_new_candidate(backtest_config['ranges'], best_result, m=ms[k])
+            pass
+        else:
+            print('using random starting candidate')
+            candidate = get_new_candidate(
+                backtest_config['ranges'],
+                {k_: 0.0 for k_ in backtest_config['ranges']},
+                m=1.0
+            )
+    if backtest_config['multiprocessing']:
+        jackrabbit_multi_core(results,
+                              ticks,
+                              backtest_config,
+                              best_result,
+                              candidate,
+                              k,
+                              ks,
+                              ms)
     else:
-        tmp_live_settings = load_settings(exchange, do_print=False)
-        tmp_live_settings['symbol'] = backtesting_settings['symbol']
-        settings_from_exchange = {}
-        if exchange == 'binance':
-            bot = await create_bot_binance(user, tmp_live_settings)
-            settings_from_exchange['inverse'] = False
-            settings_from_exchange['maker_fee'] = 0.00018
-            settings_from_exchange['taker_fee'] = 0.00036
-            settings_from_exchange['exchange'] = 'binance'
-        elif exchange == 'bybit':
-            bot = await create_bot_bybit(user, tmp_live_settings)
-            settings_from_exchange['inverse'] = True
-            settings_from_exchange['maker_fee'] = -0.00025
-            settings_from_exchange['taker_fee'] = 0.00075
-            settings_from_exchange['exchange'] = 'bybit'
-        settings_from_exchange['min_qty'] = bot.min_qty
-        settings_from_exchange['min_notional'] = bot.min_notional
-        settings_from_exchange['qty_step'] = bot.qty_step
-        settings_from_exchange['price_step'] = bot.price_step
-        settings_from_exchange['max_leverage'] = bot.max_leverage
-        await bot.cc.close()
-        json.dump(settings_from_exchange, open(settings_from_exchange_fp, 'w'), indent=4)
-    if 'leverage' in ranges:
-        ranges['leverage'][1] = min(ranges['leverage'][1],
-                                    settings_from_exchange['max_leverage'])
-        ranges['leverage'][0] = min(ranges['leverage'][0],
-                                    ranges['leverage'][1])
+        jackrabbit_single_core(results,
+                               ticks,
+                               backtest_config,
+                               best_result,
+                               candidate,
+                               k,
+                               ks,
+                               ms)
 
-    backtesting_settings = {**backtesting_settings, **settings_from_exchange}
-    print(json.dumps(backtesting_settings, indent=4))
-    trades_list_filepath = os.path.join(results_filepath, f"{n_days}_days_trades_list_cache.npy")
-    if os.path.exists(trades_list_filepath):
-        print('loading cached trade list', trades_list_filepath)
-        trades_list = np.load(trades_list_filepath, allow_pickle=True)
+
+
+def jackrabbit_single_core(results: dict,
+                           ticks: [dict],
+                           backtest_config: dict,
+                           best_result: dict,
+                           candidate: dict,
+                           k: int,
+                           ks: int,
+                           ms: [float]):
+    results_filepath = backtest_config['session_dirpath'] + 'results.txt'
+    trades_filepath = make_get_filepath(os.path.join(backtest_config['session_dirpath'],
+                                        'backtest_trades', ''))
+    best_result_filepath = backtest_config['session_dirpath'] + 'best_result.json'
+    while k < ks:
+        key = calc_candidate_hash_key(candidate, sorted(backtest_config['ranges']))
+        if key not in results:
+            print(f"\nk={k} m={ms[k]:.6f} {key}")
+            print('candidate:\n', candidate)
+            result, tdf = jackrabbit_wrap(ticks, {**backtest_config, **candidate})
+            print('\nresult:\n', result, '\n')
+            print()
+            result['key'] = key
+            result = {**result, **candidate}
+            result['index'] = k
+            results[key] = result
+            with open(results_filepath, 'a') as f:
+                f.write(json.dumps(result) + '\n')
+            if os.path.exists(best_result_filepath):
+                best_result = json.load(open(best_result_filepath))
+            if 'gain' in result:
+                if 'gain' not in best_result or result['gain'] > best_result['gain']:
+                    print('\n\n### new best ###\n\n')
+                    best_result = result
+                    print(json.dumps(best_result, indent=4))
+                    print('\n\n')
+                    json.dump(best_result, open(best_result_filepath, 'w'), indent=4)
+                    json.dump(candidate_to_live_settings(backtest_config['exchange'],
+                                                         {**backtest_config, **best_result}),
+                              open(backtest_config['session_dirpath'] + 'live_config.json', 'w'),
+                              indent=4)
+                tdf.to_csv(f'{trades_filepath}{key}.csv')
+        candidate = get_new_candidate(backtest_config['ranges'], best_result, ms[k])
+        k += 1
+
+
+def jackrabbit_multi_core(results: dict,
+                          ticks: [dict],
+                          backtest_config: dict,
+                          best_result: dict,
+                          candidate: dict,
+                          k: int,
+                          ks: int,
+                          ms: [float]):
+    pass
+
+
+def jackrabbit_wrap(ticks: [dict], backtest_config: dict) -> dict:
+    key = np.format_float_positional(
+        hash(json.dumps({k_: backtest_config[k_] for k_ in sorted(backtest_config['ranges'])})),
+        trim='-')[1:20]
+    trades = backtest(ticks, backtest_config)
+    if not trades:
+        return {}, None
+    tdf = pd.DataFrame(trades).set_index('trade_id')
+    result = {
+        'pnl_sum': trades[-1]['pnl_sum'],
+        'profit_sum': trades[-1]['profit_sum'],
+        'loss_sum': trades[-1]['loss_sum'],
+        'closest_shrt_liq': tdf.closest_shrt_liq.min(),
+        'closest_long_liq': tdf.closest_long_liq.min(),
+        'n_trades': len(trades),
+        'n_closes': len(tdf[tdf.type == 'close']),
+        'n_stop_losses': len(tdf[tdf.type == 'stop_loss']),
+    }
+    result['gain'] = (result['pnl_sum'] + backtest_config['starting_balance']) / \
+        backtest_config['starting_balance']
+    result['average_daily_gain'] = result['gain'] ** (1 / backtest_config['n_days']) \
+        if result['gain'] > 0.0 else 0.0
+    result['closest_liq'] = min(result['closest_shrt_liq'], result['closest_long_liq'])
+
+    return result, tdf
+
+
+async def load_ticks(backtest_config: dict) -> [dict]:
+    ticks_filepath = os.path.join(backtest_config['session_dirpath'], f"ticks_cache.npy")
+    if os.path.exists(ticks_filepath):
+        print('loading cached trade list', ticks_filepath)
+        ticks = np.load(ticks_filepath, allow_pickle=True)
     else:
-        agg_trades = await load_trades(exchange, user, symbol, n_days)
+        agg_trades = await load_trades(backtest_config['exchange'], backtest_config['user'],
+                                       backtest_config['symbol'], backtest_config['n_days'])
         print('preparing trades...')
-        trades_list = prep_trades_list(agg_trades)
-        np.save(trades_list_filepath, trades_list)
-    jackrabbit(trades_list, backtesting_settings, ranges, results_filepath)
+        ticks = prep_ticks(agg_trades)
+        np.save(ticks_filepath, ticks)
+    return list(ticks)
+
+
+async def prep_backtest_config(config_name: str):
+    backtest_config = hjson.load(open(f'backtest_configs/{config_name}.hjson'))
+
+    exchange = backtest_config['exchange']
+    user = backtest_config['user']
+    symbol = backtest_config['symbol']
+    session_name = backtest_config['session_name']
+
+    results_filepath = make_get_filepath(os.path.join('backtest_results',
+                                                      exchange,
+                                                      symbol,
+                                                      session_name,
+                                                      ''))
+    if os.path.exists((mss := results_filepath + 'market_specific_settings.json')):
+        market_specific_settings = json.load(open(mss))
+    else:
+        market_specific_settings = await fetch_market_specific_settings(exchange, user, symbol)
+        json.dump(market_specific_settings, open(mss, 'w'))
+    backtest_config.update(market_specific_settings)
+    backtest_config['ranges']['leverage'][1] = \
+        min(backtest_config['ranges']['leverage'][1],
+            backtest_config['max_leverage'])
+    backtest_config['ranges']['leverage'][0] = \
+        min(backtest_config['ranges']['leverage'][0],
+            backtest_config['ranges']['leverage'][1])
+    backtest_config['session_dirpath'] = results_filepath
+
+    return backtest_config
+
+
+async def main():
+    config_name = sys.argv[1]
+    backtest_config = await prep_backtest_config(config_name)
+    ticks = await load_ticks(backtest_config)
+    jackrabbit(ticks, backtest_config)
 
 
 if __name__ == '__main__':

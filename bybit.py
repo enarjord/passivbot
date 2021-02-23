@@ -11,8 +11,8 @@ from math import ceil
 from math import floor
 from time import time, sleep
 from typing import Callable, Iterator
-from passivbot import init_ccxt, load_key_secret, load_settings, make_get_filepath, print_, \
-    ts_to_date, flatten, filter_orders, Bot, start_bot, round_up, round_dn, calc_initial_entry_qty
+from passivbot import init_ccxt, load_key_secret, load_live_settings, make_get_filepath, print_, \
+    ts_to_date, flatten, filter_orders, Bot, start_bot, round_up, round_dn, calc_min_entry_qty
 
 
 def first_capitalized(s: str):
@@ -131,8 +131,8 @@ class BybitBot(Bot):
         self.price_step = float(e['price_filter']['tick_size'])
         self.qty_step = float(e['lot_size_filter']['qty_step'])
         self.min_qty = float(e['lot_size_filter']['min_trading_qty'])
-        self.calc_initial_entry_qty = lambda balance_, last_price: \
-            calc_initial_entry_qty(self.min_qty, self.qty_step,
+        self.calc_min_entry_qty = lambda balance_, last_price: \
+            calc_min_entry_qty(self.min_qty, self.qty_step,
                                    balance_ * last_price * self.leverage,
                                    self.entry_qty_pct)
         await self.update_position()
@@ -297,7 +297,7 @@ class BybitBot(Bot):
 
 
 async def main() -> None:
-    bot = await create_bot(sys.argv[1], load_settings('bybit', sys.argv[1]))
+    bot = await create_bot(sys.argv[1], load_live_settings('bybit', sys.argv[1]))
     await start_bot(bot)
 
 

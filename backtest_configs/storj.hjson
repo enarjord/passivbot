@@ -1,0 +1,52 @@
+{
+  session_name: storj_session_7_days_001
+  exchange: binance
+  user: e
+  symbol: STORJUSDT
+  n_days: 7
+  # if starting_candidate_filepath is not a valid file, will use random starting candidate
+  starting_candidate_filepath: live_settings/binance/default.json
+  multiprocessing: false
+  starting_k: 0
+  n_jackrabbit_iterations: 200
+  starting_balance: 30
+  break_on:
+  [
+    ["OFF: break on first soft stop",
+     "lambda trade, tick: trade['type'] == 'stop_loss'"]
+    ["OFF: neg pnl sum",
+     "lambda trade, tick: trade['pnl_sum'] < 0.0 and trade['progress'] > 0.5"]
+    ["OFF: liq diff too small",
+     "lambda trade, tick: trade['liq_diff'] < 0.07"]
+    ["OFF: time between consec trades",
+     "lambda trade, tick: tick['timestamp'] - trade['timestamp'] > 1000 * 60 * 60 * 24"]
+    ["OFF: pos price last price diff",
+     "lambda trade, tick: calc_diff(trade['price'], tick['price']) > 1.05"]
+    ["OFF: adg too low",
+     "lambda trade, tick: trade['average_daily_gain'] < 1.01 and trade['progress'] >= 0.5"]
+    ["OFF: no soft stops",
+     "lambda trade, tick: trade['loss_sum'] == 0.0 and trade['progress'] >= 0.6"]
+    ["OFF: balance + pnl below starting_balance",
+     "lambda trade, tick: trade['actual_balance'] + trade['pnl_sum'] < 0.0"]
+  ]
+  ranges:
+  {
+    balance_pct: [0.01, 1, 0.001]
+    entry_qty_pct: [0.0001, 0.5, 1e-05]
+    ddown_factor: [0, 3.0, 0.001]
+    ema_span: [100, 100000, 1]
+    ema_spread: [0, 0.02, 0.0001]
+    grid_coefficient: [0, 700, 0.01]
+    grid_spacing: [0.0002, 0.01, 1e-05]
+    leverage: [2, 999999, 1]
+    stop_loss_liq_diff: [0.015, 0.15, 0.0001]
+    stop_loss_pos_price_diff: [0.015, 0.15, 0.0001]
+    max_markup: [0.001, 0.03, 1e-05]
+    min_markup: [0.0005, 0.002, 1e-05]
+    min_close_qty_multiplier: [0, 1, 0.1]
+    n_close_orders: [8, 25, 1]
+    stop_loss_pos_reduction: [0.001, 0.3, 0.001]
+    do_long: [1, 1, 1]
+    do_shrt: [1, 1, 1]
+  }
+}
