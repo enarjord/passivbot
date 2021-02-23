@@ -223,6 +223,8 @@ def backtest(ticks: [dict], settings: dict):
             total_gain = (pnl_sum + settings['starting_balance']) / settings['starting_balance']
             n_days_ = (t['timestamp'] - ticks[0]['timestamp']) / (1000 * 60 * 60 * 24)
             adg = total_gain ** (1 / n_days_) if (n_days_ > 0.0 and total_gain > 0.0) else 0.0
+            avg_gain_per_tick = \
+                (actual_balance / settings['starting_balance']) ** (1 / (len(trades) + 1))
             trades.append({'trade_id': k, 'side': trade_side, 'type': trade_type, 'price': price,
                            'qty': qty, 'pos_price': pos_price, 'pos_size': pos_size, 'pnl': pnl,
                            'liq_price': liq_price, 'apparent_balance': apparent_balance,
@@ -231,6 +233,7 @@ def backtest(ticks: [dict], settings: dict):
                            'average_daily_gain': adg, 'timestamp': t['timestamp'],
                            'closest_long_liq': closest_long_liq,
                            'closest_shrt_liq': closest_shrt_liq,
+                           'avg_gain_per_tick': avg_gain_per_tick,
                            'progress': progress})
             closest_long_liq, closest_shrt_liq = 1.0, 1.0
             for key, condition in break_on.items():
