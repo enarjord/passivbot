@@ -509,7 +509,7 @@ def jackrabbit(ticks: [dict], backtest_config: dict):
     try:
         best_result = json.load(open(backtest_config['session_dirpath'] + 'best_result.json'))
     except Exception as e:
-        print(e)
+        print('no current best result')
         best_result = {}
     try:
         candidate = live_settings_to_candidate(
@@ -529,7 +529,7 @@ def jackrabbit(ticks: [dict], backtest_config: dict):
                 {k_: 0.0 for k_ in backtest_config['ranges']},
                 m=1.0
             )
-    if backtest_config['multiprocessing']:
+    if False:#backtest_config['multiprocessing']:
         jackrabbit_multi_core(results,
                               ticks,
                               backtest_config,
