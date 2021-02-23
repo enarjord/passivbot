@@ -654,12 +654,13 @@ async def prep_backtest_config(config_name: str):
     symbol = backtest_config['symbol']
     session_name = backtest_config['session_name']
 
-    results_filepath = make_get_filepath(os.path.join('backtest_results',
-                                                      exchange,
-                                                      symbol,
-                                                      session_name,
-                                                      ''))
-    if os.path.exists((mss := results_filepath + 'market_specific_settings.json')):
+    session_dirpath = make_get_filepath(os.path.join(
+        'backtest_results',
+        exchange,
+        symbol,
+        f"{session_name}_{backtest_config['n_days']}_days",
+        ''))
+    if os.path.exists((mss := session_dirpath + 'market_specific_settings.json')):
         market_specific_settings = json.load(open(mss))
     else:
         market_specific_settings = await fetch_market_specific_settings(exchange, user, symbol)
@@ -671,7 +672,7 @@ async def prep_backtest_config(config_name: str):
     backtest_config['ranges']['leverage'][0] = \
         min(backtest_config['ranges']['leverage'][0],
             backtest_config['ranges']['leverage'][1])
-    backtest_config['session_dirpath'] = results_filepath
+    backtest_config['session_dirpath'] = session_dirpath
 
     return backtest_config
 
