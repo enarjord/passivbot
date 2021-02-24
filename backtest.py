@@ -312,7 +312,7 @@ def backtest(ticks: [dict], settings: dict):
 
 
 def calc_new_val(val, range_, m):
-    choice_span = (range_[1] - range_[0]) * m / 2
+    choice_span = (range_[1] - range_[0]) * max(m / 2, 0.000001)
     biased_mid_point = max(range_[0] + choice_span, min(val, range_[1] - choice_span))
     choice_range = (biased_mid_point - choice_span, biased_mid_point + choice_span)
     new_val = np.random.choice(np.linspace(choice_range[0], choice_range[1], 200))
