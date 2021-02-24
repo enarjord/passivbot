@@ -15,7 +15,7 @@
     ["OFF: break on first soft stop",
      "lambda trade, tick: trade['type'] == 'stop_loss'"]
     ["OFF: neg pnl sum",
-     "lambda trade, tick: trade['pnl_sum'] < 0.0 and trade['progress'] > 0.5"]
+     "lambda trade, tick: trade['net_pnl_plus_fees'] < 0.0 and trade['progress'] > 0.5"]
     ["OFF: liq diff too small",
      "lambda trade, tick: trade['liq_diff'] < 0.07"]
     ["OFF: time between consec trades",
@@ -27,7 +27,7 @@
     ["OFF: no soft stops",
      "lambda trade, tick: trade['loss_sum'] == 0.0 and trade['progress'] >= 0.6"]
     ["OFF: balance + pnl below starting_balance",
-     "lambda trade, tick: trade['actual_balance'] + trade['pnl_sum'] < 0.0"]
+     "lambda trade, tick: trade['actual_balance'] + trade['net_pnl_plus_fees'] < 0.0"]
   ]
   ranges:
   {
