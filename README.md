@@ -31,10 +31,13 @@ https://github.com/enarjord/passivbot_futures/wiki
 ------------------------------------------------------------------
 change log
 
-2021-02-23 v2.0.0
+2021-02-23 v2.0.0_beta
 - major update to backtester
 - new backtest usage syntax
 - other changes
+
+2021-02-23 v2.0.0_beta_jit
+- backtester speed upgrade using numba
 
 see `changelog.txt` for earlier changes
 
