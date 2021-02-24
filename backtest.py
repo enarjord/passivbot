@@ -233,6 +233,7 @@ def backtest(ticks: [dict], settings: dict):
                            'average_daily_gain': adg, 'timestamp': t['timestamp'],
                            'closest_long_liq': closest_long_liq,
                            'closest_shrt_liq': closest_shrt_liq,
+                           'closest_liq': min(closest_long_liq, closest_shrt_liq),
                            'avg_gain_per_tick': avg_gain_per_tick,
                            'progress': progress})
             closest_long_liq, closest_shrt_liq = 1.0, 1.0
@@ -250,6 +251,7 @@ def backtest(ticks: [dict], settings: dict):
                                             pos_margin_f(ss['leverage'], pos_size, pos_price),
                                             pos_price)
                 )
+                reentry_price = max(ss['price_step'], reentry_price)
                 reentry_qty = calc_reentry_qty(ss['qty_step'],
                                                ss['ddown_factor'],
                                                min_entry_qty_f(ss['qty_step'], ss['min_qty'],
@@ -261,17 +263,18 @@ def backtest(ticks: [dict], settings: dict):
                                                pos_size)
                 if reentry_qty < min_qty_f(ss['qty_step'], ss['min_qty'],
                                            ss['min_cost'], reentry_price):
-                    reentry_price = 9e-12
+                    reentry_price = ss['price_step']
             elif pos_size < 0.0:
                 stop_loss_price = min(pos_price * (1 + ss['stop_loss_pos_price_diff']),
                                       liq_price * (1 - ss['stop_loss_liq_diff']))
-                reentry_price = max(
+                reentry_price = max([
+                    ss['price_step'],
                     ob[1],
                     calc_shrt_reentry_price(ss['price_step'], ss['grid_spacing'],
                                             ss['grid_coefficient'], apparent_balance,
                                             pos_margin_f(ss['leverage'], pos_size, pos_price),
                                             pos_price)
-                )
+                ])
                 reentry_qty = -calc_reentry_qty(ss['qty_step'],
                                                 ss['ddown_factor'],
                                                 min_entry_qty_f(ss['qty_step'], ss['min_qty'],
@@ -593,7 +596,9 @@ def jackrabbit_single_core(results: dict,
                               open(backtest_config['session_dirpath'] + 'live_config.json', 'w'),
                               indent=4)
                 tdf.to_csv(f'{trades_filepath}{key}.csv')
-        candidate = get_new_candidate(backtest_config['ranges'], best_result, ms[k])
+        candidate = get_new_candidate(backtest_config['ranges'],
+                                      (best_result if best_result else candidate),
+                                      ms[k])
         k += 1
 
 
@@ -669,12 +674,23 @@ async def prep_backtest_config(config_name: str):
         market_specific_settings = await fetch_market_specific_settings(exchange, user, symbol)
         json.dump(market_specific_settings, open(mss, 'w'))
     backtest_config.update(market_specific_settings)
+
+    # setting absolute min/max ranges
+    for key in ['balance_pct', 'entry_qty_pct', 'ddown_factor', 'ema_span', 'ema_spread',
+                'grid_coefficient', 'grid_spacing', 'min_close_qty_multiplier',
+                'stop_loss_pos_reduction']:
+        backtest_config['ranges'][key][0] = max(0.0, backtest_config['ranges'][key][0])
+    for key in ['balance_pct', 'entry_qty_pct', 'min_close_qty_multiplier',
+                'stop_loss_pos_reduction']:
+        backtest_config['ranges'][key][1] = min(1.0, backtest_config['ranges'][key][1])
+
     backtest_config['ranges']['leverage'][1] = \
         min(backtest_config['ranges']['leverage'][1],
             backtest_config['max_leverage'])
     backtest_config['ranges']['leverage'][0] = \
         min(backtest_config['ranges']['leverage'][0],
             backtest_config['ranges']['leverage'][1])
+    
     backtest_config['session_dirpath'] = session_dirpath
 
     return backtest_config
