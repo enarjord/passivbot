@@ -49,7 +49,7 @@ def backtest(ticks: [dict], settings: dict):
     actual_balance = ss['starting_balance']
     apparent_balance = actual_balance * ss['balance_pct']
 
-    pnl_sum, loss_sum, profit_sum = 0.0, 0.0, 0.0
+    net_pnl_plus_fees, loss_sum, profit_sum = 0.0, 0.0, 0.0
 
     if ss['inverse']:
         min_qty_f = calc_min_qty_inverse
@@ -95,7 +95,8 @@ def backtest(ticks: [dict], settings: dict):
                                               ss['entry_qty_pct'], ss['leverage'], apparent_balance,
                                               price)
                         trade_type, trade_side = 'entry', 'long'
-                        pnl = -cost_f(qty, price) * ss['maker_fee']
+                        pnl = 0.0
+                        fee_paid = -cost_f(qty, price) * ss['maker_fee']
             elif pos_size > 0.0:
                 closest_long_liq = min(calc_diff(liq_price, t['price']), closest_long_liq)
                 if t['price'] <= liq_price and closest_long_liq < 0.2:
@@ -106,7 +107,8 @@ def backtest(ticks: [dict], settings: dict):
                     # add to long pos
                     did_trade, qty, price = True, reentry_qty, reentry_price
                     trade_type, trade_side = 'entry', 'long'
-                    pnl = -cost_f(qty, price) * ss['maker_fee']
+                    pnl = 0.0
+                    fee_paid = -cost_f(qty, price) * ss['maker_fee']
             else:
                 if t['price'] <= pos_price:
                     # close shrt pos
@@ -128,8 +130,8 @@ def backtest(ticks: [dict], settings: dict):
                     if t['price'] < prices[0]:
                         did_trade, qty, price = True, qtys[0], prices[0]
                         trade_type, trade_side = 'close', 'shrt'
-                        pnl = shrt_pnl_f(pos_price, price, qty) - \
-                            cost_f(qty, price) * ss['maker_fee']
+                        pnl = shrt_pnl_f(pos_price, price, qty)
+                        fee_paid = -cost_f(qty, price) * ss['maker_fee']
                 elif t['price'] >= stop_loss_price:
                     # shrt stop loss
                     did_trade = True
@@ -137,8 +139,8 @@ def backtest(ticks: [dict], settings: dict):
                                                   ss['qty_step']))
                     price = ob[0]
                     trade_type, trade_side = 'stop_loss', 'shrt'
-                    pnl = shrt_pnl_f(pos_price, price, qty) - \
-                        cost_f(qty, price) * ss['maker_fee']
+                    pnl = shrt_pnl_f(pos_price, price, qty)
+                    fee_paid = -cost_f(qty, price) * ss['maker_fee']
 
             ob[0] = t['price']
         else:
@@ -153,7 +155,8 @@ def backtest(ticks: [dict], settings: dict):
                                                ss['entry_qty_pct'], ss['leverage'],
                                                apparent_balance, price)
                         trade_type, trade_side = 'entry', 'shrt'
-                        pnl = -cost_f(-qty, price) * ss['maker_fee']
+                        pnl = 0.0
+                        fee_paid = -cost_f(-qty, price) * ss['maker_fee']
             elif pos_size < 0.0:
                 closest_shrt_liq = min(calc_diff(liq_price, t['price']), closest_shrt_liq)
                 if t['price'] >= liq_price and closest_shrt_liq < 0.2:
@@ -164,7 +167,8 @@ def backtest(ticks: [dict], settings: dict):
                     # add to shrt pos
                     did_trade, qty, price = True, reentry_qty, reentry_price
                     trade_type, trade_side = 'entry', 'shrt'
-                    pnl = -cost_f(-qty, price) * ss['maker_fee']
+                    pnl = 0.0
+                    fee_paid = -cost_f(-qty, price) * ss['maker_fee']
             else:
                 # close long pos
                 if t['price'] >= pos_price:
@@ -186,8 +190,8 @@ def backtest(ticks: [dict], settings: dict):
                     if t['price'] > prices[0]:
                         did_trade, qty, price = True, qtys[0], prices[0]
                         trade_type, trade_side = 'close', 'long'
-                        pnl = long_pnl_f(pos_price, price, -qty) - \
-                            cost_f(-qty, price) * ss['maker_fee']
+                        pnl = long_pnl_f(pos_price, price, -qty)
+                        fee_paid =  - cost_f(-qty, price) * ss['maker_fee']
                 elif t['price'] <= stop_loss_price:
                     # long stop loss
                     did_trade = True
@@ -195,8 +199,8 @@ def backtest(ticks: [dict], settings: dict):
                                                   ss['qty_step']))
                     price = ob[1]
                     trade_type, trade_side = 'stop_loss', 'long'
-                    pnl = long_pnl_f(pos_price, price, qty) - \
-                        cost_f(-qty, price) * ss['maker_fee']
+                    pnl = long_pnl_f(pos_price, price, qty)
+                    fee_paid = -cost_f(-qty, price) * ss['maker_fee']
             ob[1] = t['price']
         ema = ema * ema_alpha_ + t['price'] * ema_alpha
         if did_trade:
@@ -205,8 +209,7 @@ def backtest(ticks: [dict], settings: dict):
                 pos_price = pos_price * abs(pos_size / new_pos_size) + \
                     price * abs(qty / new_pos_size) if new_pos_size else np.nan
             pos_size = new_pos_size
-            actual_balance += pnl
-            actual_balance = max(ss['starting_balance'], actual_balance + pnl)
+            actual_balance = max(ss['starting_balance'], actual_balance + pnl + fee_paid)
             apparent_balance = actual_balance * ss['balance_pct']
             if pos_size == 0.0:
                 liq_price = 0.0
@@ -214,23 +217,29 @@ def backtest(ticks: [dict], settings: dict):
                 liq_price = long_liq_price_f(actual_balance, pos_size, pos_price, ss['leverage'])
             else:
                 liq_price = shrt_liq_price_f(actual_balance, pos_size, pos_price, ss['leverage'])
+            if liq_price < 0.0:
+                liq_price = 0.0
             progress = k / len(ticks)
-            pnl_sum += pnl
+            net_pnl_plus_fees += pnl + fee_paid
             if trade_type == 'stop_loss':
                 loss_sum += pnl
             else:
                 profit_sum += pnl
-            total_gain = (pnl_sum + settings['starting_balance']) / settings['starting_balance']
+            total_gain = (net_pnl_plus_fees + settings['starting_balance']) / settings['starting_balance']
             n_days_ = (t['timestamp'] - ticks[0]['timestamp']) / (1000 * 60 * 60 * 24)
             adg = total_gain ** (1 / n_days_) if (n_days_ > 0.0 and total_gain > 0.0) else 0.0
+            avg_gain_per_tick = \
+                (actual_balance / settings['starting_balance']) ** (1 / (len(trades) + 1))
             trades.append({'trade_id': k, 'side': trade_side, 'type': trade_type, 'price': price,
                            'qty': qty, 'pos_price': pos_price, 'pos_size': pos_size, 'pnl': pnl,
                            'liq_price': liq_price, 'apparent_balance': apparent_balance,
-                           'actual_balance': actual_balance, 'pnl_sum': pnl_sum,
+                           'actual_balance': actual_balance, 'net_pnl_plus_fees': net_pnl_plus_fees,
                            'loss_sum': loss_sum, 'profit_sum': profit_sum,
                            'average_daily_gain': adg, 'timestamp': t['timestamp'],
                            'closest_long_liq': closest_long_liq,
                            'closest_shrt_liq': closest_shrt_liq,
+                           'closest_liq': min(closest_long_liq, closest_shrt_liq),
+                           'avg_gain_per_tick': avg_gain_per_tick,
                            'progress': progress})
             closest_long_liq, closest_shrt_liq = 1.0, 1.0
             for key, condition in break_on.items():
@@ -247,6 +256,7 @@ def backtest(ticks: [dict], settings: dict):
                                             pos_margin_f(ss['leverage'], pos_size, pos_price),
                                             pos_price)
                 )
+                reentry_price = max(ss['price_step'], reentry_price)
                 reentry_qty = calc_reentry_qty(ss['qty_step'],
                                                ss['ddown_factor'],
                                                min_entry_qty_f(ss['qty_step'], ss['min_qty'],
@@ -258,17 +268,22 @@ def backtest(ticks: [dict], settings: dict):
                                                pos_size)
                 if reentry_qty < min_qty_f(ss['qty_step'], ss['min_qty'],
                                            ss['min_cost'], reentry_price):
-                    reentry_price = 9e-12
+                    reentry_price = ss['price_step']
+                trades[-1]['reentry_price'] = reentry_price
             elif pos_size < 0.0:
-                stop_loss_price = min(pos_price * (1 + ss['stop_loss_pos_price_diff']),
-                                      liq_price * (1 - ss['stop_loss_liq_diff']))
-                reentry_price = max(
+                if liq_price > 0.0:
+                    stop_loss_price = min(pos_price * (1 + ss['stop_loss_pos_price_diff']),
+                                          liq_price * (1 - ss['stop_loss_liq_diff']))
+                else:
+                    stop_loss_price = pos_price * (1 + ss['stop_loss_pos_price_diff'])
+                reentry_price = max([
+                    ss['price_step'],
                     ob[1],
                     calc_shrt_reentry_price(ss['price_step'], ss['grid_spacing'],
                                             ss['grid_coefficient'], apparent_balance,
                                             pos_margin_f(ss['leverage'], pos_size, pos_price),
                                             pos_price)
-                )
+                ])
                 reentry_qty = -calc_reentry_qty(ss['qty_step'],
                                                 ss['ddown_factor'],
                                                 min_entry_qty_f(ss['qty_step'], ss['min_qty'],
@@ -281,8 +296,12 @@ def backtest(ticks: [dict], settings: dict):
                 if -reentry_qty < min_qty_f(ss['qty_step'], ss['min_qty'],
                                             ss['min_cost'], reentry_price):
                     reentry_price = 9e12
+                trades[-1]['reentry_price'] = reentry_price
+            else:
+                trades[-1]['reentry_price'] = np.nan
 
-            line = f"\r{progress:.3f} net pnl {pnl_sum:.8f} "
+
+            line = f"\r{progress:.3f} net pnl plus fees {net_pnl_plus_fees:.8f} "
             line += f"profit sum {profit_sum:.5f} "
             line += f"loss sum {loss_sum:.5f} "
             line += f"actual_bal {actual_balance:.4f} "
@@ -476,6 +495,7 @@ def candidate_to_live_settings(exchange: str, candidate: dict) -> dict:
     live_settings = load_live_settings(exchange, do_print=False)
     live_settings['config_name'] = candidate['session_name']
     live_settings['symbol'] = candidate['symbol']
+    live_settings['key'] = candidate['key']
     for k in candidate:
         if k in live_settings:
             live_settings[k] = candidate[k]
@@ -590,7 +610,9 @@ def jackrabbit_single_core(results: dict,
                               open(backtest_config['session_dirpath'] + 'live_config.json', 'w'),
                               indent=4)
                 tdf.to_csv(f'{trades_filepath}{key}.csv')
-        candidate = get_new_candidate(backtest_config['ranges'], best_result, ms[k])
+        candidate = get_new_candidate(backtest_config['ranges'],
+                                      (best_result if best_result else candidate),
+                                      ms[k])
         k += 1
 
 
@@ -614,7 +636,7 @@ def jackrabbit_wrap(ticks: [dict], backtest_config: dict) -> dict:
         return {}, None
     tdf = pd.DataFrame(trades).set_index('trade_id')
     result = {
-        'pnl_sum': trades[-1]['pnl_sum'],
+        'net_pnl_plus_fees': trades[-1]['net_pnl_plus_fees'],
         'profit_sum': trades[-1]['profit_sum'],
         'loss_sum': trades[-1]['loss_sum'],
         'closest_shrt_liq': tdf.closest_shrt_liq.min(),
@@ -623,7 +645,7 @@ def jackrabbit_wrap(ticks: [dict], backtest_config: dict) -> dict:
         'n_closes': len(tdf[tdf.type == 'close']),
         'n_stop_losses': len(tdf[tdf.type == 'stop_loss']),
     }
-    result['gain'] = (result['pnl_sum'] + backtest_config['starting_balance']) / \
+    result['gain'] = (result['net_pnl_plus_fees'] + backtest_config['starting_balance']) / \
         backtest_config['starting_balance']
     result['average_daily_gain'] = result['gain'] ** (1 / backtest_config['n_days']) \
         if result['gain'] > 0.0 else 0.0
@@ -666,12 +688,23 @@ async def prep_backtest_config(config_name: str):
         market_specific_settings = await fetch_market_specific_settings(exchange, user, symbol)
         json.dump(market_specific_settings, open(mss, 'w'))
     backtest_config.update(market_specific_settings)
+
+    # setting absolute min/max ranges
+    for key in ['balance_pct', 'entry_qty_pct', 'ddown_factor', 'ema_span', 'ema_spread',
+                'grid_coefficient', 'grid_spacing', 'min_close_qty_multiplier',
+                'stop_loss_pos_reduction']:
+        backtest_config['ranges'][key][0] = max(0.0, backtest_config['ranges'][key][0])
+    for key in ['balance_pct', 'entry_qty_pct', 'min_close_qty_multiplier',
+                'stop_loss_pos_reduction']:
+        backtest_config['ranges'][key][1] = min(1.0, backtest_config['ranges'][key][1])
+
     backtest_config['ranges']['leverage'][1] = \
         min(backtest_config['ranges']['leverage'][1],
             backtest_config['max_leverage'])
     backtest_config['ranges']['leverage'][0] = \
         min(backtest_config['ranges']['leverage'][0],
             backtest_config['ranges']['leverage'][1])
+    
     backtest_config['session_dirpath'] = session_dirpath
 
     return backtest_config
