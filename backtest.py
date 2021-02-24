@@ -214,6 +214,8 @@ def backtest(ticks: [dict], settings: dict):
                 liq_price = long_liq_price_f(actual_balance, pos_size, pos_price, ss['leverage'])
             else:
                 liq_price = shrt_liq_price_f(actual_balance, pos_size, pos_price, ss['leverage'])
+            if liq_price < 0.0:
+                liq_price = 0.0
             progress = k / len(ticks)
             pnl_sum += pnl
             if trade_type == 'stop_loss':
@@ -264,6 +266,7 @@ def backtest(ticks: [dict], settings: dict):
                 if reentry_qty < min_qty_f(ss['qty_step'], ss['min_qty'],
                                            ss['min_cost'], reentry_price):
                     reentry_price = ss['price_step']
+                trades[-1]['reentry_price'] = reentry_price
             elif pos_size < 0.0:
                 stop_loss_price = min(pos_price * (1 + ss['stop_loss_pos_price_diff']),
                                       liq_price * (1 - ss['stop_loss_liq_diff']))
@@ -287,6 +290,10 @@ def backtest(ticks: [dict], settings: dict):
                 if -reentry_qty < min_qty_f(ss['qty_step'], ss['min_qty'],
                                             ss['min_cost'], reentry_price):
                     reentry_price = 9e12
+                trades[-1]['reentry_price'] = reentry_price
+            else:
+                trades[-1]['reentry_price'] = np.nan
+
 
             line = f"\r{progress:.3f} net pnl {pnl_sum:.8f} "
             line += f"profit sum {profit_sum:.5f} "
