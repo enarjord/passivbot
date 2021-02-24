@@ -268,8 +268,11 @@ def backtest(ticks: [dict], settings: dict):
                     reentry_price = ss['price_step']
                 trades[-1]['reentry_price'] = reentry_price
             elif pos_size < 0.0:
-                stop_loss_price = min(pos_price * (1 + ss['stop_loss_pos_price_diff']),
-                                      liq_price * (1 - ss['stop_loss_liq_diff']))
+                if liq_price > 0.0:
+                    stop_loss_price = min(pos_price * (1 + ss['stop_loss_pos_price_diff']),
+                                          liq_price * (1 - ss['stop_loss_liq_diff']))
+                else:
+                    stop_loss_price = pos_price * (1 + ss['stop_loss_pos_price_diff'])
                 reentry_price = max([
                     ss['price_step'],
                     ob[1],
