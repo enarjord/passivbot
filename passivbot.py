@@ -34,6 +34,7 @@ def sort_dict_keys(d):
     return {key: sort_dict_keys(d[key]) for key in sorted(d)}
 
 
+
 #################
 # inverse calcs #
 #################
@@ -71,7 +72,6 @@ def calc_min_entry_qty_inverse(qty_step: float, min_qty: float, min_cost: float,
                               balance * leverage * price,
                               entry_qty_pct)
 
-
 ################
 # linear calcs #
 ################
@@ -108,7 +108,6 @@ def calc_min_entry_qty_linear(qty_step: float, min_qty: float, min_cost: float,
                               qty_step,
                               (balance * leverage) / price,
                               entry_qty_pct)
-
 
 ##################
 ##################
@@ -493,10 +492,6 @@ class Bot:
     def calc_orders(self):
         last_price_diff_limit = 0.05
         balance = self.position['wallet_balance'] * min(1.0, abs(self.balance_pct))
-        min_entry_qty = self.calc_min_entry_qty(balance, self.price)
-        min_close_qty = max(self.min_qty,
-                            round_dn(min_entry_qty * self.min_close_qty_multiplier,
-                                     self.qty_step))
         orders = []
         if calc_diff(self.position['liquidation_price'], self.price) < self.stop_loss_liq_diff or \
                 calc_diff(self.position['price'], self.price) > self.stop_loss_pos_price_diff:
@@ -523,11 +518,13 @@ class Bot:
         if self.position['size'] == 0: # no pos
             bid_price, ask_price = self.calc_initial_bid_ask()
             if bid_price > 0.0:
-                orders.append({'side': 'buy', 'qty': min_entry_qty, 'price': bid_price,
+                orders.append({'side': 'buy', 'qty': self.calc_min_entry_qty(balance, bid_price),
+                               'price': bid_price,
                                'type': 'limit', 'reduce_only': False, 'custom_id': 'entry'})
             if ask_price > 0.0:
-                orders.append({'side': 'sell', 'qty': min_entry_qty, 'price': ask_price,
-                               'type': 'limit', 'reduce_only': False, 'custom_id': 'entry'})
+                orders.append({'side': 'sell', 'qty': self.calc_min_entry_qty(balance, ask_price),
+                               'price': ask_price, 'type': 'limit', 'reduce_only': False,
+                               'custom_id': 'entry'})
         elif self.position['size'] > 0.0: # long pos
             pos_size = self.position['size']
             pos_price = self.position['price']
@@ -541,6 +538,7 @@ class Bot:
             for k in range(self.n_entry_orders):
                 max_pos_size = self.calc_max_pos_size(min(balance, self.position['equity']),
                                                       bid_price)
+                min_entry_qty = self.calc_min_entry_qty(balance, bid_price)
                 bid_qty = calc_reentry_qty(self.qty_step, self.ddown_factor, min_entry_qty,
                                            max_pos_size, pos_size)
                 if bid_qty < min_entry_qty:
@@ -562,15 +560,20 @@ class Bot:
                                                                     balance,
                                                                     pos_margin,
                                                                     pos_price))
-            ask_qtys, ask_prices = calc_long_closes(self.price_step,
-                                                    self.qty_step,
-                                                    min_close_qty,
-                                                    self.min_markup,
-                                                    self.max_markup,
-                                                    self.position['size'] - stop_loss_qty,
-                                                    self.position['price'],
-                                                    self.ob[1],
-                                                    self.n_close_orders)
+            ask_qtys, ask_prices = calc_long_closes(
+                self.price_step,
+                self.qty_step,
+                calc_min_close_qty(self.qty_step,
+                                   self.min_qty,
+                                   self.min_close_qty_multiplier,
+                                   self.calc_min_entry_qty(balance, self.position['price'])),
+                self.min_markup,
+                self.max_markup,
+                self.position['size'] - stop_loss_qty,
+                self.position['price'],
+                self.ob[1],
+                self.n_close_orders
+            )
             close_orders = sorted([{'side': 'sell', 'qty': abs_qty, 'price': float(price_),
                                     'type': 'limit', 'reduce_only': True, 'custom_id': 'close'}
                                    for qty_, price_ in zip(ask_qtys, ask_prices)
@@ -591,6 +594,7 @@ class Bot:
             for k in range(self.n_entry_orders):
                 max_pos_size = self.calc_max_pos_size(min(balance, self.position['equity']),
                                                       ask_price)
+                min_entry_qty = self.calc_min_entry_qty(balance, ask_price)
                 ask_qty = calc_reentry_qty(self.qty_step, self.ddown_factor, min_entry_qty,
                                            max_pos_size, pos_size)
                 if ask_qty < min_entry_qty:
@@ -612,15 +616,20 @@ class Bot:
                                                                     balance,
                                                                     pos_margin,
                                                                     pos_price))
-            bid_qtys, bid_prices = calc_shrt_closes(self.price_step,
-                                                    self.qty_step,
-                                                    min_close_qty,
-                                                    self.min_markup,
-                                                    self.max_markup,
-                                                    self.position['size'] + stop_loss_qty,
-                                                    self.position['price'],
-                                                    self.ob[0],
-                                                    self.n_close_orders)
+            bid_qtys, bid_prices = calc_shrt_closes(
+                self.price_step,
+                self.qty_step,
+                calc_min_close_qty(self.qty_step,
+                                   self.min_qty,
+                                   self.min_close_qty_multiplier,
+                                   self.calc_min_entry_qty(balance, self.position['price'])),
+                self.min_markup,
+                self.max_markup,
+                self.position['size'] + stop_loss_qty,
+                self.position['price'],
+                self.ob[0],
+                self.n_close_orders
+            )
             close_orders = sorted([{'side': 'buy', 'qty': float(qty_), 'price': float(price_),
                                     'type': 'limit', 'reduce_only': True, 'custom_id': 'close'}
                                    for qty_, price_ in zip(bid_qtys, bid_prices) if qty_ > 0.0],
