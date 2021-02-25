@@ -5,8 +5,7 @@
   symbol: XMRUSDT
   n_days: 60
   # if starting_candidate_filepath is not a valid file, will use random starting candidate
-  starting_candidate_filepath: backtest_configs/conservative_starting_config.json
-  # starting_candidate_filepath: backtest_results/binance/XMRUSDT/xmr_session_001_60_days/live_config.json
+  starting_candidate_filepath: live_settings/binance/default.json
   multiprocessing: false
   starting_k: 0
   n_jackrabbit_iterations: 200
