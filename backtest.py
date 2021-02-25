@@ -45,7 +45,7 @@ def backtest(ticks: [dict], settings: dict):
 
     pos_size, pos_price, reentry_price, reentry_qty, liq_price = 0.0, 0.0, 0.0, 0.0, 0.0
     closest_long_liq, closest_shrt_liq = 1.0, 1.0
-    stop_loss_price = 0.0
+    stop_loss_liq_diff_price, stop_loss_pos_price_diff_price, stop_loss_price = 0.0, 0.0, 0.0
     actual_balance = ss['starting_balance']
     apparent_balance = actual_balance * ss['balance_pct']
 
@@ -109,6 +109,15 @@ def backtest(ticks: [dict], settings: dict):
                     trade_type, trade_side = 'entry', 'long'
                     pnl = 0.0
                     fee_paid = -cost_f(qty, price) * ss['maker_fee']
+                # check if long stop loss triggered
+                if t['price'] <= stop_loss_liq_diff_price:
+                    stop_loss_price = ob[1]
+                    stop_loss_type = 'stop_loss_liq_diff'
+                elif t['price'] <= stop_loss_pos_price_diff_price:
+                    stop_loss_price = ob[1]
+                    stop_loss_type = 'stop_loss_pos_price_diff'
+                else:
+                    stop_loss_price = 0.0
             else:
                 if t['price'] <= pos_price:
                     # close shrt pos
@@ -132,13 +141,13 @@ def backtest(ticks: [dict], settings: dict):
                         trade_type, trade_side = 'close', 'shrt'
                         pnl = shrt_pnl_f(pos_price, price, qty)
                         fee_paid = -cost_f(qty, price) * ss['maker_fee']
-                elif t['price'] >= stop_loss_price:
+                elif t['price'] < stop_loss_price:
                     # shrt stop loss
                     did_trade = True
                     qty = min(-pos_size, round_up(-pos_size * ss['stop_loss_pos_reduction'],
                                                   ss['qty_step']))
-                    price = ob[0]
-                    trade_type, trade_side = 'stop_loss', 'shrt'
+                    price = stop_loss_price
+                    trade_type, trade_side = stop_loss_type, 'shrt'
                     pnl = shrt_pnl_f(pos_price, price, qty)
                     fee_paid = -cost_f(qty, price) * ss['maker_fee']
 
@@ -169,6 +178,15 @@ def backtest(ticks: [dict], settings: dict):
                     trade_type, trade_side = 'entry', 'shrt'
                     pnl = 0.0
                     fee_paid = -cost_f(-qty, price) * ss['maker_fee']
+                # check if shrt stop loss triggered
+                if t['price'] >= stop_loss_liq_diff_price:
+                    stop_loss_price = ob[0]
+                    stop_loss_type = 'stop_loss_liq_diff'
+                elif t['price'] >= stop_loss_pos_price_diff_price:
+                    stop_loss_price = ob[0]
+                    stop_loss_type = 'stop_loss_pos_price_diff'
+                else:
+                    stop_loss_price = 0.0
             else:
                 # close long pos
                 if t['price'] >= pos_price:
@@ -192,13 +210,13 @@ def backtest(ticks: [dict], settings: dict):
                         trade_type, trade_side = 'close', 'long'
                         pnl = long_pnl_f(pos_price, price, -qty)
                         fee_paid =  - cost_f(-qty, price) * ss['maker_fee']
-                elif t['price'] <= stop_loss_price:
+                elif stop_loss_price > 0.0 and t['price'] > stop_loss_price:
                     # long stop loss
                     did_trade = True
                     qty = -min(pos_size, round_up(pos_size * ss['stop_loss_pos_reduction'],
                                                   ss['qty_step']))
-                    price = ob[1]
-                    trade_type, trade_side = 'stop_loss', 'long'
+                    price = stop_loss_price
+                    trade_type, trade_side = stop_loss_type, 'long'
                     pnl = long_pnl_f(pos_price, price, qty)
                     fee_paid = -cost_f(-qty, price) * ss['maker_fee']
             ob[1] = t['price']
@@ -221,7 +239,7 @@ def backtest(ticks: [dict], settings: dict):
                 liq_price = 0.0
             progress = k / len(ticks)
             net_pnl_plus_fees += pnl + fee_paid
-            if trade_type == 'stop_loss':
+            if trade_type.startswith('stop_loss'):
                 loss_sum += pnl
             else:
                 profit_sum += pnl
@@ -249,8 +267,8 @@ def backtest(ticks: [dict], settings: dict):
                     print('break on', key)
                     return []
             if pos_size > 0.0:
-                stop_loss_price = max(pos_price * (1 - ss['stop_loss_pos_price_diff']),
-                                      liq_price * (1 + ss['stop_loss_liq_diff']))
+                stop_loss_liq_diff_price = liq_price * (1 + ss['stop_loss_liq_diff'])
+                stop_loss_pos_price_diff_price = pos_price * (1 - ss['stop_loss_pos_price_diff'])
                 reentry_price = min(
                     ob[0],
                     calc_long_reentry_price(ss['price_step'], ss['grid_spacing'],
@@ -273,11 +291,9 @@ def backtest(ticks: [dict], settings: dict):
                     reentry_price = ss['price_step']
                 trades[-1]['reentry_price'] = reentry_price
             elif pos_size < 0.0:
-                if liq_price > 0.0:
-                    stop_loss_price = min(pos_price * (1 + ss['stop_loss_pos_price_diff']),
-                                          liq_price * (1 - ss['stop_loss_liq_diff']))
-                else:
-                    stop_loss_price = pos_price * (1 + ss['stop_loss_pos_price_diff'])
+                stop_loss_liq_diff_price = liq_price * (1 - ss['stop_loss_liq_diff']) \
+                    if liq_price > 0.0 else pos_price * 10000
+                stop_loss_pos_price_diff_price = pos_price * (1 + ss['stop_loss_pos_price_diff'])
                 reentry_price = max([
                     ss['price_step'],
                     ob[1],
@@ -645,7 +661,7 @@ def jackrabbit_wrap(ticks: [dict], backtest_config: dict) -> dict:
         'closest_long_liq': tdf.closest_long_liq.min(),
         'n_trades': len(trades),
         'n_closes': len(tdf[tdf.type == 'close']),
-        'n_stop_losses': len(tdf[tdf.type == 'stop_loss']),
+        'n_stop_losses': len(tdf[tdf.type.str.startswith('stop_loss')]),
     }
     result['gain'] = (result['net_pnl_plus_fees'] + backtest_config['starting_balance']) / \
         backtest_config['starting_balance']
