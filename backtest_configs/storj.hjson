@@ -1,11 +1,12 @@
 {
-  session_name: storj_session_7_days_001
+  session_name: xmr_session_001
   exchange: binance
   user: e
-  symbol: STORJUSDT
-  n_days: 7
+  symbol: XMRUSDT
+  n_days: 60
   # if starting_candidate_filepath is not a valid file, will use random starting candidate
-  starting_candidate_filepath: live_settings/binance/default.json
+  starting_candidate_filepath: backtest_configs/conservative_starting_config.json
+  # starting_candidate_filepath: backtest_results/binance/XMRUSDT/xmr_session_001_60_days/live_config.json
   multiprocessing: false
   starting_k: 0
   n_jackrabbit_iterations: 200
@@ -15,23 +16,23 @@
     ["OFF: break on first soft stop",
      "lambda trade, tick: trade['type'] == 'stop_loss'"]
     ["OFF: neg pnl sum",
-     "lambda trade, tick: trade['pnl_sum'] < 0.0 and trade['progress'] > 0.5"]
-    ["OFF: liq diff too small",
-     "lambda trade, tick: trade['liq_diff'] < 0.07"]
+     "lambda trade, tick: trade['net_pnl_plus_fees'] < 0.0 and trade['progress'] > 0.25"]
+    ["ON: liq too close",
+     "lambda trade, tick: trade['closest_liq'] < 0.07"]
     ["OFF: time between consec trades",
      "lambda trade, tick: tick['timestamp'] - trade['timestamp'] > 1000 * 60 * 60 * 24"]
     ["OFF: pos price last price diff",
      "lambda trade, tick: calc_diff(trade['price'], tick['price']) > 1.05"]
     ["OFF: adg too low",
      "lambda trade, tick: trade['average_daily_gain'] < 1.01 and trade['progress'] >= 0.5"]
-    ["OFF: no soft stops",
-     "lambda trade, tick: trade['loss_sum'] == 0.0 and trade['progress'] >= 0.6"]
+    ["ON: no soft stops",
+     "lambda trade, tick: trade['loss_sum'] == 0.0 and trade['progress'] >= 0.9"]
     ["OFF: balance + pnl below starting_balance",
-     "lambda trade, tick: trade['actual_balance'] + trade['pnl_sum'] < 0.0"]
+     "lambda trade, tick: trade['actual_balance'] + trade['net_pnl_plus_fees'] < 0.0"]
   ]
   ranges:
   {
-    balance_pct: [0.01, 1, 0.001]
+    balance_pct: [0.01, 1.0, 0.001]
     entry_qty_pct: [0.0001, 0.5, 1e-05]
     ddown_factor: [0, 3.0, 0.001]
     ema_span: [100, 100000, 1]
