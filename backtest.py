@@ -78,7 +78,7 @@ def backtest(ticks: [dict], settings: dict):
     ema_alpha = 2 / (ss['ema_span'] + 1)
     ema_alpha_ = 1 - ema_alpha
     prev_trade_ts = 0
-    min_trade_delay_millis = 1000
+    min_trade_delay_millis = ss['latency_simulation_ms'] if 'latency_simulation_ms' in ss else 1000
 
     trades = []
     ob = [min(ticks[0]['price'], ticks[1]['price']),
