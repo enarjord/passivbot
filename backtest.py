@@ -253,7 +253,7 @@ def backtest(ticks: [dict], settings: dict):
                            'qty': qty, 'pos_price': pos_price, 'pos_size': pos_size, 'pnl': pnl,
                            'liq_price': liq_price, 'apparent_balance': apparent_balance,
                            'actual_balance': actual_balance, 'net_pnl_plus_fees': net_pnl_plus_fees,
-                           'loss_sum': loss_sum, 'profit_sum': profit_sum,
+                           'loss_sum': loss_sum, 'profit_sum': profit_sum, 'fee_paid': fee_paid,
                            'average_daily_gain': adg, 'timestamp': t['timestamp'],
                            'closest_long_liq': closest_long_liq,
                            'closest_shrt_liq': closest_shrt_liq,
@@ -269,6 +269,7 @@ def backtest(ticks: [dict], settings: dict):
             if pos_size > 0.0:
                 stop_loss_liq_diff_price = liq_price * (1 + ss['stop_loss_liq_diff'])
                 stop_loss_pos_price_diff_price = pos_price * (1 - ss['stop_loss_pos_price_diff'])
+                stop_loss_price = 0.0
                 reentry_price = min(
                     ob[0],
                     calc_long_reentry_price(ss['price_step'], ss['grid_spacing'],
@@ -294,6 +295,7 @@ def backtest(ticks: [dict], settings: dict):
                 stop_loss_liq_diff_price = liq_price * (1 - ss['stop_loss_liq_diff']) \
                     if liq_price > 0.0 else pos_price * 10000
                 stop_loss_pos_price_diff_price = pos_price * (1 + ss['stop_loss_pos_price_diff'])
+                stop_loss_price = 0.0
                 reentry_price = max([
                     ss['price_step'],
                     ob[1],
