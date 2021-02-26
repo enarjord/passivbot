@@ -105,7 +105,7 @@ run with
 open backtest_notes.ipynb in jupyter notebook or jupiter-lab for plotting and analysis
 
 
-about backtest config, binance XMRUSDT example
+about backtest config, binance example
 
 ```
 {
@@ -119,6 +119,7 @@ about backtest config, binance XMRUSDT example
   multiprocessing: false
   starting_k: 0
   n_jackrabbit_iterations: 200
+  latency_simulation_ms: 1000
   starting_balance: 30
   break_on:
   [
