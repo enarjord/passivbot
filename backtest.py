@@ -77,6 +77,8 @@ def backtest(ticks: [dict], settings: dict):
     ema = ticks[0]['price']
     ema_alpha = 2 / (ss['ema_span'] + 1)
     ema_alpha_ = 1 - ema_alpha
+    prev_trade_ts = 0
+    min_trade_delay_millis = 1000
 
     trades = []
     ob = [min(ticks[0]['price'], ticks[1]['price']),
@@ -221,7 +223,8 @@ def backtest(ticks: [dict], settings: dict):
                     fee_paid = -cost_f(-qty, price) * ss['maker_fee']
             ob[1] = t['price']
         ema = ema * ema_alpha_ + t['price'] * ema_alpha
-        if did_trade:
+        if did_trade and t['timestamp'] - prev_trade_ts > min_trade_delay_millis:
+            prev_trade_ts = t['timestamp']
             new_pos_size = round(pos_size + qty, 10)
             if trade_type == 'entry':
                 pos_price = pos_price * abs(pos_size / new_pos_size) + \
