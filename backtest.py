@@ -251,7 +251,7 @@ def backtest(ticks: [dict], settings: dict):
             adg = total_gain ** (1 / n_days_) if (n_days_ > 0.0 and total_gain > 0.0) else 0.0
             avg_gain_per_tick = \
                 (actual_balance / settings['starting_balance']) ** (1 / (len(trades) + 1))
-            hours_since_prev_trade = t['timestamp'] - trades[-1]['timestamp'] if trades else 0.0
+            millis_since_prev_trade = t['timestamp'] - trades[-1]['timestamp'] if trades else 0.0
             trades.append({'trade_id': k, 'side': trade_side, 'type': trade_type, 'price': price,
                            'qty': qty, 'pos_price': pos_price, 'pos_size': pos_size, 'pnl': pnl,
                            'liq_price': liq_price, 'apparent_balance': apparent_balance,
@@ -262,7 +262,7 @@ def backtest(ticks: [dict], settings: dict):
                            'closest_shrt_liq': closest_shrt_liq,
                            'closest_liq': min(closest_long_liq, closest_shrt_liq),
                            'avg_gain_per_tick': avg_gain_per_tick,
-                           'hours_since_prev_trade': hours_since_prev_trade,
+                           'millis_since_prev_trade': millis_since_prev_trade,
                            'progress': progress})
             closest_long_liq, closest_shrt_liq = 1.0, 1.0
             for key, condition in break_on.items():
@@ -606,7 +606,7 @@ def jackrabbit_single_core(results: dict,
                                         'backtest_trades', ''))
     best_result_filepath = backtest_config['session_dirpath'] + 'best_result.json'
     while k < ks:
-        key = calc_candidate_hash_key(candidate, sorted(backtest_config['ranges']))
+        key = calc_candidate_hash_key(candidate, list(backtest_config['ranges']))
         if key not in results:
             print(f"\nk={k} m={ms[k]:.6f} {key}")
             print('candidate:\n', candidate)
@@ -674,7 +674,7 @@ def jackrabbit_wrap(ticks: [dict], backtest_config: dict) -> dict:
         if result['gain'] > 0.0 else 0.0
     result['closest_liq'] = min(result['closest_shrt_liq'], result['closest_long_liq'])
     result['max_n_hours_between_consec_trades'] = \
-        tdf.hours_since_prev_trade.max() / (1000 * 60 * 60)
+        tdf.millis_since_prev_trade.max() / (1000 * 60 * 60)
 
     return result, tdf
 
