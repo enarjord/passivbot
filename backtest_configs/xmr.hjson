@@ -20,7 +20,7 @@
     ["ON: liq too close",
      "lambda trade, tick: trade['closest_liq'] < 0.07"]
     ["ON: time between consec trades",
-     "lambda trade, tick: trade['hours_since_prev_trade'] > 1000 * 60 * 60 * 36"]
+     "lambda trade, tick: trade['millis_since_prev_trade'] > 1000 * 60 * 60 * 36"]
     ["OFF: pos price last price diff",
      "lambda trade, tick: calc_diff(trade['price'], tick['price']) > 1.05"]
     ["OFF: adg too low",
