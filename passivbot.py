@@ -638,7 +638,7 @@ class Bot:
         return orders
 
     async def cancel_and_create(self):
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(0.01)
         await self.update_position()
         await asyncio.sleep(0.01)
         if any([self.ts_locked[k_] > self.ts_released[k_]
@@ -655,7 +655,7 @@ class Bot:
             tasks.append(self.cancel_orders(to_cancel[:n_orders_limit]))
         tasks.append(self.create_orders(to_create[:n_orders_limit]))
         results = await asyncio.gather(*tasks)
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(0.01)
         await self.update_position()
         if any(results):
             print()
