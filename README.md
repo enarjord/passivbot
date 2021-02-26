@@ -28,10 +28,16 @@ for more detailed documentation on this project, see the wiki at:
 
 https://github.com/enarjord/passivbot_futures/wiki
 
+bybit ref:
+https://www.bybit.com/invite?ref=PQEGz
+
+binance ref:
+https://www.binance.cc/en/register?ref=TII4B07C
+
 ------------------------------------------------------------------
 change log
 
-2021-02-23 v2.0.0
+2021-02-23 v2.0.0_beta
 - major update to backtester
 - new backtest usage syntax
 - other changes
