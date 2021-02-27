@@ -163,7 +163,7 @@ class BybitBot(Bot):
             self.cc.v2_private_get_funding_predicted_funding(params={'symbol': self.symbol})
         )
         pos = position['result']
-        result = {'size': pos['size'] * (-1 if pos['side'] == 'Sell' else 1),
+        result = {'size': pos['size'] * (-1.0 if pos['side'] == 'Sell' else 1.0),
                   'price': float(pos['entry_price']),
                   'leverage': float(pos['leverage']),
                   'liquidation_price': float(pos['liq_price']),
