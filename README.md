@@ -1,8 +1,10 @@
 # passivbot_futures
 
-**Version: 2.0.0_beta**
+**Version: 2.0.0_jit**
 
 trading bot running on bybit inverse futures and binance usdt futures
+
+uses just in time compilation for faster backtesting
 
 use at own risk
 
