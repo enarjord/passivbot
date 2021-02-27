@@ -279,11 +279,10 @@ class BybitBot(Bot):
                                 self.ob[0] = e['price']
                             self.price = e['price']
                             price_changed = True
-                    if price_changed:
-                        self.update_indicators({'timestamp': e['trade_time_ms'],
-                                                'price': e['price'],
-                                                'side': e['side'].lower(),
-                                                'qty': e['size']})
+                            self.update_indicators({'timestamp': e['trade_time_ms'],
+                                                    'price': e['price'],
+                                                    'side': e['side'].lower(),
+                                                    'qty': e['size']})
                 except Exception as e:
                     if 'success' not in data:
                         print('error in websocket streamed data', e)
