@@ -1,0 +1,71 @@
+2021-01-19
+- renamed settings["margin_limit"] to settings["balance"]
+- bug fixes and changes in trade data downloading
+- if there already is historical trade data downloaded, run the script `rename_trade_data_csvs.py` to rename all files
+
+2021-01-23
+- removed static mode
+- added indicator ema
+- rewrote backtester
+
+2021-01-30
+- changed backtesting results formatting
+- fixed insufficient margin error
+- many other fixes and changes...
+- added possibility of running same backtest in two or more terminals for better cpu utilization
+
+2021-02-03
+- backtester break conditions change
+- bug fixes
+
+2021-02-08
+- added min_close_qty_multiplier
+
+2021-02-09
+- added classic stop loss
+
+2021-02-10
+- renamed settings["default_qty"] to settings["entry_qty_pct"]
+- settings["entry_qty_pct"] may now also be a positive value
+- renamed settings["balance"] to settings["balance_pct"]
+- settings["balance_pct"] may now also be a positive value
+- added balance_pct to backtester.  backtester will now behave like live bot, taking balance_pct into account
+    - actual balance is used for liq price calc, otherwise balance * balance_pct is used
+
+2021-02-12
+- added indicator_settings["funding_fee_collect_mode"]
+    - if true, will enter long only if predicted fundig rate is negative and enter short only if predicted funding rate is positive
+- added indicator rsi (not finished, not active)
+- changed entry_qty_pct formula
+    - before initial_entry_qty = balance_ito_contracts * entry_qty_pct
+    - now    initial_entry_qty = balance_ito_contracts * leverage * entry_qty_pct
+- added logging
+- added "config_name" and "logging_level" to live settings
+- added break_on condition: break if balance + pnl < starting_balance
+
+2021-02-16
+- bug fixes v1.0.2
+- updated default bybit live settings v1.1.0
+
+2021-02-17 v1.2.0
+- bug fixes
+- change in backtesting_notes.ipynb
+    - automatic plot dump
+    - other changes
+- backtester now fetches relevant data from exchanges instead of user having to input them manually
+
+2021-02-17 v1.2.1
+- backtester will cache exchange fetched settings after first run
+- backtester will prevent using leverage higher than max leverage, in case max leverage set in ranges.json was too high
+
+2021-02-17 v1.3.0
+- added indicator_settings["tick_ema"]["spread"] to live bot and backtester
+    - optional setting -- ema_spread defaults to 0.0 if not present in config file
+
+2021-02-18 v1.3.3
+- minor refactoring
+
+2021-02-23 v2.0.0
+- major update to backtester
+- new backtest usage syntax
+- other changes

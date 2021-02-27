@@ -1,6 +1,6 @@
 # passivbot_futures
 
-**Version: 1.3.4**
+**Version: 2.0.0_beta**
 
 trading bot running on bybit inverse futures and binance usdt futures
 
@@ -10,7 +10,7 @@ requires python >= 3.8
 
 dependencies, install with pip:
 
-`python3 -m pip install matplotlib pandas websockets ccxt`
+`python3 -m pip install matplotlib pandas websockets ccxt hjson`
 
 discord
 
@@ -28,75 +28,21 @@ for more detailed documentation on this project, see the wiki at:
 
 https://github.com/enarjord/passivbot_futures/wiki
 
+bybit ref:
+https://www.bybit.com/invite?ref=PQEGz
+
+binance ref:
+https://www.binance.cc/en/register?ref=TII4B07C
+
 ------------------------------------------------------------------
 change log
 
-2021-01-19
-- renamed settings["margin_limit"] to settings["balance"]
-- bug fixes and changes in trade data downloading
-- if there already is historical trade data downloaded, run the script `rename_trade_data_csvs.py` to rename all files
+2021-02-23 v2.0.0_beta
+- major update to backtester
+- new backtest usage syntax
+- other changes
 
-2021-01-23
-- removed static mode
-- added indicator ema
-- rewrote backtester
-
-2021-01-30
-- changed backtesting results formatting
-- fixed insufficient margin error
-- many other fixes and changes...
-- added possibility of running same backtest in two or more terminals for better cpu utilization
-
-2021-02-03
-- backtester break conditions change
-- bug fixes
-
-2021-02-08
-- added min_close_qty_multiplier
-
-2021-02-09
-- added classic stop loss
-
-2021-02-10
-- renamed settings["default_qty"] to settings["entry_qty_pct"]
-- settings["entry_qty_pct"] may now also be a positive value
-- renamed settings["balance"] to settings["balance_pct"]
-- settings["balance_pct"] may now also be a positive value
-- added balance_pct to backtester.  backtester will now behave like live bot, taking balance_pct into account
-    - actual balance is used for liq price calc, otherwise balance * balance_pct is used
-
-2021-02-12
-- added indicator_settings["funding_fee_collect_mode"]
-    - if true, will enter long only if predicted fundig rate is negative and enter short only if predicted funding rate is positive
-- added indicator rsi (not finished, not active)
-- changed entry_qty_pct formula
-    - before initial_entry_qty = balance_ito_contracts * entry_qty_pct
-    - now    initial_entry_qty = balance_ito_contracts * leverage * entry_qty_pct
-- added logging
-- added "config_name" and "logging_level" to live settings
-- added break_on condition: break if balance + pnl < starting_balance
-
-2021-02-16
-- bug fixes v1.0.2
-- updated default bybit live settings v1.1.0
-
-2021-02-17 v1.2.0
-- bug fixes
-- change in backtesting_notes.ipynb
-    - automatic plot dump
-    - other changes
-- backtester now fetches relevant data from exchanges instead of user having to input them manually
-
-2021-02-17 v1.2.1
-- backtester will cache exchange fetched settings after first run
-- backtester will prevent using leverage higher than max leverage, in case max leverage set in ranges.json was too high
-
-2021-02-17 v1.3.0
-- added indicator_settings["tick_ema"]["spread"] to live bot and backtester
-    - optional setting -- ema_spread defaults to 0.0 if not present in config file
-
-2021-02-18 v1.3.3
-- minor refactoring
+see `changelog.txt` for earlier changes
 
 
 
@@ -148,70 +94,80 @@ reentry_ask_price = pos_price * (1 + grid_spacing * (1 + (position_margin / wall
 
 a backtester is included
 
-go to backtesting_settings/{exchange}/, adjust backtesting_settings.json and ranges.json
+go to `backtest_configs/{config_name}.hjson` and adjust
 
 run with 
 
-`python3 backtest.py exchange your_user_name`
-
-optional:  specify session name as arg:
-
-`python3 backtest.py exchange your_user_name session_name`
-
-otherwise will use session_name given in backtesting_settings.json
-
-open backtesting_notes.ipynb in jupyter notebook or jupiter-lab for plotting and analysis
+`python3 backtest.py {config_name}`
 
 
-about backtesting settings, binance XMRUSDT example
 
+open backtest_notes.ipynb in jupyter notebook or jupiter-lab for plotting and analysis
+
+
+about backtest config, binance example
+
+```
 {
-
-    "session_name": "unnamed_session",       # arbitrary name.
-    "symbol": "XMRUSDT",
-    "n_days": 41,                            # n days to backtest
-
-    "starting_candidate_preference": ["best", "random", "given"],
-                                             # starting candidate preference from left to right.
-                                             # if best is first and there is a best.json file present, will build on best.
-                                             # otherwise, starting candidate will be either random or given, depending which is before the other.
-                                             # after first iteration, will build on best regardless of starting_candidate_preference
-    
-    "starting_k": 0,                         # k is incremented by 1 per iteration until k == n_jackrabbit_iterations
-    "n_jackrabbit_iterations": 200,          # see below for more info on jackrabbit
-    
-    "cross_mode": true,                      # true for cross mode, false for isolated mode
-    "max_leverage": 75,                      # max allowed leverage for symbol
-    "do_long": true,
-    "do_shrt": true,
-
-    
-    "break_on": [
-        ["OFF: break on first soft stop",
-         "lambda trade, tick: trade['type'] == 'stop_loss'"],
-        ["ON: neg pnl sum",
-         "lambda trade, tick: trade['pnl_sum'] < 0.0 and trade['progress'] > 0.4"],
-        ["ON: liq diff too small",
-         "lambda trade, tick: trade['liq_diff'] < 0.02"],
-        ["ON: time between consec trades",
-         "lambda trade, tick: tick['timestamp'] - trade['timestamp'] > 1000 * 60 * 60 * 24"],
-        ["ON: pos price last price diff",
-         "lambda trade, tick: calc_diff(trade['price'], tick['price']) > 1.05"]
-    ],
-                                             # conditions to break backtest prematurely and returns empty list of trades.
-                                             # ["name", if true: break.  trade is last trade, tick is last price tick]
-                                             # if startswith "OFF", will ignore condition.
-
-
-    "starting_balance": 10.0,                # backtest starting balance
-                                             # backtest balance never goes lower than starting balance,
-                                             # as if topping up wallet back to starting balance each time balance goes below starting balance.
-
-
+  session_name: storj_session_7_days_001
+  exchange: binance
+  user: e
+  symbol: STORJUSDT
+  n_days: 7
+  # if starting_candidate_filepath is not a valid file, will use random starting candidate
+  starting_candidate_filepath: live_settings/binance/default.json
+  multiprocessing: false
+  starting_k: 0
+  n_jackrabbit_iterations: 200
+  latency_simulation_ms: 1000
+  starting_balance: 30
+  break_on:
+  [
+    ["OFF: break on first soft stop",
+     "lambda trade, tick: trade['type'] == 'stop_loss'"]
+    ["OFF: neg pnl sum",
+     "lambda trade, tick: trade['pnl_sum'] < 0.0 and trade['progress'] > 0.5"]
+    ["OFF: liq diff too small",
+     "lambda trade, tick: trade['liq_diff'] < 0.07"]
+    ["OFF: time between consec trades",
+     "lambda trade, tick: tick['timestamp'] - trade['timestamp'] > 1000 * 60 * 60 * 24"]
+    ["OFF: pos price last price diff",
+     "lambda trade, tick: calc_diff(trade['price'], tick['price']) > 1.05"]
+    ["OFF: adg too low",
+     "lambda trade, tick: trade['average_daily_gain'] < 1.01 and trade['progress'] >= 0.5"]
+    ["OFF: no soft stops",
+     "lambda trade, tick: trade['loss_sum'] == 0.0 and trade['progress'] >= 0.6"]
+    ["OFF: balance + pnl below starting_balance",
+     "lambda trade, tick: trade['actual_balance'] + trade['pnl_sum'] < 0.0"]
+  ]
+  ranges:
+  {
+    balance_pct: [0.01, 1, 0.001]
+    entry_qty_pct: [0.0001, 0.5, 1e-05]
+    ddown_factor: [0, 3.0, 0.001]
+    ema_span: [100, 100000, 1]
+    ema_spread: [0, 0.02, 0.0001]
+    grid_coefficient: [0, 700, 0.01]
+    grid_spacing: [0.0002, 0.01, 1e-05]
+    leverage: [2, 999999, 1]
+    stop_loss_liq_diff: [0.015, 0.15, 0.0001]
+    stop_loss_pos_price_diff: [0.015, 0.15, 0.0001]
+    max_markup: [0.001, 0.03, 1e-05]
+    min_markup: [0.0005, 0.002, 1e-05]
+    min_close_qty_multiplier: [0, 1, 0.1]
+    n_close_orders: [8, 25, 1]
+    stop_loss_pos_reduction: [0.001, 0.3, 0.001]
+    do_long: [1, 1, 1]
+    do_shrt: [1, 1, 1]
+  }
 }
+```
 
 
-in ranges.json are defined which settings are to be mutated: [min, max, step]
+
+
+
+ranges define which settings are to be mutated: [min, max, step]
 
 jackrabbit is a pet name given to a simple algorithm for optimizing settings.
 
@@ -224,10 +180,6 @@ the superior settings becomes the parent of the next candidate.
 the mutation coefficient m determines the mutation range, and is inversely proportional to k, which is a simple counter.
 
 in other words, at first new candidates will vary wildly from the best settings, towards the end they will vary less, "fine tuning" the settings.
-
-it is possible to run the same backtest in two or more terminals simultaneously.  they will share best candidate and dump results in same file for later analysis.
-
-if you wish to do so, use the same session name for all and be sure to start with only one and let it finish downloading trades and making a trades_list cache before starting the others.
 
 ------------------------------------------------------------------
 

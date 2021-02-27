@@ -34,6 +34,90 @@ def sort_dict_keys(d):
     return {key: sort_dict_keys(d[key]) for key in sorted(d)}
 
 
+
+#################
+# inverse calcs #
+#################
+
+
+def calc_min_qty_inverse(qty_step: float, min_qty: float, min_cost: float, price: float) -> float:
+    return min_qty
+
+
+def calc_long_pnl_inverse(entry_price: float, close_price: float, qty: float) -> float:
+    return abs(qty) * (1 / entry_price - 1 / close_price)
+
+
+def calc_shrt_pnl_inverse(entry_price: float, close_price: float, qty: float) -> float:
+    return abs(qty) * (1 / close_price - 1 / entry_price)
+
+
+def calc_cost_inverse(qty: float, price: float) -> float:
+    return abs(qty / price)
+
+
+def calc_margin_cost_inverse(leverage: float, qty: float, price: float) -> float:
+    return calc_cost_inverse(qty, price) / leverage
+
+
+def calc_max_pos_size_inverse(leverage: float, balance: float, price: float) -> float:
+    return balance * price * leverage
+
+
+def calc_min_entry_qty_inverse(qty_step: float, min_qty: float, min_cost: float,
+                               entry_qty_pct: float, leverage: float, balance: float,
+                               price: float) -> float:
+    return calc_min_entry_qty(calc_min_qty_inverse(qty_step, min_qty, min_cost, price),
+                              qty_step,
+                              balance * leverage * price,
+                              entry_qty_pct)
+
+################
+# linear calcs #
+################
+
+
+def calc_min_qty_linear(qty_step: float, min_qty: float, min_cost: float, price: float) -> float:
+    return max(min_qty, round_up(min_cost / price, qty_step))
+
+
+def calc_long_pnl_linear(entry_price: float, close_price: float, qty: float) -> float:
+    return abs(qty) * (close_price - entry_price)
+
+
+def calc_shrt_pnl_linear(entry_price: float, close_price: float, qty: float) -> float:
+    return abs(qty) * (entry_price - close_price)
+
+
+def calc_cost_linear(qty: float, price: float) -> float:
+    return abs(qty * price)
+
+
+def calc_margin_cost_linear(leverage: float, qty: float, price: float) -> float:
+    return calc_cost_linear(qty, price) / leverage
+
+
+def calc_max_pos_size_linear(leverage: float, balance: float, price: float) -> float:
+    return (balance / price) * leverage
+
+
+def calc_min_entry_qty_linear(qty_step: float, min_qty: float, min_cost: float,
+                              entry_qty_pct: float, leverage: float, balance: float,
+                              price: float) -> float:
+    return calc_min_entry_qty(calc_min_qty_linear(qty_step, min_qty, min_cost, price),
+                              qty_step,
+                              (balance * leverage) / price,
+                              entry_qty_pct)
+
+##################
+##################
+
+
+def calc_min_close_qty(qty_step: float, min_qty: float, min_close_qty_multiplier: float,
+                       min_entry_qty) -> float:
+    return max(min_qty, round_dn(min_entry_qty * min_close_qty_multiplier, qty_step))
+
+
 def calc_long_reentry_price(price_step: float,
                             grid_spacing: float,
                             grid_coefficient: float,
@@ -56,6 +140,24 @@ def calc_shrt_reentry_price(price_step: float,
                     round_up(pos_price * grid_spacing / 4, price_step))
 
 
+def calc_min_entry_qty(min_qty: float,
+                       qty_step: float,
+                       leveraged_balance_ito_contracts: float,
+                       qty_balance_pct: float) -> float:
+    return max(min_qty, round_dn(leveraged_balance_ito_contracts * abs(qty_balance_pct), qty_step))
+
+
+def calc_reentry_qty(qty_step: float,
+                     ddown_factor: float,
+                     min_entry_qty: float,
+                     max_pos_size: float,
+                     pos_size: float):
+    abs_pos_size = abs(pos_size)
+    qty_available = max(0.0, round_dn(max_pos_size - abs_pos_size, qty_step))
+    return min(qty_available,
+               max(min_entry_qty, round_dn(abs_pos_size * ddown_factor, qty_step)))
+
+
 def calc_long_closes(price_step: float,
                      qty_step: float,
                      min_qty: float,
@@ -67,9 +169,11 @@ def calc_long_closes(price_step: float,
                      n_orders: int = 10,
                      single_order_price_diff_threshold: float = 0.003):
     n_orders = int(round(min(n_orders, pos_size / min_qty)))
-    prices = round_up(np.linspace(pos_price * (1 + min_markup), pos_price * (1 + max_markup),
-                                  n_orders),
-                      price_step)
+
+    prices = np.linspace(pos_price * (1 + min_markup), pos_price * (1 + max_markup), n_orders)
+    for i in range(len(prices)):
+        prices[i] = round_up(prices[i], price_step)
+
     prices = np.unique(prices)
     prices = prices[np.where(prices >= lowest_ask)]
     if len(prices) == 0:
@@ -81,7 +185,9 @@ def calc_long_closes(price_step: float,
         # too great spacing between prices, return single order
         return (np.array([-pos_size]), 
                 np.array([max(lowest_ask, round_up(pos_price * (1 + min_markup), price_step))]))
-    qtys = round_up(np.repeat(pos_size / len(prices), len(prices)), qty_step)
+    qtys = np.repeat(pos_size / len(prices), len(prices))
+    for i in range(len(qtys)):
+        qtys[i] = round_up(qtys[i], qty_step)
     qtys_sum = qtys.sum()
     while qtys_sum > pos_size:
         for i in range(len(qtys)):
@@ -90,24 +196,6 @@ def calc_long_closes(price_step: float,
             if qtys_sum <= pos_size:
                 break
     return qtys * -1, prices
-
-
-def calc_initial_entry_qty(min_qty: float,
-                           qty_step: float,
-                           leveraged_balance_ito_contracts: float,
-                           qty_balance_pct: float) -> float:
-    return max(min_qty, round_dn(leveraged_balance_ito_contracts * abs(qty_balance_pct), qty_step))
-
-
-def calc_reentry_qty(qty_step: float,
-                     ddown_factor: float,
-                     initial_entry_qty: float,
-                     max_pos_size: float,
-                     pos_size: float):
-    abs_pos_size = abs(pos_size)
-    qty_available = max(0.0, round_dn(max_pos_size - abs_pos_size, qty_step))
-    return min(qty_available,
-               max(initial_entry_qty, round_dn(abs_pos_size * ddown_factor, qty_step)))
 
 
 def calc_shrt_closes(price_step: float,
@@ -122,9 +210,11 @@ def calc_shrt_closes(price_step: float,
                      single_order_price_diff_threshold: float = 0.003):
     abs_pos_size = abs(pos_size)
     n_orders = int(round(min(n_orders, abs_pos_size / min_qty)))
-    prices = round_dn(np.linspace(pos_price * (1 - min_markup), pos_price * (1 - max_markup),
-                                  n_orders),
-                      price_step)
+
+    prices = np.linspace(pos_price * (1 - min_markup), pos_price * (1 - max_markup), n_orders)
+    for i in range(len(prices)):
+        prices[i] = round_dn(prices[i], price_step)
+
     prices = np.unique(prices)
     prices = -np.sort(-prices[np.where(prices <= highest_bid)])
     if len(prices) == 0:
@@ -136,7 +226,9 @@ def calc_shrt_closes(price_step: float,
         # too great spacing between prices, return single order
         return (np.array([-pos_size]),
                 np.array([min(highest_bid, round_dn(pos_price * (1 - min_markup), price_step))]))
-    qtys = round_up(np.repeat(abs_pos_size / len(prices), len(prices)), qty_step)
+    qtys = np.repeat(abs_pos_size / len(prices), len(prices))
+    for i in range(len(qtys)):
+        qtys[i] = round_up(qtys[i], qty_step)
     qtys_sum = qtys.sum()
     while qtys_sum > abs_pos_size:
         for i in range(len(qtys) - 1, -1, -1):
@@ -193,7 +285,7 @@ def print_(args, r=False, n=False):
     return line
 
 
-def load_settings(exchange: str, user: str = 'default', do_print=True) -> dict:
+def load_live_settings(exchange: str, user: str = 'default', do_print=True) -> dict:
     fpath = f'live_settings/{exchange}/'
     try:
         settings = json.load(open(f'{fpath}{user}.json'))
@@ -402,10 +494,6 @@ class Bot:
     def calc_orders(self):
         last_price_diff_limit = 0.05
         balance = self.position['wallet_balance'] * min(1.0, abs(self.balance_pct))
-        initial_entry_qty = self.calc_initial_entry_qty(balance, self.price)
-        min_close_qty = max(self.min_qty,
-                            round_dn(initial_entry_qty * self.min_close_qty_multiplier,
-                                     self.qty_step))
         orders = []
         if calc_diff(self.position['liquidation_price'], self.price) < self.stop_loss_liq_diff or \
                 calc_diff(self.position['price'], self.price) > self.stop_loss_pos_price_diff:
@@ -432,11 +520,13 @@ class Bot:
         if self.position['size'] == 0: # no pos
             bid_price, ask_price = self.calc_initial_bid_ask()
             if bid_price > 0.0:
-                orders.append({'side': 'buy', 'qty': initial_entry_qty, 'price': bid_price,
+                orders.append({'side': 'buy', 'qty': self.calc_min_entry_qty(balance, bid_price),
+                               'price': bid_price,
                                'type': 'limit', 'reduce_only': False, 'custom_id': 'entry'})
             if ask_price > 0.0:
-                orders.append({'side': 'sell', 'qty': initial_entry_qty, 'price': ask_price,
-                               'type': 'limit', 'reduce_only': False, 'custom_id': 'entry'})
+                orders.append({'side': 'sell', 'qty': self.calc_min_entry_qty(balance, ask_price),
+                               'price': ask_price, 'type': 'limit', 'reduce_only': False,
+                               'custom_id': 'entry'})
         elif self.position['size'] > 0.0: # long pos
             pos_size = self.position['size']
             pos_price = self.position['price']
@@ -450,9 +540,10 @@ class Bot:
             for k in range(self.n_entry_orders):
                 max_pos_size = self.calc_max_pos_size(min(balance, self.position['equity']),
                                                       bid_price)
-                bid_qty = calc_reentry_qty(self.qty_step, self.ddown_factor, initial_entry_qty,
+                min_entry_qty = self.calc_min_entry_qty(balance, bid_price)
+                bid_qty = calc_reentry_qty(self.qty_step, self.ddown_factor, min_entry_qty,
                                            max_pos_size, pos_size)
-                if bid_qty < initial_entry_qty:
+                if bid_qty < min_entry_qty:
                     break
                 new_pos_size = pos_size + bid_qty
                 if new_pos_size >= max_pos_size:
@@ -471,15 +562,20 @@ class Bot:
                                                                     balance,
                                                                     pos_margin,
                                                                     pos_price))
-            ask_qtys, ask_prices = calc_long_closes(self.price_step,
-                                                    self.qty_step,
-                                                    min_close_qty,
-                                                    self.min_markup,
-                                                    self.max_markup,
-                                                    self.position['size'] - stop_loss_qty,
-                                                    self.position['price'],
-                                                    self.ob[1],
-                                                    self.n_close_orders)
+            ask_qtys, ask_prices = calc_long_closes(
+                self.price_step,
+                self.qty_step,
+                calc_min_close_qty(self.qty_step,
+                                   self.min_qty,
+                                   self.min_close_qty_multiplier,
+                                   self.calc_min_entry_qty(balance, self.position['price'])),
+                self.min_markup,
+                self.max_markup,
+                self.position['size'] - stop_loss_qty,
+                self.position['price'],
+                self.ob[1],
+                self.n_close_orders
+            )
             close_orders = sorted([{'side': 'sell', 'qty': abs_qty, 'price': float(price_),
                                     'type': 'limit', 'reduce_only': True, 'custom_id': 'close'}
                                    for qty_, price_ in zip(ask_qtys, ask_prices)
@@ -500,9 +596,10 @@ class Bot:
             for k in range(self.n_entry_orders):
                 max_pos_size = self.calc_max_pos_size(min(balance, self.position['equity']),
                                                       ask_price)
-                ask_qty = calc_reentry_qty(self.qty_step, self.ddown_factor, initial_entry_qty,
+                min_entry_qty = self.calc_min_entry_qty(balance, ask_price)
+                ask_qty = calc_reentry_qty(self.qty_step, self.ddown_factor, min_entry_qty,
                                            max_pos_size, pos_size)
-                if ask_qty < initial_entry_qty:
+                if ask_qty < min_entry_qty:
                     break
                 new_pos_size = pos_size - ask_qty
                 if abs(new_pos_size) >= max_pos_size:
@@ -521,15 +618,20 @@ class Bot:
                                                                     balance,
                                                                     pos_margin,
                                                                     pos_price))
-            bid_qtys, bid_prices = calc_shrt_closes(self.price_step,
-                                                    self.qty_step,
-                                                    min_close_qty,
-                                                    self.min_markup,
-                                                    self.max_markup,
-                                                    self.position['size'] + stop_loss_qty,
-                                                    self.position['price'],
-                                                    self.ob[0],
-                                                    self.n_close_orders)
+            bid_qtys, bid_prices = calc_shrt_closes(
+                self.price_step,
+                self.qty_step,
+                calc_min_close_qty(self.qty_step,
+                                   self.min_qty,
+                                   self.min_close_qty_multiplier,
+                                   self.calc_min_entry_qty(balance, self.position['price'])),
+                self.min_markup,
+                self.max_markup,
+                self.position['size'] + stop_loss_qty,
+                self.position['price'],
+                self.ob[0],
+                self.n_close_orders
+            )
             close_orders = sorted([{'side': 'buy', 'qty': float(qty_), 'price': float(price_),
                                     'type': 'limit', 'reduce_only': True, 'custom_id': 'close'}
                                    for qty_, price_ in zip(bid_qtys, bid_prices) if qty_ > 0.0],
@@ -538,7 +640,7 @@ class Bot:
         return orders
 
     async def cancel_and_create(self):
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(0.01)
         await self.update_position()
         await asyncio.sleep(0.01)
         if any([self.ts_locked[k_] > self.ts_released[k_]
@@ -555,7 +657,7 @@ class Bot:
             tasks.append(self.cancel_orders(to_cancel[:n_orders_limit]))
         tasks.append(self.create_orders(to_create[:n_orders_limit]))
         results = await asyncio.gather(*tasks)
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(0.01)
         await self.update_position()
         if any(results):
             print()

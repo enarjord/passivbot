@@ -11,9 +11,9 @@ from math import ceil
 from math import floor
 from time import time, sleep
 from typing import Callable, Iterator
-from passivbot import init_ccxt, load_key_secret, load_settings, make_get_filepath, print_, \
+from passivbot import init_ccxt, load_key_secret, load_live_settings, make_get_filepath, print_, \
     ts_to_date, flatten, filter_orders, Bot, start_bot, round_up, round_dn, \
-    calc_initial_entry_qty
+    calc_min_entry_qty
 
 
 def get_maintenance_margin_rate(pos_size_ito_usdt: float) -> float:
@@ -149,9 +149,9 @@ class BinanceBot(Bot):
                         self.price_step = float(q['tickSize'])
                     elif q['filterType'] == 'MIN_NOTIONAL':
                         self.min_notional = float(q['notional'])
-                self.calc_initial_entry_qty = lambda balance_, last_price: \
-                    calc_initial_entry_qty(max(self.min_qty, round_up(self.min_notional / last_price,
-                                                                      self.qty_step)),
+                self.calc_min_entry_qty = lambda balance_, last_price: \
+                    calc_min_entry_qty(max(self.min_qty, round_up(self.min_notional / last_price,
+                                                                  self.qty_step)),
                                            self.qty_step,
                                            (balance_ / last_price) * self.leverage,
                                            self.entry_qty_pct)
@@ -341,7 +341,7 @@ class BinanceBot(Bot):
 
 
 async def main() -> None:
-    bot = await create_bot(sys.argv[1], load_settings('binance', sys.argv[1]))
+    bot = await create_bot(sys.argv[1], load_live_settings('binance', sys.argv[1]))
     await start_bot(bot)
 
 

@@ -1,22 +1,22 @@
 {
-    "config_name": "BTCUSD_triple_down_52_days_2021-02-14",
+    "config_name": "btc_no_reentries_tested_2021-02-26_closest_liq_13%",
     "symbol": "BTCUSD",
     "logging_level": 0,
     "cross_mode": true,
- 
-    "balance_pct": 0.528,
-    "ddown_factor": 2.186,
-    "entry_qty_pct": 0.02636,
-    "min_close_qty_multiplier": 0.6,
-    "leverage": 59.0,
-    "n_entry_orders": 8,
-    "n_close_orders": 17.0,
- 
-    "grid_spacing": 0.00221,
-    "grid_coefficient": 639.4,
-    "min_markup": 0.00047,
-    "max_markup": 0.02168,
- 
+
+    "balance_pct": 0.621,
+    "ddown_factor": 1.19,
+    "entry_qty_pct": 0.21745,
+    "min_close_qty_multiplier": 1.0,
+    "leverage": 25.0,
+    "n_entry_orders": 1,
+    "n_close_orders": 1,
+
+    "grid_spacing": 0.00356,
+    "grid_coefficient": 189.9,
+    "min_markup": 0.00116,
+    "max_markup": 0.00116,
+
     "indicator_settings": {
         "do_long": true,
         "do_shrt": true,
@@ -26,13 +26,13 @@
             "period_ms": 1800000
         },
         "tick_ema": {
-            "span": 6355.0,
-            "spread": 0.0
+            "span": 92312.0,
+            "spread": 0.0183
         }
     },
- 
+
     "market_stop_loss": false,
-    "stop_loss_liq_diff": 0.1149,
-    "stop_loss_pos_price_diff": 0.0947,
-    "stop_loss_pos_reduction": 0.012
+    "stop_loss_liq_diff": 0.1667,
+    "stop_loss_pos_price_diff": 0.0533,
+    "stop_loss_pos_reduction": 0.215
 }
