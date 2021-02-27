@@ -59,8 +59,10 @@ def backtest(ticks: [dict], settings: dict):
         pos_margin_f = calc_margin_cost_inverse
         max_pos_size_f = calc_max_pos_size_inverse
         min_entry_qty_f = calc_min_entry_qty_inverse
-        long_liq_price_f = bybit_calc_cross_long_liq_price
-        shrt_liq_price_f = bybit_calc_cross_shrt_liq_price
+        long_liq_price_f = lambda bal, psize, pprice: \
+            bybit_calc_cross_long_liq_price(bal, psize, pprice, ss['max_leverage'])
+        shrt_liq_price_f = lambda bal, psize, pprice: \
+            bybit_calc_cross_shrt_liq_price(bal, psize, pprice, ss['max_leverage'])
     else:
         min_qty_f = calc_min_qty_linear
         long_pnl_f = calc_long_pnl_linear
@@ -69,8 +71,10 @@ def backtest(ticks: [dict], settings: dict):
         pos_margin_f = calc_margin_cost_linear
         max_pos_size_f = calc_max_pos_size_linear
         min_entry_qty_f = calc_min_entry_qty_linear
-        long_liq_price_f = binance_calc_cross_long_liq_price
-        shrt_liq_price_f = binance_calc_cross_shrt_liq_price
+        long_liq_price_f = lambda bal, psize, pprice: \
+            binance_calc_cross_long_liq_price(bal, psize, pprice, ss['leverage'])
+        shrt_liq_price_f = lambda bal, psize, pprice: \
+            binance_calc_cross_shrt_liq_price(bal, psize, pprice, ss['leverage'])
 
     break_on = {e[0]: eval(e[1]) for e in settings['break_on'] if e[0].startswith('ON:')}
 
@@ -235,9 +239,9 @@ def backtest(ticks: [dict], settings: dict):
             if pos_size == 0.0:
                 liq_price = 0.0
             elif pos_size > 0.0:
-                liq_price = long_liq_price_f(actual_balance, pos_size, pos_price, ss['leverage'])
+                liq_price = long_liq_price_f(actual_balance, pos_size, pos_price)
             else:
-                liq_price = shrt_liq_price_f(actual_balance, pos_size, pos_price, ss['leverage'])
+                liq_price = shrt_liq_price_f(actual_balance, pos_size, pos_price)
             if liq_price < 0.0:
                 liq_price = 0.0
             progress = k / len(ticks)
