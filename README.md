@@ -1,6 +1,6 @@
 # passivbot_futures
 
-**Version: 2.0.0_beta**
+**Version: 2.0.0**
 
 trading bot running on bybit inverse futures and binance usdt futures
 
@@ -41,6 +41,10 @@ change log
 - major update to backtester
 - new backtest usage syntax
 - other changes
+
+2021-02-27 v2.0.0
+- bug fixes
+- new default configs for bybit and binance
 
 see `changelog.txt` for earlier changes
 
