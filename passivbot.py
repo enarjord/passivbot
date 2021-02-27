@@ -177,7 +177,8 @@ def calc_long_closes(price_step: float,
     prices = np.unique(prices)
     prices = prices[np.where(prices >= lowest_ask)]
     if len(prices) == 0:
-        return np.array([-pos_size]), np.array([lowest_ask])
+        return (np.array([-pos_size]), 
+                np.array([max(lowest_ask, round_up(pos_price * (1 + min_markup), price_step))]))
     elif len(prices) == 1:
         return np.array([-pos_size]), prices
     elif calc_diff(prices[1], prices[0]) > single_order_price_diff_threshold:
@@ -217,7 +218,8 @@ def calc_shrt_closes(price_step: float,
     prices = np.unique(prices)
     prices = -np.sort(-prices[np.where(prices <= highest_bid)])
     if len(prices) == 0:
-        return np.array([-pos_size]), np.array([highest_bid])
+        return (np.array([-pos_size]),
+                np.array([min(highest_bid, round_dn(pos_price * (1 - min_markup), price_step))]))
     elif len(prices) == 1:
         return np.array([-pos_size]), prices
     elif calc_diff(prices[0], prices[1]) > single_order_price_diff_threshold:
