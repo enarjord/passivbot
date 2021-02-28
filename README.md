@@ -1,6 +1,6 @@
 # passivbot_futures
 
-**Version: 2.0.0**
+**Version: 2.0.1**
 
 trading bot running on bybit inverse futures and binance usdt futures
 
@@ -45,6 +45,9 @@ change log
 2021-02-27 v2.0.0
 - bug fixes
 - new default configs for bybit and binance
+
+2021-02-28 v2.0.1
+- added optional just-in-time compiling for faster backtesting
 
 see `changelog.txt` for earlier changes
 
@@ -168,6 +171,9 @@ about backtest config, binance example
 ```
 
 
+add argument --jit to use numba's just in time compiler for faster backtesting:
+
+`python3 backtest.py {config_name} --jit`
 
 
 
