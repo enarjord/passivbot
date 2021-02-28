@@ -10,11 +10,11 @@ import sys
 from time import time, sleep
 from typing import Iterator
 
-try:
-    assert '--jit' in sys.argv
+
+if '--jit' in sys.argv:
     print('using numba')
     from numba import njit
-except:
+else:
     print('not using numba')
     def njit(pyfunc=None, **kwargs):
         def wrap(func):
