@@ -6,22 +6,39 @@ import numpy as np
 import pandas as pd
 import pprint
 import asyncio
+import sys
 from time import time, sleep
 from typing import Iterator
 
+try:
+    assert '--jit' in sys.argv
+    print('using numba')
+    from numba import njit
+except:
+    print('not using numba')
+    def njit(pyfunc=None, **kwargs):
+        def wrap(func):
+            return func
+        if pyfunc is not None:
+            return wrap(pyfunc)
+        else:
+            return wrap
 
+
+@njit
 def round_up(n: float, step: float, safety_rounding=10) -> float:
     return np.round(np.ceil(n / step) * step, safety_rounding)
 
-
+@njit
 def round_dn(n: float, step: float, safety_rounding=10) -> float:
     return np.round(np.floor(n / step) * step, safety_rounding)
 
-
+@njit
 def round_(n: float, step: float, safety_rounding=10) -> float:
     return np.round(np.round(n / step) * step, safety_rounding)
 
 
+@njit
 def calc_diff(x, y):
     return abs(x - y) / abs(y)
 
@@ -40,30 +57,37 @@ def sort_dict_keys(d):
 #################
 
 
+@njit
 def calc_min_qty_inverse(qty_step: float, min_qty: float, min_cost: float, price: float) -> float:
     return min_qty
 
 
+@njit
 def calc_long_pnl_inverse(entry_price: float, close_price: float, qty: float) -> float:
     return abs(qty) * (1 / entry_price - 1 / close_price)
 
 
+@njit
 def calc_shrt_pnl_inverse(entry_price: float, close_price: float, qty: float) -> float:
     return abs(qty) * (1 / close_price - 1 / entry_price)
 
 
+@njit
 def calc_cost_inverse(qty: float, price: float) -> float:
     return abs(qty / price)
 
 
+@njit
 def calc_margin_cost_inverse(leverage: float, qty: float, price: float) -> float:
     return calc_cost_inverse(qty, price) / leverage
 
 
+@njit
 def calc_max_pos_size_inverse(leverage: float, balance: float, price: float) -> float:
     return balance * price * leverage
 
 
+@njit
 def calc_min_entry_qty_inverse(qty_step: float, min_qty: float, min_cost: float,
                                entry_qty_pct: float, leverage: float, balance: float,
                                price: float) -> float:
@@ -77,30 +101,37 @@ def calc_min_entry_qty_inverse(qty_step: float, min_qty: float, min_cost: float,
 ################
 
 
+@njit
 def calc_min_qty_linear(qty_step: float, min_qty: float, min_cost: float, price: float) -> float:
     return max(min_qty, round_up(min_cost / price, qty_step))
 
 
+@njit
 def calc_long_pnl_linear(entry_price: float, close_price: float, qty: float) -> float:
     return abs(qty) * (close_price - entry_price)
 
 
+@njit
 def calc_shrt_pnl_linear(entry_price: float, close_price: float, qty: float) -> float:
     return abs(qty) * (entry_price - close_price)
 
 
+@njit
 def calc_cost_linear(qty: float, price: float) -> float:
     return abs(qty * price)
 
 
+@njit
 def calc_margin_cost_linear(leverage: float, qty: float, price: float) -> float:
     return calc_cost_linear(qty, price) / leverage
 
 
+@njit
 def calc_max_pos_size_linear(leverage: float, balance: float, price: float) -> float:
     return (balance / price) * leverage
 
 
+@njit
 def calc_min_entry_qty_linear(qty_step: float, min_qty: float, min_cost: float,
                               entry_qty_pct: float, leverage: float, balance: float,
                               price: float) -> float:
@@ -113,11 +144,13 @@ def calc_min_entry_qty_linear(qty_step: float, min_qty: float, min_cost: float,
 ##################
 
 
+@njit
 def calc_min_close_qty(qty_step: float, min_qty: float, min_close_qty_multiplier: float,
                        min_entry_qty) -> float:
     return max(min_qty, round_dn(min_entry_qty * min_close_qty_multiplier, qty_step))
 
 
+@njit
 def calc_long_reentry_price(price_step: float,
                             grid_spacing: float,
                             grid_coefficient: float,
@@ -129,6 +162,7 @@ def calc_long_reentry_price(price_step: float,
                     round_up(pos_price * grid_spacing / 4, price_step))
 
 
+@njit
 def calc_shrt_reentry_price(price_step: float,
                             grid_spacing: float,
                             grid_coefficient: float,
@@ -140,6 +174,7 @@ def calc_shrt_reentry_price(price_step: float,
                     round_up(pos_price * grid_spacing / 4, price_step))
 
 
+@njit
 def calc_min_entry_qty(min_qty: float,
                        qty_step: float,
                        leveraged_balance_ito_contracts: float,
@@ -147,6 +182,7 @@ def calc_min_entry_qty(min_qty: float,
     return max(min_qty, round_dn(leveraged_balance_ito_contracts * abs(qty_balance_pct), qty_step))
 
 
+@njit
 def calc_reentry_qty(qty_step: float,
                      ddown_factor: float,
                      min_entry_qty: float,
@@ -158,6 +194,7 @@ def calc_reentry_qty(qty_step: float,
                max(min_entry_qty, round_dn(abs_pos_size * ddown_factor, qty_step)))
 
 
+@njit(fastmath=True)
 def calc_long_closes(price_step: float,
                      qty_step: float,
                      min_qty: float,
@@ -198,6 +235,7 @@ def calc_long_closes(price_step: float,
     return qtys * -1, prices
 
 
+@njit(fastmath=True)
 def calc_shrt_closes(price_step: float,
                      qty_step: float,
                      min_qty: float,
