@@ -6,6 +6,8 @@ import pandas as pd
 import asyncio
 import os
 import pprint
+from collections import deque
+from itertools import islice
 from hashlib import sha256
 from multiprocessing import Pool
 from time import time
@@ -546,7 +548,6 @@ def load_results(results_filepath: str) -> dict:
         results = {}
     return results
 
-
 def jackrabbit(ticks: [dict], backtest_config: dict):
     results = load_results(backtest_config['session_dirpath'] + 'results.txt')
     k = backtest_config['starting_k']
@@ -625,8 +626,8 @@ def jackrabbit_single_core(results: dict,
                 f.write(json.dumps(result) + '\n')
             if os.path.exists(best_result_filepath):
                 best_result = json.load(open(best_result_filepath))
-            if 'gain' in result:
-                if 'gain' not in best_result or result['gain'] > best_result['gain']:
+            if 'fitness' in result:
+                if 'fitness' not in best_result or result['fitness'] > best_result['fitness']:
                     print('\n\n### new best ###\n\n')
                     best_result = result
                     print(json.dumps(best_result, indent=4))
@@ -653,34 +654,65 @@ def jackrabbit_multi_core(results: dict,
                           ms: [float]):
     pass
 
+def sliding_window(iterable, n, step=1):
+    length = len(iterable)
+    i = 0
+
+    while i + n < length:
+        yield list(iterable[i:i + n])
+        i += step
+
+    yield list(iterable[i:])
 
 def jackrabbit_wrap(ticks: [dict], backtest_config: dict) -> dict:
-    key = np.format_float_positional(
-        hash(json.dumps({k_: backtest_config[k_] for k_ in sorted(backtest_config['ranges'])})),
-        trim='-')[1:20]
-    trades = backtest(ticks, backtest_config)
-    if not trades:
-        return {}, None
-    tdf = pd.DataFrame(trades).set_index('trade_id')
-    result = {
-        'net_pnl_plus_fees': trades[-1]['net_pnl_plus_fees'],
-        'profit_sum': trades[-1]['profit_sum'],
-        'loss_sum': trades[-1]['loss_sum'],
-        'closest_shrt_liq': tdf.closest_shrt_liq.min(),
-        'closest_long_liq': tdf.closest_long_liq.min(),
-        'n_trades': len(trades),
-        'n_closes': len(tdf[tdf.type == 'close']),
-        'n_stop_losses': len(tdf[tdf.type.str.startswith('stop_loss')]),
-    }
-    result['gain'] = (result['net_pnl_plus_fees'] + backtest_config['starting_balance']) / \
-        backtest_config['starting_balance']
-    result['average_daily_gain'] = result['gain'] ** (1 / backtest_config['n_days']) \
-        if result['gain'] > 0.0 else 0.0
-    result['closest_liq'] = min(result['closest_shrt_liq'], result['closest_long_liq'])
-    result['max_n_hours_between_consec_trades'] = \
-        tdf.millis_since_prev_trade.max() / (1000 * 60 * 60)
+    tdfs_sub = [] 
+    results_sub = [] 
 
-    return result, tdf
+    subset_nb = int(round(backtest_config['sliding_window_size'] * len(ticks)))
+    subset_step = int(round(backtest_config['sliding_window_step'] * len(ticks)))
+
+    for subset in sliding_window(ticks, subset_nb, subset_step):
+        trades = backtest(subset, backtest_config)
+
+        if not trades:
+            continue
+
+        tdf = pd.DataFrame(trades).set_index('trade_id')
+        result = {
+            'net_pnl_plus_fees': trades[-1]['net_pnl_plus_fees'],
+            'profit_sum': trades[-1]['profit_sum'],
+            'loss_sum': trades[-1]['loss_sum'],
+            'closest_shrt_liq': tdf.closest_shrt_liq.min(),
+            'closest_long_liq': tdf.closest_long_liq.min(),
+            'n_trades': len(trades),
+            'n_closes': len(tdf[tdf.type == 'close']),
+            'n_stop_losses': len(tdf[tdf.type.str.startswith('stop_loss')]),
+        }
+
+        result['gain'] = (result['net_pnl_plus_fees'] + backtest_config['starting_balance']) / \
+            backtest_config['starting_balance']
+
+        result['average_daily_gain'] = result['gain'] ** (1 / backtest_config['n_days']) \
+            if result['gain'] > 0.0 else 0.0
+        result['closest_liq'] = min(result['closest_shrt_liq'], result['closest_long_liq'])
+        result['max_n_hours_between_consec_trades'] = \
+            tdf.millis_since_prev_trade.max() / (1000 * 60 * 60)
+
+        tdfs_sub.append(tdf)
+        results_sub.append(result)
+
+    gains = [res['gain'] for res in results_sub]
+
+    avg = np.mean(gains)
+    std = np.std(gains) if len(gains) == 1 else 1.0
+
+    results = {}
+    results['fitness'] = avg / std
+    results['data'] = results_sub
+
+    tdfs = pd.DataFrame({'idx': range(len(tdfs_sub)), 'dfs': tdfs_sub})
+
+    return results, tdfs
 
 
 async def load_ticks(backtest_config: dict) -> [dict]:
@@ -743,6 +775,7 @@ async def main():
     config_name = sys.argv[1]
     backtest_config = await prep_backtest_config(config_name)
     ticks = await load_ticks(backtest_config)
+
     jackrabbit(ticks, backtest_config)
 
 
