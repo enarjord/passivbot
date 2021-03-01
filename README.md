@@ -29,7 +29,7 @@ for more detailed documentation on this project, see the wiki at:
 https://github.com/enarjord/passivbot_futures/wiki
 
 bybit ref:
-https://www.bybit.com/invite?ref=PQEGz
+https://www.bybit.com/en-US/register?affiliate_id=16464&language=en-US&group_id=0&group_type=1
 
 binance ref:
 https://www.binance.cc/en/register?ref=TII4B07C
@@ -264,7 +264,7 @@ XLM: GDSTC6KQR6BCTA7BH45B3MTSY52EVZ4UZTPZEBAZHJMJHTUQQ5SM57S7
 USDT TRC20 (binance): TJr3KYY8Bz7wRU7QLwoYQHk88LcaBJqQN5
 
 bybit ref:
-https://www.bybit.com/invite?ref=PQEGz
+https://www.bybit.com/en-US/register?affiliate_id=16464&language=en-US&group_id=0&group_type=1
 
 binance ref:
 https://www.binance.cc/en/register?ref=TII4B07C
