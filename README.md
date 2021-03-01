@@ -51,8 +51,6 @@ change log
 
 2021-03-01 v2.0.2
 - more jit'ed calcs
-- renamed average dail gain to daily gain ratio
-- renamed gain to gain ratio
 
 see `changelog.txt` for earlier changes
 
