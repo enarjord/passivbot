@@ -1,6 +1,6 @@
 # passivbot_futures
 
-**Version: 2.0.1**
+**Version: 2.0.2**
 
 trading bot running on bybit inverse futures and binance usdt futures
 
@@ -48,6 +48,11 @@ change log
 
 2021-02-28 v2.0.1
 - added optional just-in-time compiling for faster backtesting
+
+2021-03-01 v2.0.2
+- more jit'ed calcs
+- renamed average dail gain to daily gain ratio
+- renamed gain to gain ratio
 
 see `changelog.txt` for earlier changes
 
@@ -141,7 +146,7 @@ about backtest config, binance example
     ["OFF: pos price last price diff",
      "lambda trade, tick: calc_diff(trade['price'], tick['price']) > 1.05"]
     ["OFF: adg too low",
-     "lambda trade, tick: trade['average_daily_gain'] < 1.01 and trade['progress'] >= 0.5"]
+     "lambda trade, tick: trade['daily_gain_ratio'] < 1.01 and trade['progress'] >= 0.5"]
     ["OFF: no soft stops",
      "lambda trade, tick: trade['loss_sum'] == 0.0 and trade['progress'] >= 0.6"]
     ["OFF: balance + pnl below starting_balance",
