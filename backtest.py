@@ -254,7 +254,10 @@ def backtest(ticks: [dict], settings: dict):
                 profit_sum += pnl
             total_gain = (net_pnl_plus_fees + settings['starting_balance']) / settings['starting_balance']
             n_days_ = (t['timestamp'] - ticks[0]['timestamp']) / (1000 * 60 * 60 * 24)
-            adg = total_gain ** (1 / n_days_) if (n_days_ > 0.0 and total_gain > 0.0) else 0.0
+            try:
+                adg = total_gain ** (1 / n_days_) if (n_days_ > 0.0 and total_gain > 0.0) else 0.0
+            except:
+                adj = None
             avg_gain_per_tick = \
                 (actual_balance / settings['starting_balance']) ** (1 / (len(trades) + 1))
             millis_since_prev_trade = t['timestamp'] - trades[-1]['timestamp'] if trades else 0.0
@@ -615,7 +618,7 @@ def jackrabbit_single_core(results: dict,
         if key not in results:
             print(f"\nk={k} m={ms[k]:.6f} {key}")
             print('candidate:\n', candidate)
-            result, tdf = jackrabbit_wrap(ticks, {**backtest_config, **candidate})
+            result, tdfs = jackrabbit_wrap(ticks, {**backtest_config, **candidate})
             print('\nresult:\n', result, '\n')
             print()
             result['key'] = key
@@ -637,7 +640,10 @@ def jackrabbit_single_core(results: dict,
                                                          {**backtest_config, **best_result}),
                               open(backtest_config['session_dirpath'] + 'live_config.json', 'w'),
                               indent=4)
-                tdf.to_csv(f'{trades_filepath}{key}.csv')
+
+                tdfs[0].to_csv(f'{trades_filepath}{key}_full.csv')
+                for i,tdf in enumerate(tdfs[1:]):
+                    tdf.to_csv(f'{trades_filepath}{key}_sub{i}.csv')
         candidate = get_new_candidate(backtest_config['ranges'],
                                       (best_result if best_result else candidate),
                                       ms[k])
@@ -664,18 +670,14 @@ def sliding_window(iterable, n, step=1):
 
     yield list(iterable[i:])
 
+
 def jackrabbit_wrap(ticks: [dict], backtest_config: dict) -> dict:
-    tdfs_sub = [] 
-    results_sub = [] 
+    stats = ['net_pnl_plus_fees', 'profit_sum', 'loss_sum', 'closest_shrt_liq',
+             'closest_long_liq', 'n_trades', 'n_closes', 'n_stop_losses', 'gain', 'sharpe_ratio']
 
-    subset_nb = int(round(backtest_config['sliding_window_size'] * len(ticks)))
-    subset_step = int(round(backtest_config['sliding_window_step'] * len(ticks)))
-
-    for subset in sliding_window(ticks, subset_nb, subset_step):
-        trades = backtest(subset, backtest_config)
-
+    def trades_report(trades):
         if not trades:
-            continue
+            return { stat: 0.0 for stat in stats }, pd.DataFrame()
 
         tdf = pd.DataFrame(trades).set_index('trade_id')
         result = {
@@ -698,19 +700,38 @@ def jackrabbit_wrap(ticks: [dict], backtest_config: dict) -> dict:
         result['max_n_hours_between_consec_trades'] = \
             tdf.millis_since_prev_trade.max() / (1000 * 60 * 60)
 
+        result['sharpe_ratio'] = tdf['pnl'].mean() / tdf['pnl'].std()
+
+        return result, tdf
+
+    subset_nb = int(round(backtest_config['sliding_window_size'] * len(ticks)))
+    subset_step = int(round(backtest_config['sliding_window_step'] * len(ticks)))
+
+    tdfs_sub = [] 
+    results_sub = [] 
+
+    for subset in sliding_window(ticks, subset_nb, subset_step):
+        trades = backtest(subset, backtest_config)
+        result,tdf = trades_report(trades)
+
         tdfs_sub.append(tdf)
         results_sub.append(result)
 
-    gains = [res['gain'] for res in results_sub]
-
-    avg = np.mean(gains)
-    std = np.std(gains) if len(gains) == 1 else 1.0
+    avg = { stat: np.mean([res[stat] for res in results_sub]) for stat in stats }
+    std = { stat: np.std([res[stat] for res in results_sub]) for stat in stats }
 
     results = {}
-    results['fitness'] = avg / std
-    results['data'] = results_sub
+    results['fitness'] = avg['sharpe_ratio']
+    results['avg'] = avg
+    results['std'] = std
+    results['sub_runs'] = results_sub
 
-    tdfs = pd.DataFrame({'idx': range(len(tdfs_sub)), 'dfs': tdfs_sub})
+    # Backtest on all the timeframe
+    trades = backtest(ticks, backtest_config)
+    result,tdf = trades_report(trades)
+
+    results['full_run'] = result
+    tdfs = [tdf] + tdfs_sub
 
     return results, tdfs
 
@@ -772,6 +793,7 @@ async def prep_backtest_config(config_name: str):
 
 
 async def main():
+    config_name = sys.argv[1]
     config_name = sys.argv[1]
     backtest_config = await prep_backtest_config(config_name)
     ticks = await load_ticks(backtest_config)
