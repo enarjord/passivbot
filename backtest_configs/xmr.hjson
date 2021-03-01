@@ -24,7 +24,7 @@
     ["OFF: pos price last price diff",
      "lambda trades, ticks, k: calc_diff(trades[-1]['price'], ticks[k]['price']) > 1.05"]
     ["OFF: adg too low",
-     "lambda trades, ticks, k: trades[-1]['average_daily_gain'] < 1.005 and k / len(ticks) >= 0.5"]
+     "lambda trades, ticks, k: trades[-1]['daily_gain_ratio'] < 1.005 and k / len(ticks) >= 0.5"]
     ["OFF: no soft stops",
      "lambda trades, ticks, k: trades[-1]['loss_sum'] == 0.0 and k / len(ticks) >= 0.9"]
     ["OFF: balance + pnl below starting_balance",
