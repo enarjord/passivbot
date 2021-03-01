@@ -250,9 +250,9 @@ def backtest(ticks: [dict], settings: dict):
                 loss_sum += pnl
             else:
                 profit_sum += pnl
-            total_gain_ratio = (net_pnl_plus_fees + settings['starting_balance']) / settings['starting_balance']
+            total_gain = (net_pnl_plus_fees + settings['starting_balance']) / settings['starting_balance']
             n_days_ = (t['timestamp'] - ticks[0]['timestamp']) / (1000 * 60 * 60 * 24)
-            dgr = total_gain_ratio ** (1 / n_days_) if (n_days_ > 0.0 and total_gain_ratio > 0.0) else 0.0
+            adg = total_gain ** (1 / n_days_) if (n_days_ > 0.0 and total_gain > 0.0) else 0.0
             avg_gain_per_tick = \
                 (actual_balance / settings['starting_balance']) ** (1 / (len(trades) + 1))
             millis_since_prev_trade = t['timestamp'] - trades[-1]['timestamp'] if trades else 0.0
@@ -261,7 +261,7 @@ def backtest(ticks: [dict], settings: dict):
                            'liq_price': liq_price, 'apparent_balance': apparent_balance,
                            'actual_balance': actual_balance, 'net_pnl_plus_fees': net_pnl_plus_fees,
                            'loss_sum': loss_sum, 'profit_sum': profit_sum, 'fee_paid': fee_paid,
-                           'daily_gain_ratio': dgr, 'timestamp': t['timestamp'],
+                           'average_daily_gain': adg, 'timestamp': t['timestamp'],
                            'closest_long_liq': closest_long_liq,
                            'closest_shrt_liq': closest_shrt_liq,
                            'closest_liq': min(closest_long_liq, closest_shrt_liq),
@@ -334,7 +334,7 @@ def backtest(ticks: [dict], settings: dict):
             line += f"actual_bal {actual_balance:.4f} "
             line += f"apparent_bal {apparent_balance:.4f} "
             #line += f"qty {calc_min_entry_qty_(apparent_balance, ob[0]):.4f} "
-            #line += f"dgr {trades[-1]['daily_gain_ratio']:.3f} "
+            #line += f"adg {trades[-1]['average_daily_gain']:.3f} "
             #line += f"max pos pct {abs(pos_size) / calc_max_pos_size(apparent_balance, t['price']):.3f} "
             line += f"pos size {pos_size:.4f} "
             print(line, end=' ')
@@ -625,8 +625,8 @@ def jackrabbit_single_core(results: dict,
                 f.write(json.dumps(result) + '\n')
             if os.path.exists(best_result_filepath):
                 best_result = json.load(open(best_result_filepath))
-            if 'gain_ratio' in result:
-                if 'gain_ratio' not in best_result or result['gain_ratio'] > best_result['gain_ratio']:
+            if 'gain' in result:
+                if 'gain' not in best_result or result['gain'] > best_result['gain']:
                     print('\n\n### new best ###\n\n')
                     best_result = result
                     print(json.dumps(best_result, indent=4))
@@ -699,10 +699,10 @@ def jackrabbit_wrap(ticks: [dict], backtest_config: dict) -> dict:
         'n_stop_losses': len(tdf[tdf.type.str.startswith('stop_loss')]),
         'seconds_elapsed': elapsed
     }
-    result['gain_ratio'] = (result['net_pnl_plus_fees'] + backtest_config['starting_balance']) / \
+    result['gain'] = (result['net_pnl_plus_fees'] + backtest_config['starting_balance']) / \
         backtest_config['starting_balance']
-    result['daily_gain_ratio'] = result['gain_ratio'] ** (1 / backtest_config['n_days']) \
-        if result['gain_ratio'] > 0.0 else 0.0
+    result['average_daily_gain'] = result['gain'] ** (1 / backtest_config['n_days']) \
+        if result['gain'] > 0.0 else 0.0
     result['closest_liq'] = min(result['closest_shrt_liq'], result['closest_long_liq'])
     result['max_n_hours_between_consec_trades'] = \
         tdf.millis_since_prev_trade.max() / (1000 * 60 * 60)
