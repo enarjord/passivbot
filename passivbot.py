@@ -145,6 +145,29 @@ def calc_min_entry_qty_linear(qty_step: float, min_qty: float, min_cost: float,
 
 
 @njit
+def calc_no_pos_bid_price(price_step: float,
+                          ema_spread: float,
+                          ema: float,
+                          highest_bid: float) -> float:
+    return min(highest_bid, round_dn(ema * (1 - ema_spread), price_step))
+
+
+@njit
+def calc_no_pos_ask_price(price_step: float,
+                          ema_spread: float,
+                          ema: float,
+                          lowest_ask: float) -> float:
+    return max(lowest_ask, round_up(ema * (1 + ema_spread), price_step))
+
+
+@njit
+def calc_pos_reduction_qty(qty_step: float,
+                           stop_loss_pos_reduction: float,
+                           pos_size: float) -> float:
+    return min((aps := abs(pos_size)), round_up(aps * stop_loss_pos_reduction, qty_step))
+
+
+@njit
 def calc_min_close_qty(qty_step: float, min_qty: float, min_close_qty_multiplier: float,
                        min_entry_qty) -> float:
     return max(min_qty, round_dn(min_entry_qty * min_close_qty_multiplier, qty_step))
