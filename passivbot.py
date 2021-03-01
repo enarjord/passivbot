@@ -601,10 +601,10 @@ class Bot:
             for k in range(self.n_entry_orders):
                 max_pos_size = self.calc_max_pos_size(min(balance, self.position['equity']),
                                                       bid_price)
-                min_entry_qty = self.calc_min_entry_qty(balance, bid_price)
-                bid_qty = calc_reentry_qty(self.qty_step, self.ddown_factor, min_entry_qty,
-                                           max_pos_size, pos_size)
-                if bid_qty < min_entry_qty:
+                min_qty_ = self.calc_min_qty(bid_price)
+                bid_qty = calc_reentry_qty(self.qty_step, self.ddown_factor,
+                                           min_qty_, max_pos_size, pos_size)
+                if bid_qty < min_qty_:
                     break
                 new_pos_size = pos_size + bid_qty
                 if new_pos_size >= max_pos_size:
@@ -657,10 +657,10 @@ class Bot:
             for k in range(self.n_entry_orders):
                 max_pos_size = self.calc_max_pos_size(min(balance, self.position['equity']),
                                                       ask_price)
-                min_entry_qty = self.calc_min_entry_qty(balance, ask_price)
-                ask_qty = calc_reentry_qty(self.qty_step, self.ddown_factor, min_entry_qty,
-                                           max_pos_size, pos_size)
-                if ask_qty < min_entry_qty:
+                min_qty_ = self.calc_min_qty(ask_price)
+                ask_qty = calc_reentry_qty(self.qty_step, self.ddown_factor,
+                                           min_qty_, max_pos_size, pos_size)
+                if ask_qty < min_qty_:
                     break
                 new_pos_size = pos_size - ask_qty
                 if abs(new_pos_size) >= max_pos_size:
