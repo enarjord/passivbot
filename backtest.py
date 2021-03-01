@@ -270,7 +270,7 @@ def backtest(ticks: [dict], settings: dict):
                            'progress': progress})
             closest_long_liq, closest_shrt_liq = 1.0, 1.0
             for key, condition in break_on.items():
-                if condition(trades[-1], t):
+                if condition(trades, ticks, k):
                     print('break on', key)
                     return []
             if pos_size > 0.0:
