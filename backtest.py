@@ -285,17 +285,14 @@ def backtest(ticks: [dict], settings: dict):
                                             pos_price)
                 )
                 reentry_price = max(ss['price_step'], reentry_price)
+                min_qty_ = min_qty_f(ss['qty_step'], ss['min_qty'], ss['min_cost'], reentry_price)
                 reentry_qty = calc_reentry_qty(ss['qty_step'],
                                                ss['ddown_factor'],
-                                               min_entry_qty_f(ss['qty_step'], ss['min_qty'],
-                                                               ss['min_cost'], ss['entry_qty_pct'],
-                                                               ss['leverage'], apparent_balance,
-                                                               reentry_price),
+                                               min_qty_,
                                                max_pos_size_f(ss['leverage'], apparent_balance,
                                                               reentry_price),
                                                pos_size)
-                if reentry_qty < min_qty_f(ss['qty_step'], ss['min_qty'],
-                                           ss['min_cost'], reentry_price):
+                if reentry_qty < min_qty_:
                     reentry_price = ss['price_step']
                 trades[-1]['reentry_price'] = reentry_price
             elif pos_size < 0.0:
@@ -311,17 +308,14 @@ def backtest(ticks: [dict], settings: dict):
                                             pos_margin_f(ss['leverage'], pos_size, pos_price),
                                             pos_price)
                 ])
+                min_qty_ = min_qty_f(ss['qty_step'], ss['min_qty'], ss['min_cost'], reentry_price)
                 reentry_qty = -calc_reentry_qty(ss['qty_step'],
                                                 ss['ddown_factor'],
-                                                min_entry_qty_f(ss['qty_step'], ss['min_qty'],
-                                                                ss['min_cost'], ss['entry_qty_pct'],
-                                                                ss['leverage'], apparent_balance,
-                                                                reentry_price),
+                                                min_qty_,
                                                 max_pos_size_f(ss['leverage'], apparent_balance,
                                                                   reentry_price),
                                                 pos_size)
-                if -reentry_qty < min_qty_f(ss['qty_step'], ss['min_qty'],
-                                            ss['min_cost'], reentry_price):
+                if -reentry_qty < min_qty_:
                     reentry_price = 9e12
                 trades[-1]['reentry_price'] = reentry_price
             else:
