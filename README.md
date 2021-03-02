@@ -197,7 +197,7 @@ about live settings, bybit example:
     "symbol": "BTCUSD"                    # only one symbol at a time.
 
 }
-
+ 
 
 ------------------------------------------------------------------
 
