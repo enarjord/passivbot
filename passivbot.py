@@ -953,4 +953,3 @@ class Bot:
 
 async def start_bot(bot):
     await bot.start_websocket()
-
