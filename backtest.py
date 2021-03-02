@@ -254,10 +254,7 @@ def backtest(ticks: [dict], settings: dict):
                 profit_sum += pnl
             total_gain = (net_pnl_plus_fees + settings['starting_balance']) / settings['starting_balance']
             n_days_ = (t['timestamp'] - ticks[0]['timestamp']) / (1000 * 60 * 60 * 24)
-            try:
-                adg = total_gain ** (1 / n_days_) if (n_days_ > 0.0 and total_gain > 0.0) else 0.0
-            except:
-                adj = None
+            adg = total_gain ** (1 / n_days_) if (n_days_ > 0.0 and total_gain > 0.0) else 0.0
             avg_gain_per_tick = \
                 (actual_balance / settings['starting_balance']) ** (1 / (len(trades) + 1))
             millis_since_prev_trade = t['timestamp'] - trades[-1]['timestamp'] if trades else 0.0
@@ -272,6 +269,7 @@ def backtest(ticks: [dict], settings: dict):
                            'closest_liq': min(closest_long_liq, closest_shrt_liq),
                            'avg_gain_per_tick': avg_gain_per_tick,
                            'millis_since_prev_trade': millis_since_prev_trade,
+                           'timestamp': t['timestamp'],
                            'progress': progress})
             closest_long_liq, closest_shrt_liq = 1.0, 1.0
             for key, condition in break_on.items():
@@ -595,6 +593,8 @@ def jackrabbit(ticks: [dict], backtest_config: dict):
 
 
 
+
+
 def jackrabbit_single_core(results: dict,
                            ticks: [dict],
                            backtest_config: dict,
@@ -603,10 +603,7 @@ def jackrabbit_single_core(results: dict,
                            k: int,
                            ks: int,
                            ms: [float]):
-    results_filepath = backtest_config['session_dirpath'] + 'results.txt'
-    trades_filepath = make_get_filepath(os.path.join(backtest_config['session_dirpath'],
-                                        'backtest_trades', ''))
-    best_result_filepath = backtest_config['session_dirpath'] + 'best_result.json'
+
     while k < ks:
         key = calc_candidate_hash_key(candidate, list(backtest_config['ranges']))
         if key not in results:
@@ -619,8 +616,19 @@ def jackrabbit_single_core(results: dict,
             result = {**result, **candidate}
             result['index'] = k
             results[key] = result
+
+            results_filepath = backtest_config['session_dirpath'] + 'results.txt'
+            results_filepath_g = backtest_config['session_dirpath'] + 'results'
+            trades_filepath = make_get_filepath(os.path.join(backtest_config['session_dirpath'],
+                                                'backtest_trades', ''))
+            best_result_filepath = backtest_config['session_dirpath'] + 'best_result'
             with open(results_filepath, 'a') as f:
                 f.write(json.dumps(result) + '\n')
+            with open(results_filepath_g + '_full.txt', 'a') as f:
+                f.write(json.dumps(result['full_run']) + '\n')
+            for i,results_sub in enumerate(result['sub_runs']):
+                with open(results_filepath_g + f'_sub{i:03}.txt', 'a') as f:
+                    f.write(json.dumps(results_sub) + '\n')
             if os.path.exists(best_result_filepath):
                 best_result = json.load(open(best_result_filepath))
             if 'fitness' in result:
@@ -629,15 +637,18 @@ def jackrabbit_single_core(results: dict,
                     best_result = result
                     print(json.dumps(best_result, indent=4))
                     print('\n\n')
-                    json.dump(best_result, open(best_result_filepath, 'w'), indent=4)
+                    json.dump(best_result, open(best_result_filepath + '.json', 'w'), indent=4)
+                    json.dump(best_result['full_run'], open(best_result_filepath + '_full.json', 'w'), indent=4)
+                    for i,best_result_sub in enumerate(result['sub_runs']):
+                        json.dump(best_result_sub, open(best_result_filepath + f'{i:03}.json', 'w'), indent=4)
                     json.dump(candidate_to_live_settings(backtest_config['exchange'],
                                                          {**backtest_config, **best_result}),
-                              open(backtest_config['session_dirpath'] + 'live_config.json', 'w'),
-                              indent=4)
+                              open(backtest_config['session_dirpath'] + 'live_config.json', 'w'), indent=4)
 
                 tdfs[0].to_csv(f'{trades_filepath}{key}_full.csv')
                 for i,tdf in enumerate(tdfs[1:]):
-                    tdf.to_csv(f'{trades_filepath}{key}_sub{i}.csv')
+                    tdf.to_csv(f'{trades_filepath}{key}_sub{i:03}.csv')
+
         candidate = get_new_candidate(backtest_config['ranges'],
                                       (best_result if best_result else candidate),
                                       ms[k])
@@ -722,7 +733,16 @@ def jackrabbit_wrap(ticks: [dict], backtest_config: dict) -> dict:
         result['max_n_hours_between_consec_trades'] = \
             tdf.millis_since_prev_trade.max() / (1000 * 60 * 60)
 
-        result['sharpe_ratio'] = tdf['pnl'].mean() / tdf['pnl'].std()
+        duration_ms = ticks[-1]['timestamp'] - ticks[0]['timestamp']
+        timestamp_end = ticks[-1]['timestamp']
+        hours_total = backtest_config['n_days'] * 24
+        hours = np.linspace(0.0, duration_ms, num=hours_total, endpoint=True)
+        returns = tdf['net_pnl_plus_fees'].values / backtest_config['starting_balance']
+        returns = np.concatenate(([0.0], list(returns)))
+        timestamps = np.concatenate(([0.0], list(tdf['timestamp'].values - ticks[0]['timestamp'])))
+        returns_hourly = np.interp(hours, timestamps, returns)
+        returns_risk_free = 0.0000055696 # assuming 5% annual returns
+        result['sharpe_ratio'] = (np.mean(returns_hourly) - returns_risk_free) / np.std(returns_hourly)
 
         return result, tdf
 
@@ -746,7 +766,9 @@ def jackrabbit_wrap(ticks: [dict], backtest_config: dict) -> dict:
     std = { stat: np.std([res[stat] for res in results_sub]) for stat in stats }
 
     results = {}
-    results['fitness'] = avg['sharpe_ratio']
+
+    results['fitness'] = avg[backtest_config['sharpe_ratio']]
+
     results['avg'] = avg
     results['std'] = std
     results['sub_runs'] = results_sub
