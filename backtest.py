@@ -717,7 +717,7 @@ async def load_ticks(backtest_config: dict) -> [dict]:
         print('preparing trades...')
         ticks = prep_ticks(agg_trades)
         np.save(ticks_filepath, ticks)
-    return list(ticks)
+    return ticks
 
 
 async def prep_backtest_config(config_name: str):
