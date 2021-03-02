@@ -22,7 +22,7 @@ from binance import calc_cross_shrt_liq_price as binance_calc_cross_shrt_liq_pri
 from typing import Iterator
 
 
-def prep_ticks(df: pd.DataFrame):
+def prep_ticks(df: pd.DataFrame) -> np.ndarray:
     dfc = df[df.price != df.price.shift(1)] # drop consecutive same price trades
     dfc.index = np.arange(len(dfc))
     if 'side' in dfc.columns:
@@ -36,10 +36,12 @@ def prep_ticks(df: pd.DataFrame):
     else:
         raise Exception('trades of unknown format')
     dfcc = pd.concat([dfc.price, buyer_maker, dfc.timestamp], axis=1)
-    return list(dfcc.to_dict(orient='index').values())
+    return dfcc.values
 
 
-def backtest(ticks: [dict], settings: dict):
+def backtest(ticks: np.ndarray, settings: dict):
+
+    # ticks formatting [price: float, buyer_maker: bool, timestamp: float]
 
     ss = settings
 
@@ -78,24 +80,24 @@ def backtest(ticks: [dict], settings: dict):
 
     break_on = {e[0]: eval(e[1]) for e in settings['break_on'] if e[0].startswith('ON:')}
 
-    ema = ticks[0]['price']
+    ema = ticks[0][0]
     ema_alpha = 2 / (ss['ema_span'] + 1)
     ema_alpha_ = 1 - ema_alpha
     prev_trade_ts = 0
     min_trade_delay_millis = ss['latency_simulation_ms'] if 'latency_simulation_ms' in ss else 1000
 
     trades = []
-    ob = [min(ticks[0]['price'], ticks[1]['price']),
-          max(ticks[0]['price'], ticks[1]['price'])]
+    ob = [min(ticks[0][0], ticks[1][0]),
+          max(ticks[0][0], ticks[1][0])]
     for k, t in enumerate(ticks):
         did_trade = False
-        if t['buyer_maker']:
+        if t[1]:
             # maker buy, taker sel
             if pos_size == 0.0:
                 # create long pos
                 if ss['do_long']:
                     price = calc_no_pos_bid_price(ss['price_step'], ss['ema_spread'], ema, ob[0])
-                    if t['price'] < price and ss['do_long']:
+                    if t[0] < price and ss['do_long']:
                         did_trade = True
                         qty = min_entry_qty_f(ss['qty_step'], ss['min_qty'], ss['min_cost'],
                                               ss['entry_qty_pct'], ss['leverage'], apparent_balance,
@@ -104,34 +106,34 @@ def backtest(ticks: [dict], settings: dict):
                         pnl = 0.0
                         fee_paid = -cost_f(qty, price) * ss['maker_fee']
             elif pos_size > 0.0:
-                closest_long_liq = min(calc_diff(liq_price, t['price']), closest_long_liq)
-                if t['price'] <= liq_price and closest_long_liq < 0.2:
+                closest_long_liq = min(calc_diff(liq_price, t[0]), closest_long_liq)
+                if t[0] <= liq_price and closest_long_liq < 0.2:
                     # long liquidation
                     print('\nlong liquidation')
                     return []
-                if t['price'] < reentry_price:
+                if t[0] < reentry_price:
                     # add to long pos
                     did_trade, qty, price = True, reentry_qty, reentry_price
                     trade_type, trade_side = 'entry', 'long'
                     pnl = 0.0
                     fee_paid = -cost_f(qty, price) * ss['maker_fee']
                 # check if long stop loss triggered
-                if t['price'] <= stop_loss_liq_diff_price:
+                if t[0] <= stop_loss_liq_diff_price:
                     stop_loss_price = ob[1]
                     stop_loss_type = 'stop_loss_liq_diff'
-                elif t['price'] <= stop_loss_pos_price_diff_price:
+                elif t[0] <= stop_loss_pos_price_diff_price:
                     stop_loss_price = ob[1]
                     stop_loss_type = 'stop_loss_pos_price_diff'
                 else:
                     stop_loss_price = 0.0
             else:
-                if t['price'] <= pos_price:
+                if t[0] <= pos_price:
                     # close shrt pos
                     min_close_qty = calc_min_close_qty(
                         ss['qty_step'], ss['min_qty'], ss['min_close_qty_multiplier'],
                         min_entry_qty_f(ss['qty_step'], ss['min_qty'], ss['min_cost'],
                                         ss['entry_qty_pct'], ss['leverage'], apparent_balance,
-                                        t['price'])
+                                        t[0])
                     )
                     qtys, prices = calc_shrt_closes(ss['price_step'],
                                                     ss['qty_step'],
@@ -142,12 +144,12 @@ def backtest(ticks: [dict], settings: dict):
                                                     pos_price,
                                                     ob[0],
                                                     ss['n_close_orders'])
-                    if t['price'] < prices[0]:
+                    if t[0] < prices[0]:
                         did_trade, qty, price = True, qtys[0], prices[0]
                         trade_type, trade_side = 'close', 'shrt'
                         pnl = shrt_pnl_f(pos_price, price, qty)
                         fee_paid = -cost_f(qty, price) * ss['maker_fee']
-                elif t['price'] < stop_loss_price:
+                elif t[0] < stop_loss_price:
                     # shrt stop loss
                     did_trade = True
                     qty = calc_pos_reduction_qty(ss['qty_step'], ss['stop_loss_pos_reduction'],
@@ -157,14 +159,14 @@ def backtest(ticks: [dict], settings: dict):
                     pnl = shrt_pnl_f(pos_price, price, qty)
                     fee_paid = -cost_f(qty, price) * ss['maker_fee']
 
-            ob[0] = t['price']
+            ob[0] = t[0]
         else:
             # maker sel, taker buy
             if pos_size == 0.0:
                 # create shrt pos
                 if ss['do_shrt']:
                     price = calc_no_pos_ask_price(ss['price_step'], ss['ema_spread'], ema, ob[1])
-                    if t['price'] > price:
+                    if t[0] > price:
                         did_trade = True
                         qty = -min_entry_qty_f(ss['qty_step'], ss['min_qty'], ss['min_cost'],
                                                ss['entry_qty_pct'], ss['leverage'],
@@ -173,34 +175,34 @@ def backtest(ticks: [dict], settings: dict):
                         pnl = 0.0
                         fee_paid = -cost_f(-qty, price) * ss['maker_fee']
             elif pos_size < 0.0:
-                closest_shrt_liq = min(calc_diff(liq_price, t['price']), closest_shrt_liq)
-                if t['price'] >= liq_price and closest_shrt_liq < 0.2:
+                closest_shrt_liq = min(calc_diff(liq_price, t[0]), closest_shrt_liq)
+                if t[0] >= liq_price and closest_shrt_liq < 0.2:
                     # shrt liquidation
                     print('\nshrt liquidation')
                     return []
-                if t['price'] > reentry_price:
+                if t[0] > reentry_price:
                     # add to shrt pos
                     did_trade, qty, price = True, reentry_qty, reentry_price
                     trade_type, trade_side = 'entry', 'shrt'
                     pnl = 0.0
                     fee_paid = -cost_f(-qty, price) * ss['maker_fee']
                 # check if shrt stop loss triggered
-                if t['price'] >= stop_loss_liq_diff_price:
+                if t[0] >= stop_loss_liq_diff_price:
                     stop_loss_price = ob[0]
                     stop_loss_type = 'stop_loss_liq_diff'
-                elif t['price'] >= stop_loss_pos_price_diff_price:
+                elif t[0] >= stop_loss_pos_price_diff_price:
                     stop_loss_price = ob[0]
                     stop_loss_type = 'stop_loss_pos_price_diff'
                 else:
                     stop_loss_price = 0.0
             else:
                 # close long pos
-                if t['price'] >= pos_price:
+                if t[0] >= pos_price:
                     min_close_qty = calc_min_close_qty(
                         ss['qty_step'], ss['min_qty'], ss['min_close_qty_multiplier'],
                         min_entry_qty_f(ss['qty_step'], ss['min_qty'], ss['min_cost'],
                                         ss['entry_qty_pct'], ss['leverage'], apparent_balance,
-                                        t['price'])
+                                        t[0])
                     )
                     qtys, prices = calc_long_closes(ss['price_step'],
                                                     ss['qty_step'],
@@ -211,12 +213,12 @@ def backtest(ticks: [dict], settings: dict):
                                                     pos_price,
                                                     ob[1],
                                                     ss['n_close_orders'])
-                    if t['price'] > prices[0]:
+                    if t[0] > prices[0]:
                         did_trade, qty, price = True, qtys[0], prices[0]
                         trade_type, trade_side = 'close', 'long'
                         pnl = long_pnl_f(pos_price, price, -qty)
                         fee_paid =  - cost_f(-qty, price) * ss['maker_fee']
-                elif stop_loss_price > 0.0 and t['price'] > stop_loss_price:
+                elif stop_loss_price > 0.0 and t[0] > stop_loss_price:
                     # long stop loss
                     did_trade = True
                     qty = -calc_pos_reduction_qty(ss['qty_step'], ss['stop_loss_pos_reduction'],
@@ -225,10 +227,10 @@ def backtest(ticks: [dict], settings: dict):
                     trade_type, trade_side = stop_loss_type, 'long'
                     pnl = long_pnl_f(pos_price, price, qty)
                     fee_paid = -cost_f(-qty, price) * ss['maker_fee']
-            ob[1] = t['price']
-        ema = ema * ema_alpha_ + t['price'] * ema_alpha
-        if did_trade and t['timestamp'] - prev_trade_ts > min_trade_delay_millis:
-            prev_trade_ts = t['timestamp']
+            ob[1] = t[0]
+        ema = ema * ema_alpha_ + t[0] * ema_alpha
+        if did_trade and t[2] - prev_trade_ts > min_trade_delay_millis:
+            prev_trade_ts = t[2]
             new_pos_size = round_(pos_size + qty, 0.0000000001)
             if trade_type == 'entry':
                 pos_price = pos_price * abs(pos_size / new_pos_size) + \
@@ -251,17 +253,17 @@ def backtest(ticks: [dict], settings: dict):
             else:
                 profit_sum += pnl
             total_gain = (net_pnl_plus_fees + settings['starting_balance']) / settings['starting_balance']
-            n_days_ = (t['timestamp'] - ticks[0]['timestamp']) / (1000 * 60 * 60 * 24)
+            n_days_ = (t[2] - ticks[0][2]) / (1000 * 60 * 60 * 24)
             adg = total_gain ** (1 / n_days_) if (n_days_ > 0.0 and total_gain > 0.0) else 0.0
             avg_gain_per_tick = \
                 (actual_balance / settings['starting_balance']) ** (1 / (len(trades) + 1))
-            millis_since_prev_trade = t['timestamp'] - trades[-1]['timestamp'] if trades else 0.0
+            millis_since_prev_trade = t[2] - trades[-1]['timestamp'] if trades else 0.0
             trades.append({'trade_id': k, 'side': trade_side, 'type': trade_type, 'price': price,
                            'qty': qty, 'pos_price': pos_price, 'pos_size': pos_size, 'pnl': pnl,
                            'liq_price': liq_price, 'apparent_balance': apparent_balance,
                            'actual_balance': actual_balance, 'net_pnl_plus_fees': net_pnl_plus_fees,
                            'loss_sum': loss_sum, 'profit_sum': profit_sum, 'fee_paid': fee_paid,
-                           'average_daily_gain': adg, 'timestamp': t['timestamp'],
+                           'average_daily_gain': adg, 'timestamp': t[2],
                            'closest_long_liq': closest_long_liq,
                            'closest_shrt_liq': closest_shrt_liq,
                            'closest_liq': min(closest_long_liq, closest_shrt_liq),
@@ -329,7 +331,7 @@ def backtest(ticks: [dict], settings: dict):
             line += f"apparent_bal {apparent_balance:.4f} "
             #line += f"qty {calc_min_entry_qty_(apparent_balance, ob[0]):.4f} "
             #line += f"adg {trades[-1]['average_daily_gain']:.3f} "
-            #line += f"max pos pct {abs(pos_size) / calc_max_pos_size(apparent_balance, t['price']):.3f} "
+            #line += f"max pos pct {abs(pos_size) / calc_max_pos_size(apparent_balance, t[0]):.3f} "
             line += f"pos size {pos_size:.4f} "
             print(line, end=' ')
     return trades
@@ -391,7 +393,7 @@ async def load_trades(exchange: str, user: str, symbol: str, n_days: float) -> p
     def load_cache():
         cache_filenames = [f for f in os.listdir(cache_filepath) if '.csv' in f]
         if cache_filenames:
-            print('loading cached trades')
+            print('loading cached ticks')
             cache_df = pd.concat([pd.read_csv(cache_filepath + f) for f in cache_filenames], axis=0)
             cache_df = cache_df.set_index('trade_id')
             return cache_df
