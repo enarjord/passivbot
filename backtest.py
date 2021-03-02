@@ -767,7 +767,10 @@ def jackrabbit_wrap(ticks: [dict], backtest_config: dict) -> dict:
 
     results = {}
 
-    results['fitness'] = avg[backtest_config['sharpe_ratio']]
+    if backtest_config['score_metric'] in stats:
+        results['fitness'] = avg[backtest_config['score_metric']]
+    else:
+        raise Exception(f'unknown score metric ' + backtest_config['score_metric'])
 
     results['avg'] = avg
     results['std'] = std
