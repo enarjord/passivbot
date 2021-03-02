@@ -615,20 +615,23 @@ def jackrabbit_single_core(results: dict,
             result['key'] = key
             result = {**result, **candidate}
             result['index'] = k
+            result['full_run']['index'] = k
+            result['full_run']['fitness'] = result['fitness']
             results[key] = result
 
-            results_filepath = backtest_config['session_dirpath'] + 'results.txt'
-            results_filepath_g = backtest_config['session_dirpath'] + 'results'
+            results_filepath = backtest_config['session_dirpath'] + 'results'
             trades_filepath = make_get_filepath(os.path.join(backtest_config['session_dirpath'],
                                                 'backtest_trades', ''))
             best_result_filepath = backtest_config['session_dirpath'] + 'best_result'
-            with open(results_filepath, 'a') as f:
+            with open(results_filepath + '.txt', 'a') as f:
                 f.write(json.dumps(result) + '\n')
-            with open(results_filepath_g + '_full.txt', 'a') as f:
+            with open(results_filepath + '_full.txt', 'a') as f:
                 f.write(json.dumps(result['full_run']) + '\n')
-            for i,results_sub in enumerate(result['sub_runs']):
-                with open(results_filepath_g + f'_sub{i:03}.txt', 'a') as f:
-                    f.write(json.dumps(results_sub) + '\n')
+            for i,result_sub in enumerate(result['sub_runs']):
+                result_sub['index'] = k
+                result_sub['fitness'] = result['fitness']
+                with open(results_filepath + f'_sub{i:03}.txt', 'a') as f:
+                    f.write(json.dumps(result_sub) + '\n')
             if os.path.exists(best_result_filepath):
                 best_result = json.load(open(best_result_filepath))
             if 'fitness' in result:
@@ -640,7 +643,7 @@ def jackrabbit_single_core(results: dict,
                     json.dump(best_result, open(best_result_filepath + '.json', 'w'), indent=4)
                     json.dump(best_result['full_run'], open(best_result_filepath + '_full.json', 'w'), indent=4)
                     for i,best_result_sub in enumerate(result['sub_runs']):
-                        json.dump(best_result_sub, open(best_result_filepath + f'{i:03}.json', 'w'), indent=4)
+                        json.dump(best_result_sub, open(best_result_filepath + f'_sub{i:03}.json', 'w'), indent=4)
                     json.dump(candidate_to_live_settings(backtest_config['exchange'],
                                                          {**backtest_config, **best_result}),
                               open(backtest_config['session_dirpath'] + 'live_config.json', 'w'), indent=4)
@@ -742,7 +745,7 @@ def jackrabbit_wrap(ticks: [dict], backtest_config: dict) -> dict:
         timestamps = np.concatenate(([0.0], list(tdf['timestamp'].values - ticks[0]['timestamp'])))
         returns_hourly = np.interp(hours, timestamps, returns)
         returns_risk_free = 0.0000055696 # assuming 5% annual returns
-        result['sharpe_ratio'] = (np.mean(returns_hourly) - returns_risk_free) / np.std(returns_hourly)
+        result['sharpe_ratio'] = (np.mean(returns_hourly) - returns_risk_free) / np.std(returns_hourly, ddof=1)
 
         return result, tdf
 
