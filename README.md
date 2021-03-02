@@ -1,6 +1,6 @@
 # passivbot_futures
 
-**Version: 2.0.0**
+**Version: 2.0.3**
 
 trading bot running on bybit inverse futures and binance usdt futures
 
@@ -46,6 +46,17 @@ change log
 - bug fixes
 - new default configs for bybit and binance
 
+2021-02-28 v2.0.1
+- added optional just-in-time compiling for faster backtesting
+
+2021-03-01 v2.0.2
+- more jit'ed calcs
+
+2021-03-02 v2.0.3
+- new default bybit config
+- behavior change: reentry qtys may now be smaller than initial entry qty
+- backtest iterates a numpy array instead of a python list of dicts for reduced ram usage
+
 see `changelog.txt` for earlier changes
 
 
@@ -77,19 +88,19 @@ overview
 
 the bot's purpose is to accumulate btc (or another coin) in bybit inverse and usdt in binance usdt futures
 
-it is a market maker bot, making a multiple post only limit orders above and below price
+it is a market maker bot, making multiple post only limit orders above and below price
 
 it listens to websocket live stream of trades, and updates its orders continuously
 
-when there is no position, it enters long if price < ema, short if price > ema
+when there is no position, it enters either long or short depending on indicator settings
 
-if there is a long position, it creates 8 reentry bids below pos price, and up to 20 reduce only asks above pos price
+if there is a long position, it creates reentry bids below pos price, and reduce-only asks above pos price
 
 reentry_bid_price = pos_price * (1 - grid_spacing * (1 + (position_margin / wallet_balance) * grid_coefficient))
 
 inversely,
 
-if there is a short position, it creates 8 reentry asks above pos price, and up to 20 reduce only closing bids above pos price
+if there is a short position, it creates reentry asks above pos price, and reduce-only closing bids below pos price
 
 reentry_ask_price = pos_price * (1 + grid_spacing * (1 + (position_margin / wallet_balance) * grid_coefficient))
 
@@ -104,78 +115,15 @@ run with
 
 `python3 backtest.py {config_name}`
 
+add argument --jit to use numba's just in time compiler for faster backtesting:
 
+`python3 backtest.py {config_name} --jit`
 
-open backtest_notes.ipynb in jupyter notebook or jupiter-lab for plotting and analysis
+open backtest_notes.ipynb in jupyter notebook or jupiter-lab for plotting and analysis.
 
+jackrabbit is a pet name given to a simple algorithm for optimizing bot's settings.
 
-about backtest config, binance example
-
-```
-{
-  session_name: storj_session_7_days_001
-  exchange: binance
-  user: e
-  symbol: STORJUSDT
-  n_days: 7
-  # if starting_candidate_filepath is not a valid file, will use random starting candidate
-  starting_candidate_filepath: live_settings/binance/default.json
-  multiprocessing: false
-  starting_k: 0
-  n_jackrabbit_iterations: 200
-  latency_simulation_ms: 1000
-  starting_balance: 30
-  break_on:
-  [
-    ["OFF: break on first soft stop",
-     "lambda trade, tick: trade['type'] == 'stop_loss'"]
-    ["OFF: neg pnl sum",
-     "lambda trade, tick: trade['pnl_sum'] < 0.0 and trade['progress'] > 0.5"]
-    ["OFF: liq diff too small",
-     "lambda trade, tick: trade['liq_diff'] < 0.07"]
-    ["OFF: time between consec trades",
-     "lambda trade, tick: tick['timestamp'] - trade['timestamp'] > 1000 * 60 * 60 * 24"]
-    ["OFF: pos price last price diff",
-     "lambda trade, tick: calc_diff(trade['price'], tick['price']) > 1.05"]
-    ["OFF: adg too low",
-     "lambda trade, tick: trade['average_daily_gain'] < 1.01 and trade['progress'] >= 0.5"]
-    ["OFF: no soft stops",
-     "lambda trade, tick: trade['loss_sum'] == 0.0 and trade['progress'] >= 0.6"]
-    ["OFF: balance + pnl below starting_balance",
-     "lambda trade, tick: trade['actual_balance'] + trade['pnl_sum'] < 0.0"]
-  ]
-  ranges:
-  {
-    balance_pct: [0.01, 1, 0.001]
-    entry_qty_pct: [0.0001, 0.5, 1e-05]
-    ddown_factor: [0, 3.0, 0.001]
-    ema_span: [100, 100000, 1]
-    ema_spread: [0, 0.02, 0.0001]
-    grid_coefficient: [0, 700, 0.01]
-    grid_spacing: [0.0002, 0.01, 1e-05]
-    leverage: [2, 999999, 1]
-    stop_loss_liq_diff: [0.015, 0.15, 0.0001]
-    stop_loss_pos_price_diff: [0.015, 0.15, 0.0001]
-    max_markup: [0.001, 0.03, 1e-05]
-    min_markup: [0.0005, 0.002, 1e-05]
-    min_close_qty_multiplier: [0, 1, 0.1]
-    n_close_orders: [8, 25, 1]
-    stop_loss_pos_reduction: [0.001, 0.3, 0.001]
-    do_long: [1, 1, 1]
-    do_shrt: [1, 1, 1]
-  }
-}
-```
-
-
-
-
-
-ranges define which settings are to be mutated: [min, max, step]
-
-jackrabbit is a pet name given to a simple algorithm for optimizing settings.
-
-for each iteration, settings are mutated to new values within given range defined in ranges.json.
+it iterates many backtests in succession, for each iteration, settings are mutated to new values within given range defined in backtest config.
 
 if the new candidate's backtest yields higher gain than best candidate's backtest,
 
@@ -183,11 +131,13 @@ the superior settings becomes the parent of the next candidate.
 
 the mutation coefficient m determines the mutation range, and is inversely proportional to k, which is a simple counter.
 
-in other words, at first new candidates will vary wildly from the best settings, towards the end they will vary less, "fine tuning" the settings.
+in other words, at first new candidates will vary wildly from the best settings, towards the end they will vary less, "fine tuning" the parameters.
+
+see wiki for more info on backtesting
 
 ------------------------------------------------------------------
 
-about settings, bybit example:
+about live settings, bybit example:
 
 {
 

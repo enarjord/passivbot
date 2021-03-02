@@ -47,7 +47,7 @@ def get_max_pos_size_ito_usdt(symbol: str, leverage: int) -> float:
                     'VETUSDT', 'WAVESUSDT', 'YFIIUSDT', 'YFIUSDT', 'ZECUSDT', 'ZILUSDT', 'ZRXUSDT',
                     'ZENUSDT', 'SKLUSDT', 'GRTUSDT', '1INCHUSDT']:
         kvs = [(20, 5000), (10, 25000), (5, 100000), (2, 250000), (1, 1000000)]
-    elif symbol in ['CTKUSDT']:
+    elif symbol in ['CTKUSDT', 'LITUSDT']:
         kvs = [(10, 5000), (5, 25000), (4, 100000), (2, 250000), (1, 1000000)]
     else:
         raise Exception(f'{symbol} unknown symbol')
@@ -149,12 +149,13 @@ class BinanceBot(Bot):
                         self.price_step = float(q['tickSize'])
                     elif q['filterType'] == 'MIN_NOTIONAL':
                         self.min_notional = float(q['notional'])
+                self.calc_min_qty = lambda price_: \
+                    max(self.min_qty, round_up(self.min_notional / price_, self.qty_step))
                 self.calc_min_entry_qty = lambda balance_, last_price: \
-                    calc_min_entry_qty(max(self.min_qty, round_up(self.min_notional / last_price,
-                                                                  self.qty_step)),
-                                           self.qty_step,
-                                           (balance_ / last_price) * self.leverage,
-                                           self.entry_qty_pct)
+                    calc_min_entry_qty(self.calc_min_qty(last_price),
+                                       self.qty_step,
+                                       (balance_ / last_price) * self.leverage,
+                                       self.entry_qty_pct)
                 break
         max_lev = 0
         for e in leverage_bracket:
