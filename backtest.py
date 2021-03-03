@@ -271,7 +271,6 @@ def backtest(ticks: np.ndarray, settings: dict):
                            'closest_liq': min(closest_long_liq, closest_shrt_liq),
                            'avg_gain_per_tick': avg_gain_per_tick,
                            'millis_since_prev_trade': millis_since_prev_trade,
-                           'timestamp': t['timestamp'],
                            'progress': progress})
             closest_long_liq, closest_shrt_liq = 1.0, 1.0
             for key, condition in break_on.items():
@@ -738,13 +737,14 @@ def jackrabbit_wrap(ticks: [dict], backtest_config: dict) -> dict:
         result['max_n_hours_between_consec_trades'] = \
             tdf.millis_since_prev_trade.max() / (1000 * 60 * 60)
 
-        duration_ms = ticks[-1]['timestamp'] - ticks[0]['timestamp']
-        timestamp_end = ticks[-1]['timestamp']
+        print("bruh", ticks[0])
+        duration_ms = ticks[-1][2] - ticks[0][2]
+        timestamp_end = ticks[-1][2]
         hours_total = backtest_config['n_days'] * 24
         hours = np.linspace(0.0, duration_ms, num=hours_total, endpoint=True)
         returns = tdf['net_pnl_plus_fees'].values / backtest_config['starting_balance']
         returns = np.concatenate(([0.0], list(returns)))
-        timestamps = np.concatenate(([0.0], list(tdf['timestamp'].values - ticks[0]['timestamp'])))
+        timestamps = np.concatenate(([0.0], list(tdf['timestamp'].values - ticks[0][2])))
         returns_hourly = np.interp(hours, timestamps, returns)
         returns_risk_free = 0.0000055696 # assuming 5% annual returns
         result['sharpe_ratio'] = (np.mean(returns_hourly) - returns_risk_free) / np.std(returns_hourly, ddof=1)

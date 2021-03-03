@@ -15,7 +15,7 @@ async def main():
 
     def plot_tdf_(df_, tdf_, side_: int = 0, liq_thr=0.1):
         plt.clf()
-        df_.loc[tdf_.index[0]:tdf_.index[-1]].price.plot(style='y-')
+        df_.loc[tdf_.index[0]:tdf_.index[-1]][0].plot(style='y-')
         if side_ >= 0:
             longs = tdf_[tdf_.side == 'long']
             le = longs[longs.type == 'entry']
@@ -64,12 +64,12 @@ async def main():
 
     tdf = pd.read_csv(f"{session_dirpath}backtest_trades/{key}_full.csv").set_index('trade_id')
     print('price with bid ask entry thresholds')
-    ema = df.price.ewm(span=result['ema_span'], adjust=False).mean()
+    ema = df[0].ewm(span=result['ema_span'], adjust=False).mean()
     bids_ = ema * (1 - result['ema_spread'])
     asks_ = ema * (1 + result['ema_spread'])
 
     plt.clf()
-    df.price.iloc[::100].plot()
+    df[0].iloc[::100].plot()
     bids_.iloc[::100].plot()
     asks_.iloc[::100].plot()
     plt.savefig(f'{session_dirpath}ema_spread_plot.png')
