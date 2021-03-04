@@ -713,7 +713,7 @@ def sliding_window(iterable, n, step=1):
 def jackrabbit_wrap(ticks: [dict], backtest_config: dict) -> dict:
     stats = ['net_pnl_plus_fees', 'profit_sum', 'loss_sum', 'closest_shrt_liq', 'closest_long_liq',
              'n_trades', 'n_closes', 'n_stop_losses', 'gain', 'seconds_elapsed', 'sharpe_ratio',
-             'sharpe_ratio_adjusted']
+             'sharpe_ratio_adjusted', 'VWR']
 
     def trades_report(trades, elapsed, timestamp_start, timestamp_end):
         if not trades:
@@ -741,31 +741,52 @@ def jackrabbit_wrap(ticks: [dict], backtest_config: dict) -> dict:
         result['max_n_hours_between_consec_trades'] = \
             tdf.millis_since_prev_trade.max() / (1000 * 60 * 60)
 
-        # Liquidation
-        if backtest_config['starting_balance'] + result['net_pnl_plus_fees'] <= 0.0:
+        # We're not training a NN it's ok to do this
+        if result['net_pnl_plus_fees'] < 0.0:
             result['sharpe_ratio'] = -1
             result['sharpe_ratio_adjusted'] = -1
+            result['VWR'] = -1
             return result, tdf
 
         # Add balance and timestamps at the beginning and at the end of the run
         pnl = tdf['net_pnl_plus_fees'].values
-        balance = np.array([0.0] + pnl + [pnl[-1]]) + backtest_config['starting_balance']
-        timestamps = np.array([timestamp_start] + tdf['timestamp'].values + [timestamp_end])
+        balance = np.concatenate([[0.0], pnl, [pnl[-1]]]) + backtest_config['starting_balance']
+
+        timestamps = np.concatenate([[timestamp_start], tdf['timestamp'].values, [timestamp_end]])
+        timestamps += 3600 * 1000 # Add one hour so the lasts trade are included
 
         # Regularize the data points
-        balance = pd.Series(data=balance, index=pd.to_datetime(timestamps, unit='ms'))
-        returns = balance.copy().resample('1H').pad().pct_change()
+        balance_series = pd.Series(data=balance, index=pd.to_datetime(timestamps, unit='ms'))
+        balance_1h = balance_series.resample('H').pad().dropna()
+        returns_1h = balance_1h.pct_change().dropna()
+        N = returns_1h.shape[0]
 
+        # Sharpe ratio
         hours_1y = 365*24
-        returns_annualized = np.prod(returns + 1) ** (hours_1y / returns.shape[0]) - 1
-        volatility_annualized = returns.std() * np.sqrt(hours_1y)
+        returns_annualized = np.prod(returns_1h + 1) ** (hours_1y / N) - 1
+        volatility_annualized = returns_1h.std() * np.sqrt(hours_1y)
         SR = returns_annualized / volatility_annualized
-        K = returns.kurtosis()
-        S = returns.skew()
+
+        # Sharpe ratio adjusted
+        K = returns_1h.kurtosis()
+        S = returns_1h.skew()
         SR_adj = SR * (1 + (S / 6) * SR - ((K - 3) / 24) * SR**2)
+
+        # Variability-Weighted Return
+        returns_log = np.log(1 + returns_1h)
+        returns_log_tot = np.log(balance[-1] / balance[0])
+        returns_log_avg = returns_log_tot / N
+        returns_log_annualized = np.exp(returns_log_avg * hours_1y / N) - 1
+        differential_price = (balance_1h / (balance[0] * np.exp(returns_log_avg * np.arange(0, N+1)))) - 1
+        differential_price_avg = np.mean(differential_price)
+        differential_price_std = np.std(differential_price, ddof=1)
+        tau = 2.5
+        sdev_max = 2
+        VWR = returns_log_annualized * (1.0 - (differential_price_std / sdev_max) ** tau)
 
         result['sharpe_ratio'] = SR
         result['sharpe_ratio_adjusted'] = SR_adj
+        result['VWR'] = VWR
 
         return result, tdf
 
