@@ -257,7 +257,10 @@ def backtest(ticks: np.ndarray, settings: dict):
                 profit_sum += pnl
             total_gain = (net_pnl_plus_fees + settings['starting_balance']) / settings['starting_balance']
             n_days_ = (t[2] - ticks[0][2]) / (1000 * 60 * 60 * 24)
-            adg = total_gain ** (1 / n_days_) if (n_days_ > 0.0 and total_gain > 0.0) else 0.0
+            try:
+                adg = total_gain ** (1 / n_days_) if (n_days_ > 0.0 and total_gain > 0.0) else 0.0
+            except:
+                adg = 0.0
             avg_gain_per_tick = \
                 (actual_balance / settings['starting_balance']) ** (1 / (len(trades) + 1))
             millis_since_prev_trade = t[2] - trades[-1]['timestamp'] if trades else 0.0
