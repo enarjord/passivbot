@@ -51,7 +51,7 @@ def backtest(ticks: np.ndarray, settings: dict):
     actual_balance = ss['starting_balance']
     apparent_balance = actual_balance * ss['balance_pct']
 
-    net_pnl_plus_fees, loss_sum, profit_sum = 0.0, 0.0, 0.0
+    pnl_plus_fees_cumsum, loss_cumsum, profit_cumsum, fee_paid_cumsum = 0.0, 0.0, 0.0, 0.0
 
     if ss['inverse']:
         min_qty_f = calc_min_qty_inverse
@@ -114,7 +114,7 @@ def backtest(ticks: np.ndarray, settings: dict):
                 if t[0] < reentry_price:
                     # add to long pos
                     did_trade, qty, price = True, reentry_qty, reentry_price
-                    trade_type, trade_side = 'entry', 'long'
+                    trade_type, trade_side = 'reentry', 'long'
                     pnl = 0.0
                     fee_paid = -cost_f(qty, price) * ss['maker_fee']
                 # check if long stop loss triggered
@@ -183,7 +183,7 @@ def backtest(ticks: np.ndarray, settings: dict):
                 if t[0] > reentry_price:
                     # add to shrt pos
                     did_trade, qty, price = True, reentry_qty, reentry_price
-                    trade_type, trade_side = 'entry', 'shrt'
+                    trade_type, trade_side = 'reentry', 'shrt'
                     pnl = 0.0
                     fee_paid = -cost_f(-qty, price) * ss['maker_fee']
                 # check if shrt stop loss triggered
@@ -229,10 +229,18 @@ def backtest(ticks: np.ndarray, settings: dict):
                     fee_paid = -cost_f(-qty, price) * ss['maker_fee']
             ob[1] = t[0]
         ema = ema * ema_alpha_ + t[0] * ema_alpha
-        if did_trade and t[2] - prev_trade_ts > min_trade_delay_millis:
+        if did_trade:
+            if t[2] - prev_trade_ts < min_trade_delay_millis:
+                if trade_type == 'reentry':
+                    # because of live bot's multiple open orders,
+                    # allow consecutive reentries whose timestamp diff < min delay
+                    if trades[-1]['type'] != 'reentry':
+                        continue
+                else:
+                    continue
             prev_trade_ts = t[2]
             new_pos_size = round_(pos_size + qty, 0.0000000001)
-            if trade_type == 'entry':
+            if 'entry' in trade_type:
                 pos_price = pos_price * abs(pos_size / new_pos_size) + \
                     price * abs(qty / new_pos_size) if new_pos_size else np.nan
             pos_size = new_pos_size
@@ -247,22 +255,29 @@ def backtest(ticks: np.ndarray, settings: dict):
             if liq_price < 0.0:
                 liq_price = 0.0
             progress = k / len(ticks)
-            net_pnl_plus_fees += pnl + fee_paid
+            pnl_plus_fee = pnl + fee_paid
+            pnl_plus_fees_cumsum += pnl_plus_fee
             if trade_type.startswith('stop_loss'):
-                loss_sum += pnl
+                loss_cumsum += pnl
             else:
-                profit_sum += pnl
-            total_gain = (net_pnl_plus_fees + settings['starting_balance']) / settings['starting_balance']
+                profit_cumsum += pnl
+            fee_paid_cumsum += fee_paid
+            total_gain = (pnl_plus_fees_cumsum + settings['starting_balance']) / settings['starting_balance']
             n_days_ = (t[2] - ticks[0][2]) / (1000 * 60 * 60 * 24)
-            adg = total_gain ** (1 / n_days_) if (n_days_ > 0.0 and total_gain > 0.0) else 0.0
+            try:
+                adg = total_gain ** (1 / n_days_) if (n_days_ > 0.0 and total_gain > 0.0) else 0.0
+            except:
+                adg = 0.0
             avg_gain_per_tick = \
                 (actual_balance / settings['starting_balance']) ** (1 / (len(trades) + 1))
             millis_since_prev_trade = t[2] - trades[-1]['timestamp'] if trades else 0.0
             trades.append({'trade_id': k, 'side': trade_side, 'type': trade_type, 'price': price,
-                           'qty': qty, 'pos_price': pos_price, 'pos_size': pos_size, 'pnl': pnl,
-                           'liq_price': liq_price, 'apparent_balance': apparent_balance,
-                           'actual_balance': actual_balance, 'net_pnl_plus_fees': net_pnl_plus_fees,
-                           'loss_sum': loss_sum, 'profit_sum': profit_sum, 'fee_paid': fee_paid,
+                           'qty': qty, 'pos_price': pos_price, 'pos_size': pos_size,
+                           'liq_price': liq_price, 'pnl': pnl, 'fee_paid': fee_paid,
+                           'pnl_plus_fee': pnl_plus_fee, 'fee_paid_cumsum': fee_paid_cumsum,
+                           'apparent_balance': apparent_balance, 'actual_balance': actual_balance, 
+                           'profit_cumsum': profit_cumsum, 'loss_cumsum': loss_cumsum,
+                           'pnl_plus_fees_cumsum': pnl_plus_fees_cumsum,
                            'average_daily_gain': adg, 'timestamp': t[2],
                            'closest_long_liq': closest_long_liq,
                            'closest_shrt_liq': closest_shrt_liq,
@@ -324,9 +339,9 @@ def backtest(ticks: np.ndarray, settings: dict):
                 trades[-1]['reentry_price'] = np.nan
 
 
-            line = f"\r{progress:.3f} net pnl plus fees {net_pnl_plus_fees:.8f} "
-            line += f"profit sum {profit_sum:.5f} "
-            line += f"loss sum {loss_sum:.5f} "
+            line = f"\r{progress:.3f} pnl plus fees cumsum {pnl_plus_fees_cumsum:.8f} "
+            line += f"profit cumsum {profit_cumsum:.5f} "
+            line += f"loss cumsum {loss_cumsum:.5f} "
             line += f"actual_bal {actual_balance:.4f} "
             line += f"apparent_bal {apparent_balance:.4f} "
             #line += f"qty {calc_min_entry_qty_(apparent_balance, ob[0]):.4f} "
@@ -685,24 +700,27 @@ def jackrabbit_wrap(ticks: [dict], backtest_config: dict) -> dict:
         return {}, None
     tdf = pd.DataFrame(trades).set_index('trade_id')
     result = {
-        'net_pnl_plus_fees': trades[-1]['net_pnl_plus_fees'],
-        'profit_sum': trades[-1]['profit_sum'],
-        'loss_sum': trades[-1]['loss_sum'],
-        'closest_shrt_liq': tdf.closest_shrt_liq.min(),
-        'closest_long_liq': tdf.closest_long_liq.min(),
+        'net_pnl_plus_fees': trades[-1]['pnl_plus_fees_cumsum'],
+        'profit_sum': trades[-1]['profit_cumsum'],
+        'loss_sum': trades[-1]['loss_cumsum'],
+        'fee_sum': trades[-1]['fee_paid_cumsum'],
+        'gain': (gain := (trades[-1]['pnl_plus_fees_cumsum'] + backtest_config['starting_balance']) /
+                 backtest_config['starting_balance']),
+        'average_daily_gain': gain ** (1 / backtest_config['n_days']) if gain > 0.0 else 0.0,
+        'n_days': backtest_config['n_days'],
+        'closest_shrt_liq': (csl := tdf.closest_shrt_liq.min()),
+        'closest_long_liq': (cll := tdf.closest_long_liq.min()),
+        'closest_liq': min(csl, cll),
+        'max_n_hours_between_consec_trades': tdf.millis_since_prev_trade.max() / (1000 * 60 * 60),
         'n_trades': len(trades),
         'n_closes': len(tdf[tdf.type == 'close']),
+        'n_reentries': len(tdf[tdf.type == 'reentry']),
         'n_stop_losses': len(tdf[tdf.type.str.startswith('stop_loss')]),
+        'biggest_pos_size': tdf.pos_size.abs().max(),
+        'do_long': bool(backtest_config['do_long']),
+        'do_shrt': bool(backtest_config['do_shrt']),
         'seconds_elapsed': elapsed
     }
-    result['gain'] = (result['net_pnl_plus_fees'] + backtest_config['starting_balance']) / \
-        backtest_config['starting_balance']
-    result['average_daily_gain'] = result['gain'] ** (1 / backtest_config['n_days']) \
-        if result['gain'] > 0.0 else 0.0
-    result['closest_liq'] = min(result['closest_shrt_liq'], result['closest_long_liq'])
-    result['max_n_hours_between_consec_trades'] = \
-        tdf.millis_since_prev_trade.max() / (1000 * 60 * 60)
-
     return result, tdf
 
 
