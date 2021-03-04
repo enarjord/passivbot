@@ -15,20 +15,20 @@
   [
     ["OFF: break on first soft stop",
      "lambda trades, ticks, k: trades[-1]['type'] == 'stop_loss'"]
-    ["ON: neg pnl sum",
-     "lambda trades, ticks, k: trades[-1]['net_pnl_plus_fees'] < 0.0 and k / len(ticks) > 0.4"]
+    ["OFF: neg pnl sum",
+     "lambda trades, ticks, k: trades[-1]['pnl_plus_fees_cumsum'] < 0.0 and trades[-1]['progress'] > 0.25"]
     ["ON: liq too close",
-     "lambda trades, ticks, k: trades[-1]['closest_liq'] < 0.07"]
+     "lambda trades, ticks, k: trades[-1]['closest_liq'] < 0.09"]
     ["ON: time between consec trades",
      "lambda trades, ticks, k: False if len(trades) <= 2 else ((trades[-1]['timestamp'] - trades[-2]['timestamp']) > 1000 * 60 * 60 * 36)"]
     ["OFF: pos price last price diff",
      "lambda trades, ticks, k: calc_diff(trades[-1]['price'], ticks[k]['price']) > 1.05"]
     ["OFF: adg too low",
-     "lambda trades, ticks, k: trades[-1]['average_daily_gain'] < 1.005 and k / len(ticks) >= 0.5"]
+     "lambda trades, ticks, k: trades[-1]['average_daily_gain'] < 1.005 and trades[-1]['progress'] >= 0.5"]
     ["OFF: no soft stops",
-     "lambda trades, ticks, k: trades[-1]['loss_sum'] == 0.0 and k / len(ticks) >= 0.9"]
-    ["OFF: balance + pnl below starting_balance",
-     "lambda trades, ticks, k: trades[-1]['actual_balance'] + trades[-1]['net_pnl_plus_fees'] < 0.0"]
+     "lambda trades, ticks, k: trades[-1]['loss_sum'] == 0.0 and trades[-1]['progress'] >= 0.9"]
+    ["OFF: balance + pnl cumsum below starting_balance",
+     "lambda trades, ticks, k: trades[-1]['actual_balance'] + trades[-1]['pnl_plus_fees_cumsum'] <= 0.0"]
   ]
   ranges:
   {
