@@ -1,6 +1,6 @@
 # passivbot_futures
 
-**Version: 2.0.3**
+**Version: 2.1.0**
 
 trading bot running on bybit inverse futures and binance usdt futures
 
