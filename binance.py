@@ -50,7 +50,8 @@ def get_max_pos_size_ito_usdt(symbol: str, leverage: int) -> float:
     elif symbol in ['CTKUSDT', 'LITUSDT']:
         kvs = [(10, 5000), (5, 25000), (4, 100000), (2, 250000), (1, 1000000)]
     else:
-        raise Exception(f'{symbol} unknown symbol')
+        print(f'{symbol} unknown symbol')
+        kvs = [(0, 5000)]
     for kv in kvs:
         if leverage > kv[0]:
             return kv[1]
