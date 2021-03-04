@@ -1,0 +1,6 @@
+websockets==8.1
+pandas==1.2.2
+ccxt==1.42.18
+numpy==1.20.1
+hjson==3.0.2
+numba==0.52.0
