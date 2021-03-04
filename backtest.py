@@ -4,6 +4,7 @@ import hjson
 import numpy as np
 import pandas as pd
 import asyncio
+import scipy
 import os
 import pprint
 from collections import deque
@@ -273,6 +274,8 @@ def backtest(ticks: np.ndarray, settings: dict):
                            'millis_since_prev_trade': millis_since_prev_trade,
                            'progress': progress})
             closest_long_liq, closest_shrt_liq = 1.0, 1.0
+            if net_pnl_plus_fees + settings['starting_balance'] <= 0.0:
+                break
             for key, condition in break_on.items():
                 if condition(trades, ticks, k):
                     print('break on', key)
@@ -485,8 +488,8 @@ async def fetch_market_specific_settings(exchange: str, user: str, symbol: str):
     if exchange == 'binance':
         bot = await create_bot_binance(user, tmp_live_settings)
         settings_from_exchange['inverse'] = False
-        settings_from_exchange['maker_fee'] = 0.00018
-        settings_from_exchange['taker_fee'] = 0.00036
+        settings_from_exchange['maker_fee'] = 0.0002
+        settings_from_exchange['taker_fee'] = 0.0004
         settings_from_exchange['exchange'] = 'binance'
     elif exchange == 'bybit':
         bot = await create_bot_bybit(user, tmp_live_settings)
@@ -709,9 +712,10 @@ def sliding_window(iterable, n, step=1):
 
 def jackrabbit_wrap(ticks: [dict], backtest_config: dict) -> dict:
     stats = ['net_pnl_plus_fees', 'profit_sum', 'loss_sum', 'closest_shrt_liq', 'closest_long_liq',
-            'n_trades', 'n_closes', 'n_stop_losses', 'gain', 'sharpe_ratio', 'seconds_elapsed']
+             'n_trades', 'n_closes', 'n_stop_losses', 'gain', 'seconds_elapsed', 'sharpe_ratio',
+             'sharpe_ratio_adjusted']
 
-    def trades_report(trades, elapsed):
+    def trades_report(trades, elapsed, timestamp_start, timestamp_end):
         if not trades:
             return { stat: 0.0 for stat in stats }, pd.DataFrame()
 
@@ -737,17 +741,31 @@ def jackrabbit_wrap(ticks: [dict], backtest_config: dict) -> dict:
         result['max_n_hours_between_consec_trades'] = \
             tdf.millis_since_prev_trade.max() / (1000 * 60 * 60)
 
-        print("bruh", ticks[0])
-        duration_ms = ticks[-1][2] - ticks[0][2]
-        timestamp_end = ticks[-1][2]
-        hours_total = backtest_config['n_days'] * 24
-        hours = np.linspace(0.0, duration_ms, num=hours_total, endpoint=True)
-        returns = tdf['net_pnl_plus_fees'].values / backtest_config['starting_balance']
-        returns = np.concatenate(([0.0], list(returns)))
-        timestamps = np.concatenate(([0.0], list(tdf['timestamp'].values - ticks[0][2])))
-        returns_hourly = np.interp(hours, timestamps, returns)
-        returns_risk_free = 0.0000055696 # assuming 5% annual returns
-        result['sharpe_ratio'] = (np.mean(returns_hourly) - returns_risk_free) / np.std(returns_hourly, ddof=1)
+        # Liquidation
+        if backtest_config['starting_balance'] + result['net_pnl_plus_fees'] <= 0.0:
+            result['sharpe_ratio'] = -1
+            result['sharpe_ratio_adjusted'] = -1
+            return result, tdf
+
+        # Add balance and timestamps at the beginning and at the end of the run
+        pnl = tdf['net_pnl_plus_fees'].values
+        balance = np.array([0.0] + pnl + [pnl[-1]]) + backtest_config['starting_balance']
+        timestamps = np.array([timestamp_start] + tdf['timestamp'].values + [timestamp_end])
+
+        # Regularize the data points
+        balance = pd.Series(data=balance, index=pd.to_datetime(timestamps, unit='ms'))
+        returns = balance.copy().resample('1H').pad().pct_change()
+
+        hours_1y = 365*24
+        returns_annualized = np.prod(returns + 1) ** (hours_1y / returns.shape[0]) - 1
+        volatility_annualized = returns.std() * np.sqrt(hours_1y)
+        SR = returns_annualized / volatility_annualized
+        K = returns.kurtosis()
+        S = returns.skew()
+        SR_adj = SR * (1 + (S / 6) * SR - ((K - 3) / 24) * SR**2)
+
+        result['sharpe_ratio'] = SR
+        result['sharpe_ratio_adjusted'] = SR_adj
 
         return result, tdf
 
@@ -762,7 +780,7 @@ def jackrabbit_wrap(ticks: [dict], backtest_config: dict) -> dict:
         trades = backtest(subset, backtest_config)
         elapsed = time() - start_ts
 
-        result,tdf = trades_report(trades, elapsed)
+        result,tdf = trades_report(trades, elapsed, subset[0][2], subset[-1][2])
 
         tdfs_sub.append(tdf)
         results_sub.append(result)
@@ -785,7 +803,7 @@ def jackrabbit_wrap(ticks: [dict], backtest_config: dict) -> dict:
     start_ts = time()
     trades = backtest(ticks, backtest_config)
     elapsed = time() - start_ts
-    result,tdf = trades_report(trades, elapsed)
+    result,tdf = trades_report(trades, elapsed, subset[0][2], subset[-1][2])
 
     results['full_run'] = result
     tdfs = [tdf] + tdfs_sub
