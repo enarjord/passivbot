@@ -488,8 +488,8 @@ async def fetch_market_specific_settings(exchange: str, user: str, symbol: str):
     if exchange == 'binance':
         bot = await create_bot_binance(user, tmp_live_settings)
         settings_from_exchange['inverse'] = False
-        settings_from_exchange['maker_fee'] = 0.0002
-        settings_from_exchange['taker_fee'] = 0.0004
+        settings_from_exchange['maker_fee'] = 0.00018
+        settings_from_exchange['taker_fee'] = 0.00036
         settings_from_exchange['exchange'] = 'binance'
     elif exchange == 'bybit':
         bot = await create_bot_bybit(user, tmp_live_settings)
@@ -741,7 +741,7 @@ def jackrabbit_wrap(ticks: [dict], backtest_config: dict) -> dict:
         result['max_n_hours_between_consec_trades'] = \
             tdf.millis_since_prev_trade.max() / (1000 * 60 * 60)
 
-        # We're not training a NN it's ok to do this
+        # We're not training a NN it should be ok to do this
         if result['net_pnl_plus_fees'] < 0.0:
             result['sharpe_ratio'] = -1
             result['sharpe_ratio_adjusted'] = -1
@@ -753,16 +753,17 @@ def jackrabbit_wrap(ticks: [dict], backtest_config: dict) -> dict:
         balance = np.concatenate([[0.0], pnl, [pnl[-1]]]) + backtest_config['starting_balance']
 
         timestamps = np.concatenate([[timestamp_start], tdf['timestamp'].values, [timestamp_end]])
-        timestamps += 3600 * 1000 # Add one hour so the lasts trade are included
+        #  timestamps[-1] += 3600 * 1000 # Add one hour to the last trade so the last ones are included
 
         # Regularize the data points
         balance_series = pd.Series(data=balance, index=pd.to_datetime(timestamps, unit='ms'))
-        balance_1h = balance_series.resample('H').pad().dropna()
+        balance_series = balance_series[~balance_series.index.duplicated()] # TODO: find where / why duplicates happen
+        balance_1h = balance_series.resample('4H').pad().dropna()
         returns_1h = balance_1h.pct_change().dropna()
         N = returns_1h.shape[0]
 
         # Sharpe ratio
-        hours_1y = 365*24
+        hours_1y = 365*24 / 4
         returns_annualized = np.prod(returns_1h + 1) ** (hours_1y / N) - 1
         volatility_annualized = returns_1h.std() * np.sqrt(hours_1y)
         SR = returns_annualized / volatility_annualized
@@ -777,11 +778,11 @@ def jackrabbit_wrap(ticks: [dict], backtest_config: dict) -> dict:
         returns_log_tot = np.log(balance[-1] / balance[0])
         returns_log_avg = returns_log_tot / N
         returns_log_annualized = np.exp(returns_log_avg * hours_1y / N) - 1
-        differential_price = (balance_1h / (balance[0] * np.exp(returns_log_avg * np.arange(0, N+1)))) - 1
+        differential_price = (balance_1h[1:] / (balance[0] * np.exp(returns_log_avg * np.arange(1, N+1)))) - 1
         differential_price_avg = np.mean(differential_price)
         differential_price_std = np.std(differential_price, ddof=1)
-        tau = 2.5
-        sdev_max = 2
+        tau = 2
+        sdev_max = 0.2
         VWR = returns_log_annualized * (1.0 - (differential_price_std / sdev_max) ** tau)
 
         result['sharpe_ratio'] = SR
@@ -806,8 +807,14 @@ def jackrabbit_wrap(ticks: [dict], backtest_config: dict) -> dict:
         tdfs_sub.append(tdf)
         results_sub.append(result)
 
-    avg = { stat: np.mean([res[stat] for res in results_sub]) for stat in stats }
-    std = { stat: np.std([res[stat] for res in results_sub]) for stat in stats }
+    # Backtest on all the timeframe
+    start_ts = time()
+    trades = backtest(ticks, backtest_config)
+    elapsed = time() - start_ts
+    result_full,tdf = trades_report(trades, elapsed, subset[0][2], subset[-1][2])
+
+    avg = { stat: np.mean([res[stat] for res in (results_sub + [result_full])]) for stat in stats }
+    std = { stat: np.std([res[stat] for res in (results_sub + [result_full])]) for stat in stats }
 
     results = {}
 
@@ -820,13 +827,7 @@ def jackrabbit_wrap(ticks: [dict], backtest_config: dict) -> dict:
     results['std'] = std
     results['sub_runs'] = results_sub
 
-    # Backtest on all the timeframe
-    start_ts = time()
-    trades = backtest(ticks, backtest_config)
-    elapsed = time() - start_ts
-    result,tdf = trades_report(trades, elapsed, subset[0][2], subset[-1][2])
-
-    results['full_run'] = result
+    results['full_run'] = result_full
     tdfs = [tdf] + tdfs_sub
 
     return results, tdfs
