@@ -14,7 +14,7 @@
   break_on:
   [
     ["OFF: break on first soft stop",
-     "lambda trades, ticks, k: trades[-1]['type'] == 'stop_loss'"]
+     "lambda trades, ticks, k: trades[-1]['type'].startswith('stop_loss')"]
     ["OFF: neg pnl sum",
      "lambda trades, ticks, k: trades[-1]['pnl_plus_fees_cumsum'] < 0.0 and trades[-1]['progress'] > 0.25"]
     ["ON: liq too close",
