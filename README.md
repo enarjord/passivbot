@@ -1,6 +1,6 @@
 # passivbot_futures
 
-**Version: 2.1.0**
+**Version: 2.2.0**
 
 trading bot running on bybit inverse futures and binance usdt futures
 
@@ -56,6 +56,14 @@ change log
 - new default bybit config
 - behavior change: reentry qtys may now be smaller than initial entry qty
 - backtest iterates a numpy array instead of a python list of dicts for reduced ram usage
+
+2021-03-09 v2.2.0
+- backtester now uses multiprocessing to utilize all cpus
+- implemented sliding window backtest
+- now possible to make plots of best candidate by adding param `--plot` when running backtest
+- added multiple scoring functions
+- jitted ema calc
+
 
 see `changelog.txt` for earlier changes
 
