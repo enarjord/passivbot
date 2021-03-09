@@ -1,0 +1,9 @@
+services:
+  passivebot:
+    build: .
+    container_name: passivebot
+    restart: unless-stopped
+    volumes:
+      - ./:/app/
+    command: python start_bot.py binance default
+    
