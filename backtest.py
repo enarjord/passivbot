@@ -827,6 +827,20 @@ async def jackrabbit(ticks: [dict], backtest_config: dict):
                 {k_: 0.0 for k_ in backtest_config['ranges']},
                 m=1.0
             )
+    if '--plot' in sys.argv:
+        _, best_result = load_shared_data(backtest_config['session_dirpath'], Lock())
+        if not best_result:
+            return
+        print('backtesting and plotting best candidate')
+        result_, tdf_ = jackrabbit_wrap(ticks, {**backtest_config, **{'break_on': []}, **best_result})
+        if tdf_ is None:
+            print('no trades')
+            return
+        tdf_.to_csv(backtest_config['session_dirpath'] + f"backtest_trades_{best_result['key']}.csv")
+        print('\nmaking ticks dataframe...')
+        df = pd.DataFrame({'price': ticks[:,0], 'buyer_maker': ticks[:,1], 'timestamp': ticks[:,2]})
+        dump_plots({**backtest_config, **best_result, **result_}, tdf_, df)
+        return
     
     if True:#backtest_config['multiprocessing']:
         await jackrabbit_multi_core(results,
