@@ -11,7 +11,7 @@ from time import time, sleep
 from typing import Iterator
 
 
-if '--jit' in sys.argv:
+if True:#'--jit' in sys.argv:
     print('using numba')
     from numba import njit
 else:
@@ -41,6 +41,11 @@ def round_(n: float, step: float, safety_rounding=10) -> float:
 @njit
 def calc_diff(x, y):
     return abs(x - y) / abs(y)
+
+
+@njit
+def calc_ema(alpha: float, alpha_: float, prev_ema: float, new_val: float) -> float:
+    return prev_ema * alpha_ + new_val * alpha
 
 
 def sort_dict_keys(d):
@@ -435,7 +440,7 @@ class Bot:
 
         self.my_trades = []
         self.my_trades_cache_filepath = \
-            make_get_filepath(os.path.join('historical_data', self.exchange, 'my_trades',
+            make_get_filepath(os.path.join('historical_data', self.exchange, self.user, 'my_trades',
                                            self.symbol, 'my_trades.txt'))
 
         self.log_level = 0
