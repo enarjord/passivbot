@@ -244,8 +244,15 @@ def backtest(ticks: np.ndarray, settings: dict):
                 pos_price = pos_price * abs(pos_size / new_pos_size) + \
                     price * abs(qty / new_pos_size) if new_pos_size else np.nan
             pos_size = new_pos_size
-            actual_balance = max(ss['starting_balance'], actual_balance + pnl + fee_paid)
+            actual_balance = max(0.0, actual_balance + pnl + fee_paid)
             apparent_balance = actual_balance * ss['balance_pct']
+            min_entry_qty = min_entry_qty_f(
+                ss['qty_step'], ss['min_qty'], ss['min_cost'], ss['entry_qty_pct'], ss['leverage'],
+                apparent_balance, t[0]
+            )
+            if apparent_balance * ss['leverage'] < cost_f(min_entry_qty, t[0]):
+                print('\nself liquidated')
+                return []
             if pos_size == 0.0:
                 liq_price = 0.0
             elif pos_size > 0.0:
