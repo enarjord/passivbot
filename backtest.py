@@ -949,7 +949,8 @@ async def jackrabbit_multi_core(results: dict,
                                 k_: int,
                                 ks: int,
                                 ms: [float]):
-    n_cpus = cpu_count()
+    n_cpus = min(cpu_count(), backtest_config['max_n_cpus'])
+    print('using', n_cpus, 'cpus')
     score_func = get_score_func(backtest_config['score_metric'])
     lock = Lock()
     k = Value('i', k_)
