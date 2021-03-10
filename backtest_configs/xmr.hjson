@@ -12,6 +12,7 @@
   starting_k: 0
   n_jackrabbit_iterations: 800
   latency_simulation_ms: 750
+  max_n_cpus: 10
   starting_balance: 20
   # score metrics: ['avg adg',
   #                 'min adg',
