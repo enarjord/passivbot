@@ -1,7 +1,7 @@
 services:
-  passivebot:
+  passivbot:
     build: .
-    container_name: passivebot
+    container_name: passivbot
     restart: unless-stopped
     volumes:
       - ./:/app/
