@@ -297,7 +297,6 @@ class BinanceBot(Bot):
         print_([uri])
         await self.update_position()
         k = 1
-        return
         async with websockets.connect(uri) as ws:
             async for msg in ws:
                 if msg is None:
