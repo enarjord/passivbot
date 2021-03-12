@@ -145,13 +145,6 @@ def calc_min_entry_qty_linear(qty_step: float, min_qty: float, min_cost: float,
 
 
 @njit
-def calc_pos_reduction_qty(qty_step: float,
-                           stop_loss_pos_reduction: float,
-                           pos_size: float) -> float:
-    return min((aps := abs(pos_size)), round_up(aps * stop_loss_pos_reduction, qty_step))
-
-
-@njit
 def calc_min_close_qty(qty_step: float, min_qty: float, min_close_qty_multiplier: float,
                        min_entry_qty) -> float:
     return max(min_qty, round_dn(min_entry_qty * min_close_qty_multiplier, qty_step))
@@ -380,9 +373,6 @@ class Bot:
         self.user = user
         self.symbol = settings['symbol']
         self.leverage = settings['leverage']
-        self.stop_loss_liq_diff = settings['stop_loss_liq_diff']
-        self.stop_loss_pos_price_diff = settings['stop_loss_pos_price_diff']
-        self.stop_loss_pos_reduction = settings['stop_loss_pos_reduction']
         self.grid_coefficient = settings['grid_coefficient']
         self.grid_spacing = settings['grid_spacing']
         self.max_markup = settings['max_markup']
@@ -398,8 +388,6 @@ class Bot:
         self.funding_fee_collect_mode = settings['funding_fee_collect_mode']
 
         self.min_close_qty_multiplier = settings['min_close_qty_multiplier']
-
-        self.market_stop_loss = settings['market_stop_loss']
 
         self.ts_locked = {'cancel_orders': 0, 'decide': 0, 'update_open_orders': 0,
                           'update_position': 0, 'print': 0, 'create_orders': 0}
