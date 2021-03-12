@@ -1,5 +1,5 @@
 {
-    "config_name": "xmr_default_2021-02-24",
+    "config_name": "xmr_hedge_mode",
     "symbol": "XMRUSDT",
     "logging_level": 0,
     "cross_mode": true,
@@ -17,18 +17,7 @@
     "min_markup": 0.00114,
     "max_markup": 0.00756,
 
-    "indicator_settings": {
-        "do_long": true,
-        "do_shrt": true,
-        "funding_fee_collect_mode": false,
-        "tick_ema": {
-            "span": 50992.0,
-            "spread": 0.0059
-        }
-    },
-
-    "market_stop_loss": false,
-    "stop_loss_liq_diff": 0.045,
-    "stop_loss_pos_price_diff": 0.25,
-    "stop_loss_pos_reduction": 0.1
+    "do_long": true,
+    "do_shrt": true,
+    "funding_fee_collect_mode": false,
 }
