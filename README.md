@@ -57,6 +57,11 @@ change log
 - behavior change: reentry qtys may now be smaller than initial entry qty
 - backtest iterates a numpy array instead of a python list of dicts for reduced ram usage
 
+2021-03-12 v3.0.0
+- binance hedge mode implemented (bybit not yet supported)
+- emas removed
+- stop loss removed
+
 see `changelog.txt` for earlier changes
 
 
