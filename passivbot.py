@@ -145,22 +145,6 @@ def calc_min_entry_qty_linear(qty_step: float, min_qty: float, min_cost: float,
 
 
 @njit
-def calc_no_pos_bid_price(price_step: float,
-                          ema_spread: float,
-                          ema: float,
-                          highest_bid: float) -> float:
-    return min(highest_bid, round_dn(ema * (1 - ema_spread), price_step))
-
-
-@njit
-def calc_no_pos_ask_price(price_step: float,
-                          ema_spread: float,
-                          ema: float,
-                          lowest_ask: float) -> float:
-    return max(lowest_ask, round_up(ema * (1 + ema_spread), price_step))
-
-
-@njit
 def calc_pos_reduction_qty(qty_step: float,
                            stop_loss_pos_reduction: float,
                            pos_size: float) -> float:
@@ -393,7 +377,6 @@ def flatten(lst: list) -> list:
 class Bot:
     def __init__(self, user: str, settings: dict):
         self.settings = settings
-        self.indicator_settings = settings['indicator_settings']
         self.user = user
         self.symbol = settings['symbol']
         self.leverage = settings['leverage']
@@ -410,8 +393,9 @@ class Bot:
         self.n_close_orders = settings['n_close_orders']
         self.entry_qty_pct = settings['entry_qty_pct']
         self.ddown_factor = settings['ddown_factor']
-        self.ema_spread = settings['indicator_settings']['tick_ema']['spread'] \
-            if 'spread' in settings['indicator_settings']['tick_ema'] else 0.0
+        self.do_long = settings['do_long']
+        self.do_shrt = settings['do_shrt']
+        self.funding_fee_collect_mode = settings['funding_fee_collect_mode']
 
         self.min_close_qty_multiplier = settings['min_close_qty_multiplier']
 
@@ -427,9 +411,6 @@ class Bot:
         self.lowest_ask = 9.9e9
         self.price = 0
         self.ob = [0.0, 0.0]
-
-        self.indicators = {'tick': {}, 'ohlcv': {}}
-        self.ohlcvs = {}
 
         self.log_filepath = make_get_filepath(f"logs/{self.exchange}/{settings['config_name']}.log")
 
@@ -532,121 +513,24 @@ class Bot:
     def stop(self) -> None:
         self.stop_websocket = True
 
-    def calc_initial_bid_ask(self):
-        if self.indicator_settings['do_long'] and \
-                (not self.indicator_settings['funding_fee_collect_mode'] or
-                 self.position['predicted_funding_rate'] < 0.0):
-            bid_price = min(self.ob[0],
-                            round_dn(self.indicators['tick_ema'] * (1 - self.ema_spread),
-                                     self.price_step))
-        else:
-            bid_price = -1.0
-
-        if self.indicator_settings['do_shrt'] and \
-                (not self.indicator_settings['funding_fee_collect_mode'] or
-                 self.position['predicted_funding_rate'] > 0.0):
-            ask_price = max(self.ob[1],
-                            round_up(self.indicators['tick_ema'] * (1 + self.ema_spread),
-                                     self.price_step))
-        else:
-            ask_price = -1.0
-        return bid_price, ask_price
-
     def calc_orders(self):
         last_price_diff_limit = 0.05
         balance = self.position['wallet_balance'] * min(1.0, abs(self.balance_pct))
+        orders = self.calc_long_orders(last_price_diff_limit, balance) + \
+            self.calc_shrt_orders(last_price_diff_limit, balance)
+        return orders
+
+    def calc_shrt_orders(self, last_price_diff_limit: float, balance: float):
         orders = []
-        if calc_diff(self.position['liquidation_price'], self.price) < self.stop_loss_liq_diff or \
-                calc_diff(self.position['price'], self.price) > self.stop_loss_pos_price_diff:
-            abs_pos_size = abs(self.position['size'])
-            stop_loss_qty = min(abs_pos_size, round_up(abs_pos_size * self.stop_loss_pos_reduction,
-                                                       self.qty_step))
-            if stop_loss_qty > 0.0:
-                if self.position['size'] > 0.0:
-                    # controlled long loss
-                    orders.append(
-                        {'side': 'sell', 'type': 'market' if self.market_stop_loss else 'limit',
-                         'qty': stop_loss_qty,
-                         'price': self.ob[1], 'reduce_only': True, 'custom_id': 'stop_loss'}
-                    )
-                else:
-                    # controlled shrt loss
-                    orders.append(
-                        {'side': 'buy', 'type': 'market' if self.market_stop_loss else 'limit',
-                         'qty': stop_loss_qty,
-                         'price': self.ob[0], 'reduce_only': True, 'custom_id': 'stop_loss'}
-                    )
+        sp = self.position['shrt']
+        if sp['size'] == 0.0 and self.do_shrt and (not self.funding_fee_collect_mode or
+                                                   self.position['predicted_funding_rate'] > 0.0):
+            orders.append({'side': 'sell', 'position_side': 'shrt',
+                           'qty': self.calc_min_entry_qty(balance, self.ob[1]), 'price': self.ob[1], 
+                           'type': 'limit', 'reduce_only': False, 'custom_id': 'entry'})
         else:
-            stop_loss_qty = 0.0
-        if self.position['size'] == 0: # no pos
-            bid_price, ask_price = self.calc_initial_bid_ask()
-            if bid_price > 0.0:
-                orders.append({'side': 'buy', 'qty': self.calc_min_entry_qty(balance, bid_price),
-                               'price': bid_price,
-                               'type': 'limit', 'reduce_only': False, 'custom_id': 'entry'})
-            if ask_price > 0.0:
-                orders.append({'side': 'sell', 'qty': self.calc_min_entry_qty(balance, ask_price),
-                               'price': ask_price, 'type': 'limit', 'reduce_only': False,
-                               'custom_id': 'entry'})
-        elif self.position['size'] > 0.0: # long pos
-            pos_size = self.position['size']
-            pos_price = self.position['price']
-            pos_margin = self.calc_margin_cost(pos_size, pos_price)
-            bid_price = min(self.ob[0], calc_long_reentry_price(self.price_step,
-                                                                self.grid_spacing,
-                                                                self.grid_coefficient,
-                                                                balance,
-                                                                pos_margin,
-                                                                pos_price))
-            for k in range(self.n_entry_orders):
-                max_pos_size = self.calc_max_pos_size(min(balance, self.position['equity']),
-                                                      bid_price)
-                min_qty_ = self.calc_min_qty(bid_price)
-                bid_qty = calc_reentry_qty(self.qty_step, self.ddown_factor,
-                                           min_qty_, max_pos_size, pos_size)
-                if bid_qty < min_qty_:
-                    break
-                new_pos_size = pos_size + bid_qty
-                if new_pos_size >= max_pos_size:
-                    break
-                pos_price = pos_price * (bid_qty / new_pos_size) + \
-                    bid_price * (pos_size / new_pos_size)
-                pos_size = new_pos_size
-                pos_margin = self.calc_margin_cost(pos_size, pos_price)
-                if calc_diff(bid_price, self.price) > last_price_diff_limit:
-                    break
-                orders.append({'side': 'buy', 'qty': bid_qty, 'price': bid_price,
-                               'type': 'limit', 'reduce_only': False, 'custom_id': 'entry'})
-                bid_price = min(self.ob[0], calc_long_reentry_price(self.price_step,
-                                                                    self.grid_spacing,
-                                                                    self.grid_coefficient,
-                                                                    balance,
-                                                                    pos_margin,
-                                                                    pos_price))
-            ask_qtys, ask_prices = calc_long_closes(
-                self.price_step,
-                self.qty_step,
-                calc_min_close_qty(self.qty_step,
-                                   self.min_qty,
-                                   self.min_close_qty_multiplier,
-                                   self.calc_min_entry_qty(balance, self.position['price'])),
-                self.min_markup,
-                self.max_markup,
-                self.position['size'] - stop_loss_qty,
-                self.position['price'],
-                self.ob[1],
-                self.n_close_orders
-            )
-            close_orders = sorted([{'side': 'sell', 'qty': abs_qty, 'price': float(price_),
-                                    'type': 'limit', 'reduce_only': True, 'custom_id': 'close'}
-                                   for qty_, price_ in zip(ask_qtys, ask_prices)
-                                   if (abs_qty := abs(float(qty_))) > 0.0
-                                   and calc_diff(price_, self.price) < last_price_diff_limit],
-                                  key=lambda x: x['price'])[:self.n_entry_orders]
-            orders += close_orders
-        else: # shrt pos
-            pos_size = self.position['size']
-            pos_price = self.position['price']
+            pos_size = sp['size']
+            pos_price = sp['price']
             pos_margin = self.calc_margin_cost(-pos_size, pos_price)
             ask_price = max(self.ob[1], calc_shrt_reentry_price(self.price_step,
                                                                 self.grid_spacing,
@@ -671,8 +555,9 @@ class Bot:
                 pos_margin = self.calc_margin_cost(-pos_size, pos_price)
                 if calc_diff(ask_price, self.price) > last_price_diff_limit:
                     break
-                orders.append({'side': 'sell', 'qty': ask_qty, 'price': ask_price,
-                    'type': 'limit', 'reduce_only': False, 'custom_id': 'entry'})
+                orders.append({'side': 'sell', 'position_side': 'shrt', 'qty': ask_qty,
+                    'price': ask_price, 'type': 'limit', 'reduce_only': False,
+                    'custom_id': 'entry'})
                 ask_price = max(self.ob[1], calc_shrt_reentry_price(self.price_step,
                                                                     self.grid_spacing,
                                                                     self.grid_coefficient,
@@ -685,18 +570,88 @@ class Bot:
                 calc_min_close_qty(self.qty_step,
                                    self.min_qty,
                                    self.min_close_qty_multiplier,
-                                   self.calc_min_entry_qty(balance, self.position['price'])),
+                                   self.calc_min_entry_qty(balance, sp['price'])),
                 self.min_markup,
                 self.max_markup,
-                self.position['size'] + stop_loss_qty,
-                self.position['price'],
+                sp['size'],
+                sp['price'],
                 self.ob[0],
                 self.n_close_orders
             )
-            close_orders = sorted([{'side': 'buy', 'qty': float(qty_), 'price': float(price_),
-                                    'type': 'limit', 'reduce_only': True, 'custom_id': 'close'}
+            close_orders = sorted([{'side': 'buy', 'position_side': 'shrt', 'qty': float(qty_),
+                                    'price': float(price_), 'type': 'limit', 'reduce_only': True,
+                                    'custom_id': 'close'}
                                    for qty_, price_ in zip(bid_qtys, bid_prices) if qty_ > 0.0],
                                   key=lambda x: x['price'], reverse=True)[:self.n_entry_orders]
+            orders += close_orders
+        return orders
+
+    def calc_long_orders(self, last_price_diff_limit: float, balance: float):
+        orders = []
+        lp = self.position['long']
+        if lp['size'] == 0.0 and self.do_long and (not self.funding_fee_collect_mode or
+                                                   self.position['predicted_funding_rate'] < 0.0):
+            orders.append({'side': 'buy', 'position_side': 'long',
+                           'qty': self.calc_min_entry_qty(balance, self.ob[0]), 'price': self.ob[0], 
+                           'type': 'limit', 'reduce_only': False, 'custom_id': 'entry'})
+
+        else:
+            pos_size = lp['size']
+            pos_price = lp['price']
+            pos_margin = self.calc_margin_cost(pos_size, pos_price)
+            bid_price = min(self.ob[0], calc_long_reentry_price(self.price_step,
+                                                                self.grid_spacing,
+                                                                self.grid_coefficient,
+                                                                balance,
+                                                                pos_margin,
+                                                                pos_price))
+            for k in range(self.n_entry_orders):
+                max_pos_size = self.calc_max_pos_size(min(balance, self.position['equity']),
+                                                      bid_price)
+                min_qty_ = self.calc_min_qty(bid_price)
+                bid_qty = calc_reentry_qty(self.qty_step, self.ddown_factor,
+                                           min_qty_, max_pos_size, pos_size)
+                if bid_qty < min_qty_:
+                    break
+                new_pos_size = pos_size + bid_qty
+                if new_pos_size >= max_pos_size:
+                    break
+                pos_price = pos_price * (bid_qty / new_pos_size) + \
+                    bid_price * (pos_size / new_pos_size)
+                pos_size = new_pos_size
+                pos_margin = self.calc_margin_cost(pos_size, pos_price)
+                if calc_diff(bid_price, self.price) > last_price_diff_limit:
+                    break
+                orders.append({'side': 'buy', 'position_side': 'long', 'qty': bid_qty,
+                               'price': bid_price, 'type': 'limit', 'reduce_only': False,
+                               'custom_id': 'entry'})
+                bid_price = min(self.ob[0], calc_long_reentry_price(self.price_step,
+                                                                    self.grid_spacing,
+                                                                    self.grid_coefficient,
+                                                                    balance,
+                                                                    pos_margin,
+                                                                    pos_price))
+            ask_qtys, ask_prices = calc_long_closes(
+                self.price_step,
+                self.qty_step,
+                calc_min_close_qty(self.qty_step,
+                                   self.min_qty,
+                                   self.min_close_qty_multiplier,
+                                   self.calc_min_entry_qty(balance, lp['price'])),
+                self.min_markup,
+                self.max_markup,
+                lp['size'],
+                lp['price'],
+                self.ob[1],
+                self.n_close_orders
+            )
+            close_orders = sorted([{'side': 'sell', 'position_side': 'long', 'qty': abs_qty,
+                                    'price': float(price_), 'type': 'limit', 'reduce_only': True,
+                                    'custom_id': 'close'}
+                                   for qty_, price_ in zip(ask_qtys, ask_prices)
+                                   if (abs_qty := abs(float(qty_))) > 0.0
+                                   and calc_diff(price_, self.price) < last_price_diff_limit],
+                                  key=lambda x: x['price'])[:self.n_entry_orders]
             orders += close_orders
         return orders
 
@@ -745,184 +700,24 @@ class Bot:
         if time() - self.ts_released['print'] >= 0.5:
             self.ts_released['print'] = time()
             line = f"{self.symbol} "
-            if self.position['size'] == 0:
-                line += f"no position bid {self.highest_bid} ask {self.lowest_ask} "
-                ratio = (self.price - self.highest_bid) / (self.lowest_ask - self.highest_bid)
-            elif self.position['size'] > 0.0:
-                line += f"long {self.position['size']} "
-                line += f"@ {round_(self.position['price'], self.price_step)} "
-                line += f"exit {self.lowest_ask} ddown {self.highest_bid} "
-                ratio = (self.price - self.highest_bid) / (self.lowest_ask - self.highest_bid)
-            else:
-                line += f"shrt {self.position['size']} "
-                line += f"@ {round_(self.position['price'], self.price_step)} "
-                ratio = 1 - (self.price - self.highest_bid) / (self.lowest_ask - self.highest_bid)
-                line += f"exit {self.highest_bid} ddown {self.lowest_ask } "
-
-            liq_diff = calc_diff(self.position['liquidation_price'], self.price)
-            line += f"pct {ratio:.2f} liq_diff {liq_diff:.3f} last {self.price}   "
+            line += f"long {self.position['long']['size']} @ "
+            line += f"{round_(self.position['long']['price'], self.price_step)} "
+            long_closes = sorted([o for o in self.open_orders if o['side'] == 'sell'
+                                  and o['position_side'] == 'long'], key=lambda x: x['price'])
+            long_reentries = sorted([o for o in self.open_orders if o['side'] == 'buy'
+                                     and o['position_side'] == 'long'], key=lambda x: x['price'])
+            line += f"close @ {long_closes[0]['price'] if long_closes else 0.0} "
+            line += f"reenter @ {long_reentries[-1]['price'] if long_reentries else 0.0} "
+            line += '|| '
+            line += f"shrt {self.position['shrt']['size']} @ "
+            line += f"{round_(self.position['shrt']['price'], self.price_step)} "
+            shrt_closes = sorted([o for o in self.open_orders if o['side'] == 'buy'
+                                  and o['position_side'] == 'shrt'], key=lambda x: x['price'])
+            shrt_reentries = sorted([o for o in self.open_orders if o['side'] == 'sell'
+                                     and o['position_side'] == 'shrt'], key=lambda x: x['price'])
+            line += f"close @ {shrt_closes[-1]['price'] if shrt_closes else 0.0} "
+            line += f"reenter @ {shrt_reentries[0]['price'] if shrt_reentries else 0.0} "
             print_([line], r=True)
-
-    def init_tick_ema(self, ticks: [dict]):
-        print_(['initiating tick ema...'])
-        ema_span = self.indicator_settings['tick_ema']['span']
-        ema = ticks[0]['price']
-        alpha = 2 / (ema_span + 1)
-        for t in ticks:
-            ema = ema * (1 - alpha) + t['price'] * alpha
-        self.indicators['tick_ema'] = ema
-        self.indicator_settings['tick_ema']['alpha'] = alpha
-        self.indicator_settings['tick_ema']['alpha_'] = 1 - alpha
-
-    def update_tick_ema(self, websocket_tick):
-        self.indicators['tick_ema'] = \
-            self.indicators['tick_ema'] * self.indicator_settings['tick_ema']['alpha_'] + \
-            websocket_tick['price'] * self.indicator_settings['tick_ema']['alpha']
-
-    def init_fancy_indicator_001(self, ticks: [dict]):
-        pass
-
-    def update_fancy_indicator_001(self, websocket_tick: dict):
-        pass
-
-    def init_fancy_indicator_002(self, ticks: [dict]):
-        pass
-
-    def update_fancy_indicator_002(self, websocket_tick: dict):
-        pass
-
-    def init_tick_rsi(self):
-        pass
-
-    def update_tick_rsi(self):
-        pass
-
-    def init_ohlcv_rsi(self, ticks: [dict]):
-        print_(['initiation ohlcv rsi'])
-        self.indicator_settings['max_periods_in_memory'] = \
-            self.indicator_settings['ohlcv_rsi']['n_periods']
-        n_periods = self.indicator_settings['ohlcv_rsi']['n_periods']
-        self.init_ohlcv(self.indicator_settings['ohlcv_rsi']['period_ms'], ticks)
-        ohlcvs = self.ohlcvs[self.indicator_settings['ohlcv_rsi']['period_ms']]
-        upchange_smoothed = 0.0
-        dnchange_smoothed = 0.0
-        for i in range(1, len(ohlcvs)):
-            if ohlcvs[i]['close'] == ohlcvs[i - 1]['close']:
-                upchange = 0
-                dnchange = 0
-            elif ohlcvs[i]['close'] > ohlcvs[i - 1]['close']:
-                upchange = ohlcvs[i]['close'] - ohlcvs[i - 1]['close']
-                dnchange = 0
-            else:
-                upchange = 0
-                dnchange = ohlcvs[i - 1]['close'] - ohlcvs[i]['close']
-            upchange_smoothed = (upchange_smoothed * (n_periods - 1) + upchange) / n_periods
-            dnchange_smoothed = (dnchange_smoothed * (n_periods - 1) + dnchange) / n_periods
-            self.indicator_settings['ohlcv_rsi']['upchange_smoothed'] = upchange_smoothed
-            self.indicator_settings['ohlcv_rsi']['dnchange_smoothed'] = dnchange_smoothed
-            rs = upchange_smoothed / dnchange_smoothed if dnchange_smoothed > 0.0 else 9e9
-            rsi = 100 - 100 / (1 + rs)
-        self.indicators['ohlcv_rsi'] = rsi
-
-    def update_ohlcv_rsi(self, websocket_tick: dict):
-        ohlcvs = self.ohlcvs[self.indicator_settings['ohlcv_rsi']['period_ms']]
-        if self.update_ohlcv(self.indicator_settings['ohlcv_rsi']['period_ms'], websocket_tick):
-            if ohlcvs[-1]['close'] == ohlcvs[-2]['close']:
-                upchange = 0
-                dnchange = 0
-            elif ohlcvs[-1]['close'] > ohlcvs[-2]['close']:
-                upchange = ohlcvs[i]['close'] - ohlcvs[-2]['close']
-                dnchange = 0
-            else:
-                upchange = 0
-                dnchange = ohlcvs[i - 1]['close'] - ohlcvs[i]['close']
-            upchange_smoothed = (self.indicator_settings['ohlcv_rsi']['upchange_smoothed'] *
-                                 (n_periods - 1) + upchange) / n_periods
-            dnchange_smoothed = (self.indicator_settings['ohlcv_rsi']['dnchange_smoothed'] *
-                                 (n_periods - 1) + dnchange) / n_periods
-            rs = upchange_smoothed / dnchange_smoothed if dnchange_smoothed > 0.0 else 9e9
-            rsi = 100 - 100 / (1 + rs)
-            self.indicators['ohlcv_rsi'] = rsi
-            self.indicator_settings['ohlcv_rsi']['upchange_smoothed'] = upchange_smoothed
-            self.indicator_settings['ohlcv_rsi']['dnchange_smoothed'] = dnchange_smoothed
-
-    async def fetch_ticks(self):
-        n_ticks_to_fetch = int(self.indicator_settings['tick_ema']['span'])
-        # each fetch contains 1000 ticks
-        ticks = await self.fetch_trades()
-        additional_ticks = await asyncio.gather(
-            *[self.fetch_trades(from_id=ticks[0]['trade_id'] - 1000 * i)
-              for i in range(1, min(50, n_ticks_to_fetch // 1000))])
-        ticks = sorted(ticks + flatten(additional_ticks), key=lambda x: x['trade_id'])
-        condensed_ticks = [ticks[0]]
-        for i in range(1, len(ticks)):
-            if ticks[i]['price'] != condensed_ticks[-1]['price']:
-                condensed_ticks.append(ticks[i])
-        return condensed_ticks
-
-    async def init_indicators(self):
-        # called upon websocket start
-        ticks = await self.fetch_ticks()
-        self.init_tick_ema(ticks)
-        #self.init_ohlcv_rsi(ticks)
-
-    def update_indicators(self, websocket_tick: dict):
-        # called each websocket tick
-        # {'price': float, 'qty': float, 'timestamp': int, 'side': 'buy'|'sell'}
-        self.update_tick_ema(websocket_tick)
-        #self.update_ohlcv_rsi(websocket_tick)
-
-    def init_ohlcv(self, period_ms: int, ticks: [dict]):
-        print_([f'initiating ohlcvs {period_ms}...'])
-        self.ohlcvs[period_ms] = [{
-            'timestamp': ticks[0]['timestamp'] - ticks[0]['timestamp'] % 10000,
-            'open': ticks[0]['price'],
-            'high': ticks[0]['price'],
-            'low': ticks[0]['price'],
-            'close': ticks[0]['price'],
-            'volume': ticks[0]['qty']
-        }]
-        for t in ticks[1:]:
-            self.update_ohlcv(period_ms, t)
-
-    def update_ohlcv(self, period_ms, websocket_tick) -> bool:
-        if websocket_tick['timestamp'] > round(self.ohlcvs[period_ms][-1]['timestamp'] + period_ms):
-            new_ohlcv = True
-            while websocket_tick['timestamp'] > \
-                    round(self.ohlcvs[period_ms][-1]['timestamp'] + period_ms * 2):
-                # fill empty ohlcvs
-                self.ohlcvs[period_ms].append({
-                    'timestamp': int(round(self.ohlcvs[period_ms][-1]['timestamp'] + period_ms)),
-                    'open': self.ohlcvs[period_ms][-1]['close'],
-                    'high': self.ohlcvs[period_ms][-1]['close'],
-                    'low': self.ohlcvs[period_ms][-1]['close'],
-                    'close': self.ohlcvs[period_ms][-1]['close'],
-                    'volume': 0.0
-                })
-            # new ohlcv
-            self.ohlcvs[period_ms].append({
-                'timestamp': int(round(self.ohlcvs[period_ms][-1]['timestamp'] + period_ms)),
-                'open': websocket_tick['price'],
-                'high': websocket_tick['price'],
-                'low': websocket_tick['price'],
-                'close': websocket_tick['price'],
-                'volume': websocket_tick['qty']
-            })
-        else:
-            new_ohlcv = False
-            # update current ohlcv
-            self.ohlcvs[period_ms][-1]['high'] = \
-                max(self.ohlcvs[period_ms][-1]['high'], websocket_tick['price'])
-            self.ohlcvs[period_ms][-1]['low'] = \
-                min(self.ohlcvs[period_ms][-1]['low'], websocket_tick['price'])
-            self.ohlcvs[period_ms][-1]['close'] = \
-                websocket_tick['price']
-            self.ohlcvs[period_ms][-1]['volume'] = \
-                round(self.ohlcvs[period_ms][-1]['volume'] + websocket_tick['qty'], 10)
-        if len(self.ohlcvs[period_ms]) > self.indicator_settings['max_periods_in_memory'] + 20:
-            self.ohlcvs[period_ms] = \
-                self.ohlcvs[period_ms][-self.indicator_settings['max_periods_in_memory']:]
-        return new_ohlcv
 
     def load_cached_my_trades(self) -> [dict]:
         if os.path.exists(self.my_trades_cache_filepath):
