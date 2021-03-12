@@ -25,39 +25,6 @@ def get_maintenance_margin_rate(pos_size_ito_usdt: float) -> float:
     return kvs[-1][1]
 
 
-def get_max_pos_size_ito_usdt(symbol: str, leverage: int) -> float:
-    if symbol == 'BTCUSDT':
-        kvs = [(100, 50000), (50, 250000), (20, 1000000), (10, 5000000), (5, 20000000),
-               (4, 50000000), (3, 100000000), (2, 200000000)]
-    elif symbol == 'ETHUSDT':
-        kvs = [(75, 10000), (50, 100000), (25, 500000), (10, 1000000), (5, 2000000),
-               (4, 5000000), (3, 10000000), (2, 20000000)]
-    elif symbol in ['ADAUSDT', 'BNBUSDT', 'DOTUSDT', 'EOSUSDT', 'ETCUSDT', 'LINKUSDT', 'LTCUSDT',
-                    'TRXUSDT', 'XLMUSDT', 'XMRUSDT', 'XRPUSDT', 'XTZUSDT', 'BCHUSDT']:
-        kvs = [(50, 10000), (25, 50000), (10, 250000), (5, 1000000), (4, 2000000),
-               (3, 5000000), (2, 10000000)]
-    elif symbol in ['AAVEUSDT', 'ALGOUSDT', 'ALPHAUSDT', 'ATOMUSDT', 'AVAXUSDT', 'AXSUSDT',
-                    'BALUSDT', 'BANDUSDT', 'BATUSDT', 'BELUSDT', 'BLZUSDT', 'BZRXUSDT', 'COMPUSDT',
-                    'CRVUSDT', 'CVCUSDT', 'DASHUSDT', 'DEFIUSDT', 'DOGEUSDT', 'EGLDUSDT', 'ENJUSDT',
-                    'FILUSDT', 'FLMUSDT', 'FTMUSDT', 'HNTUSDT', 'ICXUSDT', 'IOSTUSDT', 'IOTAUSDT',
-                    'KAVAUSDT', 'KNCUSDT', 'KSMUSDT', 'LRCUSDT', 'MATICUSDT', 'MKRUSDT', 'NEARUSDT',
-                    'NEOUSDT', 'OCEANUSDT', 'OMGUSDT', 'ONTUSDT', 'QTUMUSDT', 'RENUSDT', 'RLCUSDT',
-                    'RSRUSDT', 'RUNEUSDT', 'SNXUSDT', 'SOLUSDT', 'SRMUSDT', 'STORJUSDT',
-                    'SUSHIUSDT', 'SXPUSDT', 'THETAUSDT', 'TOMOUSDT', 'TRBUSDT', 'UNIUSDT',
-                    'VETUSDT', 'WAVESUSDT', 'YFIIUSDT', 'YFIUSDT', 'ZECUSDT', 'ZILUSDT', 'ZRXUSDT',
-                    'ZENUSDT', 'SKLUSDT', 'GRTUSDT', '1INCHUSDT']:
-        kvs = [(20, 5000), (10, 25000), (5, 100000), (2, 250000), (1, 1000000)]
-    elif symbol in ['CTKUSDT', 'LITUSDT']:
-        kvs = [(10, 5000), (5, 25000), (4, 100000), (2, 250000), (1, 1000000)]
-    else:
-        print(f'{symbol} unknown symbol')
-        kvs = [(0, 5000)]
-    for kv in kvs:
-        if leverage > kv[0]:
-            return kv[1]
-    return 9e12
-
-
 def calc_isolated_long_liq_price(balance,
                                  pos_size,
                                  pos_price,
@@ -123,9 +90,7 @@ class BinanceBot(Bot):
     def __init__(self, user: str, settings: dict):
         self.exchange = 'binance'
         super().__init__(user, settings)
-        self.max_pos_size_ito_usdt = get_max_pos_size_ito_usdt(settings['symbol'],
-                                                               settings['leverage'])
-
+        self.max_pos_size_ito_usdt = 0.0
         self.cc = init_ccxt(self.exchange, user)
         self.trade_id = 0
 
@@ -134,6 +99,7 @@ class BinanceBot(Bot):
             self.cc.fapiPublic_get_exchangeinfo(),
             self.cc.fapiPrivate_get_leveragebracket()
         )
+
         for e in exchange_info['symbols']:
             if e['symbol'] == self.symbol:
                 self.coin = e['baseAsset']
@@ -167,6 +133,27 @@ class BinanceBot(Bot):
         self.max_leverage = max_lev
         await self.update_position()
         await self.init_order_book()
+        try:
+            mode = 'CROSSED' if self.settings['cross_mode'] else 'ISOLATED'
+            print(await self.cc.fapiPrivate_post_margintype(params={'symbol': self.symbol,
+                                                                    'marginType': mode}))
+        except Exception as e:
+            print(e)
+        try:
+            lev = await self.cc.fapiPrivate_post_leverage(params={'symbol': self.symbol,
+                                                                  'leverage': int(self.leverage)})
+            self.max_pos_size_ito_usdt = float(lev['maxNotionalValue'])
+            print('max pos size in terms of usdt', self.max_pos_size_ito_usdt)
+        except Exception as e:
+            print(e)
+        try:
+            res = await self.cc.fapiPrivate_post_positionside_dual(params={'dualSidePosition': 'true'})
+            print(res)
+        except Exception as e:
+            if '"code":-4059' not in e.args[0]:
+                print(e)
+                print('unable to set hedge mode, aborting')
+                raise Exception('failed to set hedge mode')
 
     async def init_order_book(self):
         ticker = await self.cc.fapiPublic_get_ticker_bookticker(params={'symbol': self.symbol})
@@ -181,6 +168,7 @@ class BinanceBot(Bot):
              'qty': float(e['origQty']),
              'type': e['type'].lower(),
              'side': e['side'].lower(),
+             'position_side': e['positionSide'].lower().replace('short', 'shrt'),
              'timestamp': int(e['time'])}
             for e in await self.cc.fapiPrivate_get_openorders(params={'symbol': self.symbol})
         ]
@@ -191,18 +179,23 @@ class BinanceBot(Bot):
             self.cc.fapiPrivate_get_account(),
             self.cc.fapiPublic_get_fundingrate()
         )
+        position = {}
         if positions:
-            position = {'size': float(positions[0]['positionAmt']),
-                        'price': float(positions[0]['entryPrice']),
-                        'liquidation_price': float(positions[0]['liquidationPrice']),
-                        'leverage': float(positions[0]['leverage'])}
-        else:
-            position = {'size': 0.0,
-                        'price': 0.0,
-                        'liquidation_price': 0.0,
-                        'leverage': 1.0}
-        position['cost'] = abs(position['size']) * position['price']
-        position['margin_cost'] = position['cost'] / self.leverage
+            for p in positions:
+                if p['positionSide'] == 'LONG':
+                    position['long'] = {'size': (lsize:= float(p['positionAmt'])),
+                                        'price': (lprice := float(p['entryPrice'])),
+                                        'liquidation_price': float(p['liquidationPrice']),
+                                        'leverage': float(p['leverage']),
+                                        'cost': (lcost := abs(lsize) * lprice),
+                                        'margin_cost': lcost / self.leverage}
+                elif p['positionSide'] == 'SHORT':
+                    position['shrt'] = {'size': (ssize:= float(p['positionAmt'])),
+                                        'price': (sprice := float(p['entryPrice'])),
+                                        'liquidation_price': float(p['liquidationPrice']),
+                                        'leverage': float(p['leverage']),
+                                        'cost': (scost := abs(ssize) * sprice),
+                                        'margin_cost': scost / self.leverage}
         for e in funding:
             if e['symbol'] == self.symbol:
                 position['predicted_funding_rate'] = float(e['fundingRate'])
@@ -263,18 +256,21 @@ class BinanceBot(Bot):
     async def execute_order(self, order: dict) -> dict:
         params = {'symbol': self.symbol,
                   'side': order['side'].upper(),
+                  'positionSide': order['position_side'].replace('shrt', 'short').upper(),
                   'type': order['type'].upper(),
-                  'quantity': order['qty'],
-                  'reduceOnly': order['reduce_only']}
+                  'quantity': order['qty']}
         if params['type'] == 'LIMIT':
             params['timeInForce'] = 'GTX'
             params['price'] = order['price']
         if 'custom_id' in order:
             params['newClientOrderId'] = \
                 f"{order['custom_id']}_{int(time() * 1000)}_{int(np.random.random() * 1000)}"
+        if 'reduce_only' in order and order['reduce_only']:
+            params['reduceOnly']: True
         o = await self.cc.fapiPrivate_post_order(params=params)
         return {'symbol': self.symbol,
                 'side': o['side'].lower(),
+                'position_side': o['positionSide'].lower().replace('short', 'shrt'),
                 'type': o['type'].lower(),
                 'qty': float(o['origQty']),
                 'price': float(o['price'])}
@@ -299,22 +295,9 @@ class BinanceBot(Bot):
         self.stop_websocket = False
         uri = f"wss://fstream.binance.com/ws/{self.symbol.lower()}@aggTrade"
         print_([uri])
-        try:
-            mode = 'CROSSED' if self.settings['cross_mode'] else 'ISOLATED'
-            print(await self.cc.fapiPrivate_post_margintype(params={'symbol': self.symbol,
-                                                                    'marginType': mode}))
-        except Exception as e:
-            print(e)
-        try:
-            lev = await self.cc.fapiPrivate_post_leverage(params={'symbol': self.symbol,
-                                                                  'leverage': int(self.leverage)})
-            self.max_pos_size_ito_usdt = float(lev['maxNotionalValue'])
-            print('max pos size in terms of usdt', self.max_pos_size_ito_usdt)
-        except Exception as e:
-            print(e)
-        await self.init_indicators()
         await self.update_position()
         k = 1
+        return
         async with websockets.connect(uri) as ws:
             async for msg in ws:
                 if msg is None:
@@ -326,11 +309,6 @@ class BinanceBot(Bot):
                     self.ob[0] = price
                 else:
                     self.ob[1] = price
-                if price != self.price:
-                    self.update_indicators({'timestamp': data['T'],
-                                            'price': price,
-                                            'side': 'sell' if data['m'] else 'buy',
-                                            'qty': float(data['q'])})
                 self.price = price
                 if self.ts_locked['decide'] < self.ts_released['decide']:
                     asyncio.create_task(self.decide())
