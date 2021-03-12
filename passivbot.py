@@ -705,6 +705,7 @@ class Bot:
                                      and o['position_side'] == 'shrt'], key=lambda x: x['price'])
             line += f"close @ {shrt_closes[-1]['price'] if shrt_closes else 0.0} "
             line += f"reenter @ {shrt_reentries[0]['price'] if shrt_reentries else 0.0} "
+            line += f"|| last {self.price} "
             print_([line], r=True)
 
     def load_cached_my_trades(self) -> [dict]:
