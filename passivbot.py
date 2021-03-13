@@ -140,6 +140,31 @@ def calc_min_entry_qty_linear(qty_step: float, min_qty: float, min_cost: float,
                               (balance * leverage) / price,
                               entry_qty_pct)
 
+
+@njit
+def calc_cross_hedge_lig_price(balance: float,
+                               long_pos_size: float,
+                               shrt_pos_size: float,
+                               long_pos_price: float,
+                               shrt_pos_price: float,
+                               leverage: float) -> float:
+    abs_long_pos_size = abs(long_pos_size)
+    abs_shrt_pos_size = abs(shrt_pos_size)
+    long_pos_margin = abs_long_pos_size * long_pos_price / leverage
+    shrt_pos_margin = abs_shrt_pos_size * shrt_pos_price / leverage
+    mml = 0.01
+    mms = 0.01
+    tmm = max(long_pos_margin, shrt_pos_margin)
+    upnl = 0.0
+    numerator = (balance + - tmm + upnl + long_pos_margin + shrt_pos_margin -
+                 abs_long_pos_size * long_pos_price +
+                 abs_shrt_pos_size * shrt_pos_price)
+    denom = (long_pos_size * mml + abs_shrt_pos_size * mms - abs_long_pos_size + abs_shrt_pos_size)
+    if denom == 0.0:
+        return 0.0
+    return numerator / denom
+
+
 ##################
 ##################
 
@@ -535,7 +560,7 @@ class Bot:
                 if ask_qty < min_qty_:
                     break
                 new_pos_size = pos_size - ask_qty
-                if abs(new_pos_size) >= max_pos_size:
+                if abs(new_pos_size) + self.position['long']['size'] >= max_pos_size:
                     break
                 pos_price = pos_price * (-ask_qty / new_pos_size) + \
                     ask_price * (pos_size / new_pos_size)
@@ -602,7 +627,7 @@ class Bot:
                 if bid_qty < min_qty_:
                     break
                 new_pos_size = pos_size + bid_qty
-                if new_pos_size >= max_pos_size:
+                if new_pos_size + abs(self.position['shrt']['size']) >= max_pos_size:
                     break
                 pos_price = pos_price * (bid_qty / new_pos_size) + \
                     bid_price * (pos_size / new_pos_size)
