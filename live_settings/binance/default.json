@@ -19,5 +19,5 @@
 
     "do_long": true,
     "do_shrt": true,
-    "funding_fee_collect_mode": false,
+    "funding_fee_collect_mode": false
 }
