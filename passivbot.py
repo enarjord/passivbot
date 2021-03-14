@@ -233,7 +233,6 @@ def iter_shrt_entries_linear(price_step: float,
                                                    leverage, balance, price)
         qty = -calc_reentry_qty(qty_step, ddown_factor, abs(min_entry_qty),
                                 calc_max_pos_size_linear(leverage, balance, price), psize)
-        print(min_entry_qty)
         new_pos_size = psize + qty
         pprice = pprice * (psize / new_pos_size) + price * (qty / new_pos_size)
         psize = new_pos_size
