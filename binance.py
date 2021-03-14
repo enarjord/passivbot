@@ -13,7 +13,8 @@ from time import time, sleep
 from typing import Callable, Iterator
 from passivbot import init_ccxt, load_key_secret, load_live_settings, make_get_filepath, print_, \
     ts_to_date, flatten, filter_orders, Bot, start_bot, round_up, round_dn, \
-    calc_min_entry_qty
+    calc_min_entry_qty, calc_cross_hedge_lig_price, iter_long_entries_linear, \
+    iter_shrt_entries_linear
 
 
 def get_maintenance_margin_rate(pos_size_ito_usdt: float) -> float:
@@ -115,7 +116,7 @@ class BinanceBot(Bot):
                     elif q['filterType'] == 'PRICE_FILTER':
                         self.price_step = float(q['tickSize'])
                     elif q['filterType'] == 'MIN_NOTIONAL':
-                        self.min_notional = float(q['notional'])
+                        self.min_notional = self.min_cost = float(q['notional'])
                 self.calc_min_qty = lambda price_: \
                     max(self.min_qty, round_up(self.min_notional / price_, self.qty_step))
                 self.calc_min_entry_qty = lambda balance_, last_price: \
@@ -154,6 +155,16 @@ class BinanceBot(Bot):
                 print(e)
                 print('unable to set hedge mode, aborting')
                 raise Exception('failed to set hedge mode')
+        self.iter_long_entries = lambda balance, psize, pprice, highest_bid: \
+            iter_long_entries_linear(self.price_step, self.qty_step, self.min_qty, self.min_cost,
+                                     self.ddown_factor, self.entry_qty_pct, self.leverage,
+                                     self.grid_spacing, self.grid_coefficient, balance, psize,
+                                     pprice, highest_bid)
+        self.iter_shrt_entries = lambda balance, psize, pprice, lowest_ask: \
+            iter_shrt_entries_linear(self.price_step, self.qty_step, self.min_qty, self.min_cost,
+                                     self.ddown_factor, self.entry_qty_pct, self.leverage,
+                                     self.grid_spacing, self.grid_coefficient, balance, psize,
+                                     pprice, lowest_ask)
 
     async def init_order_book(self):
         ticker = await self.cc.fapiPublic_get_ticker_bookticker(params={'symbol': self.symbol})
