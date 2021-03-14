@@ -192,8 +192,7 @@ def iter_long_entries_linear(price_step: float,
                                         pos_margin, pprice)
         min_entry_qty = calc_min_entry_qty_linear(qty_step, min_qty, min_cost, entry_qty_pct,
                                                   leverage, balance, price)
-        qty = calc_reentry_qty(qty_step, ddown_factor,
-                               min_entry_qty,
+        qty = calc_reentry_qty(qty_step, ddown_factor, min_entry_qty,
                                calc_max_pos_size_linear(leverage, balance, price), psize)
         new_pos_size = psize + qty
         pprice = pprice * (psize / new_pos_size) + price * (qty / new_pos_size)
@@ -232,8 +231,9 @@ def iter_shrt_entries_linear(price_step: float,
                                         pos_margin, pprice)
         min_entry_qty = -calc_min_entry_qty_linear(qty_step, min_qty, min_cost, entry_qty_pct,
                                                    leverage, balance, price)
-        qty = -calc_reentry_qty(qty_step, ddown_factor, min_entry_qty,
+        qty = -calc_reentry_qty(qty_step, ddown_factor, abs(min_entry_qty),
                                 calc_max_pos_size_linear(leverage, balance, price), psize)
+        print(min_entry_qty)
         new_pos_size = psize + qty
         pprice = pprice * (psize / new_pos_size) + price * (qty / new_pos_size)
         psize = new_pos_size
@@ -695,17 +695,17 @@ class Bot:
     def calc_shrt_orders(self, last_price_diff_limit: float, balance: float):
         orders = []
         sp = self.position['shrt']
-        if sp['size'] == 0.0 and self.do_shrt and (not self.funding_fee_collect_mode or
-                                                   self.position['predicted_funding_rate'] > 0.0):
-            orders.append({'side': 'sell', 'position_side': 'shrt',
-                           'qty': self.calc_min_entry_qty(balance, self.ob[1]), 'price': self.ob[1], 
-                           'type': 'limit', 'reduce_only': False, 'custom_id': 'entry'})
+        if sp['size'] == 0.0:
+            if self.do_shrt and (not self.funding_fee_collect_mode or
+                                                       self.position['predicted_funding_rate'] > 0.0):
+                orders.append({'side': 'sell', 'position_side': 'shrt',
+                               'qty': self.calc_min_entry_qty(balance, self.ob[1]), 'price': self.ob[1], 
+                               'type': 'limit', 'reduce_only': False, 'custom_id': 'entry'})
         else:
-
             for tpl in self.iter_shrt_entries(balance, sp['size'], sp['price'], self.ob[1]):
                 if len(orders) >= self.n_entry_orders:
                     break
-                if calc_diff(tpl[1], self.price) >last_price_diff_limit:
+                if calc_diff(tpl[1], self.price) > last_price_diff_limit:
                     break
                 orders.append({'side': 'sell', 'position_side': 'shrt', 'qty': abs(tpl[0]),
                                'price': tpl[1], 'type': 'limit', 'reduce_only': False,
@@ -738,11 +738,12 @@ class Bot:
     def calc_long_orders(self, last_price_diff_limit: float, balance: float):
         orders = []
         lp = self.position['long']
-        if lp['size'] == 0.0 and self.do_long and (not self.funding_fee_collect_mode or
-                                                   self.position['predicted_funding_rate'] < 0.0):
-            orders.append({'side': 'buy', 'position_side': 'long',
-                           'qty': self.calc_min_entry_qty(balance, self.ob[0]), 'price': self.ob[0], 
-                           'type': 'limit', 'reduce_only': False, 'custom_id': 'entry'})
+        if lp['size'] == 0.0:
+            if self.do_long and (not self.funding_fee_collect_mode or
+                                                       self.position['predicted_funding_rate'] < 0.0):
+                orders.append({'side': 'buy', 'position_side': 'long',
+                               'qty': self.calc_min_entry_qty(balance, self.ob[0]), 'price': self.ob[0], 
+                               'type': 'limit', 'reduce_only': False, 'custom_id': 'entry'})
 
         else:
 
