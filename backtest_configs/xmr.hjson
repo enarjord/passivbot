@@ -1,53 +1,50 @@
 {
-  session_name: xmr_session_001
+  session_name: session_005
   exchange: binance
   user: e
   symbol: XMRUSDT
-  n_days: 60
+  n_days: 14
   # if starting_candidate_filepath is not a valid file, will use random starting candidate
-  starting_candidate_filepath: live_settings/binance/default.json
-  multiprocessing: false
+  #starting_candidate_filepath: backtest_configs/starting_candidate.json
+  starting_candidate_filepath: live_settings/binance/e.json
+  multiprocessing: true
   starting_k: 0
-  n_jackrabbit_iterations: 200
-  latency_simulation_ms: 1000
+  n_jackrabbit_iterations: 2000
+  latency_simulation_ms: 750
   starting_balance: 30
+  max_n_cpus: 10
+  score_metric: avg adg * min adg
+  # set sliding window size to 1.0 to do only one backtest for whole period
+  sliding_window_size: 0.5
+  sliding_window_step: 0.15
   break_on:
   [
-    ["OFF: break on first soft stop",
-     "lambda trades, ticks, k: trades[-1]['type'].startswith('stop_loss')"]
-    ["OFF: neg pnl sum",
-     "lambda trades, ticks, k: trades[-1]['pnl_plus_fees_cumsum'] < 0.0 and trades[-1]['progress'] > 0.25"]
     ["ON: liq too close",
-     "lambda trades, ticks, k: trades[-1]['closest_liq'] < 0.09"]
-    ["ON: time between consec trades",
-     "lambda trades, ticks, k: False if len(trades) <= 2 else ((trades[-1]['timestamp'] - trades[-2]['timestamp']) > 1000 * 60 * 60 * 36)"]
-    ["OFF: pos price last price diff",
-     "lambda trades, ticks, k: calc_diff(trades[-1]['price'], ticks[k]['price']) > 1.05"]
-    ["OFF: adg too low",
-     "lambda trades, ticks, k: trades[-1]['average_daily_gain'] < 1.005 and trades[-1]['progress'] >= 0.5"]
-    ["OFF: no soft stops",
-     "lambda trades, ticks, k: trades[-1]['loss_sum'] == 0.0 and trades[-1]['progress'] >= 0.9"]
-    ["OFF: balance + pnl cumsum below starting_balance",
-     "lambda trades, ticks, k: trades[-1]['actual_balance'] + trades[-1]['pnl_plus_fees_cumsum'] <= 0.0"]
+     "lambda fills, ticks, k: fills[-1]['liq_diff'] < 0.05"]
+    ["ON: max hours without pos change",
+     "lambda fills, ticks, k: fills[-1]['hours_since_pos_change_max'] > 56"]
+    ["ON: max diff between pos price and last price",
+     "lambda fills, ticks, k: max(calc_diff(fills[-1]['long_pos_price'], ticks[k][0]), calc_diff(fills[-1]['shrt_pos_price'], ticks[k][0])) > 0.3"]
+
   ]
   ranges:
   {
     balance_pct: [0.01, 1.0, 0.001]
     entry_qty_pct: [0.0001, 0.5, 1e-05]
     ddown_factor: [0, 3.0, 0.001]
-    ema_span: [100, 100000, 1]
-    ema_spread: [0, 0.02, 0.0001]
-    grid_coefficient: [0, 700, 0.01]
-    grid_spacing: [0.0002, 0.01, 1e-05]
+    grid_coefficient: [0, 100, 0.01]
+    grid_spacing: [0.0002, 0.05, 1e-05]
     leverage: [2, 999999, 1]
-    stop_loss_liq_diff: [0.015, 0.15, 0.0001]
-    stop_loss_pos_price_diff: [0.015, 0.15, 0.0001]
     max_markup: [0.001, 0.03, 1e-05]
     min_markup: [0.0005, 0.002, 1e-05]
     min_close_qty_multiplier: [0, 1, 0.1]
     n_close_orders: [8, 25, 1]
-    stop_loss_pos_reduction: [0.001, 0.3, 0.001]
     do_long: [1, 1, 1]
     do_shrt: [1, 1, 1]
+    ema_span: [1.0, 300000.0, 1.0]
+    ema_spread: [-0.02, 0.02, 0.0001]
+    #stop_loss_liq_diff: [0.015, 0.15, 0.0001]
+    #stop_loss_pos_price_diff: [0.015, 0.15, 0.0001]
+    #stop_loss_pos_reduction: [0.001, 0.3, 0.001]
   }
 }
