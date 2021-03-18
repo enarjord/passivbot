@@ -1,6 +1,6 @@
 # passivbot_futures
 
-**Version: 2.1.0**
+**Version: 3.0.1**
 
 trading bot running on bybit inverse futures and binance usdt futures
 
@@ -61,6 +61,10 @@ change log
 - binance hedge mode implemented (bybit not yet supported)
 - emas removed
 - stop loss removed
+
+2021-03-18 v3.0.1
+- hedge mode backtester implemented
+- emas added back
 
 see `changelog.txt` for earlier changes
 
