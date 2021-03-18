@@ -708,10 +708,10 @@ class Bot:
         if sp['size'] == 0.0:
             if self.do_shrt and (not self.funding_fee_collect_mode or
                                                        self.position['predicted_funding_rate'] > 0.0):
+                price = max(self.ob[1], round_up(self.ema * (1 + self.ema_spread), self.price_step))
                 orders.append({
                     'side': 'sell', 'position_side': 'shrt',
-                    'qty': self.calc_min_entry_qty(balance, self.ob[1]),
-                    'price': max(self.ob[1], round_up(self.ema * (1 + self.ema_spread), self.price_step)),
+                    'qty': self.calc_min_entry_qty(balance, price), 'price': price,
                     'type': 'limit', 'reduce_only': False, 'custom_id': 'entry'})
         else:
             for tpl in self.iter_shrt_entries(balance, self.position['long']['size'],
@@ -754,10 +754,10 @@ class Bot:
         if lp['size'] == 0.0:
             if self.do_long and (not self.funding_fee_collect_mode or
                                                        self.position['predicted_funding_rate'] < 0.0):
+                price = min(self.ob[0], round_dn(self.ema * (1 - self.ema_spread), self.price_step))
                 orders.append({
                     'side': 'buy', 'position_side': 'long',
-                    'qty': self.calc_min_entry_qty(balance, self.ob[0]),
-                    'price': min(self.ob[0], round_dn(self.ema * (1 - self.ema_spread), self.price_step)),
+                    'qty': self.calc_min_entry_qty(balance, price), 'price': price,
                     'type': 'limit', 'reduce_only': False, 'custom_id': 'entry'})
 
         else:
