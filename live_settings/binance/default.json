@@ -16,6 +16,9 @@
     "grid_coefficient": 312.6,
     "min_markup": 0.00114,
     "max_markup": 0.00756,
+    
+    "ema_span": 1.0,
+    "ema_spread": 0.0,
 
     "do_long": true,
     "do_shrt": true,
