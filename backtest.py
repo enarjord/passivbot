@@ -110,6 +110,25 @@ def get_score_func(key: str) -> Callable:
             return True
         return candidate_score > best_score
 
+    def score_func_gain_liq_stuck(best: dict, candidate: dict) -> bool:
+        liq_cap = 0.1
+        hours_stuck_cap = 48
+        try:
+            candidate_score = candidate['average_daily_gain']['avg'] * \
+                candidate['average_daily_gain']['min'] * \
+                min(candidate['closest_liq']['min'], liq_cap) / \
+                max(candidate['max_n_hours_stuck']['max'], hours_stuck_cap)
+        except:
+            return False
+        try:
+            best_score = best['average_daily_gain']['avg'] * \
+                best['average_daily_gain']['min'] * \
+                min(best['closest_liq']['min'], liq_cap) / \
+                max(best['max_n_hours_stuck']['max'], hours_stuck_cap)
+        except:
+            return True
+        return candidate_score > best_score
+
     if key == 'avg adg':
         return score_func_avg_adg
     elif key == 'min adg':
@@ -124,6 +143,8 @@ def get_score_func(key: str) -> Callable:
         return score_func_avg_adg_min_adg_min_liq_capped
     elif key == 'avg adg * min adg * min liq / std adg':
         return score_func_avg_adg_min_adg_min_liq_std_adg
+    elif key == 'gain liq stuck':
+        return score_func_gain_liq_stuck
     raise Exception('unknown score metric', key)
 
 
@@ -142,15 +163,26 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
     lines.append(f"gain percentage {gain_conv(result['gain']):.2f}%")
     lines.append(f"n_days {result['n_days']}")
     lines.append(f"average_daily_gain percentage {(result['average_daily_gain'] - 1) * 100:.2f}%")
-    lines.append(f"n trades {result['n_trades']}")
+    lines.append(f"n fills {result['n_fills']}")
     lines.append(f"n closes {result['n_closes']}")
     lines.append(f"n reentries {result['n_reentries']}")
     lines.append(f"n stop loss closes {result['n_stop_losses']}")
     lines.append(f"biggest_pos_size {round(result['biggest_pos_size'], 10)}")
     lines.append(f"closest liq percentage {result['closest_liq'] * 100:.4f}%")
-    lines.append(f"max n hours between consecutive trades {result['max_n_hours_between_consec_trades']:.2f}")
+    lines.append(f"max n hours stuck {result['max_n_hours_stuck']:.2f}")
     lines.append(f"starting balance {result['starting_balance']}")
     lines.append(f"long: {result['do_long']}, short: {result['do_shrt']}")
+
+    print('plotting price with bid ask entry thresholds')
+    ema = df.price.ewm(span=result['ema_span'], adjust=False).mean()
+    bids_ = ema * (1 - result['ema_spread'])
+    asks_ = ema * (1 + result['ema_spread'])
+    
+    plt.clf()
+    df.price.iloc[::100].plot()
+    bids_.iloc[::100].plot()
+    asks_.iloc[::100].plot()
+    plt.savefig(f"{result['session_dirpath']}ema_spread_plot.png")
 
     print('writing backtest_result.txt...')
     with open(f"{result['session_dirpath']}backtest_result.txt", 'w') as f:
@@ -187,7 +219,8 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
 
     print('plotting pos sizes...')
     plt.clf()
-    fdf.pos_size.plot()
+    fdf.long_pos_size.plot()
+    fdf.shrt_pos_size.plot()
     plt.savefig(f"{result['session_dirpath']}pos_sizes_plot.png")
 
     print('plotting average daily gain...')
@@ -469,6 +502,13 @@ def backtest(ticks: np.ndarray, settings: dict) -> [dict]:
                 fill['timestamp'] = tick[2]
                 fill['trade_id'] = k
                 fill['progress'] = k / len(ticks)
+                fill['gain'] = (pnl_plus_fees_cumsum + settings['starting_balance']) / \
+                    settings['starting_balance']
+                fill['n_days'] = (tick[2] - ticks[0][2]) / (1000 * 60 * 60 * 24)
+                try:
+                    fill['average_daily_gain'] = fill['gain'] ** (1 / fill['n_days'])
+                except:
+                    fill['average_daily_gain'] = 0.0
                 fill['hours_since_long_pos_change'] = (lc := ms_since_long_pos_change / (1000 * 60 * 60))
                 fill['hours_since_shrt_pos_change'] = (sc := ms_since_shrt_pos_change / (1000 * 60 * 60))
                 fill['hours_since_pos_change_max'] = max(lc, sc)
@@ -700,7 +740,7 @@ async def jackrabbit(ticks: [dict], backtest_config: dict):
         print(e, f"starting candidate {backtest_config['starting_candidate_filepath']} not found.")
         if best_result:
             print('building on current best')
-            candidate = get_new_candidate(backtest_config['ranges'], best_result, m=ms[k])
+            candidate = get_new_candidate(backtest_config['ranges'], best_result, m=0.0)
             pass
         else:
             print('using random starting candidate')
@@ -882,6 +922,7 @@ def jackrabbit_wrap(ticks: [dict], backtest_config: dict) -> dict:
         'n_reentries': len(fdf[fdf.type == 'reentry']),
         'n_stop_losses': len(fdf[fdf.type.str.startswith('stop_loss')]),
         'biggest_pos_size': fdf[['long_pos_size', 'shrt_pos_size']].abs().max(axis=1).max(),
+        'max_n_hours_stuck': fdf['hours_since_pos_change_max'].max(),
         'do_long': bool(backtest_config['do_long']),
         'do_shrt': bool(backtest_config['do_shrt']),
         'seconds_elapsed': elapsed
