@@ -23,7 +23,12 @@ from binance import calc_cross_shrt_liq_price as binance_calc_cross_shrt_liq_pri
 
 from typing import Iterator, Callable
 
-aiomultiprocess.set_start_method("fork")
+try:
+    aiomultiprocess.set_start_method("fork")
+except Exception as e:
+    print('failed to set fork method for aiomultiprocess', e)
+    print('using spawn method instead')
+    aiomultiprocess.set_start_method("spawn")
 
 
 def get_score_func(key: str) -> Callable:
