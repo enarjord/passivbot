@@ -858,9 +858,9 @@ async def jackrabbit_worker(ticks: np.ndarray,
         candidate, key = get_next_candidate(backtest_config, candidate, ms, k, lock)
         if candidate is None:
             break
+        line = f'running backtest {k.value} of {ks}. m={ms[k.value]:.3f} {key} '
         k.value = k.value + 1
         bpm = k.value / (time() - start_time) * 60
-        line = f'running backtest {k.value} of {ks}. m={ms[k.value]:.3f} {key} '
         line += f'backtests per minute: {bpm:.2f}'
         print(line)
         print(candidate, '\n')
