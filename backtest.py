@@ -112,19 +112,19 @@ def get_score_func(key: str) -> Callable:
 
     def score_func_gain_liq_stuck(best: dict, candidate: dict) -> bool:
         liq_cap = 0.1
-        hours_stuck_cap = 48
+        hours_stuck_cap = 72
         try:
-            candidate_score = candidate['average_daily_gain']['avg'] * \
-                candidate['average_daily_gain']['min'] * \
-                min(candidate['closest_liq']['min'], liq_cap) / \
-                max(candidate['max_n_hours_stuck']['max'], hours_stuck_cap)
+            candidate_score = (candidate['average_daily_gain']['avg'] *
+                               candidate['average_daily_gain']['min'] *
+                               min(1.0, candidate['closest_liq']['min'] / liq_cap) /
+                               max(1.0, candidate['max_n_hours_stuck']['max'] / hours_stuck_cap))
         except:
             return False
         try:
-            best_score = best['average_daily_gain']['avg'] * \
-                best['average_daily_gain']['min'] * \
-                min(best['closest_liq']['min'], liq_cap) / \
-                max(best['max_n_hours_stuck']['max'], hours_stuck_cap)
+            best_score = (best['average_daily_gain']['avg'] *
+                          best['average_daily_gain']['min'] *
+                          min(1.0, best['closest_liq']['min'] / liq_cap) /
+                          max(1.0, best['max_n_hours_stuck']['max'] / hours_stuck_cap))
         except:
             return True
         return candidate_score > best_score
@@ -750,10 +750,15 @@ async def jackrabbit(ticks: [dict], backtest_config: dict):
                 m=1.0
             )
     if '--plot' in sys.argv:
-        _, best_result = load_shared_data(backtest_config['session_dirpath'], Lock())
-        if not best_result:
-            return
-        print('backtesting and plotting best candidate')
+        if '--given' in sys.argv:
+            best_result = candidate
+            print('backtesting and plotting given candidate')
+
+        else:
+            _, best_result = load_shared_data(backtest_config['session_dirpath'], Lock())
+            if not best_result:
+                return
+            print('backtesting and plotting best candidate')
         result_, tdf_ = jackrabbit_wrap(ticks, {**backtest_config, **{'break_on': []}, **best_result})
         if tdf_ is None:
             print('no trades')
@@ -912,8 +917,7 @@ def jackrabbit_wrap(ticks: [dict], backtest_config: dict) -> dict:
         'profit_sum': fills[-1]['profit_cumsum'],
         'loss_sum': fills[-1]['loss_cumsum'],
         'fee_sum': fills[-1]['fee_paid_cumsum'],
-        'gain': (gain := (fills[-1]['pnl_plus_fees_cumsum'] + backtest_config['starting_balance']) /
-                 backtest_config['starting_balance']),
+        'gain': (gain := fills[-1]['actual_balance'] / backtest_config['starting_balance']),
         'n_days': (n_days := (ticks[-1][2] - ticks[0][2]) / (1000 * 60 * 60 * 24)),
         'average_daily_gain': gain ** (1 / n_days) if gain > 0.0 else 0.0,
         'closest_liq': fdf.liq_diff.min(),
