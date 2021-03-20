@@ -1,22 +1,26 @@
 {
-    "config_name": "xmr_steady_hedge_mode",
+    "config_name": "liq_14%_adg_3.8%_no_ema_28_days",
     "symbol": "XMRUSDT",
     "logging_level": 0,
     "cross_mode": true,
+
     "balance_pct": 0.803,
-    "ddown_factor": 1.281,
-    "entry_qty_pct": 0.00905,
-    "min_close_qty_multiplier": 0.6,
-    "leverage": 44.0,
+    "ddown_factor": 2.994,
+    "entry_qty_pct": 0.00735,
+    "min_close_qty_multiplier": 0.94,
+    "leverage": 50.0,
     "n_entry_orders": 8,
-    "n_close_orders": 15.0,
-    "grid_spacing": 0.00389,
-    "grid_coefficient": 312.6,
-    "min_markup": 0.00114,
-    "max_markup": 0.00756,
+    "n_close_orders": 22.0,
+
+    "grid_spacing": 0.02426,
+    "grid_coefficient": 76.15,
+    "min_markup": 0.00097,
+    "max_markup": 0.01512,
+
+    "ema_span": 1.0,
+    "ema_spread": 0.0,
     "do_long": true,
     "do_shrt": true,
     "funding_fee_collect_mode": false,
-    "ema_span": 50992.0,
-    "ema_spread": 0.0059
+    "key": "f61a24f3b215de03c6a25cad4e5236aa34ada91bca7e64587f7078fcbd8a8abd"
 }
