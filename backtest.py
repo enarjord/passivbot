@@ -112,7 +112,7 @@ def get_score_func(key: str) -> Callable:
 
     def score_func_gain_liq_stuck(best: dict, candidate: dict) -> bool:
         liq_cap = 0.1
-        hours_stuck_cap = 72
+        hours_stuck_cap = 108
         try:
             candidate_score = (candidate['average_daily_gain']['avg'] *
                                candidate['average_daily_gain']['min'] *
@@ -190,21 +190,11 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
             print(line)
             f.write(line + '\n')
 
-    print('plotting pnl cumsum...')
-    counter = 0
-    idxs = []
-    for row in fdf.itertuples():
-        if row.type.startswith('stop_loss'):
-            counter += 1
-        else:
-            if counter > 0:
-                idxs.append(row.Index)
-            counter = 0
+    print('plotting balance and equity...')
     plt.clf()
-    fdf.pnl_plus_fees_cumsum.plot()
-    if idxs:
-        fdf.pnl_plus_fees_cumsum.loc[idxs].plot(style='ro')
-    plt.savefig(f"{result['session_dirpath']}pnlcumsum_plot.png")
+    fdf.actual_balance.plot()
+    fdf.equity.plot()
+    plt.savefig(f"{result['session_dirpath']}balance_and_equity.png")
 
     print('plotting backtest whole and in chunks...')
     n_parts = 7
@@ -227,7 +217,7 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
     adg_ = fdf.average_daily_gain
     adg_.index = np.linspace(0.0, 1.0, len(fdf))
     plt.clf()
-    adg_c = adg_.iloc[int(len(fdf) * 0.1):]
+    adg_c = adg_.iloc[int(len(fdf) * 0.1):] # skipping first 10%
     print('min max', adg_c.min(), adg_c.max())
     adg_c.plot()
     plt.savefig(f"{result['session_dirpath']}average_daily_gain_plot.png")
@@ -491,6 +481,9 @@ def backtest(ticks: np.ndarray, settings: dict) -> [dict]:
                     profit_cumsum += fill['pnl']
                 fee_paid_cumsum += fill['fee_paid']
                 pnl_plus_fees_cumsum += fill['pnl'] + fill['fee_paid']
+                upnl_l = x if (x := long_pnl_f(long_pos_price, tick[0], long_pos_size)) == x else 0.0
+                upnl_s = y if (y := shrt_pnl_f(shrt_pos_price, tick[0], shrt_pos_size)) == y else 0.0
+                fill['equity'] = actual_balance + upnl_l + upnl_s
                 fill['pnl_plus_fees_cumsum'] = pnl_plus_fees_cumsum
                 fill['loss_cumsum'] = loss_cumsum
                 fill['profit_cumsum'] = profit_cumsum
@@ -502,8 +495,8 @@ def backtest(ticks: np.ndarray, settings: dict) -> [dict]:
                 fill['timestamp'] = tick[2]
                 fill['trade_id'] = k
                 fill['progress'] = k / len(ticks)
-                fill['gain'] = (pnl_plus_fees_cumsum + settings['starting_balance']) / \
-                    settings['starting_balance']
+                fill['drawdown'] = calc_diff(fill['actual_balance'], fill['equity'])
+                fill['gain'] = fill['equity'] / settings['starting_balance']
                 fill['n_days'] = (tick[2] - ticks[0][2]) / (1000 * 60 * 60 * 24)
                 try:
                     fill['average_daily_gain'] = fill['gain'] ** (1 / fill['n_days'])
@@ -721,7 +714,7 @@ async def jackrabbit(ticks: [dict], backtest_config: dict):
     k = backtest_config['starting_k']
     ks = backtest_config['n_jackrabbit_iterations']
     if ks > 1:
-        ms = np.array([1 / (i / 2 + 16) for i in range(ks)])
+        ms = np.array([1 / (i / 2 + 32) for i in range(ks)])
         ms = ((ms - ms.min()) / (ms.max() - ms.min()))
     else:
         ms = np.array([0.0])
@@ -912,12 +905,15 @@ def jackrabbit_wrap(ticks: [dict], backtest_config: dict) -> dict:
         return {}, None
     fdf = pd.DataFrame(fills).set_index('trade_id')
     ms_gap = np.diff([ticks[0][2]] + list(fdf.timestamp) + [ticks[-1][2]]).max()
+    hours_since_prev_fill = ticks[-1][2] - fills[-1]['timestamp']
     result = {
         'net_pnl_plus_fees': fills[-1]['pnl_plus_fees_cumsum'],
         'profit_sum': fills[-1]['profit_cumsum'],
         'loss_sum': fills[-1]['loss_cumsum'],
         'fee_sum': fills[-1]['fee_paid_cumsum'],
-        'gain': (gain := fills[-1]['actual_balance'] / backtest_config['starting_balance']),
+        'final_equity': fills[-1]['equity'],
+        'gain': (gain := fills[-1]['gain']),
+        'max_drawdown': fdf.drawdown.max(),
         'n_days': (n_days := (ticks[-1][2] - ticks[0][2]) / (1000 * 60 * 60 * 24)),
         'average_daily_gain': gain ** (1 / n_days) if gain > 0.0 else 0.0,
         'closest_liq': fdf.liq_diff.min(),
@@ -926,7 +922,8 @@ def jackrabbit_wrap(ticks: [dict], backtest_config: dict) -> dict:
         'n_reentries': len(fdf[fdf.type == 'reentry']),
         'n_stop_losses': len(fdf[fdf.type.str.startswith('stop_loss')]),
         'biggest_pos_size': fdf[['long_pos_size', 'shrt_pos_size']].abs().max(axis=1).max(),
-        'max_n_hours_stuck': fdf['hours_since_pos_change_max'].max(),
+        'max_n_hours_stuck': max(fdf['hours_since_pos_change_max'].max(),
+                                 (ticks[-1][2] - fills[-1]['timestamp']) / (1000 * 60 * 60)),
         'do_long': bool(backtest_config['do_long']),
         'do_shrt': bool(backtest_config['do_shrt']),
         'seconds_elapsed': elapsed
@@ -988,7 +985,7 @@ async def load_ticks(backtest_config: dict) -> [dict]:
     else:
         agg_trades = await load_trades(backtest_config['exchange'], backtest_config['user'],
                                        backtest_config['symbol'], backtest_config['n_days'])
-        print('preparing trades...')
+        print('preparing ticks...')
         ticks = prep_ticks(agg_trades)
         np.save(ticks_filepath, ticks)
     return ticks
