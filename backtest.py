@@ -9,7 +9,7 @@ import pprint
 import matplotlib.pyplot as plt
 import aiomultiprocess
 from hashlib import sha256
-from multiprocessing import cpu_count, Lock, Value
+from multiprocessing import cpu_count, Lock, Value, Array
 from time import time
 from passivbot import *
 from bybit import create_bot as create_bot_bybit
@@ -22,9 +22,9 @@ from typing import Iterator, Callable
 try:
     aiomultiprocess.set_start_method("fork")
 except Exception as e:
+    aiomultiprocess.set_start_method("spawn")
     print('failed to set fork method for aiomultiprocess', e)
     print('using spawn method instead')
-    aiomultiprocess.set_start_method("spawn")
 
 
 def score_func_avg_adg(best: dict, candidate: dict) -> bool:
@@ -115,8 +115,8 @@ def score_func_avg_adg_min_adg_min_liq_capped(best: dict, candidate: dict) -> bo
     return candidate_score > best_score
 
 def score_func_gain_liq_stuck(best: dict, candidate: dict) -> bool:
-    liq_cap = 0.1
-    hours_stuck_cap = 108
+    liq_cap = 0.05
+    hours_stuck_cap = 144
     try:
         candidate_score = (candidate['average_daily_gain']['avg'] *
                            candidate['average_daily_gain']['min'] *
@@ -154,7 +154,7 @@ def get_score_func(key: str) -> Callable:
         return score_func_gain_liq_stuck
     raise Exception('unknown score metric', key)
 
-    
+
 def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
     plt.rcParams['figure.figsize'] = [29, 18]
     pd.set_option('precision', 10)
@@ -238,7 +238,6 @@ def plot_fills(df, fdf, side_: int = 0, liq_thr=0.1):
 
     if side_ >= 0:
         longs = fdf[fdf.pos_side == 'long']
-        #print('debug long', longs)
         le = longs[longs.type.str.endswith('entry')]
         lc = longs[longs.type == 'close']
         le.price.plot(style='b.')
@@ -307,15 +306,13 @@ def backtest(ticks: np.ndarray, settings: dict) -> [dict]:
                 balance, long_psize, shrt_psize, shrt_pprice, lowest_ask
             )
         iter_long_closes = lambda balance, pos_size, pos_price, lowest_ask: \
-            iter_long_closes_linear(ss['price_step'], ss['qty_step'], ss['min_qty'], ss['min_cost'],
-                                    ss['entry_qty_pct'], ss['leverage'],
-                                    ss['min_close_qty_multiplier'], ss['min_markup'],
+            iter_long_closes_linear(ss['price_step'], ss['qty_step'], ss['min_qty'],
+                                    ss['close_qty_pct'], ss['leverage'], ss['min_markup'],
                                     ss['max_markup'], ss['n_close_orders'],
                                     balance, pos_size, pos_price, lowest_ask)
         iter_shrt_closes = lambda balance, pos_size, pos_price, highest_bid: \
-            iter_shrt_closes_linear(ss['price_step'], ss['qty_step'], ss['min_qty'], ss['min_cost'],
-                                    ss['entry_qty_pct'], ss['leverage'],
-                                    ss['min_close_qty_multiplier'], ss['min_markup'],
+            iter_shrt_closes_linear(ss['price_step'], ss['qty_step'], ss['min_qty'],
+                                    ss['close_qty_pct'], ss['leverage'], ss['min_markup'],
                                     ss['max_markup'], ss['n_close_orders'],
                                     balance, pos_size, pos_price, highest_bid)
         long_pnl_f = calc_long_pnl_linear
@@ -405,8 +402,7 @@ def backtest(ticks: np.ndarray, settings: dict) -> [dict]:
                             'liq_diff': calc_diff(liq_price, tick[0])
                         })
                         prev_shrt_close_price = price
-                    else:
-                        break
+                        shrt_reentry_price = np.nan
             ob[0] = tick[0]
         else:
             # maker sel, taker buy
@@ -506,7 +502,8 @@ def backtest(ticks: np.ndarray, settings: dict) -> [dict]:
                 fill['gain'] = fill['equity'] / settings['starting_balance']
                 fill['n_days'] = (tick[2] - ticks[0][2]) / (1000 * 60 * 60 * 24)
                 try:
-                    fill['average_daily_gain'] = fill['gain'] ** (1 / fill['n_days'])
+                    fill['average_daily_gain'] = fill['gain'] ** (1 / fill['n_days']) \
+                        if (fill['n_days'] > 0.0 and fill['gain'] > 0.0) else 0.0
                 except:
                     fill['average_daily_gain'] = 0.0
                 fill['hours_since_long_pos_change'] = (lc := ms_since_long_pos_change / (1000 * 60 * 60))
@@ -703,7 +700,7 @@ def candidate_to_live_settings(exchange: str, candidate: dict) -> dict:
 
 
 def calc_candidate_hash_key(candidate: dict, keys: [str]) -> str:
-    return sha256(json.dumps({k: candidate[k] for k in sorted(keys) if k in candidate}).encode()).hexdigest()
+    return sha256(json.dumps({k: candidate[k] for k in sorted(keys)}).encode()).hexdigest()
 
 
 def load_results(results_filepath: str) -> dict:
@@ -853,6 +850,7 @@ async def jackrabbit_worker(ticks: np.ndarray,
                             lock: Lock):
     start_time = time()
     while True:
+
         if k.value >= ks:
             break
         candidate, key = get_next_candidate(backtest_config, candidate, ms, k, lock)
@@ -1020,12 +1018,12 @@ async def prep_backtest_config(config_name: str):
     backtest_config.update(market_specific_settings)
 
     # setting absolute min/max ranges
-    for key in ['balance_pct', 'entry_qty_pct', 'ddown_factor', 'ema_span', 'ema_spread',
-                'grid_coefficient', 'grid_spacing', 'min_close_qty_multiplier',
+    for key in ['balance_pct', 'entry_qty_pct', 'close_qty_pct', 'ddown_factor', 'ema_span', 'ema_spread',
+                'grid_coefficient', 'grid_spacing',
                 'stop_loss_pos_reduction']:
         if key in backtest_config['ranges']:
             backtest_config['ranges'][key][0] = max(0.0, backtest_config['ranges'][key][0])
-    for key in ['balance_pct', 'entry_qty_pct', 'min_close_qty_multiplier',
+    for key in ['balance_pct', 'entry_qty_pct', 'close_qty_pct',
                 'stop_loss_pos_reduction']:
         if key in backtest_config['ranges']:
             backtest_config['ranges'][key][1] = min(1.0, backtest_config['ranges'][key][1])
