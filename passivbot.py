@@ -164,7 +164,6 @@ def calc_no_pos_ask_price(price_step: float,
 def calc_pos_reduction_qty(qty_step: float,
                            stop_loss_pos_reduction: float,
                            pos_size: float) -> float:
-    aps = abs(pos_size)
     return min(abs(pos_size), round_up(abs(pos_size) * stop_loss_pos_reduction, qty_step))
 
 
