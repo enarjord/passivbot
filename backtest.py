@@ -31,94 +31,114 @@ except Exception as e:
     aiomultiprocess.set_start_method("spawn")
 
 
+def score_func_avg_adg(best: dict, candidate: dict) -> bool:
+    try:
+        candidate_score = candidate['average_daily_gain']['avg']
+    except:
+        return False
+    try:
+        best_score = best['average_daily_gain']['avg']
+    except:
+        return True
+    return candidate_score > best_score
+
+def score_func_min_adg(best: dict, candidate: dict) -> bool:
+    try:
+        candidate_score = candidate['average_daily_gain']['min']
+    except:
+        return False
+    try:
+        best_score = best['average_daily_gain']['min']
+    except:
+        return True
+    return candidate_score > best_score
+
+def score_func_avg_adg_min_adg(best: dict, candidate: dict) -> bool:
+    try:
+        candidate_score = candidate['average_daily_gain']['avg'] * \
+            candidate['average_daily_gain']['min']
+    except:
+        return False
+    try:
+        best_score = best['average_daily_gain']['avg'] * \
+            best['average_daily_gain']['min']
+    except:
+        return True
+    return candidate_score > best_score
+
+def score_func_avg_adg_min_liq(best: dict, candidate: dict) -> bool:
+    try:
+        candidate_score = candidate['average_daily_gain']['avg'] * candidate['closest_liq']['min']
+    except:
+        return False
+    try:
+        best_score = best['average_daily_gain']['avg'] * best['closest_liq']['min']
+    except:
+        return True
+    return candidate_score > best_score
+
+def score_func_avg_adg_min_adg_min_liq(best: dict, candidate: dict) -> bool:
+    try:
+        candidate_score = candidate['average_daily_gain']['avg'] * \
+            candidate['average_daily_gain']['min'] * candidate['closest_liq']['min']
+    except:
+        return False
+    try:
+        best_score = best['average_daily_gain']['avg'] * best['average_daily_gain']['min'] * \
+            best['closest_liq']['min']
+    except:
+        return True
+    return candidate_score > best_score
+
+def score_func_avg_adg_min_adg_min_liq_std_adg(best: dict, candidate: dict) -> bool:
+    try:
+        candidate_score = candidate['average_daily_gain']['avg'] * \
+            candidate['average_daily_gain']['min'] * candidate['closest_liq']['min'] / \
+            candidate['average_daily_gain']['std']
+    except:
+        return False
+    try:
+        best_score = best['average_daily_gain']['avg'] * best['average_daily_gain']['min'] * \
+            best['closest_liq']['min'] / best['average_daily_gain']['std']
+    except:
+        return True
+    return candidate_score > best_score
+
+def score_func_avg_adg_min_adg_min_liq_capped(best: dict, candidate: dict) -> bool:
+    cap = 0.2
+    try:
+        candidate_score = candidate['average_daily_gain']['avg'] * \
+            candidate['average_daily_gain']['min'] * min(candidate['closest_liq']['min'], cap)
+    except:
+        return False
+    try:
+        best_score = best['average_daily_gain']['avg'] * \
+            best['average_daily_gain']['min'] * min(best['closest_liq']['min'], cap)
+    except:
+        return True
+    return candidate_score > best_score
+
+def score_func_gain_liq_stuck(best: dict, candidate: dict) -> bool:
+    liq_cap = 0.1
+    hours_stuck_cap = 108
+    try:
+        candidate_score = (candidate['average_daily_gain']['avg'] *
+                           candidate['average_daily_gain']['min'] *
+                           min(1.0, candidate['closest_liq']['min'] / liq_cap) /
+                           max(1.0, candidate['max_n_hours_stuck']['max'] / hours_stuck_cap))
+    except:
+        return False
+    try:
+        best_score = (best['average_daily_gain']['avg'] *
+                      best['average_daily_gain']['min'] *
+                      min(1.0, best['closest_liq']['min'] / liq_cap) /
+                      max(1.0, best['max_n_hours_stuck']['max'] / hours_stuck_cap))
+    except:
+        return True
+    return candidate_score > best_score
+
+
 def get_score_func(key: str) -> Callable:
-
-    def score_func_avg_adg(best: dict, candidate: dict) -> bool:
-        try:
-            candidate_score = candidate['average_daily_gain']['avg']
-        except:
-            return False
-        try:
-            best_score = best['average_daily_gain']['avg']
-        except:
-            return True
-        return candidate_score > best_score
-    
-    def score_func_min_adg(best: dict, candidate: dict) -> bool:
-        try:
-            candidate_score = candidate['average_daily_gain']['min']
-        except:
-            return False
-        try:
-            best_score = best['average_daily_gain']['min']
-        except:
-            return True
-        return candidate_score > best_score
-
-    def score_func_avg_adg_min_adg(best: dict, candidate: dict) -> bool:
-        try:
-            candidate_score = candidate['average_daily_gain']['avg'] * \
-                candidate['average_daily_gain']['min']
-        except:
-            return False
-        try:
-            best_score = best['average_daily_gain']['avg'] * \
-                best['average_daily_gain']['min']
-        except:
-            return True
-        return candidate_score > best_score
-    
-    def score_func_avg_adg_min_liq(best: dict, candidate: dict) -> bool:
-        try:
-            candidate_score = candidate['average_daily_gain']['avg'] * candidate['closest_liq']['min']
-        except:
-            return False
-        try:
-            best_score = best['average_daily_gain']['avg'] * best['closest_liq']['min']
-        except:
-            return True
-        return candidate_score > best_score
-    
-    def score_func_avg_adg_min_adg_min_liq(best: dict, candidate: dict) -> bool:
-        try:
-            candidate_score = candidate['average_daily_gain']['avg'] * \
-                candidate['average_daily_gain']['min'] * candidate['closest_liq']['min']
-        except:
-            return False
-        try:
-            best_score = best['average_daily_gain']['avg'] * best['average_daily_gain']['min'] * \
-                best['closest_liq']['min']
-        except:
-            return True
-        return candidate_score > best_score
-
-    def score_func_avg_adg_min_adg_min_liq_std_adg(best: dict, candidate: dict) -> bool:
-        try:
-            candidate_score = candidate['average_daily_gain']['avg'] * \
-                candidate['average_daily_gain']['min'] * candidate['closest_liq']['min'] / \
-                candidate['average_daily_gain']['std']
-        except:
-            return False
-        try:
-            best_score = best['average_daily_gain']['avg'] * best['average_daily_gain']['min'] * \
-                best['closest_liq']['min'] / best['average_daily_gain']['std']
-        except:
-            return True
-        return candidate_score > best_score
-
-    def score_func_avg_adg_min_adg_min_liq_capped(best: dict, candidate: dict) -> bool:
-        cap = 0.25
-        try:
-            candidate_score = candidate['average_daily_gain']['avg'] * \
-                candidate['average_daily_gain']['min'] * min(candidate['closest_liq']['min'], cap)
-        except:
-            return False
-        try:
-            best_score = best['average_daily_gain']['avg'] * \
-                best['average_daily_gain']['min'] * min(best['closest_liq']['min'], cap)
-        except:
-            return True
-        return candidate_score > best_score
 
     if key == 'avg adg':
         return score_func_avg_adg
@@ -134,6 +154,8 @@ def get_score_func(key: str) -> Callable:
         return score_func_avg_adg_min_adg_min_liq_capped
     elif key == 'avg adg * min adg * min liq / std adg':
         return score_func_avg_adg_min_adg_min_liq_std_adg
+    elif key == 'gain liq stuck':
+        return score_func_gain_liq_stuck
     raise Exception('unknown score metric', key)
 
 
