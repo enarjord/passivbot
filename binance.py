@@ -13,8 +13,8 @@ from time import time, sleep
 from typing import Callable, Iterator
 from passivbot import init_ccxt, load_key_secret, load_live_settings, make_get_filepath, print_, \
     ts_to_date, flatten, filter_orders, Bot, start_bot, round_up, round_dn, \
-    calc_min_entry_qty, calc_cross_hedge_lig_price, iter_long_entries_linear, \
-    iter_shrt_entries_linear, calc_ema
+    calc_min_order_qty, calc_cross_hedge_lig_price, iter_long_entries_linear, \
+    iter_shrt_entries_linear, iter_long_closes_linear, iter_shrt_closes_linear, calc_ema
 
 
 def get_maintenance_margin_rate(pos_size_ito_usdt: float) -> float:
@@ -120,7 +120,7 @@ class BinanceBot(Bot):
                 self.calc_min_qty = lambda price_: \
                     max(self.min_qty, round_up(self.min_notional / price_, self.qty_step))
                 self.calc_min_entry_qty = lambda balance_, last_price: \
-                    calc_min_entry_qty(self.calc_min_qty(last_price),
+                    calc_min_order_qty(self.calc_min_qty(last_price),
                                        self.qty_step,
                                        (balance_ / last_price) * self.leverage,
                                        self.entry_qty_pct)
@@ -145,6 +145,16 @@ class BinanceBot(Bot):
                                      self.ddown_factor, self.entry_qty_pct, self.leverage,
                                      self.grid_spacing, self.grid_coefficient, balance, long_psize,
                                      shrt_psize, shrt_pprice, lowest_ask)
+        self.iter_long_closes = lambda balance, pos_size, pos_price, lowest_ask: \
+            iter_long_closes_linear(self.price_step, self.qty_step, self.min_qty,
+                                    self.close_qty_pct, self.leverage, self.min_markup,
+                                    self.max_markup, self.n_close_orders, balance, pos_size,
+                                    pos_price, lowest_ask)
+        self.iter_shrt_closes = lambda balance, pos_size, pos_price, highest_bid: \
+            iter_shrt_closes_linear(self.price_step, self.qty_step, self.min_qty,
+                                    self.close_qty_pct, self.leverage, self.min_markup,
+                                    self.max_markup, self.n_close_orders, balance, pos_size,
+                                    pos_price, highest_bid)
 
     async def init_exchange_settings(self):
         try:
@@ -289,7 +299,7 @@ class BinanceBot(Bot):
                 'qty': float(o['origQty']),
                 'price': float(o['price'])}
 
-    async def execute_cancellation(self, id_: [dict]) -> [dict]:
+    async def execute_cancellation(self, id_: str) -> [dict]:
         cancellation = await self.cc.fapiPrivate_delete_order(params={
             'symbol': self.symbol, 'orderId': id_
         })
