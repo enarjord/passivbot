@@ -1,8 +1,10 @@
 # passivbot_futures
 
-**Version: 3.0.1**
+**Version: 3.1.0**
 
-trading bot running on bybit inverse futures and binance usdt futures
+trading bot running on bybit inverse futures and binance usdt futures using hedge mode
+
+bybit inverse futures not yet functional, work in progress
 
 use at own risk
 
@@ -65,6 +67,12 @@ change log
 2021-03-18 v3.0.1
 - hedge mode backtester implemented
 - emas added back
+
+2021-03-21 v3.1.0
+- removed setting min_close_qty_multiplier
+- added setting close_qty_pct, which complements entry_qty_pct
+- rewrote iter_long/shrt_closes
+- fixed memory leak bug
 
 see `changelog.txt` for earlier changes
 
