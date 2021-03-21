@@ -703,7 +703,7 @@ def candidate_to_live_settings(exchange: str, candidate: dict) -> dict:
 
 
 def calc_candidate_hash_key(candidate: dict, keys: [str]) -> str:
-    return sha256(json.dumps({k: candidate[k] for k in sorted(keys)}).encode()).hexdigest()
+    return sha256(json.dumps({k: candidate[k] for k in sorted(keys) if k in candidate}).encode()).hexdigest()
 
 
 def load_results(results_filepath: str) -> dict:
