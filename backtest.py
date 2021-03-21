@@ -808,8 +808,6 @@ def candidate_to_live_settings(exchange: str, candidate: dict) -> dict:
 
 
 def calc_candidate_hash_key(candidate: dict, keys: [str]) -> str:
-    print(candidate)
-    print(keys)
     return sha256(json.dumps({k: candidate[k] for k in sorted(keys)}).encode()).hexdigest()
 
 
