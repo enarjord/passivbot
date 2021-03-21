@@ -165,7 +165,7 @@ def calc_pos_reduction_qty(qty_step: float,
                            stop_loss_pos_reduction: float,
                            pos_size: float) -> float:
     aps = abs(pos_size)
-    return min(aps, round_up(aps * stop_loss_pos_reduction, qty_step))
+    return min(abs(pos_size), round_up(abs(pos_size) * stop_loss_pos_reduction, qty_step))
 
 
 @njit
