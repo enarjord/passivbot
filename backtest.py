@@ -9,7 +9,7 @@ import pprint
 import matplotlib.pyplot as plt
 import aiomultiprocess
 from hashlib import sha256
-from multiprocessing import cpu_count, Lock, Value
+from multiprocessing import cpu_count, Lock, Value, Array
 from time import time
 from passivbot import *
 from bybit import create_bot as create_bot_bybit
@@ -843,7 +843,8 @@ def get_next_candidate(backtest_config: dict, candidate: dict, ms: [float], k: V
         lock.release()
 
 
-async def jackrabbit_worker(ticks: np.ndarray,
+async def jackrabbit_worker(ticks: Array,
+                            dim: (),
                             backtest_config: dict,
                             candidate: dict,
                             score_func: Callable,
@@ -851,6 +852,7 @@ async def jackrabbit_worker(ticks: np.ndarray,
                             ks: int,
                             ms: [float],
                             lock: Lock):
+    ticks = np.frombuffer(ticks.get_obj(), dtype='d').reshape(dim)
     start_time = time()
     while True:
         if k.value >= ks:
@@ -895,9 +897,12 @@ async def jackrabbit_multi_core(results: dict,
     lock = Lock()
     k = Value('i', k_)
     workers = []
+    ticks_m = Array('d', int(np.prod(ticks.shape)), lock=True)
+    ticks_n = np.frombuffer(ticks_m.get_obj(), dtype='d').reshape(ticks.shape)
+    ticks_n[:] = ticks
     for _ in range(min(n_cpus, ks)):
         workers.append(asyncio.create_task(multiprocess_wrap(
-            jackrabbit_worker, (ticks, backtest_config, candidate, score_func, k, ks, ms, lock)
+            jackrabbit_worker, (ticks_m, ticks.shape, backtest_config, candidate, score_func, k, ks, ms, lock)
         )))
         await asyncio.sleep(0.05)
     for w in workers:
