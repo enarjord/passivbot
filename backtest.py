@@ -115,8 +115,8 @@ def score_func_avg_adg_min_adg_min_liq_capped(best: dict, candidate: dict) -> bo
     return candidate_score > best_score
 
 def score_func_gain_liq_stuck(best: dict, candidate: dict) -> bool:
-    liq_cap = 0.05
-    hours_stuck_cap = 144
+    liq_cap = 0.16
+    hours_stuck_cap = 72
     try:
         candidate_score = (candidate['average_daily_gain']['avg'] *
                            candidate['average_daily_gain']['min'] *
@@ -852,6 +852,7 @@ async def jackrabbit_worker(ticks: Array,
                             lock: Lock):
     ticks = np.frombuffer(ticks.get_obj(), dtype='d').reshape(dim)
     start_time = time()
+    await asyncio.sleep(0.01)
     while True:
 
         if k.value >= ks:
