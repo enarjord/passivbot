@@ -14,8 +14,8 @@ from math import floor
 from time import time, sleep
 from typing import Callable, Iterator
 from passivbot import init_ccxt, load_key_secret, load_live_settings, make_get_filepath, print_, \
-    ts_to_date, flatten, filter_orders, Bot, start_bot, round_up, round_dn, calc_min_entry_qty, \
-    sort_dict_keys, calc_ema
+    ts_to_date, flatten, filter_orders, Bot, start_bot, round_up, round_dn, \
+    calc_min_entry_qty_inverse, sort_dict_keys, calc_ema
 import aiohttp
 from urllib.parse import urlencode
 
@@ -140,9 +140,8 @@ class BybitInverseFuturesBot(Bot):
         self.min_qty = float(e['lot_size_filter']['min_trading_qty'])
         self.calc_min_qty = lambda price_: self.min_qty
         self.calc_min_entry_qty = lambda balance_, last_price: \
-            calc_min_entry_qty(self.min_qty, self.qty_step,
-                                   balance_ * last_price * self.leverage,
-                                   self.entry_qty_pct)
+            calc_min_entry_qty_inverse(self.qyt_step, self.min_qty, self.min_cost,
+                                       self.entry_qty_pct, self.leverage, balance_, last_price)
         await self.update_position()
         await self.init_order_book()
         self.ema = (self.ob[0] + self.ob[1]) / 2
