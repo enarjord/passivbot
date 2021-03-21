@@ -7,7 +7,7 @@
     "balance_pct": 0.803,
     "ddown_factor": 2.994,
     "entry_qty_pct": 0.00735,
-    "min_close_qty_multiplier": 0.94,
+    "close_qty_pct": 0.00735,
     "leverage": 50.0,
     "n_entry_orders": 8,
     "n_close_orders": 22.0,
