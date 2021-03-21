@@ -1,0 +1,25 @@
+{
+    "config_name": "btc_hedge_mode",
+    "symbol": "BTCUSDM21",
+    "logging_level": 0,
+    "cross_mode": true,
+
+    "balance_pct": 0.537,
+    "ddown_factor": 0.298,
+    "entry_qty_pct": 0.10101,
+    "close_qty_pct": 0.10101,
+    "leverage": 19.0,
+    "n_entry_orders": 8,
+    "n_close_orders": 18.0,
+
+    "grid_spacing": 0.00152,
+    "grid_coefficient": 203.6,
+    "min_markup": 0.00066,
+    "max_markup": 0.01135,
+
+    "do_long": true,
+    "do_shrt": true,
+    "funding_fee_collect_mode": false,
+    "ema_span": 61499.0,
+    "ema_spread": 0.0133
+}
