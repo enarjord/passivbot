@@ -9,7 +9,7 @@ import pprint
 import matplotlib.pyplot as plt
 import aiomultiprocess
 from hashlib import sha256
-from multiprocessing import cpu_count, Lock, Value
+from multiprocessing import cpu_count, Lock, Value, Array
 from time import time
 from passivbot import *
 from bybit import create_bot as create_bot_bybit
@@ -808,6 +808,8 @@ def candidate_to_live_settings(exchange: str, candidate: dict) -> dict:
 
 
 def calc_candidate_hash_key(candidate: dict, keys: [str]) -> str:
+    print(candidate)
+    print(keys)
     return sha256(json.dumps({k: candidate[k] for k in sorted(keys)}).encode()).hexdigest()
 
 
@@ -925,7 +927,8 @@ def dump_shared_data(dirpath: str, result: dict, best_result: dict, lock: Lock) 
         lock.release()
 
 
-async def jackrabbit_worker(ticks: np.ndarray,
+async def jackrabbit_worker(ticks: Array,
+                            dim: (),
                             backtest_config: dict,
                             candidate: dict,
                             score_func: Callable,
@@ -933,6 +936,7 @@ async def jackrabbit_worker(ticks: np.ndarray,
                             ks: int,
                             ms: [float],
                             lock: Lock):
+    ticks = np.frombuffer(ticks.get_obj(), dtype='d').reshape(dim)
     keys, best_result = load_shared_data(backtest_config['session_dirpath'], lock)
     start_time = time()
     while True:
@@ -982,9 +986,12 @@ async def jackrabbit_multi_core(results: dict,
     lock = Lock()
     k = Value('i', k_)
     workers = []
+    ticks_m = Array('d', int(np.prod(ticks.shape)), lock=True)
+    ticks_n = np.frombuffer(ticks_m.get_obj(), dtype='d').reshape(ticks.shape)
+    ticks_n[:] = ticks
     for _ in range(n_cpus):
         workers.append(asyncio.create_task(multiprocess_wrap(
-            jackrabbit_worker, (ticks, backtest_config, candidate, score_func, k, ks, ms, lock)
+            jackrabbit_worker, (ticks_m, ticks.shape, backtest_config, candidate, score_func, k, ks, ms, lock)
         )))
     for w in workers:
         await w
