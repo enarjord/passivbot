@@ -542,7 +542,7 @@ def get_new_candidate(ranges: dict, best: dict, m=0.2):
 def get_downloaded_trades(filepath: str, age_limit_millis: float) -> (pd.DataFrame, dict):
     if os.path.isdir(filepath):
         filenames = sorted([f for f in os.listdir(filepath) if f.endswith('.csv')],
-                           key=lambda x: int(x[:x.find('_')].replace('.cs', '').replace('v', '')))
+                           key=lambda x: int(eval(x[:x.find('_')].replace('.cs', '').replace('v', ''))))
         chunks = []
         chunk_lengths = {}
         df = pd.DataFrame()
@@ -1095,4 +1095,3 @@ async def main():
 
 if __name__ == '__main__':
     asyncio.run(main())
-
