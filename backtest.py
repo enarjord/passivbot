@@ -366,7 +366,7 @@ def backtest(ticks: np.ndarray, settings: dict) -> [dict]:
                 if highest_bid > 0.0 and tick[2] - prev_long_close_ts > min_trade_delay_millis:
                     # create or add to long pos
                     for tpl in iter_long_entries(apparent_balance, long_pos_size, long_pos_price,
-                                                 shrt_pos_size, ob[0]):
+                                                 shrt_pos_size, highest_bid):
                         long_reentry_price = tpl[1]
                         if tick[0] < tpl[1]:
                             long_pos_size, long_pos_price, prev_long_entry_ts = tpl[2], tpl[3], tick[2]
@@ -429,7 +429,7 @@ def backtest(ticks: np.ndarray, settings: dict) -> [dict]:
                 if lowest_ask > 0.0 and tick[2] - prev_shrt_close_ts > min_trade_delay_millis:
                     # create or add to shrt pos
                     for tpl in iter_shrt_entries(apparent_balance, long_pos_size, shrt_pos_size,
-                                                 shrt_pos_price, ob[1]):
+                                                 shrt_pos_price, lowest_ask):
                         shrt_reentry_price = tpl[1]
                         if tick[0] > tpl[1]:
                             shrt_pos_size, shrt_pos_price = tpl[2], tpl[3]
@@ -533,7 +533,10 @@ def calc_new_val(val, range_, m):
 
 
 def get_new_candidate(ranges: dict, best: dict, m=0.2):
-    return sort_dict_keys({k: calc_new_val(best[k], ranges[k], m) for k in best if k in ranges})
+    cand = sort_dict_keys({k: calc_new_val(best[k], ranges[k], m) for k in best if k in ranges})
+    cand['max_markup'] = max(cand['min_markup'], cand['max_markup'])
+    cand['close_qty_pct'] = min(cand['entry_qty_pct'], cand['close_qty_pct'])
+    return cand
 
 
 def get_downloaded_trades(filepath: str, age_limit_millis: float) -> (pd.DataFrame, dict):
@@ -658,6 +661,9 @@ async def load_trades(exchange: str, user: str, symbol: str, n_days: float) -> p
             fetched_new_trades = await fetch_trades_func(cc, symbol, from_id=from_id)
         new_trades = fetched_new_trades + new_trades
         ids.update([e['trade_id'] for e in new_trades])
+        if new_trades[0]['trade_id'] <= 1000:
+            print('end of the line')
+            break
     del ids
     gc.collect()
     tdf = pd.concat([load_cache(), trades_df], axis=0).sort_index()
