@@ -6,6 +6,7 @@ import pandas as pd
 import asyncio
 import os
 import pprint
+import gc
 import matplotlib.pyplot as plt
 import aiomultiprocess
 from hashlib import sha256
@@ -541,16 +542,30 @@ def get_downloaded_trades(filepath: str, age_limit_millis: float) -> (pd.DataFra
                            key=lambda x: int(x[:x.find('_')].replace('.cs', '').replace('v', '')))
         chunks = []
         chunk_lengths = {}
+        df = pd.DataFrame()
         for f in filenames[::-1]:
-            chunk = pd.read_csv(filepath + f).set_index('trade_id')
+            chunk = pd.read_csv(os.path.join(filepath, f), dtype=np.float64).set_index('trade_id')
             chunk_lengths[f] = len(chunk)
+            chunks.append(chunk)
+            if len(chunks) >= 100:
+                if df.empty:
+                    df = pd.concat(chunks, axis=0)
+                else:
+                    chunks.insert(0, df)
+                    df = pd.concat(chunks, axis=0)
+                chunks = []
             print('\rloaded chunk of trades', f, ts_to_date(chunk.timestamp.iloc[0] / 1000),
                   end='     ')
-            chunks.append(chunk)
             if chunk.timestamp.iloc[0] < age_limit_millis:
                 break
         if chunks:
-            df = pd.concat(chunks, axis=0).sort_index()
+            if df.empty:
+                df = pd.concat(chunks, axis=0)
+            else:
+                chunks.insert(0, df)
+                df = pd.concat(chunks, axis=0)
+            del chunks
+        if not df.empty:
             return df[~df.index.duplicated()], chunk_lengths
         else:
             return None, {}
@@ -568,11 +583,17 @@ async def load_trades(exchange: str, user: str, symbol: str, n_days: float) -> p
             print('           to', id_)
         return id_
 
-    def load_cache():
+    def load_cache(index_only=False):
         cache_filenames = [f for f in os.listdir(cache_filepath) if '.csv' in f]
         if cache_filenames:
             print('loading cached ticks')
-            cache_df = pd.concat([pd.read_csv(cache_filepath + f) for f in cache_filenames], axis=0)
+            if index_only:
+                cache_df = pd.concat(
+                    [pd.read_csv(os.path.join(cache_filepath, f), dtype=np.float64, usecols=["trade_id"]) for f in
+                     cache_filenames], axis=0)
+            else:
+                cache_df = pd.concat(
+                    [pd.read_csv(os.path.join(cache_filepath, f), dtype=np.float64) for f in cache_filenames], axis=0)
             cache_df = cache_df.set_index('trade_id')
             return cache_df
         return None
@@ -591,13 +612,15 @@ async def load_trades(exchange: str, user: str, symbol: str, n_days: float) -> p
     age_limit = time() - 60 * 60 * 24 * n_days
     age_limit_millis = age_limit * 1000
     print('age_limit', ts_to_date(age_limit))
-    cache_df = load_cache()
+    cache_df = load_cache(True)
     trades_df, chunk_lengths = get_downloaded_trades(filepath, age_limit_millis)
     ids = set()
     if trades_df is not None:
         ids.update(trades_df.index)
     if cache_df is not None:
         ids.update(cache_df.index)
+        del cache_df
+        gc.collect()
     gaps = []
     if trades_df is not None and len(trades_df) > 0:
         # 
@@ -607,6 +630,8 @@ async def load_trades(exchange: str, user: str, symbol: str, n_days: float) -> p
                 gaps.append((sids[i-1], sids[i]))
         if gaps:
             print('gaps', gaps)
+        del sids
+        gc.collect()
         # 
     prev_fetch_ts = time()
     new_trades = await fetch_trades_func(cc, symbol)
@@ -633,6 +658,8 @@ async def load_trades(exchange: str, user: str, symbol: str, n_days: float) -> p
             fetched_new_trades = await fetch_trades_func(cc, symbol, from_id=from_id)
         new_trades = fetched_new_trades + new_trades
         ids.update([e['trade_id'] for e in new_trades])
+    del ids
+    gc.collect()
     tdf = pd.concat([load_cache(), trades_df], axis=0).sort_index()
     tdf = tdf[~tdf.index.duplicated()]
     dump_chunks(filepath, tdf, chunk_lengths)
@@ -648,7 +675,7 @@ async def load_trades(exchange: str, user: str, symbol: str, n_days: float) -> p
 def dump_chunks(filepath: str, tdf: pd.DataFrame, chunk_lengths: dict, chunk_size=100000):
     chunk_ids = tdf.index // chunk_size * chunk_size
     for g in tdf.groupby(chunk_ids):
-        filename = f'{g[1].index[0]}_{g[1].index[-1]}.csv'
+        filename = f'{int(g[1].index[0])}_{int(g[1].index[-1])}.csv'
         if filename not in chunk_lengths or chunk_lengths[filename] != chunk_size:
             print('dumping chunk', filename)
             g[1].to_csv(f'{filepath}{filename}')
@@ -995,6 +1022,11 @@ async def load_ticks(backtest_config: dict) -> [dict]:
     if os.path.exists(ticks_filepath):
         print('loading cached trade list', ticks_filepath)
         ticks = np.load(ticks_filepath, allow_pickle=True)
+        if ticks.dtype != np.float64:
+            print('converting cached trade list')
+            np.save(ticks_filepath, ticks.astype("float64"))
+            ticks = np.load(ticks_filepath, allow_pickle=True)
+            gc.collect()
     else:
         agg_trades = await load_trades(backtest_config['exchange'], backtest_config['user'],
                                        backtest_config['symbol'], backtest_config['n_days'])
