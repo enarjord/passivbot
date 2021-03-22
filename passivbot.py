@@ -667,7 +667,7 @@ class Bot:
         self.stop_websocket = True
 
     def calc_orders(self):
-        last_price_diff_limit = 0.05
+        last_price_diff_limit = 0.15
         balance = self.position['wallet_balance'] * min(1.0, abs(self.balance_pct))
         orders = self.calc_long_orders(last_price_diff_limit, balance) + \
             self.calc_shrt_orders(last_price_diff_limit, balance)
