@@ -289,8 +289,6 @@ class BinanceBot(Bot):
         if 'custom_id' in order:
             params['newClientOrderId'] = \
                 f"{order['custom_id']}_{int(time() * 1000)}_{int(np.random.random() * 1000)}"
-        if 'reduce_only' in order and order['reduce_only']:
-            params['reduceOnly']: True
         o = await self.cc.fapiPrivate_post_order(params=params)
         return {'symbol': self.symbol,
                 'side': o['side'].lower(),
