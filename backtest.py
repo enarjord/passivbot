@@ -502,6 +502,8 @@ async def load_trades(exchange: str, user: str, symbol: str, n_days: float) -> p
             fetched_new_trades = await fetch_trades_func(cc, symbol, from_id=from_id)
         new_trades = fetched_new_trades + new_trades
         ids.update([e['trade_id'] for e in new_trades])
+    del ids
+    gc.collect()
     tdf = pd.concat([load_cache(), trades_df], axis=0).sort_index()
     tdf = tdf[~tdf.index.duplicated()]
     dump_chunks(filepath, tdf, chunk_lengths)
