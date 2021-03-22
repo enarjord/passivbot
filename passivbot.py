@@ -553,7 +553,7 @@ class Bot:
         return bid_price, ask_price
 
     def calc_orders(self):
-        last_price_diff_limit = 0.05
+        last_price_diff_limit = 0.15
         balance = self.position['wallet_balance'] * min(1.0, abs(self.balance_pct))
         orders = []
         if calc_diff(self.position['liquidation_price'], self.price) < self.stop_loss_liq_diff or \
