@@ -13,8 +13,8 @@ from time import time, sleep
 from typing import Callable, Iterator
 from passivbot import init_ccxt, load_key_secret, load_live_settings, make_get_filepath, print_, \
     ts_to_date, flatten, filter_orders, Bot, start_bot, round_up, round_dn, \
-    calc_min_order_qty, calc_cross_hedge_lig_price, iter_long_entries_linear, \
-    iter_shrt_entries_linear, iter_long_closes_linear, iter_shrt_closes_linear, calc_ema
+    calc_min_entry_qty, iter_long_entries_linear, iter_shrt_entries_linear, \
+    iter_long_closes_linear, iter_shrt_closes_linear, calc_ema
 
 
 def get_maintenance_margin_rate(pos_size_ito_usdt: float) -> float:
@@ -120,7 +120,7 @@ class BinanceBot(Bot):
                 self.calc_min_qty = lambda price_: \
                     max(self.min_qty, round_up(self.min_notional / price_, self.qty_step))
                 self.calc_min_entry_qty = lambda balance_, last_price: \
-                    calc_min_order_qty(self.calc_min_qty(last_price),
+                    calc_min_entry_qty(self.calc_min_qty(last_price),
                                        self.qty_step,
                                        (balance_ / last_price) * self.leverage,
                                        self.entry_qty_pct)
@@ -146,19 +146,19 @@ class BinanceBot(Bot):
                                      self.grid_spacing, self.grid_coefficient, balance, long_psize,
                                      shrt_psize, shrt_pprice, lowest_ask)
         self.iter_long_closes = lambda balance, pos_size, pos_price, lowest_ask: \
-            iter_long_closes_linear(self.price_step, self.qty_step, self.min_qty,
-                                    self.close_qty_pct, self.leverage, self.min_markup,
-                                    self.max_markup, self.n_close_orders, balance, pos_size,
+            iter_long_closes_linear(self.price_step, self.qty_step, self.min_qty, self.min_cost,
+                                    self.entry_qty_pct, self.leverage, self.min_markup,
+                                    self.markup_range, self.n_close_orders, balance, pos_size,
                                     pos_price, lowest_ask)
         self.iter_shrt_closes = lambda balance, pos_size, pos_price, highest_bid: \
-            iter_shrt_closes_linear(self.price_step, self.qty_step, self.min_qty,
-                                    self.close_qty_pct, self.leverage, self.min_markup,
-                                    self.max_markup, self.n_close_orders, balance, pos_size,
+            iter_shrt_closes_linear(self.price_step, self.qty_step, self.min_qty, self.min_cost,
+                                    self.entry_qty_pct, self.leverage, self.min_markup,
+                                    self.markup_range, self.n_close_orders, balance, pos_size,
                                     pos_price, highest_bid)
 
     async def init_exchange_settings(self):
         try:
-            mode = 'CROSSED' if self.settings['cross_mode'] else 'ISOLATED'
+            mode = 'CROSSED'
             print(await self.cc.fapiPrivate_post_margintype(params={'symbol': self.symbol,
                                                                     'marginType': mode}))
         except Exception as e:
@@ -198,10 +198,9 @@ class BinanceBot(Bot):
         ]
 
     async def fetch_position(self) -> dict:
-        positions, account, funding = await asyncio.gather(
+        positions, account = await asyncio.gather(
             self.cc.fapiPrivate_get_positionrisk(params={'symbol': self.symbol}),
-            self.cc.fapiPrivate_get_account(),
-            self.cc.fapiPublic_get_fundingrate()
+            self.cc.fapiPrivate_get_account()
         )
         position = {}
         if positions:
@@ -220,10 +219,6 @@ class BinanceBot(Bot):
                                         'leverage': float(p['leverage']),
                                         'cost': (scost := abs(ssize) * sprice),
                                         'margin_cost': scost / self.leverage}
-        for e in funding:
-            if e['symbol'] == self.symbol:
-                position['predicted_funding_rate'] = float(e['fundingRate'])
-                break
         for e in account['assets']:
             if e['asset'] == 'USDT':
                 position['equity'] = float(e['marginBalance'])
