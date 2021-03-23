@@ -118,6 +118,191 @@ def calc_min_close_qty_inverse(qty_step: float, min_qty: float,
     return calc_min_order_qty(min_qty, qty_step, balance * leverage * price, close_qty_pct)
 
 
+@njit
+def iter_long_entries_inverse(price_step: float,
+                              qty_step: float,
+                              min_qty: float,
+                              min_cost: float,
+                              ddown_factor: float,
+                              entry_qty_pct: float,
+                              leverage: float,
+                              grid_spacing: float,
+                              grid_coefficient: float,
+                              balance: float,
+                              long_psize: float,
+                              long_pprice: float,
+                              shrt_psize: float,
+                              highest_bid: float,) -> Iterator[Tuple[float, float, float, float, float]]:
+    # yields tuple (qty, price, new_long_psize, new_long_pprice, margin_cost)
+    if long_psize == 0.0:
+        qty = calc_min_entry_qty_inverse(qty_step, min_qty, min_cost, entry_qty_pct, leverage,
+                                         balance, highest_bid)
+        price = highest_bid
+        long_psize = qty
+        long_pprice = price
+        margin_cost = calc_margin_cost_inverse(leverage, long_psize, long_pprice)
+        balance -= margin_cost
+        yield qty, price, round_(long_psize, qty_step), long_pprice, 0.0
+    while True:
+        pos_margin = calc_margin_cost_inverse(leverage, long_psize, long_pprice)
+        price = min(highest_bid, calc_long_reentry_price(price_step, grid_spacing, grid_coefficient,
+                                                         balance, pos_margin, long_pprice))
+        if price == 0.0:
+            break
+        min_entry_qty = calc_min_entry_qty_inverse(qty_step, min_qty, min_cost, entry_qty_pct,
+                                                   leverage, balance, price)
+        qty = calc_reentry_qty(qty_step, ddown_factor, min_entry_qty,
+                               calc_max_entry_qty_inverse(leverage, balance, long_psize, shrt_psize,
+                                                          price),
+                               long_psize)
+        if qty < min_entry_qty:
+            break
+        new_pos_size = long_psize + qty
+        long_pprice = long_pprice * (long_psize / new_pos_size) + price * (qty / new_pos_size)
+        long_psize = new_pos_size
+        margin_cost = calc_margin_cost_inverse(leverage, qty, price)
+        balance -= margin_cost
+        yield qty, price, round_(long_psize, qty_step), long_pprice, 1.0
+
+
+@njit
+def iter_shrt_entries_inverse(price_step: float,
+                              qty_step: float,
+                              min_qty: float,
+                              min_cost: float,
+                              ddown_factor: float,
+                              entry_qty_pct: float,
+                              leverage: float,
+                              grid_spacing: float,
+                              grid_coefficient: float,
+                              balance: float,
+                              long_psize: float,
+                              shrt_psize: float,
+                              shrt_pprice: float,
+                              lowest_ask: float,) -> Iterator[Tuple[float, float, float, float, float]]:
+    # yields tuple (qty, price, new_shrt_psize, new_shrt_pprice, margin_cost)
+
+    if shrt_psize == 0.0:
+        qty = -calc_min_entry_qty_inverse(qty_step, min_qty, min_cost, entry_qty_pct, leverage,
+                                          balance, lowest_ask)
+        price = lowest_ask
+        shrt_psize = qty
+        shrt_pprice = price
+        margin_cost = calc_margin_cost_inverse(leverage, shrt_psize, shrt_pprice)
+        balance -= margin_cost
+        yield qty, price, round_(shrt_psize, qty_step), shrt_pprice, 0.0
+    while True:
+        pos_margin = calc_margin_cost_inverse(leverage, shrt_psize, shrt_pprice)
+        price = max(lowest_ask, calc_shrt_reentry_price(price_step, grid_spacing, grid_coefficient,
+                                                        balance, pos_margin, shrt_pprice))
+        min_entry_qty = -calc_min_entry_qty_inverse(qty_step, min_qty, min_cost, entry_qty_pct,
+                                                    leverage, balance, price)
+        qty = -calc_reentry_qty(qty_step, ddown_factor, abs(min_entry_qty),
+                                calc_max_entry_qty_inverse(leverage, balance, long_psize, shrt_psize,
+                                                           price),
+                                shrt_psize)
+        if qty > min_entry_qty:
+            break
+        new_pos_size = shrt_psize + qty
+        shrt_pprice = shrt_pprice * (shrt_psize / new_pos_size) + price * (qty / new_pos_size)
+        shrt_psize = new_pos_size
+        margin_cost = calc_margin_cost_inverse(leverage, qty, price)
+        balance -= margin_cost
+        yield qty, price, round_(shrt_psize, qty_step), shrt_pprice, 1.0
+
+
+@njit
+def iter_long_closes_inverse(price_step: float,
+                             qty_step: float,
+                             min_qty: float,
+                             close_qty_pct: float,
+                             leverage: float,
+                             min_markup: float,
+                             max_markup: float,
+                             n_orders: int,
+                             balance: float,
+                             pos_size: float,
+                             pos_price: float,
+                             lowest_ask: float):
+
+    # yields tuple (qty, price, new_pos_size)
+
+    if pos_size == 0.0:
+        return
+
+    minm = pos_price * (1 + min_markup)
+    prices = np.linspace(minm, pos_price * (1 + max_markup), int(n_orders))
+    prices = [p for p in sorted(set([round_up(p_, price_step) for p_ in prices]))
+              if p >= lowest_ask]
+    if len(prices) == 0:
+        yield -pos_size, max(lowest_ask, round_up(minm, price_step)), 0.0
+    else:
+        n_orders = int(min([n_orders, len(prices), int(pos_size / min_qty)]))
+        for price in prices:
+            if n_orders == 0:
+                break
+            else:
+                qty = -min(pos_size, max(calc_min_close_qty_inverse(qty_step, min_qty, close_qty_pct,
+                                                                    leverage, balance, lowest_ask),
+                                         round_up(pos_size / n_orders, qty_step)))
+            if qty == 0.0:
+                break
+            pos_size = round_(pos_size + qty, qty_step)
+            yield qty, price, pos_size
+            lowest_ask = price
+            n_orders -= 1
+        if pos_size > 0.0:
+            yield -pos_size, lowest_ask, 0.0
+
+
+@njit
+def iter_shrt_closes_inverse(price_step: float,
+                             qty_step: float,
+                             min_qty: float,
+                             close_qty_pct: float,
+                             leverage: float,
+                             min_markup: float,
+                             max_markup: float,
+                             n_orders: int,
+                             balance: float,
+                             pos_size: float,
+                             pos_price: float,
+                             highest_bid: float):
+    
+    # yields tuple (qty, price, new_pos_size)
+
+    if pos_size == 0.0:
+        return
+
+    abs_pos_size = abs(pos_size)
+    minm = pos_price * (1 - min_markup)
+
+    prices = np.linspace(minm, pos_price * (1 - max_markup), int(n_orders))
+    prices = [p for p in sorted(set([round_dn(p_, price_step) for p_ in prices]), reverse=True)
+              if p <= highest_bid]
+
+    if len(prices) == 0:
+        yield abs_pos_size, min(highest_bid, round_dn(minm, price_step)), 0.0
+        abs_pos_size = 0.0
+    else:
+        n_orders = int(min([n_orders, len(prices), int(abs_pos_size / min_qty)]))
+        for price in prices:
+            if n_orders == 0:
+                break
+            else:
+                qty = min(abs_pos_size, max(calc_min_close_qty_inverse(qty_step, min_qty, close_qty_pct,
+                                                                       leverage, balance, highest_bid),
+                                            round_up(abs_pos_size / n_orders, qty_step)))
+            if qty == 0.0:
+                break
+            abs_pos_size = round_(abs_pos_size - qty, qty_step)
+            yield qty, price, abs_pos_size * -1
+            highest_bid = price
+            n_orders -= 1
+        if abs_pos_size > 0.0:
+            yield abs_pos_size, min(highest_bid, round_dn(minm, price_step)), 0.0
+
+
 ################
 # linear calcs #
 ################
@@ -493,7 +678,7 @@ def load_live_settings(exchange: str, user: str = 'default', do_print=True) -> d
         settings = json.load(open(f'{fpath}default.json'))
     if do_print:
         print('\nloaded settings:')
-        pprint.pprint(settings)
+        print(json.dumps(settings, indent=4))
     return settings
 
 
@@ -629,7 +814,8 @@ class Bot:
             try:
                 o = await c
                 created_orders.append(o)
-                print_([' created order', o['symbol'], o['side'], o['qty'], o['price']], n=True)
+                print_([' created order', o['symbol'], o['side'], o['position_side'], o['qty'],
+                        o['price']], n=True)
                 self.dump_log({'log_type': 'create_order', 'data': o})
             except Exception as e:
                 print_(['error creating order b', oc, c.exception(), e], n=True)
@@ -654,7 +840,8 @@ class Bot:
             try:
                 o = await c
                 canceled_orders.append(o)
-                print_(['cancelled order', o['symbol'], o['side'], o['qty'], o['price']], n=True)
+                print_(['cancelled order', o['symbol'], o['side'], o['position_side'], o['qty'],
+                        o['price']], n=True)
                 self.dump_log({'log_type': 'cancel_order', 'data': o})
             except Exception as e:
                 print_(['error cancelling order', oc, c.exception(), e], n=True)
@@ -674,77 +861,54 @@ class Bot:
         return orders
 
     def calc_shrt_orders(self, last_price_diff_limit: float, balance: float):
-        orders = []
         sp = self.position['shrt']
-        if sp['size'] == 0.0:
-            if self.do_shrt and (not self.funding_fee_collect_mode or
-                                                       self.position['predicted_funding_rate'] > 0.0):
-                price = max(self.ob[1], round_up(self.ema * (1 + self.ema_spread), self.price_step))
-                orders.append({
-                    'side': 'sell', 'position_side': 'shrt',
-                    'qty': self.calc_min_entry_qty(balance, price), 'price': price,
-                    'type': 'limit', 'reduce_only': False, 'custom_id': 'entry'})
-        else:
+        lowest_ask = max(self.ob[1], round_up(self.ema * (1 + self.ema_spread), self.price_step)) if \
+            sp['size'] == 0.0 else self.ob[1]
+        entry_orders = []
+        if self.do_shrt or sp['size'] < 0.0:
             for tpl in self.iter_shrt_entries(balance, self.position['long']['size'],
-                                              sp['size'], sp['price'], self.ob[1]):
-                if len(orders) >= self.n_entry_orders:
+                                              sp['size'], sp['price'], lowest_ask):
+                if len(entry_orders) >= self.n_entry_orders or \
+                        calc_diff(tpl[1], self.price) > last_price_diff_limit:
                     break
-                if calc_diff(tpl[1], self.price) > last_price_diff_limit:
-                    break
-                orders.append({'side': 'sell', 'position_side': 'shrt', 'qty': abs(tpl[0]),
-                               'price': tpl[1], 'type': 'limit', 'reduce_only': False,
-                               'custom_id': 'entry'})
-
-            close_orders = []
-            for bid_qty, bid_price, _ in self.iter_shrt_closes(balance, sp['size'], sp['price'],
-                                                               self.ob[0]):
-                if calc_diff(bid_price, self.price) > last_price_diff_limit:
-                    break
-                if len(close_orders) >= self.n_entry_orders:
-                    break
-                close_orders.append({'side': 'buy', 'position_side': 'shrt', 'qty': abs(bid_qty),
-                                     'price': float(bid_price), 'type': 'limit', 'reduce_only': True,
-                                     'custom_id': 'close'})
-            orders += close_orders
-        return orders
+                entry_orders.append({'side': 'sell', 'position_side': 'shrt', 'qty': abs(tpl[0]),
+                                     'price': tpl[1], 'type': 'limit', 'reduce_only': False,
+                                     'custom_id': 'entry'})
+        close_orders = []
+        for bid_qty, bid_price, _ in self.iter_shrt_closes(balance, sp['size'], sp['price'],
+                                                           self.ob[0]):
+            if len(close_orders) >= self.n_entry_orders or \
+                    calc_diff(bid_price, self.price) > last_price_diff_limit:
+                break
+            close_orders.append({'side': 'buy', 'position_side': 'shrt', 'qty': abs(bid_qty),
+                                 'price': float(bid_price), 'type': 'limit', 'reduce_only': True,
+                                 'custom_id': 'close'})
+        return sorted(entry_orders + close_orders, key=lambda x: calc_diff(x['price'], self.price))
 
     def calc_long_orders(self, last_price_diff_limit: float, balance: float):
-        orders = []
         lp = self.position['long']
-        if lp['size'] == 0.0:
-            if self.do_long and (not self.funding_fee_collect_mode or
-                                                       self.position['predicted_funding_rate'] < 0.0):
-                price = min(self.ob[0], round_dn(self.ema * (1 - self.ema_spread), self.price_step))
-                orders.append({
-                    'side': 'buy', 'position_side': 'long',
-                    'qty': self.calc_min_entry_qty(balance, price), 'price': price,
-                    'type': 'limit', 'reduce_only': False, 'custom_id': 'entry'})
-
-        else:
-
+        highest_bid = min(self.ob[0], round_dn(self.ema * (1 - self.ema_spread), self.price_step)) \
+            if lp['size'] == 0.0 else self.ob[0]
+        entry_orders = []
+        if self.do_long or lp['size'] > 0.0:
             for tpl in self.iter_long_entries(balance, lp['size'], lp['price'],
-                                              self.position['shrt']['size'], self.ob[0]):
-                if len(orders) >= self.n_entry_orders:
+                                              self.position['shrt']['size'], highest_bid):
+                if len(entry_orders) >= self.n_entry_orders or \
+                        calc_diff(tpl[1], self.price) > last_price_diff_limit:
                     break
-                if calc_diff(tpl[1], self.price) >last_price_diff_limit:
-                    break
-                orders.append({'side': 'buy', 'position_side': 'long', 'qty': tpl[0],
-                               'price': tpl[1], 'type': 'limit', 'reduce_only': False,
-                               'custom_id': 'entry'})
-
-            close_orders = []
-            for ask_qty, ask_price, _ in self.iter_long_closes(balance, lp['size'], lp['price'],
-                                                               self.ob[1]):
-                if calc_diff(ask_price, self.price) > last_price_diff_limit:
-                    break
-                if len(close_orders) >= self.n_entry_orders:
-                    break
-                close_orders.append({'side': 'sell', 'position_side': 'long', 'qty': abs(ask_qty),
-                                     'price': float(ask_price), 'type': 'limit', 'reduce_only': True,
-                                     'custom_id': 'close'})
-
-            orders += close_orders
-        return orders
+                entry_orders.append({'side': 'buy', 'position_side': 'long', 'qty': tpl[0],
+                                     'price': tpl[1], 'type': 'limit', 'reduce_only': False,
+                                     'custom_id': 'entry'})
+        close_orders = []
+        for ask_qty, ask_price, _ in self.iter_long_closes(balance, lp['size'], lp['price'],
+                                                           self.ob[1]):
+            if len(close_orders) >= self.n_entry_orders or \
+                    calc_diff(ask_price, self.price) > last_price_diff_limit:
+                break
+            close_orders.append({'side': 'sell', 'position_side': 'long', 'qty': abs(ask_qty),
+                                 'price': float(ask_price), 'type': 'limit', 'reduce_only': True,
+                                 'custom_id': 'close'})
+        return sorted(entry_orders + close_orders, key=lambda x: calc_diff(x['price'], self.price))
 
     async def cancel_and_create(self):
         await asyncio.sleep(0.01)
