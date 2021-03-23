@@ -26,16 +26,8 @@ from typing import Iterator
 def prep_ticks(df: pd.DataFrame) -> np.ndarray:
     dfc = df[df.price != df.price.shift(1)] # drop consecutive same price trades
     dfc.index = np.arange(len(dfc))
-    if 'side' in dfc.columns:
-        # bybit
-        buyer_maker = dfc.side == 'Sell'
-        buyer_maker.name = 'buyer_maker'
-    elif 'is_buyer_maker' in dfc.columns:
-        # binance
-        buyer_maker = dfc.is_buyer_maker
-        buyer_maker.name = 'buyer_maker'
-    else:
-        raise Exception('trades of unknown format')
+    buyer_maker = dfc.is_buyer_maker
+    buyer_maker.name = 'buyer_maker'
     dfcc = pd.concat([dfc.price, buyer_maker, dfc.timestamp], axis=1)
     return dfcc.values
 
@@ -388,7 +380,12 @@ def get_downloaded_trades(filepath: str, age_limit_millis: float) -> (pd.DataFra
         chunk_lengths = {}
         df = pd.DataFrame()
         for f in filenames[::-1]:
-            chunk = pd.read_csv(os.path.join(filepath, f), dtype=np.float64).set_index('trade_id')
+            try:
+                chunk = pd.read_csv(os.path.join(filepath, f), dtype=np.float64).set_index('trade_id')
+            except ValueError as e:
+                chunk = pd.read_csv(os.path.join(filepath, f)).set_index('trade_id')
+                chunk = chunk.drop('side', axis=1).join(pd.Series(chunk.side == 'Sell', name='is_buyer_maker', index=chunk.index))
+                chunk = chunk.astype(np.float64)
             chunk_lengths[f] = len(chunk)
             chunks.append(chunk)
             if len(chunks) >= 100:
