@@ -152,11 +152,7 @@ about live settings, bybit example:
 
 {
 
-    "balance_pct": 0.5,                   # if settings["balance_pct"] = 1.0, will use 100% of balance.
-                                          # if settings["balance_pct"] = 0.35, will us 35% of balance.
     "config_name": "BTCUSD_default",      # arbitrary name given to settings.
-    "cross_mode": true,                   # true for cross, false for isolated.
-                                          # use isolated mode with care.  depending on settings, there is high risk of accidental liquidations.
 
     "entry_qty_pct": 0.005,               # percentage of balance * leverage used as initial entry qty.
                                           # the bot will calculate initial entry qty using the following formula:
@@ -183,20 +179,13 @@ about live settings, bybit example:
     "grid_coefficient": 245.0,            # next entry price is pos_price * (1 +- grid_spacing * (1 + (pos_margin / balance) * grid_coefficient)).
     "grid_spacing": 0.0026,               # 
                                           
-    "stop_loss_liq_diff": 0.02,           # if difference between liquidation price and last price is less than 2%, ...
-    "stop_loss_pos_price_diff": 0.04,     # ... or if difference between pos price and last price is greater than 4%, reduce position by 2% at a loss,
-
-    "stop_loss_pos_reduction": 0.02,      # reduce position by 2% at a loss.
-    
     "leverage": 100,                      # leverage (irrelevant in bybit because cross mode in is always max leverage).
     "logging_level": 0,                   # if logging_level > 0,
                                           # will log positions, open orders, order creations and order cancellations in logs/{exchange}/{config_name}.log.
 
     "min_markup": 0.0002,                 # when there's a position, bot makes a grid of n_close_orders whose prices are
-    "max_markup": 0.0159,                 # evenly distributed between min and max markup, and whose qtys are pos_size // n_close_orders.
-    
-    "market_stop_loss": false,            # if true will soft stop with market orders, if false soft stops with limit orders at order book's higest_bid/lowest_ask
-                                          
+    "markup_range": 0.0159,               # evenly distributed between min_markup and (min_markup + markup_range), and whose qtys are pos_size // n_close_orders.
+                        
     "n_close_orders": 20,                 # max n close orders.
     "n_entry_orders": 8,                  # max n entry orders.
     "symbol": "BTCUSD"                    # only one symbol at a time.
