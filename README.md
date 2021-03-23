@@ -76,6 +76,9 @@ change log
 
 2021-03-23 v3.2.0
 - implemented particle swarm optimizationg algorithm, replacing jackrabbit
+- bybit hedge mode with inverse futures
+- removed config param close_qty_pct
+- removed config param balance_pct
 
 see `changelog.txt` for earlier changes
 
