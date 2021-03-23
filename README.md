@@ -39,26 +39,6 @@ https://www.binance.cc/en/register?ref=TII4B07C
 ------------------------------------------------------------------
 change log
 
-2021-02-23 v2.0.0_beta
-- major update to backtester
-- new backtest usage syntax
-- other changes
-
-2021-02-27 v2.0.0
-- bug fixes
-- new default configs for bybit and binance
-
-2021-02-28 v2.0.1
-- added optional just-in-time compiling for faster backtesting
-
-2021-03-01 v2.0.2
-- more jit'ed calcs
-
-2021-03-02 v2.0.3
-- new default bybit config
-- behavior change: reentry qtys may now be smaller than initial entry qty
-- backtest iterates a numpy array instead of a python list of dicts for reduced ram usage
-
 2021-03-12 v3.0.0
 - binance hedge mode implemented (bybit not yet supported)
 - emas removed
@@ -79,6 +59,8 @@ change log
 - bybit hedge mode with inverse futures
 - removed config param close_qty_pct
 - removed config param balance_pct
+- removed config param max_markup
+- added config param markup_range
 
 see `changelog.txt` for earlier changes
 
