@@ -15,7 +15,8 @@ from time import time, sleep
 from typing import Callable, Iterator
 from passivbot import init_ccxt, load_key_secret, load_live_settings, make_get_filepath, print_, \
     ts_to_date, flatten, filter_orders, Bot, start_bot, round_up, round_dn, \
-    calc_min_entry_qty_inverse, sort_dict_keys, calc_ema
+    calc_min_entry_qty_inverse, sort_dict_keys, calc_ema, iter_long_entries_inverse, \
+    iter_shrt_entries_inverse, iter_long_closes_inverse, iter_shrt_closes_inverse
 import aiohttp
 from urllib.parse import urlencode
 
@@ -82,6 +83,25 @@ def calc_cross_shrt_bankruptcy_price(pos_size, order_cost, balance, order_margin
     return (0.99925 * pos_size) / (order_cost - (balance - order_margin))
 
 
+def determine_pos_side(o: dict) -> str:
+    side = o['side'].lower()
+    if side == 'buy':
+        if 'entry' in o['order_link_id']:
+            position_side = 'long'
+        elif 'close' in o['order_link_id']:
+            position_side = 'shrt'
+        else:
+            position_side = 'unknown'
+    else:
+        if 'entry' in o['order_link_id']:
+            position_side = 'shrt'
+        elif 'close' in o['order_link_id']:
+            position_side = 'long'
+        else:
+            position_side = 'unknown'
+    return position_side
+
+
 async def fetch_trades(cc, symbol: str, from_id: int = None) -> [dict]:
 
     params = {'symbol': symbol, 'limit': 1000}
@@ -89,10 +109,10 @@ async def fetch_trades(cc, symbol: str, from_id: int = None) -> [dict]:
         params['from'] = from_id
     fetched_trades = await cc.v2_public_get_trading_records(params=params)
     trades = [{'trade_id': int(t['id']),
-               'side': t['side'],
                'price': t['price'],
                'qty': t['qty'],
-               'timestamp': date_to_ts(t['time'][:-1])} for t in fetched_trades['result']]
+               'timestamp': date_to_ts(t['time'][:-1]),
+               'is_buyer_maker': t['side'] == 'Sell'} for t in fetched_trades['result']]
     print_(['fetched trades', symbol, trades[0]['trade_id'],
             ts_to_date(trades[0]['timestamp'] / 1000)])
     return trades
@@ -121,7 +141,7 @@ class BybitInverseFuturesBot(Bot):
         self.exchange = 'bybit'
         self.min_notional = 0.0
         super().__init__(user, settings)
-        self.key, self.secret = load_key_secret('bybit_inverse_futures', user)
+        self.key, self.secret = load_key_secret('bybit', user)
         self.base_endpoint = 'https://api.bybit.com'
         self.session = aiohttp.ClientSession()
 
@@ -138,6 +158,7 @@ class BybitInverseFuturesBot(Bot):
         self.price_step = float(e['price_filter']['tick_size'])
         self.qty_step = float(e['lot_size_filter']['qty_step'])
         self.min_qty = float(e['lot_size_filter']['min_trading_qty'])
+        self.min_cost = 0.0
         self.calc_min_qty = lambda price_: self.min_qty
         self.calc_min_entry_qty = lambda balance_, last_price: \
             calc_min_entry_qty_inverse(self.qyt_step, self.min_qty, self.min_cost,
@@ -145,23 +166,48 @@ class BybitInverseFuturesBot(Bot):
         await self.update_position()
         await self.init_order_book()
         self.ema = (self.ob[0] + self.ob[1]) / 2
+        self.iter_long_entries = lambda balance, long_psize, long_pprice, shrt_psize, highest_bid: \
+            iter_long_entries_inverse(self.price_step, self.qty_step, self.min_qty, self.min_cost,
+                                      self.ddown_factor, self.entry_qty_pct, self.leverage,
+                                      self.grid_spacing, self.grid_coefficient, balance, long_psize,
+                                      long_pprice, shrt_psize, highest_bid)
+        self.iter_shrt_entries = lambda balance, long_psize, shrt_psize, shrt_pprice, lowest_ask: \
+            iter_shrt_entries_inverse(self.price_step, self.qty_step, self.min_qty, self.min_cost,
+                                      self.ddown_factor, self.entry_qty_pct, self.leverage,
+                                      self.grid_spacing, self.grid_coefficient, balance, long_psize,
+                                      shrt_psize, shrt_pprice, lowest_ask)
+        self.iter_long_closes = lambda balance, pos_size, pos_price, lowest_ask: \
+            iter_long_closes_inverse(self.price_step, self.qty_step, self.min_qty,
+                                     self.close_qty_pct, self.leverage, self.min_markup,
+                                     self.max_markup, self.n_close_orders, balance, pos_size,
+                                     pos_price, lowest_ask)
+        self.iter_shrt_closes = lambda balance, pos_size, pos_price, highest_bid: \
+            iter_shrt_closes_inverse(self.price_step, self.qty_step, self.min_qty,
+                                     self.close_qty_pct, self.leverage, self.min_markup,
+                                     self.max_markup, self.n_close_orders, balance, pos_size,
+                                     pos_price, highest_bid)
 
     async def init_order_book(self):
         ticker = await self.private_get('/v2/public/tickers', {'symbol': self.symbol})
         self.ob = [float(ticker['result'][0]['bid_price']), float(ticker['result'][0]['ask_price'])]
         self.price = float(ticker['result'][0]['last_price'])
 
+
     async def fetch_open_orders(self) -> [dict]:
         fetched = await self.private_get('/futures/private/order/list', {'symbol': self.symbol})
-        return [
-            {'order_id': e['order_id'],
-             'symbol': e['symbol'],
-             'price': float(e['price']),
-             'qty': float(e['qty']),
-             'side': e['side'].lower(),
-             'timestamp': date_to_ts(e['created_at'])}
-            for e in fetched['result']['data'] if e['order_status'] == 'New'
-        ]
+        oos = []
+        for elm in fetched['result']['data']:
+            if elm['order_status'] == 'New':
+                position_side = determine_pos_side(elm)
+                oos.append({'order_id': elm['order_id'],
+                            'custom_id': elm['order_link_id'],
+                            'symbol': elm['symbol'],
+                            'price': float(elm['price']),
+                            'qty': float(elm['qty']),
+                            'side': elm['side'].lower(),
+                            'position_side': position_side,
+                            'timestamp': date_to_ts(elm['created_at'])})
+        return oos
 
     async def public_get(self, url: str, params: dict = {}) -> dict:
         async with self.session.get(self.base_endpoint + url, params=params) as response:
@@ -211,18 +257,6 @@ class BybitInverseFuturesBot(Bot):
         position['wallet_balance'] = position['long']['wallet_balance']
         return position
 
-        pos = position['result']
-        result = {'size': pos['size'] * (-1.0 if pos['side'] == 'Sell' else 1.0),
-                  'price': float(pos['entry_price']),
-                  'leverage': float(pos['leverage']),
-                  'liquidation_price': float(pos['liq_price']),
-                  'equity': balance['result'][self.coin]['equity'],
-                  'wallet_balance': balance['result'][self.coin]['wallet_balance']}
-        result['cost'] = abs(result['size']) / result['price'] if result['price'] else 0.0
-        result['margin_cost'] = result['cost'] / self.leverage
-        result['predicted_funding_rate'] = funding['result']['predicted_funding_rate']
-        return result
-
     async def execute_order(self, order: dict) -> dict:
         params = {'symbol': self.symbol,
                   'side':  first_capitalized(order['side']),
@@ -231,30 +265,28 @@ class BybitInverseFuturesBot(Bot):
                   'qty': int(order['qty'])}
         if params['order_type'] == 'Limit':
             params['time_in_force'] = 'PostOnly'
-            params['price'] = order['price']
+            params['price'] = str(order['price'])
         else:
             params['time_in_force'] = 'GoodTillCancel'
         if 'custom_id' in order:
             params['order_link_id'] = \
                 f"{order['custom_id']}_{int(time() * 1000)}_{int(np.random.random() * 1000)}"
         o = await self.private_post('/futures/private/order/create', params)
-        #o = await self.cc.v2_private_post_order_create(params=params)
-        return {'symbol': o['result']['symbol'],
-                'side': o['result']['side'].lower(),
-                'type': o['result']['order_type'].lower(),
-                'qty': o['result']['qty'],
-                'price': o['result']['price']}
+        if o['result']:
+            return {'symbol': o['result']['symbol'],
+                    'side': o['result']['side'].lower(),
+                    'position_side': order['position_side'],
+                    'type': o['result']['order_type'].lower(),
+                    'qty': o['result']['qty'],
+                    'price': o['result']['price']}
+        else:
+            return {}
 
     async def execute_cancellation(self, id_: str) -> [dict]:
         o = await self.private_post('/futures/private/order/cancel',
                                     {'symbol': self.symbol, 'order_id': id_})
-        return o
-        '''
-        o = await self.cc.v2_private_post_order_cancel(
-            params={'symbol': self.symbol, 'order_id': id_}
-        )
-        '''
         return {'symbol': o['result']['symbol'], 'side': o['result']['side'].lower(),
+                'position_side': determine_pos_side(o['result']),
                 'qty': o['result']['qty'], 'price': o['result']['price']}
 
     async def init_my_trades(self, age_limit_days: float = 7.0) -> [dict]:
