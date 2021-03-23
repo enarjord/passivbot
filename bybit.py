@@ -14,7 +14,7 @@ from math import floor
 from time import time, sleep
 from typing import Callable, Iterator
 from passivbot import init_ccxt, load_key_secret, load_live_settings, make_get_filepath, print_, \
-    ts_to_date, flatten, filter_orders, Bot, start_bot, round_up, round_dn, \
+    ts_to_date, flatten, Bot, start_bot, round_up, round_dn, \
     calc_min_entry_qty_inverse, sort_dict_keys, calc_ema, iter_long_entries_inverse, \
     iter_shrt_entries_inverse, iter_long_closes_inverse, iter_shrt_closes_inverse
 import aiohttp
@@ -106,8 +106,12 @@ async def fetch_trades(cc, symbol: str, from_id: int = None) -> [dict]:
 
     params = {'symbol': symbol, 'limit': 1000}
     if from_id:
-        params['from'] = from_id
-    fetched_trades = await cc.v2_public_get_trading_records(params=params)
+        params['from'] = max(0, from_id)
+    try:
+        fetched_trades = await cc.v2_public_get_trading_records(params=params)
+    except Exception as e:
+        print(e)
+        return []
     trades = [{'trade_id': int(t['id']),
                'price': t['price'],
                'qty': t['qty'],
@@ -131,12 +135,12 @@ def date_to_ts(date: str):
     raise Exception(f'unable to convert date {date} to timestamp')
 
 async def create_bot(user: str, settings: str):
-    bot = BybitInverseFuturesBot(user, settings)
+    bot = Bybit(user, settings)
     await bot._init()
     return bot
 
 
-class BybitInverseFuturesBot(Bot):
+class Bybit(Bot):
     def __init__(self, user: str, settings: dict):
         self.exchange = 'bybit'
         self.min_notional = 0.0
@@ -177,14 +181,14 @@ class BybitInverseFuturesBot(Bot):
                                       self.grid_spacing, self.grid_coefficient, balance, long_psize,
                                       shrt_psize, shrt_pprice, lowest_ask)
         self.iter_long_closes = lambda balance, pos_size, pos_price, lowest_ask: \
-            iter_long_closes_inverse(self.price_step, self.qty_step, self.min_qty,
-                                     self.close_qty_pct, self.leverage, self.min_markup,
-                                     self.max_markup, self.n_close_orders, balance, pos_size,
+            iter_long_closes_inverse(self.price_step, self.qty_step, self.min_qty, self.min_cost,
+                                     self.entry_qty_pct, self.leverage, self.min_markup,
+                                     self.markup_range, self.n_close_orders, balance, pos_size,
                                      pos_price, lowest_ask)
         self.iter_shrt_closes = lambda balance, pos_size, pos_price, highest_bid: \
-            iter_shrt_closes_inverse(self.price_step, self.qty_step, self.min_qty,
-                                     self.close_qty_pct, self.leverage, self.min_markup,
-                                     self.max_markup, self.n_close_orders, balance, pos_size,
+            iter_shrt_closes_inverse(self.price_step, self.qty_step, self.min_qty, self.min_cost,
+                                     self.entry_qty_pct, self.leverage, self.min_markup,
+                                     self.markup_range, self.n_close_orders, balance, pos_size,
                                      pos_price, highest_bid)
 
     async def init_order_book(self):
@@ -194,9 +198,9 @@ class BybitInverseFuturesBot(Bot):
 
 
     async def fetch_open_orders(self) -> [dict]:
-        fetched = await self.private_get('/futures/private/order/list', {'symbol': self.symbol})
+        fetched = await self.private_get('/futures/private/order', {'symbol': self.symbol})
         oos = []
-        for elm in fetched['result']['data']:
+        for elm in fetched['result']:
             if elm['order_status'] == 'New':
                 position_side = determine_pos_side(elm)
                 oos.append({'order_id': elm['order_id'],
@@ -253,7 +257,6 @@ class BybitInverseFuturesBot(Bot):
                                     'liquidation_price': float(e['data']['liq_price']),
                                     'equity': (b := float(e['data']['wallet_balance'])),
                                     'wallet_balance': b}
-        position['predicted_funding_rate'] = 0.0
         position['wallet_balance'] = position['long']['wallet_balance']
         return position
 
