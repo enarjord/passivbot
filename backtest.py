@@ -66,7 +66,7 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
 
     print('plotting balance and equity...')
     plt.clf()
-    fdf.actual_balance.plot()
+    fdf.balance.plot()
     fdf.equity.plot()
     plt.savefig(f"{result['session_dirpath']}balance_and_equity.png")
 
@@ -751,8 +751,8 @@ def x_to_d(x: np.ndarray, ranges: dict) -> dict:
 
 
 def score_func(r) -> float:
-    liq_cap = 0.1
-    hours_stuck_cap = 120
+    liq_cap = 0.2
+    hours_stuck_cap = 72
     return (r['average_daily_gain']['avg'] *
             r['average_daily_gain']['min'] *
             min(1.0, r['closest_liq']['min'] / liq_cap) /
@@ -789,22 +789,17 @@ def backtest_pso(ticks, bc):
                                               options=options, bounds=bounds)
     stats = optimizer.optimize(rf.rf, iters=iters, n_processes=n_cpus)
     print(stats)
-    try:
-        best_candidate = x_to_d(stats[0], bc['ranges'])
-        print('stats[0] best candidate', best_candidate)
-    except:
-        print('as suspected')
-        best_candidate = x_to_d(stats[1], bc['ranges'])
-        print('stats[1] best candidate', best_candidate)
+    best_candidate = x_to_d(stats[1], bc['ranges'])
+    print('best candidate', best_candidate)
 
-    result_, tdf_ = jackrabbit_wrap(ticks, {**bc, **{'break_on': {}}, **best_candidate})
-    if tdf_ is None:
+    result_, fdf = jackrabbit_wrap(ticks, {**bc, **{'break_on': {}}, **best_candidate})
+    if fdf is None:
         print('no trades')
         return
-    tdf_.to_csv(bc['session_dirpath'] + f"backtest_trades_{best_result['key']}.csv")
+    fdf.to_csv(bc['session_dirpath'] + f"backtest_trades_{best_candidate['key']}.csv")
     print('\nmaking ticks dataframe...')
     df = pd.DataFrame({'price': ticks[:,0], 'buyer_maker': ticks[:,1], 'timestamp': ticks[:,2]})
-    dump_plots({**bc, **best_candidate, **result_}, tdf_, df)
+    dump_plots({**bc, **best_candidate, **result_}, fdf, df)
 
 
 
