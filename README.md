@@ -1,6 +1,6 @@
 # passivbot_futures
 
-**Version: 3.1.0**
+**Version: 3.2.0**
 
 trading bot running on bybit inverse futures and binance usdt futures using hedge mode
 
@@ -74,6 +74,9 @@ change log
 - rewrote iter_long/shrt_closes
 - fixed memory leak bug
 
+2021-03-23 v3.2.0
+- implemented particle swarm optimizationg algorithm, replacing jackrabbit
+
 see `changelog.txt` for earlier changes
 
 
@@ -86,7 +89,7 @@ released freely -- anybody may copy, redistribute, modify, use for commercial, n
 
 usage:
 
-supports exchanges bybit inverse and binance usdt futures
+supports exchanges bybit inverse futures and binance usdt futures
 
 add api key and secret as json file in dir `api_key_secret/{exchange}/your_user_name.json`
 
@@ -100,7 +103,7 @@ rename the copy `your_user_name.json` and make desired changes
 
 run in terminal: `python3 start_bot.py exchange your_user_name`
 
-run in docker: modify command with exchange and user_name in docker-compose and start with `docker-compose up -d` (-d for background run). All code and files generated are in original git folder.
+run in docker: modify command with exchange and user_name in docker-compose and start with `docker-compose up -d` (-d for background run).  all code and files generated are in original git folder.
 
 ------------------------------------------------------------------
 overview
@@ -138,20 +141,6 @@ add argument --jit to use numba's just in time compiler for faster backtesting:
 
 `python3 backtest.py {config_name} --jit`
 
-open backtest_notes.ipynb in jupyter notebook or jupiter-lab for plotting and analysis.
-
-jackrabbit is a pet name given to a simple algorithm for optimizing bot's settings.
-
-it iterates many backtests in succession, for each iteration, settings are mutated to new values within given range defined in backtest config.
-
-if the new candidate's backtest yields higher gain than best candidate's backtest,
-
-the superior settings becomes the parent of the next candidate.
-
-the mutation coefficient m determines the mutation range, and is inversely proportional to k, which is a simple counter.
-
-in other words, at first new candidates will vary wildly from the best settings, towards the end they will vary less, "fine tuning" the parameters.
-
 see wiki for more info on backtesting
 
 ------------------------------------------------------------------
@@ -181,17 +170,12 @@ about live settings, bybit example:
                                           # if set to 1.5, each reentry qty will be equal to 1.5x pos size.
                                           # if set to 0.0, each reentry qty will be equal to initial_entry_qty.
                                           
-    "indicator_settings": {
-        "tick_ema": {                     # tick ema is not based on ohlcvs, but calculated based on sequence of raw trades.
-            "span": 10000,                # if no pos, bid = min(ema * (1 - spread), highest_bid) and ask = max(ema * (1 + spread), lowest_ask)
-            "spread": 0.001
-        },                                # if ema span is set to 1.0, ema is always equal to last price, which will disable ema smoothing of initial entries
+                                          # tick ema is not based on ohlcvs, but calculated based on sequence of raw trades.
+    "ema_span": 10000,                    # if no pos, bid = min(ema * (1 - spread), highest_bid) and ask = max(ema * (1 + spread), lowest_ask)
+    "ema_spread": 0.001
 
-        "funding_fee_collect_mode": false,# if true, will enter long only if predicted funding fee is < 0.0, and short only if predicted funding fee is > 0.0
-
-        "do_long": true,                  # if true, will allow long positions
-        "do_shrt": true                   # if true, will allow short posisions
-    },
+    "do_long": true,                      # if true, will allow long positions
+    "do_shrt": true                       # if true, will allow short posisions
                                           
     "grid_coefficient": 245.0,            # next entry price is pos_price * (1 +- grid_spacing * (1 + (pos_margin / balance) * grid_coefficient)).
     "grid_spacing": 0.0026,               # 
@@ -207,7 +191,6 @@ about live settings, bybit example:
 
     "min_markup": 0.0002,                 # when there's a position, bot makes a grid of n_close_orders whose prices are
     "max_markup": 0.0159,                 # evenly distributed between min and max markup, and whose qtys are pos_size // n_close_orders.
-    "min_close_qty_multiplier": 0.5       # min_close_qty = max(min_qty, initial_entry_qty * min_close_qty_multiplier)
     
     "market_stop_loss": false,            # if true will soft stop with market orders, if false soft stops with limit orders at order book's higest_bid/lowest_ask
                                           
