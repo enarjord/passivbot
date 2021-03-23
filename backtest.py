@@ -13,8 +13,8 @@ from hashlib import sha256
 from multiprocessing import cpu_count, Lock, Value, Array
 from time import time
 from passivbot import *
-from bybit_inverse_futures import create_bot as create_bot_bybit
-from bybit_inverse_futures import fetch_trades as bybit_fetch_trades
+from bybit import create_bot as create_bot_bybit
+from bybit import fetch_trades as bybit_fetch_trades
 from binance import create_bot as create_bot_binance
 from binance import fetch_trades as binance_fetch_trades
 import pyswarms
