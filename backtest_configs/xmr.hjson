@@ -1,9 +1,9 @@
 {
-  session_name: session_016_no_ema
+  session_name: session_003_with_ema
   exchange: binance
   user: e
   symbol: XMRUSDT
-  n_days: 44
+  n_days: 4
   latency_simulation_ms: 750
   starting_balance: 30
   # set sliding window size to 1.0 to do only one backtest for whole period
@@ -15,20 +15,15 @@
 
   ranges:
   {
-    balance_pct: [0.2, 1.0, 0.001]
     entry_qty_pct: [0.0, 1.0, 1e-05]
-    close_qty_pct: [0.0, 1.0, 1e-05]
     ddown_factor: [0, 3.0, 0.001]
     grid_coefficient: [0, 500, 0.01]
     grid_spacing: [0.0002, 0.05, 1e-05]
     leverage: [2, 999999, 1]
-    max_markup: [0.001, 0.03, 1e-05]
+    markup_range: [0.0, 0.03, 1e-05]
     min_markup: [0.0005, 0.002, 1e-05]
     n_close_orders: [8, 25, 1]
-    ema_span: [1.0, 1.0, 1.0]
-    ema_spread: [0.0, 0.0, 0.0001]
-    #stop_loss_liq_diff: [0.015, 0.15, 0.0001]
-    #stop_loss_pos_price_diff: [0.015, 0.15, 0.0001]
-    #stop_loss_pos_reduction: [0.001, 0.3, 0.001]
+    ema_span: [1.0, 500000.0, 1.0]
+    ema_spread: [-0.02, 0.02, 0.0001]
   }
 }
