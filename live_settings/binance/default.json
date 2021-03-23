@@ -1,26 +1,21 @@
 {
-    "config_name": "liq_14%_adg_3.8%_no_ema_28_days",
+    "config_name": "xmr",
     "symbol": "XMRUSDT",
     "logging_level": 0,
-    "cross_mode": true,
 
-    "balance_pct": 0.803,
     "ddown_factor": 2.994,
     "entry_qty_pct": 0.00735,
-    "close_qty_pct": 0.00735,
-    "leverage": 50.0,
+    "leverage": 45.0,
     "n_entry_orders": 8,
     "n_close_orders": 22.0,
 
     "grid_spacing": 0.02426,
     "grid_coefficient": 76.15,
     "min_markup": 0.00097,
-    "max_markup": 0.01512,
+    "markup_range": 0.014,
 
     "ema_span": 1.0,
     "ema_spread": 0.0,
     "do_long": true,
-    "do_shrt": true,
-    "funding_fee_collect_mode": false,
-    "key": "f61a24f3b215de03c6a25cad4e5236aa34ada91bca7e64587f7078fcbd8a8abd"
+    "do_shrt": true
 }
