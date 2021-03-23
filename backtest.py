@@ -17,143 +17,9 @@ from bybit_inverse_futures import create_bot as create_bot_bybit
 from bybit_inverse_futures import fetch_trades as bybit_fetch_trades
 from binance import create_bot as create_bot_binance
 from binance import fetch_trades as binance_fetch_trades
+import pyswarms
 
 from typing import Iterator, Callable
-
-try:
-    aiomultiprocess.set_start_method("fork")
-except Exception as e:
-    aiomultiprocess.set_start_method("spawn")
-    print('failed to set fork method for aiomultiprocess', e)
-    print('using spawn method instead')
-
-
-def score_func_avg_adg(best: dict, candidate: dict) -> bool:
-    try:
-        candidate_score = candidate['average_daily_gain']['avg']
-    except:
-        return False
-    try:
-        best_score = best['average_daily_gain']['avg']
-    except:
-        return True
-    return candidate_score > best_score
-
-def score_func_min_adg(best: dict, candidate: dict) -> bool:
-    try:
-        candidate_score = candidate['average_daily_gain']['min']
-    except:
-        return False
-    try:
-        best_score = best['average_daily_gain']['min']
-    except:
-        return True
-    return candidate_score > best_score
-
-def score_func_avg_adg_min_adg(best: dict, candidate: dict) -> bool:
-    try:
-        candidate_score = candidate['average_daily_gain']['avg'] * \
-            candidate['average_daily_gain']['min']
-    except:
-        return False
-    try:
-        best_score = best['average_daily_gain']['avg'] * \
-            best['average_daily_gain']['min']
-    except:
-        return True
-    return candidate_score > best_score
-
-def score_func_avg_adg_min_liq(best: dict, candidate: dict) -> bool:
-    try:
-        candidate_score = candidate['average_daily_gain']['avg'] * candidate['closest_liq']['min']
-    except:
-        return False
-    try:
-        best_score = best['average_daily_gain']['avg'] * best['closest_liq']['min']
-    except:
-        return True
-    return candidate_score > best_score
-
-def score_func_avg_adg_min_adg_min_liq(best: dict, candidate: dict) -> bool:
-    try:
-        candidate_score = candidate['average_daily_gain']['avg'] * \
-            candidate['average_daily_gain']['min'] * candidate['closest_liq']['min']
-    except:
-        return False
-    try:
-        best_score = best['average_daily_gain']['avg'] * best['average_daily_gain']['min'] * \
-            best['closest_liq']['min']
-    except:
-        return True
-    return candidate_score > best_score
-
-def score_func_avg_adg_min_adg_min_liq_std_adg(best: dict, candidate: dict) -> bool:
-    try:
-        candidate_score = candidate['average_daily_gain']['avg'] * \
-            candidate['average_daily_gain']['min'] * candidate['closest_liq']['min'] / \
-            candidate['average_daily_gain']['std']
-    except:
-        return False
-    try:
-        best_score = best['average_daily_gain']['avg'] * best['average_daily_gain']['min'] * \
-            best['closest_liq']['min'] / best['average_daily_gain']['std']
-    except:
-        return True
-    return candidate_score > best_score
-
-def score_func_avg_adg_min_adg_min_liq_capped(best: dict, candidate: dict) -> bool:
-    cap = 0.2
-    try:
-        candidate_score = candidate['average_daily_gain']['avg'] * \
-            candidate['average_daily_gain']['min'] * min(candidate['closest_liq']['min'], cap)
-    except:
-        return False
-    try:
-        best_score = best['average_daily_gain']['avg'] * \
-            best['average_daily_gain']['min'] * min(best['closest_liq']['min'], cap)
-    except:
-        return True
-    return candidate_score > best_score
-
-def score_func_gain_liq_stuck(best: dict, candidate: dict) -> bool:
-    liq_cap = 0.16
-    hours_stuck_cap = 72
-    try:
-        candidate_score = (candidate['average_daily_gain']['avg'] *
-                           candidate['average_daily_gain']['min'] *
-                           min(1.0, candidate['closest_liq']['min'] / liq_cap) /
-                           max(1.0, candidate['max_n_hours_stuck']['max'] / hours_stuck_cap))
-    except:
-        return False
-    try:
-        best_score = (best['average_daily_gain']['avg'] *
-                      best['average_daily_gain']['min'] *
-                      min(1.0, best['closest_liq']['min'] / liq_cap) /
-                      max(1.0, best['max_n_hours_stuck']['max'] / hours_stuck_cap))
-    except:
-        return True
-    return candidate_score > best_score
-
-
-def get_score_func(key: str) -> Callable:
-
-    if key == 'avg adg':
-        return score_func_avg_adg
-    elif key == 'min adg':
-        return score_func_min_adg
-    elif key == 'avg adg * min adg':
-        return score_func_avg_adg_min_adg
-    elif key == 'avg adg * min liq':
-        return score_func_avg_adg_min_liq
-    elif key == 'avg adg * min adg * min liq':
-        return score_func_avg_adg_min_adg_min_liq
-    elif key == 'avg adg * min adg * min liq capped':
-        return score_func_avg_adg_min_adg_min_liq_capped
-    elif key == 'avg adg * min adg * min liq / std adg':
-        return score_func_avg_adg_min_adg_min_liq_std_adg
-    elif key == 'gain liq stuck':
-        return score_func_gain_liq_stuck
-    raise Exception('unknown score metric', key)
 
 
 def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
@@ -270,8 +136,17 @@ def prep_ticks(df: pd.DataFrame) -> np.ndarray:
     return dfcc.values
 
 
+def cleanup_config(config: dict) -> dict:
+    cleaned = config.copy()
+    for k in config['ranges']:
+        cleaned[k] = round_(config[k], config['ranges'][k][2])
+    cleaned['max_markup'] = max(cleaned['min_markup'], cleaned['max_markup'])
+    cleaned['close_qty_pct'] = min(cleaned['entry_qty_pct'], cleaned['close_qty_pct'])
+    return cleaned
+
+
 def backtest(ticks: np.ndarray, settings: dict) -> [dict]:
-    ss = settings
+    ss = cleanup_config(settings)
 
     long_pos_size, long_pos_price, long_reentry_price = 0.0, np.nan, np.nan
     shrt_pos_size, shrt_pos_price, shrt_reentry_price = 0.0, np.nan, np.nan
@@ -285,6 +160,31 @@ def backtest(ticks: np.ndarray, settings: dict) -> [dict]:
         long_pnl_f = calc_long_pnl_inverse
         shrt_pnl_f = calc_shrt_pnl_inverse
         cost_f = calc_cost_inverse
+        iter_long_entries = lambda balance, long_psize, long_pprice, shrt_psize, highest_bid: \
+            iter_long_entries_inverse(
+                ss['price_step'], ss['qty_step'], ss['min_qty'], ss['min_cost'], ss['ddown_factor'],
+                ss['entry_qty_pct'], ss['leverage'], ss['grid_spacing'], ss['grid_coefficient'],
+                balance, long_psize, long_pprice, shrt_psize, highest_bid
+            )
+        iter_shrt_entries = lambda balance, long_psize, shrt_psize, shrt_pprice, lowest_ask: \
+            iter_shrt_entries_inverse(
+                ss['price_step'], ss['qty_step'], ss['min_qty'], ss['min_cost'], ss['ddown_factor'],
+                ss['entry_qty_pct'], ss['leverage'], ss['grid_spacing'], ss['grid_coefficient'],
+                balance, long_psize, shrt_psize, shrt_pprice, lowest_ask
+            )
+        iter_long_closes = lambda balance, pos_size, pos_price, lowest_ask: \
+            iter_long_closes_inverse(ss['price_step'], ss['qty_step'], ss['min_qty'],
+                                     ss['close_qty_pct'], ss['leverage'], ss['min_markup'],
+                                     ss['max_markup'], ss['n_close_orders'],
+                                     balance, pos_size, pos_price, lowest_ask)
+        iter_shrt_closes = lambda balance, pos_size, pos_price, highest_bid: \
+            iter_shrt_closes_inverse(ss['price_step'], ss['qty_step'], ss['min_qty'],
+                                     ss['close_qty_pct'], ss['leverage'], ss['min_markup'],
+                                     ss['max_markup'], ss['n_close_orders'],
+                                     balance, pos_size, pos_price, highest_bid)
+        long_pnl_f = calc_long_pnl_inverse
+        shrt_pnl_f = calc_shrt_pnl_inverse
+        cost_f = calc_cost_linear
     else:
         iter_long_entries = lambda balance, long_psize, long_pprice, shrt_psize, highest_bid: \
             iter_long_entries_linear(
@@ -315,7 +215,8 @@ def backtest(ticks: np.ndarray, settings: dict) -> [dict]:
     liq_price_f = lambda balance, l_psize, l_pprice, s_psize, s_pprice: \
         calc_cross_hedge_lig_price(balance, l_psize, l_pprice, s_psize, s_pprice, ss['leverage'])
     
-    break_on = {e[0]: eval(e[1]) for e in settings['break_on'] if e[0].startswith('ON:')}
+    break_on = {e[0]: eval(e[1]) for e in settings['break_on'] if e[0].startswith('ON:')} \
+        if 'break_on' in ss else {}
 
     prev_trade_ts = 0
     prev_long_close_ts, prev_long_entry_ts, prev_long_close_price = 0, 0, 0.0
@@ -513,39 +414,15 @@ def backtest(ticks: np.ndarray, settings: dict) -> [dict]:
     return all_fills, True
 
 
-def calc_new_val(val, range_, m):
-    # quick fix of bug where random nums weren't random enuf between processes
-    np.random.seed((int(time() * 100000) % (2**31)))
-    choice_span = (range_[1] - range_[0]) * m / 2
-    biased_mid_point = max(range_[0] + choice_span, min(val, range_[1] - choice_span))
-    choice_range = (biased_mid_point - choice_span, biased_mid_point + choice_span)
-    new_val = np.random.choice(np.linspace(choice_range[0], choice_range[1], 200))
-    #new_val = np.random.random() * (choice_range[1] - choice_range[0])
-    return round_(new_val, range_[2])
-
-
-def get_new_candidate(ranges: dict, best: dict, m=0.2):
-    cand = sort_dict_keys({k: calc_new_val(best[k], ranges[k], m) for k in best if k in ranges})
-    cand['max_markup'] = max(cand['min_markup'], cand['max_markup'])
-    cand['close_qty_pct'] = min(cand['entry_qty_pct'], cand['close_qty_pct'])
-    return cand
-
-
 def get_downloaded_trades(filepath: str, age_limit_millis: float) -> (pd.DataFrame, dict):
     if os.path.isdir(filepath):
         filenames = sorted([f for f in os.listdir(filepath) if f.endswith('.csv')],
-                           key=lambda x: int(x[:x.find('_')].replace('.cs', '').replace('v', '')))
+                           key=lambda x: int(eval(x[:x.find('_')].replace('.cs', '').replace('v', ''))))
         chunks = []
         chunk_lengths = {}
         df = pd.DataFrame()
         for f in filenames[::-1]:
-            try:
-                chunk = pd.read_csv(os.path.join(filepath, f), dtype=np.float64).set_index('trade_id')
-            except ValueError as e:
-                # old bybit formatting
-                chunk = pd.read_csv(os.path.join(filepath, f)).set_index('trade_id')
-                chunk = chunk.drop('side', axis=1).join(pd.Series(chunk.side == 'Sell', name='is_buyer_maker', index=chunk.index))
-                chunk = chunk.astype(np.float64)
+            chunk = pd.read_csv(os.path.join(filepath, f), dtype=np.float64).set_index('trade_id')
             chunk_lengths[f] = len(chunk)
             chunks.append(chunk)
             if len(chunks) >= 100:
@@ -735,218 +612,23 @@ def calc_candidate_hash_key(candidate: dict, keys: [str]) -> str:
                               if k in candidate}).encode()).hexdigest()
 
 
-def load_results(results_filepath: str) -> dict:
-    if os.path.exists(results_filepath):
-        with open(results_filepath) as f:
-            lines = f.readlines()
-        results = {(e := json.loads(line))['key']: e for line in lines}
-    else:
-        results = {}
-    return results
-
-
-async def jackrabbit(ticks: [dict], backtest_config: dict):
-    results = load_results(backtest_config['session_dirpath'] + 'results.txt')
-    k = backtest_config['starting_k']
-    ks = backtest_config['n_jackrabbit_iterations']
-    if ks > 1:
-        ms = np.array([1 / (i / 2 + 32) for i in range(ks)])
-        ms = ((ms - ms.min()) / (ms.max() - ms.min()))
-    else:
-        ms = np.array([0.0])
-    try:
-        best_result = json.load(open(backtest_config['session_dirpath'] + 'best_result.json'))
-    except Exception as e:
-        print('no current best result')
-        best_result = {}
-    try:
-        candidate = live_settings_to_candidate(
-            json.load(open(backtest_config['starting_candidate_filepath'])),
-            backtest_config['ranges']
-        )
-        print('using given starting candidate', backtest_config['starting_candidate_filepath'])
-    except Exception as e:
-        print(e, f"starting candidate {backtest_config['starting_candidate_filepath']} not found.")
-        if best_result:
-            print('building on current best')
-            candidate = get_new_candidate(backtest_config['ranges'], best_result, m=0.0)
-            pass
-        else:
-            print('using random starting candidate')
-            candidate = get_new_candidate(
-                backtest_config['ranges'],
-                {k_: 0.0 for k_ in backtest_config['ranges']},
-                m=1.0
-            )
-    if '--plot' in sys.argv:
-        if '--given' in sys.argv:
-            best_result = candidate
-            print('backtesting and plotting given candidate')
-
-        else:
-            _, best_result = load_shared_data(backtest_config['session_dirpath'], Lock())
-            if not best_result:
-                return
-            print('backtesting and plotting best candidate')
-        result_, tdf_ = jackrabbit_wrap(ticks, {**backtest_config, **{'break_on': []}, **best_result})
-        if tdf_ is None:
-            print('no trades')
-            return
-        tdf_.to_csv(backtest_config['session_dirpath'] + f"backtest_trades_{best_result['key']}.csv")
-        print('\nmaking ticks dataframe...')
-        df = pd.DataFrame({'price': ticks[:,0], 'buyer_maker': ticks[:,1], 'timestamp': ticks[:,2]})
-        dump_plots({**backtest_config, **best_result, **result_}, tdf_, df)
-        return
-    
-    await jackrabbit_multi_core(results,
-                                ticks,
-                                backtest_config,
-                                candidate,
-                                k,
-                                ks,
-                                ms)
-
-
-async def multiprocess_wrap(func, args=()):
-    result = await aiomultiprocess.Worker(target=func, args=args)
-    return result
-
-
-def load_best_result(dirpath: str):
-    if os.path.exists((p := dirpath + 'best_result.json')):
-        return json.load(open(p))
-    return {}
-
-
-def load_keys(dirpath: str) -> set:
-    if os.path.exists((p := dirpath + 'keys.txt')):
-        with open(p) as f:
-            keys = set([line.strip() for line in f.readlines()])
-    else:
-        keys = set()
-    return keys
-
-def append_key(dirpath: str, key: str):
-    with open(dirpath + 'keys.txt', 'a') as f:
-        f.write(key + '\n')
-
-def load_shared_data(dirpath: str, lock: Lock) -> (dict, dict):
-    lock.acquire()
-    try:
-        return load_keys(dirpath), load_best_result(dirpath)
-    finally:
-        lock.release()
-
-
-def dump_shared_data(dirpath: str, result: dict, best_result: dict, lock: Lock) -> None:
-    lock.acquire()
-    try:
-        with open(dirpath + 'results.txt', 'a') as f:
-            f.write(json.dumps(result) + '\n')
-        append_key(dirpath, result['key'])
-        if load_best_result(dirpath) != best_result:
-            json.dump(best_result, open(dirpath + 'best_result.json', 'w'), indent=4)
-    finally:
-        lock.release()
-
-
-def get_next_candidate(backtest_config: dict, candidate: dict, ms: [float], k: Value, lock: Lock):
-    lock.acquire()
-    new_candidate = candidate.copy()
-    try:
-        dirpath = backtest_config['session_dirpath']
-        keys, best_result = load_keys(dirpath), load_best_result(dirpath)
-        key = calc_candidate_hash_key(candidate, list(backtest_config['ranges']))
-        for _ in range(10):
-            if key not in keys:
-                break
-            new_candidate = get_new_candidate(backtest_config['ranges'],
-                                              (best_result if best_result else candidate),
-                                              m=ms[k.value])
-            key = calc_candidate_hash_key(new_candidate, list(backtest_config['ranges']))
-        else:
-            return None, key
-        append_key(dirpath, key)
-        return new_candidate, key
-    finally:
-        lock.release()
-
-
-async def jackrabbit_worker(ticks: Array,
-                            dim: (),
-                            backtest_config: dict,
-                            candidate: dict,
-                            score_func: Callable,
-                            k: Value,
-                            ks: int,
-                            ms: [float],
-                            lock: Lock):
-    ticks = np.frombuffer(ticks.get_obj(), dtype='d').reshape(dim)
-    start_time = time()
-    await asyncio.sleep(0.01)
-    while True:
-
-        if k.value >= ks:
-            break
-        candidate, key = get_next_candidate(backtest_config, candidate, ms, k, lock)
-        if candidate is None:
-            break
-        line = f'running backtest {k.value} of {ks}. m={ms[k.value]:.3f} {key} '
-        k.value = k.value + 1
-        bpm = k.value / (time() - start_time) * 60
-        line += f'backtests per minute: {bpm:.2f}'
-        print(line)
-        print(candidate, '\n')
-        result = await jackrabbit_sliding_window_wrap(ticks, {**backtest_config,
-                                                              **candidate,
-                                                              **{'key': key}})
-        result['key'] = key
-        result = {**result, **candidate}
-        keys, best_result = load_shared_data(backtest_config['session_dirpath'], lock)
-        if score_func(best_result, result):
-            print('\n\n### new best ###\n\n')
-            best_result = result
-            print(json.dumps(best_result, indent=4))
-            print('\n\n')
-            json.dump(candidate_to_live_settings(backtest_config['exchange'],
-                                                 {**backtest_config, **candidate, **best_result}),
-                      open(backtest_config['session_dirpath'] + 'live_config.json', 'w'),
-                      indent=4)
-        dump_shared_data(backtest_config['session_dirpath'], result, best_result, lock)
-
-
-async def jackrabbit_multi_core(results: dict,
-                                ticks: [dict],
-                                backtest_config: dict,
-                                candidate: dict,
-                                k_: int,
-                                ks: int,
-                                ms: [float]):
-    n_cpus = min(cpu_count(), backtest_config['max_n_cpus'])
-    print('using', n_cpus, 'cpus')
-    score_func = get_score_func(backtest_config['score_metric'])
-    lock = Lock()
-    k = Value('i', k_)
-    workers = []
-    ticks_m = Array('d', int(np.prod(ticks.shape)), lock=True)
-    ticks_n = np.frombuffer(ticks_m.get_obj(), dtype='d').reshape(ticks.shape)
-    ticks_n[:] = ticks
-    for _ in range(min(n_cpus, ks)):
-        workers.append(asyncio.create_task(multiprocess_wrap(
-            jackrabbit_worker, (ticks_m, ticks.shape, backtest_config, candidate, score_func, k, ks,
-                                ms, lock)
-        )))
-        await asyncio.sleep(0.05)
-    for w in workers:
-        await w
+def iter_slices(iterable, step: float, size: float):
+    i = 0
+    n = int(len(iterable) * size)
+    s = int(len(iterable) * step)
+    while i + n < len(iterable):
+        yield iterable[i:i+n]
+        i += s
+    yield iterable[-n:]
+    if size < 1.0:
+        # also yield full 
+        yield iterable
 
 
 def jackrabbit_wrap(ticks: [dict], backtest_config: dict) -> dict:
     start_ts = time()
     fills, did_finish = backtest(ticks, backtest_config)
     elapsed = time() - start_ts
-    if not did_finish or not fills:
-        return {}, None
     fdf = pd.DataFrame(fills).set_index('trade_id')
     ms_gap = np.diff([ticks[0][2]] + list(fdf.timestamp) + [ticks[-1][2]]).max()
     hours_since_prev_fill = ticks[-1][2] - fills[-1]['timestamp']
@@ -975,20 +657,7 @@ def jackrabbit_wrap(ticks: [dict], backtest_config: dict) -> dict:
     return result, fdf
 
 
-def iter_slices(iterable, step: float, size: float):
-    i = 0
-    n = int(len(iterable) * size)
-    s = int(len(iterable) * step)
-    while i + n < len(iterable):
-        yield iterable[i:i+n]
-        i += s
-    yield iterable[-n:]
-    if size < 1.0:
-        # also yield full 
-        yield iterable
-
-
-async def jackrabbit_sliding_window_wrap(ticks: np.ndarray, backtest_config: dict) -> dict:
+def jackrabbit_sliding_window_wrap(ticks: np.ndarray, backtest_config: dict) -> dict:
     sub_runs = []
     start_ts = time()
     for z, slice_ in enumerate(iter_slices(ticks,
@@ -1084,11 +753,75 @@ async def prep_backtest_config(config_name: str):
     return backtest_config
 
 
+def x_to_d(x: np.ndarray, ranges: dict) -> dict:
+    return {k: x[i] for i, k in enumerate(sorted(ranges))}
+
+
+def score_func(r) -> float:
+    liq_cap = 0.1
+    hours_stuck_cap = 120
+    return (r['average_daily_gain']['avg'] *
+            r['average_daily_gain']['min'] *
+            min(1.0, r['closest_liq']['min'] / liq_cap) /
+            max(1.0, r['max_n_hours_stuck']['max'] / hours_stuck_cap))
+
+
+class RF:
+    def __init__(self, ticks, backtest_config):
+        self.ticks = ticks
+        self.bc = backtest_config
+
+    def rf(self, x):
+        rs = [
+            jackrabbit_sliding_window_wrap(
+                self.ticks,
+                {**self.bc,
+                 **x_to_d(x[i], self.bc['ranges']),
+                 **{'key': calc_candidate_hash_key(x_to_d(x[i], self.bc['ranges']),
+                                                   sorted(self.bc['ranges']))}}
+            ) for i in range(x.shape[0])
+        ]
+        return np.array([-score_func(r) for r in rs])
+
+
+def backtest_pso(ticks, bc):
+    bounds = (np.array([bc['ranges'][k][0] for k in sorted(bc['ranges'])]),
+              np.array([bc['ranges'][k][1] for k in sorted(bc['ranges'])]))
+    rf = RF(ticks, bc)
+    iters = 100
+    options = {'c1': 1.0, 'c2': 1.0, 'w': 1.0}
+    n_particles = 10
+    n_cpus = os.cpu_count()
+    optimizer = pyswarms.single.GlobalBestPSO(n_particles=n_particles, dimensions=len(bounds[0]),
+                                              options=options, bounds=bounds)
+    stats = optimizer.optimize(rf.rf, iters=iters, n_processes=n_cpus)
+    print(stats)
+    try:
+        best_candidate = x_to_d(stats[0], bc['ranges'])
+        print('stats[0] best candidate', best_candidate)
+    except:
+        print('as suspected')
+        best_candidate = x_to_d(stats[1], bc['ranges'])
+        print('stats[1] best candidate', best_candidate)
+
+    result_, tdf_ = jackrabbit_wrap(ticks, {**bc, **{'break_on': {}}, **best_candidate})
+    if tdf_ is None:
+        print('no trades')
+        return
+    tdf_.to_csv(backtest_config['session_dirpath'] + f"backtest_trades_{best_result['key']}.csv")
+    print('\nmaking ticks dataframe...')
+    df = pd.DataFrame({'price': ticks[:,0], 'buyer_maker': ticks[:,1], 'timestamp': ticks[:,2]})
+    dump_plots({**bc, **best_candidate, **result_}, tdf_, df)
+
+
+
+
 async def main():
     config_name = sys.argv[1]
     backtest_config = await prep_backtest_config(config_name)
     ticks = await load_ticks(backtest_config)
-    await jackrabbit(ticks, backtest_config)
+    print('pso')
+    backtest_pso(ticks, backtest_config)
 
 
 if __name__ == '__main__':
