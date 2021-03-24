@@ -47,6 +47,9 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
     lines.append(f"starting balance {result['starting_balance']}")
     lines.append(f"long: {result['do_long']}, short: {result['do_shrt']}")
 
+    live_config = candidate_to_live_settings(result['exchange'], result)
+    json.dump(live_config, open(result['session_dirpath'] + 'live_config.json', 'w'), indent=4)
+
     print('plotting price with bid ask entry thresholds')
     ema = df.price.ewm(span=result['ema_span'], adjust=False).mean()
     bids_ = ema * (1 - result['ema_spread'])
@@ -72,6 +75,7 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
 
     print('plotting backtest whole and in chunks...')
     n_parts = 7
+    #n_parts = int(round_up(result['n_days'], 1.0))
     for z in range(n_parts):
         start_ = z / n_parts
         end_ = (z + 1) / n_parts
@@ -231,7 +235,6 @@ def backtest(ticks: np.ndarray, settings: dict) -> [dict]:
             if ss['do_long']:
                 if tick[0] <= liq_price and long_pos_size > -shrt_pos_size:
                     if (liq_diff := calc_diff(liq_price, tick[0])) < 0.1:
-                        print('long liq')
                         fills.append({
                             'price': tick[0], 'side': 'sel', 'pos_side': 'long',
                             'type': 'liquidation', 'qty': -long_pos_size,
@@ -297,7 +300,6 @@ def backtest(ticks: np.ndarray, settings: dict) -> [dict]:
             if ss['do_shrt']:
                 if tick[0] >= liq_price and -shrt_pos_size > long_pos_size:
                     if (liq_diff := calc_diff(liq_price, tick[0])) < 0.1:
-                        print('shrt liq')
                         fills.append({
                             'price': tick[0], 'side': 'buy', 'pos_side': 'shrt',
                             'type': 'liquidation', 'qty': -shrt_pos_size,
@@ -414,7 +416,13 @@ def get_downloaded_trades(filepath: str, age_limit_millis: float) -> (pd.DataFra
         chunk_lengths = {}
         df = pd.DataFrame()
         for f in filenames[::-1]:
-            chunk = pd.read_csv(os.path.join(filepath, f), dtype=np.float64).set_index('trade_id')
+            try:
+                chunk = pd.read_csv(os.path.join(filepath, f), dtype=np.float64).set_index('trade_id')
+            except ValueError as e:
+                # old bybit formatting
+                chunk = pd.read_csv(os.path.join(filepath, f)).set_index('trade_id')
+                chunk = chunk.drop('side', axis=1).join(pd.Series(chunk.side == 'Sell', name='is_buyer_maker', index=chunk.index))
+                chunk = chunk.astype(np.float64)
             chunk_lengths[f] = len(chunk)
             chunks.append(chunk)
             if len(chunks) >= 100:
@@ -620,10 +628,12 @@ def iter_slices(iterable, step: float, size: float):
         yield iterable
 
 
-def jackrabbit_wrap(ticks: [dict], backtest_config: dict) -> dict:
+def backtest_wrap(ticks: [dict], backtest_config: dict) -> dict:
     start_ts = time()
     fills, did_finish = backtest(ticks, backtest_config)
     elapsed = time() - start_ts
+    if len(fills) == 0:
+        return {'average_daily_gain': 0.0, 'closest_liq': 0.0, 'max_n_hours_stuck': 1000.0}, pd.DataFrame()
     fdf = pd.DataFrame(fills).set_index('trade_id')
     ms_gap = np.diff([ticks[0][2]] + list(fdf.timestamp) + [ticks[-1][2]]).max()
     hours_since_prev_fill = ticks[-1][2] - fills[-1]['timestamp']
@@ -649,16 +659,18 @@ def jackrabbit_wrap(ticks: [dict], backtest_config: dict) -> dict:
         'do_shrt': bool(backtest_config['do_shrt']),
         'seconds_elapsed': elapsed
     }
+    if 'key' not in result:
+        result['key'] = calc_candidate_hash_key(backtest_config, backtest_config['ranges'])
     return result, fdf
 
 
-def jackrabbit_sliding_window_wrap(ticks: np.ndarray, backtest_config: dict) -> dict:
+def backtest_sliding_window_wrap(ticks: np.ndarray, backtest_config: dict) -> dict:
     sub_runs = []
     start_ts = time()
     for z, slice_ in enumerate(iter_slices(ticks,
                                            backtest_config['sliding_window_step'],
                                            backtest_config['sliding_window_size'])):
-        result_, _ = jackrabbit_wrap(slice_, backtest_config)
+        result_, _ = backtest_wrap(slice_, backtest_config)
         if not result_:
             print(f"\n{backtest_config['key']} did not finish backtest")
             return {'key': backtest_config['key']}
@@ -752,7 +764,7 @@ def x_to_d(x: np.ndarray, ranges: dict) -> dict:
 
 def score_func(r) -> float:
     liq_cap = 0.2
-    hours_stuck_cap = 72
+    hours_stuck_cap = 60
     return (r['average_daily_gain']['avg'] *
             r['average_daily_gain']['min'] *
             min(1.0, r['closest_liq']['min'] / liq_cap) /
@@ -766,7 +778,7 @@ class RF:
 
     def rf(self, x):
         rs = [
-            jackrabbit_sliding_window_wrap(
+            backtest_sliding_window_wrap(
                 self.ticks,
                 {**self.bc,
                  **x_to_d(x[i], self.bc['ranges']),
@@ -791,26 +803,43 @@ def backtest_pso(ticks, bc):
     print(stats)
     best_candidate = x_to_d(stats[1], bc['ranges'])
     print('best candidate', best_candidate)
+    plot_wrap(bc, ticks, best_candidate)
 
-    result_, fdf = jackrabbit_wrap(ticks, {**bc, **{'break_on': {}}, **best_candidate})
-    if fdf is None:
+
+def plot_wrap(bc, ticks, candidate):
+    bc['session_dirpath'] = make_get_filepath(os.path.join(
+        'plots', bc['exchange'], bc['symbol'],
+        f"{int(bc['n_days'])}_days_{ts_to_date(time())[:19].replace(':', '')}", ''))
+    result, fdf = backtest_wrap(ticks, {**bc, **{'break_on': {}}, **candidate})
+    if fdf is None or len(fdf) == 0:
         print('no trades')
         return
-    fdf.to_csv(bc['session_dirpath'] + f"backtest_trades_{best_candidate['key']}.csv")
+    fdf.to_csv(bc['session_dirpath'] + f"backtest_trades_{result['key']}.csv")
     print('\nmaking ticks dataframe...')
     df = pd.DataFrame({'price': ticks[:,0], 'buyer_maker': ticks[:,1], 'timestamp': ticks[:,2]})
-    dump_plots({**bc, **best_candidate, **result_}, fdf, df)
+    dump_plots({**bc, **candidate, **result}, fdf, df)
 
 
-
-
-async def main():
-    config_name = sys.argv[1]
+async def main(args: list):
+    config_name = args[1]
     backtest_config = await prep_backtest_config(config_name)
     ticks = await load_ticks(backtest_config)
-    print('pso')
+    if (p := '--plot') in args:
+        try:
+            candidate = json.load(open(args[args.index(p) + 1]))
+            print('plotting given candidate')
+        except Exception as e:
+            print(os.listdir(backtest_config['session_dirpath']))
+            try:
+                candidate = json.load(open(backtest_config['session_dirpath'] + 'live_config.json'))
+                print('plotting best candidate')
+            except:
+                return
+        print(json.dumps(candidate, indent=4))
+        plot_wrap(backtest_config, ticks, candidate)
+        return
     backtest_pso(ticks, backtest_config)
 
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    asyncio.run(main(sys.argv))
