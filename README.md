@@ -93,13 +93,11 @@ run in docker: modify command with exchange and user_name in docker-compose and 
 ------------------------------------------------------------------
 overview
 
-the bot's purpose is to accumulate btc (or another coin) in bybit inverse and usdt in binance usdt futures
+the bot's purpose is to accumulate btc (or another coin) in bybit inverse and usdt in binance usdt futures using hedge mode for simultaneous long and short positions
 
 it is a market maker bot, making multiple post only limit orders above and below price
 
 it listens to websocket live stream of trades, and updates its orders continuously
-
-when there is no position, it enters either long or short depending on indicator settings
 
 if there is a long position, it creates reentry bids below pos price, and reduce-only asks above pos price
 
