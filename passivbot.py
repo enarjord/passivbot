@@ -11,10 +11,7 @@ from time import time, sleep
 from typing import Iterator, Tuple
 
 
-if '--jit' in sys.argv:
-    print('using numba')
-    from numba import njit
-else:
+if '--nojit' in sys.argv:
     print('not using numba')
     def njit(pyfunc=None, **kwargs):
         def wrap(func):
@@ -23,6 +20,9 @@ else:
             return wrap(pyfunc)
         else:
             return wrap
+else:
+    print('using numba')
+    from numba import njit
 
 
 @njit
@@ -55,6 +55,17 @@ def sort_dict_keys(d):
 def calc_ema(alpha: float, alpha_: float, prev_ema: float, new_val: float) -> float:
     return prev_ema * alpha_ + new_val * alpha
 
+
+@njit
+def calc_initial_long_entry_price(price_step: float, spread: float, ema: float,
+                                  highest_bid: float) -> float:
+    return min(highest_bid, round_dn(ema * (1 - spread), price_step))
+
+
+@njit
+def calc_initial_shrt_entry_price(price_step: float, spread: float, ema: float,
+                                  lowest_ask: float) -> float:
+    return min(lowest_ask, round_up(ema * (1 + spread), price_step))
 
 
 #################
@@ -93,7 +104,7 @@ def calc_max_pos_size_inverse(leverage: float, balance: float, price: float) -> 
 
 
 @njit
-def calc_max_entry_qty_inverse(leverage: float,
+def calc_max_order_qty_inverse(leverage: float,
                                balance: float,
                                long_pos_size: float,
                                shrt_pos_size: float,
@@ -102,13 +113,13 @@ def calc_max_entry_qty_inverse(leverage: float,
 
 
 @njit
-def calc_min_entry_qty_inverse(qty_step: float, min_qty: float, min_cost: float,
-                               entry_qty_pct: float, leverage: float, balance: float,
+def calc_min_order_qty_inverse(qty_step: float, min_qty: float, min_cost: float,
+                               qty_pct: float, leverage: float, balance: float,
                                price: float) -> float:
-    return calc_min_entry_qty(calc_min_qty_inverse(qty_step, min_qty, min_cost, price),
+    return calc_min_order_qty(calc_min_qty_inverse(qty_step, min_qty, min_cost, price),
                               qty_step,
                               balance * leverage * price,
-                              entry_qty_pct)
+                              qty_pct)
 
 
 @njit
@@ -117,7 +128,7 @@ def iter_long_entries_inverse(price_step: float,
                               min_qty: float,
                               min_cost: float,
                               ddown_factor: float,
-                              entry_qty_pct: float,
+                              qty_pct: float,
                               leverage: float,
                               grid_spacing: float,
                               grid_coefficient: float,
@@ -128,7 +139,7 @@ def iter_long_entries_inverse(price_step: float,
                               highest_bid: float,) -> Iterator[Tuple[float, float, float, float, float]]:
     # yields tuple (qty, price, new_long_psize, new_long_pprice, margin_cost)
     if long_psize == 0.0:
-        qty = calc_min_entry_qty_inverse(qty_step, min_qty, min_cost, entry_qty_pct, leverage,
+        qty = calc_min_order_qty_inverse(qty_step, min_qty, min_cost, qty_pct, leverage,
                                          balance, highest_bid)
         price = highest_bid
         long_psize = qty
@@ -142,13 +153,13 @@ def iter_long_entries_inverse(price_step: float,
                                                          balance, pos_margin, long_pprice))
         if price == 0.0:
             break
-        min_entry_qty = calc_min_entry_qty_inverse(qty_step, min_qty, min_cost, entry_qty_pct,
+        min_order_qty = calc_min_order_qty_inverse(qty_step, min_qty, min_cost, qty_pct,
                                                    leverage, balance, price)
-        qty = calc_reentry_qty(qty_step, ddown_factor, min_entry_qty,
-                               calc_max_entry_qty_inverse(leverage, balance, long_psize, shrt_psize,
+        qty = calc_reentry_qty(qty_step, ddown_factor, min_order_qty,
+                               calc_max_order_qty_inverse(leverage, balance, long_psize, shrt_psize,
                                                           price),
                                long_psize)
-        if qty < min_entry_qty:
+        if qty < min_order_qty:
             break
         new_pos_size = long_psize + qty
         long_pprice = long_pprice * (long_psize / new_pos_size) + price * (qty / new_pos_size)
@@ -164,7 +175,7 @@ def iter_shrt_entries_inverse(price_step: float,
                               min_qty: float,
                               min_cost: float,
                               ddown_factor: float,
-                              entry_qty_pct: float,
+                              qty_pct: float,
                               leverage: float,
                               grid_spacing: float,
                               grid_coefficient: float,
@@ -176,7 +187,7 @@ def iter_shrt_entries_inverse(price_step: float,
     # yields tuple (qty, price, new_shrt_psize, new_shrt_pprice, margin_cost)
 
     if shrt_psize == 0.0:
-        qty = -calc_min_entry_qty_inverse(qty_step, min_qty, min_cost, entry_qty_pct, leverage,
+        qty = -calc_min_order_qty_inverse(qty_step, min_qty, min_cost, qty_pct, leverage,
                                           balance, lowest_ask)
         price = lowest_ask
         shrt_psize = qty
@@ -188,13 +199,13 @@ def iter_shrt_entries_inverse(price_step: float,
         pos_margin = calc_margin_cost_inverse(leverage, shrt_psize, shrt_pprice)
         price = max(lowest_ask, calc_shrt_reentry_price(price_step, grid_spacing, grid_coefficient,
                                                         balance, pos_margin, shrt_pprice))
-        min_entry_qty = -calc_min_entry_qty_inverse(qty_step, min_qty, min_cost, entry_qty_pct,
+        min_order_qty = -calc_min_order_qty_inverse(qty_step, min_qty, min_cost, qty_pct,
                                                     leverage, balance, price)
-        qty = -calc_reentry_qty(qty_step, ddown_factor, abs(min_entry_qty),
-                                calc_max_entry_qty_inverse(leverage, balance, long_psize, shrt_psize,
+        qty = -calc_reentry_qty(qty_step, ddown_factor, abs(min_order_qty),
+                                calc_max_order_qty_inverse(leverage, balance, long_psize, shrt_psize,
                                                            price),
                                 shrt_psize)
-        if qty > min_entry_qty:
+        if qty > min_order_qty:
             break
         new_pos_size = shrt_psize + qty
         shrt_pprice = shrt_pprice * (shrt_psize / new_pos_size) + price * (qty / new_pos_size)
@@ -209,7 +220,7 @@ def iter_long_closes_inverse(price_step: float,
                              qty_step: float,
                              min_qty: float,
                              min_cost: float,
-                             entry_qty_pct: float,
+                             qty_pct: float,
                              leverage: float,
                              min_markup: float,
                              markup_range: float,
@@ -236,8 +247,8 @@ def iter_long_closes_inverse(price_step: float,
             if n_orders == 0:
                 break
             else:
-                qty = -min(pos_size, max(calc_min_entry_qty_inverse(qty_step, min_qty, min_cost,
-                                                                    entry_qty_pct, leverage,
+                qty = -min(pos_size, max(calc_min_order_qty_inverse(qty_step, min_qty, min_cost,
+                                                                    qty_pct, leverage,
                                                                     balance, lowest_ask),
                                          round_up(pos_size / n_orders, qty_step)))
             if qty == 0.0:
@@ -255,7 +266,7 @@ def iter_shrt_closes_inverse(price_step: float,
                              qty_step: float,
                              min_qty: float,
                              min_cost: float,
-                             entry_qty_pct: float,
+                             qty_pct: float,
                              leverage: float,
                              min_markup: float,
                              markup_range: float,
@@ -286,8 +297,8 @@ def iter_shrt_closes_inverse(price_step: float,
             if n_orders == 0:
                 break
             else:
-                qty = min(abs_pos_size, max(calc_min_entry_qty_inverse(qty_step, min_qty, min_cost,
-                                                                       entry_qty_pct, leverage,
+                qty = min(abs_pos_size, max(calc_min_order_qty_inverse(qty_step, min_qty, min_cost,
+                                                                       qty_pct, leverage,
                                                                        balance, highest_bid),
                                             round_up(abs_pos_size / n_orders, qty_step)))
             if qty == 0.0:
@@ -298,6 +309,65 @@ def iter_shrt_closes_inverse(price_step: float,
             n_orders -= 1
         if abs_pos_size > 0.0:
             yield abs_pos_size, min(highest_bid, round_dn(minm, price_step)), 0.0
+
+
+@njit
+def calc_cross_long_liq_price_bybit_inverse(balance,
+                                            pos_size,
+                                            pos_price,
+                                            leverage,
+                                            mm=0.005) -> float:
+    order_cost = pos_size / pos_price
+    order_margin = order_cost / leverage
+    bankruptcy_price = calc_cross_long_bankruptcy_price_bybit_inverse(pos_size, order_cost, balance, order_margin)
+    if bankruptcy_price == 0.0:
+        return 0.0
+    rhs = -(balance - order_margin - (pos_size / pos_price) * mm - \
+        (pos_size * 0.00075) / bankruptcy_price)
+    return (pos_price * pos_size) / (pos_size - pos_price * rhs)
+
+
+@njit
+def calc_cross_long_bankruptcy_price_bybit_inverse(pos_size, order_cost, balance, order_margin) -> float:
+    return (1.00075 * pos_size) / (order_cost + (balance - order_margin))
+
+
+@njit
+def calc_cross_shrt_liq_price_bybit_inverse(balance,
+                              pos_size,
+                              pos_price,
+                              leverage,
+                              mm=0.005) -> float:
+    _pos_size = abs(pos_size)
+    order_cost = _pos_size / pos_price
+    order_margin = order_cost / leverage
+    bankruptcy_price = calc_cross_shrt_bankruptcy_price_bybit_inverse(_pos_size, order_cost, balance, order_margin)
+    if bankruptcy_price == 0.0:
+        return 0.0
+    rhs = -(balance - order_margin - (_pos_size / pos_price) * mm - \
+        (_pos_size * 0.00075) / bankruptcy_price)
+    shrt_liq_price = (pos_price * _pos_size) / (pos_price * rhs + _pos_size)
+    if shrt_liq_price <= 0.0:
+        return 0.0
+    return shrt_liq_price
+
+
+@njit
+def calc_cross_shrt_bankruptcy_price_bybit_inverse(pos_size, order_cost, balance, order_margin) -> float:
+    return (0.99925 * pos_size) / (order_cost - (balance - order_margin))
+
+
+@njit
+def calc_cross_hedge_liq_price_bybit_inverse(balance: float,
+                                             long_pos_size: float,
+                                             long_pos_price: float,
+                                             shrt_pos_size: float,
+                                             shrt_pos_price: float,
+                                             leverage: float) -> float:
+    if long_pos_size > abs(shrt_pos_size):
+        return calc_cross_long_liq_price_bybit_inverse(balance, long_pos_size, long_pos_price, leverage)
+    else:
+        return calc_cross_shrt_liq_price_bybit_inverse(balance, shrt_pos_size, shrt_pos_price, leverage)
 
 
 ################
@@ -336,7 +406,7 @@ def calc_max_pos_size_linear(leverage: float, balance: float, price: float) -> f
 
 
 @njit
-def calc_max_entry_qty_linear(leverage: float,
+def calc_max_order_qty_linear(leverage: float,
                               balance: float,
                               long_pos_size: float,
                               shrt_pos_size: float,
@@ -345,22 +415,22 @@ def calc_max_entry_qty_linear(leverage: float,
 
 
 @njit
-def calc_min_entry_qty_linear(qty_step: float, min_qty: float, min_cost: float,
-                              entry_qty_pct: float, leverage: float, balance: float,
+def calc_min_order_qty_linear(qty_step: float, min_qty: float, min_cost: float,
+                              qty_pct: float, leverage: float, balance: float,
                               price: float) -> float:
-    return calc_min_entry_qty(calc_min_qty_linear(qty_step, min_qty, min_cost, price),
+    return calc_min_order_qty(calc_min_qty_linear(qty_step, min_qty, min_cost, price),
                               qty_step,
                               (balance * leverage) / price,
-                              entry_qty_pct)
+                              qty_pct)
 
 
 @njit
-def calc_cross_hedge_liq_price(balance: float,
-                               long_pos_size: float,
-                               long_pos_price: float,
-                               shrt_pos_size: float,
-                               shrt_pos_price: float,
-                               leverage: float) -> float:
+def calc_cross_hedge_liq_price_binance_linear(balance: float,
+                                              long_pos_size: float,
+                                              long_pos_price: float,
+                                              shrt_pos_size: float,
+                                              shrt_pos_price: float,
+                                              leverage: float) -> float:
     abs_long_pos_size = abs(long_pos_size)
     abs_shrt_pos_size = abs(shrt_pos_size)
     long_pos_price = long_pos_price if long_pos_price == long_pos_price else 0.0
@@ -385,7 +455,7 @@ def iter_long_entries_linear(price_step: float,
                              min_qty: float,
                              min_cost: float,
                              ddown_factor: float,
-                             entry_qty_pct: float,
+                             qty_pct: float,
                              leverage: float,
                              grid_spacing: float,
                              grid_coefficient: float,
@@ -396,7 +466,7 @@ def iter_long_entries_linear(price_step: float,
                              highest_bid: float,) -> Iterator[Tuple[float, float, float, float, float]]:
     # yields tuple (qty, price, new_long_psize, new_long_pprice, margin_cost)
     if long_psize == 0.0:
-        qty = calc_min_entry_qty_linear(qty_step, min_qty, min_cost, entry_qty_pct, leverage,
+        qty = calc_min_order_qty_linear(qty_step, min_qty, min_cost, qty_pct, leverage,
                                         balance, highest_bid)
         price = highest_bid
         long_psize = qty
@@ -410,13 +480,13 @@ def iter_long_entries_linear(price_step: float,
                                                          balance, pos_margin, long_pprice))
         if price == 0.0:
             break
-        min_entry_qty = calc_min_entry_qty_linear(qty_step, min_qty, min_cost, entry_qty_pct,
+        min_order_qty = calc_min_order_qty_linear(qty_step, min_qty, min_cost, qty_pct,
                                                   leverage, balance, price)
-        qty = calc_reentry_qty(qty_step, ddown_factor, min_entry_qty,
-                               calc_max_entry_qty_linear(leverage, balance, long_psize, shrt_psize,
+        qty = calc_reentry_qty(qty_step, ddown_factor, min_order_qty,
+                               calc_max_order_qty_linear(leverage, balance, long_psize, shrt_psize,
                                                          price),
                                long_psize)
-        if qty < min_entry_qty:
+        if qty < min_order_qty:
             break
         new_pos_size = long_psize + qty
         long_pprice = long_pprice * (long_psize / new_pos_size) + price * (qty / new_pos_size)
@@ -432,7 +502,7 @@ def iter_shrt_entries_linear(price_step: float,
                              min_qty: float,
                              min_cost: float,
                              ddown_factor: float,
-                             entry_qty_pct: float,
+                             qty_pct: float,
                              leverage: float,
                              grid_spacing: float,
                              grid_coefficient: float,
@@ -444,7 +514,7 @@ def iter_shrt_entries_linear(price_step: float,
     # yields tuple (qty, price, new_shrt_psize, new_shrt_pprice, margin_cost)
 
     if shrt_psize == 0.0:
-        qty = -calc_min_entry_qty_linear(qty_step, min_qty, min_cost, entry_qty_pct, leverage,
+        qty = -calc_min_order_qty_linear(qty_step, min_qty, min_cost, qty_pct, leverage,
                                          balance, lowest_ask)
         price = lowest_ask
         shrt_psize = qty
@@ -456,13 +526,13 @@ def iter_shrt_entries_linear(price_step: float,
         pos_margin = calc_margin_cost_linear(leverage, shrt_psize, shrt_pprice)
         price = max(lowest_ask, calc_shrt_reentry_price(price_step, grid_spacing, grid_coefficient,
                                                         balance, pos_margin, shrt_pprice))
-        min_entry_qty = -calc_min_entry_qty_linear(qty_step, min_qty, min_cost, entry_qty_pct,
+        min_order_qty = -calc_min_order_qty_linear(qty_step, min_qty, min_cost, qty_pct,
                                                    leverage, balance, price)
-        qty = -calc_reentry_qty(qty_step, ddown_factor, abs(min_entry_qty),
-                                calc_max_entry_qty_linear(leverage, balance, long_psize, shrt_psize,
+        qty = -calc_reentry_qty(qty_step, ddown_factor, abs(min_order_qty),
+                                calc_max_order_qty_linear(leverage, balance, long_psize, shrt_psize,
                                                           price),
                                 shrt_psize)
-        if qty > min_entry_qty:
+        if qty > min_order_qty:
             break
         new_pos_size = shrt_psize + qty
         shrt_pprice = shrt_pprice * (shrt_psize / new_pos_size) + price * (qty / new_pos_size)
@@ -477,7 +547,7 @@ def iter_long_closes_linear(price_step: float,
                             qty_step: float,
                             min_qty: float,
                             min_cost: float,
-                            entry_qty_pct: float,
+                            qty_pct: float,
                             leverage: float,
                             min_markup: float,
                             markup_range: float,
@@ -504,8 +574,8 @@ def iter_long_closes_linear(price_step: float,
             if n_orders == 0:
                 break
             else:
-                qty = -min(pos_size, max(calc_min_entry_qty_linear(qty_step, min_qty, min_cost,
-                                                                   entry_qty_pct, leverage,
+                qty = -min(pos_size, max(calc_min_order_qty_linear(qty_step, min_qty, min_cost,
+                                                                   qty_pct, leverage,
                                                                    balance, lowest_ask),
                                          round_up(pos_size / n_orders, qty_step)))
             if qty == 0.0:
@@ -523,7 +593,7 @@ def iter_shrt_closes_linear(price_step: float,
                             qty_step: float,
                             min_qty: float,
                             min_cost: float,
-                            entry_qty_pct: float,
+                            qty_pct: float,
                             leverage: float,
                             min_markup: float,
                             markup_range: float,
@@ -554,8 +624,8 @@ def iter_shrt_closes_linear(price_step: float,
             if n_orders == 0:
                 break
             else:
-                qty = min(abs_pos_size, max(calc_min_entry_qty_linear(qty_step, min_qty, min_cost,
-                                                                      entry_qty_pct, leverage,
+                qty = min(abs_pos_size, max(calc_min_order_qty_linear(qty_step, min_qty, min_cost,
+                                                                      qty_pct, leverage,
                                                                       balance, highest_bid),
                                             round_up(abs_pos_size / n_orders, qty_step)))
             if qty == 0.0:
@@ -598,23 +668,23 @@ def calc_shrt_reentry_price(price_step: float,
 
 
 @njit
-def calc_min_entry_qty(min_qty: float,
+def calc_min_order_qty(min_qty: float,
                        qty_step: float,
                        leveraged_balance_ito_contracts: float,
-                       entry_qty_pct: float) -> float:
-    return max(min_qty, round_dn(leveraged_balance_ito_contracts * entry_qty_pct, qty_step))
+                       qty_pct: float) -> float:
+    return max(min_qty, round_dn(leveraged_balance_ito_contracts * qty_pct, qty_step))
 
 
 
 @njit
 def calc_reentry_qty(qty_step: float,
                      ddown_factor: float,
-                     min_entry_qty: float,
-                     max_entry_qty: float,
+                     min_order_qty: float,
+                     max_order_qty: float,
                      pos_size: float) -> float:
-    qty_available = max(0.0, round_dn(max_entry_qty, qty_step))
+    qty_available = max(0.0, round_dn(max_order_qty, qty_step))
     return min(qty_available,
-               max(min_entry_qty, round_dn(abs(pos_size) * ddown_factor, qty_step)))
+               max(min_order_qty, round_dn(abs(pos_size) * ddown_factor, qty_step)))
 
 
 def make_get_filepath(filepath: str) -> str:
@@ -720,7 +790,7 @@ class Bot:
         self.min_markup = settings['min_markup']
         self.n_entry_orders = settings['n_entry_orders']
         self.n_close_orders = settings['n_close_orders']
-        self.entry_qty_pct = settings['entry_qty_pct']
+        self.qty_pct = settings['qty_pct']
         self.ddown_factor = settings['ddown_factor']
         self.do_long = settings['do_long']
         self.do_shrt = settings['do_shrt']
