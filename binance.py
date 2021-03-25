@@ -312,6 +312,7 @@ class BinanceBot(Bot):
             'symbol': self.symbol, 'orderId': id_
         })
         return {'symbol': self.symbol, 'side': cancellation['side'].lower(),
+                'position_side': cancellation['positionSide'].lower().replace('short', 'shrt'),
                 'qty': float(cancellation['origQty']), 'price': float(cancellation['price'])}
 
     async def fetch_ticks(self, from_id: int = None, do_print: bool = True):
