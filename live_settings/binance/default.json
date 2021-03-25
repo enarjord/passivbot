@@ -1,21 +1,21 @@
 {
-    "config_name": "xmr_no_ema",
+    "config_name": "xmr",
     "symbol": "XMRUSDT",
     "logging_level": 0,
 
-    "ddown_factor": 2.994,
-    "qty_pct": 0.00735,
-    "leverage": 45.0,
+    "ddown_factor": 1.276,
+    "qty_pct": 0.00512,
+    "leverage": 39.0,
     "n_entry_orders": 8,
-    "n_close_orders": 22.0,
+    "n_close_orders": 14.0,
 
-    "grid_spacing": 0.02426,
-    "grid_coefficient": 76.15,
-    "min_markup": 0.00097,
-    "markup_range": 0.014,
+    "grid_spacing": 0.00352,
+    "grid_coefficient": 317.11,
+    "min_markup": 0.00108,
+    "markup_range": 0.00508,
 
-    "ema_span": 1.0,
-    "ema_spread": 0.0,
     "do_long": true,
-    "do_shrt": true
+    "do_shrt": true,
+    "ema_span": 29494.0,
+    "ema_spread": 0.0056
 }
