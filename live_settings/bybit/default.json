@@ -4,7 +4,7 @@
     "logging_level": 0,
 
     "ddown_factor": 0.298,
-    "entry_qty_pct": 0.10101,
+    "qty_pct": 0.10101,
     "leverage": 10.0,
     "n_entry_orders": 8,
     "n_close_orders": 18.0,
