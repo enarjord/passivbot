@@ -13,7 +13,7 @@ from time import time, sleep
 from typing import Callable, Iterator
 from passivbot import init_ccxt, load_key_secret, load_live_settings, make_get_filepath, print_, \
     ts_to_date, flatten, filter_orders, Bot, start_bot, round_up, round_dn, \
-    calc_min_entry_qty, iter_long_entries_linear, iter_shrt_entries_linear, \
+    calc_min_order_qty, iter_long_entries_linear, iter_shrt_entries_linear, \
     iter_long_closes_linear, iter_shrt_closes_linear, calc_ema
 
 
@@ -67,7 +67,7 @@ def calc_cross_shrt_liq_price(balance,
     return (balance + pos_margin - pos_size * pos_price) / d
 
 
-async def fetch_trades(cc, symbol: str, from_id: int = None) -> [dict]:
+async def fetch_ticks(cc, symbol: str, from_id: int = None, do_print=True) -> [dict]:
     params = {'symbol': symbol, 'limit': 1000}
     if from_id:
         params['fromId'] = from_id
@@ -77,8 +77,9 @@ async def fetch_trades(cc, symbol: str, from_id: int = None) -> [dict]:
                'qty': float(t['q']),
                'timestamp': t['T'],
                'is_buyer_maker': t['m']} for t in fetched_trades]
-    print_(['fetched trades', symbol, trades[0]['trade_id'],
-            ts_to_date(trades[0]['timestamp'] / 1000)])
+    if do_print:
+        print_(['fetched trades', symbol, trades[0]['trade_id'],
+                ts_to_date(trades[0]['timestamp'] / 1000)])
     return trades
 
 async def create_bot(user: str, settings: str):
@@ -119,11 +120,11 @@ class BinanceBot(Bot):
                         self.min_notional = self.min_cost = float(q['notional'])
                 self.calc_min_qty = lambda price_: \
                     max(self.min_qty, round_up(self.min_notional / price_, self.qty_step))
-                self.calc_min_entry_qty = lambda balance_, last_price: \
-                    calc_min_entry_qty(self.calc_min_qty(last_price),
+                self.calc_min_order_qty = lambda balance_, last_price: \
+                    calc_min_order_qty(self.calc_min_qty(last_price),
                                        self.qty_step,
                                        (balance_ / last_price) * self.leverage,
-                                       self.entry_qty_pct)
+                                       self.qty_pct)
                 break
         max_lev = 0
         for e in leverage_bracket:
@@ -134,27 +135,41 @@ class BinanceBot(Bot):
         self.max_leverage = max_lev
         await self.update_position()
         await self.init_order_book()
-        self.ema = (self.ob[0] + self.ob[1]) / 2
+        await self.init_ema()
         self.iter_long_entries = lambda balance, long_psize, long_pprice, shrt_psize, highest_bid: \
             iter_long_entries_linear(self.price_step, self.qty_step, self.min_qty, self.min_cost,
-                                     self.ddown_factor, self.entry_qty_pct, self.leverage,
+                                     self.ddown_factor, self.qty_pct, self.leverage,
                                      self.grid_spacing, self.grid_coefficient, balance, long_psize,
                                      long_pprice, shrt_psize, highest_bid)
         self.iter_shrt_entries = lambda balance, long_psize, shrt_psize, shrt_pprice, lowest_ask: \
             iter_shrt_entries_linear(self.price_step, self.qty_step, self.min_qty, self.min_cost,
-                                     self.ddown_factor, self.entry_qty_pct, self.leverage,
+                                     self.ddown_factor, self.qty_pct, self.leverage,
                                      self.grid_spacing, self.grid_coefficient, balance, long_psize,
                                      shrt_psize, shrt_pprice, lowest_ask)
         self.iter_long_closes = lambda balance, pos_size, pos_price, lowest_ask: \
             iter_long_closes_linear(self.price_step, self.qty_step, self.min_qty, self.min_cost,
-                                    self.entry_qty_pct, self.leverage, self.min_markup,
+                                    self.qty_pct, self.leverage, self.min_markup,
                                     self.markup_range, self.n_close_orders, balance, pos_size,
                                     pos_price, lowest_ask)
         self.iter_shrt_closes = lambda balance, pos_size, pos_price, highest_bid: \
             iter_shrt_closes_linear(self.price_step, self.qty_step, self.min_qty, self.min_cost,
-                                    self.entry_qty_pct, self.leverage, self.min_markup,
+                                    self.qty_pct, self.leverage, self.min_markup,
                                     self.markup_range, self.n_close_orders, balance, pos_size,
                                     pos_price, highest_bid)
+
+    async def init_ema(self):
+        # fetch 10 tick chunks to initiate ema
+        ticks = await self.fetch_ticks(do_print=False)
+        additional_ticks = flatten(await asyncio.gather(
+            *[self.fetch_ticks(from_id=ticks[0]['trade_id'] - len(ticks) * i, do_print=False)
+              for i in range(1, 10)]
+        ))
+        ticks = sorted(ticks + additional_ticks, key=lambda x: x['trade_id'])
+        ema = ticks[0]['price']
+        for i in range(1, len(ticks)):
+            if ticks[i]['price'] != ticks[i-1]['price']:
+                ema = ema * self.ema_alpha_ + ticks[i]['price'] * self.ema_alpha
+        self.ema = ema
 
     async def init_exchange_settings(self):
         try:
@@ -299,8 +314,8 @@ class BinanceBot(Bot):
         return {'symbol': self.symbol, 'side': cancellation['side'].lower(),
                 'qty': float(cancellation['origQty']), 'price': float(cancellation['price'])}
 
-    async def fetch_trades(self, from_id: int = None):
-        return await fetch_trades(self.cc, self.symbol, from_id)
+    async def fetch_ticks(self, from_id: int = None, do_print: bool = True):
+        return await fetch_ticks(self.cc, self.symbol, from_id, do_print=do_print)
 
     def calc_margin_cost(self, qty: float, price: float) -> float:
         return qty * price / self.leverage
