@@ -1,10 +1,10 @@
 {
-    "config_name": "xmr",
+    "config_name": "xmr_no_ema",
     "symbol": "XMRUSDT",
     "logging_level": 0,
 
     "ddown_factor": 2.994,
-    "entry_qty_pct": 0.00735,
+    "qty_pct": 0.00735,
     "leverage": 45.0,
     "n_entry_orders": 8,
     "n_close_orders": 22.0,
