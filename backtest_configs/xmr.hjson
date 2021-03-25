@@ -26,7 +26,7 @@
     ["OFF: adg too low",
      "lambda trades, ticks, k: trades[-1]['average_daily_gain'] < 1.005 and trades[-1]['progress'] >= 0.5"]
     ["OFF: no soft stops",
-     "lambda trades, ticks, k: trades[-1]['loss_sum'] == 0.0 and trades[-1]['progress'] >= 0.9"]
+     "lambda trades, ticks, k: trades[-1]['loss_cumsum'] == 0.0 and trades[-1]['progress'] >= 0.9"]
     ["OFF: balance + pnl cumsum below starting_balance",
      "lambda trades, ticks, k: trades[-1]['actual_balance'] + trades[-1]['pnl_plus_fees_cumsum'] <= 0.0"]
   ]
