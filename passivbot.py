@@ -65,7 +65,7 @@ def calc_initial_long_entry_price(price_step: float, spread: float, ema: float,
 @njit
 def calc_initial_shrt_entry_price(price_step: float, spread: float, ema: float,
                                   lowest_ask: float) -> float:
-    return min(lowest_ask, round_up(ema * (1 + spread), price_step))
+    return max(lowest_ask, round_up(ema * (1 + spread), price_step))
 
 
 #################
