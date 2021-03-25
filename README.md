@@ -1,6 +1,6 @@
 # passivbot_futures
 
-**Version: 3.2.0**
+**Version: 3.2.1**
 
 trading bot running on bybit inverse futures and binance usdt futures using hedge mode
 
@@ -62,6 +62,14 @@ change log
 - removed config param max_markup
 - added config param markup_range
 
+2021-03-25 v3.2.1
+- bug fixes
+- bybit backtester improvements and bug fixes
+- numba is now enabled by default, use --nojit to disable numba
+- several renamings
+
+
+
 see `changelog.txt` for earlier changes
 
 
@@ -82,7 +90,7 @@ add api key and secret as json file in dir `api_key_secret/{exchange}/your_user_
 formatted like this: `["KEY", "SECRET"]`
 
 
-make a copy of `settings/{exchange}/default.json`
+make a copy of `live_settings/{exchange}/default.json`
 
 rename the copy `your_user_name.json` and make desired changes
 
@@ -95,7 +103,7 @@ overview
 
 the bot's purpose is to accumulate btc (or another coin) in bybit inverse and usdt in binance usdt futures using hedge mode for simultaneous long and short positions
 
-it is a market maker bot, making multiple post only limit orders above and below price
+it is a market maker bot, making multiple post only limit orders above and below current price
 
 it listens to websocket live stream of trades, and updates its orders continuously
 
@@ -120,9 +128,11 @@ run with
 
 `python3 backtest.py {config_name}`
 
-add argument --jit to use numba's just in time compiler for faster backtesting:
+will use numba's just in time compiler by default to speed up backtesting
 
-`python3 backtest.py {config_name} --jit`
+add argument --nojit to disable numba:
+
+`python3 backtest.py {config_name} --nojit`
 
 see wiki for more info on backtesting
 
@@ -134,24 +144,15 @@ about live settings, bybit example:
 
     "config_name": "BTCUSD_default",      # arbitrary name given to settings.
 
-    "entry_qty_pct": 0.005,               # percentage of balance * leverage used as initial entry qty.
-                                          # the bot will calculate initial entry qty using the following formula:
-                                          # initial_entry_qty = round_dn(balance_in_terms_of_contracts * leverage * abs(settings["entry_qty_pct"]), qty_step)
-                                          # bybit BTCUSD example:
-                                          # if "entry_qty_pct"  is set to 0.0021, last price is 37000, leverage is 50 and wallet balance is 0.001 btc,
-                                          # initial_entry_qty = 0.001 * 37000 * 50 * 0.0021 == 3.885.  rounded down is 3.0 usd.
-                                          # binance ETHUSDT example:
-                                          # if "entry_qty_pct" is set to 0.07, last price is 1100, leverage is 33 and wallet balance is 40 usdt,
-                                          # initial_entry_qty = (40 / 1100) * 33 * 0.07 == 0.084.  rounded down is 0.084 eth.
+    "qty_pct": 0.005,                     # percentage of balance * leverage used as min order qty.
     
     "ddown_factor": 0.02,                 # next reentry_qty is max(initial_entry_qty, abs(pos_size) * ddown_factor).
                                           # if set to 1.0, each reentry qty will be equal to 1x pos size, i.e. doubling pos size after every reentry.
                                           # if set to 1.5, each reentry qty will be equal to 1.5x pos size.
                                           # if set to 0.0, each reentry qty will be equal to initial_entry_qty.
                                           
-                                          # tick ema is not based on ohlcvs, but calculated based on sequence of raw trades.
-    "ema_span": 10000,                    # if no pos, bid = min(ema * (1 - spread), highest_bid) and ask = max(ema * (1 + spread), lowest_ask)
-    "ema_spread": 0.001
+    "ema_span": 10000,                    # tick ema is not based on ohlcvs, but calculated based on sequence of raw trades.
+    "ema_spread": 0.001                   # if no pos, bid = min(ema * (1 - spread), highest_bid) and ask = max(ema * (1 + spread), lowest_ask)
 
     "do_long": true,                      # if true, will allow long positions
     "do_shrt": true                       # if true, will allow short posisions
