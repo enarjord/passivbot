@@ -15,8 +15,8 @@ from time import time, sleep
 from typing import Callable, Iterator
 from passivbot import init_ccxt, load_key_secret, load_live_settings, make_get_filepath, print_, \
     ts_to_date, flatten, Bot, start_bot, round_up, round_dn, \
-    calc_min_entry_qty_inverse, sort_dict_keys, calc_ema, iter_long_entries_inverse, \
-    iter_shrt_entries_inverse, iter_long_closes_inverse, iter_shrt_closes_inverse
+    calc_min_order_qty_inverse, sort_dict_keys, calc_ema, iter_long_entries_inverse, \
+    iter_shrt_entries_inverse, iter_long_closes_inverse, iter_shrt_closes_inverse, calc_diff
 import aiohttp
 from urllib.parse import urlencode
 
@@ -41,48 +41,6 @@ def calc_isolated_shrt_liq_price(balance,
     return (pos_price * leverage) / (leverage - 1 + mm * leverage)
 
 
-def calc_cross_long_liq_price(balance,
-                              pos_size,
-                              pos_price,
-                              leverage,
-                              mm=0.005) -> float:
-    order_cost = pos_size / pos_price
-    order_margin = order_cost / leverage
-    bankruptcy_price = calc_cross_long_bankruptcy_price(pos_size, order_cost, balance, order_margin)
-    if bankruptcy_price == 0.0:
-        return 0.0
-    rhs = -(balance - order_margin - (pos_size / pos_price) * mm - \
-        (pos_size * 0.00075) / bankruptcy_price)
-    return (pos_price * pos_size) / (pos_size - pos_price * rhs)
-
-
-def calc_cross_long_bankruptcy_price(pos_size, order_cost, balance, order_margin) -> float:
-    return (1.00075 * pos_size) / (order_cost + (balance - order_margin))
-
-
-def calc_cross_shrt_liq_price(balance,
-                              pos_size,
-                              pos_price,
-                              leverage,
-                              mm=0.005) -> float:
-    _pos_size = abs(pos_size)
-    order_cost = _pos_size / pos_price
-    order_margin = order_cost / leverage
-    bankruptcy_price = calc_cross_shrt_bankruptcy_price(_pos_size, order_cost, balance, order_margin)
-    if bankruptcy_price == 0.0:
-        return 0.0
-    rhs = -(balance - order_margin - (_pos_size / pos_price) * mm - \
-        (_pos_size * 0.00075) / bankruptcy_price)
-    shrt_liq_price = (pos_price * _pos_size) / (pos_price * rhs + _pos_size)
-    if shrt_liq_price <= 0.0:
-        return 0.0
-    return shrt_liq_price
-
-
-def calc_cross_shrt_bankruptcy_price(pos_size, order_cost, balance, order_margin) -> float:
-    return (0.99925 * pos_size) / (order_cost - (balance - order_margin))
-
-
 def determine_pos_side(o: dict) -> str:
     side = o['side'].lower()
     if side == 'buy':
@@ -102,7 +60,15 @@ def determine_pos_side(o: dict) -> str:
     return position_side
 
 
-async def fetch_trades(cc, symbol: str, from_id: int = None) -> [dict]:
+def format_tick(tick: dict) -> dict:
+    return {'trade_id': int(tick['id']),
+            'price': float(tick['price']),
+            'qty': float(tick['qty']),
+            'timestamp': date_to_ts(tick['time'][:-1]),
+            'is_buyer_maker': tick['side'] == 'Sell'}
+
+
+async def fetch_ticks(cc, symbol: str, from_id: int = None, do_print=True) -> [dict]:
 
     params = {'symbol': symbol, 'limit': 1000}
     if from_id:
@@ -112,13 +78,10 @@ async def fetch_trades(cc, symbol: str, from_id: int = None) -> [dict]:
     except Exception as e:
         print(e)
         return []
-    trades = [{'trade_id': int(t['id']),
-               'price': t['price'],
-               'qty': t['qty'],
-               'timestamp': date_to_ts(t['time'][:-1]),
-               'is_buyer_maker': t['side'] == 'Sell'} for t in fetched_trades['result']]
-    print_(['fetched trades', symbol, trades[0]['trade_id'],
-            ts_to_date(trades[0]['timestamp'] / 1000)])
+    trades = [format_tick(t) for t in fetched_trades['result']]
+    if do_print:
+        print_(['fetched trades', symbol, trades[0]['trade_id'],
+                ts_to_date(trades[0]['timestamp'] / 1000)])
     return trades
 
 def date_to_ts(date: str):
@@ -164,32 +127,48 @@ class Bybit(Bot):
         self.min_qty = float(e['lot_size_filter']['min_trading_qty'])
         self.min_cost = 0.0
         self.calc_min_qty = lambda price_: self.min_qty
-        self.calc_min_entry_qty = lambda balance_, last_price: \
-            calc_min_entry_qty_inverse(self.qyt_step, self.min_qty, self.min_cost,
-                                       self.entry_qty_pct, self.leverage, balance_, last_price)
-        await self.update_position()
-        await self.init_order_book()
-        self.ema = (self.ob[0] + self.ob[1]) / 2
+        self.calc_min_order_qty = lambda balance_, last_price: \
+            calc_min_order_qty_inverse(self.qyt_step, self.min_qty, self.min_cost,
+                                       self.qty_pct, self.leverage, balance_, last_price)
+        await asyncio.gather(
+            self.update_position(),
+            self.init_order_book(),
+            self.init_ema(),
+        )
         self.iter_long_entries = lambda balance, long_psize, long_pprice, shrt_psize, highest_bid: \
             iter_long_entries_inverse(self.price_step, self.qty_step, self.min_qty, self.min_cost,
-                                      self.ddown_factor, self.entry_qty_pct, self.leverage,
+                                      self.ddown_factor, self.qty_pct, self.leverage,
                                       self.grid_spacing, self.grid_coefficient, balance, long_psize,
                                       long_pprice, shrt_psize, highest_bid)
         self.iter_shrt_entries = lambda balance, long_psize, shrt_psize, shrt_pprice, lowest_ask: \
             iter_shrt_entries_inverse(self.price_step, self.qty_step, self.min_qty, self.min_cost,
-                                      self.ddown_factor, self.entry_qty_pct, self.leverage,
+                                      self.ddown_factor, self.qty_pct, self.leverage,
                                       self.grid_spacing, self.grid_coefficient, balance, long_psize,
                                       shrt_psize, shrt_pprice, lowest_ask)
         self.iter_long_closes = lambda balance, pos_size, pos_price, lowest_ask: \
             iter_long_closes_inverse(self.price_step, self.qty_step, self.min_qty, self.min_cost,
-                                     self.entry_qty_pct, self.leverage, self.min_markup,
+                                     self.qty_pct, self.leverage, self.min_markup,
                                      self.markup_range, self.n_close_orders, balance, pos_size,
                                      pos_price, lowest_ask)
         self.iter_shrt_closes = lambda balance, pos_size, pos_price, highest_bid: \
             iter_shrt_closes_inverse(self.price_step, self.qty_step, self.min_qty, self.min_cost,
-                                     self.entry_qty_pct, self.leverage, self.min_markup,
+                                     self.qty_pct, self.leverage, self.min_markup,
                                      self.markup_range, self.n_close_orders, balance, pos_size,
                                      pos_price, highest_bid)
+
+    async def init_ema(self):
+        # fetch 10000 ticks to initiate ema
+        ticks = await self.fetch_ticks(do_print=False)
+        additional_ticks = flatten(await asyncio.gather(
+            *[self.fetch_ticks(from_id=ticks[0]['trade_id'] - len(ticks) * i, do_print=False)
+              for i in range(1, 10)]
+        ))
+        ticks = sorted(ticks + additional_ticks, key=lambda x: x['trade_id'])
+        ema = ticks[0]['price']
+        for i in range(1, len(ticks)):
+            if ticks[i]['price'] != ticks[i-1]['price']:
+                ema = ema * self.ema_alpha_ + ticks[i]['price'] * self.ema_alpha
+        self.ema = ema
 
     async def init_order_book(self):
         ticker = await self.private_get('/v2/public/tickers', {'symbol': self.symbol})
@@ -329,8 +308,16 @@ class Bybit(Bot):
               for t in fetched['result']['trade_list']}
         return sorted(mt.values(), key=lambda t: t['timestamp'])
 
-    async def fetch_trades(self, from_id: int = None):
-        return await fetch_trades(self.cc, self.symbol, from_id)
+    async def fetch_ticks(self, from_id: int = None, do_print: bool = True):
+        params = {'symbol': self.symbol, 'limit': 1000}
+        if from_id is not None:
+            params['from'] = max(0, from_id)
+        try:
+            ticks = await self.public_get('/v2/public/trading-records', params)
+        except Exception as e:
+            print('error fetching ticks', e)
+            return []
+        return list(map(format_tick, ticks['result']))
 
     def calc_margin_cost(self, qty: float, price: float) -> float:
         return qty / price / self.leverage
