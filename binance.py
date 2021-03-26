@@ -130,7 +130,7 @@ class BinanceBot(Bot):
         for e in leverage_bracket:
             if e['symbol'] == self.symbol:
                 for br in e['brackets']:
-                    max_lev = max(max_lev, br['initialLeverage'])
+                    max_lev = max(max_lev, int(br['initialLeverage']))
                 break
         self.max_leverage = max_lev
         await self.update_position()
