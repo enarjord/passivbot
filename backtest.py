@@ -8,7 +8,6 @@ import os
 import pprint
 import gc
 import matplotlib.pyplot as plt
-import aiomultiprocess
 from hashlib import sha256
 from multiprocessing import cpu_count, Lock, Value, Array
 from time import time
