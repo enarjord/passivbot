@@ -5,17 +5,13 @@ import numpy as np
 import pandas as pd
 import asyncio
 import os
-import pprint
 import gc
 import matplotlib.pyplot as plt
 from hashlib import sha256
-from multiprocessing import cpu_count, Lock, Value, Array
 from time import time
 from passivbot import *
 from bybit import create_bot as create_bot_bybit
-from bybit import fetch_ticks as bybit_fetch_ticks
 from binance import create_bot as create_bot_binance
-from binance import fetch_ticks as binance_fetch_ticks
 import pyswarms
 
 from typing import Iterator, Callable
@@ -46,8 +42,10 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
     lines.append(f"starting balance {result['starting_balance']}")
     lines.append(f"long: {result['do_long']}, short: {result['do_shrt']}")
 
-    live_config = candidate_to_live_settings(result['exchange'], result)
+    live_config = candidate_to_live_settings(result['exchange'], cleanup_candidate(result))
     json.dump(live_config, open(result['session_dirpath'] + 'live_config.json', 'w'), indent=4)
+
+    json.dump(result, open(result['session_dirpath'] + 'result.json', 'w'), indent=4)
 
     print('plotting price with bid ask entry thresholds')
     ema = df.price.ewm(span=result['ema_span'], adjust=False).mean()
@@ -139,17 +137,20 @@ def prep_ticks(df: pd.DataFrame) -> np.ndarray:
     return dfcc.values
 
 
-def cleanup_config(config: dict) -> dict:
-    cleaned = {k: round_(config[k], config['ranges'][k][2]) for k in config['ranges']}
-    if 'ema_span' in cleaned and cleaned['ema_span'] != cleaned['ema_span']:
+def cleanup_candidate(config: dict) -> dict:
+    cleaned = config.copy()
+    for k in cleaned:
+        if k in config['ranges']:
+            cleaned[k] = round_(cleaned[k], config['ranges'][k][2])
+    if cleaned['ema_span'] != cleaned['ema_span']:
         cleaned['ema_span'] = 1.0
-    if 'ema_spread' in cleaned and cleaned['ema_spread'] != cleaned['ema_spread']:
+    if cleaned['ema_spread'] != cleaned['ema_spread']:
         cleaned['ema_spread'] = 0.0
     return cleaned
 
 
 def backtest(ticks: np.ndarray, settings: dict, do_print=False) -> [dict]:
-    ss = {**settings, **cleanup_config(settings)}
+    ss = cleanup_candidate(settings)
 
     long_pos_size, long_pos_price = 0.0, np.nan
     shrt_pos_size, shrt_pos_price = 0.0, np.nan
@@ -487,13 +488,14 @@ async def load_trades(exchange: str, user: str, symbol: str, n_days: float) -> p
         return None
 
     if exchange == 'binance':
-        fetch_ticks_func = binance_fetch_ticks
+        bot = await create_bot_binance(user, {**load_live_settings('binance', do_print=False),
+                                              **{'symbol': symbol}})
     elif exchange == 'bybit':
-        fetch_ticks_func = bybit_fetch_ticks
+        bot = await create_bot_bybit(user, {**load_live_settings('bybit', do_print=False),
+                                            **{'symbol': symbol}})
     else:
         print(exchange, 'not found')
         return
-    cc = init_ccxt(exchange, user)
     filepath = make_get_filepath(os.path.join('historical_data', exchange, 'agg_trades_futures',
                                               symbol, ''))
     cache_filepath = make_get_filepath(filepath.replace(symbol, symbol + '_cache'))
@@ -522,7 +524,7 @@ async def load_trades(exchange: str, user: str, symbol: str, n_days: float) -> p
         gc.collect()
         # 
     prev_fetch_ts = time()
-    new_trades = await fetch_ticks_func(cc, symbol)
+    new_trades = await bot.fetch_ticks()
     from_id = -1
     k = 0
     while True:
@@ -542,13 +544,13 @@ async def load_trades(exchange: str, user: str, symbol: str, n_days: float) -> p
         sleep_for = max(0.0, 0.75 - (time() - prev_fetch_ts))
         await asyncio.sleep(sleep_for)
         prev_fetch_ts = time()
-        fetched_new_trades = await fetch_ticks_func(cc, symbol, from_id=from_id)
+        fetched_new_trades = await bot.fetch_ticks(from_id=from_id)
         while fetched_new_trades and \
                 fetched_new_trades[0]['trade_id'] == new_trades[0]['trade_id'] and \
                 from_id > 0:
             print('gaps in ids', from_id)
             from_id = max(0, from_id - 1000)
-            fetched_new_trades = await fetch_ticks_func(cc, symbol, from_id=from_id)
+            fetched_new_trades = await bot.fetch_ticks(from_id=from_id)
         new_trades = fetched_new_trades + new_trades
         ids.update([e['trade_id'] for e in new_trades])
     del ids
@@ -561,7 +563,14 @@ async def load_trades(exchange: str, user: str, symbol: str, n_days: float) -> p
     for filename in cache_filenames:
         print(f'\rremoving {filename}', end='   ')
         os.remove(cache_filepath + filename)
-    await cc.close()
+    try:
+        await bot.cc.close()
+    except:
+        pass
+    try:
+        await bot.session.close()
+    except:
+        pass
     return tdf[tdf.timestamp >= age_limit_millis]
 
 
@@ -614,7 +623,6 @@ def candidate_to_live_settings(exchange: str, candidate: dict) -> dict:
             live_settings[k] = candidate[k]
     live_settings['config_name'] = candidate['session_name']
     live_settings['symbol'] = candidate['symbol']
-    live_settings['key'] = candidate['key']
     if live_settings['ema_span'] != live_settings['ema_span']:
         live_settings['ema_span'] = 1.0
     if live_settings['ema_spread'] != live_settings['ema_spread']:
@@ -777,13 +785,18 @@ def x_to_d(x: np.ndarray, ranges: dict) -> dict:
 
 
 def score_func(r) -> float:
-    liq_cap = 0.2
-    
+    liq_cap = 0.07
+
     hours_stuck_cap = 108
-    return (r['average_daily_gain']['avg'] *
-            r['average_daily_gain']['min'] *
-            min(1.0, r['closest_liq']['min'] / liq_cap) /
-            max(1.0, r['max_n_hours_stuck']['max'] / hours_stuck_cap))
+    try:
+        return r['average_daily_gain']['avg']
+        return (r['average_daily_gain']['avg'] *
+                r['average_daily_gain']['min'] *
+                min(1.0, r['closest_liq']['min'] / liq_cap) /
+                max(1.0, r['max_n_hours_stuck']['max'] / hours_stuck_cap))
+    except Exception as e:
+        print('error with score func', e, r)
+        return 0.0
 
 
 class RF:
@@ -808,7 +821,7 @@ def backtest_pso(ticks, bc):
     bounds = (np.array([bc['ranges'][k][0] for k in sorted(bc['ranges'])]),
               np.array([bc['ranges'][k][1] for k in sorted(bc['ranges'])]))
     rf = RF(ticks, bc)
-    iters = 100
+    iters = 120
     options = {'c1': 1.0, 'c2': 1.0, 'w': 1.0}
     n_particles = 10
     n_cpus = os.cpu_count()
@@ -825,7 +838,8 @@ def plot_wrap(bc, ticks, candidate):
     bc['session_dirpath'] = make_get_filepath(os.path.join(
         'plots', bc['exchange'], bc['symbol'],
         f"{int(bc['n_days'])}_days_{ts_to_date(time())[:19].replace(':', '')}", ''))
-    result, fdf = backtest_wrap(ticks, {**bc, **{'break_on': {}}, **candidate})
+    print('backtesting...')
+    result, fdf = backtest_wrap(ticks, {**bc, **{'break_on': {}}, **candidate}, do_print=True)
     if fdf is None or len(fdf) == 0:
         print('no trades')
         return
