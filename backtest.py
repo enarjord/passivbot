@@ -528,7 +528,7 @@ async def load_trades(exchange: str, user: str, symbol: str, n_days: float) -> p
     k = 0
     while True:
         k += 1
-        if (break_ := (new_trades[0]['timestamp'] <= age_limit_millis or
+        if (break_ := (float(new_trades[0]['timestamp']) <= age_limit_millis or
                        new_trades[0]['trade_id'] <= 1000 or
                        from_id == 0)) or k % 20 == 0:
             print('caching trades...')
