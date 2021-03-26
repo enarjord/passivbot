@@ -79,7 +79,7 @@ async def fetch_ticks(cc, symbol: str, from_id: int = None, do_print=True) -> [d
                'is_buyer_maker': t['m']} for t in fetched_trades]
     if do_print:
         print_(['fetched trades', symbol, trades[0]['trade_id'],
-                ts_to_date(trades[0]['timestamp'] / 1000)])
+                ts_to_date(float(trades[0]['timestamp']) / 1000)])
     return trades
 
 async def create_bot(user: str, settings: str):
@@ -180,7 +180,7 @@ class BinanceBot(Bot):
             print(e)
         try:
             lev = await self.cc.fapiPrivate_post_leverage(params={'symbol': self.symbol,
-                                                                  'leverage': int(self.leverage)})
+                                                                  'leverage': int(round(self.leverage))})
             self.max_pos_size_ito_usdt = float(lev['maxNotionalValue'])
             print('max pos size in terms of usdt', self.max_pos_size_ito_usdt)
         except Exception as e:
