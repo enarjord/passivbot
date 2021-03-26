@@ -333,3 +333,20 @@ $RECYCLE.BIN/
 
 # Windows shortcuts
 *.lnk
+
+# Backtest files
+!/backtest_configs/xmr.hjson
+/backtest_configs/*
+/plots/
+/backtest_results/
+
+# Run files
+/historical_data/
+
+# Config files
+!/api_key_secrets/binance/example_user.json
+!/api_key_secrets/bybit/example_user.json
+/api_key_secrets/*
+!/live_settings/binance/default.json
+!/live_settings/bybit/default.json
+/live_settings/*
