@@ -82,6 +82,23 @@ async def fetch_ticks(cc, symbol: str, from_id: int = None, do_print=True) -> [d
                 ts_to_date(float(trades[0]['timestamp']) / 1000)])
     return trades
 
+
+async def fetch_ticks_time(cc, symbol: str, start_time: int, end_time: int = None, do_print=True) -> [dict]:
+    params = {'symbol': symbol, 'limit': 1000, 'startTime': start_time}
+    if end_time:
+        params['endTime'] = end_time
+    fetched_trades = await cc.fapiPublic_get_aggtrades(params=params)
+    trades = [{'trade_id': int(t['a']),
+               'price': float(t['p']),
+               'qty': float(t['q']),
+               'timestamp': t['T'],
+               'is_buyer_maker': t['m']} for t in fetched_trades]
+    if do_print:
+        print_(['fetched trades', symbol, trades[0]['trade_id'],
+                ts_to_date(float(trades[0]['timestamp']) / 1000)])
+    return trades
+
+
 async def create_bot(user: str, settings: str):
     bot = BinanceBot(user, settings)
     await bot._init()
@@ -317,6 +334,9 @@ class BinanceBot(Bot):
 
     async def fetch_ticks(self, from_id: int = None, do_print: bool = True):
         return await fetch_ticks(self.cc, self.symbol, from_id, do_print=do_print)
+
+    async def fetch_ticks_time(self, start_time: int, end_time: int = None, do_print: bool = True):
+        return await fetch_ticks_time(self.cc, self.symbol, start_time, end_time, do_print=do_print)
 
     def calc_margin_cost(self, qty: float, price: float) -> float:
         return qty * price / self.leverage
