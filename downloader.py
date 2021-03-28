@@ -220,7 +220,10 @@ class Downloader:
 
         filenames = self.get_filenames()
         for f in filenames:
-            last_time = int(f.split("_")[3].split(".")[0])
+            try:
+                last_time = int(f.split("_")[3].split(".")[0])
+            except:
+                last_time = sys.maxsize
             if last_time >= self.start_time:
                 df = self.read_dataframe(os.path.join(self.filepath, f))
                 print_(['Validating file', f])
