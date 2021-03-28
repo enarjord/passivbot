@@ -316,7 +316,11 @@ class Bybit(Bot):
         except Exception as e:
             print('error fetching ticks', e)
             return []
-        return list(map(format_tick, ticks['result']))
+        trades = list(map(format_tick, ticks['result']))
+        if do_print:
+            print_(['fetched trades', self.symbol, trades[0]['trade_id'],
+                    ts_to_date(float(trades[0]['timestamp']) / 1000)])
+        return trades
 
     def calc_margin_cost(self, qty: float, price: float) -> float:
         return qty / price / self.leverage
