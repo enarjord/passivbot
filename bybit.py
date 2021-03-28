@@ -64,7 +64,7 @@ def format_tick(tick: dict) -> dict:
     return {'trade_id': int(tick['id']),
             'price': float(tick['price']),
             'qty': float(tick['qty']),
-            'timestamp': date_to_ts(tick['time'][:-1]),
+            'timestamp': date_to_ts(tick['time']),
             'is_buyer_maker': tick['side'] == 'Sell'}
 
 
@@ -85,11 +85,10 @@ async def fetch_ticks(cc, symbol: str, from_id: int = None, do_print=True) -> [d
     return trades
 
 def date_to_ts(date: str):
-    date = date[:23].replace('Z', '')
     try:
-        return datetime.strptime(date, "%Y-%m-%dT%H:%M:%S.%f").timestamp() * 1000
+        return datetime.strptime(date, "%Y-%m-%dT%H:%M:%S.%f%z").timestamp() * 1000
     except ValueError:
-        formats = ["%Y-%m-%dT%H:%M:%S"]
+        formats = ["%Y-%m-%dT%H:%M:%S%z"]
         for f in formats:
             try:
                 return datetime.strptime(date, f).timestamp() * 1000
