@@ -535,7 +535,7 @@ class Downloader:
                 tick_data = np.load(tick_filepath)
                 return tick_data
             await self.download_ticks()
-            await self.prepare_files(filepaths, True)
+            await self.prepare_files(filepaths, single_file)
             tick_data = np.load(tick_filepath)
             return tick_data
         else:
@@ -555,7 +555,7 @@ class Downloader:
                     gc.collect()
 
             await self.download_ticks()
-            await self.prepare_files(filepaths, True)
+            await self.prepare_files(filepaths, single_file)
             price_data = np.load(price_filepath)
             buyer_maker_data = np.load(buyer_maker_filepath)
             time_data = np.load(time_filepath)
