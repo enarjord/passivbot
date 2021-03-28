@@ -393,7 +393,6 @@ class Downloader:
 
         if single_file:
             for f in filenames:
-
                 chunk = pd.read_csv(os.path.join(self.filepath, f),
                                     dtype={"price": np.float64, "is_buyer_maker": np.float64, "timestamp": np.float64},
                                     usecols=["price", "is_buyer_maker", "timestamp"])
@@ -430,8 +429,11 @@ class Downloader:
                     chunk = pd.read_csv(os.path.join(self.filepath, f),
                                         dtype={"timestamp": np.int64, "price": np.float64},
                                         usecols=["timestamp", "price"])
-                    chunk = chunk[(chunk['timestamp'] >= self.start_time) & (chunk['timestamp'] <= self.end_time)][
-                        ["price"]]
+                    if self.end_time != -1:
+                        chunk = chunk[(chunk['timestamp'] >= self.start_time) & (chunk['timestamp'] <= self.end_time)][
+                            ["price"]]
+                    else:
+                        chunk = chunk[(chunk['timestamp'] >= self.start_time)][["price"]]
                 else:
                     chunk = pd.read_csv(os.path.join(self.filepath, f), dtype={"price": np.float64}, usecols=["price"])
                 chunks.append(chunk)
@@ -465,8 +467,11 @@ class Downloader:
                     chunk = pd.read_csv(os.path.join(self.filepath, f),
                                         dtype={"timestamp": np.int64, "is_buyer_maker": np.int8},
                                         usecols=["timestamp", "is_buyer_maker"])
-                    chunk = chunk[(chunk['timestamp'] >= self.start_time) & (chunk['timestamp'] <= self.end_time)][
-                        ["is_buyer_maker"]]
+                    if self.end_time != -1:
+                        chunk = chunk[(chunk['timestamp'] >= self.start_time) & (chunk['timestamp'] <= self.end_time)][
+                            ["is_buyer_maker"]]
+                    else:
+                        chunk = chunk[(chunk['timestamp'] >= self.start_time)][["is_buyer_maker"]]
                 else:
                     chunk = pd.read_csv(os.path.join(self.filepath, f), dtype={"is_buyer_maker": np.int8},
                                         usecols=["is_buyer_maker"])
