@@ -13,8 +13,8 @@ from time import time, sleep
 from typing import Callable, Iterator
 from passivbot import init_ccxt, load_key_secret, load_live_settings, make_get_filepath, print_, \
     ts_to_date, flatten, filter_orders, Bot, start_bot, round_up, round_dn, \
-    calc_min_order_qty, iter_long_entries_linear, iter_shrt_entries_linear, \
-    iter_long_closes_linear, iter_shrt_closes_linear, calc_ema
+    calc_min_order_qty, \
+    iter_long_closes_linear, iter_shrt_closes_linear, calc_ema, iter_entries_linear
 
 
 def get_maintenance_margin_rate(pos_size_ito_usdt: float) -> float:
@@ -153,16 +153,6 @@ class BinanceBot(Bot):
         await self.update_position()
         await self.init_order_book()
         await self.init_ema()
-        self.iter_long_entries = lambda balance, long_psize, long_pprice, shrt_psize, highest_bid: \
-            iter_long_entries_linear(self.price_step, self.qty_step, self.min_qty, self.min_cost,
-                                     self.ddown_factor, self.qty_pct, self.leverage,
-                                     self.grid_spacing, self.grid_coefficient, balance, long_psize,
-                                     long_pprice, shrt_psize, highest_bid)
-        self.iter_shrt_entries = lambda balance, long_psize, shrt_psize, shrt_pprice, lowest_ask: \
-            iter_shrt_entries_linear(self.price_step, self.qty_step, self.min_qty, self.min_cost,
-                                     self.ddown_factor, self.qty_pct, self.leverage,
-                                     self.grid_spacing, self.grid_coefficient, balance, long_psize,
-                                     shrt_psize, shrt_pprice, lowest_ask)
         self.iter_long_closes = lambda balance, pos_size, pos_price, lowest_ask: \
             iter_long_closes_linear(self.price_step, self.qty_step, self.min_qty, self.min_cost,
                                     self.qty_pct, self.leverage, self.min_markup,
@@ -173,6 +163,13 @@ class BinanceBot(Bot):
                                     self.qty_pct, self.leverage, self.min_markup,
                                     self.markup_range, self.n_close_orders, balance, pos_size,
                                     pos_price, highest_bid)
+        self.iter_entries = lambda balance, long_psize, long_pprice, shrt_psize, shrt_pprice, \
+            highest_bid, lowest_ask, last_price: \
+            iter_entries_linear(self.price_step, self.qty_step, self.min_qty, self.min_cost,
+                                self.ddown_factor, self.qty_pct, self.leverage,
+                                self.grid_spacing, self.grid_coefficient, balance, long_psize,
+                                long_pprice, shrt_psize, shrt_pprice, highest_bid, lowest_ask,
+                                last_price, self.do_long, self.do_shrt)
 
     async def init_ema(self):
         # fetch 10 tick chunks to initiate ema
