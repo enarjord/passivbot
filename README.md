@@ -1,6 +1,6 @@
 # passivbot_futures
 
-**Version: 3.2.1**
+**Version: 3.3.0**
 
 trading bot running on bybit inverse futures and binance usdt futures using hedge mode
 
