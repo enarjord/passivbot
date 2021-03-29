@@ -12,6 +12,9 @@
 
   do_long: true,
   do_shrt: true,
+  
+  start_date: 2021-03-01T21:30
+  end_date: -1
 
   ranges:
   {
