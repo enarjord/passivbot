@@ -13,10 +13,11 @@ from math import ceil
 from math import floor
 from time import time, sleep
 from typing import Callable, Iterator
-from passivbot import init_ccxt, load_key_secret, load_live_settings, make_get_filepath, print_, \
+from passivbot import load_key_secret, load_live_settings, make_get_filepath, print_, \
     ts_to_date, flatten, Bot, start_bot, round_up, round_dn, \
-    calc_min_order_qty_inverse, sort_dict_keys, calc_ema, iter_long_entries_inverse, \
-    iter_shrt_entries_inverse, iter_long_closes_inverse, iter_shrt_closes_inverse, calc_diff
+    calc_min_order_qty_inverse, sort_dict_keys, calc_ema, \
+    iter_long_closes_inverse, iter_shrt_closes_inverse, calc_diff, \
+    iter_entries_inverse
 import aiohttp
 from urllib.parse import urlencode
 
@@ -85,10 +86,11 @@ async def fetch_ticks(cc, symbol: str, from_id: int = None, do_print=True) -> [d
     return trades
 
 def date_to_ts(date: str):
+    date = date[:23].replace('Z', '')
     try:
-        return datetime.strptime(date, "%Y-%m-%dT%H:%M:%S.%f%z").timestamp() * 1000
+        return datetime.strptime(date, "%Y-%m-%dT%H:%M:%S.%f").timestamp() * 1000
     except ValueError:
-        formats = ["%Y-%m-%dT%H:%M:%S%z"]
+        formats = ["%Y-%m-%dT%H:%M:%S"]
         for f in formats:
             try:
                 return datetime.strptime(date, f).timestamp() * 1000
@@ -134,16 +136,6 @@ class Bybit(Bot):
             self.init_order_book(),
             self.init_ema(),
         )
-        self.iter_long_entries = lambda balance, long_psize, long_pprice, shrt_psize, highest_bid: \
-            iter_long_entries_inverse(self.price_step, self.qty_step, self.min_qty, self.min_cost,
-                                      self.ddown_factor, self.qty_pct, self.leverage,
-                                      self.grid_spacing, self.grid_coefficient, balance, long_psize,
-                                      long_pprice, shrt_psize, highest_bid)
-        self.iter_shrt_entries = lambda balance, long_psize, shrt_psize, shrt_pprice, lowest_ask: \
-            iter_shrt_entries_inverse(self.price_step, self.qty_step, self.min_qty, self.min_cost,
-                                      self.ddown_factor, self.qty_pct, self.leverage,
-                                      self.grid_spacing, self.grid_coefficient, balance, long_psize,
-                                      shrt_psize, shrt_pprice, lowest_ask)
         self.iter_long_closes = lambda balance, pos_size, pos_price, lowest_ask: \
             iter_long_closes_inverse(self.price_step, self.qty_step, self.min_qty, self.min_cost,
                                      self.qty_pct, self.leverage, self.min_markup,
@@ -154,6 +146,13 @@ class Bybit(Bot):
                                      self.qty_pct, self.leverage, self.min_markup,
                                      self.markup_range, self.n_close_orders, balance, pos_size,
                                      pos_price, highest_bid)
+        self.iter_entries = lambda balance, long_psize, long_pprice, shrt_psize, shrt_pprice, \
+            highest_bid, lowest_ask, last_price: \
+            iter_entries_inverse(self.price_step, self.qty_step, self.min_qty, self.min_cost,
+                                 self.ddown_factor, self.qty_pct, self.leverage,
+                                 self.grid_spacing, self.grid_coefficient, balance, long_psize,
+                                 long_pprice, shrt_psize, shrt_pprice, highest_bid, lowest_ask,
+                                 last_price, self.do_long, self.do_shrt)
 
     async def init_ema(self):
         # fetch 10000 ticks to initiate ema
