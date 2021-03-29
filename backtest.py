@@ -7,6 +7,7 @@ import asyncio
 import os
 import gc
 import matplotlib.pyplot as plt
+from multiprocessing import Lock
 from hashlib import sha256
 from time import time
 from passivbot import *
@@ -15,6 +16,9 @@ from binance import create_bot as create_bot_binance
 import pyswarms
 
 from typing import Iterator, Callable
+
+
+lock = Lock()
 
 
 def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
@@ -163,17 +167,13 @@ def backtest(ticks: np.ndarray, settings: dict, do_print=False) -> [dict]:
         long_pnl_f = calc_long_pnl_inverse
         shrt_pnl_f = calc_shrt_pnl_inverse
         cost_f = calc_cost_inverse
-        iter_long_entries = lambda balance, long_psize, long_pprice, shrt_psize, highest_bid: \
-            iter_long_entries_inverse(
+        iter_entries = lambda balance, long_psize, long_pprice, shrt_psize, shrt_pprice, \
+            highest_bid, lowest_ask, last_price, do_long, do_shrt: \
+            iter_entries_inverse(
                 ss['price_step'], ss['qty_step'], ss['min_qty'], ss['min_cost'], ss['ddown_factor'],
                 ss['qty_pct'], ss['leverage'], ss['grid_spacing'], ss['grid_coefficient'],
-                balance, long_psize, long_pprice, shrt_psize, highest_bid
-            )
-        iter_shrt_entries = lambda balance, long_psize, shrt_psize, shrt_pprice, lowest_ask: \
-            iter_shrt_entries_inverse(
-                ss['price_step'], ss['qty_step'], ss['min_qty'], ss['min_cost'], ss['ddown_factor'],
-                ss['qty_pct'], ss['leverage'], ss['grid_spacing'], ss['grid_coefficient'],
-                balance, long_psize, shrt_psize, shrt_pprice, lowest_ask
+                balance, long_psize, long_pprice, shrt_psize, shrt_pprice, highest_bid, lowest_ask,
+                last_price, do_long, do_shrt
             )
         iter_long_closes = lambda balance, pos_size, pos_price, lowest_ask: \
             iter_long_closes_inverse(ss['price_step'], ss['qty_step'], ss['min_qty'], ss['min_cost'],
@@ -191,17 +191,13 @@ def backtest(ticks: np.ndarray, settings: dict, do_print=False) -> [dict]:
             calc_cross_hedge_liq_price_bybit_inverse(balance, l_psize, l_pprice, s_psize, s_pprice,
                                                      ss['leverage'])
     else:
-        iter_long_entries = lambda balance, long_psize, long_pprice, shrt_psize, highest_bid: \
-            iter_long_entries_linear(
+        iter_entries = lambda balance, long_psize, long_pprice, shrt_psize, shrt_pprice, \
+            highest_bid, lowest_ask, last_price, do_long, do_shrt: \
+            iter_entries_linear(
                 ss['price_step'], ss['qty_step'], ss['min_qty'], ss['min_cost'], ss['ddown_factor'],
                 ss['qty_pct'], ss['leverage'], ss['grid_spacing'], ss['grid_coefficient'],
-                balance, long_psize, long_pprice, shrt_psize, highest_bid
-            )
-        iter_shrt_entries = lambda balance, long_psize, shrt_psize, shrt_pprice, lowest_ask: \
-            iter_shrt_entries_linear(
-                ss['price_step'], ss['qty_step'], ss['min_qty'], ss['min_cost'], ss['ddown_factor'],
-                ss['qty_pct'], ss['leverage'], ss['grid_spacing'], ss['grid_coefficient'],
-                balance, long_psize, shrt_psize, shrt_pprice, lowest_ask
+                balance, long_psize, long_pprice, shrt_psize, shrt_pprice, highest_bid, lowest_ask,
+                last_price, do_long, do_shrt
             )
         iter_long_closes = lambda balance, pos_size, pos_price, lowest_ask: \
             iter_long_closes_linear(ss['price_step'], ss['qty_step'], ss['min_qty'], ss['min_cost'],
@@ -264,8 +260,8 @@ def backtest(ticks: np.ndarray, settings: dict, do_print=False) -> [dict]:
                     highest_bid = 0.0
                 if highest_bid > 0.0 and tick[0] and tick[2] - prev_long_close_ts > min_trade_delay_millis:
                     # create or add to long pos
-                    for tpl in iter_long_entries(balance, long_pos_size, long_pos_price,
-                                                 shrt_pos_size, highest_bid):
+                    for tpl in iter_entries(balance, long_pos_size, long_pos_price, shrt_pos_size,
+                                            shrt_pos_price, highest_bid, 0.0, tick[0], True, False):
                         if tick[0] < tpl[1]:
                             long_pos_size, long_pos_price, prev_long_entry_ts = tpl[2], tpl[3], tick[2]
                             fills.append({
@@ -326,8 +322,8 @@ def backtest(ticks: np.ndarray, settings: dict, do_print=False) -> [dict]:
                     lowest_ask = 0.0
                 if lowest_ask > 0.0 and tick[2] - prev_shrt_close_ts > min_trade_delay_millis:
                     # create or add to shrt pos
-                    for tpl in iter_shrt_entries(balance, long_pos_size, shrt_pos_size,
-                                                 shrt_pos_price, lowest_ask):
+                    for tpl in iter_entries(balance, long_pos_size, long_pos_price, shrt_pos_size,
+                                            shrt_pos_price, 0.0, lowest_ask, tick[0], False, True):
                         if tick[0] > tpl[1]:
                             shrt_pos_size, shrt_pos_price, prev_shrt_entry_ts = tpl[2], tpl[3], tick[2]
                             fills.append({
@@ -785,13 +781,12 @@ def x_to_d(x: np.ndarray, ranges: dict) -> dict:
 
 
 def score_func(r) -> float:
-    liq_cap = 0.07
+    liq_cap = 0.17
 
-    hours_stuck_cap = 108
+    hours_stuck_cap = 120
     try:
-        return r['average_daily_gain']['avg']
+        #return r['average_daily_gain']['avg'] * min(1.0, r['closest_liq']['min'] / liq_cap)
         return (r['average_daily_gain']['avg'] *
-                r['average_daily_gain']['min'] *
                 min(1.0, r['closest_liq']['min'] / liq_cap) /
                 max(1.0, r['max_n_hours_stuck']['max'] / hours_stuck_cap))
     except Exception as e:
@@ -800,9 +795,10 @@ def score_func(r) -> float:
 
 
 class RF:
-    def __init__(self, ticks, backtest_config):
+    def __init__(self, ticks, backtest_config, now):
         self.ticks = ticks
         self.bc = backtest_config
+        self.results_filename = f"results_{ts_to_date(now)[:19].replace(':', '')}.txt"
 
     def rf(self, x):
         rs = [
@@ -814,19 +810,29 @@ class RF:
                                                    sorted(self.bc['ranges']))}}
             ) for i in range(x.shape[0])
         ]
+        global lock
+        try:
+            lock.acquire()
+            with open(self.bc['session_dirpath'] + self.results_filename, 'a') as f:
+                for i, elm in enumerate(rs):
+                    st = {**elm, **x_to_d(x[i], self.bc['ranges'])}
+                    f.write(json.dumps(st) + '\n')
+        finally:
+            lock.release()
         return np.array([-score_func(r) for r in rs])
 
 
 def backtest_pso(ticks, bc):
     bounds = (np.array([bc['ranges'][k][0] for k in sorted(bc['ranges'])]),
               np.array([bc['ranges'][k][1] for k in sorted(bc['ranges'])]))
-    rf = RF(ticks, bc)
-    iters = 120
-    options = {'c1': 1.0, 'c2': 1.0, 'w': 1.0}
-    n_particles = 10
+
+    rf = RF(ticks, bc, time())
+    iters = bc['iters']
+    options = bc['options']
+    n_particles = bc['n_particles']
     n_cpus = os.cpu_count()
-    optimizer = pyswarms.single.GlobalBestPSO(n_particles=n_particles, dimensions=len(bounds[0]),
-                                              options=options, bounds=bounds)
+    optimizer = pyswarms.single.LocalBestPSO(n_particles=n_particles, dimensions=len(bounds[0]),
+                                             options=options, bounds=bounds)
     stats = optimizer.optimize(rf.rf, iters=iters, n_processes=n_cpus)
     print(stats)
     best_candidate = x_to_d(stats[1], bc['ranges'])
