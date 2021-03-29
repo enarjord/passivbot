@@ -93,9 +93,13 @@ async def fetch_ticks_time(cc, symbol: str, start_time: int, end_time: int = Non
                'qty': float(t['q']),
                'timestamp': t['T'],
                'is_buyer_maker': t['m']} for t in fetched_trades]
-    if do_print:
-        print_(['fetched trades', symbol, trades[0]['trade_id'],
-                ts_to_date(float(trades[0]['timestamp']) / 1000)])
+    try:
+        if do_print:
+            print_(['fetched trades', symbol, trades[0]['trade_id'],
+                    ts_to_date(float(trades[0]['timestamp']) / 1000)])
+    except:
+        if do_print:
+            print_(['fetched no new trades', symbol])
     return trades
 
 
