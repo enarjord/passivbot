@@ -63,6 +63,7 @@ class Downloader:
             gaps["end"] = gaps["end"].astype(np.int64)
             gaps.sort_values("start", inplace=True)
             gaps.reset_index(drop=True, inplace=True)
+            gaps["start"] = gaps["start"].replace(0, 1)
             return True, df, gaps
 
     def read_dataframe(self, path) -> pd.DataFrame:
@@ -111,14 +112,15 @@ class Downloader:
         @return: Clean dataframe with correct data types.
         """
         df = pd.DataFrame(ticks)
-        df["trade_id"] = df["trade_id"].astype(np.int64)
-        df["price"] = df["price"].astype(np.float64)
-        df["qty"] = df["qty"].astype(np.float64)
-        df["timestamp"] = df["timestamp"].astype(np.int64)
-        df["is_buyer_maker"] = df["is_buyer_maker"].astype(np.int8)
-        df.sort_values("trade_id", inplace=True)
-        df.drop_duplicates("trade_id", inplace=True)
-        df.reset_index(drop=True, inplace=True)
+        if not df.empty:
+            df["trade_id"] = df["trade_id"].astype(np.int64)
+            df["price"] = df["price"].astype(np.float64)
+            df["qty"] = df["qty"].astype(np.float64)
+            df["timestamp"] = df["timestamp"].astype(np.int64)
+            df["is_buyer_maker"] = df["is_buyer_maker"].astype(np.int8)
+            df.sort_values("trade_id", inplace=True)
+            df.drop_duplicates("trade_id", inplace=True)
+            df.reset_index(drop=True, inplace=True)
         return df
 
     def get_filenames(self) -> list:
@@ -143,7 +145,7 @@ class Downloader:
         div = int((last_timestamp - first_timestamp) / length)
         prev_div.append(div)
         forward = int((first_timestamp - start_time) / np.mean(prev_div))
-        return int(first_trade_id - forward), prev_div, forward
+        return max(1, int(first_trade_id - forward)), prev_div, forward
 
     async def find_time(self, start_time) -> pd.DataFrame:
         """
@@ -183,6 +185,8 @@ class Downloader:
                         last_ts = df["timestamp"].iloc[-1]
                         first_id = df["trade_id"].iloc[0]
                         length = len(df)
+                        if nw_id == 1 and first_ts >= start_time:
+                            break
                 except Exception:
                     print("Failed to fetch or transform...")
             print_(['Found id for start time!'])
@@ -248,6 +252,12 @@ class Downloader:
                             try:
                                 fetched_new_trades = await self.bot.fetch_ticks(int(current_id))
                                 tf = self.transform_ticks(fetched_new_trades)
+                                if tf.empty:
+                                    print_(["Response empty. No new trades, exiting..."])
+                                    break
+                                if current_id == tf["trade_id"].iloc[-1]:
+                                    print_(["Same trade ID again. No new trades, exiting..."])
+                                    break
                                 current_id = tf["trade_id"].iloc[-1]
                                 df = pd.concat([df, tf])
                                 df.sort_values("trade_id", inplace=True)
@@ -266,7 +276,7 @@ class Downloader:
                     if df["timestamp"].iloc[-1] > latest:
                         latest = df["timestamp"].iloc[-1]
                     self.save_dataframe(df, f, missing)
-                else:
+                elif df["trade_id"].iloc[0] != 1:
                     os.remove(os.path.join(self.filepath, f))
                     print_(['Removed file fragment', f])
 
@@ -329,6 +339,12 @@ class Downloader:
                     datetime.datetime.now(tz.UTC).timestamp() * 1000) - current_time > 10000:
                 fetched_new_trades = await self.bot.fetch_ticks(int(current_id))
                 tf = self.transform_ticks(fetched_new_trades)
+                if tf.empty:
+                    print_(["Response empty. No new trades, exiting..."])
+                    break
+                if current_id == tf["trade_id"].iloc[-1]:
+                    print_(["Same trade ID again. No new trades, exiting..."])
+                    break
                 df = pd.concat([df, tf])
                 df.sort_values("trade_id", inplace=True)
                 df.drop_duplicates("trade_id", inplace=True)

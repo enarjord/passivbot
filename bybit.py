@@ -86,11 +86,10 @@ async def fetch_ticks(cc, symbol: str, from_id: int = None, do_print=True) -> [d
     return trades
 
 def date_to_ts(date: str):
-    date = date[:23].replace('Z', '')
     try:
-        return datetime.strptime(date, "%Y-%m-%dT%H:%M:%S.%f").timestamp() * 1000
+        return datetime.strptime(date, "%Y-%m-%dT%H:%M:%S.%f%z").timestamp() * 1000
     except ValueError:
-        formats = ["%Y-%m-%dT%H:%M:%S"]
+        formats = ["%Y-%m-%dT%H:%M:%S%z"]
         for f in formats:
             try:
                 return datetime.strptime(date, f).timestamp() * 1000
@@ -315,10 +314,15 @@ class Bybit(Bot):
         except Exception as e:
             print('error fetching ticks', e)
             return []
-        trades = list(map(format_tick, ticks['result']))
-        if do_print:
-            print_(['fetched trades', self.symbol, trades[0]['trade_id'],
-                    ts_to_date(float(trades[0]['timestamp']) / 1000)])
+        try:
+            trades = list(map(format_tick, ticks['result']))
+            if do_print:
+                print_(['fetched trades', self.symbol, trades[0]['trade_id'],
+                        ts_to_date(float(trades[0]['timestamp']) / 1000)])
+        except:
+            trades = []
+            if do_print:
+                print_(['fetched no new trades', self.symbol])
         return trades
 
     def calc_margin_cost(self, qty: float, price: float) -> float:
