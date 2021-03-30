@@ -13,6 +13,7 @@ from time import time
 from passivbot import *
 from bybit import create_bot as create_bot_bybit
 from binance import create_bot as create_bot_binance
+from downloader import Downloader, prep_backtest_config, fetch_market_specific_settings
 import pyswarms
 
 from typing import Iterator, Callable
@@ -130,15 +131,6 @@ def plot_fills(df, fdf, side_: int = 0, liq_thr=0.1):
         liq_diff = ((fdf.liq_price - fdf.price).abs() / fdf.price)
         fdf.liq_price.where(liq_diff < liq_thr, np.nan).plot(style='k--')
     return plt
-
-
-def prep_ticks(df: pd.DataFrame) -> np.ndarray:
-    dfc = df[df.price != df.price.shift(1)] # drop consecutive same price trades
-    dfc.index = np.arange(len(dfc))
-    buyer_maker = dfc.is_buyer_maker
-    buyer_maker.name = 'buyer_maker'
-    dfcc = pd.concat([dfc.price, buyer_maker, dfc.timestamp], axis=1)
-    return dfcc.values
 
 
 def cleanup_candidate(config: dict) -> dict:
@@ -415,198 +407,6 @@ def backtest(ticks: np.ndarray, settings: dict, do_print=False) -> [dict]:
     return all_fills, True
 
 
-def get_downloaded_trades(filepath: str, age_limit_millis: float) -> (pd.DataFrame, dict):
-    if os.path.isdir(filepath):
-        filenames = sorted([f for f in os.listdir(filepath) if f.endswith('.csv')],
-                           key=lambda x: int(eval(x[:x.find('_')].replace('.cs', '').replace('v', ''))))
-        chunks = []
-        chunk_lengths = {}
-        df = pd.DataFrame()
-        for f in filenames[::-1]:
-            try:
-                chunk = pd.read_csv(os.path.join(filepath, f), dtype=np.float64).set_index('trade_id')
-            except ValueError as e:
-                # old bybit formatting
-                chunk = pd.read_csv(os.path.join(filepath, f)).set_index('trade_id')
-                chunk = chunk.drop('side', axis=1).join(pd.Series(chunk.side == 'Sell', name='is_buyer_maker', index=chunk.index))
-                chunk = chunk.astype(np.float64)
-            chunk_lengths[f] = len(chunk)
-            chunks.append(chunk)
-            if len(chunks) >= 100:
-                if df.empty:
-                    df = pd.concat(chunks, axis=0)
-                else:
-                    chunks.insert(0, df)
-                    df = pd.concat(chunks, axis=0)
-                chunks = []
-            print('\rloaded chunk of trades', f, ts_to_date(chunk.timestamp.iloc[0] / 1000),
-                  end='     ')
-            if chunk.timestamp.iloc[0] < age_limit_millis:
-                break
-        if chunks:
-            if df.empty:
-                df = pd.concat(chunks, axis=0)
-            else:
-                chunks.insert(0, df)
-                df = pd.concat(chunks, axis=0)
-            del chunks
-        if not df.empty:
-            return df[~df.index.duplicated()], chunk_lengths
-        else:
-            return None, {}
-    else:
-        return None, {}
-
-
-async def load_trades(exchange: str, user: str, symbol: str, n_days: float) -> pd.DataFrame:
-
-    def skip_ids(id_, ids_):
-        if id_ in ids_:
-            print('skipping from', id_)
-            while id_ in ids_:
-                id_ -= 1
-            print('           to', id_)
-        return id_
-
-    def load_cache(index_only=False):
-        cache_filenames = [f for f in os.listdir(cache_filepath) if '.csv' in f]
-        if cache_filenames:
-            print('loading cached ticks')
-            if index_only:
-                cache_df = pd.concat(
-                    [pd.read_csv(os.path.join(cache_filepath, f), dtype=np.float64, usecols=["trade_id"]) for f in
-                     cache_filenames], axis=0)
-            else:
-                cache_df = pd.concat(
-                    [pd.read_csv(os.path.join(cache_filepath, f), dtype=np.float64) for f in cache_filenames], axis=0)
-            cache_df = cache_df.set_index('trade_id')
-            return cache_df
-        return None
-
-    if exchange == 'binance':
-        bot = await create_bot_binance(user, {**load_live_settings('binance', do_print=False),
-                                              **{'symbol': symbol}})
-    elif exchange == 'bybit':
-        bot = await create_bot_bybit(user, {**load_live_settings('bybit', do_print=False),
-                                            **{'symbol': symbol}})
-    else:
-        print(exchange, 'not found')
-        return
-    filepath = make_get_filepath(os.path.join('historical_data', exchange, 'agg_trades_futures',
-                                              symbol, ''))
-    cache_filepath = make_get_filepath(filepath.replace(symbol, symbol + '_cache'))
-    age_limit = time() - 60 * 60 * 24 * n_days
-    age_limit_millis = age_limit * 1000
-    print('age_limit', ts_to_date(age_limit))
-    cache_df = load_cache(True)
-    trades_df, chunk_lengths = get_downloaded_trades(filepath, age_limit_millis)
-    ids = set()
-    if trades_df is not None:
-        ids.update(trades_df.index)
-    if cache_df is not None:
-        ids.update(cache_df.index)
-        del cache_df
-        gc.collect()
-    gaps = []
-    if trades_df is not None and len(trades_df) > 0:
-        # 
-        sids = sorted(ids)
-        for i in range(1, len(sids)):
-            if sids[i-1] + 1 != sids[i]:
-                gaps.append((sids[i-1], sids[i]))
-        if gaps:
-            print('gaps', gaps)
-        del sids
-        gc.collect()
-        # 
-    prev_fetch_ts = time()
-    new_trades = await bot.fetch_ticks()
-    from_id = -1
-    k = 0
-    while True:
-        k += 1
-        if (break_ := (float(new_trades[0]['timestamp']) <= age_limit_millis or
-                       new_trades[0]['trade_id'] <= 1000 or
-                       from_id == 0)) or k % 20 == 0:
-            print('caching trades...')
-            new_tdf = pd.DataFrame(new_trades).set_index('trade_id')
-            cache_filename = f'{cache_filepath}{new_tdf.index[0]}_{new_tdf.index[-1]}.csv'
-            new_tdf.to_csv(cache_filename)
-            new_trades = [new_trades[0]]
-            if break_:
-                break
-        from_id = max(0, skip_ids(new_trades[0]['trade_id'] - 1, ids) - 999)
-        # wait at least 0.75 sec between each fetch
-        sleep_for = max(0.0, 0.75 - (time() - prev_fetch_ts))
-        await asyncio.sleep(sleep_for)
-        prev_fetch_ts = time()
-        fetched_new_trades = await bot.fetch_ticks(from_id=from_id)
-        while fetched_new_trades and \
-                fetched_new_trades[0]['trade_id'] == new_trades[0]['trade_id'] and \
-                from_id > 0:
-            print('gaps in ids', from_id)
-            from_id = max(0, from_id - 1000)
-            fetched_new_trades = await bot.fetch_ticks(from_id=from_id)
-        new_trades = fetched_new_trades + new_trades
-        ids.update([e['trade_id'] for e in new_trades])
-    del ids
-    gc.collect()
-    tdf = pd.concat([load_cache(), trades_df], axis=0).sort_index()
-    tdf = tdf[~tdf.index.duplicated()]
-    dump_chunks(filepath, tdf, chunk_lengths)
-    cache_filenames = [f for f in os.listdir(cache_filepath) if '.csv' in f]
-    print('removing cache...\n')
-    for filename in cache_filenames:
-        print(f'\rremoving {filename}', end='   ')
-        os.remove(cache_filepath + filename)
-    try:
-        await bot.cc.close()
-    except:
-        pass
-    try:
-        await bot.session.close()
-    except:
-        pass
-    return tdf[tdf.timestamp >= age_limit_millis]
-
-
-def dump_chunks(filepath: str, tdf: pd.DataFrame, chunk_lengths: dict, chunk_size=100000):
-    chunk_ids = tdf.index // chunk_size * chunk_size
-    for g in tdf.groupby(chunk_ids):
-        filename = f'{int(g[1].index[0])}_{int(g[1].index[-1])}.csv'
-        if filename not in chunk_lengths or chunk_lengths[filename] != chunk_size:
-            print('dumping chunk', filename)
-            g[1].to_csv(f'{filepath}{filename}')
-
-
-async def fetch_market_specific_settings(exchange: str, user: str, symbol: str):
-    tmp_live_settings = load_live_settings(exchange, do_print=False)
-    tmp_live_settings['symbol'] = symbol
-    settings_from_exchange = {}
-    if exchange == 'binance':
-        bot = await create_bot_binance(user, tmp_live_settings)
-        settings_from_exchange['inverse'] = False
-        settings_from_exchange['maker_fee'] = 0.00018
-        settings_from_exchange['taker_fee'] = 0.00036
-        settings_from_exchange['exchange'] = 'binance'
-        await bot.cc.close()
-    elif exchange == 'bybit':
-        bot = await create_bot_bybit(user, tmp_live_settings)
-        settings_from_exchange['inverse'] = True
-        settings_from_exchange['maker_fee'] = -0.00025
-        settings_from_exchange['taker_fee'] = 0.00075
-        settings_from_exchange['exchange'] = 'bybit'
-        await bot.session.close()
-    else:
-        raise Exception(f'unknown exchange {exchange}')
-    settings_from_exchange['max_leverage'] = bot.max_leverage
-    settings_from_exchange['min_qty'] = bot.min_qty
-    settings_from_exchange['min_cost'] = bot.min_notional
-    settings_from_exchange['qty_step'] = bot.qty_step
-    settings_from_exchange['price_step'] = bot.price_step
-    settings_from_exchange['max_leverage'] = bot.max_leverage
-    return settings_from_exchange
-
 
 def live_settings_to_candidate(live_settings: dict, ranges: dict) -> dict:
     return {k: live_settings[k] for k in ranges if k in live_settings}
@@ -715,66 +515,6 @@ def backtest_sliding_window_wrap(ticks: np.ndarray, backtest_config: dict) -> di
     return result
 
 
-async def load_ticks(backtest_config: dict) -> [dict]:
-    ticks_filepath = os.path.join(backtest_config['session_dirpath'], f"ticks_cache.npy")
-    if os.path.exists(ticks_filepath):
-        print('loading cached trade list', ticks_filepath)
-        ticks = np.load(ticks_filepath, allow_pickle=True)
-        if ticks.dtype != np.float64:
-            print('converting cached trade list')
-            np.save(ticks_filepath, ticks.astype("float64"))
-            ticks = np.load(ticks_filepath, allow_pickle=True)
-            gc.collect()
-    else:
-        agg_trades = await load_trades(backtest_config['exchange'], backtest_config['user'],
-                                       backtest_config['symbol'], backtest_config['n_days'])
-        print('preparing ticks...')
-        ticks = prep_ticks(agg_trades)
-        np.save(ticks_filepath, ticks)
-    return ticks
-
-
-async def prep_backtest_config(config_name: str):
-    backtest_config = hjson.load(open(f'backtest_configs/{config_name}.hjson'))
-
-    exchange = backtest_config['exchange']
-    user = backtest_config['user']
-    symbol = backtest_config['symbol']
-    session_name = backtest_config['session_name']
-
-    session_dirpath = make_get_filepath(os.path.join(
-        'backtest_results',
-        exchange,
-        symbol,
-        f"{session_name}_{backtest_config['n_days']}_days",
-        ''))
-    if os.path.exists((mss := session_dirpath + 'market_specific_settings.json')):
-        market_specific_settings = json.load(open(mss))
-    else:
-        market_specific_settings = await fetch_market_specific_settings(exchange, user, symbol)
-        json.dump(market_specific_settings, open(mss, 'w'))
-    backtest_config.update(market_specific_settings)
-
-    # setting absolute min/max ranges
-    for key in ['qty_pct', 'ddown_factor', 'ema_span', 'ema_spread',
-                'grid_coefficient', 'grid_spacing']:
-        if key in backtest_config['ranges']:
-            backtest_config['ranges'][key][0] = max(0.0, backtest_config['ranges'][key][0])
-    for key in ['qty_pct']:
-        if key in backtest_config['ranges']:
-            backtest_config['ranges'][key][1] = min(1.0, backtest_config['ranges'][key][1])
-
-    backtest_config['ranges']['leverage'][1] = \
-        min(backtest_config['ranges']['leverage'][1],
-            backtest_config['max_leverage'])
-    backtest_config['ranges']['leverage'][0] = \
-        min(backtest_config['ranges']['leverage'][0],
-            backtest_config['ranges']['leverage'][1])
-    
-    backtest_config['session_dirpath'] = session_dirpath
-
-    return backtest_config
-
 
 def x_to_d(x: np.ndarray, ranges: dict) -> dict:
     return {k: x[i] for i, k in enumerate(sorted(ranges))}
@@ -858,7 +598,8 @@ def plot_wrap(bc, ticks, candidate):
 async def main(args: list):
     config_name = args[1]
     backtest_config = await prep_backtest_config(config_name)
-    ticks = await load_ticks(backtest_config)
+    downloader = Downloader(backtest_config)
+    ticks = await downloader.get_ticks(True)
     if (p := '--plot') in args:
         try:
             candidate = json.load(open(args[args.index(p) + 1]))
