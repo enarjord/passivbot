@@ -2,9 +2,7 @@
 
 **Version: 3.3.0**
 
-trading bot running on bybit inverse futures and binance usdt futures using hedge mode
-
-bybit inverse futures not yet functional, work in progress
+trading bot running on bybit binance usdt futures using hedge mode when possible
 
 use at own risk
 
@@ -68,6 +66,10 @@ change log
 - numba is now enabled by default, use --nojit to disable numba
 - several renamings
 
+2021-03-30 v3.3.0
+- bybit usdt linear perpetual and bybit inverse perpetual markets now supported
+- new downloader for historical backtesting data
+
 
 
 see `changelog.txt` for earlier changes
@@ -101,9 +103,9 @@ run in docker: modify command with exchange and user_name in docker-compose and 
 ------------------------------------------------------------------
 overview
 
-the bot's purpose is to accumulate btc (or another coin) in bybit inverse and usdt in binance usdt futures using hedge mode for simultaneous long and short positions
+the bot's purpose is to accumulate tokens over time
 
-it is a market maker bot, making multiple post only limit orders above and below current price
+it is a market maker bot working in futures markets, making multiple post only limit orders above and below current price
 
 it listens to websocket live stream of trades, and updates its orders continuously
 
