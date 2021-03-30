@@ -521,7 +521,7 @@ def x_to_d(x: np.ndarray, ranges: dict) -> dict:
 
 
 def score_func(r) -> float:
-    liq_cap = 0.17
+    liq_cap = 0.21
 
     hours_stuck_cap = 120
     try:
@@ -581,9 +581,10 @@ def backtest_pso(ticks, bc):
 
 
 def plot_wrap(bc, ticks, candidate):
+    n_days = round_((ticks[-1][2] - ticks[0][2]) / (1000 * 60 * 60 * 24), 0.1)
     bc['session_dirpath'] = make_get_filepath(os.path.join(
         'plots', bc['exchange'], bc['symbol'],
-        f"{int(bc['n_days'])}_days_{ts_to_date(time())[:19].replace(':', '')}", ''))
+        f"{n_days}_days_{ts_to_date(time())[:19].replace(':', '')}", ''))
     print('backtesting...')
     result, fdf = backtest_wrap(ticks, {**bc, **{'break_on': {}}, **candidate}, do_print=True)
     if fdf is None or len(fdf) == 0:
