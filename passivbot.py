@@ -915,6 +915,8 @@ class Bot:
         self.ema = 0.0
         self.fills = []
 
+        self.hedge_mode = True
+
         self.log_filepath = make_get_filepath(f"logs/{self.exchange}/{settings['config_name']}.log")
 
         self.my_trades = []
@@ -997,9 +999,9 @@ class Bot:
         for oc in orders_to_cancel:
             try:
                 deletions.append((oc,
-                                  asyncio.create_task(self.execute_cancellation(oc['order_id']))))
+                                  asyncio.create_task(self.execute_cancellation(oc))))
             except Exception as e:
-                print_(['error cancelling order', oc, e])
+                print_(['error cancelling order a', oc, e])
         canceled_orders = []
         for oc, c in deletions:
             try:
@@ -1009,7 +1011,7 @@ class Bot:
                         o['price']], n=True)
                 self.dump_log({'log_type': 'cancel_order', 'data': o})
             except Exception as e:
-                print_(['error cancelling order', oc, c.exception(), e], n=True)
+                print_(['error cancelling order b', oc, c.exception(), e], n=True)
                 self.dump_log({'log_type': 'cancel_order', 'data': {'result': str(c.exception()),
                                'error': repr(e), 'data': oc}})
         self.ts_released['cancel_orders'] = time()
@@ -1022,8 +1024,13 @@ class Bot:
         last_price_diff_limit = 0.15
         balance = self.position['wallet_balance'] * 0.98
 
-        do_long = self.do_long or self.position['long']['size'] != 0.0
-        do_shrt = self.do_shrt or self.position['shrt']['size'] != 0.0
+        if self.hedge_mode:
+            do_long = self.do_long or self.position['long']['size'] != 0.0
+            do_shrt = self.do_shrt or self.position['shrt']['size'] != 0.0
+        else:
+            no_pos = self.position['long']['size'] == 0.0 and self.position['shrt']['size'] == 0.0
+            do_long = (no_pos and self.do_long) or self.position['long']['size'] != 0.0
+            do_shrt = (no_pos and self.do_shrt) or self.position['shrt']['size'] != 0.0
         highest_bid = min(self.ob[0], round_dn(self.ema * (1 - self.ema_spread), self.price_step)) \
             if self.position['long']['size'] == 0.0 else self.ob[0]
         lowest_ask = max(self.ob[1], round_up(self.ema * (1 + self.ema_spread), self.price_step)) if \
@@ -1036,7 +1043,7 @@ class Bot:
                                      self.position['long']['price'],
                                      self.position['shrt']['size'],
                                      self.position['shrt']['price'],
-                                     highest_bid, lowest_ask, self.price):
+                                     highest_bid, lowest_ask, self.price, do_long, do_shrt):
             if len(entry_orders) >= self.n_entry_orders * 2 or \
                     calc_diff(tpl[1], self.price) > last_price_diff_limit:
                 break
