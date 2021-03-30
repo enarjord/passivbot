@@ -110,7 +110,7 @@ async def fetch_trades(cc, symbol: str, from_id: int = None) -> [dict]:
                'timestamp': float(t['T']),
                'is_buyer_maker': t['m']} for t in fetched_trades]
     print_(['fetched trades', symbol, trades[0]['trade_id'],
-            ts_to_date(rades[0]['timestamp'] / 1000)])
+            ts_to_date(trades[0]['timestamp'] / 1000)])
     return trades
 
 async def create_bot(user: str, settings: str):
