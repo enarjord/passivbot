@@ -3,7 +3,6 @@
   exchange: binance
   user: e
   symbol: XMRUSDT
-  n_days: 28
   latency_simulation_ms: 750
   starting_balance: 30.0
   # set sliding window size to 1.0 to do only one backtest for whole period
