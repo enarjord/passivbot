@@ -168,12 +168,12 @@ class BinanceBot(Bot):
                                     self.markup_range, self.n_close_orders, balance, pos_size,
                                     pos_price, highest_bid)
         self.iter_entries = lambda balance, long_psize, long_pprice, shrt_psize, shrt_pprice, \
-            highest_bid, lowest_ask, last_price: \
+            highest_bid, lowest_ask, last_price, do_long, do_shrt: \
             iter_entries_linear(self.price_step, self.qty_step, self.min_qty, self.min_cost,
                                 self.ddown_factor, self.qty_pct, self.leverage,
                                 self.grid_spacing, self.grid_coefficient, balance, long_psize,
                                 long_pprice, shrt_psize, shrt_pprice, highest_bid, lowest_ask,
-                                last_price, self.do_long, self.do_shrt)
+                                last_price, do_long, do_shrt)
 
     async def init_ema(self):
         # fetch 10 tick chunks to initiate ema
@@ -325,9 +325,9 @@ class BinanceBot(Bot):
                 'qty': float(o['origQty']),
                 'price': float(o['price'])}
 
-    async def execute_cancellation(self, id_: str) -> [dict]:
+    async def execute_cancellation(self, order: dict) -> [dict]:
         cancellation = await self.cc.fapiPrivate_delete_order(params={
-            'symbol': self.symbol, 'orderId': id_
+            'symbol': self.symbol, 'orderId': order['order_id']
         })
         return {'symbol': self.symbol, 'side': cancellation['side'].lower(),
                 'position_side': cancellation['positionSide'].lower().replace('short', 'shrt'),
