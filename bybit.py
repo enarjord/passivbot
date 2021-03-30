@@ -8,16 +8,16 @@ import pandas as pd
 import pprint
 import hashlib
 import hmac
-from datetime import datetime
+from dateutil import parser
 from math import ceil
 from math import floor
 from time import time, sleep
 from typing import Callable, Iterator
 from passivbot import load_key_secret, load_live_settings, make_get_filepath, print_, \
     ts_to_date, flatten, Bot, start_bot, round_up, round_dn, \
-    calc_min_order_qty_inverse, sort_dict_keys, calc_ema, \
-    iter_long_closes_inverse, iter_shrt_closes_inverse, calc_diff, \
-    iter_entries_inverse
+    calc_min_order_qty_inverse, sort_dict_keys, calc_ema, calc_diff, \
+    iter_long_closes_inverse, iter_shrt_closes_inverse, iter_entries_inverse, \
+    iter_long_closes_linear, iter_shrt_closes_linear, iter_entries_linear
 import aiohttp
 from urllib.parse import urlencode
 
@@ -40,25 +40,6 @@ def calc_isolated_shrt_liq_price(balance,
                                  leverage,
                                  mm=0.005) -> float:
     return (pos_price * leverage) / (leverage - 1 + mm * leverage)
-
-
-def determine_pos_side(o: dict) -> str:
-    side = o['side'].lower()
-    if side == 'buy':
-        if 'entry' in o['order_link_id']:
-            position_side = 'long'
-        elif 'close' in o['order_link_id']:
-            position_side = 'shrt'
-        else:
-            position_side = 'unknown'
-    else:
-        if 'entry' in o['order_link_id']:
-            position_side = 'shrt'
-        elif 'close' in o['order_link_id']:
-            position_side = 'long'
-        else:
-            position_side = 'unknown'
-    return position_side
 
 
 def format_tick(tick: dict) -> dict:
@@ -86,16 +67,7 @@ async def fetch_ticks(cc, symbol: str, from_id: int = None, do_print=True) -> [d
     return trades
 
 def date_to_ts(date: str):
-    try:
-        return datetime.strptime(date, "%Y-%m-%dT%H:%M:%S.%f%z").timestamp() * 1000
-    except ValueError:
-        formats = ["%Y-%m-%dT%H:%M:%S%z"]
-        for f in formats:
-            try:
-                return datetime.strptime(date, f).timestamp() * 1000
-            except ValueError:
-                continue
-    raise Exception(f'unable to convert date {date} to timestamp')
+    return parser.parse(date).timestamp() * 1000
 
 async def create_bot(user: str, settings: str):
     bot = Bybit(user, settings)
@@ -110,7 +82,89 @@ class Bybit(Bot):
         super().__init__(user, settings)
         self.key, self.secret = load_key_secret('bybit', user)
         self.base_endpoint = 'https://api.bybit.com'
+        self.endpoints = {}
+        self.market_type = ''
         self.session = aiohttp.ClientSession()
+
+    def init_market_type(self):
+        if self.symbol.endswith('USDT'):
+            print('linear perpetual')
+            self.market_type = 'linear_perpetual'
+            self.endpoints = {'position': '/private/linear/position/list',
+                              'open_orders': '/private/linear/order/list',
+                              'create_order': '/private/linear/order/create',
+                              'cancel_order': '/private/linear/order/cancel',
+                              'ticks': '/public/linear/recent-trading-records',
+                              'websocket_url': 'wss://stream.bybit.com/realtime_public'}
+            self.iter_long_closes = lambda balance, pos_size, pos_price, lowest_ask: \
+                iter_long_closes_linear(self.price_step, self.qty_step, self.min_qty, self.min_cost,
+                                        self.qty_pct, self.leverage, self.min_markup,
+                                        self.markup_range, self.n_close_orders, balance, pos_size,
+                                        pos_price, lowest_ask)
+            self.iter_shrt_closes = lambda balance, pos_size, pos_price, highest_bid: \
+                iter_shrt_closes_linear(self.price_step, self.qty_step, self.min_qty, self.min_cost,
+                                        self.qty_pct, self.leverage, self.min_markup,
+                                        self.markup_range, self.n_close_orders, balance, pos_size,
+                                        pos_price, highest_bid)
+            self.iter_entries = lambda balance, long_psize, long_pprice, shrt_psize, shrt_pprice, \
+                highest_bid, lowest_ask, last_price, do_long, do_shrt: \
+                iter_entries_linear(self.price_step, self.qty_step, self.min_qty, self.min_cost,
+                                    self.ddown_factor, self.qty_pct, self.leverage,
+                                    self.grid_spacing, self.grid_coefficient, balance, long_psize,
+                                    long_pprice, shrt_psize, shrt_pprice, highest_bid, lowest_ask,
+                                    last_price, do_long, do_shrt)
+            self.hedge_mode = False
+
+        else:
+            if self.symbol.endswith('USD'):
+                print('inverse perpetual')
+                self.market_type = 'inverse_perpetual'
+                self.endpoints = {'position': '/v2/private/position/list',
+                                  'open_orders': '/v2/private/order',
+                                  'create_order': '/v2/private/order/create',
+                                  'cancel_order': '/v2/private/order/cancel',
+                                  'ticks': '/v2/public/trading-records',
+                                  'websocket_url': 'wss://stream.bybit.com/realtime'}
+                self.hedge_mode = False
+            else:
+                print('inverse futures')
+                self.market_type = 'inverse_futures'
+                self.endpoints = {'position': '/futures/private/position/list',
+                                  'open_orders': '/futures/private/order',
+                                  'create_order': '/futures/private/order/create',
+                                  'cancel_order': '/futures/private/order/cancel',
+                                  'ticks': '/v2/public/trading-records',
+                                  'websocket_url': 'wss://stream.bybit.com/realtime'}
+
+            self.iter_long_closes = lambda balance, pos_size, pos_price, lowest_ask: \
+                iter_long_closes_inverse(self.price_step, self.qty_step, self.min_qty, self.min_cost,
+                                         self.qty_pct, self.leverage, self.min_markup,
+                                         self.markup_range, self.n_close_orders, balance, pos_size,
+                                         pos_price, lowest_ask)
+            self.iter_shrt_closes = lambda balance, pos_size, pos_price, highest_bid: \
+                iter_shrt_closes_inverse(self.price_step, self.qty_step, self.min_qty, self.min_cost,
+                                         self.qty_pct, self.leverage, self.min_markup,
+                                         self.markup_range, self.n_close_orders, balance, pos_size,
+                                         pos_price, highest_bid)
+            self.iter_entries = lambda balance, long_psize, long_pprice, shrt_psize, shrt_pprice, \
+                highest_bid, lowest_ask, last_price, do_long, do_shrt: \
+                iter_entries_inverse(self.price_step, self.qty_step, self.min_qty, self.min_cost,
+                                     self.ddown_factor, self.qty_pct, self.leverage,
+                                     self.grid_spacing, self.grid_coefficient, balance, long_psize,
+                                     long_pprice, shrt_psize, shrt_pprice, highest_bid, lowest_ask,
+                                     last_price, do_long, do_shrt)
+
+    def determine_pos_side(self, o: dict) -> str:
+        side = o['side'].lower()
+        if side == 'buy':
+            if 'entry' in o['order_link_id']:   position_side = 'long'
+            elif 'close' in o['order_link_id']: position_side = 'shrt'
+            else:                               position_side = 'unknown'
+        else:
+            if 'entry' in o['order_link_id']:   position_side = 'shrt'
+            elif 'close' in o['order_link_id']: position_side = 'long'
+            else:                               position_side = 'both'
+        return position_side
 
     async def _init(self):
         info = await self.public_get('/v2/public/symbols')
@@ -130,28 +184,13 @@ class Bybit(Bot):
         self.calc_min_order_qty = lambda balance_, last_price: \
             calc_min_order_qty_inverse(self.qyt_step, self.min_qty, self.min_cost,
                                        self.qty_pct, self.leverage, balance_, last_price)
+        self.init_market_type()
         await asyncio.gather(
             self.update_position(),
             self.init_order_book(),
             self.init_ema(),
         )
-        self.iter_long_closes = lambda balance, pos_size, pos_price, lowest_ask: \
-            iter_long_closes_inverse(self.price_step, self.qty_step, self.min_qty, self.min_cost,
-                                     self.qty_pct, self.leverage, self.min_markup,
-                                     self.markup_range, self.n_close_orders, balance, pos_size,
-                                     pos_price, lowest_ask)
-        self.iter_shrt_closes = lambda balance, pos_size, pos_price, highest_bid: \
-            iter_shrt_closes_inverse(self.price_step, self.qty_step, self.min_qty, self.min_cost,
-                                     self.qty_pct, self.leverage, self.min_markup,
-                                     self.markup_range, self.n_close_orders, balance, pos_size,
-                                     pos_price, highest_bid)
-        self.iter_entries = lambda balance, long_psize, long_pprice, shrt_psize, shrt_pprice, \
-            highest_bid, lowest_ask, last_price: \
-            iter_entries_inverse(self.price_step, self.qty_step, self.min_qty, self.min_cost,
-                                 self.ddown_factor, self.qty_pct, self.leverage,
-                                 self.grid_spacing, self.grid_coefficient, balance, long_psize,
-                                 long_pprice, shrt_psize, shrt_pprice, highest_bid, lowest_ask,
-                                 last_price, self.do_long, self.do_shrt)
+        return
 
     async def init_ema(self):
         # fetch 10000 ticks to initiate ema
@@ -174,11 +213,18 @@ class Bybit(Bot):
 
 
     async def fetch_open_orders(self) -> [dict]:
-        fetched = await self.private_get('/futures/private/order', {'symbol': self.symbol})
+        fetched = await self.private_get(self.endpoints['open_orders'], {'symbol': self.symbol})
+        if self.market_type == 'linear_perpetual':
+            elms = fetched['result']['data']
+            created_at_key = 'created_time'
+        else:
+            elms = fetched['result']
+            created_at_key = 'created_at'
+
         oos = []
-        for elm in fetched['result']:
+        for elm in elms:
             if elm['order_status'] == 'New':
-                position_side = determine_pos_side(elm)
+                position_side = self.determine_pos_side(elm)
                 oos.append({'order_id': elm['order_id'],
                             'custom_id': elm['order_link_id'],
                             'symbol': elm['symbol'],
@@ -186,7 +232,7 @@ class Bybit(Bot):
                             'qty': float(elm['qty']),
                             'side': elm['side'].lower(),
                             'position_side': position_side,
-                            'timestamp': date_to_ts(elm['created_at'])})
+                            'timestamp': date_to_ts(elm[created_at_key])})
         return oos
 
     async def public_get(self, url: str, params: dict = {}) -> dict:
@@ -216,41 +262,61 @@ class Bybit(Bot):
         return await self.private_('post', url, params)
 
     async def fetch_position(self) -> dict:
-        fetched = await self.private_get('/futures/private/position/list', {'symbol': self.symbol})
         position = {}
-        for e in fetched['result']:
-            if e['data']['position_idx'] == 1:
-                position['long'] = {'size': float(e['data']['size']),
-                                    'price': float(e['data']['entry_price']),
-                                    'leverage': float(e['data']['leverage']),
-                                    'liquidation_price': float(e['data']['liq_price']),
-                                    'equity': (b := float(e['data']['wallet_balance'])),
-                                    'wallet_balance': b}
-            elif e['data']['position_idx'] == 2:
-                position['shrt'] = {'size': -abs(float(e['data']['size'])),
-                                    'price': float(e['data']['entry_price']),
-                                    'leverage': float(e['data']['leverage']),
-                                    'liquidation_price': float(e['data']['liq_price']),
-                                    'equity': (b := float(e['data']['wallet_balance'])),
-                                    'wallet_balance': b}
-        position['wallet_balance'] = position['long']['wallet_balance']
+        if self.market_type == 'linear_perpetual':
+            fetched, bal = await asyncio.gather(
+                self.private_get(self.endpoints['position'], {'symbol': self.symbol}),
+                self.private_get('/v2/private/wallet/balance', {'coin': self.quot})
+            )
+            long_pos = [e for e in fetched['result'] if e['side'] == 'Buy'][0]
+            shrt_pos = [e for e in fetched['result'] if e['side'] == 'Sell'][0]
+            position['wallet_balance'] = float(bal['result'][self.quot]['wallet_balance'])
+        else:
+            fetched = await self.private_get(self.endpoints['position'], {'symbol': self.symbol})
+        if self.market_type == 'inverse_perpetual':
+            if fetched['result']['side'] == 'Buy':
+                long_pos = fetched['result']
+                shrt_pos = {'size': 0.0, 'entry_price': 0.0, 'leverage': 0.0, 'liq_price': 0.0}
+            else:
+                long_pos = {'size': 0.0, 'entry_price': 0.0, 'leverage': 0.0, 'liq_price': 0.0}
+                shrt_pos = fetched['result']
+            position['wallet_balance'] = float(fetched['result']['wallet_balance'])
+        elif self.market_type == 'inverse_futures':
+            long_pos = [e['data'] for e in fetched['result'] if e['data']['position_idx'] == 1][0]
+            shrt_pos = [e['data'] for e in fetched['result'] if e['data']['position_idx'] == 2][0]
+            position['wallet_balance'] = float(long_pos['wallet_balance'])
+
+        position['long'] = {'size': float(long_pos['size']),
+                            'price': float(long_pos['entry_price']),
+                            'leverage': float(long_pos['leverage']),
+                            'liquidation_price': float(long_pos['liq_price'])}
+        position['shrt'] = {'size': -float(shrt_pos['size']),
+                            'price': float(shrt_pos['entry_price']),
+                            'leverage': float(shrt_pos['leverage']),
+                            'liquidation_price': float(shrt_pos['liq_price'])}
+
         return position
 
     async def execute_order(self, order: dict) -> dict:
         params = {'symbol': self.symbol,
                   'side':  first_capitalized(order['side']),
-                  'position_idx': 1 if order['position_side'] == 'long' else 2,
                   'order_type': first_capitalized(order['type']),
-                  'qty': int(order['qty'])}
+                  'qty': float(order['qty']) if self.market_type == 'linear_perpetual' else int(order['qty']),
+                  'close_on_trigger': False}
+        if self.hedge_mode:
+            params['position_idx'] = 1 if order['position_side'] == 'long' else 2
+        else:
+            params['position_idx'] = 0
         if params['order_type'] == 'Limit':
             params['time_in_force'] = 'PostOnly'
             params['price'] = str(order['price'])
         else:
             params['time_in_force'] = 'GoodTillCancel'
-        if 'custom_id' in order:
-            params['order_link_id'] = \
-                f"{order['custom_id']}_{int(time() * 1000)}_{int(np.random.random() * 1000)}"
-        o = await self.private_post('/futures/private/order/create', params)
+        params['order_link_id'] = \
+            f"{order['custom_id']}_{int(time() * 1000)}_{int(np.random.random() * 1000)}"
+        if not self.hedge_mode:
+            params['reduce_only'] = order['custom_id'] == 'close'
+        o = await self.private_post(self.endpoints['create_order'], params)
         if o['result']:
             return {'symbol': o['result']['symbol'],
                     'side': o['result']['side'].lower(),
@@ -261,56 +327,19 @@ class Bybit(Bot):
         else:
             return {}
 
-    async def execute_cancellation(self, id_: str) -> [dict]:
-        o = await self.private_post('/futures/private/order/cancel',
-                                    {'symbol': self.symbol, 'order_id': id_})
-        return {'symbol': o['result']['symbol'], 'side': o['result']['side'].lower(),
-                'position_side': determine_pos_side(o['result']),
-                'qty': o['result']['qty'], 'price': o['result']['price']}
-
-    async def init_my_trades(self, age_limit_days: float = 7.0) -> [dict]:
-        age_limit = self.cc.milliseconds() - 1000 * 60 * 60 * 24 * age_limit_days
-        mtl = await self.fetch_my_trades()
-        print('loading my trades cache...')
-        mtl += self.load_cached_my_trades()
-        mtd = {t['order_id']: t for t in mtl}
-        mt = sorted(mtd.values(), key=lambda x: x['timestamp'])
-        page = 2
-        while mt[0]['timestamp'] > age_limit:
-            print('fetching my trades', ts_to_date(mt[0]['timestamp'] / 1000))
-            new_mt = await self.fetch_my_trades(page)
-            if len(new_mt) == 0 or new_mt[0]['order_id'] in mtd:
-                break
-            page += 1
-            mtd = {t['order_id']: t for t in mt + new_mt}
-            mt = sorted(mtd.values(), key=lambda x: x['timestamp'])
-        my_trades = [t for t in mt if t['timestamp'] > age_limit]
-        print('dumping trades to cache...')
-        with open(self.my_trades_cache_filepath, 'w') as f:
-            for t in my_trades:
-                f.write(json.dumps(t) + '\n')
-        self.my_trades = my_trades
-
-    async def fetch_my_trades(self, page: int = 1):
-        params = {'symbol': self.symbol, 'limit': 200, 'order': 'desc', 'page': page}
-        fetched = await self.cc.v2_private_get_execution_list(params=params)
-        mt = {t['exec_id']: {'custom_id': t['order_link_id'],
-                             'order_id': t['order_id'],
-                             'symbol': t['symbol'],
-                             'side': t['side'].lower(),
-                             'type': t['order_type'].lower(),
-                             'price': float(t['order_price']),
-                             'qty': float(t['order_qty']),
-                             'timestamp': t['trade_time_ms']}
-              for t in fetched['result']['trade_list']}
-        return sorted(mt.values(), key=lambda t: t['timestamp'])
+    async def execute_cancellation(self, order: dict) -> [dict]:
+        o = await self.private_post(self.endpoints['cancel_order'],
+                                    {'symbol': self.symbol, 'order_id': order['order_id']})
+        return {'symbol': self.symbol, 'side': order['side'],
+                'position_side': order['position_side'],
+                'qty': order['qty'], 'price': order['price']}
 
     async def fetch_ticks(self, from_id: int = None, do_print: bool = True):
         params = {'symbol': self.symbol, 'limit': 1000}
         if from_id is not None:
             params['from'] = max(0, from_id)
         try:
-            ticks = await self.public_get('/v2/public/trading-records', params)
+            ticks = await self.public_get(self.endpoints['ticks'], params)
         except Exception as e:
             print('error fetching ticks', e)
             return []
@@ -333,31 +362,36 @@ class Bybit(Bot):
 
     async def init_exchange_settings(self):
         try:
-            res = await self.private_post('/futures/private/position/switch-isolated',
-                                          {'symbol': self.symbol, 'is_isolated': False,
-                                           'buy_leverage': int(self.leverage),
-                                           'sell_leverage': int(self.leverage)})
-            print(res)
-        except Exception as e:
-            print(e)
-        try:
-            lev = await self.private_post('/futures/private/position/leverage/save',
-                                          {'symbol': self.symbol,
-                                           'buy_leverage': int(self.leverage),
-                                           'sell_leverage': int(self.leverage)})
-            print(lev)
-        except Exception as e:
-            print(e)
-        try:
-            res = await self.private_post('/futures/private/position/switch-mode',
-                                          {'symbol': self.symbol, 'mode': 3})
+            # set cross mode
+            if self.market_type == 'inverse_futures':
+                res = await asyncio.gather(
+                    self.private_post('/futures/private/position/leverage/save',
+                                      {'symbol': self.symbol, 'position_idx': 1,
+                                       'buy_leverage': 0, 'sell_leverage': 0}),
+                    self.private_post('/futures/private/position/leverage/save',
+                                      {'symbol': self.symbol, 'position_idx': 2,
+                                       'buy_leverage': 0, 'sell_leverage': 0})
+                )
+                print(res)
+                res = await self.private_post('/futures/private/position/switch-mode',
+                                              {'symbol': self.symbol, 'mode': 3})
+                print(res)
+            elif self.market_type == 'linear_perpetual':
+                res = await self.private_post('/private/linear/position/switch-isolated',
+                                              {'symbol': self.symbol, 'is_isolated': False,
+                                               'buy_leverage': 0,
+                                               'sell_leverage': 0})
+            elif self.market_type == 'inverse_perpetual':
+                res = await self.private_post('/v2/private/position/leverage/save',
+                                              {'symbol': self.symbol, 'leverage': 0})
+                
             print(res)
         except Exception as e:
             print(e)
 
     async def start_websocket(self) -> None:
         self.stop_websocket = False
-        uri = f"wss://stream.bybit.com/realtime"
+        uri = self.endpoints['websocket_url']
         print_([uri])
         await self.init_exchange_settings()
         param = {'op': 'subscribe', 'args': ['trade.' + self.symbol]}
@@ -371,14 +405,15 @@ class Bybit(Bot):
                 price_changed = False
                 try:
                     for e in data['data']:
-                        if e['price'] != self.price:
+                        price = float(e['price'])
+                        if price != self.price:
                             if e['side'] == 'Buy':
-                                self.ob[1] = e['price']
+                                self.ob[1] = price
                             elif e['side'] == 'Sell':
-                                self.ob[0] = e['price']
-                            self.price = e['price']
+                                self.ob[0] = price
+                            self.price = price
                             price_changed = True
-                            self.ema = calc_ema(self.ema_alpha, self.ema_alpha_, self.ema, e['price'])
+                            self.ema = calc_ema(self.ema_alpha, self.ema_alpha_, self.ema, price)
                 except Exception as e:
                     if 'success' not in data:
                         print('error in websocket streamed data', e)
