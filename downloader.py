@@ -239,7 +239,7 @@ class Downloader:
                     last_id = df["trade_id"].iloc[-1] if df["trade_id"].iloc[-1] > gaps["end"].iloc[-1] else \
                         gaps["start"].iloc[-1]
                     for i in filenames:
-                        if str(first_id) in i and str(last_id) in i:
+                        if str(first_id) in i and str(last_id) in i and first_id != 1:
                             exists = True
                             break
                 if missing and df["timestamp"].iloc[-1] > self.start_time and not exists:
