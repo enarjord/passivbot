@@ -19,7 +19,7 @@ NOTHING here is final.
 > │    ├── `Dockerfile`  
 > │    ├── `docker-compose.yml`  
 > │    ├── `changelog.txt`  
-> │    ├── `requirements.txt`
+> │    ├── `requirements.txt`  
 > │    ├── `API_KEYS/`  
 > │    │     ├── `binance/`  
 > │    │     └── `bybit/`  
