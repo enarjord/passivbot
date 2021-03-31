@@ -306,6 +306,8 @@ def iter_long_closes_inverse(price_step: float,
                                                                     qty_pct, leverage,
                                                                     balance, lowest_ask),
                                          round_up(pos_size / n_orders, qty_step)))
+                if pos_size != 0.0 and -qty / pos_size > 0.75:
+                    qty = -pos_size
             if qty == 0.0:
                 break
             pos_size = round_(pos_size + qty, qty_step)
@@ -313,7 +315,7 @@ def iter_long_closes_inverse(price_step: float,
             lowest_ask = price
             n_orders -= 1
         if pos_size > 0.0:
-            yield -pos_size, lowest_ask, 0.0
+            yield -pos_size, max(lowest_ask, round_up(minm, price_step)), 0.0
 
 
 @njit
@@ -356,6 +358,8 @@ def iter_shrt_closes_inverse(price_step: float,
                                                                        qty_pct, leverage,
                                                                        balance, highest_bid),
                                             round_up(abs_pos_size / n_orders, qty_step)))
+                if abs_pos_size != 0.0 and qty / abs_pos_size > 0.75:
+                    qty = abs_pos_size
             if qty == 0.0:
                 break
             abs_pos_size = round_(abs_pos_size - qty, qty_step)
@@ -675,7 +679,7 @@ def iter_long_closes_linear(price_step: float,
     if len(prices) == 0:
         yield -pos_size, max(lowest_ask, round_up(minm, price_step)), 0.0
     else:
-        n_orders = int(min([n_orders, len(prices), int(pos_size / min_qty)]))
+        n_orders = int(min([n_orders, len(prices), pos_size / min_qty]))
         for price in prices:
             if n_orders == 0:
                 break
@@ -684,6 +688,8 @@ def iter_long_closes_linear(price_step: float,
                                                                    qty_pct, leverage,
                                                                    balance, lowest_ask),
                                          round_up(pos_size / n_orders, qty_step)))
+                if pos_size != 0.0 and -qty / pos_size > 0.75:
+                    qty = -pos_size
             if qty == 0.0:
                 break
             pos_size = round_(pos_size + qty, qty_step)
@@ -691,7 +697,7 @@ def iter_long_closes_linear(price_step: float,
             lowest_ask = price
             n_orders -= 1
         if pos_size > 0.0:
-            yield -pos_size, lowest_ask, 0.0
+            yield -pos_size, max(lowest_ask, round_up(minm, price_step)), 0.0
 
 
 @njit
@@ -725,7 +731,7 @@ def iter_shrt_closes_linear(price_step: float,
         yield abs_pos_size, min(highest_bid, round_dn(minm, price_step)), 0.0
         abs_pos_size = 0.0
     else:
-        n_orders = int(min([n_orders, len(prices), int(abs_pos_size / min_qty)]))
+        n_orders = int(min([n_orders, len(prices), abs_pos_size / min_qty]))
         for price in prices:
             if n_orders == 0:
                 break
@@ -734,6 +740,8 @@ def iter_shrt_closes_linear(price_step: float,
                                                                       qty_pct, leverage,
                                                                       balance, highest_bid),
                                             round_up(abs_pos_size / n_orders, qty_step)))
+                if abs_pos_size != 0.0 and qty / abs_pos_size > 0.75:
+                    qty = abs_pos_size
             if qty == 0.0:
                 break
             abs_pos_size = round_(abs_pos_size - qty, qty_step)
