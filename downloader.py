@@ -294,7 +294,7 @@ class Downloader:
                 if first_time >= prev_last_time:
                     if self.end_time != -1 and self.end_time < first_time:
                         chunk_gaps.append((prev_last_time, self.end_time, prev_last_id, 0))
-                    elif self.end_time > first_time:
+                    elif self.end_time == -1 or self.end_time > first_time:
                         chunk_gaps.append((prev_last_time, first_time, prev_last_id, first_id))
             prev_last_id = last_id
             prev_last_time = last_time
