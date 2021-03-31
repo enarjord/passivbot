@@ -601,6 +601,7 @@ async def main(args: list):
     backtest_config = await prep_backtest_config(config_name)
     downloader = Downloader(backtest_config)
     ticks = await downloader.get_ticks(True)
+    backtest_config["n_days"] = (ticks[-1][2] - ticks[0][2]) / 1000 / 60 / 60 / 24
     if (p := '--plot') in args:
         try:
             candidate = json.load(open(args[args.index(p) + 1]))
