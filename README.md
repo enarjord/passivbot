@@ -1,222 +1,117 @@
-# passivbot_futures
+# Refactoring Information
 
-**Version: 2.1.0**
+Below is some general information about a re-structure of the codebase. 
+The idea is to arrange files in a way that allows for the easiest development, usage, and expansion over time.
+Since this is such a broad and somewhat ambiguous process, there is no single correct way to arrange the files, although some arrangements may have benefits over others.
+Thus, it's advantageous to get as much developer feedback as possible to ensure that the updated structure is easy to change, compartmentalize, test etc. 
+NOTHING here is final.
 
-trading bot running on bybit inverse futures and binance usdt futures
+**Proposed Structure:** This is just temporary and will be updated as progress is made.
 
-use at own risk
+> `passivbot_futures/`  
+> │  
+> ├── `Refactor.md`  
+> ├── `README.MD`  
+> ├── `main.py` &/or `start_bot.py`  
+> ├── `setup.py`  
+> ├── `.gitignore`  
+> ├── `Data/`  
+> │    ├── `Dockerfile`  
+> │    ├── `docker-compose.yml`  
+> │    ├── `changelog.txt`  
+> │    ├── `requirements.txt`
+> │    ├── `API_KEYS/`  
+> │    │     ├── `binance/`  
+> │    │     └── `bybit/`  
+> │    └── `historical_data/`  
+> └── `bot/`  
+>    ├── `passivbot.py`  
+>    ├── `exchanges/`  
+>    │    ├── `bybit.py`  
+>    │    └── `binance.py`  
+>    ├── `backtester/`  
+>    │    ├── `backtest.py`  
+>    │    ├── `backtest_notes.ipynb`  
+>    │    ├── `binanace_notes.ipynb`  
+>    │    ├── `bybit_notes.ipynb`  
+>    │    └── `backtest_configs/`  
+>    ├── `live_settings/`  
+>    │    ├── `binance/`  
+>    │    └── `bybit/`  
+>    └── `logs/`  
 
-requires python >= 3.8
 
-dependencies, install with pip:
+### `README.MD`  
 
-`pip install -r requirements.txt`
+Abstract for the program, general usage, description, version info, author information and contribution guidelines.
 
-discord
+### `main.py` &/or `start_bot.py`  
 
-https://discord.gg/QAF2H2UmzZ
+start_bot.py should stay in the root folder for the time being for development usage. 
+main.py is NOT written yet, as there should be some discussion on how it is implemented. 
+From my somewhat novice understanding of setuptools/pypi distribution, having a main.py that acts as a central entry point for the script is best practice. 
+This means conceiving of *some* kind of menu or UI that allows end-users to change and use all parts of the bot from a central place.
+I had experimented with command line interface menus, but given the complexity of the bot, it seems the best approach may be to run a local webapp, similar to how jupyter-lab works.
+In a distribution environment, it's best to assume the end user knows absolutely nothing about how to configure or read complex json files, edit code, or otherwise.
+Therefore, said webapp should include functionality to edit and add users (API keys), edit configuration files (for backtester and live bot), copy or upload an external configuration file,
+and most importantly, facilitate backtesting. My inexperience may be failing me here, but it seems that the single most complex part of packaging passivbot will stem from finding a good way to implement
+backtesting *and* the data analytics (currently done in jupyter) within whatever UI is selected for use. That said, this isn't a pre-requisite for a general restructure, 
+I just say this as it effects how the files should be laid out to make compartmental development, testing, and end usage as easy as possible.  
 
-telegram
+Martijn397 shared some work he had done in the realm of web UI on discord:  
 
-https://t.me/passivbot_futures
+![@martijn397](Data/img/passivUI.png)
 
-for a repository of settings and their backtesting results, see
+### `setup.py`  
 
-https://github.com/JohnKearney1/PassivBot-Configurations
+Contains setup instructions for producing a distribution file accepted by pypi. There's a lot of ambiguity in how this file can be written, but from my understanding, it requires a main point of entry for the final script.
+i.e. Our end user opens a command line, runs "passivbot", and the UI for the bot opens, with the command line remaining in the background to keep a log.
+Therefore, setup.py needs to know information about the author, command alias, descriptions etc, but most importantly *what* to run when the user types that command.
 
-for more detailed documentation on this project, see the wiki at:
+### `.gitignore`  
 
-https://github.com/enarjord/passivbot_futures/wiki
+Contains files git will ignore. Needs no changes.  
 
-bybit ref:
-https://www.bybit.com/en-US/register?affiliate_id=16464&language=en-US&group_id=0&group_type=1
+### `Data/`  
 
-binance ref:
-https://www.binance.cc/en/register?ref=TII4B07C
+The data directory holds all the associated development files, and data that is shared between instances of passivbot such as API keys and historical data.
 
-------------------------------------------------------------------
-change log
+### `Dockerfile`
 
-2021-02-23 v2.0.0_beta
-- major update to backtester
-- new backtest usage syntax
-- other changes
+Unsure whether docker components need any changes, I am not well versed with docker, so I'm leaving in data for time being. 
 
-2021-02-27 v2.0.0
-- bug fixes
-- new default configs for bybit and binance
+### `docker-compose.yml`
 
-2021-02-28 v2.0.1
-- added optional just-in-time compiling for faster backtesting
+Unsure whether docker components need any changes, I am not well versed with docker, so I'm leaving in data for time being. 
 
-2021-03-01 v2.0.2
-- more jit'ed calcs
+### `changelog.txt`  
 
-2021-03-02 v2.0.3
-- new default bybit config
-- behavior change: reentry qtys may now be smaller than initial entry qty
-- backtest iterates a numpy array instead of a python list of dicts for reduced ram usage
+Running list of all changes, notes by dev. Needs no changes.  
 
-see `changelog.txt` for earlier changes
+### `requirements.txt`  
 
+Lists dependencies for the package. To my knowledge, this is only used in development environments, and should list ALL deps, including ones only used for testing. 
+Dependencies for the distribution version of the project are defined in setyp.py and only include what's necessary.
 
+### `API_KEYS/`  
 
-------------------------------------------------------------------
+Moves the API keys up to a directory in the root folder. This is mostly a preference thing, and could be re-located to the
+`bot/` directory depending on what's easier / more convenient. 
+The inner files don't need any changes for the refactor, although it may be worthwhile to eventually consider an updated naming scheme / subdirectories for users, assuming the UI is responsible for tracking, accessing, and editing multiple different users for different exchanges.
 
-released freely -- anybody may copy, redistribute, modify, use for commercial, non-commercial, educational or non-educational purposes, censor, claim as one's own or otherwise do or not do whatever without permission from anybody
+### `historical_data/`
 
-------------------------------------------------------------------
+Historical data has been placed in the data folder so that if there were ever multiple / different versions of the bot being distributed together, they can share some information.
 
-usage:
 
-supports exchanges bybit inverse and binance usdt futures
+### `bot/`  
 
-add api key and secret as json file in dir `api_key_secret/{exchange}/your_user_name.json`
+The bot folder contains a given version of passivbot, the backtester, the configurations, logs, and historical data. 
+`API_KEYS/` could be moved inside of this folder, but I've left them in the root contingent on more feedback. If passiv ever includes multiple versions that operate differently, the `bot/` folder could be duplicated and named using version / purpose:
 
+> `bot{ver}` --> `botV2.1` & `botV3.2`   
 
-formatted like this: `["KEY", "SECRET"]`
+In this case, v2.1 and v3.2 can coexist, pull from the same API keys and historical data, but have separate configuration pools and different operating logic.
+The end user then gets to select which version to use via the UI, and all the rest is done in the background.
 
-
-make a copy of `settings/{exchange}/default.json`
-
-rename the copy `your_user_name.json` and make desired changes
-
-run in terminal: `python3 start_bot.py exchange your_user_name`
-
-run in docker: modify command with exchange and user_name in docker-compose and start with `docker-compose up -d` (-d for background run). All code and files generated are in original git folder.
-
-------------------------------------------------------------------
-overview
-
-the bot's purpose is to accumulate btc (or another coin) in bybit inverse and usdt in binance usdt futures
-
-it is a market maker bot, making multiple post only limit orders above and below price
-
-it listens to websocket live stream of trades, and updates its orders continuously
-
-when there is no position, it enters either long or short depending on indicator settings
-
-if there is a long position, it creates reentry bids below pos price, and reduce-only asks above pos price
-
-reentry_bid_price = pos_price * (1 - grid_spacing * (1 + (position_margin / wallet_balance) * grid_coefficient))
-
-inversely,
-
-if there is a short position, it creates reentry asks above pos price, and reduce-only closing bids below pos price
-
-reentry_ask_price = pos_price * (1 + grid_spacing * (1 + (position_margin / wallet_balance) * grid_coefficient))
-
-
-------------------------------------------------------------------
-
-a backtester is included
-
-go to `backtest_configs/{config_name}.hjson` and adjust
-
-run with 
-
-`python3 backtest.py {config_name}`
-
-add argument --jit to use numba's just in time compiler for faster backtesting:
-
-`python3 backtest.py {config_name} --jit`
-
-open backtest_notes.ipynb in jupyter notebook or jupiter-lab for plotting and analysis.
-
-jackrabbit is a pet name given to a simple algorithm for optimizing bot's settings.
-
-it iterates many backtests in succession, for each iteration, settings are mutated to new values within given range defined in backtest config.
-
-if the new candidate's backtest yields higher gain than best candidate's backtest,
-
-the superior settings becomes the parent of the next candidate.
-
-the mutation coefficient m determines the mutation range, and is inversely proportional to k, which is a simple counter.
-
-in other words, at first new candidates will vary wildly from the best settings, towards the end they will vary less, "fine tuning" the parameters.
-
-see wiki for more info on backtesting
-
-------------------------------------------------------------------
-
-about live settings, bybit example:
-
-{
-
-    "balance_pct": 0.5,                   # if settings["balance_pct"] = 1.0, will use 100% of balance.
-                                          # if settings["balance_pct"] = 0.35, will us 35% of balance.
-    "config_name": "BTCUSD_default",      # arbitrary name given to settings.
-    "cross_mode": true,                   # true for cross, false for isolated.
-                                          # use isolated mode with care.  depending on settings, there is high risk of accidental liquidations.
-
-    "entry_qty_pct": 0.005,               # percentage of balance * leverage used as initial entry qty.
-                                          # the bot will calculate initial entry qty using the following formula:
-                                          # initial_entry_qty = round_dn(balance_in_terms_of_contracts * leverage * abs(settings["entry_qty_pct"]), qty_step)
-                                          # bybit BTCUSD example:
-                                          # if "entry_qty_pct"  is set to 0.0021, last price is 37000, leverage is 50 and wallet balance is 0.001 btc,
-                                          # initial_entry_qty = 0.001 * 37000 * 50 * 0.0021 == 3.885.  rounded down is 3.0 usd.
-                                          # binance ETHUSDT example:
-                                          # if "entry_qty_pct" is set to 0.07, last price is 1100, leverage is 33 and wallet balance is 40 usdt,
-                                          # initial_entry_qty = (40 / 1100) * 33 * 0.07 == 0.084.  rounded down is 0.084 eth.
-    
-    "ddown_factor": 0.02,                 # next reentry_qty is max(initial_entry_qty, abs(pos_size) * ddown_factor).
-                                          # if set to 1.0, each reentry qty will be equal to 1x pos size, i.e. doubling pos size after every reentry.
-                                          # if set to 1.5, each reentry qty will be equal to 1.5x pos size.
-                                          # if set to 0.0, each reentry qty will be equal to initial_entry_qty.
-                                          
-    "indicator_settings": {
-        "tick_ema": {                     # tick ema is not based on ohlcvs, but calculated based on sequence of raw trades.
-            "span": 10000,                # if no pos, bid = min(ema * (1 - spread), highest_bid) and ask = max(ema * (1 + spread), lowest_ask)
-            "spread": 0.001
-        },                                # if ema span is set to 1.0, ema is always equal to last price, which will disable ema smoothing of initial entries
-
-        "funding_fee_collect_mode": false,# if true, will enter long only if predicted funding fee is < 0.0, and short only if predicted funding fee is > 0.0
-
-        "do_long": true,                  # if true, will allow long positions
-        "do_shrt": true                   # if true, will allow short posisions
-    },
-                                          
-    "grid_coefficient": 245.0,            # next entry price is pos_price * (1 +- grid_spacing * (1 + (pos_margin / balance) * grid_coefficient)).
-    "grid_spacing": 0.0026,               # 
-                                          
-    "stop_loss_liq_diff": 0.02,           # if difference between liquidation price and last price is less than 2%, ...
-    "stop_loss_pos_price_diff": 0.04,     # ... or if difference between pos price and last price is greater than 4%, reduce position by 2% at a loss,
-
-    "stop_loss_pos_reduction": 0.02,      # reduce position by 2% at a loss.
-    
-    "leverage": 100,                      # leverage (irrelevant in bybit because cross mode in is always max leverage).
-    "logging_level": 0,                   # if logging_level > 0,
-                                          # will log positions, open orders, order creations and order cancellations in logs/{exchange}/{config_name}.log.
-
-    "min_markup": 0.0002,                 # when there's a position, bot makes a grid of n_close_orders whose prices are
-    "max_markup": 0.0159,                 # evenly distributed between min and max markup, and whose qtys are pos_size // n_close_orders.
-    "min_close_qty_multiplier": 0.5       # min_close_qty = max(min_qty, initial_entry_qty * min_close_qty_multiplier)
-    
-    "market_stop_loss": false,            # if true will soft stop with market orders, if false soft stops with limit orders at order book's higest_bid/lowest_ask
-                                          
-    "n_close_orders": 20,                 # max n close orders.
-    "n_entry_orders": 8,                  # max n entry orders.
-    "symbol": "BTCUSD"                    # only one symbol at a time.
-
-}
- 
-
-------------------------------------------------------------------
-
-feel free to make a donation to show support of the work
-
-XMR: 49gUQ1jasDK23tJTMCvP4mQUUwndeLWAwSgdCFn6ovmRKXZAjQnVp2JZ2K4UuDDdYMNam1HE8ELZoWdeJPRfYEa9QSEK6XZ
-
-Nano: nano_1nf3knbhapee5ruwg7i8sqekx3zmifdeijr8495t9kgp3uyunik7b9cuyhf5
-
-EOS: nbt4rhnhpjan
-
-XLM: GDSTC6KQR6BCTA7BH45B3MTSY52EVZ4UZTPZEBAZHJMJHTUQQ5SM57S7
-
-USDT TRC20 (binance): TJr3KYY8Bz7wRU7QLwoYQHk88LcaBJqQN5
-
-bybit ref:
-https://www.bybit.com/en-US/register?affiliate_id=16464&language=en-US&group_id=0&group_type=1
-
-binance ref:
-https://www.binance.cc/en/register?ref=TII4B07C
+Live settings, backtesting settings, backtesting info, and all of the major components of the bot are located here.
