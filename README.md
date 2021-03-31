@@ -15,12 +15,14 @@ NOTHING here is final.
 > ├── `main.py` &/or `start_bot.py`  
 > ├── `setup.py`  
 > ├── `.gitignore`  
-> ├── `Data/`  
+> ├── `requirements.txt`
+> │── `changelog.txt`  
+> ├── `infrastructure/`  
 > │    ├── `Dockerfile`  
 > │    ├── `docker-compose.yml`  
-> │    ├── `changelog.txt`  
-> │    ├── `requirements.txt`  
+> ├── `data/`  
 > │    └── `historical_data/`  
+> │    └── `logs/`
 > └── `bot/`  
 >    ├── `passivbot.py`  
 >    ├── `exchanges/`  
@@ -37,8 +39,7 @@ NOTHING here is final.
 >    │    └── `bybit/`  
 >    ├── `API_KEYS/`  
 >    │     ├── `binance/`  
->    │     └── `bybit/`  
->    └── `logs/`  
+>    │     └── `bybit/`
 
 
 ### `README.MD`  
