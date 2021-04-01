@@ -286,10 +286,10 @@ class BinanceBot(Bot):
                   'side': order['side'].upper(),
                   'positionSide': order['position_side'].replace('shrt', 'short').upper(),
                   'type': order['type'].upper(),
-                  'quantity': order['qty']}
+                  'quantity': str(order['qty'])}
         if params['type'] == 'LIMIT':
             params['timeInForce'] = 'GTX'
-            params['price'] = order['price']
+            params['price'] = str(order['price'])
         if 'custom_id' in order:
             params['newClientOrderId'] = \
                 f"{order['custom_id']}_{int(time() * 1000)}_{int(np.random.random() * 1000)}"
