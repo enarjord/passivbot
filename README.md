@@ -1,8 +1,8 @@
 # passivbot_futures
 
-**Version: 3.3.0**
+**Version: 3.3.1**
 
-trading bot running on bybit binance usdt futures using hedge mode when possible
+trading bot running on bybit and binance futures using hedge mode when possible
 
 use at own risk
 
@@ -70,6 +70,8 @@ change log
 - bybit usdt linear perpetual and bybit inverse perpetual markets now supported
 - new downloader for historical backtesting data
 
+2021-04-01 v3.3.1
+- binance inverse futures coin margined markets now supported
 
 
 see `changelog.txt` for earlier changes
@@ -112,8 +114,6 @@ it listens to websocket live stream of trades, and updates its orders continuous
 if there is a long position, it creates reentry bids below pos price, and reduce-only asks above pos price
 
 reentry_bid_price = pos_price * (1 - grid_spacing * (1 + (position_margin / wallet_balance) * grid_coefficient))
-
-inversely,
 
 if there is a short position, it creates reentry asks above pos price, and reduce-only closing bids below pos price
 
