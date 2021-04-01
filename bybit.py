@@ -190,7 +190,6 @@ class Bybit(Bot):
             self.init_order_book(),
             self.init_ema(),
         )
-        return
 
     async def init_ema(self):
         # fetch 10000 ticks to initiate ema
