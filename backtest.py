@@ -1,25 +1,16 @@
-import sys
-import json
-import hjson
-import numpy as np
-import pandas as pd
-import asyncio
-import os
-import gc
-import matplotlib.pyplot as plt
-from multiprocessing import Lock
 from hashlib import sha256
-from time import time
+
+import matplotlib.pyplot as plt
+# import nevergrad as ng
+import ray
+from ray import tune
+from ray.tune.schedulers import AsyncHyperBandScheduler
+# from ray.tune.suggest import ConcurrencyLimiter
+# from ray.tune.suggest.nevergrad import NevergradSearch
+from ray.tune.suggest.zoopt import ZOOptSearch
+
+from downloader import Downloader, prep_backtest_config
 from passivbot import *
-from bybit import create_bot as create_bot_bybit
-from binance import create_bot as create_bot_binance
-from downloader import Downloader, prep_backtest_config, fetch_market_specific_settings
-import pyswarms
-
-from typing import Iterator, Callable
-
-
-lock = Lock()
 
 
 def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
@@ -28,7 +19,7 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
 
     def gain_conv(x):
         return x * 100 - 100
-    
+
     lines = []
     lines.append(f"net pnl plus fees {result['net_pnl_plus_fees']:.6f}")
     lines.append(f"profit sum {result['profit_sum']:.6f}")
@@ -56,7 +47,7 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
     ema = df.price.ewm(span=result['ema_span'], adjust=False).mean()
     bids_ = ema * (1 - result['ema_spread'])
     asks_ = ema * (1 + result['ema_spread'])
-    
+
     plt.clf()
     df.price.iloc[::100].plot()
     bids_.iloc[::100].plot()
@@ -77,7 +68,7 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
 
     print('plotting backtest whole and in chunks...')
     n_parts = 7
-    #n_parts = int(round_up(result['n_days'], 1.0))
+    # n_parts = int(round_up(result['n_days'], 1.0))
     for z in range(n_parts):
         start_ = z / n_parts
         end_ = (z + 1) / n_parts
@@ -97,11 +88,10 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
     adg_ = fdf.average_daily_gain
     adg_.index = np.linspace(0.0, 1.0, len(fdf))
     plt.clf()
-    adg_c = adg_.iloc[int(len(fdf) * 0.1):] # skipping first 10%
+    adg_c = adg_.iloc[int(len(fdf) * 0.1):]  # skipping first 10%
     print('min max', adg_c.min(), adg_c.max())
     adg_c.plot()
     plt.savefig(f"{result['session_dirpath']}average_daily_gain_plot.png")
-    
 
 
 def plot_fills(df, fdf, side_: int = 0, liq_thr=0.1):
@@ -124,7 +114,6 @@ def plot_fills(df, fdf, side_: int = 0, liq_thr=0.1):
         sc.price.plot(style='b.')
         shrts.shrt_pos_price.fillna(method='ffill').plot(style='r--')
 
-
     stops = fdf[fdf.type.str.startswith('stop_loss')]
     stops.price.plot(style='gx')
     if 'liq_price' in fdf.columns:
@@ -145,105 +134,92 @@ def cleanup_candidate(config: dict) -> dict:
     return cleaned
 
 
-def backtest(ticks: np.ndarray, settings: dict, do_print=False) -> [dict]:
-    ss = cleanup_candidate(settings)
-
+def backtest(config, ticks=None, return_fills=False, do_print=False) -> (list, bool):
     long_pos_size, long_pos_price = 0.0, np.nan
     shrt_pos_size, shrt_pos_price = 0.0, np.nan
     liq_price = 0.0
-    balance = ss['starting_balance']
+    balance = config["starting_balance"]
 
     pnl_plus_fees_cumsum, loss_cumsum, profit_cumsum, fee_paid_cumsum = 0.0, 0.0, 0.0, 0.0
 
-    if ss['inverse']:
-        long_pnl_f = calc_long_pnl_inverse
-        shrt_pnl_f = calc_shrt_pnl_inverse
+    if config["inverse"]:
         cost_f = calc_cost_inverse
-        iter_entries = lambda balance, long_psize, long_pprice, shrt_psize, shrt_pprice, \
-            highest_bid, lowest_ask, last_price, do_long, do_shrt: \
-            iter_entries_inverse(
-                ss['price_step'], ss['qty_step'], ss['min_qty'], ss['min_cost'], ss['ddown_factor'],
-                ss['qty_pct'], ss['leverage'], ss['grid_spacing'], ss['grid_coefficient'],
-                balance, long_psize, long_pprice, shrt_psize, shrt_pprice, highest_bid, lowest_ask,
-                last_price, do_long, do_shrt
-            )
-        iter_long_closes = lambda balance, pos_size, pos_price, lowest_ask: \
-            iter_long_closes_inverse(ss['price_step'], ss['qty_step'], ss['min_qty'], ss['min_cost'],
-                                     ss['qty_pct'], ss['leverage'], ss['min_markup'],
-                                     ss['markup_range'], ss['n_close_orders'],
-                                     balance, pos_size, pos_price, lowest_ask)
-        iter_shrt_closes = lambda balance, pos_size, pos_price, highest_bid: \
-            iter_shrt_closes_inverse(ss['price_step'], ss['qty_step'], ss['min_qty'], ss['min_cost'],
-                                     ss['qty_pct'], ss['leverage'], ss['min_markup'],
-                                     ss['markup_range'], ss['n_close_orders'],
-                                     balance, pos_size, pos_price, highest_bid)
+        iter_entries = lambda balance, long_psize, long_pprice, shrt_psize, shrt_pprice, highest_bid, lowest_ask, \
+                              last_price, do_long, do_shrt: iter_entries_inverse(config["price_step"],
+                                                                                 config["qty_step"], config["min_qty"],
+                                                                                 config["min_cost"],
+                                                                                 config["ddown_factor"],
+                                                                                 config["qty_pct"], config["leverage"],
+                                                                                 config["grid_spacing"],
+                                                                                 config["grid_coefficient"], balance,
+                                                                                 long_psize, long_pprice, shrt_psize,
+                                                                                 shrt_pprice, highest_bid, lowest_ask,
+                                                                                 last_price, do_long, do_shrt)
+        iter_long_closes = lambda balance, pos_size, pos_price, lowest_ask: iter_long_closes_inverse(
+            config["price_step"], config["qty_step"], config["min_qty"], config["min_cost"], config["qty_pct"],
+            config["leverage"], config["min_markup"], config["markup_range"], config["n_close_orders"], balance,
+            pos_size, pos_price, lowest_ask)
+        iter_shrt_closes = lambda balance, pos_size, pos_price, highest_bid: iter_shrt_closes_inverse(
+            config["price_step"], config["qty_step"], config["min_qty"], config["min_cost"], config["qty_pct"],
+            config["leverage"], config["min_markup"], config["markup_range"], config["n_close_orders"], balance,
+            pos_size, pos_price, highest_bid)
         long_pnl_f = calc_long_pnl_inverse
         shrt_pnl_f = calc_shrt_pnl_inverse
-        liq_price_f = lambda balance, l_psize, l_pprice, s_psize, s_pprice: \
-            calc_cross_hedge_liq_price_bybit_inverse(balance, l_psize, l_pprice, s_psize, s_pprice,
-                                                     ss['leverage'])
+        liq_price_f = lambda balance, l_psize, l_pprice, s_psize, s_pprice: calc_cross_hedge_liq_price_bybit_inverse(
+            balance, l_psize, l_pprice, s_psize, s_pprice, config["leverage"])
     else:
-        iter_entries = lambda balance, long_psize, long_pprice, shrt_psize, shrt_pprice, \
-            highest_bid, lowest_ask, last_price, do_long, do_shrt: \
-            iter_entries_linear(
-                ss['price_step'], ss['qty_step'], ss['min_qty'], ss['min_cost'], ss['ddown_factor'],
-                ss['qty_pct'], ss['leverage'], ss['grid_spacing'], ss['grid_coefficient'],
-                balance, long_psize, long_pprice, shrt_psize, shrt_pprice, highest_bid, lowest_ask,
-                last_price, do_long, do_shrt
-            )
-        iter_long_closes = lambda balance, pos_size, pos_price, lowest_ask: \
-            iter_long_closes_linear(ss['price_step'], ss['qty_step'], ss['min_qty'], ss['min_cost'],
-                                    ss['qty_pct'], ss['leverage'], ss['min_markup'],
-                                    ss['markup_range'], ss['n_close_orders'],
-                                    balance, pos_size, pos_price, lowest_ask)
-        iter_shrt_closes = lambda balance, pos_size, pos_price, highest_bid: \
-            iter_shrt_closes_linear(ss['price_step'], ss['qty_step'], ss['min_qty'], ss['min_cost'],
-                                    ss['qty_pct'], ss['leverage'], ss['min_markup'],
-                                    ss['markup_range'], ss['n_close_orders'],
-                                    balance, pos_size, pos_price, highest_bid)
+        iter_entries = lambda balance, long_psize, long_pprice, shrt_psize, shrt_pprice, highest_bid, lowest_ask, \
+                              last_price, do_long, do_shrt: iter_entries_linear(config["price_step"],
+                                                                                config["qty_step"], config["min_qty"],
+                                                                                config["min_cost"],
+                                                                                config["ddown_factor"],
+                                                                                config["qty_pct"], config["leverage"],
+                                                                                config["grid_spacing"],
+                                                                                config["grid_coefficient"], balance,
+                                                                                long_psize, long_pprice, shrt_psize,
+                                                                                shrt_pprice, highest_bid, lowest_ask,
+                                                                                last_price, do_long, do_shrt)
+        iter_long_closes = lambda balance, pos_size, pos_price, lowest_ask: iter_long_closes_linear(
+            config["price_step"], config["qty_step"], config["min_qty"], config["min_cost"], config["qty_pct"],
+            config["leverage"], config["min_markup"], config["markup_range"], config["n_close_orders"], balance,
+            pos_size, pos_price, lowest_ask)
+        iter_shrt_closes = lambda balance, pos_size, pos_price, highest_bid: iter_shrt_closes_linear(
+            config["price_step"], config["qty_step"], config["min_qty"], config["min_cost"], config["qty_pct"],
+            config["leverage"], config["min_markup"], config["markup_range"], config["n_close_orders"], balance,
+            pos_size, pos_price, highest_bid)
         long_pnl_f = calc_long_pnl_linear
         shrt_pnl_f = calc_shrt_pnl_linear
         cost_f = calc_cost_linear
-        liq_price_f = lambda balance, l_psize, l_pprice, s_psize, s_pprice: \
-            calc_cross_hedge_liq_price_binance_linear(balance, l_psize, l_pprice, s_psize, s_pprice,
-                                                      ss['leverage'])
-    
-    break_on = {e[0]: eval(e[1]) for e in ss['break_on'] if e[0].startswith('ON:')} \
-        if 'break_on' in ss else {}
+        liq_price_f = lambda balance, l_psize, l_pprice, s_psize, s_pprice: calc_cross_hedge_liq_price_binance_linear(
+            balance, l_psize, l_pprice, s_psize, s_pprice, config["leverage"])
 
-    prev_trade_ts = 0
     prev_long_close_ts, prev_long_entry_ts, prev_long_close_price = 0, 0, 0.0
     prev_shrt_close_ts, prev_shrt_entry_ts, prev_shrt_close_price = 0, 0, 0.0
-    min_trade_delay_millis = ss['latency_simulation_ms'] if 'latency_simulation_ms' in ss else 1000
+    min_trade_delay_millis = config["latency_simulation_ms"] if "latency_simulation_ms" in config else 1000
 
     all_fills = []
     ob = [min(ticks[0][0], ticks[1][0]),
           max(ticks[0][0], ticks[1][0])]
     ema = ticks[0][0]
-    ema_alpha = 2 / (ss['ema_span'] + 1)
+    ema_alpha = 2 / (config["ema_span"] + 1)
     ema_alpha_ = 1 - ema_alpha
     # tick tuple: (price, buyer_maker, timestamp)
     for k, tick in enumerate(ticks):
         fills = []
         if tick[1]:
             # maker buy, taker sel
-            if ss['do_long']:
+            if config["do_long"]:
                 if tick[0] <= liq_price and long_pos_size > -shrt_pos_size:
                     if (liq_diff := calc_diff(liq_price, tick[0])) < 0.05:
-                        fills.append({
-                            'price': tick[0], 'side': 'sel', 'pos_side': 'long',
-                            'type': 'liquidation', 'qty': -long_pos_size,
-                            'pnl': long_pnl_f(long_pos_price, tick[0], -long_pos_size),
-                            'fee_paid': -cost_f(long_pos_size, tick[0]) * ss['taker_fee'],
-                            'long_pos_size': 0.0, 'long_pos_price': np.nan,
-                            'shrt_pos_size': 0.0, 'shrt_pos_price': np.nan,
-                            'liq_diff': liq_diff
-                        })
+                        fills.append({"price": tick[0], "side": "sel", "pos_side": "long", "type": "liquidation",
+                                      "qty": -long_pos_size, "pnl": long_pnl_f(long_pos_price, tick[0], -long_pos_size),
+                                      "fee_paid": -cost_f(long_pos_size, tick[0]) * config["taker_fee"],
+                                      "long_pos_size": 0.0, "long_pos_price": np.nan, "shrt_pos_size": 0.0,
+                                      "shrt_pos_price": np.nan, "liq_diff": liq_diff})
                 if long_pos_size == 0.0:
-                    if ss['ema_span'] > 1.0:
-                        highest_bid = calc_initial_long_entry_price(
-                            ss['price_step'], ss['ema_spread'], ema, ob[0]
-                        )
+                    if config["ema_span"] > 1.0:
+                        highest_bid = calc_initial_long_entry_price(config["price_step"], config["ema_spread"], ema,
+                                                                    ob[0])
                     else:
                         highest_bid = ob[0]
                 elif tick[0] < long_pos_price:
@@ -252,60 +228,49 @@ def backtest(ticks: np.ndarray, settings: dict, do_print=False) -> [dict]:
                     highest_bid = 0.0
                 if highest_bid > 0.0 and tick[0] and tick[2] - prev_long_close_ts > min_trade_delay_millis:
                     # create or add to long pos
-                    for tpl in iter_entries(balance, long_pos_size, long_pos_price, shrt_pos_size,
-                                            shrt_pos_price, highest_bid, 0.0, tick[0], True, False):
+                    for tpl in iter_entries(balance, long_pos_size, long_pos_price, shrt_pos_size, shrt_pos_price,
+                                            highest_bid, 0.0, tick[0], True, False):
                         if tick[0] < tpl[1]:
                             long_pos_size, long_pos_price, prev_long_entry_ts = tpl[2], tpl[3], tick[2]
-                            fills.append({
-                                'price': tpl[1], 'side': 'buy', 'pos_side': 'long',
-                                'type': 'reentry' if tpl[4] else 'entry', 'qty': tpl[0], 'pnl': 0.0,
-                                'fee_paid': -cost_f(tpl[0], tpl[1]) * ss['maker_fee'],
-                                'long_pos_size': long_pos_size, 'long_pos_price': long_pos_price,
-                                'shrt_pos_size': shrt_pos_size, 'shrt_pos_price': shrt_pos_price,
-                                'liq_diff': calc_diff(liq_price, tick[0])
-                            })
+                            fills.append({"price": tpl[1], "side": "buy", "pos_side": "long",
+                                          "type": "reentry" if tpl[4] else "entry", "qty": tpl[0], "pnl": 0.0,
+                                          "fee_paid": -cost_f(tpl[0], tpl[1]) * config["maker_fee"],
+                                          "long_pos_size": long_pos_size, "long_pos_price": long_pos_price,
+                                          "shrt_pos_size": shrt_pos_size, "shrt_pos_price": shrt_pos_price,
+                                          "liq_diff": calc_diff(liq_price, tick[0])})
                         else:
                             break
 
-            if shrt_pos_size < 0.0 and tick[0] < shrt_pos_price and \
-                    (tick[2] - prev_shrt_entry_ts > min_trade_delay_millis):
+            if shrt_pos_size < 0.0 and tick[0] < shrt_pos_price and (
+                    tick[2] - prev_shrt_entry_ts > min_trade_delay_millis):
                 # close shrt pos
-                for qty, price, new_pos_size in iter_shrt_closes(balance, shrt_pos_size,
-                                                                 shrt_pos_price, ob[0]):
+                for qty, price, new_pos_size in iter_shrt_closes(balance, shrt_pos_size, shrt_pos_price, ob[0]):
                     if tick[0] < price:
-                        if tick[2] - prev_shrt_close_ts < min_trade_delay_millis and \
-                                price >= prev_shrt_close_price:
+                        if tick[2] - prev_shrt_close_ts < min_trade_delay_millis and price >= prev_shrt_close_price:
                             break
                         pnl = shrt_pnl_f(shrt_pos_price, price, qty)
                         shrt_pos_size, prev_shrt_close_ts = new_pos_size, tick[2]
                         if shrt_pos_size == 0.0:
                             shrt_pos_price = np.nan
-                        fills.append({
-                            'price': price, 'side': 'buy', 'pos_side': 'shrt',
-                            'type': 'close', 'qty': qty,
-                            'pnl': pnl, 'fee_paid': -cost_f(qty, price) * ss['maker_fee'],
-                            'long_pos_size': long_pos_size, 'long_pos_price': long_pos_price,
-                            'shrt_pos_size': shrt_pos_size, 'shrt_pos_price': shrt_pos_price,
-                            'liq_diff': calc_diff(liq_price, tick[0])
-                        })
+                        fills.append(
+                            {"price": price, "side": "buy", "pos_side": "shrt", "type": "close", "qty": qty, "pnl": pnl,
+                             "fee_paid": -cost_f(qty, price) * config["maker_fee"], "long_pos_size": long_pos_size,
+                             "long_pos_price": long_pos_price, "shrt_pos_size": shrt_pos_size,
+                             "shrt_pos_price": shrt_pos_price, "liq_diff": calc_diff(liq_price, tick[0])})
                         prev_shrt_close_price = price
             ob[0] = tick[0]
         else:
             # maker sel, taker buy
-            if ss['do_shrt']:
+            if config["do_shrt"]:
                 if tick[0] >= liq_price and -shrt_pos_size > long_pos_size:
                     if (liq_diff := calc_diff(liq_price, tick[0])) < 0.1:
-                        fills.append({
-                            'price': tick[0], 'side': 'buy', 'pos_side': 'shrt',
-                            'type': 'liquidation', 'qty': -shrt_pos_size,
-                            'pnl': shrt_pnl_f(shrt_pos_price, tick[0], -shrt_pos_size),
-                            'fee_paid': -cost_f(shrt_pos_size, tick[0]) * ss['taker_fee']
-                        })
+                        fills.append({"price": tick[0], "side": "buy", "pos_side": "shrt", "type": "liquidation",
+                                      "qty": -shrt_pos_size, "pnl": shrt_pnl_f(shrt_pos_price, tick[0], -shrt_pos_size),
+                                      "fee_paid": -cost_f(shrt_pos_size, tick[0]) * config["taker_fee"]})
                 if shrt_pos_size == 0.0:
-                    if ss['ema_span'] > 1.0:
-                        lowest_ask = calc_initial_shrt_entry_price(
-                            ss['price_step'], ss['ema_spread'], ema, ob[1]
-                        )
+                    if config["ema_span"] > 1.0:
+                        lowest_ask = calc_initial_shrt_entry_price(config["price_step"], config["ema_spread"], ema,
+                                                                   ob[1])
                     else:
                         lowest_ask = ob[1]
                 elif tick[0] > shrt_pos_price:
@@ -314,102 +279,92 @@ def backtest(ticks: np.ndarray, settings: dict, do_print=False) -> [dict]:
                     lowest_ask = 0.0
                 if lowest_ask > 0.0 and tick[2] - prev_shrt_close_ts > min_trade_delay_millis:
                     # create or add to shrt pos
-                    for tpl in iter_entries(balance, long_pos_size, long_pos_price, shrt_pos_size,
-                                            shrt_pos_price, 0.0, lowest_ask, tick[0], False, True):
+                    for tpl in iter_entries(balance, long_pos_size, long_pos_price, shrt_pos_size, shrt_pos_price, 0.0,
+                                            lowest_ask, tick[0], False, True):
                         if tick[0] > tpl[1]:
                             shrt_pos_size, shrt_pos_price, prev_shrt_entry_ts = tpl[2], tpl[3], tick[2]
-                            fills.append({
-                                'price': tpl[1], 'side': 'sel', 'pos_side': 'shrt',
-                                'type': 'reentry' if tpl[4] else 'entry', 'qty': tpl[0], 'pnl': 0.0,
-                                'fee_paid': -cost_f(tpl[0], tpl[1]) * ss['maker_fee'],
-                                'long_pos_size': long_pos_size, 'long_pos_price': long_pos_price,
-                                'shrt_pos_size': shrt_pos_size, 'shrt_pos_price': shrt_pos_price,
-                                'liq_diff': calc_diff(liq_price, tick[0])
-                            })
+                            fills.append({"price": tpl[1], "side": "sel", "pos_side": "shrt",
+                                          "type": "reentry" if tpl[4] else "entry", "qty": tpl[0], "pnl": 0.0,
+                                          "fee_paid": -cost_f(tpl[0], tpl[1]) * config["maker_fee"],
+                                          "long_pos_size": long_pos_size, "long_pos_price": long_pos_price,
+                                          "shrt_pos_size": shrt_pos_size, "shrt_pos_price": shrt_pos_price,
+                                          "liq_diff": calc_diff(liq_price, tick[0])})
                         else:
                             break
-            if long_pos_size > 0.0 and tick[0] > long_pos_price and \
-                    (tick[2] - prev_long_entry_ts > min_trade_delay_millis):
+            if long_pos_size > 0.0 and tick[0] > long_pos_price and (
+                    tick[2] - prev_long_entry_ts > min_trade_delay_millis):
                 # close long pos
-                for qty, price, new_pos_size in iter_long_closes(balance, long_pos_size,
-                                                                 long_pos_price, ob[1]):
+                for qty, price, new_pos_size in iter_long_closes(balance, long_pos_size, long_pos_price, ob[1]):
                     if tick[0] > price:
-                        if tick[2] - prev_long_close_ts < min_trade_delay_millis and \
-                                price <= prev_long_close_price:
+                        if tick[2] - prev_long_close_ts < min_trade_delay_millis and price <= prev_long_close_price:
                             break
                         pnl = long_pnl_f(long_pos_price, price, qty)
                         long_pos_size, prev_long_close_ts = new_pos_size, tick[2]
                         if long_pos_size == 0.0:
                             long_pos_price = np.nan
-                        fills.append({
-                            'price': price, 'side': 'sel', 'pos_side': 'long',
-                            'type': 'close', 'qty': qty,
-                            'pnl': pnl, 'fee_paid': -cost_f(qty, price) * ss['maker_fee'],
-                            'long_pos_size': long_pos_size, 'long_pos_price': long_pos_price,
-                            'shrt_pos_size': shrt_pos_size, 'shrt_pos_price': shrt_pos_price,
-                            'liq_diff': calc_diff(liq_price, tick[0])
-                        })
+                        fills.append(
+                            {"price": price, "side": "sel", "pos_side": "long", "type": "close", "qty": qty, "pnl": pnl,
+                             "fee_paid": -cost_f(qty, price) * config["maker_fee"], "long_pos_size": long_pos_size,
+                             "long_pos_price": long_pos_price, "shrt_pos_size": shrt_pos_size,
+                             "shrt_pos_price": shrt_pos_price, "liq_diff": calc_diff(liq_price, tick[0])})
                         prev_long_close_price = price
             ob[1] = tick[0]
         ema = calc_ema(ema_alpha, ema_alpha_, ema, tick[0])
         if len(fills) > 0:
             for fill in fills:
-                balance += fill['pnl'] + fill['fee_paid']
-                liq_price = liq_price_f(balance, long_pos_size, long_pos_price,
-                                        shrt_pos_size, shrt_pos_price)
-                ms_since_long_pos_change = tick[2] - prev_long_fill_ts \
-                    if (prev_long_fill_ts := max(prev_long_close_ts, prev_long_entry_ts)) > 0 else 0
-                ms_since_shrt_pos_change = tick[2] - prev_shrt_fill_ts \
-                    if (prev_shrt_fill_ts := max(prev_shrt_close_ts, prev_shrt_entry_ts)) > 0 else 0
+                balance += fill["pnl"] + fill["fee_paid"]
+                liq_price = liq_price_f(balance, long_pos_size, long_pos_price, shrt_pos_size, shrt_pos_price)
+                ms_since_long_pos_change = tick[2] - prev_long_fill_ts if (prev_long_fill_ts := max(prev_long_close_ts,
+                                                                                                    prev_long_entry_ts)) > 0 else 0
+                ms_since_shrt_pos_change = tick[2] - prev_shrt_fill_ts if (prev_shrt_fill_ts := max(prev_shrt_close_ts,
+                                                                                                    prev_shrt_entry_ts)) > 0 else 0
 
-                if fill['type'].startswith('stop_loss'):
-                    loss_cumsum += fill['pnl']
+                if fill["type"].startswith("stop_loss"):
+                    loss_cumsum += fill["pnl"]
                 else:
-                    profit_cumsum += fill['pnl']
-                fee_paid_cumsum += fill['fee_paid']
-                pnl_plus_fees_cumsum += fill['pnl'] + fill['fee_paid']
+                    profit_cumsum += fill["pnl"]
+                fee_paid_cumsum += fill["fee_paid"]
+                pnl_plus_fees_cumsum += fill["pnl"] + fill["fee_paid"]
                 upnl_l = x if (x := long_pnl_f(long_pos_price, tick[0], long_pos_size)) == x else 0.0
                 upnl_s = y if (y := shrt_pnl_f(shrt_pos_price, tick[0], shrt_pos_size)) == y else 0.0
-                fill['equity'] = balance + upnl_l + upnl_s
-                fill['pnl_plus_fees_cumsum'] = pnl_plus_fees_cumsum
-                fill['loss_cumsum'] = loss_cumsum
-                fill['profit_cumsum'] = profit_cumsum
-                fill['fee_paid_cumsum'] = fee_paid_cumsum
+                fill["equity"] = balance + upnl_l + upnl_s
+                fill["pnl_plus_fees_cumsum"] = pnl_plus_fees_cumsum
+                fill["loss_cumsum"] = loss_cumsum
+                fill["profit_cumsum"] = profit_cumsum
+                fill["fee_paid_cumsum"] = fee_paid_cumsum
 
-                fill['balance'] = balance
-                fill['liq_price'] = liq_price
-                fill['timestamp'] = tick[2]
-                fill['trade_id'] = k
-                fill['progress'] = k / len(ticks)
-                fill['drawdown'] = calc_diff(fill['balance'], fill['equity'])
-                fill['gain'] = fill['equity'] / settings['starting_balance']
-                fill['n_days'] = (tick[2] - ticks[0][2]) / (1000 * 60 * 60 * 24)
+                fill["balance"] = balance
+                fill["liq_price"] = liq_price
+                fill["timestamp"] = tick[2]
+                fill["trade_id"] = k
+                fill["progress"] = k / len(ticks)
+                fill["drawdown"] = calc_diff(fill["balance"], fill["equity"])
+                fill["gain"] = fill["equity"] / config["starting_balance"]
+                fill["n_days"] = (tick[2] - ticks[0][2]) / (1000 * 60 * 60 * 24)
                 try:
-                    fill['average_daily_gain'] = fill['gain'] ** (1 / fill['n_days']) \
-                        if (fill['n_days'] > 0.0 and fill['gain'] > 0.0) else 0.0
+                    fill["average_daily_gain"] = fill["gain"] ** (1 / fill["n_days"]) if (
+                            fill["n_days"] > 0.0 and fill["gain"] > 0.0) else 0.0
                 except:
-                    fill['average_daily_gain'] = 0.0
-                fill['hours_since_long_pos_change'] = (lc := ms_since_long_pos_change / (1000 * 60 * 60))
-                fill['hours_since_shrt_pos_change'] = (sc := ms_since_shrt_pos_change / (1000 * 60 * 60))
-                fill['hours_since_pos_change_max'] = max(lc, sc)
+                    fill["average_daily_gain"] = 0.0
+                fill["hours_since_long_pos_change"] = (lc := ms_since_long_pos_change / (1000 * 60 * 60))
+                fill["hours_since_shrt_pos_change"] = (sc := ms_since_shrt_pos_change / (1000 * 60 * 60))
+                fill["hours_since_pos_change_max"] = max(lc, sc)
                 all_fills.append(fill)
-                if balance <= 0.0 or fill['type'] == 'liquidation':
-                    return all_fills, False
-                for key, condition in break_on.items():
-                    if condition(all_fills, ticks, k):
-                        print('break on', key)
+                if balance <= 0.0 or fill["type"] == "liquidation":
+                    if return_fills:
                         return all_fills, False
+                    else:
+                        result = prepare_result(all_fills, ticks, config["do_long"], config["do_shrt"])
+                        tune.report(objective=objective_function(result))
             if do_print:
                 line = f"\r{all_fills[-1]['progress']:.3f} "
                 line += f"adg {all_fills[-1]['average_daily_gain']:.4f} "
                 print(line, end=' ')
-            # print(f"\r{k / len(ticks):.2f} ", end=' ')
-    return all_fills, True
-
-
-
-def live_settings_to_candidate(live_settings: dict, ranges: dict) -> dict:
-    return {k: live_settings[k] for k in ranges if k in live_settings}
+    if return_fills:
+        return all_fills, True
+    else:
+        result = prepare_result(all_fills, ticks, config["do_long"], config["do_shrt"])
+        tune.report(objective=objective_function(result))
 
 
 def candidate_to_live_settings(exchange: str, candidate: dict) -> dict:
@@ -433,151 +388,123 @@ def calc_candidate_hash_key(candidate: dict, keys: [str]) -> str:
                               if k in candidate}).encode()).hexdigest()
 
 
-def iter_slices(iterable, step: float, size: float):
-    i = 0
-    n = int(len(iterable) * size)
-    s = int(len(iterable) * step)
-    while i + n < len(iterable):
-        yield iterable[i:i+n]
-        i += s
-    yield iterable[-n:]
-    if size < 1.0:
-        # also yield full 
-        yield iterable
-
-
-def backtest_wrap(ticks: [dict], backtest_config: dict, do_print=False) -> dict:
+def backtest_wrap(ticks: [dict], backtest_config: dict, do_print=False) -> (dict, pd.DataFrame):
     start_ts = time()
-    fills, did_finish = backtest(ticks, backtest_config, do_print=do_print)
+    fills, did_finish = backtest(backtest_config, ticks, return_fills=True, do_print=do_print)
     elapsed = time() - start_ts
     if len(fills) == 0:
         return {'average_daily_gain': 0.0, 'closest_liq': 0.0, 'max_n_hours_stuck': 1000.0}, pd.DataFrame()
     fdf = pd.DataFrame(fills).set_index('trade_id')
-    ms_gap = np.diff([ticks[0][2]] + list(fdf.timestamp) + [ticks[-1][2]]).max()
-    hours_since_prev_fill = ticks[-1][2] - fills[-1]['timestamp']
-    result = {
-        'net_pnl_plus_fees': fills[-1]['pnl_plus_fees_cumsum'],
-        'profit_sum': fills[-1]['profit_cumsum'],
-        'loss_sum': fills[-1]['loss_cumsum'],
-        'fee_sum': fills[-1]['fee_paid_cumsum'],
-        'final_equity': fills[-1]['equity'],
-        'gain': (gain := fills[-1]['gain']),
-        'max_drawdown': fdf.drawdown.max(),
-        'n_days': (n_days := (ticks[-1][2] - ticks[0][2]) / (1000 * 60 * 60 * 24)),
-        'average_daily_gain': gain ** (1 / n_days) if gain > 0.0 else 0.0,
-        'closest_liq': fdf.liq_diff.min(),
-        'n_fills': len(fills),
-        'n_closes': len(fdf[fdf.type == 'close']),
-        'n_reentries': len(fdf[fdf.type == 'reentry']),
-        'n_stop_losses': len(fdf[fdf.type.str.startswith('stop_loss')]),
-        'biggest_pos_size': fdf[['long_pos_size', 'shrt_pos_size']].abs().max(axis=1).max(),
-        'max_n_hours_stuck': max(fdf['hours_since_pos_change_max'].max(),
-                                 (ticks[-1][2] - fills[-1]['timestamp']) / (1000 * 60 * 60)),
-        'do_long': bool(backtest_config['do_long']),
-        'do_shrt': bool(backtest_config['do_shrt']),
-        'seconds_elapsed': elapsed
-    }
+    result = prepare_result(fills, ticks, bool(backtest_config['do_long']), bool(backtest_config['do_shrt']))
+    result["seconds_elapsed"] = elapsed
     if 'key' not in result:
         result['key'] = calc_candidate_hash_key(backtest_config, backtest_config['ranges'])
     return result, fdf
 
 
-def backtest_sliding_window_wrap(ticks: np.ndarray, backtest_config: dict) -> dict:
-    sub_runs = []
-    start_ts = time()
-    for z, slice_ in enumerate(iter_slices(ticks,
-                                           backtest_config['sliding_window_step'],
-                                           backtest_config['sliding_window_size'])):
-        result_, _ = backtest_wrap(slice_, backtest_config)
-        if not result_:
-            print(f"\n{backtest_config['key']} did not finish backtest")
-            return {'key': backtest_config['key']}
-        sub_runs.append(result_)
-    total_elapsed = time() - start_ts
-    result = {}
-    skip = ['do_long', 'do_shrt']
-    for k in sub_runs[0]:
-        if k in skip:
-            continue
-        try:
-            vals = [r[k] for r in sub_runs]
-            result[k] = {'avg': np.mean(vals),
-                         'std': np.std(vals),
-                         'min': min(vals),
-                         'max': max(vals),
-                         'vals': {**{f'sub_run_{i:03}': v for i, v in enumerate(vals[:-1])},
-                                  **{'full_run': vals[-1]}}}
-        except:
-            continue
-    result['n_sub_runs'] = z
-    result['total_seconds_elapsed'] = total_elapsed
-    result['key'] = backtest_config['key']
+def prepare_result(fills, ticks, do_long, do_shrt) -> dict:
+    fdf = pd.DataFrame(fills)
+    result = {
+        "net_pnl_plus_fees": fills[-1]["pnl_plus_fees_cumsum"],
+        "profit_sum": fills[-1]["profit_cumsum"],
+        "loss_sum": fills[-1]["loss_cumsum"],
+        "fee_sum": fills[-1]["fee_paid_cumsum"],
+        "final_equity": fills[-1]["equity"],
+        "gain": (gain := fills[-1]["gain"]),
+        "max_drawdown": fdf.drawdown.max(),
+        "n_days": (n_days := (ticks[-1][2] - ticks[0][2]) / (1000 * 60 * 60 * 24)),
+        "average_daily_gain": gain ** (1 / n_days) if gain > 0.0 else 0.0,
+        "closest_liq": fdf.liq_diff.min(),
+        "n_fills": len(fills),
+        "n_closes": len(fdf[fdf.type == "close"]),
+        "n_reentries": len(fdf[fdf.type == "reentry"]),
+        "n_stop_losses": len(fdf[fdf.type.str.startswith("stop_loss")]),
+        "biggest_pos_size": fdf[["long_pos_size", "shrt_pos_size"]].abs().max(axis=1).max(),
+        "max_n_hours_stuck": max(fdf["hours_since_pos_change_max"].max(),
+                                 (ticks[-1][2] - fills[-1]["timestamp"]) / (1000 * 60 * 60)),
+        "do_long": do_long,
+        "do_shrt": do_shrt
+    }
     return result
 
 
-
-def x_to_d(x: np.ndarray, ranges: dict) -> dict:
-    return {k: x[i] for i, k in enumerate(sorted(ranges))}
-
-
-def score_func(r) -> float:
-    liq_cap = 0.21
-
-    hours_stuck_cap = 108
-    try:
-        #return r['average_daily_gain']['avg'] * min(1.0, r['closest_liq']['min'] / liq_cap)
-        return (r['average_daily_gain']['avg'] *
-                min(1.0, r['closest_liq']['min'] / liq_cap) /
-                max(1.0, r['max_n_hours_stuck']['max'] / hours_stuck_cap))
-    except Exception as e:
-        print('error with score func', e, r)
-        return 0.0
+def objective_function(result) -> float:
+    if "net_pnl_plus_fees" in result:
+        return result["net_pnl_plus_fees"]
+    else:
+        return -1000
 
 
-class RF:
-    def __init__(self, ticks, backtest_config, now):
-        self.ticks = ticks
-        self.bc = backtest_config
-        self.results_filename = f"results_{ts_to_date(now)[:19].replace(':', '')}.txt"
+def create_config(backtest_config: dict) -> dict:
+    config = {}
+    config["starting_balance"] = backtest_config["starting_balance"]
+    config["inverse"] = backtest_config["inverse"]
+    config["price_step"] = backtest_config["price_step"]
+    config["qty_step"] = backtest_config["qty_step"]
+    config["min_qty"] = backtest_config["min_qty"]
+    config["min_cost"] = backtest_config["min_cost"]
+    if "latency_simulation_ms" in backtest_config:
+        config["latency_simulation_ms"] = backtest_config["latency_simulation_ms"]
+    config["do_long"] = backtest_config["do_long"]
+    config["do_shrt"] = backtest_config["do_shrt"]
+    config["taker_fee"] = backtest_config["taker_fee"]
+    config["maker_fee"] = backtest_config["maker_fee"]
 
-    def rf(self, x):
-        rs = [
-            backtest_sliding_window_wrap(
-                self.ticks,
-                {**self.bc,
-                 **x_to_d(x[i], self.bc['ranges']),
-                 **{'key': calc_candidate_hash_key(x_to_d(x[i], self.bc['ranges']),
-                                                   sorted(self.bc['ranges']))}}
-            ) for i in range(x.shape[0])
-        ]
-        global lock
-        try:
-            lock.acquire()
-            with open(self.bc['session_dirpath'] + self.results_filename, 'a') as f:
-                for i, elm in enumerate(rs):
-                    st = {**elm, **x_to_d(x[i], self.bc['ranges'])}
-                    f.write(json.dumps(st) + '\n')
-        finally:
-            lock.release()
-        return np.array([-score_func(r) for r in rs])
+    config["qty_pct"] = tune.quniform(backtest_config["ranges"]["qty_pct"][0],
+                                      backtest_config["ranges"]["qty_pct"][1],
+                                      backtest_config["ranges"]["qty_pct"][2])
+    config["ddown_factor"] = tune.quniform(backtest_config["ranges"]["ddown_factor"][0],
+                                           backtest_config["ranges"]["ddown_factor"][1],
+                                           backtest_config["ranges"]["ddown_factor"][2])
+    config["grid_coefficient"] = tune.quniform(backtest_config["ranges"]["grid_coefficient"][0],
+                                               backtest_config["ranges"]["grid_coefficient"][1],
+                                               backtest_config["ranges"]["grid_coefficient"][2])
+    config["grid_spacing"] = tune.quniform(backtest_config["ranges"]["grid_spacing"][0],
+                                           backtest_config["ranges"]["grid_spacing"][1],
+                                           backtest_config["ranges"]["grid_spacing"][2])
+    config["markup_range"] = tune.quniform(backtest_config["ranges"]["markup_range"][0],
+                                           backtest_config["ranges"]["markup_range"][1],
+                                           backtest_config["ranges"]["markup_range"][2])
+    config["min_markup"] = tune.quniform(backtest_config["ranges"]["min_markup"][0],
+                                         backtest_config["ranges"]["min_markup"][1],
+                                         backtest_config["ranges"]["min_markup"][2])
+    config["ema_span"] = tune.quniform(backtest_config["ranges"]["ema_span"][0],
+                                       backtest_config["ranges"]["ema_span"][1],
+                                       backtest_config["ranges"]["ema_span"][2])
+    config["ema_spread"] = tune.quniform(backtest_config["ranges"]["ema_spread"][0],
+                                         backtest_config["ranges"]["ema_spread"][1],
+                                         backtest_config["ranges"]["ema_spread"][2])
+
+    config["leverage"] = tune.qrandint(backtest_config["ranges"]["leverage"][0],
+                                       backtest_config["ranges"]["leverage"][1],
+                                       backtest_config["ranges"]["leverage"][2])
+    config["n_close_orders"] = tune.qrandint(backtest_config["ranges"]["n_close_orders"][0],
+                                             backtest_config["ranges"]["n_close_orders"][1],
+                                             backtest_config["ranges"]["n_close_orders"][2])
+    return config
 
 
-def backtest_pso(ticks, bc):
-    bounds = (np.array([bc['ranges'][k][0] for k in sorted(bc['ranges'])]),
-              np.array([bc['ranges'][k][1] for k in sorted(bc['ranges'])]))
+def backtest_tune(ticks: np.ndarray, backtest_config: dict):
+    config = create_config(backtest_config)
+    iters = 8
+    if "iters" in backtest_config:
+        iters = backtest_config["iters"]
+    num_cpus = 4
+    if "num_cpus" in backtest_config:
+        num_cpus = backtest_config["num_cpus"]
 
-    rf = RF(ticks, bc, time())
-    iters = bc['iters']
-    options = bc['options']
-    n_particles = bc['n_particles']
-    n_cpus = os.cpu_count()
-    optimizer = pyswarms.single.LocalBestPSO(n_particles=n_particles, dimensions=len(bounds[0]),
-                                             options=options, bounds=bounds)
-    stats = optimizer.optimize(rf.rf, iters=iters, n_processes=n_cpus)
-    print(stats)
-    best_candidate = x_to_d(stats[1], bc['ranges'])
-    print('best candidate', best_candidate)
-    plot_wrap(bc, ticks, best_candidate)
+    ray.init(num_cpus=num_cpus)
+    algo = ZOOptSearch(algo="Asracos", budget=iters, **{"parallel_num": num_cpus})
+    # algo = NevergradSearch(optimizer=ng.optimizers.OnePlusOne)
+    # algo = ConcurrencyLimiter(algo, max_concurrent=num_cpus)
+    scheduler = AsyncHyperBandScheduler()
+
+    analysis = tune.run(tune.with_parameters(backtest, ticks=ticks), metric="objective", mode="max", name="search",
+                        search_alg=algo, scheduler=scheduler, num_samples=iters, config=config, verbose=2)
+
+    # print("Best candidate found were: ", analysis.best_config)
+    ray.shutdown()
+    plot_wrap(backtest_config, ticks, analysis.best_config)
 
 
 def plot_wrap(bc, ticks, candidate):
@@ -592,7 +519,7 @@ def plot_wrap(bc, ticks, candidate):
         return
     fdf.to_csv(bc['session_dirpath'] + f"backtest_trades_{result['key']}.csv")
     print('\nmaking ticks dataframe...')
-    df = pd.DataFrame({'price': ticks[:,0], 'buyer_maker': ticks[:,1], 'timestamp': ticks[:,2]})
+    df = pd.DataFrame({'price': ticks[:, 0], 'buyer_maker': ticks[:, 1], 'timestamp': ticks[:, 2]})
     dump_plots({**bc, **candidate, **result}, fdf, df)
 
 
@@ -616,7 +543,7 @@ async def main(args: list):
         print(json.dumps(candidate, indent=4))
         plot_wrap(backtest_config, ticks, candidate)
         return
-    backtest_pso(ticks, backtest_config)
+    backtest_tune(ticks, backtest_config)
 
 
 if __name__ == '__main__':
