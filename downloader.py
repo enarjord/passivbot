@@ -372,10 +372,6 @@ class Downloader:
                     self.save_dataframe(df, "", True)
 
         try:
-            await self.bot.cc.close()
-        except:
-            pass
-        try:
             await self.bot.session.close()
         except:
             pass
@@ -596,16 +592,15 @@ async def fetch_market_specific_settings(exchange: str, user: str, symbol: str):
         settings_from_exchange['maker_fee'] = 0.00018
         settings_from_exchange['taker_fee'] = 0.00036
         settings_from_exchange['exchange'] = 'binance'
-        await bot.cc.close()
     elif exchange == 'bybit':
         bot = await create_bot_bybit(user, tmp_live_settings)
         settings_from_exchange['inverse'] = True
         settings_from_exchange['maker_fee'] = -0.00025
         settings_from_exchange['taker_fee'] = 0.00075
         settings_from_exchange['exchange'] = 'bybit'
-        await bot.session.close()
     else:
         raise Exception(f'unknown exchange {exchange}')
+    await bot.session.close()
     settings_from_exchange['max_leverage'] = bot.max_leverage
     settings_from_exchange['min_qty'] = bot.min_qty
     settings_from_exchange['min_cost'] = bot.min_notional
