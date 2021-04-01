@@ -1,0 +1,14 @@
+{
+  "BINANCE" :
+  {
+    "User1" : ["API_KEY", "API_KEY_SECRET"],
+    "User2" : ["API_KEY", "API_KEY_SECRET"]
+  },
+
+  "BYBIT" :
+  {
+    "User1" : ["API_KEY", "API_KEY_SECRET"],
+    "User2" : ["API_KEY", "API_KEY_SECRET"]
+  }
+
+}
