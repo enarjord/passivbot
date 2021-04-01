@@ -603,7 +603,7 @@ async def fetch_market_specific_settings(exchange: str, user: str, symbol: str):
     await bot.session.close()
     settings_from_exchange['max_leverage'] = bot.max_leverage
     settings_from_exchange['min_qty'] = bot.min_qty
-    settings_from_exchange['min_cost'] = bot.min_notional
+    settings_from_exchange['min_cost'] = bot.min_cost
     settings_from_exchange['qty_step'] = bot.qty_step
     settings_from_exchange['price_step'] = bot.price_step
     settings_from_exchange['max_leverage'] = bot.max_leverage
