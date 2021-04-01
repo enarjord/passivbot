@@ -1136,19 +1136,18 @@ class Bot:
             line += f"{round_(self.position['long']['price'], self.price_step)} "
             long_closes = sorted([o for o in self.open_orders if o['side'] == 'sell'
                                   and o['position_side'] == 'long'], key=lambda x: x['price'])
-            long_reentries = sorted([o for o in self.open_orders if o['side'] == 'buy'
-                                     and o['position_side'] == 'long'], key=lambda x: x['price'])
+            long_entries = sorted([o for o in self.open_orders if o['side'] == 'buy'
+                                   and o['position_side'] == 'long'], key=lambda x: x['price'])
             line += f"close @ {long_closes[0]['price'] if long_closes else 0.0} "
-            line += f"enter @ {long_reentries[-1]['price'] if long_reentries else 0.0} "
-            line += '|| '
-            line += f"shrt {self.position['shrt']['size']} @ "
+            line += f"enter @ {long_entries[-1]['price'] if long_entries else 0.0} "
+            line += f"|| shrt {self.position['shrt']['size']} @ "
             line += f"{round_(self.position['shrt']['price'], self.price_step)} "
             shrt_closes = sorted([o for o in self.open_orders if o['side'] == 'buy'
                                   and o['position_side'] == 'shrt'], key=lambda x: x['price'])
-            shrt_reentries = sorted([o for o in self.open_orders if o['side'] == 'sell'
-                                     and o['position_side'] == 'shrt'], key=lambda x: x['price'])
+            shrt_entries = sorted([o for o in self.open_orders if o['side'] == 'sell'
+                                   and o['position_side'] == 'shrt'], key=lambda x: x['price'])
             line += f"close @ {shrt_closes[-1]['price'] if shrt_closes else 0.0} "
-            line += f"enter @ {shrt_reentries[0]['price'] if shrt_reentries else 0.0} "
+            line += f"enter @ {shrt_entries[0]['price'] if shrt_entries else 0.0} "
             line += f"|| last {self.price} ema {round_(self.ema, self.price_step)} "
             print_([line], r=True)
 
