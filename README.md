@@ -6,23 +6,24 @@ Since this is such a broad and somewhat ambiguous process, there is no single co
 Thus, it's advantageous to get as much developer feedback as possible to ensure that the updated structure is easy to change, compartmentalize, test etc.
 NOTHING here is final.
 
-**Proposed Structure:** This is just temporary and will be updated as progress is made.
+**Current Proposed Structure:** This is the current treemap for the refactor. It may change as the refactor progresses.
 
 > `passivbot_futures/`  
 > │  
-> ├── `Refactor.md`    
-> ├── `README.MD`  
+> ├── `README(main).md`    
+> ├── `README.MD` refactor readme  
 > ├── `main.py` &/or `start_bot.py`  
 > ├── `setup.py`  
 > ├── `.gitignore`  
-> ├── `requirements.txt`
-> │── `changelog.txt`  
+> ├── `requirements.txt`  
+> ├── `api-keys-example.json` replaces api_key_secrets/  
+> ├── `changelog.txt`  
 > ├── `infrastructure/`  
 > │    ├── `Dockerfile`  
-> │    ├── `docker-compose.yml`  
+> │    └── `docker-compose.yml`  
 > ├── `data/`  
-> │    └── `historical_data/`  
-> │    └── `logs/`
+> │    ├──`historical_data/{version}/`  
+> │    └── `logs/`  
 > └── `bot/`  
 >    ├── `passivbot.py`  
 >    ├── `exchanges/`  
@@ -34,12 +35,10 @@ NOTHING here is final.
 >    │    ├── `binanace_notes.ipynb`  
 >    │    ├── `bybit_notes.ipynb`  
 >    │    └── `backtest_configs/`  
->    ├── `live_settings/`  
->    │    ├── `binance/`  
->    │    └── `bybit/`  
->    ├── `API_KEYS/`  
->    │     ├── `binance/`  
->    │     └── `bybit/`
+>    └── `live_settings/`  
+>        ├── `binance/`  
+>        └── `bybit/`  
+
 
 
 ### `README.MD`  
@@ -50,7 +49,7 @@ Abstract for the program, general usage, description, version info, author infor
 
 start_bot.py should stay in the root folder for the time being for development usage.
 main.py is NOT written yet, as there should be some discussion on how it is implemented.
-From my somewhat novice understanding of setuptools/pypi distribution, having a main.py that acts as a central entry point for the script is best practice.
+From my understanding of setuptools/pypi distribution, having a main.py that acts as a central entry point for the script is best practice.
 This means conceiving of *some* kind of menu or UI that allows end-users to change and use all parts of the bot from a central place.
 I had experimented with command line interface menus, but given the complexity of the bot, it seems the best approach may be to run a local webapp, similar to how jupyter-lab works.
 In a distribution environment, it's best to assume the end user knows absolutely nothing about how to configure or read complex json files, edit code, or otherwise.
@@ -94,16 +93,20 @@ Running list of all changes, notes by dev. Needs no changes.
 Lists dependencies for the package. To my knowledge, this is only used in development environments, and should list ALL deps, including ones only used for testing.
 Dependencies for the distribution version of the project are defined in setyp.py and only include what's necessary.
 
-### `API_KEYS/`  
+### `api-keys-example.json`  
 
-Moves the API keys up to a directory in the root folder. This is mostly a preference thing, and could be re-located to the
-`bot/` directory depending on what's easier / more convenient.
-The inner files don't need any changes for the refactor, although it may be worthwhile to eventually consider an updated naming scheme / subdirectories for users, assuming the UI is responsible for tracking, accessing, and editing multiple different users for different exchanges.
+Changes `api_key_secrets/` from a directory to a single json file. This json file should:
+
+- Hold multiple API key pairs for each exchange
+- Be editable from the UI
+
+This change will require changes in where and how api keys are read into the bot, in all passivbot code.
 
 ### `historical_data/`
 
-Historical data has been placed in the data folder so that if there were ever multiple / different versions of the bot being distributed together, they can share some information.
-
+Historical data has been placed in the root directory and sorted into subfolders based upon any versions included in a single distribution.
+The UI / downloader should be able to find the most up-to date data already saved, and use it with the current version assuming it is compatible.
+This change requires an edit to the target location of saved data, in all passivbot code.
 
 ### `bot/`  
 
@@ -115,7 +118,7 @@ The bot folder contains a given version of passivbot, the backtester, the config
 In this case, v2.1 and v3.2 can coexist, pull from the same API keys and historical data, but have separate configuration pools and different operating logic.
 The end user then gets to select which version to use via the UI, and all the rest is done in the background.
 
-Live settings, backtesting settings, backtesting info, and all of the major components of the bot are located here.
+Live settings, backtesting settings, backtesting info, and all the major components of the bot are located here.
 
 ## Changelog  
 

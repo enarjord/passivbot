@@ -1,6 +1,6 @@
 services:
   passivbot:
-    build: .
+    build: ..
     container_name: passivbot
     restart: unless-stopped
     volumes:

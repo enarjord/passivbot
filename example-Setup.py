@@ -13,7 +13,7 @@ with open("README.md", "r") as fh:
 # Read requirements for requirements from file...
 # There are different ways of specifying requirements for distribution vs. development.
 # This assumes that the development and usage requirements are the same.
-with open("Data/requirements.txt", "r") as fh:
+with open("requirements.txt", "r") as fh:
     requirements = fh.read()
 
 # Begin Setup
