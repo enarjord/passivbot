@@ -102,6 +102,8 @@ run in terminal: `python3 start_bot.py exchange your_user_name`
 
 run in docker: modify command with exchange and user_name in docker-compose and start with `docker-compose up -d` (-d for background run).  all code and files generated are in original git folder.
 
+for graceful stopping of the bot, set do_long and do_shrt both to false, and bot will continue as normal, opening no new positions, until all existing positions are closed
+
 ------------------------------------------------------------------
 overview
 
