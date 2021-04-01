@@ -1,0 +1,31 @@
+{
+  session_name: session_001_with_ema
+  exchange: binance
+  user: user
+  symbol: XMRUSDT
+  latency_simulation_ms: 750
+  starting_balance: 100.0
+
+  do_long: true
+  do_shrt: true
+
+  iters: 4
+  num_cpus: 4
+
+  start_date: 2021-03-28T21:30
+  end_date: -1
+
+  ranges:
+  {
+    qty_pct: [0.0, 1.0, 1e-05]
+    ddown_factor: [0, 4.0, 0.001]
+    grid_coefficient: [0, 600, 0.01]
+    grid_spacing: [0.0002, 0.06, 1e-05]
+    leverage: [2, 999999, 1]
+    markup_range: [0.0, 0.03, 1e-05]
+    min_markup: [0.0005, 0.01, 1e-05]
+    n_close_orders: [1, 20, 1]
+    ema_span: [1.0, 600000.0, 1.0]
+    ema_spread: [-0.03, 0.03, 0.0001]
+  }
+}
