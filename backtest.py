@@ -429,10 +429,17 @@ def prepare_result(fills, ticks, do_long, do_shrt) -> dict:
 
 
 def objective_function(result) -> float:
-    if "net_pnl_plus_fees" in result:
-        return result["net_pnl_plus_fees"]
-    else:
-        return -1000
+    liq_cap = 0.21
+    hours_stuck_cap = 108
+    n_daily_fills_cap = 25.0
+    try:
+        return (result['average_daily_gain'] *
+                min(1.0, (result['n_fills'] / result['n_days']) / n_daily_fills_cap) *
+                min(1.0, result['closest_liq'] / liq_cap) /
+                max(1.0, result['max_n_hours_stuck'] / hours_stuck_cap))
+    except Exception as e:
+        #print('error with score func', e, result)
+        return -1000.0
 
 
 def create_config(backtest_config: dict) -> dict:
