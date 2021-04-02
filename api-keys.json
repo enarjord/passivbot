@@ -1,14 +1,20 @@
 {
-  "BINANCE" :
-  {
-    "User1" : ["API_KEY", "API_KEY_SECRET"],
-    "User2" : ["API_KEY", "API_KEY_SECRET"]
-  },
-
-  "BYBIT" :
-  {
-    "User1" : ["API_KEY", "API_KEY_SECRET"],
-    "User2" : ["API_KEY", "API_KEY_SECRET"]
-  }
-
+    "account_binance_1" : {
+        "exchange": "binance",
+        "key": "key",
+        "secret": "secret",
+        "market": "Futures"
+    },
+    "account_binance_2" : {
+        "exchange": "binance",
+        "key": "key",
+        "secret": "secret",
+        "market": "Futures"
+    },
+    "account_bybit_1" : {
+        "exchange": "bybit",
+        "key": "key",
+        "secret": "secret",
+        "market": "Inverse Futures"
+    }
 }

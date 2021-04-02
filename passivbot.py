@@ -811,17 +811,22 @@ def make_get_filepath(filepath: str) -> str:
 def load_key_secret(exchange: str, user: str) -> (str, str):
     try:
         keyfile = json.load(open('api-keys.json'))
-        # Transform user input for exchange to uppercase to be case-insensitive. Api json "exchange" list must be
-        # uppercase. User input for user is not changed. Must be entered as it was configured.
-        if user in keyfile[exchange.upper()]:
-            print(keyfile[exchange.upper()][user])
-            return keyfile[exchange.upper()][user]
-        if user not in keyfile:
-            raise Exception("Couldn't find a user with the name " + str(user))
+        # Checks that the user exists, and it is for the correct exchange
+        if user in keyfile and keyfile[user]["exchange"] == exchange:
+
+            # If we need to get the `market` key:
+            # market = keyfile[user]["market"]
+            # print("The Market Type is " + str(market))
+
+            # Get the keys, format as a string list for ccxt, then return
+            keyList = [str(keyfile[user]["key"]), str(keyfile[user]["secret"])]
+
+            return keyList
+        elif user not in keyfile or keyfile[user]["exchange"] != exchange:
+            print("Looks like the keys aren't configured yet, or you entered the wrong username!")
     except FileNotFoundError:
-        print(f'\n\nPlease specify {exchange} API key/secret in file\n\napi_key_secre' + \
-              f'ts/{exchange}/{user}.json\n\nformatted thus:\n["Ktnks95U...", "yDKRQqA6..."]\n\n')
-        raise Exception('api key secret missing')
+        print("File Not Found!")
+        raise Exception('API KeyFile Missing!')
 
 
 def init_ccxt(exchange: str = None, user: str = None):
