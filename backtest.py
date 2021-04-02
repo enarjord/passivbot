@@ -404,27 +404,49 @@ def backtest_wrap(ticks: [dict], backtest_config: dict, do_print=False) -> (dict
 
 def prepare_result(fills, ticks, do_long, do_shrt) -> dict:
     fdf = pd.DataFrame(fills)
-    result = {
-        "net_pnl_plus_fees": fills[-1]["pnl_plus_fees_cumsum"],
-        "profit_sum": fills[-1]["profit_cumsum"],
-        "loss_sum": fills[-1]["loss_cumsum"],
-        "fee_sum": fills[-1]["fee_paid_cumsum"],
-        "final_equity": fills[-1]["equity"],
-        "gain": (gain := fills[-1]["gain"]),
-        "max_drawdown": fdf.drawdown.max(),
-        "n_days": (n_days := (ticks[-1][2] - ticks[0][2]) / (1000 * 60 * 60 * 24)),
-        "average_daily_gain": gain ** (1 / n_days) if gain > 0.0 else 0.0,
-        "closest_liq": fdf.liq_diff.min(),
-        "n_fills": len(fills),
-        "n_closes": len(fdf[fdf.type == "close"]),
-        "n_reentries": len(fdf[fdf.type == "reentry"]),
-        "n_stop_losses": len(fdf[fdf.type.str.startswith("stop_loss")]),
-        "biggest_pos_size": fdf[["long_pos_size", "shrt_pos_size"]].abs().max(axis=1).max(),
-        "max_n_hours_stuck": max(fdf["hours_since_pos_change_max"].max(),
-                                 (ticks[-1][2] - fills[-1]["timestamp"]) / (1000 * 60 * 60)),
-        "do_long": do_long,
-        "do_shrt": do_shrt
-    }
+    if fdf.empty:
+        result = {
+            "net_pnl_plus_fees": 0,
+            "profit_sum": 0,
+            "loss_sum": 0,
+            "fee_sum": 0,
+            "final_equity": 0,
+            "gain": 0,
+            "max_drawdown": 0,
+            "n_days": 0,
+            "average_daily_gain": 0,
+            "closest_liq": 0,
+            "n_fills": 0,
+            "n_closes": 0,
+            "n_reentries": 0,
+            "n_stop_losses": 0,
+            "biggest_pos_size": 0,
+            "max_n_hours_stuck": 0,
+            "do_long": do_long,
+            "do_shrt": do_shrt
+        }
+    else:
+        result = {
+            "net_pnl_plus_fees": fills[-1]["pnl_plus_fees_cumsum"],
+            "profit_sum": fills[-1]["profit_cumsum"],
+            "loss_sum": fills[-1]["loss_cumsum"],
+            "fee_sum": fills[-1]["fee_paid_cumsum"],
+            "final_equity": fills[-1]["equity"],
+            "gain": (gain := fills[-1]["gain"]),
+            "max_drawdown": fdf.drawdown.max(),
+            "n_days": (n_days := (ticks[-1][2] - ticks[0][2]) / (1000 * 60 * 60 * 24)),
+            "average_daily_gain": gain ** (1 / n_days) if gain > 0.0 else 0.0,
+            "closest_liq": fdf.liq_diff.min(),
+            "n_fills": len(fills),
+            "n_closes": len(fdf[fdf.type == "close"]),
+            "n_reentries": len(fdf[fdf.type == "reentry"]),
+            "n_stop_losses": len(fdf[fdf.type.str.startswith("stop_loss")]),
+            "biggest_pos_size": fdf[["long_pos_size", "shrt_pos_size"]].abs().max(axis=1).max(),
+            "max_n_hours_stuck": max(fdf["hours_since_pos_change_max"].max(),
+                                     (ticks[-1][2] - fills[-1]["timestamp"]) / (1000 * 60 * 60)),
+            "do_long": do_long,
+            "do_shrt": do_shrt
+        }
     return result
 
 
@@ -438,7 +460,7 @@ def objective_function(result) -> float:
                 min(1.0, result['closest_liq'] / liq_cap) /
                 max(1.0, result['max_n_hours_stuck'] / hours_stuck_cap))
     except Exception as e:
-        #print('error with score func', e, result)
+        # print('error with score func', e, result)
         return -1000.0
 
 
