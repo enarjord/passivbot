@@ -541,7 +541,6 @@ def k_fold(config, ticks=None):
 
 def backtest_tune(ticks: np.ndarray, backtest_config: dict, current_best: dict = None):
     config = create_config(backtest_config)
-    current_best = clean_start_config(current_best, config)
     n_days = round_((ticks[-1][2] - ticks[0][2]) / (1000 * 60 * 60 * 24), 0.1)
     session_dirpath = make_get_filepath(os.path.join("reports", backtest_config["exchange"], backtest_config["symbol"],
                                                      f"{n_days}_days_{ts_to_date(time())[:19].replace(':', '')}", ''))
@@ -557,6 +556,7 @@ def backtest_tune(ticks: np.ndarray, backtest_config: dict, current_best: dict =
         print("Parameter num_cpus should be defined in the configuration. Defaulting to 2.")
     current_best_params = []
     if current_best:
+        current_best = clean_start_config(current_best, config)
         current_best_params.append(current_best)
     initial_points = max(1, min(int(iters / 10), 20))
 
