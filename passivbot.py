@@ -939,7 +939,7 @@ class Bot:
     def dump_log(self, data) -> None:
         if self.settings['logging_level'] > 0:
             with open(self.log_filepath, 'a') as f:
-                f.write(json.dumps({**{'log_timestamp': self.cc.milliseconds()}, **data}) + '\n')
+                f.write(json.dumps({**{'log_timestamp': time()}, **data}) + '\n')
 
     async def update_open_orders(self) -> None:
         if self.ts_locked['update_open_orders'] > self.ts_released['update_open_orders']:
