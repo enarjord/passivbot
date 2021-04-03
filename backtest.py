@@ -512,6 +512,14 @@ def create_config(backtest_config: dict) -> dict:
     return config
 
 
+def clean_start_config(start_config: dict, backtest_config: dict) -> dict:
+    clean_start = {}
+    for k, v in start_config.items():
+        if k in backtest_config:
+            clean_start[k] = v
+    return clean_start
+
+
 def k_fold(config, ticks=None):
     folds = int(config["folds"])
     objectives = []
@@ -533,6 +541,7 @@ def k_fold(config, ticks=None):
 
 def backtest_tune(ticks: np.ndarray, backtest_config: dict, current_best: dict = None):
     config = create_config(backtest_config)
+    current_best = clean_start_config(current_best, config)
     n_days = round_((ticks[-1][2] - ticks[0][2]) / (1000 * 60 * 60 * 24), 0.1)
     session_dirpath = make_get_filepath(os.path.join("plots", backtest_config["exchange"], backtest_config["symbol"],
                                                      f"{n_days}_days_{ts_to_date(time())[:19].replace(':', '')}", ''))
@@ -604,7 +613,17 @@ async def main(args: list):
         print(json.dumps(candidate, indent=4))
         plot_wrap(backtest_config, ticks, candidate)
         return
-    backtest_tune(ticks, backtest_config)
+    start_candidate = None
+    if (s := '--start') in args:
+        try:
+            start_candidate = json.load(open(args[args.index(s) + 1]))
+            print("Starting with specified configuration.")
+        except:
+            print("Could not find specified configuration.")
+    if start_candidate:
+        backtest_tune(ticks, backtest_config, start_candidate)
+    else:
+        backtest_tune(ticks, backtest_config)
 
 
 if __name__ == '__main__':
