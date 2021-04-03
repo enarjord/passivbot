@@ -852,7 +852,7 @@ class Bot:
         ticks = await self.fetch_trades()
         additional_ticks = await asyncio.gather(
             *[self.fetch_trades(from_id=ticks[0]['trade_id'] - 1000 * i)
-              for i in range(1, min(50, n_ticks_to_fetch // 1000))])
+              for i in range(1, n_ticks_to_fetch // 1000)])
         ticks = sorted(ticks + flatten(additional_ticks), key=lambda x: x['trade_id'])
         condensed_ticks = [ticks[0]]
         for i in range(1, len(ticks)):
