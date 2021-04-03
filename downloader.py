@@ -96,6 +96,7 @@ class Downloader:
         if new_name != filename:
             print_(['Saving file', new_name])
             df.to_csv(os.path.join(self.filepath, new_name), index=False)
+            new_name = ""
             try:
                 os.remove(os.path.join(self.filepath, filename))
                 print_(['Removed file', filename])
@@ -104,6 +105,9 @@ class Downloader:
         elif missing:
             print_(['Replacing file', filename])
             df.to_csv(os.path.join(self.filepath, filename), index=False)
+        else:
+            new_name = ""
+        return new_name
 
     def transform_ticks(self, ticks: list) -> pd.DataFrame:
         """
@@ -223,12 +227,16 @@ class Downloader:
             return
 
         filenames = self.get_filenames()
+        mod_files = []
         for f in filenames:
             try:
+                first_time = int(f.split("_")[2])
                 last_time = int(f.split("_")[3].split(".")[0])
             except:
+                first_time = sys.maxsize
                 last_time = sys.maxsize
-            if last_time >= self.start_time:
+            if last_time >= self.start_time and (
+                    self.end_time == -1 or (first_time <= self.end_time)) or last_time == sys.maxsize:
                 df = self.read_dataframe(os.path.join(self.filepath, f))
                 print_(['Validating file', f])
                 missing, df, gaps = self.validate_dataframe(df)
@@ -236,10 +244,9 @@ class Downloader:
                 if not gaps.empty and f != filenames[-1]:
                     first_id = df["trade_id"].iloc[0] if df["trade_id"].iloc[0] < gaps["start"].iloc[0] else \
                         gaps["start"].iloc[0]
-                    last_id = df["trade_id"].iloc[-1] if df["trade_id"].iloc[-1] > gaps["end"].iloc[-1] else \
-                        gaps["start"].iloc[-1]
                     for i in filenames:
-                        if str(first_id) in i and str(last_id) in i and first_id != 1:
+                        if str(first_id - first_id % 100000) in i and str(
+                                first_id - first_id % 100000 + 99999) in i and first_id != 1 and i != f:
                             exists = True
                             break
                 if missing and df["timestamp"].iloc[-1] > self.start_time and not exists:
@@ -262,6 +269,7 @@ class Downloader:
                                 df = pd.concat([df, tf])
                                 df.sort_values("trade_id", inplace=True)
                                 df.drop_duplicates("trade_id", inplace=True)
+                                df = df[df["trade_id"] <= gaps["end"].iloc[i] - gaps["end"].iloc[i] % 100000 + 99999]
                                 df.reset_index(drop=True, inplace=True)
                                 current_time = df["timestamp"].iloc[-1]
                             except Exception:
@@ -271,11 +279,13 @@ class Downloader:
                     tf = df[df["trade_id"].mod(100000) == 0]
                     if len(tf) > 1:
                         df = df[:tf.index[-1]]
-                    if df["timestamp"].iloc[0] < earliest:
-                        earliest = df["timestamp"].iloc[0]
-                    if df["timestamp"].iloc[-1] > latest:
-                        latest = df["timestamp"].iloc[-1]
-                    self.save_dataframe(df, f, missing)
+                    if not df.empty:
+                        if df["timestamp"].iloc[0] < earliest:
+                            earliest = df["timestamp"].iloc[0]
+                        if df["timestamp"].iloc[-1] > latest:
+                            latest = df["timestamp"].iloc[-1]
+                    nf = self.save_dataframe(df, f, missing)
+                    mod_files.append(nf)
                 elif df["trade_id"].iloc[0] != 1:
                     os.remove(os.path.join(self.filepath, f))
                     print_(['Removed file fragment', f])
@@ -284,19 +294,18 @@ class Downloader:
         filenames = self.get_filenames()
         prev_last_id = 0
         prev_last_time = self.start_time
-
         for f in filenames:
             first_id = int(f.split("_")[0])
             last_id = int(f.split("_")[1])
             first_time = int(f.split("_")[2])
             last_time = int(f.split("_")[3].split(".")[0])
-            if first_id - 1 != prev_last_id:
-                if first_time >= prev_last_time:
-                    if self.end_time != -1 and self.end_time < first_time:
+            if first_id - 1 != prev_last_id and f not in mod_files:
+                if first_time >= prev_last_time and first_time >= self.start_time:
+                    if self.end_time != -1 and self.end_time < first_time and not prev_last_time > self.end_time:
                         chunk_gaps.append((prev_last_time, self.end_time, prev_last_id, 0))
                     elif self.end_time == -1 or self.end_time > first_time:
                         chunk_gaps.append((prev_last_time, first_time, prev_last_id, first_id))
-            if first_time >= self.start_time:
+            if first_time >= self.start_time or last_time >= self.start_time:
                 prev_last_id = last_id
                 prev_last_time = last_time
 
