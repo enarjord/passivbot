@@ -1,13 +1,11 @@
 from hashlib import sha256
 
 import matplotlib.pyplot as plt
-# import nevergrad as ng
 import ray
 from ray import tune
 from ray.tune.schedulers import AsyncHyperBandScheduler
-# from ray.tune.suggest import ConcurrencyLimiter
-# from ray.tune.suggest.nevergrad import NevergradSearch
-from ray.tune.suggest.zoopt import ZOOptSearch
+from ray.tune.suggest import ConcurrencyLimiter
+from ray.tune.suggest.hyperopt import HyperOptSearch
 
 from downloader import Downloader, prep_backtest_config
 from passivbot import *
@@ -535,25 +533,39 @@ def k_fold(config, ticks=None):
 
 def backtest_tune(ticks: np.ndarray, backtest_config: dict, current_best: dict = None):
     config = create_config(backtest_config)
-    iters = 8
+    n_days = round_((ticks[-1][2] - ticks[0][2]) / (1000 * 60 * 60 * 24), 0.1)
+    session_dirpath = make_get_filepath(os.path.join("plots", backtest_config["exchange"], backtest_config["symbol"],
+                                                     f"{n_days}_days_{ts_to_date(time())[:19].replace(':', '')}", ''))
+    iters = 10
     if "iters" in backtest_config:
         iters = backtest_config["iters"]
-    num_cpus = 4
+    else:
+        print("Parameter iters should be defined in the configuration. Defaulting to 10.")
+    num_cpus = 2
     if "num_cpus" in backtest_config:
         num_cpus = backtest_config["num_cpus"]
+    else:
+        print("Parameter num_cpus should be defined in the configuration. Defaulting to 2.")
+    current_best_params = []
+    if current_best:
+        current_best_params.append(current_best)
+    initial_points = max(1, min(int(iters / 10), 20))
 
     ray.init(num_cpus=num_cpus)
-    algo = ZOOptSearch(algo="Asracos", budget=iters, **{"parallel_num": num_cpus})
-    # algo = NevergradSearch(optimizer=ng.optimizers.OnePlusOne)
-    # algo = ConcurrencyLimiter(algo, max_concurrent=num_cpus)
+
+    algo = HyperOptSearch(points_to_evaluate=current_best_params, n_initial_points=initial_points)
+    algo = ConcurrencyLimiter(algo, max_concurrent=num_cpus)
     scheduler = AsyncHyperBandScheduler()
 
-    analysis = tune.run(tune.with_parameters(backtest, ticks=ticks), metric="objective", mode="max", name="search",
-                        search_alg=algo, scheduler=scheduler, num_samples=iters, config=config, verbose=2)
+    analysis = tune.run(tune.with_parameters(k_fold, ticks=ticks), metric="objective", mode="max", name="search",
+                        search_alg=algo, scheduler=scheduler, num_samples=iters, config=config, verbose=2,
+                        reuse_actors=True, local_dir=session_dirpath)
 
-    # print("Best candidate found were: ", analysis.best_config)
     ray.shutdown()
+
+    print("Best candidate found were: ", analysis.best_config)
     plot_wrap(backtest_config, ticks, analysis.best_config)
+    return analysis
 
 
 def plot_wrap(bc, ticks, candidate):
@@ -577,7 +589,7 @@ async def main(args: list):
     backtest_config = await prep_backtest_config(config_name)
     downloader = Downloader(backtest_config)
     ticks = await downloader.get_ticks(True)
-    backtest_config['n_days'] = (ticks[-1][2] - ticks[0][2]) / 1000 / 60 / 60 / 24
+    backtest_config['n_days'] = round_((ticks[-1][2] - ticks[0][2]) / (1000 * 60 * 60 * 24), 0.1)
     if (p := '--plot') in args:
         try:
             candidate = json.load(open(args[args.index(p) + 1]))
