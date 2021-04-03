@@ -98,6 +98,8 @@ def calc_cross_shrt_liq_price(balance,
 
 
 async def fetch_trades(cc, symbol: str, from_id: int = None) -> [dict]:
+    cc.rateLimit = 750
+    cc.enableRateLimit = True
     params = {'symbol': symbol, 'limit': 1000}
     if from_id:
         params['fromId'] = from_id
@@ -106,16 +108,17 @@ async def fetch_trades(cc, symbol: str, from_id: int = None) -> [dict]:
                'price': float(t['p']),
                'qty': float(t['q']),
                'timestamp': float(t['T']),
-               'is_buyer_maker': t['m']} for t in fetched_trades]
-    print_(['fetched trades', symbol, trades[0]['trade_id'],
+               'is_buyer_maker': t['m']} for t in fetchedtrades]
+    print(['fetched trades', symbol, trades[0]['trade_id'],
             ts_to_date(trades[0]['timestamp'] / 1000)])
+    cc.enableRateLimit = False
     return trades
+
 
 async def create_bot(user: str, settings: str):
     bot = BinanceBot(user, settings)
     await bot._init()
     return bot
-
 
 class BinanceBot(Bot):
     def __init__(self, user: str, settings: dict):
