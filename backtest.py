@@ -543,7 +543,7 @@ def backtest_tune(ticks: np.ndarray, backtest_config: dict, current_best: dict =
     config = create_config(backtest_config)
     current_best = clean_start_config(current_best, config)
     n_days = round_((ticks[-1][2] - ticks[0][2]) / (1000 * 60 * 60 * 24), 0.1)
-    session_dirpath = make_get_filepath(os.path.join("plots", backtest_config["exchange"], backtest_config["symbol"],
+    session_dirpath = make_get_filepath(os.path.join("reports", backtest_config["exchange"], backtest_config["symbol"],
                                                      f"{n_days}_days_{ts_to_date(time())[:19].replace(':', '')}", ''))
     iters = 10
     if "iters" in backtest_config:
