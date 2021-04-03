@@ -466,6 +466,7 @@ def objective_function(result) -> float:
 
 def create_config(backtest_config: dict) -> dict:
     config = {}
+    config["folds"] = backtest_config["folds"]
     config["starting_balance"] = backtest_config["starting_balance"]
     config["inverse"] = backtest_config["inverse"]
     config["price_step"] = backtest_config["price_step"]
@@ -513,7 +514,26 @@ def create_config(backtest_config: dict) -> dict:
     return config
 
 
-def backtest_tune(ticks: np.ndarray, backtest_config: dict):
+def k_fold(config, ticks=None):
+    folds = int(config["folds"])
+    objectives = []
+    for i in range(folds):
+        if i == folds - 1:
+            fills, _ = backtest(config, ticks[i * int(int(len(ticks) / folds) / folds):], True)
+            result = prepare_result(fills, ticks[i * int(int(len(ticks) / folds) / folds):], config["do_long"],
+                                    config["do_shrt"])
+            objectives.append(objective_function(result))
+        else:
+            fills, _ = backtest(config, ticks[i * int(int(len(ticks) / folds) / folds):(i + 1) * int(
+                int(len(ticks) / folds) / folds)], True)
+            result = prepare_result(fills, ticks[i * int(int(len(ticks) / folds) / folds):(i + 1) * int(
+                int(len(ticks) / folds) / folds)], config["do_long"], config["do_shrt"])
+            objectives.append(objective_function(result))
+
+    tune.report(objective=np.average(objectives))
+
+
+def backtest_tune(ticks: np.ndarray, backtest_config: dict, current_best: dict = None):
     config = create_config(backtest_config)
     iters = 8
     if "iters" in backtest_config:
