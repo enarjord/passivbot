@@ -5,17 +5,13 @@
   symbol: XMRUSDT
   latency_simulation_ms: 750
   starting_balance: 30.0
-  # set sliding window size to 1.0 to do only one backtest for whole period
-  sliding_window_size: 1.0
-  sliding_window_step: 0.15
 
   do_long: true
   do_shrt: true
   
-  # pso options
-  iters: 200
-  options: {"c1": 1.2, "c2": 1.2, "w": 0.9, "k": 3, "p": 2}
-  n_particles: 12
+  iters: 10
+  num_cpus: 2
+  folds: 4
   
   start_date: 2021-03-01T21:30
   end_date: -1
