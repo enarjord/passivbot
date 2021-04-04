@@ -189,7 +189,6 @@ class BinanceBot(Bot):
         self.max_leverage = max_lev
         await self.update_position()
         await self.init_order_book()
-        await self.init_ema()
 
     async def init_ema(self):
         # fetch 10 tick chunks to initiate ema
@@ -233,6 +232,7 @@ class BinanceBot(Bot):
                 print(e)
                 print('unable to set hedge mode, aborting')
                 raise Exception('failed to set hedge mode')
+        await self.init_ema()
 
     async def init_order_book(self):
         ticker = await self.public_get(self.endpoints['ticker'], {'symbol': self.symbol})
