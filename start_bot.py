@@ -13,7 +13,7 @@ restart_k = 0
 while True:
     try:
         print(f"\nStarting {exchange} {user}")
-        p = Popen(f"python3 {exchange}.py {user} --nojit", shell=True)
+        p = Popen(f"{sys.executable} {exchange}.py {user}", shell=True)
         p.wait()
         restart_k += 1
         if restart_k > max_n_restarts:
