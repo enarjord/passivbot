@@ -400,7 +400,7 @@ def backtest_wrap(ticks: [dict], backtest_config: dict, do_print=False) -> (dict
     return result, fdf
 
 
-def prepare_result(fills, ticks, do_long, do_shrt) -> dict:
+def prepare_result(fills: list, ticks: np.ndarray, do_long: bool, do_shrt: bool) -> dict:
     fdf = pd.DataFrame(fills)
     if fdf.empty:
         result = {
@@ -567,7 +567,7 @@ def backtest_tune(ticks: np.ndarray, backtest_config: dict, current_best: dict =
     scheduler = AsyncHyperBandScheduler()
 
     analysis = tune.run(tune.with_parameters(k_fold, ticks=ticks), metric="objective", mode="max", name="search",
-                        search_alg=algo, scheduler=scheduler, num_samples=iters, config=config, verbose=2,
+                        search_alg=algo, scheduler=scheduler, num_samples=iters, config=config, verbose=1,
                         reuse_actors=True, local_dir=session_dirpath)
 
     ray.shutdown()
