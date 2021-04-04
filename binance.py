@@ -108,7 +108,7 @@ async def fetch_trades(cc, symbol: str, from_id: int = None) -> [dict]:
                'price': float(t['p']),
                'qty': float(t['q']),
                'timestamp': float(t['T']),
-               'is_buyer_maker': t['m']} for t in fetchedtrades]
+               'is_buyer_maker': t['m']} for t in fetched_trades]
     print(['fetched trades', symbol, trades[0]['trade_id'],
             ts_to_date(trades[0]['timestamp'] / 1000)])
     cc.enableRateLimit = False
