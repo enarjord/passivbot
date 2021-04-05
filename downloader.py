@@ -656,12 +656,13 @@ async def prep_backtest_config(config_name: str):
         if key in backtest_config['ranges']:
             backtest_config['ranges'][key][1] = min(1.0, backtest_config['ranges'][key][1])
 
-    backtest_config['ranges']['leverage'][1] = \
-        min(backtest_config['ranges']['leverage'][1],
-            backtest_config['max_leverage'])
-    backtest_config['ranges']['leverage'][0] = \
-        min(backtest_config['ranges']['leverage'][0],
-            backtest_config['ranges']['leverage'][1])
+    if all('leverage' in x for x in [backtest_config, backtest_config['ranges']]):
+        backtest_config['ranges']['leverage'][1] = \
+            min(backtest_config['ranges']['leverage'][1],
+                backtest_config['max_leverage'])
+        backtest_config['ranges']['leverage'][0] = \
+            min(backtest_config['ranges']['leverage'][0],
+                backtest_config['ranges']['leverage'][1])
 
     backtest_config['session_dirpath'] = session_dirpath
 
