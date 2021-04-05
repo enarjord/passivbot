@@ -1,20 +1,17 @@
 {
-    "account_binance_1" : {
+    "binance_01" : {
         "exchange": "binance",
         "key": "key",
-        "secret": "secret",
-        "market": "Futures"
+        "secret": "secret"
     },
-    "account_binance_2" : {
+    "binance_02" : {
         "exchange": "binance",
         "key": "key",
-        "secret": "secret",
-        "market": "Futures"
+        "secret": "secret"
     },
-    "account_bybit_1" : {
+    "bybit_01" : {
         "exchange": "bybit",
         "key": "key",
-        "secret": "secret",
-        "market": "Inverse Futures"
+        "secret": "secret"
     }
 }
