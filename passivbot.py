@@ -1200,7 +1200,21 @@ class Bot:
 async def start_bot(bot):
     await bot.start_websocket()
 
-                                              
+
+async def create_binance_bot(user: str, settings: str):
+    from binance import BinanceBot
+    bot = BinanceBot(user, settings)
+    await bot._init()
+    return bot
+
+
+async def create_bybit_bot(user: str, settings: str):
+    from bybit import Bybit
+    bot = Bybit(user, settings)
+    await bot._init()
+    return bot
+
+
 async def main() -> None:
     try:
         accounts = json.load(open('api-keys.json'))
