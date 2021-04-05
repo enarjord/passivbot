@@ -1200,3 +1200,28 @@ class Bot:
 async def start_bot(bot):
     await bot.start_websocket()
 
+                                              
+async def main() -> None:
+    try:
+        accounts = json.load(open('api-keys.json'))
+    except Exception as e:
+        print(e, 'failed to load api-keys.json file')
+        return
+    if sys.argv[1] in accounts:
+        account = accounts[sys.argv[1]]
+    else:
+        print('unrecognized account name', sys.argv[1])
+        return
+    try:
+        config = json.load(open(sys.argv[3]))
+    except Exception as e:
+        print(e, 'failed to load config', sys.argv[3])
+        return
+    config['symbol'] = sys.argv[2]
+
+    bot = await create_bot(account['exchange'], config)
+    await start_bot(bot)
+
+
+if __name__ == '__main__':
+    asyncio.run(main())
