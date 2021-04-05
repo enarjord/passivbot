@@ -1231,7 +1231,7 @@ async def main() -> None:
     if account['exchange'] == 'binance':
         bot = await create_binance_bot(sys.argv[1], config)
     elif account['exchange'] == 'bybit':
-        bot = await create_binance_bot(sys.argv[1], config)
+        bot = await create_bybit_bot(sys.argv[1], config)
     else:
         raise Exception('unknown exchange', account['exchange'])
     await start_bot(bot)
