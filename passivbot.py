@@ -1,4 +1,3 @@
-import ccxt.async_support as ccxt_async
 import json
 import os
 import datetime
@@ -818,7 +817,6 @@ def load_key_secret(exchange: str, user: str) -> (str, str):
             # market = keyfile[user]["market"]
             # print("The Market Type is " + str(market))
 
-            # Get the keys, format as a string list for ccxt, then return
             keyList = [str(keyfile[user]["key"]), str(keyfile[user]["secret"])]
 
             return keyList
@@ -827,20 +825,6 @@ def load_key_secret(exchange: str, user: str) -> (str, str):
     except FileNotFoundError:
         print("File Not Found!")
         raise Exception('API KeyFile Missing!')
-
-
-def init_ccxt(exchange: str = None, user: str = None):
-    if user is None:
-        cc = getattr(ccxt_async, exchange)
-    try:
-        cc = getattr(ccxt_async, exchange)({'apiKey': (ks := load_key_secret(exchange, user))[0],
-                                            'secret': ks[1]})
-    except Exception as e:
-        print('error init ccxt', e)
-        cc = getattr(ccxt_async, exchange)
-    #print('ccxt enableRateLimit true')
-    #cc.enableRateLimit = True
-    return cc
 
 
 def print_(args, r=False, n=False):
@@ -996,8 +980,11 @@ class Bot:
             try:
                 o = await c
                 created_orders.append(o)
-                print_([' created order', o['symbol'], o['side'], o['position_side'], o['qty'],
-                        o['price']], n=True)
+                if 'side' in o:
+                    print_([' created order', o['symbol'], o['side'], o['position_side'], o['qty'],
+                            o['price']], n=True)
+                else:
+                    print_(['error creating order', o], n=True)
                 self.dump_log({'log_type': 'create_order', 'data': o})
             except Exception as e:
                 print_(['error creating order b', oc, c.exception(), e], n=True)
@@ -1022,8 +1009,11 @@ class Bot:
             try:
                 o = await c
                 canceled_orders.append(o)
-                print_(['cancelled order', o['symbol'], o['side'], o['position_side'], o['qty'],
-                        o['price']], n=True)
+                if 'side' in o:
+                    print_(['cancelled order', o['symbol'], o['side'], o['position_side'], o['qty'],
+                            o['price']], n=True)
+                else:
+                    print_(['error cancelling order', o], n=True)
                 self.dump_log({'log_type': 'cancel_order', 'data': o})
             except Exception as e:
                 print_(['error cancelling order b', oc, c.exception(), e], n=True)
