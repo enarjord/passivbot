@@ -857,12 +857,7 @@ def print_(args, r=False, n=False):
 
 
 def load_live_settings(exchange: str, user: str = 'default', do_print=True) -> dict:
-    fpath = f'live_settings/{exchange}/'
-    try:
-        settings = json.load(open(f'{fpath}{user}.json'))
-    except FileNotFoundError:
-        print_([f'settings for user {user} not found, using default settings'])
-        settings = json.load(open(f'{fpath}default.json'))
+    settings = json.load(open(f'live_configs/{exchange}_default.json'))
     if do_print:
         print('\nloaded settings:')
         print(json.dumps(settings, indent=4))
