@@ -16,7 +16,7 @@ restart_k = 0
 while True:
     try:
         print(f"\nStarting {user} {symbol} {path_to_config}")
-        p = Popen(f"{sys.executable} passivbot.py {user} {symbol} {path_to_config}", shell=True)
+        p = Popen(f"{sys.executable} passivbot.py {user} {symbol} {path_to_config} --nojit", shell=True)
         p.wait()
         restart_k += 1
         if restart_k > max_n_restarts:
