@@ -1,0 +1,17 @@
+{
+    "binance_01" : {
+        "exchange": "binance",
+        "key": "key",
+        "secret": "secret"
+    },
+    "binance_02" : {
+        "exchange": "binance",
+        "key": "key",
+        "secret": "secret"
+    },
+    "bybit_01" : {
+        "exchange": "bybit",
+        "key": "key",
+        "secret": "secret"
+    }
+}
