@@ -1,6 +1,5 @@
 {
-    "config_name": "56_days_adg2.4%_liq20%_stuck47hrs_ddownf2.763",
-    "symbol": "XMRUSDT",
+    "config_name": "XMRUSDT_56_days_adg2.4%_liq20%_stuck47hrs_ddownf2.763",
     "logging_level": 0,
     "ddown_factor": 2.763,
     "qty_pct": 0.00925,
