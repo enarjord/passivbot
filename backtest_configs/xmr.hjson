@@ -12,6 +12,10 @@
   iters: 10
   num_cpus: 2
   folds: 4
+
+  desired_minimum_liquidation_distance: 0.21
+  desired_max_hours_stuck: 108
+  desired_minimum_daily_fills: 25.0
   
   start_date: 2021-03-01T21:30
   end_date: -1

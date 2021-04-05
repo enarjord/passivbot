@@ -132,7 +132,7 @@ def cleanup_candidate(config: dict) -> dict:
     return cleaned
 
 
-def backtest(config, ticks=None, return_fills=False, do_print=False) -> (list, bool):
+def backtest(config: dict, ticks: np.ndarray, return_fills=False, do_print=False) -> (list, bool):
     long_pos_size, long_pos_price = 0.0, np.nan
     shrt_pos_size, shrt_pos_price = 0.0, np.nan
     liq_price = 0.0
@@ -352,8 +352,11 @@ def backtest(config, ticks=None, return_fills=False, do_print=False) -> (list, b
                     if return_fills:
                         return all_fills, False
                     else:
-                        result = prepare_result(all_fills, ticks, config["do_long"], config["do_shrt"])
-                        tune.report(objective=objective_function(result))
+                        result = prepare_result(all_fills, ticks, config["do_long"],
+                                                config["do_shrt"])
+                        tune.report(objective=objective_function(result, config[
+                            "desired_minimum_liquidation_distance"], config["desired_max_hours_stuck"],
+                                                                 config["desired_minimum_daily_fills"]))
             if do_print:
                 line = f"\r{all_fills[-1]['progress']:.3f} "
                 line += f"adg {all_fills[-1]['average_daily_gain']:.4f} "
@@ -362,7 +365,9 @@ def backtest(config, ticks=None, return_fills=False, do_print=False) -> (list, b
         return all_fills, True
     else:
         result = prepare_result(all_fills, ticks, config["do_long"], config["do_shrt"])
-        tune.report(objective=objective_function(result))
+        tune.report(objective=objective_function(result, config["desired_minimum_liquidation_distance"],
+                                                 config["desired_max_hours_stuck"],
+                                                 config["desired_minimum_daily_fills"]))
 
 
 def candidate_to_live_settings(exchange: str, candidate: dict) -> dict:
@@ -448,10 +453,7 @@ def prepare_result(fills: list, ticks: np.ndarray, do_long: bool, do_shrt: bool)
     return result
 
 
-def objective_function(result) -> float:
-    liq_cap = 0.21
-    hours_stuck_cap = 108
-    n_daily_fills_cap = 25.0
+def objective_function(result: dict, liq_cap: float, hours_stuck_cap: int, n_daily_fills_cap: float) -> float:
     try:
         return (result['average_daily_gain'] *
                 min(1.0, (result['n_fills'] / result['n_days']) / n_daily_fills_cap) *
@@ -477,6 +479,9 @@ def create_config(backtest_config: dict) -> dict:
     config["do_shrt"] = backtest_config["do_shrt"]
     config["taker_fee"] = backtest_config["taker_fee"]
     config["maker_fee"] = backtest_config["maker_fee"]
+    config["desired_minimum_liquidation_distance"] = backtest_config["desired_minimum_liquidation_distance"]
+    config["desired_max_hours_stuck"] = backtest_config["desired_max_hours_stuck"]
+    config["desired_minimum_daily_fills"] = backtest_config["desired_minimum_daily_fills"]
 
     config["qty_pct"] = tune.quniform(backtest_config["ranges"]["qty_pct"][0],
                                       backtest_config["ranges"]["qty_pct"][1],
@@ -525,16 +530,21 @@ def k_fold(config, ticks=None):
     objectives = []
     for i in range(folds):
         if i == folds - 1:
-            fills, _ = backtest(config, ticks[i * int(int(len(ticks) / folds) / folds):], True)
+            fills, _ = backtest(config, ticks=ticks[i * int(int(len(ticks) / folds) / folds):], return_fills=True)
             result = prepare_result(fills, ticks[i * int(int(len(ticks) / folds) / folds):], config["do_long"],
                                     config["do_shrt"])
-            objectives.append(objective_function(result))
+            objectives.append(objective_function(result, config["desired_minimum_liquidation_distance"],
+                                                 config["desired_max_hours_stuck"],
+                                                 config["desired_minimum_daily_fills"]))
+
         else:
-            fills, _ = backtest(config, ticks[i * int(int(len(ticks) / folds) / folds):(i + 1) * int(
-                int(len(ticks) / folds) / folds)], True)
+            fills, _ = backtest(config, ticks=ticks[i * int(int(len(ticks) / folds) / folds):(i + 1) * int(
+                int(len(ticks) / folds) / folds)], return_fills=True)
             result = prepare_result(fills, ticks[i * int(int(len(ticks) / folds) / folds):(i + 1) * int(
                 int(len(ticks) / folds) / folds)], config["do_long"], config["do_shrt"])
-            objectives.append(objective_function(result))
+            objectives.append(objective_function(result, config["desired_minimum_liquidation_distance"],
+                                                 config["desired_max_hours_stuck"],
+                                                 config["desired_minimum_daily_fills"]))
 
     tune.report(objective=np.average(objectives))
 
