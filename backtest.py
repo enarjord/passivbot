@@ -455,13 +455,13 @@ def prepare_result(fills: list, ticks: np.ndarray, do_long: bool, do_shrt: bool)
 
 def objective_function(result: dict, liq_cap: float, hours_stuck_cap: int, n_daily_fills_cap: float) -> float:
     try:
-        return (result['average_daily_gain'] *
+        return ((result['average_daily_gain'] - 1) *
                 min(1.0, (result['n_fills'] / result['n_days']) / n_daily_fills_cap) *
                 min(1.0, result['closest_liq'] / liq_cap) /
                 max(1.0, result['max_n_hours_stuck'] / hours_stuck_cap))
     except Exception as e:
         # print('error with score func', e, result)
-        return -1000.0
+        return -1.0
 
 
 def create_config(backtest_config: dict) -> dict:
