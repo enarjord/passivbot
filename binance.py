@@ -294,19 +294,25 @@ class BinanceBot(Bot):
             params['newClientOrderId'] = \
                 f"{order['custom_id']}_{int(time() * 1000)}_{int(np.random.random() * 1000)}"
         o = await self.private_post(self.endpoints['create_order'], params)
-        return {'symbol': self.symbol,
-                'side': o['side'].lower(),
-                'position_side': o['positionSide'].lower().replace('short', 'shrt'),
-                'type': o['type'].lower(),
-                'qty': float(o['origQty']),
-                'price': float(o['price'])}
+        if 'side' in o:
+            return {'symbol': self.symbol,
+                    'side': o['side'].lower(),
+                    'position_side': o['positionSide'].lower().replace('short', 'shrt'),
+                    'type': o['type'].lower(),
+                    'qty': float(o['origQty']),
+                    'price': float(o['price'])}
+        else:
+            return o
 
     async def execute_cancellation(self, order: dict) -> [dict]:
         cancellation = await self.private_delete(self.endpoints['cancel_order'],
                                                  {'symbol': self.symbol, 'orderId': order['order_id']})
-        return {'symbol': self.symbol, 'side': cancellation['side'].lower(),
-                'position_side': cancellation['positionSide'].lower().replace('short', 'shrt'),
-                'qty': float(cancellation['origQty']), 'price': float(cancellation['price'])}
+        if 'side' in cancellation:
+            return {'symbol': self.symbol, 'side': cancellation['side'].lower(),
+                    'position_side': cancellation['positionSide'].lower().replace('short', 'shrt'),
+                    'qty': float(cancellation['origQty']), 'price': float(cancellation['price'])}
+        else:
+            return cancellation
 
     async def fetch_ticks(self, from_id: int = None, start_time: int = None, end_time: int = None,
                           do_print: bool = True):
