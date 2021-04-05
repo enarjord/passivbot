@@ -99,7 +99,7 @@ run in terminal: `python3 start_bot.py {account_name} {symbol} {path/to/config.j
 
 for example
 
-`python3 start_bot.py binance_01 LTCUSD_PERP live_configs/default.json`
+`python3 start_bot.py binance_01 XMRUSDT live_configs/binance_default.json`
 
 run in docker: modify command with exchange and user_name in docker-compose and start with `docker-compose up -d` (-d for background run).  all code and files generated are in original git folder.
 
