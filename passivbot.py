@@ -1219,7 +1219,12 @@ async def main() -> None:
         return
     config['symbol'] = sys.argv[2]
 
-    bot = await create_bot(account['exchange'], config)
+    if account['exchange'] == 'binance':
+        bot = await create_binance_bot(sys.argv[1], config)
+    elif account['exchange'] == 'bybit':
+        bot = await create_binance_bot(sys.argv[1], config)
+    else:
+        raise Exception('unknown exchange', account['exchange'])
     await start_bot(bot)
 
 
