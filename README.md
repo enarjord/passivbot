@@ -77,6 +77,7 @@ change log
 - changed api key format
 - changed name of live_settings dir to live_configs, removed subdirs binance/bybit
 - changed how to use start_bot.py.  see updated startup instructions
+- improved backtester multiprocessing memory usage
 
 
 see `changelog.txt` for earlier changes
