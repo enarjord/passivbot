@@ -433,6 +433,30 @@ def calc_cross_hedge_liq_price_bybit_inverse(balance: float,
         return calc_cross_shrt_liq_price_bybit_inverse(balance, shrt_pos_size, shrt_pos_price, leverage)
 
 
+@njit
+def calc_cross_hedge_liq_price_binance_inverse(balance: float,
+                                               long_pos_size: float,
+                                               long_pos_price: float,
+                                               shrt_pos_size: float,
+                                               shrt_pos_price: float,
+                                               leverage: float,
+                                               contract_size: float = 1.0) -> float:
+    abs_long_pos_size = abs(long_pos_size)
+    abs_shrt_pos_size = abs(shrt_pos_size)
+    long_pos_price = long_pos_price if long_pos_price == long_pos_price else 0.0
+    shrt_pos_price = shrt_pos_price if shrt_pos_price == shrt_pos_price else 0.0
+    mml = 0.02
+    mms = 0.02
+    numerator = abs_long_pos_size * mml + abs_shrt_pos_size * mms + abs_long_pos_size - abs_shrt_pos_size
+    cm = contract_size #contract_multiplier?
+    long_pos_cost = abs_long_pos_size / long_pos_price if long_pos_price > 0.0 else 0.0
+    shrt_pos_cost = abs_shrt_pos_size / shrt_pos_price if shrt_pos_price > 0.0 else 0.0
+    denom = balance / cm + long_pos_cost - shrt_pos_cost
+    if denom == 0.0:
+        return 0.0
+    return max(0.0, numerator / denom)
+
+
 ################
 # linear calcs #
 ################
