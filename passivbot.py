@@ -537,6 +537,16 @@ def calc_cross_hedge_liq_price_binance_linear(balance: float,
 
 
 @njit
+def calc_cross_hedge_liq_price_bybit_linear(balance: float,
+                                            long_pos_size: float,
+                                            long_pos_price: float,
+                                            shrt_pos_size: float,
+                                            shrt_pos_price: float,
+                                            leverage: float) -> float:
+    raise Exception('bybit linear not yet implemented')
+
+
+@njit
 def iter_entries_linear(price_step: float,
                         qty_step: float,
                         min_qty: float,
