@@ -533,6 +533,9 @@ def create_config(backtest_config: dict) -> dict:
     config['desired_minimum_liquidation_distance'] = backtest_config['desired_minimum_liquidation_distance']
     config['desired_max_hours_stuck'] = backtest_config['desired_max_hours_stuck']
     config['desired_minimum_daily_fills'] = backtest_config['desired_minimum_daily_fills']
+    config['leverage'] = backtest_config['leverage']
+    config['n_close_orders'] = backtest_config['n_close_orders']
+    config['exchange'] = backtest_config['exchange']
 
     config['qty_pct'] = tune.quniform(backtest_config['ranges']['qty_pct'][0],
                                       backtest_config['ranges']['qty_pct'][1],
@@ -559,12 +562,12 @@ def create_config(backtest_config: dict) -> dict:
                                          backtest_config['ranges']['ema_spread'][1],
                                          backtest_config['ranges']['ema_spread'][2])
 
-    config['leverage'] = tune.qrandint(backtest_config['ranges']['leverage'][0],
-                                       backtest_config['ranges']['leverage'][1],
-                                       backtest_config['ranges']['leverage'][2])
-    config['n_close_orders'] = tune.qrandint(backtest_config['ranges']['n_close_orders'][0],
-                                             backtest_config['ranges']['n_close_orders'][1],
-                                             backtest_config['ranges']['n_close_orders'][2])
+    # config['leverage'] = tune.qrandint(backtest_config['ranges']['leverage'][0],
+    #                                    backtest_config['ranges']['leverage'][1],
+    #                                    backtest_config['ranges']['leverage'][2])
+    # config['n_close_orders'] = tune.qrandint(backtest_config['ranges']['n_close_orders'][0],
+    #                                          backtest_config['ranges']['n_close_orders'][1],
+    #                                          backtest_config['ranges']['n_close_orders'][2])
     return config
 
 
