@@ -5,7 +5,9 @@ import ray
 from ray import tune
 from ray.tune.schedulers import AsyncHyperBandScheduler
 from ray.tune.suggest import ConcurrencyLimiter
-from ray.tune.suggest.hyperopt import HyperOptSearch
+# from ray.tune.suggest.hyperopt import HyperOptSearch
+from ray.tune.suggest.nevergrad import NevergradSearch
+import nevergrad as ng
 
 from downloader import Downloader, prep_backtest_config
 from passivbot import *
@@ -625,8 +627,9 @@ def backtest_tune(ticks: np.ndarray, backtest_config: dict, current_best: dict =
     initial_points = max(1, min(int(iters / 10), 20))
 
     ray.init(num_cpus=num_cpus)
-
-    algo = HyperOptSearch(points_to_evaluate=current_best_params, n_initial_points=initial_points)
+    pso = ng.optimizers.ConfiguredPSO()
+    algo = NevergradSearch(optimizer=pso, points_to_evaluate=current_best_params)
+    # algo = HyperOptSearch(points_to_evaluate=current_best_params, n_initial_points=initial_points)
     algo = ConcurrencyLimiter(algo, max_concurrent=num_cpus)
     scheduler = AsyncHyperBandScheduler()
 
