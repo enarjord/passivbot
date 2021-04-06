@@ -1,16 +1,4 @@
 from hashlib import sha256
-import sys
-import json
-import hjson
-import numpy as np
-import pandas as pd
-import asyncio
-import os
-import gc
-import matplotlib.pyplot as plt
-#import aiomultiprocess
-import pyswarms
-from multiprocessing import Lock, shared_memory
 
 import matplotlib.pyplot as plt
 import ray
@@ -21,13 +9,6 @@ from ray.tune.suggest.hyperopt import HyperOptSearch
 
 from downloader import Downloader, prep_backtest_config
 from passivbot import *
-from bybit import create_bot as create_bot_bybit
-from binance import create_bot as create_bot_binance
-from downloader import Downloader, prep_backtest_config
-from typing import Iterator, Callable
-
-
-lock = Lock()
 
 
 def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
@@ -307,7 +288,7 @@ def backtest(config: dict, ticks: np.ndarray, return_fills=False, do_print=False
                             'liq_diff': calc_diff(liq_price, tick[0])
                         })
                         prev_shrt_close_price = price
-                    #else:
+                    # else:
                     #    break
                     # it would be proper to break here,
                     # unfortunately if done, numba causes memory leak ¯\_(ツ)_/¯
@@ -419,11 +400,11 @@ def backtest(config: dict, ticks: np.ndarray, return_fills=False, do_print=False
                     if return_fills:
                         return all_fills, False
                     else:
-                        result = prepare_result(all_fills, ticks, config["do_long"],
-                                                config["do_shrt"])
+                        result = prepare_result(all_fills, ticks, config['do_long'],
+                                                config['do_shrt'])
                         tune.report(objective=objective_function(result, config[
-                            "desired_minimum_liquidation_distance"], config["desired_max_hours_stuck"],
-                                                                 config["desired_minimum_daily_fills"]))
+                            'desired_minimum_liquidation_distance'], config['desired_max_hours_stuck'],
+                                                                 config['desired_minimum_daily_fills']))
             if do_print:
                 line = f"\r{all_fills[-1]['progress']:.3f} "
                 line += f"adg {all_fills[-1]['average_daily_gain']:.4f} "
@@ -432,10 +413,10 @@ def backtest(config: dict, ticks: np.ndarray, return_fills=False, do_print=False
     if return_fills:
         return all_fills, True
     else:
-        result = prepare_result(all_fills, ticks, config["do_long"], config["do_shrt"])
-        tune.report(objective=objective_function(result, config["desired_minimum_liquidation_distance"],
-                                                 config["desired_max_hours_stuck"],
-                                                 config["desired_minimum_daily_fills"]))
+        result = prepare_result(all_fills, ticks, config['do_long'], config['do_shrt'])
+        tune.report(objective=objective_function(result, config['desired_minimum_liquidation_distance'],
+                                                 config['desired_max_hours_stuck'],
+                                                 config['desired_minimum_daily_fills']))
 
 
 def candidate_to_live_settings(exchange: str, candidate: dict) -> dict:
@@ -467,7 +448,7 @@ def backtest_wrap(ticks: [dict], backtest_config: dict, do_print=False) -> (dict
         return {'average_daily_gain': 0.0, 'closest_liq': 0.0, 'max_n_hours_stuck': 1000.0}, pd.DataFrame()
     fdf = pd.DataFrame(fills).set_index('trade_id')
     result = prepare_result(fills, ticks, bool(backtest_config['do_long']), bool(backtest_config['do_shrt']))
-    result["seconds_elapsed"] = elapsed
+    result['seconds_elapsed'] = elapsed
     if 'key' not in result:
         result['key'] = calc_candidate_hash_key(backtest_config, backtest_config['ranges'])
     return result, fdf
@@ -477,48 +458,48 @@ def prepare_result(fills: list, ticks: np.ndarray, do_long: bool, do_shrt: bool)
     fdf = pd.DataFrame(fills)
     if fdf.empty:
         result = {
-            "net_pnl_plus_fees": 0,
-            "profit_sum": 0,
-            "loss_sum": 0,
-            "fee_sum": 0,
-            "final_equity": 0,
-            "gain": 0,
-            "max_drawdown": 0,
-            "n_days": 0,
-            "average_daily_gain": 0,
-            "closest_liq": 0,
-            "n_fills": 0,
-            "n_entries": 0,
-            "n_closes": 0,
-            "n_reentries": 0,
-            "n_stop_losses": 0,
-            "biggest_pos_size": 0,
-            "max_n_hours_stuck": 0,
-            "do_long": do_long,
-            "do_shrt": do_shrt
+            'net_pnl_plus_fees': 0,
+            'profit_sum': 0,
+            'loss_sum': 0,
+            'fee_sum': 0,
+            'final_equity': 0,
+            'gain': 0,
+            'max_drawdown': 0,
+            'n_days': 0,
+            'average_daily_gain': 0,
+            'closest_liq': 0,
+            'n_fills': 0,
+            'n_entries': 0,
+            'n_closes': 0,
+            'n_reentries': 0,
+            'n_stop_losses': 0,
+            'biggest_pos_size': 0,
+            'max_n_hours_stuck': 0,
+            'do_long': do_long,
+            'do_shrt': do_shrt
         }
     else:
         result = {
-            "net_pnl_plus_fees": fills[-1]["pnl_plus_fees_cumsum"],
-            "profit_sum": fills[-1]["profit_cumsum"],
-            "loss_sum": fills[-1]["loss_cumsum"],
-            "fee_sum": fills[-1]["fee_paid_cumsum"],
-            "final_equity": fills[-1]["equity"],
-            "gain": (gain := fills[-1]["gain"]),
-            "max_drawdown": fdf.drawdown.max(),
-            "n_days": (n_days := (ticks[-1][2] - ticks[0][2]) / (1000 * 60 * 60 * 24)),
-            "average_daily_gain": gain ** (1 / n_days) if gain > 0.0 else 0.0,
-            "closest_liq": fdf.liq_diff.min(),
-            "n_fills": len(fills),
+            'net_pnl_plus_fees': fills[-1]['pnl_plus_fees_cumsum'],
+            'profit_sum': fills[-1]['profit_cumsum'],
+            'loss_sum': fills[-1]['loss_cumsum'],
+            'fee_sum': fills[-1]['fee_paid_cumsum'],
+            'final_equity': fills[-1]['equity'],
+            'gain': (gain := fills[-1]['gain']),
+            'max_drawdown': fdf.drawdown.max(),
+            'n_days': (n_days := (ticks[-1][2] - ticks[0][2]) / (1000 * 60 * 60 * 24)),
+            'average_daily_gain': gain ** (1 / n_days) if gain > 0.0 else 0.0,
+            'closest_liq': fdf.liq_diff.min(),
+            'n_fills': len(fills),
             'n_entries': len(fdf[fdf.type.str.contains('entry')]),
-            "n_closes": len(fdf[fdf.type == "close"]),
-            "n_reentries": len(fdf[fdf.type == "reentry"]),
-            "n_stop_losses": len(fdf[fdf.type.str.startswith("stop_loss")]),
-            "biggest_pos_size": fdf[["long_pos_size", "shrt_pos_size"]].abs().max(axis=1).max(),
-            "max_n_hours_stuck": max(fdf["hours_since_pos_change_max"].max(),
-                                     (ticks[-1][2] - fills[-1]["timestamp"]) / (1000 * 60 * 60)),
-            "do_long": do_long,
-            "do_shrt": do_shrt
+            'n_closes': len(fdf[fdf.type == 'close']),
+            'n_reentries': len(fdf[fdf.type == 'reentry']),
+            'n_stop_losses': len(fdf[fdf.type.str.startswith('stop_loss')]),
+            'biggest_pos_size': fdf[['long_pos_size', 'shrt_pos_size']].abs().max(axis=1).max(),
+            'max_n_hours_stuck': max(fdf['hours_since_pos_change_max'].max(),
+                                     (ticks[-1][2] - fills[-1]['timestamp']) / (1000 * 60 * 60)),
+            'do_long': do_long,
+            'do_shrt': do_shrt
         }
     return result
 
@@ -536,54 +517,54 @@ def objective_function(result: dict, liq_cap: float, hours_stuck_cap: int, n_dai
 
 def create_config(backtest_config: dict) -> dict:
     config = {}
-    config["folds"] = backtest_config["folds"]
-    config["starting_balance"] = backtest_config["starting_balance"]
-    config["inverse"] = backtest_config["inverse"]
-    config["price_step"] = backtest_config["price_step"]
-    config["qty_step"] = backtest_config["qty_step"]
-    config["min_qty"] = backtest_config["min_qty"]
-    config["min_cost"] = backtest_config["min_cost"]
-    if "latency_simulation_ms" in backtest_config:
-        config["latency_simulation_ms"] = backtest_config["latency_simulation_ms"]
-    config["do_long"] = backtest_config["do_long"]
-    config["do_shrt"] = backtest_config["do_shrt"]
-    config["taker_fee"] = backtest_config["taker_fee"]
-    config["maker_fee"] = backtest_config["maker_fee"]
-    config["desired_minimum_liquidation_distance"] = backtest_config["desired_minimum_liquidation_distance"]
-    config["desired_max_hours_stuck"] = backtest_config["desired_max_hours_stuck"]
-    config["desired_minimum_daily_fills"] = backtest_config["desired_minimum_daily_fills"]
+    config['folds'] = backtest_config['folds']
+    config['starting_balance'] = backtest_config['starting_balance']
+    config['inverse'] = backtest_config['inverse']
+    config['price_step'] = backtest_config['price_step']
+    config['qty_step'] = backtest_config['qty_step']
+    config['min_qty'] = backtest_config['min_qty']
+    config['min_cost'] = backtest_config['min_cost']
+    if 'latency_simulation_ms' in backtest_config:
+        config['latency_simulation_ms'] = backtest_config['latency_simulation_ms']
+    config['do_long'] = backtest_config['do_long']
+    config['do_shrt'] = backtest_config['do_shrt']
+    config['taker_fee'] = backtest_config['taker_fee']
+    config['maker_fee'] = backtest_config['maker_fee']
+    config['desired_minimum_liquidation_distance'] = backtest_config['desired_minimum_liquidation_distance']
+    config['desired_max_hours_stuck'] = backtest_config['desired_max_hours_stuck']
+    config['desired_minimum_daily_fills'] = backtest_config['desired_minimum_daily_fills']
 
-    config["qty_pct"] = tune.quniform(backtest_config["ranges"]["qty_pct"][0],
-                                      backtest_config["ranges"]["qty_pct"][1],
-                                      backtest_config["ranges"]["qty_pct"][2])
-    config["ddown_factor"] = tune.quniform(backtest_config["ranges"]["ddown_factor"][0],
-                                           backtest_config["ranges"]["ddown_factor"][1],
-                                           backtest_config["ranges"]["ddown_factor"][2])
-    config["grid_coefficient"] = tune.quniform(backtest_config["ranges"]["grid_coefficient"][0],
-                                               backtest_config["ranges"]["grid_coefficient"][1],
-                                               backtest_config["ranges"]["grid_coefficient"][2])
-    config["grid_spacing"] = tune.quniform(backtest_config["ranges"]["grid_spacing"][0],
-                                           backtest_config["ranges"]["grid_spacing"][1],
-                                           backtest_config["ranges"]["grid_spacing"][2])
-    config["markup_range"] = tune.quniform(backtest_config["ranges"]["markup_range"][0],
-                                           backtest_config["ranges"]["markup_range"][1],
-                                           backtest_config["ranges"]["markup_range"][2])
-    config["min_markup"] = tune.quniform(backtest_config["ranges"]["min_markup"][0],
-                                         backtest_config["ranges"]["min_markup"][1],
-                                         backtest_config["ranges"]["min_markup"][2])
-    config["ema_span"] = tune.quniform(backtest_config["ranges"]["ema_span"][0],
-                                       backtest_config["ranges"]["ema_span"][1],
-                                       backtest_config["ranges"]["ema_span"][2])
-    config["ema_spread"] = tune.quniform(backtest_config["ranges"]["ema_spread"][0],
-                                         backtest_config["ranges"]["ema_spread"][1],
-                                         backtest_config["ranges"]["ema_spread"][2])
+    config['qty_pct'] = tune.quniform(backtest_config['ranges']['qty_pct'][0],
+                                      backtest_config['ranges']['qty_pct'][1],
+                                      backtest_config['ranges']['qty_pct'][2])
+    config['ddown_factor'] = tune.quniform(backtest_config['ranges']['ddown_factor'][0],
+                                           backtest_config['ranges']['ddown_factor'][1],
+                                           backtest_config['ranges']['ddown_factor'][2])
+    config['grid_coefficient'] = tune.quniform(backtest_config['ranges']['grid_coefficient'][0],
+                                               backtest_config['ranges']['grid_coefficient'][1],
+                                               backtest_config['ranges']['grid_coefficient'][2])
+    config['grid_spacing'] = tune.quniform(backtest_config['ranges']['grid_spacing'][0],
+                                           backtest_config['ranges']['grid_spacing'][1],
+                                           backtest_config['ranges']['grid_spacing'][2])
+    config['markup_range'] = tune.quniform(backtest_config['ranges']['markup_range'][0],
+                                           backtest_config['ranges']['markup_range'][1],
+                                           backtest_config['ranges']['markup_range'][2])
+    config['min_markup'] = tune.quniform(backtest_config['ranges']['min_markup'][0],
+                                         backtest_config['ranges']['min_markup'][1],
+                                         backtest_config['ranges']['min_markup'][2])
+    config['ema_span'] = tune.quniform(backtest_config['ranges']['ema_span'][0],
+                                       backtest_config['ranges']['ema_span'][1],
+                                       backtest_config['ranges']['ema_span'][2])
+    config['ema_spread'] = tune.quniform(backtest_config['ranges']['ema_spread'][0],
+                                         backtest_config['ranges']['ema_spread'][1],
+                                         backtest_config['ranges']['ema_spread'][2])
 
-    config["leverage"] = tune.qrandint(backtest_config["ranges"]["leverage"][0],
-                                       backtest_config["ranges"]["leverage"][1],
-                                       backtest_config["ranges"]["leverage"][2])
-    config["n_close_orders"] = tune.qrandint(backtest_config["ranges"]["n_close_orders"][0],
-                                             backtest_config["ranges"]["n_close_orders"][1],
-                                             backtest_config["ranges"]["n_close_orders"][2])
+    config['leverage'] = tune.qrandint(backtest_config['ranges']['leverage'][0],
+                                       backtest_config['ranges']['leverage'][1],
+                                       backtest_config['ranges']['leverage'][2])
+    config['n_close_orders'] = tune.qrandint(backtest_config['ranges']['n_close_orders'][0],
+                                             backtest_config['ranges']['n_close_orders'][1],
+                                             backtest_config['ranges']['n_close_orders'][2])
     return config
 
 
@@ -596,25 +577,25 @@ def clean_start_config(start_config: dict, backtest_config: dict) -> dict:
 
 
 def k_fold(config, ticks=None):
-    folds = int(config["folds"])
+    folds = int(config['folds'])
     objectives = []
     for i in range(folds):
         if i == folds - 1:
             fills, _ = backtest(config, ticks=ticks[i * int(int(len(ticks) / folds) / folds):], return_fills=True)
-            result = prepare_result(fills, ticks[i * int(int(len(ticks) / folds) / folds):], config["do_long"],
-                                    config["do_shrt"])
-            objectives.append(objective_function(result, config["desired_minimum_liquidation_distance"],
-                                                 config["desired_max_hours_stuck"],
-                                                 config["desired_minimum_daily_fills"]))
+            result = prepare_result(fills, ticks[i * int(int(len(ticks) / folds) / folds):], config['do_long'],
+                                    config['do_shrt'])
+            objectives.append(objective_function(result, config['desired_minimum_liquidation_distance'],
+                                                 config['desired_max_hours_stuck'],
+                                                 config['desired_minimum_daily_fills']))
 
         else:
             fills, _ = backtest(config, ticks=ticks[i * int(int(len(ticks) / folds) / folds):(i + 1) * int(
                 int(len(ticks) / folds) / folds)], return_fills=True)
             result = prepare_result(fills, ticks[i * int(int(len(ticks) / folds) / folds):(i + 1) * int(
-                int(len(ticks) / folds) / folds)], config["do_long"], config["do_shrt"])
-            objectives.append(objective_function(result, config["desired_minimum_liquidation_distance"],
-                                                 config["desired_max_hours_stuck"],
-                                                 config["desired_minimum_daily_fills"]))
+                int(len(ticks) / folds) / folds)], config['do_long'], config['do_shrt'])
+            objectives.append(objective_function(result, config['desired_minimum_liquidation_distance'],
+                                                 config['desired_max_hours_stuck'],
+                                                 config['desired_minimum_daily_fills']))
 
     tune.report(objective=np.average(objectives))
 
@@ -622,18 +603,18 @@ def k_fold(config, ticks=None):
 def backtest_tune(ticks: np.ndarray, backtest_config: dict, current_best: dict = None):
     config = create_config(backtest_config)
     n_days = round_((ticks[-1][2] - ticks[0][2]) / (1000 * 60 * 60 * 24), 0.1)
-    session_dirpath = make_get_filepath(os.path.join("reports", backtest_config["exchange"], backtest_config["symbol"],
+    session_dirpath = make_get_filepath(os.path.join('reports', backtest_config['exchange'], backtest_config['symbol'],
                                                      f"{n_days}_days_{ts_to_date(time())[:19].replace(':', '')}", ''))
     iters = 10
-    if "iters" in backtest_config:
-        iters = backtest_config["iters"]
+    if 'iters' in backtest_config:
+        iters = backtest_config['iters']
     else:
-        print("Parameter iters should be defined in the configuration. Defaulting to 10.")
+        print('Parameter iters should be defined in the configuration. Defaulting to 10.')
     num_cpus = 2
-    if "num_cpus" in backtest_config:
-        num_cpus = backtest_config["num_cpus"]
+    if 'num_cpus' in backtest_config:
+        num_cpus = backtest_config['num_cpus']
     else:
-        print("Parameter num_cpus should be defined in the configuration. Defaulting to 2.")
+        print('Parameter num_cpus should be defined in the configuration. Defaulting to 2.')
     current_best_params = []
     if current_best:
         current_best = clean_start_config(current_best, config)
@@ -646,13 +627,13 @@ def backtest_tune(ticks: np.ndarray, backtest_config: dict, current_best: dict =
     algo = ConcurrencyLimiter(algo, max_concurrent=num_cpus)
     scheduler = AsyncHyperBandScheduler()
 
-    analysis = tune.run(tune.with_parameters(k_fold, ticks=ticks), metric="objective", mode="max", name="search",
+    analysis = tune.run(tune.with_parameters(k_fold, ticks=ticks), metric='objective', mode='max', name='search',
                         search_alg=algo, scheduler=scheduler, num_samples=iters, config=config, verbose=1,
                         reuse_actors=True, local_dir=session_dirpath)
 
     ray.shutdown()
 
-    print("Best candidate found were: ", analysis.best_config)
+    print('Best candidate found were: ', analysis.best_config)
     plot_wrap(backtest_config, ticks, analysis.best_config)
     return analysis
 
@@ -697,9 +678,9 @@ async def main(args: list):
     if (s := '--start') in args:
         try:
             start_candidate = json.load(open(args[args.index(s) + 1]))
-            print("Starting with specified configuration.")
+            print('Starting with specified configuration.')
         except:
-            print("Could not find specified configuration.")
+            print('Could not find specified configuration.')
     if start_candidate:
         backtest_tune(ticks, backtest_config, start_candidate)
     else:
