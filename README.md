@@ -74,7 +74,7 @@ change log
 - binance inverse futures coin margined markets now supported
 
 2021-04-05 v3.3.2
-- changed api key format
+- changed api key format.  put api key/secret in api-keys.json in main dir.
 - changed name of live_settings dir to live_configs, removed subdirs binance/bybit
 - changed how to use start_bot.py.  see updated startup instructions
 - improved backtester multiprocessing memory usage
