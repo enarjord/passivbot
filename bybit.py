@@ -17,7 +17,9 @@ from passivbot import load_key_secret, load_live_settings, make_get_filepath, pr
     ts_to_date, flatten, Bot, start_bot, round_up, round_dn, \
     calc_min_order_qty_inverse, sort_dict_keys, calc_ema, calc_diff, \
     iter_long_closes_inverse, iter_shrt_closes_inverse, iter_entries_inverse, \
-    iter_long_closes_linear, iter_shrt_closes_linear, iter_entries_linear
+    iter_long_closes_linear, iter_shrt_closes_linear, iter_entries_linear, calc_long_pnl_linear, \
+    calc_long_pnl_inverse, calc_shrt_pnl_linear, \
+    calc_shrt_pnl_inverse, calc_cost_linear, calc_cost_inverse
 import aiohttp
 from urllib.parse import urlencode
 
@@ -114,8 +116,14 @@ class Bybit(Bot):
                                     long_pprice, shrt_psize, shrt_pprice, highest_bid, lowest_ask,
                                     last_price, do_long, do_shrt)
             self.hedge_mode = False
+            self.long_pnl_f = calc_long_pnl_linear
+            self.shrt_pnl_f = calc_shrt_pnl_linear
+            self.cost_f = calc_cost_linear
 
         else:
+            self.long_pnl_f = calc_long_pnl_inverse
+            self.shrt_pnl_f = calc_shrt_pnl_inverse
+            self.cost_f = calc_cost_inverse
             if self.symbol.endswith('USD'):
                 print('inverse perpetual')
                 self.market_type = 'inverse_perpetual'
@@ -153,6 +161,7 @@ class Bybit(Bot):
                                      self.grid_spacing, self.grid_coefficient, balance, long_psize,
                                      long_pprice, shrt_psize, shrt_pprice, highest_bid, lowest_ask,
                                      last_price, do_long, do_shrt)
+        self.endpoints['balance'] = '/v2/private/wallet/balance'
 
     def determine_pos_side(self, o: dict) -> str:
         side = o['side'].lower()
@@ -185,11 +194,8 @@ class Bybit(Bot):
             calc_min_order_qty_inverse(self.qyt_step, self.min_qty, self.min_cost,
                                        self.qty_pct, self.leverage, balance_, last_price)
         self.init_market_type()
-        await asyncio.gather(
-            self.update_position(),
-            self.init_order_book(),
-            self.init_ema(),
-        )
+        await self.init_order_book()
+        await self.update_position()
 
     async def init_ema(self):
         # fetch 10000 ticks to initiate ema
@@ -265,25 +271,30 @@ class Bybit(Bot):
         if self.market_type == 'linear_perpetual':
             fetched, bal = await asyncio.gather(
                 self.private_get(self.endpoints['position'], {'symbol': self.symbol}),
-                self.private_get('/v2/private/wallet/balance', {'coin': self.quot})
+                self.private_get(self.endpoints['balance'], {'coin': self.quot})
             )
             long_pos = [e for e in fetched['result'] if e['side'] == 'Buy'][0]
             shrt_pos = [e for e in fetched['result'] if e['side'] == 'Sell'][0]
             position['wallet_balance'] = float(bal['result'][self.quot]['wallet_balance'])
+            # position['available_balance'] = float(bal['result'][self.quot]['available_balance'])
         else:
-            fetched = await self.private_get(self.endpoints['position'], {'symbol': self.symbol})
-        if self.market_type == 'inverse_perpetual':
-            if fetched['result']['side'] == 'Buy':
-                long_pos = fetched['result']
-                shrt_pos = {'size': 0.0, 'entry_price': 0.0, 'leverage': 0.0, 'liq_price': 0.0}
-            else:
-                long_pos = {'size': 0.0, 'entry_price': 0.0, 'leverage': 0.0, 'liq_price': 0.0}
-                shrt_pos = fetched['result']
-            position['wallet_balance'] = float(fetched['result']['wallet_balance'])
-        elif self.market_type == 'inverse_futures':
-            long_pos = [e['data'] for e in fetched['result'] if e['data']['position_idx'] == 1][0]
-            shrt_pos = [e['data'] for e in fetched['result'] if e['data']['position_idx'] == 2][0]
-            position['wallet_balance'] = float(long_pos['wallet_balance'])
+            fetched, bal = await asyncio.gather(
+                self.private_get(self.endpoints['position'], {'symbol': self.symbol}),
+                self.private_get(self.endpoints['balance'], {'coin': self.coin})
+            )
+            position['wallet_balance'] = float(bal['result'][self.coin]['wallet_balance'])
+            # position['available_balance'] = float(bal['result'][self.coin]['available_balance'])
+            if self.market_type == 'inverse_perpetual':
+                if fetched['result']['side'] == 'Buy':
+                    long_pos = fetched['result']
+                    shrt_pos = {'size': 0.0, 'entry_price': 0.0, 'leverage': 0.0, 'liq_price': 0.0}
+                else:
+                    long_pos = {'size': 0.0, 'entry_price': 0.0, 'leverage': 0.0, 'liq_price': 0.0}
+                    shrt_pos = fetched['result']
+            elif self.market_type == 'inverse_futures':
+                long_pos = [e['data'] for e in fetched['result'] if e['data']['position_idx'] == 1][0]
+                shrt_pos = [e['data'] for e in fetched['result'] if e['data']['position_idx'] == 2][0]
+
 
         position['long'] = {'size': float(long_pos['size']),
                             'price': float(long_pos['entry_price']),
@@ -293,7 +304,14 @@ class Bybit(Bot):
                             'price': float(shrt_pos['entry_price']),
                             'leverage': float(shrt_pos['leverage']),
                             'liquidation_price': float(shrt_pos['liq_price'])}
-
+        position['long']['upnl'] = self.long_pnl_f(position['long']['price'], self.price,
+                                                   position['long']['size']) \
+            if position['long']['price'] != 0.0 else 0.0
+        position['shrt']['upnl'] = self.shrt_pnl_f(position['shrt']['price'], self.price,
+                                                   position['shrt']['size']) \
+            if position['shrt']['price'] != 0.0 else 0.0
+        upnl = position['long']['upnl'] + position['shrt']['upnl']
+        position['equity'] = position['wallet_balance'] + upnl
         return position
 
     async def execute_order(self, order: dict) -> dict:
@@ -387,6 +405,7 @@ class Bybit(Bot):
             print(res)
         except Exception as e:
             print(e)
+        await self.init_ema()
 
     async def start_websocket(self) -> None:
         self.stop_websocket = False
