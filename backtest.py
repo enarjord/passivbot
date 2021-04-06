@@ -1,4 +1,16 @@
 from hashlib import sha256
+import sys
+import json
+import hjson
+import numpy as np
+import pandas as pd
+import asyncio
+import os
+import gc
+import matplotlib.pyplot as plt
+#import aiomultiprocess
+import pyswarms
+from multiprocessing import Lock, shared_memory
 
 import matplotlib.pyplot as plt
 import ray
@@ -9,6 +21,13 @@ from ray.tune.suggest.hyperopt import HyperOptSearch
 
 from downloader import Downloader, prep_backtest_config
 from passivbot import *
+from bybit import create_bot as create_bot_bybit
+from binance import create_bot as create_bot_binance
+from downloader import Downloader, prep_backtest_config
+from typing import Iterator, Callable
+
+
+lock = Lock()
 
 
 def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
@@ -27,6 +46,7 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
     lines.append(f"n_days {result['n_days']}")
     lines.append(f"average_daily_gain percentage {(result['average_daily_gain'] - 1) * 100:.2f}%")
     lines.append(f"n fills {result['n_fills']}")
+    lines.append(f"n entries {result['n_entries']}")
     lines.append(f"n closes {result['n_closes']}")
     lines.append(f"n reentries {result['n_reentries']}")
     lines.append(f"n stop loss closes {result['n_stop_losses']}")
@@ -136,139 +156,178 @@ def backtest(config: dict, ticks: np.ndarray, return_fills=False, do_print=False
     long_pos_size, long_pos_price = 0.0, np.nan
     shrt_pos_size, shrt_pos_price = 0.0, np.nan
     liq_price = 0.0
-    balance = config["starting_balance"]
+    balance = config['starting_balance']
 
     pnl_plus_fees_cumsum, loss_cumsum, profit_cumsum, fee_paid_cumsum = 0.0, 0.0, 0.0, 0.0
 
-    if config["inverse"]:
-        cost_f = calc_cost_inverse
-        iter_entries = lambda balance, long_psize, long_pprice, shrt_psize, shrt_pprice, highest_bid, lowest_ask, \
-                              last_price, do_long, do_shrt: iter_entries_inverse(config["price_step"],
-                                                                                 config["qty_step"], config["min_qty"],
-                                                                                 config["min_cost"],
-                                                                                 config["ddown_factor"],
-                                                                                 config["qty_pct"], config["leverage"],
-                                                                                 config["grid_spacing"],
-                                                                                 config["grid_coefficient"], balance,
-                                                                                 long_psize, long_pprice, shrt_psize,
-                                                                                 shrt_pprice, highest_bid, lowest_ask,
-                                                                                 last_price, do_long, do_shrt)
-        iter_long_closes = lambda balance, pos_size, pos_price, lowest_ask: iter_long_closes_inverse(
-            config["price_step"], config["qty_step"], config["min_qty"], config["min_cost"], config["qty_pct"],
-            config["leverage"], config["min_markup"], config["markup_range"], config["n_close_orders"], balance,
-            pos_size, pos_price, lowest_ask)
-        iter_shrt_closes = lambda balance, pos_size, pos_price, highest_bid: iter_shrt_closes_inverse(
-            config["price_step"], config["qty_step"], config["min_qty"], config["min_cost"], config["qty_pct"],
-            config["leverage"], config["min_markup"], config["markup_range"], config["n_close_orders"], balance,
-            pos_size, pos_price, highest_bid)
+    if config['inverse']:
         long_pnl_f = calc_long_pnl_inverse
         shrt_pnl_f = calc_shrt_pnl_inverse
-        liq_price_f = lambda balance, l_psize, l_pprice, s_psize, s_pprice: calc_cross_hedge_liq_price_bybit_inverse(
-            balance, l_psize, l_pprice, s_psize, s_pprice, config["leverage"])
+        cost_f = calc_cost_inverse
+        iter_entries = lambda balance, long_psize, long_pprice, shrt_psize, shrt_pprice, \
+                              highest_bid, lowest_ask, last_price, do_long, do_shrt: \
+            iter_entries_inverse(config['price_step'], config['qty_step'], config['min_qty'],
+                                 config['min_cost'], config['ddown_factor'], config['qty_pct'],
+                                 config['leverage'], config['grid_spacing'],
+                                 config['grid_coefficient'], balance, long_psize, long_pprice,
+                                 shrt_psize, shrt_pprice, highest_bid, lowest_ask, last_price,
+                                 do_long, do_shrt)
+        iter_long_closes = lambda balance, pos_size, pos_price, lowest_ask: \
+            iter_long_closes_inverse(config['price_step'], config['qty_step'], config['min_qty'],
+                                     config['min_cost'], config['qty_pct'], config['leverage'],
+                                     config['min_markup'], config['markup_range'],
+                                     config['n_close_orders'], balance, pos_size, pos_price,
+                                     lowest_ask)
+        iter_shrt_closes = lambda balance, pos_size, pos_price, highest_bid: \
+            iter_shrt_closes_inverse(config['price_step'], config['qty_step'], config['min_qty'],
+                                     config['min_cost'], config['qty_pct'], config['leverage'],
+                                     config['min_markup'], config['markup_range'],
+                                     config['n_close_orders'], balance, pos_size, pos_price,
+                                     highest_bid)
+        if config['exchange'] == 'binance':
+            liq_price_f = lambda balance, l_psize, l_pprice, s_psize, s_pprice: \
+                calc_cross_hedge_liq_price_binance_inverse(balance, l_psize, l_pprice, s_psize, s_pprice,
+                                                           config['leverage'],
+                                                           contract_size=config['contract_size'])
+        elif config['exchange'] == 'bybit':
+            liq_price_f = lambda balance, l_psize, l_pprice, s_psize, s_pprice: \
+                calc_cross_hedge_liq_price_bybit_inverse(balance, l_psize, l_pprice, s_psize, s_pprice,
+                                                         config['leverage'])
     else:
-        iter_entries = lambda balance, long_psize, long_pprice, shrt_psize, shrt_pprice, highest_bid, lowest_ask, \
-                              last_price, do_long, do_shrt: iter_entries_linear(config["price_step"],
-                                                                                config["qty_step"], config["min_qty"],
-                                                                                config["min_cost"],
-                                                                                config["ddown_factor"],
-                                                                                config["qty_pct"], config["leverage"],
-                                                                                config["grid_spacing"],
-                                                                                config["grid_coefficient"], balance,
-                                                                                long_psize, long_pprice, shrt_psize,
-                                                                                shrt_pprice, highest_bid, lowest_ask,
-                                                                                last_price, do_long, do_shrt)
-        iter_long_closes = lambda balance, pos_size, pos_price, lowest_ask: iter_long_closes_linear(
-            config["price_step"], config["qty_step"], config["min_qty"], config["min_cost"], config["qty_pct"],
-            config["leverage"], config["min_markup"], config["markup_range"], config["n_close_orders"], balance,
-            pos_size, pos_price, lowest_ask)
-        iter_shrt_closes = lambda balance, pos_size, pos_price, highest_bid: iter_shrt_closes_linear(
-            config["price_step"], config["qty_step"], config["min_qty"], config["min_cost"], config["qty_pct"],
-            config["leverage"], config["min_markup"], config["markup_range"], config["n_close_orders"], balance,
-            pos_size, pos_price, highest_bid)
         long_pnl_f = calc_long_pnl_linear
         shrt_pnl_f = calc_shrt_pnl_linear
         cost_f = calc_cost_linear
-        liq_price_f = lambda balance, l_psize, l_pprice, s_psize, s_pprice: calc_cross_hedge_liq_price_binance_linear(
-            balance, l_psize, l_pprice, s_psize, s_pprice, config["leverage"])
+        iter_entries = lambda balance, long_psize, long_pprice, shrt_psize, shrt_pprice, \
+                              highest_bid, lowest_ask, last_price, do_long, do_shrt: \
+            iter_entries_linear(config['price_step'], config['qty_step'], config['min_qty'],
+                                config['min_cost'], config['ddown_factor'], config['qty_pct'],
+                                config['leverage'], config['grid_spacing'],
+                                config['grid_coefficient'], balance, long_psize, long_pprice,
+                                shrt_psize, shrt_pprice, highest_bid, lowest_ask, last_price,
+                                do_long, do_shrt)
+
+        iter_long_closes = lambda balance, pos_size, pos_price, lowest_ask: \
+            iter_long_closes_linear(config['price_step'], config['qty_step'], config['min_qty'],
+                                    config['min_cost'], config['qty_pct'], config['leverage'],
+                                    config['min_markup'], config['markup_range'],
+                                    config['n_close_orders'], balance, pos_size, pos_price,
+                                    lowest_ask)
+        iter_shrt_closes = lambda balance, pos_size, pos_price, highest_bid: \
+            iter_shrt_closes_linear(config['price_step'], config['qty_step'], config['min_qty'],
+                                    config['min_cost'], config['qty_pct'], config['leverage'],
+                                    config['min_markup'], config['markup_range'],
+                                    config['n_close_orders'], balance, pos_size, pos_price,
+                                    highest_bid)
+
+        if config['exchange'] == 'binance':
+            liq_price_f = lambda balance, l_psize, l_pprice, s_psize, s_pprice: \
+                calc_cross_hedge_liq_price_binance_linear(balance, l_psize, l_pprice, s_psize, s_pprice,
+                                                          config['leverage'])
+        elif config['exchange'] == 'bybit':
+            liq_price_f = lambda balance, l_psize, l_pprice, s_psize, s_pprice: \
+                calc_cross_hedge_liq_price_bybit_linear(balance, l_psize, l_pprice, s_psize, s_pprice,
+                                                        config['leverage'])
 
     prev_long_close_ts, prev_long_entry_ts, prev_long_close_price = 0, 0, 0.0
     prev_shrt_close_ts, prev_shrt_entry_ts, prev_shrt_close_price = 0, 0, 0.0
-    min_trade_delay_millis = config["latency_simulation_ms"] if "latency_simulation_ms" in config else 1000
+    min_trade_delay_millis = config['latency_simulation_ms'] \
+        if 'latency_simulation_ms' in config else 1000
 
     all_fills = []
     ob = [min(ticks[0][0], ticks[1][0]),
           max(ticks[0][0], ticks[1][0])]
     ema = ticks[0][0]
-    ema_alpha = 2 / (config["ema_span"] + 1)
+    ema_alpha = 2 / (config['ema_span'] + 1)
     ema_alpha_ = 1 - ema_alpha
     # tick tuple: (price, buyer_maker, timestamp)
     for k, tick in enumerate(ticks):
         fills = []
         if tick[1]:
             # maker buy, taker sel
-            if config["do_long"]:
+            if config['do_long']:
                 if tick[0] <= liq_price and long_pos_size > -shrt_pos_size:
                     if (liq_diff := calc_diff(liq_price, tick[0])) < 0.05:
-                        fills.append({"price": tick[0], "side": "sel", "pos_side": "long", "type": "liquidation",
-                                      "qty": -long_pos_size, "pnl": long_pnl_f(long_pos_price, tick[0], -long_pos_size),
-                                      "fee_paid": -cost_f(long_pos_size, tick[0]) * config["taker_fee"],
-                                      "long_pos_size": 0.0, "long_pos_price": np.nan, "shrt_pos_size": 0.0,
-                                      "shrt_pos_price": np.nan, "liq_diff": liq_diff})
+                        fills.append({
+                            'price': tick[0], 'side': 'sel', 'pos_side': 'long',
+                            'type': 'liquidation', 'qty': -long_pos_size,
+                            'pnl': long_pnl_f(long_pos_price, tick[0], -long_pos_size),
+                            'fee_paid': -cost_f(long_pos_size, tick[0]) * config['taker_fee'],
+                            'long_pos_size': 0.0, 'long_pos_price': np.nan,
+                            'shrt_pos_size': 0.0, 'shrt_pos_price': np.nan, 'liq_diff': liq_diff
+                        })
                 if long_pos_size == 0.0:
-                    if config["ema_span"] > 1.0:
-                        highest_bid = calc_initial_long_entry_price(config["price_step"], config["ema_spread"], ema,
-                                                                    ob[0])
+                    if config['ema_span'] > 1.0:
+                        highest_bid = calc_initial_long_entry_price(config['price_step'],
+                                                                    config['ema_spread'],
+                                                                    ema, ob[0])
                     else:
                         highest_bid = ob[0]
                 elif tick[0] < long_pos_price:
                     highest_bid = ob[0]
                 else:
                     highest_bid = 0.0
-                if highest_bid > 0.0 and tick[0] and tick[2] - prev_long_close_ts > min_trade_delay_millis:
+                if highest_bid > 0.0 and tick[0] and \
+                        tick[2] - prev_long_close_ts > min_trade_delay_millis:
                     # create or add to long pos
-                    for tpl in iter_entries(balance, long_pos_size, long_pos_price, shrt_pos_size, shrt_pos_price,
-                                            highest_bid, 0.0, tick[0], True, False):
+                    for tpl in iter_entries(balance, long_pos_size, long_pos_price, shrt_pos_size,
+                                            shrt_pos_price, highest_bid, 0.0, tick[0], True, False):
                         if tick[0] < tpl[1]:
-                            long_pos_size, long_pos_price, prev_long_entry_ts = tpl[2], tpl[3], tick[2]
-                            fills.append({"price": tpl[1], "side": "buy", "pos_side": "long",
-                                          "type": "reentry" if tpl[4] else "entry", "qty": tpl[0], "pnl": 0.0,
-                                          "fee_paid": -cost_f(tpl[0], tpl[1]) * config["maker_fee"],
-                                          "long_pos_size": long_pos_size, "long_pos_price": long_pos_price,
-                                          "shrt_pos_size": shrt_pos_size, "shrt_pos_price": shrt_pos_price,
-                                          "liq_diff": calc_diff(liq_price, tick[0])})
+                            long_pos_size, long_pos_price = tpl[2], tpl[3]
+                            prev_long_entry_ts = tick[2]
+                            fills.append({
+                                'price': tpl[1], 'side': 'buy', 'pos_side': 'long',
+                                'type': 'reentry' if tpl[4] else 'entry', 'qty': tpl[0], 'pnl': 0.0,
+                                'fee_paid': -cost_f(tpl[0], tpl[1]) * config['maker_fee'],
+                                'long_pos_size': long_pos_size, 'long_pos_price': long_pos_price,
+                                'shrt_pos_size': shrt_pos_size, 'shrt_pos_price': shrt_pos_price,
+                                'liq_diff': calc_diff(liq_price, tick[0])
+                            })
                         else:
                             break
 
-            if shrt_pos_size < 0.0 and tick[0] < shrt_pos_price and (
-                    tick[2] - prev_shrt_entry_ts > min_trade_delay_millis):
+            if shrt_pos_size < 0.0 and tick[0] < shrt_pos_price and \
+                    (tick[2] - prev_shrt_entry_ts > min_trade_delay_millis):
                 # close shrt pos
-                for qty, price, new_pos_size in iter_shrt_closes(balance, shrt_pos_size, shrt_pos_price, ob[0]):
+                for qty, price, new_pos_size in iter_shrt_closes(balance, shrt_pos_size,
+                                                                 shrt_pos_price, ob[0]):
                     if tick[0] < price:
-                        if tick[2] - prev_shrt_close_ts < min_trade_delay_millis and price >= prev_shrt_close_price:
+                        if tick[2] - prev_shrt_close_ts < min_trade_delay_millis and \
+                                price >= prev_shrt_close_price:
                             break
                         pnl = shrt_pnl_f(shrt_pos_price, price, qty)
                         shrt_pos_size, prev_shrt_close_ts = new_pos_size, tick[2]
                         if shrt_pos_size == 0.0:
                             shrt_pos_price = np.nan
-                        fills.append(
-                            {"price": price, "side": "buy", "pos_side": "shrt", "type": "close", "qty": qty, "pnl": pnl,
-                             "fee_paid": -cost_f(qty, price) * config["maker_fee"], "long_pos_size": long_pos_size,
-                             "long_pos_price": long_pos_price, "shrt_pos_size": shrt_pos_size,
-                             "shrt_pos_price": shrt_pos_price, "liq_diff": calc_diff(liq_price, tick[0])})
+                        fills.append({
+                            'price': price, 'side': 'buy', 'pos_side': 'shrt',
+                            'type': 'close', 'qty': qty,
+                            'pnl': pnl, 'fee_paid': -cost_f(qty, price) * config['maker_fee'],
+                            'long_pos_size': long_pos_size, 'long_pos_price': long_pos_price,
+                            'shrt_pos_size': shrt_pos_size, 'shrt_pos_price': shrt_pos_price,
+                            'liq_diff': calc_diff(liq_price, tick[0])
+                        })
                         prev_shrt_close_price = price
+                    #else:
+                    #    break
+                    # it would be proper to break here,
+                    # unfortunately if done, numba causes memory leak ¯\_(ツ)_/¯
             ob[0] = tick[0]
         else:
             # maker sel, taker buy
-            if config["do_shrt"]:
+            if config['do_shrt']:
                 if tick[0] >= liq_price and -shrt_pos_size > long_pos_size:
                     if (liq_diff := calc_diff(liq_price, tick[0])) < 0.1:
-                        fills.append({"price": tick[0], "side": "buy", "pos_side": "shrt", "type": "liquidation",
-                                      "qty": -shrt_pos_size, "pnl": shrt_pnl_f(shrt_pos_price, tick[0], -shrt_pos_size),
-                                      "fee_paid": -cost_f(shrt_pos_size, tick[0]) * config["taker_fee"]})
+                        fills.append({
+                            'price': tick[0], 'side': 'buy', 'pos_side': 'shrt',
+                            'type': 'liquidation', 'qty': -shrt_pos_size,
+                            'pnl': shrt_pnl_f(shrt_pos_price, tick[0], -shrt_pos_size),
+                            'fee_paid': -cost_f(shrt_pos_size, tick[0]) * config['taker_fee']
+                        })
                 if shrt_pos_size == 0.0:
-                    if config["ema_span"] > 1.0:
-                        lowest_ask = calc_initial_shrt_entry_price(config["price_step"], config["ema_spread"], ema,
-                                                                   ob[1])
+                    if config['ema_span'] > 1.0:
+                        lowest_ask = calc_initial_shrt_entry_price(
+                            config['price_step'], config['ema_spread'], ema, ob[1]
+                        )
                     else:
                         lowest_ask = ob[1]
                 elif tick[0] > shrt_pos_price:
@@ -277,78 +336,86 @@ def backtest(config: dict, ticks: np.ndarray, return_fills=False, do_print=False
                     lowest_ask = 0.0
                 if lowest_ask > 0.0 and tick[2] - prev_shrt_close_ts > min_trade_delay_millis:
                     # create or add to shrt pos
-                    for tpl in iter_entries(balance, long_pos_size, long_pos_price, shrt_pos_size, shrt_pos_price, 0.0,
-                                            lowest_ask, tick[0], False, True):
+                    for tpl in iter_entries(balance, long_pos_size, long_pos_price, shrt_pos_size,
+                                            shrt_pos_price, 0.0, lowest_ask, tick[0], False, True):
                         if tick[0] > tpl[1]:
                             shrt_pos_size, shrt_pos_price, prev_shrt_entry_ts = tpl[2], tpl[3], tick[2]
-                            fills.append({"price": tpl[1], "side": "sel", "pos_side": "shrt",
-                                          "type": "reentry" if tpl[4] else "entry", "qty": tpl[0], "pnl": 0.0,
-                                          "fee_paid": -cost_f(tpl[0], tpl[1]) * config["maker_fee"],
-                                          "long_pos_size": long_pos_size, "long_pos_price": long_pos_price,
-                                          "shrt_pos_size": shrt_pos_size, "shrt_pos_price": shrt_pos_price,
-                                          "liq_diff": calc_diff(liq_price, tick[0])})
+                            fills.append({
+                                'price': tpl[1], 'side': 'sel', 'pos_side': 'shrt',
+                                'type': 'reentry' if tpl[4] else 'entry', 'qty': tpl[0], 'pnl': 0.0,
+                                'fee_paid': -cost_f(tpl[0], tpl[1]) * config['maker_fee'],
+                                'long_pos_size': long_pos_size, 'long_pos_price': long_pos_price,
+                                'shrt_pos_size': shrt_pos_size, 'shrt_pos_price': shrt_pos_price,
+                                'liq_diff': calc_diff(liq_price, tick[0])
+                            })
                         else:
                             break
-            if long_pos_size > 0.0 and tick[0] > long_pos_price and (
-                    tick[2] - prev_long_entry_ts > min_trade_delay_millis):
+            if long_pos_size > 0.0 and tick[0] > long_pos_price and \
+                    (tick[2] - prev_long_entry_ts > min_trade_delay_millis):
                 # close long pos
-                for qty, price, new_pos_size in iter_long_closes(balance, long_pos_size, long_pos_price, ob[1]):
+                for qty, price, new_pos_size in iter_long_closes(balance, long_pos_size,
+                                                                 long_pos_price, ob[1]):
                     if tick[0] > price:
-                        if tick[2] - prev_long_close_ts < min_trade_delay_millis and price <= prev_long_close_price:
+                        if tick[2] - prev_long_close_ts < min_trade_delay_millis and \
+                                price <= prev_long_close_price:
                             break
                         pnl = long_pnl_f(long_pos_price, price, qty)
                         long_pos_size, prev_long_close_ts = new_pos_size, tick[2]
                         if long_pos_size == 0.0:
                             long_pos_price = np.nan
-                        fills.append(
-                            {"price": price, "side": "sel", "pos_side": "long", "type": "close", "qty": qty, "pnl": pnl,
-                             "fee_paid": -cost_f(qty, price) * config["maker_fee"], "long_pos_size": long_pos_size,
-                             "long_pos_price": long_pos_price, "shrt_pos_size": shrt_pos_size,
-                             "shrt_pos_price": shrt_pos_price, "liq_diff": calc_diff(liq_price, tick[0])})
+                        fills.append({
+                            'price': price, 'side': 'sel', 'pos_side': 'long',
+                            'type': 'close', 'qty': qty,
+                            'pnl': pnl, 'fee_paid': -cost_f(qty, price) * config['maker_fee'],
+                            'long_pos_size': long_pos_size, 'long_pos_price': long_pos_price,
+                            'shrt_pos_size': shrt_pos_size, 'shrt_pos_price': shrt_pos_price,
+                            'liq_diff': calc_diff(liq_price, tick[0])
+                        })
                         prev_long_close_price = price
             ob[1] = tick[0]
         ema = calc_ema(ema_alpha, ema_alpha_, ema, tick[0])
         if len(fills) > 0:
             for fill in fills:
-                balance += fill["pnl"] + fill["fee_paid"]
-                liq_price = liq_price_f(balance, long_pos_size, long_pos_price, shrt_pos_size, shrt_pos_price)
-                ms_since_long_pos_change = tick[2] - prev_long_fill_ts if (prev_long_fill_ts := max(prev_long_close_ts,
-                                                                                                    prev_long_entry_ts)) > 0 else 0
-                ms_since_shrt_pos_change = tick[2] - prev_shrt_fill_ts if (prev_shrt_fill_ts := max(prev_shrt_close_ts,
-                                                                                                    prev_shrt_entry_ts)) > 0 else 0
+                balance += fill['pnl'] + fill['fee_paid']
+                liq_price = liq_price_f(balance, long_pos_size, long_pos_price,
+                                        shrt_pos_size, shrt_pos_price)
+                ms_since_long_pos_change = tick[2] - prev_long_fill_ts \
+                    if (prev_long_fill_ts := max(prev_long_close_ts, prev_long_entry_ts)) > 0 else 0
+                ms_since_shrt_pos_change = tick[2] - prev_shrt_fill_ts \
+                    if (prev_shrt_fill_ts := max(prev_shrt_close_ts, prev_shrt_entry_ts)) > 0 else 0
 
-                if fill["type"].startswith("stop_loss"):
-                    loss_cumsum += fill["pnl"]
+                if fill['type'].startswith('stop_loss'):
+                    loss_cumsum += fill['pnl']
                 else:
-                    profit_cumsum += fill["pnl"]
-                fee_paid_cumsum += fill["fee_paid"]
-                pnl_plus_fees_cumsum += fill["pnl"] + fill["fee_paid"]
+                    profit_cumsum += fill['pnl']
+                fee_paid_cumsum += fill['fee_paid']
+                pnl_plus_fees_cumsum += fill['pnl'] + fill['fee_paid']
                 upnl_l = x if (x := long_pnl_f(long_pos_price, tick[0], long_pos_size)) == x else 0.0
                 upnl_s = y if (y := shrt_pnl_f(shrt_pos_price, tick[0], shrt_pos_size)) == y else 0.0
-                fill["equity"] = balance + upnl_l + upnl_s
-                fill["pnl_plus_fees_cumsum"] = pnl_plus_fees_cumsum
-                fill["loss_cumsum"] = loss_cumsum
-                fill["profit_cumsum"] = profit_cumsum
-                fill["fee_paid_cumsum"] = fee_paid_cumsum
+                fill['equity'] = balance + upnl_l + upnl_s
+                fill['pnl_plus_fees_cumsum'] = pnl_plus_fees_cumsum
+                fill['loss_cumsum'] = loss_cumsum
+                fill['profit_cumsum'] = profit_cumsum
+                fill['fee_paid_cumsum'] = fee_paid_cumsum
 
-                fill["balance"] = balance
-                fill["liq_price"] = liq_price
-                fill["timestamp"] = tick[2]
-                fill["trade_id"] = k
-                fill["progress"] = k / len(ticks)
-                fill["drawdown"] = calc_diff(fill["balance"], fill["equity"])
-                fill["gain"] = fill["equity"] / config["starting_balance"]
-                fill["n_days"] = (tick[2] - ticks[0][2]) / (1000 * 60 * 60 * 24)
+                fill['balance'] = balance
+                fill['liq_price'] = liq_price
+                fill['timestamp'] = tick[2]
+                fill['trade_id'] = k
+                fill['progress'] = k / len(ticks)
+                fill['drawdown'] = calc_diff(fill['balance'], fill['equity'])
+                fill['gain'] = fill['equity'] / config['starting_balance']
+                fill['n_days'] = (tick[2] - ticks[0][2]) / (1000 * 60 * 60 * 24)
                 try:
-                    fill["average_daily_gain"] = fill["gain"] ** (1 / fill["n_days"]) if (
-                            fill["n_days"] > 0.0 and fill["gain"] > 0.0) else 0.0
+                    fill['average_daily_gain'] = fill['gain'] ** (1 / fill['n_days']) \
+                        if (fill['n_days'] > 0.5 and fill['gain'] > 0.0) else 0.0
                 except:
-                    fill["average_daily_gain"] = 0.0
-                fill["hours_since_long_pos_change"] = (lc := ms_since_long_pos_change / (1000 * 60 * 60))
-                fill["hours_since_shrt_pos_change"] = (sc := ms_since_shrt_pos_change / (1000 * 60 * 60))
-                fill["hours_since_pos_change_max"] = max(lc, sc)
+                    fill['average_daily_gain'] = 0.0
+                fill['hours_since_long_pos_change'] = (lc := ms_since_long_pos_change / (1000 * 60 * 60))
+                fill['hours_since_shrt_pos_change'] = (sc := ms_since_shrt_pos_change / (1000 * 60 * 60))
+                fill['hours_since_pos_change_max'] = max(lc, sc)
                 all_fills.append(fill)
-                if balance <= 0.0 or fill["type"] == "liquidation":
+                if balance <= 0.0 or fill['type'] == 'liquidation':
                     if return_fills:
                         return all_fills, False
                     else:
@@ -361,6 +428,7 @@ def backtest(config: dict, ticks: np.ndarray, return_fills=False, do_print=False
                 line = f"\r{all_fills[-1]['progress']:.3f} "
                 line += f"adg {all_fills[-1]['average_daily_gain']:.4f} "
                 print(line, end=' ')
+            # print(f"\r{k / len(ticks):.2f} ", end=' ')
     if return_fills:
         return all_fills, True
     else:
@@ -420,6 +488,7 @@ def prepare_result(fills: list, ticks: np.ndarray, do_long: bool, do_shrt: bool)
             "average_daily_gain": 0,
             "closest_liq": 0,
             "n_fills": 0,
+            "n_entries": 0,
             "n_closes": 0,
             "n_reentries": 0,
             "n_stop_losses": 0,
@@ -441,6 +510,7 @@ def prepare_result(fills: list, ticks: np.ndarray, do_long: bool, do_shrt: bool)
             "average_daily_gain": gain ** (1 / n_days) if gain > 0.0 else 0.0,
             "closest_liq": fdf.liq_diff.min(),
             "n_fills": len(fills),
+            'n_entries': len(fdf[fdf.type.str.contains('entry')]),
             "n_closes": len(fdf[fdf.type == "close"]),
             "n_reentries": len(fdf[fdf.type == "reentry"]),
             "n_stop_losses": len(fdf[fdf.type.str.startswith("stop_loss")]),

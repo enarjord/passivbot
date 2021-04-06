@@ -1,4 +1,3 @@
-import ccxt.async_support as ccxt_async
 import json
 import os
 import datetime
@@ -122,6 +121,11 @@ def calc_max_order_qty_inverse(leverage: float,
                                shrt_pos_size: float,
                                price: float) -> float:
     return calc_max_pos_size_inverse(leverage, balance, price) - (long_pos_size + abs(shrt_pos_size))
+
+
+def calc_margin_available_inverse(balance, long_pos_size, long_pos_price, shrt_pos_size, shrt_pos_price, last_price):
+    # unfinished
+    return balance - calc_cost_inverse(long_pos_size, last_price)
 
 
 @njit
@@ -810,25 +814,22 @@ def make_get_filepath(filepath: str) -> str:
 
 def load_key_secret(exchange: str, user: str) -> (str, str):
     try:
-        return json.load(open(f'api_key_secrets/{exchange}/{user}.json'))
-    except(FileNotFoundError):
-        print(f'\n\nPlease specify {exchange} API key/secret in file\n\napi_key_secre' + \
-              f'ts/{exchange}/{user}.json\n\nformatted thus:\n["Ktnks95U...", "yDKRQqA6..."]\n\n')
-        raise Exception('api key secret missing')
+        keyfile = json.load(open('api-keys.json'))
+        # Checks that the user exists, and it is for the correct exchange
+        if user in keyfile and keyfile[user]["exchange"] == exchange:
 
+            # If we need to get the `market` key:
+            # market = keyfile[user]["market"]
+            # print("The Market Type is " + str(market))
 
-def init_ccxt(exchange: str = None, user: str = None):
-    if user is None:
-        cc = getattr(ccxt_async, exchange)
-    try:
-        cc = getattr(ccxt_async, exchange)({'apiKey': (ks := load_key_secret(exchange, user))[0],
-                                            'secret': ks[1]})
-    except Exception as e:
-        print('error init ccxt', e)
-        cc = getattr(ccxt_async, exchange)
-    #print('ccxt enableRateLimit true')
-    #cc.enableRateLimit = True
-    return cc
+            keyList = [str(keyfile[user]["key"]), str(keyfile[user]["secret"])]
+
+            return keyList
+        elif user not in keyfile or keyfile[user]["exchange"] != exchange:
+            print("Looks like the keys aren't configured yet, or you entered the wrong username!")
+    except FileNotFoundError:
+        print("File Not Found!")
+        raise Exception('API KeyFile Missing!')
 
 
 def print_(args, r=False, n=False):
@@ -845,12 +846,7 @@ def print_(args, r=False, n=False):
 
 
 def load_live_settings(exchange: str, user: str = 'default', do_print=True) -> dict:
-    fpath = f'live_settings/{exchange}/'
-    try:
-        settings = json.load(open(f'{fpath}{user}.json'))
-    except FileNotFoundError:
-        print_([f'settings for user {user} not found, using default settings'])
-        settings = json.load(open(f'{fpath}default.json'))
+    settings = json.load(open(f'live_configs/{exchange}_default.json'))
     if do_print:
         print('\nloaded settings:')
         print(json.dumps(settings, indent=4))
@@ -967,6 +963,14 @@ class Bot:
         try:
             position, _ = await asyncio.gather(self.fetch_position(),
                                                self.update_open_orders())
+            position['used_margin'] = \
+                ((self.cost_f(position['long']['size'], position['long']['price'])
+                  if position['long']['price'] else 0.0) +
+                 (self.cost_f(position['shrt']['size'], position['shrt']['price'])
+                  if position['shrt']['price'] else 0.0)) / self.leverage
+            position['available_margin'] = position['equity'] - position['used_margin']
+            position['long']['liq_diff'] = calc_diff(position['long']['liquidation_price'], self.price)
+            position['shrt']['liq_diff'] = calc_diff(position['shrt']['liquidation_price'], self.price)
             if self.position != position:
                 self.dump_log({'log_type': 'position', 'data': position})
             self.position = position
@@ -989,8 +993,11 @@ class Bot:
             try:
                 o = await c
                 created_orders.append(o)
-                print_([' created order', o['symbol'], o['side'], o['position_side'], o['qty'],
-                        o['price']], n=True)
+                if 'side' in o:
+                    print_([' created order', o['symbol'], o['side'], o['position_side'], o['qty'],
+                            o['price']], n=True)
+                else:
+                    print_(['error creating order', o], n=True)
                 self.dump_log({'log_type': 'create_order', 'data': o})
             except Exception as e:
                 print_(['error creating order b', oc, c.exception(), e], n=True)
@@ -1015,8 +1022,11 @@ class Bot:
             try:
                 o = await c
                 canceled_orders.append(o)
-                print_(['cancelled order', o['symbol'], o['side'], o['position_side'], o['qty'],
-                        o['price']], n=True)
+                if 'side' in o:
+                    print_(['cancelled order', o['symbol'], o['side'], o['position_side'], o['qty'],
+                            o['price']], n=True)
+                else:
+                    print_(['error cancelling order', o], n=True)
                 self.dump_log({'log_type': 'cancel_order', 'data': o})
             except Exception as e:
                 print_(['error cancelling order b', oc, c.exception(), e], n=True)
@@ -1188,3 +1198,47 @@ class Bot:
 async def start_bot(bot):
     await bot.start_websocket()
 
+
+async def create_binance_bot(user: str, settings: str):
+    from binance import BinanceBot
+    bot = BinanceBot(user, settings)
+    await bot._init()
+    return bot
+
+
+async def create_bybit_bot(user: str, settings: str):
+    from bybit import Bybit
+    bot = Bybit(user, settings)
+    await bot._init()
+    return bot
+
+
+async def main() -> None:
+    try:
+        accounts = json.load(open('api-keys.json'))
+    except Exception as e:
+        print(e, 'failed to load api-keys.json file')
+        return
+    if sys.argv[1] in accounts:
+        account = accounts[sys.argv[1]]
+    else:
+        print('unrecognized account name', sys.argv[1])
+        return
+    try:
+        config = json.load(open(sys.argv[3]))
+    except Exception as e:
+        print(e, 'failed to load config', sys.argv[3])
+        return
+    config['symbol'] = sys.argv[2]
+
+    if account['exchange'] == 'binance':
+        bot = await create_binance_bot(sys.argv[1], config)
+    elif account['exchange'] == 'bybit':
+        bot = await create_bybit_bot(sys.argv[1], config)
+    else:
+        raise Exception('unknown exchange', account['exchange'])
+    await start_bot(bot)
+
+
+if __name__ == '__main__':
+    asyncio.run(main())

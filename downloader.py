@@ -202,8 +202,6 @@ class Downloader:
         Downloads any missing data based on the specified time frame.
         @return:
         """
-        earliest = sys.maxsize
-        latest = 0
         if "historical_data_path" in self.backtest_config and self.backtest_config["historical_data_path"]:
             self.filepath = make_get_filepath(
                 os.path.join(self.backtest_config["historical_data_path"], "historical_data",
@@ -228,6 +226,7 @@ class Downloader:
 
         filenames = self.get_filenames()
         mod_files = []
+        highest_id = 0
         for f in filenames:
             try:
                 first_time = int(f.split("_")[2])
@@ -241,12 +240,17 @@ class Downloader:
                 print_(['Validating file', f])
                 missing, df, gaps = self.validate_dataframe(df)
                 exists = False
-                if not gaps.empty and f != filenames[-1]:
+                if gaps.empty:
+                    first_id = df["trade_id"].iloc[0]
+                else:
                     first_id = df["trade_id"].iloc[0] if df["trade_id"].iloc[0] < gaps["start"].iloc[0] else \
                         gaps["start"].iloc[0]
+                if not gaps.empty and (f != filenames[-1] or str(first_id - first_id % 100000) not in f):
+                    last_id = df["trade_id"].iloc[-1]
                     for i in filenames:
-                        if str(first_id - first_id % 100000) in i and str(
-                                first_id - first_id % 100000 + 99999) in i and first_id != 1 and i != f:
+                        if str(first_id - first_id % 100000) in i and (str(
+                                first_id - first_id % 100000 + 99999) in i or str(
+                            highest_id) in i or highest_id > last_id) and first_id != 1 and i != f:
                             exists = True
                             break
                 if missing and df["timestamp"].iloc[-1] > self.start_time and not exists:
@@ -275,15 +279,13 @@ class Downloader:
                             except Exception:
                                 print("Failed to fetch or transform...")
                             await asyncio.sleep(0.75)
+                if not df.empty:
+                    if df["trade_id"].iloc[-1] > highest_id:
+                        highest_id = df["trade_id"].iloc[-1]
                 if not exists:
                     tf = df[df["trade_id"].mod(100000) == 0]
                     if len(tf) > 1:
                         df = df[:tf.index[-1]]
-                    if not df.empty:
-                        if df["timestamp"].iloc[0] < earliest:
-                            earliest = df["timestamp"].iloc[0]
-                        if df["timestamp"].iloc[-1] > latest:
-                            latest = df["timestamp"].iloc[-1]
                     nf = self.save_dataframe(df, f, missing)
                     mod_files.append(nf)
                 elif df["trade_id"].iloc[0] != 1:
@@ -654,12 +656,13 @@ async def prep_backtest_config(config_name: str):
         if key in backtest_config['ranges']:
             backtest_config['ranges'][key][1] = min(1.0, backtest_config['ranges'][key][1])
 
-    backtest_config['ranges']['leverage'][1] = \
-        min(backtest_config['ranges']['leverage'][1],
-            backtest_config['max_leverage'])
-    backtest_config['ranges']['leverage'][0] = \
-        min(backtest_config['ranges']['leverage'][0],
-            backtest_config['ranges']['leverage'][1])
+    if all('leverage' in x for x in [backtest_config, backtest_config['ranges']]):
+        backtest_config['ranges']['leverage'][1] = \
+            min(backtest_config['ranges']['leverage'][1],
+                backtest_config['max_leverage'])
+        backtest_config['ranges']['leverage'][0] = \
+            min(backtest_config['ranges']['leverage'][0],
+                backtest_config['ranges']['leverage'][1])
 
     backtest_config['session_dirpath'] = session_dirpath
 

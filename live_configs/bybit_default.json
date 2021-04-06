@@ -1,0 +1,17 @@
+{
+    "config_name": "BTCUSDU21_session_001_with_ema",
+    "logging_level": 0,
+    "ddown_factor": 0.9492,
+    "qty_pct": 0.03468,
+    "leverage": 41.0,
+    "n_entry_orders": 8,
+    "n_close_orders": 16.0,
+    "grid_spacing": 0.01259,
+    "grid_coefficient": 85.1389,
+    "min_markup": 0.007803,
+    "markup_range": 0.02972,
+    "do_long": true,
+    "do_shrt": true,
+    "ema_span": 150673.0,
+    "ema_spread": 0.01615
+}

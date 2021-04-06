@@ -1,6 +1,6 @@
 # passivbot_futures
 
-**Version: 3.3.1**
+**Version: 3.3.2**
 
 trading bot running on bybit and binance futures using hedge mode when possible
 
@@ -73,6 +73,12 @@ change log
 2021-04-01 v3.3.1
 - binance inverse futures coin margined markets now supported
 
+2021-04-05 v3.3.2
+- changed api key format
+- changed name of live_settings dir to live_configs, removed subdirs binance/bybit
+- changed how to use start_bot.py.  see updated startup instructions
+- improved backtester multiprocessing memory usage
+
 
 see `changelog.txt` for earlier changes
 
@@ -88,17 +94,13 @@ usage:
 
 supports exchanges bybit inverse futures and binance usdt futures
 
-add api key and secret as json file in dir `api_key_secret/{exchange}/your_user_name.json`
+add api key and secret in file `api-keys.json`
 
+run in terminal: `python3 start_bot.py {account_name} {symbol} {path/to/config.json}`
 
-formatted like this: `["KEY", "SECRET"]`
+for example
 
-
-make a copy of `live_settings/{exchange}/default.json`
-
-rename the copy `your_user_name.json` and make desired changes
-
-run in terminal: `python3 start_bot.py exchange your_user_name`
+`python3 start_bot.py binance_01 XMRUSDT live_configs/binance_default.json`
 
 run in docker: modify command with exchange and user_name in docker-compose and start with `docker-compose up -d` (-d for background run).  all code and files generated are in original git folder.
 
