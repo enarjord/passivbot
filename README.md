@@ -92,7 +92,7 @@ released freely -- anybody may copy, redistribute, modify, use for commercial, n
 
 usage:
 
-supports exchanges bybit inverse futures and binance usdt futures
+supports exchanges bybit futures and binance futures, using hedge mode when supported
 
 add api key and secret in file `api-keys.json`
 
