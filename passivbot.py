@@ -123,6 +123,11 @@ def calc_max_order_qty_inverse(leverage: float,
     return calc_max_pos_size_inverse(leverage, balance, price) - (long_pos_size + abs(shrt_pos_size))
 
 
+def calc_margin_available_inverse(balance, long_pos_size, long_pos_price, shrt_pos_size, shrt_pos_price, last_price):
+    # unfinished
+    return balance - calc_cost_inverse(long_pos_size, last_price)
+
+
 @njit
 def calc_min_order_qty_inverse(qty_step: float, min_qty: float, min_cost: float,
                                qty_pct: float, leverage: float, balance: float,
@@ -958,6 +963,14 @@ class Bot:
         try:
             position, _ = await asyncio.gather(self.fetch_position(),
                                                self.update_open_orders())
+            position['used_margin'] = \
+                ((self.cost_f(position['long']['size'], position['long']['price'])
+                  if position['long']['price'] else 0.0) +
+                 (self.cost_f(position['shrt']['size'], position['shrt']['price'])
+                  if position['shrt']['price'] else 0.0)) / self.leverage
+            position['available_margin'] = position['equity'] - position['used_margin']
+            position['long']['liq_diff'] = calc_diff(position['long']['liquidation_price'], self.price)
+            position['shrt']['liq_diff'] = calc_diff(position['shrt']['liquidation_price'], self.price)
             if self.position != position:
                 self.dump_log({'log_type': 'position', 'data': position})
             self.position = position
