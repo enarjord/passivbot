@@ -1,13 +1,13 @@
 from hashlib import sha256
 
 import matplotlib.pyplot as plt
+import nevergrad as ng
 import ray
 from ray import tune
 from ray.tune.schedulers import AsyncHyperBandScheduler
 from ray.tune.suggest import ConcurrencyLimiter
 # from ray.tune.suggest.hyperopt import HyperOptSearch
 from ray.tune.suggest.nevergrad import NevergradSearch
-import nevergrad as ng
 
 from downloader import Downloader, prep_backtest_config
 from passivbot import *
@@ -518,58 +518,13 @@ def objective_function(result: dict, liq_cap: float, hours_stuck_cap: int, n_dai
 
 
 def create_config(backtest_config: dict) -> dict:
-    config = {}
-    config['folds'] = backtest_config['folds']
-    config['starting_balance'] = backtest_config['starting_balance']
-    config['inverse'] = backtest_config['inverse']
-    config['price_step'] = backtest_config['price_step']
-    config['qty_step'] = backtest_config['qty_step']
-    config['min_qty'] = backtest_config['min_qty']
-    config['min_cost'] = backtest_config['min_cost']
-    if 'latency_simulation_ms' in backtest_config:
-        config['latency_simulation_ms'] = backtest_config['latency_simulation_ms']
-    config['do_long'] = backtest_config['do_long']
-    config['do_shrt'] = backtest_config['do_shrt']
-    config['taker_fee'] = backtest_config['taker_fee']
-    config['maker_fee'] = backtest_config['maker_fee']
-    config['desired_minimum_liquidation_distance'] = backtest_config['desired_minimum_liquidation_distance']
-    config['desired_max_hours_stuck'] = backtest_config['desired_max_hours_stuck']
-    config['desired_minimum_daily_fills'] = backtest_config['desired_minimum_daily_fills']
-    config['leverage'] = backtest_config['leverage']
-    config['n_close_orders'] = backtest_config['n_close_orders']
-    config['exchange'] = backtest_config['exchange']
-
-    config['qty_pct'] = tune.quniform(backtest_config['ranges']['qty_pct'][0],
-                                      backtest_config['ranges']['qty_pct'][1],
-                                      backtest_config['ranges']['qty_pct'][2])
-    config['ddown_factor'] = tune.quniform(backtest_config['ranges']['ddown_factor'][0],
-                                           backtest_config['ranges']['ddown_factor'][1],
-                                           backtest_config['ranges']['ddown_factor'][2])
-    config['grid_coefficient'] = tune.quniform(backtest_config['ranges']['grid_coefficient'][0],
-                                               backtest_config['ranges']['grid_coefficient'][1],
-                                               backtest_config['ranges']['grid_coefficient'][2])
-    config['grid_spacing'] = tune.quniform(backtest_config['ranges']['grid_spacing'][0],
-                                           backtest_config['ranges']['grid_spacing'][1],
-                                           backtest_config['ranges']['grid_spacing'][2])
-    config['markup_range'] = tune.quniform(backtest_config['ranges']['markup_range'][0],
-                                           backtest_config['ranges']['markup_range'][1],
-                                           backtest_config['ranges']['markup_range'][2])
-    config['min_markup'] = tune.quniform(backtest_config['ranges']['min_markup'][0],
-                                         backtest_config['ranges']['min_markup'][1],
-                                         backtest_config['ranges']['min_markup'][2])
-    config['ema_span'] = tune.quniform(backtest_config['ranges']['ema_span'][0],
-                                       backtest_config['ranges']['ema_span'][1],
-                                       backtest_config['ranges']['ema_span'][2])
-    config['ema_spread'] = tune.quniform(backtest_config['ranges']['ema_spread'][0],
-                                         backtest_config['ranges']['ema_spread'][1],
-                                         backtest_config['ranges']['ema_spread'][2])
-
-    # config['leverage'] = tune.qrandint(backtest_config['ranges']['leverage'][0],
-    #                                    backtest_config['ranges']['leverage'][1],
-    #                                    backtest_config['ranges']['leverage'][2])
-    # config['n_close_orders'] = tune.qrandint(backtest_config['ranges']['n_close_orders'][0],
-    #                                          backtest_config['ranges']['n_close_orders'][1],
-    #                                          backtest_config['ranges']['n_close_orders'][2])
+    config = {k: backtest_config[k] for k in backtest_config
+              if k not in {'session_name', 'user', 'symbol', 'start_date', 'end_date', 'ranges'}}
+    for k in backtest_config['ranges']:
+        config[k] = tune.quniform(*[backtest_config['ranges'][k][i] for i in range(3)])
+        config[k] = tune.choice(np.arange(backtest_config['ranges'][k][0],
+                                          backtest_config['ranges'][k][1] + backtest_config['ranges'][k][2],
+                                          backtest_config['ranges'][k][2]))
     return config
 
 
