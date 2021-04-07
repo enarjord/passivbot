@@ -84,8 +84,8 @@ async def fetch_trades(cc, symbol: str, from_id: int = None) -> [dict]:
         params['from'] = from_id
     fetched_trades = await cc.v2_public_get_trading_records(params=params)
     trades = [{'trade_id': int(t['id']),
-               'price': t['price'],
-               'qty': t['qty'],
+               'price': float(t['price']),
+               'qty': float(t['qty']),
                'timestamp': date_to_ts(t['time'][:-1]),
                'is_buyer_maker': t['side'] == 'Sell'} for t in fetched_trades['result']]
     print_(['fetched trades', symbol, trades[0]['trade_id'],
