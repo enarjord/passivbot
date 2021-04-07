@@ -521,17 +521,14 @@ def create_config(backtest_config: dict) -> dict:
     config = {k: backtest_config[k] for k in backtest_config
               if k not in {'session_name', 'user', 'symbol', 'start_date', 'end_date', 'ranges'}}
     for k in backtest_config['ranges']:
-        config[k] = tune.quniform(*[backtest_config['ranges'][k][i] for i in range(3)])
-        config[k] = tune.choice(np.arange(backtest_config['ranges'][k][0],
-                                          backtest_config['ranges'][k][1] + backtest_config['ranges'][k][2],
-                                          backtest_config['ranges'][k][2]))
+        config[k] = tune.uniform(*[backtest_config['ranges'][k][i] for i in range(2)])
     return config
 
 
 def clean_start_config(start_config: dict, backtest_config: dict) -> dict:
     clean_start = {}
     for k, v in start_config.items():
-        if k in backtest_config:
+        if k in backtest_config['ranges']:
             clean_start[k] = v
     return clean_start
 
@@ -577,7 +574,7 @@ def backtest_tune(ticks: np.ndarray, backtest_config: dict, current_best: dict =
         print('Parameter num_cpus should be defined in the configuration. Defaulting to 2.')
     current_best_params = []
     if current_best:
-        current_best = clean_start_config(current_best, config)
+        current_best = clean_start_config(current_best, backtest_config)
         current_best_params.append(current_best)
     initial_points = max(1, min(int(iters / 10), 20))
 
