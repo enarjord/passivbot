@@ -273,17 +273,20 @@ class BybitBot(Bot):
                 price_changed = False
                 try:
                     for e in data['data']:
-                        if e['price'] != self.price:
+                        price = float(e['price'])
+                        timestamp = int(e['trade_time_ms'])
+                        qty = float(e['size'])
+                        if price != self.price:
                             if e['side'] == 'Buy':
-                                self.ob[1] = e['price']
+                                self.ob[1] = price
                             elif e['side'] == 'Sell':
-                                self.ob[0] = e['price']
-                            self.price = e['price']
+                                self.ob[0] = price
+                            self.price = price
                             price_changed = True
-                            self.update_indicators({'timestamp': e['trade_time_ms'],
-                                                    'price': e['price'],
+                            self.update_indicators({'timestamp': timestamp,
+                                                    'price': price,
                                                     'side': e['side'].lower(),
-                                                    'qty': e['size']})
+                                                    'qty': qty})
                 except Exception as e:
                     if 'success' not in data:
                         print('error in websocket streamed data', e)
