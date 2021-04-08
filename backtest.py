@@ -534,7 +534,8 @@ class RF:
                     f.write(json.dumps(st) + '\n')
         finally:
             lock.release()
-        return np.array([-score_func(r) for r in rs])
+        return np.array([-score_func(r, self.bc['minimum_liquidation_distance'],
+                                     self.bc['maximum_daily_entries']) for r in rs])
 
 
 def backtest_pso(ticks, bc):
@@ -632,7 +633,7 @@ async def custom_tune(ticks, bc):
             if workers[k] is not None and workers[k].done():
                 # worker finished, process results
                 result, fdf = await workers[k]
-                score = score_func(result)
+                score = score_func(result, bc['minimum_liquidation_distance'], bc['maximum_daily_entries'])
                 result = {**result, **{'score': score}}
                 results[result['key']] = result
                 with open(results_fp, 'a') as f:
@@ -663,9 +664,7 @@ async def custom_tune(ticks, bc):
     print('finished')
 
 
-def score_func(r) -> float:
-    liq_cap = 0.3
-    n_daily_entries_cap = 10.0
+def score_func(r: dict, liq_cap: float, n_daily_entries_cap: int) -> float:
     try:
         return (r['average_daily_gain'] *
                 min(1.0, (r['n_entries'] / r['n_days']) / n_daily_entries_cap) *
