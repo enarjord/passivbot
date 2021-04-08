@@ -552,7 +552,10 @@ def backtest_pso(ticks, bc):
     iters = bc['iters']
     options = bc['options']
     n_particles = bc['n_particles']
-    n_cpus = os.cpu_count()
+    if 'num_cpus' in bc:
+        n_cpus = bc['num_cpus']
+    else:
+        n_cpus = os.cpu_count()
     optimizer = pyswarms.single.GlobalBestPSO(n_particles=n_particles, dimensions=len(bounds[0]),
                                               options=options, bounds=bounds)
     stats = optimizer.optimize(rf.rf, iters=iters, n_processes=n_cpus)

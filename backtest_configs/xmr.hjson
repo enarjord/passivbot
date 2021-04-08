@@ -13,6 +13,7 @@
   
   # pso options
   iters: 100
+  num_cpus: 4
   options: {"c1": 1.4962, "c2": 1.4962, "w": 0.7298}
   n_particles: 24
 
