@@ -534,7 +534,8 @@ class RF:
                     f.write(json.dumps(st) + '\n')
         finally:
             lock.release()
-        return np.array([-score_func(r) for r in rs])
+        return np.array([-score_func(r, self.bc['minimum_liquidation_distance'],
+                                     self.bc['maximum_daily_entries']) for r in rs])
 
 
 def backtest_pso(ticks, bc):
@@ -551,7 +552,10 @@ def backtest_pso(ticks, bc):
     iters = bc['iters']
     options = bc['options']
     n_particles = bc['n_particles']
-    n_cpus = os.cpu_count()
+    if 'num_cpus' in bc:
+        n_cpus = bc['num_cpus']
+    else:
+        n_cpus = os.cpu_count()
     optimizer = pyswarms.single.GlobalBestPSO(n_particles=n_particles, dimensions=len(bounds[0]),
                                               options=options, bounds=bounds)
     stats = optimizer.optimize(rf.rf, iters=iters, n_processes=n_cpus)
@@ -632,7 +636,7 @@ async def custom_tune(ticks, bc):
             if workers[k] is not None and workers[k].done():
                 # worker finished, process results
                 result, fdf = await workers[k]
-                score = score_func(result)
+                score = score_func(result, bc['minimum_liquidation_distance'], bc['maximum_daily_entries'])
                 result = {**result, **{'score': score}}
                 results[result['key']] = result
                 with open(results_fp, 'a') as f:
@@ -663,9 +667,7 @@ async def custom_tune(ticks, bc):
     print('finished')
 
 
-def score_func(r) -> float:
-    liq_cap = 0.3
-    n_daily_entries_cap = 10.0
+def score_func(r: dict, liq_cap: float, n_daily_entries_cap: int) -> float:
     try:
         return (r['average_daily_gain'] *
                 min(1.0, (r['n_entries'] / r['n_days']) / n_daily_entries_cap) *
