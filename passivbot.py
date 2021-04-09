@@ -239,8 +239,11 @@ def calc_next_long_entry_inverse(price_step: float,
         if price <= 0.0:
             return 0.0, np.nan, long_psize, long_pprice, 1
         max_order_qty = round_dn(available_margin * price * leverage, qty_step)
+        '''
         min_long_order_qty = calc_min_order_qty_inverse(qty_step, min_qty, min_cost, qty_pct,
                                                         leverage, balance, price)
+        '''
+        min_long_order_qty = calc_min_qty_inverse(qty_step, min_qty, min_cost, price)
         long_qty = calc_reentry_qty(qty_step, ddown_factor, min_long_order_qty,
                                     max_order_qty,
                                     long_psize)
@@ -283,8 +286,12 @@ def calc_next_shrt_entry_inverse(price_step: float,
         price = max(round_(lowest_ask, price_step),
                     calc_shrt_reentry_price(price_step, grid_spacing, grid_coefficient,
                                             balance, pos_margin, shrt_pprice))
+        '''
         min_order_qty = -calc_min_order_qty_inverse(qty_step, min_qty, min_cost, qty_pct,
                                                     leverage, balance, price)
+        '''
+        min_order_qty = -calc_min_qty_linear(qty_step, min_qty, min_cost, price)
+
         max_order_qty = round_dn(available_margin * price * leverage, qty_step)
         qty = -calc_reentry_qty(qty_step, ddown_factor, abs(min_order_qty),
                                 max_order_qty,
@@ -671,8 +678,11 @@ def calc_next_long_entry_linear(price_step: float,
         if price <= 0.0:
             return 0.0, np.nan, long_psize, long_pprice, 1
         max_order_qty = round_dn((available_margin / price) * leverage, qty_step)
+        '''
         min_long_order_qty = calc_min_order_qty_linear(qty_step, min_qty, min_cost, qty_pct,
                                                        leverage, balance, price)
+        '''
+        min_long_order_qty = calc_min_qty_linear(qty_step, min_qty, min_cost, price)
         long_qty = calc_reentry_qty(qty_step, ddown_factor, min_long_order_qty,
                                     max_order_qty,
                                     long_psize)
@@ -715,8 +725,12 @@ def calc_next_shrt_entry_linear(price_step: float,
         price = max(round_(lowest_ask, price_step),
                     calc_shrt_reentry_price(price_step, grid_spacing, grid_coefficient,
                                             balance, pos_margin, shrt_pprice))
+        '''
         min_order_qty = -calc_min_order_qty_linear(qty_step, min_qty, min_cost, qty_pct,
                                                    leverage, balance, price)
+        '''
+        min_order_qty = -calc_min_qty_linear(qty_step, min_qty, min_cost, price)
+
         max_order_qty = round_dn((available_margin / price) * leverage, qty_step)
         qty = -calc_reentry_qty(qty_step, ddown_factor, abs(min_order_qty),
                                 max_order_qty,
