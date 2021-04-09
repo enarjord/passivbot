@@ -1,3 +1,4 @@
+import argparse
 import gc
 
 import hjson
@@ -670,7 +671,17 @@ async def prep_backtest_config(config_name: str):
 
 
 async def main(args: list):
-    config_name = args[1]
+    argparser = argparse.ArgumentParser(prog="Downloader", add_help=True,
+                                        description="Downloads tick data from exchanges.")
+    argparser.add_argument("-c", "--config", type=str, required=True, dest="c", help="Configuration to use.")
+    argparser.add_argument("-s", "--single", type=str, action="store_true", dest="s", default=False, required=False)
+    argparser.add_argument("-d", "--download_only", type=str, action="store_true", dest="d", default=False,
+                           required=False)
+    args = argparser.parse_args()
+    config_name = args.c
+    single = args.s
+    download_only = args.d
+
     backtest_config = await prep_backtest_config(config_name)
     downloader = Downloader(backtest_config)
 
@@ -680,12 +691,10 @@ async def main(args: list):
     tick_filepath = os.path.join(backtest_config["session_dirpath"], f"ticks_cache.npy")
     filepaths = {"price_filepath": price_filepath, "buyer_maker_filepath": buyer_maker_filepath,
                  "time_filepath": time_filepath, "tick_filepath": tick_filepath}
-    single = False
-    if '--single' in args:
-        single = True
 
     await downloader.download_ticks()
-    await downloader.prepare_files(filepaths, single)
+    if not download_only:
+        await downloader.prepare_files(filepaths, single)
 
 
 if __name__ == "__main__":

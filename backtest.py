@@ -1,23 +1,13 @@
-import sys
-import json
-import hjson
-import numpy as np
-import pandas as pd
-import asyncio
-import os
-import gc
-import matplotlib.pyplot as plt
-#import aiomultiprocess
-import pyswarms
-from multiprocessing import Lock, shared_memory
+import argparse
 from hashlib import sha256
-from time import time
-from passivbot import *
-from bybit import create_bot as create_bot_bybit
-from binance import create_bot as create_bot_binance
-from downloader import Downloader, prep_backtest_config
-from typing import Iterator, Callable
+from multiprocessing import Lock, shared_memory
 
+import matplotlib.pyplot as plt
+# import aiomultiprocess
+import pyswarms
+
+from downloader import Downloader, prep_backtest_config
+from passivbot import *
 
 lock = Lock()
 
@@ -699,14 +689,22 @@ def plot_wrap(bc, ticks, candidate):
 
 
 async def main(args: list):
-    config_name = args[1]
+    argparser = argparse.ArgumentParser(prog="Backtester", add_help=True,
+                                        description="Backtests and optimizes a strategy.")
+    argparser.add_argument("-c", "--config", type=str, required=True, dest="c", help="Configuration to test.")
+    argparser.add_argument("-p", "--plot", type=str, required=False, dest="p", default="",
+                           help="Plot specified configuration.")
+    args = argparser.parse_args()
+    config_name = args.c
+    plot = args.p
+
     backtest_config = await prep_backtest_config(config_name)
     downloader = Downloader(backtest_config)
     ticks = await downloader.get_ticks(True)
     backtest_config['n_days'] = (ticks[-1][2] - ticks[0][2]) / 1000 / 60 / 60 / 24
-    if (p := '--plot') in args:
+    if plot:
         try:
-            candidate = json.load(open(args[args.index(p) + 1]))
+            candidate = json.load(open(plot))
             print('plotting given candidate')
         except Exception as e:
             print(os.listdir(backtest_config['session_dirpath']))

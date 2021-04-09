@@ -1,17 +1,23 @@
+import argparse
+import sys
 from subprocess import Popen
 from time import sleep
-import sys
 
-user = sys.argv[1]
-symbol = sys.argv[2]
-path_to_config = sys.argv[3]
-
-
+argparser = argparse.ArgumentParser(prog="Bot starter", add_help=True, description="Starts the bot.")
+argparser.add_argument("-a", "--account_name", type=str, required=True, dest="a",
+                       help="The account name to use in the bot. This needs to be specified in api-keys.json")
+argparser.add_argument("-s", "--symbol", type=str, required=True, dest="s",
+                       help="The symbol to use in the bot. For example, XMRUSDT.")
+argparser.add_argument("-c", "--config_path", type=str, required=True, dest="c",
+                       help="The path to the config that the bot should use. For example, live_configs/default.json.")
+args = argparser.parse_args()
+user = args.a
+symbol = args.s
+path_to_config = args.c
 
 max_n_restarts = 30
 
 restart_k = 0
-
 
 while True:
     try:
