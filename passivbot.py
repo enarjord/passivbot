@@ -123,11 +123,6 @@ def calc_max_order_qty_inverse(leverage: float,
     return calc_max_pos_size_inverse(leverage, balance, price) - (long_pos_size + abs(shrt_pos_size))
 
 
-def calc_margin_available_inverse(balance, long_pos_size, long_pos_price, shrt_pos_size, shrt_pos_price, last_price):
-    # unfinished
-    return balance - calc_cost_inverse(long_pos_size, last_price)
-
-
 @njit
 def calc_min_order_qty_inverse(qty_step: float, min_qty: float, min_cost: float,
                                qty_pct: float, leverage: float, balance: float,
@@ -136,6 +131,26 @@ def calc_min_order_qty_inverse(qty_step: float, min_qty: float, min_cost: float,
                               qty_step,
                               balance * leverage * price,
                               qty_pct)
+
+
+@njit
+def calc_available_margin_inverse(balance: float,
+                                  leverage: float,
+                                  long_psize: float,
+                                  long_pprice: float,
+                                  shrt_psize: float,
+                                  shrt_pprice: float,
+                                  last_price: float) -> float:
+    used_margin = 0.0
+    equity = balance
+    if long_pprice and long_psize:
+        equity += calc_long_pnl_inverse(long_pprice, last_price, long_psize)
+        used_margin += calc_cost_inverse(long_psize, long_pprice) / leverage
+    if shrt_pprice and shrt_psize:
+        equity += calc_shrt_pnl_inverse(shrt_pprice, last_price, shrt_psize)
+        used_margin += calc_cost_inverse(shrt_psize, shrt_pprice) / leverage
+    return equity - used_margin
+
 
 @njit
 def iter_entries_inverse(price_step: float,
@@ -147,13 +162,18 @@ def iter_entries_inverse(price_step: float,
                          leverage: float,
                          grid_spacing: float,
                          grid_coefficient: float,
+                         ema_spread: float,
+                         stop_loss_liq_diff: float,
+                         stop_loss_pos_pct: float,
                          balance: float,
                          long_psize: float,
                          long_pprice: float,
                          shrt_psize: float,
                          shrt_pprice: float,
+                         liq_price: float,
                          highest_bid: float,
                          lowest_ask: float,
+                         ema: float,
                          last_price: float,
                          do_long: bool = True,
                          do_shrt: bool = True,):
@@ -161,26 +181,67 @@ def iter_entries_inverse(price_step: float,
     # (long_qty, long_price, new_long_psize, new_long_pprice,
     #  shrt_qty, shrt_price, new_shrt_psize, new_shrt_pprice)
 
-    used_margin = 0.0
-    equity = balance
-    if long_pprice and long_psize:
-        equity += calc_long_pnl_inverse(long_pprice, last_price, long_psize)
-        used_margin += calc_cost_inverse(long_psize, long_pprice) / leverage
-    if shrt_pprice and shrt_psize:
-        equity += calc_shrt_pnl_inverse(shrt_pprice, last_price, shrt_psize)
-        used_margin += calc_cost_inverse(shrt_psize, shrt_pprice) / leverage
-    available_margin = equity - used_margin
+    available_margin = calc_available_margin_inverse(balance, leverage, long_psize, long_pprice,
+                                                     shrt_psize, shrt_pprice, last_price)
+
+    abs_shrt_psize = abs(shrt_psize)
+    if calc_diff(liq_price, last_price) < stop_loss_liq_diff:
+        if long_psize > abs_shrt_psize:
+            stop_loss_qty = min(long_psize,
+                                max(calc_min_order_qty_inverse(qty_step, min_qty, min_cost, qty_pct,
+                                                               leverage, balance, lowest_ask),
+                                    round_dn(long_psize * stop_loss_pos_pct, qty_step)))
+            # if sufficient margin available, increase short pos, otherwise, reduce long pos
+            margin_cost = calc_margin_cost_inverse(leverage, stop_loss_qty, lowest_ask)
+            if margin_cost < available_margin:
+                # add to shrt pos
+                new_shrt_psize = round_(shrt_psize - stop_loss_qty, qty_step)
+                shrt_pprice = (shrt_pprice * (shrt_psize / new_shrt_psize) +
+                               lowest_ask * (-stop_loss_qty / new_shrt_psize))
+                shrt_psize = new_shrt_psize
+                yield -stop_loss_qty, lowest_ask, shrt_psize, shrt_pprice, 'stop_loss_shrt_entry'
+                available_margin -= margin_cost
+            else:
+                # reduce long pos
+                long_psize = round_(long_psize - stop_loss_qty, qty_step)
+                yield -stop_loss_qty, lowest_ask, long_psize, long_pprice, 'stop_loss_long_close'
+                available_margin += margin_cost
+        else:
+            stop_loss_qty = min(abs_shrt_psize,
+                                max(calc_min_order_qty_inverse(qty_step, min_qty, min_cost, qty_pct,
+                                                              leverage, balance, highest_bid),
+                                    round_dn(abs_shrt_psize * stop_loss_pos_pct, qty_step)))
+            # if sufficient margin available, increase long pos, otherwise, reduce shrt pos
+            margin_cost = calc_margin_cost_inverse(leverage, stop_loss_qty, highest_bid)
+            if margin_cost < available_margin:
+                # add to long pos
+                new_long_psize = round_(long_psize + stop_loss_qty, qty_step)
+                long_pprice = (long_pprice * (long_psize / new_long_psize) +
+                               highest_bid * (stop_loss_qty / new_long_psize))
+                long_psize = new_long_psize
+                yield stop_loss_qty, highest_bid, long_psize, long_pprice, 'stop_loss_long_entry'
+                available_margin -= margin_cost
+            else:
+                # reduce shrt pos
+                shrt_psize = round_(shrt_psize + stop_loss_qty, qty_step)
+                yield stop_loss_qty, highest_bid, shrt_psize, shrt_pprice, 'stop_loss_shrt_close'
+                available_margin += margin_cost
+
+
+
 
     while True:
 
         long_entry = calc_next_long_entry_inverse(
             price_step, qty_step, min_qty, min_cost, ddown_factor, qty_pct, leverage, grid_spacing,
-            grid_coefficient, balance, long_psize, long_pprice, shrt_psize, highest_bid, available_margin
+            grid_coefficient, ema_spread, balance, long_psize, long_pprice, shrt_psize, highest_bid,
+            ema, available_margin
         ) if do_long else (0.0, np.nan, long_psize, long_pprice, 0)
 
         shrt_entry = calc_next_shrt_entry_inverse(
             price_step, qty_step, min_qty, min_cost, ddown_factor, qty_pct, leverage, grid_spacing,
-            grid_coefficient, balance, long_psize, shrt_psize, shrt_pprice, lowest_ask, available_margin
+            grid_coefficient, ema_spead, balance, long_psize, shrt_psize, shrt_pprice, lowest_ask,
+            ema, available_margin
         ) if do_shrt else (0.0, np.nan, shrt_psize, shrt_pprice, 0)
 
         if long_entry[0] > 0.0:
@@ -196,14 +257,14 @@ def iter_entries_inverse(price_step: float,
             yield long_entry
             long_psize = long_entry[2]
             long_pprice = long_entry[3]
-            available_margin -= (long_entry[0] / long_entry[1]) / leverage if long_entry[1] else 0.0
+            if long_entry[1]:
+                available_margin -= calc_margin_cost_inverse(leverage, long_entry[0], long_entry[1])
         else:
             yield shrt_entry
             shrt_psize = shrt_entry[2]
             shrt_pprice = shrt_entry[3]
-            available_margin += (shrt_entry[0] / shrt_entry[1]) / leverage if shrt_entry[1] else 0.0
-
-
+            if shrt_entry[1]:
+                available_margin -= calc_margin_cost_inverse(leverage, shrt_entry[0], shrt_entry[1])
 
 
 @njit
@@ -216,14 +277,16 @@ def calc_next_long_entry_inverse(price_step: float,
                                  leverage: float,
                                  grid_spacing: float,
                                  grid_coefficient: float,
+                                 ema_spread: float,
                                  balance: float,
                                  long_psize: float,
                                  long_pprice: float,
                                  shrt_psize: float,
                                  highest_bid: float,
+                                 ema: float,
                                  available_margin: float):
     if long_psize == 0.0:
-        price = highest_bid
+        price = min(highest_bid, round_dn(ema * (1 - ema_spread), price_step))
         max_order_qty = round_dn(available_margin * price * leverage, qty_step)
         long_qty = min(max_order_qty,
                        calc_min_order_qty_inverse(qty_step, min_qty, min_cost, qty_pct, leverage,
@@ -266,18 +329,20 @@ def calc_next_shrt_entry_inverse(price_step: float,
                                  leverage: float,
                                  grid_spacing: float,
                                  grid_coefficient: float,
+                                 ema_spread: float,
                                  balance: float,
                                  long_psize: float,
                                  shrt_psize: float,
                                  shrt_pprice: float,
                                  lowest_ask: float,
+                                 ema: float,
                                  available_margin: float):
     if shrt_psize == 0.0:
+        price = max(lowest_ask, round_up(ema * (1 + ema_spread), price_step))
         max_order_qty = round_dn(available_margin * lowest_ask * leverage, qty_step)
         qty = -min(max_order_qty,
                    calc_min_order_qty_inverse(qty_step, min_qty, min_cost, qty_pct, leverage,
                                               balance, lowest_ask))
-        price = lowest_ask
         shrt_psize = qty
         shrt_pprice = price
         return qty, price, round_(shrt_psize, qty_step), shrt_pprice, 0
@@ -579,6 +644,25 @@ def calc_cross_hedge_liq_price_bybit_linear(balance: float,
 
 
 @njit
+def calc_available_margin_linear(balance: float,
+                                 leverage: float,
+                                 long_psize: float,
+                                 long_pprice: float,
+                                 shrt_psize: float,
+                                 shrt_pprice: float,
+                                 last_price: float) -> float:
+    used_margin = 0.0
+    equity = balance
+    if long_pprice and long_psize:
+        equity += calc_long_pnl_linear(long_pprice, last_price, long_psize)
+        used_margin += calc_cost_linear(long_psize, long_pprice) / leverage
+    if shrt_pprice and shrt_psize:
+        equity += calc_shrt_pnl_linear(shrt_pprice, last_price, shrt_psize)
+        used_margin += calc_cost_linear(shrt_psize, shrt_pprice) / leverage
+    return equity - used_margin
+
+
+@njit
 def iter_entries_linear(price_step: float,
                         qty_step: float,
                         min_qty: float,
@@ -588,41 +672,85 @@ def iter_entries_linear(price_step: float,
                         leverage: float,
                         grid_spacing: float,
                         grid_coefficient: float,
+                        ema_spread: float,
+                        stop_loss_liq_diff: float,
+                        stop_loss_pos_pct: float,
                         balance: float,
                         long_psize: float,
                         long_pprice: float,
                         shrt_psize: float,
                         shrt_pprice: float,
+                        liq_price: float,
                         highest_bid: float,
                         lowest_ask: float,
+                        ema: float,
                         last_price: float,
                         do_long: bool = True,
                         do_shrt: bool = True,):
     # yields both long and short entries
-    # (long_qty, long_price, new_long_psize, new_long_pprice,
-    #  shrt_qty, shrt_price, new_shrt_psize, new_shrt_pprice)
+    # also yields stop loss orders if triggered
+    # (qty, price, new_psize, new_pprice, comment)
 
-    used_margin = 0.0
-    equity = balance
-    if long_pprice and long_psize:
-        equity += calc_long_pnl_linear(long_pprice, last_price, long_psize)
-        used_margin += calc_cost_linear(long_psize, long_pprice) / leverage
-    if shrt_pprice and shrt_psize:
-        equity += calc_shrt_pnl_linear(shrt_pprice, last_price, shrt_psize)
-        used_margin += calc_cost_linear(shrt_psize, shrt_pprice) / leverage
-    available_margin = equity - used_margin
+    available_margin = calc_available_margin_linear(balance, leverage, long_psize, long_pprice,
+                                                    shrt_psize, shrt_pprice, last_price)
+
+
+    abs_shrt_psize = abs(shrt_psize)
+    if calc_diff(liq_price, last_price) < stop_loss_liq_diff:
+        if long_psize > abs_shrt_psize:
+            stop_loss_qty = min(long_psize,
+                                max(calc_min_order_qty_linear(qty_step, min_qty, min_cost, qty_pct,
+                                                              leverage, balance, lowest_ask),
+                                    round_dn(long_psize * stop_loss_pos_pct, qty_step)))
+            # if sufficient margin available, increase short pos, otherwise, reduce long pos
+            margin_cost = calc_margin_cost_linear(leverage, stop_loss_qty, lowest_ask)
+            if margin_cost < available_margin:
+                # add to shrt pos
+                new_shrt_psize = round_(shrt_psize - stop_loss_qty, qty_step)
+                shrt_pprice = (shrt_pprice * (shrt_psize / new_shrt_psize) +
+                               lowest_ask * (-stop_loss_qty / new_shrt_psize))
+                shrt_psize = new_shrt_psize
+                yield -stop_loss_qty, lowest_ask, shrt_psize, shrt_pprice, 'stop_loss_shrt_entry'
+                available_margin -= margin_cost
+            else:
+                # reduce long pos
+                long_psize = round_(long_psize - stop_loss_qty, qty_step)
+                yield -stop_loss_qty, lowest_ask, long_psize, long_pprice, 'stop_loss_long_close'
+                available_margin += margin_cost
+        else:
+            stop_loss_qty = min(abs_shrt_psize,
+                                max(calc_min_order_qty_linear(qty_step, min_qty, min_cost, qty_pct,
+                                                              leverage, balance, highest_bid),
+                                    round_dn(abs_shrt_psize * stop_loss_pos_pct, qty_step)))
+            # if sufficient margin available, increase long pos, otherwise, reduce shrt pos
+            margin_cost = calc_margin_cost_linear(leverage, stop_loss_qty, highest_bid)
+            if margin_cost < available_margin:
+                # add to long pos
+                new_long_psize = round_(long_psize + stop_loss_qty, qty_step)
+                long_pprice = (long_pprice * (long_psize / new_long_psize) +
+                               highest_bid * (stop_loss_qty / new_long_psize))
+                long_psize = new_long_psize
+                yield stop_loss_qty, highest_bid, long_psize, long_pprice, 'stop_loss_long_entry'
+                available_margin -= margin_cost
+            else:
+                # reduce shrt pos
+                shrt_psize = round_(shrt_psize + stop_loss_qty, qty_step)
+                yield stop_loss_qty, highest_bid, shrt_psize, shrt_pprice, 'stop_loss_shrt_close'
+                available_margin += margin_cost
 
     while True:
 
         long_entry = calc_next_long_entry_linear(
             price_step, qty_step, min_qty, min_cost, ddown_factor, qty_pct, leverage, grid_spacing,
-            grid_coefficient, balance, long_psize, long_pprice, shrt_psize, highest_bid, available_margin
-        ) if do_long else (0.0, np.nan, long_psize, long_pprice, 0)
+            grid_coefficient, ema_spread, balance, long_psize, long_pprice, shrt_psize, highest_bid,
+            ema, available_margin
+        ) if do_long else (0.0, np.nan, long_psize, long_pprice, 'long_entry')
 
         shrt_entry = calc_next_shrt_entry_linear(
             price_step, qty_step, min_qty, min_cost, ddown_factor, qty_pct, leverage, grid_spacing,
-            grid_coefficient, balance, long_psize, shrt_psize, shrt_pprice, lowest_ask, available_margin
-        ) if do_shrt else (0.0, np.nan, shrt_psize, shrt_pprice, 0)
+            grid_coefficient, ema_spread, balance, long_psize, shrt_psize, shrt_pprice, lowest_ask,
+            ema, available_margin
+        ) if do_shrt else (0.0, np.nan, shrt_psize, shrt_pprice, 'shrt_entry')
 
         if long_entry[0] > 0.0:
             if shrt_entry[0] == 0.0:
@@ -637,12 +765,12 @@ def iter_entries_linear(price_step: float,
             yield long_entry
             long_psize = long_entry[2]
             long_pprice = long_entry[3]
-            available_margin -= long_entry[0] * long_entry[1] / leverage
+            available_margin -= calc_margin_cost_linear(leverage, long_entry[0], long_entry[1])
         else:
             yield shrt_entry
             shrt_psize = shrt_entry[2]
             shrt_pprice = shrt_entry[3]
-            available_margin += shrt_entry[0] * shrt_entry[1] / leverage
+            available_margin -= calc_margin_cost_linear(leverage, shrt_entry[0], shrt_entry[1])
 
 
 @njit
@@ -655,28 +783,30 @@ def calc_next_long_entry_linear(price_step: float,
                                 leverage: float,
                                 grid_spacing: float,
                                 grid_coefficient: float,
+                                ema_spread: float,
                                 balance: float,
                                 long_psize: float,
                                 long_pprice: float,
                                 shrt_psize: float,
                                 highest_bid: float,
+                                ema: float,
                                 available_margin: float):
     if long_psize == 0.0:
-        price = highest_bid
+        price = min(highest_bid, round_dn(ema * (1 - ema_spread), price_step))
         max_order_qty = round_dn(available_margin / highest_bid * leverage, qty_step)
         long_qty = min(max_order_qty,
                        calc_min_order_qty_linear(qty_step, min_qty, min_cost, qty_pct, leverage,
                                                  balance, highest_bid))
         long_psize = round_(long_qty, qty_step)
         long_pprice = price
-        return long_qty, price, long_psize, long_pprice, 0
+        return long_qty, price, long_psize, long_pprice, 'long_entry'
     else:
         long_pmargin = calc_margin_cost_linear(leverage, long_psize, long_pprice)
         price = min(round_(highest_bid, price_step),
                     calc_long_reentry_price(price_step, grid_spacing, grid_coefficient,
                                             balance, long_pmargin, long_pprice))
         if price <= 0.0:
-            return 0.0, np.nan, long_psize, long_pprice, 1
+            return 0.0, np.nan, long_psize, long_pprice, 'long_reentry'
         max_order_qty = round_dn((available_margin / price) * leverage, qty_step)
         '''
         min_long_order_qty = calc_min_order_qty_linear(qty_step, min_qty, min_cost, qty_pct,
@@ -691,9 +821,9 @@ def calc_next_long_entry_linear(price_step: float,
             long_pprice = long_pprice * (long_psize / new_long_psize) + \
                 price * (long_qty / new_long_psize)
             long_psize = new_long_psize
-            return long_qty, price, long_psize, long_pprice, 1
+            return long_qty, price, long_psize, long_pprice, 'long_reentry'
         else:
-            return 0.0, np.nan, long_psize, long_pprice, 1
+            return 0.0, np.nan, long_psize, long_pprice, 'long_reentry'
 
 @njit
 def calc_next_shrt_entry_linear(price_step: float,
@@ -705,21 +835,23 @@ def calc_next_shrt_entry_linear(price_step: float,
                                 leverage: float,
                                 grid_spacing: float,
                                 grid_coefficient: float,
+                                ema_spread: float,
                                 balance: float,
                                 long_psize: float,
                                 shrt_psize: float,
                                 shrt_pprice: float,
                                 lowest_ask: float,
+                                ema: float,
                                 available_margin: float):
     if shrt_psize == 0.0:
-        price = lowest_ask
+        price = max(lowest_ask, round_up(ema * (1 + ema_spread), price_step))
         max_order_qty = round_dn(available_margin / lowest_ask * leverage, qty_step)
         qty = -min(max_order_qty,
                    calc_min_order_qty_linear(qty_step, min_qty, min_cost, qty_pct, leverage,
                                              balance, lowest_ask))
         shrt_psize = qty
         shrt_pprice = price
-        return qty, price, round_(shrt_psize, qty_step), shrt_pprice, 0
+        return qty, price, round_(shrt_psize, qty_step), shrt_pprice, 'shrt_entry'
     else:
         pos_margin = calc_margin_cost_linear(leverage, shrt_psize, shrt_pprice)
         price = max(round_(lowest_ask, price_step),
@@ -739,9 +871,9 @@ def calc_next_shrt_entry_linear(price_step: float,
             new_pos_size = shrt_psize + qty
             shrt_pprice = shrt_pprice * (shrt_psize / new_pos_size) + price * (qty / new_pos_size)
             shrt_psize = new_pos_size
-            return qty, price, round_(shrt_psize, qty_step), shrt_pprice, 1
+            return qty, price, round_(shrt_psize, qty_step), shrt_pprice, 'shrt_reentry'
         else:
-            return 0.0, np.nan, shrt_psize, shrt_pprice, 1
+            return 0.0, np.nan, shrt_psize, shrt_pprice, 'shrt_reentry'
 
 
 @njit
@@ -842,7 +974,6 @@ def iter_shrt_closes_linear(price_step: float,
             n_orders -= 1
         if abs_pos_size > 0.0:
             yield abs_pos_size, min(highest_bid, round_dn(minm, price_step)), 0.0
-
 
 
 ##################
@@ -977,22 +1108,12 @@ class Bot:
     def __init__(self, user: str, settings: dict):
         self.settings = settings
         self.user = user
-        self.symbol = settings['symbol']
-        self.leverage = settings['leverage']
-        self.grid_coefficient = settings['grid_coefficient']
-        self.grid_spacing = settings['grid_spacing']
-        self.markup_range = settings['markup_range']
-        self.min_markup = settings['min_markup']
-        self.n_entry_orders = settings['n_entry_orders']
-        self.n_close_orders = settings['n_close_orders']
-        self.qty_pct = settings['qty_pct']
-        self.ddown_factor = settings['ddown_factor']
-        self.do_long = settings['do_long']
-        self.do_shrt = settings['do_shrt']
+
+        for key in settings:
+            setattr(self, key, settings[key])
 
         self.ema_alpha = 2 / (settings['ema_span'] + 1)
         self.ema_alpha_ = 1 - self.ema_alpha
-        self.ema_spread = settings['ema_spread']
 
         self.ts_locked = {'cancel_orders': 0, 'decide': 0, 'update_open_orders': 0,
                           'update_position': 0, 'print': 0, 'create_orders': 0}
@@ -1129,30 +1250,34 @@ class Bot:
     def calc_orders(self):
         last_price_diff_limit = 0.15
         balance = self.position['wallet_balance'] * 0.98
+        long_psize = self.position['long']['size']
+        long_pprice = self.position['long']['price']
+        shrt_psize = self.position['shrt']['size']
+        shrt_pprice = self.position['shrt']['price']
 
         if self.hedge_mode:
-            do_long = self.do_long or self.position['long']['size'] != 0.0
-            do_shrt = self.do_shrt or self.position['shrt']['size'] != 0.0
+            do_long = self.do_long or long_psize != 0.0
+            do_shrt = self.do_shrt or shrt_psize != 0.0
         else:
-            no_pos = self.position['long']['size'] == 0.0 and self.position['shrt']['size'] == 0.0
-            do_long = (no_pos and self.do_long) or self.position['long']['size'] != 0.0
-            do_shrt = (no_pos and self.do_shrt) or self.position['shrt']['size'] != 0.0
-        highest_bid = min(self.ob[0], round_dn(self.ema * (1 - self.ema_spread), self.price_step)) \
-            if self.position['long']['size'] == 0.0 else self.ob[0]
-        lowest_ask = max(self.ob[1], round_up(self.ema * (1 + self.ema_spread), self.price_step)) if \
-            self.position['shrt']['size'] == 0.0 else self.ob[1]
+            no_pos = long_psize == 0.0 and shrt_psize == 0.0
+            do_long = (no_pos and self.do_long) or long_psize != 0.0
+            do_shrt = (no_pos and self.do_shrt) or shrt_psize != 0.0
+
+        liq_price = max(self.position['long']['liquidation_price'],
+                        self.position['shrt']['liquidation_price'])
 
         entry_orders = []
 
-        for tpl in self.iter_entries(balance,
-                                     self.position['long']['size'],
-                                     self.position['long']['price'],
-                                     self.position['shrt']['size'],
-                                     self.position['shrt']['price'],
-                                     highest_bid, lowest_ask, self.price, do_long, do_shrt):
+        for tpl in self.iter_entries(balance, long_psize, long_pprice, shrt_psize, shrt_pprice,
+                                     liq_price, self.ob[0], self.ob[1], self.ema, self.price,
+                                     do_long, do_shrt):
             if len(entry_orders) >= self.n_entry_orders * 2 or \
                     calc_diff(tpl[1], self.price) > last_price_diff_limit:
                 break
+            if tpl[4] == 'stop_loss_shrt_close':
+                shrt_psize = round_(shrt_psize + tpl[0], self.qty_step)
+            elif tpl[4] == 'stop_loss_long_close':
+                long_psize = round_(long_psize + tpl[0], self.qty_step)
             if tpl[0] > 0.0:
                 entry_orders.append({'side': 'buy', 'position_side': 'long', 'qty': tpl[0],
                                      'price': tpl[1], 'type': 'limit', 'reduce_only': False,
@@ -1163,8 +1288,8 @@ class Bot:
                                      'custom_id': 'entry'})
 
         long_close_orders = []
-        for ask_qty, ask_price, _ in self.iter_long_closes(balance, self.position['long']['size'],
-                                                           self.position['long']['price'],
+        for ask_qty, ask_price, _ in self.iter_long_closes(balance, long_psize,
+                                                           long_pprice,
                                                            self.ob[1]):
             if len(long_close_orders) >= self.n_entry_orders or \
                     calc_diff(ask_price, self.price) > last_price_diff_limit:
@@ -1173,8 +1298,8 @@ class Bot:
                                       'price': float(ask_price), 'type': 'limit',
                                       'reduce_only': True, 'custom_id': 'close'})
         shrt_close_orders = []
-        for bid_qty, bid_price, _ in self.iter_shrt_closes(balance, self.position['shrt']['size'],
-                                                           self.position['shrt']['price'],
+        for bid_qty, bid_price, _ in self.iter_shrt_closes(balance, shrt_psize,
+                                                           shrt_pprice,
                                                            self.ob[0]):
             if len(shrt_close_orders) >= self.n_entry_orders or \
                     calc_diff(bid_price, self.price) > last_price_diff_limit:
@@ -1325,6 +1450,8 @@ async def main() -> None:
         bot = await create_bybit_bot(sys.argv[1], config)
     else:
         raise Exception('unknown exchange', account['exchange'])
+    print('using config')
+    print(json.dumps(config, indent=4))
     await start_bot(bot)
 
 
