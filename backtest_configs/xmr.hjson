@@ -11,18 +11,20 @@
   leverage: 12
   n_close_orders: 16
 
-  iters: 10
-  num_cpus: 2
-  folds: 4
+  # pso options
+  iters: 100
+  num_cpus: 4
+  options: {"c1": 1.4962, "c2": 1.4962, "w": 0.7298}
+  n_particles: 24
 
-  desired_minimum_liquidation_distance: 0.21
-  desired_max_hours_stuck: 108
-  desired_minimum_daily_fills: 25.0
-  
+  minimum_liquidation_distance: 0.3
+  maximum_daily_entries: 10
+
   start_date: 2021-03-01T21:30
   # set end_date=-1 to use now as end date
   end_date: -1
 
+  # If start, stop, and step are set to same value, it's treated as a fixed variable.
   ranges:
   {
     qty_pct: [0.0, 0.5, 0.0001]
