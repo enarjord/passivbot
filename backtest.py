@@ -1,3 +1,4 @@
+import gc
 from hashlib import sha256
 
 import matplotlib.pyplot as plt
@@ -6,11 +7,12 @@ import ray
 from ray import tune
 from ray.tune.schedulers import AsyncHyperBandScheduler
 from ray.tune.suggest import ConcurrencyLimiter
-# from ray.tune.suggest.hyperopt import HyperOptSearch
 from ray.tune.suggest.nevergrad import NevergradSearch
 
 from downloader import Downloader, prep_backtest_config
 from passivbot import *
+
+os.environ['TUNE_GLOBAL_CHECKPOINT_S'] = '120'
 
 
 def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
@@ -402,11 +404,13 @@ def backtest(config: dict, ticks: np.ndarray, return_fills=False, do_print=False
                     if return_fills:
                         return all_fills, False
                     else:
-                        result = prepare_result(all_fills, ticks, config['do_long'],
-                                                config['do_shrt'])
-                        tune.report(objective=objective_function(result, config[
-                            'desired_minimum_liquidation_distance'], config['desired_max_hours_stuck'],
-                                                                 config['desired_minimum_daily_fills']))
+                        result = prepare_result(all_fills, ticks, config['do_long'], config['do_shrt'])
+                        objective = objective_function(result, config['minimum_liquidation_distance'],
+                                                       config['maximum_daily_entries'])
+                        tune.report(objective=objective)
+                        del all_fills
+                        gc.collect()
+                        return objective
             if do_print:
                 line = f"\r{all_fills[-1]['progress']:.3f} "
                 line += f"adg {all_fills[-1]['average_daily_gain']:.4f} "
@@ -416,9 +420,11 @@ def backtest(config: dict, ticks: np.ndarray, return_fills=False, do_print=False
         return all_fills, True
     else:
         result = prepare_result(all_fills, ticks, config['do_long'], config['do_shrt'])
-        tune.report(objective=objective_function(result, config['desired_minimum_liquidation_distance'],
-                                                 config['desired_max_hours_stuck'],
-                                                 config['desired_minimum_daily_fills']))
+        objective = objective_function(result, config['minimum_liquidation_distance'], config['maximum_daily_entries'])
+        tune.report(objective=objective)
+        del all_fills
+        gc.collect()
+        return objective
 
 
 def candidate_to_live_settings(exchange: str, candidate: dict) -> dict:
@@ -506,55 +512,44 @@ def prepare_result(fills: list, ticks: np.ndarray, do_long: bool, do_shrt: bool)
     return result
 
 
-def objective_function(result: dict, liq_cap: float, hours_stuck_cap: int, n_daily_fills_cap: float) -> float:
+def objective_function(result: dict, liq_cap: float, n_daily_entries_cap: int) -> float:
     try:
-        return ((result['average_daily_gain'] - 1) *
-                min(1.0, (result['n_fills'] / result['n_days']) / n_daily_fills_cap) *
-                min(1.0, result['closest_liq'] / liq_cap) /
-                max(1.0, result['max_n_hours_stuck'] / hours_stuck_cap))
+        return (result['average_daily_gain'] *
+                min(1.0, (result['n_entries'] / result['n_days']) / n_daily_entries_cap) *
+                min(1.0, result['closest_liq'] / liq_cap))
     except Exception as e:
-        # print('error with score func', e, result)
-        return -1.0
+        print('error with objective function', e, result)
+        return 0.0
 
 
 def create_config(backtest_config: dict) -> dict:
     config = {k: backtest_config[k] for k in backtest_config
               if k not in {'session_name', 'user', 'symbol', 'start_date', 'end_date', 'ranges'}}
     for k in backtest_config['ranges']:
-        config[k] = tune.uniform(*[backtest_config['ranges'][k][i] for i in range(2)])
+        if backtest_config['ranges'][k][0] == backtest_config['ranges'][k][1] == backtest_config['ranges'][k][2]:
+            config[k] = backtest_config['ranges'][k][0]
+        else:
+            config[k] = tune.choice(np.arange(backtest_config['ranges'][k][0],
+                                              backtest_config['ranges'][k][1] + backtest_config['ranges'][k][2],
+                                              backtest_config['ranges'][k][2]))
     return config
 
 
 def clean_start_config(start_config: dict, backtest_config: dict) -> dict:
     clean_start = {}
     for k, v in start_config.items():
-        if k in backtest_config['ranges']:
+        if k in backtest_config:
             clean_start[k] = v
     return clean_start
 
 
-def k_fold(config, ticks=None):
-    folds = int(config['folds'])
-    objectives = []
-    for i in range(folds):
-        if i == folds - 1:
-            fills, _ = backtest(config, ticks=ticks[i * int(int(len(ticks) / folds) / folds):], return_fills=True)
-            result = prepare_result(fills, ticks[i * int(int(len(ticks) / folds) / folds):], config['do_long'],
-                                    config['do_shrt'])
-            objectives.append(objective_function(result, config['desired_minimum_liquidation_distance'],
-                                                 config['desired_max_hours_stuck'],
-                                                 config['desired_minimum_daily_fills']))
-
-        else:
-            fills, _ = backtest(config, ticks=ticks[i * int(int(len(ticks) / folds) / folds):(i + 1) * int(
-                int(len(ticks) / folds) / folds)], return_fills=True)
-            result = prepare_result(fills, ticks[i * int(int(len(ticks) / folds) / folds):(i + 1) * int(
-                int(len(ticks) / folds) / folds)], config['do_long'], config['do_shrt'])
-            objectives.append(objective_function(result, config['desired_minimum_liquidation_distance'],
-                                                 config['desired_max_hours_stuck'],
-                                                 config['desired_minimum_daily_fills']))
-
-    tune.report(objective=np.average(objectives))
+def clean_result_config(config: dict) -> dict:
+    for k, v in config.items():
+        if type(v) == np.float64:
+            config[k] = float(v)
+        if type(v) == np.int64 or type(v) == np.int32 or type(v) == np.int16 or type(v) == np.int8:
+            config[k] = int(v)
+    return config
 
 
 def backtest_tune(ticks: np.ndarray, backtest_config: dict, current_best: dict = None):
@@ -572,27 +567,41 @@ def backtest_tune(ticks: np.ndarray, backtest_config: dict, current_best: dict =
         num_cpus = backtest_config['num_cpus']
     else:
         print('Parameter num_cpus should be defined in the configuration. Defaulting to 2.')
+    n_particles = 10
+    if 'n_particles' in backtest_config:
+        n_particles = backtest_config['n_particles']
+    phi1 = 1.4962
+    phi2 = 1.4962
+    omega = 0.7298
+    if 'options' in backtest_config:
+        phi1 = backtest_config['options']['c1']
+        phi2 = backtest_config['options']['c2']
+        omega = backtest_config['options']['w']
     current_best_params = []
     if current_best:
-        current_best = clean_start_config(current_best, backtest_config)
+        current_best = clean_start_config(current_best, config)
         current_best_params.append(current_best)
-    initial_points = max(1, min(int(iters / 10), 20))
 
     ray.init(num_cpus=num_cpus)
-    pso = ng.optimizers.ConfiguredPSO()
+    pso = ng.optimizers.ConfiguredPSO(transform='identity', popsize=n_particles, omega=omega, phip=phi1, phig=phi2)
     algo = NevergradSearch(optimizer=pso, points_to_evaluate=current_best_params)
-    # algo = HyperOptSearch(points_to_evaluate=current_best_params, n_initial_points=initial_points)
     algo = ConcurrencyLimiter(algo, max_concurrent=num_cpus)
     scheduler = AsyncHyperBandScheduler()
 
-    analysis = tune.run(tune.with_parameters(k_fold, ticks=ticks), metric='objective', mode='max', name='search',
+    analysis = tune.run(tune.with_parameters(backtest, ticks=ticks), metric='objective', mode='max', name='search',
                         search_alg=algo, scheduler=scheduler, num_samples=iters, config=config, verbose=1,
                         reuse_actors=True, local_dir=session_dirpath)
 
     ray.shutdown()
-
+    df = analysis.results_df
+    df.reset_index(inplace=True)
+    df.drop(columns=['trial_id', 'time_this_iter_s', 'done', 'timesteps_total', 'episodes_total', 'training_iteration',
+                     'experiment_id', 'date', 'timestamp', 'time_total_s', 'pid', 'hostname', 'node_ip',
+                     'time_since_restore', 'timesteps_since_restore', 'iterations_since_restore', 'experiment_tag'],
+            inplace=True)
+    df.to_csv(os.path.join(backtest_config['session_dirpath'], 'results.csv'), index=False)
     print('Best candidate found were: ', analysis.best_config)
-    plot_wrap(backtest_config, ticks, analysis.best_config)
+    plot_wrap(backtest_config, ticks, clean_result_config(analysis.best_config))
     return analysis
 
 

@@ -9,3 +9,4 @@ python-dateutil>=2.8.1
 ray[tune]>=1.2.0
 hyperopt>=0.2.5
 matplotlib~=3.4.1
+nevergrad~=0.4.3.post2
