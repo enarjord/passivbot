@@ -127,6 +127,17 @@ if there is a short position, it creates reentry asks above pos price, and reduc
 
 reentry_ask_price = pos_price * (1 + grid_spacing * (1 + (position_margin / wallet_balance) * grid_coefficient))
 
+in hedge mode, stop loss works thusly:
+```
+if diff(liq_price, last_price) < stop_loss_liq_diff:
+    if available margin:
+        enter opposite side
+    else:
+        close same side at a loss
+```
+
+in both cases liq price will be pushed away
+
 
 ------------------------------------------------------------------
 
@@ -179,6 +190,9 @@ about live settings, bybit example:
                         
     "n_close_orders": 20,                 # max n close orders.
     "n_entry_orders": 8,                  # max n entry orders.
+    
+    "stop_loss_liq_diff": 0.2             # if difference between liq price and last price is less than 20%, ...
+    "stop_loss_pos_pct": 0.01             # ... if available margin, increase opposite side pos by 1%, otherwise reduce same side pos by 1%
     "symbol": "BTCUSD"                    # only one symbol at a time.
 
 }
