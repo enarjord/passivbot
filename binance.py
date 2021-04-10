@@ -231,7 +231,6 @@ class BinanceBot(Bot):
             print('no positions or open orders in other symbols sharing margin wallet')
 
     async def init_exchange_settings(self):
-        await self.check_if_other_positions()
         try:
             print(await self.private_post(self.endpoints['margin_type'],
                                           {'symbol': self.symbol, 'marginType': 'CROSSED'}))
@@ -259,6 +258,7 @@ class BinanceBot(Bot):
                 print(e)
                 print('unable to set hedge mode, aborting')
                 raise Exception('failed to set hedge mode')
+        await self.check_if_other_positions()
         await self.init_ema()
 
     async def init_order_book(self):
