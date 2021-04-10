@@ -98,23 +98,29 @@ class Bybit(Bot):
                               'cancel_order': '/private/linear/order/cancel',
                               'ticks': '/public/linear/recent-trading-records',
                               'websocket_url': 'wss://stream.bybit.com/realtime_public'}
+
             self.iter_long_closes = lambda balance, pos_size, pos_price, lowest_ask: \
                 iter_long_closes_linear(self.price_step, self.qty_step, self.min_qty, self.min_cost,
                                         self.qty_pct, self.leverage, self.min_markup,
                                         self.markup_range, self.n_close_orders, balance, pos_size,
                                         pos_price, lowest_ask)
+
             self.iter_shrt_closes = lambda balance, pos_size, pos_price, highest_bid: \
                 iter_shrt_closes_linear(self.price_step, self.qty_step, self.min_qty, self.min_cost,
                                         self.qty_pct, self.leverage, self.min_markup,
                                         self.markup_range, self.n_close_orders, balance, pos_size,
                                         pos_price, highest_bid)
+
             self.iter_entries = lambda balance, long_psize, long_pprice, shrt_psize, shrt_pprice, \
-                highest_bid, lowest_ask, last_price, do_long, do_shrt: \
+                liq_price, highest_bid, lowest_ask, ema, last_price, do_long, do_shrt: \
                 iter_entries_linear(self.price_step, self.qty_step, self.min_qty, self.min_cost,
                                     self.ddown_factor, self.qty_pct, self.leverage,
-                                    self.grid_spacing, self.grid_coefficient, balance, long_psize,
-                                    long_pprice, shrt_psize, shrt_pprice, highest_bid, lowest_ask,
-                                    last_price, do_long, do_shrt)
+                                    self.grid_spacing, self.grid_coefficient, self.ema_spread,
+                                    self.stop_loss_liq_diff, self.stop_loss_pos_pct, balance,
+                                    long_psize, long_pprice, shrt_psize, shrt_pprice, liq_price,
+                                    highest_bid, lowest_ask, ema, last_price, do_long, do_shrt)
+
+
             self.hedge_mode = False
             self.long_pnl_f = calc_long_pnl_linear
             self.shrt_pnl_f = calc_shrt_pnl_linear
@@ -149,18 +155,23 @@ class Bybit(Bot):
                                          self.qty_pct, self.leverage, self.min_markup,
                                          self.markup_range, self.n_close_orders, balance, pos_size,
                                          pos_price, lowest_ask)
+
             self.iter_shrt_closes = lambda balance, pos_size, pos_price, highest_bid: \
                 iter_shrt_closes_inverse(self.price_step, self.qty_step, self.min_qty, self.min_cost,
                                          self.qty_pct, self.leverage, self.min_markup,
                                          self.markup_range, self.n_close_orders, balance, pos_size,
                                          pos_price, highest_bid)
+
             self.iter_entries = lambda balance, long_psize, long_pprice, shrt_psize, shrt_pprice, \
-                highest_bid, lowest_ask, last_price, do_long, do_shrt: \
+                liq_price, highest_bid, lowest_ask, ema, last_price, do_long, do_shrt: \
                 iter_entries_inverse(self.price_step, self.qty_step, self.min_qty, self.min_cost,
                                      self.ddown_factor, self.qty_pct, self.leverage,
-                                     self.grid_spacing, self.grid_coefficient, balance, long_psize,
-                                     long_pprice, shrt_psize, shrt_pprice, highest_bid, lowest_ask,
-                                     last_price, do_long, do_shrt)
+                                     self.grid_spacing, self.grid_coefficient, self.ema_spread,
+                                     self.stop_loss_liq_diff, self.stop_loss_pos_pct, balance,
+                                     long_psize, long_pprice, shrt_psize, shrt_pprice, liq_price,
+                                     highest_bid, lowest_ask, ema, last_price, do_long, do_shrt)
+
+
         self.endpoints['balance'] = '/v2/private/wallet/balance'
 
     def determine_pos_side(self, o: dict) -> str:
