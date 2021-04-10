@@ -13,5 +13,8 @@
     "do_long": true,
     "do_shrt": true,
     "ema_span": 33481.0,
-    "ema_spread": 0.0129
+    "ema_spread": 0.0129,
+    "stop_loss_liq_diff": 0.2,
+    "stop_loss_pos_pct": 0.01
 }
+
