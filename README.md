@@ -1,6 +1,6 @@
 # passivbot_futures
 
-**Version: 3.3.3**
+**Version: 3.3.2**
 
 trading bot running on bybit and binance futures using hedge mode when possible
 
@@ -78,10 +78,6 @@ change log
 - changed name of live_settings dir to live_configs, removed subdirs binance/bybit
 - changed how to use start_bot.py.  see updated startup instructions
 - improved backtester multiprocessing memory usage
-
-2021-04-05 v3.3.3
-- added stop loss
-- todo: backtester with stop loss
 
 
 see `changelog.txt` for earlier changes
