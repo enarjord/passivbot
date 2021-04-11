@@ -120,8 +120,6 @@ class Bybit(Bot):
                                     long_psize, long_pprice, shrt_psize, shrt_pprice, liq_price,
                                     highest_bid, lowest_ask, ema, last_price, do_long, do_shrt)
 
-
-            self.hedge_mode = False
             self.long_pnl_f = calc_long_pnl_linear
             self.shrt_pnl_f = calc_shrt_pnl_linear
             self.cost_f = calc_cost_linear
@@ -333,8 +331,11 @@ class Bybit(Bot):
                   'close_on_trigger': False}
         if self.hedge_mode:
             params['position_idx'] = 1 if order['position_side'] == 'long' else 2
+            if self.market_type == 'linear_perpetual':
+                params['reduce_only'] = order['custom_id'] == 'close'
         else:
             params['position_idx'] = 0
+            params['reduce_only'] = order['custom_id'] == 'close'
         if params['order_type'] == 'Limit':
             params['time_in_force'] = 'PostOnly'
             params['price'] = str(order['price'])
@@ -342,8 +343,6 @@ class Bybit(Bot):
             params['time_in_force'] = 'GoodTillCancel'
         params['order_link_id'] = \
             f"{order['custom_id']}_{int(time() * 1000)}_{int(np.random.random() * 1000)}"
-        if not self.hedge_mode:
-            params['reduce_only'] = order['custom_id'] == 'close'
         o = await self.private_post(self.endpoints['create_order'], params)
         if o['result']:
             return {'symbol': o['result']['symbol'],

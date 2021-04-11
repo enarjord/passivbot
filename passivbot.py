@@ -240,7 +240,7 @@ def iter_entries_inverse(price_step: float,
 
         shrt_entry = calc_next_shrt_entry_inverse(
             price_step, qty_step, min_qty, min_cost, ddown_factor, qty_pct, leverage, grid_spacing,
-            grid_coefficient, ema_spead, balance, long_psize, shrt_psize, shrt_pprice, lowest_ask,
+            grid_coefficient, ema_spread, balance, long_psize, shrt_psize, shrt_pprice, lowest_ask,
             ema, available_margin
         ) if do_shrt else (0.0, np.nan, shrt_psize, shrt_pprice, 0)
 
@@ -704,7 +704,7 @@ def iter_entries_linear(price_step: float,
                                     round_dn(long_psize * stop_loss_pos_pct, qty_step)))
             # if sufficient margin available, increase short pos, otherwise, reduce long pos
             margin_cost = calc_margin_cost_linear(leverage, stop_loss_qty, lowest_ask)
-            if margin_cost < available_margin:
+            if margin_cost < available_margin and do_shrt:
                 # add to shrt pos
                 new_shrt_psize = round_(shrt_psize - stop_loss_qty, qty_step)
                 shrt_pprice = (shrt_pprice * (shrt_psize / new_shrt_psize) +
@@ -724,7 +724,7 @@ def iter_entries_linear(price_step: float,
                                     round_dn(abs_shrt_psize * stop_loss_pos_pct, qty_step)))
             # if sufficient margin available, increase long pos, otherwise, reduce shrt pos
             margin_cost = calc_margin_cost_linear(leverage, stop_loss_qty, highest_bid)
-            if margin_cost < available_margin:
+            if margin_cost < available_margin and do_long:
                 # add to long pos
                 new_long_psize = round_(long_psize + stop_loss_qty, qty_step)
                 long_pprice = (long_pprice * (long_psize / new_long_psize) +
@@ -1263,8 +1263,8 @@ class Bot:
             do_long = (no_pos and self.do_long) or long_psize != 0.0
             do_shrt = (no_pos and self.do_shrt) or shrt_psize != 0.0
 
-        liq_price = max(self.position['long']['liquidation_price'],
-                        self.position['shrt']['liquidation_price'])
+        liq_price = self.position['long']['liquidation_price'] if long_psize > abs(shrt_psize) \
+            else self.position['shrt']['liquidation_price']
 
         entry_orders = []
 
