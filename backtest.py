@@ -538,15 +538,6 @@ def create_config(backtest_config: dict) -> dict:
     return config
 
 
-def find_closest(value: float, distribution: np.ndarray) -> float:
-    closest = 0
-    error = 100
-    for i in distribution:
-        if i - value < error:
-            closest = i
-    return closest
-
-
 def clean_start_config(start_config: dict, backtest_config: dict) -> dict:
     clean_start = {}
     for k, v in start_config.items():
