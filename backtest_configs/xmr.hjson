@@ -8,8 +8,6 @@
 
   do_long: true
   do_shrt: true
-  leverage: 12
-  n_close_orders: 16
 
   # pso options
   iters: 100
@@ -24,16 +22,18 @@
   # set end_date=-1 to use now as end date
   end_date: -1
 
-  # If start, stop, and step are set to same value, it's treated as a fixed variable.
+  # If start and stop are set to same value, it's treated as a fixed variable.
   ranges:
   {
-    qty_pct: [0.0, 0.5, 0.0001]
-    ddown_factor: [0, 3.5, 0.05]
-    grid_coefficient: [0, 400, 0.1]
-    grid_spacing: [0.0002, 0.02, 0.0001]
-    markup_range: [0.0, 0.02, 0.0001]
-    min_markup: [0.0005, 0.012, 0.00001]
-    ema_span: [10.0, 60000.0, 10.0]
-    ema_spread: [0.0, 0.0075, 0.0001]
+    leverage: [1, 100]
+    n_close_orders: [8, 20]
+    qty_pct: [0.0, 0.5]
+    ddown_factor: [0, 3.5]
+    grid_coefficient: [0, 400]
+    grid_spacing: [0.0002, 0.02]
+    markup_range: [0.0, 0.02]
+    min_markup: [0.0005, 0.012]
+    ema_span: [10.0, 60000.0]
+    ema_spread: [0.0, 0.0075]
   }
 }

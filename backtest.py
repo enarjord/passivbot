@@ -130,9 +130,9 @@ def plot_fills(df, fdf, side_: int = 0, liq_thr=0.1):
 
 def cleanup_candidate(config: dict) -> dict:
     cleaned = config.copy()
-    for k in cleaned:
-        if k in config['ranges']:
-            cleaned[k] = round_(cleaned[k], config['ranges'][k][2])
+    # for k in cleaned:
+    #     if k in config['ranges']:
+    #         cleaned[k] = round_(cleaned[k], config['ranges'][k][2])
     if cleaned['ema_span'] != cleaned['ema_span']:
         cleaned['ema_span'] = 1.0
     if cleaned['ema_spread'] != cleaned['ema_spread']:
@@ -529,12 +529,12 @@ def create_config(backtest_config: dict) -> dict:
     config = {k: backtest_config[k] for k in backtest_config
               if k not in {'session_name', 'user', 'symbol', 'start_date', 'end_date', 'ranges'}}
     for k in backtest_config['ranges']:
-        if backtest_config['ranges'][k][0] == backtest_config['ranges'][k][1] == backtest_config['ranges'][k][2]:
+        if backtest_config['ranges'][k][0] == backtest_config['ranges'][k][1]:
             config[k] = backtest_config['ranges'][k][0]
+        elif k in ['n_close_orders', 'leverage']:
+            config[k] = tune.randint(backtest_config['ranges'][k][0], backtest_config['ranges'][k][1] + 1)
         else:
-            config[k] = tune.choice(np.arange(backtest_config['ranges'][k][0],
-                                              backtest_config['ranges'][k][1] + backtest_config['ranges'][k][2],
-                                              backtest_config['ranges'][k][2]))
+            config[k] = tune.uniform(backtest_config['ranges'][k][0], backtest_config['ranges'][k][1])
     return config
 
 
@@ -550,15 +550,8 @@ def find_closest(value: float, distribution: np.ndarray) -> float:
 def clean_start_config(start_config: dict, backtest_config: dict) -> dict:
     clean_start = {}
     for k, v in start_config.items():
-        if k in backtest_config:
-            try:
-                if v in backtest_config[k]:
-                    clean_start[k] = v
-                else:
-                    closest = find_closest(v, backtest_config[k])
-                    clean_start[k] = closest
-            except:
-                pass
+        if k in backtest_config and k not in ['do_long', 'do_shrt']:
+            clean_start[k] = v
     return clean_start
 
 
