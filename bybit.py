@@ -387,6 +387,9 @@ class Bybit(Bot):
     def calc_max_pos_size(self, balance: float, price: float):
         return balance * price * self.leverage * 0.95
 
+    async def fetch_ticks_time(self, start_time: int, end_time: int = None, do_print: bool = True):
+        return await self.fetch_ticks(start_time=start_time, end_time=end_time, do_print=do_print)
+
     async def init_exchange_settings(self):
         try:
             # set cross mode
