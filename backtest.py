@@ -1,5 +1,7 @@
 import gc
+import glob
 from hashlib import sha256
+from typing import Union
 
 import matplotlib.pyplot as plt
 import nevergrad as ng
@@ -7,6 +9,7 @@ import ray
 from ray import tune
 from ray.tune.schedulers import AsyncHyperBandScheduler
 from ray.tune.suggest import ConcurrencyLimiter
+# from ray.tune.suggest.hyperopt import HyperOptSearch
 from ray.tune.suggest.nevergrad import NevergradSearch
 
 from downloader import Downloader, prep_backtest_config
@@ -127,9 +130,9 @@ def plot_fills(df, fdf, side_: int = 0, liq_thr=0.1):
 
 def cleanup_candidate(config: dict) -> dict:
     cleaned = config.copy()
-    for k in cleaned:
-        if k in config['ranges']:
-            cleaned[k] = round_(cleaned[k], config['ranges'][k][2])
+    # for k in cleaned:
+    #     if k in config['ranges']:
+    #         cleaned[k] = round_(cleaned[k], config['ranges'][k][2])
     if cleaned['ema_span'] != cleaned['ema_span']:
         cleaned['ema_span'] = 1.0
     if cleaned['ema_spread'] != cleaned['ema_spread']:
@@ -526,19 +529,19 @@ def create_config(backtest_config: dict) -> dict:
     config = {k: backtest_config[k] for k in backtest_config
               if k not in {'session_name', 'user', 'symbol', 'start_date', 'end_date', 'ranges'}}
     for k in backtest_config['ranges']:
-        if backtest_config['ranges'][k][0] == backtest_config['ranges'][k][1] == backtest_config['ranges'][k][2]:
+        if backtest_config['ranges'][k][0] == backtest_config['ranges'][k][1]:
             config[k] = backtest_config['ranges'][k][0]
+        elif k in ['n_close_orders', 'leverage']:
+            config[k] = tune.randint(backtest_config['ranges'][k][0], backtest_config['ranges'][k][1] + 1)
         else:
-            config[k] = tune.choice(np.arange(backtest_config['ranges'][k][0],
-                                              backtest_config['ranges'][k][1] + backtest_config['ranges'][k][2],
-                                              backtest_config['ranges'][k][2]))
+            config[k] = tune.uniform(backtest_config['ranges'][k][0], backtest_config['ranges'][k][1])
     return config
 
 
 def clean_start_config(start_config: dict, backtest_config: dict) -> dict:
     clean_start = {}
     for k, v in start_config.items():
-        if k in backtest_config:
+        if k in backtest_config and k not in ['do_long', 'do_shrt']:
             clean_start[k] = v
     return clean_start
 
@@ -552,7 +555,7 @@ def clean_result_config(config: dict) -> dict:
     return config
 
 
-def backtest_tune(ticks: np.ndarray, backtest_config: dict, current_best: dict = None):
+def backtest_tune(ticks: np.ndarray, backtest_config: dict, current_best: Union[dict, list] = None):
     config = create_config(backtest_config)
     n_days = round_((ticks[-1][2] - ticks[0][2]) / (1000 * 60 * 60 * 24), 0.1)
     session_dirpath = make_get_filepath(os.path.join('reports', backtest_config['exchange'], backtest_config['symbol'],
@@ -579,8 +582,13 @@ def backtest_tune(ticks: np.ndarray, backtest_config: dict, current_best: dict =
         omega = backtest_config['options']['w']
     current_best_params = []
     if current_best:
-        current_best = clean_start_config(current_best, config)
-        current_best_params.append(current_best)
+        if type(current_best) == list:
+            for c in current_best:
+                c = clean_start_config(c, config)
+                current_best_params.append(c)
+        else:
+            current_best = clean_start_config(current_best, config)
+            current_best_params.append(current_best)
 
     ray.init(num_cpus=num_cpus)
     pso = ng.optimizers.ConfiguredPSO(transform='identity', popsize=n_particles, omega=omega, phip=phi1, phig=phi2)
@@ -644,8 +652,13 @@ async def main(args: list):
     start_candidate = None
     if (s := '--start') in args:
         try:
-            start_candidate = json.load(open(args[args.index(s) + 1]))
-            print('Starting with specified configuration.')
+            if os.path.isdir(args[args.index(s) + 1]):
+                start_candidate = [json.load(open(f)) for f in
+                                   glob.glob(os.path.join(args[args.index(s) + 1], '*.json'))]
+                print('Starting with all configurations in directory.')
+            else:
+                start_candidate = json.load(open(args[args.index(s) + 1]))
+                print('Starting with specified configuration.')
         except:
             print('Could not find specified configuration.')
     if start_candidate:
