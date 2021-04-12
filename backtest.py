@@ -668,4 +668,5 @@ async def main(args: list):
 
 
 if __name__ == '__main__':
-    asyncio.run(main(sys.argv))
+    print("backtester doesn't work in v3.3.3 yet")
+    # asyncio.run(main(sys.argv))
