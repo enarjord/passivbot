@@ -1,10 +1,10 @@
 <h1 align="center">
-  passivbot_futures
+  passivbot
 </h1>
 
-![passivbot_futures Version](https://img.shields.io/badge/passivbot__futures-3.3.3-blue)
-![GitHub issues](https://img.shields.io/github/issues/enarjord/passivbot_futures)
-![GitHub](https://img.shields.io/github/license/enarjord/passivbot_futures)
+![passivbot Version](https://img.shields.io/badge/passivbot-3.3.3-blue)
+![GitHub issues](https://img.shields.io/github/issues/enarjord/passivbot)
+![GitHub](https://img.shields.io/github/license/enarjord/passivbot)
 
 ## Trading bot running on Bybit and Binance Futures using hedge mode when possible
 
@@ -77,7 +77,7 @@ no new positions, until all existing positions are closed.
 
 ### Documentation [WIP], see the wiki at:
 
-https://github.com/enarjord/passivbot_futures/wiki
+https://github.com/enarjord/passivbot/wiki
 
 ### Support
 
@@ -107,7 +107,7 @@ Will use numba's just in time compiler by default to speed up backtesting, add a
 
 `python3 backtest.py {config_name} --nojit`
 
-See [wiki](https://github.com/enarjord/passivbot_futures/wiki) for more info on backtesting
+See [wiki](https://github.com/enarjord/passivbot/wiki) for more info on backtesting
 
 ## Live settings
 

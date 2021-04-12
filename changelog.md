@@ -19,24 +19,24 @@ All notable changes to this project will be documented in this file.
 
 ## [v3.1.1] - 2021-04-01
 
-- binance inverse futures coin margined markets now supported
+- Binance inverse futures coin margined markets now supported
 
 ## [v3.3.0] - 2021-03-30
 
-- bybit usdt linear perpetual and bybit inverse perpetual markets now supported
+- Bybit usdt linear perpetual and Bybit inverse perpetual markets now supported
 - new downloader for historical backtesting data
 
 ## [v3.2.1] - 2021-03-25
 
 - bug fixes
-- bybit backtester improvements and bug fixes
+- Bybit backtester improvements and bug fixes
 - numba is now enabled by default, use --nojit to disable numba
 - several renamings
 
 ## [v3.2.0] - 2021-03-23
 
 - implemented particle swarm optimizationg algorithm, replacing jackrabbit
-- bybit hedge mode with inverse futures
+- Bybit hedge mode with inverse futures
 - removed config param close_qty_pct
 - removed config param balance_pct
 - removed config param max_markup
@@ -56,13 +56,13 @@ All notable changes to this project will be documented in this file.
 
 ## [v3.0.0] - 2021-03-12
 
-- binance hedge mode implemented (bybit not yet supported)
+- Binance hedge mode implemented (Bybit not yet supported)
 - emas removed
 - stop loss removed
 
 ## [v2.0.3] - 2021-03-02
 
-- new default bybit config
+- new default Bybit config
 - behavior change: reentry qtys may now be smaller than initial entry qty
 - backtest iterates a numpy array instead of a python list of dicts for reduced ram usage
 
@@ -105,7 +105,7 @@ All notable changes to this project will be documented in this file.
 ## [v1.1.0] - 2021-02-16
 
 - bug fixes v1.0.2
-- updated default bybit live settings v1.1.0
+- updated default Bybit live settings v1.1.0
 
 ## 2021-02-12
 
