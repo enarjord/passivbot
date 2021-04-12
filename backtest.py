@@ -1,21 +1,80 @@
 import gc
 import glob
 from hashlib import sha256
-from typing import Union
+from typing import Dict, List, Optional, Union
 
 import matplotlib.pyplot as plt
 import nevergrad as ng
 import ray
 from ray import tune
+from ray.tune import CLIReporter
 from ray.tune.schedulers import AsyncHyperBandScheduler
 from ray.tune.suggest import ConcurrencyLimiter
-# from ray.tune.suggest.hyperopt import HyperOptSearch
 from ray.tune.suggest.nevergrad import NevergradSearch
+from ray.tune.trial import Trial
 
 from downloader import Downloader, prep_backtest_config
 from passivbot import *
 
 os.environ['TUNE_GLOBAL_CHECKPOINT_S'] = '120'
+
+
+class LogReporter(CLIReporter):
+    """
+    Extend CLI reporter to add saving of intermediate configs and results.
+    """
+
+    def __init__(
+            self,
+            metric_columns: Union[None, List[str], Dict[str, str]] = None,
+            parameter_columns: Union[None, List[str], Dict[str, str]] = None,
+            total_samples: Optional[int] = None,
+            max_progress_rows: int = 20,
+            max_error_rows: int = 20,
+            max_report_frequency: int = 5,
+            infer_limit: int = 3,
+            print_intermediate_tables: Optional[bool] = None,
+            metric: Optional[str] = None,
+            mode: Optional[str] = None):
+        self.objective = 0
+
+        super(LogReporter, self).__init__(
+            metric_columns, parameter_columns, total_samples,
+            max_progress_rows, max_error_rows, max_report_frequency,
+            infer_limit, print_intermediate_tables, metric, mode)
+
+    def report(self, trials: List[Trial], done: bool, *sys_info: Dict):
+        l = []
+        o = []
+        best_config = None
+        best_eval = None
+        for trial in trials:
+            if self._metric in trial.last_result:
+                if trial.last_result[self._metric] > self.objective:
+                    self.objective = trial.last_result[self._metric]
+                    best_config = trial.config
+                    best_eval = trial.evaluated_params
+                l.append(trial.evaluated_params)
+                o.append(trial.last_result[self._metric])
+                config = trial.config
+        try:
+            df = pd.DataFrame(l)
+            df[self._metric] = o
+            df.sort_values(self._metric, ascending=False, inplace=True)
+            df.dropna(inplace=True)
+            df[df[self._metric] > 0].to_csv(
+                os.path.join(config['session_dirpath'], 'intermediate_results.csv'), index=False)
+            if best_eval:
+                intermediate_result = best_eval.copy()
+                intermediate_result['do_long'] = best_config['do_long']
+                intermediate_result['do_shrt'] = best_config['do_shrt']
+                json.dump(intermediate_result,
+                          open(os.path.join(best_config['session_dirpath'], 'intermediate_best_result.json'), 'w'),
+                          indent=4)
+        except Exception as e:
+            print("Something went wrong", e)
+
+        print(self._progress_str(trials, done, *sys_info))
 
 
 def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
@@ -598,7 +657,7 @@ def backtest_tune(ticks: np.ndarray, backtest_config: dict, current_best: Union[
 
     analysis = tune.run(tune.with_parameters(backtest, ticks=ticks), metric='objective', mode='max', name='search',
                         search_alg=algo, scheduler=scheduler, num_samples=iters, config=config, verbose=1,
-                        reuse_actors=True, local_dir=session_dirpath)
+                        reuse_actors=True, local_dir=session_dirpath, progress_reporter=LogReporter())
 
     ray.shutdown()
     df = analysis.results_df
