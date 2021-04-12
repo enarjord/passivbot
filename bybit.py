@@ -93,11 +93,12 @@ class Bybit(Bot):
             print('linear perpetual')
             self.market_type = 'linear_perpetual'
             self.endpoints = {'position': '/private/linear/position/list',
-                              'open_orders': '/private/linear/order/list',
+                              'open_orders': '/private/linear/order/search',
                               'create_order': '/private/linear/order/create',
                               'cancel_order': '/private/linear/order/cancel',
                               'ticks': '/public/linear/recent-trading-records',
-                              'websocket_url': 'wss://stream.bybit.com/realtime_public'}
+                              'websocket_url': 'wss://stream.bybit.com/realtime_public',
+                              'created_at_key': 'created_time'}
 
             self.iter_long_closes = lambda balance, pos_size, pos_price, lowest_ask: \
                 iter_long_closes_linear(self.price_step, self.qty_step, self.min_qty, self.min_cost,
@@ -136,7 +137,9 @@ class Bybit(Bot):
                                   'create_order': '/v2/private/order/create',
                                   'cancel_order': '/v2/private/order/cancel',
                                   'ticks': '/v2/public/trading-records',
-                                  'websocket_url': 'wss://stream.bybit.com/realtime'}
+                                  'websocket_url': 'wss://stream.bybit.com/realtime',
+                                  'created_at_key': 'created_at'}
+
                 self.hedge_mode = False
             else:
                 print('inverse futures')
@@ -146,7 +149,8 @@ class Bybit(Bot):
                                   'create_order': '/futures/private/order/create',
                                   'cancel_order': '/futures/private/order/cancel',
                                   'ticks': '/v2/public/trading-records',
-                                  'websocket_url': 'wss://stream.bybit.com/realtime'}
+                                  'websocket_url': 'wss://stream.bybit.com/realtime',
+                                  'created_at_key': 'created_at'}
 
             self.iter_long_closes = lambda balance, pos_size, pos_price, lowest_ask: \
                 iter_long_closes_inverse(self.price_step, self.qty_step, self.min_qty, self.min_cost,
@@ -228,26 +232,16 @@ class Bybit(Bot):
 
     async def fetch_open_orders(self) -> [dict]:
         fetched = await self.private_get(self.endpoints['open_orders'], {'symbol': self.symbol})
-        if self.market_type == 'linear_perpetual':
-            elms = fetched['result']['data']
-            created_at_key = 'created_time'
-        else:
-            elms = fetched['result']
-            created_at_key = 'created_at'
 
-        oos = []
-        for elm in elms:
-            if elm['order_status'] == 'New':
-                position_side = self.determine_pos_side(elm)
-                oos.append({'order_id': elm['order_id'],
-                            'custom_id': elm['order_link_id'],
-                            'symbol': elm['symbol'],
-                            'price': float(elm['price']),
-                            'qty': float(elm['qty']),
-                            'side': elm['side'].lower(),
-                            'position_side': position_side,
-                            'timestamp': date_to_ts(elm[created_at_key])})
-        return oos
+        return [{'order_id': elm['order_id'],
+                 'custom_id': elm['order_link_id'],
+                 'symbol': elm['symbol'],
+                 'price': float(elm['price']),
+                 'qty': float(elm['qty']),
+                 'side': elm['side'].lower(),
+                 'position_side': self.determine_pos_side(elm),
+                 'timestamp': date_to_ts(elm[self.endpoints['created_at_key']])}
+                for elm in fetched['result']]
 
     async def public_get(self, url: str, params: dict = {}) -> dict:
         async with self.session.get(self.base_endpoint + url, params=params) as response:
@@ -352,7 +346,7 @@ class Bybit(Bot):
                     'qty': o['result']['qty'],
                     'price': o['result']['price']}
         else:
-            return {}
+            return o, order
 
     async def execute_cancellation(self, order: dict) -> [dict]:
         o = await self.private_post(self.endpoints['cancel_order'],
