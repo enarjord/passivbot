@@ -178,8 +178,7 @@ def iter_entries_inverse(price_step: float,
                          do_long: bool = True,
                          do_shrt: bool = True,):
     # yields both long and short entries
-    # (long_qty, long_price, new_long_psize, new_long_pprice,
-    #  shrt_qty, shrt_price, new_shrt_psize, new_shrt_pprice)
+    # (qty, price, new_psize, new_pprice, comment)
 
     available_margin = calc_available_margin_inverse(balance, leverage, long_psize, long_pprice,
                                                      shrt_psize, shrt_pprice, last_price)
@@ -293,19 +292,15 @@ def calc_next_long_entry_inverse(price_step: float,
                                                   balance, highest_bid))
         long_psize = round_(long_qty, qty_step)
         long_pprice = price
-        return long_qty, price, long_psize, long_pprice, 0
+        return long_qty, price, long_psize, long_pprice, 'initial_entry'
     else:
         long_pmargin = calc_margin_cost_inverse(leverage, long_psize, long_pprice)
         price = min(round_(highest_bid, price_step),
                     calc_long_reentry_price(price_step, grid_spacing, grid_coefficient,
                                             balance, long_pmargin, long_pprice))
         if price <= 0.0:
-            return 0.0, np.nan, long_psize, long_pprice, 1
+            return 0.0, np.nan, long_psize, long_pprice, 'reentry'
         max_order_qty = round_dn(available_margin * price * leverage, qty_step)
-        '''
-        min_long_order_qty = calc_min_order_qty_inverse(qty_step, min_qty, min_cost, qty_pct,
-                                                        leverage, balance, price)
-        '''
         min_long_order_qty = calc_min_qty_inverse(qty_step, min_qty, min_cost, price)
         long_qty = calc_reentry_qty(qty_step, ddown_factor, min_long_order_qty,
                                     max_order_qty,
@@ -315,9 +310,9 @@ def calc_next_long_entry_inverse(price_step: float,
             long_pprice = long_pprice * (long_psize / new_long_psize) + \
                 price * (long_qty / new_long_psize)
             long_psize = new_long_psize
-            return long_qty, price, long_psize, long_pprice, 1
+            return long_qty, price, long_psize, long_pprice, 'reentry'
         else:
-            return 0.0, np.nan, long_psize, long_pprice, 1
+            return 0.0, np.nan, long_psize, long_pprice, 'reentry'
 
 @njit
 def calc_next_shrt_entry_inverse(price_step: float,
@@ -345,7 +340,7 @@ def calc_next_shrt_entry_inverse(price_step: float,
                                               balance, lowest_ask))
         shrt_psize = qty
         shrt_pprice = price
-        return qty, price, round_(shrt_psize, qty_step), shrt_pprice, 0
+        return qty, price, round_(shrt_psize, qty_step), shrt_pprice, 'initial_entry'
     else:
         pos_margin = calc_margin_cost_inverse(leverage, shrt_psize, shrt_pprice)
         price = max(round_(lowest_ask, price_step),
@@ -355,20 +350,18 @@ def calc_next_shrt_entry_inverse(price_step: float,
         min_order_qty = -calc_min_order_qty_inverse(qty_step, min_qty, min_cost, qty_pct,
                                                     leverage, balance, price)
         '''
-        min_order_qty = -calc_min_qty_linear(qty_step, min_qty, min_cost, price)
+        min_order_qty = calc_min_qty_inverse(qty_step, min_qty, min_cost, price)
 
         max_order_qty = round_dn(available_margin * price * leverage, qty_step)
-        qty = -calc_reentry_qty(qty_step, ddown_factor, abs(min_order_qty),
-                                max_order_qty,
-                                shrt_psize)
-        if qty <= min_order_qty:
-            new_pos_size = shrt_psize + qty
-            shrt_pprice = shrt_pprice * (shrt_psize / new_pos_size) + price * (qty / new_pos_size)
+        qty = calc_reentry_qty(qty_step, ddown_factor, min_order_qty, max_order_qty, shrt_psize)
+        if qty >= min_order_qty:
+            new_pos_size = shrt_psize - qty
+            shrt_pprice = shrt_pprice * (shrt_psize / new_pos_size) + price * (-qty / new_pos_size)
             shrt_psize = new_pos_size
             margin_cost = calc_margin_cost_inverse(leverage, qty, price)
-            return qty, price, round_(shrt_psize, qty_step), shrt_pprice, 1
+            return -qty, price, round_(shrt_psize, qty_step), shrt_pprice, 'reentry'
         else:
-            return 0.0, np.nan, shrt_psize, shrt_pprice, 1
+            return 0.0, np.nan, shrt_psize, shrt_pprice, 'reentry'
 
 
 @njit
@@ -694,7 +687,6 @@ def iter_entries_linear(price_step: float,
     available_margin = calc_available_margin_linear(balance, leverage, long_psize, long_pprice,
                                                     shrt_psize, shrt_pprice, last_price)
 
-
     abs_shrt_psize = abs(shrt_psize)
     if calc_diff(liq_price, last_price) < stop_loss_liq_diff:
         if long_psize > abs_shrt_psize:
@@ -739,7 +731,6 @@ def iter_entries_linear(price_step: float,
                 available_margin += margin_cost
 
     while True:
-
         long_entry = calc_next_long_entry_linear(
             price_step, qty_step, min_qty, min_cost, ddown_factor, qty_pct, leverage, grid_spacing,
             grid_coefficient, ema_spread, balance, long_psize, long_pprice, shrt_psize, highest_bid,
@@ -857,21 +848,14 @@ def calc_next_shrt_entry_linear(price_step: float,
         price = max(round_(lowest_ask, price_step),
                     calc_shrt_reentry_price(price_step, grid_spacing, grid_coefficient,
                                             balance, pos_margin, shrt_pprice))
-        '''
-        min_order_qty = -calc_min_order_qty_linear(qty_step, min_qty, min_cost, qty_pct,
-                                                   leverage, balance, price)
-        '''
-        min_order_qty = -calc_min_qty_linear(qty_step, min_qty, min_cost, price)
-
+        min_order_qty = calc_min_qty_linear(qty_step, min_qty, min_cost, price)
         max_order_qty = round_dn((available_margin / price) * leverage, qty_step)
-        qty = -calc_reentry_qty(qty_step, ddown_factor, abs(min_order_qty),
-                                max_order_qty,
-                                shrt_psize)
-        if qty <= min_order_qty:
-            new_pos_size = shrt_psize + qty
-            shrt_pprice = shrt_pprice * (shrt_psize / new_pos_size) + price * (qty / new_pos_size)
+        qty = calc_reentry_qty(qty_step, ddown_factor, min_order_qty, max_order_qty, shrt_psize)
+        if qty >= min_order_qty:
+            new_pos_size = shrt_psize - qty
+            shrt_pprice = shrt_pprice * (shrt_psize / new_pos_size) + price * (-qty / new_pos_size)
             shrt_psize = new_pos_size
-            return qty, price, round_(shrt_psize, qty_step), shrt_pprice, 'shrt_reentry'
+            return -qty, price, round_(shrt_psize, qty_step), shrt_pprice, 'shrt_reentry'
         else:
             return 0.0, np.nan, shrt_psize, shrt_pprice, 'shrt_reentry'
 
@@ -1177,7 +1161,7 @@ class Bot:
                   if position['long']['price'] else 0.0) +
                  (self.cost_f(position['shrt']['size'], position['shrt']['price'])
                   if position['shrt']['price'] else 0.0)) / self.leverage
-            position['available_margin'] = position['equity'] - position['used_margin']
+            position['available_margin'] = (position['equity'] - position['used_margin']) * 0.9
             position['long']['liq_diff'] = calc_diff(position['long']['liquidation_price'], self.price)
             position['shrt']['liq_diff'] = calc_diff(position['shrt']['liquidation_price'], self.price)
             if self.position != position:
@@ -1266,48 +1250,50 @@ class Bot:
         liq_price = self.position['long']['liquidation_price'] if long_psize > abs(shrt_psize) \
             else self.position['shrt']['liquidation_price']
 
-        entry_orders = []
+        long_entry_orders, shrt_entry_orders, long_close_orders, shrt_close_orders = [], [], [], []
 
         for tpl in self.iter_entries(balance, long_psize, long_pprice, shrt_psize, shrt_pprice,
                                      liq_price, self.ob[0], self.ob[1], self.ema, self.price,
                                      do_long, do_shrt):
-            if len(entry_orders) >= self.n_entry_orders * 2 or \
+            if (len(long_entry_orders) >= self.n_entry_orders and
+                len(shrt_entry_orders) >= self.n_entry_orders) or \
                     calc_diff(tpl[1], self.price) > last_price_diff_limit:
                 break
             if tpl[4] == 'stop_loss_shrt_close':
-                shrt_psize = round_(shrt_psize + tpl[0], self.qty_step)
+                shrt_close_orders.append({'side': 'buy', 'position_side': 'shrt', 'qty': abs(tpl[0]),
+                                          'price': tpl[1], 'type': 'limit', 'reduce_only': True,
+                                          'custom_id': tpl[4]})
+                shrt_psize = tpl[2]
             elif tpl[4] == 'stop_loss_long_close':
-                long_psize = round_(long_psize + tpl[0], self.qty_step)
-            if tpl[0] > 0.0:
-                entry_orders.append({'side': 'buy', 'position_side': 'long', 'qty': tpl[0],
-                                     'price': tpl[1], 'type': 'limit', 'reduce_only': False,
-                                     'custom_id': 'entry'})
+                long_close_orders.append({'side': 'sell', 'position_side': 'long', 'qty': abs(tpl[0]),
+                                          'price': tpl[1], 'type': 'limit', 'reduce_only': True,
+                                          'custom_id': tpl[4]})
+                long_psize = tpl[2]
+            elif tpl[0] > 0.0:
+                long_entry_orders.append({'side': 'buy', 'position_side': 'long', 'qty': tpl[0],
+                                          'price': tpl[1], 'type': 'limit', 'reduce_only': False,
+                                          'custom_id': tpl[4]})
             else:
-                entry_orders.append({'side': 'sell', 'position_side': 'shrt', 'qty': abs(tpl[0]),
-                                     'price': tpl[1], 'type': 'limit', 'reduce_only': False,
-                                     'custom_id': 'entry'})
+                shrt_entry_orders.append({'side': 'sell', 'position_side': 'shrt', 'qty': abs(tpl[0]),
+                                          'price': tpl[1], 'type': 'limit', 'reduce_only': False,
+                                          'custom_id': tpl[4]})
 
-        long_close_orders = []
-        for ask_qty, ask_price, _ in self.iter_long_closes(balance, long_psize,
-                                                           long_pprice,
-                                                           self.ob[1]):
+        for ask_qty, ask_price, _ in self.iter_long_closes(balance, long_psize, long_pprice, self.ob[1]):
             if len(long_close_orders) >= self.n_entry_orders or \
                     calc_diff(ask_price, self.price) > last_price_diff_limit:
                 break
             long_close_orders.append({'side': 'sell', 'position_side': 'long', 'qty': abs(ask_qty),
                                       'price': float(ask_price), 'type': 'limit',
                                       'reduce_only': True, 'custom_id': 'close'})
-        shrt_close_orders = []
-        for bid_qty, bid_price, _ in self.iter_shrt_closes(balance, shrt_psize,
-                                                           shrt_pprice,
-                                                           self.ob[0]):
+
+        for bid_qty, bid_price, _ in self.iter_shrt_closes(balance, shrt_psize, shrt_pprice, self.ob[0]):
             if len(shrt_close_orders) >= self.n_entry_orders or \
                     calc_diff(bid_price, self.price) > last_price_diff_limit:
                 break
             shrt_close_orders.append({'side': 'buy', 'position_side': 'shrt', 'qty': abs(bid_qty),
                                       'price': float(bid_price), 'type': 'limit',
                                       'reduce_only': True, 'custom_id': 'close'})
-        return entry_orders + long_close_orders + shrt_close_orders
+        return long_entry_orders + shrt_entry_orders + long_close_orders + shrt_close_orders
 
 
     async def cancel_and_create(self):
