@@ -321,6 +321,7 @@ class BinanceBot(Bot):
             if e['asset'] == (self.quot if self.market_type == 'linear_perpetual' else self.coin):
                 position['wallet_balance'] = float(e['balance']) / self.contract_size
                 position['equity'] = position['wallet_balance'] + float(e['crossUnPnl']) / self.contract_size
+                #position['available_margin'] = float(e['availableBalance']) / self.contract_size
                 # position['available_balance'] = float(e['availableBalance'])
                 break
         return position
@@ -336,7 +337,7 @@ class BinanceBot(Bot):
             params['price'] = str(order['price'])
         if 'custom_id' in order:
             params['newClientOrderId'] = \
-                f"{order['custom_id']}_{int(time() * 1000)}_{int(np.random.random() * 1000)}"
+                f"{order['custom_id']}_{str(int(time() * 1000))[8:]}_{int(np.random.random() * 1000)}"
         o = await self.private_post(self.endpoints['create_order'], params)
         if 'side' in o:
             return {'symbol': self.symbol,
