@@ -5,11 +5,11 @@ from typing import Union
 
 import matplotlib.pyplot as plt
 import nevergrad as ng
+import pandas as pd
 import ray
 from ray import tune
 from ray.tune.schedulers import AsyncHyperBandScheduler
 from ray.tune.suggest import ConcurrencyLimiter
-# from ray.tune.suggest.hyperopt import HyperOptSearch
 from ray.tune.suggest.nevergrad import NevergradSearch
 
 from downloader import Downloader, prep_backtest_config
@@ -152,7 +152,7 @@ def backtest(config: dict, ticks: np.ndarray, return_fills=False, do_print=False
         long_pnl_f = calc_long_pnl_inverse
         shrt_pnl_f = calc_shrt_pnl_inverse
         cost_f = calc_cost_inverse
-        iter_entries = lambda balance, long_psize, long_pprice, shrt_psize, shrt_pprice, \
+        iter_entries = lambda balance, long_psize, long_pprice, shrt_psize, shrt_pprice,
                               highest_bid, lowest_ask, last_price, do_long, do_shrt: \
             iter_entries_inverse(config['price_step'], config['qty_step'], config['min_qty'],
                                  config['min_cost'], config['ddown_factor'], config['qty_pct'],
@@ -185,7 +185,7 @@ def backtest(config: dict, ticks: np.ndarray, return_fills=False, do_print=False
         long_pnl_f = calc_long_pnl_linear
         shrt_pnl_f = calc_shrt_pnl_linear
         cost_f = calc_cost_linear
-        iter_entries = lambda balance, long_psize, long_pprice, shrt_psize, shrt_pprice, \
+        iter_entries = lambda balance, long_psize, long_pprice, shrt_psize, shrt_pprice,
                               highest_bid, lowest_ask, last_price, do_long, do_shrt: \
             iter_entries_linear(config['price_step'], config['qty_step'], config['min_qty'],
                                 config['min_cost'], config['ddown_factor'], config['qty_pct'],

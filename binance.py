@@ -1,26 +1,21 @@
 import asyncio
-import json
-import websockets
-import os
-import sys
-import numpy as np
-import pandas as pd
-import pprint
-import datetime
-import aiohttp
-import hmac
 import hashlib
+import hmac
+import json
+import sys
+from time import time
 from urllib.parse import urlencode
-from math import ceil
-from math import floor
-from time import time, sleep
-from typing import Callable, Iterator
-from passivbot import load_key_secret, load_live_settings, make_get_filepath, print_, \
-    ts_to_date, flatten, filter_orders, Bot, start_bot, round_up, round_dn, \
-    calc_min_order_qty, sort_dict_keys, \
-    iter_long_closes_linear, iter_shrt_closes_linear, calc_ema, iter_entries_linear, \
+
+import aiohttp
+import numpy as np
+import websockets
+
+from passivbot import load_key_secret, load_live_settings, print_, \
+    ts_to_date, flatten, Bot, start_bot, round_up, calc_min_order_qty, sort_dict_keys, \
+    iter_long_closes_linear, iter_shrt_closes_linear, iter_entries_linear, \
     iter_long_closes_inverse, iter_shrt_closes_inverse, calc_ema, iter_entries_inverse, \
     calc_cost_linear, calc_cost_inverse
+
 
 async def create_bot(user: str, settings: str):
     bot = BinanceBot(user, settings)
@@ -38,7 +33,6 @@ class BinanceBot(Bot):
         self.base_endpoint = ''
         self.key, self.secret = load_key_secret('binance', user)
 
-
     async def public_get(self, url: str, params: dict = {}) -> dict:
         async with self.session.get(self.base_endpoint + url, params=params) as response:
             result = await response.text()
@@ -54,8 +48,8 @@ class BinanceBot(Bot):
                 params[k] = str(params[k])
         params = sort_dict_keys(params)
         params['signature'] = hmac.new(self.secret.encode('utf-8'),
-                                  urlencode(params).encode('utf-8'),
-                                  hashlib.sha256).hexdigest()
+                                       urlencode(params).encode('utf-8'),
+                                       hashlib.sha256).hexdigest()
         headers = {'X-MBX-APIKEY': self.key}
         async with getattr(self.session, type_)(self.base_endpoint + url, params=params,
                                                 headers=headers) as response:
@@ -102,16 +96,14 @@ class BinanceBot(Bot):
                                         self.markup_range, self.n_close_orders, balance, pos_size,
                                         pos_price, highest_bid)
 
-
-            self.iter_entries = lambda balance, long_psize, long_pprice, shrt_psize, shrt_pprice, \
-                liq_price, highest_bid, lowest_ask, ema, last_price, do_long, do_shrt: \
+            self.iter_entries = lambda balance, long_psize, long_pprice, shrt_psize, shrt_pprice,
+                                       liq_price, highest_bid, lowest_ask, ema, last_price, do_long, do_shrt: \
                 iter_entries_linear(self.price_step, self.qty_step, self.min_qty, self.min_cost,
                                     self.ddown_factor, self.qty_pct, self.leverage,
                                     self.grid_spacing, self.grid_coefficient, self.ema_spread,
                                     self.stop_loss_liq_diff, self.stop_loss_pos_pct, balance,
                                     long_psize, long_pprice, shrt_psize, shrt_pprice, liq_price,
                                     highest_bid, lowest_ask, ema, last_price, do_long, do_shrt)
-
 
             self.cost_f = calc_cost_linear
         else:
@@ -144,8 +136,8 @@ class BinanceBot(Bot):
                                          self.markup_range, self.n_close_orders, balance, pos_size,
                                          pos_price, highest_bid)
 
-            self.iter_entries = lambda balance, long_psize, long_pprice, shrt_psize, shrt_pprice, \
-                liq_price, highest_bid, lowest_ask, ema, last_price, do_long, do_shrt: \
+            self.iter_entries = lambda balance, long_psize, long_pprice, shrt_psize, shrt_pprice,
+                                       liq_price, highest_bid, lowest_ask, ema, last_price, do_long, do_shrt: \
                 iter_entries_inverse(self.price_step, self.qty_step, self.min_qty, self.min_cost,
                                      self.ddown_factor, self.qty_pct, self.leverage,
                                      self.grid_spacing, self.grid_coefficient, self.ema_spread,
@@ -195,7 +187,7 @@ class BinanceBot(Bot):
         max_lev = 0
         for e in leverage_bracket:
             if ('pair' in e and e['pair'] == self.pair) or \
-                    ('symbol' in e and e['symbol'] ==self.symbol):
+                    ('symbol' in e and e['symbol'] == self.symbol):
                 for br in e['brackets']:
                     max_lev = max(max_lev, int(br['initialLeverage']))
                 break
@@ -213,7 +205,7 @@ class BinanceBot(Bot):
         ticks = sorted(ticks + additional_ticks, key=lambda x: x['trade_id'])
         ema = ticks[0]['price']
         for i in range(1, len(ticks)):
-            if ticks[i]['price'] != ticks[i-1]['price']:
+            if ticks[i]['price'] != ticks[i - 1]['price']:
                 ema = ema * self.ema_alpha_ + ticks[i]['price'] * self.ema_alpha
         self.ema = ema
 
@@ -233,11 +225,11 @@ class BinanceBot(Bot):
                     do_abort = True
         for e in open_orders:
             if e['symbol'] != self.symbol:
-                    print('\n\nWARNING\n\n')
-                    print('account has open orders in other symbol:', e)
-                    print('\naborting')
-                    print('\n\n')
-                    do_abort = True
+                print('\n\nWARNING\n\n')
+                print('account has open orders in other symbol:', e)
+                print('\naborting')
+                print('\n\n')
+                do_abort = True
         if do_abort:
             if abort:
                 raise Exception('please close other positions and cancel other open orders')
@@ -321,7 +313,7 @@ class BinanceBot(Bot):
             if e['asset'] == (self.quot if self.market_type == 'linear_perpetual' else self.coin):
                 position['wallet_balance'] = float(e['balance']) / self.contract_size
                 position['equity'] = position['wallet_balance'] + float(e['crossUnPnl']) / self.contract_size
-                #position['available_margin'] = float(e['availableBalance']) / self.contract_size
+                # position['available_margin'] = float(e['availableBalance']) / self.contract_size
                 # position['available_balance'] = float(e['availableBalance'])
                 break
         return position
@@ -434,4 +426,3 @@ async def main() -> None:
 
 if __name__ == '__main__':
     asyncio.run(main())
-

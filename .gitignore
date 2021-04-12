@@ -347,9 +347,7 @@ backtest_results/
 historical_data/
 
 # Config files
-!api_key_secrets/binance/example_user.json
-!api_key_secrets/bybit/example_user.json
-api_key_secrets/*
+api-keys.json
 !live_settings/binance/default.json
 !live_settings/bybit/default.json
 live_settings/*

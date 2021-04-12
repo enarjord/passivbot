@@ -1,21 +1,20 @@
+import asyncio
+import datetime
 import json
 import os
-import datetime
-import numpy as np
-import pandas as pd
-import pprint
-import asyncio
-import traceback
 import sys
-from time import time, sleep
-from typing import Iterator, Tuple
+from time import time
 
+import numpy as np
 
 if '--nojit' in sys.argv:
     print('not using numba')
+
+
     def njit(pyfunc=None, **kwargs):
         def wrap(func):
             return func
+
         if pyfunc is not None:
             return wrap(pyfunc)
         else:
@@ -29,9 +28,11 @@ else:
 def round_up(n: float, step: float, safety_rounding=10) -> float:
     return np.round(np.ceil(n / step) * step, safety_rounding)
 
+
 @njit
 def round_dn(n: float, step: float, safety_rounding=10) -> float:
     return np.round(np.floor(n / step) * step, safety_rounding)
+
 
 @njit
 def round_(n: float, step: float, safety_rounding=10) -> float:
@@ -176,7 +177,7 @@ def iter_entries_inverse(price_step: float,
                          ema: float,
                          last_price: float,
                          do_long: bool = True,
-                         do_shrt: bool = True,):
+                         do_shrt: bool = True, ):
     # yields both long and short entries
     # (qty, price, new_psize, new_pprice, comment)
 
@@ -208,7 +209,7 @@ def iter_entries_inverse(price_step: float,
         else:
             stop_loss_qty = min(abs_shrt_psize,
                                 max(calc_min_order_qty_inverse(qty_step, min_qty, min_cost, qty_pct,
-                                                              leverage, balance, highest_bid),
+                                                               leverage, balance, highest_bid),
                                     round_dn(abs_shrt_psize * stop_loss_pos_pct, qty_step)))
             # if sufficient margin available, increase long pos, otherwise, reduce shrt pos
             margin_cost = calc_margin_cost_inverse(leverage, stop_loss_qty, highest_bid)
@@ -225,9 +226,6 @@ def iter_entries_inverse(price_step: float,
                 shrt_psize = round_(shrt_psize + stop_loss_qty, qty_step)
                 yield stop_loss_qty, highest_bid, shrt_psize, shrt_pprice, 'stop_loss_shrt_close'
                 available_margin += margin_cost
-
-
-
 
     while True:
 
@@ -308,11 +306,12 @@ def calc_next_long_entry_inverse(price_step: float,
         if long_qty >= min_long_order_qty:
             new_long_psize = round_(long_psize + long_qty, qty_step)
             long_pprice = long_pprice * (long_psize / new_long_psize) + \
-                price * (long_qty / new_long_psize)
+                          price * (long_qty / new_long_psize)
             long_psize = new_long_psize
             return long_qty, price, long_psize, long_pprice, 'reentry'
         else:
             return 0.0, np.nan, long_psize, long_pprice, 'reentry'
+
 
 @njit
 def calc_next_shrt_entry_inverse(price_step: float,
@@ -378,7 +377,6 @@ def iter_long_closes_inverse(price_step: float,
                              pos_size: float,
                              pos_price: float,
                              lowest_ask: float):
-
     # yields tuple (qty, price, new_pos_size)
 
     if pos_size == 0.0:
@@ -426,7 +424,6 @@ def iter_shrt_closes_inverse(price_step: float,
                              pos_size: float,
                              pos_price: float,
                              highest_bid: float):
-    
     # yields tuple (qty, price, new_pos_size)
 
     if pos_size == 0.0:
@@ -475,8 +472,8 @@ def calc_cross_long_liq_price_bybit_inverse(balance,
     bankruptcy_price = calc_cross_long_bankruptcy_price_bybit_inverse(pos_size, order_cost, balance, order_margin)
     if bankruptcy_price == 0.0:
         return 0.0
-    rhs = -(balance - order_margin - (pos_size / pos_price) * mm - \
-        (pos_size * 0.00075) / bankruptcy_price)
+    rhs = -(balance - order_margin - (pos_size / pos_price) * mm -
+            (pos_size * 0.00075) / bankruptcy_price)
     return (pos_price * pos_size) / (pos_size - pos_price * rhs)
 
 
@@ -487,18 +484,18 @@ def calc_cross_long_bankruptcy_price_bybit_inverse(pos_size, order_cost, balance
 
 @njit
 def calc_cross_shrt_liq_price_bybit_inverse(balance,
-                              pos_size,
-                              pos_price,
-                              leverage,
-                              mm=0.005) -> float:
+                                            pos_size,
+                                            pos_price,
+                                            leverage,
+                                            mm=0.005) -> float:
     _pos_size = abs(pos_size)
     order_cost = _pos_size / pos_price
     order_margin = order_cost / leverage
     bankruptcy_price = calc_cross_shrt_bankruptcy_price_bybit_inverse(_pos_size, order_cost, balance, order_margin)
     if bankruptcy_price == 0.0:
         return 0.0
-    rhs = -(balance - order_margin - (_pos_size / pos_price) * mm - \
-        (_pos_size * 0.00075) / bankruptcy_price)
+    rhs = -(balance - order_margin - (_pos_size / pos_price) * mm -
+            (_pos_size * 0.00075) / bankruptcy_price)
     shrt_liq_price = (pos_price * _pos_size) / (pos_price * rhs + _pos_size)
     if shrt_liq_price <= 0.0:
         return 0.0
@@ -538,7 +535,7 @@ def calc_cross_hedge_liq_price_binance_inverse(balance: float,
     mml = 0.02
     mms = 0.02
     numerator = abs_long_pos_size * mml + abs_shrt_pos_size * mms + abs_long_pos_size - abs_shrt_pos_size
-    cm = contract_size #contract_multiplier?
+    cm = contract_size  # contract_multiplier?
     long_pos_cost = abs_long_pos_size / long_pos_price if long_pos_price > 0.0 else 0.0
     shrt_pos_cost = abs_shrt_pos_size / shrt_pos_price if shrt_pos_price > 0.0 else 0.0
     denom = balance / cm + long_pos_cost - shrt_pos_cost
@@ -616,7 +613,7 @@ def calc_cross_hedge_liq_price_binance_linear(balance: float,
     shrt_pos_margin = abs_shrt_pos_size * shrt_pos_price / leverage
     mml = 0.006
     mms = 0.006
-    #tmm = max(long_pos_margin, shrt_pos_margin)
+    # tmm = max(long_pos_margin, shrt_pos_margin)
     tmm = long_pos_margin + shrt_pos_margin
     numerator = (balance - tmm + long_pos_margin + shrt_pos_margin -
                  abs_long_pos_size * long_pos_price + abs_shrt_pos_size * shrt_pos_price)
@@ -679,7 +676,7 @@ def iter_entries_linear(price_step: float,
                         ema: float,
                         last_price: float,
                         do_long: bool = True,
-                        do_shrt: bool = True,):
+                        do_shrt: bool = True, ):
     # yields both long and short entries
     # also yields stop loss orders if triggered
     # (qty, price, new_psize, new_pprice, comment)
@@ -810,11 +807,12 @@ def calc_next_long_entry_linear(price_step: float,
         if long_qty >= min_long_order_qty:
             new_long_psize = round_(long_psize + long_qty, qty_step)
             long_pprice = long_pprice * (long_psize / new_long_psize) + \
-                price * (long_qty / new_long_psize)
+                          price * (long_qty / new_long_psize)
             long_psize = new_long_psize
             return long_qty, price, long_psize, long_pprice, 'long_reentry'
         else:
             return 0.0, np.nan, long_psize, long_pprice, 'long_reentry'
+
 
 @njit
 def calc_next_shrt_entry_linear(price_step: float,
@@ -874,7 +872,6 @@ def iter_long_closes_linear(price_step: float,
                             pos_size: float,
                             pos_price: float,
                             lowest_ask: float):
-
     # yields tuple (qty, price, new_pos_size)
 
     if pos_size == 0.0:
@@ -922,7 +919,6 @@ def iter_shrt_closes_linear(price_step: float,
                             pos_size: float,
                             pos_price: float,
                             highest_bid: float):
-    
     # yields tuple (qty, price, new_pos_size)
 
     if pos_size == 0.0:
@@ -994,7 +990,6 @@ def calc_min_order_qty(min_qty: float,
     return max(min_qty, round_dn(leveraged_balance_ito_contracts * qty_pct, qty_step))
 
 
-
 @njit
 def calc_reentry_qty(qty_step: float,
                      ddown_factor: float,
@@ -1063,7 +1058,6 @@ def ts_to_date(timestamp: float) -> str:
 def filter_orders(actual_orders: [dict],
                   ideal_orders: [dict],
                   keys: [str] = ['symbol', 'side', 'qty', 'price']) -> ([dict], [dict]):
-
     # returns (orders_to_delete, orders_to_create)
 
     if not actual_orders:
@@ -1195,7 +1189,7 @@ class Bot:
             except Exception as e:
                 print_(['error creating order b', oc, c.exception(), e], n=True)
                 self.dump_log({'log_type': 'create_order', 'data': {'result': str(c.exception()),
-                               'error': repr(e), 'data': oc}})
+                                                                    'error': repr(e), 'data': oc}})
         self.ts_released['create_orders'] = time()
         return created_orders
 
@@ -1224,7 +1218,7 @@ class Bot:
             except Exception as e:
                 print_(['error cancelling order b', oc, c.exception(), e], n=True)
                 self.dump_log({'log_type': 'cancel_order', 'data': {'result': str(c.exception()),
-                               'error': repr(e), 'data': oc}})
+                                                                    'error': repr(e), 'data': oc}})
         self.ts_released['cancel_orders'] = time()
         return canceled_orders
 
@@ -1294,7 +1288,6 @@ class Bot:
                                       'price': float(bid_price), 'type': 'limit',
                                       'reduce_only': True, 'custom_id': 'close'})
         return long_entry_orders + shrt_entry_orders + long_close_orders + shrt_close_orders
-
 
     async def cancel_and_create(self):
         await asyncio.sleep(0.01)
