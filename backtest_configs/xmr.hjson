@@ -1,7 +1,7 @@
 {
-  session_name: session_001_with_ema
+  session_name: session_001
   exchange: binance
-  user: e
+  user: user_name
   symbol: XMRUSDT
   latency_simulation_ms: 750
   starting_balance: 30.0
@@ -35,5 +35,7 @@
     min_markup: [0.0005, 0.012]
     ema_span: [10.0, 60000.0]
     ema_spread: [0.0, 0.0075]
+    stop_loss_liq_dif: [0.05, 0.6]
+    stop_loss_pos_pct: [0.01, 0.1]
   }
 }
