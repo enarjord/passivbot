@@ -98,7 +98,7 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
     lines.append(f"n closes {result['n_closes']}")
     lines.append(f"n reentries {result['n_reentries']}")
     lines.append(f"n stop loss closes {result['n_stop_losses']}")
-    lines.append(f"biggest_pos_size {round(result['biggest_pos_size'], 10)}")
+    lines.append(f"biggest_psize {round(result['biggest_psize'], 10)}")
     lines.append(f"closest liq percentage {result['closest_liq'] * 100:.4f}%")
     lines.append(f"max n hours stuck {result['max_n_hours_stuck']:.2f}")
     lines.append(f"starting balance {result['starting_balance']}")
@@ -146,9 +146,9 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
 
     print('plotting pos sizes...')
     plt.clf()
-    fdf.long_pos_size.plot()
-    fdf.shrt_pos_size.plot()
-    plt.savefig(f"{result['session_dirpath']}pos_sizes_plot.png")
+    fdf.long_psize.plot()
+    fdf.shrt_psize.plot()
+    plt.savefig(f"{result['session_dirpath']}psizes_plot.png")
 
     print('plotting average daily gain...')
     adg_ = fdf.average_daily_gain
@@ -229,17 +229,17 @@ def backtest(config: dict, ticks: np.ndarray, return_fills=False, do_print=False
                                  liq_price, highest_bid, lowest_ask, ema, last_price, do_long,
                                  do_shrt)
 
-        iter_long_closes = lambda balance, pos_size, pos_price, lowest_ask: \
+        iter_long_closes = lambda balance, psize, pprice, lowest_ask: \
             iter_long_closes_inverse(config['price_step'], config['qty_step'], config['min_qty'],
                                      config['min_cost'], config['qty_pct'], config['leverage'],
                                      config['min_markup'], config['markup_range'],
-                                     config['n_close_orders'], balance, pos_size, pos_price,
+                                     config['n_close_orders'], balance, psize, pprice,
                                      lowest_ask)
-        iter_shrt_closes = lambda balance, pos_size, pos_price, highest_bid: \
+        iter_shrt_closes = lambda balance, psize, pprice, highest_bid: \
             iter_shrt_closes_inverse(config['price_step'], config['qty_step'], config['min_qty'],
                                      config['min_cost'], config['qty_pct'], config['leverage'],
                                      config['min_markup'], config['markup_range'],
-                                     config['n_close_orders'], balance, pos_size, pos_price,
+                                     config['n_close_orders'], balance, psize, pprice,
                                      highest_bid)
         if config['exchange'] == 'binance':
             liq_price_f = lambda balance, l_psize, l_pprice, s_psize, s_pprice: \
@@ -266,17 +266,17 @@ def backtest(config: dict, ticks: np.ndarray, return_fills=False, do_print=False
                                 liq_price, highest_bid, lowest_ask, ema, last_price, do_long,
                                 do_shrt)
 
-        iter_long_closes = lambda balance, pos_size, pos_price, lowest_ask: \
+        iter_long_closes = lambda balance, psize, pprice, lowest_ask: \
             iter_long_closes_linear(config['price_step'], config['qty_step'], config['min_qty'],
                                     config['min_cost'], config['qty_pct'], config['leverage'],
                                     config['min_markup'], config['markup_range'],
-                                    config['n_close_orders'], balance, pos_size, pos_price,
+                                    config['n_close_orders'], balance, psize, pprice,
                                     lowest_ask)
-        iter_shrt_closes = lambda balance, pos_size, pos_price, highest_bid: \
+        iter_shrt_closes = lambda balance, psize, pprice, highest_bid: \
             iter_shrt_closes_linear(config['price_step'], config['qty_step'], config['min_qty'],
                                     config['min_cost'], config['qty_pct'], config['leverage'],
                                     config['min_markup'], config['markup_range'],
-                                    config['n_close_orders'], balance, pos_size, pos_price,
+                                    config['n_close_orders'], balance, psize, pprice,
                                     highest_bid)
 
         if config['exchange'] == 'binance':
@@ -546,7 +546,7 @@ def prepare_result(fills: list, ticks: np.ndarray, do_long: bool, do_shrt: bool)
             'n_closes': 0,
             'n_reentries': 0,
             'n_stop_losses': 0,
-            'biggest_pos_size': 0,
+            'biggest_psize': 0,
             'max_n_hours_stuck': 0,
             'do_long': do_long,
             'do_shrt': do_shrt
@@ -568,7 +568,7 @@ def prepare_result(fills: list, ticks: np.ndarray, do_long: bool, do_shrt: bool)
             'n_closes': len(fdf[fdf.type == 'close']),
             'n_reentries': len(fdf[fdf.type == 'reentry']),
             'n_stop_losses': len(fdf[fdf.type.str.startswith('stop_loss')]),
-            'biggest_pos_size': fdf[['long_pos_size', 'shrt_pos_size']].abs().max(axis=1).max(),
+            'biggest_psize': fdf[['long_psize', 'shrt_psize']].abs().max(axis=1).max(),
             'max_n_hours_stuck': max(fdf['hours_since_pos_change_max'].max(),
                                      (ticks[-1][2] - fills[-1]['timestamp']) / (1000 * 60 * 60)),
             'do_long': do_long,
