@@ -108,7 +108,7 @@ class Bybit(Bot):
                                         self.markup_range, self.n_close_orders, balance, pos_size,
                                         pos_price, highest_bid)
 
-            self.iter_entries = lambda balance, long_psize, long_pprice, shrt_psize, shrt_pprice,
+            self.iter_entries = lambda balance, long_psize, long_pprice, shrt_psize, shrt_pprice, \
                                        liq_price, highest_bid, lowest_ask, ema, last_price, do_long, do_shrt: \
                 iter_entries_linear(self.price_step, self.qty_step, self.min_qty, self.min_cost,
                                     self.ddown_factor, self.qty_pct, self.leverage,
@@ -160,7 +160,7 @@ class Bybit(Bot):
                                          self.markup_range, self.n_close_orders, balance, pos_size,
                                          pos_price, highest_bid)
 
-            self.iter_entries = lambda balance, long_psize, long_pprice, shrt_psize, shrt_pprice,
+            self.iter_entries = lambda balance, long_psize, long_pprice, shrt_psize, shrt_pprice, \
                                        liq_price, highest_bid, lowest_ask, ema, last_price, do_long, do_shrt: \
                 iter_entries_inverse(self.price_step, self.qty_step, self.min_qty, self.min_cost,
                                      self.ddown_factor, self.qty_pct, self.leverage,
