@@ -166,25 +166,30 @@ def plot_fills(df, fdf, side_: int = 0, liq_thr=0.1):
     df.loc[fdf.index[0]:fdf.index[-1]].price.plot(style='y-')
 
     if side_ >= 0:
-        longs = fdf[fdf.pos_side == 'long']
-        le = longs[longs.type.str.endswith('entry')]
-        lc = longs[longs.type == 'close']
-        le.price.plot(style='b.')
-        lc.price.plot(style='r.')
-        longs.long_pos_price.fillna(method='ffill').plot(style='b--')
+        longs = fdf[fdf.pside == 'long']
+        lentry = longs[longs.type == 'long_entry']
+        lclose = longs[longs.type == 'long_close']
+        lstopclose = longs[longs.type == 'stop_loss_long_close']
+        lstopentry = longs[longs.type == 'stop_loss_long_entry']
+        lentry.price.plot(style='b.')
+        lstopentry.price.plot(style='bx')
+        lclose.price.plot(style='r.')
+        lstopclose.price.plot(style=('rx'))
+        longs.long_pprice.fillna(method='ffill').plot(style='b--')
     if side_ <= 0:
-        shrts = fdf[fdf.pos_side == 'shrt']
-        se = shrts[shrts.type.str.endswith('entry')]
-        sc = shrts[shrts.type == 'close']
-        se.price.plot(style='r.')
-        sc.price.plot(style='b.')
-        shrts.shrt_pos_price.fillna(method='ffill').plot(style='r--')
+        shrts = fdf[fdf.pside == 'shrt']
+        sentry = shrts[shrts.type == 'shrt_entry']
+        sclose = shrts[shrts.type == 'shrt_close']
+        sstopclose = shrts[shrts.type == 'stop_loss_shrt_close']
+        sstopentry = shrts[shrts.type == 'stop_loss_shrt_entry']
+        sentry.price.plot(style='r.')
+        sstopentry.price.plot(style='rx')
+        sclose.price.plot(style='b.')
+        sstopclose.price.plot(style=('bx'))
+        shrts.shrt_pprice.fillna(method='ffill').plot(style='r--')
 
-    stops = fdf[fdf.type.str.startswith('stop_loss')]
-    stops.price.plot(style='gx')
     if 'liq_price' in fdf.columns:
-        liq_diff = ((fdf.liq_price - fdf.price).abs() / fdf.price)
-        fdf.liq_price.where(liq_diff < liq_thr, np.nan).plot(style='k--')
+        fdf.liq_price.where(fdf.liq_diff < liq_thr, np.nan).plot(style='k--')
     return plt
 
 
