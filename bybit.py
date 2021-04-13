@@ -1,27 +1,22 @@
 import asyncio
-import json
-import websockets
-import os
-import sys
-import numpy as np
-import pandas as pd
-import pprint
 import hashlib
 import hmac
+import json
+import sys
+from time import time
+from urllib.parse import urlencode
+
+import aiohttp
+import numpy as np
+import websockets
 from dateutil import parser
-from math import ceil
-from math import floor
-from time import time, sleep
-from typing import Callable, Iterator
-from passivbot import load_key_secret, load_live_settings, make_get_filepath, print_, \
-    ts_to_date, flatten, Bot, start_bot, round_up, round_dn, \
-    calc_min_order_qty_inverse, sort_dict_keys, calc_ema, calc_diff, \
-    iter_long_closes_inverse, iter_shrt_closes_inverse, iter_entries_inverse, \
+
+from passivbot import load_key_secret, load_live_settings, print_, \
+    ts_to_date, flatten, Bot, start_bot, calc_min_order_qty_inverse, sort_dict_keys, calc_ema, iter_long_closes_inverse, \
+    iter_shrt_closes_inverse, iter_entries_inverse, \
     iter_long_closes_linear, iter_shrt_closes_linear, iter_entries_linear, calc_long_pnl_linear, \
     calc_long_pnl_inverse, calc_shrt_pnl_linear, \
     calc_shrt_pnl_inverse, calc_cost_linear, calc_cost_inverse
-import aiohttp
-from urllib.parse import urlencode
 
 
 def first_capitalized(s: str):
@@ -53,7 +48,6 @@ def format_tick(tick: dict) -> dict:
 
 
 async def fetch_ticks(cc, symbol: str, from_id: int = None, do_print=True) -> [dict]:
-
     params = {'symbol': symbol, 'limit': 1000}
     if from_id:
         params['from'] = max(0, from_id)
@@ -68,8 +62,10 @@ async def fetch_ticks(cc, symbol: str, from_id: int = None, do_print=True) -> [d
                 ts_to_date(trades[0]['timestamp'] / 1000)])
     return trades
 
+
 def date_to_ts(date: str):
     return parser.parse(date).timestamp() * 1000
+
 
 async def create_bot(user: str, settings: str):
     bot = Bybit(user, settings)
@@ -112,8 +108,8 @@ class Bybit(Bot):
                                         self.markup_range, self.n_close_orders, balance, pos_size,
                                         pos_price, highest_bid)
 
-            self.iter_entries = lambda balance, long_psize, long_pprice, shrt_psize, shrt_pprice, \
-                liq_price, highest_bid, lowest_ask, ema, last_price, do_long, do_shrt: \
+            self.iter_entries = lambda balance, long_psize, long_pprice, shrt_psize, shrt_pprice,
+                                       liq_price, highest_bid, lowest_ask, ema, last_price, do_long, do_shrt: \
                 iter_entries_linear(self.price_step, self.qty_step, self.min_qty, self.min_cost,
                                     self.ddown_factor, self.qty_pct, self.leverage,
                                     self.grid_spacing, self.grid_coefficient, self.ema_spread,
@@ -164,8 +160,8 @@ class Bybit(Bot):
                                          self.markup_range, self.n_close_orders, balance, pos_size,
                                          pos_price, highest_bid)
 
-            self.iter_entries = lambda balance, long_psize, long_pprice, shrt_psize, shrt_pprice, \
-                liq_price, highest_bid, lowest_ask, ema, last_price, do_long, do_shrt: \
+            self.iter_entries = lambda balance, long_psize, long_pprice, shrt_psize, shrt_pprice,
+                                       liq_price, highest_bid, lowest_ask, ema, last_price, do_long, do_shrt: \
                 iter_entries_inverse(self.price_step, self.qty_step, self.min_qty, self.min_cost,
                                      self.ddown_factor, self.qty_pct, self.leverage,
                                      self.grid_spacing, self.grid_coefficient, self.ema_spread,
@@ -173,19 +169,24 @@ class Bybit(Bot):
                                      long_psize, long_pprice, shrt_psize, shrt_pprice, liq_price,
                                      highest_bid, lowest_ask, ema, last_price, do_long, do_shrt)
 
-
         self.endpoints['balance'] = '/v2/private/wallet/balance'
 
     def determine_pos_side(self, o: dict) -> str:
         side = o['side'].lower()
         if side == 'buy':
-            if 'entry' in o['order_link_id']:   position_side = 'long'
-            elif 'close' in o['order_link_id']: position_side = 'shrt'
-            else:                               position_side = 'unknown'
+            if 'entry' in o['order_link_id']:
+                position_side = 'long'
+            elif 'close' in o['order_link_id']:
+                position_side = 'shrt'
+            else:
+                position_side = 'unknown'
         else:
-            if 'entry' in o['order_link_id']:   position_side = 'shrt'
-            elif 'close' in o['order_link_id']: position_side = 'long'
-            else:                               position_side = 'both'
+            if 'entry' in o['order_link_id']:
+                position_side = 'shrt'
+            elif 'close' in o['order_link_id']:
+                position_side = 'long'
+            else:
+                position_side = 'both'
         return position_side
 
     async def _init(self):
@@ -220,7 +221,7 @@ class Bybit(Bot):
         ticks = sorted(ticks + additional_ticks, key=lambda x: x['trade_id'])
         ema = ticks[0]['price']
         for i in range(1, len(ticks)):
-            if ticks[i]['price'] != ticks[i-1]['price']:
+            if ticks[i]['price'] != ticks[i - 1]['price']:
                 ema = ema * self.ema_alpha_ + ticks[i]['price'] * self.ema_alpha
         self.ema = ema
 
@@ -228,7 +229,6 @@ class Bybit(Bot):
         ticker = await self.private_get('/v2/public/tickers', {'symbol': self.symbol})
         self.ob = [float(ticker['result'][0]['bid_price']), float(ticker['result'][0]['ask_price'])]
         self.price = float(ticker['result'][0]['last_price'])
-
 
     async def fetch_open_orders(self) -> [dict]:
         fetched = await self.private_get(self.endpoints['open_orders'], {'symbol': self.symbol})
@@ -298,7 +298,6 @@ class Bybit(Bot):
                 long_pos = [e['data'] for e in fetched['result'] if e['data']['position_idx'] == 1][0]
                 shrt_pos = [e['data'] for e in fetched['result'] if e['data']['position_idx'] == 2][0]
 
-
         position['long'] = {'size': float(long_pos['size']),
                             'price': float(long_pos['entry_price']),
                             'leverage': float(long_pos['leverage']),
@@ -319,7 +318,7 @@ class Bybit(Bot):
 
     async def execute_order(self, order: dict) -> dict:
         params = {'symbol': self.symbol,
-                  'side':  first_capitalized(order['side']),
+                  'side': first_capitalized(order['side']),
                   'order_type': first_capitalized(order['type']),
                   'qty': float(order['qty']) if self.market_type == 'linear_perpetual' else int(order['qty']),
                   'close_on_trigger': False}
@@ -405,7 +404,7 @@ class Bybit(Bot):
             elif self.market_type == 'inverse_perpetual':
                 res = await self.private_post('/v2/private/position/leverage/save',
                                               {'symbol': self.symbol, 'leverage': 0})
-                
+
             print(res)
         except Exception as e:
             print(e)
@@ -455,5 +454,3 @@ async def main() -> None:
 
 if __name__ == '__main__':
     asyncio.run(main())
-
-
