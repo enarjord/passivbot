@@ -682,6 +682,72 @@ def calc_available_margin_linear(balance: float,
     return equity - used_margin
 
 
+
+@njit
+def calc_stop_loss_linear(qty_step: float,
+                          min_qty: float,
+                          min_cost: float,
+                          qty_pct: float,
+                          leverage: float,
+                          stop_loss_liq_diff: float,
+                          stop_loss_pos_pct: float,
+                          balance: float,
+                          long_psize: float,
+                          long_pprice: float,
+                          shrt_psize: float,
+                          shrt_pprice: float,
+                          liq_price: float,
+                          highest_bid: float,
+                          lowest_ask: float,
+                          last_price: float,
+                          available_margin: float,
+                          do_long: bool = True,
+                          do_shrt: bool = True,):
+    abs_shrt_psize = abs(shrt_psize)
+    if calc_diff(liq_price, last_price) < stop_loss_liq_diff:
+        if long_psize > abs_shrt_psize:
+            stop_loss_qty = min(long_psize,
+                                max(calc_min_order_qty_linear(qty_step, min_qty, min_cost, qty_pct,
+                                                              leverage, balance, lowest_ask),
+                                    round_dn(long_psize * stop_loss_pos_pct, qty_step)))
+            # if sufficient margin available, increase short pos, otherwise, reduce long pos
+            margin_cost = calc_margin_cost_linear(leverage, stop_loss_qty, lowest_ask)
+            if margin_cost < available_margin and do_shrt:
+                # add to shrt pos
+                new_shrt_psize = round_(shrt_psize - stop_loss_qty, qty_step)
+                shrt_pprice = (shrt_pprice * (shrt_psize / new_shrt_psize) +
+                               lowest_ask * (-stop_loss_qty / new_shrt_psize))
+                shrt_psize = new_shrt_psize
+                return -stop_loss_qty, lowest_ask, shrt_psize, shrt_pprice, 'stop_loss_shrt_entry'
+                available_margin -= margin_cost
+            else:
+                # reduce long pos
+                long_psize = round_(long_psize - stop_loss_qty, qty_step)
+                return -stop_loss_qty, lowest_ask, long_psize, long_pprice, 'stop_loss_long_close'
+                available_margin += margin_cost
+        else:
+            stop_loss_qty = min(abs_shrt_psize,
+                                max(calc_min_order_qty_linear(qty_step, min_qty, min_cost, qty_pct,
+                                                              leverage, balance, highest_bid),
+                                    round_dn(abs_shrt_psize * stop_loss_pos_pct, qty_step)))
+            # if sufficient margin available, increase long pos, otherwise, reduce shrt pos
+            margin_cost = calc_margin_cost_linear(leverage, stop_loss_qty, highest_bid)
+            if margin_cost < available_margin and do_long:
+                # add to long pos
+                new_long_psize = round_(long_psize + stop_loss_qty, qty_step)
+                long_pprice = (long_pprice * (long_psize / new_long_psize) +
+                               highest_bid * (stop_loss_qty / new_long_psize))
+                long_psize = new_long_psize
+                return stop_loss_qty, highest_bid, long_psize, long_pprice, 'stop_loss_long_entry'
+                available_margin -= margin_cost
+            else:
+                # reduce shrt pos
+                shrt_psize = round_(shrt_psize + stop_loss_qty, qty_step)
+                return stop_loss_qty, highest_bid, shrt_psize, shrt_pprice, 'stop_loss_shrt_close'
+                available_margin += margin_cost
+    return 0.0, 0.0, 0.0, 0.0, ''
+
+
 @njit
 def iter_entries_linear(price_step: float,
                         qty_step: float,
@@ -706,7 +772,7 @@ def iter_entries_linear(price_step: float,
                         ema: float,
                         last_price: float,
                         do_long: bool = True,
-                        do_shrt: bool = True, ):
+                        do_shrt: bool = True,):
     # yields both long and short entries
     # also yields stop loss orders if triggered
     # (qty, price, new_psize, new_pprice, comment)
@@ -714,48 +780,13 @@ def iter_entries_linear(price_step: float,
     available_margin = calc_available_margin_linear(balance, leverage, long_psize, long_pprice,
                                                     shrt_psize, shrt_pprice, last_price)
 
-    abs_shrt_psize = abs(shrt_psize)
-    if calc_diff(liq_price, last_price) < stop_loss_liq_diff:
-        if long_psize > abs_shrt_psize:
-            stop_loss_qty = min(long_psize,
-                                max(calc_min_order_qty_linear(qty_step, min_qty, min_cost, qty_pct,
-                                                              leverage, balance, lowest_ask),
-                                    round_dn(long_psize * stop_loss_pos_pct, qty_step)))
-            # if sufficient margin available, increase short pos, otherwise, reduce long pos
-            margin_cost = calc_margin_cost_linear(leverage, stop_loss_qty, lowest_ask)
-            if margin_cost < available_margin and do_shrt:
-                # add to shrt pos
-                new_shrt_psize = round_(shrt_psize - stop_loss_qty, qty_step)
-                shrt_pprice = (shrt_pprice * (shrt_psize / new_shrt_psize) +
-                               lowest_ask * (-stop_loss_qty / new_shrt_psize))
-                shrt_psize = new_shrt_psize
-                yield -stop_loss_qty, lowest_ask, shrt_psize, shrt_pprice, 'stop_loss_shrt_entry'
-                available_margin -= margin_cost
-            else:
-                # reduce long pos
-                long_psize = round_(long_psize - stop_loss_qty, qty_step)
-                yield -stop_loss_qty, lowest_ask, long_psize, long_pprice, 'stop_loss_long_close'
-                available_margin += margin_cost
-        else:
-            stop_loss_qty = min(abs_shrt_psize,
-                                max(calc_min_order_qty_linear(qty_step, min_qty, min_cost, qty_pct,
-                                                              leverage, balance, highest_bid),
-                                    round_dn(abs_shrt_psize * stop_loss_pos_pct, qty_step)))
-            # if sufficient margin available, increase long pos, otherwise, reduce shrt pos
-            margin_cost = calc_margin_cost_linear(leverage, stop_loss_qty, highest_bid)
-            if margin_cost < available_margin and do_long:
-                # add to long pos
-                new_long_psize = round_(long_psize + stop_loss_qty, qty_step)
-                long_pprice = (long_pprice * (long_psize / new_long_psize) +
-                               highest_bid * (stop_loss_qty / new_long_psize))
-                long_psize = new_long_psize
-                yield stop_loss_qty, highest_bid, long_psize, long_pprice, 'stop_loss_long_entry'
-                available_margin -= margin_cost
-            else:
-                # reduce shrt pos
-                shrt_psize = round_(shrt_psize + stop_loss_qty, qty_step)
-                yield stop_loss_qty, highest_bid, shrt_psize, shrt_pprice, 'stop_loss_shrt_close'
-                available_margin += margin_cost
+    stop_loss_order = calc_stop_loss_linear(qty_step, min_qty, min_cost, qty_pct, leverage,
+                                            stop_loss_liq_diff, stop_loss_pos_pct, balance,
+                                            long_psize, long_pprice, shrt_psize, shrt_pprice,
+                                            liq_price, highest_bid, lowest_ask, last_price,
+                                            available_margin, do_long, do_shrt,)
+    if stop_loss_order[0] != 0.0:
+        yield stop_loss_order
 
     while True:
         long_entry = calc_next_long_entry_linear(
@@ -826,10 +857,6 @@ def calc_next_long_entry_linear(price_step: float,
         if price <= 0.0:
             return 0.0, np.nan, long_psize, long_pprice, 'long_reentry'
         max_order_qty = round_dn((available_margin / price) * leverage, qty_step)
-        '''
-        min_long_order_qty = calc_min_order_qty_linear(qty_step, min_qty, min_cost, qty_pct,
-                                                       leverage, balance, price)
-        '''
         min_long_order_qty = calc_min_qty_linear(qty_step, min_qty, min_cost, price)
         long_qty = calc_reentry_qty(qty_step, ddown_factor, min_long_order_qty,
                                     max_order_qty,
@@ -902,6 +929,7 @@ def iter_long_closes_linear(price_step: float,
                             pos_size: float,
                             pos_price: float,
                             lowest_ask: float):
+
     # yields tuple (qty, price, new_pos_size)
 
     if pos_size == 0.0:
@@ -949,6 +977,7 @@ def iter_shrt_closes_linear(price_step: float,
                             pos_size: float,
                             pos_price: float,
                             highest_bid: float):
+    
     # yields tuple (qty, price, new_pos_size)
 
     if pos_size == 0.0:
