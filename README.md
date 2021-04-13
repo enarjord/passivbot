@@ -27,7 +27,7 @@ If there is a short position, it creates reentry asks above pos price, and reduc
 
 `reentry_ask_price = pos_price * (1 + grid_spacing * (1 + (position_margin / wallet_balance) * grid_coefficient))`
 
-In hedge mode, stop loss works thusly:
+In hedge mode, stop loss works like this:
 
 ```
 if diff(liq_price, last_price) < stop_loss_liq_diff:
