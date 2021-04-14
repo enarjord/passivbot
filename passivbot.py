@@ -25,6 +25,11 @@ else:
 
 
 @njit
+def nan_to_0(x: float) -> float:
+    return x if x == x else 0.0
+
+
+@njit
 def round_up(n: float, step: float, safety_rounding=10) -> float:
     return np.round(np.ceil(n / step) * step, safety_rounding)
 
@@ -185,7 +190,7 @@ def calc_stop_loss_inverse(qty_step: float,
             if margin_cost < available_margin:
                 # add to shrt pos
                 new_shrt_psize = round_(shrt_psize - stop_loss_qty, qty_step)
-                shrt_pprice = (shrt_pprice * (shrt_psize / new_shrt_psize) +
+                shrt_pprice = (nan_to_0(shrt_pprice) * (shrt_psize / new_shrt_psize) +
                                lowest_ask * (-stop_loss_qty / new_shrt_psize))
                 shrt_psize = new_shrt_psize
                 return -stop_loss_qty, lowest_ask, shrt_psize, shrt_pprice, 'stop_loss_shrt_entry'
@@ -205,7 +210,7 @@ def calc_stop_loss_inverse(qty_step: float,
             if margin_cost < available_margin:
                 # add to long pos
                 new_long_psize = round_(long_psize + stop_loss_qty, qty_step)
-                long_pprice = (long_pprice * (long_psize / new_long_psize) +
+                long_pprice = (nan_to_0(long_pprice) * (long_psize / new_long_psize) +
                                highest_bid * (stop_loss_qty / new_long_psize))
                 long_psize = new_long_psize
                 return stop_loss_qty, highest_bid, long_psize, long_pprice, 'stop_loss_long_entry'
@@ -715,7 +720,7 @@ def calc_stop_loss_linear(qty_step: float,
             if margin_cost < available_margin and do_shrt:
                 # add to shrt pos
                 new_shrt_psize = round_(shrt_psize - stop_loss_qty, qty_step)
-                shrt_pprice = (shrt_pprice * (shrt_psize / new_shrt_psize) +
+                shrt_pprice = (nan_to_0(shrt_pprice) * (shrt_psize / new_shrt_psize) +
                                lowest_ask * (-stop_loss_qty / new_shrt_psize))
                 shrt_psize = new_shrt_psize
                 return -stop_loss_qty, lowest_ask, shrt_psize, shrt_pprice, 'stop_loss_shrt_entry'
@@ -735,7 +740,7 @@ def calc_stop_loss_linear(qty_step: float,
             if margin_cost < available_margin and do_long:
                 # add to long pos
                 new_long_psize = round_(long_psize + stop_loss_qty, qty_step)
-                long_pprice = (long_pprice * (long_psize / new_long_psize) +
+                long_pprice = (nan_to_0(long_pprice) * (long_psize / new_long_psize) +
                                highest_bid * (stop_loss_qty / new_long_psize))
                 long_psize = new_long_psize
                 return stop_loss_qty, highest_bid, long_psize, long_pprice, 'stop_loss_long_entry'
