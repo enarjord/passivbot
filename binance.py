@@ -184,7 +184,7 @@ class BinanceBot(Bot):
                                        (balance_ / last_price) * self.leverage,
                                        self.qty_pct)
                 break
-        max_lev = 0
+        max_lev = 10
         for e in leverage_bracket:
             if ('pair' in e and e['pair'] == self.pair) or \
                     ('symbol' in e and e['symbol'] == self.symbol):
