@@ -97,7 +97,10 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
     lines.append(f"n entries {result['n_entries']}")
     lines.append(f"n closes {result['n_closes']}")
     lines.append(f"n reentries {result['n_reentries']}")
-    lines.append(f"n stop loss closes {result['n_stop_losses']}")
+    lines.append(f"n initial entries {result['n_initial_entries']}")
+    lines.append(f"n normal closes {result['n_normal_closes']}")
+    lines.append(f"n stop loss closes {result['n_stop_loss_closes']}")
+    lines.append(f"n stop loss entries {result['n_stop_loss_entries']}")
     lines.append(f"biggest_psize {round(result['biggest_psize'], 10)}")
     lines.append(f"closest liq percentage {result['closest_liq'] * 100:.4f}%")
     lines.append(f"max n hours stuck {result['max_n_hours_stuck']:.2f}")
@@ -558,7 +561,10 @@ def prepare_result(fills: list, ticks: np.ndarray, do_long: bool, do_shrt: bool)
             'n_entries': 0,
             'n_closes': 0,
             'n_reentries': 0,
-            'n_stop_losses': 0,
+            'n_initial_entries': 0,
+            'n_normal_closes': 0,
+            'n_stop_loss_closes': 0,
+            'n_stop_loss_entries': 0,
             'biggest_psize': 0,
             'max_n_hours_stuck': 0,
             'do_long': do_long,
@@ -580,7 +586,7 @@ def prepare_result(fills: list, ticks: np.ndarray, do_long: bool, do_shrt: bool)
             'n_entries': len(fdf[fdf.type.str.contains('entry')]),
             'n_closes': len(fdf[fdf.type.str.contains('close')]),
             'n_reentries': len(fdf[fdf.type.str.contains('reentry')]),
-            'n_initial_entries': len(fdf[fdf.type.str.contains('initial_entry')]),
+            'n_initial_entries': len(fdf[fdf.type.str.contains('initial')]),
             'n_normal_closes': len(fdf[(fdf.type == 'long_close') | (fdf.type == 'shrt_close')]),
             'n_stop_loss_closes': len(fdf[(fdf.type.str.contains('stop_loss')) &
                                           (fdf.type.str.contains('close'))]),
