@@ -269,13 +269,13 @@ def iter_entries_inverse(price_step: float,
             price_step, qty_step, min_qty, min_cost, ddown_factor, qty_pct, leverage, grid_spacing,
             grid_coefficient, ema_spread, balance, long_psize, long_pprice, shrt_psize, highest_bid,
             ema, available_margin
-        ) if do_long else (0.0, np.nan, long_psize, long_pprice, 0)
+        ) if do_long else (0.0, np.nan, long_psize, long_pprice, '')
 
         shrt_entry = calc_next_shrt_entry_inverse(
             price_step, qty_step, min_qty, min_cost, ddown_factor, qty_pct, leverage, grid_spacing,
             grid_coefficient, ema_spread, balance, long_psize, shrt_psize, shrt_pprice, lowest_ask,
             ema, available_margin
-        ) if do_shrt else (0.0, np.nan, shrt_psize, shrt_pprice, 0)
+        ) if do_shrt else (0.0, np.nan, shrt_psize, shrt_pprice, '')
 
         if long_entry[0] > 0.0:
             if shrt_entry[0] == 0.0:
@@ -326,14 +326,14 @@ def calc_next_long_entry_inverse(price_step: float,
                                                   balance, highest_bid))
         long_psize = round_(long_qty, qty_step)
         long_pprice = price
-        return long_qty, price, long_psize, long_pprice, 'initial_entry'
+        return long_qty, price, long_psize, long_pprice, 'initial_long_entry'
     else:
         long_pmargin = calc_margin_cost_inverse(leverage, long_psize, long_pprice)
         price = min(round_(highest_bid, price_step),
                     calc_long_reentry_price(price_step, grid_spacing, grid_coefficient,
                                             balance, long_pmargin, long_pprice))
         if price <= 0.0:
-            return 0.0, np.nan, long_psize, long_pprice, 'reentry'
+            return 0.0, np.nan, long_psize, long_pprice, 'long_reentry'
         max_order_qty = round_dn(available_margin * price * leverage, qty_step)
         min_long_order_qty = calc_min_qty_inverse(qty_step, min_qty, min_cost, price)
         long_qty = calc_reentry_qty(qty_step, ddown_factor, min_long_order_qty,
@@ -344,9 +344,9 @@ def calc_next_long_entry_inverse(price_step: float,
             long_pprice = long_pprice * (long_psize / new_long_psize) + \
                           price * (long_qty / new_long_psize)
             long_psize = new_long_psize
-            return long_qty, price, long_psize, long_pprice, 'reentry'
+            return long_qty, price, long_psize, long_pprice, 'long_reentry'
         else:
-            return 0.0, np.nan, long_psize, long_pprice, 'reentry'
+            return 0.0, np.nan, long_psize, long_pprice, 'long_reentry'
 
 @njit
 def calc_next_shrt_entry_inverse(price_step: float,
@@ -374,7 +374,7 @@ def calc_next_shrt_entry_inverse(price_step: float,
                                               balance, lowest_ask))
         shrt_psize = qty
         shrt_pprice = price
-        return qty, price, round_(shrt_psize, qty_step), shrt_pprice, 'initial_entry'
+        return qty, price, round_(shrt_psize, qty_step), shrt_pprice, 'initial_shrt_entry'
     else:
         pos_margin = calc_margin_cost_inverse(leverage, shrt_psize, shrt_pprice)
         price = max(round_(lowest_ask, price_step),
@@ -393,9 +393,9 @@ def calc_next_shrt_entry_inverse(price_step: float,
             shrt_pprice = shrt_pprice * (shrt_psize / new_pos_size) + price * (-qty / new_pos_size)
             shrt_psize = new_pos_size
             margin_cost = calc_margin_cost_inverse(leverage, qty, price)
-            return -qty, price, round_(shrt_psize, qty_step), shrt_pprice, 'reentry'
+            return -qty, price, round_(shrt_psize, qty_step), shrt_pprice, 'shrt_reentry'
         else:
-            return 0.0, np.nan, shrt_psize, shrt_pprice, 'reentry'
+            return 0.0, np.nan, shrt_psize, shrt_pprice, 'shrt_reentry'
 
 
 @njit
@@ -853,7 +853,7 @@ def calc_next_long_entry_linear(price_step: float,
                                                  balance, highest_bid))
         long_psize = round_(long_qty, qty_step)
         long_pprice = price
-        return long_qty, price, long_psize, long_pprice, 'long_entry'
+        return long_qty, price, long_psize, long_pprice, 'initial_long_entry'
     else:
         long_pmargin = calc_margin_cost_linear(leverage, long_psize, long_pprice)
         price = min(round_(highest_bid, price_step),
@@ -902,7 +902,7 @@ def calc_next_shrt_entry_linear(price_step: float,
                                              balance, lowest_ask))
         shrt_psize = qty
         shrt_pprice = price
-        return qty, price, round_(shrt_psize, qty_step), shrt_pprice, 'shrt_entry'
+        return qty, price, round_(shrt_psize, qty_step), shrt_pprice, 'initial_shrt_entry'
     else:
         pos_margin = calc_margin_cost_linear(leverage, shrt_psize, shrt_pprice)
         price = max(round_(lowest_ask, price_step),
