@@ -250,10 +250,11 @@ def backtest(config: dict, ticks: np.ndarray, return_fills=False, do_print=False
                                      config['n_close_orders'], balance, psize, pprice,
                                      highest_bid)
         if config['exchange'] == 'binance':
+            # balance = config['starting_balance'] / config['contract_multiplier']
             liq_price_f = lambda balance, l_psize, l_pprice, s_psize, s_pprice: \
                 calc_cross_hedge_liq_price_binance_inverse(balance, l_psize, l_pprice, s_psize, s_pprice,
                                                            config['leverage'],
-                                                           contract_size=config['contract_size'])
+                                                           contract_multiplier=config['contract_multiplier'])
         elif config['exchange'] == 'bybit':
             liq_price_f = lambda balance, l_psize, l_pprice, s_psize, s_pprice: \
                 calc_cross_hedge_liq_price_bybit_inverse(balance, l_psize, l_pprice, s_psize, s_pprice,
@@ -446,7 +447,8 @@ def backtest(config: dict, ticks: np.ndarray, return_fills=False, do_print=False
                     if (prev_shrt_fill_ts := max(prev_shrt_close_ts, prev_shrt_entry_ts)) > 0 else 0
 
 
-                if 'stop_loss' in fill['type'] and 'close' in fill['type']:
+                if ('stop_loss' in fill['type'] and 'close' in fill['type']) \
+                        or 'liquidation' in fill['type']:
                     loss_cumsum += fill['pnl']
                 else:
                     profit_cumsum += fill['pnl']
@@ -701,18 +703,18 @@ def backtest_tune(ticks: np.ndarray, backtest_config: dict, current_best: Union[
 
 def plot_wrap(bc, ticks, candidate):
     n_days = round_((ticks[-1][2] - ticks[0][2]) / (1000 * 60 * 60 * 24), 0.1)
-    bc['session_dirpath'] = make_get_filepath(os.path.join(
-        'plots', bc['exchange'], bc['symbol'],
-        f"{n_days}_days_{ts_to_date(time())[:19].replace(':', '')}", ''))
     print('backtesting...')
     result, fdf = backtest_wrap(ticks, {**bc, **{'break_on': {}}, **candidate}, do_print=True)
     if fdf is None or len(fdf) == 0:
         print('no trades')
         return
-    fdf.to_csv(bc['session_dirpath'] + f"backtest_trades_{result['key']}.csv")
-    print('\nmaking ticks dataframe...')
+    backtest_config = {**bc, **candidate, **result}
+    backtest_config['session_dirpath'] = make_get_filepath(os.path.join(
+        'plots', bc['exchange'], bc['symbol'],
+        f"{n_days}_days_{ts_to_date(time())[:19].replace(':', '')}", ''))
+    fdf.to_csv(backtest_config['session_dirpath'] + f"backtest_trades_{result['key']}.csv")
     df = pd.DataFrame({'price': ticks[:, 0], 'buyer_maker': ticks[:, 1], 'timestamp': ticks[:, 2]})
-    dump_plots({**bc, **candidate, **result}, fdf, df)
+    dump_plots(backtest_config, fdf, df)
 
 
 async def main(args: list):
