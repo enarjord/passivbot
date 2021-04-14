@@ -601,18 +601,22 @@ async def fetch_market_specific_settings(exchange: str, user: str, symbol: str):
     settings_from_exchange = {}
     if exchange == 'binance':
         bot = await create_bot_binance(user, tmp_live_settings)
-        settings_from_exchange['inverse'] = False
         settings_from_exchange['maker_fee'] = 0.00018
         settings_from_exchange['taker_fee'] = 0.00036
         settings_from_exchange['exchange'] = 'binance'
     elif exchange == 'bybit':
         bot = await create_bot_bybit(user, tmp_live_settings)
-        settings_from_exchange['inverse'] = True
         settings_from_exchange['maker_fee'] = -0.00025
         settings_from_exchange['taker_fee'] = 0.00075
         settings_from_exchange['exchange'] = 'bybit'
     else:
         raise Exception(f'unknown exchange {exchange}')
+    if 'inverse' in bot.market_type:
+        settings_from_exchange['inverse'] = True
+    elif 'linear' in bot.market_type:
+        settings_from_exchange['inverse'] = False
+    else:
+        raise Exception('unknown market type')
     await bot.session.close()
     settings_from_exchange['max_leverage'] = bot.max_leverage
     settings_from_exchange['min_qty'] = bot.min_qty
@@ -620,6 +624,7 @@ async def fetch_market_specific_settings(exchange: str, user: str, symbol: str):
     settings_from_exchange['qty_step'] = bot.qty_step
     settings_from_exchange['price_step'] = bot.price_step
     settings_from_exchange['max_leverage'] = bot.max_leverage
+    settings_from_exchange['contract_multiplier'] = bot.contract_size
     return settings_from_exchange
 
 
