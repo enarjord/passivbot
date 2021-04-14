@@ -463,10 +463,10 @@ def backtest(config: dict, ticks: np.ndarray, return_fills=False, do_print=False
                 fill['trade_id'] = k
                 fill['progress'] = k / len(ticks)
                 fill['drawdown'] = calc_diff(fill['balance'], fill['equity'])
-                fill['gain'] = fill['balance'] / config['starting_balance']
                 fill['balance_starting_balance_ratio'] = fill['balance'] / config['starting_balance']
                 fill['equity_starting_balance_ratio'] = fill['equity'] / config['starting_balance']
                 fill['equity_balance_ratio'] = fill['equity'] / fill['balance']
+                fill['gain'] = fill['equity_starting_balance_ratio']
                 fill['n_days'] = (tick[2] - ticks[0][2]) / (1000 * 60 * 60 * 24)
                 try:
                     fill['average_daily_gain'] = fill['gain'] ** (1 / fill['n_days']) \
@@ -577,8 +577,8 @@ def prepare_result(fills: list, ticks: np.ndarray, do_long: bool, do_shrt: bool)
             'average_daily_gain': gain ** (1 / n_days) if gain > 0.0 else 0.0,
             'closest_liq': fdf.liq_diff.min(),
             'n_fills': len(fills),
-            'n_entries': len(fdf[fdf.type.str.contains('entry')])
-            'n_closes': len(fdf[fdf.type.str.contains('close')])
+            'n_entries': len(fdf[fdf.type.str.contains('entry')]),
+            'n_closes': len(fdf[fdf.type.str.contains('close')]),
             'n_reentries': len(fdf[fdf.type.str.contains('reentry')]),
             'n_initial_entries': len(fdf[fdf.type.str.contains('initial_entry')]),
             'n_normal_closes': len(fdf[(fdf.type == 'long_close') | (fdf.type == 'shrt_close')]),
