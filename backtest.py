@@ -483,7 +483,7 @@ def backtest(config: dict, ticks: np.ndarray, return_fills=False, do_print=False
                     else:
                         result = prepare_result(all_fills, ticks, config['do_long'], config['do_shrt'])
                         objective = objective_function(result, config['minimum_liquidation_distance'],
-                                                       config['maximum_daily_entries'])
+                                                       config['minimum_daily_entries'])
                         tune.report(objective=objective)
                         del all_fills
                         gc.collect()
@@ -498,7 +498,7 @@ def backtest(config: dict, ticks: np.ndarray, return_fills=False, do_print=False
     else:
         result = prepare_result(all_fills, ticks, config['do_long'], config['do_shrt'])
         objective = objective_function(result, config['minimum_liquidation_distance'],
-                                       config['maximum_daily_entries'])
+                                       config['minimum_daily_entries'])
         tune.report(objective=objective)
         del all_fills
         gc.collect()
