@@ -167,7 +167,7 @@ def plot_fills(df, fdf, side_: int = 0, liq_thr=0.1):
 
     if side_ >= 0:
         longs = fdf[fdf.pside == 'long']
-        lentry = longs[longs.type == 'long_entry']
+        lentry = longs[(longs.type == 'long_entry') | (longs.type == 'long_reentry')]
         lclose = longs[longs.type == 'long_close']
         lstopclose = longs[longs.type == 'stop_loss_long_close']
         lstopentry = longs[longs.type == 'stop_loss_long_entry']
@@ -178,7 +178,7 @@ def plot_fills(df, fdf, side_: int = 0, liq_thr=0.1):
         longs.long_pprice.fillna(method='ffill').plot(style='b--')
     if side_ <= 0:
         shrts = fdf[fdf.pside == 'shrt']
-        sentry = shrts[shrts.type == 'shrt_entry']
+        sentry = shrts[(shrts.type == 'shrt_entry') | (shrts.type == 'shrt_reentry')]
         sclose = shrts[shrts.type == 'shrt_close']
         sstopclose = shrts[shrts.type == 'stop_loss_shrt_close']
         sstopentry = shrts[shrts.type == 'stop_loss_shrt_entry']
@@ -217,9 +217,14 @@ def backtest(config: dict, ticks: np.ndarray, return_fills=False, do_print=False
         long_pnl_f = calc_long_pnl_inverse
         shrt_pnl_f = calc_shrt_pnl_inverse
         cost_f = calc_cost_inverse
+        available_margin_f = lambda balance, long_psize, long_pprice, shrt_psize, \
+                                    shrt_pprice, last_price: \
+            calc_available_margin_inverse(balance, config['leverage'], long_psize, long_pprice,
+                                          shrt_psize, shrt_pprice, last_price)
 
-        iter_entries = lambda balance, long_psize, long_pprice, shrt_psize, shrt_pprice, \
-            liq_price, highest_bid, lowest_ask, ema, last_price, do_long, do_shrt: \
+
+        iter_entries = lambda balance, long_psize, long_pprice, shrt_psize, shrt_pprice, liq_price, \
+                              highest_bid, lowest_ask, ema, last_price, do_long, do_shrt: \
             iter_entries_inverse(config['price_step'], config['qty_step'], config['min_qty'],
                                  config['min_cost'], config['ddown_factor'], config['qty_pct'],
                                  config['leverage'], config['grid_spacing'],
@@ -254,6 +259,10 @@ def backtest(config: dict, ticks: np.ndarray, return_fills=False, do_print=False
         long_pnl_f = calc_long_pnl_linear
         shrt_pnl_f = calc_shrt_pnl_linear
         cost_f = calc_cost_linear
+        available_margin_f = lambda balance, long_psize, long_pprice, shrt_psize, \
+                                    shrt_pprice, last_price: \
+            calc_available_margin_linear(balance, config['leverage'], long_psize, long_pprice,
+                                         shrt_psize, shrt_pprice, last_price)
 
         iter_entries = lambda balance, long_psize, long_pprice, shrt_psize, shrt_pprice, \
             liq_price, highest_bid, lowest_ask, ema, last_price, do_long, do_shrt: \
@@ -447,7 +456,8 @@ def backtest(config: dict, ticks: np.ndarray, return_fills=False, do_print=False
                 fill['loss_cumsum'] = loss_cumsum
                 fill['profit_cumsum'] = profit_cumsum
                 fill['fee_paid_cumsum'] = fee_paid_cumsum
-
+                fill['available_margin'] = available_margin_f(balance, long_psize, long_pprice,
+                                                              shrt_psize, shrt_pprice, tick[0])
                 fill['balance'] = balance
                 fill['timestamp'] = tick[2]
                 fill['trade_id'] = k
@@ -564,10 +574,13 @@ def prepare_result(fills: list, ticks: np.ndarray, do_long: bool, do_shrt: bool)
             'average_daily_gain': gain ** (1 / n_days) if gain > 0.0 else 0.0,
             'closest_liq': fdf.liq_diff.min(),
             'n_fills': len(fills),
-            'n_entries': len(fdf[fdf.type.str.contains('entry')]),
-            'n_closes': len(fdf[fdf.type == 'close']),
-            'n_reentries': len(fdf[fdf.type == 'reentry']),
-            'n_stop_losses': len(fdf[fdf.type.str.startswith('stop_loss')]),
+            'n_initial_entries': len(fdf[fdf.type.str.contains('entry')]),
+            'n_closes': len(fdf[fdf.type.str.contains('close')]),
+            'n_reentries': len(fdf[fdf.type.str.contains('reentry')]),
+            'n_stop_loss_closes': len(fdf[(fdf.type.str.contains('stop_loss')) &
+                                          (fdf.type.str.contains('close'))]),
+            'n_stop_loss_entries': len(fdf[(fdf.type.str.contains('stop_loss')) &
+                                           (fdf.type.str.contains('entry'))]),
             'biggest_psize': fdf[['long_psize', 'shrt_psize']].abs().max(axis=1).max(),
             'max_n_hours_stuck': max(fdf['hours_since_pos_change_max'].max(),
                                      (ticks[-1][2] - fills[-1]['timestamp']) / (1000 * 60 * 60)),
