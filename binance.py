@@ -86,30 +86,30 @@ class BinanceBot(Bot):
 
             self.iter_long_closes = lambda balance, pos_size, pos_price, lowest_ask: \
                 iter_long_closes_linear(self.price_step, self.qty_step, self.min_qty, self.min_cost,
-                                        self.qty_pct, self.leverage, self.min_markup,
-                                        self.markup_range, self.n_close_orders, balance, pos_size,
-                                        pos_price, lowest_ask)
+                                        self.contract_multiplier, self.qty_pct, self.leverage,
+                                        self.min_markup, self.markup_range, self.n_close_orders,
+                                        balance, pos_size, pos_price, lowest_ask)
 
             self.iter_shrt_closes = lambda balance, pos_size, pos_price, highest_bid: \
                 iter_shrt_closes_linear(self.price_step, self.qty_step, self.min_qty, self.min_cost,
-                                        self.qty_pct, self.leverage, self.min_markup,
-                                        self.markup_range, self.n_close_orders, balance, pos_size,
-                                        pos_price, highest_bid)
+                                        self.contract_multiplier, self.qty_pct, self.leverage,
+                                        self.min_markup, self.markup_range, self.n_close_orders,
+                                        balance, pos_size, pos_price, highest_bid)
 
             self.iter_entries = lambda balance, long_psize, long_pprice, shrt_psize, shrt_pprice, \
                                        liq_price, highest_bid, lowest_ask, ema, last_price, do_long, do_shrt: \
                 iter_entries_linear(self.price_step, self.qty_step, self.min_qty, self.min_cost,
-                                    self.ddown_factor, self.qty_pct, self.leverage,
-                                    self.grid_spacing, self.grid_coefficient, self.ema_spread,
-                                    self.stop_loss_liq_diff, self.stop_loss_pos_pct, balance,
-                                    long_psize, long_pprice, shrt_psize, shrt_pprice, liq_price,
-                                    highest_bid, lowest_ask, ema, last_price, do_long, do_shrt)
+                                    self.contract_multiplier, self.ddown_factor, self.qty_pct,
+                                    self.leverage, self.grid_spacing, self.grid_coefficient,
+                                    self.ema_spread, self.stop_loss_liq_diff, self.stop_loss_pos_pct,
+                                    balance, long_psize, long_pprice, shrt_psize, shrt_pprice,
+                                    liq_price, highest_bid, lowest_ask, ema, last_price, do_long, do_shrt)
 
             self.cost_f = calc_cost_linear
         else:
-            print('inverse perpetual')
+            print('inverse coin margined')
             self.base_endpoint = 'https://dapi.binance.com'
-            self.market_type = 'inverse_perpetual'
+            self.market_type = 'inverse_coin_margined'
             self.endpoints = {'position': '/dapi/v1/positionRisk',
                               'balance': '/dapi/v1/balance',
                               'exchange_info': '/dapi/v1/exchangeInfo',
@@ -126,23 +126,23 @@ class BinanceBot(Bot):
 
             self.iter_long_closes = lambda balance, pos_size, pos_price, lowest_ask: \
                 iter_long_closes_inverse(self.price_step, self.qty_step, self.min_qty, self.min_cost,
-                                         self.qty_pct, self.leverage, self.min_markup,
-                                         self.markup_range, self.n_close_orders, balance, pos_size,
-                                         pos_price, lowest_ask)
+                                         self.contract_multiplier, self.qty_pct, self.leverage,
+                                         self.min_markup, self.markup_range, self.n_close_orders,
+                                         balance, pos_size, pos_price, lowest_ask)
 
             self.iter_shrt_closes = lambda balance, pos_size, pos_price, highest_bid: \
                 iter_shrt_closes_inverse(self.price_step, self.qty_step, self.min_qty, self.min_cost,
-                                         self.qty_pct, self.leverage, self.min_markup,
-                                         self.markup_range, self.n_close_orders, balance, pos_size,
-                                         pos_price, highest_bid)
+                                         self.contract_multiplier, self.qty_pct, self.leverage,
+                                         self.min_markup, self.markup_range, self.n_close_orders,
+                                         balance, pos_size, pos_price, highest_bid)
 
             self.iter_entries = lambda balance, long_psize, long_pprice, shrt_psize, shrt_pprice, \
                                        liq_price, highest_bid, lowest_ask, ema, last_price, do_long, do_shrt: \
                 iter_entries_inverse(self.price_step, self.qty_step, self.min_qty, self.min_cost,
-                                     self.ddown_factor, self.qty_pct, self.leverage,
-                                     self.grid_spacing, self.grid_coefficient, self.ema_spread,
-                                     self.stop_loss_liq_diff, self.stop_loss_pos_pct, balance,
-                                     long_psize, long_pprice, shrt_psize, shrt_pprice, liq_price,
+                                     self.contract_multiplier, self.ddown_factor, self.qty_pct,
+                                     self.leverage, self.grid_spacing, self.grid_coefficient,
+                                     self.ema_spread, self.stop_loss_liq_diff, self.stop_loss_pos_pct,
+                                     balance, long_psize, long_pprice, shrt_psize, shrt_pprice, liq_price,
                                      highest_bid, lowest_ask, ema, last_price, do_long, do_shrt)
 
             self.cost_f = calc_cost_inverse
@@ -159,8 +159,8 @@ class BinanceBot(Bot):
                 self.quot = e['quoteAsset']
                 self.margin_coin = e['marginAsset']
                 self.pair = e['pair']
-                self.contract_size = float(e['contractSize']) \
-                    if self.market_type == 'inverse_perpetual' else 1.0
+                if self.market_type == 'inverse_coin_margined':
+                    self.contract_multiplier = float(e['contractSize'])
                 price_precision = e['pricePrecision']
                 qty_precision = e['quantityPrecision']
                 for q in e['filters']:
@@ -249,7 +249,7 @@ class BinanceBot(Bot):
             if self.market_type == 'linear_perpetual':
                 self.max_pos_size_ito_usdt = float(lev['maxNotionalValue'])
                 print('max pos size in terms of usdt', self.max_pos_size_ito_usdt)
-            elif self.market_type == 'inverse_perpetual':
+            elif self.market_type == 'inverse_coin_margined':
                 self.max_pos_size_ito_coin = float(lev['maxQty'])
                 print('max pos size in terms of coin', self.max_pos_size_ito_coin)
 
@@ -269,7 +269,7 @@ class BinanceBot(Bot):
 
     async def init_order_book(self):
         ticker = await self.public_get(self.endpoints['ticker'], {'symbol': self.symbol})
-        if self.market_type == 'inverse_perpetual':
+        if self.market_type == 'inverse_coin_margined':
             ticker = ticker[0]
         self.ob = [float(ticker['bidPrice']), float(ticker['askPrice'])]
         self.price = np.random.choice(self.ob)
@@ -311,10 +311,8 @@ class BinanceBot(Bot):
                                         'leverage': float(p['leverage'])}
         for e in balance:
             if e['asset'] == (self.quot if self.market_type == 'linear_perpetual' else self.coin):
-                position['wallet_balance'] = float(e['balance']) / self.contract_size
-                position['equity'] = position['wallet_balance'] + float(e['crossUnPnl']) / self.contract_size
-                # position['available_margin'] = float(e['availableBalance']) / self.contract_size
-                # position['available_balance'] = float(e['availableBalance'])
+                position['wallet_balance'] = float(e['balance'])
+                position['equity'] = position['wallet_balance'] + float(e['crossUnPnl'])
                 break
         return position
 
@@ -385,7 +383,7 @@ class BinanceBot(Bot):
     def calc_max_pos_size(self, balance: float, price: float):
         if self.market_type == 'linear_perpetual':
             return min((balance / price) * self.leverage, self.max_pos_size_ito_usdt / price) * 0.92
-        elif self.market_type == 'inverse_perpetual':
+        elif self.market_type == 'inverse_coin_margined':
             return min((balance * price) * self.leverage, self.max_pos_size_ito_coin * price) * 0.92
 
     async def start_websocket(self) -> None:
