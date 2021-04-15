@@ -222,14 +222,16 @@ def backtest(config: dict, ticks: np.ndarray, return_fills=False, do_print=False
         cost_f = calc_cost_inverse
         available_margin_f = lambda balance, long_psize, long_pprice, shrt_psize, \
                                     shrt_pprice, last_price: \
-            calc_available_margin_inverse(balance, config['leverage'], long_psize, long_pprice,
+            calc_available_margin_inverse(config['contract_multiplier'], config['leverage'], balance,
+                                          long_psize, long_pprice,
                                           shrt_psize, shrt_pprice, last_price)
 
 
         iter_entries = lambda balance, long_psize, long_pprice, shrt_psize, shrt_pprice, liq_price, \
                               highest_bid, lowest_ask, ema, last_price, do_long, do_shrt: \
             iter_entries_inverse(config['price_step'], config['qty_step'], config['min_qty'],
-                                 config['min_cost'], config['ddown_factor'], config['qty_pct'],
+                                 config['min_cost'], config['contract_multiplier'],
+                                 config['ddown_factor'], config['qty_pct'],
                                  config['leverage'], config['grid_spacing'],
                                  config['grid_coefficient'], config['ema_spread'],
                                  config['stop_loss_liq_diff'], config['stop_loss_pos_pct'],
@@ -239,18 +241,17 @@ def backtest(config: dict, ticks: np.ndarray, return_fills=False, do_print=False
 
         iter_long_closes = lambda balance, psize, pprice, lowest_ask: \
             iter_long_closes_inverse(config['price_step'], config['qty_step'], config['min_qty'],
-                                     config['min_cost'], config['qty_pct'], config['leverage'],
-                                     config['min_markup'], config['markup_range'],
+                                     config['min_cost'], config['contract_multiplier'], config['qty_pct'],
+                                     config['leverage'], config['min_markup'], config['markup_range'],
                                      config['n_close_orders'], balance, psize, pprice,
                                      lowest_ask)
         iter_shrt_closes = lambda balance, psize, pprice, highest_bid: \
             iter_shrt_closes_inverse(config['price_step'], config['qty_step'], config['min_qty'],
-                                     config['min_cost'], config['qty_pct'], config['leverage'],
-                                     config['min_markup'], config['markup_range'],
+                                     config['min_cost'], config['contract_multiplier'], config['qty_pct'],
+                                     config['leverage'], config['min_markup'], config['markup_range'],
                                      config['n_close_orders'], balance, psize, pprice,
                                      highest_bid)
         if config['exchange'] == 'binance':
-            # balance = config['starting_balance'] / config['contract_multiplier']
             liq_price_f = lambda balance, l_psize, l_pprice, s_psize, s_pprice: \
                 calc_cross_hedge_liq_price_binance_inverse(balance, l_psize, l_pprice, s_psize, s_pprice,
                                                            config['leverage'],
@@ -265,13 +266,15 @@ def backtest(config: dict, ticks: np.ndarray, return_fills=False, do_print=False
         cost_f = calc_cost_linear
         available_margin_f = lambda balance, long_psize, long_pprice, shrt_psize, \
                                     shrt_pprice, last_price: \
-            calc_available_margin_linear(balance, config['leverage'], long_psize, long_pprice,
+            calc_available_margin_linear(config['contract_multiplier'], config['leverage'], balance,
+                                         long_psize, long_pprice,
                                          shrt_psize, shrt_pprice, last_price)
 
         iter_entries = lambda balance, long_psize, long_pprice, shrt_psize, shrt_pprice, \
             liq_price, highest_bid, lowest_ask, ema, last_price, do_long, do_shrt: \
             iter_entries_linear(config['price_step'], config['qty_step'], config['min_qty'],
-                                config['min_cost'], config['ddown_factor'], config['qty_pct'],
+                                config['min_cost'], config['contract_multiplier'],
+                                config['ddown_factor'], config['qty_pct'],
                                 config['leverage'], config['grid_spacing'],
                                 config['grid_coefficient'], config['ema_spread'],
                                 config['stop_loss_liq_diff'], config['stop_loss_pos_pct'],
@@ -281,13 +284,14 @@ def backtest(config: dict, ticks: np.ndarray, return_fills=False, do_print=False
 
         iter_long_closes = lambda balance, psize, pprice, lowest_ask: \
             iter_long_closes_linear(config['price_step'], config['qty_step'], config['min_qty'],
-                                    config['min_cost'], config['qty_pct'], config['leverage'],
-                                    config['min_markup'], config['markup_range'],
-                                    config['n_close_orders'], balance, psize, pprice,
-                                    lowest_ask)
+                                    config['min_cost'], config['contract_multiplier'],
+                                    config['qty_pct'], config['leverage'], config['min_markup'],
+                                    config['markup_range'], config['n_close_orders'], balance,
+                                    psize, pprice, lowest_ask)
         iter_shrt_closes = lambda balance, psize, pprice, highest_bid: \
             iter_shrt_closes_linear(config['price_step'], config['qty_step'], config['min_qty'],
-                                    config['min_cost'], config['qty_pct'], config['leverage'],
+                                    config['min_cost'], config['contract_multiplier'],
+                                    config['qty_pct'], config['leverage'],
                                     config['min_markup'], config['markup_range'],
                                     config['n_close_orders'], balance, psize, pprice,
                                     highest_bid)
