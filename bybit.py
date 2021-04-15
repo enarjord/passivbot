@@ -98,24 +98,24 @@ class Bybit(Bot):
 
             self.iter_long_closes = lambda balance, pos_size, pos_price, lowest_ask: \
                 iter_long_closes_linear(self.price_step, self.qty_step, self.min_qty, self.min_cost,
-                                        self.qty_pct, self.leverage, self.min_markup,
-                                        self.markup_range, self.n_close_orders, balance, pos_size,
-                                        pos_price, lowest_ask)
+                                        self.contract_multiplier, self.qty_pct, self.leverage,
+                                        self.min_markup, self.markup_range, self.n_close_orders,
+                                        balance, pos_size, pos_price, lowest_ask)
 
             self.iter_shrt_closes = lambda balance, pos_size, pos_price, highest_bid: \
                 iter_shrt_closes_linear(self.price_step, self.qty_step, self.min_qty, self.min_cost,
-                                        self.qty_pct, self.leverage, self.min_markup,
-                                        self.markup_range, self.n_close_orders, balance, pos_size,
-                                        pos_price, highest_bid)
+                                        self.contract_multiplier, self.qty_pct, self.leverage,
+                                        self.min_markup, self.markup_range, self.n_close_orders,
+                                        balance, pos_size, pos_price, highest_bid)
 
             self.iter_entries = lambda balance, long_psize, long_pprice, shrt_psize, shrt_pprice, \
                                        liq_price, highest_bid, lowest_ask, ema, last_price, do_long, do_shrt: \
                 iter_entries_linear(self.price_step, self.qty_step, self.min_qty, self.min_cost,
-                                    self.ddown_factor, self.qty_pct, self.leverage,
-                                    self.grid_spacing, self.grid_coefficient, self.ema_spread,
-                                    self.stop_loss_liq_diff, self.stop_loss_pos_pct, balance,
-                                    long_psize, long_pprice, shrt_psize, shrt_pprice, liq_price,
-                                    highest_bid, lowest_ask, ema, last_price, do_long, do_shrt)
+                                    self.contract_multiplier, self.ddown_factor, self.qty_pct,
+                                    self.leverage, self.grid_spacing, self.grid_coefficient,
+                                    self.ema_spread, self.stop_loss_liq_diff, self.stop_loss_pos_pct,
+                                    balance, long_psize, long_pprice, shrt_psize, shrt_pprice,
+                                    liq_price, highest_bid, lowest_ask, ema, last_price, do_long, do_shrt)
 
             self.long_pnl_f = calc_long_pnl_linear
             self.shrt_pnl_f = calc_shrt_pnl_linear
@@ -150,23 +150,23 @@ class Bybit(Bot):
 
             self.iter_long_closes = lambda balance, pos_size, pos_price, lowest_ask: \
                 iter_long_closes_inverse(self.price_step, self.qty_step, self.min_qty, self.min_cost,
-                                         self.qty_pct, self.leverage, self.min_markup,
-                                         self.markup_range, self.n_close_orders, balance, pos_size,
-                                         pos_price, lowest_ask)
+                                         self.contract_multiplier, self.qty_pct, self.leverage,
+                                         self.min_markup, self.markup_range, self.n_close_orders,
+                                         balance, pos_size, pos_price, lowest_ask)
 
             self.iter_shrt_closes = lambda balance, pos_size, pos_price, highest_bid: \
                 iter_shrt_closes_inverse(self.price_step, self.qty_step, self.min_qty, self.min_cost,
-                                         self.qty_pct, self.leverage, self.min_markup,
-                                         self.markup_range, self.n_close_orders, balance, pos_size,
-                                         pos_price, highest_bid)
+                                         self.contract_multiplier, self.qty_pct, self.leverage,
+                                         self.min_markup, self.markup_range, self.n_close_orders,
+                                         balance, pos_size, pos_price, highest_bid)
 
             self.iter_entries = lambda balance, long_psize, long_pprice, shrt_psize, shrt_pprice, \
                                        liq_price, highest_bid, lowest_ask, ema, last_price, do_long, do_shrt: \
                 iter_entries_inverse(self.price_step, self.qty_step, self.min_qty, self.min_cost,
-                                     self.ddown_factor, self.qty_pct, self.leverage,
-                                     self.grid_spacing, self.grid_coefficient, self.ema_spread,
-                                     self.stop_loss_liq_diff, self.stop_loss_pos_pct, balance,
-                                     long_psize, long_pprice, shrt_psize, shrt_pprice, liq_price,
+                                     self.contract_multiplier, self.ddown_factor, self.qty_pct,
+                                     self.leverage, self.grid_spacing, self.grid_coefficient,
+                                     self.ema_spread, self.stop_loss_liq_diff, self.stop_loss_pos_pct,
+                                     balance, long_psize, long_pprice, shrt_psize, shrt_pprice, liq_price,
                                      highest_bid, lowest_ask, ema, last_price, do_long, do_shrt)
 
         self.endpoints['balance'] = '/v2/private/wallet/balance'
@@ -279,14 +279,12 @@ class Bybit(Bot):
             long_pos = [e for e in fetched['result'] if e['side'] == 'Buy'][0]
             shrt_pos = [e for e in fetched['result'] if e['side'] == 'Sell'][0]
             position['wallet_balance'] = float(bal['result'][self.quot]['wallet_balance'])
-            # position['available_balance'] = float(bal['result'][self.quot]['available_balance'])
         else:
             fetched, bal = await asyncio.gather(
                 self.private_get(self.endpoints['position'], {'symbol': self.symbol}),
                 self.private_get(self.endpoints['balance'], {'coin': self.coin})
             )
             position['wallet_balance'] = float(bal['result'][self.coin]['wallet_balance'])
-            # position['available_balance'] = float(bal['result'][self.coin]['available_balance'])
             if self.market_type == 'inverse_perpetual':
                 if fetched['result']['side'] == 'Buy':
                     long_pos = fetched['result']
