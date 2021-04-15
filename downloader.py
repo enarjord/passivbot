@@ -624,7 +624,7 @@ async def fetch_market_specific_settings(exchange: str, user: str, symbol: str):
     settings_from_exchange['qty_step'] = bot.qty_step
     settings_from_exchange['price_step'] = bot.price_step
     settings_from_exchange['max_leverage'] = bot.max_leverage
-    settings_from_exchange['contract_multiplier'] = bot.contract_size
+    settings_from_exchange['contract_multiplier'] = bot.contract_multiplier
     return settings_from_exchange
 
 
