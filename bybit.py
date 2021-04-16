@@ -333,7 +333,7 @@ class Bybit(Bot):
         else:
             params['time_in_force'] = 'GoodTillCancel'
         params['order_link_id'] = \
-            f"{order['custom_id']}_{int(time() * 1000)}_{int(np.random.random() * 1000)}"
+            f"{order['custom_id']}_{str(int(time() * 1000))[8:]}_{int(np.random.random() * 1000)}"
         o = await self.private_post(self.endpoints['create_order'], params)
         if o['result']:
             return {'symbol': o['result']['symbol'],
