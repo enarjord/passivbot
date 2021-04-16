@@ -1123,14 +1123,6 @@ def print_(args, r=False, n=False):
     return line
 
 
-def load_live_settings(exchange: str, user: str = 'default', do_print=True) -> dict:
-    settings = json.load(open(f'live_configs/{exchange}_default.json'))
-    if do_print:
-        print('\nloaded settings:')
-        print(json.dumps(settings, indent=4))
-    return settings
-
-
 def ts_to_date(timestamp: float) -> str:
     return str(datetime.datetime.fromtimestamp(timestamp)).replace(' ', 'T')
 
