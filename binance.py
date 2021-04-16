@@ -416,11 +416,3 @@ class BinanceBot(Bot):
                     break
                 k += 1
 
-
-async def main() -> None:
-    bot = await create_bot(sys.argv[1], load_live_settings('binance', sys.argv[1]))
-    await start_bot(bot)
-
-
-if __name__ == '__main__':
-    asyncio.run(main())
