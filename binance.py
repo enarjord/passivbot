@@ -10,7 +10,7 @@ import aiohttp
 import numpy as np
 import websockets
 
-from passivbot import load_key_secret, load_live_settings, print_, \
+from passivbot import load_key_secret, print_, \
     ts_to_date, flatten, Bot, start_bot, round_up, calc_min_order_qty, sort_dict_keys, \
     iter_long_closes_linear, iter_shrt_closes_linear, iter_entries_linear, \
     iter_long_closes_inverse, iter_shrt_closes_inverse, calc_ema, iter_entries_inverse, \
