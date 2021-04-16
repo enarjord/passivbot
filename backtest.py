@@ -107,7 +107,7 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
     lines.append(f"starting balance {result['starting_balance']}")
     lines.append(f"long: {result['do_long']}, short: {result['do_shrt']}")
 
-    live_config = candidate_to_live_settings(result['exchange'], cleanup_candidate(result))
+    live_config = candidate_to_live_config(result)
     json.dump(live_config, open(result['session_dirpath'] + 'live_config.json', 'w'), indent=4)
 
     json.dump(result, open(result['session_dirpath'] + 'result.json', 'w'), indent=4)
@@ -194,18 +194,6 @@ def plot_fills(df, fdf, side_: int = 0, liq_thr=0.1):
     if 'liq_price' in fdf.columns:
         fdf.liq_price.where(fdf.liq_diff < liq_thr, np.nan).plot(style='k--')
     return plt
-
-
-def cleanup_candidate(config: dict) -> dict:
-    cleaned = config.copy()
-    # for k in cleaned:
-    #     if k in config['ranges']:
-    #         cleaned[k] = round_(cleaned[k], config['ranges'][k][2])
-    if cleaned['ema_span'] != cleaned['ema_span']:
-        cleaned['ema_span'] = 1.0
-    if cleaned['ema_spread'] != cleaned['ema_spread']:
-        cleaned['ema_spread'] = 0.0
-    return cleaned
 
 
 def backtest(config: dict, ticks: np.ndarray, return_fills=False, do_print=False) -> (list, bool):
@@ -514,20 +502,19 @@ def backtest(config: dict, ticks: np.ndarray, return_fills=False, do_print=False
         return objective
 
 
-def candidate_to_live_settings(exchange: str, candidate: dict) -> dict:
-    live_settings = load_live_settings(exchange, do_print=False)
-    for k in candidate:
-        if k in live_settings:
-            live_settings[k] = candidate[k]
-    live_settings['config_name'] = candidate['session_name']
-    live_settings['symbol'] = candidate['symbol']
-    if live_settings['ema_span'] != live_settings['ema_span']:
-        live_settings['ema_span'] = 1.0
-    if live_settings['ema_spread'] != live_settings['ema_spread']:
-        live_settings['ema_spread'] = 0.0
+def candidate_to_live_config(candidate: dict) -> dict:
+    live_config = {}
+    for k in ["config_name", "logging_level", "ddown_factor", "qty_pct", "leverage",
+              "n_entry_orders", "n_close_orders", "grid_spacing", "grid_coefficient", "min_markup",
+              "markup_range", "do_long", "do_shrt", "ema_span", "ema_spread", "stop_loss_liq_diff",
+              "stop_loss_pos_pct", "symbol"]:
+        if k in candidate:
+            live_config[k] = candidate[k]
+        else:
+            live_config[k] = 0.0
     for k in ['do_long', 'do_shrt']:
-        live_settings[k] = bool(candidate[k])
-    return live_settings
+        live_config[k] = bool(live_config[k])
+    return live_config
 
 
 def calc_candidate_hash_key(candidate: dict, keys: [str]) -> str:
