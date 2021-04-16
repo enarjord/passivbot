@@ -629,7 +629,7 @@ async def fetch_market_specific_settings(exchange: str, user: str, symbol: str):
 
 
 async def prep_backtest_config(config_name: str):
-    backtest_config = hjson.load(open(f'backtest_configs/{config_name}.hjson'))
+    backtest_config = hjson.load(open(config_name))
 
     exchange = backtest_config['exchange']
     user = backtest_config['user']
