@@ -724,6 +724,9 @@ def plot_wrap(bc, ticks, candidate):
 async def main(args: list):
     config_name = args[1]
     backtest_config = await prep_backtest_config(config_name)
+    if backtest_config['exchange'] == 'bybit' and not backtest_config['inverse']:
+        print('bybit usdt linear backtesting not supported')
+        return
     downloader = Downloader(backtest_config)
     ticks = await downloader.get_ticks(True)
     backtest_config['n_days'] = round_((ticks[-1][2] - ticks[0][2]) / (1000 * 60 * 60 * 24), 0.1)
