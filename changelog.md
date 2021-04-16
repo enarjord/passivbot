@@ -2,8 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
-- added backtester with stoploss
+## [v3.4.0] - 2021-04-14
+- added binance USDT-margined backtester with stoploss
+- added binance COIN-margined backtester with stoploss
+- changed backtester usage -- now needs to specify whole path to .hjson config file
 
 ## [v3.3.3] - 2021-04-05
 
