@@ -237,8 +237,8 @@ class Downloader:
                 last_time = sys.maxsize
             if last_time >= self.start_time and (
                     self.end_time == -1 or (first_time <= self.end_time)) or last_time == sys.maxsize:
-                df = self.read_dataframe(os.path.join(self.filepath, f))
                 print_(['Validating file', f])
+                df = self.read_dataframe(os.path.join(self.filepath, f))
                 missing, df, gaps = self.validate_dataframe(df)
                 exists = False
                 if gaps.empty:
