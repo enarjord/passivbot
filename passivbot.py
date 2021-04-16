@@ -185,7 +185,7 @@ def calc_stop_loss_inverse(qty_step: float,
             # if sufficient margin available, increase short pos, otherwise, reduce long pos
             margin_cost = calc_margin_cost_inverse(leverage, stop_loss_qty * contract_multiplier,
                                                    lowest_ask)
-            if margin_cost < available_margin:
+            if margin_cost < available_margin and do_shrt:
                 # add to shrt pos
                 new_shrt_psize = round_(shrt_psize - stop_loss_qty, qty_step)
                 shrt_pprice = (nan_to_0(shrt_pprice) * (shrt_psize / new_shrt_psize) +
@@ -208,7 +208,7 @@ def calc_stop_loss_inverse(qty_step: float,
             # if sufficient margin available, increase long pos, otherwise, reduce shrt pos
             margin_cost = calc_margin_cost_inverse(leverage, stop_loss_qty * contract_multiplier,
                                                    highest_bid)
-            if margin_cost < available_margin:
+            if margin_cost < available_margin and do_long:
                 # add to long pos
                 new_long_psize = round_(long_psize + stop_loss_qty, qty_step)
                 long_pprice = (nan_to_0(long_pprice) * (long_psize / new_long_psize) +
@@ -665,11 +665,12 @@ def calc_cross_hedge_liq_price_binance_linear(balance: float,
 
 @njit
 def calc_cross_hedge_liq_price_bybit_linear(balance: float,
-                                            long_pos_size: float,
-                                            long_pos_price: float,
-                                            shrt_pos_size: float,
-                                            shrt_pos_price: float,
+                                            long_psize: float,
+                                            long_pprice: float,
+                                            shrt_psize: float,
+                                            shrt_pprice: float,
                                             leverage: float) -> float:
+    
     raise Exception('bybit linear not yet implemented')
 
 
