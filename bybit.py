@@ -11,7 +11,7 @@ import numpy as np
 import websockets
 from dateutil import parser
 
-from passivbot import load_key_secret, load_live_settings, print_, \
+from passivbot import load_key_secret, print_, \
     ts_to_date, flatten, Bot, start_bot, calc_min_order_qty_inverse, sort_dict_keys, calc_ema, iter_long_closes_inverse, \
     iter_shrt_closes_inverse, iter_entries_inverse, \
     iter_long_closes_linear, iter_shrt_closes_linear, iter_entries_linear, calc_long_pnl_linear, \
