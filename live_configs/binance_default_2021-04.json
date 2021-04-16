@@ -1,0 +1,20 @@
+{
+    "config_name": "binance_xmrusdt_155_days_adg0.8%_no_ema",
+    "logging_level": 0,
+    "ddown_factor": 2.6907241753865185,
+    "qty_pct": 0.01747124510344857,
+    "leverage": 6,
+    "n_entry_orders": 8,
+    "n_close_orders": 18,
+    "grid_spacing": 0.010080189524705041,
+    "grid_coefficient": 207.6211606806754,
+    "min_markup": 0.0023217672328606754,
+    "markup_range": 0.01189086602086998,
+    "do_long": true,
+    "do_shrt": true,
+    "ema_span": 1,
+    "ema_spread": 0.0,
+    "stop_loss_liq_diff": 0.35320030509321254,
+    "stop_loss_pos_pct": 0.020930605580961593
+}
+
