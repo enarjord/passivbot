@@ -4,8 +4,6 @@ import hjson
 import pandas as pd
 from dateutil import parser, tz
 
-from binance import create_bot as create_bot_binance
-from bybit import create_bot as create_bot_bybit
 from passivbot import *
 
 
@@ -214,13 +212,15 @@ class Downloader:
                              self.backtest_config["symbol"], ""))
 
         if self.backtest_config["exchange"] == "binance":
-            self.bot = await create_bot_binance(self.backtest_config["user"],
-                                                {**load_live_settings("binance", do_print=False),
-                                                 **{"symbol": self.backtest_config["symbol"]}})
+            self.bot = await create_binance_bot(self.backtest_config["user"],
+                                                get_dummy_settings(self.backtest_config["user"],
+                                                                   self.backtest_config["exchange"],
+                                                                   self.backtest_config["symbol"]))
         elif self.backtest_config["exchange"] == "bybit":
-            self.bot = await create_bot_bybit(self.backtest_config["user"],
-                                              {**load_live_settings("bybit", do_print=False),
-                                               **{"symbol": self.backtest_config["symbol"]}})
+            self.bot = await create_bybit_bot(self.backtest_config["user"],
+                                              get_dummy_settings(self.backtest_config["user"],
+                                                                 self.backtest_config["exchange"],
+                                                                 self.backtest_config["symbol"]))
         else:
             print(self.backtest_config["exchange"], 'not found')
             return
@@ -595,17 +595,21 @@ class Downloader:
             return price_data, buyer_maker_data, time_data
 
 
+def get_dummy_settings(user: str, exchange: str, symbol: str):
+    return {'user': user, 'exchange': exchange, 'symbol': symbol, 'ema_span': 1.0,
+            'config_name': '', 'leverage': 5, 'logging_level': 0}
+
+
 async def fetch_market_specific_settings(exchange: str, user: str, symbol: str):
-    tmp_live_settings = load_live_settings(exchange, do_print=False)
-    tmp_live_settings['symbol'] = symbol
+    tmp_live_settings = get_dummy_settings(user, exchange, symbol)
     settings_from_exchange = {}
     if exchange == 'binance':
-        bot = await create_bot_binance(user, tmp_live_settings)
+        bot = await create_binance_bot(user, tmp_live_settings)
         settings_from_exchange['maker_fee'] = 0.00018
         settings_from_exchange['taker_fee'] = 0.00036
         settings_from_exchange['exchange'] = 'binance'
     elif exchange == 'bybit':
-        bot = await create_bot_bybit(user, tmp_live_settings)
+        bot = await create_bybit_bot(user, tmp_live_settings)
         settings_from_exchange['maker_fee'] = -0.00025
         settings_from_exchange['taker_fee'] = 0.00075
         settings_from_exchange['exchange'] = 'bybit'
