@@ -1318,6 +1318,7 @@ class Bot:
             else self.position['shrt']['liquidation_price']
 
         long_entry_orders, shrt_entry_orders, long_close_orders, shrt_close_orders = [], [], [], []
+        stop_loss_close = False
 
         for tpl in self.iter_entries(balance, long_psize, long_pprice, shrt_psize, shrt_pprice,
                                      liq_price, self.ob[0], self.ob[1], self.ema, self.price,
@@ -1331,11 +1332,13 @@ class Bot:
                                           'price': tpl[1], 'type': 'limit', 'reduce_only': True,
                                           'custom_id': tpl[4]})
                 shrt_psize = tpl[2]
+                stop_loss_close = True
             elif tpl[4] == 'stop_loss_long_close':
                 long_close_orders.append({'side': 'sell', 'position_side': 'long', 'qty': abs(tpl[0]),
                                           'price': tpl[1], 'type': 'limit', 'reduce_only': True,
                                           'custom_id': tpl[4]})
                 long_psize = tpl[2]
+                stop_loss_close = True
             elif tpl[0] > 0.0:
                 long_entry_orders.append({'side': 'buy', 'position_side': 'long', 'qty': tpl[0],
                                           'price': tpl[1], 'type': 'limit', 'reduce_only': False,
@@ -1347,7 +1350,8 @@ class Bot:
 
         for ask_qty, ask_price, _ in self.iter_long_closes(balance, long_psize, long_pprice, self.ob[1]):
             if len(long_close_orders) >= self.n_entry_orders or \
-                    calc_diff(ask_price, self.price) > last_price_diff_limit:
+                    calc_diff(ask_price, self.price) > last_price_diff_limit or \
+                    stop_loss_close:
                 break
             long_close_orders.append({'side': 'sell', 'position_side': 'long', 'qty': abs(ask_qty),
                                       'price': float(ask_price), 'type': 'limit',
@@ -1355,7 +1359,8 @@ class Bot:
 
         for bid_qty, bid_price, _ in self.iter_shrt_closes(balance, shrt_psize, shrt_pprice, self.ob[0]):
             if len(shrt_close_orders) >= self.n_entry_orders or \
-                    calc_diff(bid_price, self.price) > last_price_diff_limit:
+                    calc_diff(bid_price, self.price) > last_price_diff_limit or \
+                    stop_loss_close:
                 break
             shrt_close_orders.append({'side': 'buy', 'position_side': 'shrt', 'qty': abs(bid_qty),
                                       'price': float(bid_price), 'type': 'limit',

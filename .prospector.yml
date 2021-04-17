@@ -1,0 +1,42 @@
+# Prospector config: https://prospector.landscape.io/en/master/usage.html
+strictness: medium # verylow, low, medium (the default), high and veryhigh
+test-warnings: true
+doc-warnings: false
+autodetect: true
+max-line-length: 140
+ignore-paths:
+  - historical_data
+  - backtest_results
+  - logs
+
+pyflakes:
+    run: true
+    disable:
+      - F405 # Currently disable to lower the warnings output. It's warn on import may be undefined, or defined from star imports (passiv bot is wildcard included from backtest and download)
+
+pep8:
+    run: true
+    full: false # Currently deactivated since it's not the more important
+    disable: # https://pypi.org/project/pep8-naming/
+      - N803 # argument name should be lowercase
+      - N806 # variable in function should be lowercase
+      - N812 # lowercase imported as non lowercase
+pylint:
+    run: true
+    disable: # https://github.com/PyCQA/prospector/blob/9a8c0e365f1d9efb19797a8f45edb6f4ea6b8818/prospector/profiles/profiles/strictness_low.yaml#L7
+      - too-many-locals
+      - arguments-differ
+      - no-else-return
+      - inconsistent-return-statements
+      - missing-module-docstring
+      - too-many-arguments # Should not be disabled but not mandatory
+      - consider-using-set-comprehension # Disable due to mathematical operations
+
+pep257:
+    run: true
+    disable: # https://pep257.readthedocs.io/en/latest/error_codes.html
+      - D203 # 1 blank line required before class docstring
+      - D212 # Multi-line docstring summary should start at the first line
+      - D213 # Multi-line docstring summary should start at the second line
+      - D107 # Missing docstring in __init__
+      - D205 # blank line required between summary line and description
