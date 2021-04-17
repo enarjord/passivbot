@@ -1,81 +1,24 @@
 import gc
 import glob
+import logging
+import pprint
 from hashlib import sha256
-from typing import Dict, List, Optional, Union
+from typing import Union
 
 import matplotlib.pyplot as plt
 import nevergrad as ng
 import pandas as pd
 import ray
 from ray import tune
-from ray.tune import CLIReporter
 from ray.tune.schedulers import AsyncHyperBandScheduler
 from ray.tune.suggest import ConcurrencyLimiter
 from ray.tune.suggest.nevergrad import NevergradSearch
-from ray.tune.trial import Trial
 
 from downloader import Downloader, prep_backtest_config
 from passivbot import *
+from reporter import LogReporter
 
 os.environ['TUNE_GLOBAL_CHECKPOINT_S'] = '120'
-
-
-class LogReporter(CLIReporter):
-    """
-    Extend CLI reporter to add saving of intermediate configs and results.
-    """
-
-    def __init__(
-            self,
-            metric_columns: Union[None, List[str], Dict[str, str]] = None,
-            parameter_columns: Union[None, List[str], Dict[str, str]] = None,
-            total_samples: Optional[int] = None,
-            max_progress_rows: int = 20,
-            max_error_rows: int = 20,
-            max_report_frequency: int = 5,
-            infer_limit: int = 3,
-            print_intermediate_tables: Optional[bool] = None,
-            metric: Optional[str] = None,
-            mode: Optional[str] = None):
-        self.objective = 0
-
-        super(LogReporter, self).__init__(
-            metric_columns, parameter_columns, total_samples,
-            max_progress_rows, max_error_rows, max_report_frequency,
-            infer_limit, print_intermediate_tables, metric, mode)
-
-    def report(self, trials: List[Trial], done: bool, *sys_info: Dict):
-        l = []
-        o = []
-        best_config = None
-        best_eval = None
-        for trial in trials:
-            if self._metric in trial.last_result:
-                if trial.last_result[self._metric] > self.objective:
-                    self.objective = trial.last_result[self._metric]
-                    best_config = trial.config
-                    best_eval = trial.evaluated_params
-                l.append(trial.evaluated_params)
-                o.append(trial.last_result[self._metric])
-                config = trial.config
-        try:
-            df = pd.DataFrame(l)
-            df[self._metric] = o
-            df.sort_values(self._metric, ascending=False, inplace=True)
-            df.dropna(inplace=True)
-            df[df[self._metric] > 0].to_csv(
-                os.path.join(config['session_dirpath'], 'intermediate_results.csv'), index=False)
-            if best_eval:
-                intermediate_result = best_eval.copy()
-                intermediate_result['do_long'] = best_config['do_long']
-                intermediate_result['do_shrt'] = best_config['do_shrt']
-                json.dump(intermediate_result,
-                          open(os.path.join(best_config['session_dirpath'], 'intermediate_best_result.json'), 'w'),
-                          indent=4)
-        except Exception as e:
-            print("Something went wrong", e)
-
-        print(self._progress_str(trials, done, *sys_info))
 
 
 def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
@@ -214,7 +157,6 @@ def backtest(config: dict, ticks: np.ndarray, return_fills=False, do_print=False
                                           long_psize, long_pprice,
                                           shrt_psize, shrt_pprice, last_price)
 
-
         iter_entries = lambda balance, long_psize, long_pprice, shrt_psize, shrt_pprice, liq_price, \
                               highest_bid, lowest_ask, ema, last_price, do_long, do_shrt: \
             iter_entries_inverse(config['price_step'], config['qty_step'], config['min_qty'],
@@ -259,7 +201,7 @@ def backtest(config: dict, ticks: np.ndarray, return_fills=False, do_print=False
                                          shrt_psize, shrt_pprice, last_price)
 
         iter_entries = lambda balance, long_psize, long_pprice, shrt_psize, shrt_pprice, \
-            liq_price, highest_bid, lowest_ask, ema, last_price, do_long, do_shrt: \
+                              liq_price, highest_bid, lowest_ask, ema, last_price, do_long, do_shrt: \
             iter_entries_linear(config['price_step'], config['qty_step'], config['min_qty'],
                                 config['min_cost'], config['contract_multiplier'],
                                 config['ddown_factor'], config['qty_pct'],
@@ -438,7 +380,6 @@ def backtest(config: dict, ticks: np.ndarray, return_fills=False, do_print=False
                 ms_since_shrt_pos_change = tick[2] - prev_shrt_fill_ts \
                     if (prev_shrt_fill_ts := max(prev_shrt_close_ts, prev_shrt_entry_ts)) > 0 else 0
 
-
                 if ('stop_loss' in fill['type'] and 'close' in fill['type']) \
                         or 'liquidation' in fill['type']:
                     loss_cumsum += fill['pnl']
@@ -481,7 +422,8 @@ def backtest(config: dict, ticks: np.ndarray, return_fills=False, do_print=False
                         result = prepare_result(all_fills, ticks, config['do_long'], config['do_shrt'])
                         objective = objective_function(result, config['minimum_liquidation_distance'],
                                                        config['minimum_daily_entries'])
-                        tune.report(objective=objective)
+                        tune.report(objective=objective, daily_gain=result['average_daily_gain'],
+                                    closest_liquidation=result['closest_liq'])
                         del all_fills
                         gc.collect()
                         return objective
@@ -496,7 +438,8 @@ def backtest(config: dict, ticks: np.ndarray, return_fills=False, do_print=False
         result = prepare_result(all_fills, ticks, config['do_long'], config['do_shrt'])
         objective = objective_function(result, config['minimum_liquidation_distance'],
                                        config['minimum_daily_entries'])
-        tune.report(objective=objective)
+        tune.report(objective=objective, daily_gain=result['average_daily_gain'],
+                    closest_liquidation=result['closest_liq'])
         del all_fills
         gc.collect()
         return objective
@@ -669,7 +612,7 @@ def backtest_tune(ticks: np.ndarray, backtest_config: dict, current_best: Union[
             current_best = clean_start_config(current_best, config)
             current_best_params.append(current_best)
 
-    ray.init(num_cpus=num_cpus)
+    ray.init(num_cpus=num_cpus, logging_level=logging.FATAL, log_to_driver=False)
     pso = ng.optimizers.ConfiguredPSO(transform='identity', popsize=n_particles, omega=omega, phip=phi1, phig=phi2)
     algo = NevergradSearch(optimizer=pso, points_to_evaluate=current_best_params)
     algo = ConcurrencyLimiter(algo, max_concurrent=num_cpus)
@@ -677,7 +620,9 @@ def backtest_tune(ticks: np.ndarray, backtest_config: dict, current_best: Union[
 
     analysis = tune.run(tune.with_parameters(backtest, ticks=ticks), metric='objective', mode='max', name='search',
                         search_alg=algo, scheduler=scheduler, num_samples=iters, config=config, verbose=1,
-                        reuse_actors=True, local_dir=session_dirpath, progress_reporter=LogReporter())
+                        reuse_actors=True, local_dir=session_dirpath,
+                        progress_reporter=LogReporter(metric_columns=['daily_gain', 'closest_liquidation', 'objective'],
+                                                      parameter_columns=[k for k in backtest_config['ranges']]))
 
     ray.shutdown()
     df = analysis.results_df
@@ -687,7 +632,8 @@ def backtest_tune(ticks: np.ndarray, backtest_config: dict, current_best: Union[
                      'time_since_restore', 'timesteps_since_restore', 'iterations_since_restore', 'experiment_tag'],
             inplace=True)
     df.to_csv(os.path.join(backtest_config['session_dirpath'], 'results.csv'), index=False)
-    print('Best candidate found: ', analysis.best_config)
+    print('Best candidate found:')
+    pprint.pprint(analysis.best_config)
     plot_wrap(backtest_config, ticks, clean_result_config(analysis.best_config))
     return analysis
 
