@@ -5,5 +5,5 @@ services:
     restart: unless-stopped
     volumes:
       - ./:/app/
-    command: python start_bot.py binance default
+    command: python start_bot.py binance_01 XMRUSDT live_configs/binance_default_2021-03.json
     
