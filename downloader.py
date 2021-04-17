@@ -693,9 +693,13 @@ async def main(args: list):
     single = False
     if '--single' in args:
         single = True
+    only = False
+    if 'only' in args:
+        only = True
 
     await downloader.download_ticks()
-    await downloader.prepare_files(filepaths, single)
+    if not only:
+        await downloader.prepare_files(filepaths, single)
 
 
 if __name__ == "__main__":
