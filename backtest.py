@@ -454,7 +454,10 @@ def candidate_to_live_config(candidate: dict) -> dict:
         if k in candidate:
             live_config[k] = candidate[k]
         else:
-            live_config[k] = 0.0
+            if k == 'n_entry_orders':
+                live_config[k] = 8
+            else:
+                live_config[k] = 0.0
     for k in ['do_long', 'do_shrt']:
         live_config[k] = bool(live_config[k])
     return live_config
