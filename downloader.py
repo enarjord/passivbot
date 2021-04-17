@@ -161,8 +161,7 @@ class Downloader:
         """
         try:
             ticks = await self.bot.fetch_ticks_time(start_time)
-            df = self.transform_ticks(ticks)
-            return df
+            return self.transform_ticks(ticks)
         except:
             print_(['Finding id for start time...'])
             ticks = await self.bot.fetch_ticks()
@@ -332,16 +331,10 @@ class Downloader:
                 current_id = start_id + 1
                 current_time = start_time
 
-            if end_id == 0:
-                end_id = sys.maxsize
-            else:
-                end_id = end_id - 1
+            end_id = sys.maxsize if end_id in [-1, 0] else end_id - 1
 
-            if end_time == -1:
-                end_time = sys.maxsize
-
-            if current_id <= end_id and current_time <= end_time and int(
-                    datetime.datetime.now(tz.UTC).timestamp() * 1000) - current_time > 10000:
+            if current_id <= end_id and current_time <= end_time and \
+                    int(datetime.datetime.now(tz.UTC).timestamp() * 1000) - current_time > 10000:
                 if end_time == sys.maxsize:
                     print_(['Downloading from', ts_to_date(float(current_time) / 1000), 'to current time...'])
                 else:
@@ -408,10 +401,7 @@ class Downloader:
                 if int(filenames[i].split("_")[2]) <= self.end_time <= int(filenames[i].split("_")[3].split(".")[0]):
                     end_index = i
                     break
-        if end_index == -1:
-            filenames = filenames[start_index:]
-        else:
-            filenames = filenames[start_index:end_index + 1]
+        filenames = filenames[start_index:] if end_index == -1 else filenames[start_index:end_index + 1]
 
         chunks = []
         df = pd.DataFrame()
@@ -622,13 +612,9 @@ async def fetch_market_specific_settings(exchange: str, user: str, symbol: str):
     else:
         raise Exception('unknown market type')
     await bot.session.close()
-    settings_from_exchange['max_leverage'] = bot.max_leverage
-    settings_from_exchange['min_qty'] = bot.min_qty
-    settings_from_exchange['min_cost'] = bot.min_cost
-    settings_from_exchange['qty_step'] = bot.qty_step
-    settings_from_exchange['price_step'] = bot.price_step
-    settings_from_exchange['max_leverage'] = bot.max_leverage
-    settings_from_exchange['contract_multiplier'] = bot.contract_multiplier
+    for key in ['max_leverage', 'min_qty', 'min_cost', 'qty_step', 'price_step', 'max_leverage',
+                'contract_multiplier']:
+        settings_from_exchange[key] = getattr(bot, key)
     return settings_from_exchange
 
 
@@ -675,7 +661,6 @@ async def prep_backtest_config(config_name: str):
                 backtest_config['ranges']['leverage'][1])
 
     backtest_config['session_dirpath'] = session_dirpath
-
     return backtest_config
 
 
@@ -690,16 +675,9 @@ async def main(args: list):
     tick_filepath = os.path.join(backtest_config["session_dirpath"], f"ticks_cache.npy")
     filepaths = {"price_filepath": price_filepath, "buyer_maker_filepath": buyer_maker_filepath,
                  "time_filepath": time_filepath, "tick_filepath": tick_filepath}
-    single = False
-    if '--single' in args:
-        single = True
-    only = False
-    if 'only' in args:
-        only = True
-
     await downloader.download_ticks()
-    if not only:
-        await downloader.prepare_files(filepaths, single)
+    if not '--only' in args:
+        await downloader.prepare_files(filepaths, '--single' in args)
 
 
 if __name__ == "__main__":
