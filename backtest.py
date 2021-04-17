@@ -8,6 +8,7 @@ from typing import Union
 import matplotlib.pyplot as plt
 import nevergrad as ng
 import pandas as pd
+import numpy as np
 import ray
 from ray import tune
 from ray.tune.schedulers import AsyncHyperBandScheduler
@@ -139,7 +140,7 @@ def plot_fills(df, fdf, side_: int = 0, liq_thr=0.1):
     return plt
 
 
-def backtest(config: dict, ticks: np.ndarray, return_fills=False, do_print=False) -> (list, bool):
+def backtest(config: dict, ticks: np.ndarray, return_fills=False, do_print=False) -> (list, list, bool):
     long_psize, long_pprice = 0.0, np.nan
     shrt_psize, shrt_pprice = 0.0, np.nan
     liq_price = 0.0
@@ -251,9 +252,28 @@ def backtest(config: dict, ticks: np.ndarray, return_fills=False, do_print=False
     # tick tuple: (price, buyer_maker, timestamp)
     delayed_update = ticks[0][2] + min_trade_delay_millis
     prev_update_ts = 0
+
+    last_update = None
+    stats = []
+
+    def stats_update():
+        upnl_l = x if (x := long_pnl_f(long_pprice, tick[0], long_psize)) == x else 0.0
+        upnl_s = y if (y := shrt_pnl_f(shrt_pprice, tick[0], shrt_psize)) == y else 0.0
+        s = {}
+        s['timestamp'] = tick[2]
+        s['balance'] = balance # Not needed because redondant with fills, but makes plotting easier
+        s['equity'] = balance + upnl_l + upnl_s
+        stats.append(s)
+
     for k, tick in enumerate(ticks):
 
         liq_diff = calc_diff(liq_price, tick[0])
+
+        # Update the stats every hour
+        if last_update == None or tick[2] - last_update > 3600*1000:
+            stats_update()
+            last_update = tick[2]
+
         if tick[2] > delayed_update:
             # after simulated delay, update open orders
             bids, asks = [], []
@@ -415,11 +435,12 @@ def backtest(config: dict, ticks: np.ndarray, return_fills=False, do_print=False
                 fill['hours_since_shrt_pos_change'] = (sc := ms_since_shrt_pos_change / (1000 * 60 * 60))
                 fill['hours_since_pos_change_max'] = max(lc, sc)
                 all_fills.append(fill)
+                stats_update()
                 if balance <= 0.0 or 'liquidation' in fill['type']:
                     if return_fills:
                         return all_fills, False
                     else:
-                        result = prepare_result(all_fills, ticks, config['do_long'], config['do_shrt'])
+                        result = prepare_result(all_fills, stats, ticks, config['do_long'], config['do_shrt'])
                         objective = objective_function(result, config['minimum_liquidation_distance'],
                                                        config['minimum_daily_entries'])
                         tune.report(objective=objective, daily_gain=result['average_daily_gain'],
@@ -432,10 +453,11 @@ def backtest(config: dict, ticks: np.ndarray, return_fills=False, do_print=False
                 line += f"adg {all_fills[-1]['average_daily_gain']:.4f} "
                 print(line, end=' ')
             # print(f"\r{k / len(ticks):.2f} ", end=' ')
+    stats_update()
     if return_fills:
-        return all_fills, True
+        return all_fills, stats, True
     else:
-        result = prepare_result(all_fills, ticks, config['do_long'], config['do_shrt'])
+        result = prepare_result(all_fills, stats, ticks, config['do_long'], config['do_shrt'])
         objective = objective_function(result, config['minimum_liquidation_distance'],
                                        config['minimum_daily_entries'])
         tune.report(objective=objective, daily_gain=result['average_daily_gain'],
@@ -470,19 +492,107 @@ def calc_candidate_hash_key(candidate: dict, keys: [str]) -> str:
 
 def backtest_wrap(ticks: [dict], backtest_config: dict, do_print=False) -> (dict, pd.DataFrame):
     start_ts = time()
-    fills, did_finish = backtest(backtest_config, ticks, return_fills=True, do_print=do_print)
+    fills, stats, did_finish = backtest(backtest_config, ticks, return_fills=True, do_print=do_print)
     elapsed = time() - start_ts
     if len(fills) == 0:
         return {'average_daily_gain': 0.0, 'closest_liq': 0.0, 'max_n_hours_stuck': 1000.0}, pd.DataFrame()
     fdf = pd.DataFrame(fills).set_index('trade_id')
-    result = prepare_result(fills, ticks, bool(backtest_config['do_long']), bool(backtest_config['do_shrt']))
+    result = prepare_result(fills, stats, ticks, bool(backtest_config['do_long']), bool(backtest_config['do_shrt']))
     result['seconds_elapsed'] = elapsed
     if 'key' not in result:
         result['key'] = calc_candidate_hash_key(backtest_config, backtest_config['ranges'])
     return result, fdf
 
 
-def prepare_result(fills: list, ticks: np.ndarray, do_long: bool, do_shrt: bool) -> dict:
+# TODO: Make a class Returns?
+# Dict of interesting periods and their associated number of seconds
+PERIODS = {
+    'daily': 60*60*24,
+    'weekly': 60*60*24*7,
+    'monthly': 60*60*24*365.25/12,
+    'yearly': 60*60*24*365.25
+}
+
+def result_sampled_default():
+    result = {}
+    for period,sec in PERIODS.items():
+        result['returns_' + period] = 0
+        result['sharpe_ratio_' + period] = 0
+        result['VWR_' + period] = 0
+    return result
+
+def prepare_result_sampled(stats: list) -> dict:
+    if len(stats) < 10:
+        return result_sampled_default()
+
+    sample_period = '1H'
+    sample_sec = pd.to_timedelta(sample_period).seconds
+
+    equity_start = stats[0]['equity']
+    equity_end = stats[-1]['equity']
+
+    sdf = pd.DataFrame(stats).set_index('timestamp')
+    sdf.index = pd.to_datetime(sdf.index, unit='ms')
+    sdf = sdf.resample(sample_period).last()
+
+    returns = sdf.equity.pct_change()
+    returns[0] = sdf.equity[0] / equity_start - 1
+    returns.fillna(0, inplace=True)
+    # returns_diff = (sdf['balance'].pad() / (equity_start * np.exp(returns_log_mean * np.arange(1, N+1)))) - 1
+
+    N = len(returns)
+    returns_mean = np.exp(np.mean(np.log(returns + 1))) - 1 # Geometrical mean
+
+    #########################################
+    ### Variability-Weighted Return (VWR) ###
+    #########################################
+
+    # See https://www.crystalbull.com/sharpe-ratio-better-with-log-returns/
+    returns_log = np.log(1 + returns)
+    returns_log_mean = np.log(equity_end / equity_start) / N
+    # returns_mean = np.exp(returns_log_mean) - 1 # = geometrical mean != returns.mean()
+
+    # Relative difference of the equity E_i and the zero-variability ideal equity E'_i: (E_i / E'i) - 1
+    equity_diff = (sdf['equity'].pad() / (equity_start * np.exp(returns_log_mean * np.arange(1, N+1)))) - 1
+
+    # Standard deviation of equity differentials
+    equity_diff_std = np.std(equity_diff, ddof=1)
+
+    tau = 1.4 # Rate at which weighting falls with increasing variability (investor tolerance)
+    sdev_max = 0.16 # Maximum acceptable standard deviation (investor limit)
+
+    # Weighting of the expected compounded returns for a given period (daily, ...). Note that
+    # - this factor is always less than 1
+    # - this factor is negative if equity_diff_std > sdev_max (hence this parameter name)
+    # - the smaller (resp. bigger) tau is the quicker this factor tends to zero (resp. 1)
+    VWR_weight = (1.0 - (equity_diff_std / sdev_max) ** tau)
+
+    result = {}
+    for period,sec in PERIODS.items():
+        # There are `periods_nb` times `sample_sec` in `period`
+        periods_nb = sec / sample_sec
+
+        # Expected compounded returns for `period` (daily returns = adg - 1)
+        returns_expected_period = (returns_mean + 1) ** periods_nb - 1
+        # returns_expected_period = np.exp(returns_log_mean * periods_nb) - 1
+
+        volatility_expected_period = returns.std() * np.sqrt(periods_nb)
+        SR = returns_expected_period / volatility_expected_period # Sharpe ratio (risk-free)
+        VWR = returns_expected_period * VWR_weight
+
+        result['returns_' + period] = returns_expected_period
+
+        # TODO: Put this condition outside this loop, perhaps use result_sampled_default?
+        if equity_end > equity_start:
+            result['sharpe_ratio_' + period] = SR
+            result['VWR_' + period] = VWR
+        else:
+            result['sharpe_ratio_' + period] = 0.0
+            result['VWR_' + period] = 0.0 # VWR is positive when returns_expected_period < 0
+
+    return result
+
+def prepare_result(fills: list, stats: list, ticks: np.ndarray, do_long: bool, do_shrt: bool) -> dict:
     fdf = pd.DataFrame(fills)
     if fdf.empty:
         result = {
@@ -537,12 +647,14 @@ def prepare_result(fills: list, ticks: np.ndarray, do_long: bool, do_shrt: bool)
             'do_long': do_long,
             'do_shrt': do_shrt
         }
+
+    result.update(prepare_result_sampled(stats))
     return result
 
 
 def objective_function(result: dict, liq_cap: float, n_daily_entries_cap: int) -> float:
     try:
-        return (result['average_daily_gain'] *
+        return (result['VWR_daily'] *
                 min(1.0, (result['n_entries'] / result['n_days']) / n_daily_entries_cap) *
                 min(1.0, result['closest_liq'] / liq_cap))
     except Exception as e:
