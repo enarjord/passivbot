@@ -253,26 +253,24 @@ def backtest(config: dict, ticks: np.ndarray, return_fills=False, do_print=False
     delayed_update = ticks[0][2] + min_trade_delay_millis
     prev_update_ts = 0
 
-    last_update = None
+    next_stats_update = 0
     stats = []
 
     def stats_update():
         upnl_l = x if (x := long_pnl_f(long_pprice, tick[0], long_psize)) == x else 0.0
         upnl_s = y if (y := shrt_pnl_f(shrt_pprice, tick[0], shrt_psize)) == y else 0.0
-        s = {}
-        s['timestamp'] = tick[2]
-        s['balance'] = balance # Not needed because redondant with fills, but makes plotting easier
-        s['equity'] = balance + upnl_l + upnl_s
-        stats.append(s)
+        stats.append({'timestamp': tick[2],
+                      'balance': balance, # Redundant with fills, but makes plotting easier
+                      'equity': balance + upnl_l + upnl_s})
 
     for k, tick in enumerate(ticks):
 
         liq_diff = calc_diff(liq_price, tick[0])
 
         # Update the stats every hour
-        if last_update == None or tick[2] - last_update > 3600*1000:
+        if tick[2] > next_stats_update:
             stats_update()
-            last_update = tick[2]
+            next_stats_update = tick[2] + 1000 * 60 * 60
 
         if tick[2] > delayed_update:
             # after simulated delay, update open orders
