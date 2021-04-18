@@ -648,13 +648,28 @@ def prepare_result(fills: list, stats: list, ticks: np.ndarray, do_long: bool, d
 
     result.update(prepare_result_sampled(stats))
     return result
+                
 
+def obj_adg(result: dict, liq_cap: float, n_daily_entries_cap: int) -> float:
+    return (result['average_daily_gain'] *
+            min(1.0, (result['n_entries'] / result['n_days']) / n_daily_entries_cap) *
+            min(1.0, result['closest_liq'] / liq_cap))
+
+
+def obj_vwr_daily(result: dict, liq_cap: float, n_daily_entries_cap: int) -> float:
+    return (result['VWR_daily'] *
+            min(1.0, (result['n_entries'] / result['n_days']) / n_daily_entries_cap) *
+            min(1.0, result['closest_liq'] / liq_cap))
+ 
 
 def objective_function(result: dict, liq_cap: float, n_daily_entries_cap: int) -> float:
     try:
-        return (result['VWR_daily'] *
-                min(1.0, (result['n_entries'] / result['n_days']) / n_daily_entries_cap) *
-                min(1.0, result['closest_liq'] / liq_cap))
+        # scoring metric and any parameters belonging thereto could eventually be defined in backtest config,
+        # e.g. [adg, vwr_daily, vwr_weekly, ]
+        # letting default remain 'average_daily_gain' for now
+
+        return obj_adg(result, liq_cap, n_daily_entries_cap)
+        # return obj_vwr_daily(result, liq_cap, n_daily_entries_cap)
     except Exception as e:
         print('error with objective function', e, result)
         return 0.0
