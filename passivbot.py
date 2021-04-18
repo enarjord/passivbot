@@ -329,14 +329,13 @@ def calc_next_long_entry_inverse(price_step: float,
                                  available_margin: float):
     if long_psize == 0.0:
         price = min(highest_bid, round_dn(ema * (1 - ema_spread), price_step))
-        max_order_qty = round_dn(available_margin * price * leverage, qty_step)
-        long_qty = min(max_order_qty,
+        long_qty = min(round_dn((available_margin / contract_multiplier) * price * leverage, qty_step),
                        calc_min_order_qty_inverse(qty_step, min_qty, min_cost, qty_pct, leverage,
-                                                  balance / contract_multiplier,
-                                                  highest_bid))
-        long_psize = round_(long_qty, qty_step)
+                                                  balance / contract_multiplier, price))
+        if long_qty < calc_min_qty_inverse(qty_step, min_qty, min_cost, price):
+            long_qty = 0.0
         long_pprice = price
-        return long_qty, price, long_psize, long_pprice, 'initial_long_entry'
+        return long_qty, price, long_qty, long_pprice, 'initial_long_entry'
     else:
         long_pmargin = calc_margin_cost_inverse(leverage, long_psize * contract_multiplier, long_pprice)
         price = min(round_(highest_bid, price_step),
@@ -353,8 +352,7 @@ def calc_next_long_entry_inverse(price_step: float,
             new_long_psize = round_(long_psize + long_qty, qty_step)
             long_pprice = nan_to_0(long_pprice) * (long_psize / new_long_psize) + \
                           price * (long_qty / new_long_psize)
-            long_psize = new_long_psize
-            return long_qty, price, long_psize, long_pprice, 'long_reentry'
+            return long_qty, price, new_long_psize, long_pprice, 'long_reentry'
         else:
             return 0.0, np.nan, long_psize, long_pprice, 'long_reentry'
 
@@ -379,13 +377,13 @@ def calc_next_shrt_entry_inverse(price_step: float,
                                  available_margin: float):
     if shrt_psize == 0.0:
         price = max(lowest_ask, round_up(ema * (1 + ema_spread), price_step))
-        max_order_qty = round_dn(available_margin * lowest_ask * leverage, qty_step)
-        qty = -min(max_order_qty,
-                   calc_min_order_qty_inverse(qty_step, min_qty, min_cost, qty_pct, leverage,
-                                              balance / contract_multiplier, lowest_ask))
-        shrt_psize = qty
+        shrt_qty = min(round_dn((available_margin / contract_multiplier) * price * leverage, qty_step),
+                       calc_min_order_qty_inverse(qty_step, min_qty, min_cost, qty_pct, leverage,
+                                                  balance / contract_multiplier, price))
+        if shrt_qty < calc_min_qty_inverse(qty_step, min_qty, min_cost, price):
+            shrt_qty = 0.0
         shrt_pprice = price
-        return qty, price, round_(shrt_psize, qty_step), shrt_pprice, 'initial_shrt_entry'
+        return -shrt_qty, price, -shrt_qty, shrt_pprice, 'initial_shrt_entry'
     else:
         pos_margin = calc_margin_cost_inverse(leverage, shrt_psize * contract_multiplier, shrt_pprice)
         price = max(round_(lowest_ask, price_step),
@@ -402,9 +400,8 @@ def calc_next_shrt_entry_inverse(price_step: float,
         if qty >= min_order_qty:
             new_pos_size = shrt_psize - qty
             shrt_pprice = nan_to_0(shrt_pprice) * (shrt_psize / new_pos_size) + price * (-qty / new_pos_size)
-            shrt_psize = new_pos_size
             margin_cost = calc_margin_cost_inverse(leverage, qty, price)
-            return -qty, price, round_(shrt_psize, qty_step), shrt_pprice, 'shrt_reentry'
+            return -qty, price, round_(new_pos_size, qty_step), shrt_pprice, 'shrt_reentry'
         else:
             return 0.0, np.nan, shrt_psize, shrt_pprice, 'shrt_reentry'
 
@@ -860,13 +857,13 @@ def calc_next_long_entry_linear(price_step: float,
                                 available_margin: float):
     if long_psize == 0.0:
         price = min(highest_bid, round_dn(ema * (1 - ema_spread), price_step))
-        max_order_qty = round_dn(available_margin / highest_bid * leverage, qty_step)
-        long_qty = min(max_order_qty,
+        long_qty = min(round_dn((available_margin / price) * leverage, qty_step),
                        calc_min_order_qty_linear(qty_step, min_qty, min_cost, qty_pct, leverage,
-                                                 balance, highest_bid))
-        long_psize = round_(long_qty, qty_step)
+                                                 balance, price))
+        if long_qty < calc_min_qty_linear(qty_step, min_qty, min_cost, price):
+            long_qty = 0.0
         long_pprice = price
-        return long_qty, price, long_psize, long_pprice, 'initial_long_entry'
+        return long_qty, price, long_qty, long_pprice, 'initial_long_entry'
     else:
         long_pmargin = calc_margin_cost_linear(leverage, long_psize, long_pprice)
         price = min(round_(highest_bid, price_step),
@@ -883,8 +880,7 @@ def calc_next_long_entry_linear(price_step: float,
             new_long_psize = round_(long_psize + long_qty, qty_step)
             long_pprice = long_pprice * (long_psize / new_long_psize) + \
                           price * (long_qty / new_long_psize)
-            long_psize = new_long_psize
-            return long_qty, price, long_psize, long_pprice, 'long_reentry'
+            return long_qty, price, new_long_psize, long_pprice, 'long_reentry'
         else:
             return 0.0, np.nan, long_psize, long_pprice, 'long_reentry'
 
@@ -910,13 +906,13 @@ def calc_next_shrt_entry_linear(price_step: float,
                                 available_margin: float):
     if shrt_psize == 0.0:
         price = max(lowest_ask, round_up(ema * (1 + ema_spread), price_step))
-        max_order_qty = round_dn(available_margin / lowest_ask * leverage, qty_step)
-        qty = -min(max_order_qty,
-                   calc_min_order_qty_linear(qty_step, min_qty, min_cost, qty_pct, leverage,
-                                             balance, lowest_ask))
-        shrt_psize = qty
+        shrt_qty = min(round_dn(available_margin / price * leverage, qty_step),
+                       calc_min_order_qty_linear(qty_step, min_qty, min_cost, qty_pct, leverage,
+                                                 balance, price))
+        if shrt_qty < calc_min_qty_linear(qty_step, min_qty, min_cost, price):
+            shrt_qty = 0.0
         shrt_pprice = price
-        return qty, price, round_(shrt_psize, qty_step), shrt_pprice, 'initial_shrt_entry'
+        return -shrt_qty, price, -shrt_qty, shrt_pprice, 'initial_shrt_entry'
     else:
         pos_margin = calc_margin_cost_linear(leverage, shrt_psize, shrt_pprice)
         price = max(round_(lowest_ask, price_step),
@@ -928,8 +924,7 @@ def calc_next_shrt_entry_linear(price_step: float,
         if qty >= min_order_qty:
             new_pos_size = shrt_psize - qty
             shrt_pprice = nan_to_0(shrt_pprice) * (shrt_psize / new_pos_size) + price * (-qty / new_pos_size)
-            shrt_psize = new_pos_size
-            return -qty, price, round_(shrt_psize, qty_step), shrt_pprice, 'shrt_reentry'
+            return -qty, price, round_(new_pos_size, qty_step), shrt_pprice, 'shrt_reentry'
         else:
             return 0.0, np.nan, shrt_psize, shrt_pprice, 'shrt_reentry'
 
@@ -1257,10 +1252,10 @@ class Bot:
                     print_([' created order', o['symbol'], o['side'], o['position_side'], o['qty'],
                             o['price']], n=True)
                 else:
-                    print_(['error creating order', o], n=True)
+                    print_(['error creating order b', o, oc], n=True)
                 self.dump_log({'log_type': 'create_order', 'data': o})
             except Exception as e:
-                print_(['error creating order b', oc, c.exception(), e], n=True)
+                print_(['error creating order c', oc, c.exception(), e], n=True)
                 self.dump_log({'log_type': 'create_order', 'data': {'result': str(c.exception()),
                                                                     'error': repr(e), 'data': oc}})
         self.ts_released['create_orders'] = time()
