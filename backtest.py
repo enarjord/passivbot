@@ -567,7 +567,8 @@ def clean_start_config(start_config: dict, backtest_config: dict) -> dict:
     clean_start = {}
     for k, v in start_config.items():
         if k in backtest_config and k not in ['do_long', 'do_shrt']:
-            clean_start[k] = v
+            if type(backtest_config[k]) == ray.tune.sample.Float or type(backtest_config[k]) == ray.tune.sample.Integer:
+                clean_start[k] = v
     return clean_start
 
 
