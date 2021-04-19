@@ -2,6 +2,9 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v3.5.0] - 2021-04-14
+- added volatility indicator
+
 ## [v3.4.0] - 2021-04-14
 - added binance USDT-margined backtester with stoploss
 - added binance COIN-margined backtester with stoploss
