@@ -8,12 +8,11 @@ from urllib.parse import urlencode
 
 import aiohttp
 import numpy as np
-import websockets
 from dateutil import parser
 
 from passivbot import load_key_secret, print_, \
-    ts_to_date, flatten, Bot, start_bot, calc_min_order_qty_inverse, sort_dict_keys, calc_ema, iter_long_closes_inverse, \
-    iter_shrt_closes_inverse, iter_entries_inverse, \
+    ts_to_date, flatten, Bot, start_bot, calc_min_order_qty_inverse, sort_dict_keys, calc_ema, \
+    iter_long_closes_inverse, iter_shrt_closes_inverse, iter_entries_inverse, \
     iter_long_closes_linear, iter_shrt_closes_linear, iter_entries_linear, calc_long_pnl_linear, \
     calc_long_pnl_inverse, calc_shrt_pnl_linear, \
     calc_shrt_pnl_inverse, calc_cost_linear, calc_cost_inverse
@@ -93,7 +92,7 @@ class Bybit(Bot):
                               'create_order': '/private/linear/order/create',
                               'cancel_order': '/private/linear/order/cancel',
                               'ticks': '/public/linear/recent-trading-records',
-                              'websocket_url': 'wss://stream.bybit.com/realtime_public',
+                              'websocket': 'wss://stream.bybit.com/realtime_public',
                               'created_at_key': 'created_time'}
 
             self.iter_long_closes = lambda balance, pos_size, pos_price, lowest_ask: \
@@ -133,7 +132,7 @@ class Bybit(Bot):
                                   'create_order': '/v2/private/order/create',
                                   'cancel_order': '/v2/private/order/cancel',
                                   'ticks': '/v2/public/trading-records',
-                                  'websocket_url': 'wss://stream.bybit.com/realtime',
+                                  'websocket': 'wss://stream.bybit.com/realtime',
                                   'created_at_key': 'created_at'}
 
                 self.hedge_mode = False
@@ -145,7 +144,7 @@ class Bybit(Bot):
                                   'create_order': '/futures/private/order/create',
                                   'cancel_order': '/futures/private/order/cancel',
                                   'ticks': '/v2/public/trading-records',
-                                  'websocket_url': 'wss://stream.bybit.com/realtime',
+                                  'websocket': 'wss://stream.bybit.com/realtime',
                                   'created_at_key': 'created_at'}
 
             self.iter_long_closes = lambda balance, pos_size, pos_price, lowest_ask: \
@@ -210,20 +209,6 @@ class Bybit(Bot):
         self.init_market_type()
         await self.init_order_book()
         await self.update_position()
-
-    async def init_ema(self):
-        # fetch 10000 ticks to initiate ema
-        ticks = await self.fetch_ticks(do_print=False)
-        additional_ticks = flatten(await asyncio.gather(
-            *[self.fetch_ticks(from_id=ticks[0]['trade_id'] - len(ticks) * i, do_print=False)
-              for i in range(1, 10)]
-        ))
-        ticks = sorted(ticks + additional_ticks, key=lambda x: x['trade_id'])
-        ema = ticks[0]['price']
-        for i in range(1, len(ticks)):
-            if ticks[i]['price'] != ticks[i - 1]['price']:
-                ema = ema * self.ema_alpha_ + ticks[i]['price'] * self.ema_alpha
-        self.ema = ema
 
     async def init_order_book(self):
         ticker = await self.private_get('/v2/public/tickers', {'symbol': self.symbol})
@@ -408,40 +393,22 @@ class Bybit(Bot):
             print(e)
         await self.init_ema()
 
-    async def start_websocket(self) -> None:
-        self.stop_websocket = False
-        uri = self.endpoints['websocket_url']
-        print_([uri])
-        await self.init_exchange_settings()
-        param = {'op': 'subscribe', 'args': ['trade.' + self.symbol]}
-        k = 1
-        async with websockets.connect(uri) as ws:
-            await ws.send(json.dumps(param))
-            async for msg in ws:
-                if msg is None:
-                    continue
-                data = json.loads(msg)
-                price_changed = False
-                try:
-                    for e in data['data']:
-                        price = float(e['price'])
-                        if price != self.price:
-                            if e['side'] == 'Buy':
-                                self.ob[1] = price
-                            elif e['side'] == 'Sell':
-                                self.ob[0] = price
-                            self.price = price
-                            price_changed = True
-                            self.ema = calc_ema(self.ema_alpha, self.ema_alpha_, self.ema, price)
-                except Exception as e:
-                    if 'success' not in data:
-                        print('error in websocket streamed data', e)
-                if price_changed:
-                    if self.ts_locked['decide'] < self.ts_released['decide']:
-                        asyncio.create_task(self.decide())
-                    if k % 10 == 0:
-                        self.flush_stuck_locks()
-                        k = 1
-                    k += 1
+    def standardize_websocket_ticks(self, data: dict) -> [dict]:
+        ticks = []
+        for e in data['data']:
+            try:
+                price = float(e['price'])
+                if ticks:
+                    if price != ticks[-1]['price']:
+                        ticks.append({'price': float(e['price']), 'is_buyer_maker': e['side'] == 'Sell'})
+                elif price != self.price:
+                    ticks.append({'price': float(e['price']), 'is_buyer_maker': e['side'] == 'Sell'})
+            except Exception as ex:
+                print('errer in websocket tick', e, ex)
+        return ticks
+
+    async def subscribe_ws(self, ws):
+        params = {'op': 'subscribe', 'args': ['trade.' + self.symbol]}
+        await ws.send(json.dumps(params))
 
 
