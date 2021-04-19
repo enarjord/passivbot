@@ -331,7 +331,8 @@ class Downloader:
                 current_id = start_id + 1
                 current_time = start_time
 
-            end_id = sys.maxsize if end_id in [-1, 0] else end_id - 1
+            end_id = sys.maxsize if end_id == 0 else end_id - 1
+            end_time = sys.maxsize if end_time == -1 else end_time
 
             if current_id <= end_id and current_time <= end_time and \
                     int(datetime.datetime.now(tz.UTC).timestamp() * 1000) - current_time > 10000:
