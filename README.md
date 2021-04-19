@@ -40,7 +40,7 @@ In both cases liq price will be pushed away
 
 ### Requirements
 
-- Python >= 3.8
+- Python == 3.8.x
 - [requirements.txt](requirements.txt) dependencies
 
 ### Setup dependencies
