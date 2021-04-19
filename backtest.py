@@ -563,12 +563,12 @@ def create_config(backtest_config: dict) -> dict:
     return config
 
 
-def clean_start_config(start_config: dict, backtest_config: dict) -> dict:
+def clean_start_config(start_config: dict, config: dict, ranges: dict) -> dict:
     clean_start = {}
     for k, v in start_config.items():
-        if k in backtest_config and k not in ['do_long', 'do_shrt']:
-            if type(backtest_config[k]) == ray.tune.sample.Float or type(backtest_config[k]) == ray.tune.sample.Integer:
-                clean_start[k] = v
+        if k in config and k not in ['do_long', 'do_shrt']:
+            if type(config[k]) == ray.tune.sample.Float or type(config[k]) == ray.tune.sample.Integer:
+                clean_start[k] = min(max(v, ranges[k][0]), ranges[k][1])
     return clean_start
 
 
@@ -610,10 +610,10 @@ def backtest_tune(ticks: np.ndarray, backtest_config: dict, current_best: Union[
     if current_best:
         if type(current_best) == list:
             for c in current_best:
-                c = clean_start_config(c, config)
+                c = clean_start_config(c, config, backtest_config['ranges'])
                 current_best_params.append(c)
         else:
-            current_best = clean_start_config(current_best, config)
+            current_best = clean_start_config(current_best, config, backtest_config['ranges'])
             current_best_params.append(current_best)
 
     ray.init(num_cpus=num_cpus, logging_level=logging.FATAL, log_to_driver=False)
@@ -701,3 +701,4 @@ async def main(args: list):
 
 if __name__ == '__main__':
     asyncio.run(main(sys.argv))
+
