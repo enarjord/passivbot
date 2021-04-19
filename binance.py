@@ -8,7 +8,6 @@ from urllib.parse import urlencode
 
 import aiohttp
 import numpy as np
-import websockets
 
 from passivbot import load_key_secret, print_, \
     ts_to_date, flatten, Bot, start_bot, round_up, calc_min_order_qty, sort_dict_keys, \
@@ -82,7 +81,7 @@ class BinanceBot(Bot):
                               'margin_type': '/fapi/v1/marginType',
                               'leverage': '/fapi/v1/leverage',
                               'position_side': '/fapi/v1/positionSide/dual',
-                              'websocket': 'wss://fstream.binance.com'}
+                              'websocket': f"wss://fstream.binance.com/ws/{self.symbol.lower()}@aggTrade"}
 
             self.iter_long_closes = lambda balance, pos_size, pos_price, lowest_ask: \
                 iter_long_closes_linear(self.price_step, self.qty_step, self.min_qty, self.min_cost,
@@ -122,7 +121,7 @@ class BinanceBot(Bot):
                               'margin_type': '/dapi/v1/marginType',
                               'leverage': '/dapi/v1/leverage',
                               'position_side': '/dapi/v1/positionSide/dual',
-                              'websocket': 'wss://dstream.binance.com'}
+                              'websocket': f"wss://dstream.binance.com/ws/{self.symbol.lower()}@aggTrade"}
 
             self.iter_long_closes = lambda balance, pos_size, pos_price, lowest_ask: \
                 iter_long_closes_inverse(self.price_step, self.qty_step, self.min_qty, self.min_cost,
@@ -195,19 +194,6 @@ class BinanceBot(Bot):
         await self.init_order_book()
         await self.update_position()
 
-    async def init_ema(self):
-        # fetch 10 tick chunks to initiate ema
-        ticks = await self.fetch_ticks(do_print=False)
-        additional_ticks = flatten(await asyncio.gather(
-            *[self.fetch_ticks(from_id=ticks[0]['trade_id'] - len(ticks) * i, do_print=False)
-              for i in range(1, 10)]
-        ))
-        ticks = sorted(ticks + additional_ticks, key=lambda x: x['trade_id'])
-        ema = ticks[0]['price']
-        for i in range(1, len(ticks)):
-            if ticks[i]['price'] != ticks[i - 1]['price']:
-                ema = ema * self.ema_alpha_ + ticks[i]['price'] * self.ema_alpha
-        self.ema = ema
 
     async def check_if_other_positions(self, abort=True):
         positions, open_orders = await asyncio.gather(
@@ -220,14 +206,12 @@ class BinanceBot(Bot):
                 if e['symbol'] != self.symbol:
                     print('\n\nWARNING\n\n')
                     print('account has position in other symbol:', e)
-                    print('\naborting')
                     print('\n\n')
                     do_abort = True
         for e in open_orders:
             if e['symbol'] != self.symbol:
                 print('\n\nWARNING\n\n')
                 print('account has open orders in other symbol:', e)
-                print('\naborting')
                 print('\n\n')
                 do_abort = True
         if do_abort:
@@ -361,7 +345,7 @@ class BinanceBot(Bot):
         try:
             fetched = await self.private_get(self.endpoints['ticks'], params)
         except Exception as e:
-            print('error fetching ticks', e)
+            print('error fetching ticks a', e)
             return []
         try:
             ticks = [{'trade_id': int(t['a']), 'price': float(t['p']), 'qty': float(t['q']),
@@ -371,7 +355,7 @@ class BinanceBot(Bot):
                 print_(['fetched trades', self.symbol, ticks[0]['trade_id'],
                         ts_to_date(float(ticks[0]['timestamp']) / 1000)])
         except Exception as e:
-            print(e)
+            print('errer fetching ticks b', e, fetched)
             ticks = []
             if do_print:
                 print_(['fetched no new ticks', self.symbol])
@@ -386,33 +370,15 @@ class BinanceBot(Bot):
         elif self.market_type == 'inverse_coin_margined':
             return min((balance * price) * self.leverage, self.max_pos_size_ito_coin * price) * 0.92
 
-    async def start_websocket(self) -> None:
-        self.stop_websocket = False
-        uri = f"{self.endpoints['websocket']}/ws/{self.symbol.lower()}@aggTrade"
-        print_([uri])
-        await self.update_position()
-        await self.init_exchange_settings()
-        k = 1
-        async with websockets.connect(uri) as ws:
-            async for msg in ws:
-                if msg is None:
-                    continue
-                data = json.loads(msg)
-                price = float(data['p'])
-                trade_id = data['a']
-                if data['m']:
-                    self.ob[0] = price
-                else:
-                    self.ob[1] = price
-                if price != self.price:
-                    self.ema = calc_ema(self.ema_alpha, self.ema_alpha_, self.ema, price)
-                self.price = price
-                if self.ts_locked['decide'] < self.ts_released['decide']:
-                    asyncio.create_task(self.decide())
-                if k % 10 == 0:
-                    self.flush_stuck_locks()
-                    k = 1
-                if self.stop_websocket:
-                    break
-                k += 1
+    def standardize_websocket_ticks(self, data: dict) -> [dict]:
+        try:
+            ticks = [{'price': float(data['p']), 'is_buyer_maker': data['m']}]
+            if ticks[0]['price'] != self.price:
+                return ticks
+        except Exception as e:
+            print('errer in websocket tick', e)
+        return []
+
+    async def subscribe_ws(self, ws):
+        pass
 
