@@ -245,14 +245,13 @@ def backtest(config: dict, ticks: np.ndarray, return_fills=False, do_print=False
     bids, asks = [], []
     stop_loss_order = None
     ob = [min(ticks[0][0], ticks[1][0]), max(ticks[0][0], ticks[1][0])]
-    ema = ticks[0][0]
-    ema_alpha = 2 / (config['ema_span'] + 1)
-    ema_alpha_ = 1 - ema_alpha
+    ema_span = int(round(config['ema_span']))
+    emas = calc_emas(ticks[:,0], ema_span)
+    price_stds = calc_stds(ticks[:,0], ema_span)
     # tick tuple: (price, buyer_maker, timestamp)
     delayed_update = ticks[0][2] + min_trade_delay_millis
     next_update_ts = 0
-    for k, tick in enumerate(ticks):
-
+    for k, tick in enumerate(ticks[ema_span:], start=ema_span):
         liq_diff = calc_diff(liq_price, tick[0])
         if tick[2] > delayed_update:
             # after simulated delay, update open orders
@@ -261,7 +260,7 @@ def backtest(config: dict, ticks: np.ndarray, return_fills=False, do_print=False
             tampered_longpsize, tampered_shrtpsize = long_psize, shrt_psize
             next_update_ts = tick[2] + 5000
             for tpl in iter_entries(balance, long_psize, long_pprice, shrt_psize, shrt_pprice,
-                                    liq_price, ob[0], ob[1], ema, tick[0],
+                                    liq_price, ob[0], ob[1], emas[k], tick[0],
                                     config['do_long'], config['do_shrt']):
                 if len(bids) > 2 and len(asks) > 2:
                     break
@@ -370,7 +369,6 @@ def backtest(config: dict, ticks: np.ndarray, return_fills=False, do_print=False
                     else:
                         break
             ob[1] = tick[0]
-        ema = calc_ema(ema_alpha, ema_alpha_, ema, tick[0])
 
         if len(fills) > 0:
             for fill in fills:
