@@ -1366,24 +1366,26 @@ class Bot:
         return long_entry_orders + shrt_entry_orders + long_close_orders + shrt_close_orders
 
     async def cancel_and_create(self):
-        await asyncio.sleep(0.01)
+        await asyncio.sleep(0.005)
         await self.update_position()
-        await asyncio.sleep(0.01)
+        await asyncio.sleep(0.005)
         if any([self.ts_locked[k_] > self.ts_released[k_]
                 for k_ in [x for x in self.ts_locked if x != 'decide']]):
             return
         n_orders_limit = 4
         to_cancel, to_create = filter_orders(self.open_orders,
-                                             self.calc_orders(),
+                                             (self.calc_orders_bancor() if 'bancor' in self.settings
+                                              else self.calc_orders()),
                                              keys=['side', 'position_side', 'qty', 'price'])
         to_cancel = sorted(to_cancel, key=lambda x: calc_diff(x['price'], self.price))
         to_create = sorted(to_create, key=lambda x: calc_diff(x['price'], self.price))
-        tasks = []
+        results = []
         if to_cancel:
-            tasks.append(self.cancel_orders(to_cancel[:n_orders_limit]))
-        tasks.append(self.create_orders(to_create[:n_orders_limit]))
-        results = await asyncio.gather(*tasks)
-        await asyncio.sleep(0.01)
+            results.append(asyncio.create_task(self.cancel_orders(to_cancel[:n_orders_limit])))
+            await asyncio.sleep(0.005) # sleep 5 ms between sending cancellations and creations
+        if to_create:
+            results.append(await self.create_orders(to_create[:n_orders_limit]))
+        await asyncio.sleep(0.005)
         await self.update_position()
         if any(results):
             print()
