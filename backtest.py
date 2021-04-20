@@ -250,7 +250,7 @@ def backtest(config: dict, ticks: np.ndarray, return_fills=False, do_print=False
     ema_alpha_ = 1 - ema_alpha
     # tick tuple: (price, buyer_maker, timestamp)
     delayed_update = ticks[0][2] + min_trade_delay_millis
-    prev_update_ts = 0
+    next_update_ts = 0
     for k, tick in enumerate(ticks):
 
         liq_diff = calc_diff(liq_price, tick[0])
@@ -259,7 +259,7 @@ def backtest(config: dict, ticks: np.ndarray, return_fills=False, do_print=False
             bids, asks = [], []
             stop_loss_order = (0.0, 0.0, 0.0, 0.0, '')
             tampered_longpsize, tampered_shrtpsize = long_psize, shrt_psize
-            prev_update_ts = tick[2]
+            next_update_ts = tick[2] + 5000
             for tpl in iter_entries(balance, long_psize, long_pprice, shrt_psize, shrt_pprice,
                                     liq_price, ob[0], ob[1], ema, tick[0],
                                     config['do_long'], config['do_shrt']):
@@ -290,7 +290,7 @@ def backtest(config: dict, ticks: np.ndarray, return_fills=False, do_print=False
                     (config['do_shrt'] and shrt_psize == 0.0) or \
                     liq_diff < config['stop_loss_liq_diff'] or \
                     stop_loss_order[0] != 0.0 or \
-                    tick[2] - prev_update_ts > 5:
+                    tick[2] > next_update_ts:
                 delayed_update = tick[2] + min_trade_delay_millis
 
         fills = []
