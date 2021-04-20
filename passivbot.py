@@ -12,8 +12,6 @@ import numpy as np
 
 if '--nojit' in sys.argv:
     print('not using numba')
-
-
     def njit(pyfunc=None, **kwargs):
         def wrap(func):
             return func
@@ -25,6 +23,14 @@ if '--nojit' in sys.argv:
 else:
     print('using numba')
     from numba import njit
+    
+
+def format_float(n: float):
+    return np.format_float_positional(n, trim='-')
+
+
+def round_dynamic(n: float, d: int):
+    return round_(n, 10**((doti := format_float(n).find('.')) - d - (1 if doti == 1 else 0)))
 
 
 @njit
@@ -1264,6 +1270,8 @@ class Bot:
             print('error with update position', e)
 
     async def create_orders(self, orders_to_create: [dict]) -> dict:
+        if not orders_to_create:
+            return
         if self.ts_locked['create_orders'] > self.ts_released['create_orders']:
             return
         self.ts_locked['create_orders'] = time()
@@ -1292,6 +1300,8 @@ class Bot:
         return created_orders
 
     async def cancel_orders(self, orders_to_cancel: [dict]) -> [dict]:
+        if not orders_to_cancel:
+            return
         if self.ts_locked['cancel_orders'] > self.ts_released['cancel_orders']:
             return
         self.ts_locked['cancel_orders'] = time()
@@ -1450,12 +1460,24 @@ class Bot:
             line += f"|| shrt {self.position['shrt']['size']} @ "
             line += f"{round_(self.position['shrt']['price'], self.price_step)} "
             shrt_closes = sorted([o for o in self.open_orders if o['side'] == 'buy'
-                                  and o['position_side'] == 'shrt'], key=lambda x: x['price'])
+                                  and (o['position_side'] == 'shrt' or
+                                       (o['position_side'] == 'both' and
+                                        self.position['shrt']['size'] != 0.0))],
+                                 key=lambda x: x['price'])
             shrt_entries = sorted([o for o in self.open_orders if o['side'] == 'sell'
-                                   and o['position_side'] == 'shrt'], key=lambda x: x['price'])
+                                   and (o['position_side'] == 'shrt' or
+                                        (o['position_side'] == 'both' and
+                                         self.position['shrt']['size'] != 0.0))],
+                                  key=lambda x: x['price'])
             line += f"close @ {shrt_closes[-1]['price'] if shrt_closes else 0.0} "
             line += f"enter @ {shrt_entries[0]['price'] if shrt_entries else 0.0} "
-            line += f"|| last {self.price} ema {round_(self.ema, self.price_step)} "
+            liq_price = self.position['long']['liquidation_price'] \
+                if self.position['long']['size'] > abs(self.position['shrt']['size']) else \
+                self.position['shrt']['liquidation_price']
+            line += f"|| last {self.price} liq {liq_price} "
+            line += f"ema {round_(self.ema, self.price_step)} "
+            line += f"bal {round_dynamic(self.position['wallet_balance'], 4)} "
+            line += f"equity {round_dynamic(self.position['equity'], 4)} "
             print_([line], r=True)
 
     def load_cached_my_trades(self) -> [dict]:
@@ -1555,7 +1577,8 @@ class Bot:
                         break
                     k += 1
                 except Exception as e:
-                    print('error in websocket', e, msg)
+                    if 'success' not in msg:
+                        print('error in websocket', e, msg)
 
 
 async def start_bot(bot):
