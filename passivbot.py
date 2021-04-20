@@ -77,6 +77,33 @@ def calc_ema(alpha: float, alpha_: float, prev_ema: float, new_val: float) -> fl
 
 
 @njit
+def calc_emas(xs: [float], span: int) -> np.ndarray:
+    alpha = 2 / (span + 1)
+    alpha_ = 1 - alpha
+    emas = np.empty_like(xs)
+    emas[0] = xs[0]
+    for i in range(1, len(xs)):
+        emas[i] = emas[i-1] * alpha_ + xs[i] * alpha
+    return emas
+
+
+@njit
+def calc_stds(xs: [float], span: int) -> np.ndarray:
+    stds = np.empty_like(xs)
+    stds.fill(np.nan)
+    if len(stds) <= span:
+        return stds
+    xsum = xs[:span].sum()
+    xsum_sq = (xs[:span]**2).sum()
+    stds[span] = np.sqrt((xsum_sq / span) - (xsum / span)**2)
+    for i in range(span, len(xs)):
+        xsum += xs[i] - xs[i-span]
+        xsum_sq += xs[i]**2 - xs[i-span]**2
+        stds[i] = np.sqrt((xsum_sq / span) - (xsum / span)**2)
+    return stds
+
+
+@njit
 def calc_initial_long_entry_price(price_step: float, spread: float, ema: float,
                                   highest_bid: float) -> float:
     return min(highest_bid, round_dn(ema * (1 - spread), price_step))
