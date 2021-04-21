@@ -4,11 +4,9 @@ import json
 import os
 import sys
 import websockets
+import numpy as np
 from time import time
 from collections import deque
-
-
-import numpy as np
 
 if '--nojit' in sys.argv:
     print('not using numba')
@@ -23,7 +21,7 @@ if '--nojit' in sys.argv:
 else:
     print('using numba')
     from numba import njit
-    
+
 
 def format_float(n: float):
     return np.format_float_positional(n, trim='-')
@@ -1193,7 +1191,8 @@ class Bot:
         for key in settings:
             setattr(self, key, settings[key])
 
-        self.ema_alpha = 2 / (settings['ema_span'] + 1)
+        self.ema_span = round(int(self.ema_span))
+        self.ema_alpha = 2 / (self.ema_span + 1)
         self.ema_alpha_ = 1 - self.ema_alpha
 
         self.ts_locked = {'cancel_orders': 0, 'decide': 0, 'update_open_orders': 0,
@@ -1471,10 +1470,14 @@ class Bot:
                                   key=lambda x: x['price'])
             line += f"close @ {shrt_closes[-1]['price'] if shrt_closes else 0.0} "
             line += f"enter @ {shrt_entries[0]['price'] if shrt_entries else 0.0} "
-            liq_price = self.position['long']['liquidation_price'] \
-                if self.position['long']['size'] > abs(self.position['shrt']['size']) else \
-                self.position['shrt']['liquidation_price']
+            if self.position['long']['size'] > abs(self.position['shrt']['size']):
+                liq_price = self.position['long']['liquidation_price']
+                sl_trigger_price = round_(liq_price / (1 - self.stop_loss_liq_diff), self.price_step)
+            else:
+                liq_price = self.position['shrt']['liquidation_price']
+                sl_trigger_price = round_(liq_price / (1 + self.stop_loss_liq_diff), self.price_step)
             line += f"|| last {self.price} liq {liq_price} "
+            line += f"sl trig {round_(sl_trigger_price, self.price_step)} "
             line += f"ema {round_(self.ema, self.price_step)} "
             line += f"bal {round_dynamic(self.position['wallet_balance'], 4)} "
             line += f"equity {round_dynamic(self.position['equity'], 4)} "
@@ -1515,11 +1518,10 @@ class Bot:
 
     async def init_ema(self):
         # fetch 10 tick chunks to initiate ema
-        n_ticks = int(self.ema_span)
         ticks = await self.fetch_ticks(do_print=False)
         additional_ticks = flatten(await asyncio.gather(
             *[self.fetch_ticks(from_id=ticks[0]['trade_id'] - len(ticks) * i, do_print=False)
-              for i in range(1, n_ticks // 1000 + 5)]
+              for i in range(1, self.ema_span // 1000 + 5)]
         ))
         ticks = sorted(ticks + additional_ticks, key=lambda x: x['trade_id'])
         compressed_ticks = [ticks[0]]
@@ -1527,7 +1529,7 @@ class Bot:
             if ticks[i]['price'] != compressed_ticks[-1]['price']:
                 compressed_ticks.append(ticks[i])
         ema = compressed_ticks[0]['price']
-        self.tick_prices_deque = deque(maxlen=n_ticks)
+        self.tick_prices_deque = deque(maxlen=self.ema_span)
         for tick in compressed_ticks:
             self.tick_prices_deque.append(tick['price'])
             ema = ema * self.ema_alpha_ + tick['price'] * self.ema_alpha
