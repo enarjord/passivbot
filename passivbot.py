@@ -300,6 +300,7 @@ def iter_entries_inverse(price_step: float,
                                              do_shrt)
     if stop_loss_order[0] != 0.0:
         yield stop_loss_order
+        available_margin -= calc_margin_cost_inverse(leverage, stop_loss_order[0], stop_loss_order[1])
 
     while True:
 
@@ -835,6 +836,7 @@ def iter_entries_linear(price_step: float,
 
     if stop_loss_order[0] != 0.0:
         yield stop_loss_order
+        available_margin -= calc_margin_cost_linear(leverage, stop_loss_order[0], stop_loss_order[1])
 
     while True:
         long_entry = calc_next_long_entry_linear(
