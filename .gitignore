@@ -348,9 +348,9 @@ historical_data/
 
 # Config files
 api-keys.json
-!live_settings/binance/default.json
-!live_settings/bybit/default.json
-live_settings/*
+!live_configs/binance_default.json
+!live_configs/bybit_default.json
+live_configs/*
 
 # Reports
 reports/*
