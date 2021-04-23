@@ -340,7 +340,8 @@ def calc_next_long_entry(xk: tuple,
         qty = calc_initial_entry_qty(xk, balance, price, available_margin, volatility)
         return qty, price, qty, price, 'initial_long_entry'
     else:
-        price = min(round_(highest_bid, xk[4]), calc_long_reentry_price(xk, balance, psize, pprice))
+        price = min(round_(highest_bid, xk[4]), calc_long_reentry_price(xk, balance, psize, pprice,
+                                                                        volatility))
         if price <= 0.0:
             return 0.0, 0.0, psize, pprice, 'long_reentry'
         qty = calc_reentry_qty(xk, psize, price, available_margin)
@@ -362,7 +363,8 @@ def calc_next_shrt_entry(xk: tuple,
         qty = -calc_initial_entry_qty(xk, balance, price, available_margin, volatility)
         return qty, price, qty, price, 'initial_shrt_entry'
     else:
-        price = max(round_(lowest_ask, xk[4]), calc_shrt_reentry_price(xk, balance, psize, pprice))
+        price = max(round_(lowest_ask, xk[4]), calc_shrt_reentry_price(xk, balance, psize, pprice,
+                                                                       volatility))
         qty = -calc_reentry_qty(xk, psize, price, available_margin)
         psize, pprice = calc_new_psize_pprice(xk, psize, pprice, qty, price)
         return qty, price, psize, pprice, 'shrt_reentry'
