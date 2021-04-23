@@ -239,6 +239,16 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, bool):
     min_trade_delay_millis = config['latency_simulation_ms'] \
         if 'latency_simulation_ms' in config else 1000
 
+    next_stats_update = 0
+    stats = []
+
+    def stats_update():
+        upnl_l = x if (x := long_pnl_f(long_pprice, tick[0], long_psize)) == x else 0.0
+        upnl_s = y if (y := shrt_pnl_f(shrt_pprice, tick[0], shrt_psize)) == y else 0.0
+        stats.append({'timestamp': tick[2],
+                      'balance': balance, # Redundant with fills, but makes plotting easier
+                      'equity': balance + upnl_l + upnl_s})
+
     all_fills = []
     fills = []
     bids, asks = [], []
@@ -252,6 +262,12 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, bool):
     next_update_ts = 0
     for k, tick in enumerate(ticks[ema_span:], start=ema_span):
         liq_diff = calc_diff(liq_price, tick[0])
+
+        # Update the stats every hour
+        if tick[2] > next_stats_update:
+            stats_update()
+            next_stats_update = tick[2] + 1000 * 60 * 60
+
         if tick[2] > delayed_update:
             # after simulated delay, update open orders
             bids, asks = [], []
@@ -420,6 +436,95 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, bool):
                 print(line, end=' ')
             # print(f"\r{k / len(ticks):.2f} ", end=' ')
     return all_fills, True
+
+
+# TODO: Make a class Returns?
+# Dict of interesting periods and their associated number of seconds
+PERIODS = {
+    'daily': 60*60*24,
+    'weekly': 60*60*24*7,
+    'monthly': 60*60*24*365.25/12,
+    'yearly': 60*60*24*365.25
+}
+
+def result_sampled_default():
+    result = {}
+    for period,sec in PERIODS.items():
+        result['returns_' + period] = 0
+        result['sharpe_ratio_' + period] = 0
+        result['VWR_' + period] = 0
+    return result
+
+def prepare_result_sampled(stats: list) -> dict:
+    if len(stats) < 10:
+        return result_sampled_default()
+
+    sample_period = '1H'
+    sample_sec = pd.to_timedelta(sample_period).seconds
+
+    equity_start = stats[0]['equity']
+    equity_end = stats[-1]['equity']
+
+    sdf = pd.DataFrame(stats).set_index('timestamp')
+    sdf.index = pd.to_datetime(sdf.index, unit='ms')
+    sdf = sdf.resample(sample_period).last()
+
+    returns = sdf.equity.pct_change()
+    returns[0] = sdf.equity[0] / equity_start - 1
+    returns.fillna(0, inplace=True)
+    # returns_diff = (sdf['balance'].pad() / (equity_start * np.exp(returns_log_mean * np.arange(1, N+1)))) - 1
+
+    N = len(returns)
+    returns_mean = np.exp(np.mean(np.log(returns + 1))) - 1 # Geometrical mean
+
+    #########################################
+    ### Variability-Weighted Return (VWR) ###
+    #########################################
+
+    # See https://www.crystalbull.com/sharpe-ratio-better-with-log-returns/
+    returns_log = np.log(1 + returns)
+    returns_log_mean = np.log(equity_end / equity_start) / N
+    # returns_mean = np.exp(returns_log_mean) - 1 # = geometrical mean != returns.mean()
+
+    # Relative difference of the equity E_i and the zero-variability ideal equity E'_i: (E_i / E'i) - 1
+    equity_diff = (sdf['equity'].pad() / (equity_start * np.exp(returns_log_mean * np.arange(1, N+1)))) - 1
+
+    # Standard deviation of equity differentials
+    equity_diff_std = np.std(equity_diff, ddof=1)
+
+    tau = 1.4 # Rate at which weighting falls with increasing variability (investor tolerance)
+    sdev_max = 0.16 # Maximum acceptable standard deviation (investor limit)
+
+    # Weighting of the expected compounded returns for a given period (daily, ...). Note that
+    # - this factor is always less than 1
+    # - this factor is negative if equity_diff_std > sdev_max (hence this parameter name)
+    # - the smaller (resp. bigger) tau is the quicker this factor tends to zero (resp. 1)
+    VWR_weight = (1.0 - (equity_diff_std / sdev_max) ** tau)
+
+    result = {}
+    for period,sec in PERIODS.items():
+        # There are `periods_nb` times `sample_sec` in `period`
+        periods_nb = sec / sample_sec
+
+        # Expected compounded returns for `period` (daily returns = adg - 1)
+        returns_expected_period = (returns_mean + 1) ** periods_nb - 1
+        # returns_expected_period = np.exp(returns_log_mean * periods_nb) - 1
+
+        volatility_expected_period = returns.std() * np.sqrt(periods_nb)
+        SR = returns_expected_period / volatility_expected_period # Sharpe ratio (risk-free)
+        VWR = returns_expected_period * VWR_weight
+
+        result['returns_' + period] = returns_expected_period
+
+        # TODO: Put this condition outside this loop, perhaps use result_sampled_default?
+        if equity_end > equity_start:
+            result['sharpe_ratio_' + period] = SR
+            result['VWR_' + period] = VWR
+        else:
+            result['sharpe_ratio_' + period] = 0.0
+            result['VWR_' + period] = 0.0 # VWR is positive when returns_expected_period < 0
+
+    return result
 
 
 def candidate_to_live_config(candidate: dict) -> dict:
