@@ -136,6 +136,7 @@ class Bot:
 
         for key in settings:
             setattr(self, key, settings[key])
+        self.xk = config_to_xk(settings)
 
         self.ema_span = round(int(self.ema_span))
         self.ema_alpha = 2 / (self.ema_span + 1)
