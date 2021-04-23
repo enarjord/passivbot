@@ -1,22 +1,21 @@
-import gc
-import glob
-import logging
-import pprint
+import asyncio
+import json
+import os
+import sys
 from hashlib import sha256
-from typing import Union
+from time import time
 
 import matplotlib.pyplot as plt
-import nevergrad as ng
+import numpy as np
 import pandas as pd
-import ray
-from ray import tune
-from ray.tune.schedulers import AsyncHyperBandScheduler
-from ray.tune.suggest import ConcurrencyLimiter
-from ray.tune.suggest.nevergrad import NevergradSearch
 
 from downloader import Downloader, prep_backtest_config
-from passivbot import *
-from reporter import LogReporter
+from passivbot import round_, make_get_filepath, ts_to_date, calc_long_pnl_inverse, calc_shrt_pnl_inverse, \
+    calc_cost_inverse, calc_available_margin_inverse, iter_entries_inverse, iter_long_closes_inverse, \
+    iter_shrt_closes_inverse, calc_cross_hedge_liq_price_binance_inverse, calc_cross_hedge_liq_price_bybit_inverse, \
+    calc_long_pnl_linear, calc_shrt_pnl_linear, calc_cost_linear, calc_available_margin_linear, iter_entries_linear, \
+    iter_long_closes_linear, iter_shrt_closes_linear, calc_cross_hedge_liq_price_binance_linear, \
+    calc_cross_hedge_liq_price_bybit_linear, calc_emas, calc_stds, calc_diff
 
 os.environ['TUNE_GLOBAL_CHECKPOINT_S'] = '120'
 
@@ -139,7 +138,7 @@ def plot_fills(df, fdf, side_: int = 0, liq_thr=0.1):
     return plt
 
 
-def backtest(config: dict, ticks: np.ndarray, return_fills=False, do_print=False) -> (list, bool):
+def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, bool):
     long_psize, long_pprice = 0.0, np.nan
     shrt_psize, shrt_pprice = 0.0, np.nan
     liq_price = 0.0
@@ -246,8 +245,8 @@ def backtest(config: dict, ticks: np.ndarray, return_fills=False, do_print=False
     stop_loss_order = None
     ob = [min(ticks[0][0], ticks[1][0]), max(ticks[0][0], ticks[1][0])]
     ema_span = int(round(config['ema_span']))
-    emas = calc_emas(ticks[:,0], ema_span)
-    price_stds = calc_stds(ticks[:,0], ema_span)
+    emas = calc_emas(ticks[:, 0], ema_span)
+    price_stds = calc_stds(ticks[:, 0], ema_span)
     # tick tuple: (price, buyer_maker, timestamp)
     delayed_update = ticks[0][2] + min_trade_delay_millis
     next_update_ts = 0
@@ -414,33 +413,13 @@ def backtest(config: dict, ticks: np.ndarray, return_fills=False, do_print=False
                 fill['hours_since_pos_change_max'] = max(lc, sc)
                 all_fills.append(fill)
                 if balance <= 0.0 or 'liquidation' in fill['type']:
-                    if return_fills:
-                        return all_fills, False
-                    else:
-                        result = prepare_result(all_fills, ticks, config['do_long'], config['do_shrt'])
-                        objective = objective_function(result, config['minimum_liquidation_distance'],
-                                                       config['minimum_daily_entries'])
-                        tune.report(objective=objective, daily_gain=result['average_daily_gain'],
-                                    closest_liquidation=result['closest_liq'])
-                        del all_fills
-                        gc.collect()
-                        return objective
+                    return all_fills, False
             if do_print:
                 line = f"\r{all_fills[-1]['progress']:.3f} "
                 line += f"adg {all_fills[-1]['average_daily_gain']:.4f} "
                 print(line, end=' ')
             # print(f"\r{k / len(ticks):.2f} ", end=' ')
-    if return_fills:
-        return all_fills, True
-    else:
-        result = prepare_result(all_fills, ticks, config['do_long'], config['do_shrt'])
-        objective = objective_function(result, config['minimum_liquidation_distance'],
-                                       config['minimum_daily_entries'])
-        tune.report(objective=objective, daily_gain=result['average_daily_gain'],
-                    closest_liquidation=result['closest_liq'])
-        del all_fills
-        gc.collect()
-        return objective
+    return all_fills, True
 
 
 def candidate_to_live_config(candidate: dict) -> dict:
@@ -468,7 +447,7 @@ def calc_candidate_hash_key(candidate: dict, keys: [str]) -> str:
 
 def backtest_wrap(ticks: [dict], backtest_config: dict, do_print=False) -> (dict, pd.DataFrame):
     start_ts = time()
-    fills, did_finish = backtest(backtest_config, ticks, return_fills=True, do_print=do_print)
+    fills, did_finish = backtest(backtest_config, ticks, do_print=do_print)
     elapsed = time() - start_ts
     if len(fills) == 0:
         return {'average_daily_gain': 0.0, 'closest_liq': 0.0, 'max_n_hours_stuck': 1000.0}, pd.DataFrame()
@@ -538,108 +517,6 @@ def prepare_result(fills: list, ticks: np.ndarray, do_long: bool, do_shrt: bool)
     return result
 
 
-def objective_function(result: dict, liq_cap: float, n_daily_entries_cap: int) -> float:
-    try:
-        return (result['average_daily_gain'] *
-                min(1.0, (result['n_entries'] / result['n_days']) / n_daily_entries_cap) *
-                min(1.0, result['closest_liq'] / liq_cap))
-    except Exception as e:
-        print('error with objective function', e, result)
-        return 0.0
-
-
-def create_config(backtest_config: dict) -> dict:
-    config = {k: backtest_config[k] for k in backtest_config
-              if k not in {'session_name', 'user', 'symbol', 'start_date', 'end_date', 'ranges'}}
-    for k in backtest_config['ranges']:
-        if backtest_config['ranges'][k][0] == backtest_config['ranges'][k][1]:
-            config[k] = backtest_config['ranges'][k][0]
-        elif k in ['n_close_orders', 'leverage']:
-            config[k] = tune.randint(backtest_config['ranges'][k][0], backtest_config['ranges'][k][1] + 1)
-        else:
-            config[k] = tune.uniform(backtest_config['ranges'][k][0], backtest_config['ranges'][k][1])
-    return config
-
-
-def clean_start_config(start_config: dict, config: dict, ranges: dict) -> dict:
-    clean_start = {}
-    for k, v in start_config.items():
-        if k in config and k not in ['do_long', 'do_shrt']:
-            if type(config[k]) == ray.tune.sample.Float or type(config[k]) == ray.tune.sample.Integer:
-                clean_start[k] = min(max(v, ranges[k][0]), ranges[k][1])
-    return clean_start
-
-
-def clean_result_config(config: dict) -> dict:
-    for k, v in config.items():
-        if type(v) == np.float64:
-            config[k] = float(v)
-        if type(v) == np.int64 or type(v) == np.int32 or type(v) == np.int16 or type(v) == np.int8:
-            config[k] = int(v)
-    return config
-
-
-def backtest_tune(ticks: np.ndarray, backtest_config: dict, current_best: Union[dict, list] = None):
-    config = create_config(backtest_config)
-    n_days = round_((ticks[-1][2] - ticks[0][2]) / (1000 * 60 * 60 * 24), 0.1)
-    session_dirpath = make_get_filepath(os.path.join('reports', backtest_config['exchange'], backtest_config['symbol'],
-                                                     f"{n_days}_days_{ts_to_date(time())[:19].replace(':', '')}", ''))
-    iters = 10
-    if 'iters' in backtest_config:
-        iters = backtest_config['iters']
-    else:
-        print('Parameter iters should be defined in the configuration. Defaulting to 10.')
-    num_cpus = 2
-    if 'num_cpus' in backtest_config:
-        num_cpus = backtest_config['num_cpus']
-    else:
-        print('Parameter num_cpus should be defined in the configuration. Defaulting to 2.')
-    n_particles = 10
-    if 'n_particles' in backtest_config:
-        n_particles = backtest_config['n_particles']
-    phi1 = 1.4962
-    phi2 = 1.4962
-    omega = 0.7298
-    if 'options' in backtest_config:
-        phi1 = backtest_config['options']['c1']
-        phi2 = backtest_config['options']['c2']
-        omega = backtest_config['options']['w']
-    current_best_params = []
-    if current_best:
-        if type(current_best) == list:
-            for c in current_best:
-                c = clean_start_config(c, config, backtest_config['ranges'])
-                current_best_params.append(c)
-        else:
-            current_best = clean_start_config(current_best, config, backtest_config['ranges'])
-            current_best_params.append(current_best)
-
-    ray.init(num_cpus=num_cpus, logging_level=logging.FATAL, log_to_driver=False)
-    pso = ng.optimizers.ConfiguredPSO(transform='identity', popsize=n_particles, omega=omega, phip=phi1, phig=phi2)
-    algo = NevergradSearch(optimizer=pso, points_to_evaluate=current_best_params)
-    algo = ConcurrencyLimiter(algo, max_concurrent=num_cpus)
-    scheduler = AsyncHyperBandScheduler()
-
-    analysis = tune.run(tune.with_parameters(backtest, ticks=ticks), metric='objective', mode='max', name='search',
-                        search_alg=algo, scheduler=scheduler, num_samples=iters, config=config, verbose=1,
-                        reuse_actors=True, local_dir=session_dirpath,
-                        progress_reporter=LogReporter(metric_columns=['daily_gain', 'closest_liquidation', 'objective'],
-                                                      parameter_columns=[k for k in backtest_config['ranges']]))
-
-    ray.shutdown()
-    df = analysis.results_df
-    df.reset_index(inplace=True)
-    df.drop(columns=['trial_id', 'time_this_iter_s', 'done', 'timesteps_total', 'episodes_total', 'training_iteration',
-                     'experiment_id', 'date', 'timestamp', 'time_total_s', 'pid', 'hostname', 'node_ip',
-                     'time_since_restore', 'timesteps_since_restore', 'iterations_since_restore', 'experiment_tag'],
-            inplace=True)
-    df.to_csv(os.path.join(backtest_config['session_dirpath'], 'results.csv'), index=False)
-    print('Best candidate found:')
-    pprint.pprint(analysis.best_config)
-    plot_wrap(backtest_config, ticks, clean_result_config(analysis.best_config))
-    return analysis
-
-
 def plot_wrap(bc, ticks, candidate):
     n_days = round_((ticks[-1][2] - ticks[0][2]) / (1000 * 60 * 60 * 24), 0.1)
     print('backtesting...')
@@ -658,6 +535,7 @@ def plot_wrap(bc, ticks, candidate):
 
 async def main(args: list):
     config_name = args[1]
+    candidate = args[2]
     backtest_config = await prep_backtest_config(config_name)
     if backtest_config['exchange'] == 'bybit' and not backtest_config['inverse']:
         print('bybit usdt linear backtesting not supported')
@@ -665,38 +543,20 @@ async def main(args: list):
     downloader = Downloader(backtest_config)
     ticks = await downloader.get_ticks(True)
     backtest_config['n_days'] = round_((ticks[-1][2] - ticks[0][2]) / (1000 * 60 * 60 * 24), 0.1)
-    if (p := '--plot') in args:
+    try:
+        candidate = json.load(open(candidate))
+        print('plotting given candidate')
+    except Exception as e:
+        print(os.listdir(backtest_config['session_dirpath']))
         try:
-            candidate = json.load(open(args[args.index(p) + 1]))
-            print('plotting given candidate')
-        except Exception as e:
-            print(os.listdir(backtest_config['session_dirpath']))
-            try:
-                candidate = json.load(open(backtest_config['session_dirpath'] + 'live_config.json'))
-                print('plotting best candidate')
-            except:
-                return
-        print(json.dumps(candidate, indent=4))
-        plot_wrap(backtest_config, ticks, candidate)
-        return
-    start_candidate = None
-    if (s := '--start') in args:
-        try:
-            if os.path.isdir(args[args.index(s) + 1]):
-                start_candidate = [json.load(open(f)) for f in
-                                   glob.glob(os.path.join(args[args.index(s) + 1], '*.json'))]
-                print('Starting with all configurations in directory.')
-            else:
-                start_candidate = json.load(open(args[args.index(s) + 1]))
-                print('Starting with specified configuration.')
+            candidate = json.load(open(backtest_config['session_dirpath'] + 'live_config.json'))
+            print('plotting best candidate')
         except:
-            print('Could not find specified configuration.')
-    if start_candidate:
-        backtest_tune(ticks, backtest_config, start_candidate)
-    else:
-        backtest_tune(ticks, backtest_config)
+            return
+    print(json.dumps(candidate, indent=4))
+    plot_wrap(backtest_config, ticks, candidate)
+    return
 
 
 if __name__ == '__main__':
     asyncio.run(main(sys.argv))
-
