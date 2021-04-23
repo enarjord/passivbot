@@ -20,20 +20,21 @@ def round_dynamic(n: float, d: int):
 def config_to_xk(config: dict) -> tuple:
     '''
     xk index/value
-     0 qty_step              7 qty_pct                13 stop_loss_pos_pct  19 n_close_orders   
-     1 price_step            8 leverage               14 do_shrt            20 volatility_grid_coeff
-     3 min_qty               9 grid_spacing           15 do_shrt            21 volatility_qty_coeff
-     4 min_cost             10 pos_margin_grid_coeff  16 inverse            
-     5 contract_multiplier  11 ema_spread             17 min_markup               
-     6 ddown_factor         12 stop_loss_liq_diff     18 markup_range  
+     0 inverse      6 min_cost             12 grid_spacing           18 ema_span
+     1 do_long      7 contract_multiplier  13 pos_margin_grid_coeff  19 ema_spread
+     2 do_shrt      8 ddown_factor         14 volatility_grid_coeff  20 stop_loss_liq_diff
+     3 qty_step     9 qty_pct              15 volatility_qty_coeff   21 stop_loss_pos_pct
+     4 price_step  10 leverage             16 min_markup
+     5 min_qty     11 n_close_orders       17 markup_range
     '''
     return tuple(float(config[k]) if type(config[k]) not in [bool, str] else config[k] for k in [
-        'qty_step', 'price_step', 'min_qty', 'min_cost', 'contract_multiplier', 'ddown_factor',
-        'qty_pct', 'leverage', 'grid_spacing', 'pos_margin_grid_coeff', 'ema_spread',
-        'stop_loss_liq_diff', 'stop_loss_pos_pct', 'do_shrt', 'do_shrt', 'inverse', 'min_markup',
-        'markup_range', 'n_close_orders', 'volatility_grid_coeff', 'volatility_qty_coeff'
+        'inverse', 'do_long', 'do_shrt', 'qty_step', 'price_step', 'min_qty', 'min_cost',
+        'contract_multiplier', 'ddown_factor', 'qty_pct', 'leverage', 'n_close_orders',
+        'grid_spacing', 'pos_margin_grid_coeff', 'volatility_grid_coeff', 'volatility_qty_coeff',
+        'min_markup', 'markup_range', 'ema_span', 'ema_spread', 'stop_loss_liq_diff',
+        'stop_loss_pos_pct',
     ])
-        
+
 
 def sort_dict_keys(d):
     if type(d) == list:
@@ -301,7 +302,7 @@ class Bot:
         long_entry_orders, shrt_entry_orders, long_close_orders, shrt_close_orders = [], [], [], []
         stop_loss_close = False
         xk_list = list(self.xk)
-        xk_list[14], xk_list[15] = do_long, do_shrt
+        xk_list[1], xk_list[2] = do_long, do_shrt
         xk = tuple(xk_list)
 
         for tpl in iter_entries(xk, balance, long_psize, long_pprice, shrt_psize, shrt_pprice,
