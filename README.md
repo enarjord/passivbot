@@ -101,19 +101,21 @@ claim as one's own or otherwise do whatever without permission from anybody.
 
 A backtester is included
 
-1. make a backtest_config.hjson file, using`backtest_configs/xmr.hjson` as template
-2. run with `python3 backtest.py path_to_backtest_config.hjson path_to_live_config_to_test.json`
+1. make a backtest_config.hjson file, using `backtest_configs/xmr.hjson` as template
+2. run with `python3 backtest.py {path_to_backtest_config.hjson} {path_to_live_config_to_test.json}`
 
 Will use numba's just in time compiler by default to speed up backtesting, add argument `--nojit` to disable numba:
 
-`python3 backtest.py path_to_backtest_config.hjson path_to_live_config_to_test.json --nojit`
+`python3 backtest.py {path_to_backtest_config.hjson} {path_to_live_config_to_test.json} --nojit`
 
 ## Optimizer
 
 To optimize a configuration by iterating multiple backtests,
 
 1. make a backtest_config.hjson file, using`backtest_configs/xmr.hjson` as template
-2. run with `python3 optimize.py path_to_backtest_config.hjson`
+2. run with `python3 optimize.py {path_to_backtest_config.hjson}`
+3. optionally make optimizer start from given candidate(s) by adding kwarg `--start {path_to_starting_candidate.json}`
+   if pointing to a directory, will use all .json files in that directory as starting candidates
 
 See [wiki](https://github.com/enarjord/passivbot/wiki) for more info on backtesting and optimizing
 
