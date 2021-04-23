@@ -8,12 +8,11 @@ from urllib.parse import urlencode
 
 import aiohttp
 import numpy as np
+from jitted import calc_entries, calc_long_closes, calc_shrt_closes, calc_diff, calc_ema, \
+  round_up, round_dn, round_
 
-from passivbot import load_key_secret, print_, \
-    ts_to_date, flatten, Bot, start_bot, round_up, calc_min_order_qty, sort_dict_keys, \
-    iter_long_closes_linear, iter_shrt_closes_linear, iter_entries_linear, \
-    iter_long_closes_inverse, iter_shrt_closes_inverse, calc_ema, iter_entries_inverse, \
-    calc_cost_linear, calc_cost_inverse
+from passivbot import load_key_secret, print_, ts_to_date, flatten, Bot, start_bot, \
+  calc_min_order_qty, sort_dict_keys
 
 
 async def create_bot(user: str, settings: str):
@@ -83,28 +82,6 @@ class BinanceBot(Bot):
                               'position_side': '/fapi/v1/positionSide/dual',
                               'websocket': f"wss://fstream.binance.com/ws/{self.symbol.lower()}@aggTrade"}
 
-            self.iter_long_closes = lambda balance, pos_size, pos_price, lowest_ask: \
-                iter_long_closes_linear(self.price_step, self.qty_step, self.min_qty, self.min_cost,
-                                        self.contract_multiplier, self.qty_pct, self.leverage,
-                                        self.min_markup, self.markup_range, self.n_close_orders,
-                                        balance, pos_size, pos_price, lowest_ask)
-
-            self.iter_shrt_closes = lambda balance, pos_size, pos_price, highest_bid: \
-                iter_shrt_closes_linear(self.price_step, self.qty_step, self.min_qty, self.min_cost,
-                                        self.contract_multiplier, self.qty_pct, self.leverage,
-                                        self.min_markup, self.markup_range, self.n_close_orders,
-                                        balance, pos_size, pos_price, highest_bid)
-
-            self.iter_entries = lambda balance, long_psize, long_pprice, shrt_psize, shrt_pprice, \
-                                       liq_price, highest_bid, lowest_ask, ema, last_price, do_long, do_shrt: \
-                iter_entries_linear(self.price_step, self.qty_step, self.min_qty, self.min_cost,
-                                    self.contract_multiplier, self.ddown_factor, self.qty_pct,
-                                    self.leverage, self.grid_spacing, self.grid_coefficient,
-                                    self.ema_spread, self.stop_loss_liq_diff, self.stop_loss_pos_pct,
-                                    balance, long_psize, long_pprice, shrt_psize, shrt_pprice,
-                                    liq_price, highest_bid, lowest_ask, ema, last_price, do_long, do_shrt)
-
-            self.cost_f = calc_cost_linear
         else:
             print('inverse coin margined')
             self.base_endpoint = 'https://dapi.binance.com'
@@ -122,29 +99,6 @@ class BinanceBot(Bot):
                               'leverage': '/dapi/v1/leverage',
                               'position_side': '/dapi/v1/positionSide/dual',
                               'websocket': f"wss://dstream.binance.com/ws/{self.symbol.lower()}@aggTrade"}
-
-            self.iter_long_closes = lambda balance, pos_size, pos_price, lowest_ask: \
-                iter_long_closes_inverse(self.price_step, self.qty_step, self.min_qty, self.min_cost,
-                                         self.contract_multiplier, self.qty_pct, self.leverage,
-                                         self.min_markup, self.markup_range, self.n_close_orders,
-                                         balance, pos_size, pos_price, lowest_ask)
-
-            self.iter_shrt_closes = lambda balance, pos_size, pos_price, highest_bid: \
-                iter_shrt_closes_inverse(self.price_step, self.qty_step, self.min_qty, self.min_cost,
-                                         self.contract_multiplier, self.qty_pct, self.leverage,
-                                         self.min_markup, self.markup_range, self.n_close_orders,
-                                         balance, pos_size, pos_price, highest_bid)
-
-            self.iter_entries = lambda balance, long_psize, long_pprice, shrt_psize, shrt_pprice, \
-                                       liq_price, highest_bid, lowest_ask, ema, last_price, do_long, do_shrt: \
-                iter_entries_inverse(self.price_step, self.qty_step, self.min_qty, self.min_cost,
-                                     self.contract_multiplier, self.ddown_factor, self.qty_pct,
-                                     self.leverage, self.grid_spacing, self.grid_coefficient,
-                                     self.ema_spread, self.stop_loss_liq_diff, self.stop_loss_pos_pct,
-                                     balance, long_psize, long_pprice, shrt_psize, shrt_pprice, liq_price,
-                                     highest_bid, lowest_ask, ema, last_price, do_long, do_shrt)
-
-            self.cost_f = calc_cost_inverse
 
     async def _init(self):
         self.init_market_type()
@@ -175,13 +129,6 @@ class BinanceBot(Bot):
                     z = self.min_cost
                 except AttributeError:
                     self.min_cost = 0.0
-                self.calc_min_qty = lambda price_: \
-                    max(self.min_qty, round_up(self.cost / price_, self.qty_step))
-                self.calc_min_order_qty = lambda balance_, last_price: \
-                    calc_min_order_qty(self.calc_min_qty(last_price),
-                                       self.qty_step,
-                                       (balance_ / last_price) * self.leverage,
-                                       self.qty_pct)
                 break
         max_lev = 10
         for e in leverage_bracket:
