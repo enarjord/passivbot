@@ -76,17 +76,17 @@ def calc_stds(xs: [float], span: int) -> np.ndarray:
 
 @njit
 def calc_initial_long_entry_price(xk: tuple, ema: float,  highest_bid: float) -> float:
-    return min(highest_bid, round_dn(ema * (1 - xk[11]), xk[1]))
+    return min(highest_bid, round_dn(ema * (1 - xk[19]), xk[4]))
 
 
 @njit
 def calc_initial_shrt_entry_price(xk: tuple, ema: float, lowest_ask: float) -> float:
-    return max(lowest_ask, round_up(ema * (1 + xk[11]), xk[1]))
+    return max(lowest_ask, round_up(ema * (1 + xk[19]), xk[4]))
 
 
 @njit
 def calc_min_entry_qty(xk: tuple, price: float) -> float:
-    return max(xk[3], round_up(xk[4] * (price / xk[5] if xk[16] else 1 / price), xk[1]))
+    return max(xk[5], round_up(xk[6] * (price / xk[7] if xk[0] else 1 / price), xk[4]))
 
 
 @njit
@@ -96,19 +96,19 @@ def calc_initial_entry_qty(xk: tuple,
                            available_margin: float,
                            volatility: float) -> float:
     min_entry_qty = calc_min_entry_qty(xk, price)
-    if xk[16]:
+    if xk[0]:
         qty = round_dn(
-            min(available_margin * price / xk[5],
+            min(available_margin * price / xk[7],
                 max(min_entry_qty,
-                    (balance / xk[5]) * price * xk[8] * xk[7] * (1 + volatility * xk[21]))),
-            xk[0]
+                    (balance / xk[7]) * price * xk[10] * xk[9] * (1 + volatility * xk[15]))),
+            xk[3]
         )
     else:
         qty = round_dn(
             min(available_margin / price,
                 max(min_entry_qty,
-                    (balance / price) * xk[8] * xk[7] * (1 + volatility * xk[21]))),
-            xk[0]
+                    (balance / price) * xk[10] * xk[9] * (1 + volatility * xk[15]))),
+            xk[3]
         )
     return qty if qty >= min_entry_qty else 0.0
 
@@ -116,8 +116,8 @@ def calc_initial_entry_qty(xk: tuple,
 @njit
 def calc_reentry_qty(xk: tuple, psize: float, price: float, available_margin: float) -> float:
     min_entry_qty = calc_min_entry_qty(xk, price)
-    qty = min(round_dn(available_margin * (price / xk[5] if xk[16] else 1 / price), xk[0]),
-              max(min_entry_qty, round_dn(abs(psize) * xk[6], xk[0])))
+    qty = min(round_dn(available_margin * (price / xk[7] if xk[0] else 1 / price), xk[3]),
+              max(min_entry_qty, round_dn(abs(psize) * xk[8], xk[3])))
     return qty if qty >= min_entry_qty else 0.0
 
 
@@ -127,9 +127,9 @@ def calc_long_reentry_price(xk: tuple,
                             psize: float,
                             pprice: float,
                             volatility: float) -> float:
-    modifier = (1 + (calc_margin_cost(xk, psize, pprice) / balance) * xk[10]) * \
-        (1 + volatility * xk[20])
-    return round_dn(pprice * (1 - xk[0] * modifier, xk[1]))
+    modifier = (1 + (calc_margin_cost(xk, psize, pprice) / balance) * xk[13]) * \
+        (1 + volatility * xk[14])
+    return round_dn(pprice * (1 - xk[12] * modifier, xk[4]))
 
 
 @njit
@@ -138,9 +138,9 @@ def calc_shrt_reentry_price(xk: tuple,
                             psize: float,
                             pprice: float,
                             volatility: float) -> float:
-    modifier = (1 + (calc_margin_cost(xk, psize, pprice) / balance) * xk[10]) * \
-        (1 + volatility * xk[20])
-    return round_dn(pprice * (1 + xk[0] * modifier, xk[1]))
+    modifier = (1 + (calc_margin_cost(xk, psize, pprice) / balance) * xk[13]) * \
+        (1 + volatility * xk[14])
+    return round_dn(pprice * (1 + xk[12] * modifier, xk[4]))
 
 
 @njit
@@ -151,33 +151,33 @@ def calc_new_psize_pprice(xk: tuple,
                           price: float) -> (float, float):
     if qty == 0.0:
         return psize, pprice
-    new_psize = round_(psize + qty, xk[0])
+    new_psize = round_(psize + qty, xk[3])
     return new_psize, nan_to_0(pprice) * (psize / new_psize) + price * (qty / new_psize)
 
 @njit
 def calc_long_pnl(xk: tuple, entry_price: float, close_price: float, qty: float) -> float:
-    if xk[16]:
-        return abs(qty) * xk[5] * (1 / entry_price - 1 / close_price)
+    if xk[0]:
+        return abs(qty) * xk[7] * (1 / entry_price - 1 / close_price)
     else:
         return abs(qty) * (close_price - entry_price)
 
 
 @njit
 def calc_shrt_pnl(xk: tuple, entry_price: float, close_price: float, qty: float) -> float:
-    if xk[16]:
-        return abs(qty) * xk[5] * (1 / close_price - 1 / entry_price)
+    if xk[0]:
+        return abs(qty) * xk[7] * (1 / close_price - 1 / entry_price)
     else:
         return abs(qty) * (entry_price - close_price)
 
 
 @njit
 def calc_cost(xk: tuple, qty: float, price: float) -> float:
-    return abs(qty / price) * xk[5] if xk[16] else abs(qty * price)
+    return abs(qty / price) * xk[7] if xk[0] else abs(qty * price)
 
 
 @njit
 def calc_margin_cost(xk: tuple, qty: float, price: float) -> float:
-    return calc_cost(xk, qty, price) / leverage
+    return calc_cost(xk, qty, price) / xk[10]
 
 
 @njit
@@ -191,13 +191,13 @@ def calc_available_margin(xk: float,
     used_margin = 0.0
     equity = balance
     if long_pprice and long_psize:
-        long_psize_real = long_psize * xk[5]
+        long_psize_real = long_psize * xk[7]
         equity += calc_long_pnl(xk, long_pprice, last_price, long_psize_real)
-        used_margin += calc_cost(xk, long_psize_real, long_pprice) / xk[8]
+        used_margin += calc_cost(xk, long_psize_real, long_pprice) / xk[10]
     if shrt_pprice and shrt_psize:
-        shrt_psize_real = shrt_psize * xk[5]
+        shrt_psize_real = shrt_psize * xk[7]
         equity += calc_shrt_pnl(xk, shrt_pprice, last_price, shrt_psize_real)
-        used_margin += calc_cost(xk, shrt_psize_real, shrt_pprice) / xk[8]
+        used_margin += calc_cost(xk, shrt_psize_real, shrt_pprice) / xk[10]
     return equity - used_margin
 
 
@@ -216,12 +216,12 @@ def iter_entries(xk: tuple,
                  volatility: float):
     '''
     xk index/value
-     0 qty_step              7 qty_pct                13 stop_loss_pos_pct  19 n_close_orders   
-     1 price_step            8 leverage               14 do_shrt            20 volatility_grid_coeff
-     3 min_qty               9 grid_spacing           15 do_shrt            21 volatility_qty_coeff
-     4 min_cost             10 pos_margin_grid_coeff  16 inverse            
-     5 contract_multiplier  11 ema_spread             17 min_markup               
-     6 ddown_factor         12 stop_loss_liq_diff     18 markup_range  
+     0 inverse      6 min_cost             12 grid_spacing           18 ema_span
+     1 do_long      7 contract_multiplier  13 pos_margin_grid_coeff  19 ema_spread
+     2 do_shrt      8 ddown_factor         14 volatility_grid_coeff  20 stop_loss_liq_diff
+     3 qty_step     9 qty_pct              15 volatility_qty_coeff   21 stop_loss_pos_pct
+     4 price_step  10 leverage             16 min_markup
+     5 min_qty     11 n_close_orders       17 markup_range
     '''
 
     available_margin = calc_available_margin(xk, balance, long_psize, long_pprice,
@@ -237,13 +237,13 @@ def iter_entries(xk: tuple,
             shrt_psize, shrt_pprice = stop_loss_order[2:4]
         available_margin -= calc_margin_cost(xk, stop_loss_order[0], stop_loss_order[1])
     while True:
-        if xk[14]:
+        if xk[1]:
             long_entry = calc_next_long_entry(xk, balance, long_psize, long_pprice,
                                               highest_bid, ema, available_margin, volatility)
         else:
             long_entry = (0.0, 0.0, long_psize, long_pprice, '')
 
-        if xk[15]:
+        if xk[2]:
             shrt_entry = calc_next_shrt_entry(xk, balance, shrt_psize, shrt_pprice,
                                               lowest_ask, ema, available_margin, volatility)
         else:
@@ -285,43 +285,43 @@ def calc_stop_loss(xk: tuple,
                    available_margin: float):
     '''
     xk index/value
-     0 qty_step              7 qty_pct                13 stop_loss_pos_pct  19 n_close_orders   
-     1 price_step            8 leverage               14 do_shrt            20 volatility_grid_coeff
-     3 min_qty               9 grid_spacing           15 do_shrt            21 volatility_qty_coeff
-     4 min_cost             10 pos_margin_grid_coeff  16 inverse            
-     5 contract_multiplier  11 ema_spread             17 min_markup               
-     6 ddown_factor         12 stop_loss_liq_diff     18 markup_range  
+     0 inverse      6 min_cost             12 grid_spacing           18 ema_span
+     1 do_long      7 contract_multiplier  13 pos_margin_grid_coeff  19 ema_spread
+     2 do_shrt      8 ddown_factor         14 volatility_grid_coeff  20 stop_loss_liq_diff
+     3 qty_step     9 qty_pct              15 volatility_qty_coeff   21 stop_loss_pos_pct
+     4 price_step  10 leverage             16 min_markup
+     5 min_qty     11 n_close_orders       17 markup_range
     '''
     # returns (qty, price, psize if taken, pprice if taken, comment)
     abs_shrt_psize = abs(shrt_psize)
-    if calc_diff(liq_price, last_price) < xk[12]:
+    if calc_diff(liq_price, last_price) < xk[20]:
         if long_psize > abs_shrt_psize:
-            stop_loss_qty = min(long_psize, max(calc_min_entry_qty(xk, balance, lowest_ask),
-                                                round_dn(long_psize * xk[13], xk[0])))
+            stop_loss_qty = min(long_psize, max(calc_min_entry_qty(xk, lowest_ask),
+                                                round_dn(long_psize * xk[21], xk[3])))
             # if sufficient margin available, increase short pos, otherwise reduce long pos
             margin_cost = calc_margin_cost(xk, stop_loss_qty, lowest_ask)
-            if margin_cost < available_margin and xk[15]:
+            if margin_cost < available_margin and xk[2]:
                 # add to shrt pos
                 shrt_psize, shrt_pprice = calc_new_psize_pprice(xk, shrt_psize, shrt_pprice,
                                                                 -stop_loss_qty, lowest_ask)
                 return -stop_loss_qty, lowest_ask, shrt_psize, shrt_pprice, 'stop_loss_shrt_entry'
             else:
                 # reduce long pos
-                long_psize = round_(long_psize - stop_loss_qty, xk[0])
+                long_psize = round_(long_psize - stop_loss_qty, xk[3])
                 return -stop_loss_qty, lowest_ask, long_psize, long_pprice, 'stop_loss_long_close'
         else:
-            stop_loss_qty = min(abs_shrt_psize, max(calc_min_entry_qty(xk, balance, highest_bid),
-                                                    round_dn(abs_shrt_psize * xk[13], xk[0])))
+            stop_loss_qty = min(abs_shrt_psize, max(calc_min_entry_qty(xk, highest_bid),
+                                                    round_dn(abs_shrt_psize * xk[21], xk[3])))
             # if sufficient margin available, increase long pos, otherwise, reduce shrt pos
             margin_cost = calc_margin_cost(xk, stop_loss_qty, highest_bid)
-            if margin_cost < available_margin and xk[14]:
+            if margin_cost < available_margin and xk[1]:
                 # add to long pos
                 long_psize, long_pprice = calc_new_psize_pprice(xk, long_psize, long_pprice,
                                                                 stop_loss_qty, highest_bid)
                 return stop_loss_qty, highest_bid, long_psize, long_pprice, 'stop_loss_long_entry'
             else:
                 # reduce shrt pos
-                shrt_psize = round_(shrt_psize + stop_loss_qty, xk[0])
+                shrt_psize = round_(shrt_psize + stop_loss_qty, xk[3])
                 return stop_loss_qty, highest_bid, shrt_psize, shrt_pprice, 'stop_loss_shrt_close'
     return 0.0, 0.0, 0.0, 0.0, ''
 
@@ -340,11 +340,11 @@ def calc_next_long_entry(xk: tuple,
         qty = calc_initial_entry_qty(xk, balance, price, available_margin, volatility)
         return qty, price, qty, price, 'initial_long_entry'
     else:
-        price = min(round_(highest_bid, xk[1]), calc_long_reentry_price(xk, balance, psize, pprice))
+        price = min(round_(highest_bid, xk[4]), calc_long_reentry_price(xk, balance, psize, pprice))
         if price <= 0.0:
             return 0.0, 0.0, psize, pprice, 'long_reentry'
         qty = calc_reentry_qty(xk, psize, price, available_margin)
-        psize, pprice = calc_new_psize_pprice(xk[0], psize, pprice, qty, price)
+        psize, pprice = calc_new_psize_pprice(xk, psize, pprice, qty, price)
         return qty, price, psize, pprice, 'long_reentry'
 
 
@@ -362,9 +362,9 @@ def calc_next_shrt_entry(xk: tuple,
         qty = -calc_initial_entry_qty(xk, balance, price, available_margin, volatility)
         return qty, price, qty, price, 'initial_shrt_entry'
     else:
-        price = max(round_(lowest_ask, xk[1]), calc_shrt_reentry_price(xk, balance, psize, pprice))
+        price = max(round_(lowest_ask, xk[4]), calc_shrt_reentry_price(xk, balance, psize, pprice))
         qty = -calc_reentry_qty(xk, psize, price, available_margin)
-        psize, pprice = calc_new_psize_pprice(xk[0], psize, pprice, qty, price)
+        psize, pprice = calc_new_psize_pprice(xk, psize, pprice, qty, price)
         return qty, price, psize, pprice, 'shrt_reentry'
 
 
@@ -372,29 +372,29 @@ def calc_next_shrt_entry(xk: tuple,
 def iter_long_closes(xk: float, balance: float, psize: float, pprice: float, lowest_ask: float):
     '''
     xk index/value
-     0 qty_step              7 qty_pct                13 stop_loss_pos_pct  19 n_close_orders   
-     1 price_step            8 leverage               14 do_shrt            20 volatility_grid_coeff
-     3 min_qty               9 grid_spacing           15 do_shrt            21 volatility_qty_coeff
-     4 min_cost             10 pos_margin_grid_coeff  16 inverse            
-     5 contract_multiplier  11 ema_spread             17 min_markup               
-     6 ddown_factor         12 stop_loss_liq_diff     18 markup_range  
+     0 inverse      6 min_cost             12 grid_spacing           18 ema_span
+     1 do_long      7 contract_multiplier  13 pos_margin_grid_coeff  19 ema_spread
+     2 do_shrt      8 ddown_factor         14 volatility_grid_coeff  20 stop_loss_liq_diff
+     3 qty_step     9 qty_pct              15 volatility_qty_coeff   21 stop_loss_pos_pct
+     4 price_step  10 leverage             16 min_markup
+     5 min_qty     11 n_close_orders       17 markup_range
     '''
     # yields (qty, price, psize_if_taken)
     if psize == 0.0:
         return
-    minm = pprice * (1 + xk[17])
-    prices = np.linspace(minm, pprice * (1 + xk[17] + xk[18]), int(xk[19]))
-    prices = [p for p in sorted(set([round_up(p_, xk[1]) for p_ in prices])) if p >= lowest_ask]
+    minm = pprice * (1 + xk[16])
+    prices = np.linspace(minm, pprice * (1 + xk[16] + xk[17]), int(xk[11]))
+    prices = [p for p in sorted(set([round_up(p_, xk[4]) for p_ in prices])) if p >= lowest_ask]
     if len(prices) == 0:
-        yield -psize, max(lowest_ask, round_up(minm, xk[1])), 0.0
+        yield -psize, max(lowest_ask, round_up(minm, xk[4])), 0.0
     else:
-        n_orders = int(min([xk[19], len(prices), int(psize / xk[3])]))
+        n_orders = int(min([xk[11], len(prices), int(psize / xk[5])]))
         for price in prices:
             if n_orders == 0:
                 break
             else:
                 qty = min(psize, max(calc_initial_entry_qty(xk, balance, lowest_ask, balance, 0.0),
-                                     round_up(psize / n_orders, xk[0])))
+                                     round_up(psize / n_orders, xk[3])))
                 if psize != 0.0 and qty / psize > 0.75:
                     qty = psize
             if qty == 0.0:
@@ -404,48 +404,48 @@ def iter_long_closes(xk: float, balance: float, psize: float, pprice: float, low
             lowest_ask = price
             n_orders -= 1
         if psize > 0.0:
-            yield -psize, max(lowest_ask, round_up(minm, xk[1])), 0.0
+            yield -psize, max(lowest_ask, round_up(minm, xk[4])), 0.0
 
 
 @njit
 def iter_shrt_closes(xk: float, balance: float, psize: float, pprice: float, highest_bid: float):
     '''
     xk index/value
-     0 qty_step              7 qty_pct                13 stop_loss_pos_pct  19 n_close_orders   
-     1 price_step            8 leverage               14 do_shrt            20 volatility_grid_coeff
-     3 min_qty               9 grid_spacing           15 do_shrt            21 volatility_qty_coeff
-     4 min_cost             10 pos_margin_grid_coeff  16 inverse            
-     5 contract_multiplier  11 ema_spread             17 min_markup               
-     6 ddown_factor         12 stop_loss_liq_diff     18 markup_range  
+     0 inverse      6 min_cost             12 grid_spacing           18 ema_span
+     1 do_long      7 contract_multiplier  13 pos_margin_grid_coeff  19 ema_spread
+     2 do_shrt      8 ddown_factor         14 volatility_grid_coeff  20 stop_loss_liq_diff
+     3 qty_step     9 qty_pct              15 volatility_qty_coeff   21 stop_loss_pos_pct
+     4 price_step  10 leverage             16 min_markup
+     5 min_qty     11 n_close_orders       17 markup_range
     '''
     # yields (qty, price, psize_if_taken)
     abs_psize = abs(psize)
     if psize == 0.0:
         return
-    minm = pprice * (1 - xk[17])
-    prices = np.linspace(minm, pprice * (1 - (xk[17] + xk[18])), int(xk[19]))
-    prices = [p for p in sorted(set([round_dn(p_, xk[1]) for p_ in prices]), reverse=True)
+    minm = pprice * (1 - xk[16])
+    prices = np.linspace(minm, pprice * (1 - (xk[16] + xk[17])), int(xk[11]))
+    prices = [p for p in sorted(set([round_dn(p_, xk[4]) for p_ in prices]), reverse=True)
               if p <= highest_bid]
     if len(prices) == 0:
-        yield abs_psize, min(highest_bid, round_dn(minm, xk[1])), 0.0
+        yield abs_psize, min(highest_bid, round_dn(minm, xk[4])), 0.0
     else:
-        n_orders = int(min([xk[19], len(prices), int(abs_psize / xk[3])]))
+        n_orders = int(min([xk[11], len(prices), int(abs_psize / xk[5])]))
         for price in prices:
             if n_orders == 0:
                 break
             else:
                 qty = min(abs_psize, max(calc_initial_entry_qty(xk, balance, highest_bid, balance, 0.0),
-                                         round_up(abs_psize / n_orders, xk[0])))
+                                         round_up(abs_psize / n_orders, xk[3])))
                 if abs_psize != 0.0 and qty / abs_psize > 0.75:
                     qty = abs_psize
             if qty == 0.0:
                 break
-            abs_psize = round_(abs_psize - qty, xk[0])
+            abs_psize = round_(abs_psize - qty, xk[3])
             yield qty, price, abs_psize
             highest_bid = price
             n_orders -= 1
         if abs_psize > 0.0:
-            yield abs_psize, min(highest_bid, round_dn(minm, xk[1])), 0.0
+            yield abs_psize, min(highest_bid, round_dn(minm, xk[4])), 0.0
 
 
 @njit
@@ -459,13 +459,13 @@ def calc_liq_price_binance(xk: tuple,
     abs_shrt_psize = abs(shrt_psize)
     long_pprice = nan_to_0(long_pprice)
     shrt_pprice = nan_to_0(shrt_pprice)
-    if xk[16]:
+    if xk[0]:
         mml = 0.02
         mms = 0.02
         numerator = abs_long_psize * mml + abs_shrt_psize * mms + abs_long_psize - abs_shrt_psize
         long_pcost = abs_long_psize / long_pprice if long_pprice > 0.0 else 0.0
         shrt_pcost = abs_shrt_psize / shrt_pprice if shrt_pprice > 0.0 else 0.0
-        denom = balance / xk[5] + long_pcost - shrt_pcost
+        denom = balance / xk[7] + long_pcost - shrt_pcost
         if denom == 0.0:
             return 0.0
         return max(0.0, numerator / denom)
@@ -489,11 +489,11 @@ def calc_liq_price_bybit(xk: tuple,
                          shrt_pprice: float):
     mm = 0.005
     abs_shrt_psize = abs(shrt_psize)
-    if xk[16]:
+    if xk[0]:
         if long_psize > abs_shrt_psize:
             long_pprice = nan_to_0(long_pprice)
             order_cost = long_psize / long_pprice if long_pprice > 0.0 else 0.0
-            order_margin = order_cost / xk[8]
+            order_margin = order_cost / xk[10]
             bankruptcy_price = (1.00075 * long_psize) / (order_cost + (balance - order_margin))
             if bankruptcy_price == 0.0:
                 return 0.0
@@ -503,7 +503,7 @@ def calc_liq_price_bybit(xk: tuple,
         else:
             shrt_pprice = nan_to_0(shrt_pprice)
             order_cost = abs_shrt_psize / shrt_pprice if shrt_pprice > 0.0 else 0.0
-            order_margin = order_cost / xk[8]
+            order_margin = order_cost / xk[10]
             bankruptcy_price = (0.99925 * abs_shrt_psize) / (order_cost - (balance - order_margin))
             if bankruptcy_price == 0.0:
                 return 0.0
