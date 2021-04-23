@@ -95,35 +95,7 @@ class Bybit(Bot):
                               'websocket': 'wss://stream.bybit.com/realtime_public',
                               'created_at_key': 'created_time'}
 
-            self.iter_long_closes = lambda balance, pos_size, pos_price, lowest_ask: \
-                iter_long_closes_linear(self.price_step, self.qty_step, self.min_qty, self.min_cost,
-                                        self.contract_multiplier, self.qty_pct, self.leverage,
-                                        self.min_markup, self.markup_range, self.n_close_orders,
-                                        balance, pos_size, pos_price, lowest_ask)
-
-            self.iter_shrt_closes = lambda balance, pos_size, pos_price, highest_bid: \
-                iter_shrt_closes_linear(self.price_step, self.qty_step, self.min_qty, self.min_cost,
-                                        self.contract_multiplier, self.qty_pct, self.leverage,
-                                        self.min_markup, self.markup_range, self.n_close_orders,
-                                        balance, pos_size, pos_price, highest_bid)
-
-            self.iter_entries = lambda balance, long_psize, long_pprice, shrt_psize, shrt_pprice, \
-                                       liq_price, highest_bid, lowest_ask, ema, last_price, do_long, do_shrt: \
-                iter_entries_linear(self.price_step, self.qty_step, self.min_qty, self.min_cost,
-                                    self.contract_multiplier, self.ddown_factor, self.qty_pct,
-                                    self.leverage, self.grid_spacing, self.grid_coefficient,
-                                    self.ema_spread, self.stop_loss_liq_diff, self.stop_loss_pos_pct,
-                                    balance, long_psize, long_pprice, shrt_psize, shrt_pprice,
-                                    liq_price, highest_bid, lowest_ask, ema, last_price, do_long, do_shrt)
-
-            self.long_pnl_f = calc_long_pnl_linear
-            self.shrt_pnl_f = calc_shrt_pnl_linear
-            self.cost_f = calc_cost_linear
-
         else:
-            self.long_pnl_f = calc_long_pnl_inverse
-            self.shrt_pnl_f = calc_shrt_pnl_inverse
-            self.cost_f = calc_cost_inverse
             if self.symbol.endswith('USD'):
                 print('inverse perpetual')
                 self.market_type = 'inverse_perpetual'
@@ -146,27 +118,6 @@ class Bybit(Bot):
                                   'ticks': '/v2/public/trading-records',
                                   'websocket': 'wss://stream.bybit.com/realtime',
                                   'created_at_key': 'created_at'}
-
-            self.iter_long_closes = lambda balance, pos_size, pos_price, lowest_ask: \
-                iter_long_closes_inverse(self.price_step, self.qty_step, self.min_qty, self.min_cost,
-                                         self.contract_multiplier, self.qty_pct, self.leverage,
-                                         self.min_markup, self.markup_range, self.n_close_orders,
-                                         balance, pos_size, pos_price, lowest_ask)
-
-            self.iter_shrt_closes = lambda balance, pos_size, pos_price, highest_bid: \
-                iter_shrt_closes_inverse(self.price_step, self.qty_step, self.min_qty, self.min_cost,
-                                         self.contract_multiplier, self.qty_pct, self.leverage,
-                                         self.min_markup, self.markup_range, self.n_close_orders,
-                                         balance, pos_size, pos_price, highest_bid)
-
-            self.iter_entries = lambda balance, long_psize, long_pprice, shrt_psize, shrt_pprice, \
-                                       liq_price, highest_bid, lowest_ask, ema, last_price, do_long, do_shrt: \
-                iter_entries_inverse(self.price_step, self.qty_step, self.min_qty, self.min_cost,
-                                     self.contract_multiplier, self.ddown_factor, self.qty_pct,
-                                     self.leverage, self.grid_spacing, self.grid_coefficient,
-                                     self.ema_spread, self.stop_loss_liq_diff, self.stop_loss_pos_pct,
-                                     balance, long_psize, long_pprice, shrt_psize, shrt_pprice, liq_price,
-                                     highest_bid, lowest_ask, ema, last_price, do_long, do_shrt)
 
         self.endpoints['balance'] = '/v2/private/wallet/balance'
 
@@ -202,10 +153,6 @@ class Bybit(Bot):
         self.qty_step = float(e['lot_size_filter']['qty_step'])
         self.min_qty = float(e['lot_size_filter']['min_trading_qty'])
         self.min_cost = 0.0
-        self.calc_min_qty = lambda price_: self.min_qty
-        self.calc_min_order_qty = lambda balance_, last_price: \
-            calc_min_order_qty_inverse(self.qyt_step, self.min_qty, self.min_cost,
-                                       self.qty_pct, self.leverage, balance_, last_price)
         self.init_market_type()
         await self.init_order_book()
         await self.update_position()
