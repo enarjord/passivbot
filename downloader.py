@@ -587,8 +587,9 @@ class Downloader:
 
 
 def get_dummy_settings(user: str, exchange: str, symbol: str):
-    return {'user': user, 'exchange': exchange, 'symbol': symbol, 'ema_span': 1.0,
-            'config_name': '', 'leverage': 5, 'logging_level': 0}
+    return {**{k: 1.0 for k in get_keys()},
+            **{'user': user, 'exchange': exchange, 'symbol': symbol, 'config_name': '',
+               'logging_level': 0}}
 
 
 async def fetch_market_specific_settings(exchange: str, user: str, symbol: str):
