@@ -385,7 +385,7 @@ def iter_long_closes(xk: tuple, balance: float, psize: float, pprice: float, low
      5 min_qty     11 n_close_orders       17 markup_range
     '''
     # yields (qty, price, psize_if_taken)
-    if psize == 0.0:
+    if psize == 0.0 or pprice == 0.0:
         return
     minm = pprice * (1 + xk[16])
     prices = np.linspace(minm, pprice * (1 + xk[16] + xk[17]), int(xk[11]))
@@ -393,7 +393,12 @@ def iter_long_closes(xk: tuple, balance: float, psize: float, pprice: float, low
     if len(prices) == 0:
         yield -psize, max(lowest_ask, round_up(minm, xk[4])), 0.0
     else:
-        n_orders = int(min([xk[11], len(prices), int(psize / xk[5])]))
+        try:
+            n_orders = int(min([xk[11], len(prices), int(psize / xk[5])]))
+        except:
+            print('begud')
+            print(xk[11], prices, psize, xk[5])
+            raise Exception
         for price in prices:
             if n_orders == 0:
                 break
@@ -404,7 +409,7 @@ def iter_long_closes(xk: tuple, balance: float, psize: float, pprice: float, low
                     qty = psize
             if qty == 0.0:
                 break
-            psize = round_(psize - qty, xk[0])
+            psize = round_(psize - qty, xk[3])
             yield -qty, price, psize
             lowest_ask = price
             n_orders -= 1
