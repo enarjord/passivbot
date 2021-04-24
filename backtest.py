@@ -227,8 +227,6 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, bool):
                             fills.append(fill)
                         else:
                             break
-                    else:
-                        break
             ob[0] = tick[0]
         else:
             if liq_diff < 0.05 and -shrt_psize > long_psize and tick[0] >= liq_price:
@@ -268,8 +266,6 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, bool):
                             fills.append(fill)
                         else:
                             break
-                    else:
-                        break
             ob[1] = tick[0]
 
         if tick[2] > prev_update_plus_delay and (update_triggered or tick[2] > prev_update_plus_5sec):
@@ -453,7 +449,8 @@ def prepare_result_sampled(stats: list) -> dict:
 def candidate_to_live_config(candidate: dict) -> dict:
     live_config = {}
     for k in ["config_name", "logging_level", "ddown_factor", "qty_pct", "leverage",
-              "n_entry_orders", "n_close_orders", "grid_spacing", "pos_margin_grid_coeff", "min_markup",
+              "n_entry_orders", "n_close_orders", "grid_spacing", "pos_margin_grid_coeff",
+              "volatility_grid_coeff", "volatility_qty_coeff", "min_markup",
               "markup_range", "do_long", "do_shrt", "ema_span", "ema_spread", "stop_loss_liq_diff",
               "stop_loss_pos_pct", "symbol"]:
         if k in candidate:
