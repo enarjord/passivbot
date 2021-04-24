@@ -139,7 +139,7 @@ def plot_fills(df, fdf, side_: int = 0, liq_thr=0.1):
 def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, bool):
     long_psize, long_pprice = 0.0, 0.0
     shrt_psize, shrt_pprice = 0.0, 0.0
-    liq_price = 0.0
+    liq_price, liq_diff = 0.0, 1.0
     balance = config['starting_balance']
 
     pnl_plus_fees_cumsum, loss_cumsum, profit_cumsum, fee_paid_cumsum = 0.0, 0.0, 0.0, 0.0
@@ -190,7 +190,7 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, bool):
             if liq_diff < 0.05 and long_psize > -shrt_psize and tick[0] <= liq_price:
                 fills.append({'qty': -long_psize, 'price': tick[0], 'pside': 'long',
                               'type': 'long_liquidation', 'side': 'sel',
-                              'pnl': calc_long_pnl(long_pprice, tick[0], long_psize),
+                              'pnl': calc_long_pnl(xk, long_pprice, tick[0], long_psize),
                               'fee_paid': -calc_cost(xk, long_psize, tick[0]) * config['taker_fee'],
                               'long_psize': 0.0, 'long_pprice': 0.0, 'shrt_psize': 0.0,
                               'shrt_pprice': 0.0, 'liq_price': 0.0, 'liq_diff': 1.0})
@@ -205,7 +205,7 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, bool):
                             fill = {'qty': bid[0], 'price': bid[1], 'side': 'buy', 'type': bid[4],
                                     'fee_paid': -calc_cost(xk, bid[0], bid[1]) * config['maker_fee']}
                             if 'close' in bid[4]:
-                                fill['pnl'] = calc_shrt_pnl(shrt_pprice, bid[1], bid[0])
+                                fill['pnl'] = calc_shrt_pnl(xk, shrt_pprice, bid[1], bid[0])
                                 shrt_psize = round_(shrt_psize + bid[0], xk[3])
                                 fill.update({'pside': 'shrt', 'long_psize': long_psize,
                                              'long_pprice': long_pprice, 'shrt_psize': shrt_psize,
@@ -220,7 +220,7 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, bool):
                                              'long_pprice': bid[3], 'shrt_psize': shrt_psize,
                                              'shrt_pprice': shrt_pprice})
                                 prev_long_entry_ts = tick[2]
-                            liq_price = calc_liq_price(balance, long_psize, long_pprice,
+                            liq_price = calc_liq_price(xk, balance, long_psize, long_pprice,
                                                        shrt_psize, shrt_pprice)
                             liq_diff = calc_diff(liq_price, tick[0])
                             fill.update({'liq_price': liq_price, 'liq_diff': liq_diff})
@@ -234,7 +234,7 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, bool):
             if liq_diff < 0.05 and -shrt_psize > long_psize and tick[0] >= liq_price:
                 fills.append({'qty': -shrt_psize, 'price': tick[0], 'pside': 'shrt',
                               'type': 'shrt_liquidation', 'side': 'buy',
-                              'pnl': calc_shrt_pnl(shrt_pprice, tick[0], shrt_psize),
+                              'pnl': calc_shrt_pnl(xk, shrt_pprice, tick[0], shrt_psize),
                               'fee_paid': -calc_cost(xk, shrt_psize, tick[0]) * config['taker_fee'],
                               'long_psize': 0.0, 'long_pprice': 0.0, 'shrt_psize': 0.0,
                               'shrt_pprice': 0.0, 'liq_price': 0.0, 'liq_diff': 1.0})
@@ -292,6 +292,8 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, bool):
                 for tpl in iter_shrt_closes(xk, balance, shrt_psize, shrt_pprice, ob[0]):
                     bids.append(list(tpl) + [shrt_pprice, 'shrt_close'])
             if tick[0] >= long_pprice and long_pprice > 0.0:
+                if long_psize != long_psize:
+                    print('debug', long_pprice,long_psize)
                 for tpl in iter_long_closes(xk, balance, long_psize, long_pprice, ob[1]):
                     asks.append(list(tpl) + [long_pprice, 'long_close'])
             bids = sorted(bids, key=lambda x: x[1], reverse=True)
@@ -314,7 +316,7 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, bool):
                 pnl_plus_fees_cumsum += fill['pnl'] + fill['fee_paid']
                 upnl_l = calc_long_pnl(xk, long_pprice, tick[0], long_psize)
                 upnl_s = calc_shrt_pnl(xk, shrt_pprice, tick[0], shrt_psize)
-                fill['liq_price'] = calc_liq_price(balance, long_psize, long_pprice, shrt_psize,
+                fill['liq_price'] = calc_liq_price(xk, balance, long_psize, long_pprice, shrt_psize,
                                                    shrt_pprice)
                 fill['liq_diff'] = calc_diff(fill['liq_price'], tick[0])
                 fill['equity'] = balance + upnl_l + upnl_s
@@ -331,7 +333,7 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, bool):
                 fill['balance'] = balance
                 fill['timestamp'] = tick[2]
                 fill['trade_id'] = k
-                fill['progress'] = k / len(ticks)
+                fill['progress'] = (k - ema_span) / (len(ticks) - ema_span)
                 fill['drawdown'] = calc_diff(fill['balance'], fill['equity'])
                 fill['balance_starting_balance_ratio'] = fill['balance'] / config['starting_balance']
                 fill['equity_starting_balance_ratio'] = fill['equity'] / config['starting_balance']
