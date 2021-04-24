@@ -11,7 +11,8 @@ import pandas as pd
 
 from downloader import Downloader, prep_backtest_config
 from jitted import iter_entries, iter_long_closes, iter_shrt_closes, calc_diff, calc_emas, \
-    calc_stds, calc_long_pnl, calc_shrt_pnl, calc_cost, calc_liq_price_binance, calc_liq_price_bybit
+    calc_stds, calc_long_pnl, calc_shrt_pnl, calc_cost, calc_liq_price_binance, \
+    calc_liq_price_bybit, calc_new_psize_pprice, calc_available_margin
 from passivbot import config_to_xk
 
 os.environ['TUNE_GLOBAL_CHECKPOINT_S'] = '120'
@@ -136,8 +137,8 @@ def plot_fills(df, fdf, side_: int = 0, liq_thr=0.1):
 
 
 def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, bool):
-    long_psize, long_pprice = 0.0, np.nan
-    shrt_psize, shrt_pprice = 0.0, np.nan
+    long_psize, long_pprice = 0.0, 0.0
+    shrt_psize, shrt_pprice = 0.0, 0.0
     liq_price = 0.0
     balance = config['starting_balance']
 
@@ -152,7 +153,7 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, bool):
 
     prev_long_close_ts, prev_long_entry_ts, prev_long_close_price = 0, 0, 0.0
     prev_shrt_close_ts, prev_shrt_entry_ts, prev_shrt_close_price = 0, 0, 0.0
-    min_trade_delay_millis = config['latency_simulation_ms'] \
+    latency_simulation_ms = config['latency_simulation_ms'] \
         if 'latency_simulation_ms' in config else 1000
 
     next_stats_update = 0
@@ -168,60 +169,21 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, bool):
     all_fills = []
     fills = []
     bids, asks = [], []
-    stop_loss_order = None
     ob = [min(ticks[0][0], ticks[1][0]), max(ticks[0][0], ticks[1][0])]
     ema_span = int(round(config['ema_span']))
     emas = calc_emas(ticks[:, 0], ema_span)
     price_stds = calc_stds(ticks[:, 0], ema_span)
     volatilities = price_stds / emas
+    prev_update_plus_delay = ticks[ema_span][2] + latency_simulation_ms
+    update_triggered = False
+    prev_update_plus_5sec = 0
     # tick tuple: (price, buyer_maker, timestamp)
-    delayed_update = ticks[0][2] + min_trade_delay_millis
-    next_update_ts = 0
     for k, tick in enumerate(ticks[ema_span:], start=ema_span):
-        liq_diff = calc_diff(liq_price, tick[0])
 
         # Update the stats every hour
         if tick[2] > next_stats_update:
             stats_update()
             next_stats_update = tick[2] + 1000 * 60 * 60
-
-        if tick[2] > delayed_update:
-            # after simulated delay, update open orders
-            bids, asks = [], []
-            stop_loss_order = (0.0, 0.0, 0.0, 0.0, '')
-            tampered_longpsize, tampered_shrtpsize = long_psize, shrt_psize
-            next_update_ts = tick[2] + 5000
-            for tpl in iter_entries(xk, balance, long_psize, long_pprice, shrt_psize, shrt_pprice,
-                                    liq_price, ob[0], ob[1], emas[k], tick[0], volatilities[k]):
-                if len(bids) > 2 and len(asks) > 2:
-                    break
-                if tpl[0] > 0.0:
-                    bids.append(tpl)
-                    if 'close' in tpl[4]:
-                        tampered_shrtpsize = tpl[2]
-                elif tpl[0] < 0.0:
-                    asks.append(tpl)
-                    if 'close' in tpl[4]:
-                        tampered_longpsize = tpl[2]
-                else:
-                    break
-            if tick[0] <= shrt_pprice:
-                for tpl in iter_shrt_closes(xk, balance, tampered_shrtpsize, shrt_pprice, ob[0]):
-                    bids.append(list(tpl) + [shrt_pprice, 'shrt_close'])
-            if tick[0] >= long_pprice:
-                for tpl in iter_long_closes(xk, balance, tampered_longpsize, long_pprice, ob[1]):
-                    asks.append(list(tpl) + [long_pprice, 'long_close'])
-            bids = sorted(bids, key=lambda x: x[1], reverse=True)
-            asks = sorted(asks, key=lambda x: x[1])
-            delayed_update = 9e13
-        elif delayed_update == 9e13:
-            if fills or \
-                    (config['do_long'] and long_psize == 0.0) or \
-                    (config['do_shrt'] and shrt_psize == 0.0) or \
-                    liq_diff < config['stop_loss_liq_diff'] or \
-                    stop_loss_order[0] != 0.0 or \
-                    tick[2] > next_update_ts:
-                delayed_update = tick[2] + min_trade_delay_millis
 
         fills = []
         if tick[1]:
@@ -230,35 +192,41 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, bool):
                               'type': 'long_liquidation', 'side': 'sel',
                               'pnl': calc_long_pnl(long_pprice, tick[0], long_psize),
                               'fee_paid': -calc_cost(xk, long_psize, tick[0]) * config['taker_fee'],
-                              'long_psize': 0.0, 'long_pprice': np.nan, 'shrt_psize': 0.0,
-                              'shrt_pprice': np.nan, 'liq_price': 0.0, 'liq_diff': 1.0})
-                long_psize, long_pprice, shrt_psize, shrt_pprice = 0.0, np.nan, 0.0, np.nan
+                              'long_psize': 0.0, 'long_pprice': 0.0, 'shrt_psize': 0.0,
+                              'shrt_pprice': 0.0, 'liq_price': 0.0, 'liq_diff': 1.0})
+                long_psize, long_pprice, shrt_psize, shrt_pprice = 0.0, 0.0, 0.0, 0.0
             else:
-                while bids:
-                    if tick[0] < bids[0][1]:
-                        bid = bids.pop(0)
-                        fill = {'qty': bid[0], 'price': bid[1], 'side': 'buy', 'type': bid[4],
-                                'fee_paid': -calc_cost(xk, bid[0], bid[1]) * config['maker_fee']}
-                        if 'close' in bid[4]:
-                            fill.update({'pside': 'shrt', 'long_psize': long_psize,
-                                         'long_pprice': long_pprice, 'shrt_psize': bid[2],
-                                         'shrt_pprice': bid[3]})
-                            shrt_psize = bid[2]
-                            fill['pnl'] = calc_shrt_pnl(shrt_pprice, bid[1], bid[0])
-                            prev_shrt_close_ts = tick[2]
+                if bids:
+                    if tick[0] <= bids[0][1]:
+                        update_triggered = True
+                    while bids:
+                        if tick[0] < bids[0][1]:
+                            bid = bids.pop(0)
+                            fill = {'qty': bid[0], 'price': bid[1], 'side': 'buy', 'type': bid[4],
+                                    'fee_paid': -calc_cost(xk, bid[0], bid[1]) * config['maker_fee']}
+                            if 'close' in bid[4]:
+                                fill['pnl'] = calc_shrt_pnl(shrt_pprice, bid[1], bid[0])
+                                shrt_psize = round_(shrt_psize + bid[0], xk[3])
+                                fill.update({'pside': 'shrt', 'long_psize': long_psize,
+                                             'long_pprice': long_pprice, 'shrt_psize': shrt_psize,
+                                             'shrt_pprice': shrt_pprice})
+                                prev_shrt_close_ts = tick[2]
+                            else:
+                                fill['pnl'] = 0.0
+                                long_psize, long_pprice = calc_new_psize_pprice(xk, long_psize,
+                                                                                long_pprice, bid[0],
+                                                                                bid[1])
+                                fill.update({'pside': 'long', 'long_psize': bid[2],
+                                             'long_pprice': bid[3], 'shrt_psize': shrt_psize,
+                                             'shrt_pprice': shrt_pprice})
+                                prev_long_entry_ts = tick[2]
+                            liq_price = liq_price_f(balance, long_psize, long_pprice,
+                                                    shrt_psize, shrt_pprice)
+                            liq_diff = calc_diff(liq_price, tick[0])
+                            fill.update({'liq_price': liq_price, 'liq_diff': liq_diff})
+                            fills.append(fill)
                         else:
-                            fill.update({'pside': 'long', 'long_psize': bid[2],
-                                         'long_pprice': bid[3], 'shrt_psize': shrt_psize,
-                                         'shrt_pprice': shrt_pprice})
-                            long_psize = bid[2]
-                            long_pprice = bid[3]
-                            fill['pnl'] = 0.0
-                            prev_long_entry_ts = tick[2]
-                        liq_price = liq_price_f(balance, long_psize, long_pprice,
-                                                shrt_psize, shrt_pprice)
-                        liq_diff = calc_diff(liq_price, tick[0])
-                        fill.update({'liq_price': liq_price, 'liq_diff': liq_diff})
-                        fills.append(fill)
+                            break
                     else:
                         break
             ob[0] = tick[0]
@@ -268,38 +236,66 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, bool):
                               'type': 'shrt_liquidation', 'side': 'buy',
                               'pnl': calc_shrt_pnl(shrt_pprice, tick[0], shrt_psize),
                               'fee_paid': -calc_cost(xk, shrt_psize, tick[0]) * config['taker_fee'],
-                              'long_psize': 0.0, 'long_pprice': np.nan, 'shrt_psize': 0.0,
-                              'shrt_pprice': np.nan, 'liq_price': 0.0, 'liq_diff': 1.0})
-                long_psize, long_pprice, shrt_psize, shrt_pprice = 0.0, np.nan, 0.0, np.nan
+                              'long_psize': 0.0, 'long_pprice': 0.0, 'shrt_psize': 0.0,
+                              'shrt_pprice': 0.0, 'liq_price': 0.0, 'liq_diff': 1.0})
+                long_psize, long_pprice, shrt_psize, shrt_pprice = 0.0, 0.0, 0.0, 0.0
             else:
-                while asks:
-                    if tick[0] > asks[0][1]:
-                        ask = asks.pop(0)
-                        fill = {'qty': ask[0], 'price': ask[1], 'side': 'sel', 'type': ask[4],
-                                'fee_paid': -calc_cost(xk, ask[0], ask[1]) * config['maker_fee']}
-                        if 'close' in ask[4]:
-                            fill.update({'pside': 'long', 'long_psize': ask[2],
-                                         'long_pprice': ask[3], 'shrt_psize': shrt_psize,
-                                         'shrt_pprice': shrt_pprice})
-                            long_psize = ask[2]
-                            fill['pnl'] = calc_long_pnl(xk, long_pprice, ask[1], ask[0])
-                            prev_long_close_ts = tick[2]
+                if asks:
+                    if tick[0] >= asks[0][1]:
+                        update_triggered = True
+                    while asks:
+                        if tick[0] > asks[0][1]:
+                            ask = asks.pop(0)
+                            fill = {'qty': ask[0], 'price': ask[1], 'side': 'sel', 'type': ask[4],
+                                    'fee_paid': -calc_cost(xk, ask[0], ask[1]) * config['maker_fee']}
+                            if 'close' in ask[4]:
+                                fill['pnl'] = calc_long_pnl(xk, long_pprice, ask[1], ask[0])
+                                long_psize = round_(long_psize + ask[0], xk[3])
+                                fill.update({'pside': 'long', 'long_psize': long_psize,
+                                             'long_pprice': long_pprice, 'shrt_psize': shrt_psize,
+                                             'shrt_pprice': shrt_pprice})
+                                prev_long_close_ts = tick[2]
+                            else:
+                                fill['pnl'] = 0.0
+                                shrt_psize, shrt_pprice = calc_new_psize_pprice(xk, shrt_psize,
+                                                                                shrt_pprice, ask[0],
+                                                                                ask[1])
+                                fill.update({'pside': 'shrt', 'long_psize': long_psize,
+                                             'long_pprice': long_pprice, 'shrt_psize': shrt_psize,
+                                             'shrt_pprice': shrt_pprice})
+                                prev_shrt_entry_ts = tick[2]
+                            fill.update({'liq_price': liq_price, 'liq_diff': liq_diff})
+                            fills.append(fill)
                         else:
-                            fill.update({'pside': 'shrt', 'long_psize': long_psize,
-                                         'long_pprice': long_pprice, 'shrt_psize': ask[2],
-                                         'shrt_pprice': ask[3]})
-                            shrt_psize = ask[2]
-                            shrt_pprice = ask[3]
-                            fill['pnl'] = 0.0
-                            prev_shrt_entry_ts = tick[2]
-                        liq_price = liq_price_f(balance, long_psize, long_pprice,
-                                                shrt_psize, shrt_pprice)
-                        liq_diff = calc_diff(liq_price, tick[0])
-                        fill.update({'liq_price': liq_price, 'liq_diff': liq_diff})
-                        fills.append(fill)
+                            break
                     else:
                         break
             ob[1] = tick[0]
+
+        if tick[2] > prev_update_plus_delay and (update_triggered or tick[2] > prev_update_plus_5sec):
+            prev_update_plus_delay = tick[2] + latency_simulation_ms
+            prev_update_plus_5sec = tick[2] + 5000
+            update_triggered = False
+            bids, asks = [], []
+            liq_diff = calc_diff(liq_price, tick[0])
+            for tpl in iter_entries(xk, balance, long_psize, long_pprice, shrt_psize, shrt_pprice,
+                                    liq_price, ob[0], ob[1], emas[k], tick[0], volatilities[k]):
+                if len(bids) > 2 and len(asks) > 2:
+                    break
+                if tpl[0] > 0.0:
+                    bids.append(tpl)
+                elif tpl[0] < 0.0:
+                    asks.append(tpl)
+                else:
+                    break
+            if tick[0] <= shrt_pprice and shrt_pprice > 0.0:
+                for tpl in iter_shrt_closes(xk, balance, shrt_psize, shrt_pprice, ob[0]):
+                    bids.append(list(tpl) + [shrt_pprice, 'shrt_close'])
+            if tick[0] >= long_pprice and long_pprice > 0.0:
+                for tpl in iter_long_closes(xk, balance, long_psize, long_pprice, ob[1]):
+                    asks.append(list(tpl) + [long_pprice, 'long_close'])
+            bids = sorted(bids, key=lambda x: x[1], reverse=True)
+            asks = sorted(asks, key=lambda x: x[1])
 
         if len(fills) > 0:
             for fill in fills:
@@ -318,13 +314,20 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, bool):
                 pnl_plus_fees_cumsum += fill['pnl'] + fill['fee_paid']
                 upnl_l = x if (x := calc_long_pnl(xk, long_pprice, tick[0], long_psize)) == x else 0.0
                 upnl_s = y if (y := calc_shrt_pnl(xk, shrt_pprice, tick[0], shrt_psize)) == y else 0.0
+                fill['liq_price'] = liq_price_f(balance, long_psize, long_pprice, shrt_psize,
+                                                shrt_pprice)
+                fill['liq_diff'] = calc_diff(fill['liq_price'], tick[0])
                 fill['equity'] = balance + upnl_l + upnl_s
                 fill['pnl_plus_fees_cumsum'] = pnl_plus_fees_cumsum
                 fill['loss_cumsum'] = loss_cumsum
                 fill['profit_cumsum'] = profit_cumsum
                 fill['fee_paid_cumsum'] = fee_paid_cumsum
-                fill['available_margin'] = available_margin_f(balance, long_psize, long_pprice,
-                                                              shrt_psize, shrt_pprice, tick[0])
+                fill['available_margin'] = calc_available_margin(xk, balance, long_psize,
+                                                                 long_pprice, shrt_psize,
+                                                                 shrt_pprice, tick[0])
+                for side_ in ['long', 'shrt']:
+                    if fill[f'{side_}_pprice'] == 0.0:
+                        fill[f'{side_}_pprice'] = np.nan
                 fill['balance'] = balance
                 fill['timestamp'] = tick[2]
                 fill['trade_id'] = k
@@ -340,9 +343,10 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, bool):
                         if (fill['n_days'] > 0.5 and fill['gain'] > 0.0) else 0.0
                 except:
                     fill['average_daily_gain'] = 0.0
-                fill['hours_since_long_pos_change'] = (lc := ms_since_long_pos_change / (1000 * 60 * 60))
-                fill['hours_since_shrt_pos_change'] = (sc := ms_since_shrt_pos_change / (1000 * 60 * 60))
-                fill['hours_since_pos_change_max'] = max(lc, sc)
+                fill['hours_since_long_pos_change'] = ms_since_long_pos_change / (1000 * 60 * 60)
+                fill['hours_since_shrt_pos_change'] = ms_since_shrt_pos_change / (1000 * 60 * 60)
+                fill['hours_since_pos_change_max'] = max(fill['hours_since_long_pos_change'],
+                                                         fill['hours_since_shrt_pos_change'])
                 all_fills.append(fill)
                 if balance <= 0.0 or 'liquidation' in fill['type']:
                     return all_fills, False
@@ -350,7 +354,6 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, bool):
                 line = f"\r{all_fills[-1]['progress']:.3f} "
                 line += f"adg {all_fills[-1]['average_daily_gain']:.4f} "
                 print(line, end=' ')
-            # print(f"\r{k / len(ticks):.2f} ", end=' ')
     return all_fills, True
 
 
