@@ -220,8 +220,8 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, bool):
                                              'long_pprice': bid[3], 'shrt_psize': shrt_psize,
                                              'shrt_pprice': shrt_pprice})
                                 prev_long_entry_ts = tick[2]
-                            liq_price = liq_price_f(balance, long_psize, long_pprice,
-                                                    shrt_psize, shrt_pprice)
+                            liq_price = calc_liq_price(balance, long_psize, long_pprice,
+                                                       shrt_psize, shrt_pprice)
                             liq_diff = calc_diff(liq_price, tick[0])
                             fill.update({'liq_price': liq_price, 'liq_diff': liq_diff})
                             fills.append(fill)
@@ -312,10 +312,10 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, bool):
                     profit_cumsum += fill['pnl']
                 fee_paid_cumsum += fill['fee_paid']
                 pnl_plus_fees_cumsum += fill['pnl'] + fill['fee_paid']
-                upnl_l = x if (x := calc_long_pnl(xk, long_pprice, tick[0], long_psize)) == x else 0.0
-                upnl_s = y if (y := calc_shrt_pnl(xk, shrt_pprice, tick[0], shrt_psize)) == y else 0.0
-                fill['liq_price'] = liq_price_f(balance, long_psize, long_pprice, shrt_psize,
-                                                shrt_pprice)
+                upnl_l = calc_long_pnl(xk, long_pprice, tick[0], long_psize)
+                upnl_s = calc_shrt_pnl(xk, shrt_pprice, tick[0], shrt_psize)
+                fill['liq_price'] = calc_liq_price(balance, long_psize, long_pprice, shrt_psize,
+                                                   shrt_pprice)
                 fill['liq_diff'] = calc_diff(fill['liq_price'], tick[0])
                 fill['equity'] = balance + upnl_l + upnl_s
                 fill['pnl_plus_fees_cumsum'] = pnl_plus_fees_cumsum
