@@ -9,7 +9,7 @@ import aiohttp
 import numpy as np
 from dateutil import parser
 
-from passivbot import ts_to_date, load_key_secret, print_, Bot, sort_dict_keys
+from passivbot import ts_to_date, load_key_secret, print_, Bot, sort_dict_keys, config_to_xk
 
 
 def first_capitalized(s: str):
@@ -44,17 +44,17 @@ def date_to_ts(date: str):
     return parser.parse(date).timestamp() * 1000
 
 
-async def create_bot(user: str, settings: str):
-    bot = Bybit(user, settings)
+async def create_bot(user: str, config: str):
+    bot = Bybit(user, config)
     await bot._init()
     return bot
 
 
 class Bybit(Bot):
-    def __init__(self, user: str, settings: dict):
+    def __init__(self, user: str, config: dict):
         self.exchange = 'bybit'
         self.min_notional = 0.0
-        super().__init__(user, settings)
+        super().__init__(user, config)
         self.key, self.secret = load_key_secret('bybit', user)
         self.base_endpoint = 'https://api.bybit.com'
         self.endpoints = {}
@@ -65,6 +65,7 @@ class Bybit(Bot):
         if self.symbol.endswith('USDT'):
             print('linear perpetual')
             self.market_type = 'linear_perpetual'
+            self.inverse = self.config['inverse'] = False
             self.endpoints = {'position': '/private/linear/position/list',
                               'open_orders': '/private/linear/order/search',
                               'create_order': '/private/linear/order/create',
@@ -74,6 +75,7 @@ class Bybit(Bot):
                               'created_at_key': 'created_time'}
 
         else:
+            self.inverse = self.config['inverse'] = True
             if self.symbol.endswith('USD'):
                 print('inverse perpetual')
                 self.market_type = 'inverse_perpetual'
@@ -127,11 +129,12 @@ class Bybit(Bot):
         self.max_leverage = e['leverage_filter']['max_leverage']
         self.coin = e['base_currency']
         self.quot = e['quote_currency']
-        self.price_step = float(e['price_filter']['tick_size'])
-        self.qty_step = float(e['lot_size_filter']['qty_step'])
-        self.min_qty = float(e['lot_size_filter']['min_trading_qty'])
-        self.min_cost = 0.0
+        self.price_step = self.config['price_step'] = float(e['price_filter']['tick_size'])
+        self.qty_step = self.config['qty_step'] = float(e['lot_size_filter']['qty_step'])
+        self.min_qty = self.config['min_qty'] = float(e['lot_size_filter']['min_trading_qty'])
+        self.min_cost = self.config['min_cost'] = 0.0
         self.init_market_type()
+        self.xk = config_to_xk(self.config)
         await self.init_order_book()
         await self.update_position()
 
@@ -288,7 +291,7 @@ class Bybit(Bot):
     def calc_max_pos_size(self, balance: float, price: float):
         return balance * price * self.leverage * 0.95
 
-    async def init_exchange_settings(self):
+    async def init_exchange_config(self):
         try:
             # set cross mode
             if self.market_type == 'inverse_futures':

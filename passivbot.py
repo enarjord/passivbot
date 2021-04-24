@@ -139,13 +139,12 @@ def flatten(lst: list) -> list:
 
 
 class Bot:
-    def __init__(self, user: str, settings: dict):
-        self.settings = settings
+    def __init__(self, user: str, config: dict):
+        self.config = config
         self.user = user
 
-        for key in settings:
-            setattr(self, key, settings[key])
-        self.xk = config_to_xk(settings)
+        for key in config:
+            setattr(self, key, config[key])
 
         self.ema_span = round(int(self.ema_span))
         self.ema_alpha = 2 / (self.ema_span + 1)
@@ -165,9 +164,9 @@ class Bot:
         self.fills = []
 
         self.hedge_mode = True
-        self.contract_multiplier = 1.0
+        self.contract_multiplier = self.config['contract_multiplier'] = 1.0
 
-        self.log_filepath = make_get_filepath(f"logs/{self.exchange}/{settings['config_name']}.log")
+        self.log_filepath = make_get_filepath(f"logs/{self.exchange}/{config['config_name']}.log")
 
         self.my_trades = []
         self.my_trades_cache_filepath = \
@@ -179,7 +178,7 @@ class Bot:
         self.stop_websocket = False
 
     def dump_log(self, data) -> None:
-        if self.settings['logging_level'] > 0:
+        if self.config['logging_level'] > 0:
             with open(self.log_filepath, 'a') as f:
                 f.write(json.dumps({**{'log_timestamp': time()}, **data}) + '\n')
 
@@ -518,7 +517,7 @@ class Bot:
         self.stop_websocket = False
         print_([self.endpoints['websocket']])
         await self.update_position()
-        await self.init_exchange_settings()
+        await self.init_exchange_config()
         k = 1
         async with websockets.connect(self.endpoints['websocket']) as ws:
             await self.subscribe_ws(ws)
@@ -546,16 +545,16 @@ async def start_bot(bot):
     await bot.start_websocket()
 
 
-async def create_binance_bot(user: str, settings: str):
+async def create_binance_bot(user: str, config: str):
     from binance import BinanceBot
-    bot = BinanceBot(user, settings)
+    bot = BinanceBot(user, config)
     await bot._init()
     return bot
 
 
-async def create_bybit_bot(user: str, settings: str):
+async def create_bybit_bot(user: str, config: str):
     from bybit import Bybit
-    bot = Bybit(user, settings)
+    bot = Bybit(user, config)
     await bot._init()
     return bot
 
