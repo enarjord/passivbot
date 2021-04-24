@@ -1,11 +1,9 @@
 import sys
-
 import numpy as np
+
 
 if '--nojit' in sys.argv:
     print('not using numba')
-
-
     def njit(pyfunc=None, **kwargs):
         def wrap(func):
             return func
@@ -393,12 +391,7 @@ def iter_long_closes(xk: tuple, balance: float, psize: float, pprice: float, low
     if len(prices) == 0:
         yield -psize, max(lowest_ask, round_up(minm, xk[4])), 0.0
     else:
-        try:
-            n_orders = int(min([xk[11], len(prices), int(psize / xk[5])]))
-        except:
-            print('begud')
-            print(xk[11], prices, psize, xk[5])
-            raise Exception
+        n_orders = int(min([xk[11], len(prices), int(psize / xk[5])]))
         for price in prices:
             if n_orders == 0:
                 break
