@@ -30,13 +30,19 @@ def config_to_xk(config: dict) -> tuple:
      4 price_step  10 leverage             16 min_markup
      5 min_qty     11 n_close_orders       17 markup_range
     '''
-    return tuple(float(config[k]) if type(config[k]) not in [bool, str] else config[k] for k in [
-        'inverse', 'do_long', 'do_shrt', 'qty_step', 'price_step', 'min_qty', 'min_cost',
-        'contract_multiplier', 'ddown_factor', 'qty_pct', 'leverage', 'n_close_orders',
-        'grid_spacing', 'pos_margin_grid_coeff', 'volatility_grid_coeff', 'volatility_qty_coeff',
-        'min_markup', 'markup_range', 'ema_span', 'ema_spread', 'stop_loss_liq_diff',
-        'stop_loss_pos_pct',
-    ])
+    config_list = []
+    for k in ['inverse', 'do_long', 'do_shrt', 'qty_step', 'price_step', 'min_qty', 'min_cost', 'contract_multiplier',
+              'ddown_factor', 'qty_pct', 'leverage', 'n_close_orders', 'grid_spacing', 'pos_margin_grid_coeff',
+              'volatility_grid_coeff', 'volatility_qty_coeff', 'min_markup', 'markup_range', 'ema_span', 'ema_spread',
+              'stop_loss_liq_diff', 'stop_loss_pos_pct']:
+        if k in config:
+            if type(config[k]) not in [bool, str]:
+                config_list.append(float(config[k]))
+            else:
+                config_list.append(config[k])
+        else:
+            config_list.append(None)
+    return tuple(config_list)
 
 
 def sort_dict_keys(d):
