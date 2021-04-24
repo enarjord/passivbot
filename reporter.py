@@ -171,6 +171,7 @@ class LogReporter(CLIReporter):
         o = []
         best_config = None
         best_eval = None
+        config = None
         for trial in trials:
             if self._metric in trial.last_result:
                 if trial.last_result[self._metric] > self.objective:
@@ -182,19 +183,20 @@ class LogReporter(CLIReporter):
                 config = trial.config
 
         try:
-            df = pd.DataFrame(l)
-            df[self._metric] = o
-            df.sort_values(self._metric, ascending=False, inplace=True)
-            df.dropna(inplace=True)
-            df[df[self._metric] > 0].to_csv(
-                os.path.join(config['session_dirpath'], 'intermediate_results.csv'), index=False)
-            if best_eval:
-                intermediate_result = best_eval.copy()
-                intermediate_result['do_long'] = best_config['do_long']
-                intermediate_result['do_shrt'] = best_config['do_shrt']
-                json.dump(intermediate_result,
-                          open(os.path.join(best_config['session_dirpath'], 'intermediate_best_result.json'), 'w'),
-                          indent=4)
+            if config:
+                df = pd.DataFrame(l)
+                df[self._metric] = o
+                df.sort_values(self._metric, ascending=False, inplace=True)
+                df.dropna(inplace=True)
+                df[df[self._metric] > 0].to_csv(
+                    os.path.join(config['session_dirpath'], 'intermediate_results.csv'), index=False)
+                if best_eval:
+                    intermediate_result = best_eval.copy()
+                    intermediate_result['do_long'] = best_config['do_long']
+                    intermediate_result['do_shrt'] = best_config['do_shrt']
+                    json.dump(intermediate_result,
+                              open(os.path.join(best_config['session_dirpath'], 'intermediate_best_result.json'), 'w'),
+                              indent=4)
         except Exception as e:
             print("Something went wrong", e)
 
