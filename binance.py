@@ -8,19 +8,19 @@ from urllib.parse import urlencode
 import aiohttp
 import numpy as np
 
-from passivbot import load_key_secret, print_, ts_to_date, Bot, sort_dict_keys
+from passivbot import load_key_secret, print_, ts_to_date, Bot, sort_dict_keys, config_to_xk
 
 
-async def create_bot(user: str, settings: str):
-    bot = BinanceBot(user, settings)
+async def create_bot(user: str, config: str):
+    bot = BinanceBot(user, config)
     await bot._init()
     return bot
 
 
 class BinanceBot(Bot):
-    def __init__(self, user: str, settings: dict):
+    def __init__(self, user: str, config: dict):
         self.exchange = 'binance'
-        super().__init__(user, settings)
+        super().__init__(user, config)
         self.max_pos_size_ito_usdt = 0.0
         self.max_pos_size_ito_coin = 0.0
         self.session = aiohttp.ClientSession()
@@ -63,38 +63,44 @@ class BinanceBot(Bot):
         if self.symbol.endswith('USDT'):
             print('linear perpetual')
             self.market_type = 'linear_perpetual'
+            self.inverse = self.config['inverse'] = False
             self.base_endpoint = 'https://fapi.binance.com'
-            self.endpoints = {'position': '/fapi/v2/positionRisk',
-                              'balance': '/fapi/v2/balance',
-                              'exchange_info': '/fapi/v1/exchangeInfo',
-                              'leverage_bracket': '/fapi/v1/leverageBracket',
-                              'open_orders': '/fapi/v1/openOrders',
-                              'ticker': '/fapi/v1/ticker/bookTicker',
-                              'create_order': '/fapi/v1/order',
-                              'cancel_order': '/fapi/v1/order',
-                              'ticks': '/fapi/v1/aggTrades',
-                              'margin_type': '/fapi/v1/marginType',
-                              'leverage': '/fapi/v1/leverage',
-                              'position_side': '/fapi/v1/positionSide/dual',
-                              'websocket': f"wss://fstream.binance.com/ws/{self.symbol.lower()}@aggTrade"}
+            self.endpoints = {
+                'position': '/fapi/v2/positionRisk',
+                'balance': '/fapi/v2/balance',
+                'exchange_info': '/fapi/v1/exchangeInfo',
+                'leverage_bracket': '/fapi/v1/leverageBracket',
+                'open_orders': '/fapi/v1/openOrders',
+                'ticker': '/fapi/v1/ticker/bookTicker',
+                'create_order': '/fapi/v1/order',
+                'cancel_order': '/fapi/v1/order',
+                'ticks': '/fapi/v1/aggTrades',
+                'margin_type': '/fapi/v1/marginType',
+                'leverage': '/fapi/v1/leverage',
+                'position_side': '/fapi/v1/positionSide/dual',
+                'websocket': f"wss://fstream.binance.com/ws/{self.symbol.lower()}@aggTrade"
+            }
 
         else:
             print('inverse coin margined')
             self.base_endpoint = 'https://dapi.binance.com'
             self.market_type = 'inverse_coin_margined'
-            self.endpoints = {'position': '/dapi/v1/positionRisk',
-                              'balance': '/dapi/v1/balance',
-                              'exchange_info': '/dapi/v1/exchangeInfo',
-                              'leverage_bracket': '/dapi/v1/leverageBracket',
-                              'open_orders': '/dapi/v1/openOrders',
-                              'ticker': '/dapi/v1/ticker/bookTicker',
-                              'create_order': '/dapi/v1/order',
-                              'cancel_order': '/dapi/v1/order',
-                              'ticks': '/dapi/v1/aggTrades',
-                              'margin_type': '/dapi/v1/marginType',
-                              'leverage': '/dapi/v1/leverage',
-                              'position_side': '/dapi/v1/positionSide/dual',
-                              'websocket': f"wss://dstream.binance.com/ws/{self.symbol.lower()}@aggTrade"}
+            self.inverse = self.config['inverse'] = True
+            self.endpoints = {
+                'position': '/dapi/v1/positionRisk',
+                'balance': '/dapi/v1/balance',
+                'exchange_info': '/dapi/v1/exchangeInfo',
+                'leverage_bracket': '/dapi/v1/leverageBracket',
+                'open_orders': '/dapi/v1/openOrders',
+                'ticker': '/dapi/v1/ticker/bookTicker',
+                'create_order': '/dapi/v1/order',
+                'cancel_order': '/dapi/v1/order',
+                'ticks': '/dapi/v1/aggTrades',
+                'margin_type': '/dapi/v1/marginType',
+                'leverage': '/dapi/v1/leverage',
+                'position_side': '/dapi/v1/positionSide/dual',
+                'websocket': f"wss://dstream.binance.com/ws/{self.symbol.lower()}@aggTrade"
+            }
 
     async def _init(self):
         self.init_market_type()
@@ -109,18 +115,19 @@ class BinanceBot(Bot):
                 self.margin_coin = e['marginAsset']
                 self.pair = e['pair']
                 if self.market_type == 'inverse_coin_margined':
-                    self.contract_multiplier = float(e['contractSize'])
+                    self.contract_multiplier = self.config['contract_multiplier'] = \
+                        float(e['contractSize'])
                 price_precision = e['pricePrecision']
                 qty_precision = e['quantityPrecision']
                 for q in e['filters']:
                     if q['filterType'] == 'LOT_SIZE':
-                        self.min_qty = float(q['minQty'])
+                        self.min_qty = self.config['min_qty'] = float(q['minQty'])
                     elif q['filterType'] == 'MARKET_LOT_SIZE':
-                        self.qty_step = float(q['stepSize'])
+                        self.qty_step = self.config['qty_step'] = float(q['stepSize'])
                     elif q['filterType'] == 'PRICE_FILTER':
-                        self.price_step = float(q['tickSize'])
+                        self.price_step = self.config['price_step'] = float(q['tickSize'])
                     elif q['filterType'] == 'MIN_NOTIONAL':
-                        self.min_cost = float(q['notional'])
+                        self.min_cost = self.config['min_cost'] = float(q['notional'])
                 try:
                     z = self.min_cost
                 except AttributeError:
@@ -134,6 +141,7 @@ class BinanceBot(Bot):
                     max_lev = max(max_lev, int(br['initialLeverage']))
                 break
         self.max_leverage = max_lev
+        self.xk = config_to_xk(self.config)
         await self.init_order_book()
         await self.update_position()
 
@@ -162,7 +170,7 @@ class BinanceBot(Bot):
         else:
             print('no positions or open orders in other symbols sharing margin wallet')
 
-    async def init_exchange_settings(self):
+    async def init_exchange_config(self):
         try:
             print(await self.private_post(self.endpoints['margin_type'],
                                           {'symbol': self.symbol, 'marginType': 'CROSSED'}))
