@@ -20,6 +20,13 @@ def round_dynamic(n: float, d: int):
     return round_(n, 10 ** ((doti := format_float(n).find('.')) - d - (1 if doti == 1 else 0)))
 
 
+def get_keys():
+    return ['inverse', 'do_long', 'do_shrt', 'qty_step', 'price_step', 'min_qty', 'min_cost',
+            'contract_multiplier', 'ddown_factor', 'qty_pct', 'leverage', 'n_close_orders',
+            'grid_spacing', 'pos_margin_grid_coeff', 'volatility_grid_coeff',
+            'volatility_qty_coeff', 'min_markup', 'markup_range', 'ema_span', 'ema_spread',
+            'stop_loss_liq_diff', 'stop_loss_pos_pct']
+
 def config_to_xk(config: dict) -> tuple:
     '''
     xk index/value
@@ -30,13 +37,8 @@ def config_to_xk(config: dict) -> tuple:
      4 price_step  10 leverage             16 min_markup
      5 min_qty     11 n_close_orders       17 markup_range
     '''
-    return tuple(float(config[k]) if type(config[k]) not in [bool, str] else config[k] for k in [
-        'inverse', 'do_long', 'do_shrt', 'qty_step', 'price_step', 'min_qty', 'min_cost',
-        'contract_multiplier', 'ddown_factor', 'qty_pct', 'leverage', 'n_close_orders',
-        'grid_spacing', 'pos_margin_grid_coeff', 'volatility_grid_coeff', 'volatility_qty_coeff',
-        'min_markup', 'markup_range', 'ema_span', 'ema_spread', 'stop_loss_liq_diff',
-        'stop_loss_pos_pct',
-    ])
+    return tuple(float(config[k]) if type(config[k]) not in [bool, str] else config[k]
+                 for k in get_keys())
 
 
 def sort_dict_keys(d):
