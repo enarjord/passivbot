@@ -1,9 +1,11 @@
-import numpy as np
 import sys
 
+import numpy as np
 
 if '--nojit' in sys.argv:
     print('not using numba')
+
+
     def njit(pyfunc=None, **kwargs):
         def wrap(func):
             return func
@@ -54,7 +56,7 @@ def calc_emas(xs: [float], span: int) -> np.ndarray:
     emas = np.empty_like(xs)
     emas[0] = xs[0]
     for i in range(1, len(xs)):
-        emas[i] = emas[i-1] * alpha_ + xs[i] * alpha
+        emas[i] = emas[i - 1] * alpha_ + xs[i] * alpha
     return emas
 
 
@@ -65,17 +67,17 @@ def calc_stds(xs: [float], span: int) -> np.ndarray:
     if len(stds) <= span:
         return stds
     xsum = xs[:span].sum()
-    xsum_sq = (xs[:span]**2).sum()
-    stds[span] = np.sqrt((xsum_sq / span) - (xsum / span)**2)
+    xsum_sq = (xs[:span] ** 2).sum()
+    stds[span] = np.sqrt((xsum_sq / span) - (xsum / span) ** 2)
     for i in range(span, len(xs)):
-        xsum += xs[i] - xs[i-span]
-        xsum_sq += xs[i]**2 - xs[i-span]**2
-        stds[i] = np.sqrt((xsum_sq / span) - (xsum / span)**2)
+        xsum += xs[i] - xs[i - span]
+        xsum_sq += xs[i] ** 2 - xs[i - span] ** 2
+        stds[i] = np.sqrt((xsum_sq / span) - (xsum / span) ** 2)
     return stds
 
 
 @njit
-def calc_initial_long_entry_price(xk: tuple, ema: float,  highest_bid: float) -> float:
+def calc_initial_long_entry_price(xk: tuple, ema: float, highest_bid: float) -> float:
     return min(highest_bid, round_dn(ema * (1 - xk[19]), xk[4]))
 
 
@@ -90,9 +92,9 @@ def calc_min_entry_qty(xk: tuple, price: float) -> float:
 
 
 @njit
-def calc_initial_entry_qty(xk: tuple, 
-                           balance: float, 
-                           price: float, 
+def calc_initial_entry_qty(xk: tuple,
+                           balance: float,
+                           price: float,
                            available_margin: float,
                            volatility: float) -> float:
     min_entry_qty = calc_min_entry_qty(xk, price)
@@ -128,8 +130,8 @@ def calc_long_reentry_price(xk: tuple,
                             pprice: float,
                             volatility: float) -> float:
     modifier = (1 + (calc_margin_cost(xk, psize, pprice) / balance) * xk[13]) * \
-        (1 + volatility * xk[14])
-    return round_dn(pprice * (1 - xk[12] * modifier, xk[4]))
+               (1 + volatility * xk[14])
+    return round_dn(pprice * (1 - xk[12] * modifier), xk[4])
 
 
 @njit
@@ -139,8 +141,8 @@ def calc_shrt_reentry_price(xk: tuple,
                             pprice: float,
                             volatility: float) -> float:
     modifier = (1 + (calc_margin_cost(xk, psize, pprice) / balance) * xk[13]) * \
-        (1 + volatility * xk[14])
-    return round_dn(pprice * (1 + xk[12] * modifier, xk[4]))
+               (1 + volatility * xk[14])
+    return round_dn(pprice * (1 + xk[12] * modifier), xk[4])
 
 
 @njit
@@ -153,6 +155,7 @@ def calc_new_psize_pprice(xk: tuple,
         return psize, pprice
     new_psize = round_(psize + qty, xk[3])
     return new_psize, nan_to_0(pprice) * (psize / new_psize) + price * (qty / new_psize)
+
 
 @njit
 def calc_long_pnl(xk: tuple, entry_price: float, close_price: float, qty: float) -> float:
@@ -181,7 +184,7 @@ def calc_margin_cost(xk: tuple, qty: float, price: float) -> float:
 
 
 @njit
-def calc_available_margin(xk: float,
+def calc_available_margin(xk: tuple,
                           balance: float,
                           long_psize: float,
                           long_pprice: float,
@@ -371,7 +374,7 @@ def calc_next_shrt_entry(xk: tuple,
 
 
 @njit
-def iter_long_closes(xk: float, balance: float, psize: float, pprice: float, lowest_ask: float):
+def iter_long_closes(xk: tuple, balance: float, psize: float, pprice: float, lowest_ask: float):
     '''
     xk index/value
      0 inverse      6 min_cost             12 grid_spacing           18 ema_span
@@ -401,7 +404,7 @@ def iter_long_closes(xk: float, balance: float, psize: float, pprice: float, low
                     qty = psize
             if qty == 0.0:
                 break
-            psize = round_(psize - qty, rk[0])
+            psize = round_(psize - qty, xk[0])
             yield -qty, price, psize
             lowest_ask = price
             n_orders -= 1
@@ -410,7 +413,7 @@ def iter_long_closes(xk: float, balance: float, psize: float, pprice: float, low
 
 
 @njit
-def iter_shrt_closes(xk: float, balance: float, psize: float, pprice: float, highest_bid: float):
+def iter_shrt_closes(xk: tuple, balance: float, psize: float, pprice: float, highest_bid: float):
     '''
     xk index/value
      0 inverse      6 min_cost             12 grid_spacing           18 ema_span
@@ -514,5 +517,3 @@ def calc_liq_price_bybit(xk: tuple,
             return max(0.0, (shrt_pprice * abs_shrt_psize) / (shrt_pprice * rhs + abs_shrt_psize))
     else:
         raise Exception('bybit linear liq price not implemented')
-
-

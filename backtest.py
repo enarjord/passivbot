@@ -12,8 +12,8 @@ import pandas as pd
 from downloader import Downloader, prep_backtest_config
 from jitted import iter_entries, iter_long_closes, iter_shrt_closes, calc_diff, calc_emas, \
     calc_stds, calc_long_pnl, calc_shrt_pnl, calc_cost, calc_liq_price_binance, \
-    calc_liq_price_bybit, calc_new_psize_pprice, calc_available_margin
-from passivbot import config_to_xk
+    calc_liq_price_bybit, calc_new_psize_pprice, calc_available_margin, round_
+from passivbot import config_to_xk, make_get_filepath, ts_to_date
 
 os.environ['TUNE_GLOBAL_CHECKPOINT_S'] = '120'
 
@@ -163,7 +163,7 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, bool):
         upnl_l = x if (x := calc_long_pnl(xk, long_pprice, tick[0], long_psize)) == x else 0.0
         upnl_s = y if (y := calc_shrt_pnl(xk, shrt_pprice, tick[0], shrt_psize)) == y else 0.0
         stats.append({'timestamp': tick[2],
-                      'balance': balance, # Redundant with fills, but makes plotting easier
+                      'balance': balance,  # Redundant with fills, but makes plotting easier
                       'equity': balance + upnl_l + upnl_s})
 
     all_fills = []
@@ -360,19 +360,21 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, bool):
 # TODO: Make a class Returns?
 # Dict of interesting periods and their associated number of seconds
 PERIODS = {
-    'daily': 60*60*24,
-    'weekly': 60*60*24*7,
-    'monthly': 60*60*24*365.25/12,
-    'yearly': 60*60*24*365.25
+    'daily': 60 * 60 * 24,
+    'weekly': 60 * 60 * 24 * 7,
+    'monthly': 60 * 60 * 24 * 365.25 / 12,
+    'yearly': 60 * 60 * 24 * 365.25
 }
 
-def result_sampled_default():
+
+def result_sampled_default() -> dict:
     result = {}
-    for period,sec in PERIODS.items():
+    for period, sec in PERIODS.items():
         result['returns_' + period] = 0
         result['sharpe_ratio_' + period] = 0
         result['VWR_' + period] = 0
     return result
+
 
 def prepare_result_sampled(stats: list) -> dict:
     if len(stats) < 10:
@@ -394,7 +396,7 @@ def prepare_result_sampled(stats: list) -> dict:
     # returns_diff = (sdf['balance'].pad() / (equity_start * np.exp(returns_log_mean * np.arange(1, N+1)))) - 1
 
     N = len(returns)
-    returns_mean = np.exp(np.mean(np.log(returns + 1))) - 1 # Geometrical mean
+    returns_mean = np.exp(np.mean(np.log(returns + 1))) - 1  # Geometrical mean
 
     #########################################
     ### Variability-Weighted Return (VWR) ###
@@ -406,13 +408,13 @@ def prepare_result_sampled(stats: list) -> dict:
     # returns_mean = np.exp(returns_log_mean) - 1 # = geometrical mean != returns.mean()
 
     # Relative difference of the equity E_i and the zero-variability ideal equity E'_i: (E_i / E'i) - 1
-    equity_diff = (sdf['equity'].pad() / (equity_start * np.exp(returns_log_mean * np.arange(1, N+1)))) - 1
+    equity_diff = (sdf['equity'].pad() / (equity_start * np.exp(returns_log_mean * np.arange(1, N + 1)))) - 1
 
     # Standard deviation of equity differentials
     equity_diff_std = np.std(equity_diff, ddof=1)
 
-    tau = 1.4 # Rate at which weighting falls with increasing variability (investor tolerance)
-    sdev_max = 0.16 # Maximum acceptable standard deviation (investor limit)
+    tau = 1.4  # Rate at which weighting falls with increasing variability (investor tolerance)
+    sdev_max = 0.16  # Maximum acceptable standard deviation (investor limit)
 
     # Weighting of the expected compounded returns for a given period (daily, ...). Note that
     # - this factor is always less than 1
@@ -421,7 +423,7 @@ def prepare_result_sampled(stats: list) -> dict:
     VWR_weight = (1.0 - (equity_diff_std / sdev_max) ** tau)
 
     result = {}
-    for period,sec in PERIODS.items():
+    for period, sec in PERIODS.items():
         # There are `periods_nb` times `sample_sec` in `period`
         periods_nb = sec / sample_sec
 
@@ -430,7 +432,7 @@ def prepare_result_sampled(stats: list) -> dict:
         # returns_expected_period = np.exp(returns_log_mean * periods_nb) - 1
 
         volatility_expected_period = returns.std() * np.sqrt(periods_nb)
-        SR = returns_expected_period / volatility_expected_period # Sharpe ratio (risk-free)
+        SR = returns_expected_period / volatility_expected_period  # Sharpe ratio (risk-free)
         VWR = returns_expected_period * VWR_weight
 
         result['returns_' + period] = returns_expected_period
@@ -441,7 +443,7 @@ def prepare_result_sampled(stats: list) -> dict:
             result['VWR_' + period] = VWR
         else:
             result['sharpe_ratio_' + period] = 0.0
-            result['VWR_' + period] = 0.0 # VWR is positive when returns_expected_period < 0
+            result['VWR_' + period] = 0.0  # VWR is positive when returns_expected_period < 0
 
     return result
 

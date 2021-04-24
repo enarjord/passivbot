@@ -2,7 +2,6 @@ import asyncio
 import hashlib
 import hmac
 import json
-import sys
 from time import time
 from urllib.parse import urlencode
 
@@ -10,32 +9,11 @@ import aiohttp
 import numpy as np
 from dateutil import parser
 
-from passivbot import load_key_secret, print_, \
-    ts_to_date, flatten, Bot, start_bot, calc_min_order_qty_inverse, sort_dict_keys, calc_ema, \
-    iter_long_closes_inverse, iter_shrt_closes_inverse, iter_entries_inverse, \
-    iter_long_closes_linear, iter_shrt_closes_linear, iter_entries_linear, calc_long_pnl_linear, \
-    calc_long_pnl_inverse, calc_shrt_pnl_linear, \
-    calc_shrt_pnl_inverse, calc_cost_linear, calc_cost_inverse
+from passivbot import ts_to_date, load_key_secret, print_, Bot, sort_dict_keys
 
 
 def first_capitalized(s: str):
     return s[0].upper() + s[1:].lower()
-
-
-def calc_isolated_long_liq_price(balance,
-                                 pos_size,
-                                 pos_price,
-                                 leverage,
-                                 mm=0.005) -> float:
-    return (pos_price * leverage) / (leverage + 1 - mm * leverage)
-
-
-def calc_isolated_shrt_liq_price(balance,
-                                 pos_size,
-                                 pos_price,
-                                 leverage,
-                                 mm=0.005) -> float:
-    return (pos_price * leverage) / (leverage - 1 + mm * leverage)
 
 
 def format_tick(tick: dict) -> dict:
@@ -357,5 +335,3 @@ class Bybit(Bot):
     async def subscribe_ws(self, ws):
         params = {'op': 'subscribe', 'args': ['trade.' + self.symbol]}
         await ws.send(json.dumps(params))
-
-

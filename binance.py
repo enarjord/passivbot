@@ -2,17 +2,13 @@ import asyncio
 import hashlib
 import hmac
 import json
-import sys
 from time import time
 from urllib.parse import urlencode
 
 import aiohttp
 import numpy as np
-from jitted import calc_entries, calc_long_closes, calc_shrt_closes, calc_diff, calc_ema, \
-  round_up, round_dn, round_
 
-from passivbot import load_key_secret, print_, ts_to_date, flatten, Bot, start_bot, \
-  calc_min_order_qty, sort_dict_keys
+from passivbot import load_key_secret, print_, ts_to_date, Bot, sort_dict_keys
 
 
 async def create_bot(user: str, settings: str):
@@ -140,7 +136,6 @@ class BinanceBot(Bot):
         self.max_leverage = max_lev
         await self.init_order_book()
         await self.update_position()
-
 
     async def check_if_other_positions(self, abort=True):
         positions, open_orders = await asyncio.gather(
@@ -328,4 +323,3 @@ class BinanceBot(Bot):
 
     async def subscribe_ws(self, ws):
         pass
-

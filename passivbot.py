@@ -3,10 +3,13 @@ import datetime
 import json
 import os
 import sys
-import websockets
-import numpy as np
-from time import time
 from collections import deque
+from time import time
+
+import numpy as np
+import websockets
+
+from jitted import round_, calc_diff, iter_entries, iter_shrt_closes, iter_long_closes, calc_ema
 
 
 def format_float(n: float):
@@ -14,7 +17,7 @@ def format_float(n: float):
 
 
 def round_dynamic(n: float, d: int):
-    return round_(n, 10**((doti := format_float(n).find('.')) - d - (1 if doti == 1 else 0)))
+    return round_(n, 10 ** ((doti := format_float(n).find('.')) - d - (1 if doti == 1 else 0)))
 
 
 def config_to_xk(config: dict) -> tuple:
@@ -53,7 +56,6 @@ def flatten_dict(d, parent_key='', sep='_'):
         else:
             items.append((new_key, v))
     return dict(items)
-
 
 
 def make_get_filepath(filepath: str) -> str:
@@ -368,7 +370,7 @@ class Bot:
         results = []
         if to_cancel:
             results.append(asyncio.create_task(self.cancel_orders(to_cancel[:n_orders_limit])))
-            await asyncio.sleep(0.005) # sleep 5 ms between sending cancellations and creations
+            await asyncio.sleep(0.005)  # sleep 5 ms between sending cancellations and creations
         if to_create:
             results.append(await self.create_orders(to_create[:n_orders_limit]))
         await asyncio.sleep(0.005)
@@ -485,9 +487,9 @@ class Bot:
             ema = ema * self.ema_alpha_ + tick['price'] * self.ema_alpha
         self.ema = ema
         self.sum_prices = sum(self.tick_prices_deque)
-        self.sum_prices_squared = sum([e**2 for e in self.tick_prices_deque])
+        self.sum_prices_squared = sum([e ** 2 for e in self.tick_prices_deque])
         avg = self.sum_prices / len(self.tick_prices_deque)
-        self.price_std = np.sqrt((self.sum_prices_squared / len(self.tick_prices_deque) - (avg**2)))
+        self.price_std = np.sqrt((self.sum_prices_squared / len(self.tick_prices_deque) - (avg ** 2)))
         self.volatility = self.price_std / self.ema
 
     def update_indicators(self, ticks: dict):
@@ -498,12 +500,12 @@ class Bot:
                 self.ob[1] = tick['price']
             self.ema = calc_ema(self.ema_alpha, self.ema_alpha_, self.ema, tick['price'])
             self.sum_prices -= self.tick_prices_deque[0]
-            self.sum_prices_squared -= self.tick_prices_deque[0]**2
+            self.sum_prices_squared -= self.tick_prices_deque[0] ** 2
             self.tick_prices_deque.append(tick['price'])
             self.sum_prices += self.tick_prices_deque[-1]
-            self.sum_prices_squared += self.tick_prices_deque[-1]**2
+            self.sum_prices_squared += self.tick_prices_deque[-1] ** 2
         avg = self.sum_prices / len(self.tick_prices_deque)
-        self.price_std = np.sqrt((self.sum_prices_squared / len(self.tick_prices_deque) - (avg**2)))
+        self.price_std = np.sqrt((self.sum_prices_squared / len(self.tick_prices_deque) - (avg ** 2)))
         self.price = ticks[-1]['price']
 
     async def start_websocket(self) -> None:
