@@ -118,7 +118,9 @@ def backtest_tune(ticks: np.ndarray, backtest_config: dict, current_best: Union[
                         search_alg=algo, scheduler=scheduler, num_samples=iters, config=config, verbose=1,
                         reuse_actors=True, local_dir=session_dirpath,
                         progress_reporter=LogReporter(metric_columns=['daily_gain', 'closest_liquidation', 'objective'],
-                                                      parameter_columns=[k for k in backtest_config['ranges']]))
+                                                      parameter_columns=[k for k in backtest_config['ranges'] if type(
+                                                          config[k]) == ray.tune.sample.Float or type(
+                                                          config[k]) == ray.tune.sample.Integer]))
 
     ray.shutdown()
     return analysis
