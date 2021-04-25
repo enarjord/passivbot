@@ -152,6 +152,8 @@ def calc_new_psize_pprice(xk: tuple,
     if qty == 0.0:
         return psize, pprice
     new_psize = round_(psize + qty, xk[3])
+    if new_psize == 0.0:
+        return 0.0, 0.0
     return new_psize, nan_to_0(pprice) * (psize / new_psize) + price * (qty / new_psize)
 
 
