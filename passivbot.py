@@ -9,7 +9,7 @@ from time import time
 import numpy as np
 import websockets
 
-from jitted import round_, calc_diff, iter_entries, iter_shrt_closes, iter_long_closes, calc_ema
+from jitted import round_, calc_diff, iter_entries, iter_shrt_closes, iter_long_closes, calc_ema, Config
 
 
 def format_float(n: float):
@@ -27,7 +27,8 @@ def get_keys():
             'volatility_qty_coeff', 'min_markup', 'markup_range', 'ema_span', 'ema_spread',
             'stop_loss_liq_diff', 'stop_loss_pos_pct']
 
-def config_to_xk(config: dict) -> tuple:
+
+def config_to_xk(config: dict) -> np.ndarray:
     '''
     xk index/value
      0 inverse      6 min_cost             12 grid_spacing           18 ema_span
@@ -37,8 +38,7 @@ def config_to_xk(config: dict) -> tuple:
      4 price_step  10 leverage             16 min_markup
      5 min_qty     11 n_close_orders       17 markup_range
     '''
-    return tuple(float(config[k]) if type(config[k]) not in [bool, str] else config[k]
-                 for k in get_keys())
+    return np.asarray([float(config[k]) if type(config[k]) not in [bool, str] else config[k] for k in get_keys()])
 
 
 def sort_dict_keys(d):
@@ -304,9 +304,8 @@ class Bot:
 
         long_entry_orders, shrt_entry_orders, long_close_orders, shrt_close_orders = [], [], [], []
         stop_loss_close = False
-        xk_list = list(self.xk)
-        xk_list[1], xk_list[2] = do_long, do_shrt
-        xk = tuple(xk_list)
+        self.xk[np.intp(Config.do_long)], self.xk[np.intp(Config.do_shrt)] = do_long, do_shrt
+        xk = self.xk
 
         for tpl in iter_entries(xk, balance, long_psize, long_pprice, shrt_psize, shrt_pprice,
                                 liq_price, self.ob[0], self.ob[1], self.ema, self.price,

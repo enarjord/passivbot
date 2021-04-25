@@ -12,10 +12,8 @@ import pandas as pd
 from downloader import Downloader, prep_backtest_config
 from jitted import iter_entries, iter_long_closes, iter_shrt_closes, calc_diff, calc_emas, \
     calc_stds, calc_long_pnl, calc_shrt_pnl, calc_cost, calc_liq_price_binance, \
-    calc_liq_price_bybit, calc_new_psize_pprice, calc_available_margin, round_
+    calc_liq_price_bybit, calc_new_psize_pprice, calc_available_margin, round_, Config
 from passivbot import config_to_xk, make_get_filepath, ts_to_date
-
-os.environ['TUNE_GLOBAL_CHECKPOINT_S'] = '120'
 
 
 def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
@@ -206,7 +204,7 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, bool):
                                     'fee_paid': -calc_cost(xk, bid[0], bid[1]) * config['maker_fee']}
                             if 'close' in bid[4]:
                                 fill['pnl'] = calc_shrt_pnl(xk, shrt_pprice, bid[1], bid[0])
-                                shrt_psize = round_(shrt_psize + bid[0], xk[3])
+                                shrt_psize = round_(shrt_psize + bid[0], xk[np.intp(Config.qty_step)])
                                 fill.update({'pside': 'shrt', 'long_psize': long_psize,
                                              'long_pprice': long_pprice, 'shrt_psize': shrt_psize,
                                              'shrt_pprice': shrt_pprice})
@@ -248,7 +246,7 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, bool):
                                     'fee_paid': -calc_cost(xk, ask[0], ask[1]) * config['maker_fee']}
                             if 'close' in ask[4]:
                                 fill['pnl'] = calc_long_pnl(xk, long_pprice, ask[1], ask[0])
-                                long_psize = round_(long_psize + ask[0], xk[3])
+                                long_psize = round_(long_psize + ask[0], xk[np.intp(Config.qty_step)])
                                 fill.update({'pside': 'long', 'long_psize': long_psize,
                                              'long_pprice': long_pprice, 'shrt_psize': shrt_psize,
                                              'shrt_pprice': shrt_pprice})
@@ -289,7 +287,7 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, bool):
                     bids.append(list(tpl) + [shrt_pprice, 'shrt_close'])
             if tick[0] >= long_pprice and long_pprice > 0.0:
                 if long_psize != long_psize:
-                    print('debug', long_pprice,long_psize)
+                    print('debug', long_pprice, long_psize)
                 for tpl in iter_long_closes(xk, balance, long_psize, long_pprice, ob[1]):
                     asks.append(list(tpl) + [long_pprice, 'long_close'])
             bids = sorted(bids, key=lambda x: x[1], reverse=True)
