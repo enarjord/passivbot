@@ -9,7 +9,8 @@ import aiohttp
 import numpy as np
 from dateutil import parser
 
-from passivbot import ts_to_date, load_key_secret, print_, Bot, sort_dict_keys, config_to_xk
+from passivbot import ts_to_date, load_key_secret, print_, Bot, sort_dict_keys, create_XK
+from jitted import set_XK
 
 
 def first_capitalized(s: str):
@@ -134,7 +135,8 @@ class Bybit(Bot):
         self.min_qty = self.config['min_qty'] = float(e['lot_size_filter']['min_trading_qty'])
         self.min_cost = self.config['min_cost'] = 0.0
         self.init_market_type()
-        self.xk = config_to_xk(self.config)
+        globals()['XK'] = create_XK(self.config)
+        set_XK(create_XK(self.config))
         await self.init_order_book()
         await self.update_position()
 
