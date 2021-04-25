@@ -10,7 +10,8 @@ from enum import Enum
 import numpy as np
 import websockets
 
-from jitted import round_, calc_diff, iter_entries, iter_shrt_closes, iter_long_closes, calc_ema
+from jitted import round_, calc_diff, iter_entries, iter_shrt_closes, iter_long_closes, calc_ema, \
+    calc_cost
 
 
 def format_float(n: float):
@@ -197,9 +198,9 @@ class Bot:
             position, _ = await asyncio.gather(self.fetch_position(),
                                                self.update_open_orders())
             position['used_margin'] = \
-                ((self.cost_f(position['long']['size'], position['long']['price'])
+                ((calc_cost(position['long']['size'], position['long']['price'])
                   if position['long']['price'] else 0.0) +
-                 (self.cost_f(position['shrt']['size'], position['shrt']['price'])
+                 (calc_cost(position['shrt']['size'], position['shrt']['price'])
                   if position['shrt']['price'] else 0.0)) / self.leverage
             position['available_margin'] = (position['equity'] - position['used_margin']) * 0.9
             position['long']['liq_diff'] = calc_diff(position['long']['liquidation_price'], self.price)
