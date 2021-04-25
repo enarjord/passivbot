@@ -95,12 +95,14 @@ def calc_initial_shrt_entry_price(ema: float, lowest_ask: float) -> float:
 
 @njit
 def calc_min_entry_qty(price: float) -> float:
-    return max(XK.min_qty.value, round_up(XK.min_cost.value * (price / XK.contract_multiplier.value if XK.inverse.value else 1 / price), XK.price_step.value))
+    return max(XK.min_qty.value,
+               round_up(XK.min_cost.value * (price / XK.contract_multiplier.value
+                                             if XK.inverse.value else 1 / price),
+                        XK.price_step.value))
 
 
 @njit
-def calc_initial_entry_qty(
-                           balance: float,
+def calc_initial_entry_qty(balance: float,
                            price: float,
                            available_margin: float,
                            volatility: float) -> float:
@@ -109,14 +111,16 @@ def calc_initial_entry_qty(
         qty = round_dn(
             min(available_margin * price / XK.contract_multiplier.value,
                 max(min_entry_qty,
-                    (balance / XK.contract_multiplier.value) * price * XK.leverage.value * XK.qty_pct.value * (1 + volatility * XK.volatility_qty_coeff.value))),
+                    ((balance / XK.contract_multiplier.value) * price * XK.leverage.value *
+                      XK.qty_pct.value * (1 + volatility * XK.volatility_qty_coeff.value)))),
             XK.qty_step.value
         )
     else:
         qty = round_dn(
             min(available_margin / price,
                 max(min_entry_qty,
-                    (balance / price) * XK.leverage.value * XK.qty_pct.value * (1 + volatility * XK.volatility_qty_coeff.value))),
+                    ((balance / price) * XK.leverage.value * XK.qty_pct.value *
+                      (1 + volatility * XK.volatility_qty_coeff.value)))),
             XK.qty_step.value
         )
     return qty if qty >= min_entry_qty else 0.0
@@ -125,14 +129,14 @@ def calc_initial_entry_qty(
 @njit
 def calc_reentry_qty(psize: float, price: float, available_margin: float) -> float:
     min_entry_qty = calc_min_entry_qty(price)
-    qty = min(round_dn(available_margin * (price / XK.contract_multiplier.value if XK.inverse.value else 1 / price), XK.qty_step.value),
+    qty = min(round_dn(available_margin * (price / XK.contract_multiplier.value if XK.inverse.value
+                                           else 1 / price), XK.qty_step.value),
               max(min_entry_qty, round_dn(abs(psize) * XK.ddown_factor.value, XK.qty_step.value)))
     return qty if qty >= min_entry_qty else 0.0
 
 
 @njit
-def calc_long_reentry_price(
-                            balance: float,
+def calc_long_reentry_price(balance: float,
                             psize: float,
                             pprice: float,
                             volatility: float) -> float:
@@ -142,8 +146,7 @@ def calc_long_reentry_price(
 
 
 @njit
-def calc_shrt_reentry_price(
-                            balance: float,
+def calc_shrt_reentry_price(balance: float,
                             psize: float,
                             pprice: float,
                             volatility: float) -> float:
@@ -153,8 +156,7 @@ def calc_shrt_reentry_price(
 
 
 @njit
-def calc_new_psize_pprice(
-                          psize: float,
+def calc_new_psize_pprice(psize: float,
                           pprice: float,
                           qty: float,
                           price: float) -> (float, float):
@@ -193,8 +195,7 @@ def calc_margin_cost(qty: float, price: float) -> float:
 
 
 @njit
-def calc_available_margin(
-                          balance: float,
+def calc_available_margin(balance: float,
                           long_psize: float,
                           long_pprice: float,
                           shrt_psize: float,
@@ -214,8 +215,7 @@ def calc_available_margin(
 
 
 @njit
-def iter_entries(
-                 balance: float,
+def iter_entries(balance: float,
                  long_psize: float,
                  long_pprice: float,
                  shrt_psize: float,
@@ -280,8 +280,7 @@ def iter_entries(
 
 
 @njit
-def calc_stop_loss(
-                   balance: float,
+def calc_stop_loss(balance: float,
                    long_psize: float,
                    long_pprice: float,
                    shrt_psize: float,
@@ -298,7 +297,8 @@ def calc_stop_loss(
     if calc_diff(liq_price, last_price) < XK.stop_loss_liq_diff.value:
         if long_psize > abs_shrt_psize:
             stop_loss_qty = min(long_psize, max(calc_min_entry_qty(lowest_ask),
-                                                round_dn(long_psize * XK.stop_loss_pos_pct.value, XK.qty_step.value)))
+                                                round_dn(long_psize * XK.stop_loss_pos_pct.value,
+                                                         XK.qty_step.value)))
             # if sufficient margin available, increase short pos, otherwise reduce long pos
             margin_cost = calc_margin_cost(stop_loss_qty, lowest_ask)
             if margin_cost < available_margin and do_shrt:
@@ -311,8 +311,10 @@ def calc_stop_loss(
                 long_psize = round_(long_psize - stop_loss_qty, XK.qty_step.value)
                 return -stop_loss_qty, lowest_ask, long_psize, long_pprice, 'stop_loss_long_close'
         else:
-            stop_loss_qty = min(abs_shrt_psize, max(calc_min_entry_qty(highest_bid),
-                                                    round_dn(abs_shrt_psize * XK.stop_loss_pos_pct.value, XK.qty_step.value)))
+            stop_loss_qty = min(abs_shrt_psize,
+                                max(calc_min_entry_qty(highest_bid),
+                                    round_dn(abs_shrt_psize * XK.stop_loss_pos_pct.value,
+                                             XK.qty_step.value)))
             # if sufficient margin available, increase long pos, otherwise, reduce shrt pos
             margin_cost = calc_margin_cost(stop_loss_qty, highest_bid)
             if margin_cost < available_margin and do_long:
@@ -328,8 +330,7 @@ def calc_stop_loss(
 
 
 @njit
-def calc_next_long_entry(
-                         balance: float,
+def calc_next_long_entry(balance: float,
                          psize: float,
                          pprice: float,
                          highest_bid: float,
@@ -341,8 +342,8 @@ def calc_next_long_entry(
         qty = calc_initial_entry_qty(balance, price, available_margin, volatility)
         return qty, price, qty, price, 'initial_long_entry'
     else:
-        price = min(round_(highest_bid, XK.price_step.value), calc_long_reentry_price(balance, psize, pprice,
-                                                                        volatility))
+        price = min(round_(highest_bid, XK.price_step.value),
+                    calc_long_reentry_price(balance, psize, pprice, volatility))
         if price <= 0.0:
             return 0.0, 0.0, psize, pprice, 'long_reentry'
         qty = calc_reentry_qty(psize, price, available_margin)
@@ -351,8 +352,7 @@ def calc_next_long_entry(
 
 
 @njit
-def calc_next_shrt_entry(
-                         balance: float,
+def calc_next_shrt_entry(balance: float,
                          psize: float,
                          pprice: float,
                          lowest_ask: float,
@@ -364,8 +364,8 @@ def calc_next_shrt_entry(
         qty = -calc_initial_entry_qty(balance, price, available_margin, volatility)
         return qty, price, qty, price, 'initial_shrt_entry'
     else:
-        price = max(round_(lowest_ask, XK.price_step.value), calc_shrt_reentry_price(balance, psize, pprice,
-                                                                       volatility))
+        price = max(round_(lowest_ask, XK.price_step.value),
+                    calc_shrt_reentry_price(balance, psize, pprice, volatility))
         qty = -calc_reentry_qty(psize, price, available_margin)
         psize, pprice = calc_new_psize_pprice(psize, pprice, qty, price)
         return qty, price, psize, pprice, 'shrt_reentry'
@@ -377,8 +377,10 @@ def iter_long_closes(balance: float, psize: float, pprice: float, lowest_ask: fl
     if psize == 0.0 or pprice == 0.0:
         return
     minm = pprice * (1 + XK.min_markup.value)
-    prices = np.linspace(minm, pprice * (1 + XK.min_markup.value + XK.markup_range.value), int(XK.n_close_orders.value))
-    prices = [p for p in sorted(set([round_up(p_, XK.price_step.value) for p_ in prices])) if p >= lowest_ask]
+    prices = np.linspace(minm, pprice * (1 + XK.min_markup.value + XK.markup_range.value),
+                         int(XK.n_close_orders.value))
+    prices = [p for p in sorted(set([round_up(p_, XK.price_step.value)
+                                     for p_ in prices])) if p >= lowest_ask]
     if len(prices) == 0:
         yield -psize, max(lowest_ask, round_up(minm, XK.price_step.value)), 0.0
     else:
@@ -408,13 +410,15 @@ def iter_shrt_closes(balance: float, psize: float, pprice: float, highest_bid: f
     if psize == 0.0:
         return
     minm = pprice * (1 - XK.min_markup.value)
-    prices = np.linspace(minm, pprice * (1 - (XK.min_markup.value + XK.markup_range.value)), int(XK.n_close_orders.value))
-    prices = [p for p in sorted(set([round_dn(p_, XK.price_step.value) for p_ in prices]), reverse=True)
-              if p <= highest_bid]
+    prices = np.linspace(minm, pprice * (1 - (XK.min_markup.value + XK.markup_range.value)),
+                         int(XK.n_close_orders.value))
+    prices = [p for p in sorted(set([round_dn(p_, XK.price_step.value)
+                                     for p_ in prices]), reverse=True) if p <= highest_bid]
     if len(prices) == 0:
         yield abs_psize, min(highest_bid, round_dn(minm, XK.price_step.value)), 0.0
     else:
-        n_orders = int(min([XK.n_close_orders.value, len(prices), int(abs_psize / XK.min_qty.value)]))
+        n_orders = int(min([XK.n_close_orders.value, len(prices),
+                            int(abs_psize / XK.min_qty.value)]))
         for price in prices:
             if n_orders == 0:
                 break
@@ -434,8 +438,7 @@ def iter_shrt_closes(balance: float, psize: float, pprice: float, highest_bid: f
 
 
 @njit
-def calc_liq_price_binance(
-                           balance: float,
+def calc_liq_price_binance(balance: float,
                            long_psize: float,
                            long_pprice: float,
                            shrt_psize: float,
@@ -466,8 +469,7 @@ def calc_liq_price_binance(
 
 
 @njit
-def calc_liq_price_bybit(
-                         balance: float,
+def calc_liq_price_bybit(balance: float,
                          long_psize: float,
                          long_pprice: float,
                          shrt_psize: float,
