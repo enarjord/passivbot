@@ -498,6 +498,7 @@ class Bot:
         avg = self.sum_prices / len(self.tick_prices_deque)
         self.price_std = np.sqrt((self.sum_prices_squared / len(self.tick_prices_deque) - (avg ** 2)))
         self.price = ticks[-1]['price']
+        self.volatility = self.price_std / self.ema
 
     async def start_websocket(self) -> None:
         self.stop_websocket = False
