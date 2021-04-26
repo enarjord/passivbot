@@ -98,7 +98,7 @@ def calc_min_entry_qty(price: float) -> float:
     return max(XK.min_qty.value,
                round_up(XK.min_cost.value * (price / XK.contract_multiplier.value
                                              if XK.inverse.value else 1 / price),
-                        XK.price_step.value))
+                        XK.qty_step.value))
 
 
 @njit
@@ -237,6 +237,7 @@ def iter_entries(balance: float,
     stop_loss_order = calc_stop_loss(balance, long_psize, long_pprice, shrt_psize, shrt_pprice,
                                      liq_price, highest_bid, lowest_ask, last_price,
                                      available_margin, do_long_, do_shrt_)
+
     if stop_loss_order[0] != 0.0:
         yield stop_loss_order
         if 'long' in stop_loss_order[4]:
