@@ -129,8 +129,10 @@ def calc_initial_entry_qty(balance: float,
 @njit
 def calc_reentry_qty(psize: float, price: float, available_margin: float) -> float:
     min_entry_qty = calc_min_entry_qty(price)
-    qty = min(round_dn(available_margin * (price / XK.contract_multiplier.value if XK.inverse.value
-                                           else 1 / price), XK.qty_step.value),
+    qty = min(round_dn(available_margin * XK.leverage.value * (price / XK.contract_multiplier.value
+                                                               if XK.inverse.value
+                                                               else 1 / price),
+                       XK.qty_step.value),
               max(min_entry_qty, round_dn(abs(psize) * XK.ddown_factor.value, XK.qty_step.value)))
     return qty if qty >= min_entry_qty else 0.0
 
