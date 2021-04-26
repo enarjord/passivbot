@@ -109,7 +109,7 @@ def calc_initial_entry_qty(balance: float,
     min_entry_qty = calc_min_entry_qty(price)
     if XK.inverse.value:
         qty = round_dn(
-            min(available_margin * price / XK.contract_multiplier.value,
+            min(available_margin * XK.leverage.value * price / XK.contract_multiplier.value,
                 max(min_entry_qty,
                     ((balance / XK.contract_multiplier.value) * price * XK.leverage.value *
                       XK.qty_pct.value * (1 + volatility * XK.volatility_qty_coeff.value)))),
@@ -117,7 +117,7 @@ def calc_initial_entry_qty(balance: float,
         )
     else:
         qty = round_dn(
-            min(available_margin / price,
+            min(available_margin * XK.leverage.value / price,
                 max(min_entry_qty,
                     ((balance / price) * XK.leverage.value * XK.qty_pct.value *
                       (1 + volatility * XK.volatility_qty_coeff.value)))),
