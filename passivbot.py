@@ -480,8 +480,8 @@ class Bot:
         self.ema = ema
         self.sum_prices = sum(self.tick_prices_deque)
         self.sum_prices_squared = sum([e ** 2 for e in self.tick_prices_deque])
-        avg = self.sum_prices / len(self.tick_prices_deque)
-        self.price_std = np.sqrt((self.sum_prices_squared / len(self.tick_prices_deque) - (avg ** 2)))
+        self.price_std = np.sqrt((self.sum_prices_squared / len(self.tick_prices_deque) -
+                                 ((self.sum_prices / len(self.tick_prices_deque)) ** 2)))
         self.volatility = self.price_std / self.ema
 
     def update_indicators(self, ticks: dict):
