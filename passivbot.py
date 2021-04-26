@@ -424,6 +424,7 @@ class Bot:
             line += f"ema {round_(self.ema, self.price_step)} "
             line += f"bal {round_dynamic(self.position['wallet_balance'], 4)} "
             line += f"equity {round_dynamic(self.position['equity'], 4)} "
+            line += f"v. {round_dynamic(self.volatility, 8)} "
             print_([line], r=True)
 
     def load_cached_my_trades(self) -> [dict]:
@@ -459,7 +460,7 @@ class Bot:
         except Exception as e:
             print('failed to fetch fills', e)
 
-    async def init_ema(self):
+    async def init_indicators(self):
         # fetch 10 tick chunks to initiate ema
         ticks = await self.fetch_ticks(do_print=False)
         additional_ticks = flatten(await asyncio.gather(
@@ -495,8 +496,8 @@ class Bot:
             self.tick_prices_deque.append(tick['price'])
             self.sum_prices += self.tick_prices_deque[-1]
             self.sum_prices_squared += self.tick_prices_deque[-1] ** 2
-        avg = self.sum_prices / len(self.tick_prices_deque)
-        self.price_std = np.sqrt((self.sum_prices_squared / len(self.tick_prices_deque) - (avg ** 2)))
+        self.price_std = np.sqrt((self.sum_prices_squared / len(self.tick_prices_deque) -
+                                 ((self.sum_prices / len(self.tick_prices_deque)) ** 2)))
         self.price = ticks[-1]['price']
         self.volatility = self.price_std / self.ema
 
