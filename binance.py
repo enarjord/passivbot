@@ -132,7 +132,7 @@ class BinanceBot(Bot):
                 try:
                     z = self.min_cost
                 except AttributeError:
-                    self.min_cost = 0.0
+                    self.min_cost = self.config['min_cost'] = 0.0
                 break
         max_lev = 10
         for e in leverage_bracket:
