@@ -321,7 +321,7 @@ class Bybit(Bot):
             print(res)
         except Exception as e:
             print(e)
-        await self.init_ema()
+        await self.init_indicators()
 
     def standardize_websocket_ticks(self, data: dict) -> [dict]:
         ticks = []
