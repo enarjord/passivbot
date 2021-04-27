@@ -8,8 +8,7 @@ from urllib.parse import urlencode
 import aiohttp
 import numpy as np
 
-from passivbot import load_key_secret, print_, ts_to_date, Bot, sort_dict_keys, create_XK
-from jitted import set_XK
+from passivbot import load_key_secret, print_, ts_to_date, Bot, sort_dict_keys
 
 
 async def create_bot(user: str, config: str):
@@ -142,8 +141,7 @@ class BinanceBot(Bot):
                     max_lev = max(max_lev, int(br['initialLeverage']))
                 break
         self.max_leverage = max_lev
-        globals()['XK'] = create_XK(self.config)
-        set_XK(create_XK(self.config))
+        await super()._init()
         await self.init_order_book()
         await self.update_position()
 
