@@ -10,8 +10,8 @@ from enum import Enum
 import numpy as np
 import websockets
 
-from jitted import round_, calc_diff, iter_entries, iter_shrt_closes, iter_long_closes, calc_ema, \
-    calc_cost
+from jitted import round_, calc_diff, calc_ema, calc_cost, iter_entries, iter_long_closes, \
+    iter_shrt_closes
 
 
 def format_float(n: float):
@@ -28,10 +28,6 @@ def get_keys():
             'grid_spacing', 'pos_margin_grid_coeff', 'volatility_grid_coeff',
             'volatility_qty_coeff', 'min_markup', 'markup_range', 'ema_span', 'ema_spread',
             'stop_loss_liq_diff', 'stop_loss_pos_pct']
-
-
-def create_XK(config: dict) -> Enum:
-    return Enum('XK', {k: float(config[k]) for k in get_keys()})
 
 
 def sort_dict_keys(d):
@@ -166,6 +162,9 @@ class Bot:
 
         self.stop_websocket = False
 
+    async def _init(self):
+        self.xk = {k: float(self.config[k]) for k in get_keys()}
+
     def dump_log(self, data) -> None:
         if self.config['logging_level'] > 0:
             with open(self.log_filepath, 'a') as f:
@@ -198,9 +197,11 @@ class Bot:
             position, _ = await asyncio.gather(self.fetch_position(),
                                                self.update_open_orders())
             position['used_margin'] = \
-                ((calc_cost(position['long']['size'], position['long']['price'])
+                ((calc_cost(position['long']['size'], position['long']['price'],
+                            self.xk['inverse'], self.xk['contract_multiplier'])
                   if position['long']['price'] else 0.0) +
-                 (calc_cost(position['shrt']['size'], position['shrt']['price'])
+                 (calc_cost(position['shrt']['size'], position['shrt']['price'],
+                            self.xk['inverse'], self.xk['contract_multiplier'])
                   if position['shrt']['price'] else 0.0)) / self.leverage
             position['available_margin'] = (position['equity'] - position['used_margin']) * 0.9
             position['long']['liq_diff'] = calc_diff(position['long']['liquidation_price'], self.price)
@@ -300,7 +301,7 @@ class Bot:
 
         for tpl in iter_entries(balance, long_psize, long_pprice, shrt_psize, shrt_pprice,
                                 liq_price, self.ob[0], self.ob[1], self.ema, self.price,
-                                self.volatility, do_long=do_long, do_shrt=do_shrt):
+                                self.volatility, **self.xk):
             if (len(long_entry_orders) >= self.n_entry_orders and
                 len(shrt_entry_orders) >= self.n_entry_orders) or \
                     calc_diff(tpl[1], self.price) > last_price_diff_limit:
@@ -326,7 +327,8 @@ class Bot:
                                           'price': tpl[1], 'type': 'limit', 'reduce_only': False,
                                           'custom_id': tpl[4]})
 
-        for ask_qty, ask_price, _ in iter_long_closes(balance, long_psize, long_pprice, self.ob[1]):
+        for ask_qty, ask_price, _ in iter_long_closes(balance, long_psize, long_pprice, self.ob[1],
+                                                      **self.xk):
             if len(long_close_orders) >= self.n_entry_orders or \
                     calc_diff(ask_price, self.price) > last_price_diff_limit or \
                     stop_loss_close:
@@ -335,7 +337,8 @@ class Bot:
                                       'price': float(ask_price), 'type': 'limit',
                                       'reduce_only': True, 'custom_id': 'close'})
 
-        for bid_qty, bid_price, _ in iter_shrt_closes(balance, shrt_psize, shrt_pprice, self.ob[0]):
+        for bid_qty, bid_price, _ in iter_shrt_closes(balance, shrt_psize, shrt_pprice, self.ob[0],
+                                                      **self.xk):
             if len(shrt_close_orders) >= self.n_entry_orders or \
                     calc_diff(bid_price, self.price) > last_price_diff_limit or \
                     stop_loss_close:
