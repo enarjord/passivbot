@@ -226,11 +226,6 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, bool, tu
                                              'long_pprice': bid[3], 'shrt_psize': shrt_psize,
                                              'shrt_pprice': shrt_pprice})
                                 prev_long_entry_ts = tick[2]
-                            liq_price = calc_liq_price(balance, long_psize, long_pprice,
-                                                       shrt_psize, shrt_pprice, xk['inverse'],
-                                                       xk['contract_multiplier'])
-                            liq_diff = calc_diff(liq_price, tick[0])
-                            fill.update({'liq_price': liq_price, 'liq_diff': liq_diff})
                             fills.append(fill)
                         else:
                             break
@@ -275,6 +270,7 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, bool, tu
                                              'long_pprice': long_pprice, 'shrt_psize': shrt_psize,
                                              'shrt_pprice': shrt_pprice})
                                 prev_shrt_entry_ts = tick[2]
+                            liq_diff = calc_diff(liq_price, tick[0])
                             fill.update({'liq_price': liq_price, 'liq_diff': liq_diff})
                             fills.append(fill)
                         else:
@@ -328,10 +324,13 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, bool, tu
                                        xk['contract_multiplier'])
                 upnl_s = calc_shrt_pnl(shrt_pprice, tick[0], shrt_psize, xk['inverse'],
                                        xk['contract_multiplier'])
-                fill['liq_price'] = calc_liq_price(balance, long_psize, long_pprice, shrt_psize,
-                                                   shrt_pprice, xk['inverse'],
-                                                   xk['contract_multiplier'])
-                fill['liq_diff'] = calc_diff(fill['liq_price'], tick[0])
+
+                liq_price = calc_liq_price(balance, long_psize, long_pprice,
+                                           shrt_psize, shrt_pprice, xk['inverse'],
+                                           xk['contract_multiplier'])
+                liq_diff = calc_diff(liq_price, tick[0])
+                fill.update({'liq_price': liq_price, 'liq_diff': liq_diff})
+
                 fill['equity'] = balance + upnl_l + upnl_s
                 fill['pnl_plus_fees_cumsum'] = pnl_plus_fees_cumsum
                 fill['loss_cumsum'] = loss_cumsum
