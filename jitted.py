@@ -19,59 +19,96 @@ else:
 
 @njit
 def round_up(n, step, safety_rounding=10) -> float:
-  return np.round(np.ceil(n / step) * step, safety_rounding)
+    return np.round(np.ceil(n / step) * step, safety_rounding)
 
 
 @njit
 def round_dn(n, step, safety_rounding=10) -> float:
-  return np.round(np.floor(n / step) * step, safety_rounding)
+    return np.round(np.floor(n / step) * step, safety_rounding)
 
 
 @njit
 def round_(n, step, safety_rounding=10) -> float:
-  return np.round(np.round(n / step) * step, safety_rounding)
+    return np.round(np.round(n / step) * step, safety_rounding)
 
 
 @njit
 def calc_diff(x, y):
-  return abs(x - y) / abs(y)
+    return abs(x - y) / abs(y)
 
 
 @njit
 def nan_to_0(x) -> float:
-  return x if x == x else 0.0
+    return x if x == x else 0.0
 
 
 @njit
 def calc_ema(alpha, alpha_, prev_ema, new_val) -> float:
-  return prev_ema * alpha_ + new_val * alpha
+    return prev_ema * alpha_ + new_val * alpha
 
 
 @njit
 def calc_emas(xs: [float], span: int) -> np.ndarray:
-  alpha = 2 / (span + 1)
-  alpha_ = 1 - alpha
-  emas = np.empty_like(xs)
-  emas[0] = xs[0]
-  for i in range(1, len(xs)):
-      emas[i] = emas[i - 1] * alpha_ + xs[i] * alpha
-  return emas
+    alpha = 2 / (span + 1)
+    alpha_ = 1 - alpha
+    emas = np.empty_like(xs)
+    emas[0] = xs[0]
+    for i in range(1, len(xs)):
+        emas[i] = emas[i - 1] * alpha_ + xs[i] * alpha
+    return emas
 
 
 @njit
 def calc_stds(xs: [float], span: int) -> np.ndarray:
-  stds = np.empty_like(xs)
-  stds.fill(0.0)
-  if len(stds) <= span:
-      return stds
-  xsum = xs[:span].sum()
-  xsum_sq = (xs[:span] ** 2).sum()
-  stds[span] = np.sqrt((xsum_sq / span) - (xsum / span) ** 2)
-  for i in range(span, len(xs)):
-      xsum += xs[i] - xs[i - span]
-      xsum_sq += xs[i] ** 2 - xs[i - span] ** 2
-      stds[i] = np.sqrt((xsum_sq / span) - (xsum / span) ** 2)
-  return stds
+    stds = np.empty_like(xs)
+    stds.fill(0.0)
+    if len(stds) <= span:
+        return stds
+    xsum = xs[:span].sum()
+    xsum_sq = (xs[:span] ** 2).sum()
+    stds[span] = np.sqrt((xsum_sq / span) - (xsum / span) ** 2)
+    for i in range(span, len(xs)):
+        xsum += xs[i] - xs[i - span]
+        xsum_sq += xs[i] ** 2 - xs[i - span] ** 2
+        stds[i] = np.sqrt((xsum_sq / span) - (xsum / span) ** 2)
+    return stds
+
+
+@njit
+def iter_indicator_chunks(xs: [float], span: int, chunk_size: 65536):
+    pass
+
+    '''
+
+    if len(xs) < span:
+        return
+
+    alpha = 2 / (span + 1)
+    alpha_ = 1 - alpha
+
+    prev_chunk_last_ema = xs[0]
+    for i in range(1, span):
+        prev_chunk_last_ema = prev_chunk_last_ema * alpha_ + xs[i] * alpha
+
+    xsum = xs[:span].sum()
+    xsum_sq = (xs[:span] ** 2).sum()
+
+    k = 0
+    while True:
+        xs_chunk = xs[span + chunk_size * k:span + chunk_size * (k + 1)]
+        emas = np.empty(len(xs_chunk))
+        emas[0] = prev_chunk_last_ema * alpha_ + xs_chunk[0] * alpha
+
+        stds = np.empty(len(xs_chunk))
+        stds[0] = np.sqrt((xsum_sq / span) - (xsum / span) ** 2)
+        for i in range(1, len(xs_chunk)):
+            emas[i] = emas[i - 1] * alpha_ + xs_chunk[i] * alpha
+
+            xsum += xs_chunk[i] - xs_chunk[i - span]
+            xsum_sq += xs_chunk[i] ** 2 - xs_chunk[i - span] ** 2
+            stds[0] = np.sqrt((xsum_sq / span) - (xsum / span) ** 2)
+    '''
+
 
 
 @njit
@@ -208,8 +245,12 @@ def iter_entries(
             long_psize, long_pprice = stop_loss_order[2:4]
         elif 'shrt' in stop_loss_order[4]:
             shrt_psize, shrt_pprice = stop_loss_order[2:4]
-        available_margin -= calc_margin_cost(stop_loss_order[0], stop_loss_order[1], inverse,
-                                             contract_multiplier, leverage)
+        if 'entry' in stop_loss_order[4]:
+            available_margin -= calc_margin_cost(stop_loss_order[0], stop_loss_order[1], inverse,
+                                                 contract_multiplier, leverage)
+        elif 'close' in stop_loss_order[4]:
+            available_margin += calc_margin_cost(stop_loss_order[0], stop_loss_order[1], inverse,
+                                                 contract_multiplier, leverage)
     while True:
         if do_long:
             if long_psize == 0.0:
