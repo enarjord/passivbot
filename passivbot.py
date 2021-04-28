@@ -489,10 +489,10 @@ class Bot:
         return drop_consecutive_same_prices(sorted(ticks + new_ticks, key=lambda x: x['trade_id']))
 
     async def init_indicators(self):
-        ticks = self.fetch_compressed_ticks()
-        ema = compressed_ticks[0]['price']
+        ticks = await self.fetch_compressed_ticks()
+        ema = ticks[0]['price']
         self.tick_prices_deque = deque(maxlen=self.ema_span)
-        for tick in compressed_ticks:
+        for tick in ticks:
             self.tick_prices_deque.append(tick['price'])
             ema = ema * self.ema_alpha_ + tick['price'] * self.ema_alpha
         self.ema = ema
