@@ -131,7 +131,7 @@ class Bot:
         for key in config:
             setattr(self, key, config[key])
 
-        self.ema_span = round(int(self.ema_span))
+        self.ema_span = int(round(self.ema_span))
         self.ema_alpha = 2 / (self.ema_span + 1)
         self.ema_alpha_ = 1 - self.ema_alpha
 
@@ -463,18 +463,33 @@ class Bot:
         except Exception as e:
             print('failed to fetch fills', e)
 
+    async def fetch_compressed_ticks(self):
+
+        def drop_consecutive_same_prices(ticks_):
+            compressed_ = [ticks_[0]]
+            for i in range(1, len(ticks_)):
+                if ticks_[i]['price'] != compressed_[-1]['price']:
+                    compressed_.append(ticks_[i])
+            return compressed_
+
+        ticks = drop_consecutive_same_prices(await self.fetch_ticks(do_print=False))
+        ticks_per_fetch = len(ticks)
+        delay_between_fetches = 0.5
+        while len(ticks) < self.ema_span + 100:
+            print(f'\rfetching ticks... {len(ticks)} of {self.ema_span} ', end= ' ')
+            sts = time()
+            new_ticks = drop_consecutive_same_prices(
+                await self.fetch_ticks(from_id=ticks[0]['trade_id'] - ticks_per_fetch,
+                                       do_print=False)
+            )
+            wait_for = max(0.0, delay_between_fetches - (time() - sts))
+            await asyncio.sleep(wait_for)
+            ticks = new_ticks + ticks
+        new_ticks = await self.fetch_ticks(do_print=False)
+        return drop_consecutive_same_prices(sorted(ticks + new_ticks, key=lambda x: x['trade_id']))
+
     async def init_indicators(self):
-        # fetch 10 tick chunks to initiate ema
-        ticks = await self.fetch_ticks(do_print=False)
-        additional_ticks = flatten(await asyncio.gather(
-            *[self.fetch_ticks(from_id=ticks[0]['trade_id'] - len(ticks) * i, do_print=False)
-              for i in range(1, self.ema_span // 1000 + 5)]
-        ))
-        ticks = sorted(ticks + additional_ticks, key=lambda x: x['trade_id'])
-        compressed_ticks = [ticks[0]]
-        for i in range(1, len(ticks)):
-            if ticks[i]['price'] != compressed_ticks[-1]['price']:
-                compressed_ticks.append(ticks[i])
+        ticks = self.fetch_compressed_ticks()
         ema = compressed_ticks[0]['price']
         self.tick_prices_deque = deque(maxlen=self.ema_span)
         for tick in compressed_ticks:
