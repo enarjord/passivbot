@@ -60,8 +60,7 @@ def calc_emas(xs: [float], span: int) -> np.ndarray:
 
 @njit
 def calc_stds(xs: [float], span: int) -> np.ndarray:
-    stds = np.empty_like(xs)
-    stds.fill(0.0)
+    stds = np.zeros_like(xs)
     if len(stds) <= span:
         return stds
     xsum = xs[:span].sum()
@@ -75,40 +74,49 @@ def calc_stds(xs: [float], span: int) -> np.ndarray:
 
 
 @njit
-def iter_indicator_chunks(xs: [float], span: int, chunk_size: 65536):
-    pass
+def iter_indicator_chunks(xs: [float], span: int, chunk_size: int = 65536):
 
-    '''
 
     if len(xs) < span:
         return
 
+    chunk_size = max(chunk_size, span)
+
+    n_chunks = int(round_up((len(xs) - span) / chunk_size, 1.0))
+
     alpha = 2 / (span + 1)
     alpha_ = 1 - alpha
 
-    prev_chunk_last_ema = xs[0]
-    for i in range(1, span):
-        prev_chunk_last_ema = prev_chunk_last_ema * alpha_ + xs[i] * alpha
+    emas = np.zeros(chunk_size)
+    emas[0] = xs[0]
+    for i in range(1, chunk_size):
+        emas[i] = emas[i - 1] * alpha_ + xs[i] * alpha
+
+    stds = np.zeros(chunk_size)
 
     xsum = xs[:span].sum()
     xsum_sq = (xs[:span] ** 2).sum()
+    for i in range(span, chunk_size):
+        xsum += xs[i] - xs[i - span]
+        xsum_sq += xs[i] ** 2 - xs[i - span] ** 2
+        stds[i] = np.sqrt((xsum_sq / span) - (xsum / span) ** 2)
+    yield emas, stds, 0
 
-    k = 0
-    while True:
-        xs_chunk = xs[span + chunk_size * k:span + chunk_size * (k + 1)]
-        emas = np.empty(len(xs_chunk))
-        emas[0] = prev_chunk_last_ema * alpha_ + xs_chunk[0] * alpha
-
-        stds = np.empty(len(xs_chunk))
-        stds[0] = np.sqrt((xsum_sq / span) - (xsum / span) ** 2)
-        for i in range(1, len(xs_chunk)):
-            emas[i] = emas[i - 1] * alpha_ + xs_chunk[i] * alpha
-
-            xsum += xs_chunk[i] - xs_chunk[i - span]
-            xsum_sq += xs_chunk[i] ** 2 - xs_chunk[i - span] ** 2
-            stds[0] = np.sqrt((xsum_sq / span) - (xsum / span) ** 2)
-    '''
-
+    for k in range(1, n_chunks):
+        kc = chunk_size * k
+        new_emas = np.zeros(chunk_size)
+        new_stds = np.zeros(chunk_size)
+        new_emas[0] = emas[-1] * alpha_ + xs[kc] * alpha
+        xsum += xs[kc] - xs[kc - span]
+        xsum_sq += xs[kc] ** 2 - xs[kc - span] ** 2
+        new_stds[0] = np.sqrt((xsum_sq / span) - (xsum / span) ** 2)
+        for i in range(1, chunk_size):
+            new_emas[i] = new_emas[i - 1] * alpha_ + xs[kc + i] * alpha
+            xsum += xs[kc + i] - xs[kc + i - span]
+            xsum_sq += xs[kc + i] ** 2 - xs[kc + i - span] ** 2
+            new_stds[i] = np.sqrt((xsum_sq / span) - (xsum / span) ** 2)
+        yield new_emas, new_stds, k
+        emas, stds = new_emas, new_stds
 
 
 @njit
