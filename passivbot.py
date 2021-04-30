@@ -1521,7 +1521,7 @@ async def main() -> None:
     print('using config')
     print(json.dumps(config, indent=4))
 
-    if 'telegram' in config and config['telegram']:
+    if 'telegram' in config:
         await _start_telegram(account=account, bot=bot)
     await start_bot(bot)
 
