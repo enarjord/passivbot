@@ -25,10 +25,12 @@ from reporter import LogReporter
 os.environ['TUNE_GLOBAL_CHECKPOINT_S'] = '120'
 
 
-def objective_function(result: dict, liq_cap: float, n_daily_entries_cap: int) -> float:
+def objective_function(result: dict,
+                       liq_cap: float,
+                       max_hours_between_fills_cap: int) -> float:
     try:
-        return (result['average_daily_gain'] *
-                min(1.0, (result['n_entries'] / result['n_days']) / n_daily_entries_cap) *
+        return (result['average_daily_gain'] /
+                max(1.0, result['max_n_hours_between_fills'] / max_hours_between_fills_cap) *
                 min(1.0, result['closest_liq'] / liq_cap))
     except Exception as e:
         print('error with objective function', e, result)
@@ -69,7 +71,9 @@ def clean_result_config(config: dict) -> dict:
 def wrap_backtest(config, ticks):
     fills, did_finish = backtest(config, ticks)
     result = prepare_result(fills, ticks, config['do_long'], config['do_shrt'])
-    objective = objective_function(result, config['minimum_liquidation_distance'], config['minimum_daily_entries'])
+    objective = objective_function(result,
+                                   config['minimum_liquidation_distance'],
+                                   config['max_n_hours_between_fills'])
     tune.report(objective=objective, daily_gain=result['average_daily_gain'], closest_liquidation=result['closest_liq'])
 
 
