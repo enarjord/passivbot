@@ -18,9 +18,9 @@
   minimum_liquidation_distance: 0.21
   max_n_hours_between_fills: 72
 
-  start_date: 2021-03-01T21:30
-  # set end_date=-1 to use now as end date
-  end_date: 2020-01-01T00:00
+  start_date: 2020-01-01T00:00
+  end_date: 2021-04-20T04:20
+  # set end_date: -1 to use now as end date
 
   # If start and stop are set to same value, it's treated as a fixed variable.
   ranges:
