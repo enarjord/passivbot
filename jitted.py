@@ -82,7 +82,7 @@ def iter_indicator_chunks(xs: [float], span: int, chunk_size: int = 65536):
 
     chunk_size = max(chunk_size, span)
 
-    n_chunks = int(round_up((len(xs) - span) / chunk_size, 1.0))
+    n_chunks = int(round_up(len(xs) / chunk_size, 1.0))
 
     alpha = 2 / (span + 1)
     alpha_ = 1 - alpha
