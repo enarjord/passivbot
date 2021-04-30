@@ -489,7 +489,7 @@ def calc_liq_price_binance(balance,
                            long_pprice,
                            shrt_psize,
                            shrt_pprice,
-                           inverse, contract_multiplier):
+                           inverse, contract_multiplier, leverage):
     abs_long_psize = abs(long_psize)
     abs_shrt_psize = abs(shrt_psize)
     long_pprice = nan_to_0(long_pprice)
@@ -521,7 +521,7 @@ def calc_liq_price_bybit(balance,
                          long_pprice,
                          shrt_psize,
                          shrt_pprice,
-                         inverse, contract_multiplier):
+                         inverse, contract_multiplier, leverage):
     mm = 0.005
     abs_shrt_psize = abs(shrt_psize)
     if inverse:
