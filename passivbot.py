@@ -475,6 +475,7 @@ class Bot:
         ticks = drop_consecutive_same_prices(await self.fetch_ticks(do_print=False))
         ticks_per_fetch = len(ticks)
         delay_between_fetches = 0.5
+        print()
         while len(ticks) < self.ema_span + 100:
             print(f'\rfetching ticks... {len(ticks)} of {self.ema_span} ', end= ' ')
             sts = time()
