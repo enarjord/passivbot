@@ -341,7 +341,7 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, bool):
 
                 liq_price = calc_liq_price(balance, long_psize, long_pprice,
                                            shrt_psize, shrt_pprice, xk['inverse'],
-                                           xk['contract_multiplier'], xk['leverage'])
+                                           xk['contract_multiplier'], config['max_leverage'])
                 liq_diff = calc_diff(liq_price, tick[0])
                 fill.update({'liq_price': liq_price, 'liq_diff': liq_diff})
 
