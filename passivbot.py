@@ -472,20 +472,22 @@ class Bot:
                     compressed_.append(ticks_[i])
             return compressed_
 
-        ticks = drop_consecutive_same_prices(await self.fetch_ticks(do_print=False))
-        ticks_per_fetch = len(ticks)
+        ticks_unabridged = await self.fetch_ticks(do_print=False)
+        ticks_per_fetch = len(ticks_unabridged)
+        ticks = drop_consecutive_same_prices(ticks_unabridged)
         delay_between_fetches = 0.5
         print()
-        while len(ticks) < self.ema_span + 100:
+        while True:
             print(f'\rfetching ticks... {len(ticks)} of {self.ema_span} ', end= ' ')
             sts = time()
-            new_ticks = drop_consecutive_same_prices(
-                await self.fetch_ticks(from_id=ticks[0]['trade_id'] - ticks_per_fetch,
-                                       do_print=False)
-            )
+            new_ticks = await self.fetch_ticks(from_id=ticks[0]['trade_id'] - ticks_per_fetch,
+                                               do_print=False)
             wait_for = max(0.0, delay_between_fetches - (time() - sts))
+            ticks = drop_consecutive_same_prices(sorted(new_ticks + ticks,
+                                                        key=lambda x: x['trade_id']))
+            if len(ticks) > self.ema_span:
+                break
             await asyncio.sleep(wait_for)
-            ticks = new_ticks + ticks
         new_ticks = await self.fetch_ticks(do_print=False)
         return drop_consecutive_same_prices(sorted(ticks + new_ticks, key=lambda x: x['trade_id']))
 
@@ -502,6 +504,8 @@ class Bot:
         self.price_std = np.sqrt((self.sum_prices_squared / len(self.tick_prices_deque) -
                                  ((self.sum_prices / len(self.tick_prices_deque)) ** 2)))
         self.volatility = self.price_std / self.ema
+        print('debug len ticks, prices deque, ema_span')
+        print(len(ticks), len(self.tick_prices_deque), self.ema_span)
 
     def update_indicators(self, ticks: dict):
         for tick in ticks:
