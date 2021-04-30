@@ -12,7 +12,7 @@ import pandas as pd
 from downloader import Downloader, prep_backtest_config
 from jitted import calc_diff, calc_emas, calc_stds, round_, iter_entries, iter_long_closes, \
     iter_shrt_closes, calc_available_margin, calc_liq_price_binance, calc_liq_price_bybit, \
-    calc_new_psize_pprice, calc_long_pnl, calc_shrt_pnl, calc_cost
+    calc_new_psize_pprice, calc_long_pnl, calc_shrt_pnl, calc_cost, iter_indicator_chunks
 from passivbot import make_get_filepath, ts_to_date, get_keys
 
 
@@ -134,7 +134,7 @@ def plot_fills(df, fdf, side_: int = 0, liq_thr=0.1):
     return plt
 
 
-def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, bool, tuple):
+def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, bool):
     long_psize, long_pprice = 0.0, 0.0
     shrt_psize, shrt_pprice = 0.0, 0.0
     liq_price, liq_diff = 0.0, 1.0
@@ -171,14 +171,28 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, bool, tu
     bids, asks = [], []
     ob = [min(ticks[0][0], ticks[1][0]), max(ticks[0][0], ticks[1][0])]
     ema_span = int(round(config['ema_span']))
-    emas = calc_emas(ticks[:, 0], ema_span)
-    price_stds = calc_stds(ticks[:, 0], ema_span)
-    volatilities = price_stds / emas
+    # emas = calc_emas(ticks[:, 0], ema_span)
+    # price_stds = calc_stds(ticks[:, 0], ema_span)
+    # volatilities = price_stds / emas
+
+    ema_std_iterator = iter_indicator_chunks(ticks[:, 0], ema_span)
+    ema_chunk, std_chunk, z = next(ema_std_iterator)
+    volatility_chunk = std_chunk / ema_chunk    
+    zc = 0
+
     prev_update_plus_delay = ticks[ema_span][2] + latency_simulation_ms
     update_triggered = False
     prev_update_plus_5sec = 0
     # tick tuple: (price, buyer_maker, timestamp)
     for k, tick in enumerate(ticks[ema_span:], start=ema_span):
+
+        chunk_i = k - zc
+        if chunk_i >= len(ema_chunk):
+            ema_chunk, std_chunk, z = next(ema_std_iterator)
+            volatility_chunk = std_chunk / ema_chunk
+            zc = z * len(ema_chunk)
+            chunk_i = k - zc
+
 
         # Update the stats every hour
         if tick[2] > next_stats_update:
@@ -284,8 +298,8 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, bool, tu
             bids, asks = [], []
             liq_diff = calc_diff(liq_price, tick[0])
             for tpl in iter_entries(balance, long_psize, long_pprice, shrt_psize, shrt_pprice,
-                                    liq_price, ob[0], ob[1], emas[k], tick[0], volatilities[k],
-                                    **xk):
+                                    liq_price, ob[0], ob[1], ema_chunk[k - zc], tick[0],
+                                    volatility_chunk[k - zc], **xk):
                 if len(bids) > 2 and len(asks) > 2:
                     break
                 if tpl[0] > 0.0:
@@ -525,6 +539,7 @@ def prepare_result(fills: list, ticks: np.ndarray, do_long: bool, do_shrt: bool)
             'n_stop_loss_entries': 0,
             'biggest_psize': 0,
             'max_n_hours_stuck': 0,
+            'max_n_hours_between_fills': 0,
             'do_long': do_long,
             'do_shrt': do_shrt
         }
@@ -553,6 +568,8 @@ def prepare_result(fills: list, ticks: np.ndarray, do_long: bool, do_shrt: bool)
             'biggest_psize': fdf[['long_psize', 'shrt_psize']].abs().max(axis=1).max(),
             'max_n_hours_stuck': max(fdf['hours_since_pos_change_max'].max(),
                                      (ticks[-1][2] - fills[-1]['timestamp']) / (1000 * 60 * 60)),
+            'max_n_hours_between_fills': np.diff([ticks[0][2]] + list(fdf.timestamp) +
+                                                 [ticks[-1][2]]).max() / (1000 * 60 * 60),
             'do_long': do_long,
             'do_shrt': do_shrt
         }
