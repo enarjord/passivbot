@@ -1,0 +1,19 @@
+{
+    "config_name": "xmr_default_2021-04-22",
+    "logging_level": 0,
+    "ddown_factor": 1.11265,
+    "qty_pct": 0.0402884,
+    "leverage": 4,
+    "n_entry_orders": 8,
+    "n_close_orders": 16,
+    "grid_spacing": 0.00996078,
+    "grid_coefficient": 9.99404,
+    "min_markup": 0.0066674,
+    "markup_range": 0.00412748,
+    "do_long": true,
+    "do_shrt": true,
+    "ema_span": 59662,
+    "ema_spread": 0.00722579,
+    "stop_loss_liq_diff": 0.199888,
+    "stop_loss_pos_pct": 0.05
+}
