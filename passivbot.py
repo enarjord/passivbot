@@ -5,7 +5,10 @@ import os
 import sys
 from time import time
 
+import git
 import numpy as np
+
+import telegram_bot
 
 if '--nojit' in sys.argv:
     print('not using numba')
@@ -1478,6 +1481,19 @@ async def create_bybit_bot(user: str, settings: str):
     return bot
 
 
+async def _start_telegram(account: dict, bot: Bot):
+    try:
+        telegram = telegram_bot.Telegram(token=account['telegram']['token'],
+                                         chat_id=account['telegram']['chat_id'], bot=bot)
+        msg = f'<b>Passivbot started</b>'
+        telegram.send_msg(msg=msg)
+
+        telegram.show_config()
+        return telegram
+    except Exception as e:
+        print(e, 'failed to initialize telegram')
+        return
+
 async def main() -> None:
     try:
         accounts = json.load(open('api-keys.json'))
@@ -1504,6 +1520,9 @@ async def main() -> None:
         raise Exception('unknown exchange', account['exchange'])
     print('using config')
     print(json.dumps(config, indent=4))
+
+    if config['telegram']:
+        await _start_telegram(account=account, bot=bot)
     await start_bot(bot)
 
 
