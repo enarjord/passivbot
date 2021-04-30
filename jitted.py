@@ -171,6 +171,8 @@ def calc_new_psize_pprice(psize, pprice, qty, price, qty_step) -> (float, float)
 @njit
 def calc_long_pnl(entry_price, close_price, qty, inverse, contract_multiplier) -> float:
     if inverse:
+        if entry_price == 0.0 or close_price == 0.0:
+            return 0.0
         return abs(qty) * contract_multiplier * (1 / entry_price - 1 / close_price)
     else:
         return abs(qty) * (close_price - entry_price)
@@ -179,6 +181,8 @@ def calc_long_pnl(entry_price, close_price, qty, inverse, contract_multiplier) -
 @njit
 def calc_shrt_pnl(entry_price, close_price, qty, inverse, contract_multiplier) -> float:
     if inverse:
+        if entry_price == 0.0 or close_price == 0.0:
+            return 0.0
         return abs(qty) * contract_multiplier * (1 / close_price - 1 / entry_price)
     else:
         return abs(qty) * (entry_price - close_price)
