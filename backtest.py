@@ -480,17 +480,14 @@ def prepare_result_sampled(stats: list) -> dict:
 def candidate_to_live_config(candidate: dict) -> dict:
     live_config = {}
     for k in ["config_name", "logging_level", "ddown_factor", "qty_pct", "leverage",
-              "n_entry_orders", "n_close_orders", "grid_spacing", "pos_margin_grid_coeff",
+              "n_close_orders", "grid_spacing", "pos_margin_grid_coeff",
               "volatility_grid_coeff", "volatility_qty_coeff", "min_markup",
               "markup_range", "do_long", "do_shrt", "ema_span", "ema_spread", "stop_loss_liq_diff",
               "stop_loss_pos_pct", "symbol"]:
         if k in candidate:
             live_config[k] = candidate[k]
         else:
-            if k == 'n_entry_orders':
-                live_config[k] = 8
-            else:
-                live_config[k] = 0.0
+            live_config[k] = 0.0
     for k in ['do_long', 'do_shrt']:
         live_config[k] = bool(live_config[k])
     return live_config
