@@ -148,6 +148,10 @@ class Bot:
         self.ema = 0.0
         self.fills = []
 
+        self.n_open_orders_limit = 8
+        self.last_price_diff_limit = 0.15
+        self.n_orders_per_execution = 4
+
         self.hedge_mode = True
         self.contract_multiplier = self.config['contract_multiplier'] = 1.0
 
@@ -278,7 +282,6 @@ class Bot:
         self.stop_websocket = True
 
     def calc_orders(self):
-        last_price_diff_limit = 0.15
         balance = self.position['wallet_balance'] * 0.98
         long_psize = self.position['long']['size']
         long_pprice = self.position['long']['price']
@@ -302,9 +305,9 @@ class Bot:
         for tpl in iter_entries(balance, long_psize, long_pprice, shrt_psize, shrt_pprice,
                                 liq_price, self.ob[0], self.ob[1], self.ema, self.price,
                                 self.volatility, **self.xk):
-            if (len(long_entry_orders) >= self.n_entry_orders and
-                len(shrt_entry_orders) >= self.n_entry_orders) or \
-                    calc_diff(tpl[1], self.price) > last_price_diff_limit:
+            if (len(long_entry_orders) >= self.n_open_orders_limit and
+                len(shrt_entry_orders) >= self.n_open_orders_limit) or \
+                    calc_diff(tpl[1], self.price) > self.last_price_diff_limit:
                 break
             if tpl[4] == 'stop_loss_shrt_close':
                 shrt_close_orders.append({'side': 'buy', 'position_side': 'shrt', 'qty': abs(tpl[0]),
@@ -329,8 +332,8 @@ class Bot:
 
         for ask_qty, ask_price, _ in iter_long_closes(balance, long_psize, long_pprice, self.ob[1],
                                                       **self.xk):
-            if len(long_close_orders) >= self.n_entry_orders or \
-                    calc_diff(ask_price, self.price) > last_price_diff_limit or \
+            if len(long_close_orders) >= self.n_open_orders_limit or \
+                    calc_diff(ask_price, self.price) > self.last_price_diff_limit or \
                     stop_loss_close:
                 break
             long_close_orders.append({'side': 'sell', 'position_side': 'long', 'qty': abs(ask_qty),
@@ -339,8 +342,8 @@ class Bot:
 
         for bid_qty, bid_price, _ in iter_shrt_closes(balance, shrt_psize, shrt_pprice, self.ob[0],
                                                       **self.xk):
-            if len(shrt_close_orders) >= self.n_entry_orders or \
-                    calc_diff(bid_price, self.price) > last_price_diff_limit or \
+            if len(shrt_close_orders) >= self.n_open_orders_limit or \
+                    calc_diff(bid_price, self.price) > self.last_price_diff_limit or \
                     stop_loss_close:
                 break
             shrt_close_orders.append({'side': 'buy', 'position_side': 'shrt', 'qty': abs(bid_qty),
@@ -355,7 +358,6 @@ class Bot:
         if any([self.ts_locked[k_] > self.ts_released[k_]
                 for k_ in [x for x in self.ts_locked if x != 'decide']]):
             return
-        n_orders_limit = 4
         to_cancel, to_create = filter_orders(self.open_orders,
                                              self.calc_orders(),
                                              keys=['side', 'position_side', 'qty', 'price'])
@@ -363,10 +365,10 @@ class Bot:
         to_create = sorted(to_create, key=lambda x: calc_diff(x['price'], self.price))
         results = []
         if to_cancel:
-            results.append(asyncio.create_task(self.cancel_orders(to_cancel[:n_orders_limit])))
+            results.append(asyncio.create_task(self.cancel_orders(to_cancel[:self.n_orders_per_execution])))
             await asyncio.sleep(0.005)  # sleep 5 ms between sending cancellations and creations
         if to_create:
-            results.append(await self.create_orders(to_create[:n_orders_limit]))
+            results.append(await self.create_orders(to_create[:self.n_orders_per_execution]))
         await asyncio.sleep(0.005)
         await self.update_position()
         if any(results):
