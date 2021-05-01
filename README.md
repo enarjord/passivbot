@@ -2,7 +2,7 @@
   passivbot
 </h1>
 
-![passivbot Version](https://img.shields.io/badge/version-v3.4.0-blue)
+![passivbot Version](https://img.shields.io/badge/passivbot-3.5.0-blue)
 ![GitHub issues](https://img.shields.io/github/issues/enarjord/passivbot)
 
 ## Trading bot running on Bybit and Binance Futures using hedge mode when possible
@@ -40,7 +40,7 @@ In both cases liq price will be pushed away
 
 ### Requirements
 
-- Python == 3.8.x
+- Python >= 3.8
 - [requirements.txt](requirements.txt) dependencies
 
 ### Setup dependencies
@@ -101,14 +101,23 @@ claim as one's own or otherwise do whatever without permission from anybody.
 
 A backtester is included
 
-1. go to `backtest_configs/{config_name}.hjson` and adjust it
-2. run with `python3 backtest.py path_to_config.hjson`
+1. make a backtest_config.hjson file, using `backtest_configs/xmr.hjson` as template
+2. run with `python3 backtest.py {path_to_backtest_config.hjson} {path_to_live_config_to_test.json}`
 
 Will use numba's just in time compiler by default to speed up backtesting, add argument `--nojit` to disable numba:
 
-`python3 backtest.py backtest_configs/{config_name}.hjson --nojit`
+`python3 backtest.py {path_to_backtest_config.hjson} {path_to_live_config_to_test.json} --nojit`
 
-See [wiki](https://github.com/enarjord/passivbot/wiki) for more info on backtesting
+## Optimizer
+
+To optimize a configuration by iterating multiple backtests,
+
+1. make a backtest_config.hjson file, using`backtest_configs/xmr.hjson` as template
+2. run with `python3 optimize.py {path_to_backtest_config.hjson}`
+3. optionally make optimizer start from given candidate(s) by adding kwarg `--start {path_to_starting_candidate.json}`
+   if pointing to a directory, will use all .json files in that directory as starting candidates
+
+See [wiki](https://github.com/enarjord/passivbot/wiki) for more info on backtesting and optimizing
 
 ## Live settings
 
