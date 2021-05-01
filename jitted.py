@@ -527,19 +527,26 @@ def calc_liq_price_bybit(balance,
     if inverse:
         if long_psize > abs_shrt_psize:
             long_pprice = nan_to_0(long_pprice)
+            if long_pprice == 0.0:
+                return 0.0
             order_cost = long_psize / long_pprice if long_pprice > 0.0 else 0.0
             order_margin = order_cost / leverage
-            bankruptcy_price = (1.00075 * long_psize) / (order_cost + (balance - order_margin))
+            bpdenom = order_cost + (balance - order_margin)
+            bankruptcy_price = (1.00075 * long_psize) / bpdenom if bpdenom else 0.0
             if bankruptcy_price == 0.0:
                 return 0.0
             rhs = -(balance - order_margin - (long_psize / long_pprice) * mm -
                     (long_psize * 0.00075) / bankruptcy_price)
-            return max(0.0, (long_pprice * long_psize) / (long_psize - long_pprice * rhs))
+            rdenom = long_psize - long_pprice * rhs
+            return max(0.0, (long_pprice * long_psize) / rdenom if rdenom else 0.0)
         else:
             shrt_pprice = nan_to_0(shrt_pprice)
+            if shrt_pprice == 0.0:
+                return 0.0
             order_cost = abs_shrt_psize / shrt_pprice if shrt_pprice > 0.0 else 0.0
             order_margin = order_cost / leverage
-            bankruptcy_price = (0.99925 * abs_shrt_psize) / (order_cost - (balance - order_margin))
+            bpdenom = order_cost - (balance - order_margin)
+            bankruptcy_price = (0.99925 * abs_shrt_psize) / bpdenom if bpdenom else 0.0
             if bankruptcy_price == 0.0:
                 return 0.0
             rhs = -(balance - order_margin - (abs_shrt_psize / shrt_pprice) * mm -
