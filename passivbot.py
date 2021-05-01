@@ -2,6 +2,7 @@ import asyncio
 import datetime
 import json
 import os
+import signal
 import sys
 from collections import deque
 from time import time
@@ -576,7 +577,7 @@ async def _start_telegram(account: dict, bot: Bot):
     try:
         telegram = telegram_bot.Telegram(token=account['telegram']['token'],
                                          chat_id=account['telegram']['chat_id'], bot=bot)
-        msg = f'<b>Passivbot started</b>'
+        msg = f'<b>Passivbot started!</b>'
         telegram.send_msg(msg=msg)
 
         telegram.show_config()
@@ -613,7 +614,8 @@ async def main() -> None:
     print(json.dumps(config, indent=4))
 
     if 'telegram' in account:
-        await _start_telegram(account=account, bot=bot)
+        telegram = await _start_telegram(account=account, bot=bot)
+        signal.signal(signal.SIGINT, telegram.exit)
     await start_bot(bot)
 
 
