@@ -4,7 +4,6 @@
     "ddown_factor": 1.11265,
     "qty_pct": 0.0402884,
     "leverage": 4,
-    "n_entry_orders": 8,
     "n_close_orders": 16,
     "grid_spacing": 0.00996078,
     "pos_margin_grid_coeff": 9.99404,
