@@ -86,7 +86,7 @@ class Telegram:
 
         msg = f'<pre><b>Version:</b></pre> {sha_short},\n' \
               f'<pre><b>Config:</b></pre> \n' \
-              f'{json.dumps(self._bot.settings, indent=4)}'
+              f'{json.dumps(self._bot.config, indent=4)}'
         self.send_msg(msg)
 
     def send_msg(self, msg: str):
