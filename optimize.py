@@ -29,8 +29,8 @@ def objective_function(result: dict,
                        liq_cap: float,
                        max_hours_between_fills_cap: int) -> float:
     try:
-        return (result['average_daily_gain'] /
-                max(1.0, result['max_n_hours_between_fills'] / max_hours_between_fills_cap) *
+        return (result['average_daily_gain'] *
+                min(1.0, max_hours_between_fills_cap / result['max_n_hours_between_fills']) *
                 min(1.0, result['closest_liq'] / liq_cap))
     except Exception as e:
         print('error with objective function', e, result)
