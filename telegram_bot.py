@@ -1,7 +1,7 @@
 import json
 
 import git
-from prettytable import PrettyTable
+from prettytable import PrettyTable, HEADER
 from telegram import KeyboardButton, ParseMode, ReplyKeyboardMarkup
 from telegram.ext import Updater, CommandHandler
 
@@ -38,7 +38,7 @@ class Telegram:
 
     def _orders(self, update=None, context=None):
         open_orders = self._bot.open_orders
-        order_table = PrettyTable(["long/short", "buy/sell", "Price", "Quantity"])
+        order_table = PrettyTable(["l/s", "b/s", "price", "qty"])
 
         for order in open_orders:
             price = order['price']
@@ -47,24 +47,27 @@ class Telegram:
             position_side = order['position_side']
             order_table.add_row([position_side, side, price, qty])
 
-        msg = f'<pre>{order_table.get_string(sortby="Price")}</pre>'
+        table_msg = order_table.get_string(sortby="price", border=True, padding_width=1,
+                                           junction_char=' ', vertical_char=' ', hrules=HEADER)
+        msg = f'<pre>{table_msg}</pre>'
         self.send_msg(msg)
 
     def _position(self, update=None, context=None):
-        position_table = PrettyTable(
-            ["long/short", "size", "price", "leverage", "liquidation price", "upnl",
-             "liquidation difference"])
+        position_table = PrettyTable(['', 'Long', 'Short'])
         long_position = self._bot.position['long']
-        position_table.add_row(
-            ['long', long_position['size'], long_position['price'], long_position['leverage'],
-             long_position['liquidation_price'], long_position['upnl'], long_position['liq_diff']])
-
         shrt_position = self._bot.position['shrt']
-        position_table.add_row(
-            ['short', shrt_position['size'], shrt_position['price'], shrt_position['leverage'],
-             shrt_position['liquidation_price'], shrt_position['upnl'], shrt_position['liq_diff']])
 
-        self.send_msg(f'<pre>{position_table}</pre>')
+        position_table.add_row(['Size', long_position['size'], shrt_position['size']])
+        position_table.add_row(['Price', long_position['price'], shrt_position['price']])
+        position_table.add_row(['Leverage', long_position['leverage'], shrt_position['leverage']])
+        position_table.add_row(
+            ['Liq.price', long_position['liquidation_price'], shrt_position['liquidation_price']])
+        position_table.add_row(['Liq.diff', long_position['liq_diff'], shrt_position['liq_diff']])
+        position_table.add_row(['UPNL', long_position['upnl'], shrt_position['upnl']])
+
+        table_msg = position_table.get_string(border=True, padding_width=1,
+                                              junction_char=' ', vertical_char=' ', hrules=HEADER)
+        self.send_msg(f'<pre>{table_msg}</pre>')
 
     def _balance(self, update=None, context=None):
         if bool(self._bot.position):
