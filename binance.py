@@ -2,31 +2,25 @@ import asyncio
 import hashlib
 import hmac
 import json
-import sys
 from time import time
 from urllib.parse import urlencode
 
 import aiohttp
 import numpy as np
-import websockets
 
-from passivbot import load_key_secret, print_, \
-    ts_to_date, flatten, Bot, start_bot, round_up, calc_min_order_qty, sort_dict_keys, \
-    iter_long_closes_linear, iter_shrt_closes_linear, iter_entries_linear, \
-    iter_long_closes_inverse, iter_shrt_closes_inverse, calc_ema, iter_entries_inverse, \
-    calc_cost_linear, calc_cost_inverse
+from passivbot import load_key_secret, print_, ts_to_date, Bot, sort_dict_keys
 
 
-async def create_bot(user: str, settings: str):
-    bot = BinanceBot(user, settings)
+async def create_bot(user: str, config: str):
+    bot = BinanceBot(user, config)
     await bot._init()
     return bot
 
 
 class BinanceBot(Bot):
-    def __init__(self, user: str, settings: dict):
+    def __init__(self, user: str, config: dict):
         self.exchange = 'binance'
-        super().__init__(user, settings)
+        super().__init__(user, config)
         self.max_pos_size_ito_usdt = 0.0
         self.max_pos_size_ito_coin = 0.0
         self.session = aiohttp.ClientSession()
@@ -69,83 +63,44 @@ class BinanceBot(Bot):
         if self.symbol.endswith('USDT'):
             print('linear perpetual')
             self.market_type = 'linear_perpetual'
+            self.inverse = self.config['inverse'] = False
             self.base_endpoint = 'https://fapi.binance.com'
-            self.endpoints = {'position': '/fapi/v2/positionRisk',
-                              'balance': '/fapi/v2/balance',
-                              'exchange_info': '/fapi/v1/exchangeInfo',
-                              'leverage_bracket': '/fapi/v1/leverageBracket',
-                              'open_orders': '/fapi/v1/openOrders',
-                              'ticker': '/fapi/v1/ticker/bookTicker',
-                              'create_order': '/fapi/v1/order',
-                              'cancel_order': '/fapi/v1/order',
-                              'ticks': '/fapi/v1/aggTrades',
-                              'margin_type': '/fapi/v1/marginType',
-                              'leverage': '/fapi/v1/leverage',
-                              'position_side': '/fapi/v1/positionSide/dual',
-                              'websocket': 'wss://fstream.binance.com'}
+            self.endpoints = {
+                'position': '/fapi/v2/positionRisk',
+                'balance': '/fapi/v2/balance',
+                'exchange_info': '/fapi/v1/exchangeInfo',
+                'leverage_bracket': '/fapi/v1/leverageBracket',
+                'open_orders': '/fapi/v1/openOrders',
+                'ticker': '/fapi/v1/ticker/bookTicker',
+                'create_order': '/fapi/v1/order',
+                'cancel_order': '/fapi/v1/order',
+                'ticks': '/fapi/v1/aggTrades',
+                'margin_type': '/fapi/v1/marginType',
+                'leverage': '/fapi/v1/leverage',
+                'position_side': '/fapi/v1/positionSide/dual',
+                'websocket': f"wss://fstream.binance.com/ws/{self.symbol.lower()}@aggTrade"
+            }
 
-            self.iter_long_closes = lambda balance, pos_size, pos_price, lowest_ask: \
-                iter_long_closes_linear(self.price_step, self.qty_step, self.min_qty, self.min_cost,
-                                        self.contract_multiplier, self.qty_pct, self.leverage,
-                                        self.min_markup, self.markup_range, self.n_close_orders,
-                                        balance, pos_size, pos_price, lowest_ask)
-
-            self.iter_shrt_closes = lambda balance, pos_size, pos_price, highest_bid: \
-                iter_shrt_closes_linear(self.price_step, self.qty_step, self.min_qty, self.min_cost,
-                                        self.contract_multiplier, self.qty_pct, self.leverage,
-                                        self.min_markup, self.markup_range, self.n_close_orders,
-                                        balance, pos_size, pos_price, highest_bid)
-
-            self.iter_entries = lambda balance, long_psize, long_pprice, shrt_psize, shrt_pprice, \
-                                       liq_price, highest_bid, lowest_ask, ema, last_price, do_long, do_shrt: \
-                iter_entries_linear(self.price_step, self.qty_step, self.min_qty, self.min_cost,
-                                    self.contract_multiplier, self.ddown_factor, self.qty_pct,
-                                    self.leverage, self.grid_spacing, self.grid_coefficient,
-                                    self.ema_spread, self.stop_loss_liq_diff, self.stop_loss_pos_pct,
-                                    balance, long_psize, long_pprice, shrt_psize, shrt_pprice,
-                                    liq_price, highest_bid, lowest_ask, ema, last_price, do_long, do_shrt)
-
-            self.cost_f = calc_cost_linear
         else:
             print('inverse coin margined')
             self.base_endpoint = 'https://dapi.binance.com'
             self.market_type = 'inverse_coin_margined'
-            self.endpoints = {'position': '/dapi/v1/positionRisk',
-                              'balance': '/dapi/v1/balance',
-                              'exchange_info': '/dapi/v1/exchangeInfo',
-                              'leverage_bracket': '/dapi/v1/leverageBracket',
-                              'open_orders': '/dapi/v1/openOrders',
-                              'ticker': '/dapi/v1/ticker/bookTicker',
-                              'create_order': '/dapi/v1/order',
-                              'cancel_order': '/dapi/v1/order',
-                              'ticks': '/dapi/v1/aggTrades',
-                              'margin_type': '/dapi/v1/marginType',
-                              'leverage': '/dapi/v1/leverage',
-                              'position_side': '/dapi/v1/positionSide/dual',
-                              'websocket': 'wss://dstream.binance.com'}
-
-            self.iter_long_closes = lambda balance, pos_size, pos_price, lowest_ask: \
-                iter_long_closes_inverse(self.price_step, self.qty_step, self.min_qty, self.min_cost,
-                                         self.contract_multiplier, self.qty_pct, self.leverage,
-                                         self.min_markup, self.markup_range, self.n_close_orders,
-                                         balance, pos_size, pos_price, lowest_ask)
-
-            self.iter_shrt_closes = lambda balance, pos_size, pos_price, highest_bid: \
-                iter_shrt_closes_inverse(self.price_step, self.qty_step, self.min_qty, self.min_cost,
-                                         self.contract_multiplier, self.qty_pct, self.leverage,
-                                         self.min_markup, self.markup_range, self.n_close_orders,
-                                         balance, pos_size, pos_price, highest_bid)
-
-            self.iter_entries = lambda balance, long_psize, long_pprice, shrt_psize, shrt_pprice, \
-                                       liq_price, highest_bid, lowest_ask, ema, last_price, do_long, do_shrt: \
-                iter_entries_inverse(self.price_step, self.qty_step, self.min_qty, self.min_cost,
-                                     self.contract_multiplier, self.ddown_factor, self.qty_pct,
-                                     self.leverage, self.grid_spacing, self.grid_coefficient,
-                                     self.ema_spread, self.stop_loss_liq_diff, self.stop_loss_pos_pct,
-                                     balance, long_psize, long_pprice, shrt_psize, shrt_pprice, liq_price,
-                                     highest_bid, lowest_ask, ema, last_price, do_long, do_shrt)
-
-            self.cost_f = calc_cost_inverse
+            self.inverse = self.config['inverse'] = True
+            self.endpoints = {
+                'position': '/dapi/v1/positionRisk',
+                'balance': '/dapi/v1/balance',
+                'exchange_info': '/dapi/v1/exchangeInfo',
+                'leverage_bracket': '/dapi/v1/leverageBracket',
+                'open_orders': '/dapi/v1/openOrders',
+                'ticker': '/dapi/v1/ticker/bookTicker',
+                'create_order': '/dapi/v1/order',
+                'cancel_order': '/dapi/v1/order',
+                'ticks': '/dapi/v1/aggTrades',
+                'margin_type': '/dapi/v1/marginType',
+                'leverage': '/dapi/v1/leverage',
+                'position_side': '/dapi/v1/positionSide/dual',
+                'websocket': f"wss://dstream.binance.com/ws/{self.symbol.lower()}@aggTrade"
+            }
 
     async def _init(self):
         self.init_market_type()
@@ -160,29 +115,23 @@ class BinanceBot(Bot):
                 self.margin_coin = e['marginAsset']
                 self.pair = e['pair']
                 if self.market_type == 'inverse_coin_margined':
-                    self.contract_multiplier = float(e['contractSize'])
+                    self.contract_multiplier = self.config['contract_multiplier'] = \
+                        float(e['contractSize'])
                 price_precision = e['pricePrecision']
                 qty_precision = e['quantityPrecision']
                 for q in e['filters']:
                     if q['filterType'] == 'LOT_SIZE':
-                        self.min_qty = float(q['minQty'])
+                        self.min_qty = self.config['min_qty'] = float(q['minQty'])
                     elif q['filterType'] == 'MARKET_LOT_SIZE':
-                        self.qty_step = float(q['stepSize'])
+                        self.qty_step = self.config['qty_step'] = float(q['stepSize'])
                     elif q['filterType'] == 'PRICE_FILTER':
-                        self.price_step = float(q['tickSize'])
+                        self.price_step = self.config['price_step'] = float(q['tickSize'])
                     elif q['filterType'] == 'MIN_NOTIONAL':
-                        self.min_cost = float(q['notional'])
+                        self.min_cost = self.config['min_cost'] = float(q['notional'])
                 try:
                     z = self.min_cost
                 except AttributeError:
-                    self.min_cost = 0.0
-                self.calc_min_qty = lambda price_: \
-                    max(self.min_qty, round_up(self.cost / price_, self.qty_step))
-                self.calc_min_order_qty = lambda balance_, last_price: \
-                    calc_min_order_qty(self.calc_min_qty(last_price),
-                                       self.qty_step,
-                                       (balance_ / last_price) * self.leverage,
-                                       self.qty_pct)
+                    self.min_cost = self.config['min_cost'] = 0.0
                 break
         max_lev = 10
         for e in leverage_bracket:
@@ -192,22 +141,9 @@ class BinanceBot(Bot):
                     max_lev = max(max_lev, int(br['initialLeverage']))
                 break
         self.max_leverage = max_lev
+        await super()._init()
         await self.init_order_book()
         await self.update_position()
-
-    async def init_ema(self):
-        # fetch 10 tick chunks to initiate ema
-        ticks = await self.fetch_ticks(do_print=False)
-        additional_ticks = flatten(await asyncio.gather(
-            *[self.fetch_ticks(from_id=ticks[0]['trade_id'] - len(ticks) * i, do_print=False)
-              for i in range(1, 10)]
-        ))
-        ticks = sorted(ticks + additional_ticks, key=lambda x: x['trade_id'])
-        ema = ticks[0]['price']
-        for i in range(1, len(ticks)):
-            if ticks[i]['price'] != ticks[i - 1]['price']:
-                ema = ema * self.ema_alpha_ + ticks[i]['price'] * self.ema_alpha
-        self.ema = ema
 
     async def check_if_other_positions(self, abort=True):
         positions, open_orders = await asyncio.gather(
@@ -220,14 +156,12 @@ class BinanceBot(Bot):
                 if e['symbol'] != self.symbol:
                     print('\n\nWARNING\n\n')
                     print('account has position in other symbol:', e)
-                    print('\naborting')
                     print('\n\n')
                     do_abort = True
         for e in open_orders:
             if e['symbol'] != self.symbol:
                 print('\n\nWARNING\n\n')
                 print('account has open orders in other symbol:', e)
-                print('\naborting')
                 print('\n\n')
                 do_abort = True
         if do_abort:
@@ -236,7 +170,7 @@ class BinanceBot(Bot):
         else:
             print('no positions or open orders in other symbols sharing margin wallet')
 
-    async def init_exchange_settings(self):
+    async def init_exchange_config(self):
         try:
             print(await self.private_post(self.endpoints['margin_type'],
                                           {'symbol': self.symbol, 'marginType': 'CROSSED'}))
@@ -265,7 +199,7 @@ class BinanceBot(Bot):
                 print('unable to set hedge mode, aborting')
                 raise Exception('failed to set hedge mode')
         await self.check_if_other_positions()
-        await self.init_ema()
+        await self.init_indicators()
 
     async def init_order_book(self):
         ticker = await self.public_get(self.endpoints['ticker'], {'symbol': self.symbol})
@@ -361,7 +295,7 @@ class BinanceBot(Bot):
         try:
             fetched = await self.private_get(self.endpoints['ticks'], params)
         except Exception as e:
-            print('error fetching ticks', e)
+            print('error fetching ticks a', e)
             return []
         try:
             ticks = [{'trade_id': int(t['a']), 'price': float(t['p']), 'qty': float(t['q']),
@@ -371,7 +305,7 @@ class BinanceBot(Bot):
                 print_(['fetched trades', self.symbol, ticks[0]['trade_id'],
                         ts_to_date(float(ticks[0]['timestamp']) / 1000)])
         except Exception as e:
-            print(e)
+            print('errer fetching ticks b', e, fetched)
             ticks = []
             if do_print:
                 print_(['fetched no new ticks', self.symbol])
@@ -386,33 +320,14 @@ class BinanceBot(Bot):
         elif self.market_type == 'inverse_coin_margined':
             return min((balance * price) * self.leverage, self.max_pos_size_ito_coin * price) * 0.92
 
-    async def start_websocket(self) -> None:
-        self.stop_websocket = False
-        uri = f"{self.endpoints['websocket']}/ws/{self.symbol.lower()}@aggTrade"
-        print_([uri])
-        await self.update_position()
-        await self.init_exchange_settings()
-        k = 1
-        async with websockets.connect(uri) as ws:
-            async for msg in ws:
-                if msg is None:
-                    continue
-                data = json.loads(msg)
-                price = float(data['p'])
-                trade_id = data['a']
-                if data['m']:
-                    self.ob[0] = price
-                else:
-                    self.ob[1] = price
-                if price != self.price:
-                    self.ema = calc_ema(self.ema_alpha, self.ema_alpha_, self.ema, price)
-                self.price = price
-                if self.ts_locked['decide'] < self.ts_released['decide']:
-                    asyncio.create_task(self.decide())
-                if k % 10 == 0:
-                    self.flush_stuck_locks()
-                    k = 1
-                if self.stop_websocket:
-                    break
-                k += 1
+    def standardize_websocket_ticks(self, data: dict) -> [dict]:
+        try:
+            ticks = [{'price': float(data['p']), 'is_buyer_maker': data['m']}]
+            if ticks[0]['price'] != self.price:
+                return ticks
+        except Exception as e:
+            print('errer in websocket tick', e)
+        return []
 
+    async def subscribe_ws(self, ws):
+        pass

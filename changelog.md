@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v3.5.0] - 2021-04-14
+- added volatility indicator
+- split extract optimize.py from backtest.py
+- now `python3 backtest.py backtest_config.hjson live_config.json` will backtest and plot single candidate
+- `python3 optimize.py backtest_config.hjson` will optimize
+- refactoring of all @njit calcs, separating them into jitted.py
+
 ## [v3.4.0] - 2021-04-14
 - added binance USDT-margined backtester with stoploss
 - added binance COIN-margined backtester with stoploss

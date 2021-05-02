@@ -1,7 +1,7 @@
 {
   session_name: session_001
   exchange: binance
-  user: user_name
+  user: account_name
   symbol: XMRUSDT
   latency_simulation_ms: 750
   starting_balance: 30.0
@@ -15,26 +15,28 @@
   options: {"c1": 1.4962, "c2": 1.4962, "w": 0.7298}
   n_particles: 24
 
-  minimum_liquidation_distance: 0.3
-  minimum_daily_entries: 10
+  minimum_liquidation_distance: 0.21
+  max_n_hours_between_fills: 72
 
-  start_date: 2021-03-01T21:30
-  # set end_date=-1 to use now as end date
-  end_date: -1
+  start_date: 2020-01-01T00:00
+  end_date: 2021-04-20T04:20
+  # set end_date: -1 to use now as end date
 
   # If start and stop are set to same value, it's treated as a fixed variable.
   ranges:
   {
-    leverage: [1, 125]
+    leverage: [1, 10]
     n_close_orders: [8, 20]
     qty_pct: [0.0, 0.5]
-    ddown_factor: [0, 3.5]
-    grid_coefficient: [0, 400]
+    ddown_factor: [0.0, 3.5]
+    pos_margin_grid_coeff: [0.0, 400.0]
+    volatility_grid_coeff: [0.0, 2000.0]
+    volatility_qty_coeff: [-2000.0, 2000.0]
     grid_spacing: [0.0002, 0.02]
     markup_range: [0.0, 0.02]
     min_markup: [0.0005, 0.012]
-    ema_span: [1.0, 200000.0]
-    ema_spread: [0.0, 0.012]
+    ema_span: [1.0, 250000.0]
+    ema_spread: [0.0, 0.02]
     stop_loss_liq_diff: [0.05, 0.9]
     stop_loss_pos_pct: [0.01, 0.1]
   }
