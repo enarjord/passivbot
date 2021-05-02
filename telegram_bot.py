@@ -35,7 +35,7 @@ class Telegram:
               '/graceful_stop: instructs the bot to no longer open new positions and exit gracefully\n' \
               '/position: information about the current position(s)\n' \
               '/show_config: the active configuration used\n' \
-              '/reload_config: reload thee configuration from disk, based on the file initially used\n' \
+              '/reload_config: reload the configuration from disk, based on the file initially used\n' \
               '/help: This help page\n'
         self.send_msg(msg)
 
