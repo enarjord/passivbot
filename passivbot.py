@@ -538,6 +538,7 @@ class Bot:
         print_([self.endpoints['websocket']])
         await self.update_position()
         await self.init_exchange_config()
+        await self.init_indicators()
         k = 1
         async with websockets.connect(self.endpoints['websocket']) as ws:
             await self.subscribe_ws(ws)
