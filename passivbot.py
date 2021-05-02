@@ -2,12 +2,15 @@ import asyncio
 import datetime
 import json
 import os
+import signal
 import sys
 from collections import deque
 from time import time
 from enum import Enum
 
 import numpy as np
+
+import telegram_bot
 import websockets
 
 from jitted import round_, calc_diff, calc_ema, calc_cost, iter_entries, iter_long_closes, \
@@ -572,6 +575,19 @@ async def create_bybit_bot(user: str, config: str):
     return bot
 
 
+async def _start_telegram(account: dict, bot: Bot):
+    try:
+        telegram = telegram_bot.Telegram(token=account['telegram']['token'],
+                                         chat_id=account['telegram']['chat_id'], bot=bot)
+        msg = f'<b>Passivbot started!</b>'
+        telegram.send_msg(msg=msg)
+
+        telegram.show_config()
+        return telegram
+    except Exception as e:
+        print(e, 'failed to initialize telegram')
+        return
+
 async def main() -> None:
     try:
         accounts = json.load(open('api-keys.json'))
@@ -598,6 +614,10 @@ async def main() -> None:
         raise Exception('unknown exchange', account['exchange'])
     print('using config')
     print(json.dumps(config, indent=4))
+
+    if 'telegram' in account:
+        telegram = await _start_telegram(account=account, bot=bot)
+        signal.signal(signal.SIGINT, telegram.exit)
     await start_bot(bot)
 
 
