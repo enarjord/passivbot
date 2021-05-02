@@ -127,9 +127,10 @@ def flatten(lst: list) -> list:
 
 
 class Bot:
-    def __init__(self, user: str, config: dict):
+    def __init__(self, user: str, config: dict, telegram: telegram_bot.Telegram = None):
         self.config = config
         self.user = user
+        self.telegram = telegram
 
         for key in config:
             setattr(self, key, config[key])
@@ -168,6 +169,11 @@ class Bot:
         self.log_level = 0
 
         self.stop_websocket = False
+
+    def set_config(self, config):
+        self.config = config
+        for key in config:
+            setattr(self, key, config[key])
 
     def set_config_value(self, key, value):
         self.config[key] = value
@@ -555,6 +561,8 @@ class Bot:
                         self.flush_stuck_locks()
                         k = 1
                     if self.stop_websocket:
+                        if self.telegram is not None:
+                            self.telegram.send_msg("<pre>Bot stopped</pre>")
                         break
                     k += 1
                 except Exception as e:
@@ -584,10 +592,7 @@ async def _start_telegram(account: dict, bot: Bot):
     try:
         telegram = telegram_bot.Telegram(token=account['telegram']['token'],
                                          chat_id=account['telegram']['chat_id'], bot=bot)
-        msg = f'<b>Passivbot started!</b>'
-        telegram.send_msg(msg=msg)
-
-        telegram.show_config()
+        telegram.log_start()
         return telegram
     except Exception as e:
         print(e, 'failed to initialize telegram')

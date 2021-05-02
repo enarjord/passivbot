@@ -1,5 +1,4 @@
 import json
-import signal
 
 import git
 import sys
@@ -15,7 +14,8 @@ class Telegram:
 
         keyboard_buttons = [
             [KeyboardButton('/balance'), KeyboardButton('/orders'), KeyboardButton('/position')],
-            [KeyboardButton('/graceful_stop'), KeyboardButton('/show_config'), KeyboardButton('/help')]]
+            [KeyboardButton('/graceful_stop'), KeyboardButton('/show_config'), KeyboardButton('/help')],
+            [KeyboardButton('/reload_config')]]
         self._keyboard = ReplyKeyboardMarkup(keyboard_buttons, resize_keyboard=True)
 
         dispatcher = self._updater.dispatcher
@@ -24,6 +24,7 @@ class Telegram:
         dispatcher.add_handler(CommandHandler('position', self._position))
         dispatcher.add_handler(CommandHandler('graceful_stop', self._graceful_stop))
         dispatcher.add_handler(CommandHandler('show_config', self.show_config))
+        dispatcher.add_handler(CommandHandler('reload_config', self._reload_config))
         dispatcher.add_handler(CommandHandler('help', self._help))
         self._updater.start_polling()
 
@@ -33,7 +34,8 @@ class Telegram:
               '/orders: a list of all buy & sell orders currently open\n' \
               '/graceful_stop: instructs the bot to no longer open new positions and exit gracefully\n' \
               '/position: information about the current position(s)\n' \
-              '/show_config: the config used\n' \
+              '/show_config: the active configuration used\n' \
+              '/reload_config: reload thee configuration from disk, based on the file initially used\n' \
               '/help: This help page\n'
         self.send_msg(msg)
 
@@ -89,6 +91,20 @@ class Telegram:
 
         self.send_msg('No longer opening new long or short positions, existing positions will be closed gracefully')
 
+    def _reload_config(self, update=None, context=None):
+        self.send_msg('Reloading config...')
+
+        try:
+            config = json.load(open(sys.argv[3]))
+        except Exception:
+            self.send_msg("Failed to load config file")
+            return
+
+        self._bot.stop()
+        self._bot.set_config(config)
+        self._bot.start_websocket()
+        self._bot.log_start()
+
     def show_config(self, update=None, context=None):
         repo = git.Repo(search_parent_directories=True)
         sha = repo.head.object.hexsha
@@ -98,6 +114,10 @@ class Telegram:
               f'<pre><b>Config:</b></pre> \n' \
               f'{json.dumps(self._bot.config, indent=4)}'
         self.send_msg(msg)
+
+    def log_start(self):
+        self.send_msg('<b>Passivbot started!</b>')
+        self.show_config()
 
     def send_msg(self, msg: str):
         try:
