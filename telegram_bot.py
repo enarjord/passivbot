@@ -102,7 +102,7 @@ class Telegram:
 
         self._bot.stop()
         self._bot.set_config(config)
-        self._bot.start_websocket()
+        await self._bot.start_websocket()
         self._bot.log_start()
 
     def show_config(self, update=None, context=None):
