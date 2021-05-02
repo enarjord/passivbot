@@ -615,7 +615,7 @@ async def main() -> None:
     print('using config')
     print(json.dumps(config, indent=4))
 
-    if 'telegram' in account:
+    if 'telegram' in account and account['telegram']['enabled']:
         telegram = await _start_telegram(account=account, bot=bot)
         signal.signal(signal.SIGINT, telegram.exit)
     await start_bot(bot)
