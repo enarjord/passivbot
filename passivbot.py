@@ -309,6 +309,9 @@ class Bot:
             do_long = (no_pos and self.do_long) or long_psize != 0.0
             do_shrt = (no_pos and self.do_shrt) or shrt_psize != 0.0
 
+        self.xk['do_long'] = do_long
+        self.xk['do_shrt'] = do_shrt
+
         liq_price = self.position['long']['liquidation_price'] if long_psize > abs(shrt_psize) \
             else self.position['shrt']['liquidation_price']
 
