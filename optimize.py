@@ -18,8 +18,8 @@ from ray.tune.suggest.nevergrad import NevergradSearch
 
 from backtest import backtest, plot_wrap, prepare_result, prep_backtest_config
 from downloader import Downloader
-from passivbot import make_get_filepath, ts_to_date
 from jitted import round_
+from passivbot import make_get_filepath, ts_to_date
 from reporter import LogReporter
 
 os.environ['TUNE_GLOBAL_CHECKPOINT_S'] = '120'
@@ -69,7 +69,7 @@ def clean_result_config(config: dict) -> dict:
 
 
 def wrap_backtest(config, ticks):
-    fills, did_finish = backtest(config, ticks)
+    fills, _, did_finish = backtest(config, ticks)
     result = prepare_result(fills, ticks, config['do_long'], config['do_shrt'])
     objective = objective_function(result,
                                    config['minimum_liquidation_distance'],
