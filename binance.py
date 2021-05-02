@@ -199,7 +199,6 @@ class BinanceBot(Bot):
                 print('unable to set hedge mode, aborting')
                 raise Exception('failed to set hedge mode')
         await self.check_if_other_positions()
-        await self.init_indicators()
 
     async def init_order_book(self):
         ticker = await self.public_get(self.endpoints['ticker'], {'symbol': self.symbol})
