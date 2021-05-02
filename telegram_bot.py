@@ -15,14 +15,14 @@ class Telegram:
 
         keyboard_buttons = [
             [KeyboardButton('/balance'), KeyboardButton('/orders'), KeyboardButton('/position')],
-            [KeyboardButton('/stop_buy'), KeyboardButton('/show_config'), KeyboardButton('/help')]]
+            [KeyboardButton('/graceful_stop'), KeyboardButton('/show_config'), KeyboardButton('/help')]]
         self._keyboard = ReplyKeyboardMarkup(keyboard_buttons, resize_keyboard=True)
 
         dispatcher = self._updater.dispatcher
         dispatcher.add_handler(CommandHandler('balance', self._balance))
         dispatcher.add_handler(CommandHandler('orders', self._orders))
         dispatcher.add_handler(CommandHandler('position', self._position))
-        dispatcher.add_handler(CommandHandler('stop_buy', self._stop_buy))
+        dispatcher.add_handler(CommandHandler('graceful_stop', self._graceful_stop))
         dispatcher.add_handler(CommandHandler('show_config', self.show_config))
         dispatcher.add_handler(CommandHandler('help', self._help))
         self._updater.start_polling()
@@ -31,7 +31,7 @@ class Telegram:
         msg = '<pre><b>The following commands are available:</b></pre>\n' \
               '/balance: the equity & wallet balance in the configured account\n' \
               '/orders: a list of all buy & sell orders currently open\n' \
-              '/stop_buy: instructs the bot to no longer open new positions and exit gracefully\n' \
+              '/graceful_stop: instructs the bot to no longer open new positions and exit gracefully\n' \
               '/position: information about the current position(s)\n' \
               '/show_config: the config used\n' \
               '/help: This help page\n'
@@ -83,11 +83,11 @@ class Telegram:
             msg = 'Balance not retrieved yet, please try again later'
         self.send_msg(msg)
 
-    def _stop_buy(self, update=None, context=None):
+    def _graceful_stop(self, update=None, context=None):
         self._bot.set_config_value('do_long', False)
         self._bot.set_config_value('do_short', False)
 
-        self.send_msg('No longer buying long or short, existing positions will be closed gracefully')
+        self.send_msg('No longer opening new long or short positions, existing positions will be closed gracefully')
 
     def show_config(self, update=None, context=None):
         repo = git.Repo(search_parent_directories=True)
