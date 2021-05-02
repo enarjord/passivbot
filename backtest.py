@@ -10,9 +10,9 @@ import numpy as np
 import pandas as pd
 
 from downloader import Downloader, prep_backtest_config
-from jitted import calc_diff, calc_emas, calc_stds, round_, iter_entries, iter_long_closes, \
-    iter_shrt_closes, calc_available_margin, calc_liq_price_binance, calc_liq_price_bybit, \
-    calc_new_psize_pprice, calc_long_pnl, calc_shrt_pnl, calc_cost, iter_indicator_chunks
+from jitted import calc_diff, round_, iter_entries, iter_long_closes, iter_shrt_closes, calc_available_margin, \
+    calc_liq_price_binance, calc_liq_price_bybit, calc_new_psize_pprice, calc_long_pnl, calc_shrt_pnl, calc_cost, \
+    iter_indicator_chunks
 from passivbot import make_get_filepath, ts_to_date, get_keys
 
 
@@ -134,7 +134,7 @@ def plot_fills(df, fdf, side_: int = 0, liq_thr=0.1):
     return plt
 
 
-def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, bool):
+def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, list, bool):
     long_psize, long_pprice = 0.0, 0.0
     shrt_psize, shrt_pprice = 0.0, 0.0
     liq_price, liq_diff = 0.0, 1.0
@@ -177,7 +177,7 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, bool):
 
     ema_std_iterator = iter_indicator_chunks(ticks[:, 0], ema_span)
     ema_chunk, std_chunk, z = next(ema_std_iterator)
-    volatility_chunk = std_chunk / ema_chunk    
+    volatility_chunk = std_chunk / ema_chunk
     zc = 0
 
     prev_update_plus_delay = ticks[ema_span][2] + latency_simulation_ms
@@ -192,7 +192,6 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, bool):
             volatility_chunk = std_chunk / ema_chunk
             zc = z * len(ema_chunk)
             chunk_i = k - zc
-
 
         # Update the stats every hour
         if tick[2] > next_stats_update:
@@ -313,7 +312,7 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, bool):
                     bids.append(list(tpl) + [shrt_pprice, 'shrt_close'])
             if tick[0] >= long_pprice and long_pprice > 0.0:
                 if long_psize != long_psize:
-                    print('debug', long_pprice,long_psize)
+                    print('debug', long_pprice, long_psize)
                 for tpl in iter_long_closes(balance, long_psize, long_pprice, ob[1], **xk):
                     asks.append(list(tpl) + [long_pprice, 'long_close'])
             bids = sorted(bids, key=lambda x: x[1], reverse=True)
@@ -378,12 +377,12 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, bool):
                                                          fill['hours_since_shrt_pos_change'])
                 all_fills.append(fill)
                 if balance <= 0.0 or 'liquidation' in fill['type']:
-                    return all_fills, False
+                    return all_fills, stats, False
             if do_print:
                 line = f"\r{all_fills[-1]['progress']:.3f} "
                 line += f"adg {all_fills[-1]['average_daily_gain']:.4f} "
                 print(line, end=' ')
-    return all_fills, True
+    return all_fills, stats, True
 
 
 # TODO: Make a class Returns?
@@ -500,7 +499,7 @@ def calc_candidate_hash_key(candidate: dict, keys: [str]) -> str:
 
 def backtest_wrap(ticks: [dict], backtest_config: dict, do_print=False) -> (dict, pd.DataFrame):
     start_ts = time()
-    fills, did_finish = backtest(backtest_config, ticks, do_print=do_print)
+    fills, _, did_finish = backtest(backtest_config, ticks, do_print=do_print)
     elapsed = time() - start_ts
     if len(fills) == 0:
         return {'average_daily_gain': 0.0, 'closest_liq': 0.0, 'max_n_hours_stuck': 1000.0}, pd.DataFrame()
