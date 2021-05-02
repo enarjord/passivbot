@@ -169,6 +169,10 @@ class Bot:
 
         self.stop_websocket = False
 
+    def set_config_value(self, key, value):
+        self.config[key] = value
+        setattr(self, key, self.config[key])
+
     async def _init(self):
         self.xk = {k: float(self.config[k]) for k in get_keys()}
 
