@@ -6,7 +6,7 @@
         "telegram": {
             "enabled": false,
             "token": "bot_token",
-            "chat_id": "chat_id",
+            "chat_id": "chat_id"
         }
     },
     "binance_02" : {
