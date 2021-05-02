@@ -174,7 +174,9 @@ class Bot:
         self.config = config
         for key in config:
             setattr(self, key, config[key])
-        self.xk = {k: float(self.config[k]) for k in get_keys()}
+        for key in config:
+            if key in self.xk:
+                self.xk[key] = config[key]
 
     def set_config_value(self, key, value):
         self.config[key] = value
