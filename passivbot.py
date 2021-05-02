@@ -484,6 +484,9 @@ class Bot:
         ticks_unabridged = await self.fetch_ticks(do_print=False)
         ticks_per_fetch = len(ticks_unabridged)
         ticks = drop_consecutive_same_prices(ticks_unabridged)
+        if self.exchange == 'bybit' and self.market_type == 'linear_perpetual':
+            print('\nwarning:  bybit linear usdt symbols only allows fetching most recent 1000 ticks')
+            return ticks
         delay_between_fetches = 0.5
         print()
         while True:
@@ -507,6 +510,11 @@ class Bot:
         for tick in ticks:
             self.tick_prices_deque.append(tick['price'])
             ema = ema * self.ema_alpha_ + tick['price'] * self.ema_alpha
+        if len(self.tick_prices_deque) < self.ema_span:
+            print('\nwarning: insufficient ticks fetched, filling deque with duplicate ticks...')
+            print('ema and volatility will be inaccurate until deque is filled with websocket ticks')
+            while len(self.tick_prices_deque) < self.ema_span:
+                self.tick_prices_deque.extend([t['price'] for t in ticks])
         self.ema = ema
         self.sum_prices = sum(self.tick_prices_deque)
         self.sum_prices_squared = sum([e ** 2 for e in self.tick_prices_deque])
