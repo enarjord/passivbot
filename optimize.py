@@ -74,7 +74,8 @@ def wrap_backtest(config, ticks):
     objective = objective_function(result,
                                    config['minimum_liquidation_distance'],
                                    config['max_n_hours_between_fills'])
-    tune.report(objective=objective, daily_gain=result['average_daily_gain'], closest_liquidation=result['closest_liq'])
+    tune.report(objective=objective, daily_gain=result['average_daily_gain'], closest_liquidation=result['closest_liq'],
+                max_hours_between_fills=result['max_n_hours_between_fills'])
 
 
 def backtest_tune(ticks: np.ndarray, backtest_config: dict, current_best: Union[dict, list] = None):
@@ -123,7 +124,7 @@ def backtest_tune(ticks: np.ndarray, backtest_config: dict, current_best: Union[
                         reuse_actors=True, local_dir=session_dirpath,
                         progress_reporter=LogReporter(metric_columns=['daily_gain',
                                                                       'closest_liquidation',
-                                                                      'max_n_hours_between_fills',
+                                                                      'max_hours_between_fills',
                                                                       'objective'],
                                                       parameter_columns=[k for k in backtest_config['ranges'] if type(
                                                           config[k]) == ray.tune.sample.Float or type(
@@ -136,10 +137,9 @@ def backtest_tune(ticks: np.ndarray, backtest_config: dict, current_best: Union[
 def save_results(analysis, backtest_config):
     df = analysis.results_df
     df.reset_index(inplace=True)
-    df.drop(columns=['trial_id', 'time_this_iter_s', 'done', 'timesteps_total', 'episodes_total', 'training_iteration',
-                     'experiment_id', 'date', 'timestamp', 'time_total_s', 'pid', 'hostname', 'node_ip',
-                     'time_since_restore', 'timesteps_since_restore', 'iterations_since_restore', 'experiment_tag'],
-            inplace=True)
+    df.rename(columns={column: column.replace('config.', '') for column in df.columns}, inplace=True)
+    df = df[list(backtest_config['ranges'].keys()) + ['daily_gain', 'closest_liquidation', 'max_hours_between_fills',
+                                                      'objective']].sort_values('objective', ascending=False)
     df.to_csv(os.path.join(backtest_config['session_dirpath'], 'results.csv'), index=False)
     print('Best candidate found:')
     pprint.pprint(analysis.best_config)
