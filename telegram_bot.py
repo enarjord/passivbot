@@ -6,6 +6,7 @@ import sys
 from prettytable import PrettyTable, HEADER
 from telegram import KeyboardButton, ParseMode, ReplyKeyboardMarkup
 from telegram.ext import Updater, CommandHandler, run_async
+from time import time
 
 
 class Telegram:
@@ -14,6 +15,7 @@ class Telegram:
         self.loop = loop
         self._chat_id = chat_id
         self._updater = Updater(token=token)
+        self.config_reload_ts = 0.0
 
         keyboard_buttons = [
             [KeyboardButton('/balance'), KeyboardButton('/orders'), KeyboardButton('/position')],
@@ -95,12 +97,18 @@ class Telegram:
         self.send_msg('No longer opening new long or short positions, existing positions will be closed gracefully')
 
     def _reload_config(self, update=None, context=None):
+        if self.config_reload_ts > 0.0:
+            if time() - self.config_reload_ts < 60 * 5:
+                self.send_msg('Config reload in progress, please wait')
+                return
+        self.config_reload_ts = time()
         self.send_msg('Reloading config...')
 
         try:
             config = json.load(open(sys.argv[3]))
         except Exception:
             self.send_msg("Failed to load config file")
+            self.config_reload_ts = 0.0
             return
 
         self._bot.pause()
@@ -109,6 +117,7 @@ class Telegram:
         def init_finished(task):
             self._bot.resume()
             self.log_start()
+            self.config_reload_ts = 0.0
 
         task = self.loop.create_task(self._bot.init_indicators())
         task.add_done_callback(init_finished)
