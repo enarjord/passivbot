@@ -127,9 +127,10 @@ def flatten(lst: list) -> list:
 
 
 class Bot:
-    def __init__(self, user: str, config: dict):
+    def __init__(self, user: str, config: dict, telegram: telegram_bot.Telegram = None):
         self.config = config
         self.user = user
+        self.telegram = telegram
 
         for key in config:
             setattr(self, key, config[key])
@@ -168,6 +169,15 @@ class Bot:
         self.log_level = 0
 
         self.stop_websocket = False
+        self.process_websocket_ticks = True
+
+    def set_config(self, config):
+        config['ema_span'] = int(round(config['ema_span']))
+        self.config = config
+        for key in config:
+            setattr(self, key, config[key])
+            if key in self.xk:
+                self.xk[key] = config[key]
 
     def set_config_value(self, key, value):
         self.config[key] = value
@@ -287,6 +297,12 @@ class Bot:
 
     def stop(self) -> None:
         self.stop_websocket = True
+
+    def pause(self) -> None:
+        self.process_websocket_ticks = False
+
+    def resume(self) -> None:
+        self.process_websocket_ticks = True
 
     def calc_orders(self):
         balance = self.position['wallet_balance'] * 0.98
@@ -546,6 +562,7 @@ class Bot:
 
     async def start_websocket(self) -> None:
         self.stop_websocket = False
+        self.process_websocket_ticks = True
         print_([self.endpoints['websocket']])
         await self.update_position()
         await self.init_exchange_config()
@@ -558,16 +575,20 @@ class Bot:
                     continue
                 try:
                     ticks = self.standardize_websocket_ticks(json.loads(msg))
-                    if ticks:
-                        self.update_indicators(ticks)
-                    if self.ts_locked['decide'] < self.ts_released['decide']:
-                        asyncio.create_task(self.decide())
+                    if self.process_websocket_ticks:
+                        if ticks:
+                            self.update_indicators(ticks)
+                        if self.ts_locked['decide'] < self.ts_released['decide']:
+                            asyncio.create_task(self.decide())
                     if k % 10 == 0:
                         self.flush_stuck_locks()
                         k = 1
                     if self.stop_websocket:
+                        if self.telegram is not None:
+                            self.telegram.send_msg("<pre>Bot stopped</pre>")
                         break
                     k += 1
+
                 except Exception as e:
                     if 'success' not in msg:
                         print('error in websocket', e, msg)
@@ -592,17 +613,12 @@ async def create_bybit_bot(user: str, config: str):
 
 
 async def _start_telegram(account: dict, bot: Bot):
-    try:
-        telegram = telegram_bot.Telegram(token=account['telegram']['token'],
-                                         chat_id=account['telegram']['chat_id'], bot=bot)
-        msg = f'<b>Passivbot started!</b>'
-        telegram.send_msg(msg=msg)
-
-        telegram.show_config()
-        return telegram
-    except Exception as e:
-        print(e, 'failed to initialize telegram')
-        return
+    telegram = telegram_bot.Telegram(token=account['telegram']['token'],
+                                     chat_id=account['telegram']['chat_id'],
+                                     bot=bot,
+                                     loop=asyncio.get_event_loop())
+    telegram.log_start()
+    return telegram
 
 async def main() -> None:
     try:
