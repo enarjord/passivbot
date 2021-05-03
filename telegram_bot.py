@@ -17,8 +17,8 @@ class Telegram:
 
         keyboard_buttons = [
             [KeyboardButton('/balance'), KeyboardButton('/orders'), KeyboardButton('/position')],
-            [KeyboardButton('/graceful_stop'), KeyboardButton('/show_config'), KeyboardButton('/help')],
-            [KeyboardButton('/reload_config')]]
+            [KeyboardButton('/graceful_stop'), KeyboardButton('/show_config'), KeyboardButton('/reload_config')],
+            [KeyboardButton('/help')]]
         self._keyboard = ReplyKeyboardMarkup(keyboard_buttons, resize_keyboard=True)
 
         dispatcher = self._updater.dispatcher
