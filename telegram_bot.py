@@ -1,14 +1,17 @@
+import asyncio
 import json
 
 import git
 import sys
 from prettytable import PrettyTable, HEADER
 from telegram import KeyboardButton, ParseMode, ReplyKeyboardMarkup
-from telegram.ext import Updater, CommandHandler
+from telegram.ext import Updater, CommandHandler, run_async
+
 
 class Telegram:
-    def __init__(self, token: str, chat_id: str, bot):
+    def __init__(self, token: str, chat_id: str, bot, loop):
         self._bot = bot
+        self.loop = loop
         self._chat_id = chat_id
         self._updater = Updater(token=token)
 
@@ -91,7 +94,7 @@ class Telegram:
 
         self.send_msg('No longer opening new long or short positions, existing positions will be closed gracefully')
 
-    async def _reload_config(self, update=None, context=None):
+    def _reload_config(self, update=None, context=None):
         self.send_msg('Reloading config...')
 
         try:
@@ -102,9 +105,13 @@ class Telegram:
 
         self._bot.pause()
         self._bot.set_config(config)
-        await self._bot.init_indicators()
-        self._bot.resume()
-        self._bot.log_start()
+
+        def init_finished(task):
+            self._bot.resume()
+            self.log_start()
+
+        task = self.loop.create_task(self._bot.init_indicators())
+        task.add_done_callback(init_finished)
 
     def show_config(self, update=None, context=None):
         try:

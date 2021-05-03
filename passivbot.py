@@ -616,14 +616,12 @@ async def create_bybit_bot(user: str, config: str):
 
 
 async def _start_telegram(account: dict, bot: Bot):
-    try:
-        telegram = telegram_bot.Telegram(token=account['telegram']['token'],
-                                         chat_id=account['telegram']['chat_id'], bot=bot)
-        telegram.log_start()
-        return telegram
-    except Exception as e:
-        print(e, 'failed to initialize telegram')
-        return
+    telegram = telegram_bot.Telegram(token=account['telegram']['token'],
+                                     chat_id=account['telegram']['chat_id'],
+                                     bot=bot,
+                                     loop=asyncio.get_event_loop())
+    telegram.log_start()
+    return telegram
 
 async def main() -> None:
     try:
