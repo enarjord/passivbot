@@ -91,7 +91,7 @@ class Telegram:
 
         self.send_msg('No longer opening new long or short positions, existing positions will be closed gracefully')
 
-    def _reload_config(self, update=None, context=None):
+    async def _reload_config(self, update=None, context=None):
         self.send_msg('Reloading config...')
 
         try:
@@ -100,15 +100,19 @@ class Telegram:
             self.send_msg("Failed to load config file")
             return
 
-        self._bot.stop()
+        self._bot.pause()
         self._bot.set_config(config)
-        self._bot.start_websocket()
+        await self._bot.init_indicators()
+        self._bot.resume()
         self._bot.log_start()
 
     def show_config(self, update=None, context=None):
-        repo = git.Repo(search_parent_directories=True)
-        sha = repo.head.object.hexsha
-        sha_short = repo.git.rev_parse(sha, short=True)
+        try:
+            repo = git.Repo(search_parent_directories=True)
+            sha = repo.head.object.hexsha
+            sha_short = repo.git.rev_parse(sha, short=True)
+        except:
+            sha_short = 'UNKNOWN'
 
         msg = f'<pre><b>Version:</b></pre> {sha_short},\n' \
               f'<pre><b>Config:</b></pre> \n' \

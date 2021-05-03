@@ -169,6 +169,7 @@ class Bot:
         self.log_level = 0
 
         self.stop_websocket = False
+        self.process_websocket_ticks = True
 
     def set_config(self, config):
         self.config = config
@@ -296,6 +297,12 @@ class Bot:
 
     def stop(self) -> None:
         self.stop_websocket = True
+
+    def pause(self) -> None:
+        self.process_websocket_ticks = False
+
+    def resume(self) -> None:
+        self.process_websocket_ticks = True
 
     def calc_orders(self):
         balance = self.position['wallet_balance'] * 0.98
@@ -547,6 +554,7 @@ class Bot:
 
     async def start_websocket(self) -> None:
         self.stop_websocket = False
+        self.process_websocket_ticks = True
         print_([self.endpoints['websocket']])
         await self.update_position()
         await self.init_exchange_config()
@@ -559,10 +567,11 @@ class Bot:
                     continue
                 try:
                     ticks = self.standardize_websocket_ticks(json.loads(msg))
-                    if ticks:
-                        self.update_indicators(ticks)
-                    if self.ts_locked['decide'] < self.ts_released['decide']:
-                        asyncio.create_task(self.decide())
+                    if self.process_websocket_ticks:
+                        if ticks:
+                            self.update_indicators(ticks)
+                        if self.ts_locked['decide'] < self.ts_released['decide']:
+                            asyncio.create_task(self.decide())
                     if k % 10 == 0:
                         self.flush_stuck_locks()
                         k = 1
@@ -571,6 +580,7 @@ class Bot:
                             self.telegram.send_msg("<pre>Bot stopped</pre>")
                         break
                     k += 1
+
                 except Exception as e:
                     if 'success' not in msg:
                         print('error in websocket', e, msg)
