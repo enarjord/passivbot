@@ -322,9 +322,6 @@ class Bot:
         self.xk['do_long'] = do_long
         self.xk['do_shrt'] = do_shrt
 
-        self.xk['do_long'] = do_long
-        self.xk['do_shrt'] = do_shrt
-
         liq_price = self.position['long']['liquidation_price'] if long_psize > abs(shrt_psize) \
             else self.position['shrt']['liquidation_price']
 
