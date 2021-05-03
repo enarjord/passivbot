@@ -172,10 +172,10 @@ class Bot:
         self.process_websocket_ticks = True
 
     def set_config(self, config):
+        config['ema_span'] = int(round(config['ema_span']))
         self.config = config
         for key in config:
             setattr(self, key, config[key])
-        for key in config:
             if key in self.xk:
                 self.xk[key] = config[key]
 
