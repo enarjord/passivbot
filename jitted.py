@@ -284,9 +284,9 @@ def iter_entries(
                     qty = calc_reentry_qty(long_psize, price, available_margin, inverse, qty_step,
                                            min_qty, min_cost, contract_multiplier, ddown_factor,
                                            leverage)
-                    long_psize, long_pprice = calc_new_psize_pprice(long_psize, long_pprice,
-                                                                              qty, price, qty_step)
-                    long_entry = (qty, price, long_psize, long_pprice, 'long_reentry')
+                    new_long_psize, new_long_pprice = calc_new_psize_pprice(long_psize, long_pprice,
+                                                                            qty, price, qty_step)
+                    long_entry = (qty, price, new_long_psize, new_long_pprice, 'long_reentry')
         else:
             long_entry = (0.0, 0.0, long_psize, long_pprice, '')
 
@@ -307,9 +307,9 @@ def iter_entries(
                 qty = -calc_reentry_qty(shrt_psize, price, available_margin, inverse, qty_step,
                                         min_qty, min_cost, contract_multiplier, ddown_factor,
                                         leverage)
-                shrt_psize, shrt_pprice = calc_new_psize_pprice(shrt_psize, shrt_pprice, qty, price,
-                                                                qty_step)
-                shrt_entry = (qty, price, shrt_psize, shrt_pprice, 'shrt_reentry')
+                new_shrt_psize, new_shrt_pprice = calc_new_psize_pprice(shrt_psize, shrt_pprice, qty, price,
+                                                                        qty_step)
+                shrt_entry = (qty, price, new_shrt_psize, new_shrt_pprice, 'shrt_reentry')
         else:
             shrt_entry = (0.0, 0.0, shrt_psize, shrt_pprice, '')
 
@@ -323,6 +323,7 @@ def iter_entries(
             long_first = False
         else:
             break
+
         if long_first:
             yield long_entry
             long_psize, long_pprice = long_entry[2:4]
