@@ -10,6 +10,7 @@ import numpy as np
 from dateutil import parser
 
 from passivbot import ts_to_date, load_key_secret, print_, Bot, sort_dict_keys
+from jitted import calc_long_pnl, calc_shrt_pnl
 
 
 def first_capitalized(s: str):
@@ -217,11 +218,13 @@ class Bybit(Bot):
                             'price': float(shrt_pos['entry_price']),
                             'leverage': float(shrt_pos['leverage']),
                             'liquidation_price': float(shrt_pos['liq_price'])}
-        position['long']['upnl'] = self.long_pnl_f(position['long']['price'], self.price,
-                                                   position['long']['size']) \
+        position['long']['upnl'] = calc_long_pnl(position['long']['price'], self.price,
+                                                 position['long']['size'], self.xk['inverse'],
+                                                 self.xk['contract_multiplier']) \
             if position['long']['price'] != 0.0 else 0.0
-        position['shrt']['upnl'] = self.shrt_pnl_f(position['shrt']['price'], self.price,
-                                                   position['shrt']['size']) \
+        position['shrt']['upnl'] = calc_shrt_pnl(position['shrt']['price'], self.price,
+                                                 position['shrt']['size'], self.xk['inverse'],
+                                                 self.xk['contract_multiplier']) \
             if position['shrt']['price'] != 0.0 else 0.0
         upnl = position['long']['upnl'] + position['shrt']['upnl']
         position['equity'] = position['wallet_balance'] + upnl
