@@ -85,7 +85,7 @@ class Telegram:
 
     def _graceful_stop(self, update=None, context=None):
         self._bot.set_config_value('do_long', False)
-        self._bot.set_config_value('do_short', False)
+        self._bot.set_config_value('do_shrt', False)
 
         self.send_msg('No longer opening new long or short positions, existing positions will be closed gracefully')
 
