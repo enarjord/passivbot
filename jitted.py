@@ -557,4 +557,3 @@ def calc_liq_price_bybit(balance,
         raise Exception('bybit linear liq price not implemented')
 
 
-
