@@ -74,6 +74,20 @@ with `docker-compose up -d` (-d for background run). All code and files generate
 For graceful stopping of the bot, set `do_long`and `do_shrt` both to `false`, and bot will continue as normal, opening
 no new positions, until all existing positions are closed.
 
+#### Setting up Telegram
+
+The bot provides interfacing with the bot via Telegram via a telegram bot. In order to set it up, you'll need a telegram
+bot token and a chat-id. Once you have those, you can enable teleegram for each individual account that is specified in
+the api-keys.json file. There is an example telegram configuration in that file to get started. If a telegram configuration
+is not present for an account, telegram is disabled at startup.
+
+For setup instructions, see https://docs.microsoft.com/en-us/azure/bot-service/bot-service-channel-connect-telegram?view=azure-bot-service-4.0
+
+How to get the chat id: https://sean-bradley.medium.com/get-telegram-chat-id-80b575520659
+
+There are several commands & messages provided via Telegram, please issue a `/help` command in the telegram chat to see
+all the options.
+
 ### Documentation [WIP], see the wiki at:
 
 https://github.com/enarjord/passivbot/wiki
