@@ -3,20 +3,21 @@
   exchange: binance
   user: account_name
   symbol: XMRUSDT
-  latency_simulation_ms: 750
-  starting_balance: 30.0
+  latency_simulation_ms: 450
+  starting_balance: 100.0
 
   do_long: true
   do_shrt: true
 
   # pso options
-  iters: 100
+  iters: 10000
   num_cpus: 4
   options: {"c1": 1.4962, "c2": 1.4962, "w": 0.7298}
   n_particles: 24
 
   minimum_liquidation_distance: 0.21
-  max_n_hours_between_fills: 48
+  max_hours_between_fills: 48
+  max_hours_same_side_stuck: 72
 
   start_date: 2020-11-11T11:11
   end_date: 2021-05-04T00:00

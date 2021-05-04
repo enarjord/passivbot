@@ -41,7 +41,8 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
     lines.append(f"n stop loss entries {result['n_stop_loss_entries']}")
     lines.append(f"biggest_psize {round(result['biggest_psize'], 10)}")
     lines.append(f"closest liq percentage {result['closest_liq'] * 100:.4f}%")
-    lines.append(f"max n hours stuck {result['max_n_hours_stuck']:.2f}")
+    lines.append(f"max hours stuck {result['max_hours_same_side_stuck']:.2f}")
+    lines.append(f"max hours between fills {result['max_hours_between_fills']:.2f}")
     lines.append(f"starting balance {result['starting_balance']}")
     lines.append(f"long: {result['do_long']}, short: {result['do_shrt']}")
 
@@ -502,7 +503,8 @@ def backtest_wrap(ticks: [dict], backtest_config: dict, do_print=False) -> (dict
     fills, _, did_finish = backtest(backtest_config, ticks, do_print=do_print)
     elapsed = time() - start_ts
     if len(fills) == 0:
-        return {'average_daily_gain': 0.0, 'closest_liq': 0.0, 'max_n_hours_stuck': 1000.0}, pd.DataFrame()
+        return {'average_daily_gain': 0.0, 'closest_liq': 0.0, 'max_hours_between_fills': 1000.0,
+                'max_hours_same_side_stuck': 1000.0,}, pd.DataFrame()
     fdf = pd.DataFrame(fills).set_index('trade_id')
     result = prepare_result(fills, ticks, bool(backtest_config['do_long']), bool(backtest_config['do_shrt']))
     result['seconds_elapsed'] = elapsed
@@ -534,8 +536,8 @@ def prepare_result(fills: list, ticks: np.ndarray, do_long: bool, do_shrt: bool)
             'n_stop_loss_closes': 0,
             'n_stop_loss_entries': 0,
             'biggest_psize': 0,
-            'max_n_hours_stuck': 0,
-            'max_n_hours_between_fills': 0,
+            'max_hours_same_side_stuck': 0,
+            'max_hours_between_fills': 0,
             'do_long': do_long,
             'do_shrt': do_shrt
         }
@@ -562,10 +564,10 @@ def prepare_result(fills: list, ticks: np.ndarray, do_long: bool, do_shrt: bool)
             'n_stop_loss_entries': len(fdf[(fdf.type.str.contains('stop_loss')) &
                                            (fdf.type.str.contains('entry'))]),
             'biggest_psize': fdf[['long_psize', 'shrt_psize']].abs().max(axis=1).max(),
-            'max_n_hours_stuck': max(fdf['hours_since_pos_change_max'].max(),
-                                     (ticks[-1][2] - fills[-1]['timestamp']) / (1000 * 60 * 60)),
-            'max_n_hours_between_fills': np.diff([ticks[0][2]] + list(fdf.timestamp) +
-                                                 [ticks[-1][2]]).max() / (1000 * 60 * 60),
+            'max_hours_same_side_stuck': max(fdf['hours_since_pos_change_max'].max(),
+                                             (ticks[-1][2] - fills[-1]['timestamp']) / (1000 * 60 * 60)),
+            'max_hours_between_fills': np.diff([ticks[0][2]] + list(fdf.timestamp) +
+                                               [ticks[-1][2]]).max() / (1000 * 60 * 60),
             'do_long': do_long,
             'do_shrt': do_shrt
         }
