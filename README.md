@@ -81,6 +81,10 @@ bot token and a chat-id. Once you have those, you can enable teleegram for each 
 the api-keys.json file. There is an example telegram configuration in that file to get started. If a telegram configuration
 is not present for an account, telegram is disabled at startup.
 
+For setup instructions, see https://docs.microsoft.com/en-us/azure/bot-service/bot-service-channel-connect-telegram?view=azure-bot-service-4.0
+
+How to get the chat id: https://sean-bradley.medium.com/get-telegram-chat-id-80b575520659
+
 There are several commands & messages provided via Telegram, please issue a `/help` command in the telegram chat to see
 all the options.
 
