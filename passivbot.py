@@ -506,7 +506,7 @@ class Bot:
         if self.exchange == 'bybit' and self.market_type == 'linear_perpetual':
             print('\nwarning:  bybit linear usdt symbols only allows fetching most recent 1000 ticks')
             return ticks
-        delay_between_fetches = 0.5
+        delay_between_fetches = 0.55
         print()
         while True:
             print(f'\rfetching ticks... {len(ticks)} of {self.ema_span} ', end= ' ')
