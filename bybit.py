@@ -9,7 +9,7 @@ import aiohttp
 import numpy as np
 from dateutil import parser
 
-from passivbot import ts_to_date, load_key_secret, print_, Bot, sort_dict_keys
+from passivbot import ts_to_date, print_, Bot, sort_dict_keys
 from jitted import calc_long_pnl, calc_shrt_pnl
 
 
@@ -56,7 +56,6 @@ class Bybit(Bot):
         self.exchange = 'bybit'
         self.min_notional = 0.0
         super().__init__(user, config)
-        self.key, self.secret = load_key_secret('bybit', user)
         self.base_endpoint = 'https://api.bybit.com'
         self.endpoints = {}
         self.market_type = ''
