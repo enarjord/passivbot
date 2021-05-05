@@ -27,12 +27,12 @@ os.environ['TUNE_GLOBAL_CHECKPOINT_S'] = '120'
 
 def objective_function(result: dict,
                        liq_cap: float,
-                       max_hours_between_fills_cap: float,
-                       max_hours_same_side_stuck_cap: float) -> float:
+                       max_hrs_no_fills_cap: float,
+                       max_hrs_no_fills_same_side_cap: float) -> float:
     try:
         return (result['average_daily_gain'] *
-                min(1.0, max_hours_between_fills_cap / result['max_hours_between_fills']) *
-                min(1.0, max_hours_same_side_stuck_cap / result['max_hours_same_side_stuck']) *
+                min(1.0, max_hrs_no_fills_cap / result['max_hrs_no_fills']) *
+                min(1.0, max_hrs_no_fills_same_side_cap / result['max_hrs_no_fills_same_side']) *
                 min(1.0, result['closest_liq'] / liq_cap))
     except Exception as e:
         print('error with objective function', e, result)
@@ -75,10 +75,10 @@ def wrap_backtest(config, ticks):
     result = prepare_result(fills, ticks, config['do_long'], config['do_shrt'])
     objective = objective_function(result,
                                    config['minimum_liquidation_distance'],
-                                   config['max_hours_between_fills'],
-                                   config['max_hours_same_side_stuck'])
+                                   config['max_hrs_no_fills'],
+                                   config['max_hrs_no_fills_same_side'])
     tune.report(objective=objective, daily_gain=result['average_daily_gain'], closest_liquidation=result['closest_liq'],
-                max_hours_between_fills=result['max_hours_between_fills'], max_hours_same_side_stuck=result['max_hours_same_side_stuck'])
+                max_hrs_no_fills=result['max_hrs_no_fills'], max_hrs_no_fills_same_side=result['max_hrs_no_fills_same_side'])
 
 
 def backtest_tune(ticks: np.ndarray, backtest_config: dict, current_best: Union[dict, list] = None):
@@ -127,8 +127,8 @@ def backtest_tune(ticks: np.ndarray, backtest_config: dict, current_best: Union[
                         reuse_actors=True, local_dir=session_dirpath,
                         progress_reporter=LogReporter(metric_columns=['daily_gain',
                                                                       'closest_liquidation',
-                                                                      'max_hours_between_fills',
-                                                                      'max_hours_same_side_stuck',
+                                                                      'max_hrs_no_fills',
+                                                                      'max_hrs_no_fills_same_side',
                                                                       'objective'],
                                                       parameter_columns=[k for k in backtest_config['ranges'] if type(
                                                           config[k]) == ray.tune.sample.Float or type(
@@ -142,8 +142,8 @@ def save_results(analysis, backtest_config):
     df = analysis.results_df
     df.reset_index(inplace=True)
     df.rename(columns={column: column.replace('config.', '') for column in df.columns}, inplace=True)
-    df = df[list(backtest_config['ranges'].keys()) + ['daily_gain', 'closest_liquidation', 'max_hours_between_fills',
-                                                      'max_hours_same_side_stuck', 'objective']].sort_values('objective', ascending=False)
+    df = df[list(backtest_config['ranges'].keys()) + ['daily_gain', 'closest_liquidation', 'max_hrs_no_fills',
+                                                      'max_hrs_no_fills_same_side', 'objective']].sort_values('objective', ascending=False)
     df.to_csv(os.path.join(backtest_config['session_dirpath'], 'results.csv'), index=False)
     print('Best candidate found:')
     pprint.pprint(analysis.best_config)

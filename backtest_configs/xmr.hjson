@@ -15,9 +15,14 @@
   options: {"c1": 1.4962, "c2": 1.4962, "w": 0.7298}
   n_particles: 24
 
+
   minimum_liquidation_distance: 0.21
-  max_hours_between_fills: 48
-  max_hours_same_side_stuck: 72
+
+  # max hours between consecutive fills
+  max_hrs_no_fills: 48
+
+  # max hours between consecutive same side fills (long / short)
+  max_hrs_no_fills_same_side: 72
 
   start_date: 2020-11-11T11:11
   end_date: 2021-05-04T00:00
