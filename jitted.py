@@ -17,6 +17,14 @@ else:
     from numba import njit
 
 
+def format_float(n: float):
+    return np.format_float_positional(n, trim='-')
+
+
+def round_dynamic(n: float, d: int):
+    return round_(n, 10 ** ((doti := format_float(n).find('.')) - d - (1 if doti == 1 else 0)))
+
+
 @njit
 def round_up(n, step, safety_rounding=10) -> float:
     return np.round(np.ceil(n / step) * step, safety_rounding)
