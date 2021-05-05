@@ -72,7 +72,7 @@ class BinanceBot(Bot):
                 'leverage_bracket': '/fapi/v1/leverageBracket',
                 'open_orders': '/fapi/v1/openOrders',
                 'ticker': '/fapi/v1/ticker/bookTicker',
-                'trades': '/fapi/v1/userTrades',
+                'fills': '/fapi/v1/userTrades',
                 'create_order': '/fapi/v1/order',
                 'cancel_order': '/fapi/v1/order',
                 'ticks': '/fapi/v1/aggTrades',
@@ -94,6 +94,7 @@ class BinanceBot(Bot):
                 'leverage_bracket': '/dapi/v1/leverageBracket',
                 'open_orders': '/dapi/v1/openOrders',
                 'ticker': '/dapi/v1/ticker/bookTicker',
+                'fills': '/dapi/v1/userTrades',
                 'create_order': '/dapi/v1/order',
                 'cancel_order': '/dapi/v1/order',
                 'ticks': '/dapi/v1/aggTrades',
@@ -283,7 +284,7 @@ class BinanceBot(Bot):
         else:
             return cancellation
 
-    async def fetch_trades(self, limit: int = 1000, from_id: int = None, start_time: int = None, end_time: int = None):
+    async def fetch_fills(self, limit: int = 1000, from_id: int = None, start_time: int = None, end_time: int = None):
         params = {'symbol': self.symbol, 'limit': limit}
         if from_id is not None:
             params['fromId'] = max(0, from_id)
@@ -292,11 +293,23 @@ class BinanceBot(Bot):
         if end_time is not None:
             params['endTime'] = end_time
         try:
-            fetched = await self.private_get(self.endpoints['trades'], params)
+            fetched = await self.private_get(self.endpoints['fills'], params)
+            fills = [{'symbol': x['symbol'],
+                      'order_id': int(x['orderId']),
+                      'side': x['side'].lower(),
+                      'price': float(x['price']),
+                      'qty': float(x['qty']),
+                      'realized_pnl': float(x['realizedPnl']),
+                      'cost': float(x['quoteQty']),
+                      'fee_paid': float(x['commission']),
+                      'fee_token': x['commissionAsset'],
+                      'timestamp': int(x['time']),
+                      'position_side': x['positionSide'].lower().replace('short', 'shrt'),
+                      'is_maker': x['maker']} for x in fetched]
         except Exception as e:
-            print('error fetching trades a', e)
+            print('error fetching fills a', e)
             return []
-        return fetched
+        return fills
 
     async def fetch_ticks(self, from_id: int = None, start_time: int = None, end_time: int = None,
                           do_print: bool = True):
@@ -317,7 +330,7 @@ class BinanceBot(Bot):
                       'timestamp': int(t['T']), 'is_buyer_maker': t['m']}
                      for t in fetched]
             if do_print:
-                print_(['fetched trades', self.symbol, ticks[0]['trade_id'],
+                print_(['fetched ticks', self.symbol, ticks[0]['trade_id'],
                         ts_to_date(float(ticks[0]['timestamp']) / 1000)])
         except Exception as e:
             print('errer fetching ticks b', e, fetched)
