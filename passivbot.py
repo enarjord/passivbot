@@ -127,7 +127,7 @@ def flatten(lst: list) -> list:
 
 
 class Bot:
-    def __init__(self, user: str, config: dict, telegram: telegram_bot.Telegram = None):
+    def __init__(self, user: str, config: dict, telegram = None):
         self.config = config
         self.user = user
         self.telegram = telegram
