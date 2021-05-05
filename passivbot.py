@@ -14,15 +14,7 @@ import telegram_bot
 import websockets
 
 from jitted import round_, calc_diff, calc_ema, calc_cost, iter_entries, iter_long_closes, \
-    iter_shrt_closes
-
-
-def format_float(n: float):
-    return np.format_float_positional(n, trim='-')
-
-
-def round_dynamic(n: float, d: int):
-    return round_(n, 10 ** ((doti := format_float(n).find('.')) - d - (1 if doti == 1 else 0)))
+    iter_shrt_closes, round_dynamic
 
 
 def get_keys():
@@ -127,7 +119,7 @@ def flatten(lst: list) -> list:
 
 
 class Bot:
-    def __init__(self, user: str, config: dict, telegram: telegram_bot.Telegram = None):
+    def __init__(self, user: str, config: dict, telegram = None):
         self.config = config
         self.user = user
         self.telegram = telegram
@@ -150,7 +142,6 @@ class Bot:
         self.price = 0
         self.ob = [0.0, 0.0]
         self.ema = 0.0
-        self.fills = []
 
         self.n_open_orders_limit = 8
         self.last_price_diff_limit = 0.15
@@ -161,10 +152,7 @@ class Bot:
 
         self.log_filepath = make_get_filepath(f"logs/{self.exchange}/{config['config_name']}.log")
 
-        self.my_trades = []
-        self.my_trades_cache_filepath = \
-            make_get_filepath(os.path.join('historical_data', self.exchange, 'my_trades',
-                                           self.symbol, 'my_trades.txt'))
+        self.key, self.secret = load_key_secret(config['exchange'], user)
 
         self.log_level = 0
 
@@ -450,31 +438,13 @@ class Bot:
             else:
                 liq_price = self.position['shrt']['liquidation_price']
                 sl_trigger_price = round_(liq_price / (1 + self.stop_loss_liq_diff), self.price_step)
-            line += f"|| last {self.price} liq {liq_price} "
-            line += f"sl trig {round_(sl_trigger_price, self.price_step)} "
-            line += f"ema {round_(self.ema, self.price_step)} "
-            line += f"bal {round_dynamic(self.position['wallet_balance'], 4)} "
-            line += f"equity {round_dynamic(self.position['equity'], 4)} "
-            line += f"v. {round_dynamic(self.volatility, 8)} "
+            line += f"|| last {self.price} liq {round_dynamic(liq_price, 3)} "
+            line += f"sl trig {round_dynamic(sl_trigger_price, 3)} "
+            line += f"ema {round_dynamic(self.ema, 3)} "
+            line += f"bal {round_dynamic(self.position['wallet_balance'], 3)} "
+            line += f"equity {round_dynamic(self.position['equity'], 3)} "
+            line += f"v. {round_dynamic(self.volatility, 3)} "
             print_([line], r=True)
-
-    def load_cached_my_trades(self) -> [dict]:
-        if os.path.exists(self.my_trades_cache_filepath):
-            with open(self.my_trades_cache_filepath) as f:
-                mtd = {(t := json.loads(line))['order_id']: t for line in f.readlines()}
-            return sorted(mtd.values(), key=lambda x: x['timestamp'])
-        return []
-
-    async def update_my_trades(self):
-        mt = await self.fetch_my_trades()
-        if self.my_trades:
-            mt = [e for e in mt if e['timestamp'] >= self.my_trades[-1]['timestamp']]
-            if mt[0]['order_id'] == self.my_trades[-1]['order_id']:
-                mt = mt[1:]
-        with open(self.my_trades_cache_filepath, 'a') as f:
-            for t in mt:
-                f.write(json.dumps(t) + '\n')
-        self.my_trades += mt
 
     def flush_stuck_locks(self, timeout: float = 4.0) -> None:
         now = time()
@@ -483,13 +453,6 @@ class Bot:
                 if now - self.ts_locked[key] > timeout:
                     print('flushing', key)
                     self.ts_released[key] = now
-
-    async def update_fills(self):
-        try:
-            fills = self.fetch_my_fills()
-            self.fills = fills
-        except Exception as e:
-            print('failed to fetch fills', e)
 
     async def fetch_compressed_ticks(self):
 
@@ -540,7 +503,7 @@ class Bot:
         self.price_std = np.sqrt((self.sum_prices_squared / len(self.tick_prices_deque) -
                                  ((self.sum_prices / len(self.tick_prices_deque)) ** 2)))
         self.volatility = self.price_std / self.ema
-        print('debug len ticks, prices deque, ema_span')
+        print('\ndebug len ticks, prices deque, ema_span')
         print(len(ticks), len(self.tick_prices_deque), self.ema_span)
 
     def update_indicators(self, ticks: dict):
@@ -636,6 +599,7 @@ async def main() -> None:
     except Exception as e:
         print(e, 'failed to load config', sys.argv[3])
         return
+    config['exchange'] = account['exchange']
     config['symbol'] = sys.argv[2]
 
     if account['exchange'] == 'binance':
