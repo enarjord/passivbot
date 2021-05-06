@@ -45,12 +45,12 @@ def compress_float(n: float, d: int) -> str:
 
 @njit
 def round_up(n, step, safety_rounding=10) -> float:
-    return np.round(np.ceil(n / step) * step, safety_rounding)
+    return np.round(np.ceil(np.round(n / step, safety_rounding)) * step, safety_rounding)
 
 
 @njit
 def round_dn(n, step, safety_rounding=10) -> float:
-    return np.round(np.floor(n / step) * step, safety_rounding)
+    return np.round(np.floor(np.round(n / step, safety_rounding)) * step, safety_rounding)
 
 
 @njit
