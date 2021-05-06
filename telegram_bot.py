@@ -8,7 +8,7 @@ from telegram import KeyboardButton, ParseMode, ReplyKeyboardMarkup
 from telegram.ext import Updater, CommandHandler
 from time import time
 
-from jitted import round_dynamic
+from jitted import compress_float, round_
 
 
 class Telegram:
@@ -56,8 +56,8 @@ class Telegram:
         order_table = PrettyTable(["pside", "side", "price", "qty"])
 
         for order in open_orders:
-            price = round_dynamic(order['price'], 3)
-            qty = round_dynamic(order['qty'], 3)
+            price = round_(order['price'], self._bot.price_step)
+            qty = round_(order['qty'], self._bot.qty_step)
             side = order['side']
             position_side = order['position_side']
             order_table.add_row([position_side, side, price, qty])
@@ -73,17 +73,18 @@ class Telegram:
             long_position = self._bot.position['long']
             shrt_position = self._bot.position['shrt']
 
-            position_table.add_row([f'Size.{self._bot.coin}', round_dynamic(long_position['size'], 3),
-                                    round_dynamic(shrt_position['size'], 3)])
-            position_table.add_row(['Price', round_dynamic(long_position['price'], 3),
-                                    round_dynamic(shrt_position['price'], 3)])
-            position_table.add_row(['Leverage', long_position['leverage'], shrt_position['leverage']])
-            position_table.add_row(['Liq.price', round_dynamic(long_position['liquidation_price'], 3),
-                 round_dynamic(shrt_position['liquidation_price'], 3)])
-            position_table.add_row(['Liq.diff.%', round_dynamic(float(long_position['liq_diff']) * 100, 3),
-                 round_dynamic(float(shrt_position['liq_diff']) * 100, 3)])
-            position_table.add_row([f'UPNL.{self._bot.quot}', round_dynamic(float(long_position['upnl']), 3),
-                                    round_dynamic(float(shrt_position['upnl']), 3)])
+            position_table.add_row([f'Size {self._bot.coin}', compress_float(long_position['size'], 3),
+                                    compress_float(shrt_position['size'], 3)])
+            position_table.add_row(['Price', compress_float(long_position['price'], 4),
+                                    compress_float(shrt_position['price'], 3)])
+            position_table.add_row(['Leverage', compress_float(long_position['leverage'], 3),
+                                     compress_float(shrt_position['leverage'], 3)])
+            position_table.add_row(['Liq.price', compress_float(long_position['liquidation_price'], 3),
+                 compress_float(shrt_position['liquidation_price'], 3)])
+            position_table.add_row(['Liq.diff.%', compress_float(float(long_position['liq_diff']) * 100, 3),
+                 compress_float(float(shrt_position['liq_diff']) * 100, 3)])
+            position_table.add_row([f'UPNL {self._bot.quot}', compress_float(float(long_position['upnl']), 3),
+                                    compress_float(float(shrt_position['upnl']), 3)])
 
             table_msg = position_table.get_string(border=True, padding_width=1,
                                                   junction_char=' ', vertical_char=' ',
@@ -95,9 +96,9 @@ class Telegram:
     def _balance(self, update=None, context=None):
         if bool(self._bot.position):
             msg = '<pre><b>Balance:</b></pre>\n' \
-                  f'Equity: {round_dynamic(self._bot.position["equity"], 3)}\n' \
-                  f'Locked margin: {round_dynamic(self._bot.position["used_margin"], 3)}\n' \
-                  f'Available margin: {round_dynamic(self._bot.position["available_margin"], 3)}'
+                  f'Equity: {compress_float(self._bot.position["equity"], 3)}\n' \
+                  f'Locked margin: {compress_float(self._bot.position["used_margin"], 3)}\n' \
+                  f'Available margin: {compress_float(self._bot.position["available_margin"], 3)}'
         else:
             msg = 'Balance not retrieved yet, please try again later'
         self.send_msg(msg)
@@ -142,13 +143,13 @@ class Telegram:
                 closed_trades = [t for t in tradess if t['realized_pnl'] > 0.0]
                 closed_trades.sort(key=lambda x: x['timestamp'], reverse=True)
 
-                table = PrettyTable(['Date', 'Pos.', 'Price', f'Pnl.{self._bot.quot}'])
+                table = PrettyTable(['Date', 'Pos.', 'Price', f'Pnl {self._bot.quot}'])
 
                 for trade in closed_trades[:self.n_trades]:
                     trade_date = datetime.fromtimestamp(trade['timestamp'] / 1000)
                     table.add_row(
-                        [trade_date.strftime('%m-%d %H:%M'), trade['position_side'], trade['price'],
-                         round_dynamic(trade['realized_pnl'], 3)])
+                        [trade_date.strftime('%m-%d %H:%M'), trade['position_side'], round_(trade['price'], self._bot.price_step),
+                         compress_float(trade['realized_pnl'], 3)])
 
                 msg = f'Closed trades:\n' \
                       f'<pre>{table.get_string(border=True, padding_width=1, junction_char=" ", vertical_char=" ", hrules=HEADER)}</pre>'
@@ -163,7 +164,7 @@ class Telegram:
         from binance import BinanceBot
         if isinstance(self._bot, BinanceBot):
             async def send_daily_async():
-                table = PrettyTable(['Date', 'Profit'])
+                table = PrettyTable(['Date', f'Profit {self._bot.quot}'])
                 nr_of_days = 7
                 today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
                 for idx, item in enumerate(range(0, nr_of_days)):
@@ -175,7 +176,7 @@ class Telegram:
                     pln_summary = 0
                     for trade in daily_trades:
                         pln_summary += trade['realized_pnl']
-                    table.add_row([start_of_day.strftime('%m-%d'), round_dynamic(pln_summary, 3)])
+                    table.add_row([start_of_day.strftime('%m-%d'), compress_float(pln_summary, 3)])
 
                 msg = f'<pre>{table.get_string(border=True, padding_width=1, junction_char=" ", vertical_char=" ", hrules=HEADER)}</pre>'
                 self.send_msg(msg)
