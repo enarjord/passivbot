@@ -17,12 +17,9 @@ else:
     from numba import njit
 
 
-def format_float(n: float):
-    return np.format_float_positional(n, trim='-')
-
-
+@njit
 def round_dynamic(n: float, d: int):
-    return round_(n, 10 ** ((doti := format_float(n).find('.')) - d - (1 if doti == 1 else 0)))
+    return round(n, d - int(np.floor(np.log10(abs(n)))) - 1)
 
 
 @njit
