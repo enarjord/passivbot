@@ -194,7 +194,7 @@ class Telegram:
             sha_short = 'UNKNOWN'
 
         msg = f'<pre><b>Version:</b></pre> {sha_short},\n' \
-              f'<pre>Coin</pre>: {sys.argv[2]}\n' \
+              f'<pre>Symbol</pre>: {sys.argv[2]}\n' \
               f'<pre><b>Config:</b></pre> \n' \
               f'{json.dumps(self._bot.config, indent=4)}'
         self.send_msg(msg)
