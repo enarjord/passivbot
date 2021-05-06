@@ -53,7 +53,7 @@ class Telegram:
 
     def _open_orders(self, update=None, context=None):
         open_orders = self._bot.open_orders
-        order_table = PrettyTable(["pside", "side", "price", "qty"])
+        order_table = PrettyTable(["Pos.", "Side", "Price", "Qty"])
 
         for order in open_orders:
             price = round_dynamic(order['price'], 3)
@@ -165,6 +165,7 @@ class Telegram:
             async def send_daily_async():
                 table = PrettyTable(['Date', 'Profit'])
                 nr_of_days = 7
+                daily_summary = {}
                 today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
                 for idx, item in enumerate(range(0, nr_of_days)):
                     start_of_day = today - timedelta(days=idx)
@@ -176,6 +177,10 @@ class Telegram:
                     for trade in daily_trades:
                         pln_summary += trade['realized_pnl']
                     table.add_row([start_of_day.strftime('%m-%d'), round_dynamic(pln_summary, 3)])
+                    daily_summary[idx] = pln_summary
+
+                for item in reversed(daily_summary.keys()):
+                    print(f"Item = {daily_summary['item']}")
 
                 msg = f'<pre>{table.get_string(border=True, padding_width=1, junction_char=" ", vertical_char=" ", hrules=HEADER)}</pre>'
                 self.send_msg(msg)
