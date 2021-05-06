@@ -19,6 +19,8 @@ else:
 
 @njit
 def round_dynamic(n: float, d: int):
+    if n == 0.0:
+        return n
     return round(n, d - int(np.floor(np.log10(abs(n)))) - 1)
 
 
