@@ -24,6 +24,25 @@ def round_dynamic(n: float, d: int):
     return round(n, d - int(np.floor(np.log10(abs(n)))) - 1)
 
 
+def format_float(num):
+    return np.format_float_positional(num, trim='-')
+
+
+def compress_float(n: float, d: int) -> str:
+    if n / 10**d >= 1:
+        n = round(n)
+    else:
+        n = round_dynamic(n, d)
+    nstr = format_float(n)
+    if nstr.startswith('0.'):
+        nstr = nstr[1:]
+    elif nstr.startswith('-0.'):
+        nstr = '-' + nstr[2:]
+    elif nstr.endswith('.0'):
+        nstr = nstr[:-2]
+    return nstr
+
+
 @njit
 def round_up(n, step, safety_rounding=10) -> float:
     return np.round(np.ceil(n / step) * step, safety_rounding)
