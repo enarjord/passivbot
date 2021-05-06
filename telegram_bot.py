@@ -8,7 +8,7 @@ from telegram import KeyboardButton, ParseMode, ReplyKeyboardMarkup
 from telegram.ext import Updater, CommandHandler
 from time import time
 
-from jitted import compress_float, round_
+from jitted import compress_float, round_dynamic, round_
 
 
 class Telegram:
@@ -176,7 +176,7 @@ class Telegram:
                     pln_summary = 0
                     for trade in daily_trades:
                         pln_summary += trade['realized_pnl']
-                    table.add_row([start_of_day.strftime('%m-%d'), compress_float(pln_summary, 3)])
+                    table.add_row([start_of_day.strftime('%m-%d'), round_dynamic(pln_summary, 3)])
 
                 msg = f'<pre>{table.get_string(border=True, padding_width=1, junction_char=" ", vertical_char=" ", hrules=HEADER)}</pre>'
                 self.send_msg(msg)
