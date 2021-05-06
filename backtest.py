@@ -542,6 +542,14 @@ def prepare_result(fills: list, ticks: np.ndarray, do_long: bool, do_shrt: bool)
             'do_shrt': do_shrt
         }
     else:
+        if len(longs_ := fdf[fdf.pside == 'long']) > 0:
+            long_stuck = np.diff(list(longs_.timestamp) + [ticks[-1][2]]).max() / (1000 * 60 * 60)
+        else:
+            long_stuck = 1000.0
+        if len(shrts_ := fdf[fdf.pside == 'shrt']) > 0:
+            shrt_stuck = np.diff(list(shrts_.timestamp) + [ticks[-1][2]]).max() / (1000 * 60 * 60)
+        else:
+            shrt_stuck = 1000.0
         result = {
             'net_pnl_plus_fees': fills[-1]['pnl_plus_fees_cumsum'],
             'profit_sum': fills[-1]['profit_cumsum'],
@@ -564,10 +572,8 @@ def prepare_result(fills: list, ticks: np.ndarray, do_long: bool, do_shrt: bool)
             'n_stop_loss_entries': len(fdf[(fdf.type.str.contains('stop_loss')) &
                                            (fdf.type.str.contains('entry'))]),
             'biggest_psize': fdf[['long_psize', 'shrt_psize']].abs().max(axis=1).max(),
-            'max_hrs_no_fills_long': (long_stuck := np.diff(list(fdf[fdf.pside == 'long'].timestamp) +
-                                       [ticks[-1][2]]).max() / (1000 * 60 * 60)),
-            'max_hrs_no_fills_shrt': (shrt_stuck := np.diff(list(fdf[fdf.pside == 'shrt'].timestamp) +
-                                       [ticks[-1][2]]).max() / (1000 * 60 * 60)),
+            'max_hrs_no_fills_long': long_stuck,
+            'max_hrs_no_fills_shrt': shrt_stuck,
             'max_hrs_no_fills_same_side': max(long_stuck, shrt_stuck),
             'max_hrs_no_fills': np.diff(list(fdf.timestamp) + [ticks[-1][2]]).max() / (1000 * 60 * 60),
             'do_long': do_long,
