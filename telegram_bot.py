@@ -64,7 +64,7 @@ class Telegram:
 
         table_msg = order_table.get_string(sortby="Price", border=True, padding_width=1,
                                            junction_char=' ', vertical_char=' ', hrules=HEADER)
-        msg = f'Current rate: {compress_float(self._bot.price, 3)}\n' \
+        msg = f'Current rate: {round_(self._bot.price, self._bot.price_step)}\n' \
               f'<pre>{table_msg}</pre>'
         self.send_msg(msg)
 
