@@ -53,7 +53,7 @@ class Telegram:
 
     def _open_orders(self, update=None, context=None):
         open_orders = self._bot.open_orders
-        order_table = PrettyTable(["pside", "side", "price", "qty"])
+        order_table = PrettyTable(["Pos.", "Side", "Price", "Qty"])
 
         for order in open_orders:
             price = round_(order['price'], self._bot.price_step)
@@ -62,9 +62,10 @@ class Telegram:
             position_side = order['position_side']
             order_table.add_row([position_side, side, price, qty])
 
-        table_msg = order_table.get_string(sortby="price", border=True, padding_width=1,
+        table_msg = order_table.get_string(sortby="Price", border=True, padding_width=1,
                                            junction_char=' ', vertical_char=' ', hrules=HEADER)
-        msg = f'<pre>{table_msg}</pre>'
+        msg = f'Current rate: {compress_float(self._bot.price, 3)}\n' \
+              f'<pre>{table_msg}</pre>'
         self.send_msg(msg)
 
     def _position(self, update=None, context=None):
@@ -75,8 +76,10 @@ class Telegram:
 
             position_table.add_row([f'Size {self._bot.coin}', compress_float(long_position['size'], 3),
                                     compress_float(shrt_position['size'], 3)])
-            position_table.add_row(['Price', compress_float(long_position['price'], 4),
+            position_table.add_row(['Price', compress_float(long_position['price'], 3),
                                     compress_float(shrt_position['price'], 3)])
+            position_table.add_row(['Curr.price', compress_float(self._bot.price, 3),
+                                    compress_float(self._bot.price, 3)])
             position_table.add_row(['Leverage', compress_float(long_position['leverage'], 3),
                                      compress_float(shrt_position['leverage'], 3)])
             position_table.add_row(['Liq.price', compress_float(long_position['liquidation_price'], 3),
@@ -139,8 +142,8 @@ class Telegram:
     def _closed_trades(self, update=None, context=None):
         if self._bot.exchange == 'binance' and not self._bot.inverse:
             async def send_closed_trades_async():
-                tradess = await self._bot.fetch_fills(limit=100)
-                closed_trades = [t for t in tradess if t['realized_pnl'] > 0.0]
+                trades = await self._bot.fetch_fills(limit=100)
+                closed_trades = [t for t in trades if t['realized_pnl'] != 0.0]
                 closed_trades.sort(key=lambda x: x['timestamp'], reverse=True)
 
                 table = PrettyTable(['Date', 'Pos.', 'Price', f'Pnl {self._bot.quot}'])
@@ -156,7 +159,8 @@ class Telegram:
                 self.send_msg(msg)
 
             self.send_msg(f'Fetching last {self.n_trades} trades...')
-            self.loop.create_task(send_closed_trades_async())
+            task = self.loop.create_task(send_closed_trades_async())
+            task.add_done_callback(lambda fut: True) #ensures task is processed to prevent warning about not awaiting
         else:
             self.send_msg('This command is not supported (yet)')
 
@@ -182,7 +186,8 @@ class Telegram:
                 self.send_msg(msg)
 
             self.send_msg('Calculating daily pnl...')
-            self.loop.create_task(send_daily_async())
+            task = self.loop.create_task(send_daily_async())
+            task.add_done_callback(lambda fut: True) #ensures task is processed to prevent warning about not awaiting
         else:
             self.send_msg('This command is not supported (yet) on Bybit')
 
