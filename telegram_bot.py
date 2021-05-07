@@ -75,8 +75,10 @@ class Telegram:
 
             position_table.add_row([f'Size {self._bot.coin}', compress_float(long_position['size'], 3),
                                     compress_float(shrt_position['size'], 3)])
-            position_table.add_row(['Price', compress_float(long_position['price'], 4),
+            position_table.add_row(['Price', compress_float(long_position['price'], 3),
                                     compress_float(shrt_position['price'], 3)])
+            position_table.add_row(['Curr.price', compress_float(self._bot.price, 3),
+                                    compress_float(self._bot.price, 3)])
             position_table.add_row(['Leverage', compress_float(long_position['leverage'], 3),
                                      compress_float(shrt_position['leverage'], 3)])
             position_table.add_row(['Liq.price', compress_float(long_position['liquidation_price'], 3),
