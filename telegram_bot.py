@@ -64,7 +64,8 @@ class Telegram:
 
         table_msg = order_table.get_string(sortby="Price", border=True, padding_width=1,
                                            junction_char=' ', vertical_char=' ', hrules=HEADER)
-        msg = f'<pre>{table_msg}</pre>'
+        msg = f'Current rate: {compress_float(self._bot.price, 3)}\n' \
+              f'<pre>{table_msg}</pre>'
         self.send_msg(msg)
 
     def _position(self, update=None, context=None):
@@ -141,8 +142,8 @@ class Telegram:
     def _closed_trades(self, update=None, context=None):
         if self._bot.exchange == 'binance' and not self._bot.inverse:
             async def send_closed_trades_async():
-                tradess = await self._bot.fetch_fills(limit=100)
-                closed_trades = [t for t in tradess if t['realized_pnl'] > 0.0]
+                trades = await self._bot.fetch_fills(limit=100)
+                closed_trades = [t for t in trades if t['realized_pnl'] != 0.0]
                 closed_trades.sort(key=lambda x: x['timestamp'], reverse=True)
 
                 table = PrettyTable(['Date', 'Pos.', 'Price', f'Pnl {self._bot.quot}'])
