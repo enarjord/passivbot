@@ -53,7 +53,7 @@ class Telegram:
 
     def _open_orders(self, update=None, context=None):
         open_orders = self._bot.open_orders
-        order_table = PrettyTable(["pside", "side", "price", "qty"])
+        order_table = PrettyTable(["Pos.", "Side", "Price", "Qty"])
 
         for order in open_orders:
             price = round_(order['price'], self._bot.price_step)
@@ -156,7 +156,8 @@ class Telegram:
                 self.send_msg(msg)
 
             self.send_msg(f'Fetching last {self.n_trades} trades...')
-            self.loop.create_task(send_closed_trades_async())
+            task = self.loop.create_task(send_closed_trades_async())
+            task.add_done_callback(lambda fut: True) #ensures task is processed to prevent warning about not awaiting
         else:
             self.send_msg('This command is not supported (yet)')
 
@@ -182,7 +183,8 @@ class Telegram:
                 self.send_msg(msg)
 
             self.send_msg('Calculating daily pnl...')
-            self.loop.create_task(send_daily_async())
+            task = self.loop.create_task(send_daily_async())
+            task.add_done_callback(lambda fut: True) #ensures task is processed to prevent warning about not awaiting
         else:
             self.send_msg('This command is not supported (yet) on Bybit')
 
