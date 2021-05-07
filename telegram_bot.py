@@ -156,7 +156,8 @@ class Telegram:
                 self.send_msg(msg)
 
             self.send_msg(f'Fetching last {self.n_trades} trades...')
-            self.loop.create_task(send_closed_trades_async())
+            task = self.loop.create_task(send_closed_trades_async())
+            task.add_done_callback(lambda fut: True) #ensures task is processed to prevent warning about not awaiting
         else:
             self.send_msg('This command is not supported (yet)')
 
@@ -166,7 +167,6 @@ class Telegram:
             async def send_daily_async():
                 table = PrettyTable(['Date', f'Profit {self._bot.quot}'])
                 nr_of_days = 7
-                daily_summary = {}
                 today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
                 for idx, item in enumerate(range(0, nr_of_days)):
                     start_of_day = today - timedelta(days=idx)
@@ -178,16 +178,13 @@ class Telegram:
                     for trade in daily_trades:
                         pln_summary += trade['realized_pnl']
                     table.add_row([start_of_day.strftime('%m-%d'), round_dynamic(pln_summary, 3)])
-                    daily_summary[idx] = pln_summary
-
-                for item in reversed(daily_summary.keys()):
-                    print(f"Item = {daily_summary['item']}")
 
                 msg = f'<pre>{table.get_string(border=True, padding_width=1, junction_char=" ", vertical_char=" ", hrules=HEADER)}</pre>'
                 self.send_msg(msg)
 
             self.send_msg('Calculating daily pnl...')
-            self.loop.create_task(send_daily_async())
+            task = self.loop.create_task(send_daily_async())
+            task.add_done_callback(lambda fut: True) #ensures task is processed to prevent warning about not awaiting
         else:
             self.send_msg('This command is not supported (yet) on Bybit')
 
