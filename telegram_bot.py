@@ -62,7 +62,7 @@ class Telegram:
             position_side = order['position_side']
             order_table.add_row([position_side, side, price, qty])
 
-        table_msg = order_table.get_string(sortby="price", border=True, padding_width=1,
+        table_msg = order_table.get_string(sortby="Price", border=True, padding_width=1,
                                            junction_char=' ', vertical_char=' ', hrules=HEADER)
         msg = f'<pre>{table_msg}</pre>'
         self.send_msg(msg)
