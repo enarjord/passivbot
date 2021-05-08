@@ -165,8 +165,7 @@ class Telegram:
             self.send_msg('This command is not supported (yet)')
 
     def _daily(self, update=None, context=None):
-        from binance import BinanceBot
-        if isinstance(self._bot, BinanceBot):
+        if self._bot.exchange == 'binance':
             async def send_daily_async():
                 nr_of_days = 7
                 today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
@@ -190,7 +189,7 @@ class Telegram:
                 for item in daily.keys():
                     day_profit = daily[item]['pnl']
                     previous_day_close_wallet_balance = wallet_balance - day_profit
-                    profit_pct = ((wallet_balance/previous_day_close_wallet_balance) - 1) * 100
+                    profit_pct = ((wallet_balance / previous_day_close_wallet_balance) - 1) * 100
                     wallet_balance = previous_day_close_wallet_balance
                     table.add_row([daily[idx]['date'], compress_float(day_profit, 3), round_(profit_pct, 0.01)])
 
