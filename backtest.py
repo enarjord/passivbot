@@ -41,8 +41,8 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
     lines.append(f"n stop loss entries {result['n_stop_loss_entries']}")
     lines.append(f"biggest_psize {round(result['biggest_psize'], 10)}")
     lines.append(f"closest liq percentage {result['closest_liq'] * 100:.4f}%")
-    lines.append(f"max hours stuck {result['max_hrs_no_fills_same_side']:.2f}")
-    lines.append(f"max hours between fills {result['max_hrs_no_fills']:.2f}")
+    lines.append(f"max_hrs_no_fills_same_side {result['max_hrs_no_fills_same_side']:.2f}")
+    lines.append(f"max_hrs_no_fills {result['max_hrs_no_fills']:.2f}")
     lines.append(f"starting balance {result['starting_balance']}")
     lines.append(f"long: {result['do_long']}, short: {result['do_shrt']}")
 
@@ -181,6 +181,8 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, list, bo
     volatility_chunk = std_chunk / ema_chunk
     zc = 0
 
+    closest_liq = 1.0
+
     prev_update_plus_delay = ticks[ema_span][2] + latency_simulation_ms
     update_triggered = False
     prev_update_plus_5sec = 0
@@ -196,6 +198,7 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, list, bo
 
         # Update the stats every hour
         if tick[2] > next_stats_update:
+            closest_liq = min(closest_liq, calc_diff(liq_price, tick[0]))
             stats_update()
             next_stats_update = tick[2] + 1000 * 60 * 60
 
@@ -297,6 +300,7 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, list, bo
             update_triggered = False
             bids, asks = [], []
             liq_diff = calc_diff(liq_price, tick[0])
+            closest_liq = min(closest_liq, liq_diff)
             for tpl in iter_entries(balance, long_psize, long_pprice, shrt_psize, shrt_pprice,
                                     liq_price, ob[0], ob[1], ema_chunk[k - zc], tick[0],
                                     volatility_chunk[k - zc], **xk):
@@ -312,8 +316,6 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, list, bo
                 for tpl in iter_shrt_closes(balance, shrt_psize, shrt_pprice, ob[0], **xk):
                     bids.append(list(tpl) + [shrt_pprice, 'shrt_close'])
             if tick[0] >= long_pprice and long_pprice > 0.0:
-                if long_psize != long_psize:
-                    print('debug', long_pprice, long_psize)
                 for tpl in iter_long_closes(balance, long_psize, long_pprice, ob[1], **xk):
                     asks.append(list(tpl) + [long_pprice, 'long_close'])
             bids = sorted(bids, key=lambda x: x[1], reverse=True)
@@ -322,18 +324,6 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, list, bo
         if len(fills) > 0:
             for fill in fills:
                 balance += fill['pnl'] + fill['fee_paid']
-                ms_since_long_pos_change = tick[2] - prev_long_fill_ts \
-                    if (prev_long_fill_ts := max(prev_long_close_ts, prev_long_entry_ts)) > 0 else 0
-                ms_since_shrt_pos_change = tick[2] - prev_shrt_fill_ts \
-                    if (prev_shrt_fill_ts := max(prev_shrt_close_ts, prev_shrt_entry_ts)) > 0 else 0
-
-                if ('stop_loss' in fill['type'] and 'close' in fill['type']) \
-                        or 'liquidation' in fill['type']:
-                    loss_cumsum += fill['pnl']
-                else:
-                    profit_cumsum += fill['pnl']
-                fee_paid_cumsum += fill['fee_paid']
-                pnl_plus_fees_cumsum += fill['pnl'] + fill['fee_paid']
                 upnl_l = calc_long_pnl(long_pprice, tick[0], long_psize, xk['inverse'],
                                        xk['contract_multiplier'])
                 upnl_s = calc_shrt_pnl(shrt_pprice, tick[0], shrt_psize, xk['inverse'],
@@ -346,10 +336,6 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, list, bo
                 fill.update({'liq_price': liq_price, 'liq_diff': liq_diff})
 
                 fill['equity'] = balance + upnl_l + upnl_s
-                fill['pnl_plus_fees_cumsum'] = pnl_plus_fees_cumsum
-                fill['loss_cumsum'] = loss_cumsum
-                fill['profit_cumsum'] = profit_cumsum
-                fill['fee_paid_cumsum'] = fee_paid_cumsum
                 fill['available_margin'] = calc_available_margin(
                     balance, long_psize, long_pprice, shrt_psize, shrt_pprice, tick[0],
                     xk['inverse'], xk['contract_multiplier'], xk['leverage']
@@ -360,28 +346,21 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, list, bo
                 fill['balance'] = balance
                 fill['timestamp'] = tick[2]
                 fill['trade_id'] = k
-                fill['progress'] = (k - ema_span) / (len(ticks) - ema_span)
-                fill['drawdown'] = calc_diff(fill['balance'], fill['equity'])
-                fill['balance_starting_balance_ratio'] = fill['balance'] / config['starting_balance']
-                fill['equity_starting_balance_ratio'] = fill['equity'] / config['starting_balance']
-                fill['equity_balance_ratio'] = fill['equity'] / fill['balance']
-                fill['gain'] = fill['equity_starting_balance_ratio']
-                fill['n_days'] = (tick[2] - ticks[0][2]) / (1000 * 60 * 60 * 24)
+                fill['gain'] = fill['equity'] / config['starting_balance']
+                fill['n_days'] = (tick[2] - ticks[ema_span][2]) / (1000 * 60 * 60 * 24)
+                fill['closest_liq'] = closest_liq
                 try:
                     fill['average_daily_gain'] = fill['gain'] ** (1 / fill['n_days']) \
                         if (fill['n_days'] > 0.5 and fill['gain'] > 0.0) else 0.0
                 except:
                     fill['average_daily_gain'] = 0.0
-                fill['hours_since_long_pos_change'] = ms_since_long_pos_change / (1000 * 60 * 60)
-                fill['hours_since_shrt_pos_change'] = ms_since_shrt_pos_change / (1000 * 60 * 60)
-                fill['hours_since_pos_change_max'] = max(fill['hours_since_long_pos_change'],
-                                                         fill['hours_since_shrt_pos_change'])
                 all_fills.append(fill)
                 if balance <= 0.0 or 'liquidation' in fill['type']:
                     return all_fills, stats, False
             if do_print:
-                line = f"\r{all_fills[-1]['progress']:.3f} "
+                line = f"\r{k / len(ticks):.3f} "
                 line += f"adg {all_fills[-1]['average_daily_gain']:.4f} "
+                line += f"closest_liq {closest_liq:.4f} "
                 print(line, end=' ')
     return all_fills, stats, True
 
@@ -516,7 +495,7 @@ def backtest_wrap(ticks: [dict], backtest_config: dict, do_print=False) -> (dict
 def prepare_result(fills: list, ticks: np.ndarray, do_long: bool, do_shrt: bool) -> dict:
     fdf = pd.DataFrame(fills)
     if fdf.empty:
-        result = {
+        return {
             'net_pnl_plus_fees': 0,
             'profit_sum': 0,
             'loss_sum': 0,
@@ -541,44 +520,44 @@ def prepare_result(fills: list, ticks: np.ndarray, do_long: bool, do_shrt: bool)
             'do_long': do_long,
             'do_shrt': do_shrt
         }
+    fdf = fdf.set_index('trade_id')
+    if len(longs_ := fdf[fdf.pside == 'long']) > 0:
+        long_stuck = np.diff(list(longs_.timestamp) + [ticks[-1][2]]).max() / (1000 * 60 * 60)
     else:
-        if len(longs_ := fdf[fdf.pside == 'long']) > 0:
-            long_stuck = np.diff(list(longs_.timestamp) + [ticks[-1][2]]).max() / (1000 * 60 * 60)
-        else:
-            long_stuck = 1000.0
-        if len(shrts_ := fdf[fdf.pside == 'shrt']) > 0:
-            shrt_stuck = np.diff(list(shrts_.timestamp) + [ticks[-1][2]]).max() / (1000 * 60 * 60)
-        else:
-            shrt_stuck = 1000.0
-        result = {
-            'net_pnl_plus_fees': fills[-1]['pnl_plus_fees_cumsum'],
-            'profit_sum': fills[-1]['profit_cumsum'],
-            'loss_sum': fills[-1]['loss_cumsum'],
-            'fee_sum': fills[-1]['fee_paid_cumsum'],
-            'final_equity': fills[-1]['equity'],
-            'gain': (gain := fills[-1]['gain']),
-            'max_drawdown': fdf.drawdown.max(),
-            'n_days': (n_days := (ticks[-1][2] - ticks[0][2]) / (1000 * 60 * 60 * 24)),
-            'average_daily_gain': gain ** (1 / n_days) if gain > 0.0 else 0.0,
-            'closest_liq': fdf.liq_diff.min(),
-            'n_fills': len(fills),
-            'n_entries': len(fdf[fdf.type.str.contains('entry')]),
-            'n_closes': len(fdf[fdf.type.str.contains('close')]),
-            'n_reentries': len(fdf[fdf.type.str.contains('reentry')]),
-            'n_initial_entries': len(fdf[fdf.type.str.contains('initial')]),
-            'n_normal_closes': len(fdf[(fdf.type == 'long_close') | (fdf.type == 'shrt_close')]),
-            'n_stop_loss_closes': len(fdf[(fdf.type.str.contains('stop_loss')) &
-                                          (fdf.type.str.contains('close'))]),
-            'n_stop_loss_entries': len(fdf[(fdf.type.str.contains('stop_loss')) &
-                                           (fdf.type.str.contains('entry'))]),
-            'biggest_psize': fdf[['long_psize', 'shrt_psize']].abs().max(axis=1).max(),
-            'max_hrs_no_fills_long': long_stuck,
-            'max_hrs_no_fills_shrt': shrt_stuck,
-            'max_hrs_no_fills_same_side': max(long_stuck, shrt_stuck),
-            'max_hrs_no_fills': np.diff(list(fdf.timestamp) + [ticks[-1][2]]).max() / (1000 * 60 * 60),
-            'do_long': do_long,
-            'do_shrt': do_shrt
-        }
+        long_stuck = 1000.0
+    if len(shrts_ := fdf[fdf.pside == 'shrt']) > 0:
+        shrt_stuck = np.diff(list(shrts_.timestamp) + [ticks[-1][2]]).max() / (1000 * 60 * 60)
+    else:
+        shrt_stuck = 1000.0
+    result = {
+        'net_pnl_plus_fees': fdf.pnl.sum() + fdf.fee_paid.sum(),
+        'profit_sum': fdf[fdf.pnl > 0.0].pnl.sum(),
+        'loss_sum': fdf[fdf.pnl < 0.0].pnl.sum(),
+        'fee_sum': fdf.fee_paid.sum(),
+        'final_equity': fdf.iloc[-1].equity,
+        'gain': (gain := fdf.iloc[-1].equity / fdf.iloc[0].balance),
+        'max_drawdown': ((fdf.equity - fdf.balance).abs() / fdf.balance).max(),
+        'n_days': (n_days := (ticks[-1][2] - fdf.iloc[0].timestamp) / (1000 * 60 * 60 * 24)),
+        'average_daily_gain': gain ** (1 / n_days) if gain > 0.0 and n_days > 0.0 else 0.0,
+        'closest_liq': fdf.closest_liq.iloc[-1],
+        'n_fills': len(fdf),
+        'n_entries': len(fdf[fdf.type.str.contains('entry')]),
+        'n_closes': len(fdf[fdf.type.str.contains('close')]),
+        'n_reentries': len(fdf[fdf.type.str.contains('reentry')]),
+        'n_initial_entries': len(fdf[fdf.type.str.contains('initial')]),
+        'n_normal_closes': len(fdf[(fdf.type == 'long_close') | (fdf.type == 'shrt_close')]),
+        'n_stop_loss_closes': len(fdf[(fdf.type.str.contains('stop_loss')) &
+                                      (fdf.type.str.contains('close'))]),
+        'n_stop_loss_entries': len(fdf[(fdf.type.str.contains('stop_loss')) &
+                                       (fdf.type.str.contains('entry'))]),
+        'biggest_psize': fdf[['long_psize', 'shrt_psize']].abs().max(axis=1).max(),
+        'max_hrs_no_fills_long': long_stuck,
+        'max_hrs_no_fills_shrt': shrt_stuck,
+        'max_hrs_no_fills_same_side': max(long_stuck, shrt_stuck),
+        'max_hrs_no_fills': np.diff(list(fdf.timestamp) + [ticks[-1][2]]).max() / (1000 * 60 * 60),
+        'do_long': do_long,
+        'do_shrt': do_shrt
+    }
     return result
 
 

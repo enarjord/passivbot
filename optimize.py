@@ -70,9 +70,26 @@ def clean_result_config(config: dict) -> dict:
     return config
 
 
+def iter_slices(iterable, size: float, n_tests: int):
+    for ix in np.linspace(0.0, 1 - size, n_tests):
+        yield iterable[int(round(len(iterable) * ix)):int(round(len(iterable) * (ix + size)))]
+
+
 def wrap_backtest(config, ticks):
-    fills, _, did_finish = backtest(config, ticks)
-    result = prepare_result(fills, ticks, config['do_long'], config['do_shrt'])
+    results = []
+    for ticks_slice in iter_slices(ticks, 0.4, 4):
+        fills, _, did_finish = backtest(config, ticks_slice)
+        result_ = prepare_result(fills, ticks_slice, config['do_long'], config['do_shrt'])
+        results.append(result_)
+    result = {}
+    for k in results[0]:
+        try:
+            result[k] = np.mean([r[k] for r in results])
+        except:
+            result[k] = results[0][k]
+
+    # fills, _, did_finish = backtest(config, ticks)
+    # result = prepare_result(fills, ticks, config['do_long'], config['do_shrt'])
     objective = objective_function(result,
                                    config['minimum_liquidation_distance'],
                                    config['max_hrs_no_fills'],
@@ -111,7 +128,8 @@ def backtest_tune(ticks: np.ndarray, backtest_config: dict, current_best: Union[
         if type(current_best) == list:
             for c in current_best:
                 c = clean_start_config(c, config, backtest_config['ranges'])
-                current_best_params.append(c)
+                if c not in current_best_params:
+                    current_best_params.append(c)
         else:
             current_best = clean_start_config(current_best, config, backtest_config['ranges'])
             current_best_params.append(current_best)
