@@ -165,12 +165,13 @@ class Telegram:
             self.send_msg('This command is not supported (yet)')
 
     def _daily(self, update=None, context=None):
-        from binance import BinanceBot
-        if isinstance(self._bot, BinanceBot):
+        if self._bot.exchange == 'binance':
             async def send_daily_async():
-                table = PrettyTable(['Date', f'Profit {self._bot.quot}'])
                 nr_of_days = 7
                 today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+                daily = {}
+                position = await self._bot.fetch_position()
+                wallet_balance = position['wallet_balance']
                 for idx, item in enumerate(range(0, nr_of_days)):
                     start_of_day = today - timedelta(days=idx)
                     end_of_day = start_of_day + timedelta(days=1)
@@ -179,8 +180,18 @@ class Telegram:
                     daily_trades = await self._bot.fetch_fills(start_time=start_time, end_time=end_time)
                     pln_summary = 0
                     for trade in daily_trades:
-                        pln_summary += trade['realized_pnl']
-                    table.add_row([start_of_day.strftime('%m-%d'), round_dynamic(pln_summary, 3)])
+                        pln_summary += float(trade['realized_pnl'])
+                    daily[idx] = {}
+                    daily[idx]['date'] = start_of_day.strftime('%d-%m')
+                    daily[idx]['pnl'] = pln_summary
+
+                table = PrettyTable(['Date', 'PNL', 'Daily %'])
+                for item in daily.keys():
+                    day_profit = daily[item]['pnl']
+                    previous_day_close_wallet_balance = wallet_balance - day_profit
+                    profit_pct = ((wallet_balance / previous_day_close_wallet_balance) - 1) * 100
+                    wallet_balance = previous_day_close_wallet_balance
+                    table.add_row([daily[idx]['date'], compress_float(day_profit, 3), round_(profit_pct, 0.01)])
 
                 msg = f'<pre>{table.get_string(border=True, padding_width=1, junction_char=" ", vertical_char=" ", hrules=HEADER)}</pre>'
                 self.send_msg(msg)
