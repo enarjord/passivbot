@@ -1,14 +1,13 @@
 import asyncio
 import datetime
 import json
+import logging
 import os
 import signal
 import sys
 from collections import deque
 from time import time
-from enum import Enum
 
-import aiohttp
 import numpy as np
 
 import telegram_bot
@@ -17,6 +16,7 @@ import websockets
 from jitted import round_, calc_diff, calc_ema, calc_cost, iter_entries, iter_long_closes, \
     iter_shrt_closes, round_dynamic
 
+logging.getLogger("telegram").setLevel(logging.CRITICAL)
 
 def get_keys():
     return ['inverse', 'do_long', 'do_shrt', 'qty_step', 'price_step', 'min_qty', 'min_cost',
