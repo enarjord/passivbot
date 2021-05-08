@@ -285,7 +285,7 @@ class Bot:
         return canceled_orders
 
     def stop(self, signum=None, frame=None) -> None:
-        print("Stopping passivbot...")
+        print("\nStopping passivbot, please wait...")
         try:
             self.stop_websocket = True
             if self.telegram is not None:
@@ -638,5 +638,5 @@ if __name__ == '__main__':
     try:
         asyncio.run(main())
     finally:
-        print('Passivbot was stopped succesfully')
+        print('\nPassivbot was stopped succesfully')
         os._exit(0)
