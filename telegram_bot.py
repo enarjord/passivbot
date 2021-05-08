@@ -220,10 +220,10 @@ class Telegram:
         except:
             print('Failed to send telegram message')
 
-    def exit(self, signum, frame):
+    def exit(self):
         try:
+            print("\nStopping telegram bot...")
             self._updater.stop()
-            print("Successfully shutdown telegram bot")
+            print("\nTelegram was stopped succesfully")
         except:
-            print("Failed to shutdown telegram bot. Please make sure it is correctly terminated")
-        raise KeyboardInterrupt
+            print("\nFailed to shutdown telegram bot. Please make sure it is correctly terminated")

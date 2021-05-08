@@ -1,12 +1,12 @@
 import asyncio
 import datetime
 import json
+import logging
 import os
 import signal
 import sys
 from collections import deque
 from time import time
-from enum import Enum
 
 import numpy as np
 
@@ -16,6 +16,7 @@ import websockets
 from jitted import round_, calc_diff, calc_ema, calc_cost, iter_entries, iter_long_closes, \
     iter_shrt_closes, round_dynamic
 
+logging.getLogger("telegram").setLevel(logging.CRITICAL)
 
 def get_keys():
     return ['inverse', 'do_long', 'do_shrt', 'qty_step', 'price_step', 'min_qty', 'min_cost',
@@ -119,10 +120,10 @@ def flatten(lst: list) -> list:
 
 
 class Bot:
-    def __init__(self, user: str, config: dict, telegram = None):
+    def __init__(self, user: str, config: dict):
         self.config = config
         self.user = user
-        self.telegram = telegram
+        self.telegram = None
 
         for key in config:
             setattr(self, key, config[key])
@@ -283,8 +284,16 @@ class Bot:
         self.ts_released['cancel_orders'] = time()
         return canceled_orders
 
-    def stop(self) -> None:
-        self.stop_websocket = True
+    def stop(self, signum=None, frame=None) -> None:
+        print("\nStopping passivbot, please wait...")
+        try:
+            self.stop_websocket = True
+            if self.telegram is not None:
+                self.telegram.exit()
+            else:
+                print("No telegram active")
+        except Exception as e:
+            print(f"An error occurred during shutdown: {e}")
 
     def pause(self) -> None:
         self.process_websocket_ticks = False
@@ -558,7 +567,12 @@ class Bot:
 
 
 async def start_bot(bot):
-    await bot.start_websocket()
+    while not bot.stop_websocket:
+        try:
+            await bot.start_websocket()
+        except Exception as e:
+            print('Websocket connection has been lost, attempting to reinitialize the bot...')
+            await asyncio.sleep(10)
 
 
 async def create_binance_bot(user: str, config: str):
@@ -613,9 +627,16 @@ async def main() -> None:
 
     if 'telegram' in account and account['telegram']['enabled']:
         telegram = await _start_telegram(account=account, bot=bot)
-        signal.signal(signal.SIGINT, telegram.exit)
+        bot.telegram = telegram
+    signal.signal(signal.SIGINT, bot.stop)
+    signal.signal(signal.SIGTERM, bot.stop)
     await start_bot(bot)
+    await bot.session.close()
 
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    finally:
+        print('\nPassivbot was stopped succesfully')
+        os._exit(0)
