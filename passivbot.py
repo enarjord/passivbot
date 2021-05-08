@@ -14,7 +14,7 @@ import telegram_bot
 import websockets
 
 from jitted import round_, calc_diff, calc_ema, calc_cost, iter_entries, iter_long_closes, \
-    iter_shrt_closes, round_dynamic
+    iter_shrt_closes, round_dynamic, compress_float
 
 logging.getLogger("telegram").setLevel(logging.CRITICAL)
 
@@ -419,15 +419,15 @@ class Bot:
         if time() - self.ts_released['print'] >= 0.5:
             self.ts_released['print'] = time()
             line = f"{self.symbol} "
-            line += f"long {self.position['long']['size']} @ "
+            line += f"l {self.position['long']['size']} @ "
             line += f"{round_(self.position['long']['price'], self.price_step)} "
             long_closes = sorted([o for o in self.open_orders if o['side'] == 'sell'
                                   and o['position_side'] == 'long'], key=lambda x: x['price'])
             long_entries = sorted([o for o in self.open_orders if o['side'] == 'buy'
                                    and o['position_side'] == 'long'], key=lambda x: x['price'])
-            line += f"close @ {long_closes[0]['price'] if long_closes else 0.0} "
-            line += f"enter @ {long_entries[-1]['price'] if long_entries else 0.0} "
-            line += f"|| shrt {self.position['shrt']['size']} @ "
+            line += f"c@ {long_closes[0]['price'] if long_closes else 0.0} "
+            line += f"e@ {long_entries[-1]['price'] if long_entries else 0.0} "
+            line += f"|| s {self.position['shrt']['size']} @ "
             line += f"{round_(self.position['shrt']['price'], self.price_step)} "
             shrt_closes = sorted([o for o in self.open_orders if o['side'] == 'buy'
                                   and (o['position_side'] == 'shrt' or
@@ -439,20 +439,20 @@ class Bot:
                                         (o['position_side'] == 'both' and
                                          self.position['shrt']['size'] != 0.0))],
                                   key=lambda x: x['price'])
-            line += f"close @ {shrt_closes[-1]['price'] if shrt_closes else 0.0} "
-            line += f"enter @ {shrt_entries[0]['price'] if shrt_entries else 0.0} "
+            line += f"c@ {shrt_closes[-1]['price'] if shrt_closes else 0.0} "
+            line += f"e@ {shrt_entries[0]['price'] if shrt_entries else 0.0} "
             if self.position['long']['size'] > abs(self.position['shrt']['size']):
                 liq_price = self.position['long']['liquidation_price']
-                sl_trigger_price = round_(liq_price / (1 - self.stop_loss_liq_diff), self.price_step)
+                sl_trigger_price = liq_price / (1 - self.stop_loss_liq_diff)
             else:
                 liq_price = self.position['shrt']['liquidation_price']
-                sl_trigger_price = round_(liq_price / (1 + self.stop_loss_liq_diff), self.price_step)
-            line += f"|| last {self.price} liq {round_dynamic(liq_price, 3)} "
-            line += f"sl trig {round_dynamic(sl_trigger_price, 3)} "
-            line += f"ema {round_dynamic(self.ema, 3)} "
-            line += f"bal {round_dynamic(self.position['wallet_balance'], 3)} "
-            line += f"equity {round_dynamic(self.position['equity'], 3)} "
-            line += f"v. {round_dynamic(self.volatility, 3)} "
+                sl_trigger_price = liq_price / (1 + self.stop_loss_liq_diff)
+            line += f"|| last {self.price} liq {compress_float(liq_price, 5)} "
+            line += f"sl trig {compress_float(sl_trigger_price, 5)} "
+            line += f"ema {compress_float(self.ema, 5)} "
+            line += f"bal {compress_float(self.position['wallet_balance'], 3)} "
+            line += f"eq {compress_float(self.position['equity'], 3)} "
+            line += f"v. {compress_float(self.volatility, 5)} "
             print_([line], r=True)
 
     def flush_stuck_locks(self, timeout: float = 4.0) -> None:
