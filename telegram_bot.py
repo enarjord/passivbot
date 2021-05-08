@@ -222,8 +222,8 @@ class Telegram:
 
     def exit(self):
         try:
-            print("Stopping telegram bot...")
+            print("\nStopping telegram bot...")
             self._updater.stop()
-            print("Telegram was stopped succesfull")
+            print("\nTelegram was stopped succesfully")
         except:
-            print("Failed to shutdown telegram bot. Please make sure it is correctly terminated")
+            print("\nFailed to shutdown telegram bot. Please make sure it is correctly terminated")
