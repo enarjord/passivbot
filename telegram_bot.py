@@ -191,7 +191,7 @@ class Telegram:
                     previous_day_close_wallet_balance = wallet_balance - day_profit
                     profit_pct = ((wallet_balance / previous_day_close_wallet_balance) - 1) * 100
                     wallet_balance = previous_day_close_wallet_balance
-                    table.add_row([daily[idx]['date'], compress_float(day_profit, 3), round_(profit_pct, 0.01)])
+                    table.add_row([daily[item]['date'], compress_float(day_profit, 3), round_(profit_pct, 0.01)])
 
                 msg = f'<pre>{table.get_string(border=True, padding_width=1, junction_char=" ", vertical_char=" ", hrules=HEADER)}</pre>'
                 self.send_msg(msg)
