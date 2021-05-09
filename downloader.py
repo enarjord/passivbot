@@ -12,20 +12,24 @@ class Downloader:
     Downloader class for tick data. Fetches data from specified time until now or specified time.
     """
 
-    def __init__(self, backtest_config: dict):
-        self.backtest_config = backtest_config
+    def __init__(self, config: dict):
+        self.config = config
+        self.price_filepath = os.path.join(config["caches_dirpath"], f"{config['session_name']}_price_cache.npy")
+        self.buyer_maker_filepath = os.path.join(config["caches_dirpath"], f"{config['session_name']}_buyer_maker_cache.npy")
+        self.time_filepath = os.path.join(config["caches_dirpath"], f"{config['session_name']}_time_cache.npy")
+        self.tick_filepath = os.path.join(config["caches_dirpath"], f"{config['session_name']}_ticks_cache.npy")
         try:
-            self.start_time = int(parser.parse(self.backtest_config["start_date"]).replace(
+            self.start_time = int(parser.parse(self.config["start_date"]).replace(
                 tzinfo=datetime.timezone.utc).timestamp() * 1000)
         except Exception:
-            print("Not recognized date format for start time.")
-        self.end_time = self.backtest_config["end_date"]
+            print("Unrecognized date format for start time.")
+        self.end_time = self.config["end_date"]
         if self.end_time != -1:
             try:
                 self.end_time = int(
                     parser.parse(self.end_time).replace(tzinfo=datetime.timezone.utc).timestamp() * 1000)
             except Exception:
-                print("Not recognized date format for end time.")
+                print("Unrecognized date format for end time.")
 
     def validate_dataframe(self, df: pd.DataFrame) -> tuple:
         """
@@ -200,28 +204,28 @@ class Downloader:
         Downloads any missing data based on the specified time frame.
         @return:
         """
-        if "historical_data_path" in self.backtest_config and self.backtest_config["historical_data_path"]:
+        if "historical_data_path" in self.config and self.config["historical_data_path"]:
             self.filepath = make_get_filepath(
-                os.path.join(self.backtest_config["historical_data_path"], "historical_data",
-                             self.backtest_config["exchange"], "agg_trades_futures",
-                             self.backtest_config["symbol"], ""))
+                os.path.join(self.config["historical_data_path"], "historical_data",
+                             self.config["exchange"], "agg_trades_futures",
+                             self.config["symbol"], ""))
         else:
             self.filepath = make_get_filepath(
-                os.path.join("historical_data", self.backtest_config["exchange"], "agg_trades_futures",
-                             self.backtest_config["symbol"], ""))
+                os.path.join("historical_data", self.config["exchange"], "agg_trades_futures",
+                             self.config["symbol"], ""))
 
-        if self.backtest_config["exchange"] == "binance":
-            self.bot = await create_binance_bot(self.backtest_config["user"],
-                                                get_dummy_settings(self.backtest_config["user"],
-                                                                   self.backtest_config["exchange"],
-                                                                   self.backtest_config["symbol"]))
-        elif self.backtest_config["exchange"] == "bybit":
-            self.bot = await create_bybit_bot(self.backtest_config["user"],
-                                              get_dummy_settings(self.backtest_config["user"],
-                                                                 self.backtest_config["exchange"],
-                                                                 self.backtest_config["symbol"]))
+        if self.config["exchange"] == "binance":
+            self.bot = await create_binance_bot(self.config["user"],
+                                                get_dummy_settings(self.config["user"],
+                                                                   self.config["exchange"],
+                                                                   self.config["symbol"]))
+        elif self.config["exchange"] == "bybit":
+            self.bot = await create_bybit_bot(self.config["user"],
+                                              get_dummy_settings(self.config["user"],
+                                                                 self.config["exchange"],
+                                                                 self.config["symbol"]))
         else:
-            print(self.backtest_config["exchange"], 'not found')
+            print(self.config["exchange"], 'not found')
             return
 
         filenames = self.get_filenames()
@@ -383,10 +387,9 @@ class Downloader:
         except:
             pass
 
-    async def prepare_files(self, filepaths: dict, single_file: bool = False):
+    async def prepare_files(self, single_file: bool = False):
         """
         Takes downloaded data and prepares numpy arrays for use in backtesting.
-        @param filepaths: Dictionary of filepaths.
         @param single_file: If a single array should be created ot multiple ones.
         @return:
         """
@@ -433,8 +436,8 @@ class Downloader:
                     chunks.insert(0, df)
                     df = pd.concat(chunks, axis=0)
                 del chunks
-            print_(["Saving single file with", len(df), " ticks to", filepaths["tick_filepath"], "..."])
-            np.save(filepaths["tick_filepath"], df[["price", "is_buyer_maker", "timestamp"]])
+            print_(["Saving single file with", len(df), " ticks to", self.tick_filepath, "..."])
+            np.save(self.tick_filepath, df[["price", "is_buyer_maker", "timestamp"]])
             print_(["Saved single file!"])
         else:
             for f in filenames:
@@ -469,8 +472,8 @@ class Downloader:
                     chunks.insert(0, df)
                     df = pd.concat(chunks, axis=0)
                 del chunks
-            print_(["Saving price file with", len(df), " ticks to", filepaths["price_filepath"], "..."])
-            np.save(filepaths["price_filepath"], df["price"])
+            print_(["Saving price file with", len(df), " ticks to", self.price_filepath, "..."])
+            np.save(self.price_filepath, df["price"])
             print_(["Saved price file!"])
 
             chunks = []
@@ -508,8 +511,8 @@ class Downloader:
                     chunks.insert(0, df)
                     df = pd.concat(chunks, axis=0)
                 del chunks
-            print_(["Saving buyer_maker file with", len(df), " ticks to", filepaths["buyer_maker_filepath"], "..."])
-            np.save(filepaths["buyer_maker_filepath"], df["is_buyer_maker"])
+            print_(["Saving buyer_maker file with", len(df), " ticks to", self.buyer_maker_filepath, "..."])
+            np.save(self.buyer_maker_filepath, df["is_buyer_maker"])
             print_(["Saved buyer_maker file!"])
 
             chunks = []
@@ -537,8 +540,8 @@ class Downloader:
                     chunks.insert(0, df)
                     df = pd.concat(chunks, axis=0)
                 del chunks
-            print_(["Saving timestamp file with", len(df), " ticks to", filepaths["time_filepath"], "..."])
-            np.save(filepaths["time_filepath"], df["timestamp"])
+            print_(["Saving timestamp file with", len(df), " ticks to", self.time_filepath, "..."])
+            np.save(self.time_filepath, df["timestamp"])
             print_(["Saved timestamp file!"])
 
     async def get_ticks(self, single_file: bool = False) -> (np.ndarray, np.ndarray, np.ndarray):
@@ -547,28 +550,22 @@ class Downloader:
         If they do not exist or if their length doesn't match, download the missing data and create them.
         @return: A tuple of three numpy arrays.
         """
-        price_filepath = os.path.join(self.backtest_config["session_dirpath"], f"price_cache.npy")
-        buyer_maker_filepath = os.path.join(self.backtest_config["session_dirpath"], f"buyer_maker_cache.npy")
-        time_filepath = os.path.join(self.backtest_config["session_dirpath"], f"time_cache.npy")
-        tick_filepath = os.path.join(self.backtest_config["session_dirpath"], f"ticks_cache.npy")
-        filepaths = {"price_filepath": price_filepath, "buyer_maker_filepath": buyer_maker_filepath,
-                     "time_filepath": time_filepath, "tick_filepath": tick_filepath}
         if single_file:
-            if os.path.exists(tick_filepath):
+            if os.path.exists(self.tick_filepath):
                 print_(['Loading cached tick data'])
-                tick_data = np.load(tick_filepath)
+                tick_data = np.load(self.tick_filepath)
                 return tick_data
             await self.download_ticks()
-            await self.prepare_files(filepaths, single_file)
-            tick_data = np.load(tick_filepath)
+            await self.prepare_files(single_file)
+            tick_data = np.load(self.tick_filepath)
             return tick_data
         else:
-            if os.path.exists(price_filepath) and os.path.exists(buyer_maker_filepath) and os.path.exists(
-                    time_filepath):
+            if os.path.exists(self.price_filepath) and os.path.exists(self.buyer_maker_filepath) and \
+                    os.path.exists(self.time_filepath):
                 print_(['Loading cached tick data'])
-                price_data = np.load(price_filepath)
-                buyer_maker_data = np.load(buyer_maker_filepath)
-                time_data = np.load(time_filepath)
+                price_data = np.load(self.price_filepath)
+                buyer_maker_data = np.load(self.buyer_maker_filepath)
+                time_data = np.load(self.time_filepath)
                 if len(price_data) == len(buyer_maker_data) == len(time_data):
                     return price_data, buyer_maker_data, time_data
                 else:
@@ -579,10 +576,10 @@ class Downloader:
                     gc.collect()
 
             await self.download_ticks()
-            await self.prepare_files(filepaths, single_file)
-            price_data = np.load(price_filepath)
-            buyer_maker_data = np.load(buyer_maker_filepath)
-            time_data = np.load(time_filepath)
+            await self.prepare_files(single_file)
+            price_data = np.load(self.price_filepath)
+            buyer_maker_data = np.load(self.buyer_maker_filepath)
+            time_data = np.load(self.time_filepath)
             return price_data, buyer_maker_data, time_data
 
 
@@ -607,13 +604,13 @@ async def fetch_market_specific_settings(exchange: str, user: str, symbol: str):
         settings_from_exchange['exchange'] = 'bybit'
     else:
         raise Exception(f'unknown exchange {exchange}')
+    await bot.session.close()
     if 'inverse' in bot.market_type:
         settings_from_exchange['inverse'] = True
     elif 'linear' in bot.market_type:
         settings_from_exchange['inverse'] = False
     else:
         raise Exception('unknown market type')
-    await bot.session.close()
     for key in ['max_leverage', 'min_qty', 'min_cost', 'qty_step', 'price_step', 'max_leverage',
                 'contract_multiplier']:
         settings_from_exchange[key] = getattr(bot, key)
@@ -621,65 +618,45 @@ async def fetch_market_specific_settings(exchange: str, user: str, symbol: str):
 
 
 async def prep_backtest_config(config_name: str):
-    backtest_config = hjson.load(open(config_name))
+    config = hjson.load(open(config_name))
 
-    exchange = backtest_config['exchange']
-    user = backtest_config['user']
-    symbol = backtest_config['symbol']
-    session_name = backtest_config['session_name']
+    end_date = config['end_date'] if config['end_date'] and config['end_date'] != -1 else ts_to_date(time())[:16]
+    config['session_name'] = f"{config['start_date'].replace(' ', '').replace(':', '').replace('.', '')}_"\
+                             f"{end_date.replace(' ', '').replace(':', '').replace('.', '')}"
 
-    start_date = backtest_config['start_date'].replace(' ', '_').replace(':', '_').replace('.', '_')
-    if backtest_config['end_date'] and backtest_config['end_date'] != -1:
-        end_date = backtest_config['end_date'].replace(' ', '_').replace(':', '_').replace('.', '_')
-    else:
-        end_date = 'now'
-        backtest_config['end_date'] = -1
+    base_dirpath = os.path.join('backtests', config['exchange'], config['symbol'])
+    config['caches_dirpath'] = make_get_filepath(os.path.join(base_dirpath, 'caches', ''))
+    config['optimize_dirpath'] = make_get_filepath(os.path.join(base_dirpath, 'optimize', ''))
+    config['plots_dirpath'] = make_get_filepath(os.path.join(base_dirpath, 'plots', ''))
 
-    session_dirpath = make_get_filepath(
-        os.path.join('backtest_results', exchange, symbol, f"{session_name}_{start_date}_{end_date}", ''))
-
-    if os.path.exists((mss := session_dirpath + 'market_specific_settings.json')):
+    if os.path.exists((mss := config['caches_dirpath'] + 'market_specific_settings.json')):
         market_specific_settings = json.load(open(mss))
     else:
-        market_specific_settings = await fetch_market_specific_settings(exchange, user, symbol)
-        json.dump(market_specific_settings, open(mss, 'w'))
-    backtest_config.update(market_specific_settings)
+        market_specific_settings = await fetch_market_specific_settings(config['exchange'], config['user'], config['symbol'])
+        json.dump(market_specific_settings, open(mss, 'w'), indent=4)
+    config.update(market_specific_settings)
 
     # setting absolute min/max ranges
-    for key in ['qty_pct', 'ddown_factor', 'ema_span', 'ema_spread',
-                'grid_coefficient', 'grid_spacing']:
-        if key in backtest_config['ranges']:
-            backtest_config['ranges'][key][0] = max(0.0, backtest_config['ranges'][key][0])
+    for key in ['qty_pct', 'ddown_factor', 'ema_span', 'grid_spacing']:
+        if key in config['ranges']:
+            config['ranges'][key][0] = max(0.0, config['ranges'][key][0])
     for key in ['qty_pct']:
-        if key in backtest_config['ranges']:
-            backtest_config['ranges'][key][1] = min(1.0, backtest_config['ranges'][key][1])
+        if key in config['ranges']:
+            config['ranges'][key][1] = min(1.0, config['ranges'][key][1])
 
-    if 'leverage' in backtest_config['ranges']:
-        backtest_config['ranges']['leverage'][1] = \
-            min(backtest_config['ranges']['leverage'][1],
-                backtest_config['max_leverage'])
-        backtest_config['ranges']['leverage'][0] = \
-            min(backtest_config['ranges']['leverage'][0],
-                backtest_config['ranges']['leverage'][1])
+    if 'leverage' in config['ranges']:
+        config['ranges']['leverage'][1] = min(config['ranges']['leverage'][1], config['max_leverage'])
+        config['ranges']['leverage'][0] = min(config['ranges']['leverage'][0], config['ranges']['leverage'][1])
 
-    backtest_config['session_dirpath'] = session_dirpath
-    return backtest_config
+    return config
 
 
 async def main(args: list):
-    config_name = args[1]
-    backtest_config = await prep_backtest_config(config_name)
-    downloader = Downloader(backtest_config)
-
-    price_filepath = os.path.join(backtest_config["session_dirpath"], f"price_cache.npy")
-    buyer_maker_filepath = os.path.join(backtest_config["session_dirpath"], f"buyer_maker_cache.npy")
-    time_filepath = os.path.join(backtest_config["session_dirpath"], f"time_cache.npy")
-    tick_filepath = os.path.join(backtest_config["session_dirpath"], f"ticks_cache.npy")
-    filepaths = {"price_filepath": price_filepath, "buyer_maker_filepath": buyer_maker_filepath,
-                 "time_filepath": time_filepath, "tick_filepath": tick_filepath}
+    config = await prep_backtest_config(args[1])
+    downloader = Downloader(config)
     await downloader.download_ticks()
     if not '--only' in args:
-        await downloader.prepare_files(filepaths, '--single' in args)
+        await downloader.prepare_files('--split' not in args)
 
 
 if __name__ == "__main__":

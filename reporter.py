@@ -9,6 +9,7 @@ from ray.tune.progress_reporter import memory_debug_str, trial_errors_str, _get_
 from ray.tune.trial import Trial
 from ray.tune.utils import unflattened_lookup
 from tabulate import tabulate
+from backtest import candidate_to_live_config
 
 try:
     from collections.abc import Mapping, MutableMapping
@@ -189,13 +190,11 @@ class LogReporter(CLIReporter):
                 df.sort_values(self._metric, ascending=False, inplace=True)
                 df.dropna(inplace=True)
                 df[df[self._metric] > 0].to_csv(
-                    os.path.join(config['session_dirpath'], 'intermediate_results.csv'), index=False)
+                    os.path.join(config['optimize_dirpath'], 'intermediate_results.csv'), index=False)
                 if best_eval:
-                    intermediate_result = best_eval.copy()
-                    intermediate_result['do_long'] = best_config['do_long']
-                    intermediate_result['do_shrt'] = best_config['do_shrt']
+                    intermediate_result = candidate_to_live_config({**best_config, **best_eval.copy()})
                     json.dump(intermediate_result,
-                              open(os.path.join(best_config['session_dirpath'], 'intermediate_best_result.json'), 'w'),
+                              open(os.path.join(best_config['optimize_dirpath'], 'intermediate_best_result.json'), 'w'),
                               indent=4)
         except Exception as e:
             print("Something went wrong", e)
