@@ -17,27 +17,13 @@ from ray.tune.schedulers import AsyncHyperBandScheduler
 from ray.tune.suggest import ConcurrencyLimiter
 from ray.tune.suggest.nevergrad import NevergradSearch
 
-from backtest import backtest, plot_wrap, prepare_result, prep_backtest_config
+from backtest import backtest, plot_wrap, prep_backtest_config, prepare_result, WFO
 from downloader import Downloader
 from jitted import round_
-from passivbot import make_get_filepath, ts_to_date, get_keys
+from passivbot import get_keys, make_get_filepath, ts_to_date
 from reporter import LogReporter
 
 os.environ['TUNE_GLOBAL_CHECKPOINT_S'] = '120'
-
-
-def objective_function(result: dict,
-                       liq_cap: float,
-                       max_hrs_no_fills_cap: float,
-                       max_hrs_no_fills_same_side_cap: float) -> float:
-    try:
-        return (result['average_daily_gain'] *
-                min(1.0, max_hrs_no_fills_cap / result['max_hrs_no_fills']) *
-                min(1.0, max_hrs_no_fills_same_side_cap / result['max_hrs_no_fills_same_side']) *
-                min(1.0, result['closest_liq'] / liq_cap))
-    except Exception as e:
-        print('error with objective function', e, result)
-        return 0.0
 
 
 def create_config(backtest_config: dict) -> dict:
@@ -80,42 +66,14 @@ def iter_slices(iterable, size: float, n_tests: int):
         yield iterable[int(round(len(iterable) * ix)):int(round(len(iterable) * (ix + size)))]
 
 
-def wrap_backtest(config, ticks):
-    results = []
-    for ticks_slice in iter_slices(ticks, 0.4, 4):
-        try:
-            fills, _, did_finish = backtest(config, ticks_slice)
-        except Exception as e:
-            print('debug a', e, config)
-        if not did_finish:
-            break
-        try:
-            _, result_ = prepare_result(config, fills, ticks_slice)
-        except Exception as e:
-            print('b', e)
-        results.append(result_)
-    if results:
-        result = {}
-        for k in results[0]:
-            try:
-                result[k] = np.mean([r[k] for r in results])
-            except:
-                result[k] = results[0][k]
-    else:
-        _, result = prepare_result(config, [], ticks)
-
-    # fills, _, did_finish = backtest(config, ticks)
-    # result = prepare_result(fills, ticks, config['do_long'], config['do_shrt'])
-    try:
-        objective = objective_function(result,
-                                       config['minimum_liquidation_distance'],
-                                       config['max_hrs_no_fills'],
-                                       config['max_hrs_no_fills_same_side'])
-    except Exception as e:
-        print('c', e)
-    tune.report(objective=objective, daily_gain=result['average_daily_gain'], closest_liquidation=result['closest_liq'],
-                max_hrs_no_fills=result['max_hrs_no_fills'], max_hrs_no_fills_same_side=result['max_hrs_no_fills_same_side'])
-
+def tune_report(result):
+    tune.report(
+        objective=result["objective_gmean"],
+        daily_gain=result["daily_gains_gmean"],
+        closest_liquidation=result["closest_liq"],
+        max_hrs_no_fills=result["max_hrs_no_fills"],
+        max_hrs_no_fills_same_side=result["max_hrs_no_fills_same_side"],
+    )
 
 def backtest_tune(ticks: np.ndarray, backtest_config: dict, current_best: Union[dict, list] = None):
     config = create_config(backtest_config)
@@ -157,8 +115,11 @@ def backtest_tune(ticks: np.ndarray, backtest_config: dict, current_best: Union[
     algo = ConcurrencyLimiter(algo, max_concurrent=num_cpus)
     scheduler = AsyncHyperBandScheduler()
 
+    wfo = WFO(ticks, backtest_config, P_train=0.5).set_train_N(4)
+    backtest_wrap = lambda config: tune_report(wfo.backtest(config))
+
     analysis = tune.run(
-        tune.with_parameters(wrap_backtest, ticks=ticks), metric='objective', mode='max', name='search',
+        backtest_wrap, metric='objective', mode='max', name='search',
         search_alg=algo, scheduler=scheduler, num_samples=iters, config=config, verbose=1,
         reuse_actors=True, local_dir=backtest_config['optimize_dirpath'],
         progress_reporter=LogReporter(metric_columns=['daily_gain',
