@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v3.5.1] - 2021-05-09
+- optimize with sliding window
+- restructured dirs
+- new dirs
+- `backtests/{exchange}/{symbol}/optimize/`
+- `backtests/{exchange}/{symbol}/plots/`
+- `backtests/{exchange}/{symbol}/caches/`
+- if end_date = -1 in backtest_config.hjson, downloader will make a new ticks_cache.npy for each session
+- to reuse prev ticks cache, set end_date to a static date
+
 ## [v3.5.0] - 2021-05-02
 - added volatility indicator
 - split extract optimize.py from backtest.py
