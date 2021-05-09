@@ -611,8 +611,8 @@ async def start_bot(bot):
             await bot.acquire_interprocess_lock()
             await bot.start_websocket()
         except LockNotAvailableException as e:
-            print('Unable to acquire lock to start bot, retrying in 5 minutes...')
-            await asyncio.sleep(300)
+            print('Unable to acquire lock to start bot, retrying in 30 seconds...')
+            await asyncio.sleep(30)
         except Exception as e:
             print('Websocket connection has been lost, attempting to reinitialize the bot...')
             await asyncio.sleep(10)
