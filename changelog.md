@@ -11,6 +11,7 @@ All notable changes to this project will be documented in this file.
 - `backtests/{exchange}/{symbol}/caches/`
 - if end_date = -1 in backtest_config.hjson, downloader will make a new ticks_cache.npy for each session
 - to reuse prev ticks cache, set end_date to a static date
+- when optimizing, intermediate_best_result.json is dumped as usable live_config
 
 ## [v3.5.0] - 2021-05-02
 - added volatility indicator
