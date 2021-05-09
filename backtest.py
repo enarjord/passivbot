@@ -12,7 +12,7 @@ import pandas as pd
 from downloader import Downloader, prep_backtest_config
 from jitted import calc_diff, round_, iter_entries, iter_long_closes, iter_shrt_closes, calc_available_margin, \
     calc_liq_price_binance, calc_liq_price_bybit, calc_new_psize_pprice, calc_long_pnl, calc_shrt_pnl, calc_cost, \
-    iter_indicator_chunks
+    iter_indicator_chunks, round_dynamic
 from passivbot import make_get_filepath, ts_to_date, get_keys
 
 
@@ -24,46 +24,24 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
         return x * 100 - 100
 
     lines = []
-    lines.append(f"net pnl plus fees {result['net_pnl_plus_fees']:.6f}")
-    lines.append(f"profit sum {result['profit_sum']:.6f}")
-    lines.append(f"loss sum {result['loss_sum']:.6f}")
-    lines.append(f"fee sum {result['fee_sum']:.6f}")
-    lines.append(f"gain percentage {gain_conv(result['gain']):.2f}%")
-    lines.append(f"n_days {result['n_days']}")
-    lines.append(f"average_daily_gain percentage {(result['average_daily_gain'] - 1) * 100:.2f}%")
-    lines.append(f"n fills {result['n_fills']}")
-    lines.append(f"n entries {result['n_entries']}")
-    lines.append(f"n closes {result['n_closes']}")
-    lines.append(f"n reentries {result['n_reentries']}")
-    lines.append(f"n initial entries {result['n_initial_entries']}")
-    lines.append(f"n normal closes {result['n_normal_closes']}")
-    lines.append(f"n stop loss closes {result['n_stop_loss_closes']}")
-    lines.append(f"n stop loss entries {result['n_stop_loss_entries']}")
-    lines.append(f"biggest_psize {round(result['biggest_psize'], 10)}")
-    lines.append(f"closest liq percentage {result['closest_liq'] * 100:.4f}%")
-    lines.append(f"max_hrs_no_fills_same_side {result['max_hrs_no_fills_same_side']:.2f}")
-    lines.append(f"max_hrs_no_fills {result['max_hrs_no_fills']:.2f}")
-    lines.append(f"starting balance {result['starting_balance']}")
+    lines.append(f"gain percentage {round_dynamic(result['result']['gain'] * 100 - 100, 4)}%")
+    lines.append(f"average_daily_gain percentage {round_dynamic((result['result']['average_daily_gain'] - 1) * 100, 3)}%")
+    lines.append(f"closest_liq percentage {round_dynamic(result['result']['closest_liq'] * 100, 4)}%")
+
+    for key in [k for k in result['result'] if k not in ['gain', 'average_daily_gain', 'closest_liq', 'do_long', 'do_shrt']]:
+        lines.append(f"{key} {round_dynamic(result['result'][key], 6)}")
     lines.append(f"long: {result['do_long']}, short: {result['do_shrt']}")
 
     live_config = candidate_to_live_config(result)
-    json.dump(live_config, open(result['session_dirpath'] + 'live_config.json', 'w'), indent=4)
+    json.dump(live_config, open(result['plots_dirpath'] + 'live_config.json', 'w'), indent=4)
+    json.dump(result, open(result['plots_dirpath'] + 'result.json', 'w'), indent=4)
 
-    json.dump(result, open(result['session_dirpath'] + 'result.json', 'w'), indent=4)
-
-    print('plotting price with bid ask entry thresholds')
     ema = df.price.ewm(span=result['ema_span'], adjust=False).mean()
-    bids_ = ema * (1 - result['ema_spread'])
-    asks_ = ema * (1 + result['ema_spread'])
-
-    plt.clf()
-    df.price.iloc[::100].plot()
-    bids_.iloc[::100].plot()
-    asks_.iloc[::100].plot()
-    plt.savefig(f"{result['session_dirpath']}ema_spread_plot.png")
+    df.loc[:, 'bid_thr'] = ema * (1 - result['ema_spread'])
+    df.loc[:, 'ask_thr'] = ema * (1 + result['ema_spread'])
 
     print('writing backtest_result.txt...')
-    with open(f"{result['session_dirpath']}backtest_result.txt", 'w') as f:
+    with open(f"{result['plots_dirpath']}backtest_result.txt", 'w') as f:
         for line in lines:
             print(line)
             f.write(line + '\n')
@@ -72,7 +50,7 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
     plt.clf()
     fdf.balance.plot()
     fdf.equity.plot()
-    plt.savefig(f"{result['session_dirpath']}balance_and_equity.png")
+    plt.savefig(f"{result['plots_dirpath']}balance_and_equity.png")
 
     print('plotting backtest whole and in chunks...')
     n_parts = 7
@@ -82,15 +60,15 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
         end_ = (z + 1) / n_parts
         print(start_, end_)
         fig = plot_fills(df, fdf.iloc[int(len(fdf) * start_):int(len(fdf) * end_)], liq_thr=0.1)
-        fig.savefig(f"{result['session_dirpath']}backtest_{z + 1}of{n_parts}.png")
+        fig.savefig(f"{result['plots_dirpath']}backtest_{z + 1}of{n_parts}.png")
     fig = plot_fills(df, fdf, liq_thr=0.1)
-    fig.savefig(f"{result['session_dirpath']}whole_backtest.png")
+    fig.savefig(f"{result['plots_dirpath']}whole_backtest.png")
 
     print('plotting pos sizes...')
     plt.clf()
     fdf.long_psize.plot()
     fdf.shrt_psize.plot()
-    plt.savefig(f"{result['session_dirpath']}psizes_plot.png")
+    plt.savefig(f"{result['plots_dirpath']}psizes_plot.png")
 
     print('plotting average daily gain...')
     adg_ = fdf.average_daily_gain
@@ -99,13 +77,18 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
     adg_c = adg_.iloc[int(len(fdf) * 0.1):]  # skipping first 10%
     print('min max', adg_c.min(), adg_c.max())
     adg_c.plot()
-    plt.savefig(f"{result['session_dirpath']}average_daily_gain_plot.png")
+    plt.savefig(f"{result['plots_dirpath']}average_daily_gain_plot.png")
 
 
 def plot_fills(df, fdf, side_: int = 0, liq_thr=0.1):
     plt.clf()
 
-    df.loc[fdf.index[0]:fdf.index[-1]].price.plot(style='y-')
+    dfc = df.loc[fdf.index[0]:fdf.index[-1]]
+    dfc.price.plot(style='y-')
+    if 'bid_thr' in dfc.columns:
+        dfc.bid_thr.plot(style='b-')
+    if 'ask_thr' in dfc.columns:
+        dfc.ask_thr.plot(style='r-')
 
     if side_ >= 0:
         longs = fdf[fdf.pside == 'long']
@@ -136,6 +119,8 @@ def plot_fills(df, fdf, side_: int = 0, liq_thr=0.1):
 
 
 def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, list, bool):
+    if len(ticks) <= config['ema_span']:
+        return [], [], False
     long_psize, long_pprice = 0.0, 0.0
     shrt_psize, shrt_pprice = 0.0, 0.0
     liq_price, liq_diff = 0.0, 1.0
@@ -472,115 +457,98 @@ def candidate_to_live_config(candidate: dict) -> dict:
     return live_config
 
 
-def calc_candidate_hash_key(candidate: dict, keys: [str]) -> str:
-    return sha256(json.dumps({k: candidate[k] for k in sorted(keys)
-                              if k in candidate}).encode()).hexdigest()
-
-
-def backtest_wrap(ticks: [dict], backtest_config: dict, do_print=False) -> (dict, pd.DataFrame):
-    start_ts = time()
-    fills, _, did_finish = backtest(backtest_config, ticks, do_print=do_print)
-    elapsed = time() - start_ts
-    if len(fills) == 0:
-        return {'average_daily_gain': 0.0, 'closest_liq': 0.0, 'max_hrs_no_fills': 1000.0,
-                'max_hrs_no_fills_same_side': 1000.0,}, pd.DataFrame()
-    fdf = pd.DataFrame(fills).set_index('trade_id')
-    result = prepare_result(fills, ticks, bool(backtest_config['do_long']), bool(backtest_config['do_shrt']))
-    result['seconds_elapsed'] = elapsed
-    if 'key' not in result:
-        result['key'] = calc_candidate_hash_key(backtest_config, backtest_config['ranges'])
-    return result, fdf
-
-
-def prepare_result(fills: list, ticks: np.ndarray, do_long: bool, do_shrt: bool) -> dict:
+def prepare_result(backtest_config: dict, fills: list, ticks: np.ndarray) -> (pd.DataFrame, dict):
     fdf = pd.DataFrame(fills)
     if fdf.empty:
-        return {
-            'net_pnl_plus_fees': 0,
-            'profit_sum': 0,
-            'loss_sum': 0,
-            'fee_sum': 0,
-            'final_equity': 0,
-            'gain': 0,
-            'max_drawdown': 0,
-            'n_days': 0,
-            'average_daily_gain': 0,
-            'closest_liq': 0,
-            'n_fills': 0,
-            'n_entries': 0,
-            'n_closes': 0,
-            'n_reentries': 0,
-            'n_initial_entries': 0,
-            'n_normal_closes': 0,
-            'n_stop_loss_closes': 0,
-            'n_stop_loss_entries': 0,
-            'biggest_psize': 0,
-            'max_hrs_no_fills_same_side': 0,
-            'max_hrs_no_fills': 0,
-            'do_long': do_long,
-            'do_shrt': do_shrt
+        result = {
+            'net_pnl_plus_fees': 0.0,
+            'profit_sum': 0.0,
+            'loss_sum': 0.0,
+            'fee_sum': 0.0,
+            'final_equity': 0.0,
+            'gain': 0.0,
+            'max_drawdown': 0.0,
+            'n_days': 0.0,
+            'average_daily_gain': 0.0,
+            'closest_liq': 0.0,
+            'n_fills': 0.0,
+            'n_entries': 0.0,
+            'n_closes': 0.0,
+            'n_reentries': 0.0,
+            'n_initial_entries': 0.0,
+            'n_normal_closes': 0.0,
+            'n_stop_loss_closes': 0.0,
+            'n_stop_loss_entries': 0.0,
+            'biggest_psize': 0.0,
+            'max_hrs_no_fills_same_side': 1000.0,
+            'max_hrs_no_fills': 1000.0,
+            'starting_balance': backtest_config['starting_balance'],
+            'do_long': backtest_config['do_long'],
+            'do_shrt': backtest_config['do_shrt']
         }
-    fdf = fdf.set_index('trade_id')
-    if len(longs_ := fdf[fdf.pside == 'long']) > 0:
-        long_stuck = np.diff(list(longs_.timestamp) + [ticks[-1][2]]).max() / (1000 * 60 * 60)
     else:
-        long_stuck = 1000.0
-    if len(shrts_ := fdf[fdf.pside == 'shrt']) > 0:
-        shrt_stuck = np.diff(list(shrts_.timestamp) + [ticks[-1][2]]).max() / (1000 * 60 * 60)
-    else:
-        shrt_stuck = 1000.0
-    result = {
-        'net_pnl_plus_fees': fdf.pnl.sum() + fdf.fee_paid.sum(),
-        'profit_sum': fdf[fdf.pnl > 0.0].pnl.sum(),
-        'loss_sum': fdf[fdf.pnl < 0.0].pnl.sum(),
-        'fee_sum': fdf.fee_paid.sum(),
-        'final_equity': fdf.iloc[-1].equity,
-        'gain': (gain := fdf.iloc[-1].equity / fdf.iloc[0].balance),
-        'max_drawdown': ((fdf.equity - fdf.balance).abs() / fdf.balance).max(),
-        'n_days': (n_days := (ticks[-1][2] - fdf.iloc[0].timestamp) / (1000 * 60 * 60 * 24)),
-        'average_daily_gain': gain ** (1 / n_days) if gain > 0.0 and n_days > 0.0 else 0.0,
-        'closest_liq': fdf.closest_liq.iloc[-1],
-        'n_fills': len(fdf),
-        'n_entries': len(fdf[fdf.type.str.contains('entry')]),
-        'n_closes': len(fdf[fdf.type.str.contains('close')]),
-        'n_reentries': len(fdf[fdf.type.str.contains('reentry')]),
-        'n_initial_entries': len(fdf[fdf.type.str.contains('initial')]),
-        'n_normal_closes': len(fdf[(fdf.type == 'long_close') | (fdf.type == 'shrt_close')]),
-        'n_stop_loss_closes': len(fdf[(fdf.type.str.contains('stop_loss')) &
-                                      (fdf.type.str.contains('close'))]),
-        'n_stop_loss_entries': len(fdf[(fdf.type.str.contains('stop_loss')) &
-                                       (fdf.type.str.contains('entry'))]),
-        'biggest_psize': fdf[['long_psize', 'shrt_psize']].abs().max(axis=1).max(),
-        'max_hrs_no_fills_long': long_stuck,
-        'max_hrs_no_fills_shrt': shrt_stuck,
-        'max_hrs_no_fills_same_side': max(long_stuck, shrt_stuck),
-        'max_hrs_no_fills': np.diff(list(fdf.timestamp) + [ticks[-1][2]]).max() / (1000 * 60 * 60),
-        'do_long': do_long,
-        'do_shrt': do_shrt
-    }
-    return result
+        fdf = fdf.set_index('trade_id')
+        if len(longs_ := fdf[fdf.pside == 'long']) > 0:
+            long_stuck = np.diff(list(longs_.timestamp) + [ticks[-1][2]]).max() / (1000 * 60 * 60)
+        else:
+            long_stuck = 1000.0
+        if len(shrts_ := fdf[fdf.pside == 'shrt']) > 0:
+            shrt_stuck = np.diff(list(shrts_.timestamp) + [ticks[-1][2]]).max() / (1000 * 60 * 60)
+        else:
+            shrt_stuck = 1000.0
+        result = {
+            'net_pnl_plus_fees': fdf.pnl.sum() + fdf.fee_paid.sum(),
+            'profit_sum': fdf[fdf.pnl > 0.0].pnl.sum(),
+            'loss_sum': fdf[fdf.pnl < 0.0].pnl.sum(),
+            'fee_sum': fdf.fee_paid.sum(),
+            'final_equity': fdf.iloc[-1].equity,
+            'gain': (gain := fdf.iloc[-1].equity / backtest_config['starting_balance']),
+            'max_drawdown': ((fdf.equity - fdf.balance).abs() / fdf.balance).max(),
+            'n_days': (n_days := (ticks[-1][2] - fdf.iloc[0].timestamp) / (1000 * 60 * 60 * 24)),
+            'average_daily_gain': gain ** (1 / n_days) if gain > 0.0 and n_days > 0.0 else 0.0,
+            'closest_liq': fdf.closest_liq.iloc[-1],
+            'n_fills': len(fdf),
+            'n_entries': len(fdf[fdf.type.str.contains('entry')]),
+            'n_closes': len(fdf[fdf.type.str.contains('close')]),
+            'n_reentries': len(fdf[fdf.type.str.contains('reentry')]),
+            'n_initial_entries': len(fdf[fdf.type.str.contains('initial')]),
+            'n_normal_closes': len(fdf[(fdf.type == 'long_close') | (fdf.type == 'shrt_close')]),
+            'n_stop_loss_closes': len(fdf[(fdf.type.str.contains('stop_loss')) &
+                                          (fdf.type.str.contains('close'))]),
+            'n_stop_loss_entries': len(fdf[(fdf.type.str.contains('stop_loss')) &
+                                           (fdf.type.str.contains('entry'))]),
+            'biggest_psize': fdf[['long_psize', 'shrt_psize']].abs().max(axis=1).max(),
+            'max_hrs_no_fills_long': long_stuck,
+            'max_hrs_no_fills_shrt': shrt_stuck,
+            'max_hrs_no_fills_same_side': max(long_stuck, shrt_stuck),
+            'max_hrs_no_fills': np.diff(list(fdf.timestamp) + [ticks[-1][2]]).max() / (1000 * 60 * 60),
+            'starting_balance': backtest_config['starting_balance'],
+            'do_long': backtest_config['do_long'],
+            'do_shrt': backtest_config['do_shrt']
+        }
+    return fdf, result
 
 
-def plot_wrap(bc, ticks, candidate):
+def plot_wrap(bc, ticks, live_config):
     n_days = round_((ticks[-1][2] - ticks[0][2]) / (1000 * 60 * 60 * 24), 0.1)
+    config = {**bc, **live_config}
     print('backtesting...')
-    result, fdf = backtest_wrap(ticks, {**bc, **{'break_on': {}}, **candidate}, do_print=True)
-    if fdf is None or len(fdf) == 0:
-        print('no trades')
+    fills, stats, did_finish = backtest(config, ticks, do_print=True)
+    if not fills:
+        print('no fills')
         return
-    backtest_config = {**bc, **candidate, **result}
-    backtest_config['session_dirpath'] = make_get_filepath(os.path.join(
-        'plots', bc['exchange'], bc['symbol'],
-        f"{n_days}_days_{ts_to_date(time())[:19].replace(':', '')}", ''))
-    fdf.to_csv(backtest_config['session_dirpath'] + f"backtest_trades_{result['key']}.csv")
+    fdf, result = prepare_result(config, fills, ticks)
+    config['result'] = result
+    config['plots_dirpath'] = make_get_filepath(os.path.join(
+        config['plots_dirpath'], f"{ts_to_date(time())[:19].replace(':', '')}", '')
+    )
+    fdf.to_csv(config['plots_dirpath'] + "fills.csv")
     df = pd.DataFrame({'price': ticks[:, 0], 'buyer_maker': ticks[:, 1], 'timestamp': ticks[:, 2]})
-    dump_plots(backtest_config, fdf, df)
+    dump_plots(config, fdf, df)
 
 
 async def main(args: list):
-    config_name = args[1]
-    candidate = args[2]
-    backtest_config = await prep_backtest_config(config_name)
+    backtest_config = await prep_backtest_config(args[1])
     if backtest_config['exchange'] == 'bybit' and not backtest_config['inverse']:
         print('bybit usdt linear backtesting not supported')
         return
@@ -588,18 +556,13 @@ async def main(args: list):
     ticks = await downloader.get_ticks(True)
     backtest_config['n_days'] = round_((ticks[-1][2] - ticks[0][2]) / (1000 * 60 * 60 * 24), 0.1)
     try:
-        candidate = json.load(open(candidate))
-        print('plotting given candidate')
+        live_config = json.load(open(args[2]))
+        print('backtesting and plotting given candidate')
     except Exception as e:
-        print(os.listdir(backtest_config['session_dirpath']))
-        try:
-            candidate = json.load(open(backtest_config['session_dirpath'] + 'live_config.json'))
-            print('plotting best candidate')
-        except:
-            return
-    print(json.dumps(candidate, indent=4))
-    plot_wrap(backtest_config, ticks, candidate)
-    return
+        print('failed to load live config')
+        return
+    print(json.dumps(live_config, indent=4))
+    plot_wrap(backtest_config, ticks, live_config)
 
 
 if __name__ == '__main__':
