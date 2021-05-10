@@ -27,22 +27,6 @@ from reporter import LogReporter
 os.environ['TUNE_GLOBAL_CHECKPOINT_S'] = '120'
 
 
-def objective_function(result: dict,
-                       metric: str,
-                       bc: dict) -> float:
-    if result['n_fills'] == 0:
-        return -1
-    try:
-        return (
-            result[metric]
-            * min(1.0, bc["max_hrs_no_fills"] / result["max_hrs_no_fills"])
-            * min(1.0, bc["max_hrs_no_fills_same_side"] / result["max_hrs_no_fills_same_side"])
-            * min(1.0, result["closest_liq"] / bc["minimum_liquidation_distance"])
-        )
-    except:
-        return -1
-
-
 def create_config(backtest_config: dict) -> dict:
     '''
     config = {k: backtest_config[k] for k in backtest_config

@@ -265,22 +265,6 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, list, bo
     return all_fills, stats, True
 
 
-def candidate_to_live_config(candidate: dict) -> dict:
-    live_config = {}
-    for k in ["config_name", "logging_level", "ddown_factor", "qty_pct", "leverage",
-              "n_close_orders", "grid_spacing", "pos_margin_grid_coeff",
-              "volatility_grid_coeff", "volatility_qty_coeff", "min_markup",
-              "markup_range", "do_long", "do_shrt", "ema_span", "ema_spread", "stop_loss_liq_diff",
-              "stop_loss_pos_pct", "symbol"]:
-        if k in candidate:
-            live_config[k] = candidate[k]
-        else:
-            live_config[k] = 0.0
-    for k in ['do_long', 'do_shrt']:
-        live_config[k] = bool(live_config[k])
-    return live_config
-
-
 def plot_wrap(bc, ticks, live_config):
     n_days = round_((ticks[-1][2] - ticks[0][2]) / (1000 * 60 * 60 * 24), 0.1)
     config = {**bc, **live_config}
