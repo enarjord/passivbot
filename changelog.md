@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v3.5.2] - 2021-05-10
+- walk forward optimization
+- more advanced backtest analysis tools
+
 ## [v3.5.1] - 2021-05-09
 - optimize with sliding window
 - restructured dirs
