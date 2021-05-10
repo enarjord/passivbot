@@ -17,13 +17,30 @@ from ray.tune.schedulers import AsyncHyperBandScheduler
 from ray.tune.suggest import ConcurrencyLimiter
 from ray.tune.suggest.nevergrad import NevergradSearch
 
-from backtest import backtest, plot_wrap, prep_backtest_config, prepare_result, WFO
-from downloader import Downloader
+from backtest import backtest, plot_wrap
+from walk_forward_optimization import WFO
+from downloader import Downloader, prep_backtest_config
 from jitted import round_
 from passivbot import get_keys, make_get_filepath, ts_to_date
 from reporter import LogReporter
 
 os.environ['TUNE_GLOBAL_CHECKPOINT_S'] = '120'
+
+
+def objective_function(result: dict,
+                       metric: str,
+                       bc: dict) -> float:
+    if result['n_fills'] == 0:
+        return -1
+    try:
+        return (
+            result[metric]
+            * min(1.0, bc["max_hrs_no_fills"] / result["max_hrs_no_fills"])
+            * min(1.0, bc["max_hrs_no_fills_same_side"] / result["max_hrs_no_fills_same_side"])
+            * min(1.0, result["closest_liq"] / bc["minimum_liquidation_distance"])
+        )
+    except:
+        return -1
 
 
 def create_config(backtest_config: dict) -> dict:
