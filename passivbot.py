@@ -585,7 +585,7 @@ class Bot:
         if os.path.exists(self.lock_file):
             #if the file was last modified over 15 minutes ago, assume that something went wrong
             last_mod_date = os.path.getmtime(self.lock_file)
-            if last_mod_date < datetime.now() - datetime.timedelta(minutes=15):
+            if last_mod_date < datetime.datetime.now() - datetime.timedelta(minutes=15):
                 print(f'File {self.lock_file} last modified more than 15 minutes ago. Assuming something went wrong'
                       f' trying to delete it, attempting removal of file')
                 self.remove_lock_file()
