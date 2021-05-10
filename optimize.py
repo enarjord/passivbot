@@ -18,6 +18,7 @@ from ray.tune.suggest import ConcurrencyLimiter
 from ray.tune.suggest.nevergrad import NevergradSearch
 
 from backtest import backtest, plot_wrap
+from analyze import analyze_fills, get_empty_analysis, objective_function
 from walk_forward_optimization import WFO
 from downloader import Downloader, prep_backtest_config
 from jitted import round_
@@ -62,9 +63,43 @@ def clean_result_config(config: dict) -> dict:
     return config
 
 
-def iter_slices(iterable, size: float, n_tests: int):
-    for ix in np.linspace(0.0, 1 - size, n_tests):
-        yield iterable[int(round(len(iterable) * ix)):int(round(len(iterable) * (ix + size)))]
+def iter_slices(iterable, sliding_window_size: float, n_windows: int):
+    for ix in np.linspace(0.0, 1 - sliding_window_size, n_windows):
+        yield iterable[int(round(len(iterable) * ix)):int(round(len(iterable) * (ix + sliding_window_size)))]
+
+
+def simple_sliding_window_wrap(config, ticks):
+    sliding_window_size = config[sws] if (sws := 'sliding_window_size') in config else 0.4
+    n_windows = config[nsw] if (nsw := 'n_sliding_windows') in config else 4
+    results = []
+    for ticks_slice in iter_slices(ticks, sliding_window_size, n_windows):
+        try:
+            fills, _, did_finish = backtest(config, ticks_slice)
+        except Exception as e:
+            print('debug a', e, config)
+        if not did_finish:
+            break
+        try:
+            _, result_ = analyze_fills(fills, config, ticks_slice[-1][2])
+        except Exception as e:
+            print('b', e)
+        results.append(result_)
+    if results:
+        result = {}
+        for k in results[0]:
+            try:
+                result[k] = np.mean([r[k] for r in results])
+            except:
+                result[k] = results[0][k]
+    else:
+        result = get_empty_analysis()
+
+    try:
+        objective = objective_function(result, 'average_daily_gain', config)
+    except Exception as e:
+        print('c', e)
+    tune.report(objective=objective, daily_gain=result['average_daily_gain'], closest_liquidation=result['closest_liq'],
+                max_hrs_no_fills=result['max_hrs_no_fills'], max_hrs_no_fills_same_side=result['max_hrs_no_fills_same_side'])
 
 
 def tune_report(result):
@@ -75,6 +110,8 @@ def tune_report(result):
         max_hrs_no_fills=result["max_hrs_no_fills"],
         max_hrs_no_fills_same_side=result["max_hrs_no_fills_same_side"],
     )
+
+
 
 def backtest_tune(ticks: np.ndarray, backtest_config: dict, current_best: Union[dict, list] = None):
     config = create_config(backtest_config)
@@ -116,9 +153,13 @@ def backtest_tune(ticks: np.ndarray, backtest_config: dict, current_best: Union[
     algo = ConcurrencyLimiter(algo, max_concurrent=num_cpus)
     scheduler = AsyncHyperBandScheduler()
 
-    wfo = WFO(ticks, backtest_config, P_train=0.5).set_train_N(4)
-    backtest_wrap = lambda config: tune_report(wfo.backtest(config))
-
+    if 'wfo' in config and config['wfo']:
+        print('\n\nwalk forward optimization\n\n')
+        wfo = WFO(ticks, backtest_config, P_train=0.5).set_train_N(4)
+        backtest_wrap = lambda config: tune_report(wfo.backtest(config))
+    else:
+        print('\n\nsimple sliding window optimization\n\n')
+        backtest_wrap = tune.with_parameters(simple_sliding_window_wrap, ticks=ticks)
     analysis = tune.run(
         backtest_wrap, metric='objective', mode='max', name='search',
         search_alg=algo, scheduler=scheduler, num_samples=iters, config=config, verbose=1,
