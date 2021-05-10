@@ -135,12 +135,15 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, list, bo
     liq_price, liq_diff = 0.0, 1.0
     balance = config['starting_balance']
 
-    long_pprice, long_psize, shrt_pprice, shrt_psize = (
-        config["long_pprice"],
-        config["long_psize"],
-        config["shrt_pprice"],
-        config["shrt_psize"],
-    )
+    if all(x in config for x in ['long_pprice', 'long_psize', 'shrt_pprice', 'shrt_psize']):
+        long_pprice, long_psize, shrt_pprice, shrt_psize = (
+            config["long_pprice"],
+            config["long_psize"],
+            config["shrt_pprice"],
+            config["shrt_psize"],
+        )
+    else:
+        long_pprice, long_psize, shrt_pprice, shrt_psize = 0.0, 0.0, 0.0, 0.0
 
     pnl_plus_fees_cumsum, loss_cumsum, profit_cumsum, fee_paid_cumsum = 0.0, 0.0, 0.0, 0.0
 
@@ -795,7 +798,6 @@ class WFO:
             "idx": idx_end - idx_start,
             **self.convert(self.ticks[idx_end][2] - self.ticks[idx_start][2]),
         }
-
 
 
 async def main(args: list):

@@ -7,10 +7,11 @@
   starting_balance: 100.0
 
   # Initial positions
-  long_psize: 0.0
-  long_pprice: 0.0
-  shrt_psize: 0.0
-  shrt_pprice: 0.0
+  # optional, defaults to 0.0 if not supplied
+  # long_psize: 0.0
+  # long_pprice: 0.0
+  # shrt_psize: 0.0
+  # shrt_pprice: 0.0
 
   do_long: true
   do_shrt: true
@@ -36,7 +37,7 @@
   metric: "returns_daily"
 
   start_date: 2020-11-11T11:11
-  end_date: 2021-05-04T00:00
+  end_date: 2021-05-08T14:00
   # set end_date: -1 to use now as end date
 
   # If start and stop are set to same value, it's treated as a fixed variable.
