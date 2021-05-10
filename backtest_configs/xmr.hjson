@@ -30,10 +30,19 @@
   # max hours between consecutive same side fills (long / short)
   max_hrs_no_fills_same_side: 72
 
+
+  # if wfo = true, will optimize with walk forward optimization.
+  # otherwise, simple sliding window
+  wfo: true
+
+  # sliding window config:
+  sliding_window_size: 0.4
+  n_sliding_windows: 4
+
+  # wfo config:
   # VWR
   tau: 0.8
   sdev_max: 0.06
-
   metric: "returns_daily"
 
   start_date: 2020-11-11T11:11

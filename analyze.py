@@ -125,7 +125,7 @@ def analyze_samples(stats: list, bc: dict) -> (pd.DataFrame, dict):
 
     return sdf, result
 
-def result_filled_default() -> dict:
+def get_empty_analysis() -> dict:
     return {
         'net_pnl_plus_fees': 0.0,
         'profit_sum': 0.0,
@@ -155,7 +155,7 @@ def analyze_fills(fills: dict, bc: dict, last_ts: float) -> (pd.DataFrame, dict)
     fdf = pd.DataFrame(fills)
 
     if fdf.empty:
-        return fdf, result_filled_default()
+        return fdf, get_empty_analysis()
 
     fdf = fdf.set_index('trade_id')
 
@@ -206,7 +206,7 @@ def analyze_backtest(fills: list, stats: list, bc: dict) -> (pd.DataFrame, pd.Da
         'starting_balance': bc['starting_balance'],
     }
 
-    fdf, res_fill = analyze_fills(fills, bc, stats[-1]['timestamp'])
+    fdf, res_fill = analyze_fills(fills, bc, stats[-1]['timestamp'] if stats else 0)
     sdf, res_samp = analyze_samples(stats, bc)
 
     res.update(res_fill)
