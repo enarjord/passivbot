@@ -155,13 +155,13 @@ class BinanceBot(Bot):
         do_abort = False
         for e in positions:
             if float(e['positionAmt']) != 0.0:
-                if e['symbol'] != self.symbol:
+                if e['symbol'] != self.symbol and self.margin_coin in e['symbol']:
                     print('\n\nWARNING\n\n')
                     print('account has position in other symbol:', e)
                     print('\n\n')
                     do_abort = True
         for e in open_orders:
-            if e['symbol'] != self.symbol:
+            if e['symbol'] != self.symbol and self.margin_coin in e['symbol']:
                 print('\n\nWARNING\n\n')
                 print('account has open orders in other symbol:', e)
                 print('\n\n')
