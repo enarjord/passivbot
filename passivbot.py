@@ -6,6 +6,7 @@ import os
 import signal
 import sys
 from collections import deque
+from pathlib import Path
 from time import time
 
 import numpy as np
@@ -119,6 +120,9 @@ def flatten(lst: list) -> list:
     return [y for x in lst for y in x]
 
 
+class LockNotAvailableException(Exception):
+    pass
+
 class Bot:
     def __init__(self, user: str, config: dict):
         self.config = config
@@ -159,6 +163,7 @@ class Bot:
 
         self.stop_websocket = False
         self.process_websocket_ticks = True
+        self.lock_file = f"{str(Path.home())}/.passivbotlock"
 
     def set_config(self, config):
         config['ema_span'] = int(round(config['ema_span']))
@@ -539,6 +544,7 @@ class Bot:
         await self.update_position()
         await self.init_exchange_config()
         await self.init_indicators()
+        self.remove_lock_file()
         k = 1
         async with websockets.connect(self.endpoints['websocket']) as ws:
             await self.subscribe_ws(ws)
@@ -565,15 +571,50 @@ class Bot:
                     if 'success' not in msg:
                         print('error in websocket', e, msg)
 
+    def remove_lock_file(self):
+        try:
+            if os.path.exists(self.lock_file):
+                os.remove(self.lock_file)
+                print('The lock file has been removed succesfully')
+            else:
+                print("The lock file doesn't exists, no need to do anything, but it should've been there!")
+        except:
+            print(f"Failed to remove the lock file! Please remove the file {self.lock_file} manually to ensure fast restarts")
+
+    async def acquire_interprocess_lock(self):
+        if os.path.exists(self.lock_file):
+            #if the file was last modified over 15 minutes ago, assume that something went wrong
+            if time() - os.path.getmtime(self.lock_file) > 15 * 60:
+                print(f'File {self.lock_file} last modified more than 15 minutes ago. Assuming something went wrong'
+                      f' trying to delete it, attempting removal of file')
+                self.remove_lock_file()
+            else:
+                raise LockNotAvailableException("Another bot has the lock")
+
+        pid = str(os.getpid())
+        with open(self.lock_file, 'w') as f:
+            f.write(pid)
+            f.flush()
+            f.close()
+
+        await asyncio.sleep(5)
+
+        pid_in_file = open(self.lock_file).read()
+        if pid_in_file != pid:
+            raise LockNotAvailableException("Lock is stolen by another bot")
+        return
 
 async def start_bot(bot):
     while not bot.stop_websocket:
         try:
+            await bot.acquire_interprocess_lock()
             await bot.start_websocket()
+        except LockNotAvailableException as e:
+            print('Unable to acquire lock to start bot, retrying in 30 seconds...')
+            await asyncio.sleep(30)
         except Exception as e:
-            print('Websocket connection has been lost, attempting to reinitialize the bot...')
+            print('Websocket connection has been lost, attempting to reinitialize the bot...', e)
             await asyncio.sleep(10)
-
 
 async def create_binance_bot(user: str, config: str):
     from binance import BinanceBot
