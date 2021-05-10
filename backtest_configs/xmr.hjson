@@ -6,15 +6,20 @@
   latency_simulation_ms: 450
   starting_balance: 100.0
 
+  # Initial positions
+  long_psize: 0.0
+  long_pprice: 0.0
+  shrt_psize: 0.0
+  shrt_pprice: 0.0
+
   do_long: true
   do_shrt: true
 
   # pso options
-  iters: 10000
+  iters: 100
   num_cpus: 4
   options: {"c1": 1.4962, "c2": 1.4962, "w": 0.7298}
   n_particles: 24
-
 
   minimum_liquidation_distance: 0.21
 
@@ -23,6 +28,12 @@
 
   # max hours between consecutive same side fills (long / short)
   max_hrs_no_fills_same_side: 72
+
+  # VWR
+  tau: 0.8
+  sdev_max: 0.06
+
+  metric: "returns_daily"
 
   start_date: 2020-11-11T11:11
   end_date: 2021-05-04T00:00
