@@ -584,13 +584,12 @@ class Bot:
     async def acquire_interprocess_lock(self):
         if os.path.exists(self.lock_file):
             #if the file was last modified over 15 minutes ago, assume that something went wrong
-            last_mod_date = os.path.getmtime(self.lock_file)
-            if last_mod_date < datetime.datetime.now() - datetime.timedelta(minutes=15):
+            if time() - os.path.getmtime(self.lock_file) > 15 * 60:
                 print(f'File {self.lock_file} last modified more than 15 minutes ago. Assuming something went wrong'
                       f' trying to delete it, attempting removal of file')
                 self.remove_lock_file()
             else:
-                raise LockNotAvailableException("Lock is already running from another bot")
+                raise LockNotAvailableException("Another bot has the lock")
 
         pid = str(os.getpid())
         with open(self.lock_file, 'w') as f:
@@ -614,7 +613,7 @@ async def start_bot(bot):
             print('Unable to acquire lock to start bot, retrying in 30 seconds...')
             await asyncio.sleep(30)
         except Exception as e:
-            print('Websocket connection has been lost, attempting to reinitialize the bot...')
+            print('Websocket connection has been lost, attempting to reinitialize the bot...', e)
             await asyncio.sleep(10)
 
 async def create_binance_bot(user: str, config: str):
