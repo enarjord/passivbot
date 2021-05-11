@@ -63,16 +63,19 @@ def clean_result_config(config: dict) -> dict:
     return config
 
 
-def iter_slices(iterable, sliding_window_size: float, n_windows: int):
+def iter_slices(iterable, sliding_window_size: float, n_windows: int, yield_full: bool = True):
     for ix in np.linspace(0.0, 1 - sliding_window_size, n_windows):
         yield iterable[int(round(len(iterable) * ix)):int(round(len(iterable) * (ix + sliding_window_size)))]
+    if yield_full:
+        yield iterable
 
 
 def simple_sliding_window_wrap(config, ticks):
     sliding_window_size = config[sws] if (sws := 'sliding_window_size') in config else 0.4
     n_windows = config[nsw] if (nsw := 'n_sliding_windows') in config else 4
+    test_full = config['test_full'] if 'test_full' in config else False
     results = []
-    for ticks_slice in iter_slices(ticks, sliding_window_size, n_windows):
+    for ticks_slice in iter_slices(ticks, sliding_window_size, n_windows, yield_full=test_full):
         try:
             fills, _, did_finish = backtest(config, ticks_slice)
         except Exception as e:

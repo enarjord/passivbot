@@ -17,7 +17,7 @@
   do_shrt: true
 
   # pso options
-  iters: 100
+  iters: 10000
   num_cpus: 4
   options: {"c1": 1.4962, "c2": 1.4962, "w": 0.7298}
   n_particles: 24
@@ -38,6 +38,7 @@
   # sliding window config:
   sliding_window_size: 0.4
   n_sliding_windows: 4
+  test_full: false
 
   # wfo config:
   # VWR
@@ -46,7 +47,7 @@
   metric: "returns_daily"
 
   start_date: 2020-11-11T11:11
-  end_date: 2021-05-08T14:00
+  end_date: 2021-05-10T12:00
   # set end_date: -1 to use now as end date
 
   # If start and stop are set to same value, it's treated as a fixed variable.
