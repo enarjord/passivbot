@@ -152,6 +152,15 @@ def calc_min_entry_qty(price, inverse, qty_step, min_qty, min_cost, contract_mul
 
 
 @njit
+def calc_qty_from_margin(margin, price,
+                         inverse, qty_step, contract_multiplier, leverage):
+    if inverse:
+        return round_dn(margin * leverage * price / contract_multiplier, qty_step)
+    else:
+        return round_dn(margin * leverage / price, qty_step)
+
+
+@njit
 def calc_initial_entry_qty(balance,
                            price,
                            available_margin,
@@ -362,6 +371,89 @@ def iter_entries(
             if shrt_entry[1]:
                 available_margin -= calc_margin_cost(shrt_entry[0], shrt_entry[1], inverse,
                                                      contract_multiplier, leverage)
+
+
+@njit
+def calc_counter_order(balance,
+                       long_psize,
+                       long_pprice,
+                       shrt_psize,
+                       shrt_pprice,
+                       liq_price,
+                       highest_bid,
+                       lowest_ask,
+                       last_price,
+                       available_margin,
+                       inverse, do_long, do_shrt, qty_step, min_qty, min_cost, contract_multiplier,
+                       leverage, stop_loss_liq_diff, stop_loss_pos_pct, counter_order_liq_diff):
+    abs_shrt_psize = abs(shrt_psize)
+    if calc_diff(liq_price, last_price) < counter_order_liq_diff:
+        if long_psize > abs_shrt_psize:
+            min_entry_qty = calc_min_entry_qty(lowest_ask, inverse, qty_step, min_qty,
+                                               min_cost, contract_multiplier)
+            counter_order_qty = min(
+                max(min_entry_qty,
+                    calc_qty_from_margin(balance * stop_loss_pos_pct, lowest_ask, inverse,
+                                         qty_step, contract_multiplier, leverage)),
+                calc_qty_from_margin(available_margin, lowest_ask, inverse, qty_step,
+                                     contract_multiplier, leverage)
+            )
+            if counter_order_qty >= min_entry_qty:
+                new_shrt_psize, new_shrt_pprice = calc_new_psize_pprice(shrt_psize, shrt_pprice,
+                                                                        -counter_order_qty, lowest_ask,
+                                                                        qty_step)
+                return -counter_order_qty, lowest_ask, new_shrt_psize, new_shrt_pprice, 'counter_shrt_entry'
+        else:
+            min_entry_qty = calc_min_entry_qty(highest_bid, inverse, qty_step, min_qty,
+                                               min_cost, contract_multiplier)
+            counter_order_qty = min(
+                max(min_entry_qty,
+                    calc_qty_from_margin(balance * stop_loss_pos_pct, highest_bid, inverse,
+                                         qty_step, contract_multiplier, leverage)),
+                calc_qty_from_margin(available_margin, highest_bid, inverse, qty_step,
+                                     contract_multiplier, leverage)
+            )
+            if counter_order_qty >= min_entry_qty:
+                new_long_psize, new_long_pprice = calc_new_psize_pprice(long_psize, long_pprice,
+                                                                        counter_order_qty, highest_bid,
+                                                                        qty_step)
+                return counter_order_qty, highest_bid, new_long_psize, new_long_pprice, 'counter_long_entry'
+    return 0.0, 0.0, 0.0, 0.0, ''
+
+
+@njit
+def calc_stop_loss_separate(balance,
+                            long_psize,
+                            long_pprice,
+                            shrt_psize,
+                            shrt_pprice,
+                            liq_price,
+                            highest_bid,
+                            lowest_ask,
+                            last_price,
+                            available_margin,
+                            inverse, do_long, do_shrt, qty_step, min_qty, min_cost, contract_multiplier,
+                            leverage, stop_loss_liq_diff, stop_loss_pos_pct):
+    # returns (qty, price, psize if taken, pprice if taken, comment)
+    abs_shrt_psize = abs(shrt_psize)
+    if calc_diff(liq_price, last_price) < stop_loss_liq_diff:
+        if long_psize > abs_shrt_psize:
+            stop_loss_qty = min(long_psize,
+                                max(calc_min_entry_qty(lowest_ask, inverse, qty_step, min_qty,
+                                                       min_cost, contract_multiplier),
+                                    round_dn(long_psize * stop_loss_pos_pct, qty_step)))
+            # reduce long pos
+            new_long_psize = round_(long_psize - stop_loss_qty, qty_step)
+            return -stop_loss_qty, lowest_ask, new_long_psize, long_pprice, 'stop_loss_long_close'
+        else:
+            stop_loss_qty = min(abs_shrt_psize,
+                                max(calc_min_entry_qty(highest_bid, inverse, qty_step, min_qty,
+                                                       min_cost, contract_multiplier),
+                                    round_dn(abs_shrt_psize * stop_loss_pos_pct, qty_step)))
+            # reduce shrt pos
+            new_shrt_psize = round_(shrt_psize + stop_loss_qty, qty_step)
+            return stop_loss_qty, highest_bid, new_shrt_psize, shrt_pprice, 'stop_loss_shrt_close'
+    return 0.0, 0.0, 0.0, 0.0, ''
 
 
 @njit

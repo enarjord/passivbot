@@ -17,27 +17,15 @@ from ray.tune.schedulers import AsyncHyperBandScheduler
 from ray.tune.suggest import ConcurrencyLimiter
 from ray.tune.suggest.nevergrad import NevergradSearch
 
-from backtest import backtest, plot_wrap, prepare_result, prep_backtest_config
-from downloader import Downloader
+from backtest import backtest, plot_wrap
+from analyze import analyze_fills, get_empty_analysis, objective_function
+from walk_forward_optimization import WFO
+from downloader import Downloader, prep_backtest_config
 from jitted import round_
-from passivbot import make_get_filepath, ts_to_date, get_keys
+from passivbot import get_keys, make_get_filepath, ts_to_date
 from reporter import LogReporter
 
 os.environ['TUNE_GLOBAL_CHECKPOINT_S'] = '120'
-
-
-def objective_function(result: dict,
-                       liq_cap: float,
-                       max_hrs_no_fills_cap: float,
-                       max_hrs_no_fills_same_side_cap: float) -> float:
-    try:
-        return (result['average_daily_gain'] *
-                min(1.0, max_hrs_no_fills_cap / result['max_hrs_no_fills']) *
-                min(1.0, max_hrs_no_fills_same_side_cap / result['max_hrs_no_fills_same_side']) *
-                min(1.0, result['closest_liq'] / liq_cap))
-    except Exception as e:
-        print('error with objective function', e, result)
-        return 0.0
 
 
 def create_config(backtest_config: dict) -> dict:
@@ -75,14 +63,19 @@ def clean_result_config(config: dict) -> dict:
     return config
 
 
-def iter_slices(iterable, size: float, n_tests: int):
-    for ix in np.linspace(0.0, 1 - size, n_tests):
-        yield iterable[int(round(len(iterable) * ix)):int(round(len(iterable) * (ix + size)))]
+def iter_slices(iterable, sliding_window_size: float, n_windows: int, yield_full: bool = True):
+    for ix in np.linspace(0.0, 1 - sliding_window_size, n_windows):
+        yield iterable[int(round(len(iterable) * ix)):int(round(len(iterable) * (ix + sliding_window_size)))]
+    if yield_full:
+        yield iterable
 
 
-def wrap_backtest(config, ticks):
+def simple_sliding_window_wrap(config, ticks):
+    sliding_window_size = config[sws] if (sws := 'sliding_window_size') in config else 0.4
+    n_windows = config[nsw] if (nsw := 'n_sliding_windows') in config else 4
+    test_full = config['test_full'] if 'test_full' in config else False
     results = []
-    for ticks_slice in iter_slices(ticks, 0.4, 4):
+    for ticks_slice in iter_slices(ticks, sliding_window_size, n_windows, yield_full=test_full):
         try:
             fills, _, did_finish = backtest(config, ticks_slice)
         except Exception as e:
@@ -90,7 +83,7 @@ def wrap_backtest(config, ticks):
         if not did_finish:
             break
         try:
-            _, result_ = prepare_result(config, fills, ticks_slice)
+            _, result_ = analyze_fills(fills, config, ticks_slice[-1][2])
         except Exception as e:
             print('b', e)
         results.append(result_)
@@ -102,19 +95,25 @@ def wrap_backtest(config, ticks):
             except:
                 result[k] = results[0][k]
     else:
-        _, result = prepare_result(config, [], ticks)
+        result = get_empty_analysis()
 
-    # fills, _, did_finish = backtest(config, ticks)
-    # result = prepare_result(fills, ticks, config['do_long'], config['do_shrt'])
     try:
-        objective = objective_function(result,
-                                       config['minimum_liquidation_distance'],
-                                       config['max_hrs_no_fills'],
-                                       config['max_hrs_no_fills_same_side'])
+        objective = objective_function(result, 'average_daily_gain', config)
     except Exception as e:
         print('c', e)
     tune.report(objective=objective, daily_gain=result['average_daily_gain'], closest_liquidation=result['closest_liq'],
                 max_hrs_no_fills=result['max_hrs_no_fills'], max_hrs_no_fills_same_side=result['max_hrs_no_fills_same_side'])
+
+
+def tune_report(result):
+    tune.report(
+        objective=result["objective_gmean"],
+        daily_gain=result["daily_gains_gmean"],
+        closest_liquidation=result["closest_liq"],
+        max_hrs_no_fills=result["max_hrs_no_fills"],
+        max_hrs_no_fills_same_side=result["max_hrs_no_fills_same_side"],
+    )
+
 
 
 def backtest_tune(ticks: np.ndarray, backtest_config: dict, current_best: Union[dict, list] = None):
@@ -157,8 +156,15 @@ def backtest_tune(ticks: np.ndarray, backtest_config: dict, current_best: Union[
     algo = ConcurrencyLimiter(algo, max_concurrent=num_cpus)
     scheduler = AsyncHyperBandScheduler()
 
+    if 'wfo' in config and config['wfo']:
+        print('\n\nwalk forward optimization\n\n')
+        wfo = WFO(ticks, backtest_config, P_train=0.5).set_train_N(4)
+        backtest_wrap = lambda config: tune_report(wfo.backtest(config))
+    else:
+        print('\n\nsimple sliding window optimization\n\n')
+        backtest_wrap = tune.with_parameters(simple_sliding_window_wrap, ticks=ticks)
     analysis = tune.run(
-        tune.with_parameters(wrap_backtest, ticks=ticks), metric='objective', mode='max', name='search',
+        backtest_wrap, metric='objective', mode='max', name='search',
         search_alg=algo, scheduler=scheduler, num_samples=iters, config=config, verbose=1,
         reuse_actors=True, local_dir=backtest_config['optimize_dirpath'],
         progress_reporter=LogReporter(metric_columns=['daily_gain',

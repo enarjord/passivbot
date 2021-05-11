@@ -2,10 +2,9 @@
   passivbot
 </h1>
 
-![passivbot Version](https://img.shields.io/badge/passivbot-3.5.1-blue)
-![GitHub issues](https://img.shields.io/github/issues/enarjord/passivbot)
+![passivbot Version](https://img.shields.io/badge/passivbot-3.5.2-blue)
 
-## Trading bot running on Bybit and Binance Futures using hedge mode when possible
+## Trading bot running on Bybit and Binance Futures
 
 :warning: **Use at own risk** :warning:
 
@@ -18,25 +17,8 @@ price
 
 It listens to websocket live stream of trades, and updates its orders continuously
 
-If there is a long position, it creates reentry bids below pos price, and reduce-only asks above pos price:
+If possible, it will use hedge mode
 
-`reentry_bid_price = pos_price * (1 - grid_spacing * (1 + (position_margin / wallet_balance) * grid_coefficient))`
-
-If there is a short position, it creates reentry asks above pos price, and reduce-only closing bids below pos price:
-
-`reentry_ask_price = pos_price * (1 + grid_spacing * (1 + (position_margin / wallet_balance) * grid_coefficient))`
-
-In hedge mode, stop loss works like this:
-
-```
-if diff(liq_price, last_price) < stop_loss_liq_diff:
-    if available margin:
-        enter opposite side
-    else:
-        close same side at a loss
-```
-
-In both cases liq price will be pushed away
 
 ### Requirements
 
@@ -83,7 +65,7 @@ is not present for an account, telegram is disabled at startup.
 
 For setup instructions, see https://docs.microsoft.com/en-us/azure/bot-service/bot-service-channel-connect-telegram?view=azure-bot-service-4.0
 
-How to get the chat id: https://sean-bradley.medium.com/get-telegram-chat-id-80b575520659
+Start a chat with @getmyid_bot in telegram to get chat id.
 
 There are several commands & messages provided via Telegram, please issue a `/help` command in the telegram chat to see
 all the options.
