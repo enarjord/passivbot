@@ -195,7 +195,8 @@ class Telegram:
                 for item in daily.keys():
                     day_profit = daily[item]['pnl']
                     previous_day_close_wallet_balance = wallet_balance - day_profit
-                    profit_pct = ((wallet_balance / previous_day_close_wallet_balance) - 1) * 100 if wallet_balance > 0 else 0
+                    profit_pct = ((wallet_balance / previous_day_close_wallet_balance) - 1) * 100 \
+                        if previous_day_close_wallet_balance > 0.0 else 0.0
                     wallet_balance = previous_day_close_wallet_balance
                     table.add_row([daily[item]['date'], compress_float(day_profit, 3), round_(profit_pct, 0.01)])
 
