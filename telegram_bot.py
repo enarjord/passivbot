@@ -1,14 +1,20 @@
-from datetime import datetime, timedelta
 import json
-
-import git
 import sys
+from datetime import datetime, timedelta
+from time import time
+
+try:
+    import git
+except Exception as e:
+    print(e)
+    print("Unable to import git module. This is probably a result of a missing git installation."
+          "As a result of this, the version will not be shown in applicable messages. To fix this,"
+          "please make sure you have git installed properly. The bot will work fine without it.")
 from prettytable import PrettyTable, HEADER
 from telegram import KeyboardButton, ParseMode, ReplyKeyboardMarkup
 from telegram.ext import Updater, CommandHandler
-from time import time
 
-from jitted import compress_float, round_dynamic, round_
+from jitted import compress_float, round_
 
 
 class Telegram:
@@ -42,7 +48,7 @@ class Telegram:
         msg = '<pre><b>The following commands are available:</b></pre>\n' \
               '/balance: the equity & wallet balance in the configured account\n' \
               '/open_orders: a list of all buy & sell orders currently open\n' \
-              '/graceful_stop: instructs the bot to no longer open new positions and exit gracefully\n' \
+              '/graceful_stop: instructs the bot to no longer open new positions\n' \
               '/position: information about the current position(s)\n' \
               '/show_config: the active configuration used\n' \
               '/reload_config: reload the configuration from disk, based on the file initially used\n' \
@@ -111,7 +117,7 @@ class Telegram:
         self._bot.set_config_value('do_shrt', False)
 
         self.send_msg(
-            'No longer opening new long or short positions, existing positions will be closed gracefully')
+            'No longer opening new long or short positions, existing positions will still be managed.')
 
     def _reload_config(self, update=None, context=None):
         if self.config_reload_ts > 0.0:
@@ -189,7 +195,8 @@ class Telegram:
                 for item in daily.keys():
                     day_profit = daily[item]['pnl']
                     previous_day_close_wallet_balance = wallet_balance - day_profit
-                    profit_pct = ((wallet_balance / previous_day_close_wallet_balance) - 1) * 100
+                    profit_pct = ((wallet_balance / previous_day_close_wallet_balance) - 1) * 100 \
+                        if previous_day_close_wallet_balance > 0.0 else 0.0
                     wallet_balance = previous_day_close_wallet_balance
                     table.add_row([daily[item]['date'], compress_float(day_profit, 3), round_(profit_pct, 0.01)])
 
