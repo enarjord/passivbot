@@ -262,6 +262,7 @@ class Downloader:
                     for i in gaps.index:
                         print_(['Filling gaps from id', gaps["start"].iloc[i], 'to id', gaps["end"].iloc[i]])
                         current_id = gaps["start"].iloc[i]
+                        loop_start = time()
                         while current_id < gaps["end"].iloc[i] and int(
                                 datetime.datetime.now(tz.UTC).timestamp() * 1000) - current_time > 10000:
                             try:
@@ -269,9 +270,11 @@ class Downloader:
                                 tf = self.transform_ticks(fetched_new_trades)
                                 if tf.empty:
                                     print_(["Response empty. No new trades, exiting..."])
+                                    await asyncio.sleep(max(0.0, 0.75 - time() - loop_start))
                                     break
                                 if current_id == tf["trade_id"].iloc[-1]:
                                     print_(["Same trade ID again. No new trades, exiting..."])
+                                    await asyncio.sleep(max(0.0, 0.75 - time() - loop_start))
                                     break
                                 current_id = tf["trade_id"].iloc[-1]
                                 df = pd.concat([df, tf])
