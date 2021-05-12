@@ -270,11 +270,11 @@ class Downloader:
                                 tf = self.transform_ticks(fetched_new_trades)
                                 if tf.empty:
                                     print_(["Response empty. No new trades, exiting..."])
-                                    await asyncio.sleep(max(0.0, 0.75 - time() - loop_start))
+                                    await asyncio.sleep(max(0.0, 0.75 - time() + loop_start))
                                     break
                                 if current_id == tf["trade_id"].iloc[-1]:
                                     print_(["Same trade ID again. No new trades, exiting..."])
-                                    await asyncio.sleep(max(0.0, 0.75 - time() - loop_start))
+                                    await asyncio.sleep(max(0.0, 0.75 - time() + loop_start))
                                     break
                                 current_id = tf["trade_id"].iloc[-1]
                                 df = pd.concat([df, tf])
@@ -351,13 +351,16 @@ class Downloader:
 
             while current_id <= end_id and current_time <= end_time and int(
                     datetime.datetime.now(tz.UTC).timestamp() * 1000) - current_time > 10000:
+                loop_start = time()
                 fetched_new_trades = await self.bot.fetch_ticks(int(current_id))
                 tf = self.transform_ticks(fetched_new_trades)
                 if tf.empty:
                     print_(["Response empty. No new trades, exiting..."])
+                    await asyncio.sleep(max(0.0, 0.75 - time() + loop_start))
                     break
                 if current_id == tf["trade_id"].iloc[-1]:
                     print_(["Same trade ID again. No new trades, exiting..."])
+                    await asyncio.sleep(max(0.0, 0.75 - time() + loop_start))
                     break
                 df = pd.concat([df, tf])
                 df.sort_values("trade_id", inplace=True)
