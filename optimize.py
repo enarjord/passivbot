@@ -91,7 +91,12 @@ def simple_sliding_window_wrap(config, ticks):
         result = {}
         for k in results[0]:
             try:
-                result[k] = np.mean([r[k] for r in results])
+                if k == 'closest_liq':
+                    result[k] = np.min([r[k] for r in results])
+                elif 'max_hrs_no_fills' in k:
+                    result[k] = np.max([r[k] for r in results])
+                else:
+                    result[k] = np.mean([r[k] for r in results])
             except:
                 result[k] = results[0][k]
     else:
