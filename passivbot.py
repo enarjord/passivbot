@@ -145,6 +145,8 @@ class Bot:
         self.highest_bid = 0.0
         self.lowest_ask = 9.9e9
         self.price = 0
+        self.is_buyer_maker = True
+        self.agg_qty = 0.0
         self.ob = [0.0, 0.0]
         self.ema = 0.0
 
@@ -522,6 +524,13 @@ class Bot:
 
     def update_indicators(self, ticks: dict):
         for tick in ticks:
+            self.agg_qty += tick['qty']
+            if tick['price'] == self.price and tick['is_buyer_maker'] == self.is_buyer_maker:
+                continue
+            self.qty = self.agg_qty
+            self.agg_qty = 0.0
+            self.price = tick['price']
+            self.is_buyer_maker = tick['is_buyer_maker']
             if tick['is_buyer_maker']:
                 self.ob[0] = tick['price']
             else:
@@ -534,7 +543,6 @@ class Bot:
             self.sum_prices_squared += self.tick_prices_deque[-1] ** 2
         self.price_std = np.sqrt((self.sum_prices_squared / len(self.tick_prices_deque) -
                                  ((self.sum_prices / len(self.tick_prices_deque)) ** 2)))
-        self.price = ticks[-1]['price']
         self.volatility = self.price_std / self.ema
 
     async def start_websocket(self) -> None:

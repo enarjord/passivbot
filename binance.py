@@ -333,7 +333,7 @@ class BinanceBot(Bot):
                 print_(['fetched ticks', self.symbol, ticks[0]['trade_id'],
                         ts_to_date(float(ticks[0]['timestamp']) / 1000)])
         except Exception as e:
-            print('errer fetching ticks b', e, fetched)
+            print('error fetching ticks b', e, fetched)
             ticks = []
             if do_print:
                 print_(['fetched no new ticks', self.symbol])
@@ -350,11 +350,9 @@ class BinanceBot(Bot):
 
     def standardize_websocket_ticks(self, data: dict) -> [dict]:
         try:
-            ticks = [{'price': float(data['p']), 'is_buyer_maker': data['m']}]
-            if ticks[0]['price'] != self.price:
-                return ticks
+            return [{'price': float(data['p']), 'qty': float(data['q']), 'is_buyer_maker': data['m']}]
         except Exception as e:
-            print('errer in websocket tick', e)
+            print('error in websocket tick', e)
         return []
 
     async def subscribe_ws(self, ws):

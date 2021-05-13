@@ -69,12 +69,13 @@ def nan_to_0(x) -> float:
 
 
 @njit
-def compress_ticks(ticks):
+def compress_ticks(ticks: np.ndarray) -> np.ndarray:
+    # ticks format [qty, price, buyer_maker, timestamp]
     compressed = np.zeros_like(ticks)
     compressed[0] = ticks[0]
     k = 0
     for i in range(1, len(ticks)):
-        if ticks[i][0] == compressed[k][0]:
+        if ticks[i][1] == compressed[k][1] and ticks[i][2] == compressed[k][2]:
             compressed[k][1] += ticks[i][1]
         else:
             k += 1
