@@ -192,19 +192,18 @@ class Telegram:
                     daily[idx]['pnl'] = pln_summary
 
                 table = PrettyTable(['Date', 'PNL', 'Daily %'])
+                pnl_sum = 0.0
                 for item in daily.keys():
                     day_profit = daily[item]['pnl']
+                    pnl_sum += day_profit
                     previous_day_close_wallet_balance = wallet_balance - day_profit
                     profit_pct = ((wallet_balance / previous_day_close_wallet_balance) - 1) * 100 \
                         if previous_day_close_wallet_balance > 0.0 else 0.0
                     wallet_balance = previous_day_close_wallet_balance
                     table.add_row([daily[item]['date'], compress_float(day_profit, 3), round_(profit_pct, 0.01)])
 
-                pnl_sum = 0
-                pct_sum = 0
-                for row in table:
-                    pnl_sum = pnl_sum + float(row.get_string(fields=["PNL"]).split('\n')[3].replace('|','').replace(' ',''))
-                    pct_sum = pct_sum + float(row.get_string(fields=["Daily %"]).split('\n')[3].replace('|','').replace(' ',''))
+                pct_sum = ((position['wallet_balance'] + pnl_sum) / position['wallet_balance'] - 1) * 100 \
+                    if position['wallet_balance'] > 0.0 else 0.0
                 table.add_row(['-------','------','---------'])
                 table.add_row(['Total', compress_float(pnl_sum, 3), round_(pct_sum, 0.01)])
 
