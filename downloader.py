@@ -13,6 +13,7 @@ class Downloader:
     """
 
     def __init__(self, config: dict):
+        self.fetch_delay_seconds = 0.75
         self.config = config
         self.price_filepath = os.path.join(config["caches_dirpath"], f"{config['session_name']}_price_cache.npy")
         self.buyer_maker_filepath = os.path.join(config["caches_dirpath"], f"{config['session_name']}_buyer_maker_cache.npy")
@@ -177,7 +178,7 @@ class Downloader:
             first_id = df["trade_id"].iloc[0]
             length = len(df)
             while not start_time >= first_ts or not start_time <= last_ts:
-                await asyncio.sleep(0.75)
+                loop_start = time()
                 nw_id, prev_div, forward = self.new_id(first_ts, last_ts, first_id, length, start_time, prev_div)
                 print_(['Current time span from', df["timestamp"].iloc[0], 'to', df["timestamp"].iloc[-1],
                         'with earliest trade id', df["trade_id"].iloc[0], 'estimating distance of', forward, 'trades'])
@@ -195,6 +196,7 @@ class Downloader:
                             break
                 except Exception:
                     print("Failed to fetch or transform...")
+                await asyncio.sleep(max(0.0, self.fetch_delay_seconds - time() + loop_start))
             print_(['Found id for start time!'])
             return df[df["timestamp"] >= start_time]
 
@@ -262,19 +264,19 @@ class Downloader:
                     for i in gaps.index:
                         print_(['Filling gaps from id', gaps["start"].iloc[i], 'to id', gaps["end"].iloc[i]])
                         current_id = gaps["start"].iloc[i]
-                        loop_start = time()
                         while current_id < gaps["end"].iloc[i] and int(
                                 datetime.datetime.now(tz.UTC).timestamp() * 1000) - current_time > 10000:
+                            loop_start = time()
                             try:
                                 fetched_new_trades = await self.bot.fetch_ticks(int(current_id))
                                 tf = self.transform_ticks(fetched_new_trades)
                                 if tf.empty:
                                     print_(["Response empty. No new trades, exiting..."])
-                                    await asyncio.sleep(max(0.0, 0.75 - time() + loop_start))
+                                    await asyncio.sleep(max(0.0, self.fetch_delay_seconds - time() + loop_start))
                                     break
                                 if current_id == tf["trade_id"].iloc[-1]:
                                     print_(["Same trade ID again. No new trades, exiting..."])
-                                    await asyncio.sleep(max(0.0, 0.75 - time() + loop_start))
+                                    await asyncio.sleep(max(0.0, self.fetch_delay_seconds - time() + loop_start))
                                     break
                                 current_id = tf["trade_id"].iloc[-1]
                                 df = pd.concat([df, tf])
@@ -285,7 +287,7 @@ class Downloader:
                                 current_time = df["timestamp"].iloc[-1]
                             except Exception:
                                 print("Failed to fetch or transform...")
-                            await asyncio.sleep(0.75)
+                            await asyncio.sleep(max(0.0, self.fetch_delay_seconds - time() + loop_start))
                 if not df.empty:
                     if df["trade_id"].iloc[-1] > highest_id:
                         highest_id = df["trade_id"].iloc[-1]
@@ -356,11 +358,11 @@ class Downloader:
                 tf = self.transform_ticks(fetched_new_trades)
                 if tf.empty:
                     print_(["Response empty. No new trades, exiting..."])
-                    await asyncio.sleep(max(0.0, 0.75 - time() + loop_start))
+                    await asyncio.sleep(max(0.0, self.fetch_delay_seconds - time() + loop_start))
                     break
                 if current_id == tf["trade_id"].iloc[-1]:
                     print_(["Same trade ID again. No new trades, exiting..."])
-                    await asyncio.sleep(max(0.0, 0.75 - time() + loop_start))
+                    await asyncio.sleep(max(0.0, self.fetch_delay_seconds - time() + loop_start))
                     break
                 df = pd.concat([df, tf])
                 df.sort_values("trade_id", inplace=True)
@@ -376,7 +378,7 @@ class Downloader:
                     elif df["trade_id"].iloc[0] % 100000 != 0 and len(tf) == 1:
                         self.save_dataframe(df[:tf.index[-1]], "", True)
                         df = df[tf.index[-1]:]
-                await asyncio.sleep(0.75)
+                await asyncio.sleep(max(0.0, self.fetch_delay_seconds - time() + loop_start))
             if not df.empty:
                 df = df[df["timestamp"] >= start_time]
                 if start_id != 0 and not df.empty:
