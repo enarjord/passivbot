@@ -198,7 +198,7 @@ class Telegram:
                     profit_pct = ((wallet_balance / previous_day_close_wallet_balance) - 1) * 100 \
                         if previous_day_close_wallet_balance > 0.0 else 0.0
                     wallet_balance = previous_day_close_wallet_balance
-                    table.add_row([daily[item]['date'], round_(day_profit, 0.01), round_(profit_pct, 0.01)])
+                    table.add_row([daily[item]['date'], compress_float(day_profit, 3), round_(profit_pct, 0.01)])
 
                 pnl_sum = 0
                 pct_sum = 0
@@ -206,7 +206,7 @@ class Telegram:
                     pnl_sum = pnl_sum + float(row.get_string(fields=["PNL"]).split('\n')[3].replace('|','').replace(' ',''))
                     pct_sum = pct_sum + float(row.get_string(fields=["Daily %"]).split('\n')[3].replace('|','').replace(' ',''))
                 table.add_row(['-------','------','---------'])
-                table.add_row(['Total', round_(pnl_sum, 0.01), round_(pct_sum, 0.01)])
+                table.add_row(['Total', compress_float(pnl_sum, 3), round_(pct_sum, 0.01)])
 
                 msg = f'<pre>{table.get_string(border=True, padding_width=1, junction_char=" ", vertical_char=" ", hrules=HEADER)}</pre>'
                 self.send_msg(msg)
