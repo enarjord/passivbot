@@ -5,6 +5,7 @@ import pandas as pd
 from dateutil import parser, tz
 
 from passivbot import *
+from jitted import compress_ticks
 
 
 class Downloader:
@@ -453,24 +454,26 @@ class Downloader:
         # df = df.groupby([(df.price != df.price.shift()).cumsum(), 'is_buyer_maker']).agg(
         #     {'qty': 'sum', 'price': 'first', 'is_buyer_maker': 'first', 'timestamp': 'first'}).reset_index(
         #     drop=True)
-        df = df.groupby([(df.price != df.price.shift()).cumsum(), 'is_buyer_maker']).agg(
-            {'price': 'first', 'is_buyer_maker': 'first', 'timestamp': 'first'}).reset_index(drop=True)
+        # df = df.groupby([(df.price != df.price.shift()).cumsum(), 'is_buyer_maker']).agg(
+        #     {'price': 'first', 'is_buyer_maker': 'first', 'timestamp': 'first'}).reset_index(drop=True)
+
+        compressed_ticks = compress_ticks(df[["price", "is_buyer_maker", "timestamp"]].values)
 
         if single_file:
             print_(["Saving single file with", len(df), " ticks to", self.tick_filepath, "..."])
-            np.save(self.tick_filepath, df[["price", "is_buyer_maker", "timestamp"]])
+            np.save(self.tick_filepath, compressed_ticks)
             print_(["Saved single file!"])
         else:
             print_(["Saving price file with", len(df), " ticks to", self.price_filepath, "..."])
-            np.save(self.price_filepath, df["price"])
+            np.save(self.price_filepath, compressed_ticks[:, 0])
             print_(["Saved price file!"])
 
             print_(["Saving buyer_maker file with", len(df), " ticks to", self.buyer_maker_filepath, "..."])
-            np.save(self.buyer_maker_filepath, df["is_buyer_maker"])
+            np.save(self.buyer_maker_filepath, compressed_ticks[:, 1])
             print_(["Saved buyer_maker file!"])
 
             print_(["Saving timestamp file with", len(df), " ticks to", self.time_filepath, "..."])
-            np.save(self.time_filepath, df["timestamp"])
+            np.save(self.time_filepath, compressed_ticks[:, 2])
             print_(["Saved timestamp file!"])
 
     async def get_ticks(self, single_file: bool = False) -> (np.ndarray, np.ndarray, np.ndarray):
