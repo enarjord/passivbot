@@ -1,0 +1,20 @@
+{
+    "config_name": "179days_adg2.94%_liq20.64%_stoppy",
+    "logging_level": 0,
+    "ddown_factor": 2.2602243557098007,
+    "qty_pct": 0.024244881690544243,
+    "leverage": 4,
+    "n_close_orders": 16,
+    "grid_spacing": 0.008389164434013548,
+    "pos_margin_grid_coeff": 17.753455780169077,
+    "volatility_grid_coeff": 15.206865373643824,
+    "volatility_qty_coeff": 522.381503404618,
+    "min_markup": 0.0062063374242333266,
+    "markup_range": 0.005184592125760704,
+    "do_long": true,
+    "do_shrt": true,
+    "ema_span": 54441.187213624,
+    "ema_spread": 0.008006384618316275,
+    "stop_loss_liq_diff": 0.23603955717658395,
+    "stop_loss_pos_pct": 0.04953626312947159
+}
