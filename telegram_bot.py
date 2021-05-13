@@ -29,6 +29,9 @@ class Telegram:
         keyboard_buttons = [
             [KeyboardButton('/balance'), KeyboardButton('/open_orders'), KeyboardButton('/position')],
             [KeyboardButton('/graceful_stop'), KeyboardButton('/show_config'), KeyboardButton('/reload_config')],
+            [KeyboardButton('/start_short'), KeyboardButton('/stop_short'), KeyboardButton('/start_long')],
+            [KeyboardButton('/stop_long'), KeyboardButton('/lev5'), KeyboardButton('/lev7')],
+            [KeyboardButton('/lev10')],
             [KeyboardButton('/closed_trades'), KeyboardButton('/daily'), KeyboardButton('/help')]]
         self._keyboard = ReplyKeyboardMarkup(keyboard_buttons, resize_keyboard=True)
 
@@ -39,6 +42,13 @@ class Telegram:
         dispatcher.add_handler(CommandHandler('graceful_stop', self._graceful_stop))
         dispatcher.add_handler(CommandHandler('show_config', self.show_config))
         dispatcher.add_handler(CommandHandler('reload_config', self._reload_config))
+        dispatcher.add_handler(CommandHandler('start_short', self._start_short))
+        dispatcher.add_handler(CommandHandler('stop_short', self._stop_short))
+        dispatcher.add_handler(CommandHandler('start_long', self._start_long))
+        dispatcher.add_handler(CommandHandler('stop_long', self._stop_long))
+        dispatcher.add_handler(CommandHandler('lev5', self._set_lev_5))
+        dispatcher.add_handler(CommandHandler('lev7', self._set_lev_7))
+        dispatcher.add_handler(CommandHandler('lev10', self._set_lev_10))
         dispatcher.add_handler(CommandHandler('closed_trades', self._closed_trades))
         dispatcher.add_handler(CommandHandler('daily', self._daily))
         dispatcher.add_handler(CommandHandler('help', self._help))
@@ -52,6 +62,13 @@ class Telegram:
               '/position: information about the current position(s)\n' \
               '/show_config: the active configuration used\n' \
               '/reload_config: reload the configuration from disk, based on the file initially used\n' \
+              '/start_short: starts short positions (do_shrt is True)\n' \
+              '/stop_short: stops short positions (do_shrt is False)\n' \
+              '/start_long: starts short positions (do_long is True)\n' \
+              '/stop_long: stops short positions (do_long is False)\n' \
+              '/lev5: set leverage to 5\n' \
+              '/lev7: set leverage to 7\n' \
+              '/lev10: set leverage to 10\n' \
               "/closed_trades: a brief overview of bot's last 10 closed trades\n" \
               '/daily: an overview of daily profit\n' \
               '/help: This help page\n'
@@ -229,6 +246,34 @@ class Telegram:
               f'<pre><b>Config:</b></pre> \n' \
               f'{json.dumps(self._bot.config, indent=4)}'
         self.send_msg(msg)
+
+    def _start_short(self, update=None, context=None):
+        self._bot.set_config_value('do_shrt', True)
+        self.send_msg('Short position is activated.')
+    
+    def _stop_short(self, update=None, context=None):
+        self._bot.set_config_value('do_shrt', False)
+        self.send_msg('Short position is DEactivated.')
+
+    def _start_long(self, update=None, context=None):
+        self._bot.set_config_value('do_long', True)
+        self.send_msg('Long position is activated.')
+    
+    def _stop_long(self, update=None, context=None):
+        self._bot.set_config_value('do_long', False)
+        self.send_msg('Long position is DEactivated.')
+
+    def _set_lev_5(self, update=None, context=None):
+        self._bot.set_config_value('leverage', 5)
+        self.send_msg('Leverage is 5 now.')
+
+    def _set_lev_7(self, update=None, context=None):
+        self._bot.set_config_value('leverage', 7)
+        self.send_msg('Leverage is 7 now.')
+
+    def _set_lev_10(self, update=None, context=None):
+        self._bot.set_config_value('leverage', 10)
+        self.send_msg('Leverage is 10 now.')
 
     def log_start(self):
         self.send_msg('<b>Passivbot started!</b>')
