@@ -267,6 +267,7 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, list, bo
 
 def plot_wrap(bc, ticks, live_config):
     n_days = round_((ticks[-1][2] - ticks[0][2]) / (1000 * 60 * 60 * 24), 0.1)
+    print('n_days', round_(n_days, 0.1))
     config = {**bc, **live_config}
     print('backtesting...')
     fills, stats, did_finish = backtest(config, ticks, do_print=True)
