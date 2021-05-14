@@ -10,20 +10,19 @@ from typing import Union
 
 import nevergrad as ng
 import numpy as np
-import pandas as pd
 import ray
 from ray import tune
 from ray.tune.schedulers import AsyncHyperBandScheduler
 from ray.tune.suggest import ConcurrencyLimiter
 from ray.tune.suggest.nevergrad import NevergradSearch
 
-from backtest import backtest, plot_wrap
 from analyze import analyze_fills, get_empty_analysis, objective_function
-from walk_forward_optimization import WFO
+from backtest import backtest, plot_wrap
 from downloader import Downloader, prep_backtest_config
 from jitted import round_
-from passivbot import get_keys, make_get_filepath, ts_to_date
+from passivbot import ts_to_date
 from reporter import LogReporter
+from walk_forward_optimization import WFO
 
 os.environ['TUNE_GLOBAL_CHECKPOINT_S'] = '120'
 
@@ -107,7 +106,8 @@ def simple_sliding_window_wrap(config, ticks):
     except Exception as e:
         print('c', e)
     tune.report(objective=objective, daily_gain=result['average_daily_gain'], closest_liquidation=result['closest_liq'],
-                max_hrs_no_fills=result['max_hrs_no_fills'], max_hrs_no_fills_same_side=result['max_hrs_no_fills_same_side'])
+                max_hrs_no_fills=result['max_hrs_no_fills'],
+                max_hrs_no_fills_same_side=result['max_hrs_no_fills_same_side'])
 
 
 def tune_report(result):
@@ -118,7 +118,6 @@ def tune_report(result):
         max_hrs_no_fills=result["max_hrs_no_fills"],
         max_hrs_no_fills_same_side=result["max_hrs_no_fills_same_side"],
     )
-
 
 
 def backtest_tune(ticks: np.ndarray, backtest_config: dict, current_best: Union[dict, list] = None):
@@ -177,9 +176,10 @@ def backtest_tune(ticks: np.ndarray, backtest_config: dict, current_best: Union[
                                                       'max_hrs_no_fills',
                                                       'max_hrs_no_fills_same_side',
                                                       'objective'],
-        parameter_columns=[k for k in backtest_config['ranges']
-                           if type(config[k]) == ray.tune.sample.Float
-                           or type(config[k]) == ray.tune.sample.Integer])
+                                      parameter_columns=[k for k in backtest_config['ranges']
+                                                         if type(config[k]) == ray.tune.sample.Float
+                                                         or type(config[k]) == ray.tune.sample.Integer]),
+        raise_on_failed_trial=False
     )
     ray.shutdown()
     return analysis
@@ -190,7 +190,8 @@ def save_results(analysis, backtest_config):
     df.reset_index(inplace=True)
     df.rename(columns={column: column.replace('config.', '') for column in df.columns}, inplace=True)
     df = df[list(backtest_config['ranges'].keys()) + ['daily_gain', 'closest_liquidation', 'max_hrs_no_fills',
-                                                      'max_hrs_no_fills_same_side', 'objective']].sort_values('objective', ascending=False)
+                                                      'max_hrs_no_fills_same_side', 'objective']].sort_values(
+        'objective', ascending=False)
     df.to_csv(os.path.join(backtest_config['optimize_dirpath'], 'results.csv'), index=False)
     print('Best candidate found:')
     pprint.pprint(analysis.best_config)
@@ -208,7 +209,8 @@ async def main(args: list):
     if (s := '--start') in args:
         try:
             if os.path.isdir(args[args.index(s) + 1]):
-                start_candidate = [json.load(open(f)) for f in glob.glob(os.path.join(args[args.index(s) + 1], '*.json'))]
+                start_candidate = [json.load(open(f)) for f in
+                                   glob.glob(os.path.join(args[args.index(s) + 1], '*.json'))]
                 print('Starting with all configurations in directory.')
             else:
                 start_candidate = json.load(open(args[args.index(s) + 1]))
