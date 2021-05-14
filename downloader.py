@@ -4,6 +4,7 @@ import hjson
 import pandas as pd
 import argparse
 from dateutil import parser, tz
+from time import sleep
 
 from passivbot import *
 
@@ -615,6 +616,8 @@ async def main():
     await downloader.download_ticks()
     if not args.download_only:
         await downloader.prepare_files(True)
+    sleep(0.1)
+
 
 
 if __name__ == "__main__":
