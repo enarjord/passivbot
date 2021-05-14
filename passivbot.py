@@ -72,6 +72,7 @@ def load_key_secret(exchange: str, user: str) -> (str, str):
             return keyList
         elif user not in keyfile or keyfile[user]["exchange"] != exchange:
             print("Looks like the keys aren't configured yet, or you entered the wrong username!")
+        raise Exception('API KeyFile Missing!')
     except FileNotFoundError:
         print("File Not Found!")
         raise Exception('API KeyFile Missing!')
