@@ -457,9 +457,9 @@ class Downloader:
         #     drop=True)
         # df = df.groupby([(df.price != df.price.shift()).cumsum(), 'is_buyer_maker']).agg(
         #     {'price': 'first', 'is_buyer_maker': 'first', 'timestamp': 'first'}).reset_index(drop=True)
-        groups = df.groupby((~(((df.price == df.price.shift(1)) &
-                                (df.is_buyer_maker == df.is_buyer_maker.shift(1))))).cumsum())
-        df = groups.agg({'price': 'first', 'is_buyer_maker': 'first', 'timestamp': 'first', 'qty': 'sum'})
+        df = df.groupby((~((df.price == df.price.shift(1)) &
+                           (df.is_buyer_maker == df.is_buyer_maker.shift(1)))).cumsum()).agg(
+            {'price': 'first', 'is_buyer_maker': 'first', 'timestamp': 'first', 'qty': 'sum'})
 
         #compressed_ticks = df[["price", "is_buyer_maker", "timestamp", "qty"]].values
         compressed_ticks = df[["price", "is_buyer_maker", "timestamp"]].values
