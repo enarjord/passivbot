@@ -203,9 +203,11 @@ async def main():
                         default='configs/backtest/default.hjson', help='backtest config hjson file')
     parser.add_argument('-o', '--optimize-config', type=str, required=False, dest='optimize_config_path',
                         default='configs/optimize/default.hjson', help='optimize config hjson file')
-    parser.add_argument('-s', '--start', type=str, required=False, dest='starting_configs',
+    parser.add_argument('-t', '--start', type=str, required=False, dest='starting_configs',
                         default='none',
                         help='start with given live configs.  single json file or dir with multiple json files')
+    parser.add_argument('-s', '--symbol', type=str, required=False, dest='symbol',
+                        default='none', help='specify symbol, overriding symbol from backtest config')
     args = parser.parse_args()
 
     config = await prep_config(args)
