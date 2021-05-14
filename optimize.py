@@ -81,19 +81,16 @@ def simple_sliding_window_wrap(config, ticks):
             fills, _, did_finish = backtest(config, ticks_slice)
         except Exception as e:
             print('debug a', e, config)
-        if not did_finish:
-            break
         try:
             _, result_ = analyze_fills(fills, config, ticks_slice[-1][2])
-            if result_['closest_liq'] < config['minimum_liquidation_distance'] * (1 - break_factor):
-                break
-            if result_['max_hrs_no_fills'] > config['max_hrs_no_fills'] * (1 + break_factor):
-                break
-            if result_['max_hrs_no_fills_same_side'] > config['max_hrs_no_fills_same_side'] * (1 + break_factor):
-                break
         except Exception as e:
             print('b', e)
         results.append(result_)
+        if (not did_finish or
+            result_['closest_liq'] < config['minimum_liquidation_distance'] * (1 - break_factor) or
+            result_['max_hrs_no_fills'] > config['max_hrs_no_fills'] * (1 + break_factor) or
+            result_['max_hrs_no_fills_same_side'] > config['max_hrs_no_fills_same_side'] * (1 + break_factor)):
+            break
     if results:
         result = {}
         for k in results[0]:
