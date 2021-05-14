@@ -5,7 +5,6 @@ import pandas as pd
 from dateutil import parser, tz
 
 from passivbot import *
-from jitted import compress_ticks
 
 
 class Downloader:
@@ -457,8 +456,8 @@ class Downloader:
         # df = df.groupby([(df.price != df.price.shift()).cumsum(), 'is_buyer_maker']).agg(
         #     {'price': 'first', 'is_buyer_maker': 'first', 'timestamp': 'first'}).reset_index(drop=True)
 
-        compressed_ticks = compress_ticks(df[["price", "is_buyer_maker", "timestamp"]].values)
-        compressed_ticks = np.copy(compressed_ticks)
+        df = df[~((df.price == df.price.shift(1)) & (df.is_buyer_maker == df.is_buyer_maker.shift(1)))]
+        compressed_ticks = df[["price", "is_buyer_maker", "timestamp"]].values
 
         if single_file:
             print_(["Saving single file with", len(df), " ticks to", self.tick_filepath, "..."])
