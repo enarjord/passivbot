@@ -219,13 +219,11 @@ class Downloader:
                              self.config["symbol"], ""))
 
         if self.config["exchange"] == "binance":
-            self.bot = await create_binance_bot(self.config["user"],
-                                                get_dummy_settings(self.config["user"],
+            self.bot = await create_binance_bot(get_dummy_settings(self.config["user"],
                                                                    self.config["exchange"],
                                                                    self.config["symbol"]))
         elif self.config["exchange"] == "bybit":
-            self.bot = await create_bybit_bot(self.config["user"],
-                                              get_dummy_settings(self.config["user"],
+            self.bot = await create_bybit_bot(get_dummy_settings(self.config["user"],
                                                                  self.config["exchange"],
                                                                  self.config["symbol"]))
         else:
@@ -527,7 +525,7 @@ def get_dummy_settings(user: str, exchange: str, symbol: str):
                'logging_level': 0}}
 
 
-async def fetch_market_specific_settings(exchange: str, user: str, symbol: str):
+async def fetch_market_specific_settings(user: str, exchange: str, symbol: str):
     tmp_live_settings = get_dummy_settings(user, exchange, symbol)
     settings_from_exchange = {}
     if exchange == 'binance':
@@ -577,7 +575,7 @@ async def prep_config(args) -> dict:
     if os.path.exists((mss := config['caches_dirpath'] + 'market_specific_settings.json')):
         market_specific_settings = json.load(open(mss))
     else:
-        market_specific_settings = await fetch_market_specific_settings(config['exchange'], config['user'],
+        market_specific_settings = await fetch_market_specific_settings(config['user'], config['exchange'],
                                                                         config['symbol'])
         json.dump(market_specific_settings, open(mss, 'w'), indent=4)
     config.update(market_specific_settings)
@@ -597,18 +595,16 @@ async def prep_config(args) -> dict:
     return config
 
 
-def get_parser():
-    parser = argparse.ArgumentParser(prog='Optimize', description='Optimize passivbot config.')
+async def main():
+
+    parser = argparse.ArgumentParser(prog='Downloader', description='Download ticks from exchange API.')
     parser.add_argument('-b', '--backtest_config', type=str, required=False, dest='backtest_config_path',
                         default='configs/backtest/default.hjson', help='backtest config hjson file')
     parser.add_argument('-o', '--optimize_config', type=str, required=False, dest='optimize_config_path',
                         default='configs/optimize/default.hjson', help='optimize config hjson file')
     parser.add_argument('-d', '--download-only', type=bool, required=False, dest='download_only',
                         default=False, help='download only, do not dump ticks caches')
-    return parser
 
-
-async def main():
     args = get_parser().parse_args()
     config = await prep_config(args)
     downloader = Downloader(config)

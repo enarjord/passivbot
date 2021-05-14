@@ -10,6 +10,7 @@ from pathlib import Path
 from time import time
 
 import numpy as np
+import argparse
 
 import telegram_bot
 import websockets
@@ -124,9 +125,8 @@ class LockNotAvailableException(Exception):
     pass
 
 class Bot:
-    def __init__(self, user: str, config: dict):
+    def __init__(self, config: dict):
         self.config = config
-        self.user = user
         self.telegram = None
 
         for key in config:
@@ -147,6 +147,7 @@ class Bot:
         self.price = 0
         self.is_buyer_maker = True
         self.agg_qty = 0.0
+        self.qty = 0.0
         self.ob = [0.0, 0.0]
         self.ema = 0.0
 
@@ -159,7 +160,7 @@ class Bot:
 
         self.log_filepath = make_get_filepath(f"logs/{self.exchange}/{config['config_name']}.log")
 
-        self.key, self.secret = load_key_secret(config['exchange'], user)
+        self.key, self.secret = load_key_secret(config['exchange'], self.user)
 
         self.log_level = 0
 
@@ -351,6 +352,8 @@ class Bot:
                                           'custom_id': tpl[4]})
                 long_psize = tpl[2]
                 stop_loss_close = True
+            if tpl[0] == 0.0:
+                continue
             elif tpl[0] > 0.0:
                 long_entry_orders.append({'side': 'buy', 'position_side': 'long', 'qty': tpl[0],
                                           'price': tpl[1], 'type': 'limit', 'reduce_only': False,
@@ -552,6 +555,7 @@ class Bot:
         await self.update_position()
         await self.init_exchange_config()
         await self.init_indicators()
+        await self.init_order_book()
         self.remove_lock_file()
         k = 1
         async with websockets.connect(self.endpoints['websocket']) as ws:
@@ -624,16 +628,16 @@ async def start_bot(bot):
             print('Websocket connection has been lost, attempting to reinitialize the bot...', e)
             await asyncio.sleep(10)
 
-async def create_binance_bot(user: str, config: str):
+async def create_binance_bot(config: str):
     from binance import BinanceBot
-    bot = BinanceBot(user, config)
+    bot = BinanceBot(config)
     await bot._init()
     return bot
 
 
-async def create_bybit_bot(user: str, config: str):
+async def create_bybit_bot(config: str):
     from bybit import Bybit
-    bot = Bybit(user, config)
+    bot = Bybit(config)
     await bot._init()
     return bot
 
@@ -646,29 +650,40 @@ async def _start_telegram(account: dict, bot: Bot):
     telegram.log_start()
     return telegram
 
+
+def get_passivbot_parser():
+    parser = argparse.ArgumentParser(prog='passivbot', description='run passivbot')
+    parser.add_argument('account_name', type=str, help='account name defined in api-keys.json')
+    parser.add_argument('symbol', type=str, help='symbol to trade')
+    parser.add_argument('live_config_path', type=str, help='live config to use')
+    return parser
+
+
 async def main() -> None:
+    args = get_passivbot_parser().parse_args()
     try:
         accounts = json.load(open('api-keys.json'))
     except Exception as e:
         print(e, 'failed to load api-keys.json file')
         return
-    if sys.argv[1] in accounts:
-        account = accounts[sys.argv[1]]
-    else:
-        print('unrecognized account name', sys.argv[1])
+    try:
+        account = accounts[args.account_name]
+    except Exception as e:
+        print('unrecognized account name', args.account_name, e)
         return
     try:
-        config = json.load(open(sys.argv[3]))
+        config = json.load(open(args.live_config_path))
     except Exception as e:
-        print(e, 'failed to load config', sys.argv[3])
+        print(e, 'failed to load config', args.live_config_path)
         return
+    config['user'] = args.account_name
     config['exchange'] = account['exchange']
-    config['symbol'] = sys.argv[2]
+    config['symbol'] = args.symbol
 
     if account['exchange'] == 'binance':
-        bot = await create_binance_bot(sys.argv[1], config)
+        bot = await create_binance_bot(config)
     elif account['exchange'] == 'bybit':
-        bot = await create_bybit_bot(sys.argv[1], config)
+        bot = await create_bybit_bot(config)
     else:
         raise Exception('unknown exchange', account['exchange'])
     print('using config')

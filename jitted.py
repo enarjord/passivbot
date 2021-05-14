@@ -2,7 +2,7 @@ import sys
 import numpy as np
 
 
-if '--nojit' in sys.argv:
+if False:#'--nojit' in sys.argv:
     print('not using numba')
     def njit(pyfunc=None, **kwargs):
         def wrap(func):

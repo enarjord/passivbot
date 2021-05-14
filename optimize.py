@@ -20,7 +20,7 @@ from ray.tune.suggest.nevergrad import NevergradSearch
 from backtest import backtest, plot_wrap
 from analyze import analyze_fills, get_empty_analysis, objective_function
 from walk_forward_optimization import WFO
-from downloader import Downloader, prep_config, get_parser
+from downloader import Downloader, prep_config
 from jitted import round_
 from passivbot import get_keys, make_get_filepath, ts_to_date
 from reporter import LogReporter
@@ -197,7 +197,14 @@ def save_results(analysis, backtest_config):
 
 
 async def main():
-    args = get_parser().parse_args()
+
+    parser = argparse.ArgumentParser(prog='Optimize', description='Optimize passivbot config.')
+    parser.add_argument('-b', '--backtest_config', type=str, required=False, dest='backtest_config_path',
+                        default='configs/backtest/default.hjson', help='backtest config hjson file')
+    parser.add_argument('-o', '--optimize_config', type=str, required=False, dest='optimize_config_path',
+                        default='configs/optimize/default.hjson', help='optimize config hjson file')
+    args = parser.parse_args()
+
     config = await prep_config(args)
     if config['exchange'] == 'bybit' and not config['inverse']:
         print('bybit usdt linear backtesting not supported')

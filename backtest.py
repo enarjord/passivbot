@@ -10,7 +10,7 @@ import pandas as pd
 import argparse
 from plotting import dump_plots
 
-from downloader import Downloader, prep_config, get_parser
+from downloader import Downloader, prep_config
 from jitted import calc_diff, round_, iter_entries, iter_long_closes, iter_shrt_closes, calc_available_margin, \
     calc_liq_price_binance, calc_liq_price_bybit, calc_new_psize_pprice, calc_long_pnl, calc_shrt_pnl, calc_cost, \
     iter_indicator_chunks, round_dynamic
@@ -288,9 +288,15 @@ def plot_wrap(bc, ticks, live_config):
 
 
 async def main():
-    parser = get_parser()
+
+    parser = argparse.ArgumentParser(prog='Backtest', description='Backtest given passivbot config.')
     parser.add_argument('live_config_path', type=str, help='path to live config to test')
+    parser.add_argument('-b', '--backtest_config', type=str, required=False, dest='backtest_config_path',
+                        default='configs/backtest/default.hjson', help='backtest config hjson file')
+    parser.add_argument('-o', '--optimize_config', type=str, required=False, dest='optimize_config_path',
+                        default='configs/optimize/default.hjson', help='optimize config hjson file')
     args = parser.parse_args()
+
     config = await prep_config(args)
     print()
     for k in (keys := ['exchange', 'symbol', 'starting_balance', 'start_date', 'end_date',
