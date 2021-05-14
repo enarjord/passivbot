@@ -7,9 +7,10 @@ from analyze import analyze_fills
 
 import numpy as np
 import pandas as pd
+import argparse
 from plotting import dump_plots
 
-from downloader import Downloader, prep_backtest_config
+from downloader import Downloader, prep_config, get_parser
 from jitted import calc_diff, round_, iter_entries, iter_long_closes, iter_shrt_closes, calc_available_margin, \
     calc_liq_price_binance, calc_liq_price_bybit, calc_new_psize_pprice, calc_long_pnl, calc_shrt_pnl, calc_cost, \
     iter_indicator_chunks, round_dynamic
@@ -269,6 +270,7 @@ def plot_wrap(bc, ticks, live_config):
     n_days = round_((ticks[-1][2] - ticks[0][2]) / (1000 * 60 * 60 * 24), 0.1)
     print('n_days', round_(n_days, 0.1))
     config = {**bc, **live_config}
+    print('starting_balance', config['starting_balance'])
     print('backtesting...')
     fills, stats, did_finish = backtest(config, ticks, do_print=True)
     if not fills:
@@ -281,27 +283,37 @@ def plot_wrap(bc, ticks, live_config):
     )
     fdf.to_csv(config['plots_dirpath'] + "fills.csv")
     df = pd.DataFrame({'price': ticks[:, 0], 'buyer_maker': ticks[:, 1], 'timestamp': ticks[:, 2]})
+    print('dumping plots...')
     dump_plots(config, fdf, df)
 
 
-async def main(args: list):
-    backtest_config = await prep_backtest_config(args[1])
-    if backtest_config['exchange'] == 'bybit' and not backtest_config['inverse']:
+async def main():
+    parser = get_parser()
+    parser.add_argument('live_config_path', type=str, help='path to live config to test')
+    args = parser.parse_args()
+    config = await prep_config(args)
+    print()
+    for k in (keys := ['exchange', 'symbol', 'starting_balance', 'start_date', 'end_date',
+                       'latency_simulation_ms', 'do_long', 'do_shrt']):
+        if k in config:
+            print(f"{k: <{max(map(len, keys)) + 2}} {config[k]}")
+    print()
+    if config['exchange'] == 'bybit' and not config['inverse']:
         print('bybit usdt linear backtesting not supported')
         return
-    downloader = Downloader(backtest_config)
+    downloader = Downloader(config)
     ticks = await downloader.get_ticks(True)
-    backtest_config['n_days'] = round_((ticks[-1][2] - ticks[0][2]) / (1000 * 60 * 60 * 24), 0.1)
+    config['n_days'] = round_((ticks[-1][2] - ticks[0][2]) / (1000 * 60 * 60 * 24), 0.1)
     try:
-        live_config = json.load(open(args[2]))
+        live_config = json.load(open(args.live_config_path))
         print('backtesting and plotting given candidate')
     except Exception as e:
         print('failed to load live config')
         return
     print(json.dumps(live_config, indent=4))
-    plot_wrap(backtest_config, ticks, live_config)
+    plot_wrap(config, ticks, live_config)
 
 
 if __name__ == '__main__':
-    asyncio.run(main(sys.argv))
+    asyncio.run(main())
 

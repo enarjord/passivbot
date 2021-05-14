@@ -2,6 +2,7 @@ import gc
 
 import hjson
 import pandas as pd
+import argparse
 from dateutil import parser, tz
 
 from passivbot import *
@@ -554,9 +555,16 @@ async def fetch_market_specific_settings(exchange: str, user: str, symbol: str):
     return settings_from_exchange
 
 
-async def prep_backtest_config(config_name: str):
-    config = hjson.load(open(config_name))
-
+async def prep_config(args) -> dict:
+    try:
+        bc = hjson.load(open(args.backtest_config_path))
+    except Exception as e:
+        raise Exception('failed to load backtest config', backtest_config_path, e)
+    try:
+        oc = hjson.load(open(args.optimize_config_path))
+    except Exception as e:
+        raise Exception('failed to load optimize config', optimize_config_path, e)
+    config = {**oc, **bc}
     end_date = config['end_date'] if config['end_date'] and config['end_date'] != -1 else ts_to_date(time())[:16]
     config['session_name'] = f"{config['start_date'].replace(' ', '').replace(':', '').replace('.', '')}_" \
                              f"{end_date.replace(' ', '').replace(':', '').replace('.', '')}"
@@ -589,13 +597,25 @@ async def prep_backtest_config(config_name: str):
     return config
 
 
-async def main(args: list):
-    config = await prep_backtest_config(args[1])
+def get_parser():
+    parser = argparse.ArgumentParser(prog='Optimize', description='Optimize passivbot config.')
+    parser.add_argument('-b', '--backtest_config', type=str, required=False, dest='backtest_config_path',
+                        default='configs/backtest/default.hjson', help='backtest config hjson file')
+    parser.add_argument('-o', '--optimize_config', type=str, required=False, dest='optimize_config_path',
+                        default='configs/optimize/default.hjson', help='optimize config hjson file')
+    parser.add_argument('-d', '--download-only', type=bool, required=False, dest='download_only',
+                        default=False, help='download only, do not dump ticks caches')
+    return parser
+
+
+async def main():
+    args = get_parser().parse_args()
+    config = await prep_config(args)
     downloader = Downloader(config)
     await downloader.download_ticks()
-    if not '--only' in args:
-        await downloader.prepare_files('--split' not in args)
+    if not args.download_only:
+        await downloader.prepare_files(True)
 
 
 if __name__ == "__main__":
-    asyncio.run(main(sys.argv))
+    asyncio.run(main())

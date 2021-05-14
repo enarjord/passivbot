@@ -1,0 +1,14 @@
+{
+  exchange: binance
+  user: ebinance
+  symbol: XMRUSDT
+  latency_simulation_ms: 750
+  starting_balance: 100.0
+
+  do_long: true
+  do_shrt: true
+
+  start_date: 2020-11-11T11:11
+  # set end_date: -1 to use now as end date
+  end_date: 2021-05-13T12:00
+}

@@ -4,7 +4,7 @@ import json
 import logging
 import os
 import pprint
-import sys
+import argparse
 from time import time
 from typing import Union
 
@@ -20,7 +20,7 @@ from ray.tune.suggest.nevergrad import NevergradSearch
 from backtest import backtest, plot_wrap
 from analyze import analyze_fills, get_empty_analysis, objective_function
 from walk_forward_optimization import WFO
-from downloader import Downloader, prep_backtest_config
+from downloader import Downloader, prep_config, get_parser
 from jitted import round_
 from passivbot import get_keys, make_get_filepath, ts_to_date
 from reporter import LogReporter
@@ -196,12 +196,20 @@ def save_results(analysis, backtest_config):
     pprint.pprint(analysis.best_config)
 
 
-async def main(args: list):
-    backtest_config = await prep_backtest_config(args[1])
-    if backtest_config['exchange'] == 'bybit' and not backtest_config['inverse']:
+async def main():
+    args = get_parser().parse_args()
+    config = await prep_config(args)
+    if config['exchange'] == 'bybit' and not config['inverse']:
         print('bybit usdt linear backtesting not supported')
         return
-    downloader = Downloader(backtest_config)
+    downloader = Downloader(config)
+    print()
+    for k in (keys := ['exchange', 'symbol', 'starting_balance', 'start_date', 'end_date',
+                       'latency_simulation_ms', 'do_long', 'do_shrt', 'minimum_liquidation_distance',
+                       'max_hrs_no_fills', 'max_hrs_no_fills_same_side', 'iters', 'n_particles']):
+        if k in config:
+            print(f"{k: <{max(map(len, keys)) + 2}} {config[k]}")
+    print()
     ticks = await downloader.get_ticks(True)
 
     start_candidate = None
@@ -216,12 +224,12 @@ async def main(args: list):
         except:
             print('Could not find specified configuration.')
     if start_candidate:
-        analysis = backtest_tune(ticks, backtest_config, start_candidate)
+        analysis = backtest_tune(ticks, config, start_candidate)
     else:
-        analysis = backtest_tune(ticks, backtest_config)
-    save_results(analysis, backtest_config)
-    plot_wrap(backtest_config, ticks, clean_result_config(analysis.best_config))
+        analysis = backtest_tune(ticks, config)
+    save_results(analysis, config)
+    plot_wrap(config, ticks, clean_result_config(analysis.best_config))
 
 
 if __name__ == '__main__':
-    asyncio.run(main(sys.argv))
+    asyncio.run(main())
