@@ -422,12 +422,14 @@ class Downloader:
         for f in filenames:
             if single_file:
                 chunk = pd.read_csv(os.path.join(self.filepath, f),
-                                    dtype={"price": np.float64, "is_buyer_maker": np.float64, "timestamp": np.float64},
-                                    usecols=["price", "is_buyer_maker", "timestamp"])
+                                    dtype={"price": np.float64, "is_buyer_maker": np.float64, "timestamp": np.float64,
+                                           "qty": np.float64},
+                                    usecols=["price", "is_buyer_maker", "timestamp", "qty"])
             else:
                 chunk = pd.read_csv(os.path.join(self.filepath, f),
-                                    dtype={"timestamp": np.int64, "price": np.float64, "is_buyer_maker": np.int8},
-                                    usecols=["timestamp", "price", "is_buyer_maker"])
+                                    dtype={"timestamp": np.int64, "price": np.float64, "is_buyer_maker": np.int8,
+                                           "qty": np.float64},
+                                    usecols=["timestamp", "price", "is_buyer_maker", "qty"])
             if self.end_time != -1:
                 chunk = chunk[(chunk['timestamp'] >= self.start_time) & (chunk['timestamp'] <= self.end_time)]
             else:
@@ -455,8 +457,11 @@ class Downloader:
         #     drop=True)
         # df = df.groupby([(df.price != df.price.shift()).cumsum(), 'is_buyer_maker']).agg(
         #     {'price': 'first', 'is_buyer_maker': 'first', 'timestamp': 'first'}).reset_index(drop=True)
+        groups = df.groupby((~(((df.price == df.price.shift(1)) &
+                                (df.is_buyer_maker == df.is_buyer_maker.shift(1))))).cumsum())
+        df = groups.agg({'price': 'first', 'is_buyer_maker': 'first', 'timestamp': 'first', 'qty': 'sum'})
 
-        df = df[~((df.price == df.price.shift(1)) & (df.is_buyer_maker == df.is_buyer_maker.shift(1)))]
+        #compressed_ticks = df[["price", "is_buyer_maker", "timestamp", "qty"]].values
         compressed_ticks = df[["price", "is_buyer_maker", "timestamp"]].values
 
         if single_file:
