@@ -69,6 +69,21 @@ def nan_to_0(x) -> float:
 
 
 @njit
+def compress_ticks(ticks: np.ndarray) -> np.ndarray:
+    # ticks format [price, buyer_maker, timestamp]
+    compressed = np.zeros_like(ticks)
+    compressed[0] = ticks[0]
+    k = 0
+    for i in range(1, len(ticks)):
+        if ticks[i][0] == compressed[k][0] and ticks[i][1] == compressed[k][1]:
+            pass
+        else:
+            k += 1
+            compressed[k] = ticks[i]
+    return compressed[:k + 1]
+
+
+@njit
 def calc_ema(alpha, alpha_, prev_ema, new_val) -> float:
     return prev_ema * alpha_ + new_val * alpha
 

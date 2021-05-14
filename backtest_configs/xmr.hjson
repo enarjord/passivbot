@@ -3,7 +3,7 @@
   exchange: binance
   user: account_name
   symbol: XMRUSDT
-  latency_simulation_ms: 450
+  latency_simulation_ms: 750
   starting_balance: 100.0
 
   # Initial positions
@@ -28,17 +28,17 @@
   max_hrs_no_fills: 48
 
   # max hours between consecutive same side fills (long / short)
-  max_hrs_no_fills_same_side: 72
+  max_hrs_no_fills_same_side: 96
 
 
   # if wfo = true, will optimize with walk forward optimization.
   # otherwise, simple sliding window
-  wfo: true
+  wfo: false
 
   # sliding window config:
   sliding_window_size: 0.4
   n_sliding_windows: 4
-  test_full: false
+  test_full: true
 
   # wfo config:
   # VWR
@@ -47,7 +47,7 @@
   metric: "returns_daily"
 
   start_date: 2020-11-11T11:11
-  end_date: 2021-05-10T12:00
+  end_date: 2021-05-13T12:00
   # set end_date: -1 to use now as end date
 
   # If start and stop are set to same value, it's treated as a fixed variable.
@@ -65,7 +65,7 @@
     min_markup: [0.0005, 0.012]
     ema_span: [1.0, 300000.0]
     ema_spread: [0.0, 0.03]
-    stop_loss_liq_diff: [0.05, 0.05]
+    stop_loss_liq_diff: [0.2, 0.2]
     stop_loss_pos_pct: [0.05, 0.05]
   }
 }
