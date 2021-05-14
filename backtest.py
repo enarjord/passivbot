@@ -291,9 +291,9 @@ async def main():
 
     parser = argparse.ArgumentParser(prog='Backtest', description='Backtest given passivbot config.')
     parser.add_argument('live_config_path', type=str, help='path to live config to test')
-    parser.add_argument('-b', '--backtest_config', type=str, required=False, dest='backtest_config_path',
+    parser.add_argument('-b', '--backtest-config', type=str, required=False, dest='backtest_config_path',
                         default='configs/backtest/default.hjson', help='backtest config hjson file')
-    parser.add_argument('-o', '--optimize_config', type=str, required=False, dest='optimize_config_path',
+    parser.add_argument('-o', '--optimize-config', type=str, required=False, dest='optimize_config_path',
                         default='configs/optimize/default.hjson', help='optimize config hjson file')
     args = parser.parse_args()
 

@@ -199,10 +199,13 @@ def save_results(analysis, backtest_config):
 async def main():
 
     parser = argparse.ArgumentParser(prog='Optimize', description='Optimize passivbot config.')
-    parser.add_argument('-b', '--backtest_config', type=str, required=False, dest='backtest_config_path',
+    parser.add_argument('-b', '--backtest-config', type=str, required=False, dest='backtest_config_path',
                         default='configs/backtest/default.hjson', help='backtest config hjson file')
-    parser.add_argument('-o', '--optimize_config', type=str, required=False, dest='optimize_config_path',
+    parser.add_argument('-o', '--optimize-config', type=str, required=False, dest='optimize_config_path',
                         default='configs/optimize/default.hjson', help='optimize config hjson file')
+    parser.add_argument('-s', '--start', type=str, required=False, dest='starting_configs',
+                        default='none',
+                        help='start with given live configs.  single json file or dir with multiple json files')
     args = parser.parse_args()
 
     config = await prep_config(args)
@@ -220,16 +223,16 @@ async def main():
     ticks = await downloader.get_ticks(True)
 
     start_candidate = None
-    if (s := '--start') in args:
+    if args.starting_configs != 'none':
         try:
-            if os.path.isdir(args[args.index(s) + 1]):
-                start_candidate = [json.load(open(f)) for f in glob.glob(os.path.join(args[args.index(s) + 1], '*.json'))]
+            if os.path.isdir(args.starting_configs):
+                start_candidate = [json.load(open(f)) for f in glob.glob(os.path.join(args.starting_configs, '*.json'))]
                 print('Starting with all configurations in directory.')
             else:
-                start_candidate = json.load(open(args[args.index(s) + 1]))
+                start_candidate = json.load(open(args.starting_configs))
                 print('Starting with specified configuration.')
-        except:
-            print('Could not find specified configuration.')
+        except Exception as e:
+            print('Could not find specified configuration.', e)
     if start_candidate:
         analysis = backtest_tune(ticks, config, start_candidate)
     else:
