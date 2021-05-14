@@ -1,6 +1,6 @@
 {
   exchange: binance
-  user: ebinance
+  user: account_name
   symbol: XMRUSDT
   latency_simulation_ms: 750
   starting_balance: 100.0
