@@ -605,7 +605,7 @@ async def main():
     parser.add_argument('-d', '--download-only', type=bool, required=False, dest='download_only',
                         default=False, help='download only, do not dump ticks caches')
 
-    args = get_parser().parse_args()
+    args = parser.parse_args()
     config = await prep_config(args)
     downloader = Downloader(config)
     await downloader.download_ticks()
