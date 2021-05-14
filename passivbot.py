@@ -164,6 +164,7 @@ class Bot:
         self.stop_websocket = False
         self.process_websocket_ticks = True
         self.lock_file = f"{str(Path.home())}/.passivbotlock"
+        self.stop_mode = self.config['stop_mode'] = None
 
     def set_config(self, config):
         config['ema_span'] = int(round(config['ema_span']))
@@ -349,14 +350,16 @@ class Bot:
                                           'custom_id': tpl[4]})
                 long_psize = tpl[2]
                 stop_loss_close = True
-            elif tpl[0] > 0.0:
-                long_entry_orders.append({'side': 'buy', 'position_side': 'long', 'qty': tpl[0],
-                                          'price': tpl[1], 'type': 'limit', 'reduce_only': False,
-                                          'custom_id': tpl[4]})
             else:
-                shrt_entry_orders.append({'side': 'sell', 'position_side': 'shrt', 'qty': abs(tpl[0]),
-                                          'price': tpl[1], 'type': 'limit', 'reduce_only': False,
-                                          'custom_id': tpl[4]})
+                if self.stop_mode not in ['freeze']:
+                    if tpl[0] > 0.0:
+                        long_entry_orders.append({'side': 'buy', 'position_side': 'long', 'qty': tpl[0],
+                                                  'price': tpl[1], 'type': 'limit', 'reduce_only': False,
+                                                  'custom_id': tpl[4]})
+                    else:
+                        shrt_entry_orders.append({'side': 'sell', 'position_side': 'shrt', 'qty': abs(tpl[0]),
+                                                  'price': tpl[1], 'type': 'limit', 'reduce_only': False,
+                                                  'custom_id': tpl[4]})
 
         for ask_qty, ask_price, _ in iter_long_closes(balance, long_psize, long_pprice, self.ob[1],
                                                       **self.xk):
@@ -404,6 +407,8 @@ class Bot:
         return results
 
     async def decide(self):
+        if self.stop_mode is not None:
+            print(f'Effectuating stop mode {self.stop_mode}')
         if self.price <= self.highest_bid:
             self.ts_locked['decide'] = time()
             print_(['bid maybe taken'], n=True)
@@ -422,43 +427,46 @@ class Bot:
             self.ts_released['decide'] = time()
             return
         if time() - self.ts_released['print'] >= 0.5:
-            self.ts_released['print'] = time()
-            line = f"{self.symbol} "
-            line += f"l {self.position['long']['size']} @ "
-            line += f"{round_(self.position['long']['price'], self.price_step)} "
-            long_closes = sorted([o for o in self.open_orders if o['side'] == 'sell'
-                                  and o['position_side'] == 'long'], key=lambda x: x['price'])
-            long_entries = sorted([o for o in self.open_orders if o['side'] == 'buy'
-                                   and o['position_side'] == 'long'], key=lambda x: x['price'])
-            line += f"c@ {long_closes[0]['price'] if long_closes else 0.0} "
-            line += f"e@ {long_entries[-1]['price'] if long_entries else 0.0} "
-            line += f"|| s {self.position['shrt']['size']} @ "
-            line += f"{round_(self.position['shrt']['price'], self.price_step)} "
-            shrt_closes = sorted([o for o in self.open_orders if o['side'] == 'buy'
-                                  and (o['position_side'] == 'shrt' or
-                                       (o['position_side'] == 'both' and
-                                        self.position['shrt']['size'] != 0.0))],
-                                 key=lambda x: x['price'])
-            shrt_entries = sorted([o for o in self.open_orders if o['side'] == 'sell'
-                                   and (o['position_side'] == 'shrt' or
-                                        (o['position_side'] == 'both' and
-                                         self.position['shrt']['size'] != 0.0))],
-                                  key=lambda x: x['price'])
-            line += f"c@ {shrt_closes[-1]['price'] if shrt_closes else 0.0} "
-            line += f"e@ {shrt_entries[0]['price'] if shrt_entries else 0.0} "
-            if self.position['long']['size'] > abs(self.position['shrt']['size']):
-                liq_price = self.position['long']['liquidation_price']
-                sl_trigger_price = liq_price / (1 - self.stop_loss_liq_diff)
-            else:
-                liq_price = self.position['shrt']['liquidation_price']
-                sl_trigger_price = liq_price / (1 + self.stop_loss_liq_diff)
-            line += f"|| last {self.price} liq {compress_float(liq_price, 5)} "
-            line += f"sl trig {compress_float(sl_trigger_price, 5)} "
-            line += f"ema {compress_float(self.ema, 5)} "
-            line += f"bal {compress_float(self.position['wallet_balance'], 3)} "
-            line += f"eq {compress_float(self.position['equity'], 3)} "
-            line += f"v. {compress_float(self.volatility, 5)} "
-            print_([line], r=True)
+            await self.update_output_information()
+
+    async def update_output_information(self):
+        self.ts_released['print'] = time()
+        line = f"{self.symbol} "
+        line += f"l {self.position['long']['size']} @ "
+        line += f"{round_(self.position['long']['price'], self.price_step)} "
+        long_closes = sorted([o for o in self.open_orders if o['side'] == 'sell'
+                              and o['position_side'] == 'long'], key=lambda x: x['price'])
+        long_entries = sorted([o for o in self.open_orders if o['side'] == 'buy'
+                               and o['position_side'] == 'long'], key=lambda x: x['price'])
+        line += f"c@ {long_closes[0]['price'] if long_closes else 0.0} "
+        line += f"e@ {long_entries[-1]['price'] if long_entries else 0.0} "
+        line += f"|| s {self.position['shrt']['size']} @ "
+        line += f"{round_(self.position['shrt']['price'], self.price_step)} "
+        shrt_closes = sorted([o for o in self.open_orders if o['side'] == 'buy'
+                              and (o['position_side'] == 'shrt' or
+                                   (o['position_side'] == 'both' and
+                                    self.position['shrt']['size'] != 0.0))],
+                             key=lambda x: x['price'])
+        shrt_entries = sorted([o for o in self.open_orders if o['side'] == 'sell'
+                               and (o['position_side'] == 'shrt' or
+                                    (o['position_side'] == 'both' and
+                                     self.position['shrt']['size'] != 0.0))],
+                              key=lambda x: x['price'])
+        line += f"c@ {shrt_closes[-1]['price'] if shrt_closes else 0.0} "
+        line += f"e@ {shrt_entries[0]['price'] if shrt_entries else 0.0} "
+        if self.position['long']['size'] > abs(self.position['shrt']['size']):
+            liq_price = self.position['long']['liquidation_price']
+            sl_trigger_price = liq_price / (1 - self.stop_loss_liq_diff)
+        else:
+            liq_price = self.position['shrt']['liquidation_price']
+            sl_trigger_price = liq_price / (1 + self.stop_loss_liq_diff)
+        line += f"|| last {self.price} liq {compress_float(liq_price, 5)} "
+        line += f"sl trig {compress_float(sl_trigger_price, 5)} "
+        line += f"ema {compress_float(self.ema, 5)} "
+        line += f"bal {compress_float(self.position['wallet_balance'], 3)} "
+        line += f"eq {compress_float(self.position['equity'], 3)} "
+        line += f"v. {compress_float(self.volatility, 5)} "
+        print_([line], r=True)
 
     def flush_stuck_locks(self, timeout: float = 4.0) -> None:
         now = time()
@@ -609,11 +617,8 @@ async def start_bot(bot):
         try:
             await bot.acquire_interprocess_lock()
             await bot.start_websocket()
-        except LockNotAvailableException as e:
-            print('Unable to acquire lock to start bot, retrying in 30 seconds...')
-            await asyncio.sleep(30)
         except Exception as e:
-            print('Websocket connection has been lost, attempting to reinitialize the bot...', e)
+            print('Websocket connection has been lost or unable to acquire lock to start, attempting to reinitialize the bot...', e)
             await asyncio.sleep(10)
 
 async def create_binance_bot(user: str, config: str):
