@@ -478,7 +478,8 @@ class Bot:
         def drop_consecutive_same_prices(ticks_):
             compressed_ = [ticks_[0]]
             for i in range(1, len(ticks_)):
-                if ticks_[i]['price'] != compressed_[-1]['price']:
+                if ticks_[i]['price'] != compressed_[-1]['price'] or \
+                        ticks_[i]['is_buyer_maker'] != compressed_[-1]['is_buyer_maker']:
                     compressed_.append(ticks_[i])
             return compressed_
 
@@ -679,6 +680,7 @@ async def main() -> None:
     config['user'] = args.account_name
     config['exchange'] = account['exchange']
     config['symbol'] = args.symbol
+    config['live_config_path'] = args.live_config_path
 
     if account['exchange'] == 'binance':
         bot = await create_binance_bot(config)
