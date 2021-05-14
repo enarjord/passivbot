@@ -109,7 +109,7 @@ class Telegram:
         msg = '<pre><b>The following commands are available:</b></pre>\n' \
               '/balance: the equity & wallet balance in the configured account\n' \
               '/open_orders: a list of all buy & sell orders currently open\n' \
-              '/stop <mode>: instructs the bot to stop\n' \
+              '/stop: initiates a conversation via which the user can activate a stop mode\n' \
               '/position: information about the current position(s)\n' \
               '/show_config: the active configuration used\n' \
               '/reload_config: reload the configuration from disk, based on the file initially used\n' \
