@@ -458,6 +458,7 @@ class Downloader:
         #     {'price': 'first', 'is_buyer_maker': 'first', 'timestamp': 'first'}).reset_index(drop=True)
 
         compressed_ticks = compress_ticks(df[["price", "is_buyer_maker", "timestamp"]].values)
+        compressed_ticks = np.copy(compressed_ticks)
 
         if single_file:
             print_(["Saving single file with", len(df), " ticks to", self.tick_filepath, "..."])
@@ -484,7 +485,7 @@ class Downloader:
         """
         if single_file:
             if os.path.exists(self.tick_filepath):
-                print_(['Loading cached tick data'])
+                print_(['Loading cached tick data from', self.tick_filepath])
                 tick_data = np.load(self.tick_filepath)
                 return tick_data
             await self.download_ticks()
@@ -494,7 +495,7 @@ class Downloader:
         else:
             if os.path.exists(self.price_filepath) and os.path.exists(self.buyer_maker_filepath) and \
                     os.path.exists(self.time_filepath):
-                print_(['Loading cached tick data'])
+                print_(['Loading cached tick data from', self.tick_filepath])
                 price_data = np.load(self.price_filepath)
                 buyer_maker_data = np.load(self.buyer_maker_filepath)
                 time_data = np.load(self.time_filepath)
