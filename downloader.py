@@ -529,12 +529,12 @@ async def fetch_market_specific_settings(user: str, exchange: str, symbol: str):
     tmp_live_settings = get_dummy_settings(user, exchange, symbol)
     settings_from_exchange = {}
     if exchange == 'binance':
-        bot = await create_binance_bot(user, tmp_live_settings)
+        bot = await create_binance_bot(tmp_live_settings)
         settings_from_exchange['maker_fee'] = 0.00018
         settings_from_exchange['taker_fee'] = 0.00036
         settings_from_exchange['exchange'] = 'binance'
     elif exchange == 'bybit':
-        bot = await create_bybit_bot(user, tmp_live_settings)
+        bot = await create_bybit_bot(tmp_live_settings)
         settings_from_exchange['maker_fee'] = -0.00025
         settings_from_exchange['taker_fee'] = 0.00075
         settings_from_exchange['exchange'] = 'bybit'
@@ -563,6 +563,8 @@ async def prep_config(args) -> dict:
     except Exception as e:
         raise Exception('failed to load optimize config', optimize_config_path, e)
     config = {**oc, **bc}
+    if args.symbol != 'none':
+        config['symbol'] = args.symbol
     end_date = config['end_date'] if config['end_date'] and config['end_date'] != -1 else ts_to_date(time())[:16]
     config['session_name'] = f"{config['start_date'].replace(' ', '').replace(':', '').replace('.', '')}_" \
                              f"{end_date.replace(' ', '').replace(':', '').replace('.', '')}"
@@ -604,6 +606,8 @@ async def main():
                         default='configs/optimize/default.hjson', help='optimize config hjson file')
     parser.add_argument('-d', '--download-only', type=bool, required=False, dest='download_only',
                         default=False, help='download only, do not dump ticks caches')
+    parser.add_argument('-s', '--symbol', type=str, required=False, dest='symbol',
+                        default='none', help='specify symbol, overriding symbol from backtest config')
 
     args = parser.parse_args()
     config = await prep_config(args)
