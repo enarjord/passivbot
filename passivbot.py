@@ -610,7 +610,7 @@ class Bot:
                       f' trying to delete it, attempting removal of file')
                 self.remove_lock_file()
             else:
-                raise LockNotAvailableException("Another bot has the lock.  "\
+                raise LockNotAvailableException("Another bot has the lock. "\
                                                 f"To force acquire lock, delete .passivbotlock file: {self.lock_file}")
 
         pid = str(os.getpid())
@@ -722,6 +722,8 @@ async def main() -> None:
 if __name__ == '__main__':
     try:
         asyncio.run(main())
+    except Exception as e:
+        print(f'\nThere was an error starting the bot: {e}')
     finally:
         print('\nPassivbot was stopped succesfully')
         os._exit(0)
