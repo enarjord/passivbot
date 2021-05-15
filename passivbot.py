@@ -411,7 +411,7 @@ class Bot:
 
     async def decide(self):
         if self.stop_mode is not None:
-            print(f'Effectuating stop mode {self.stop_mode}')
+            print(f'{self.stop_mode} stop mode is active')
         if self.price <= self.highest_bid:
             self.ts_locked['decide'] = time()
             print_(['bid maybe taken'], n=True)
