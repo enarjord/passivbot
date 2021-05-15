@@ -15,7 +15,7 @@ from telegram import KeyboardButton, ParseMode, ReplyKeyboardMarkup, Update
 from telegram.ext import Updater, CommandHandler, ConversationHandler, CallbackContext, \
     MessageHandler, Filters
 
-from jitted import compress_float, round_
+from jitted import compress_float, round_, round_dynamic
 
 
 class Telegram:
@@ -45,7 +45,7 @@ class Telegram:
         dispatcher.add_handler(ConversationHandler(
             entry_points=[CommandHandler('stop', self._begin_stop)],
             states={
-                1: [MessageHandler(Filters.regex('^(graceful|freeze)$'), self._stop_mode_chosen)],
+                1: [MessageHandler(Filters.regex('^(graceful|freeze|cancel)$'), self._stop_mode_chosen)],
                 2: [MessageHandler(Filters.regex('^(confirm|abort)$'), self._verify_confirmation)],
             },
             fallbacks=[CommandHandler('cancel', self._abort_stop)],
@@ -54,7 +54,8 @@ class Telegram:
 
     def _begin_stop(self, update: Update, _: CallbackContext) -> int:
         self.stop_mode_requested = ''
-        reply_keyboard = [['graceful', 'freeze']]
+        reply_keyboard = [['graceful', 'freeze'],
+                          ['cancel']]
         update.message.reply_text(
             text='To stop the bot, please choose one of the following modes:\n'
             '<pre>graceful</pre>: prevents the bot from opening new positions, but completes the existing position as usual\n'
@@ -66,6 +67,10 @@ class Telegram:
         return 1
 
     def _stop_mode_chosen(self, update: Update, _: CallbackContext) -> int:
+        if update.message.text == 'cancel':
+            self.stop_mode_requested = ''
+            self.send_msg('Request for activating stop-mode was cancelled')
+            return ConversationHandler.END
         self.stop_mode_requested = update.message.text
         reply_keyboard = [['confirm', 'abort']]
         update.message.reply_text(
@@ -96,6 +101,7 @@ class Telegram:
             self.send_msg(
                 'Request for activating stop-mode was aborted')
         else:
+            self.stop_mode_requested = ''
             update.message.reply_text(text=f'Something went wrong, either <pre>confirm</pre> or <pre>abort</pre> was expected, but {update.message.text} was sent',
                                       parse_mode=ParseMode.HTML,
                                       reply_markup=self._keyboard)
@@ -141,20 +147,20 @@ class Telegram:
             long_position = self._bot.position['long']
             shrt_position = self._bot.position['shrt']
 
-            position_table.add_row([f'Size {self._bot.coin}', compress_float(long_position['size'], 3),
-                                    compress_float(shrt_position['size'], 3)])
-            position_table.add_row(['Price', compress_float(long_position['price'], 3),
-                                    compress_float(shrt_position['price'], 3)])
-            position_table.add_row(['Curr.price', compress_float(self._bot.price, 3),
-                                    compress_float(self._bot.price, 3)])
+            position_table.add_row([f'Size {self._bot.coin}', round_dynamic(long_position['size'], 3),
+                                    round_dynamic(shrt_position['size'], 3)])
+            position_table.add_row(['Price', round_dynamic(long_position['price'], 3),
+                                    round_dynamic(shrt_position['price'], 3)])
+            position_table.add_row(['Curr.price', round_dynamic(self._bot.price, 3),
+                                    round_dynamic(self._bot.price, 3)])
             position_table.add_row(['Leverage', compress_float(long_position['leverage'], 3),
                                      compress_float(shrt_position['leverage'], 3)])
-            position_table.add_row(['Liq.price', compress_float(long_position['liquidation_price'], 3),
-                 compress_float(shrt_position['liquidation_price'], 3)])
-            position_table.add_row(['Liq.diff.%', compress_float(float(long_position['liq_diff']) * 100, 3),
-                 compress_float(float(shrt_position['liq_diff']) * 100, 3)])
-            position_table.add_row([f'UPNL {self._bot.quot}', compress_float(float(long_position['upnl']), 3),
-                                    compress_float(float(shrt_position['upnl']), 3)])
+            position_table.add_row(['Liq.price', round_dynamic(long_position['liquidation_price'], 3),
+                 round_dynamic(shrt_position['liquidation_price'], 3)])
+            position_table.add_row(['Liq.diff.%', round_dynamic(float(long_position['liq_diff']) * 100, 3),
+                 round_dynamic(float(shrt_position['liq_diff']) * 100, 3)])
+            position_table.add_row([f'UPNL {self._bot.quot}', round_dynamic(float(long_position['upnl']), 3),
+                                    round_dynamic(float(shrt_position['upnl']), 3)])
 
             table_msg = position_table.get_string(border=True, padding_width=1,
                                                   junction_char=' ', vertical_char=' ',
@@ -165,13 +171,19 @@ class Telegram:
 
     def _balance(self, update=None, context=None):
         if bool(self._bot.position):
-            msg = '<pre><b>Balance:</b></pre>\n' \
-                  f'Equity: {compress_float(self._bot.position["equity"], 3)}\n' \
-                  f'Locked margin: {compress_float(self._bot.position["used_margin"], 3)}\n' \
-                  f'Available margin: {compress_float(self._bot.position["available_margin"], 3)}'
+            async def _balance_async():
+                position = await self._bot.fetch_position()
+                msg = f'Wallet balance: {compress_float(position["wallet_balance"], 4)}\n' \
+                      f'Equity: {compress_float(self._bot.position["equity"], 4)}\n' \
+                      f'Locked margin: {compress_float(self._bot.position["used_margin"], 4)}\n' \
+                      f'Available margin: {compress_float(self._bot.position["available_margin"], 4)}'
+                self.send_msg(msg)
+
+            self.send_msg('Retrieving balance...')
+            task = self.loop.create_task(_balance_async())
+            task.add_done_callback(lambda fut: True) #ensures task is processed to prevent warning about not awaiting
         else:
-            msg = 'Balance not retrieved yet, please try again later'
-        self.send_msg(msg)
+            self.send_msg('Balance not retrieved yet, please try again later')
 
     def _reload_config(self, update=None, context=None):
         if self.config_reload_ts > 0.0:
@@ -212,7 +224,7 @@ class Telegram:
                     trade_date = datetime.fromtimestamp(trade['timestamp'] / 1000)
                     table.add_row(
                         [trade_date.strftime('%m-%d %H:%M'), trade['position_side'], round_(trade['price'], self._bot.price_step),
-                         compress_float(trade['realized_pnl'], 3)])
+                         round_(trade['realized_pnl'], 0.01)])
 
                 msg = f'Closed trades:\n' \
                       f'<pre>{table.get_string(border=True, padding_width=1, junction_char=" ", vertical_char=" ", hrules=HEADER)}</pre>'
@@ -242,11 +254,12 @@ class Telegram:
                     for trade in daily_trades:
                         pln_summary += float(trade['realized_pnl'])
                     daily[idx] = {}
-                    daily[idx]['date'] = start_of_day.strftime('%d-%m')
+                    daily[idx]['date'] = start_of_day.strftime('%m-%d')
                     daily[idx]['pnl'] = pln_summary
 
-                table = PrettyTable(['Date', 'PNL', 'Daily %'])
+                table = PrettyTable(['Date', 'PNL (%)'])
                 pnl_sum = 0.0
+                day_profits, profit_pcts = [], []
                 for item in daily.keys():
                     day_profit = daily[item]['pnl']
                     pnl_sum += day_profit
@@ -254,12 +267,12 @@ class Telegram:
                     profit_pct = ((wallet_balance / previous_day_close_wallet_balance) - 1) * 100 \
                         if previous_day_close_wallet_balance > 0.0 else 0.0
                     wallet_balance = previous_day_close_wallet_balance
-                    table.add_row([daily[item]['date'], compress_float(day_profit, 3), round_(profit_pct, 0.01)])
+                    table.add_row([daily[item]['date'], f'{day_profit:.1f} ({profit_pct:.2f}%)'])
 
                 pct_sum = ((position['wallet_balance'] + pnl_sum) / position['wallet_balance'] - 1) * 100 \
                     if position['wallet_balance'] > 0.0 else 0.0
-                table.add_row(['-------','------','---------'])
-                table.add_row(['Total', compress_float(pnl_sum, 3), round_(pct_sum, 0.01)])
+                table.add_row(['-------','------------'])
+                table.add_row(['Total', f'{round_dynamic(pnl_sum, 3)} ({round_(pct_sum, 0.01)}%)'])
 
                 msg = f'<pre>{table.get_string(border=True, padding_width=1, junction_char=" ", vertical_char=" ", hrules=HEADER)}</pre>'
                 self.send_msg(msg)
