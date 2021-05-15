@@ -171,13 +171,19 @@ class Telegram:
 
     def _balance(self, update=None, context=None):
         if bool(self._bot.position):
-            msg = '<pre><b>Balance:</b></pre>\n' \
-                  f'Equity: {compress_float(self._bot.position["equity"], 3)}\n' \
-                  f'Locked margin: {compress_float(self._bot.position["used_margin"], 3)}\n' \
-                  f'Available margin: {compress_float(self._bot.position["available_margin"], 3)}'
+            async def _balance_async():
+                position = await self._bot.fetch_position()
+                msg = f'Wallet balance: {compress_float(position["wallet_balance"], 3)}\n' \
+                      f'Equity: {compress_float(self._bot.position["equity"], 3)}\n' \
+                      f'Locked margin: {compress_float(self._bot.position["used_margin"], 3)}\n' \
+                      f'Available margin: {compress_float(self._bot.position["available_margin"], 3)}'
+                self.send_msg(msg)
+
+            self.send_msg('Retrieving balance...')
+            task = self.loop.create_task(_balance_async())
+            task.add_done_callback(lambda fut: True) #ensures task is processed to prevent warning about not awaiting
         else:
-            msg = 'Balance not retrieved yet, please try again later'
-        self.send_msg(msg)
+            self.send_msg('Balance not retrieved yet, please try again later')
 
     def _reload_config(self, update=None, context=None):
         if self.config_reload_ts > 0.0:

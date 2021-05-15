@@ -606,7 +606,7 @@ class Bot:
                       f' trying to delete it, attempting removal of file')
                 self.remove_lock_file()
             else:
-                raise LockNotAvailableException("Another bot has the lock.  "\
+                raise LockNotAvailableException("Another bot has the lock. "\
                                                 f"To force acquire lock, delete .passivbotlock file: {self.lock_file}")
 
         pid = str(os.getpid())
