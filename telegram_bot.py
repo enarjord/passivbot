@@ -15,7 +15,7 @@ from telegram import KeyboardButton, ParseMode, ReplyKeyboardMarkup, Update
 from telegram.ext import Updater, CommandHandler, ConversationHandler, CallbackContext, \
     MessageHandler, Filters
 
-from jitted import compress_float, round_
+from jitted import compress_float, round_, round_dynamic
 
 
 class Telegram:
@@ -147,20 +147,20 @@ class Telegram:
             long_position = self._bot.position['long']
             shrt_position = self._bot.position['shrt']
 
-            position_table.add_row([f'Size {self._bot.coin}', compress_float(long_position['size'], 3),
-                                    compress_float(shrt_position['size'], 3)])
-            position_table.add_row(['Price', compress_float(long_position['price'], 3),
-                                    compress_float(shrt_position['price'], 3)])
-            position_table.add_row(['Curr.price', compress_float(self._bot.price, 3),
-                                    compress_float(self._bot.price, 3)])
+            position_table.add_row([f'Size {self._bot.coin}', round_dynamic(long_position['size'], 3),
+                                    round_dynamic(shrt_position['size'], 3)])
+            position_table.add_row(['Price', round_dynamic(long_position['price'], 3),
+                                    round_dynamic(shrt_position['price'], 3)])
+            position_table.add_row(['Curr.price', round_dynamic(self._bot.price, 3),
+                                    round_dynamic(self._bot.price, 3)])
             position_table.add_row(['Leverage', compress_float(long_position['leverage'], 3),
                                      compress_float(shrt_position['leverage'], 3)])
-            position_table.add_row(['Liq.price', compress_float(long_position['liquidation_price'], 3),
-                 compress_float(shrt_position['liquidation_price'], 3)])
-            position_table.add_row(['Liq.diff.%', compress_float(float(long_position['liq_diff']) * 100, 3),
-                 compress_float(float(shrt_position['liq_diff']) * 100, 3)])
-            position_table.add_row([f'UPNL {self._bot.quot}', compress_float(float(long_position['upnl']), 3),
-                                    compress_float(float(shrt_position['upnl']), 3)])
+            position_table.add_row(['Liq.price', round_dynamic(long_position['liquidation_price'], 3),
+                 round_dynamic(shrt_position['liquidation_price'], 3)])
+            position_table.add_row(['Liq.diff.%', round_dynamic(float(long_position['liq_diff']) * 100, 3),
+                 round_dynamic(float(shrt_position['liq_diff']) * 100, 3)])
+            position_table.add_row([f'UPNL {self._bot.quot}', round_dynamic(float(long_position['upnl']), 3),
+                                    round_dynamic(float(shrt_position['upnl']), 3)])
 
             table_msg = position_table.get_string(border=True, padding_width=1,
                                                   junction_char=' ', vertical_char=' ',
@@ -173,10 +173,10 @@ class Telegram:
         if bool(self._bot.position):
             async def _balance_async():
                 position = await self._bot.fetch_position()
-                msg = f'Wallet balance: {compress_float(position["wallet_balance"], 3)}\n' \
-                      f'Equity: {compress_float(self._bot.position["equity"], 3)}\n' \
-                      f'Locked margin: {compress_float(self._bot.position["used_margin"], 3)}\n' \
-                      f'Available margin: {compress_float(self._bot.position["available_margin"], 3)}'
+                msg = f'Wallet balance: {compress_float(position["wallet_balance"], 4)}\n' \
+                      f'Equity: {compress_float(self._bot.position["equity"], 4)}\n' \
+                      f'Locked margin: {compress_float(self._bot.position["used_margin"], 4)}\n' \
+                      f'Available margin: {compress_float(self._bot.position["available_margin"], 4)}'
                 self.send_msg(msg)
 
             self.send_msg('Retrieving balance...')
@@ -224,7 +224,7 @@ class Telegram:
                     trade_date = datetime.fromtimestamp(trade['timestamp'] / 1000)
                     table.add_row(
                         [trade_date.strftime('%m-%d %H:%M'), trade['position_side'], round_(trade['price'], self._bot.price_step),
-                         compress_float(trade['realized_pnl'], 3)])
+                         round_(trade['realized_pnl'], 0.01)])
 
                 msg = f'Closed trades:\n' \
                       f'<pre>{table.get_string(border=True, padding_width=1, junction_char=" ", vertical_char=" ", hrules=HEADER)}</pre>'
@@ -254,11 +254,12 @@ class Telegram:
                     for trade in daily_trades:
                         pln_summary += float(trade['realized_pnl'])
                     daily[idx] = {}
-                    daily[idx]['date'] = start_of_day.strftime('%d-%m')
+                    daily[idx]['date'] = start_of_day.strftime('%m-%d')
                     daily[idx]['pnl'] = pln_summary
 
                 table = PrettyTable(['Date', 'PNL (%)'])
                 pnl_sum = 0.0
+                day_profits, profit_pcts = [], []
                 for item in daily.keys():
                     day_profit = daily[item]['pnl']
                     pnl_sum += day_profit
@@ -266,12 +267,12 @@ class Telegram:
                     profit_pct = ((wallet_balance / previous_day_close_wallet_balance) - 1) * 100 \
                         if previous_day_close_wallet_balance > 0.0 else 0.0
                     wallet_balance = previous_day_close_wallet_balance
-                    table.add_row([daily[item]['date'], f'{float(compress_float(day_profit, 3)):.1f} ({float(round_(profit_pct, 0.01)):.2f}%)'])
+                    table.add_row([daily[item]['date'], f'{day_profit:.1f} ({profit_pct:.2f}%)'])
 
                 pct_sum = ((position['wallet_balance'] + pnl_sum) / position['wallet_balance'] - 1) * 100 \
                     if position['wallet_balance'] > 0.0 else 0.0
                 table.add_row(['-------','------------'])
-                table.add_row(['Total', f'{compress_float(pnl_sum, 3)} ({round_(pct_sum, 0.01)}%)'])
+                table.add_row(['Total', f'{round_dynamic(pnl_sum, 3)} ({round_(pct_sum, 0.01)}%)'])
 
                 msg = f'<pre>{table.get_string(border=True, padding_width=1, junction_char=" ", vertical_char=" ", hrules=HEADER)}</pre>'
                 self.send_msg(msg)
