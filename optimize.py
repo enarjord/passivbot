@@ -233,6 +233,7 @@ async def main():
         try:
             if os.path.isdir(args.starting_configs):
                 start_candidate = [json.load(open(f)) for f in glob.glob(os.path.join(args.starting_configs, '*.json'))]
+
                 print('Starting with all configurations in directory.')
             else:
                 start_candidate = json.load(open(args.starting_configs))
