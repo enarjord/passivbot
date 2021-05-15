@@ -295,6 +295,8 @@ async def main():
                         default='configs/backtest/default.hjson', help='backtest config hjson file')
     parser.add_argument('-o', '--optimize-config', type=str, required=False, dest='optimize_config_path',
                         default='configs/optimize/default.hjson', help='optimize config hjson file')
+    parser.add_argument('-s', '--symbol', type=str, required=False, dest='symbol',
+                        default='none', help='specify symbol, overriding symbol from backtest config')
     args = parser.parse_args()
 
     config = await prep_config(args)
