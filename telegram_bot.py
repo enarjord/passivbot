@@ -191,7 +191,7 @@ class Telegram:
                     daily[idx]['date'] = start_of_day.strftime('%d-%m')
                     daily[idx]['pnl'] = pln_summary
 
-                table = PrettyTable(['Date', 'PNL', 'Daily %'])
+                table = PrettyTable(['Date', 'PNL (%)'])
                 pnl_sum = 0.0
                 for item in daily.keys():
                     day_profit = daily[item]['pnl']
@@ -200,12 +200,12 @@ class Telegram:
                     profit_pct = ((wallet_balance / previous_day_close_wallet_balance) - 1) * 100 \
                         if previous_day_close_wallet_balance > 0.0 else 0.0
                     wallet_balance = previous_day_close_wallet_balance
-                    table.add_row([daily[item]['date'], compress_float(day_profit, 3), round_(profit_pct, 0.01)])
+                    table.add_row([daily[item]['date'], f'{float(compress_float(day_profit, 3)):.1f} ({round_(profit_pct, 0.01)}%)'])
 
                 pct_sum = ((position['wallet_balance'] + pnl_sum) / position['wallet_balance'] - 1) * 100 \
                     if position['wallet_balance'] > 0.0 else 0.0
-                table.add_row(['-------','------','---------'])
-                table.add_row(['Total', compress_float(pnl_sum, 3), round_(pct_sum, 0.01)])
+                table.add_row(['-------','------------'])
+                table.add_row(['Total', f'{compress_float(pnl_sum, 3)} ({round_(pct_sum, 0.01)}%)'])
 
                 msg = f'<pre>{table.get_string(border=True, padding_width=1, junction_char=" ", vertical_char=" ", hrules=HEADER)}</pre>'
                 self.send_msg(msg)
