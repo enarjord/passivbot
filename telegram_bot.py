@@ -45,7 +45,7 @@ class Telegram:
         dispatcher.add_handler(ConversationHandler(
             entry_points=[CommandHandler('stop', self._begin_stop)],
             states={
-                1: [MessageHandler(Filters.regex('^(graceful|freeze)$'), self._stop_mode_chosen)],
+                1: [MessageHandler(Filters.regex('^(graceful|freeze|cancel)$'), self._stop_mode_chosen)],
                 2: [MessageHandler(Filters.regex('^(confirm|abort)$'), self._verify_confirmation)],
             },
             fallbacks=[CommandHandler('cancel', self._abort_stop)],
@@ -54,7 +54,8 @@ class Telegram:
 
     def _begin_stop(self, update: Update, _: CallbackContext) -> int:
         self.stop_mode_requested = ''
-        reply_keyboard = [['graceful', 'freeze']]
+        reply_keyboard = [['graceful', 'freeze'],
+                          ['cancel']]
         update.message.reply_text(
             text='To stop the bot, please choose one of the following modes:\n'
             '<pre>graceful</pre>: prevents the bot from opening new positions, but completes the existing position as usual\n'
@@ -66,6 +67,10 @@ class Telegram:
         return 1
 
     def _stop_mode_chosen(self, update: Update, _: CallbackContext) -> int:
+        if update.message.text == 'cancel':
+            self.stop_mode_requested = ''
+            self.send_msg('Request for activating stop-mode was cancelled')
+            return ConversationHandler.END
         self.stop_mode_requested = update.message.text
         reply_keyboard = [['confirm', 'abort']]
         update.message.reply_text(
@@ -96,6 +101,7 @@ class Telegram:
             self.send_msg(
                 'Request for activating stop-mode was aborted')
         else:
+            self.stop_mode_requested = ''
             update.message.reply_text(text=f'Something went wrong, either <pre>confirm</pre> or <pre>abort</pre> was expected, but {update.message.text} was sent',
                                       parse_mode=ParseMode.HTML,
                                       reply_markup=self._keyboard)
@@ -254,7 +260,7 @@ class Telegram:
                     profit_pct = ((wallet_balance / previous_day_close_wallet_balance) - 1) * 100 \
                         if previous_day_close_wallet_balance > 0.0 else 0.0
                     wallet_balance = previous_day_close_wallet_balance
-                    table.add_row([daily[item]['date'], f'{float(compress_float(day_profit, 3)):.1f} ({round_(profit_pct, 0.01)}%)'])
+                    table.add_row([daily[item]['date'], f'{float(compress_float(day_profit, 3)):.1f} ({float(round_(profit_pct, 0.01)):.2f}%)'])
 
                 pct_sum = ((position['wallet_balance'] + pnl_sum) / position['wallet_balance'] - 1) * 100 \
                     if position['wallet_balance'] > 0.0 else 0.0
