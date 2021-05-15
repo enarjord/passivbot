@@ -693,6 +693,8 @@ async def main() -> None:
 if __name__ == '__main__':
     try:
         asyncio.run(main())
+    except Exception as e:
+        print(f'\nThere was an error starting the bot: {e}')
     finally:
         print('\nPassivbot was stopped succesfully')
         os._exit(0)
