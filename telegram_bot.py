@@ -11,8 +11,9 @@ except Exception as e:
           "As a result of this, the version will not be shown in applicable messages. To fix this,"
           "please make sure you have git installed properly. The bot will work fine without it.")
 from prettytable import PrettyTable, HEADER
-from telegram import KeyboardButton, ParseMode, ReplyKeyboardMarkup
-from telegram.ext import Updater, CommandHandler
+from telegram import KeyboardButton, ParseMode, ReplyKeyboardMarkup, Update
+from telegram.ext import Updater, CommandHandler, ConversationHandler, CallbackContext, \
+    MessageHandler, Filters
 
 from jitted import compress_float, round_
 
@@ -28,7 +29,7 @@ class Telegram:
 
         keyboard_buttons = [
             [KeyboardButton('/balance'), KeyboardButton('/open_orders'), KeyboardButton('/position')],
-            [KeyboardButton('/graceful_stop'), KeyboardButton('/show_config'), KeyboardButton('/reload_config')],
+            [KeyboardButton('/stop'), KeyboardButton('/show_config'), KeyboardButton('/reload_config')],
             [KeyboardButton('/closed_trades'), KeyboardButton('/daily'), KeyboardButton('/help')]]
         self._keyboard = ReplyKeyboardMarkup(keyboard_buttons, resize_keyboard=True)
 
@@ -36,19 +37,79 @@ class Telegram:
         dispatcher.add_handler(CommandHandler('balance', self._balance))
         dispatcher.add_handler(CommandHandler('open_orders', self._open_orders))
         dispatcher.add_handler(CommandHandler('position', self._position))
-        dispatcher.add_handler(CommandHandler('graceful_stop', self._graceful_stop))
         dispatcher.add_handler(CommandHandler('show_config', self.show_config))
         dispatcher.add_handler(CommandHandler('reload_config', self._reload_config))
         dispatcher.add_handler(CommandHandler('closed_trades', self._closed_trades))
         dispatcher.add_handler(CommandHandler('daily', self._daily))
         dispatcher.add_handler(CommandHandler('help', self._help))
+        dispatcher.add_handler(ConversationHandler(
+            entry_points=[CommandHandler('stop', self._begin_stop)],
+            states={
+                1: [MessageHandler(Filters.regex('^(graceful|freeze)$'), self._stop_mode_chosen)],
+                2: [MessageHandler(Filters.regex('^(confirm|abort)$'), self._verify_confirmation)],
+            },
+            fallbacks=[CommandHandler('cancel', self._abort_stop)],
+        ))
         self._updater.start_polling()
+
+    def _begin_stop(self, update: Update, _: CallbackContext) -> int:
+        self.stop_mode_requested = ''
+        reply_keyboard = [['graceful', 'freeze']]
+        update.message.reply_text(
+            text='To stop the bot, please choose one of the following modes:\n'
+            '<pre>graceful</pre>: prevents the bot from opening new positions, but completes the existing position as usual\n'
+            '<pre>freeze</pre>: prevents the bot from opening positions, and cancels all open orders to open/reenter positions\n'
+            'Or send /cancel to abort stop-mode activation',
+            parse_mode=ParseMode.HTML,
+            reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True)
+        )
+        return 1
+
+    def _stop_mode_chosen(self, update: Update, _: CallbackContext) -> int:
+        self.stop_mode_requested = update.message.text
+        reply_keyboard = [['confirm', 'abort']]
+        update.message.reply_text(
+            text=f'You have chosen to activate the stop mode <pre>{update.message.text}</pre>\n'
+            f'Please confirm that you want to activate this stop mode be replying with either <pre>confirm</pre> or <pre>abort</pre>',
+            parse_mode=ParseMode.HTML,
+            reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True)
+        )
+        return 2
+
+    def _verify_confirmation(self, update: Update, _: CallbackContext) -> int:
+        if update.message.text == 'confirm':
+            if self.stop_mode_requested == 'graceful':
+                self._bot.set_config_value('do_long', False)
+                self._bot.set_config_value('do_shrt', False)
+                self.send_msg(
+                    'Graceful stop mode activated. No longer opening new long or short positions, existing positions will still be managed.'
+                    'Please be aware that this change is NOT persisted between restarts. To clear the stop-mode, you can use <pre>/reload_config</pre>')
+            elif self.stop_mode_requested == 'freeze':
+                self._bot.set_config_value('do_long', False)
+                self._bot.set_config_value('do_shrt', False)
+                self._bot.stop_mode = 'freeze'
+                self.send_msg(
+                    'Freeze stop mode activated. No longer opening new long or short positions, all orders for reentry will be cancelled.'
+                    'Please be aware that this change is NOT persisted between restarts. To clear the stop-mode, you can use <pre>/reload_config</pre>')
+        elif update.message.text == 'abort':
+            self.stop_mode_requested = ''
+            self.send_msg(
+                'Request for activating stop-mode was aborted')
+        else:
+            update.message.reply_text(text=f'Something went wrong, either <pre>confirm</pre> or <pre>abort</pre> was expected, but {update.message.text} was sent',
+                                      parse_mode=ParseMode.HTML,
+                                      reply_markup=self._keyboard)
+        return ConversationHandler.END
+
+    def _abort_stop(self, update: Update, _: CallbackContext) -> int:
+        update.message.reply_text('Aborting initiating stop mode', reply_markup=self._keyboard)
+        return ConversationHandler.END
 
     def _help(self, update=None, context=None):
         msg = '<pre><b>The following commands are available:</b></pre>\n' \
               '/balance: the equity & wallet balance in the configured account\n' \
               '/open_orders: a list of all buy & sell orders currently open\n' \
-              '/graceful_stop: instructs the bot to no longer open new positions\n' \
+              '/stop: initiates a conversation via which the user can activate a stop mode\n' \
               '/position: information about the current position(s)\n' \
               '/show_config: the active configuration used\n' \
               '/reload_config: reload the configuration from disk, based on the file initially used\n' \
@@ -111,13 +172,6 @@ class Telegram:
         else:
             msg = 'Balance not retrieved yet, please try again later'
         self.send_msg(msg)
-
-    def _graceful_stop(self, update=None, context=None):
-        self._bot.set_config_value('do_long', False)
-        self._bot.set_config_value('do_shrt', False)
-
-        self.send_msg(
-            'No longer opening new long or short positions, existing positions will still be managed.')
 
     def _reload_config(self, update=None, context=None):
         if self.config_reload_ts > 0.0:
