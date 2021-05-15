@@ -692,6 +692,8 @@ def calc_liq_price_bybit(balance,
 
 @njit
 def calc_liq_price_universal(balance, long_psize, long_pprice, shrt_psize, shrt_pprice, inverse, cm, leverage):
+    long_pprice = nan_to_0(long_pprice)
+    shrt_pprice = nan_to_0(shrt_pprice)
     abs_shrt_psize = abs(shrt_psize)
     if inverse:
         shrt_cost = (cm * abs_shrt_psize) / shrt_pprice if shrt_pprice > 0.0 else 0.0
