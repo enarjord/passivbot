@@ -14,6 +14,7 @@
   max_hrs_no_fills_same_side: 96
 
 
+
   # if wfo = true, will optimize with walk forward optimization.
   # otherwise, simple sliding window
   wfo: false
@@ -22,6 +23,11 @@
   sliding_window_size: 0.1
   n_sliding_windows: 15
   test_full: true
+
+  # set to 0.0 to disable breaking early
+  # otherwise will break trial early on first window returning val {< or >} val_thr * (1 {- or +} break_early_factor)
+  # e.g. break if a sub test returns closest_liq < liq_diff_thr * (1 - break_early_factor)
+  break_early_factor: 0.25
 
   # wfo config:
   # VWR
