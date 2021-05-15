@@ -601,14 +601,7 @@ async def prep_config(args) -> dict:
 async def main():
 
     parser = argparse.ArgumentParser(prog='Downloader', description='Download ticks from exchange API.')
-    parser.add_argument('-b', '--backtest_config', type=str, required=False, dest='backtest_config_path',
-                        default='configs/backtest/default.hjson', help='backtest config hjson file')
-    parser.add_argument('-o', '--optimize_config', type=str, required=False, dest='optimize_config_path',
-                        default='configs/optimize/default.hjson', help='optimize config hjson file')
-    parser.add_argument('-d', '--download-only', type=bool, required=False, dest='download_only',
-                        default=False, help='download only, do not dump ticks caches')
-    parser.add_argument('-s', '--symbol', type=str, required=False, dest='symbol',
-                        default='none', help='specify symbol, overriding symbol from backtest config')
+    parser = add_argparse_args(parser)
 
     args = parser.parse_args()
     config = await prep_config(args)

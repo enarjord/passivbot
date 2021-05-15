@@ -14,7 +14,7 @@ from downloader import Downloader, prep_config
 from jitted import calc_diff, round_, iter_entries, iter_long_closes, iter_shrt_closes, calc_available_margin, \
     calc_liq_price_binance, calc_liq_price_bybit, calc_new_psize_pprice, calc_long_pnl, calc_shrt_pnl, calc_cost, \
     iter_indicator_chunks, round_dynamic
-from passivbot import make_get_filepath, ts_to_date, get_keys
+from passivbot import make_get_filepath, ts_to_date, get_keys, add_argparse_args
 
 
 def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, list, bool):
@@ -291,12 +291,7 @@ async def main():
 
     parser = argparse.ArgumentParser(prog='Backtest', description='Backtest given passivbot config.')
     parser.add_argument('live_config_path', type=str, help='path to live config to test')
-    parser.add_argument('-b', '--backtest-config', type=str, required=False, dest='backtest_config_path',
-                        default='configs/backtest/default.hjson', help='backtest config hjson file')
-    parser.add_argument('-o', '--optimize-config', type=str, required=False, dest='optimize_config_path',
-                        default='configs/optimize/default.hjson', help='optimize config hjson file')
-    parser.add_argument('-s', '--symbol', type=str, required=False, dest='symbol',
-                        default='none', help='specify symbol, overriding symbol from backtest config')
+    parser = add_argparse_args(parser)
     args = parser.parse_args()
 
     config = await prep_config(args)

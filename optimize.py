@@ -20,7 +20,7 @@ from analyze import analyze_fills, get_empty_analysis, objective_function
 from backtest import backtest, plot_wrap
 from downloader import Downloader, prep_config
 from jitted import round_
-from passivbot import ts_to_date
+from passivbot import ts_to_date, add_argparse_args
 from reporter import LogReporter
 from walk_forward_optimization import WFO
 
@@ -203,15 +203,10 @@ def save_results(analysis, backtest_config):
 
 async def main():
     parser = argparse.ArgumentParser(prog='Optimize', description='Optimize passivbot config.')
-    parser.add_argument('-b', '--backtest-config', type=str, required=False, dest='backtest_config_path',
-                        default='configs/backtest/default.hjson', help='backtest config hjson file')
-    parser.add_argument('-o', '--optimize-config', type=str, required=False, dest='optimize_config_path',
-                        default='configs/optimize/default.hjson', help='optimize config hjson file')
+    parser = add_argparse_args(parser)
     parser.add_argument('-t', '--start', type=str, required=False, dest='starting_configs',
                         default='none',
                         help='start with given live configs.  single json file or dir with multiple json files')
-    parser.add_argument('-s', '--symbol', type=str, required=False, dest='symbol',
-                        default='none', help='specify symbol, overriding symbol from backtest config')
     args = parser.parse_args()
 
     config = await prep_config(args)
@@ -233,7 +228,6 @@ async def main():
         try:
             if os.path.isdir(args.starting_configs):
                 start_candidate = [json.load(open(f)) for f in glob.glob(os.path.join(args.starting_configs, '*.json'))]
-
                 print('Starting with all configurations in directory.')
             else:
                 start_candidate = json.load(open(args.starting_configs))

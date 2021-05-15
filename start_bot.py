@@ -1,10 +1,7 @@
 import sys
-import argparse
 from subprocess import Popen
 from time import sleep
-from passivbot import get_passivbot_parser
 
-args = get_passivbot_parser().parse_args()
 
 max_n_restarts = 30
 
@@ -12,8 +9,8 @@ restart_k = 0
 
 while True:
     try:
-        print(f"\nStarting {args.account_name} {args.symbol} {args.live_config_path}")
-        p = Popen(f"{sys.executable} passivbot.py {args.account_name} {args.symbol} {args.live_config_path} ", shell=True)
+        print(f"\nStarting {sys.argv[1]} {sys.argv[2]} {sys.argv[3]}")
+        p = Popen(f"{sys.executable} passivbot.py {sys.argv[1]} {sys.argv[2]} {sys.argv[3]} --nojit", shell=True)
         p.wait()
         restart_k += 1
         if restart_k > max_n_restarts:

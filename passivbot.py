@@ -658,7 +658,20 @@ async def _start_telegram(account: dict, bot: Bot):
     return telegram
 
 
-def get_passivbot_parser():
+def add_argparse_args(parser):
+    parser.add_argument('--nojit', help='disable numba', action='store_true')
+    parser.add_argument('-b', '--backtest_config', type=str, required=False, dest='backtest_config_path',
+                        default='configs/backtest/default.hjson', help='backtest config hjson file')
+    parser.add_argument('-o', '--optimize_config', type=str, required=False, dest='optimize_config_path',
+                        default='configs/optimize/default.hjson', help='optimize config hjson file')
+    parser.add_argument('-d', '--download-only', type=bool, required=False, dest='download_only',
+                        default=False, help='download only, do not dump ticks caches')
+    parser.add_argument('-s', '--symbol', type=str, required=False, dest='symbol',
+                        default='none', help='specify symbol, overriding symbol from backtest config')
+    return parser
+
+
+def get_passivbot_argparser():
     parser = argparse.ArgumentParser(prog='passivbot', description='run passivbot')
     parser.add_argument('account_name', type=str, help='account name defined in api-keys.json')
     parser.add_argument('symbol', type=str, help='symbol to trade')
@@ -667,7 +680,7 @@ def get_passivbot_parser():
 
 
 async def main() -> None:
-    args = get_passivbot_parser().parse_args()
+    args = add_argparse_args(get_passivbot_argparser()).parse_args()
     try:
         accounts = json.load(open('api-keys.json'))
     except Exception as e:
