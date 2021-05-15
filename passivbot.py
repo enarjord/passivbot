@@ -353,16 +353,16 @@ class Bot:
                                           'custom_id': tpl[4]})
                 long_psize = tpl[2]
                 stop_loss_close = True
+            elif tpl[0] == 0.0 or self.stop_mode in ['freeze']:
+                continue
+            elif tpl[0] > 0.0:
+                long_entry_orders.append({'side': 'buy', 'position_side': 'long', 'qty': tpl[0],
+                                          'price': tpl[1], 'type': 'limit', 'reduce_only': False,
+                                          'custom_id': tpl[4]})
             else:
-                if self.stop_mode not in ['freeze']:
-                    if tpl[0] > 0.0:
-                        long_entry_orders.append({'side': 'buy', 'position_side': 'long', 'qty': tpl[0],
-                                                  'price': tpl[1], 'type': 'limit', 'reduce_only': False,
-                                                  'custom_id': tpl[4]})
-                    else:
-                        shrt_entry_orders.append({'side': 'sell', 'position_side': 'shrt', 'qty': abs(tpl[0]),
-                                                  'price': tpl[1], 'type': 'limit', 'reduce_only': False,
-                                                  'custom_id': tpl[4]})
+                shrt_entry_orders.append({'side': 'sell', 'position_side': 'shrt', 'qty': abs(tpl[0]),
+                                          'price': tpl[1], 'type': 'limit', 'reduce_only': False,
+                                          'custom_id': tpl[4]})
 
         for ask_qty, ask_price, _ in iter_long_closes(balance, long_psize, long_pprice, self.ob[1],
                                                       **self.xk):
