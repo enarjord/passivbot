@@ -74,7 +74,6 @@ def simple_sliding_window_wrap(config, ticks):
     n_windows = config[nsw] if (nsw := 'n_sliding_windows') in config else 4
     test_full = config['test_full'] if 'test_full' in config else False
     results = []
-    break_factor = 0.25
     for ticks_slice in iter_slices(ticks, sliding_window_size, n_windows, yield_full=test_full):
         try:
             fills, _, did_finish = backtest(config, ticks_slice)
@@ -85,10 +84,11 @@ def simple_sliding_window_wrap(config, ticks):
         except Exception as e:
             print('b', e)
         results.append(result_)
-        if (not did_finish or
-                result_['closest_liq'] < config['minimum_liquidation_distance'] * (1 - break_factor) or
-                result_['max_hrs_no_fills'] > config['max_hrs_no_fills'] * (1 + break_factor) or
-                result_['max_hrs_no_fills_same_side'] > config['max_hrs_no_fills_same_side'] * (1 + break_factor)):
+        if config['break_early_factor'] > 0.0 and \
+                (not did_finish or
+                 result_['closest_liq'] < config['minimum_liquidation_distance'] * (1 - config['break_early_factor']) or
+                 result_['max_hrs_no_fills'] > config['max_hrs_no_fills'] * (1 + config['break_early_factor']) or
+                 result_['max_hrs_no_fills_same_side'] > config['max_hrs_no_fills_same_side'] * (1 + config['break_early_factor'])):
             break
     if results:
         result = {}
