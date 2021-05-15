@@ -170,6 +170,7 @@ class Bot:
 
     def set_config(self, config):
         config['ema_span'] = int(round(config['ema_span']))
+        config['stop_mode'] = self.stop_mode = None
         self.config = config
         for key in config:
             setattr(self, key, config[key])
