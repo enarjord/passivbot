@@ -1,10 +1,10 @@
+import argparse
 import asyncio
 import glob
 import json
 import logging
 import os
 import pprint
-import sys
 from time import time
 from typing import Union
 
@@ -18,9 +18,9 @@ from ray.tune.suggest.nevergrad import NevergradSearch
 
 from analyze import analyze_fills, get_empty_analysis, objective_function
 from backtest import backtest, plot_wrap
-from downloader import Downloader, prep_backtest_config
+from downloader import Downloader, prep_config
 from jitted import round_
-from passivbot import ts_to_date
+from passivbot import ts_to_date, add_argparse_args
 from reporter import LogReporter
 from walk_forward_optimization import WFO
 
@@ -79,13 +79,17 @@ def simple_sliding_window_wrap(config, ticks):
             fills, _, did_finish = backtest(config, ticks_slice)
         except Exception as e:
             print('debug a', e, config)
-        if not did_finish:
-            break
         try:
             _, result_ = analyze_fills(fills, config, ticks_slice[-1][2])
         except Exception as e:
             print('b', e)
         results.append(result_)
+        if config['break_early_factor'] > 0.0 and \
+                (not did_finish or
+                 result_['closest_liq'] < config['minimum_liquidation_distance'] * (1 - config['break_early_factor']) or
+                 result_['max_hrs_no_fills'] > config['max_hrs_no_fills'] * (1 + config['break_early_factor']) or
+                 result_['max_hrs_no_fills_same_side'] > config['max_hrs_no_fills_same_side'] * (1 + config['break_early_factor'])):
+            break
     if results:
         result = {}
         for k in results[0]:
@@ -197,33 +201,46 @@ def save_results(analysis, backtest_config):
     pprint.pprint(analysis.best_config)
 
 
-async def main(args: list):
-    backtest_config = await prep_backtest_config(args[1])
-    if backtest_config['exchange'] == 'bybit' and not backtest_config['inverse']:
+async def main():
+    parser = argparse.ArgumentParser(prog='Optimize', description='Optimize passivbot config.')
+    parser = add_argparse_args(parser)
+    parser.add_argument('-t', '--start', type=str, required=False, dest='starting_configs',
+                        default='none',
+                        help='start with given live configs.  single json file or dir with multiple json files')
+    args = parser.parse_args()
+
+    config = await prep_config(args)
+    if config['exchange'] == 'bybit' and not config['inverse']:
         print('bybit usdt linear backtesting not supported')
         return
-    downloader = Downloader(backtest_config)
+    downloader = Downloader(config)
+    print()
+    for k in (keys := ['exchange', 'symbol', 'starting_balance', 'start_date', 'end_date',
+                       'latency_simulation_ms', 'do_long', 'do_shrt', 'minimum_liquidation_distance',
+                       'max_hrs_no_fills', 'max_hrs_no_fills_same_side', 'iters', 'n_particles']):
+        if k in config:
+            print(f"{k: <{max(map(len, keys)) + 2}} {config[k]}")
+    print()
     ticks = await downloader.get_ticks(True)
 
     start_candidate = None
-    if (s := '--start') in args:
+    if args.starting_configs != 'none':
         try:
-            if os.path.isdir(args[args.index(s) + 1]):
-                start_candidate = [json.load(open(f)) for f in
-                                   glob.glob(os.path.join(args[args.index(s) + 1], '*.json'))]
+            if os.path.isdir(args.starting_configs):
+                start_candidate = [json.load(open(f)) for f in glob.glob(os.path.join(args.starting_configs, '*.json'))]
                 print('Starting with all configurations in directory.')
             else:
-                start_candidate = json.load(open(args[args.index(s) + 1]))
+                start_candidate = json.load(open(args.starting_configs))
                 print('Starting with specified configuration.')
-        except:
-            print('Could not find specified configuration.')
+        except Exception as e:
+            print('Could not find specified configuration.', e)
     if start_candidate:
-        analysis = backtest_tune(ticks, backtest_config, start_candidate)
+        analysis = backtest_tune(ticks, config, start_candidate)
     else:
-        analysis = backtest_tune(ticks, backtest_config)
-    save_results(analysis, backtest_config)
-    plot_wrap(backtest_config, ticks, clean_result_config(analysis.best_config))
+        analysis = backtest_tune(ticks, config)
+    save_results(analysis, config)
+    plot_wrap(config, ticks, clean_result_config(analysis.best_config))
 
 
 if __name__ == '__main__':
-    asyncio.run(main(sys.argv))
+    asyncio.run(main())

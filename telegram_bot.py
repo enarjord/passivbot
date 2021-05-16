@@ -1,5 +1,4 @@
 import json
-import sys
 from datetime import datetime, timedelta
 from time import time
 
@@ -194,7 +193,7 @@ class Telegram:
         self.send_msg('Reloading config...')
 
         try:
-            config = json.load(open(sys.argv[3]))
+            config = json.load(open(self._bot.live_config_path))
         except Exception:
             self.send_msg("Failed to load config file")
             self.config_reload_ts = 0.0
@@ -292,7 +291,7 @@ class Telegram:
             sha_short = 'UNKNOWN'
 
         msg = f'<pre><b>Version:</b></pre> {sha_short},\n' \
-              f'<pre>Symbol</pre>: {sys.argv[2]}\n' \
+              f'<pre>Symbol</pre>: {self._bot.symbol}\n' \
               f'<pre><b>Config:</b></pre> \n' \
               f'{json.dumps(self._bot.config, indent=4)}'
         self.send_msg(msg)
