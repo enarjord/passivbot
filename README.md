@@ -43,7 +43,7 @@ If possible, it will use hedge mode
 Example:
 
 ```bash
-python3 start_bot.py binance_01 XMRUSDT configs/live/default.json
+python3 start_bot.py binance_01 XMRUSDT configs/live/binance_xmrusdt.json
 ```
 
 #### Run with docker
