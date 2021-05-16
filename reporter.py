@@ -9,7 +9,7 @@ from ray.tune.progress_reporter import memory_debug_str, trial_errors_str, _get_
 from ray.tune.trial import Trial
 from ray.tune.utils import unflattened_lookup
 from tabulate import tabulate
-from backtest import candidate_to_live_config
+from analyze import candidate_to_live_config
 
 try:
     from collections.abc import Mapping, MutableMapping

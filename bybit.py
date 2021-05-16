@@ -326,14 +326,9 @@ class Bybit(Bot):
         ticks = []
         for e in data['data']:
             try:
-                price = float(e['price'])
-                if ticks:
-                    if price != ticks[-1]['price']:
-                        ticks.append({'price': float(e['price']), 'is_buyer_maker': e['side'] == 'Sell'})
-                elif price != self.price:
-                    ticks.append({'price': float(e['price']), 'is_buyer_maker': e['side'] == 'Sell'})
+                ticks.append({'price': float(e['price']), 'qty': float(e['size']), 'is_buyer_maker': e['side'] == 'Sell'})
             except Exception as ex:
-                print('errer in websocket tick', e, ex)
+                print('error in websocket tick', e, ex)
         return ticks
 
     async def subscribe_ws(self, ws):
