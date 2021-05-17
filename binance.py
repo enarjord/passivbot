@@ -281,7 +281,7 @@ class BinanceBot(Bot):
             return cancellation
 
     async def fetch_fills(self, limit: int = 1000, from_id: int = None, start_time: int = None, end_time: int = None):
-        params = {'symbol': self.symbol, 'limit': limit}
+        params = {'symbol': self.symbol, 'limit': min(100, limit) if self.inverse else limit}
         if from_id is not None:
             params['fromId'] = max(0, from_id)
         if start_time is not None:
@@ -296,7 +296,7 @@ class BinanceBot(Bot):
                       'price': float(x['price']),
                       'qty': float(x['qty']),
                       'realized_pnl': float(x['realizedPnl']),
-                      'cost': float(x['quoteQty']),
+                      'cost': float(x['baseQty']) if self.inverse else float(x['quoteQty']),
                       'fee_paid': float(x['commission']),
                       'fee_token': x['commissionAsset'],
                       'timestamp': int(x['time']),
