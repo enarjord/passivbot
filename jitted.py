@@ -270,7 +270,7 @@ def calc_available_margin(balance,
                                 contract_multiplier)
         used_margin += calc_cost(shrt_psize_real, shrt_pprice,
                                  inverse, contract_multiplier) / leverage
-    return equity - used_margin
+    return max(0.0, equity - used_margin)
 
 
 @njit
