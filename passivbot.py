@@ -664,16 +664,18 @@ def add_argparse_args(parser):
                         default='configs/backtest/default.hjson', help='backtest config hjson file')
     parser.add_argument('-o', '--optimize_config', type=str, required=False, dest='optimize_config_path',
                         default='configs/optimize/default.hjson', help='optimize config hjson file')
-    parser.add_argument('-d', '--download-only', type=bool, required=False, dest='download_only',
-                        default=False, help='download only, do not dump ticks caches')
+    parser.add_argument('-d', '--download-only', help='download only, do not dump ticks caches', action='store_true')
     parser.add_argument('-s', '--symbol', type=str, required=False, dest='symbol',
                         default='none', help='specify symbol, overriding symbol from backtest config')
+    parser.add_argument('-u', '--user', type=str, required=False, dest='user',
+                        default='none',
+                        help='specify user, a.k.a. account_name, overriding user from backtest config')
     return parser
 
 
 def get_passivbot_argparser():
     parser = argparse.ArgumentParser(prog='passivbot', description='run passivbot')
-    parser.add_argument('account_name', type=str, help='account name defined in api-keys.json')
+    parser.add_argument('user', type=str, help='user/account_name defined in api-keys.json')
     parser.add_argument('symbol', type=str, help='symbol to trade')
     parser.add_argument('live_config_path', type=str, help='live config to use')
     return parser
@@ -687,16 +689,16 @@ async def main() -> None:
         print(e, 'failed to load api-keys.json file')
         return
     try:
-        account = accounts[args.account_name]
+        account = accounts[args.user]
     except Exception as e:
-        print('unrecognized account name', args.account_name, e)
+        print('unrecognized account name', args.user, e)
         return
     try:
         config = json.load(open(args.live_config_path))
     except Exception as e:
         print(e, 'failed to load config', args.live_config_path)
         return
-    config['user'] = args.account_name
+    config['user'] = args.user
     config['exchange'] = account['exchange']
     config['symbol'] = args.symbol
     config['live_config_path'] = args.live_config_path
