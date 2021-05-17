@@ -690,3 +690,29 @@ def calc_liq_price_bybit(balance,
         raise Exception('bybit linear liq price not implemented')
 
 
+@njit
+def calc_liq_price_universal(balance,
+                             long_psize,
+                             long_pprice,
+                             shrt_psize,
+                             shrt_pprice,
+                             inverse, contract_multiplier, leverage):
+    long_pprice = nan_to_0(long_pprice)
+    shrt_pprice = nan_to_0(shrt_pprice)
+    long_psize *= contract_multiplier
+    abs_shrt_psize = abs(shrt_psize) * contract_multiplier
+    if inverse:
+        shrt_cost = abs_shrt_psize / shrt_pprice if shrt_pprice > 0.0 else 0.0
+        long_cost = long_psize / long_pprice if long_pprice > 0.0 else 0.0
+        denominator = (shrt_cost - long_cost - balance)
+        if denominator == 0.0:
+            return 0.0
+        liq_price = (abs_shrt_psize - long_psize) / denominator
+    else:
+        denominator = long_psize - abs_shrt_psize
+        if denominator == 0.0:
+            return 0.0
+        liq_price = (-balance + long_psize * long_pprice - abs_shrt_psize * shrt_pprice) / denominator
+    return max(0.0, liq_price)
+
+

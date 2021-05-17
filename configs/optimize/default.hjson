@@ -1,21 +1,4 @@
 {
-  session_name: session_001
-  exchange: binance
-  user: account_name
-  symbol: XMRUSDT
-  latency_simulation_ms: 750
-  starting_balance: 100.0
-
-  # Initial positions
-  # optional, defaults to 0.0 if not supplied
-  # long_psize: 0.0
-  # long_pprice: 0.0
-  # shrt_psize: 0.0
-  # shrt_pprice: 0.0
-
-  do_long: true
-  do_shrt: true
-
   # pso options
   iters: 10000
   num_cpus: 4
@@ -31,14 +14,20 @@
   max_hrs_no_fills_same_side: 96
 
 
+
   # if wfo = true, will optimize with walk forward optimization.
   # otherwise, simple sliding window
   wfo: false
 
   # sliding window config:
-  sliding_window_size: 0.4
-  n_sliding_windows: 4
+  sliding_window_size: 0.2
+  n_sliding_windows: 6
   test_full: true
+
+  # set to 0.0 to disable breaking early
+  # otherwise will break trial early on first window returning val {< or >} val_thr * (1 {- or +} break_early_factor)
+  # e.g. break if a sub test returns closest_liq < liq_diff_thr * (1 - break_early_factor)
+  break_early_factor: 0.25
 
   # wfo config:
   # VWR
@@ -46,26 +35,22 @@
   sdev_max: 0.06
   metric: "returns_daily"
 
-  start_date: 2020-11-11T11:11
-  end_date: 2021-05-13T12:00
-  # set end_date: -1 to use now as end date
-
   # If start and stop are set to same value, it's treated as a fixed variable.
   ranges:
   {
-    leverage: [1, 10]
+    leverage: [1, 16]
     n_close_orders: [16, 16]
     qty_pct: [0.0, 0.5]
     ddown_factor: [0.0, 3.5]
-    pos_margin_grid_coeff: [-400.0, 400.0]
-    volatility_grid_coeff: [-2000.0, 2000.0]
-    volatility_qty_coeff: [-2000.0, 2000.0]
+    pos_margin_grid_coeff: [0.0, 600.0]
+    volatility_grid_coeff: [0.0, 1200.0]
+    volatility_qty_coeff: [-1200.0, 0.0]
     grid_spacing: [0.0002, 0.02]
     markup_range: [0.0, 0.02]
     min_markup: [0.0005, 0.012]
-    ema_span: [1.0, 300000.0]
+    ema_span: [8000.0, 300000.0]
     ema_spread: [0.0, 0.03]
-    stop_loss_liq_diff: [0.2, 0.2]
-    stop_loss_pos_pct: [0.05, 0.05]
+    stop_loss_liq_diff: [0.2, 0.7]
+    stop_loss_pos_pct: [0.01, 0.2]
   }
 }

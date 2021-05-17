@@ -2,7 +2,9 @@ import gc
 
 import hjson
 import pandas as pd
+import argparse
 from dateutil import parser, tz
+from time import sleep
 
 from passivbot import *
 
@@ -218,13 +220,11 @@ class Downloader:
                              self.config["symbol"], ""))
 
         if self.config["exchange"] == "binance":
-            self.bot = await create_binance_bot(self.config["user"],
-                                                get_dummy_settings(self.config["user"],
+            self.bot = await create_binance_bot(get_dummy_settings(self.config["user"],
                                                                    self.config["exchange"],
                                                                    self.config["symbol"]))
         elif self.config["exchange"] == "bybit":
-            self.bot = await create_bybit_bot(self.config["user"],
-                                              get_dummy_settings(self.config["user"],
+            self.bot = await create_bybit_bot(get_dummy_settings(self.config["user"],
                                                                  self.config["exchange"],
                                                                  self.config["symbol"]))
         else:
@@ -526,16 +526,16 @@ def get_dummy_settings(user: str, exchange: str, symbol: str):
                'logging_level': 0}}
 
 
-async def fetch_market_specific_settings(exchange: str, user: str, symbol: str):
+async def fetch_market_specific_settings(user: str, exchange: str, symbol: str):
     tmp_live_settings = get_dummy_settings(user, exchange, symbol)
     settings_from_exchange = {}
     if exchange == 'binance':
-        bot = await create_binance_bot(user, tmp_live_settings)
+        bot = await create_binance_bot(tmp_live_settings)
         settings_from_exchange['maker_fee'] = 0.00018
         settings_from_exchange['taker_fee'] = 0.00036
         settings_from_exchange['exchange'] = 'binance'
     elif exchange == 'bybit':
-        bot = await create_bybit_bot(user, tmp_live_settings)
+        bot = await create_bybit_bot(tmp_live_settings)
         settings_from_exchange['maker_fee'] = -0.00025
         settings_from_exchange['taker_fee'] = 0.00075
         settings_from_exchange['exchange'] = 'bybit'
@@ -554,9 +554,18 @@ async def fetch_market_specific_settings(exchange: str, user: str, symbol: str):
     return settings_from_exchange
 
 
-async def prep_backtest_config(config_name: str):
-    config = hjson.load(open(config_name))
-
+async def prep_config(args) -> dict:
+    try:
+        bc = hjson.load(open(args.backtest_config_path))
+    except Exception as e:
+        raise Exception('failed to load backtest config', backtest_config_path, e)
+    try:
+        oc = hjson.load(open(args.optimize_config_path))
+    except Exception as e:
+        raise Exception('failed to load optimize config', optimize_config_path, e)
+    config = {**oc, **bc}
+    if args.symbol != 'none':
+        config['symbol'] = args.symbol
     end_date = config['end_date'] if config['end_date'] and config['end_date'] != -1 else ts_to_date(time())[:16]
     config['session_name'] = f"{config['start_date'].replace(' ', '').replace(':', '').replace('.', '')}_" \
                              f"{end_date.replace(' ', '').replace(':', '').replace('.', '')}"
@@ -569,7 +578,7 @@ async def prep_backtest_config(config_name: str):
     if os.path.exists((mss := config['caches_dirpath'] + 'market_specific_settings.json')):
         market_specific_settings = json.load(open(mss))
     else:
-        market_specific_settings = await fetch_market_specific_settings(config['exchange'], config['user'],
+        market_specific_settings = await fetch_market_specific_settings(config['user'], config['exchange'],
                                                                         config['symbol'])
         json.dump(market_specific_settings, open(mss, 'w'), indent=4)
     config.update(market_specific_settings)
@@ -589,13 +598,20 @@ async def prep_backtest_config(config_name: str):
     return config
 
 
-async def main(args: list):
-    config = await prep_backtest_config(args[1])
+async def main():
+
+    parser = argparse.ArgumentParser(prog='Downloader', description='Download ticks from exchange API.')
+    parser = add_argparse_args(parser)
+
+    args = parser.parse_args()
+    config = await prep_config(args)
     downloader = Downloader(config)
     await downloader.download_ticks()
-    if not '--only' in args:
-        await downloader.prepare_files('--split' not in args)
+    if not args.download_only:
+        await downloader.prepare_files(True)
+    sleep(0.1)
+
 
 
 if __name__ == "__main__":
-    asyncio.run(main(sys.argv))
+    asyncio.run(main())

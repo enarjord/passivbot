@@ -10,6 +10,7 @@ from pathlib import Path
 from time import time
 
 import numpy as np
+import argparse
 
 import telegram_bot
 import websockets
@@ -71,6 +72,7 @@ def load_key_secret(exchange: str, user: str) -> (str, str):
             return keyList
         elif user not in keyfile or keyfile[user]["exchange"] != exchange:
             print("Looks like the keys aren't configured yet, or you entered the wrong username!")
+        raise Exception('API KeyFile Missing!')
     except FileNotFoundError:
         print("File Not Found!")
         raise Exception('API KeyFile Missing!')
@@ -124,9 +126,8 @@ class LockNotAvailableException(Exception):
     pass
 
 class Bot:
-    def __init__(self, user: str, config: dict):
+    def __init__(self, config: dict):
         self.config = config
-        self.user = user
         self.telegram = None
 
         for key in config:
@@ -147,6 +148,7 @@ class Bot:
         self.price = 0
         self.is_buyer_maker = True
         self.agg_qty = 0.0
+        self.qty = 0.0
         self.ob = [0.0, 0.0]
         self.ema = 0.0
 
@@ -159,16 +161,18 @@ class Bot:
 
         self.log_filepath = make_get_filepath(f"logs/{self.exchange}/{config['config_name']}.log")
 
-        self.key, self.secret = load_key_secret(config['exchange'], user)
+        self.key, self.secret = load_key_secret(config['exchange'], self.user)
 
         self.log_level = 0
 
         self.stop_websocket = False
         self.process_websocket_ticks = True
         self.lock_file = f"{str(Path.home())}/.passivbotlock"
+        self.stop_mode = self.config['stop_mode'] = None
 
     def set_config(self, config):
         config['ema_span'] = int(round(config['ema_span']))
+        config['stop_mode'] = self.stop_mode = None
         self.config = config
         for key in config:
             setattr(self, key, config[key])
@@ -351,6 +355,8 @@ class Bot:
                                           'custom_id': tpl[4]})
                 long_psize = tpl[2]
                 stop_loss_close = True
+            elif tpl[0] == 0.0 or self.stop_mode in ['freeze']:
+                continue
             elif tpl[0] > 0.0:
                 long_entry_orders.append({'side': 'buy', 'position_side': 'long', 'qty': tpl[0],
                                           'price': tpl[1], 'type': 'limit', 'reduce_only': False,
@@ -406,6 +412,8 @@ class Bot:
         return results
 
     async def decide(self):
+        if self.stop_mode is not None:
+            print(f'{self.stop_mode} stop mode is active')
         if self.price <= self.highest_bid:
             self.ts_locked['decide'] = time()
             print_(['bid maybe taken'], n=True)
@@ -424,43 +432,46 @@ class Bot:
             self.ts_released['decide'] = time()
             return
         if time() - self.ts_released['print'] >= 0.5:
-            self.ts_released['print'] = time()
-            line = f"{self.symbol} "
-            line += f"l {self.position['long']['size']} @ "
-            line += f"{round_(self.position['long']['price'], self.price_step)} "
-            long_closes = sorted([o for o in self.open_orders if o['side'] == 'sell'
-                                  and o['position_side'] == 'long'], key=lambda x: x['price'])
-            long_entries = sorted([o for o in self.open_orders if o['side'] == 'buy'
-                                   and o['position_side'] == 'long'], key=lambda x: x['price'])
-            line += f"c@ {long_closes[0]['price'] if long_closes else 0.0} "
-            line += f"e@ {long_entries[-1]['price'] if long_entries else 0.0} "
-            line += f"|| s {self.position['shrt']['size']} @ "
-            line += f"{round_(self.position['shrt']['price'], self.price_step)} "
-            shrt_closes = sorted([o for o in self.open_orders if o['side'] == 'buy'
-                                  and (o['position_side'] == 'shrt' or
-                                       (o['position_side'] == 'both' and
-                                        self.position['shrt']['size'] != 0.0))],
-                                 key=lambda x: x['price'])
-            shrt_entries = sorted([o for o in self.open_orders if o['side'] == 'sell'
-                                   and (o['position_side'] == 'shrt' or
-                                        (o['position_side'] == 'both' and
-                                         self.position['shrt']['size'] != 0.0))],
-                                  key=lambda x: x['price'])
-            line += f"c@ {shrt_closes[-1]['price'] if shrt_closes else 0.0} "
-            line += f"e@ {shrt_entries[0]['price'] if shrt_entries else 0.0} "
-            if self.position['long']['size'] > abs(self.position['shrt']['size']):
-                liq_price = self.position['long']['liquidation_price']
-                sl_trigger_price = liq_price / (1 - self.stop_loss_liq_diff)
-            else:
-                liq_price = self.position['shrt']['liquidation_price']
-                sl_trigger_price = liq_price / (1 + self.stop_loss_liq_diff)
-            line += f"|| last {self.price} liq {compress_float(liq_price, 5)} "
-            line += f"sl trig {compress_float(sl_trigger_price, 5)} "
-            line += f"ema {compress_float(self.ema, 5)} "
-            line += f"bal {compress_float(self.position['wallet_balance'], 3)} "
-            line += f"eq {compress_float(self.position['equity'], 3)} "
-            line += f"v. {compress_float(self.volatility, 5)} "
-            print_([line], r=True)
+            await self.update_output_information()
+
+    async def update_output_information(self):
+        self.ts_released['print'] = time()
+        line = f"{self.symbol} "
+        line += f"l {self.position['long']['size']} @ "
+        line += f"{round_(self.position['long']['price'], self.price_step)} "
+        long_closes = sorted([o for o in self.open_orders if o['side'] == 'sell'
+                              and o['position_side'] == 'long'], key=lambda x: x['price'])
+        long_entries = sorted([o for o in self.open_orders if o['side'] == 'buy'
+                               and o['position_side'] == 'long'], key=lambda x: x['price'])
+        line += f"c@ {long_closes[0]['price'] if long_closes else 0.0} "
+        line += f"e@ {long_entries[-1]['price'] if long_entries else 0.0} "
+        line += f"|| s {self.position['shrt']['size']} @ "
+        line += f"{round_(self.position['shrt']['price'], self.price_step)} "
+        shrt_closes = sorted([o for o in self.open_orders if o['side'] == 'buy'
+                              and (o['position_side'] == 'shrt' or
+                                   (o['position_side'] == 'both' and
+                                    self.position['shrt']['size'] != 0.0))],
+                             key=lambda x: x['price'])
+        shrt_entries = sorted([o for o in self.open_orders if o['side'] == 'sell'
+                               and (o['position_side'] == 'shrt' or
+                                    (o['position_side'] == 'both' and
+                                     self.position['shrt']['size'] != 0.0))],
+                              key=lambda x: x['price'])
+        line += f"c@ {shrt_closes[-1]['price'] if shrt_closes else 0.0} "
+        line += f"e@ {shrt_entries[0]['price'] if shrt_entries else 0.0} "
+        if self.position['long']['size'] > abs(self.position['shrt']['size']):
+            liq_price = self.position['long']['liquidation_price']
+            sl_trigger_price = liq_price / (1 - self.stop_loss_liq_diff)
+        else:
+            liq_price = self.position['shrt']['liquidation_price']
+            sl_trigger_price = liq_price / (1 + self.stop_loss_liq_diff)
+        line += f"|| last {self.price} liq {compress_float(liq_price, 5)} "
+        line += f"sl trig {compress_float(sl_trigger_price, 5)} "
+        line += f"ema {compress_float(self.ema, 5)} "
+        line += f"bal {compress_float(self.position['wallet_balance'], 3)} "
+        line += f"eq {compress_float(self.position['equity'], 3)} "
+        line += f"v. {compress_float(self.volatility, 5)} "
+        print_([line], r=True)
 
     def flush_stuck_locks(self, timeout: float = 4.0) -> None:
         now = time()
@@ -475,7 +486,8 @@ class Bot:
         def drop_consecutive_same_prices(ticks_):
             compressed_ = [ticks_[0]]
             for i in range(1, len(ticks_)):
-                if ticks_[i]['price'] != compressed_[-1]['price']:
+                if ticks_[i]['price'] != compressed_[-1]['price'] or \
+                        ticks_[i]['is_buyer_maker'] != compressed_[-1]['is_buyer_maker']:
                     compressed_.append(ticks_[i])
             return compressed_
 
@@ -552,6 +564,7 @@ class Bot:
         await self.update_position()
         await self.init_exchange_config()
         await self.init_indicators()
+        await self.init_order_book()
         self.remove_lock_file()
         k = 1
         async with websockets.connect(self.endpoints['websocket']) as ws:
@@ -597,7 +610,7 @@ class Bot:
                       f' trying to delete it, attempting removal of file')
                 self.remove_lock_file()
             else:
-                raise LockNotAvailableException("Another bot has the lock.  "\
+                raise LockNotAvailableException("Another bot has the lock. "\
                                                 f"To force acquire lock, delete .passivbotlock file: {self.lock_file}")
 
         pid = str(os.getpid())
@@ -618,23 +631,20 @@ async def start_bot(bot):
         try:
             await bot.acquire_interprocess_lock()
             await bot.start_websocket()
-        except LockNotAvailableException as e:
-            print('Unable to acquire lock to start bot, retrying in 30 seconds...')
-            await asyncio.sleep(30)
         except Exception as e:
-            print('Websocket connection has been lost, attempting to reinitialize the bot...', e)
+            print('Websocket connection has been lost or unable to acquire lock to start, attempting to reinitialize the bot...', e)
             await asyncio.sleep(10)
 
-async def create_binance_bot(user: str, config: str):
+async def create_binance_bot(config: str):
     from binance import BinanceBot
-    bot = BinanceBot(user, config)
+    bot = BinanceBot(config)
     await bot._init()
     return bot
 
 
-async def create_bybit_bot(user: str, config: str):
+async def create_bybit_bot(config: str):
     from bybit import Bybit
-    bot = Bybit(user, config)
+    bot = Bybit(config)
     await bot._init()
     return bot
 
@@ -647,29 +657,56 @@ async def _start_telegram(account: dict, bot: Bot):
     telegram.log_start()
     return telegram
 
+
+def add_argparse_args(parser):
+    parser.add_argument('--nojit', help='disable numba', action='store_true')
+    parser.add_argument('-b', '--backtest_config', type=str, required=False, dest='backtest_config_path',
+                        default='configs/backtest/default.hjson', help='backtest config hjson file')
+    parser.add_argument('-o', '--optimize_config', type=str, required=False, dest='optimize_config_path',
+                        default='configs/optimize/default.hjson', help='optimize config hjson file')
+    parser.add_argument('-d', '--download-only', help='download only, do not dump ticks caches', action='store_true')
+    parser.add_argument('-s', '--symbol', type=str, required=False, dest='symbol',
+                        default='none', help='specify symbol, overriding symbol from backtest config')
+    parser.add_argument('-u', '--user', type=str, required=False, dest='user',
+                        default='none',
+                        help='specify user, a.k.a. account_name, overriding user from backtest config')
+    return parser
+
+
+def get_passivbot_argparser():
+    parser = argparse.ArgumentParser(prog='passivbot', description='run passivbot')
+    parser.add_argument('user', type=str, help='user/account_name defined in api-keys.json')
+    parser.add_argument('symbol', type=str, help='symbol to trade')
+    parser.add_argument('live_config_path', type=str, help='live config to use')
+    return parser
+
+
 async def main() -> None:
+    args = add_argparse_args(get_passivbot_argparser()).parse_args()
     try:
         accounts = json.load(open('api-keys.json'))
     except Exception as e:
         print(e, 'failed to load api-keys.json file')
         return
-    if sys.argv[1] in accounts:
-        account = accounts[sys.argv[1]]
-    else:
-        print('unrecognized account name', sys.argv[1])
+    try:
+        account = accounts[args.user]
+    except Exception as e:
+        print('unrecognized account name', args.user, e)
         return
     try:
-        config = json.load(open(sys.argv[3]))
+        config = json.load(open(args.live_config_path))
     except Exception as e:
-        print(e, 'failed to load config', sys.argv[3])
+        print(e, 'failed to load config', args.live_config_path)
         return
+    config['user'] = args.user
     config['exchange'] = account['exchange']
-    config['symbol'] = sys.argv[2]
+    config['symbol'] = args.symbol
+    config['live_config_path'] = args.live_config_path
 
     if account['exchange'] == 'binance':
-        bot = await create_binance_bot(sys.argv[1], config)
+        bot = await create_binance_bot(config)
     elif account['exchange'] == 'bybit':
-        bot = await create_bybit_bot(sys.argv[1], config)
+        bot = await create_bybit_bot(config)
     else:
         raise Exception('unknown exchange', account['exchange'])
     print('using config')
@@ -687,6 +724,8 @@ async def main() -> None:
 if __name__ == '__main__':
     try:
         asyncio.run(main())
+    except Exception as e:
+        print(f'\nThere was an error starting the bot: {e}')
     finally:
         print('\nPassivbot was stopped succesfully')
         os._exit(0)

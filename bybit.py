@@ -45,17 +45,11 @@ def date_to_ts(date: str):
     return parser.parse(date).timestamp() * 1000
 
 
-async def create_bot(user: str, config: str):
-    bot = Bybit(user, config)
-    await bot._init()
-    return bot
-
-
 class Bybit(Bot):
-    def __init__(self, user: str, config: dict):
+    def __init__(self, config: dict):
         self.exchange = 'bybit'
         self.min_notional = 0.0
-        super().__init__(user, config)
+        super().__init__(config)
         self.base_endpoint = 'https://api.bybit.com'
         self.endpoints = {}
         self.market_type = ''

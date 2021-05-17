@@ -11,21 +11,15 @@ import numpy as np
 from passivbot import load_key_secret, print_, ts_to_date, Bot, sort_dict_keys
 
 
-async def create_bot(user: str, config: str):
-    bot = BinanceBot(user, config)
-    await bot._init()
-    return bot
-
-
 class BinanceBot(Bot):
-    def __init__(self, user: str, config: dict):
+    def __init__(self, config: dict):
         self.exchange = 'binance'
-        super().__init__(user, config)
+        super().__init__(config)
         self.max_pos_size_ito_usdt = 0.0
         self.max_pos_size_ito_coin = 0.0
         self.session = aiohttp.ClientSession()
         self.base_endpoint = ''
-        self.key, self.secret = load_key_secret('binance', user)
+        self.key, self.secret = load_key_secret('binance', config['user'])
 
     async def public_get(self, url: str, params: dict = {}) -> dict:
         async with self.session.get(self.base_endpoint + url, params=params) as response:
