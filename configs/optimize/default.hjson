@@ -20,8 +20,8 @@
   wfo: false
 
   # sliding window config:
-  sliding_window_size: 0.1
-  n_sliding_windows: 15
+  sliding_window_size: 0.2
+  n_sliding_windows: 6
   test_full: true
 
   # set to 0.0 to disable breaking early
@@ -38,19 +38,19 @@
   # If start and stop are set to same value, it's treated as a fixed variable.
   ranges:
   {
-    leverage: [1, 12]
+    leverage: [1, 16]
     n_close_orders: [16, 16]
     qty_pct: [0.0, 0.5]
     ddown_factor: [0.0, 3.5]
-    pos_margin_grid_coeff: [0.0, 400.0]
-    volatility_grid_coeff: [0.0, 2000.0]
-    volatility_qty_coeff: [-900.0, 0.0]
+    pos_margin_grid_coeff: [0.0, 600.0]
+    volatility_grid_coeff: [0.0, 1200.0]
+    volatility_qty_coeff: [-1200.0, 0.0]
     grid_spacing: [0.0002, 0.02]
     markup_range: [0.0, 0.02]
     min_markup: [0.0005, 0.012]
     ema_span: [8000.0, 300000.0]
     ema_spread: [0.0, 0.03]
-    stop_loss_liq_diff: [0.2, 0.2]
-    stop_loss_pos_pct: [0.05, 0.05]
+    stop_loss_liq_diff: [0.2, 0.7]
+    stop_loss_pos_pct: [0.01, 0.2]
   }
 }
