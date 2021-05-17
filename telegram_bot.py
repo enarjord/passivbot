@@ -271,12 +271,13 @@ class Telegram:
                     end_of_day = start_of_day + timedelta(days=1)
                     start_time = int(start_of_day.timestamp()) * 1000
                     end_time = int(end_of_day.timestamp()) * 1000
-                    daily_trades = await self._bot.fetch_fills(start_time=start_time, end_time=end_time)
+                    daily_trades = await self._bot.fetch_income(start_time=start_time, end_time=end_time)
+                    daily_trades = [trade for trade in daily_trades if trade['incomeType'] in ['REALIZED_PNL', 'FUNDING_FEE', 'COMMISSION']]
                     pln_summary = 0
                     for trade in daily_trades:
-                        pln_summary += float(trade['realized_pnl'])
+                        pln_summary += float(trade['income'])
                     daily[idx] = {}
-                    daily[idx]['date'] = start_of_day.strftime('%m-%d')
+                    daily[idx]['date'] = start_of_day.strftime('%d-%m')
                     daily[idx]['pnl'] = pln_summary
 
                 table = PrettyTable(['Date', 'PNL (%)'])

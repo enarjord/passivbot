@@ -67,6 +67,7 @@ class BinanceBot(Bot):
                 'open_orders': '/fapi/v1/openOrders',
                 'ticker': '/fapi/v1/ticker/bookTicker',
                 'fills': '/fapi/v1/userTrades',
+                'income': '/fapi/v1/income',
                 'create_order': '/fapi/v1/order',
                 'cancel_order': '/fapi/v1/order',
                 'ticks': '/fapi/v1/aggTrades',
@@ -89,6 +90,7 @@ class BinanceBot(Bot):
                 'open_orders': '/dapi/v1/openOrders',
                 'ticker': '/dapi/v1/ticker/bookTicker',
                 'fills': '/dapi/v1/userTrades',
+                'income': '/dapi/v1/income',
                 'create_order': '/dapi/v1/order',
                 'cancel_order': '/dapi/v1/order',
                 'ticks': '/dapi/v1/aggTrades',
@@ -304,6 +306,27 @@ class BinanceBot(Bot):
             print('error fetching fills a', e)
             return []
         return fills
+
+    async def fetch_income(self, limit: int = 1000, start_time: int = None, end_time: int = None):
+        params = {'symbol': self.symbol, 'limit': limit}
+        if start_time is not None:
+            params['startTime'] = start_time
+        if end_time is not None:
+            params['endTime'] = end_time
+        try:
+            fetched = await self.private_get(self.endpoints['income'], params)
+            income = [{'symbol': x['symbol'],
+                      'incomeType': x['incomeType'],
+                      'income': float(x['income']),
+                      'asset': x['asset'],
+                      'info': x['info'],
+                      'timestamp': int(x['time']),
+                      'tranId': x['tranId'],
+                      'tradeId': x['tradeId']} for x in fetched]
+        except Exception as e:
+            print('error fetching incoming: ', e)
+            return []
+        return income
 
     async def fetch_ticks(self, from_id: int = None, start_time: int = None, end_time: int = None,
                           do_print: bool = True):
