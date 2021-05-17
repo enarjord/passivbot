@@ -169,7 +169,7 @@ class Telegram:
             long_position = self._bot.position['long']
             shrt_position = self._bot.position['shrt']
 
-            position_table.add_row([f'Size {self._bot.coin}', round_dynamic(long_position['size'], 3),
+            position_table.add_row([f'Size', round_dynamic(long_position['size'], 3),
                                     round_dynamic(shrt_position['size'], 3)])
             position_table.add_row(['Price', round_dynamic(long_position['price'], 3),
                                     round_dynamic(shrt_position['price'], 3)])
@@ -181,7 +181,7 @@ class Telegram:
                  round_dynamic(shrt_position['liquidation_price'], 3)])
             position_table.add_row(['Liq.diff.%', round_dynamic(float(long_position['liq_diff']) * 100, 3),
                  round_dynamic(float(shrt_position['liq_diff']) * 100, 3)])
-            position_table.add_row([f'UPNL {self._bot.quot}', round_dynamic(float(long_position['upnl']), 3),
+            position_table.add_row([f'UPNL {self._bot.margin_coin}', round_dynamic(float(long_position['upnl']), 3),
                                     round_dynamic(float(shrt_position['upnl']), 3)])
 
             table_msg = position_table.get_string(border=True, padding_width=1,
@@ -195,7 +195,8 @@ class Telegram:
         if bool(self._bot.position):
             async def _balance_async():
                 position = await self._bot.fetch_position()
-                msg = f'Wallet balance: {compress_float(position["wallet_balance"], 4)}\n' \
+                msg = f'Balance {self._bot.margin_coin}\n' \
+                      f'Wallet balance: {compress_float(position["wallet_balance"], 4)}\n' \
                       f'Equity: {compress_float(self._bot.position["equity"], 4)}\n' \
                       f'Locked margin: {compress_float(self._bot.position["used_margin"], 4)}\n' \
                       f'Available margin: {compress_float(self._bot.position["available_margin"], 4)}'
@@ -234,13 +235,13 @@ class Telegram:
         task.add_done_callback(init_finished)
 
     def _closed_trades(self, update=None, context=None):
-        if self._bot.exchange == 'binance' and not self._bot.inverse:
+        if self._bot.exchange == 'binance':
             async def send_closed_trades_async():
                 trades = await self._bot.fetch_fills(limit=100)
                 closed_trades = [t for t in trades if t['realized_pnl'] != 0.0]
                 closed_trades.sort(key=lambda x: x['timestamp'], reverse=True)
 
-                table = PrettyTable(['Date', 'Pos.', 'Price', f'Pnl {self._bot.quot}'])
+                table = PrettyTable(['Date', 'Pos.', 'Price', f'Pnl {self._bot.margin_coin}'])
 
                 for trade in closed_trades[:self.n_trades]:
                     trade_date = datetime.fromtimestamp(trade['timestamp'] / 1000)
@@ -271,15 +272,16 @@ class Telegram:
                     end_of_day = start_of_day + timedelta(days=1)
                     start_time = int(start_of_day.timestamp()) * 1000
                     end_time = int(end_of_day.timestamp()) * 1000
-                    daily_trades = await self._bot.fetch_fills(start_time=start_time, end_time=end_time)
+                    daily_trades = await self._bot.fetch_income(start_time=start_time, end_time=end_time)
+                    daily_trades = [trade for trade in daily_trades if trade['incomeType'] in ['REALIZED_PNL', 'FUNDING_FEE', 'COMMISSION']]
                     pln_summary = 0
                     for trade in daily_trades:
-                        pln_summary += float(trade['realized_pnl'])
+                        pln_summary += float(trade['income'])
                     daily[idx] = {}
                     daily[idx]['date'] = start_of_day.strftime('%m-%d')
                     daily[idx]['pnl'] = pln_summary
 
-                table = PrettyTable(['Date', 'PNL (%)'])
+                table = PrettyTable(['Date MM-DD', 'PNL (%)'])
                 pnl_sum = 0.0
                 day_profits, profit_pcts = [], []
                 for item in daily.keys():
