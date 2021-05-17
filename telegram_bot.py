@@ -26,30 +26,53 @@ class Telegram:
         self.config_reload_ts = 0.0
         self.n_trades = 10
 
-        keyboard_buttons = [
-            [KeyboardButton('/balance'), KeyboardButton('/open_orders'), KeyboardButton('/position')],
-            [KeyboardButton('/stop'), KeyboardButton('/show_config'), KeyboardButton('/reload_config')],
-            [KeyboardButton('/closed_trades'), KeyboardButton('/daily'), KeyboardButton('/help')]]
-        self._keyboard = ReplyKeyboardMarkup(keyboard_buttons, resize_keyboard=True)
+        first_keyboard_buttons = [
+            [KeyboardButton('\U0001F4B8 /daily'), KeyboardButton('\U0001F4CB /open_orders'), KeyboardButton('\U0001F4CC /position')],
+            [KeyboardButton('\U0000274E /closed_trades'), KeyboardButton('\U0001F4DD /show_config'), KeyboardButton('\U0000267B /reload_config')],
+            [KeyboardButton('\U0001F4B3 /balance'), KeyboardButton('\U00002753 /help'), KeyboardButton('\U000023E9 /next')]]
+        second_keyboard_buttons = [
+            [KeyboardButton('\U000023EA /previous'), KeyboardButton('\U000026D4 /stop')]
+        ]
+        self._keyboard_idx = 0
+        self._keyboards = [ReplyKeyboardMarkup(first_keyboard_buttons, resize_keyboard=True),
+                           ReplyKeyboardMarkup(second_keyboard_buttons, resize_keyboard=True)]
 
-        dispatcher = self._updater.dispatcher
-        dispatcher.add_handler(CommandHandler('balance', self._balance))
-        dispatcher.add_handler(CommandHandler('open_orders', self._open_orders))
-        dispatcher.add_handler(CommandHandler('position', self._position))
-        dispatcher.add_handler(CommandHandler('show_config', self.show_config))
-        dispatcher.add_handler(CommandHandler('reload_config', self._reload_config))
-        dispatcher.add_handler(CommandHandler('closed_trades', self._closed_trades))
-        dispatcher.add_handler(CommandHandler('daily', self._daily))
-        dispatcher.add_handler(CommandHandler('help', self._help))
+        self.add_handlers(self._updater)
+        self._updater.start_polling()
+
+    def add_handlers(self, updater):
+        dispatcher = updater.dispatcher
+        dispatcher.add_handler(MessageHandler(Filters.regex('^.*/balance'), self._balance))
+        dispatcher.add_handler(MessageHandler(Filters.regex('^.*/open_orders'), self._open_orders))
+        dispatcher.add_handler(MessageHandler(Filters.regex('^.*/position'), self._position))
+        dispatcher.add_handler(MessageHandler(Filters.regex('^.*/show_config'), self.show_config))
+        dispatcher.add_handler(
+            MessageHandler(Filters.regex('^.*/reload_config'), self._reload_config))
+        dispatcher.add_handler(
+            MessageHandler(Filters.regex('^.*/closed_trades'), self._closed_trades))
+        dispatcher.add_handler(MessageHandler(Filters.regex('^.*/daily'), self._daily))
+        dispatcher.add_handler(MessageHandler(Filters.regex('^.*/help'), self._help))
         dispatcher.add_handler(ConversationHandler(
-            entry_points=[CommandHandler('stop', self._begin_stop)],
+            entry_points=[MessageHandler(Filters.regex('^.*/stop'), self._begin_stop)],
             states={
-                1: [MessageHandler(Filters.regex('^(graceful|freeze|cancel)$'), self._stop_mode_chosen)],
+                1: [MessageHandler(Filters.regex('^(graceful|freeze|cancel)$'),
+                                   self._stop_mode_chosen)],
                 2: [MessageHandler(Filters.regex('^(confirm|abort)$'), self._verify_confirmation)],
             },
-            fallbacks=[CommandHandler('cancel', self._abort_stop)],
+            fallbacks=[CommandHandler('cancel', self._abort_stop)]
         ))
-        self._updater.start_polling()
+        dispatcher.add_handler(MessageHandler(Filters.regex('^.*/next$'), self._next_page))
+        dispatcher.add_handler(MessageHandler(Filters.regex('^.*/previous$'), self._previous_page))
+
+    def _previous_page(self, update=None, context=None):
+        if self._keyboard_idx > 0:
+            self._keyboard_idx = self._keyboard_idx - 1
+        self.send_msg('Previous')
+
+    def _next_page(self, update=None, context=None):
+        if self._keyboard_idx + 1 < len(self._keyboards):
+            self._keyboard_idx = self._keyboard_idx + 1
+        self.send_msg('Next')
 
     def _begin_stop(self, update: Update, _: CallbackContext) -> int:
         self.stop_mode_requested = ''
@@ -103,11 +126,11 @@ class Telegram:
             self.stop_mode_requested = ''
             update.message.reply_text(text=f'Something went wrong, either <pre>confirm</pre> or <pre>abort</pre> was expected, but {update.message.text} was sent',
                                       parse_mode=ParseMode.HTML,
-                                      reply_markup=self._keyboard)
+                                      reply_markup=self._keyboards[self._keyboard_idx])
         return ConversationHandler.END
 
     def _abort_stop(self, update: Update, _: CallbackContext) -> int:
-        update.message.reply_text('Aborting initiating stop mode', reply_markup=self._keyboard)
+        update.message.reply_text('Aborting initiating stop mode', reply_markup=self._keyboards[self._keyboard_idx])
         return ConversationHandler.END
 
     def _help(self, update=None, context=None):
@@ -305,11 +328,11 @@ class Telegram:
                 self._chat_id,
                 text=msg,
                 parse_mode=ParseMode.HTML,
-                reply_markup=self._keyboard,
+                reply_markup=self._keyboards[self._keyboard_idx],
                 disable_notification=False
-            )
-        except:
-            print('Failed to send telegram message')
+            ).message_id
+        except Exception as e:
+            print(f'Failed to send telegram message: {e}')
 
     def exit(self):
         try:
