@@ -308,8 +308,9 @@ def iter_entries(
         elif 'shrt' in stop_loss_order[4]:
             shrt_psize, shrt_pprice = stop_loss_order[2:4]
         if 'entry' in stop_loss_order[4]:
-            available_margin -= calc_margin_cost(stop_loss_order[0], stop_loss_order[1], inverse,
-                                                 contract_multiplier, leverage)
+            available_margin = max(0.0, available_margin - calc_margin_cost(stop_loss_order[0],
+                                                                            stop_loss_order[1], inverse,
+                                                                            contract_multiplier, leverage))
         elif 'close' in stop_loss_order[4]:
             available_margin += calc_margin_cost(stop_loss_order[0], stop_loss_order[1], inverse,
                                                  contract_multiplier, leverage)
@@ -378,14 +379,16 @@ def iter_entries(
             yield long_entry
             long_psize, long_pprice = long_entry[2:4]
             if long_entry[1]:
-                available_margin -= calc_margin_cost(long_entry[0], long_entry[1], inverse,
-                                                     contract_multiplier, leverage)
+                available_margin = max(0.0, available_margin - calc_margin_cost(long_entry[0], long_entry[1],
+                                                                                inverse, contract_multiplier,
+                                                                                leverage))
         else:
             yield shrt_entry
             shrt_psize, shrt_pprice = shrt_entry[2:4]
             if shrt_entry[1]:
-                available_margin -= calc_margin_cost(shrt_entry[0], shrt_entry[1], inverse,
-                                                     contract_multiplier, leverage)
+                available_margin = max(0.0, available_margin - calc_margin_cost(shrt_entry[0], shrt_entry[1],
+                                                                                inverse, contract_multiplier,
+                                                                                leverage))
 
 
 @njit
