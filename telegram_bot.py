@@ -293,8 +293,8 @@ class Telegram:
                     wallet_balance = previous_day_close_wallet_balance
                     table.add_row([daily[item]['date'], f'{day_profit:.1f} ({profit_pct:.2f}%)'])
 
-                pct_sum = ((position['wallet_balance'] + pnl_sum) / position['wallet_balance'] - 1) * 100 \
-                    if position['wallet_balance'] > 0.0 else 0.0
+                bal_minus_pnl = position['wallet_balance'] - pnl_sum
+                pct_sum = (position['wallet_balance'] / bal_minus_pnl - 1) * 100 if bal_minus_pnl > 0.0 else 0.0
                 table.add_row(['-------','------------'])
                 table.add_row(['Total', f'{round_dynamic(pnl_sum, 3)} ({round_(pct_sum, 0.01)}%)'])
 
