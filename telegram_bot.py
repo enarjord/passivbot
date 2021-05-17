@@ -43,35 +43,35 @@ class Telegram:
 
     def add_handlers(self, updater):
         dispatcher = updater.dispatcher
-        dispatcher.add_handler(MessageHandler(Filters.regex('^.*/balance'), self._balance))
-        dispatcher.add_handler(MessageHandler(Filters.regex('^.*/open_orders'), self._open_orders))
-        dispatcher.add_handler(MessageHandler(Filters.regex('^.*/position'), self._position))
-        dispatcher.add_handler(MessageHandler(Filters.regex('^.*/show_config'), self.show_config))
+        dispatcher.add_handler(MessageHandler(Filters.regex('.*/balance'), self._balance))
+        dispatcher.add_handler(MessageHandler(Filters.regex('.*/open_orders'), self._open_orders))
+        dispatcher.add_handler(MessageHandler(Filters.regex('.*/position'), self._position))
+        dispatcher.add_handler(MessageHandler(Filters.regex('.*/show_config'), self.show_config))
         dispatcher.add_handler(
-            MessageHandler(Filters.regex('^.*/reload_config'), self._reload_config))
+            MessageHandler(Filters.regex('.*/reload_config'), self._reload_config))
         dispatcher.add_handler(
-            MessageHandler(Filters.regex('^.*/closed_trades'), self._closed_trades))
-        dispatcher.add_handler(MessageHandler(Filters.regex('^.*/daily'), self._daily))
-        dispatcher.add_handler(MessageHandler(Filters.regex('^.*/help'), self._help))
+            MessageHandler(Filters.regex('.*/closed_trades'), self._closed_trades))
+        dispatcher.add_handler(MessageHandler(Filters.regex('.*/daily'), self._daily))
+        dispatcher.add_handler(MessageHandler(Filters.regex('.*/help'), self._help))
         dispatcher.add_handler(ConversationHandler(
-            entry_points=[MessageHandler(Filters.regex('^.*/stop'), self._begin_stop)],
+            entry_points=[MessageHandler(Filters.regex('.*/stop'), self._begin_stop)],
             states={
-                1: [MessageHandler(Filters.regex('^(graceful|freeze|shutdown|cancel)$'),
+                1: [MessageHandler(Filters.regex('(graceful|freeze|shutdown|cancel)'),
                                    self._stop_mode_chosen)],
-                2: [MessageHandler(Filters.regex('^(confirm|abort)$'), self._verify_stop_confirmation)],
+                2: [MessageHandler(Filters.regex('(confirm|abort)'), self._verify_stop_confirmation)],
             },
             fallbacks=[CommandHandler('cancel', self._abort)]
         ))
         dispatcher.add_handler(ConversationHandler(
-            entry_points=[MessageHandler(Filters.regex('^.*/set_leverage'), self._begin_set_leverage)],
+            entry_points=[MessageHandler(Filters.regex('.*/set_leverage'), self._begin_set_leverage)],
             states={
-                1: [MessageHandler(Filters.regex('^([0-9]*|cancel)$'), self._leverage_chosen)],
-                2: [MessageHandler(Filters.regex('^(confirm|abort)$'), self._verify_leverage_confirmation)],
+                1: [MessageHandler(Filters.regex('([0-9]*|cancel)'), self._leverage_chosen)],
+                2: [MessageHandler(Filters.regex('(confirm|abort)'), self._verify_leverage_confirmation)],
             },
             fallbacks=[CommandHandler('cancel', self._abort)]
         ))
-        dispatcher.add_handler(MessageHandler(Filters.regex('^.*/next$'), self._next_page))
-        dispatcher.add_handler(MessageHandler(Filters.regex('^.*/previous$'), self._previous_page))
+        dispatcher.add_handler(MessageHandler(Filters.regex('.*/next'), self._next_page))
+        dispatcher.add_handler(MessageHandler(Filters.regex('.*/previous'), self._previous_page))
 
     def _begin_set_leverage(self, update: Update, _: CallbackContext) -> int:
         self.stop_mode_requested = ''
