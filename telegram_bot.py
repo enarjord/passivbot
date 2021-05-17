@@ -81,7 +81,7 @@ class Telegram:
         update.message.reply_text(
             text='To modify the leverage, please pick the desired leverage using the buttons below,'
                  'or type in the desired leverage yourself. Note that the maximum leverage that can'
-                 'be entered is 125, and that <b>this change is not persisted between restarts!</b>\n'
+                 f'be entered is {self._bot.max_leverage}, and that <b>this change is not persisted between restarts!</b>\n'
                  'Or send /cancel to abort modifying the leverage',
             parse_mode=ParseMode.HTML,
             reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True)
@@ -95,7 +95,7 @@ class Telegram:
 
         try:
             self.leverage_chosen = int(update.message.text)
-            if self.leverage_chosen < 1 or self.leverage_chosen > 125:
+            if self.leverage_chosen < 1 or self.leverage_chosen > self._bot.max_leverage:
                 self.send_msg('Invalid leverage provided. The leverage must be between 1 and 125')
                 return ConversationHandler.END
         except:
