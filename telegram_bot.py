@@ -31,7 +31,7 @@ class Telegram:
             [KeyboardButton('\U0000274E /closed_trades'), KeyboardButton('\U0001F4DD /show_config'), KeyboardButton('\U0000267B /reload_config')],
             [KeyboardButton('\U0001F4B3 /balance'), KeyboardButton('\U00002753 /help'), KeyboardButton('\U000023E9 /next')]]
         second_keyboard_buttons = [
-            [KeyboardButton('\U000026A1 /set_leverage')],
+            [KeyboardButton('\U000026A1 /set_leverage'), KeyboardButton('\U0001F4C9 /set_short'), KeyboardButton('\U0001F4C8 /set_long')],
             [KeyboardButton('\U000023EA /previous'), KeyboardButton('\U000026D4 /stop')]
         ]
         self._keyboard_idx = 0
@@ -70,8 +70,74 @@ class Telegram:
             },
             fallbacks=[CommandHandler('cancel', self._abort)]
         ))
+        dispatcher.add_handler(ConversationHandler(
+            entry_points=[MessageHandler(Filters.regex('.*/set_short'), self._verify_set_short)],
+            states={
+                1: [MessageHandler(Filters.regex('(confirm|abort)'), self._verify_short_confirmation)],
+            },
+            fallbacks=[CommandHandler('cancel', self._abort)]
+        ))
+        dispatcher.add_handler(ConversationHandler(
+            entry_points=[MessageHandler(Filters.regex('.*/set_long'), self._verify_set_long)],
+            states={
+                1: [MessageHandler(Filters.regex('(confirm|abort)'), self._verify_long_confirmation)],
+            },
+            fallbacks=[CommandHandler('cancel', self._abort)]
+        ))
         dispatcher.add_handler(MessageHandler(Filters.regex('.*/next'), self._next_page))
         dispatcher.add_handler(MessageHandler(Filters.regex('.*/previous'), self._previous_page))
+
+    def _verify_set_short(self, update: Update, _: CallbackContext) -> int:
+        reply_keyboard = [['confirm', 'abort']]
+        update.message.reply_text(
+            text=f'Shorting is currently <pre>{"enabled" if self._bot.do_shrt is True else "disabled"}</pre>.\n'
+                 f'You have chosen to <pre>{"disable" if self._bot.do_shrt is True else "enable"}</pre> shorting.\n'
+                 f'Please confirm that you want to change this replying with either <pre>confirm</pre> or <pre>abort</pre>\n'
+                 f'<b>Please be aware that this setting is not persisted between restarts!</b>',
+            parse_mode=ParseMode.HTML,
+            reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True)
+        )
+        return 1
+
+    def _verify_short_confirmation(self, update: Update, _: CallbackContext) -> int:
+        if update.message.text == 'confirm':
+            self._bot.set_config_value('do_shrt', not self._bot.do_shrt)
+            self.send_msg(
+                f'Shorting is now <pre>{"enabled" if self._bot.do_shrt is True else "disabled"}</pre>.\n'
+                'Please be aware that this change is NOT persisted between restarts.')
+        elif update.message.text == 'abort':
+            self.send_msg(f'Request for {"disabling" if self._bot.do_shrt is True else "enabling"} shorting was aborted')
+        else:
+            update.message.reply_text(text=f'Something went wrong, either <pre>confirm</pre> or <pre>abort</pre> was expected, but {update.message.text} was sent',
+                                      parse_mode=ParseMode.HTML,
+                                      reply_markup=self._keyboards[self._keyboard_idx])
+        return ConversationHandler.END
+
+    def _verify_set_long(self, update: Update, _: CallbackContext) -> int:
+        reply_keyboard = [['confirm', 'abort']]
+        update.message.reply_text(
+            text=f'Long is currently <pre>{"enabled" if self._bot.do_long is True else "disabled"}</pre>.\n'
+                 f'You have chosen to <pre>{"disable" if self._bot.do_long is True else "enable"}</pre> long.\n'
+                 f'Please confirm that you want to change this replying with either <pre>confirm</pre> or <pre>abort</pre>\n'
+                 f'<b>Please be aware that this setting is not persisted between restarts!</b>',
+            parse_mode=ParseMode.HTML,
+            reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True)
+        )
+        return 1
+
+    def _verify_long_confirmation(self, update: Update, _: CallbackContext) -> int:
+        if update.message.text == 'confirm':
+            self._bot.set_config_value('do_long', not self._bot.do_long)
+            self.send_msg(
+                f'Long is now <pre>{"enabled" if self._bot.do_shrt is True else "disabled"}</pre>.\n'
+                'Please be aware that this change is NOT persisted between restarts.')
+        elif update.message.text == 'abort':
+            self.send_msg(f'Request for {"disabling" if self._bot.do_long is True else "enabling"} long was aborted')
+        else:
+            update.message.reply_text(text=f'Something went wrong, either <pre>confirm</pre> or <pre>abort</pre> was expected, but {update.message.text} was sent',
+                                      parse_mode=ParseMode.HTML,
+                                      reply_markup=self._keyboards[self._keyboard_idx])
+        return ConversationHandler.END
 
     def _begin_set_leverage(self, update: Update, _: CallbackContext) -> int:
         self.stop_mode_requested = ''
@@ -80,7 +146,7 @@ class Telegram:
                           ['15', '20', 'cancel']]
         update.message.reply_text(
             text='To modify the leverage, please pick the desired leverage using the buttons below,'
-                 'or type in the desired leverage yourself. Note that the maximum leverage that can'
+                 'or type in the desired leverage yourself. Note that the maximum leverage that can '
                  f'be entered is {self._bot.max_leverage}, and that <b>this change is not persisted between restarts!</b>\n'
                  'Or send /cancel to abort modifying the leverage',
             parse_mode=ParseMode.HTML,
