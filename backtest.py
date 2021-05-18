@@ -126,7 +126,7 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, list, bo
                                 fill['pnl'] = calc_shrt_pnl(shrt_pprice, bid[1], bid[0],
                                                             xk['inverse'],
                                                             xk['contract_multiplier'])
-                                shrt_psize = round_(shrt_psize + bid[0], config['qty_step'])
+                                shrt_psize = min(0.0, round_(shrt_psize + bid[0], config['qty_step']))
                                 fill.update({'pside': 'shrt', 'long_psize': long_psize,
                                              'long_pprice': long_pprice, 'shrt_psize': shrt_psize,
                                              'shrt_pprice': shrt_pprice})
@@ -137,6 +137,8 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, list, bo
                                                                                 long_pprice, bid[0],
                                                                                 bid[1],
                                                                                 xk['qty_step'])
+                                if long_psize < 0.0:
+                                    long_psize, long_pprice = 0.0, 0.0
                                 fill.update({'pside': 'long', 'long_psize': bid[2],
                                              'long_pprice': bid[3], 'shrt_psize': shrt_psize,
                                              'shrt_pprice': shrt_pprice})
@@ -170,7 +172,7 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, list, bo
                                 fill['pnl'] = calc_long_pnl(long_pprice, ask[1], ask[0],
                                                             xk['inverse'],
                                                             xk['contract_multiplier'])
-                                long_psize = round_(long_psize + ask[0], config['qty_step'])
+                                long_psize = max(0.0, round_(long_psize + ask[0], config['qty_step']))
                                 fill.update({'pside': 'long', 'long_psize': long_psize,
                                              'long_pprice': long_pprice, 'shrt_psize': shrt_psize,
                                              'shrt_pprice': shrt_pprice})
@@ -181,6 +183,8 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, list, bo
                                                                                 shrt_pprice, ask[0],
                                                                                 ask[1],
                                                                                 xk['qty_step'])
+                                if shrt_psize > 0.0:
+                                    shrt_psize, shrt_pprice = 0.0, 0.0
                                 fill.update({'pside': 'shrt', 'long_psize': long_psize,
                                              'long_pprice': long_pprice, 'shrt_psize': shrt_psize,
                                              'shrt_pprice': shrt_pprice})
