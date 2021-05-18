@@ -96,10 +96,10 @@ class Telegram:
         try:
             self.leverage_chosen = int(update.message.text)
             if self.leverage_chosen < 1 or self.leverage_chosen > self._bot.max_leverage:
-                self.send_msg('Invalid leverage provided. The leverage must be between 1 and 125')
+                self.send_msg(f'Invalid leverage provided. The leverage must be between 1 and {self._bot.max_leverage}')
                 return ConversationHandler.END
         except:
-            self.send_msg('Invalid leverage provided. The leverage must be between 1 and 125')
+            self.send_msg(f'Invalid leverage provided. The leverage must be between 1 and {self._bot.max_leverage}')
             return ConversationHandler.END
 
         reply_keyboard = [['confirm', 'abort']]
@@ -114,7 +114,14 @@ class Telegram:
 
     def _verify_leverage_confirmation(self, update: Update, _: CallbackContext) -> int:
         if update.message.text == 'confirm':
+            async def _set_leverage_async():
+                if self._bot.exchange == 'bybit':
+                    return ''
+                result = await self._bot.execute_leverage_change()
+                self.send_msg(f'Result of leverage change: {result}')
             self._bot.set_config_value('leverage', self.leverage_chosen)
+            task = self.loop.create_task(_set_leverage_async())
+            task.add_done_callback(lambda fut: True) #ensures task is processed to prevent warning about not awaiting
             self.send_msg(
                 f'Leverage set to {self.leverage_chosen} activated.\n'
                 'Please be aware that this change is NOT persisted between restarts. To reset the leverage, you can use <pre>/reload_config</pre>')
