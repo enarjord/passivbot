@@ -168,6 +168,10 @@ class BinanceBot(Bot):
         else:
             print('no positions or open orders in other symbols sharing margin wallet')
 
+    async def execute_leverage_change(self):
+        return await self.private_post(self.endpoints['leverage'],
+                                       {'symbol': self.symbol, 'leverage': int(round(self.leverage))})
+
     async def init_exchange_config(self):
         try:
             print(await self.private_post(self.endpoints['margin_type'],
@@ -175,9 +179,8 @@ class BinanceBot(Bot):
         except Exception as e:
             print(e)
         try:
-            lev = await self.private_post(self.endpoints['leverage'],
-                                          {'symbol': self.symbol, 'leverage': int(round(self.leverage))})
-            print(lev)
+            lev = self.execute_leverage()
+            print_([lev])
             if self.market_type == 'linear_perpetual':
                 self.max_pos_size_ito_usdt = float(lev['maxNotionalValue'])
                 print('max pos size in terms of usdt', self.max_pos_size_ito_usdt)
