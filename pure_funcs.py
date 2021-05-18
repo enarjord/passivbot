@@ -109,7 +109,7 @@ def calc_available_margin(balance,
 
 
 @njit
-def queq(value, coeffs, pwr=2):
+def eqf(value, coeffs, pwr=2):
     return sum([coeff * value**i for coeff, i in zip(coeffs, [pwr - i for i in range(len(coeffs))])])
 
 
@@ -120,26 +120,25 @@ def calc_entry_qty():
     max_entry_qty = round_dn(cost_to_qty(available_margin, price, inverse, contract_multiplier), qty_step)
     qty = min(max_entry_qty,
               max(min_entry_qty,
-                  round_dn(abs(psize) * ddown_factor + balance_ito_contracts * queq(volatility, v_qty_coeffs), qty_step)))
+                  round_dn(abs(psize) * ddown_factor + balance_ito_contracts * eqf(volatility, v_qty_coeffs), qty_step)))
     return qty if qty >= min_entry_qty else 0.0
 
 
 @njit
 def calc_pprice_pct():
-    return queq(volatility, v_pprice_pct_coeffs) + \
-           queq(qty_to_cost(psize, price, inverse, contract_multiplier) / balance if balance > 0.0 else 0.0,
+    return eqf(volatility, v_pprice_pct_coeffs) + \
+           eqf(qty_to_cost(psize, price, inverse, contract_multiplier) / balance if balance > 0.0 else 0.0,
                 pcost_bal_coeffs)
 
 
 @njit
 def calc_ma_pct():
-    return queq(volatility, v_ma_pct_coeffs)
+    return eqf(volatility, v_ma_pct_coeffs)
 
 
 @njit
 def calc_ma_pct():
     pass
-
 
 
 def get_template_live_config():
@@ -156,8 +155,8 @@ def get_template_live_config():
             "min_markup": 0.005,
             "markup_range": 0.005,
             "ma_span": 11200.0,
-            "counter_order_liq_diff": 0.21,
-            "stop_loss_liq_diff": 0.1,
+            "counter_order_liq_diff": 0.3,
+            "stop_loss_liq_diff": 0.21,
             "stop_loss_pos_pct": 0.05
         },
         "shrt": {
@@ -170,8 +169,8 @@ def get_template_live_config():
             "min_markup": 0.005,
             "markup_range": 0.005,
             "ma_span": 11200.0,
-            "counter_order_liq_diff": 0.21,
-            "stop_loss_liq_diff": 0.1,
+            "counter_order_liq_diff": 0.3,
+            "stop_loss_liq_diff": 0.21,
             "stop_loss_pos_pct": 0.05
         }
     }
