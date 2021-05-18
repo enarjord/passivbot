@@ -31,6 +31,7 @@ class Telegram:
             [KeyboardButton('\U0000274E /closed_trades'), KeyboardButton('\U0001F4DD /show_config'), KeyboardButton('\U0000267B /reload_config')],
             [KeyboardButton('\U0001F4B3 /balance'), KeyboardButton('\U00002753 /help'), KeyboardButton('\U000023E9 /next')]]
         second_keyboard_buttons = [
+            [KeyboardButton('\U000026A1 /set_leverage')],
             [KeyboardButton('\U000023EA /previous'), KeyboardButton('\U000026D4 /stop')]
         ]
         self._keyboard_idx = 0
@@ -42,27 +43,98 @@ class Telegram:
 
     def add_handlers(self, updater):
         dispatcher = updater.dispatcher
-        dispatcher.add_handler(MessageHandler(Filters.regex('^.*/balance'), self._balance))
-        dispatcher.add_handler(MessageHandler(Filters.regex('^.*/open_orders'), self._open_orders))
-        dispatcher.add_handler(MessageHandler(Filters.regex('^.*/position'), self._position))
-        dispatcher.add_handler(MessageHandler(Filters.regex('^.*/show_config'), self.show_config))
+        dispatcher.add_handler(MessageHandler(Filters.regex('.*/balance'), self._balance))
+        dispatcher.add_handler(MessageHandler(Filters.regex('.*/open_orders'), self._open_orders))
+        dispatcher.add_handler(MessageHandler(Filters.regex('.*/position'), self._position))
+        dispatcher.add_handler(MessageHandler(Filters.regex('.*/show_config'), self.show_config))
         dispatcher.add_handler(
-            MessageHandler(Filters.regex('^.*/reload_config'), self._reload_config))
+            MessageHandler(Filters.regex('.*/reload_config'), self._reload_config))
         dispatcher.add_handler(
-            MessageHandler(Filters.regex('^.*/closed_trades'), self._closed_trades))
-        dispatcher.add_handler(MessageHandler(Filters.regex('^.*/daily'), self._daily))
-        dispatcher.add_handler(MessageHandler(Filters.regex('^.*/help'), self._help))
+            MessageHandler(Filters.regex('.*/closed_trades'), self._closed_trades))
+        dispatcher.add_handler(MessageHandler(Filters.regex('.*/daily'), self._daily))
+        dispatcher.add_handler(MessageHandler(Filters.regex('.*/help'), self._help))
         dispatcher.add_handler(ConversationHandler(
-            entry_points=[MessageHandler(Filters.regex('^.*/stop'), self._begin_stop)],
+            entry_points=[MessageHandler(Filters.regex('.*/stop'), self._begin_stop)],
             states={
-                1: [MessageHandler(Filters.regex('^(graceful|freeze|cancel)$'),
+                1: [MessageHandler(Filters.regex('(graceful|freeze|shutdown|cancel)'),
                                    self._stop_mode_chosen)],
-                2: [MessageHandler(Filters.regex('^(confirm|abort)$'), self._verify_confirmation)],
+                2: [MessageHandler(Filters.regex('(confirm|abort)'), self._verify_stop_confirmation)],
             },
-            fallbacks=[CommandHandler('cancel', self._abort_stop)]
+            fallbacks=[CommandHandler('cancel', self._abort)]
         ))
-        dispatcher.add_handler(MessageHandler(Filters.regex('^.*/next$'), self._next_page))
-        dispatcher.add_handler(MessageHandler(Filters.regex('^.*/previous$'), self._previous_page))
+        dispatcher.add_handler(ConversationHandler(
+            entry_points=[MessageHandler(Filters.regex('.*/set_leverage'), self._begin_set_leverage)],
+            states={
+                1: [MessageHandler(Filters.regex('([0-9]*|cancel)'), self._leverage_chosen)],
+                2: [MessageHandler(Filters.regex('(confirm|abort)'), self._verify_leverage_confirmation)],
+            },
+            fallbacks=[CommandHandler('cancel', self._abort)]
+        ))
+        dispatcher.add_handler(MessageHandler(Filters.regex('.*/next'), self._next_page))
+        dispatcher.add_handler(MessageHandler(Filters.regex('.*/previous'), self._previous_page))
+
+    def _begin_set_leverage(self, update: Update, _: CallbackContext) -> int:
+        self.stop_mode_requested = ''
+        reply_keyboard = [['1', '3', '4'],
+                          ['6', '7', '10'],
+                          ['15', '20', 'cancel']]
+        update.message.reply_text(
+            text='To modify the leverage, please pick the desired leverage using the buttons below,'
+                 'or type in the desired leverage yourself. Note that the maximum leverage that can'
+                 f'be entered is {self._bot.max_leverage}, and that <b>this change is not persisted between restarts!</b>\n'
+                 'Or send /cancel to abort modifying the leverage',
+            parse_mode=ParseMode.HTML,
+            reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True)
+        )
+        return 1
+
+    def _leverage_chosen(self, update: Update, _: CallbackContext) -> int:
+        if update.message.text == 'cancel':
+            self.send_msg('Request for changing leverage was cancelled')
+            return ConversationHandler.END
+
+        try:
+            self.leverage_chosen = int(update.message.text)
+            if self.leverage_chosen < 1 or self.leverage_chosen > self._bot.max_leverage:
+                self.send_msg(f'Invalid leverage provided. The leverage must be between 1 and {self._bot.max_leverage}')
+                return ConversationHandler.END
+        except:
+            self.send_msg(f'Invalid leverage provided. The leverage must be between 1 and {self._bot.max_leverage}')
+            return ConversationHandler.END
+
+        reply_keyboard = [['confirm', 'abort']]
+        update.message.reply_text(
+            text=f'You have chosen to change the leverage to <pre>{update.message.text}</pre>.\n'
+                 f'Please confirm that you want to activate this replying with either <pre>confirm</pre> or <pre>abort</pre>\n'
+                 f'<b>Please be aware that this setting is not persisted between restarts!</b>',
+            parse_mode=ParseMode.HTML,
+            reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True)
+        )
+        return 2
+
+    def _verify_leverage_confirmation(self, update: Update, _: CallbackContext) -> int:
+        if update.message.text == 'confirm':
+            async def _set_leverage_async():
+                if self._bot.exchange == 'bybit':
+                    return ''
+                result = await self._bot.execute_leverage_change()
+                self.send_msg(f'Result of leverage change: {result}')
+            self._bot.set_config_value('leverage', self.leverage_chosen)
+            task = self.loop.create_task(_set_leverage_async())
+            task.add_done_callback(lambda fut: True) #ensures task is processed to prevent warning about not awaiting
+            self.send_msg(
+                f'Leverage set to {self.leverage_chosen} activated.\n'
+                'Please be aware that this change is NOT persisted between restarts. To reset the leverage, you can use <pre>/reload_config</pre>')
+        elif update.message.text == 'abort':
+            self.leverage_chosen = ''
+            self.send_msg(
+                'Request for setting leverage was aborted')
+        else:
+            self.leverage_chosen = ''
+            update.message.reply_text(text=f'Something went wrong, either <pre>confirm</pre> or <pre>abort</pre> was expected, but {update.message.text} was sent',
+                                      parse_mode=ParseMode.HTML,
+                                      reply_markup=self._keyboards[self._keyboard_idx])
+        return ConversationHandler.END
 
     def _previous_page(self, update=None, context=None):
         if self._keyboard_idx > 0:
@@ -77,11 +149,12 @@ class Telegram:
     def _begin_stop(self, update: Update, _: CallbackContext) -> int:
         self.stop_mode_requested = ''
         reply_keyboard = [['graceful', 'freeze'],
-                          ['cancel']]
+                          ['shutdown', 'cancel']]
         update.message.reply_text(
             text='To stop the bot, please choose one of the following modes:\n'
             '<pre>graceful</pre>: prevents the bot from opening new positions, but completes the existing position as usual\n'
             '<pre>freeze</pre>: prevents the bot from opening positions, and cancels all open orders to open/reenter positions\n'
+            '<pre>shutdown</pre>: immediately shuts down the bot, not making any further modifications to the current orders or positions\n'
             'Or send /cancel to abort stop-mode activation',
             parse_mode=ParseMode.HTML,
             reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True)
@@ -95,15 +168,23 @@ class Telegram:
             return ConversationHandler.END
         self.stop_mode_requested = update.message.text
         reply_keyboard = [['confirm', 'abort']]
+
+        if self.stop_mode_requested == 'shutdown':
+            msg = f'You have chosen to shut down the bot.\n' \
+                  f'Please confirm that you want to activate this stop mode by replying with either <pre>confirm</pre> or <pre>abort</pre>\n' \
+                  f'\U00002757<b>Be aware that you cannot restart or control the bot from telegram anymore after confirming!!</b>\U00002757'
+        else:
+            msg = f'You have chosen to activate the stop mode <pre>{update.message.text}</pre>\n' \
+                  f'Please confirm that you want to activate this stop mode by replying with either <pre>confirm</pre> or <pre>abort</pre>'
+
         update.message.reply_text(
-            text=f'You have chosen to activate the stop mode <pre>{update.message.text}</pre>\n'
-            f'Please confirm that you want to activate this stop mode be replying with either <pre>confirm</pre> or <pre>abort</pre>',
+            text=msg,
             parse_mode=ParseMode.HTML,
             reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True)
         )
         return 2
 
-    def _verify_confirmation(self, update: Update, _: CallbackContext) -> int:
+    def _verify_stop_confirmation(self, update: Update, _: CallbackContext) -> int:
         if update.message.text == 'confirm':
             if self.stop_mode_requested == 'graceful':
                 self._bot.set_config_value('do_long', False)
@@ -118,6 +199,11 @@ class Telegram:
                 self.send_msg(
                     'Freeze stop mode activated. No longer opening new long or short positions, all orders for reentry will be cancelled.'
                     'Please be aware that this change is NOT persisted between restarts. To clear the stop-mode, you can use <pre>/reload_config</pre>')
+            elif self.stop_mode_requested == 'shutdown':
+                self._bot.stop_websocket = True
+                self.send_msg(
+                    'To restart the bot, you will need to manually start it again from a console.\n'
+                    'Bot is being shut down...')
         elif update.message.text == 'abort':
             self.stop_mode_requested = ''
             self.send_msg(
@@ -129,8 +215,8 @@ class Telegram:
                                       reply_markup=self._keyboards[self._keyboard_idx])
         return ConversationHandler.END
 
-    def _abort_stop(self, update: Update, _: CallbackContext) -> int:
-        update.message.reply_text('Aborting initiating stop mode', reply_markup=self._keyboards[self._keyboard_idx])
+    def _abort(self, update: Update, _: CallbackContext) -> int:
+        update.message.reply_text('Action aborted', reply_markup=self._keyboards[self._keyboard_idx])
         return ConversationHandler.END
 
     def _help(self, update=None, context=None):
@@ -143,6 +229,7 @@ class Telegram:
               '/reload_config: reload the configuration from disk, based on the file initially used\n' \
               "/closed_trades: a brief overview of bot's last 10 closed trades\n" \
               '/daily: an overview of daily profit\n' \
+              '/set_leverage: initiates a conversion via which the user can modify the active leverage\n' \
               '/help: This help page\n'
         self.send_msg(msg)
 
@@ -281,9 +368,8 @@ class Telegram:
                     daily[idx]['date'] = start_of_day.strftime('%m-%d')
                     daily[idx]['pnl'] = pln_summary
 
-                table = PrettyTable(['Date MM-DD', 'PNL (%)'])
+                table = PrettyTable(['Date\nMM-DD', 'PNL (%)'])
                 pnl_sum = 0.0
-                day_profits, profit_pcts = [], []
                 for item in daily.keys():
                     day_profit = daily[item]['pnl']
                     pnl_sum += day_profit
