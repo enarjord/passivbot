@@ -32,7 +32,7 @@ class Telegram:
             [KeyboardButton('\U0001F4B3 /balance'), KeyboardButton('\U00002753 /help'), KeyboardButton('\U000023E9 /next')]]
         second_keyboard_buttons = [
             [KeyboardButton('\U000026A1 /set_leverage'), KeyboardButton('\U0001F4C9 /set_short'), KeyboardButton('\U0001F4C8 /set_long')],
-            [KeyboardButton('\U000023EA /previous'), KeyboardButton('\U000026D4 /stop')]
+            [KeyboardButton('\U000023EA /previous'), KeyboardButton('\U0001F4C4 /set_config'), KeyboardButton('\U000026D4 /stop')]
         ]
         self._keyboard_idx = 0
         self._keyboards = [ReplyKeyboardMarkup(first_keyboard_buttons, resize_keyboard=True),
@@ -56,7 +56,7 @@ class Telegram:
         dispatcher.add_handler(ConversationHandler(
             entry_points=[MessageHandler(Filters.regex('.*/stop'), self._begin_stop)],
             states={
-                1: [MessageHandler(Filters.regex('(graceful|freeze|shutdown|cancel)'),
+                1: [MessageHandler(Filters.regex('(graceful|freeze|shutdown|resume|cancel)'),
                                    self._stop_mode_chosen)],
                 2: [MessageHandler(Filters.regex('(confirm|abort)'), self._verify_stop_confirmation)],
             },
@@ -214,13 +214,14 @@ class Telegram:
 
     def _begin_stop(self, update: Update, _: CallbackContext) -> int:
         self.stop_mode_requested = ''
-        reply_keyboard = [['graceful', 'freeze'],
-                          ['shutdown', 'cancel']]
+        reply_keyboard = [['graceful', 'freeze', 'shutdown'],
+                          ['resume', 'cancel']]
         update.message.reply_text(
             text='To stop the bot, please choose one of the following modes:\n'
             '<pre>graceful</pre>: prevents the bot from opening new positions, but completes the existing position as usual\n'
             '<pre>freeze</pre>: prevents the bot from opening positions, and cancels all open orders to open/reenter positions\n'
             '<pre>shutdown</pre>: immediately shuts down the bot, not making any further modifications to the current orders or positions\n'
+            '<pre>resume</pre>: clears the stop mode and resumes normal operation\n'
             'Or send /cancel to abort stop-mode activation',
             parse_mode=ParseMode.HTML,
             reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True)
@@ -253,12 +254,17 @@ class Telegram:
     def _verify_stop_confirmation(self, update: Update, _: CallbackContext) -> int:
         if update.message.text == 'confirm':
             if self.stop_mode_requested == 'graceful':
+                self.previous_do_long = self._bot.do_long
+                self.previous_do_shrt = self._bot.do_shrt
                 self._bot.set_config_value('do_long', False)
                 self._bot.set_config_value('do_shrt', False)
+                self._bot.stop_mode = 'graceful'
                 self.send_msg(
                     'Graceful stop mode activated. No longer opening new long or short positions, existing positions will still be managed.'
                     'Please be aware that this change is NOT persisted between restarts. To clear the stop-mode, you can use <pre>/reload_config</pre>')
             elif self.stop_mode_requested == 'freeze':
+                self.previous_do_long = self._bot.do_long
+                self.previous_do_shrt = self._bot.do_shrt
                 self._bot.set_config_value('do_long', False)
                 self._bot.set_config_value('do_shrt', False)
                 self._bot.stop_mode = 'freeze'
@@ -270,6 +276,13 @@ class Telegram:
                 self.send_msg(
                     'To restart the bot, you will need to manually start it again from a console.\n'
                     'Bot is being shut down...')
+            elif self.stop_mode_requested == 'resume':
+                if hasattr(self, 'previous_do_long'):
+                    self._bot.set_config_value('do_long', self.previous_do_long)
+                if hasattr(self, 'previous_do_shrt'):
+                    self._bot.set_config_value('do_shrt', self.previous_do_shrt)
+                self._bot.stop_mode = None
+                self.send_msg('Normal operation resumed')
         elif update.message.text == 'abort':
             self.stop_mode_requested = ''
             self.send_msg(
@@ -296,6 +309,8 @@ class Telegram:
               "/closed_trades: a brief overview of bot's last 10 closed trades\n" \
               '/daily: an overview of daily profit\n' \
               '/set_leverage: initiates a conversion via which the user can modify the active leverage\n' \
+              '/set_short: initiates a conversion via which the user can enable/disable shorting\n' \
+              '/set_long: initiates a conversion via which the user can enable/disable long\n' \
               '/help: This help page\n'
         self.send_msg(msg)
 
@@ -348,7 +363,7 @@ class Telegram:
         if bool(self._bot.position):
             async def _balance_async():
                 position = await self._bot.fetch_position()
-                msg = f'Balance {self._bot.margin_coin}\n' \
+                msg = f'Balance {self._bot.margin_coin if hasattr(self._bot, "margin_coin") else ""}\n' \
                       f'Wallet balance: {compress_float(position["wallet_balance"], 4)}\n' \
                       f'Equity: {compress_float(self._bot.position["equity"], 4)}\n' \
                       f'Locked margin: {compress_float(self._bot.position["used_margin"], 4)}\n' \
@@ -377,6 +392,7 @@ class Telegram:
             return
 
         self._bot.pause()
+        self._bot.stop_mode = None
         self._bot.set_config(config)
 
         def init_finished(task):
