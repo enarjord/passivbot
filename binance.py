@@ -179,7 +179,7 @@ class BinanceBot(Bot):
         except Exception as e:
             print(e)
         try:
-            lev = self.execute_leverage_change()
+            lev = await self.execute_leverage_change()
             print_([lev])
             if self.market_type == 'linear_perpetual':
                 self.max_pos_size_ito_usdt = float(lev['maxNotionalValue'])
