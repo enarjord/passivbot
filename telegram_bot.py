@@ -26,39 +26,201 @@ class Telegram:
         self.config_reload_ts = 0.0
         self.n_trades = 10
 
-        keyboard_buttons = [
-            [KeyboardButton('/balance'), KeyboardButton('/open_orders'), KeyboardButton('/position')],
-            [KeyboardButton('/stop'), KeyboardButton('/show_config'), KeyboardButton('/reload_config')],
-            [KeyboardButton('/closed_trades'), KeyboardButton('/daily'), KeyboardButton('/help')]]
-        self._keyboard = ReplyKeyboardMarkup(keyboard_buttons, resize_keyboard=True)
+        first_keyboard_buttons = [
+            [KeyboardButton('\U0001F4B8 /daily'), KeyboardButton('\U0001F4CB /open_orders'), KeyboardButton('\U0001F4CC /position')],
+            [KeyboardButton('\U0000274E /closed_trades'), KeyboardButton('\U0001F4DD /show_config'), KeyboardButton('\U0000267B /reload_config')],
+            [KeyboardButton('\U0001F4B3 /balance'), KeyboardButton('\U00002753 /help'), KeyboardButton('\U000023E9 /next')]]
+        second_keyboard_buttons = [
+            [KeyboardButton('\U000026A1 /set_leverage'), KeyboardButton('\U0001F4C9 /set_short'), KeyboardButton('\U0001F4C8 /set_long')],
+            [KeyboardButton('\U000023EA /previous'), KeyboardButton('\U000026D4 /stop')]
+        ]
+        self._keyboard_idx = 0
+        self._keyboards = [ReplyKeyboardMarkup(first_keyboard_buttons, resize_keyboard=True),
+                           ReplyKeyboardMarkup(second_keyboard_buttons, resize_keyboard=True)]
 
-        dispatcher = self._updater.dispatcher
-        dispatcher.add_handler(CommandHandler('balance', self._balance))
-        dispatcher.add_handler(CommandHandler('open_orders', self._open_orders))
-        dispatcher.add_handler(CommandHandler('position', self._position))
-        dispatcher.add_handler(CommandHandler('show_config', self.show_config))
-        dispatcher.add_handler(CommandHandler('reload_config', self._reload_config))
-        dispatcher.add_handler(CommandHandler('closed_trades', self._closed_trades))
-        dispatcher.add_handler(CommandHandler('daily', self._daily))
-        dispatcher.add_handler(CommandHandler('help', self._help))
-        dispatcher.add_handler(ConversationHandler(
-            entry_points=[CommandHandler('stop', self._begin_stop)],
-            states={
-                1: [MessageHandler(Filters.regex('^(graceful|freeze|cancel)$'), self._stop_mode_chosen)],
-                2: [MessageHandler(Filters.regex('^(confirm|abort)$'), self._verify_confirmation)],
-            },
-            fallbacks=[CommandHandler('cancel', self._abort_stop)],
-        ))
+        self.add_handlers(self._updater)
         self._updater.start_polling()
+
+    def add_handlers(self, updater):
+        dispatcher = updater.dispatcher
+        dispatcher.add_handler(MessageHandler(Filters.regex('.*/balance'), self._balance))
+        dispatcher.add_handler(MessageHandler(Filters.regex('.*/open_orders'), self._open_orders))
+        dispatcher.add_handler(MessageHandler(Filters.regex('.*/position'), self._position))
+        dispatcher.add_handler(MessageHandler(Filters.regex('.*/show_config'), self.show_config))
+        dispatcher.add_handler(
+            MessageHandler(Filters.regex('.*/reload_config'), self._reload_config))
+        dispatcher.add_handler(
+            MessageHandler(Filters.regex('.*/closed_trades'), self._closed_trades))
+        dispatcher.add_handler(MessageHandler(Filters.regex('.*/daily'), self._daily))
+        dispatcher.add_handler(MessageHandler(Filters.regex('.*/help'), self._help))
+        dispatcher.add_handler(ConversationHandler(
+            entry_points=[MessageHandler(Filters.regex('.*/stop'), self._begin_stop)],
+            states={
+                1: [MessageHandler(Filters.regex('(graceful|freeze|shutdown|cancel)'),
+                                   self._stop_mode_chosen)],
+                2: [MessageHandler(Filters.regex('(confirm|abort)'), self._verify_stop_confirmation)],
+            },
+            fallbacks=[CommandHandler('cancel', self._abort)]
+        ))
+        dispatcher.add_handler(ConversationHandler(
+            entry_points=[MessageHandler(Filters.regex('.*/set_leverage'), self._begin_set_leverage)],
+            states={
+                1: [MessageHandler(Filters.regex('([0-9]*|cancel)'), self._leverage_chosen)],
+                2: [MessageHandler(Filters.regex('(confirm|abort)'), self._verify_leverage_confirmation)],
+            },
+            fallbacks=[CommandHandler('cancel', self._abort)]
+        ))
+        dispatcher.add_handler(ConversationHandler(
+            entry_points=[MessageHandler(Filters.regex('.*/set_short'), self._verify_set_short)],
+            states={
+                1: [MessageHandler(Filters.regex('(confirm|abort)'), self._verify_short_confirmation)],
+            },
+            fallbacks=[CommandHandler('cancel', self._abort)]
+        ))
+        dispatcher.add_handler(ConversationHandler(
+            entry_points=[MessageHandler(Filters.regex('.*/set_long'), self._verify_set_long)],
+            states={
+                1: [MessageHandler(Filters.regex('(confirm|abort)'), self._verify_long_confirmation)],
+            },
+            fallbacks=[CommandHandler('cancel', self._abort)]
+        ))
+        dispatcher.add_handler(MessageHandler(Filters.regex('.*/next'), self._next_page))
+        dispatcher.add_handler(MessageHandler(Filters.regex('.*/previous'), self._previous_page))
+
+    def _verify_set_short(self, update: Update, _: CallbackContext) -> int:
+        reply_keyboard = [['confirm', 'abort']]
+        update.message.reply_text(
+            text=f'Shorting is currently <pre>{"enabled" if self._bot.do_shrt is True else "disabled"}</pre>.\n'
+                 f'You have chosen to <pre>{"disable" if self._bot.do_shrt is True else "enable"}</pre> shorting.\n'
+                 f'Please confirm that you want to change this replying with either <pre>confirm</pre> or <pre>abort</pre>\n'
+                 f'<b>Please be aware that this setting is not persisted between restarts!</b>',
+            parse_mode=ParseMode.HTML,
+            reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True)
+        )
+        return 1
+
+    def _verify_short_confirmation(self, update: Update, _: CallbackContext) -> int:
+        if update.message.text == 'confirm':
+            self._bot.set_config_value('do_shrt', not self._bot.do_shrt)
+            self.send_msg(
+                f'Shorting is now <pre>{"enabled" if self._bot.do_shrt is True else "disabled"}</pre>.\n'
+                'Please be aware that this change is NOT persisted between restarts.')
+        elif update.message.text == 'abort':
+            self.send_msg(f'Request for {"disabling" if self._bot.do_shrt is True else "enabling"} shorting was aborted')
+        else:
+            update.message.reply_text(text=f'Something went wrong, either <pre>confirm</pre> or <pre>abort</pre> was expected, but {update.message.text} was sent',
+                                      parse_mode=ParseMode.HTML,
+                                      reply_markup=self._keyboards[self._keyboard_idx])
+        return ConversationHandler.END
+
+    def _verify_set_long(self, update: Update, _: CallbackContext) -> int:
+        reply_keyboard = [['confirm', 'abort']]
+        update.message.reply_text(
+            text=f'Long is currently <pre>{"enabled" if self._bot.do_long is True else "disabled"}</pre>.\n'
+                 f'You have chosen to <pre>{"disable" if self._bot.do_long is True else "enable"}</pre> long.\n'
+                 f'Please confirm that you want to change this replying with either <pre>confirm</pre> or <pre>abort</pre>\n'
+                 f'<b>Please be aware that this setting is not persisted between restarts!</b>',
+            parse_mode=ParseMode.HTML,
+            reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True)
+        )
+        return 1
+
+    def _verify_long_confirmation(self, update: Update, _: CallbackContext) -> int:
+        if update.message.text == 'confirm':
+            self._bot.set_config_value('do_long', not self._bot.do_long)
+            self.send_msg(
+                f'Long is now <pre>{"enabled" if self._bot.do_shrt is True else "disabled"}</pre>.\n'
+                'Please be aware that this change is NOT persisted between restarts.')
+        elif update.message.text == 'abort':
+            self.send_msg(f'Request for {"disabling" if self._bot.do_long is True else "enabling"} long was aborted')
+        else:
+            update.message.reply_text(text=f'Something went wrong, either <pre>confirm</pre> or <pre>abort</pre> was expected, but {update.message.text} was sent',
+                                      parse_mode=ParseMode.HTML,
+                                      reply_markup=self._keyboards[self._keyboard_idx])
+        return ConversationHandler.END
+
+    def _begin_set_leverage(self, update: Update, _: CallbackContext) -> int:
+        self.stop_mode_requested = ''
+        reply_keyboard = [['1', '3', '4'],
+                          ['6', '7', '10'],
+                          ['15', '20', 'cancel']]
+        update.message.reply_text(
+            text='To modify the leverage, please pick the desired leverage using the buttons below,'
+                 'or type in the desired leverage yourself. Note that the maximum leverage that can '
+                 f'be entered is {self._bot.max_leverage}, and that <b>this change is not persisted between restarts!</b>\n'
+                 'Or send /cancel to abort modifying the leverage',
+            parse_mode=ParseMode.HTML,
+            reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True)
+        )
+        return 1
+
+    def _leverage_chosen(self, update: Update, _: CallbackContext) -> int:
+        if update.message.text == 'cancel':
+            self.send_msg('Request for changing leverage was cancelled')
+            return ConversationHandler.END
+
+        try:
+            self.leverage_chosen = int(update.message.text)
+            if self.leverage_chosen < 1 or self.leverage_chosen > self._bot.max_leverage:
+                self.send_msg(f'Invalid leverage provided. The leverage must be between 1 and {self._bot.max_leverage}')
+                return ConversationHandler.END
+        except:
+            self.send_msg(f'Invalid leverage provided. The leverage must be between 1 and {self._bot.max_leverage}')
+            return ConversationHandler.END
+
+        reply_keyboard = [['confirm', 'abort']]
+        update.message.reply_text(
+            text=f'You have chosen to change the leverage to <pre>{update.message.text}</pre>.\n'
+                 f'Please confirm that you want to activate this replying with either <pre>confirm</pre> or <pre>abort</pre>\n'
+                 f'<b>Please be aware that this setting is not persisted between restarts!</b>',
+            parse_mode=ParseMode.HTML,
+            reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True)
+        )
+        return 2
+
+    def _verify_leverage_confirmation(self, update: Update, _: CallbackContext) -> int:
+        if update.message.text == 'confirm':
+            async def _set_leverage_async():
+                if self._bot.exchange == 'bybit':
+                    return ''
+                result = await self._bot.execute_leverage_change()
+                self.send_msg(f'Result of leverage change: {result}')
+            self._bot.set_config_value('leverage', self.leverage_chosen)
+            task = self.loop.create_task(_set_leverage_async())
+            task.add_done_callback(lambda fut: True) #ensures task is processed to prevent warning about not awaiting
+            self.send_msg(
+                f'Leverage set to {self.leverage_chosen} activated.\n'
+                'Please be aware that this change is NOT persisted between restarts. To reset the leverage, you can use <pre>/reload_config</pre>')
+        elif update.message.text == 'abort':
+            self.leverage_chosen = ''
+            self.send_msg(
+                'Request for setting leverage was aborted')
+        else:
+            self.leverage_chosen = ''
+            update.message.reply_text(text=f'Something went wrong, either <pre>confirm</pre> or <pre>abort</pre> was expected, but {update.message.text} was sent',
+                                      parse_mode=ParseMode.HTML,
+                                      reply_markup=self._keyboards[self._keyboard_idx])
+        return ConversationHandler.END
+
+    def _previous_page(self, update=None, context=None):
+        if self._keyboard_idx > 0:
+            self._keyboard_idx = self._keyboard_idx - 1
+        self.send_msg('Previous')
+
+    def _next_page(self, update=None, context=None):
+        if self._keyboard_idx + 1 < len(self._keyboards):
+            self._keyboard_idx = self._keyboard_idx + 1
+        self.send_msg('Next')
 
     def _begin_stop(self, update: Update, _: CallbackContext) -> int:
         self.stop_mode_requested = ''
         reply_keyboard = [['graceful', 'freeze'],
-                          ['cancel']]
+                          ['shutdown', 'cancel']]
         update.message.reply_text(
             text='To stop the bot, please choose one of the following modes:\n'
             '<pre>graceful</pre>: prevents the bot from opening new positions, but completes the existing position as usual\n'
             '<pre>freeze</pre>: prevents the bot from opening positions, and cancels all open orders to open/reenter positions\n'
+            '<pre>shutdown</pre>: immediately shuts down the bot, not making any further modifications to the current orders or positions\n'
             'Or send /cancel to abort stop-mode activation',
             parse_mode=ParseMode.HTML,
             reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True)
@@ -72,15 +234,23 @@ class Telegram:
             return ConversationHandler.END
         self.stop_mode_requested = update.message.text
         reply_keyboard = [['confirm', 'abort']]
+
+        if self.stop_mode_requested == 'shutdown':
+            msg = f'You have chosen to shut down the bot.\n' \
+                  f'Please confirm that you want to activate this stop mode by replying with either <pre>confirm</pre> or <pre>abort</pre>\n' \
+                  f'\U00002757<b>Be aware that you cannot restart or control the bot from telegram anymore after confirming!!</b>\U00002757'
+        else:
+            msg = f'You have chosen to activate the stop mode <pre>{update.message.text}</pre>\n' \
+                  f'Please confirm that you want to activate this stop mode by replying with either <pre>confirm</pre> or <pre>abort</pre>'
+
         update.message.reply_text(
-            text=f'You have chosen to activate the stop mode <pre>{update.message.text}</pre>\n'
-            f'Please confirm that you want to activate this stop mode be replying with either <pre>confirm</pre> or <pre>abort</pre>',
+            text=msg,
             parse_mode=ParseMode.HTML,
             reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True)
         )
         return 2
 
-    def _verify_confirmation(self, update: Update, _: CallbackContext) -> int:
+    def _verify_stop_confirmation(self, update: Update, _: CallbackContext) -> int:
         if update.message.text == 'confirm':
             if self.stop_mode_requested == 'graceful':
                 self._bot.set_config_value('do_long', False)
@@ -95,6 +265,11 @@ class Telegram:
                 self.send_msg(
                     'Freeze stop mode activated. No longer opening new long or short positions, all orders for reentry will be cancelled.'
                     'Please be aware that this change is NOT persisted between restarts. To clear the stop-mode, you can use <pre>/reload_config</pre>')
+            elif self.stop_mode_requested == 'shutdown':
+                self._bot.stop_websocket = True
+                self.send_msg(
+                    'To restart the bot, you will need to manually start it again from a console.\n'
+                    'Bot is being shut down...')
         elif update.message.text == 'abort':
             self.stop_mode_requested = ''
             self.send_msg(
@@ -103,11 +278,11 @@ class Telegram:
             self.stop_mode_requested = ''
             update.message.reply_text(text=f'Something went wrong, either <pre>confirm</pre> or <pre>abort</pre> was expected, but {update.message.text} was sent',
                                       parse_mode=ParseMode.HTML,
-                                      reply_markup=self._keyboard)
+                                      reply_markup=self._keyboards[self._keyboard_idx])
         return ConversationHandler.END
 
-    def _abort_stop(self, update: Update, _: CallbackContext) -> int:
-        update.message.reply_text('Aborting initiating stop mode', reply_markup=self._keyboard)
+    def _abort(self, update: Update, _: CallbackContext) -> int:
+        update.message.reply_text('Action aborted', reply_markup=self._keyboards[self._keyboard_idx])
         return ConversationHandler.END
 
     def _help(self, update=None, context=None):
@@ -120,6 +295,7 @@ class Telegram:
               '/reload_config: reload the configuration from disk, based on the file initially used\n' \
               "/closed_trades: a brief overview of bot's last 10 closed trades\n" \
               '/daily: an overview of daily profit\n' \
+              '/set_leverage: initiates a conversion via which the user can modify the active leverage\n' \
               '/help: This help page\n'
         self.send_msg(msg)
 
@@ -136,7 +312,7 @@ class Telegram:
 
         table_msg = order_table.get_string(sortby="Price", border=True, padding_width=1,
                                            junction_char=' ', vertical_char=' ', hrules=HEADER)
-        msg = f'Current rate: {round_(self._bot.price, self._bot.price_step)}\n' \
+        msg = f'Current price: {round_(self._bot.price, self._bot.price_step)}\n' \
               f'<pre>{table_msg}</pre>'
         self.send_msg(msg)
 
@@ -146,7 +322,7 @@ class Telegram:
             long_position = self._bot.position['long']
             shrt_position = self._bot.position['shrt']
 
-            position_table.add_row([f'Size {self._bot.coin}', round_dynamic(long_position['size'], 3),
+            position_table.add_row([f'Size', round_dynamic(long_position['size'], 3),
                                     round_dynamic(shrt_position['size'], 3)])
             position_table.add_row(['Price', round_dynamic(long_position['price'], 3),
                                     round_dynamic(shrt_position['price'], 3)])
@@ -158,7 +334,7 @@ class Telegram:
                  round_dynamic(shrt_position['liquidation_price'], 3)])
             position_table.add_row(['Liq.diff.%', round_dynamic(float(long_position['liq_diff']) * 100, 3),
                  round_dynamic(float(shrt_position['liq_diff']) * 100, 3)])
-            position_table.add_row([f'UPNL {self._bot.quot}', round_dynamic(float(long_position['upnl']), 3),
+            position_table.add_row([f'UPNL {self._bot.margin_coin}', round_dynamic(float(long_position['upnl']), 3),
                                     round_dynamic(float(shrt_position['upnl']), 3)])
 
             table_msg = position_table.get_string(border=True, padding_width=1,
@@ -172,7 +348,8 @@ class Telegram:
         if bool(self._bot.position):
             async def _balance_async():
                 position = await self._bot.fetch_position()
-                msg = f'Wallet balance: {compress_float(position["wallet_balance"], 4)}\n' \
+                msg = f'Balance {self._bot.margin_coin}\n' \
+                      f'Wallet balance: {compress_float(position["wallet_balance"], 4)}\n' \
                       f'Equity: {compress_float(self._bot.position["equity"], 4)}\n' \
                       f'Locked margin: {compress_float(self._bot.position["used_margin"], 4)}\n' \
                       f'Available margin: {compress_float(self._bot.position["available_margin"], 4)}'
@@ -211,13 +388,13 @@ class Telegram:
         task.add_done_callback(init_finished)
 
     def _closed_trades(self, update=None, context=None):
-        if self._bot.exchange == 'binance' and not self._bot.inverse:
+        if self._bot.exchange == 'binance':
             async def send_closed_trades_async():
                 trades = await self._bot.fetch_fills(limit=100)
                 closed_trades = [t for t in trades if t['realized_pnl'] != 0.0]
                 closed_trades.sort(key=lambda x: x['timestamp'], reverse=True)
 
-                table = PrettyTable(['Date', 'Pos.', 'Price', f'Pnl {self._bot.quot}'])
+                table = PrettyTable(['Date', 'Pos.', 'Price', f'Pnl {self._bot.margin_coin}'])
 
                 for trade in closed_trades[:self.n_trades]:
                     trade_date = datetime.fromtimestamp(trade['timestamp'] / 1000)
@@ -248,17 +425,17 @@ class Telegram:
                     end_of_day = start_of_day + timedelta(days=1)
                     start_time = int(start_of_day.timestamp()) * 1000
                     end_time = int(end_of_day.timestamp()) * 1000
-                    daily_trades = await self._bot.fetch_fills(start_time=start_time, end_time=end_time)
+                    daily_trades = await self._bot.fetch_income(start_time=start_time, end_time=end_time)
+                    daily_trades = [trade for trade in daily_trades if trade['incomeType'] in ['REALIZED_PNL', 'FUNDING_FEE', 'COMMISSION']]
                     pln_summary = 0
                     for trade in daily_trades:
-                        pln_summary += float(trade['realized_pnl'])
+                        pln_summary += float(trade['income'])
                     daily[idx] = {}
                     daily[idx]['date'] = start_of_day.strftime('%m-%d')
                     daily[idx]['pnl'] = pln_summary
 
-                table = PrettyTable(['Date', 'PNL (%)'])
+                table = PrettyTable(['Date\nMM-DD', 'PNL (%)'])
                 pnl_sum = 0.0
-                day_profits, profit_pcts = [], []
                 for item in daily.keys():
                     day_profit = daily[item]['pnl']
                     pnl_sum += day_profit
@@ -268,8 +445,8 @@ class Telegram:
                     wallet_balance = previous_day_close_wallet_balance
                     table.add_row([daily[item]['date'], f'{day_profit:.1f} ({profit_pct:.2f}%)'])
 
-                pct_sum = ((position['wallet_balance'] + pnl_sum) / position['wallet_balance'] - 1) * 100 \
-                    if position['wallet_balance'] > 0.0 else 0.0
+                bal_minus_pnl = position['wallet_balance'] - pnl_sum
+                pct_sum = (position['wallet_balance'] / bal_minus_pnl - 1) * 100 if bal_minus_pnl > 0.0 else 0.0
                 table.add_row(['-------','------------'])
                 table.add_row(['Total', f'{round_dynamic(pnl_sum, 3)} ({round_(pct_sum, 0.01)}%)'])
 
@@ -305,11 +482,11 @@ class Telegram:
                 self._chat_id,
                 text=msg,
                 parse_mode=ParseMode.HTML,
-                reply_markup=self._keyboard,
+                reply_markup=self._keyboards[self._keyboard_idx],
                 disable_notification=False
-            )
-        except:
-            print('Failed to send telegram message')
+            ).message_id
+        except Exception as e:
+            print(f'Failed to send telegram message: {e}')
 
     def exit(self):
         try:

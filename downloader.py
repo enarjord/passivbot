@@ -566,6 +566,8 @@ async def prep_config(args) -> dict:
     config = {**oc, **bc}
     if args.symbol != 'none':
         config['symbol'] = args.symbol
+    if args.user != 'none':
+        config['user'] = args.user
     end_date = config['end_date'] if config['end_date'] and config['end_date'] != -1 else ts_to_date(time())[:16]
     config['session_name'] = f"{config['start_date'].replace(' ', '').replace(':', '').replace('.', '')}_" \
                              f"{end_date.replace(' ', '').replace(':', '').replace('.', '')}"
