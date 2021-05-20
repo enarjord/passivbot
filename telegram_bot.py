@@ -1,4 +1,5 @@
 import json
+import os
 from datetime import datetime, timedelta
 from time import time
 
@@ -10,9 +11,10 @@ except Exception as e:
           "As a result of this, the version will not be shown in applicable messages. To fix this,"
           "please make sure you have git installed properly. The bot will work fine without it.")
 from prettytable import PrettyTable, HEADER
-from telegram import KeyboardButton, ParseMode, ReplyKeyboardMarkup, Update
+from telegram import KeyboardButton, ParseMode, ReplyKeyboardMarkup, Update, InlineKeyboardButton, \
+    InlineKeyboardMarkup
 from telegram.ext import Updater, CommandHandler, ConversationHandler, CallbackContext, \
-    MessageHandler, Filters
+    MessageHandler, Filters, CallbackQueryHandler
 
 from jitted import compress_float, round_, round_dynamic
 
@@ -84,15 +86,51 @@ class Telegram:
             },
             fallbacks=[CommandHandler('cancel', self._abort)]
         ))
+        dispatcher.add_handler(ConversationHandler(
+            entry_points=[MessageHandler(Filters.regex('.*/set_config'), self._begin_set_config)],
+            states={
+                1: [CallbackQueryHandler(self._configfile_chosen)],
+                2: [MessageHandler(Filters.regex('(confirm|abort)'), self._verify_setconfig_confirmation)],
+            },
+            fallbacks=[CommandHandler('cancel', self._abort)]
+        ))
         dispatcher.add_handler(MessageHandler(Filters.regex('.*/next'), self._next_page))
         dispatcher.add_handler(MessageHandler(Filters.regex('.*/previous'), self._previous_page))
+
+    def _begin_set_config(self, update: Update, _: CallbackContext) -> int:
+        files = os.listdir('configs/live')
+        buttons = []
+        for file in files:
+            buttons.append([InlineKeyboardButton(file, callback_data=file)])
+
+        keyboard = InlineKeyboardMarkup(buttons)
+
+        update.message.reply_text(
+            text='Please select one of the available config files to load:',
+            parse_mode=ParseMode.HTML,
+            reply_markup=keyboard
+        )
+        return 1
+
+    def _configfile_chosen(self, update: Update, _: CallbackContext) -> int:
+        query = update.callback_query
+        query.answer()
+        keyboard = InlineKeyboardMarkup([[InlineKeyboardButton('confirm'), InlineKeyboardButton('abort')]])
+        query.edit_message_reply_markup(keyboard)
+        # query.edit_message_text(text=f'You have chosen to change the active the config file <pre>{query.data}</pre>.\n'
+        #                         f'Please confirm that you want to activate this by replying with either <pre>confirm</pre> or <pre>abort</pre>')
+        return 2
+
+    def _verify_setconfig_confirmation(self, update: Update, _: CallbackContext) -> int:
+        self.send_msg('CONFIG SET')
+        return ConversationHandler.END
 
     def _verify_set_short(self, update: Update, _: CallbackContext) -> int:
         reply_keyboard = [['confirm', 'abort']]
         update.message.reply_text(
             text=f'Shorting is currently <pre>{"enabled" if self._bot.do_shrt is True else "disabled"}</pre>.\n'
                  f'You have chosen to <pre>{"disable" if self._bot.do_shrt is True else "enable"}</pre> shorting.\n'
-                 f'Please confirm that you want to change this replying with either <pre>confirm</pre> or <pre>abort</pre>\n'
+                 f'Please confirm that you want to change this by replying with either <pre>confirm</pre> or <pre>abort</pre>\n'
                  f'<b>Please be aware that this setting is not persisted between restarts!</b>',
             parse_mode=ParseMode.HTML,
             reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True)
@@ -118,7 +156,7 @@ class Telegram:
         update.message.reply_text(
             text=f'Long is currently <pre>{"enabled" if self._bot.do_long is True else "disabled"}</pre>.\n'
                  f'You have chosen to <pre>{"disable" if self._bot.do_long is True else "enable"}</pre> long.\n'
-                 f'Please confirm that you want to change this replying with either <pre>confirm</pre> or <pre>abort</pre>\n'
+                 f'Please confirm that you want to change this by replying with either <pre>confirm</pre> or <pre>abort</pre>\n'
                  f'<b>Please be aware that this setting is not persisted between restarts!</b>',
             parse_mode=ParseMode.HTML,
             reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True)
@@ -171,7 +209,7 @@ class Telegram:
         reply_keyboard = [['confirm', 'abort']]
         update.message.reply_text(
             text=f'You have chosen to change the leverage to <pre>{update.message.text}</pre>.\n'
-                 f'Please confirm that you want to activate this replying with either <pre>confirm</pre> or <pre>abort</pre>\n'
+                 f'Please confirm that you want to activate this by replying with either <pre>confirm</pre> or <pre>abort</pre>\n'
                  f'<b>Please be aware that this setting is not persisted between restarts!</b>',
             parse_mode=ParseMode.HTML,
             reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True)
