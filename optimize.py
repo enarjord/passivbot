@@ -107,7 +107,7 @@ def simple_sliding_window_wrap(config, ticks):
             except:
                 result[k] = results[0][k]
     else:
-        result = get_empty_analysis()
+        result = get_empty_analysis(config)
 
     try:
         objective = objective_function(result, 'average_daily_gain', config)
