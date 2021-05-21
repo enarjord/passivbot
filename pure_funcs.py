@@ -249,9 +249,9 @@ def iter_orders():
                 long_entry = long_entry[:4] + ('long_initial_entry',)
         if do_shrt:
             shrt_entry_price = max(lowest_ask,
-                                   round_up(calc_entry_price(balance, shrt_psize, shrt_pprice, shrt_MA, MA_ratios, shrt_grid_spacing_coeffs,
-                                                             shrt_pcost_bal_coeffs, shrt_MA_pct_coeffs,
-                                                             inverse, contract_multiplier), price_step))
+                                   round_up(calc_entry_price(balance, shrt_psize, shrt_pprice, shrt_MA, MA_ratios,
+                                                             shrt_grid_spacing_coeffs, shrt_pcost_bal_coeffs,
+                                                             shrt_MA_pct_coeffs, inverse, contract_multiplier), price_step))
             if shrt_entry_price > 0.0:
                 shrt_entry_qty = -calc_entry_qty(balance, shrt_psize, shrt_entry_price, MA_ratios, shrt_qty_pct_coeffs,
                                                  shrt_ddown_factor_coeffs, available_margin, inverse, contract_multiplier,
@@ -284,13 +284,14 @@ def iter_orders():
                                                                                 inverse, contract_multiplier,
                                                                                 max_leverage))
 
+
 @njit
-def calc_liq_price_universal(balance,
-                             long_psize,
-                             long_pprice,
-                             shrt_psize,
-                             shrt_pprice,
-                             inverse, contract_multiplier, leverage):
+def calc_bankruptcy_price(balance,
+                          long_psize,
+                          long_pprice,
+                          shrt_psize,
+                          shrt_pprice,
+                          inverse, contract_multiplier):
     long_pprice = nan_to_0(long_pprice)
     shrt_pprice = nan_to_0(shrt_pprice)
     long_psize *= contract_multiplier
