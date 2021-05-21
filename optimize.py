@@ -69,50 +69,61 @@ def iter_slices(iterable, sliding_window_size: float, n_windows: int, yield_full
         yield iterable
 
 
+def tanh(x):
+    return np.tanh(10 * (x - 1))
+
+
 def simple_sliding_window_wrap(config, ticks):
-    sliding_window_size = config['sliding_window_size'] if'sliding_window_size' in config else 0.4
+    sliding_window_size = config['sliding_window_size'] if 'sliding_window_size' in config else 0.4
     n_windows = config['n_sliding_windows'] if 'n_sliding_windows' in config else 4
     test_full = config['test_full'] if 'test_full' in config else False
     results = []
-    multiplier = 1.0
+    finished_windows = 0.0
     for ticks_slice in iter_slices(ticks, sliding_window_size, n_windows, yield_full=test_full):
         try:
             fills, _, did_finish = backtest(config, ticks_slice)
         except Exception as e:
             print('debug a', e, config)
+            fills = []
+            did_finish = False
         try:
             _, result_ = analyze_fills(fills, config, ticks_slice[-1][2])
         except Exception as e:
             print('b', e)
+            result_ = get_empty_analysis(config)
         results.append(result_)
+        finished_windows += 1.0
         if config['break_early_factor'] > 0.0 and \
                 (not did_finish or
                  result_['closest_liq'] < config['minimum_liquidation_distance'] * (1 - config['break_early_factor']) or
                  result_['max_hrs_no_fills'] > config['max_hrs_no_fills'] * (1 + config['break_early_factor']) or
-                 result_['max_hrs_no_fills_same_side'] > config['max_hrs_no_fills_same_side'] * (1 + config['break_early_factor'])):
-            multiplier = 0.5
+                 result_['max_hrs_no_fills_same_side'] > config['max_hrs_no_fills_same_side'] * (
+                         1 + config['break_early_factor'])):
             break
     if results:
         result = {}
         for k in results[0]:
             try:
                 if k == 'closest_liq':
-                    result[k] = np.min([r[k] for r in results]) * multiplier
+                    result[k] = np.min([r[k] for r in results])
                 elif k == 'average_daily_gain':
-                    result[k] = (np.sum([r[k] * r['n_days'] for r in results]) / np.sum([r['n_days'] for r in results])) * multiplier
+                    result[k] = (np.sum([r[k] * r['n_days'] for r in results]) / np.sum([r['n_days'] for r in results]))
+                    result['adjusted_daily_gain'] = np.mean(
+                        [tanh(r[k]) for r in results]) * finished_windows / n_windows
                 elif 'max_hrs_no_fills' in k:
-                    result[k] = np.max([r[k] for r in results]) / multiplier
+                    result[k] = np.max([r[k] for r in results])
                 else:
                     result[k] = np.mean([r[k] for r in results])
             except:
                 result[k] = results[0][k]
     else:
-        result = get_empty_analysis()
+        result = get_empty_analysis(config)
 
     try:
-        objective = objective_function(result, 'average_daily_gain', config)
+        objective = objective_function(result, 'adjusted_daily_gain', config)
     except Exception as e:
         print('c', e)
+        objective = -1
     tune.report(objective=objective, daily_gain=result['average_daily_gain'], closest_liquidation=result['closest_liq'],
                 max_hrs_no_fills=result['max_hrs_no_fills'],
                 max_hrs_no_fills_same_side=result['max_hrs_no_fills_same_side'])
