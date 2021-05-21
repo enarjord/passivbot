@@ -1,5 +1,5 @@
-import pandas as pd
 import numpy as np
+import pandas as pd
 
 
 def objective_function(result: dict,
@@ -9,10 +9,10 @@ def objective_function(result: dict,
         return -1
     try:
         return (
-            result[metric]
-            * min(1.0, bc["max_hrs_no_fills"] / result["max_hrs_no_fills"])
-            * min(1.0, bc["max_hrs_no_fills_same_side"] / result["max_hrs_no_fills_same_side"])
-            * min(1.0, result["closest_liq"] / bc["minimum_liquidation_distance"])
+                result[metric]
+                * min(1.0, bc["max_hrs_no_fills"] / result["max_hrs_no_fills"])
+                * min(1.0, bc["max_hrs_no_fills_same_side"] / result["max_hrs_no_fills_same_side"])
+                * min(1.0, result["closest_liq"] / bc["minimum_liquidation_distance"])
         )
     except:
         return -1
@@ -45,6 +45,7 @@ PERIODS = {
 
 METRICS_OBJ = ["average_daily_gain", "returns_daily", "sharpe_ratio_daily", "VWR_daily"]
 
+
 def result_sampled_default() -> dict:
     result = {}
     for period, sec in PERIODS.items():
@@ -52,6 +53,7 @@ def result_sampled_default() -> dict:
         result["sharpe_ratio_" + period] = 0.0
         result["VWR_" + period] = 0.0
     return result
+
 
 def analyze_samples(stats: list, bc: dict) -> (pd.DataFrame, dict):
     sdf = pd.DataFrame(stats).set_index("timestamp")
@@ -67,7 +69,6 @@ def analyze_samples(stats: list, bc: dict) -> (pd.DataFrame, dict):
 
     sdf.index = pd.to_datetime(sdf.index, unit="ms")
     sdf = sdf.resample(sample_period).last()
-
 
     returns = sdf.equity.pct_change()
     returns[0] = sdf.equity[0] / equity_start - 1
@@ -111,7 +112,10 @@ def analyze_samples(stats: list, bc: dict) -> (pd.DataFrame, dict):
         returns_expected_period = (returns_mean + 1) ** periods_nb - 1
         volatility_expected_period = returns.std() * np.sqrt(periods_nb)
 
-        SR = returns_expected_period / volatility_expected_period  # Sharpe ratio (risk-free)
+        if volatility_expected_period == 0.0:
+            SR = 0.0
+        else:
+            SR = returns_expected_period / volatility_expected_period  # Sharpe ratio (risk-free)
         VWR = returns_expected_period * VWR_weight
 
         result["returns_" + period] = returns_expected_period
@@ -125,18 +129,19 @@ def analyze_samples(stats: list, bc: dict) -> (pd.DataFrame, dict):
 
     return sdf, result
 
-def get_empty_analysis() -> dict:
+
+def get_empty_analysis(bc: dict) -> dict:
     return {
         'net_pnl_plus_fees': 0.0,
         'profit_sum': 0.0,
         'loss_sum': 0.0,
         'fee_sum': 0.0,
-        'final_equity': 0.0,
-        'gain': 0.0,
+        'final_equity': bc['starting_balance'],
+        'gain': 1.0,
         'max_drawdown': 0.0,
         'n_days': 0.0,
         'average_daily_gain': 0.0,
-        'closest_liq': 0.0,
+        'closest_liq': 1.0,
         'n_fills': 0.0,
         'n_entries': 0.0,
         'n_closes': 0.0,
@@ -151,20 +156,20 @@ def get_empty_analysis() -> dict:
     }
 
 
-def analyze_fills(fills: dict, bc: dict, last_ts: float) -> (pd.DataFrame, dict):
+def analyze_fills(fills: list, bc: dict, last_ts: float) -> (pd.DataFrame, dict):
     fdf = pd.DataFrame(fills)
 
     if fdf.empty:
-        return fdf, get_empty_analysis()
+        return fdf, get_empty_analysis(bc)
 
     fdf = fdf.set_index('trade_id')
 
     if len(longs_ := fdf[fdf.pside == 'long']) > 0:
-        long_stuck = np.diff(list(longs_.timestamp) + [last_ts]).max() / (1000 * 60 * 60)
+        long_stuck = np.max(np.diff(list(longs_.timestamp) + [last_ts])) / (1000 * 60 * 60)
     else:
         long_stuck = 1000.0
     if len(shrts_ := fdf[fdf.pside == 'shrt']) > 0:
-        shrt_stuck = np.diff(list(shrts_.timestamp) + [last_ts]).max() / (1000 * 60 * 60)
+        shrt_stuck = np.max(np.diff(list(shrts_.timestamp) + [last_ts])) / (1000 * 60 * 60)
     else:
         shrt_stuck = 1000.0
 
@@ -193,13 +198,12 @@ def analyze_fills(fills: dict, bc: dict, last_ts: float) -> (pd.DataFrame, dict)
         'max_hrs_no_fills_long': long_stuck,
         'max_hrs_no_fills_shrt': shrt_stuck,
         'max_hrs_no_fills_same_side': max(long_stuck, shrt_stuck),
-        'max_hrs_no_fills': np.diff(list(fdf.timestamp) + [last_ts]).max() / (1000 * 60 * 60),
+        'max_hrs_no_fills': np.max(np.diff(list(fdf.timestamp) + [last_ts])) / (1000 * 60 * 60),
     }
     return fdf, result
 
 
 def analyze_backtest(fills: list, stats: list, bc: dict) -> (pd.DataFrame, pd.DataFrame, dict):
-
     res = {
         "do_long": bool(bc["do_long"]),
         "do_shrt": bool(bc["do_long"]),
