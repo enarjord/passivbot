@@ -70,7 +70,7 @@ def iter_slices(iterable, sliding_window_size: float, n_windows: int, yield_full
 
 
 def tanh(x):
-    return np.tanh(50 * (x - 1))
+    return np.tanh(10 * (x - 1))
 
 
 def simple_sliding_window_wrap(config, ticks):
