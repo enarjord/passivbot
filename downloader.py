@@ -558,11 +558,11 @@ async def prep_config(args) -> dict:
     try:
         bc = hjson.load(open(args.backtest_config_path))
     except Exception as e:
-        raise Exception('failed to load backtest config', backtest_config_path, e)
+        raise Exception('failed to load backtest config', args.backtest_config_path, e)
     try:
         oc = hjson.load(open(args.optimize_config_path))
     except Exception as e:
-        raise Exception('failed to load optimize config', optimize_config_path, e)
+        raise Exception('failed to load optimize config', args.optimize_config_path, e)
     config = {**oc, **bc}
     if args.symbol != 'none':
         config['symbol'] = args.symbol

@@ -74,6 +74,7 @@ def simple_sliding_window_wrap(config, ticks):
     n_windows = config['n_sliding_windows'] if 'n_sliding_windows' in config else 4
     test_full = config['test_full'] if 'test_full' in config else False
     results = []
+    multiplier = 1.0
     for ticks_slice in iter_slices(ticks, sliding_window_size, n_windows, yield_full=test_full):
         try:
             fills, _, did_finish = backtest(config, ticks_slice)
@@ -89,15 +90,18 @@ def simple_sliding_window_wrap(config, ticks):
                  result_['closest_liq'] < config['minimum_liquidation_distance'] * (1 - config['break_early_factor']) or
                  result_['max_hrs_no_fills'] > config['max_hrs_no_fills'] * (1 + config['break_early_factor']) or
                  result_['max_hrs_no_fills_same_side'] > config['max_hrs_no_fills_same_side'] * (1 + config['break_early_factor'])):
+            multiplier = 0.5
             break
     if results:
         result = {}
         for k in results[0]:
             try:
                 if k == 'closest_liq':
-                    result[k] = np.min([r[k] for r in results])
+                    result[k] = np.min([r[k] for r in results]) * multiplier
+                elif k == 'average_daily_gain':
+                    result[k] = (np.sum([r[k] * r['n_days'] for r in results]) / np.sum([r['n_days'] for r in results])) * multiplier
                 elif 'max_hrs_no_fills' in k:
-                    result[k] = np.max([r[k] for r in results])
+                    result[k] = np.max([r[k] for r in results]) / multiplier
                 else:
                     result[k] = np.mean([r[k] for r in results])
             except:
