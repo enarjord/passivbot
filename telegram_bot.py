@@ -90,7 +90,7 @@ class Telegram:
             entry_points=[MessageHandler(Filters.regex('.*/set_config'), self._begin_set_config)],
             states={
                 1: [CallbackQueryHandler(self._configfile_chosen)],
-                2: [MessageHandler(Filters.regex('(confirm|abort)'), self._verify_setconfig_confirmation)],
+                2: [CallbackQueryHandler(self._verify_setconfig_confirmation)],
             },
             fallbacks=[CommandHandler('cancel', self._abort)]
         ))
@@ -103,26 +103,42 @@ class Telegram:
         for file in files:
             buttons.append([InlineKeyboardButton(file, callback_data=file)])
 
-        keyboard = InlineKeyboardMarkup(buttons)
-
         update.message.reply_text(
             text='Please select one of the available config files to load:',
             parse_mode=ParseMode.HTML,
-            reply_markup=keyboard
+            reply_markup=InlineKeyboardMarkup(buttons)
         )
         return 1
 
     def _configfile_chosen(self, update: Update, _: CallbackContext) -> int:
         query = update.callback_query
+        self.config_file_to_activate = query.data
         query.answer()
-        keyboard = InlineKeyboardMarkup([[InlineKeyboardButton('confirm'), InlineKeyboardButton('abort')]])
-        query.edit_message_reply_markup(keyboard)
-        # query.edit_message_text(text=f'You have chosen to change the active the config file <pre>{query.data}</pre>.\n'
-        #                         f'Please confirm that you want to activate this by replying with either <pre>confirm</pre> or <pre>abort</pre>')
+
+        keyboard = [[InlineKeyboardButton('confirm', callback_data='confirm')],
+                    [InlineKeyboardButton('abort', callback_data='abort')]]
+
+        query.edit_message_text(text=f'You have chosen to change the active the config file <pre>configs/live/{query.data}</pre>.\n'
+                                f'Please confirm that you want to activate this by replying with either <pre>confirm</pre> or <pre>abort</pre>',
+                                parse_mode=ParseMode.HTML,
+                                reply_markup=InlineKeyboardMarkup(keyboard))
         return 2
 
     def _verify_setconfig_confirmation(self, update: Update, _: CallbackContext) -> int:
-        self.send_msg('CONFIG SET')
+        query = update.callback_query
+        query.answer()
+        answer = query.data
+
+        if answer not in ['confirm', 'abort']:
+            return 2
+
+        if self.config_reload_ts > 0.0 and time() - self.config_reload_ts < 60 * 5:
+            self.send_msg('Config reload in progress, please wait')
+            return
+        self.config_reload_ts = time()
+        self.send_msg(f'Activating config file <pre>configs/live/{self.config_file_to_activate}</pre>...')
+        self._activate_config(f'configs/live/{self.config_file_to_activate}')
+        self.config_file_to_activate = None
         return ConversationHandler.END
 
     def _verify_set_short(self, update: Update, _: CallbackContext) -> int:
@@ -349,6 +365,7 @@ class Telegram:
               '/set_leverage: initiates a conversion via which the user can modify the active leverage\n' \
               '/set_short: initiates a conversion via which the user can enable/disable shorting\n' \
               '/set_long: initiates a conversion via which the user can enable/disable long\n' \
+              '/set_config: initiates a conversion via which the user can switch to a different configuration file\n' \
               '/help: This help page\n'
         self.send_msg(msg)
 
@@ -415,17 +432,19 @@ class Telegram:
             self.send_msg('Balance not retrieved yet, please try again later')
 
     def _reload_config(self, update=None, context=None):
-        if self.config_reload_ts > 0.0:
-            if time() - self.config_reload_ts < 60 * 5:
-                self.send_msg('Config reload in progress, please wait')
-                return
+        if self.config_reload_ts > 0.0 and time() - self.config_reload_ts < 60 * 5:
+            self.send_msg('Config reload in progress, please wait')
+            return
         self.config_reload_ts = time()
         self.send_msg('Reloading config...')
 
+        self._activate_config(self._bot.live_config_path)
+
+    def _activate_config(self, config_path):
         try:
-            config = json.load(open(self._bot.live_config_path))
+            config = json.load(open(config_path))
         except Exception:
-            self.send_msg("Failed to load config file")
+            self.send_msg(f"Failed to load config file {self._bot.live_config_path}")
             self.config_reload_ts = 0.0
             return
 
