@@ -547,7 +547,7 @@ def iter_long_closes(
         inverse, do_long, do_shrt, qty_step, price_step, min_qty, min_cost, contract_multiplier,
         ddown_factor, qty_pct, leverage, n_close_orders, grid_spacing, pos_margin_grid_coeff,
         volatility_grid_coeff, volatility_qty_coeff, min_markup, markup_range, ema_span, ema_spread,
-        stop_loss_liq_diff, stop_loss_pos_pct):
+        stop_loss_liq_diff, stop_loss_pos_pct, entry_liq_diff_thr):
     # yields (qty, price, psize_if_taken)
     if psize == 0.0 or pprice == 0.0:
         return
@@ -591,7 +591,7 @@ def iter_shrt_closes(
         inverse, do_long, do_shrt, qty_step, price_step, min_qty, min_cost, contract_multiplier,
         ddown_factor, qty_pct, leverage, n_close_orders, grid_spacing, pos_margin_grid_coeff,
         volatility_grid_coeff, volatility_qty_coeff, min_markup, markup_range, ema_span, ema_spread,
-        stop_loss_liq_diff, stop_loss_pos_pct):
+        stop_loss_liq_diff, stop_loss_pos_pct, entry_liq_diff_thr):
     # yields (qty, price, psize_if_taken)
     abs_psize = abs(psize)
     if psize == 0.0:
