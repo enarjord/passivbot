@@ -150,7 +150,6 @@ class Bot:
         self.qty = 0.0
         self.ob = [0.0, 0.0]
         self.ema = 0.0
-        self.entry_liq_diff_thr = self.config['entry_liq_diff_thr'] if 'entry_liq_diff_thr' in config else self.stop_loss_liq_diff
 
         self.n_open_orders_limit = 8
         self.last_price_diff_limit = 0.15
