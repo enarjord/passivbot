@@ -290,7 +290,7 @@ def iter_entries(
         inverse, do_long, do_shrt, qty_step, price_step, min_qty, min_cost, contract_multiplier,
         ddown_factor, qty_pct, leverage, n_close_orders, grid_spacing, pos_margin_grid_coeff,
         volatility_grid_coeff, volatility_qty_coeff, min_markup, markup_range, ema_span, ema_spread,
-        stop_loss_liq_diff, stop_loss_pos_pct):
+        stop_loss_liq_diff, stop_loss_pos_pct, entry_liq_diff_thr):
 
     available_margin = calc_available_margin(balance, long_psize, long_pprice,
                                              shrt_psize, shrt_pprice, last_price,
@@ -338,6 +338,10 @@ def iter_entries(
                     new_long_psize, new_long_pprice = calc_new_psize_pprice(long_psize, long_pprice,
                                                                             qty, price, qty_step)
                     long_entry = (qty, price, new_long_psize, new_long_pprice, 'long_reentry')
+                bankruptcy_price = calc_bankruptcy_price(balance, new_long_psize, new_long_pprice,
+                                                         shrt_psize, shrt_pprice, inverse, contract_multiplier)
+                if calc_diff(bankruptcy_price, last_price) < entry_liq_diff_thr:
+                    long_entry = (0.0, 0.0, long_psize, long_pprice, '')
         else:
             long_entry = (0.0, 0.0, long_psize, long_pprice, '')
 
@@ -361,6 +365,10 @@ def iter_entries(
                 new_shrt_psize, new_shrt_pprice = calc_new_psize_pprice(shrt_psize, shrt_pprice, qty, price,
                                                                         qty_step)
                 shrt_entry = (qty, price, new_shrt_psize, new_shrt_pprice, 'shrt_reentry')
+                bankruptcy_price = calc_bankruptcy_price(balance, long_psize, long_pprice,
+                                                         new_shrt_psize, new_shrt_pprice, inverse, contract_multiplier)
+                if calc_diff(bankruptcy_price, last_price) < entry_liq_diff_thr:
+                    shrt_entry = (0.0, 0.0, shrt_psize, shrt_pprice, '')
         else:
             shrt_entry = (0.0, 0.0, shrt_psize, shrt_pprice, '')
 
@@ -539,7 +547,7 @@ def iter_long_closes(
         inverse, do_long, do_shrt, qty_step, price_step, min_qty, min_cost, contract_multiplier,
         ddown_factor, qty_pct, leverage, n_close_orders, grid_spacing, pos_margin_grid_coeff,
         volatility_grid_coeff, volatility_qty_coeff, min_markup, markup_range, ema_span, ema_spread,
-        stop_loss_liq_diff, stop_loss_pos_pct):
+        stop_loss_liq_diff, stop_loss_pos_pct, entry_liq_diff_thr):
     # yields (qty, price, psize_if_taken)
     if psize == 0.0 or pprice == 0.0:
         return
@@ -583,7 +591,7 @@ def iter_shrt_closes(
         inverse, do_long, do_shrt, qty_step, price_step, min_qty, min_cost, contract_multiplier,
         ddown_factor, qty_pct, leverage, n_close_orders, grid_spacing, pos_margin_grid_coeff,
         volatility_grid_coeff, volatility_qty_coeff, min_markup, markup_range, ema_span, ema_spread,
-        stop_loss_liq_diff, stop_loss_pos_pct):
+        stop_loss_liq_diff, stop_loss_pos_pct, entry_liq_diff_thr):
     # yields (qty, price, psize_if_taken)
     abs_psize = abs(psize)
     if psize == 0.0:
@@ -694,12 +702,12 @@ def calc_liq_price_bybit(balance,
 
 
 @njit
-def calc_liq_price_universal(balance,
-                             long_psize,
-                             long_pprice,
-                             shrt_psize,
-                             shrt_pprice,
-                             inverse, contract_multiplier, leverage):
+def calc_bankruptcy_price(balance,
+                          long_psize,
+                          long_pprice,
+                          shrt_psize,
+                          shrt_pprice,
+                          inverse, contract_multiplier):
     long_pprice = nan_to_0(long_pprice)
     shrt_pprice = nan_to_0(shrt_pprice)
     long_psize *= contract_multiplier
