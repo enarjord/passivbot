@@ -129,6 +129,7 @@ class Bot:
     def __init__(self, config: dict):
         self.config = config
         self.telegram = None
+        self.xk = {}
 
         self.set_config(config)
 
