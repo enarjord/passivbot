@@ -16,7 +16,7 @@ import telegram_bot
 import websockets
 
 from jitted import round_, calc_diff, calc_ema, calc_cost, iter_entries, iter_long_closes, \
-    iter_shrt_closes, round_dynamic, compress_float
+    iter_shrt_closes, compress_float
 
 logging.getLogger("telegram").setLevel(logging.CRITICAL)
 
@@ -25,7 +25,7 @@ def get_keys():
             'contract_multiplier', 'ddown_factor', 'qty_pct', 'leverage', 'n_close_orders',
             'grid_spacing', 'pos_margin_grid_coeff', 'volatility_grid_coeff',
             'volatility_qty_coeff', 'min_markup', 'markup_range', 'ema_span', 'ema_spread',
-            'stop_loss_liq_diff', 'stop_loss_pos_pct']
+            'stop_loss_liq_diff', 'stop_loss_pos_pct', 'entry_liq_diff_thr']
 
 
 def sort_dict_keys(d):
@@ -130,8 +130,7 @@ class Bot:
         self.config = config
         self.telegram = None
 
-        for key in config:
-            setattr(self, key, config[key])
+        self.set_config(config)
 
         self.ema_span = int(round(self.ema_span))
         self.ema_alpha = 2 / (self.ema_span + 1)
@@ -151,6 +150,7 @@ class Bot:
         self.qty = 0.0
         self.ob = [0.0, 0.0]
         self.ema = 0.0
+        self.entry_liq_diff_thr = self.config['entry_liq_diff_thr'] if 'entry_liq_diff_thr' in config else self.stop_loss_liq_diff
 
         self.n_open_orders_limit = 8
         self.last_price_diff_limit = 0.15
@@ -168,11 +168,12 @@ class Bot:
         self.stop_websocket = False
         self.process_websocket_ticks = True
         self.lock_file = f"{str(Path.home())}/.passivbotlock"
-        self.stop_mode = self.config['stop_mode'] = None
 
     def set_config(self, config):
         config['ema_span'] = int(round(config['ema_span']))
         config['stop_mode'] = self.stop_mode = None
+        if 'entry_liq_diff_thr' not in self.config:
+            self.config['entry_liq_diff_thr'] = self.config['stop_loss_liq_diff']
         self.config = config
         for key in config:
             setattr(self, key, config[key])
