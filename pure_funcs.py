@@ -69,18 +69,23 @@ def nan_to_0(x) -> float:
 
 
 @njit
-def calc_min_entry_qty(price, inverse, qty_step, min_qty, min_cost, contract_multiplier) -> float:
+def calc_min_entry_qty(price, inverse, qty_step, min_qty, min_cost, c_mult) -> float:
     return min_qty if inverse else max(min_qty, round_up(min_cost / price if price > 0.0 else 0.0, qty_step))
 
 
 @njit
-def cost_to_qty(cost, price, inverse, contract_multiplier):
-    return cost * price / contract_multiplier if inverse else (cost / price if price > 0.0 else 0.0)
+def calc_max_entry_qty(inverse, qty_step, c_mult, entry_price, available_margin):
+    return round_dn(cost_to_qty(available_margin, entry_price, inverse, c_mult), qty_step)
 
 
 @njit
-def qty_to_cost(qty, price, inverse, contract_multiplier) -> float:
-    return (abs(qty / price) if price > 0.0 else 0.0) * contract_multiplier if inverse else abs(qty * price)
+def cost_to_qty(cost, price, inverse, c_mult):
+    return cost * price / c_mult if inverse else (cost / price if price > 0.0 else 0.0)
+
+
+@njit
+def qty_to_cost(qty, price, inverse, c_mult) -> float:
+    return (abs(qty / price) if price > 0.0 else 0.0) * c_mult if inverse else abs(qty * price)
 
 
 @njit
@@ -137,21 +142,21 @@ def iter_MA_ratios_chunks(xs: [float], spans: [int], chunk_size: int = 65536):
 
 
 @njit
-def calc_long_pnl(entry_price, close_price, qty, inverse, contract_multiplier) -> float:
+def calc_long_pnl(entry_price, close_price, qty, inverse, c_mult) -> float:
     if inverse:
         if entry_price == 0.0 or close_price == 0.0:
             return 0.0
-        return abs(qty) * contract_multiplier * (1 / entry_price - 1 / close_price)
+        return abs(qty) * c_mult * (1 / entry_price - 1 / close_price)
     else:
         return abs(qty) * (close_price - entry_price)
 
 
 @njit
-def calc_shrt_pnl(entry_price, close_price, qty, inverse, contract_multiplier) -> float:
+def calc_shrt_pnl(entry_price, close_price, qty, inverse, c_mult) -> float:
     if inverse:
         if entry_price == 0.0 or close_price == 0.0:
             return 0.0
-        return abs(qty) * contract_multiplier * (1 / close_price - 1 / entry_price)
+        return abs(qty) * c_mult * (1 / close_price - 1 / entry_price)
     else:
         return abs(qty) * (entry_price - close_price)
 
@@ -163,21 +168,17 @@ def calc_available_margin(balance,
                           shrt_psize,
                           shrt_pprice,
                           last_price,
-                          inverse, contract_multiplier, leverage) -> float:
+                          inverse, c_mult, leverage) -> float:
     used_margin = 0.0
     equity = balance
     if long_pprice and long_psize:
-        long_psize_real = long_psize * contract_multiplier
-        equity += calc_long_pnl(long_pprice, last_price, long_psize_real, inverse,
-                                contract_multiplier)
-        used_margin += qty_to_cost(long_psize_real, long_pprice,
-                                   inverse, contract_multiplier) / leverage
+        long_psize_real = long_psize * c_mult
+        equity += calc_long_pnl(long_pprice, last_price, long_psize_real, inverse, c_mult)
+        used_margin += qty_to_cost(long_psize_real, long_pprice, inverse, c_mult) / leverage
     if shrt_pprice and shrt_psize:
-        shrt_psize_real = shrt_psize * contract_multiplier
-        equity += calc_shrt_pnl(shrt_pprice, last_price, shrt_psize_real, inverse,
-                                contract_multiplier)
-        used_margin += qty_to_cost(shrt_psize_real, shrt_pprice,
-                                   inverse, contract_multiplier) / leverage
+        shrt_psize_real = shrt_psize * c_mult
+        equity += calc_shrt_pnl(shrt_pprice, last_price, shrt_psize_real, inverse, c_mult)
+        used_margin += qty_to_cost(shrt_psize_real, shrt_pprice, inverse, c_mult) / leverage
     return max(0.0, equity - used_margin)
 
 
@@ -192,97 +193,154 @@ def calc_new_psize_pprice(psize, pprice, qty, price, qty_step) -> (float, float)
 
 
 @njit
-def eqf(MA_ratios: [float], coeffs: [float]):
-    if len(MA_ratios) == len(coeffs):
-        return np.sum(MA_ratios * coeffs)
-    return np.sum(MA_ratios * coeffs[:-1]) + coeffs[-1]
+def eqf(vals: [float], coeffs: [float]) -> float:
+    r = coeffs[-1] if len(coeffs) > len(vals) else 0.0
+    for v, c in zip(vals, coeffs):
+        r += v * c
+    return r
 
 
 @njit
-def calc_entry_price(balance, psize, pprice, MA, MA_ratios, grid_spacing_coeffs, pcost_bal_coeffs, MA_pct_coeffs,
-                     inverse, contract_multiplier):
-    return MA * eqf(MA_ratios, MA_pct_coeffs) if psize == 0.0 else \
-           pprice * (eqf(MA_ratios, grid_spacing_coeffs) +
-                     eqf(np.repeat(qty_to_cost(psize, pprice, inverse, contract_multiplier) / balance, len(pcost_bal_coeffs)),
-                         pcost_bal_coeffs))
+def calc_entry_price(balance, psize, pprice, MA, MA_ratios, iprc_PBr_coeffs, iprc_MAr_coeffs, rprc_MAr_coeffs,
+                     inverse, c_mult):
+    if psize == 0.0:
+        return MA * eqf(MA_ratios, iprc_MAr_coeffs)
+    else:
+        pcost_bal_ratio = qty_to_cost(psize, pprice, invers, c_mult) / balance
+        return pprice * (eqf(MA_ratios, rprc_MAr_coeffs) + eqf([pcost_bal_ratio**2, pcost_bal_ratio], iprc_PBr_coeffs))
 
 
 @njit
-def calc_entry_qty(balance, psize, entry_price, MA_ratios, qty_pct_coeffs, ddown_factor_coeffs, available_margin,
-                   inverse, contract_multiplier, qty_step, min_qty, min_cost):
-    min_entry_qty = calc_min_entry_qty(entry_price, inverse, qty_step, min_qty, min_cost, contract_multiplier)
-    max_entry_qty = round_dn(cost_to_qty(available_margin, entry_price, inverse, contract_multiplier), qty_step)
-    qty = round_dn(min(max_entry_qty, max(
+def calc_entry_qty(balance, psize, entry_price, MA_ratios, iqty_MAr_coeffs, rqty_MAr_coeffs, available_margin,
+                   inverse, c_mult, qty_step, min_qty, min_cost):
+    min_entry_qty = calc_min_entry_qty(entry_price, inverse, qty_step, min_qty, min_cost, c_mult)
+    qty = round_dn(min(calc_max_entry_qty(inverse, qty_step, c_mult, entry_price, available_margin), max(
         min_entry_qty,
-        (cost_to_qty(balance, entry_price, inverse, contract_multiplier) * eqf(MA_ratios, qty_pct_coeffs)
-         if psize == 0.0 else psize * eqf(MA_ratios, ddown_factor_coeffs))
+        (cost_to_qty(balance, entry_price, inverse, c_mult) * eqf(MA_ratios, iqty_MAr_coeffs)
+         if psize == 0.0 else psize * eqf(MA_ratios, rqty_MAr_coeffs))
     )), qty_step)
     return qty if qty >= min_entry_qty else 0.0
 
 
 @njit
-def iter_orders():
+def iter_orders(
+        balance,
+        long_psize,
+        long_pprice,
+        shrt_psize,
+        shrt_pprice,
+        liq_price,
+        highest_bid,
+        lowest_ask,
+        long_MA,
+        shrt_MA,
+        last_price,
+        MA_ratios,
+
+        inverse,
+        do_long,
+        do_shrt,
+        qty_step,
+        price_step,
+        min_qty,
+        min_cost,
+        c_mult,
+        leverage,
+        hedge_liq_diff_thr,
+        hedge_qty_pct,
+        stop_liq_diff_thr,
+        stop_qty_pct,
+        iqty_MAr_coeffs,
+        iprc_PBr_coeffs,
+        iprc_MAr_coeffs,
+        rqty_MAr_coeffs,
+        rprc_MAr_coeffs,
+        markup_MAr_coeffs):
     available_margin = calc_available_margin(balance, long_psize, long_pprice,
                                              shrt_psize, shrt_pprice, last_price,
-                                             inverse, contract_multiplier, max_leverage)
+                                             inverse, c_mult, leverage)
     while True:
-        long_entry, long_close = (0.0, 0.0, 0.0, 0.0, ''), (0.0, 0.0, 0.0, 0.0, '')
-        shrt_entry, shrt_close = (0.0, 0.0, 0.0, 0.0, ''), (0.0, 0.0, 0.0, 0.0, '')
+        orders = []
         if do_long:
             long_entry_price = min(highest_bid,
-                                   round_dn(calc_entry_price(balance, long_psize, long_pprice, long_MA, MA_ratios, long_grid_spacing_coeffs,
-                                                             long_pcost_bal_coeffs, long_MA_pct_coeffs,
-                                                             inverse, contract_multiplier), price_step))
+                                   round_dn(calc_entry_price(balance, long_psize, long_pprice, long_MA, MA_ratios,
+                                                             long_iprc_PBr_coeffs, long_iprc_MAr_coeffs,
+                                                             long_rprc_MAr_coeffs, inverse, c_mult), price_step))
             if long_entry_price > 0.0:
-                long_entry_qty = calc_entry_qty(balance, long_psize, long_entry_price, MA_ratios, long_qty_pct_coeffs,
-                                                long_ddown_factor_coeffs, available_margin, inverse, contract_multiplier,
+                long_entry_qty = calc_entry_qty(balance, long_psize, long_entry_price, MA_ratios, long_iqty_MAr_coeffs,
+                                                long_rqty_MAr_coeffs, available_margin, inverse, c_mult,
                                                 qty_step, min_qty, min_cost)
                 if long_entry_qty > 0.0:
                     new_long_psize, new_long_pprice = calc_new_psize_pprice(long_psize, long_pprice, long_entry_qty,
                                                                             long_entry_price, qty_step)
-                    long_entry = (long_entry_qty, long_entry_price, new_long_psize, new_long_pprice)
+                    bankruptcy_price = calc_bankruptcy_price(balance, new_long_psize, new_long_pprice, shrt_psize, shrt_pprice,
+                                                             inverse, c_mult)
+                    if calc_diff(bankruptcy_price, last_price) > liq_diff_threshold:
+                        orders.append((long_entry_qty, long_entry_price, new_long_psize, new_long_pprice,
+                                       'long_ientry' if long_psize == 0.0 else 'long_rentry'))
             if long_psize > 0.0:
-                long_close = (-long_psize, max(lowest_ask, round_up(long_pprice * eqf(MA_ratios, long_markup_coeffs))),
-                              0.0, 0.0, 'long_close')
-                long_entry = long_entry[:4] + ('long_reentry',)
-            else:
-                long_entry = long_entry[:4] + ('long_initial_entry',)
+                orders.append((-long_psize, max(lowest_ask, round_up(long_pprice * eqf(MA_ratios, long_markup_MAr_coeffs))),
+                               0.0, 0.0, 'long_nclose'))
         if do_shrt:
             shrt_entry_price = max(lowest_ask,
                                    round_up(calc_entry_price(balance, shrt_psize, shrt_pprice, shrt_MA, MA_ratios,
-                                                             shrt_grid_spacing_coeffs, shrt_pcost_bal_coeffs,
-                                                             shrt_MA_pct_coeffs, inverse, contract_multiplier), price_step))
-            if shrt_entry_price > 0.0:
-                shrt_entry_qty = -calc_entry_qty(balance, shrt_psize, shrt_entry_price, MA_ratios, shrt_qty_pct_coeffs,
-                                                 shrt_ddown_factor_coeffs, available_margin, inverse, contract_multiplier,
-                                                 qty_step, min_qty, min_cost)
-                if shrt_entry_qty < 0.0:
-                    new_shrt_psize, new_shrt_pprice = calc_new_psize_pprice(shrt_psize, shrt_pprice, shrt_entry_qty,
-                                                                            shrt_entry_price, qty_step)
-                    shrt_entry = (shrt_entry_qty, shrt_entry_price, new_shrt_psize, new_shrt_pprice)
+                                                             shrt_iprc_PBr_coeffs, shrt_iprc_MAr_coeffs,
+                                                             shrt_rprc_MAr_coeffs, inverse, c_mult), price_step))
+            shrt_entry_qty = -calc_entry_qty(balance, shrt_psize, shrt_entry_price, MA_ratios, shrt_iqty_MAr_coeffs,
+                                             shrt_rqty_MAr_coeffs, available_margin, inverse, c_mult,
+                                             qty_step, min_qty, min_cost)
+            if shrt_entry_qty < 0.0:
+                new_shrt_psize, new_shrt_pprice = calc_new_psize_pprice(shrt_psize, shrt_pprice, shrt_entry_qty,
+                                                                        shrt_entry_price, qty_step)
+                bankruptcy_price = calc_bankruptcy_price(balance, long_psize, long_pprice, new_shrt_psize, new_shrt_pprice,
+                                                         inverse, c_mult)
+                if calc_diff(bankruptcy_price, last_price) > liq_diff_threshold:
+                    orders.append((shrt_entry_qty, shrt_entry_price, new_shrt_psize, new_shrt_pprice,
+                                   'shrt_ientry' if shrt_psize == 0.0 else 'shrt_rentry'))
             if shrt_psize < 0.0:
-                shrt_close = (-shrt_psize, min(highest_bid, round_dn(shrt_pprice * eqf(MA_ratios, shrt_markup_coeffs))),
-                              0.0, 0.0, 'shrt_close')
-                shrt_close = shrt_close[:4] + ('shrt_reentry',)
+                orders.append((-shrt_psize, min(highest_bid, round_dn(shrt_pprice * eqf(MA_ratios, shrt_markup_MAr_coeffs))),
+                               0.0, 0.0, 'shrt_nclose'))
+
+        if calc_diff(liq_price, last_price) < hedge_liq_diff_thr:
+            if long_psize > abs(shrt_psize):
+                min_entry_qty = calc_min_entry_qty(lowest_ask, inverse, qty_step, min_qty, min_cost, c_mult)
+                max_entry_qty = calc_max_entry_qty(inverse, qty_step, c_mult, lowest_ask, available_margin)
+                hedge_qty = max(min_entry_qty, min(max_entry_qty, round_dn(long_psize * hedge_qty_pct, qty_step)))
+                if hedge_qty >= min_entry_qty:
+                    hedge_qty = -hedge_qty
+                    new_shrt_psize, new_shrt_pprice = calc_new_psize_pprice(shrt_psize, shrt_pprice, hedge_qty,
+                                                                            lowest_ask, qty_step)
+                    orders.append((hedge_qty, lowest_ask, new_shrt_psize, new_shrt_pprice, 'shrt_hentry'))
             else:
-                shrt_close = shrt_close[:4] + ('shrt_initial_entry',)
+                min_entry_qty = calc_min_entry_qty(highest_bid, inverse, qty_step, min_qty, min_cost, c_mult)
+                max_entry_qty = calc_max_entry_qty(inverse, qty_step, c_mult, highest_bid, available_margin)
+                hedge_qty = max(min_entry_qty, min(max_entry_qty, round_dn(long_psize * hedge_qty_pct, qty_step)))
+                if hedge_qty >= min_entry_qty:
+                    new_long_psize, new_long_pprice = calc_new_psize_pprice(new_long_psize, new_long_pprice,
+                                                                            hedge_qty, highest_bid, qty_step)
+                    orders.append((hedge_qty, highest_bid, new_long_psize, new_long_pprice, 'long_hentry'))
+        if calc_diff(liq_price, last_price) < stop_liq_diff_thr:
+            abs_shrt_psize = abs(shrt_psize)
+            if long_psize > abs_shrt_psize:
+                stop_qty = min(long_psize, max(min_qty, round_dn(long_psize * stop_qty_pct, qty_step)))
+                if stop_qty > min_qty:
+                    orders.append((-stop_qty, lowest_ask, round_(long_psize - stop_qty, qty_step), long_pprice, 'long_sclose'))
+            else:
+                stop_qty = min(abs_shrt_psize, max(min_qty, round_dn(abs_shrt_psize * stop_qty_pct, qty_step)))
+                if stop_qty > min_qty:
+                    orders.append((stop_qty, highest_bid, round_(shrt_psize + stop_qty, qty_step), long_pprice, 'shrt_sclose'))
 
-
-        orders = sorted([long_entry, shrt_entry, long_close, shrt_close], key=lambda x: calc_diff(x[1], last_price))
+        orders = sorted(orders, key=lambda x: calc_diff(x[1], last_price))
         if orders[0][0] == 0.0:
             break
         yield orders[0]
         if 'entry' in orders[0][4]:
             if 'long' in orders[0][4]:
                 long_psize, long_pprice = orders[0][2:4]
-                available_margin = max(0.0, available_margin - calc_margin_cost(long_entry[0], long_entry[1],
-                                                                                inverse, contract_multiplier,
-                                                                                max_leverage))
+                available_margin = max(0.0, available_margin - qty_to_cost(long_entry[0], long_entry[1], inverse, c_mult) / leverage)
             else:
                 shrt_psize, shrt_pprice = orders[0][2:4]
-                available_margin = max(0.0, available_margin - calc_margin_cost(shrt_entry[0], shrt_entry[1],
-                                                                                inverse, contract_multiplier,
-                                                                                max_leverage))
+                available_margin = max(0.0, available_margin - qty_to_cost(shrt_entry[0], shrt_entry[1], inverse, c_mult) / leverage)
 
 
 @njit
@@ -291,11 +349,11 @@ def calc_bankruptcy_price(balance,
                           long_pprice,
                           shrt_psize,
                           shrt_pprice,
-                          inverse, contract_multiplier):
+                          inverse, c_mult):
     long_pprice = nan_to_0(long_pprice)
     shrt_pprice = nan_to_0(shrt_pprice)
-    long_psize *= contract_multiplier
-    abs_shrt_psize = abs(shrt_psize) * contract_multiplier
+    long_psize *= c_mult
+    abs_shrt_psize = abs(shrt_psize) * c_mult
     if inverse:
         shrt_cost = abs_shrt_psize / shrt_pprice if shrt_pprice > 0.0 else 0.0
         long_cost = long_psize / long_pprice if long_pprice > 0.0 else 0.0
@@ -317,24 +375,34 @@ def get_template_live_config():
         "logging_level": 0,
         "ma_spans": [1, 6000, 10800, 19440, 34992, 62986, 113374, 204073],
         "long": {
-            "enabled":             True,
-            "grid_spacing_coeffs":   [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
-            "pcost_bal_coeffs":    [0.0, 0.0],
-            "qty_pct_coeffs":      [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
-            "ddown_factor_coeffs": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
-            "MA_pct_coeffs":       [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
-            "markup_coeffs":       [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
-            "MA_idx":              2
+            "enabled":            True,
+            "leverage":           10,
+            "hedge_liq_diff_thr": 0.5,
+            "hedge_qty_pct":      0.05,
+            "stop_liq_diff_thr":  0.21,
+            "stop_qty_pct":       0.05,
+            "iqty_MAr_coeffs":    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
+            "iprc_PBr_coeffs":    [0.0, 0.0],
+            "iprc_MAr_coeffs":    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
+            "rqty_MAr_coeffs":    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
+            "rprc_MAr_coeffs":    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
+            "markup_MAr_coeffs":  [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
+            "MA_idx":             2
         },
         "shrt": {
-            "enabled": True,
-            "grid_spacing_coeffs":   [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
-            "pcost_bal_coeffs":    [0.0, 0.0],
-            "qty_pct_coeffs":      [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
-            "ddown_factor_coeffs": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
-            "MA_pct_coeffs":       [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
-            "markup_coeffs":       [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
-            "MA_idx":              2
+            "enabled":            True,
+            "leverage":           10,
+            "hedge_liq_diff_thr": 0.5,
+            "hedge_qty_pct":      0.05,
+            "stop_liq_diff_thr":  0.21,
+            "stop_qty_pct":       0.05,
+            "iqty_MAr_coeffs":    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
+            "iprc_PBr_coeffs":    [0.0, 0.0],
+            "iprc_MAr_coeffs":    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
+            "rqty_MAr_coeffs":    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
+            "rprc_MAr_coeffs":    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
+            "markup_MAr_coeffs":  [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
+            "MA_idx":             2
         }
     }
 
