@@ -606,7 +606,7 @@ def load_live_config(live_config_path: str) -> dict:
         if 'entry_liq_diff_thr' not in live_config:
             live_config['entry_liq_diff_thr'] = live_config['stop_loss_liq_diff']
     except Exception as e:
-        raise Exception(f'failed to load live config {path}, {e}')
+        raise Exception(f'failed to load live config {live_config_path} {e}')
     return live_config
 
 
