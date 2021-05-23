@@ -214,13 +214,13 @@ def eqf(vals: [float], coeffs: [float]) -> float:
 
 
 @njit
-def calc_entry_price(balance, psize, pprice, MA, MA_ratios, iprc_PBr_coeffs, iprc_MAr_coeffs, rprc_MAr_coeffs,
+def calc_entry_price(balance, psize, pprice, MA, MA_ratios, rprc_PBr_coeffs, iprc_MAr_coeffs, rprc_MAr_coeffs,
                      inverse, c_mult):
     if psize == 0.0:
         return MA * eqf(MA_ratios, iprc_MAr_coeffs)
     else:
         pcost_bal_ratio = qty_to_cost(psize, pprice, inverse, c_mult) / balance
-        return pprice * (eqf(MA_ratios, rprc_MAr_coeffs) + eqf([pcost_bal_ratio**2, pcost_bal_ratio], iprc_PBr_coeffs))
+        return pprice * (eqf(MA_ratios, rprc_MAr_coeffs) + eqf([pcost_bal_ratio**2, pcost_bal_ratio], rprc_PBr_coeffs))
 
 
 @njit
@@ -264,7 +264,7 @@ def iter_orders(balance,
                 stop_psize_pct,
                 entry_liq_diff_thr,
                 iqty_MAr_coeffs,
-                iprc_PBr_coeffs,
+                rprc_PBr_coeffs,
                 iprc_MAr_coeffs,
                 rqty_MAr_coeffs,
                 rprc_MAr_coeffs,
@@ -279,7 +279,7 @@ def iter_orders(balance,
         if do_long:
             long_entry_price = min(highest_bid,
                                    round_dn(calc_entry_price(balance, long_psize, long_pprice, long_MA, MA_ratios,
-                                                             iprc_PBr_coeffs[0], iprc_MAr_coeffs[0],
+                                                             rprc_PBr_coeffs[0], iprc_MAr_coeffs[0],
                                                              rprc_MAr_coeffs[0], inverse, c_mult), price_step))
             if long_entry_price > 0.0:
                 long_entry_qty = calc_entry_qty(balance, long_psize, long_entry_price, MA_ratios, iqty_MAr_coeffs[0],
@@ -303,7 +303,7 @@ def iter_orders(balance,
         if do_shrt:
             shrt_entry_price = max(lowest_ask,
                                    round_up(calc_entry_price(balance, shrt_psize, shrt_pprice, shrt_MA, MA_ratios,
-                                                             iprc_PBr_coeffs[1], iprc_MAr_coeffs[1],
+                                                             rprc_PBr_coeffs[1], iprc_MAr_coeffs[1],
                                                              rprc_MAr_coeffs[1], inverse, c_mult), price_step))
             shrt_entry_qty = -calc_entry_qty(balance, shrt_psize, shrt_entry_price, MA_ratios, iqty_MAr_coeffs[1],
                                              rqty_MAr_coeffs[1], available_margin, inverse, c_mult,
@@ -407,12 +407,12 @@ def get_template_live_config():
             "stop_liq_diff_thr":  0.21,   # partially close pos at a loss if diff(liq, last) < thr
             "stop_psize_pct":     0.05,   # % of psize for stop loss order
             "entry_liq_diff_thr": 0.21,   # prevent entries whose filling would result in diff(new_liq, last) < thr
-            "iqty_MAr_coeffs":    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
-            "iprc_PBr_coeffs":    [0.0, 0.0],
-            "iprc_MAr_coeffs":    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
-            "rqty_MAr_coeffs":    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
-            "rprc_MAr_coeffs":    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
-            "markup_MAr_coeffs":  [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
+            "iqty_MAr_coeffs":    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.05],  # initial qty pct Moving Average ratio coeffs    formerly qty_pct
+            "iprc_MAr_coeffs":    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.992], # initial price pct Moving Average ratio coeffs  formerly ema_spread
+            "rqty_MAr_coeffs":    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.5],   # reentry qty pct Moving Average ratio coeffs    formerly ddown_factor
+            "rprc_MAr_coeffs":    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.995], # reentry price pct Moving Average ratio coeffs  formerly grid_spacing
+            "rprc_PBr_coeffs":    [0.0, 120.0],                               # reentry Position cost to Balance ratio coeffs (PBr**2, PBr)  formerly pos_margin_grid_coeff
+            "markup_MAr_coeffs":  [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.004], # markup price pct Moving Average ratio coeffs
             "MA_idx":             2
         },
         "shrt": {
@@ -423,12 +423,12 @@ def get_template_live_config():
             "stop_liq_diff_thr":  0.21,   # partially close pos at a loss if diff(liq, last) < thr
             "stop_psize_pct":     0.05,   # % of psize for stop loss order
             "entry_liq_diff_thr": 0.21,   # prevent entries whose filling would result in diff(new_liq, last) < thr
-            "iqty_MAr_coeffs":    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
-            "iprc_PBr_coeffs":    [0.0, 0.0],
-            "iprc_MAr_coeffs":    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
-            "rqty_MAr_coeffs":    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
-            "rprc_MAr_coeffs":    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
-            "markup_MAr_coeffs":  [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
+            "iqty_MAr_coeffs":    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.05],  # initial qty pct Moving Average ratio coeffs    formerly qty_pct
+            "iprc_MAr_coeffs":    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.992], # initial price pct Moving Average ratio coeffs  formerly ema_spread
+            "rqty_MAr_coeffs":    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.5],   # reentry qty pct Moving Average ratio coeffs    formerly ddown_factor
+            "rprc_MAr_coeffs":    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.995], # reentry price pct Moving Average ratio coeffs  formerly grid_spacing
+            "rprc_PBr_coeffs":    [0.0, 120.0],                               # reentry Position cost to Balance ratio coeffs (PBr**2, PBr)  formerly pos_margin_grid_coeff
+            "markup_MAr_coeffs":  [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.004], # markup price pct Moving Average ratio coeffs
             "MA_idx":             2
         }
     }
