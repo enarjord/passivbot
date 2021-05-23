@@ -255,9 +255,11 @@ class Downloader:
                 if not gaps.empty and (f != filenames[-1] or str(first_id - first_id % 100000) not in f):
                     last_id = df["trade_id"].iloc[-1]
                     for i in filenames:
-                        if str(first_id - first_id % 100000) in i and (str(
-                                first_id - first_id % 100000 + 99999) in i or str(
-                            highest_id) in i or highest_id > last_id) and first_id != 1 and i != f:
+                        tmp_first_id = int(i.split("_")[0])
+                        tmp_last_id = int(i.split("_")[1])
+                        if (first_id - first_id % 100000) == tmp_first_id and (
+                                (first_id - first_id % 100000 + 99999) == tmp_last_id or (
+                                highest_id == tmp_first_id or highest_id == tmp_last_id) or highest_id > last_id) and first_id != 1 and i != f:
                             exists = True
                             break
                 if missing and df["timestamp"].iloc[-1] > self.start_time and not exists:
