@@ -440,9 +440,9 @@ class Downloader:
                         df = tf
                     else:
                         df = pd.concat([df, tf])
-                        df.sort_values("trade_id", inplace=True)
-                        df.drop_duplicates("trade_id", inplace=True)
-                        df.reset_index(drop=True, inplace=True)
+                    df.sort_values("trade_id", inplace=True)
+                    df.drop_duplicates("trade_id", inplace=True)
+                    df.reset_index(drop=True, inplace=True)
 
                     if not df.empty and (
                             (df['trade_id'].iloc[0] % 100000 == 0 and len(df) >= 100000) or df['trade_id'].iloc[
