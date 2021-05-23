@@ -600,6 +600,15 @@ async def prep_config(args) -> dict:
     return config
 
 
+def load_live_config(path: str) -> dict:
+    try:
+        live_config = json.load(open(args.live_config_path))
+        if 'entry_liq_diff_thr' not in live_config:
+            live_config['entry_liq_diff_thr'] = live_config['stop_loss_liq_diff']
+    except Exception as e:
+        raise Exception(f'failed to load live config {path}, {e}')
+
+
 async def main():
 
     parser = argparse.ArgumentParser(prog='Downloader', description='Download ticks from exchange API.')
