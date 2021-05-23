@@ -171,9 +171,10 @@ class Bot:
 
     def set_config(self, config):
         config['ema_span'] = int(round(config['ema_span']))
-        config['stop_mode'] = self.stop_mode = None
-        if 'entry_liq_diff_thr' not in self.config:
-            self.config['entry_liq_diff_thr'] = self.config['stop_loss_liq_diff']
+        if 'stop_mode' not in config:
+            config['stop_mode'] = None
+        if 'entry_liq_diff_thr' not in config:
+            config['entry_liq_diff_thr'] = config['stop_loss_liq_diff']
         self.config = config
         for key in config:
             setattr(self, key, config[key])
