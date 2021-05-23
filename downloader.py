@@ -1,10 +1,14 @@
 import gc
+from datetime import datetime
+from io import BytesIO
+from time import sleep
+from urllib.request import urlopen
+from zipfile import ZipFile
 
 import hjson
+import numpy as np
 import pandas as pd
-import argparse
 from dateutil import parser, tz
-from time import sleep
 
 from passivbot import *
 
@@ -21,6 +25,7 @@ class Downloader:
         self.buyer_maker_filepath = os.path.join(config["caches_dirpath"],
                                                  f"{config['session_name']}_buyer_maker_cache.npy")
         self.time_filepath = os.path.join(config["caches_dirpath"], f"{config['session_name']}_time_cache.npy")
+        # self.qty_filepath = os.path.join(config["caches_dirpath"], f"{config['session_name']}_qty_cache.npy")
         self.tick_filepath = os.path.join(config["caches_dirpath"], f"{config['session_name']}_ticks_cache.npy")
         try:
             self.start_time = int(parser.parse(self.config["start_date"]).replace(
@@ -34,6 +39,8 @@ class Downloader:
                     parser.parse(self.end_time).replace(tzinfo=datetime.timezone.utc).timestamp() * 1000)
             except Exception:
                 print("Unrecognized date format for end time.")
+        if self.config['exchange'] == 'binance':
+            self.base_url = "https://data.binance.vision/data/futures/um/daily/aggTrades/"
 
     def validate_dataframe(self, df: pd.DataFrame) -> tuple:
         """
@@ -203,6 +210,39 @@ class Downloader:
             print_(['Found id for start time!'])
             return df[df["timestamp"] >= start_time]
 
+    def get_day(self, symbol, date):
+        """
+        Fetches a full day of trades from the Binance repository.
+        @param symbol: Symbol to fetch.
+        @param date: Day to download.
+        @return: Dataframe with full day.
+        """
+        print_(['Fetching day', symbol, date])
+        url = "{}{}/{}-aggTrades-{}.zip".format(self.base_url, symbol.upper(), symbol.upper(), date)
+        df = pd.DataFrame(columns=['trade_id', 'price', 'qty', 'timestamp', 'is_buyer_maker'])
+        try:
+            resp = urlopen(url)
+            with ZipFile(BytesIO(resp.read())) as my_zip_file:
+                for contained_file in my_zip_file.namelist():
+                    tf = pd.read_csv(my_zip_file.open(contained_file),
+                                     names=['trade_id', 'price', 'qty', 'first', 'last', 'timestamp', 'is_buyer_maker'])
+                    tf.drop(errors='ignore', columns=['first', 'last'], inplace=True)
+                    tf["trade_id"] = tf["trade_id"].astype(np.int64)
+                    tf["price"] = tf["price"].astype(np.float64)
+                    tf["qty"] = tf["qty"].astype(np.float64)
+                    tf["timestamp"] = tf["timestamp"].astype(np.int64)
+                    tf["is_buyer_maker"] = tf["is_buyer_maker"].astype(np.int8)
+                    tf.sort_values("trade_id", inplace=True)
+                    tf.drop_duplicates("trade_id", inplace=True)
+                    tf.reset_index(drop=True, inplace=True)
+                    if df.empty:
+                        df = tf
+                    else:
+                        df = pd.concat([df, tf])
+        except Exception as e:
+            print('Failed to fetch', date, e)
+        return df
+
     async def download_ticks(self):
         """
         Searches for previously downloaded files and fills gaps in them if necessary.
@@ -333,15 +373,56 @@ class Downloader:
 
         for gaps in chunk_gaps:
             start_time, end_time, start_id, end_id = gaps
+            df = pd.DataFrame()
+
+            current_id = start_id + 1
+            current_time = start_time
+
+            if self.config['exchange'] == 'binance':
+                if end_time == -1:
+                    dates = [date.strftime("%Y-%m-%d") for date in
+                             pd.date_range(start=datetime.datetime.fromtimestamp(start_time / 1000).date(),
+                                           end=datetime.datetime.today().date()).to_pydatetime()]
+                else:
+                    dates = [date.strftime("%Y-%m-%d") for date in
+                             pd.date_range(start=datetime.datetime.fromtimestamp(start_time / 1000).date(),
+                                           end=datetime.datetime.fromtimestamp(end_time / 1000).date()).to_pydatetime()]
+                df = pd.DataFrame(columns=['trade_id', 'price', 'qty', 'timestamp', 'is_buyer_maker'])
+
+                for date in dates:
+                    tf = self.get_day(self.config['symbol'], date)
+                    tf = tf[tf['timestamp'] >= start_time]
+                    if end_time != -1:
+                        tf = tf[tf['timestamp'] <= end_time]
+                    if start_id != 0:
+                        tf = tf[tf['trade_id'] > start_id]
+                    if end_id != 0:
+                        tf = tf[tf['trade_id'] <= end_id]
+                    if df.empty:
+                        df = tf
+                    else:
+                        df = pd.concat([df, tf])
+                        df.sort_values("trade_id", inplace=True)
+                        df.drop_duplicates("trade_id", inplace=True)
+                        df.reset_index(drop=True, inplace=True)
+
+                    if (df['trade_id'].iloc[0] % 100000 == 0 and len(df) >= 100000) or df['trade_id'].iloc[
+                        0] % 100000 != 0:
+                        for index, row in df[df['trade_id'] % 100000 == 0].iterrows():
+                            if index != 0:
+                                self.save_dataframe(df[(df['trade_id'] >= row['trade_id'] - 1000000) & (
+                                        df['trade_id'] < row['trade_id'])], "", True)
+                                df = df[df['trade_id'] >= row['trade_id']]
+                    if not df.empty:
+                        start_id = df["trade_id"].iloc[0] - 1
+                        start_time = df["timestamp"].iloc[0]
+                        current_time = df["timestamp"].iloc[-1]
+                        current_id = df["trade_id"].iloc[-1] + 1
 
             if start_id == 0:
                 df = await self.find_time(start_time)
                 current_id = df["trade_id"].iloc[-1] + 1
                 current_time = df["timestamp"].iloc[-1]
-            else:
-                df = pd.DataFrame()
-                current_id = start_id + 1
-                current_time = start_time
 
             end_id = sys.maxsize if end_id == 0 else end_id - 1
             end_time = sys.maxsize if end_time == -1 else end_time
@@ -459,11 +540,11 @@ class Downloader:
         #     drop=True)
         # df = df.groupby([(df.price != df.price.shift()).cumsum(), 'is_buyer_maker']).agg(
         #     {'price': 'first', 'is_buyer_maker': 'first', 'timestamp': 'first'}).reset_index(drop=True)
-        df = df.groupby((~((df.price == df.price.shift(1)) &
-                           (df.is_buyer_maker == df.is_buyer_maker.shift(1)))).cumsum()).agg(
+        df = df.groupby(
+            (~((df.price == df.price.shift(1)) & (df.is_buyer_maker == df.is_buyer_maker.shift(1)))).cumsum()).agg(
             {'price': 'first', 'is_buyer_maker': 'first', 'timestamp': 'first', 'qty': 'sum'})
 
-        #compressed_ticks = df[["price", "is_buyer_maker", "timestamp", "qty"]].values
+        # compressed_ticks = df[["price", "is_buyer_maker", "timestamp", "qty"]].values
         compressed_ticks = df[["price", "is_buyer_maker", "timestamp"]].values
 
         if single_file:
@@ -483,6 +564,10 @@ class Downloader:
             np.save(self.time_filepath, compressed_ticks[:, 2])
             print_(["Saved timestamp file!"])
 
+            # print_(["Saving qty file with", len(df), " ticks to", self.qty_filepath, "..."])
+            # np.save(self.qty_filepath, compressed_ticks[:, 3])
+            # print_(["Saved qty file!"])
+
     async def get_ticks(self, single_file: bool = False) -> (np.ndarray, np.ndarray, np.ndarray):
         """
         Function for direct use in the backtester. Checks if the numpy arrays exist and if so loads them.
@@ -499,19 +584,21 @@ class Downloader:
             tick_data = np.load(self.tick_filepath)
             return tick_data
         else:
-            if os.path.exists(self.price_filepath) and os.path.exists(self.buyer_maker_filepath) and \
-                    os.path.exists(self.time_filepath):
+            if os.path.exists(self.price_filepath) and os.path.exists(self.buyer_maker_filepath) and os.path.exists(
+                    self.time_filepath):  # and os.path.exists(self.qty_filepath):
                 print_(['Loading cached tick data from', self.tick_filepath])
                 price_data = np.load(self.price_filepath)
                 buyer_maker_data = np.load(self.buyer_maker_filepath)
                 time_data = np.load(self.time_filepath)
-                if len(price_data) == len(buyer_maker_data) == len(time_data):
-                    return price_data, buyer_maker_data, time_data
+                # qty_data = np.load(self.qty_filepath)
+                if len(price_data) == len(buyer_maker_data) == len(time_data):  # == len(qty_data):
+                    return price_data, buyer_maker_data, time_data  # , qty_data
                 else:
                     print_(['Tick data does not match, starting over...'])
                     del price_data
                     del buyer_maker_data
                     del time_data
+                    # del qty_data
                     gc.collect()
 
             await self.download_ticks()
@@ -519,7 +606,8 @@ class Downloader:
             price_data = np.load(self.price_filepath)
             buyer_maker_data = np.load(self.buyer_maker_filepath)
             time_data = np.load(self.time_filepath)
-            return price_data, buyer_maker_data, time_data
+            # qty_data = np.load(self.qty_filepath)
+            return price_data, buyer_maker_data, time_data  # , qty_data
 
 
 def get_dummy_settings(user: str, exchange: str, symbol: str):
@@ -612,7 +700,6 @@ def load_live_config(path: str) -> dict:
 
 
 async def main():
-
     parser = argparse.ArgumentParser(prog='Downloader', description='Download ticks from exchange API.')
     parser = add_argparse_args(parser)
 
@@ -623,7 +710,6 @@ async def main():
     if not args.download_only:
         await downloader.prepare_files(True)
     sleep(0.1)
-
 
 
 if __name__ == "__main__":
