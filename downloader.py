@@ -6,9 +6,8 @@ from urllib.request import urlopen
 from zipfile import ZipFile
 
 import hjson
-import numpy as np
 import pandas as pd
-from dateutil import parser, tz
+from dateutil import parser
 
 from passivbot import *
 
@@ -40,7 +39,8 @@ class Downloader:
             except Exception:
                 print("Unrecognized date format for end time.")
         if self.config['exchange'] == 'binance':
-            self.base_url = "https://data.binance.vision/data/futures/um/daily/aggTrades/"
+            self.daily_base_url = "https://data.binance.vision/data/futures/um/daily/aggTrades/"
+            self.monthly_base_url = "https://data.binance.vision/data/futures/um/monthly/aggTrades/"
 
     def validate_dataframe(self, df: pd.DataFrame) -> tuple:
         """
@@ -210,15 +210,15 @@ class Downloader:
             print_(['Found id for start time!'])
             return df[df["timestamp"] >= start_time]
 
-    def get_day(self, symbol, date):
+    def get_zip(self, base_url, symbol, date):
         """
         Fetches a full day of trades from the Binance repository.
         @param symbol: Symbol to fetch.
         @param date: Day to download.
         @return: Dataframe with full day.
         """
-        print_(['Fetching day', symbol, date])
-        url = "{}{}/{}-aggTrades-{}.zip".format(self.base_url, symbol.upper(), symbol.upper(), date)
+        print_(['Fetching', symbol, date])
+        url = "{}{}/{}-aggTrades-{}.zip".format(base_url, symbol.upper(), symbol.upper(), date)
         df = pd.DataFrame(columns=['trade_id', 'price', 'qty', 'timestamp', 'is_buyer_maker'])
         try:
             resp = urlopen(url)
@@ -308,7 +308,7 @@ class Downloader:
                         print_(['Filling gaps from id', gaps["start"].iloc[i], 'to id', gaps["end"].iloc[i]])
                         current_id = gaps["start"].iloc[i]
                         while current_id < gaps["end"].iloc[i] and int(
-                                datetime.datetime.now(tz.UTC).timestamp() * 1000) - current_time > 10000:
+                                datetime.datetime.now(datetime.timezone.utc).timestamp() * 1000) - current_time > 10000:
                             loop_start = time()
                             try:
                                 fetched_new_trades = await self.bot.fetch_ticks(int(current_id))
@@ -379,18 +379,56 @@ class Downloader:
             current_time = start_time
 
             if self.config['exchange'] == 'binance':
+                fetched_new_trades = await self.bot.fetch_ticks(1)
+                tf = self.transform_ticks(fetched_new_trades)
+                earliest = tf['timestamp'].iloc[0]
+
+                if earliest > start_time:
+                    start_time = earliest
+                    current_time = start_time
+
                 if end_time == -1:
-                    dates = [date.strftime("%Y-%m-%d") for date in
-                             pd.date_range(start=datetime.datetime.fromtimestamp(start_time / 1000).date(),
-                                           end=datetime.datetime.today().date()).to_pydatetime()]
+                    tmp = pd.date_range(
+                        start=datetime.datetime.fromtimestamp(start_time / 1000, datetime.timezone.utc).date(),
+                        end=datetime.datetime.now(datetime.timezone.utc).date(), freq='M').to_pydatetime()
                 else:
-                    dates = [date.strftime("%Y-%m-%d") for date in
-                             pd.date_range(start=datetime.datetime.fromtimestamp(start_time / 1000).date(),
-                                           end=datetime.datetime.fromtimestamp(end_time / 1000).date()).to_pydatetime()]
+                    tmp = pd.date_range(
+                        start=datetime.datetime.fromtimestamp(start_time / 1000, datetime.timezone.utc).date(),
+                        end=datetime.datetime.fromtimestamp(end_time / 1000, datetime.timezone.utc).date(),
+                        freq='M').to_pydatetime()
+
+                months = [date.strftime("%Y-%m") for date in tmp]
+
+                if months:
+                    new_start_time = datetime.datetime.combine(tmp[-1], datetime.time.max,
+                                                               datetime.timezone.utc).timestamp() * 1000 + 0.001
+                else:
+                    new_start_time = start_time
+
+                if end_time == -1:
+                    tmp = pd.date_range(
+                        start=datetime.datetime.fromtimestamp(new_start_time / 1000, datetime.timezone.utc).date(),
+                        end=datetime.datetime.now(datetime.timezone.utc).date(), freq='D').to_pydatetime()
+                else:
+                    tmp = pd.date_range(
+                        start=datetime.datetime.fromtimestamp(new_start_time / 1000, datetime.timezone.utc).date(),
+                        end=datetime.datetime.fromtimestamp(end_time / 1000, datetime.timezone.utc).date(),
+                        freq='D').to_pydatetime()
+
+                days = [date.strftime("%Y-%m-%d") for date in tmp]
+                dates = months
+                dates.extend(days)
+
                 df = pd.DataFrame(columns=['trade_id', 'price', 'qty', 'timestamp', 'is_buyer_maker'])
 
                 for date in dates:
-                    tf = self.get_day(self.config['symbol'], date)
+                    if len(date.split('-')) == 2:
+                        tf = self.get_zip(self.monthly_base_url, self.config['symbol'], date)
+                    elif len(date.split('-')) == 3:
+                        tf = self.get_zip(self.daily_base_url, self.config['symbol'], date)
+                    else:
+                        print("Something wrong with the date", date)
+                        tf = pd.DataFrame()
                     tf = tf[tf['timestamp'] >= start_time]
                     if end_time != -1:
                         tf = tf[tf['timestamp'] <= end_time]
@@ -406,8 +444,9 @@ class Downloader:
                         df.drop_duplicates("trade_id", inplace=True)
                         df.reset_index(drop=True, inplace=True)
 
-                    if (df['trade_id'].iloc[0] % 100000 == 0 and len(df) >= 100000) or df['trade_id'].iloc[
-                        0] % 100000 != 0:
+                    if not df.empty and (
+                            (df['trade_id'].iloc[0] % 100000 == 0 and len(df) >= 100000) or df['trade_id'].iloc[
+                        0] % 100000 != 0):
                         for index, row in df[df['trade_id'] % 100000 == 0].iterrows():
                             if index != 0:
                                 self.save_dataframe(df[(df['trade_id'] >= row['trade_id'] - 1000000) & (
@@ -427,8 +466,8 @@ class Downloader:
             end_id = sys.maxsize if end_id == 0 else end_id - 1
             end_time = sys.maxsize if end_time == -1 else end_time
 
-            if current_id <= end_id and current_time <= end_time and \
-                    int(datetime.datetime.now(tz.UTC).timestamp() * 1000) - current_time > 10000:
+            if current_id <= end_id and current_time <= end_time and int(
+                    datetime.datetime.now(datetime.timezone.utc).timestamp() * 1000) - current_time > 10000:
                 if end_time == sys.maxsize:
                     print_(['Downloading from', ts_to_date(float(current_time) / 1000), 'to current time...'])
                 else:
@@ -436,7 +475,7 @@ class Downloader:
                             ts_to_date(float(end_time) / 1000)])
 
             while current_id <= end_id and current_time <= end_time and int(
-                    datetime.datetime.now(tz.UTC).timestamp() * 1000) - current_time > 10000:
+                    datetime.datetime.now(datetime.timezone.utc).timestamp() * 1000) - current_time > 10000:
                 loop_start = time()
                 fetched_new_trades = await self.bot.fetch_ticks(int(current_id))
                 tf = self.transform_ticks(fetched_new_trades)
