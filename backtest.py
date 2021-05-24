@@ -10,7 +10,7 @@ import pandas as pd
 import argparse
 from plotting import dump_plots
 
-from downloader import Downloader, prep_config
+from downloader import Downloader, prep_config, load_live_config
 from jitted import calc_diff, round_, iter_entries, iter_long_closes, iter_shrt_closes, calc_available_margin, \
     calc_liq_price_binance, calc_liq_price_bybit, calc_new_psize_pprice, calc_long_pnl, calc_shrt_pnl, calc_cost, \
     iter_indicator_chunks, round_dynamic
@@ -311,12 +311,7 @@ async def main():
     downloader = Downloader(config)
     ticks = await downloader.get_ticks(True)
     config['n_days'] = round_((ticks[-1][2] - ticks[0][2]) / (1000 * 60 * 60 * 24), 0.1)
-    try:
-        live_config = json.load(open(args.live_config_path))
-        print('backtesting and plotting given candidate')
-    except Exception as e:
-        print('failed to load live config')
-        return
+    live_config = load_live_config(args.live_config_path)
     print(json.dumps(live_config, indent=4))
     plot_wrap(config, ticks, live_config)
 
