@@ -337,11 +337,12 @@ def iter_entries(
                                            leverage)
                     new_long_psize, new_long_pprice = calc_new_psize_pprice(long_psize, long_pprice,
                                                                             qty, price, qty_step)
-                    long_entry = (qty, price, new_long_psize, new_long_pprice, 'long_reentry')
-                bankruptcy_price = calc_bankruptcy_price(balance, new_long_psize, new_long_pprice,
-                                                         shrt_psize, shrt_pprice, inverse, contract_multiplier)
-                if calc_diff(bankruptcy_price, last_price) < entry_liq_diff_thr:
-                    long_entry = (0.0, 0.0, long_psize, long_pprice, '')
+                    bankruptcy_price = calc_bankruptcy_price(balance, new_long_psize, new_long_pprice,
+                                                             shrt_psize, shrt_pprice, inverse, contract_multiplier)
+                    if calc_diff(bankruptcy_price, last_price) < entry_liq_diff_thr:
+                        long_entry = (0.0, 0.0, long_psize, long_pprice, '')
+                    else:
+                        long_entry = (qty, price, new_long_psize, new_long_pprice, 'long_reentry')
         else:
             long_entry = (0.0, 0.0, long_psize, long_pprice, '')
 
@@ -364,11 +365,12 @@ def iter_entries(
                                         leverage)
                 new_shrt_psize, new_shrt_pprice = calc_new_psize_pprice(shrt_psize, shrt_pprice, qty, price,
                                                                         qty_step)
-                shrt_entry = (qty, price, new_shrt_psize, new_shrt_pprice, 'shrt_reentry')
                 bankruptcy_price = calc_bankruptcy_price(balance, long_psize, long_pprice,
                                                          new_shrt_psize, new_shrt_pprice, inverse, contract_multiplier)
                 if calc_diff(bankruptcy_price, last_price) < entry_liq_diff_thr:
                     shrt_entry = (0.0, 0.0, shrt_psize, shrt_pprice, '')
+                else:
+                    shrt_entry = (qty, price, new_shrt_psize, new_shrt_pprice, 'shrt_reentry')
         else:
             shrt_entry = (0.0, 0.0, shrt_psize, shrt_pprice, '')
 
