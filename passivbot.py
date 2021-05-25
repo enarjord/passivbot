@@ -672,6 +672,12 @@ def add_argparse_args(parser):
     parser.add_argument('-u', '--user', type=str, required=False, dest='user',
                         default='none',
                         help='specify user, a.k.a. account_name, overriding user from backtest config')
+    parser.add_argument('--start-date', type=str, required=False, dest='start_date',
+                        default='none',
+                        help='specify start date, overriding value from backtest config')
+    parser.add_argument('--end-date', type=str, required=False, dest='end_date',
+                        default='none',
+                        help='specify end date, overriding value from backtest config')
     return parser
 
 
