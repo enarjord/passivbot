@@ -232,8 +232,7 @@ def calc_ientry_price(MA, MA_ratios, iprc_const, iprc_MAr_coeffs):
 def calc_rentry_price(balance, psize, pprice, MA_ratios, rprc_const, rprc_PBr_coeffs, rprc_MAr_coeffs, inverse, c_mult):
     # returns unrounded price
     pcost_bal_ratio = qty_to_cost(psize, pprice, inverse, c_mult) / balance
-    return pprice * (rprc_const + eqf(MA_ratios, rprc_MAr_coeffs) + eqf([pcost_bal_ratio**2, pcost_bal_ratio],
-                                                                        rprc_PBr_coeffs))
+    return pprice * (rprc_const + eqf(MA_ratios, rprc_MAr_coeffs) + eqf(np.array([pcost_bal_ratio]), rprc_PBr_coeffs))
 
 
 @njit
