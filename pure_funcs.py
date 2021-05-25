@@ -126,10 +126,11 @@ def iter_MA_ratios_chunks(xs: [float], spans: [int], chunk_size: int = 65536):
 
     @njit
     def calc_emas_(alphas, alphas_, shape, xs_, first_val, kc):
-        emas_ = np.empty(shape, dtype=np.float64):
+        emas_ = np.empty(shape, dtype=np.float64)
         emas_[0] = first_val
-        for i in range(1, len(emas_)):
+        for i in range(1, min(len(xs_) - kc, len(emas_))):
             emas_[i] = emas_[i - 1] * alphas_ + xs_[kc + i] * alphas
+        return emas_
 
     max_spans = max(spans)
     if len(xs) < max_spans:
@@ -148,11 +149,12 @@ def iter_MA_ratios_chunks(xs: [float], spans: [int], chunk_size: int = 65536):
 
     for k in range(1, n_chunks):
         kc = chunk_size * k
+        if kc >= len(xs):
+            break
         #### unfinished
         new_emass = calc_emas_(alphas, alphas_, shape, xs, emass[-1] * alphas_ + xs[kc] * alphas, kc)
         yield to_ratios(new_emass), k
         emass = new_emass
-    return emass
 
 
 @njit
@@ -496,7 +498,8 @@ def calc_bankruptcy_price(balance,
 
 
 def calc_spans(min_span: int, max_span: int, n_spans) -> [int]:
-    return [1] + [int(round(min_span * ((max_span / min_span)**(1 / (n_spans - 1))) ** i)) for i in range(0, n_spans)]
+    return np.array([1] + [int(round(min_span * ((max_span / min_span)**(1 / (n_spans - 1))) ** i))
+                           for i in range(0, n_spans)])
 
 
 def get_starting_coeffs(n_spans: int):

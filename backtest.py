@@ -11,7 +11,8 @@ import argparse
 from plotting import dump_plots
 
 from downloader import Downloader, prep_config, load_live_config
-from pure_funcs import create_xk, calc_bankruptcy_price, iter_orders
+from pure_funcs import create_xk, calc_bankruptcy_price, iter_orders, calc_long_pnl, calc_shrt_pnl, \
+    iter_MA_ratios_chunks, calc_spans
 from passivbot import make_get_filepath, ts_to_date, get_keys, add_argparse_args
 
 
@@ -26,12 +27,6 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, list, bo
     long_pprice, long_psize, shrt_pprice, shrt_psize = 0.0, 0.0, 0.0, 0.0
 
     xk = create_xk(config)
-    return xk, None, None
-
-    if config['exchange'] == 'binance':
-        calc_liq_price = calc_liq_price_binance
-    elif config['exchange'] == 'bybit':
-        calc_liq_price = calc_liq_price_bybit
 
     prev_long_close_ts, prev_long_entry_ts, prev_long_close_price = 0, 0, 0.0
     prev_shrt_close_ts, prev_shrt_entry_ts, prev_shrt_close_price = 0, 0, 0.0
@@ -43,9 +38,9 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, list, bo
 
     def stats_update():
         upnl_l = x if (x := calc_long_pnl(long_pprice, tick[0], long_psize, xk['inverse'],
-                                          xk['contract_multiplier'])) == x else 0.0
+                                          xk['c_mult'])) == x else 0.0
         upnl_s = y if (y := calc_shrt_pnl(shrt_pprice, tick[0], shrt_psize, xk['inverse'],
-                                          xk['contract_multiplier'])) == y else 0.0
+                                          xk['c_mult'])) == y else 0.0
         stats.append({'timestamp': tick[2],
                       'balance': balance,  # Redundant with fills, but makes plotting easier
                       'equity': balance + upnl_l + upnl_s})
@@ -54,19 +49,17 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, list, bo
     fills = []
     bids, asks = [], []
     ob = [min(ticks[0][0], ticks[1][0]), max(ticks[0][0], ticks[1][0])]
-    ema_span = int(round(config['ema_span']))
-    # emas = calc_emas(ticks[:, 0], ema_span)
-    # price_stds = calc_stds(ticks[:, 0], ema_span)
-    # volatilities = price_stds / emas
+    min_span = int(round(config['min_span']))
+    max_span = int(round(config['max_span']))
+    spans = calc_spans(min_span, max_span, config['n_spans'])
 
-    ema_std_iterator = iter_indicator_chunks(ticks[:, 0], ema_span)
-    ema_chunk, std_chunk, z = next(ema_std_iterator)
-    volatility_chunk = std_chunk / ema_chunk
+    ratios_iterator = iter_MA_ratios_chunks(ticks[:, 0], spans)
+    ratios_chunk, z = next(ratios_iterator)
     zc = 0
 
-    closest_liq = 1.0
+    closest_bkr = 1.0
 
-    prev_update_plus_delay = ticks[ema_span][2] + latency_simulation_ms
+    prev_update_plus_delay = ticks[max_span][2] + latency_simulation_ms
     update_triggered = False
     prev_update_plus_5sec = 0
 
@@ -74,18 +67,17 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, list, bo
     stats_update()
 
     # tick tuple: (price, buyer_maker, timestamp)
-    for k, tick in enumerate(ticks[ema_span:], start=ema_span):
+    for k, tick in enumerate(ticks[max_span:], start=max_span):
 
         chunk_i = k - zc
         if chunk_i >= len(ema_chunk):
-            ema_chunk, std_chunk, z = next(ema_std_iterator)
-            volatility_chunk = std_chunk / ema_chunk
+            ratios, z = next(ema_std_iterator)
             zc = z * len(ema_chunk)
             chunk_i = k - zc
 
         # Update the stats every 1/2 hour
         if tick[2] > next_stats_update:
-            closest_liq = min(closest_liq, calc_diff(bkr_price, tick[0]))
+            closest_bkr = min(closest_bkr, calc_diff(bkr_price, tick[0]))
             stats_update()
             next_stats_update = tick[2] + 1000 * 60 * 30
 
@@ -95,9 +87,9 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, list, bo
                 fills.append({'qty': -long_psize, 'price': tick[0], 'pside': 'long',
                               'type': 'long_liquidation', 'side': 'sel',
                               'pnl': calc_long_pnl(long_pprice, tick[0], long_psize, xk['inverse'],
-                                                   xk['contract_multiplier']),
+                                                   xk['c_mult']),
                               'fee_paid': -calc_cost(long_psize, tick[0], xk['inverse'],
-                                                     xk['contract_multiplier']) * config['taker_fee'],
+                                                     xk['c_mult']) * config['taker_fee'],
                               'long_psize': 0.0, 'long_pprice': 0.0, 'shrt_psize': 0.0,
                               'shrt_pprice': 0.0, 'bkr_price': 0.0, 'bkr_diff': 1.0})
                 long_psize, long_pprice, shrt_psize, shrt_pprice = 0.0, 0.0, 0.0, 0.0
@@ -110,11 +102,11 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, list, bo
                             bid = bids.pop(0)
                             fill = {'qty': bid[0], 'price': bid[1], 'side': 'buy', 'type': bid[4],
                                     'fee_paid': -calc_cost(bid[0], bid[1], xk['inverse'],
-                                                           xk['contract_multiplier']) * config['maker_fee']}
+                                                           xk['c_mult']) * config['maker_fee']}
                             if 'close' in bid[4]:
                                 fill['pnl'] = calc_shrt_pnl(shrt_pprice, bid[1], bid[0],
                                                             xk['inverse'],
-                                                            xk['contract_multiplier'])
+                                                            xk['c_mult'])
                                 shrt_psize = min(0.0, round_(shrt_psize + bid[0], config['qty_step']))
                                 fill.update({'pside': 'shrt', 'long_psize': long_psize,
                                              'long_pprice': long_pprice, 'shrt_psize': shrt_psize,
@@ -141,9 +133,9 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, list, bo
                 fills.append({'qty': -shrt_psize, 'price': tick[0], 'pside': 'shrt',
                               'type': 'shrt_liquidation', 'side': 'buy',
                               'pnl': calc_shrt_pnl(shrt_pprice, tick[0], shrt_psize, xk['inverse'],
-                                                   xk['contract_multiplier']),
+                                                   xk['c_mult']),
                               'fee_paid': -calc_cost(shrt_psize, tick[0], xk['inverse'],
-                                                     xk['contract_multiplier']) * config['taker_fee'],
+                                                     xk['c_mult']) * config['taker_fee'],
                               'long_psize': 0.0, 'long_pprice': 0.0, 'shrt_psize': 0.0,
                               'shrt_pprice': 0.0, 'bkr_price': 0.0, 'bkr_diff': 1.0})
                 long_psize, long_pprice, shrt_psize, shrt_pprice = 0.0, 0.0, 0.0, 0.0
@@ -156,11 +148,11 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, list, bo
                             ask = asks.pop(0)
                             fill = {'qty': ask[0], 'price': ask[1], 'side': 'sel', 'type': ask[4],
                                     'fee_paid': -calc_cost(ask[0], ask[1], xk['inverse'],
-                                                           xk['contract_multiplier']) * config['maker_fee']}
+                                                           xk['c_mult']) * config['maker_fee']}
                             if 'close' in ask[4]:
                                 fill['pnl'] = calc_long_pnl(long_pprice, ask[1], ask[0],
                                                             xk['inverse'],
-                                                            xk['contract_multiplier'])
+                                                            xk['c_mult'])
                                 long_psize = max(0.0, round_(long_psize + ask[0], config['qty_step']))
                                 fill.update({'pside': 'long', 'long_psize': long_psize,
                                              'long_pprice': long_pprice, 'shrt_psize': shrt_psize,
@@ -191,7 +183,7 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, list, bo
             update_triggered = False
             bids, asks = [], []
             bkr_diff = calc_diff(bkr_price, tick[0])
-            closest_liq = min(closest_liq, bkr_diff)
+            closest_bkr = min(closest_bkr, bkr_diff)
             for tpl in iter_entries(balance, long_psize, long_pprice, shrt_psize, shrt_pprice,
                                     bkr_price, ob[0], ob[1], ema_chunk[k - zc], tick[0],
                                     volatility_chunk[k - zc], **xk):
@@ -216,20 +208,20 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, list, bo
             for fill in fills:
                 balance += fill['pnl'] + fill['fee_paid']
                 upnl_l = calc_long_pnl(long_pprice, tick[0], long_psize, xk['inverse'],
-                                       xk['contract_multiplier'])
+                                       xk['c_mult'])
                 upnl_s = calc_shrt_pnl(shrt_pprice, tick[0], shrt_psize, xk['inverse'],
-                                       xk['contract_multiplier'])
+                                       xk['c_mult'])
 
                 bkr_price = calc_liq_price(balance, long_psize, long_pprice,
                                            shrt_psize, shrt_pprice, xk['inverse'],
-                                           xk['contract_multiplier'], config['max_leverage'])
+                                           xk['c_mult'], config['max_leverage'])
                 bkr_diff = calc_diff(bkr_price, tick[0])
                 fill.update({'bkr_price': bkr_price, 'bkr_diff': bkr_diff})
 
                 fill['equity'] = balance + upnl_l + upnl_s
                 fill['available_margin'] = calc_available_margin(
                     balance, long_psize, long_pprice, shrt_psize, shrt_pprice, tick[0],
-                    xk['inverse'], xk['contract_multiplier'], xk['leverage']
+                    xk['inverse'], xk['c_mult'], xk['leverage']
                 )
                 for side_ in ['long', 'shrt']:
                     if fill[f'{side_}_pprice'] == 0.0:
@@ -238,8 +230,8 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, list, bo
                 fill['timestamp'] = tick[2]
                 fill['trade_id'] = k
                 fill['gain'] = fill['equity'] / config['starting_balance']
-                fill['n_days'] = (tick[2] - ticks[ema_span][2]) / (1000 * 60 * 60 * 24)
-                fill['closest_liq'] = closest_liq
+                fill['n_days'] = (tick[2] - ticks[max_span][2]) / (1000 * 60 * 60 * 24)
+                fill['closest_bkr'] = closest_bkr
                 try:
                     fill['average_daily_gain'] = fill['gain'] ** (1 / fill['n_days']) \
                         if (fill['n_days'] > 0.5 and fill['gain'] > 0.0) else 0.0
@@ -251,7 +243,7 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, list, bo
             if do_print:
                 line = f"\r{k / len(ticks):.3f} "
                 line += f"adg {all_fills[-1]['average_daily_gain']:.4f} "
-                line += f"closest_liq {closest_liq:.4f} "
+                line += f"closest_bkr {closest_bkr:.4f} "
                 print(line, end=' ')
 
     tick = ticks[-1]
