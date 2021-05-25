@@ -1,0 +1,20 @@
+#How it works
+
+##Grid Trading
+
+PassivBot uses a preferential buy / sell grid to scalp trade indecisive price action. A grid consists of a range of buy and sell orders wherein a position is entered, and doubled down on as the price moves against the trade. This is known as the Martingale Strategy and is a key factor of Passiv's underlying strategy. Dollar cost averaging into the position averages out the breakeven price closer to the mark price, and when the market rebounds or pulls back, limit “reduce” orders are used to slowly scale out of your position at the average mark price within your take profit range. Grid trading essentially trades volatility in arbitrary ranges set by a certain risk tolerance, margin balance, and aggression coefficient. As such, they can operate fairly quickly, executing order changes up to once per-second and sometimes filling orders even faster.
+
+Traditional grid trading is slower, as properly weighting risk for the ranges requires a high step coefficient, and reduces the average purchased amount per-entry. Traditional grid trading often involves creating a buy and sell grid over a very large swath of price history with fixed values. Traders not willing to face potential liquidation are relegated to trading with a fraction of their futures balance, and must monitor the positions somewhat regularly to prevent fast price movement from destroying a trade or eating away at profits. As a result, traditional grid traders may have hundreds or thousands of entry orders and just as many exit orders. This prevents double down rules from letting the liquidation price go awry, but has a negative effect on short term P/L, especially when trading with small sums. Comparing these more conservative algorithms to other less risky investments, an interest account for example, reveals little added benefit to using a grid trading layout over just sticking your money in a bank, and often implies more risk.
+
+##Preferential Grid Trading
+
+Preferential grid trading takes the fundamentals of grid trading and expunges upon them to attempt to form an algorithm that not only DCA’s it’s entries and exits based on relative price action, but tries to predict or go with the major trend using external data. Using indicators in tandem with exchange data (ex. volatility indicator + volume) allows a given program to add preference values to a given position (long or short) to influence the next re-entry. The indicators used can be anything, so long as there is a definite rule. In essence, simply adding an exponential moving average does nothing unless the bot has a ruleset by which to interpret the EMA. Older versions of PassivBot utilize indicators in this way, while newer versions (v3+) replace this logic. Newer logic uses hedged positions that attempt to profit on both sides of volatility, and hold the losing position until there is a reasonable or profitable exit point.
+
+##PassivBot Implementation
+
+PassivBot is a Python 3 implementation of the aforementioned grid trading framework designed around Perpetual Futures Derivatives. The bot is designed simply as a framework for conducting grid trading, and doesn’t have any set preference, although it comes with example configurations to define expected formatting. PassivBot can be broken down into three distinct sections of operation:
+
+Configuration & API Keys – Connecting your exchange with PassivBot using API keys, and understanding the configuration files.
+Backtesting Configurations – Testing a given configuration over previous price history, and using iterating loops to find desirable / profitable settings.
+Live Usage – Using the bot in a live account, expected behavior, typical quirks, risks, and troubleshooting.
+For version specific information about configuring or using your version of the bot, refer to your version's documentation.
