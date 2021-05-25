@@ -107,7 +107,10 @@ def simple_sliding_window_wrap(config, ticks):
                 if k == 'closest_liq':
                     result[k] = np.min([r[k] for r in results])
                 elif k == 'average_daily_gain':
-                    result[k] = (np.sum([r[k] * r['n_days'] for r in results]) / np.sum([r['n_days'] for r in results]))
+                    if (denominator := np.sum([r['n_days'] for r in results])) == 0.0:
+                        result[k] = 1.0
+                    else:
+                        result[k] = np.sum([r[k] * r['n_days'] for r in results]) / denominator
                     result['adjusted_daily_gain'] = np.mean(
                         [tanh(r[k]) for r in results]) * finished_windows / n_windows
                 elif 'max_hrs_no_fills' in k:

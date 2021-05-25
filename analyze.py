@@ -24,7 +24,7 @@ def candidate_to_live_config(candidate: dict) -> dict:
               "n_close_orders", "grid_spacing", "pos_margin_grid_coeff",
               "volatility_grid_coeff", "volatility_qty_coeff", "min_markup",
               "markup_range", "do_long", "do_shrt", "ema_span", "ema_spread", "stop_loss_liq_diff",
-              "stop_loss_pos_pct", "symbol"]:
+              "stop_loss_pos_pct", "entry_liq_diff_thr", "symbol"]:
         if k in candidate:
             live_config[k] = candidate[k]
         else:
