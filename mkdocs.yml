@@ -8,6 +8,7 @@ nav:
   - Backtesting: backtesting.md
   - optimizer: optimizer.md
   - Telegram: telegram.md
+  - Developers: developers.md
   - FAQ: faq.md
 theme:
   name: material
