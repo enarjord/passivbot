@@ -17,6 +17,17 @@ else:
     from numba import njit
 
 
+def flatten_dict(d, parent_key='', sep='_'):
+    items = []
+    for k, v in d.items():
+        new_key = parent_key + sep + k if parent_key else k
+        if type(v) == dict:
+            items.extend(flatten_dict(v, new_key, sep=sep).items())
+        else:
+            items.append((new_key, v))
+    return dict(items)
+
+
 @njit
 def round_dynamic(n: float, d: int):
     if n == 0.0:
@@ -472,6 +483,72 @@ def calc_spans(min_span: int, max_span: int, n_spans) -> [int]:
 
 def get_starting_coeffs(n_spans: int):
     return np.array([[(x := 1 / (n_spans * 2)), x]] * n_spans)
+
+
+def fill_template_config(c, r=False):
+    for side in ['long', 'shrt']:
+        for k in c[side]:
+            if 'MAr' in k:
+                c[side][k] = get_starting_coeffs(c['n_spans'])
+                if r:
+                    c[side][k] += np.random.random(c[side][k].shape) * 0.1 - 0.05
+            elif 'PBr' in k:
+                c[side][k] = get_starting_coeffs(1)
+                if r:
+                    c[side][k] += np.random.random(c[side][k].shape) * 0.1 - 0.05
+    return c
+
+
+def unpack_config(d):
+    new = {}
+    for k, v in flatten_dict(d, sep='§').items():
+        try:
+            assert type(v) != str
+            for _ in v:
+                break
+            for i in range(len(v)):
+                new[f'{k}${str(i).zfill(3)}'] = v[i]
+        except:
+            new[k] = v
+    if new == d:
+        return new
+    return unpack_config(new)
+
+
+def pack_config(d):
+    result = {}
+    while any('$' in k for k in d):
+        new = {}
+        for k, v in d.items():
+            if '$' in k:
+                ks = k.split('$')
+                k0 = '$'.join(ks[:-1])
+                if k0 in new:
+                    new[k0].append(v)
+                else:
+                    new[k0] = [v]
+            else:
+                new[k] = v
+        d = new
+    new = {}
+    for k, v in d.items():
+        if type(v) == list:
+            new[k] = np.array(v)
+        else:
+            new[k] = v
+    d = new
+                
+    new = {}
+    for k, v in d.items():
+        if '§' in k:
+            k0, k1 = k.split('§')
+            if k0 in new:
+                new[k0][k1] = v
+            else:
+                new[k0] = {k1: v}
+        else:
+            new[k] = v
+    return new
 
 
 def get_template_live_config():
