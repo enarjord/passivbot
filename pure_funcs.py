@@ -185,11 +185,11 @@ def calc_available_margin(balance,
     if long_pprice and long_psize:
         long_psize_real = long_psize * c_mult
         equity += calc_long_pnl(long_pprice, last_price, long_psize_real, inverse, c_mult)
-        used_margin += qty_to_cost(long_psize_real, long_pprice, inverse, c_mult) / leverage
+        used_margin += qty_to_cost(long_psize_real, long_pprice, inverse, c_mult) / leverage[0]
     if shrt_pprice and shrt_psize:
         shrt_psize_real = shrt_psize * c_mult
         equity += calc_shrt_pnl(shrt_pprice, last_price, shrt_psize_real, inverse, c_mult)
-        used_margin += qty_to_cost(shrt_psize_real, shrt_pprice, inverse, c_mult) / leverage
+        used_margin += qty_to_cost(shrt_psize_real, shrt_pprice, inverse, c_mult) / leverage[1]
     return max(0.0, equity - used_margin)
 
 
@@ -293,7 +293,7 @@ def iter_orders(balance,
     :param min_qty: float
     :param min_cost: float
     :param c_mult: float
-    :param leverage: int
+    :param leverage: tuple(int, int)
     :param hedge_bkr_diff_thr: tuple(float, float)
     :param hedge_psize_pct: tuple(float, float)
     :param stop_bkr_diff_thr: tuple(float, float)
@@ -561,11 +561,11 @@ def get_template_live_config():
         "min_span": 6000,
         "max_span": 300000,
         "n_spans": 3,
-        "leverage":           10,     # borrow cap
         "hedge_psize_pct":    0.05,   # % of psize for hedge order
         "stop_psize_pct":     0.05,   # % of psize for stop loss order
         "long": {
             "enabled":            True,
+            "leverage":           10,     # borrow cap
             "hedge_bkr_diff_thr": 0.5,    # make counter order if diff(bkr, last) < thr
             "stop_bkr_diff_thr":  0.21,   # partially close pos at a loss if diff(bkr, last) < thr
             "entry_bkr_diff_thr": 0.21,   # prevent entries whose filling would result in diff(new_bkr, last) < thr
@@ -590,6 +590,7 @@ def get_template_live_config():
         },
         "shrt": {
             "enabled":            True,
+            "leverage":           10,     # borrow cap
             "hedge_bkr_diff_thr": 0.5,    # make counter order if diff(bkr, last) < thr
             "stop_bkr_diff_thr":  0.21,   # partially close pos at a loss if diff(bkr, last) < thr
             "entry_bkr_diff_thr": 0.21,   # prevent entries whose filling would result in diff(new_bkr, last) < thr
