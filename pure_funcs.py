@@ -115,38 +115,41 @@ def calc_emas(xs: [float], span: int) -> np.ndarray:
     return emas
 
 
-@njit
 def iter_MA_ratios_chunks(xs: [float], spans: [int], chunk_size: int = 65536):
 
+    @njit
     def to_ratios(emass_):
         ratios = np.empty((emass_.shape[0], emass_.shape[1] - 1))
         for i in range(1, emass_.shape[1]):
             ratios[:,i - 1] = emass_[:,i - 1] / emass_[:,i]
         return ratios
 
+    @njit
+    def calc_emas_(alphas, alphas_, shape, xs_, first_val, kc):
+        emas_ = np.empty(shape, dtype=np.float64):
+        emas_[0] = first_val
+        for i in range(1, len(emas_)):
+            emas_[i] = emas_[i - 1] * alphas_ + xs_[kc + i] * alphas
+
     max_spans = max(spans)
     if len(xs) < max_spans:
         return
 
     chunk_size = max(chunk_size, max_spans)
+    shape = (chunk_size, len(spans))
 
     n_chunks = int(round_up(len(xs) / chunk_size, 1.0))
 
     alphas = 2 / (spans + 1)
     alphas_ = 1 - alphas
 
-    emass = np.empty((chunk_size, len(spans)), dtype=np.float64)
-    emass[0] = xs[0]
-    for i in range(1, chunk_size):
-        emass[i] = emass[i - 1] * alphas_ + xs[i] * alphas
+    emass = calc_emas_(alphas, alphas_, shape, xs, xs[0], 0)
     yield to_ratios(emass), 0
 
     for k in range(1, n_chunks):
         kc = chunk_size * k
-        new_emass = np.empty((chunk_size, len(spans)), dtype=np.float64)
-        new_emass[0] = emass[-1] * alphas_ + xs[kc] * alphas
-        for i in range(1, chunk_size):
-            new_emass[i] = new_emass[i - 1] * alphas_ + xs[kc + i] * alphas
+        #### unfinished
+        new_emass = calc_emas_(alphas, alphas_, shape, xs, emass[-1] * alphas_ + xs[kc] * alphas, kc)
         yield to_ratios(new_emass), k
         emass = new_emass
     return emass
@@ -170,6 +173,18 @@ def calc_shrt_pnl(entry_price, close_price, qty, inverse, c_mult) -> float:
         return abs(qty) * c_mult * (1 / close_price - 1 / entry_price)
     else:
         return abs(qty) * (entry_price - close_price)
+
+
+@njit
+def calc_equity(balance, long_psize, long_pprice, shrt_psize, shrt_pprice, last_price, inverse, c_mult):
+    equity = balance
+    if long_pprice and long_psize:
+        long_psize_real = long_psize * c_mult
+        equity += calc_long_pnl(long_pprice, last_price, long_psize_real, inverse, c_mult)
+    if shrt_pprice and shrt_psize:
+        shrt_psize_real = shrt_psize * c_mult
+        equity += calc_shrt_pnl(shrt_pprice, last_price, shrt_psize_real, inverse, c_mult)
+    return equity
 
 
 @njit
@@ -314,17 +329,18 @@ def iter_orders(balance,
     '''
     bankruptcy_price = calc_bankruptcy_price(balance, long_psize, long_pprice, shrt_psize, shrt_pprice, inverse, c_mult)
     bkr_diff = calc_diff(bankruptcy_price, last_price)
+    equity = calc_equity(balance, long_psize, long_pprice, shrt_psize, shrt_pprice, last_price, inverse, c_mult)
 
     ### stop order ###
     abs_shrt_psize = abs(shrt_psize)
     if long_psize > abs_shrt_psize:
-        if bkr_diff < stop_bkr_diff_thr[0]:
+        if bkr_diff < stop_bkr_diff_thr[0] or equity / balance < stop_eq_bal_ratio_thr:
             stop_qty = min(long_psize, max(min_qty, round_dn(long_psize * stop_psize_pct, qty_step)))
             if stop_qty > min_qty:
                 long_psize = max(0.0, round_(long_psize - stop_qty, qty_step))
                 yield -stop_qty, lowest_ask, long_psize, long_pprice, 'long_sclose'
     else:
-        if bkr_diff < stop_bkr_diff_thr[1]:
+        if bkr_diff < stop_bkr_diff_thr[1] or equity / balance < stop_eq_bal_ratio_thr:
             stop_qty = min(abs_shrt_psize, max(min_qty, round_dn(abs_shrt_psize * stop_psize_pct, qty_step)))
             if stop_qty > min_qty:
                 shrt_psize = min(0.0, round_(shrt_psize + stop_qty, qty_step))
@@ -491,13 +507,19 @@ def fill_template_config(c, r=False):
     for side in ['long', 'shrt']:
         for k in c[side]:
             if 'MAr' in k:
+                c[side][k] = np.random.random((c['n_spans'], 2)) * 0.1 - 0.05 if r else np.zeros((c['n_spans'], 2))
+                '''
                 c[side][k] = get_starting_coeffs(c['n_spans'])
                 if r:
                     c[side][k] += np.random.random(c[side][k].shape) * 0.1 - 0.05
+                '''
             elif 'PBr' in k:
+                c[side][k] = np.random.random((1, 2)) * 0.1 - 0.05 if r else  np.zeros((1, 2))
+                '''
                 c[side][k] = get_starting_coeffs(1)
                 if r:
                     c[side][k] += np.random.random(c[side][k].shape) * 0.1 - 0.05
+                '''
     return c
 
 
@@ -553,6 +575,23 @@ def pack_config(d):
     return new
 
 
+def create_xk(config: dict):
+    xk = {}
+    keys = ['inverse', 'do_long', 'do_shrt', 'qty_step', 'price_step', 'min_qty', 'min_cost',
+            'c_mult', 'leverage', 'hedge_bkr_diff_thr', 'hedge_psize_pct', 'stop_bkr_diff_thr',
+            'stop_psize_pct', 'entry_bkr_diff_thr', 'iqty_const', 'iprc_const', 'rqty_const',
+            'rprc_const', 'markup_const', 'iqty_MAr_coeffs', 'rprc_PBr_coeffs', 'iprc_MAr_coeffs',
+            'rqty_MAr_coeffs', 'rprc_MAr_coeffs', 'markup_MAr_coeffs']
+    for k in keys:
+        if k in config:
+            xk[k] = config[k]
+        elif k in config['long']:
+            xk[k] = [config['long'][k], config['shrt'][k]]
+
+    return xk
+
+
+
 def get_template_live_config():
     return {
         "config_name": "name",
@@ -562,6 +601,7 @@ def get_template_live_config():
         "n_spans": 3,
         "hedge_psize_pct":    0.05,   # % of psize for hedge order
         "stop_psize_pct":     0.05,   # % of psize for stop loss order
+        "stop_eq_bal_ratio_thr": 0.8, # if equity / balance < thr: stop loss
         "long": {
             "enabled":            True,
             "leverage":           10,     # borrow cap
@@ -585,7 +625,7 @@ def get_template_live_config():
             "rprc_PBr_coeffs":    [],     # reentry Position cost to Balance ratio coeffs (PBr**2, PBr)
                                           # formerly pos_margin_grid_coeff
             "markup_MAr_coeffs":  [],     # markup price pct Moving Average ratio coeffs
-            "MA_idx":             2       # index of ema span from which to calc initial entry prices
+            "MA_idx":             1       # index of ema span from which to calc initial entry prices
         },
         "shrt": {
             "enabled":            True,
@@ -609,7 +649,7 @@ def get_template_live_config():
             "rprc_PBr_coeffs":    [],     # reentry Position cost to Balance ratio coeffs (PBr**2, PBr)
                                           # formerly pos_margin_grid_coeff
             "markup_MAr_coeffs":  [],     # markup price pct Moving Average ratio coeffs
-            "MA_idx":             2       # index of ema span from which to calc initial entry prices
+            "MA_idx":             1       # index of ema span from which to calc initial entry prices
         }
     }
 
