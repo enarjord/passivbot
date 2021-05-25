@@ -115,7 +115,66 @@ def calc_stds(xs: [float], span: int) -> np.ndarray:
 
 
 @njit
+def calc_emas_(alpha, alpha_, chunk_size, xs_, first_val, kc_):
+    emas_ = np.empty(chunk_size, dtype=np.float64)
+    emas_[0] = first_val
+    for i in range(1, min(len(xs_) - kc_, len(emas_))):
+        emas_[i] = emas_[i - 1] * alpha_ + xs_[kc_ + i] * alpha
+    return emas_
+
+
+@njit
+def calc_first_stds(chunk_size, span, xs_):
+    stds_ = np.zeros(chunk_size)
+    xsum_ = xs_[:span].sum()
+    xsum_sq_ = (xs_[:span] ** 2).sum()
+    for i in range(span, chunk_size):
+        xsum_ += xs_[i] - xs_[i - span]
+        xsum_sq_ += xs_[i] ** 2 - xs_[i - span] ** 2
+        stds_[i] = np.sqrt((xsum_sq_ / span) - (xsum_ / span) ** 2)
+    return stds_, xsum_, xsum_sq_
+
+
+@njit
+def calc_stds_(chunk_size, span, xs_, xsum_, xsum_sq_, kc_):
+    new_stds = np.zeros(chunk_size)
+    xsum_ += xs_[kc_] - xs_[kc_ - span]
+    xsum_sq_ += xs_[kc_] ** 2 - xs_[kc_ - span] ** 2
+    new_stds[0] = np.sqrt((xsum_sq_ / span) - (xsum_ / span) ** 2)
+    for i in range(1, chunk_size):
+        xsum_ += xs_[kc_ + i] - xs_[kc_ + i - span]
+        xsum_sq_ += xs_[kc_ + i] ** 2 - xs_[kc_ + i - span] ** 2
+        new_stds[i] = np.sqrt((xsum_sq_ / span) - (xsum_ / span) ** 2)
+    return new_stds, xsum_, xsum_sq_
+
+
 def iter_indicator_chunks(xs: [float], span: int, chunk_size: int = 65536):
+
+    if len(xs) < span:
+        return
+
+    chunk_size = max(chunk_size, span)
+
+    n_chunks = int(round_up(len(xs) / chunk_size, 1.0))
+
+    alpha = 2 / (span + 1)
+    alpha_ = 1 - alpha
+
+    emas = calc_emas_(alpha, alpha_, chunk_size, xs, xs[0], 0)
+    stds, xsum, xsum_sq = calc_first_stds(chunk_size, span, xs)
+
+    yield emas, stds, 0
+
+    for k in range(1, n_chunks):
+        kc = chunk_size * k
+        new_emas = calc_emas_(alpha, alpha_, chunk_size, xs, emas[-1] * alpha_ + xs[kc] * alpha, kc)
+        new_stds, xsum, xsum_sq = calc_stds_(chunk_size, span, xs, xsum, xsum_sq, kc)
+        yield new_emas, new_stds, k
+        emas, stds = new_emas, new_stds
+
+
+@njit
+def iter_indicator_chunks_old(xs: [float], span: int, chunk_size: int = 65536):
 
 
     if len(xs) < span:
@@ -158,6 +217,8 @@ def iter_indicator_chunks(xs: [float], span: int, chunk_size: int = 65536):
             new_stds[i] = np.sqrt((xsum_sq / span) - (xsum / span) ** 2)
         yield new_emas, new_stds, k
         emas, stds = new_emas, new_stds
+
+
 
 
 @njit
