@@ -28,8 +28,6 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, list, bo
 
     xk = create_xk(config)
 
-    prev_long_close_ts, prev_long_entry_ts, prev_long_close_price = 0, 0, 0.0
-    prev_shrt_close_ts, prev_shrt_entry_ts, prev_shrt_close_price = 0, 0, 0.0
     latency_simulation_ms = config['latency_simulation_ms'] \
         if 'latency_simulation_ms' in config else 1000
 
@@ -53,8 +51,8 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, list, bo
     max_span = int(round(config['max_span']))
     spans = calc_spans(min_span, max_span, config['n_spans'])
 
-    ratios_iterator = iter_MA_ratios_chunks(ticks[:, 0], spans)
-    ratios_chunk, z = next(ratios_iterator)
+    chunk_iterator = iter_MA_ratios_chunks(ticks[:, 0], spans)
+    emas_chunk, ratios_chunk, z = next(chunk_iterator)
     zc = 0
 
     closest_bkr = 1.0
@@ -70,9 +68,9 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, list, bo
     for k, tick in enumerate(ticks[max_span:], start=max_span):
 
         chunk_i = k - zc
-        if chunk_i >= len(ema_chunk):
-            ratios, z = next(ema_std_iterator)
-            zc = z * len(ema_chunk)
+        if chunk_i >= len(emas_chunk):
+            ratios, z = next(chunk_iterator)
+            zc = z * len(emas_chunk)
             chunk_i = k - zc
 
         # Update the stats every 1/2 hour
@@ -83,7 +81,7 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, list, bo
 
         fills = []
         if tick[1]:
-            if bkr_diff < 0.05 and long_psize > -shrt_psize and tick[0] <= bkr_price:
+            if bkr_diff < 0.1 and long_psize > -shrt_psize and tick[0] <= bkr_price:
                 fills.append({'qty': -long_psize, 'price': tick[0], 'pside': 'long',
                               'type': 'long_liquidation', 'side': 'sel',
                               'pnl': calc_long_pnl(long_pprice, tick[0], long_psize, xk['inverse'],
@@ -105,13 +103,11 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, list, bo
                                                            xk['c_mult']) * config['maker_fee']}
                             if 'close' in bid[4]:
                                 fill['pnl'] = calc_shrt_pnl(shrt_pprice, bid[1], bid[0],
-                                                            xk['inverse'],
-                                                            xk['c_mult'])
+                                                            xk['inverse'], xk['c_mult'])
                                 shrt_psize = min(0.0, round_(shrt_psize + bid[0], config['qty_step']))
                                 fill.update({'pside': 'shrt', 'long_psize': long_psize,
                                              'long_pprice': long_pprice, 'shrt_psize': shrt_psize,
                                              'shrt_pprice': shrt_pprice})
-                                prev_shrt_close_ts = tick[2]
                             else:
                                 fill['pnl'] = 0.0
                                 long_psize, long_pprice = calc_new_psize_pprice(long_psize,
@@ -120,10 +116,9 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, list, bo
                                                                                 xk['qty_step'])
                                 if long_psize < 0.0:
                                     long_psize, long_pprice = 0.0, 0.0
-                                fill.update({'pside': 'long', 'long_psize': bid[2],
-                                             'long_pprice': bid[3], 'shrt_psize': shrt_psize,
+                                fill.update({'pside': 'long', 'long_psize': long_psize,
+                                             'long_pprice': long_pprice, 'shrt_psize': shrt_psize,
                                              'shrt_pprice': shrt_pprice})
-                                prev_long_entry_ts = tick[2]
                             fills.append(fill)
                         else:
                             break
@@ -151,8 +146,7 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, list, bo
                                                            xk['c_mult']) * config['maker_fee']}
                             if 'close' in ask[4]:
                                 fill['pnl'] = calc_long_pnl(long_pprice, ask[1], ask[0],
-                                                            xk['inverse'],
-                                                            xk['c_mult'])
+                                                            xk['inverse'], xk['c_mult'])
                                 long_psize = max(0.0, round_(long_psize + ask[0], config['qty_step']))
                                 fill.update({'pside': 'long', 'long_psize': long_psize,
                                              'long_pprice': long_pprice, 'shrt_psize': shrt_psize,
