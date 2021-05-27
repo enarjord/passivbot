@@ -53,6 +53,7 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, list, bo
 
     chunk_iterator = iter_MA_ratios_chunks(ticks[:, 0], spans)
     emas_chunk, ratios_chunk, z = next(chunk_iterator)
+
     zc = 0
 
     closest_bkr = 1.0
@@ -71,6 +72,7 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, list, bo
         if chunk_i >= len(emas_chunk):
             ratios, z = next(chunk_iterator)
             zc = z * len(emas_chunk)
+
             chunk_i = k - zc
 
         # Update the stats every 1/2 hour
