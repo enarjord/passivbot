@@ -14,4 +14,5 @@ python-telegram-bot>=13.4.1
 gitpython>=3.1.4
 prettytable>=2.1.0
 nptyping>=1.4.2
-
+mkdocs>=1.1.2
+mkdocs-material>=7.1.5

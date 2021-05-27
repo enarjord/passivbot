@@ -106,7 +106,7 @@ def calc_stds(xs: [float], span: int) -> np.ndarray:
         return stds
     xsum = xs[:span].sum()
     xsum_sq = (xs[:span] ** 2).sum()
-    stds[span] = np.sqrt((xsum_sq / span) - (xsum / span) ** 2)
+    stds[span - 1] = np.sqrt((xsum_sq / span) - (xsum / span) ** 2)
     for i in range(span, len(xs)):
         xsum += xs[i] - xs[i - span]
         xsum_sq += xs[i] ** 2 - xs[i - span] ** 2
@@ -128,6 +128,7 @@ def calc_first_stds(chunk_size, span, xs_):
     stds_ = np.zeros(chunk_size)
     xsum_ = xs_[:span].sum()
     xsum_sq_ = (xs_[:span] ** 2).sum()
+    stds_[span - 1] = np.sqrt((xsum_sq_ / span) - (xsum_ / span) ** 2)
     for i in range(span, chunk_size):
         xsum_ += xs_[i] - xs_[i - span]
         xsum_sq_ += xs_[i] ** 2 - xs_[i - span] ** 2
