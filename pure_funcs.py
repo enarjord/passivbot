@@ -147,14 +147,14 @@ def iter_MA_ratios_chunks(xs: [float], spans: [int], chunk_size: int = 65536):
     alphas_ = 1 - alphas
 
     emass = calc_emas_(alphas, alphas_, shape, xs, xs[0], 0)
-    yield to_ratios(emass), 0
+    yield emass, to_ratios(emass), 0
 
     for k in range(1, n_chunks):
         kc = chunk_size * k
         if kc >= len(xs):
             break
         new_emass = calc_emas_(alphas, alphas_, shape, xs, emass[-1] * alphas_ + xs[kc] * alphas, kc)
-        yield to_ratios(new_emass), k
+        yield emass, to_ratios(new_emass), k
         emass = new_emass
 
 
@@ -535,7 +535,7 @@ def unpack_config(d):
             for _ in v:
                 break
             for i in range(len(v)):
-                new[f'{k}${str(i).zfill(3)}'] = v[i]
+                new[f'{k}${str(i).zfill(2)}'] = v[i]
         except:
             new[k] = v
     if new == d:

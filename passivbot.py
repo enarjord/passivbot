@@ -22,7 +22,7 @@ logging.getLogger("telegram").setLevel(logging.CRITICAL)
 
 def get_keys():
     return ['inverse', 'do_long', 'do_shrt', 'qty_step', 'price_step', 'min_qty', 'min_cost',
-            'contract_multiplier', 'ddown_factor', 'qty_pct', 'leverage', 'n_close_orders',
+            'c_mult', 'ddown_factor', 'qty_pct', 'leverage', 'n_close_orders',
             'grid_spacing', 'pos_margin_grid_coeff', 'volatility_grid_coeff',
             'volatility_qty_coeff', 'min_markup', 'markup_range', 'ema_span', 'ema_spread',
             'stop_loss_liq_diff', 'stop_loss_pos_pct', 'entry_liq_diff_thr']
@@ -157,7 +157,7 @@ class Bot:
         self.n_orders_per_execution = 4
 
         self.hedge_mode = True
-        self.contract_multiplier = self.config['contract_multiplier'] = 1.0
+        self.c_mult = self.config['c_mult'] = 1.0
 
         self.log_filepath = make_get_filepath(f"logs/{self.exchange}/{config['config_name']}.log")
 
@@ -221,10 +221,10 @@ class Bot:
                                                self.update_open_orders())
             position['used_margin'] = \
                 ((calc_cost(position['long']['size'], position['long']['price'],
-                            self.xk['inverse'], self.xk['contract_multiplier'])
+                            self.xk['inverse'], self.xk['c_mult'])
                   if position['long']['price'] else 0.0) +
                  (calc_cost(position['shrt']['size'], position['shrt']['price'],
-                            self.xk['inverse'], self.xk['contract_multiplier'])
+                            self.xk['inverse'], self.xk['c_mult'])
                   if position['shrt']['price'] else 0.0)) / self.leverage
             position['available_margin'] = (position['equity'] - position['used_margin']) * 0.9
             position['long']['liq_diff'] = calc_diff(position['long']['liquidation_price'], self.price)

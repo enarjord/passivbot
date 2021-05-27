@@ -213,11 +213,11 @@ class Bybit(Bot):
                             'liquidation_price': float(shrt_pos['liq_price'])}
         position['long']['upnl'] = calc_long_pnl(position['long']['price'], self.price,
                                                  position['long']['size'], self.xk['inverse'],
-                                                 self.xk['contract_multiplier']) \
+                                                 self.xk['c_mult']) \
             if position['long']['price'] != 0.0 else 0.0
         position['shrt']['upnl'] = calc_shrt_pnl(position['shrt']['price'], self.price,
                                                  position['shrt']['size'], self.xk['inverse'],
-                                                 self.xk['contract_multiplier']) \
+                                                 self.xk['c_mult']) \
             if position['shrt']['price'] != 0.0 else 0.0
         upnl = position['long']['upnl'] + position['shrt']['upnl']
         position['equity'] = position['wallet_balance'] + upnl

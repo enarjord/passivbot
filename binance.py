@@ -113,7 +113,7 @@ class BinanceBot(Bot):
                 self.margin_coin = e['marginAsset']
                 self.pair = e['pair']
                 if self.market_type == 'inverse_coin_margined':
-                    self.contract_multiplier = self.config['contract_multiplier'] = \
+                    self.c_mult = self.config['c_mult'] = \
                         float(e['contractSize'])
                 price_precision = e['pricePrecision']
                 qty_precision = e['quantityPrecision']

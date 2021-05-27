@@ -678,7 +678,7 @@ async def fetch_market_specific_settings(user: str, exchange: str, symbol: str):
     else:
         raise Exception('unknown market type')
     for key in ['max_leverage', 'min_qty', 'min_cost', 'qty_step', 'price_step', 'max_leverage',
-                'contract_multiplier']:
+                'c_mult']:
         settings_from_exchange[key] = getattr(bot, key)
     return settings_from_exchange
 
