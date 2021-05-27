@@ -253,7 +253,7 @@ def calc_rentry_price(balance, psize, pprice, MA_ratios, rprc_const, rprc_PBr_co
     return pprice * (rprc_const + eqf(MA_ratios, rprc_MAr_coeffs) + eqf(np.array([pcost_bal_ratio]), rprc_PBr_coeffs))
 
 
-@njit
+#@njit
 def iter_orders(balance,
                 long_psize,
                 long_pprice,
@@ -278,6 +278,7 @@ def iter_orders(balance,
                 hedge_psize_pct,
                 stop_bkr_diff_thr,
                 stop_psize_pct,
+                stop_eq_bal_ratio_thr,
                 entry_bkr_diff_thr,
                 iqty_const,
                 iprc_const,
@@ -315,6 +316,7 @@ def iter_orders(balance,
     :param hedge_psize_pct: tuple(float, float)
     :param stop_bkr_diff_thr: tuple(float, float)
     :param stop_psize_pct: tuple(float, float)
+    :param stop_eq_bal_ratio_thr: float
     :param entry_bkr_diff_thr: tuple(float, float)
     :param iqty_const: tuple(float, float)
     :param iprc_const: tuple(float, float)
@@ -352,13 +354,13 @@ def iter_orders(balance,
     if long_psize > 0.0:
         ### long normal close ###
         yield (-long_psize,
-               max(lowest_ask, round_up(long_pprice * (markup_const[0] + eqf(MA_ratios, markup_MAr_coeffs[0])))),
+               max(lowest_ask, round_up(long_pprice * (markup_const[0] + eqf(MA_ratios, markup_MAr_coeffs[0])), price_step)),
                0.0, 0.0, 'long_nclose')
 
     if shrt_psize < 0.0:
         ### shrt normal close ###
         yield (-shrt_psize,
-               min(highest_bid, round_dn(shrt_pprice * (markup_const[1] + eqf(MA_ratios, markup_MAr_coeffs[1])))),
+               min(highest_bid, round_dn(shrt_pprice * (markup_const[1] + eqf(MA_ratios, markup_MAr_coeffs[1])), price_step)),
                0.0, 0.0, 'shrt_nclose')
 
     while True:
@@ -369,7 +371,7 @@ def iter_orders(balance,
             if long_psize == 0.0:
                 ### initial long entry ###
                 long_entry_price = min(highest_bid, round_dn(calc_ientry_price(MA[0], MA_ratios, iprc_const[0],
-                                                                               iprc_MAr_coeffs[0])))
+                                                                               iprc_MAr_coeffs[0]), price_step))
                 if long_entry_price > 0.0:
                     min_entry_qty = calc_min_entry_qty(long_entry_price, inverse, qty_step, min_qty, min_cost)
                     max_entry_qty = calc_max_entry_qty(long_entry_price, available_margin, inverse, qty_step, c_mult)
@@ -390,6 +392,7 @@ def iter_orders(balance,
                 if long_entry_price > 0.0:
                     min_entry_qty = calc_min_entry_qty(long_entry_price, inverse, qty_step, min_qty, min_cost)
                     max_entry_qty = calc_max_entry_qty(long_entry_price, available_margin, inverse, qty_step, c_mult)
+                    long_entry_qty = 1.0
                     long_entry_qty = calc_rentry_qty(long_psize, long_entry_price, MA_ratios, rqty_const[0],
                                                      rqty_MAr_coeffs[0], qty_step, min_entry_qty, max_entry_qty)
                     if long_entry_qty > 0.0:
@@ -404,7 +407,7 @@ def iter_orders(balance,
             if shrt_psize == 0.0:
                 ### initial shrt entry ###
                 shrt_entry_price = max(lowest_ask, round_up(calc_ientry_price(MA[1], MA_ratios, iprc_const[1],
-                                                                              iprc_MAr_coeffs[1])))
+                                                                              iprc_MAr_coeffs[1]), price_step))
                 if shrt_entry_price > 0.0:
                     min_entry_qty = calc_min_entry_qty(shrt_entry_price, inverse, qty_step, min_qty, min_cost)
                     max_entry_qty = calc_max_entry_qty(shrt_entry_price, available_margin, inverse, qty_step, c_mult)
@@ -457,11 +460,14 @@ def iter_orders(balance,
                     new_long_psize, new_long_pprice = calc_new_psize_pprice(long_psize, long_pprice,
                                                                             hedge_qty, highest_bid, qty_step)
                     orders.append((hedge_qty, highest_bid, new_long_psize, new_long_pprice, 'long_hentry'))
-
-        orders = sorted(orders, key=lambda x: calc_diff(x[1], last_price))
+        if not orders:
+            break
+        orders = [o + (calc_diff(o[1] ,last_price),) for o in orders]
+        orders = sorted(orders, key=lambda x: x[-1])
+        #orders = sorted(orders, key=lambda x: calc_diff(x[1], last_price))
         if orders[0][0] == 0.0:
             break
-        yield orders[0]
+        yield orders[0][:5]
         if 'entry' in orders[0][4]:
             if 'long' in orders[0][4]:
                 long_psize, long_pprice = orders[0][2:4]
@@ -583,14 +589,14 @@ def create_xk(config: dict):
     xk = {}
     keys = ['inverse', 'do_long', 'do_shrt', 'qty_step', 'price_step', 'min_qty', 'min_cost',
             'c_mult', 'leverage', 'hedge_bkr_diff_thr', 'hedge_psize_pct', 'stop_bkr_diff_thr',
-            'stop_psize_pct', 'entry_bkr_diff_thr', 'iqty_const', 'iprc_const', 'rqty_const',
+            'stop_psize_pct', 'stop_eq_bal_ratio_thr', 'entry_bkr_diff_thr', 'iqty_const', 'iprc_const', 'rqty_const',
             'rprc_const', 'markup_const', 'iqty_MAr_coeffs', 'rprc_PBr_coeffs', 'iprc_MAr_coeffs',
             'rqty_MAr_coeffs', 'rprc_MAr_coeffs', 'markup_MAr_coeffs']
     for k in keys:
         if k in config:
             xk[k] = config[k]
         elif k in config['long']:
-            xk[k] = [config['long'][k], config['shrt'][k]]
+            xk[k] = (config['long'][k], config['shrt'][k])
 
     return xk
 

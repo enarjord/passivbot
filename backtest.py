@@ -12,7 +12,8 @@ from plotting import dump_plots
 
 from downloader import Downloader, prep_config, load_live_config
 from pure_funcs import create_xk, calc_bankruptcy_price, iter_orders, calc_long_pnl, calc_shrt_pnl, \
-    iter_MA_ratios_chunks, calc_spans
+    iter_MA_ratios_chunks, calc_spans, calc_available_margin, calc_diff, qty_to_cost, round_, \
+    calc_new_psize_pprice
 from passivbot import make_get_filepath, ts_to_date, get_keys, add_argparse_args
 
 
@@ -70,7 +71,7 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, list, bo
 
         chunk_i = k - zc
         if chunk_i >= len(emas_chunk):
-            ratios, z = next(chunk_iterator)
+            emas_chunk, ratios_chunk, z = next(chunk_iterator)
             zc = z * len(emas_chunk)
 
             chunk_i = k - zc
@@ -88,8 +89,8 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, list, bo
                               'type': 'long_liquidation', 'side': 'sel',
                               'pnl': calc_long_pnl(long_pprice, tick[0], long_psize, xk['inverse'],
                                                    xk['c_mult']),
-                              'fee_paid': -calc_cost(long_psize, tick[0], xk['inverse'],
-                                                     xk['c_mult']) * config['taker_fee'],
+                              'fee_paid': -qty_to_cost(long_psize, tick[0], xk['inverse'],
+                                                       xk['c_mult']) * config['taker_fee'],
                               'long_psize': 0.0, 'long_pprice': 0.0, 'shrt_psize': 0.0,
                               'shrt_pprice': 0.0, 'bkr_price': 0.0, 'bkr_diff': 1.0})
                 long_psize, long_pprice, shrt_psize, shrt_pprice = 0.0, 0.0, 0.0, 0.0
@@ -101,8 +102,8 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, list, bo
                         if tick[0] < bids[0][1]:
                             bid = bids.pop(0)
                             fill = {'qty': bid[0], 'price': bid[1], 'side': 'buy', 'type': bid[4],
-                                    'fee_paid': -calc_cost(bid[0], bid[1], xk['inverse'],
-                                                           xk['c_mult']) * config['maker_fee']}
+                                    'fee_paid': -qty_to_cost(bid[0], bid[1], xk['inverse'],
+                                                             xk['c_mult']) * config['maker_fee']}
                             if 'close' in bid[4]:
                                 fill['pnl'] = calc_shrt_pnl(shrt_pprice, bid[1], bid[0],
                                                             xk['inverse'], xk['c_mult'])
@@ -131,8 +132,8 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, list, bo
                               'type': 'shrt_liquidation', 'side': 'buy',
                               'pnl': calc_shrt_pnl(shrt_pprice, tick[0], shrt_psize, xk['inverse'],
                                                    xk['c_mult']),
-                              'fee_paid': -calc_cost(shrt_psize, tick[0], xk['inverse'],
-                                                     xk['c_mult']) * config['taker_fee'],
+                              'fee_paid': -qty_to_cost(shrt_psize, tick[0], xk['inverse'],
+                                                       xk['c_mult']) * config['taker_fee'],
                               'long_psize': 0.0, 'long_pprice': 0.0, 'shrt_psize': 0.0,
                               'shrt_pprice': 0.0, 'bkr_price': 0.0, 'bkr_diff': 1.0})
                 long_psize, long_pprice, shrt_psize, shrt_pprice = 0.0, 0.0, 0.0, 0.0
@@ -144,8 +145,8 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, list, bo
                         if tick[0] > asks[0][1]:
                             ask = asks.pop(0)
                             fill = {'qty': ask[0], 'price': ask[1], 'side': 'sel', 'type': ask[4],
-                                    'fee_paid': -calc_cost(ask[0], ask[1], xk['inverse'],
-                                                           xk['c_mult']) * config['maker_fee']}
+                                    'fee_paid': -qty_to_cost(ask[0], ask[1], xk['inverse'],
+                                                             xk['c_mult']) * config['maker_fee']}
                             if 'close' in ask[4]:
                                 fill['pnl'] = calc_long_pnl(long_pprice, ask[1], ask[0],
                                                             xk['inverse'], xk['c_mult'])
@@ -158,8 +159,7 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, list, bo
                                 fill['pnl'] = 0.0
                                 shrt_psize, shrt_pprice = calc_new_psize_pprice(shrt_psize,
                                                                                 shrt_pprice, ask[0],
-                                                                                ask[1],
-                                                                                xk['qty_step'])
+                                                                                ask[1], xk['qty_step'])
                                 if shrt_psize > 0.0:
                                     shrt_psize, shrt_pprice = 0.0, 0.0
                                 fill.update({'pside': 'shrt', 'long_psize': long_psize,
@@ -180,37 +180,30 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, list, bo
             bids, asks = [], []
             bkr_diff = calc_diff(bkr_price, tick[0])
             closest_bkr = min(closest_bkr, bkr_diff)
-            for tpl in iter_entries(balance, long_psize, long_pprice, shrt_psize, shrt_pprice,
-                                    bkr_price, ob[0], ob[1], ema_chunk[k - zc], tick[0],
-                                    volatility_chunk[k - zc], **xk):
-                if len(bids) > 2 and len(asks) > 2:
-                    break
+            MA = (emas_chunk[k - zc][config['long']['MA_idx']], emas_chunk[k - zc][config['shrt']['MA_idx']])
+            MA_ratios = ratios_chunk[k - zc]
+            for tpl in iter_orders(balance, long_psize, long_pprice, shrt_psize, shrt_pprice,
+                                   ob[0], ob[1], MA, tick[0], MA_ratios, **xk):
+                if (len(bids) > 3 and len(asks) > 3) or len(bids) > 5 or len(asks) > 5:
+                    break # beware of mem leak
                 if tpl[0] > 0.0:
                     bids.append(tpl)
                 elif tpl[0] < 0.0:
                     asks.append(tpl)
                 else:
                     break
-            if tick[0] <= shrt_pprice and shrt_pprice > 0.0:
-                for tpl in iter_shrt_closes(balance, shrt_psize, shrt_pprice, ob[0], **xk):
-                    bids.append(list(tpl) + [shrt_pprice, 'shrt_close'])
-            if tick[0] >= long_pprice and long_pprice > 0.0:
-                for tpl in iter_long_closes(balance, long_psize, long_pprice, ob[1], **xk):
-                    asks.append(list(tpl) + [long_pprice, 'long_close'])
+                    # beware of mem leak
             bids = sorted(bids, key=lambda x: x[1], reverse=True)
             asks = sorted(asks, key=lambda x: x[1])
 
         if len(fills) > 0:
             for fill in fills:
                 balance += fill['pnl'] + fill['fee_paid']
-                upnl_l = calc_long_pnl(long_pprice, tick[0], long_psize, xk['inverse'],
-                                       xk['c_mult'])
-                upnl_s = calc_shrt_pnl(shrt_pprice, tick[0], shrt_psize, xk['inverse'],
-                                       xk['c_mult'])
+                upnl_l = calc_long_pnl(long_pprice, tick[0], long_psize, xk['inverse'], xk['c_mult'])
+                upnl_s = calc_shrt_pnl(shrt_pprice, tick[0], shrt_psize, xk['inverse'], xk['c_mult'])
 
-                bkr_price = calc_liq_price(balance, long_psize, long_pprice,
-                                           shrt_psize, shrt_pprice, xk['inverse'],
-                                           xk['c_mult'], config['max_leverage'])
+                bkr_price = calc_bankruptcy_price(balance, long_psize, long_pprice,
+                                                  shrt_psize, shrt_pprice, xk['inverse'], xk['c_mult'])
                 bkr_diff = calc_diff(bkr_price, tick[0])
                 fill.update({'bkr_price': bkr_price, 'bkr_diff': bkr_diff})
 
