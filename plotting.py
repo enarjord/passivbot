@@ -4,6 +4,7 @@ import numpy as np
 import json
 from jitted import round_dynamic
 from analyze import candidate_to_live_config
+from pure_funcs import calc_bid_ask_thresholds
 
 
 def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
@@ -71,7 +72,15 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
     plt.savefig(f"{result['plots_dirpath']}average_daily_gain_plot.png")
 
 
-def plot_fills(df, fdf, side_: int = 0, liq_thr=0.1):
+def add_bid_ask_thresholds_from_config(prices, config):
+    iprc_MAr_coeffs = np.array([config['long']['iprc_MAr_coeffs'], config['shrt']['iprc_MAr_coeffs']])
+    iprc_const = config['long']['iprc_const'], config['shrt']['iprc_const']
+    MA_idx = np.array([config['long']['MA_idx'], config['shrt']['MA_idx']])
+    bids, asks = calc_bid_ask_thresholds(prices, config['spans'], iprc_const, iprc_MAr_coeffs, MA_idx)
+    return pd.DataFrame({'bid_thr': bids, 'ask_thr': asks})
+
+
+def plot_fills(df, fdf, side: int = 0, liq_thr=0.1):
     plt.clf()
 
     dfc = df.loc[fdf.index[0]:fdf.index[-1]]
@@ -81,27 +90,27 @@ def plot_fills(df, fdf, side_: int = 0, liq_thr=0.1):
     if 'ask_thr' in dfc.columns:
         dfc.ask_thr.plot(style='r-')
 
-    if side_ >= 0:
+    if side >= 0:
         longs = fdf[fdf.pside == 'long']
-        lentry = longs[(longs.type == 'long_entry') | (longs.type == 'long_reentry')]
-        lclose = longs[longs.type == 'long_close']
-        lstopclose = longs[longs.type == 'stop_loss_long_close']
-        lstopentry = longs[longs.type == 'stop_loss_long_entry']
-        lentry.price.plot(style='b.')
-        lstopentry.price.plot(style='bx')
-        lclose.price.plot(style='r.')
-        lstopclose.price.plot(style=('rx'))
+        lnentry = longs[(longs.type == 'long_ientry') | (longs.type == 'long_rentry')]
+        lhentry = longs[longs.type == 'long_hentry']
+        lnclose = longs[longs.type == 'long_nclose']
+        lsclose = longs[longs.type == 'long_sclose']
+        lnentry.price.plot(style='b.')
+        lhentry.price.plot(style='bx')
+        lnclose.price.plot(style='r.')
+        lsclose.price.plot(style=('rx'))
         longs.long_pprice.fillna(method='ffill').plot(style='b--')
-    if side_ <= 0:
+    if side <= 0:
         shrts = fdf[fdf.pside == 'shrt']
-        sentry = shrts[(shrts.type == 'shrt_entry') | (shrts.type == 'shrt_reentry')]
-        sclose = shrts[shrts.type == 'shrt_close']
-        sstopclose = shrts[shrts.type == 'stop_loss_shrt_close']
-        sstopentry = shrts[shrts.type == 'stop_loss_shrt_entry']
-        sentry.price.plot(style='r.')
-        sstopentry.price.plot(style='rx')
-        sclose.price.plot(style='b.')
-        sstopclose.price.plot(style=('bx'))
+        snentry = shrts[(shrts.type == 'shrt_ientry') | (shrts.type == 'shrt_rentry')]
+        shentry = shrts[shrts.type == 'shrt_hentry']
+        snclose = shrts[shrts.type == 'shrt_nclose']
+        ssclose = shrts[shrts.type == 'shrt_sclose']
+        snentry.price.plot(style='r.')
+        shentry.price.plot(style='rx')
+        snclose.price.plot(style='b.')
+        ssclose.price.plot(style=('bx'))
         shrts.shrt_pprice.fillna(method='ffill').plot(style='r--')
 
     if 'liq_price' in fdf.columns:

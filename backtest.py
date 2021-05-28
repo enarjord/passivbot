@@ -184,15 +184,14 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, list, bo
             MA_ratios = ratios_chunk[k - zc]
             for tpl in iter_orders(balance, long_psize, long_pprice, shrt_psize, shrt_pprice,
                                    ob[0], ob[1], MA, tick[0], MA_ratios, **xk):
-                if (len(bids) > 3 and len(asks) > 3) or len(bids) > 5 or len(asks) > 5:
-                    break # beware of mem leak
+                if (len(bids) > 2 and len(asks) > 2) or len(bids) > 5 or len(asks) > 5:
+                    break
                 if tpl[0] > 0.0:
                     bids.append(tpl)
                 elif tpl[0] < 0.0:
                     asks.append(tpl)
                 else:
                     break
-                    # beware of mem leak
             bids = sorted(bids, key=lambda x: x[1], reverse=True)
             asks = sorted(asks, key=lambda x: x[1])
 

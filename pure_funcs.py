@@ -105,31 +105,33 @@ def calc_ema(alpha, alpha_, prev_ema, new_val) -> float:
 
 
 @njit
-def calc_emas(xs: [float], span: int) -> np.ndarray:
-    alpha = 2 / (span + 1)
-    alpha_ = 1 - alpha
-    emas = np.empty_like(xs)
-    emas[0] = xs[0]
-    for i in range(1, len(xs)):
-        emas[i] = emas[i - 1] * alpha_ + xs[i] * alpha
+def calc_bid_ask_thresholds(xs: [float], spans: [int], iprc_const, iprc_MAr_coeffs, MA_idx):
+    bids = np.zeros(len(xs))
+    asks = np.zeros(len(xs))
+    alphas = 2 / (spans + 1)
+    alphas_ = 1 - alphas
+    prev_emas = np.repeat(xs[0], len(spans))
+    for i in range(len(xs)):
+        emas = prev_emas * alphas_ + xs[i] * alphas
+        prev_emas = emas
+        ratios = emas[:-1] / emas[1:]
+        bids[i] = emas[MA_idx[0]] * (iprc_const[0] + eqf(ratios, iprc_MAr_coeffs[0]))
+        asks[i] = emas[MA_idx[1]] * (iprc_const[1] + eqf(ratios, iprc_MAr_coeffs[1]))
+    return bids, asks
+
+
+@njit
+def calc_emas(alphas, alphas_, shape, xs, first_val, kc=0):
+    emas = np.empty(shape, dtype=np.float64)
+    emas[0] = first_val
+    for i in range(1, min(len(xs) - kc, len(emas))):
+        emas[i] = emas[i - 1] * alphas_ + xs[kc + i] * alphas
     return emas
 
 
 @njit
-def to_ratios(emass_):
-    ratios = np.empty((emass_.shape[0], emass_.shape[1] - 1))
-    for i in range(1, emass_.shape[1]):
-        ratios[:,i - 1] = emass_[:,i - 1] / emass_[:,i]
-    return ratios
-
-
-@njit
-def calc_emas_(alphas, alphas_, shape, xs_, first_val, kc):
-    emas_ = np.empty(shape, dtype=np.float64)
-    emas_[0] = first_val
-    for i in range(1, min(len(xs_) - kc, len(emas_))):
-        emas_[i] = emas_[i - 1] * alphas_ + xs_[kc + i] * alphas
-    return emas_
+def calc_ratios(emas):
+    return emas[:,:-1] / emas[:,1:]
 
 
 def iter_MA_ratios_chunks(xs: [float], spans: [int], chunk_size: int = 65536):
@@ -146,15 +148,15 @@ def iter_MA_ratios_chunks(xs: [float], spans: [int], chunk_size: int = 65536):
     alphas = 2 / (spans + 1)
     alphas_ = 1 - alphas
 
-    emass = calc_emas_(alphas, alphas_, shape, xs, xs[0], 0)
-    yield emass, to_ratios(emass), 0
+    emass = calc_emas(alphas, alphas_, shape, xs, xs[0], 0)
+    yield emass, calc_ratios(emass), 0
 
     for k in range(1, n_chunks):
         kc = chunk_size * k
         if kc >= len(xs):
             break
-        new_emass = calc_emas_(alphas, alphas_, shape, xs, emass[-1] * alphas_ + xs[kc] * alphas, kc)
-        yield emass, to_ratios(new_emass), k
+        new_emass = calc_emas(alphas, alphas_, shape, xs, emass[-1] * alphas_ + xs[kc] * alphas, kc)
+        yield new_emass, calc_ratios(emass), k
         emass = new_emass
 
 
@@ -396,7 +398,7 @@ def iter_orders(balance,
     long_close = calc_long_close(long_psize, long_pprice, lowest_ask, MA_ratios, price_step, markup_const, markup_MAr_coeffs)
     if long_close[0] != 0.0:
         yield long_close
-    shrt_close = calc_long_close(shrt_psize, shrt_pprice, highest_bid, MA_ratios, price_step, markup_const, markup_MAr_coeffs)
+    shrt_close = calc_shrt_close(shrt_psize, shrt_pprice, highest_bid, MA_ratios, price_step, markup_const, markup_MAr_coeffs)
     if shrt_close[0] != 0.0:
         yield shrt_close
     while True:
@@ -418,7 +420,7 @@ def iter_orders(balance,
                         new_bankruptcy_price = calc_bankruptcy_price(balance, long_entry_qty, long_entry_price,
                                                                      shrt_psize, shrt_pprice, inverse, c_mult)
                         if calc_diff(new_bankruptcy_price, last_price) > entry_bkr_diff_thr[0]:
-                            orders.append((long_entry_qty, long_entry_price, long_psize, long_pprice, 'long_ientry'))
+                            orders.append((long_entry_qty, long_entry_price, long_entry_qty, long_entry_price, 'long_ientry'))
             else:
                 ### long reentry ###
                 long_entry_price = min(highest_bid,
@@ -454,7 +456,7 @@ def iter_orders(balance,
                         new_bankruptcy_price = calc_bankruptcy_price(balance, shrt_entry_qty, shrt_entry_price,
                                                                      shrt_psize, shrt_pprice, inverse, c_mult)
                         if calc_diff(new_bankruptcy_price, last_price) > entry_bkr_diff_thr[1]:
-                            orders.append((shrt_entry_qty, shrt_entry_price, shrt_psize, shrt_pprice, 'shrt_ientry'))
+                            orders.append((shrt_entry_qty, shrt_entry_price, shrt_entry_qty, shrt_entry_price, 'shrt_ientry'))
             else:
                 ### shrt reentry ###
                 shrt_entry_price = max(lowest_ask,
@@ -467,12 +469,12 @@ def iter_orders(balance,
                     shrt_entry_qty = calc_rentry_qty(shrt_psize, shrt_entry_price, MA_ratios, rqty_const[1],
                                                      rqty_MAr_coeffs[1], qty_step, min_entry_qty, max_entry_qty)
                     if shrt_entry_qty > 0.0:
-                        new_shrt_psize, new_shrt_pprice = calc_new_psize_pprice(shrt_psize, shrt_pprice, shrt_entry_qty,
+                        new_shrt_psize, new_shrt_pprice = calc_new_psize_pprice(shrt_psize, shrt_pprice, -shrt_entry_qty,
                                                                                 shrt_entry_price, qty_step)
                         new_bankruptcy_price = calc_bankruptcy_price(balance, new_shrt_psize, new_shrt_pprice,
                                                                      shrt_psize, shrt_pprice, inverse, c_mult)
                         if calc_diff(new_bankruptcy_price, last_price) > entry_bkr_diff_thr[1]:
-                            orders.append((shrt_entry_qty, shrt_entry_price, new_shrt_psize,
+                            orders.append((-shrt_entry_qty, shrt_entry_price, new_shrt_psize,
                                            new_shrt_pprice, 'shrt_rentry'))
 
         ### hedge order ###
@@ -566,6 +568,7 @@ def fill_template_config(c, r=False):
                 if r:
                     c[side][k] += np.random.random(c[side][k].shape) * 0.1 - 0.05
                 '''
+    c['spans'] = calc_spans(c['min_span'], c['max_span'], c['n_spans'])
     return c
 
 
@@ -651,14 +654,14 @@ def get_template_live_config():
         "long": {
             "enabled":            True,
             "leverage":           10,     # borrow cap
-            "hedge_bkr_diff_thr": 0.6,    # make counter order if diff(bkr, last) < thr
-            "stop_bkr_diff_thr":  0.21,   # partially close pos at a loss if diff(bkr, last) < thr
-            "entry_bkr_diff_thr": 0.21,   # prevent entries whose filling would result in diff(new_bkr, last) < thr
+            "hedge_bkr_diff_thr": 0.07,    # make counter order if diff(bkr, last) < thr
+            "stop_bkr_diff_thr":  0.07,   # partially close pos at a loss if diff(bkr, last) < thr
+            "entry_bkr_diff_thr": 0.07,   # prevent entries whose filling would result in diff(new_bkr, last) < thr
             "iqty_const":         0.01,   # initial entry qty pct
             "iprc_const":         0.991,  # initial entry price ema_spread
-            "rqty_const":         0.5,    # reentry qty ddown faxtor
+            "rqty_const":         1.0,    # reentry qty ddown faxtor
             "rprc_const":         0.98,   # reentry price grid spacing
-            "markup_const":       1.004,  # markup
+            "markup_const":       1.003,  # markup
 
                                           # coeffs: [[quadratic_coeff, linear_coeff]] * n_spans
                                           # e.g. n_spans = 3,
@@ -676,14 +679,14 @@ def get_template_live_config():
         "shrt": {
             "enabled":            True,
             "leverage":           10,     # borrow cap
-            "hedge_bkr_diff_thr": 0.6,    # make counter order if diff(bkr, last) < thr
-            "stop_bkr_diff_thr":  0.21,   # partially close pos at a loss if diff(bkr, last) < thr
-            "entry_bkr_diff_thr": 0.21,   # prevent entries whose filling would result in diff(new_bkr, last) < thr
-            "iqty_const":         0.05,   # initial entry qty pct
+            "hedge_bkr_diff_thr": 0.07,    # make counter order if diff(bkr, last) < thr
+            "stop_bkr_diff_thr":  0.07,   # partially close pos at a loss if diff(bkr, last) < thr
+            "entry_bkr_diff_thr": 0.07,   # prevent entries whose filling would result in diff(new_bkr, last) < thr
+            "iqty_const":         0.01,   # initial entry qty pct
             "iprc_const":         1.009,  # initial entry price ema_spread
-            "rqty_const":         0.5,    # reentry qty ddown faxtor
-            "rprc_const":         1.01,   # reentry price grid spacing
-            "markup_const":       0.996,  # markup
+            "rqty_const":         1.0,    # reentry qty ddown faxtor
+            "rprc_const":         1.02,   # reentry price grid spacing
+            "markup_const":       0.997,  # markup
                                           # coeffs: [[quadratic_coeff, linear_coeff]] * n_spans
                                           # e.g. n_spans = 3,
                                           # coeffs = [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]]
