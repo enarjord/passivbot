@@ -234,6 +234,7 @@ def calc_ientry_qty(balance, entry_price, MA_ratios, iqty_const, iqty_MAr_coeffs
     return qty if qty >= min_entry_qty else 0.0
 
 
+@njit
 def calc_rentry_qty(psize, entry_price, MA_ratios, rqty_const, rqty_MAr_coeffs, qty_step, min_entry_qty, max_entry_qty):
     qty = round_dn(min(max_entry_qty, max(min_entry_qty, psize * (rqty_const + eqf(MA_ratios, rqty_MAr_coeffs)))),
                    qty_step)
@@ -253,7 +254,57 @@ def calc_rentry_price(balance, psize, pprice, MA_ratios, rprc_const, rprc_PBr_co
     return pprice * (rprc_const + eqf(MA_ratios, rprc_MAr_coeffs) + eqf(np.array([pcost_bal_ratio]), rprc_PBr_coeffs))
 
 
-#@njit
+@njit
+def calc_stop_order(balance,
+                    long_psize,
+                    long_pprice,
+                    shrt_psize,
+                    shrt_pprice,
+                    highest_bid,
+                    lowest_ask,
+                    equity,
+                    bkr_diff,
+                    qty_step,
+                    min_qty,
+                    stop_bkr_diff_thr,
+                    stop_psize_pct,
+                    stop_eq_bal_ratio_thr):
+    abs_shrt_psize = abs(shrt_psize)
+    if long_psize > abs_shrt_psize:
+        if bkr_diff < stop_bkr_diff_thr[0] or equity / balance < stop_eq_bal_ratio_thr:
+            stop_qty = min(long_psize, max(min_qty, round_dn(long_psize * stop_psize_pct, qty_step)))
+            if stop_qty > min_qty:
+                long_psize = max(0.0, round_(long_psize - stop_qty, qty_step))
+                return -stop_qty, lowest_ask, long_psize, long_pprice, 'long_sclose'
+    else:
+        if bkr_diff < stop_bkr_diff_thr[1] or equity / balance < stop_eq_bal_ratio_thr:
+            stop_qty = min(abs_shrt_psize, max(min_qty, round_dn(abs_shrt_psize * stop_psize_pct, qty_step)))
+            if stop_qty > min_qty:
+                shrt_psize = min(0.0, round_(shrt_psize + stop_qty, qty_step))
+                return stop_qty, highest_bid, shrt_psize, shrt_pprice, 'shrt_sclose'
+    return 0.0, 0.0, 0.0, 0.0, ''
+
+
+@njit
+def calc_long_close(long_psize, long_pprice, lowest_ask, MA_ratios, price_step, markup_const, markup_MAr_coeffs):
+    if long_psize > 0.0:
+        return (-long_psize,
+                max(lowest_ask, round_up(long_pprice * (markup_const[0] + eqf(MA_ratios, markup_MAr_coeffs[0])), price_step)),
+                0.0, 0.0, 'long_nclose')
+    return 0.0, 0.0, 0.0, 0.0, ''
+
+
+
+@njit
+def calc_shrt_close(shrt_psize, shrt_pprice, highest_bid, MA_ratios, price_step, markup_const, markup_MAr_coeffs):
+    if shrt_psize < 0.0:
+        return (-shrt_psize,
+                min(highest_bid, round_dn(shrt_pprice * (markup_const[1] + eqf(MA_ratios, markup_MAr_coeffs[1])), price_step)),
+                0.0, 0.0, 'shrt_nclose')
+    return 0.0, 0.0, 0.0, 0.0, ''
+
+
+@njit
 def iter_orders(balance,
                 long_psize,
                 long_pprice,
@@ -337,32 +388,17 @@ def iter_orders(balance,
     equity = calc_equity(balance, long_psize, long_pprice, shrt_psize, shrt_pprice, last_price, inverse, c_mult)
 
     ### stop order ###
-    abs_shrt_psize = abs(shrt_psize)
-    if long_psize > abs_shrt_psize:
-        if bkr_diff < stop_bkr_diff_thr[0] or equity / balance < stop_eq_bal_ratio_thr:
-            stop_qty = min(long_psize, max(min_qty, round_dn(long_psize * stop_psize_pct, qty_step)))
-            if stop_qty > min_qty:
-                long_psize = max(0.0, round_(long_psize - stop_qty, qty_step))
-                yield -stop_qty, lowest_ask, long_psize, long_pprice, 'long_sclose'
-    else:
-        if bkr_diff < stop_bkr_diff_thr[1] or equity / balance < stop_eq_bal_ratio_thr:
-            stop_qty = min(abs_shrt_psize, max(min_qty, round_dn(abs_shrt_psize * stop_psize_pct, qty_step)))
-            if stop_qty > min_qty:
-                shrt_psize = min(0.0, round_(shrt_psize + stop_qty, qty_step))
-                yield stop_qty, highest_bid, shrt_psize, long_pprice, 'shrt_sclose'
-
-    if long_psize > 0.0:
-        ### long normal close ###
-        yield (-long_psize,
-               max(lowest_ask, round_up(long_pprice * (markup_const[0] + eqf(MA_ratios, markup_MAr_coeffs[0])), price_step)),
-               0.0, 0.0, 'long_nclose')
-
-    if shrt_psize < 0.0:
-        ### shrt normal close ###
-        yield (-shrt_psize,
-               min(highest_bid, round_dn(shrt_pprice * (markup_const[1] + eqf(MA_ratios, markup_MAr_coeffs[1])), price_step)),
-               0.0, 0.0, 'shrt_nclose')
-
+    stop_order = calc_stop_order(balance, long_psize, long_pprice, shrt_psize, shrt_pprice, highest_bid, lowest_ask,
+                                 equity, bkr_diff, qty_step, min_qty, stop_bkr_diff_thr, stop_psize_pct,
+                                 stop_eq_bal_ratio_thr)
+    if stop_order[0] != 0.0:
+        yield stop_order
+    long_close = calc_long_close(long_psize, long_pprice, lowest_ask, MA_ratios, price_step, markup_const, markup_MAr_coeffs)
+    if long_close[0] != 0.0:
+        yield long_close
+    shrt_close = calc_long_close(shrt_psize, shrt_pprice, highest_bid, MA_ratios, price_step, markup_const, markup_MAr_coeffs)
+    if shrt_close[0] != 0.0:
+        yield shrt_close
     while True:
         available_margin = calc_available_margin(balance, long_psize, long_pprice, shrt_psize, shrt_pprice, last_price,
                                                  inverse, c_mult, leverage)
@@ -611,17 +647,17 @@ def get_template_live_config():
         "n_spans": 3,
         "hedge_psize_pct":    0.05,   # % of psize for hedge order
         "stop_psize_pct":     0.05,   # % of psize for stop loss order
-        "stop_eq_bal_ratio_thr": 0.8, # if equity / balance < thr: stop loss
+        "stop_eq_bal_ratio_thr": 0.1, # if equity / balance < thr: stop loss
         "long": {
             "enabled":            True,
             "leverage":           10,     # borrow cap
-            "hedge_bkr_diff_thr": 0.5,    # make counter order if diff(bkr, last) < thr
+            "hedge_bkr_diff_thr": 0.6,    # make counter order if diff(bkr, last) < thr
             "stop_bkr_diff_thr":  0.21,   # partially close pos at a loss if diff(bkr, last) < thr
             "entry_bkr_diff_thr": 0.21,   # prevent entries whose filling would result in diff(new_bkr, last) < thr
-            "iqty_const":         0.05,   # initial entry qty pct
+            "iqty_const":         0.01,   # initial entry qty pct
             "iprc_const":         0.991,  # initial entry price ema_spread
             "rqty_const":         0.5,    # reentry qty ddown faxtor
-            "rprc_const":         0.99,   # reentry price grid spacing
+            "rprc_const":         0.98,   # reentry price grid spacing
             "markup_const":       1.004,  # markup
 
                                           # coeffs: [[quadratic_coeff, linear_coeff]] * n_spans
@@ -640,7 +676,7 @@ def get_template_live_config():
         "shrt": {
             "enabled":            True,
             "leverage":           10,     # borrow cap
-            "hedge_bkr_diff_thr": 0.5,    # make counter order if diff(bkr, last) < thr
+            "hedge_bkr_diff_thr": 0.6,    # make counter order if diff(bkr, last) < thr
             "stop_bkr_diff_thr":  0.21,   # partially close pos at a loss if diff(bkr, last) < thr
             "entry_bkr_diff_thr": 0.21,   # prevent entries whose filling would result in diff(new_bkr, last) < thr
             "iqty_const":         0.05,   # initial entry qty pct
