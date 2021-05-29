@@ -1,0 +1,22 @@
+site_name: Passivbot
+nav:
+  - Home: index.md
+  - How it works: how-it-works.md
+  - Installation: installation.md
+  - Configuration: configuration.md
+  - Live: live.md
+  - Backtesting: backtesting.md
+  - optimizer: optimizer.md
+  - Telegram: telegram.md
+  - Developers: developers.md
+  - FAQ: faq.md
+theme:
+  name: material
+  logo: 'images/logo.png'
+  favicon: 'images/logo.png'
+  custom_dir: 'docs'
+  palette:
+    primary: 'blue grey'
+    accent: 'tear'
+markdown_extensions:
+  - admonition

@@ -72,7 +72,7 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, list, bo
 
     ema_std_iterator = iter_indicator_chunks(ticks[:, 0], ema_span)
     ema_chunk, std_chunk, z = next(ema_std_iterator)
-    volatility_chunk = std_chunk / ema_chunk
+    volatility_chunk = np.nan_to_num(std_chunk / ema_chunk, nan=0.0, posinf=0.0, neginf=0.0)
     zc = 0
 
     closest_liq = 1.0
@@ -90,7 +90,7 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, list, bo
         chunk_i = k - zc
         if chunk_i >= len(ema_chunk):
             ema_chunk, std_chunk, z = next(ema_std_iterator)
-            volatility_chunk = std_chunk / ema_chunk
+            volatility_chunk = np.nan_to_num(std_chunk / ema_chunk, nan=0.0, posinf=0.0, neginf=0.0)
             zc = z * len(ema_chunk)
             chunk_i = k - zc
 
