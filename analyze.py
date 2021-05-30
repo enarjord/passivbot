@@ -12,7 +12,7 @@ def objective_function(result: dict,
                 result[metric]
                 * min(1.0, bc["max_hrs_no_fills"] / result["max_hrs_no_fills"])
                 * min(1.0, bc["max_hrs_no_fills_same_side"] / result["max_hrs_no_fills_same_side"])
-                * min(1.0, result["closest_liq"] / bc["minimum_liquidation_distance"])
+                * min(1.0, result["closest_bkr"] / bc["minimum_bankruptcy_distance"])
         )
     except:
         return -1
@@ -23,8 +23,8 @@ def candidate_to_live_config(candidate: dict) -> dict:
     for k in ["config_name", "logging_level", "ddown_factor", "qty_pct", "leverage",
               "n_close_orders", "grid_spacing", "pos_margin_grid_coeff",
               "volatility_grid_coeff", "volatility_qty_coeff", "min_markup",
-              "markup_range", "do_long", "do_shrt", "ema_span", "ema_spread", "stop_loss_liq_diff",
-              "stop_loss_pos_pct", "entry_liq_diff_thr", "symbol"]:
+              "markup_range", "do_long", "do_shrt", "ema_span", "ema_spread", "stop_loss_bkr_diff",
+              "stop_loss_pos_pct", "entry_bkr_diff_thr", "symbol"]:
         if k in candidate:
             live_config[k] = candidate[k]
         else:
@@ -141,7 +141,7 @@ def get_empty_analysis(bc: dict) -> dict:
         'max_drawdown': 0.0,
         'n_days': 0.0,
         'average_daily_gain': 0.0,
-        'closest_liq': 1.0,
+        'closest_bkr': 1.0,
         'n_fills': 0.0,
         'n_entries': 0.0,
         'n_closes': 0.0,
@@ -183,7 +183,7 @@ def analyze_fills(fills: list, bc: dict, last_ts: float) -> (pd.DataFrame, dict)
         'max_drawdown': ((fdf.equity - fdf.balance).abs() / fdf.balance).max(),
         'n_days': (n_days := (last_ts - fdf.iloc[0].timestamp) / (1000 * 60 * 60 * 24)),
         'average_daily_gain': gain ** (1 / n_days) if gain > 0.0 and n_days > 0.0 else 0.0,
-        'closest_liq': fdf.closest_liq.iloc[-1],
+        'closest_bkr': fdf.closest_bkr.iloc[-1],
         'n_fills': len(fdf),
         'n_entries': len(fdf[fdf.type.str.contains('entry')]),
         'n_closes': len(fdf[fdf.type.str.contains('close')]),

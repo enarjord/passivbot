@@ -28,11 +28,6 @@ os.environ['TUNE_GLOBAL_CHECKPOINT_S'] = '120'
 
 
 def create_config(backtest_config: dict) -> dict:
-    '''
-    config = {k: backtest_config[k] for k in backtest_config
-              if k in get_keys() + ['exchange', 'starting_balance']}
-              #if k not in {'session_name', 'user', 'symbol', 'start_date', 'end_date', 'ranges'}}
-    '''
     config = backtest_config
     for k in backtest_config['ranges']:
         if backtest_config['ranges'][k][0] == backtest_config['ranges'][k][1]:
@@ -81,7 +76,7 @@ def simple_sliding_window_wrap(config, ticks):
     finished_windows = 0.0
     for ticks_slice in iter_slices(ticks, sliding_window_size, n_windows, yield_full=test_full):
         try:
-            fills, _, did_finish = backtest(config, ticks_slice)
+            fills, _, did_finish = backtest(config, ticks_slice, do_print=False)
         except Exception as e:
             print('debug a', e, config)
             fills = []
@@ -95,7 +90,7 @@ def simple_sliding_window_wrap(config, ticks):
         finished_windows += 1.0
         if config['break_early_factor'] > 0.0 and \
                 (not did_finish or
-                 result_['closest_liq'] < config['minimum_liquidation_distance'] * (1 - config['break_early_factor']) or
+                 result_['closest_bkr'] < config['minimum_bankruptcy_distance'] * (1 - config['break_early_factor']) or
                  result_['max_hrs_no_fills'] > config['max_hrs_no_fills'] * (1 + config['break_early_factor']) or
                  result_['max_hrs_no_fills_same_side'] > config['max_hrs_no_fills_same_side'] * (
                          1 + config['break_early_factor'])):
@@ -104,15 +99,14 @@ def simple_sliding_window_wrap(config, ticks):
         result = {}
         for k in results[0]:
             try:
-                if k == 'closest_liq':
+                if k == 'closest_bkr':
                     result[k] = np.min([r[k] for r in results])
                 elif k == 'average_daily_gain':
                     if (denominator := np.sum([r['n_days'] for r in results])) == 0.0:
                         result[k] = 1.0
                     else:
                         result[k] = np.sum([r[k] * r['n_days'] for r in results]) / denominator
-                    result['adjusted_daily_gain'] = np.mean(
-                        [tanh(r[k]) for r in results]) * finished_windows / n_windows
+                    result['adjusted_daily_gain'] = np.mean([tanh(r[k]) for r in results])
                 elif 'max_hrs_no_fills' in k:
                     result[k] = np.max([r[k] for r in results])
                 else:
@@ -123,11 +117,11 @@ def simple_sliding_window_wrap(config, ticks):
         result = get_empty_analysis(config)
 
     try:
-        objective = objective_function(result, 'adjusted_daily_gain', config)
+        objective = objective_function(result, 'average_daily_gain', config) * finished_windows / n_windows
     except Exception as e:
         print('c', e)
         objective = -1
-    tune.report(objective=objective, daily_gain=result['average_daily_gain'], closest_liquidation=result['closest_liq'],
+    tune.report(objective=objective, daily_gain=result['adjusted_daily_gain'], closest_bankruptcy=result['closest_bkr'],
                 max_hrs_no_fills=result['max_hrs_no_fills'],
                 max_hrs_no_fills_same_side=result['max_hrs_no_fills_same_side'])
 
@@ -136,7 +130,7 @@ def tune_report(result):
     tune.report(
         objective=result["objective_gmean"],
         daily_gain=result["daily_gains_gmean"],
-        closest_liquidation=result["closest_liq"],
+        closest_bankruptcy=result["closest_bkr"],
         max_hrs_no_fills=result["max_hrs_no_fills"],
         max_hrs_no_fills_same_side=result["max_hrs_no_fills_same_side"],
     )
@@ -194,7 +188,7 @@ def backtest_tune(ticks: np.ndarray, backtest_config: dict, current_best: Union[
         search_alg=algo, scheduler=scheduler, num_samples=iters, config=config, verbose=1,
         reuse_actors=True, local_dir=backtest_config['optimize_dirpath'],
         progress_reporter=LogReporter(metric_columns=['daily_gain',
-                                                      'closest_liquidation',
+                                                      'closest_bankruptcy',
                                                       'max_hrs_no_fills',
                                                       'max_hrs_no_fills_same_side',
                                                       'objective'],
@@ -211,7 +205,7 @@ def save_results(analysis, backtest_config):
     df = analysis.results_df
     df.reset_index(inplace=True)
     df.rename(columns={column: column.replace('config.', '') for column in df.columns}, inplace=True)
-    df = df[list(backtest_config['ranges'].keys()) + ['daily_gain', 'closest_liquidation', 'max_hrs_no_fills',
+    df = df[list(backtest_config['ranges'].keys()) + ['daily_gain', 'closest_bankruptcy', 'max_hrs_no_fills',
                                                       'max_hrs_no_fills_same_side', 'objective']].sort_values(
         'objective', ascending=False)
     df.to_csv(os.path.join(backtest_config['optimize_dirpath'], 'results.csv'), index=False)
@@ -234,7 +228,7 @@ async def main():
     downloader = Downloader(config)
     print()
     for k in (keys := ['exchange', 'symbol', 'starting_balance', 'start_date', 'end_date',
-                       'latency_simulation_ms', 'do_long', 'do_shrt', 'minimum_liquidation_distance',
+                       'latency_simulation_ms', 'do_long', 'do_shrt', 'minimum_bankruptcy_distance',
                        'max_hrs_no_fills', 'max_hrs_no_fills_same_side', 'iters', 'n_particles']):
         if k in config:
             print(f"{k: <{max(map(len, keys)) + 2}} {config[k]}")

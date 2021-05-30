@@ -5,7 +5,7 @@
   options: {"c1": 1.4962, "c2": 1.4962, "w": 0.7298}
   n_particles: 24
 
-  minimum_liquidation_distance: 0.21
+  minimum_bankruptcy_distance: 0.21
 
   # max hours between consecutive fills
   max_hrs_no_fills: 48
@@ -26,7 +26,7 @@
 
   # set to 0.0 to disable breaking early
   # otherwise will break trial early on first window returning val {< or >} val_thr * (1 {- or +} break_early_factor)
-  # e.g. break if a sub test returns closest_liq < liq_diff_thr * (1 - break_early_factor)
+  # e.g. break if a sub test returns closest_bkr < bkr_diff_thr * (1 - break_early_factor)
   break_early_factor: 0.25
 
   # wfo config:
@@ -50,8 +50,8 @@
     min_markup: [0.0005, 0.012]
     ema_span: [6000.0, 300000.0]
     ema_spread: [0.0, 0.03]
-    stop_loss_liq_diff: [0.2, 0.7]
+    stop_loss_bkr_diff: [0.2, 0.7]
     stop_loss_pos_pct: [0.01, 0.2]
-    entry_liq_diff_thr: [0.0, 0.0]
+    entry_bkr_diff_thr: [0.0, 0.0]
   }
 }
