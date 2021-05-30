@@ -153,7 +153,6 @@ class Bot:
         self.ema = 0.0
 
         self.n_open_orders_limit = 8
-        self.last_price_diff_limit = 0.15
         self.n_orders_per_execution = 4
 
         self.hedge_mode = True
@@ -175,6 +174,8 @@ class Bot:
             config['stop_mode'] = None
         if 'entry_liq_diff_thr' not in config:
             config['entry_liq_diff_thr'] = config['stop_loss_liq_diff']
+        if 'last_price_diff_limit' not in config:
+            config['last_price_diff_limit'] = 0.15
         self.config = config
         for key in config:
             setattr(self, key, config[key])
