@@ -654,12 +654,12 @@ def get_template_live_config():
         "long": {
             "enabled":            True,
             "leverage":           10,     # borrow cap
-            "hedge_bkr_diff_thr": 0.07,    # make counter order if diff(bkr, last) < thr
+            "hedge_bkr_diff_thr": 0.07,   # make counter order if diff(bkr, last) < thr
             "stop_bkr_diff_thr":  0.07,   # partially close pos at a loss if diff(bkr, last) < thr
             "entry_bkr_diff_thr": 0.07,   # prevent entries whose filling would result in diff(new_bkr, last) < thr
             "iqty_const":         0.01,   # initial entry qty pct
             "iprc_const":         0.991,  # initial entry price ema_spread
-            "rqty_const":         1.0,    # reentry qty ddown faxtor
+            "rqty_const":         1.0,    # reentry qty ddown factor
             "rprc_const":         0.98,   # reentry price grid spacing
             "markup_const":       1.003,  # markup
 
@@ -684,7 +684,7 @@ def get_template_live_config():
             "entry_bkr_diff_thr": 0.07,   # prevent entries whose filling would result in diff(new_bkr, last) < thr
             "iqty_const":         0.01,   # initial entry qty pct
             "iprc_const":         1.009,  # initial entry price ema_spread
-            "rqty_const":         1.0,    # reentry qty ddown faxtor
+            "rqty_const":         1.0,    # reentry qty ddown factor
             "rprc_const":         1.02,   # reentry price grid spacing
             "markup_const":       0.997,  # markup
                                           # coeffs: [[quadratic_coeff, linear_coeff]] * n_spans
