@@ -86,9 +86,9 @@ def plot_fills(df, fdf, side: int = 0, liq_thr=0.1):
     dfc = df.loc[fdf.index[0]:fdf.index[-1]]
     dfc.price.plot(style='y-')
     if 'bid_thr' in dfc.columns:
-        dfc.bid_thr.plot(style='b-')
+        dfc.bid_thr.plot(style='b-.')
     if 'ask_thr' in dfc.columns:
-        dfc.ask_thr.plot(style='r-')
+        dfc.ask_thr.plot(style='r-.')
 
     if side >= 0:
         longs = fdf[fdf.pside == 'long']
