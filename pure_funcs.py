@@ -224,8 +224,8 @@ def calc_new_psize_pprice(psize, pprice, qty, price, qty_step) -> (float, float)
 
 
 @njit
-def eqf(vals: np.ndarray, coeffs: np.ndarray) -> float:
-    return np.sum(vals ** 2 * coeffs[:, 0] + vals * coeffs[:, 1])
+def eqf(vals: np.ndarray, coeffs: np.ndarray, minus: float = 1.0) -> float:
+    return np.sum((vals ** 2 - minus) * coeffs[:, 0] + (vals - minus) * coeffs[:, 1])
 
 
 @njit
@@ -253,7 +253,7 @@ def calc_ientry_price(MA, MA_ratios, iprc_const, iprc_MAr_coeffs):
 def calc_rentry_price(balance, psize, pprice, MA_ratios, rprc_const, rprc_PBr_coeffs, rprc_MAr_coeffs, inverse, c_mult):
     # returns unrounded price
     pcost_bal_ratio = qty_to_cost(psize, pprice, inverse, c_mult) / balance
-    return pprice * (rprc_const + eqf(MA_ratios, rprc_MAr_coeffs) + eqf(np.array([pcost_bal_ratio]), rprc_PBr_coeffs))
+    return pprice * (rprc_const + eqf(MA_ratios, rprc_MAr_coeffs) + eqf(np.array([pcost_bal_ratio]), rprc_PBr_coeffs), minus=0.0)
 
 
 @njit
