@@ -23,26 +23,32 @@ from jitted import round_
 from passivbot import ts_to_date, add_argparse_args
 from reporter import LogReporter
 from walk_forward_optimization import WFO
+from pure_funcs import pack_config, unpack_config
 
 os.environ['TUNE_GLOBAL_CHECKPOINT_S'] = '120'
 
 
 def create_config(backtest_config: dict) -> dict:
-    config = backtest_config
-    for k in backtest_config['ranges']:
-        if backtest_config['ranges'][k][0] == backtest_config['ranges'][k][1]:
-            config[k] = backtest_config['ranges'][k][0]
-        elif k in ['n_close_orders', 'leverage']:
-            config[k] = tune.randint(backtest_config['ranges'][k][0], backtest_config['ranges'][k][1] + 1)
+    config = unpack_config(backtest_config)
+    for k in config:
+        if 'coeffs' in k:
+            config['ranges'][k] = config['ranges']['coeffs']
+        elif '§' in k and (k_ := k[k.find('§') + 1:]) in config['ranges']:
+            config['ranges'][k] = config['ranges'][k_]
+    for k in config['ranges']:
+        if config['ranges'][k][0] == config['ranges'][k][1]:
+            config[k] = config['ranges'][k][0]
+        elif any(q in k for q in ['leverage', 'MA_idx']):
+            config[k] = tune.randint(config['ranges'][k][0], config['ranges'][k][1] + 1)
         else:
-            config[k] = tune.uniform(backtest_config['ranges'][k][0], backtest_config['ranges'][k][1])
+            config[k] = tune.uniform(config['ranges'][k][0], config['ranges'][k][1])
     return config
 
 
 def clean_start_config(start_config: dict, config: dict, ranges: dict) -> dict:
     clean_start = {}
-    for k, v in start_config.items():
-        if k in config and k not in ['do_long', 'do_shrt']:
+    for k, v in unpack_config(start_config).items():
+        if k in config:
             if type(config[k]) == ray.tune.sample.Float or type(config[k]) == ray.tune.sample.Integer:
                 clean_start[k] = min(max(v, ranges[k][0]), ranges[k][1])
     return clean_start
@@ -76,7 +82,7 @@ def simple_sliding_window_wrap(config, ticks):
     finished_windows = 0.0
     for ticks_slice in iter_slices(ticks, sliding_window_size, n_windows, yield_full=test_full):
         try:
-            fills, _, did_finish = backtest(config, ticks_slice, do_print=False)
+            fills, _, did_finish = backtest(pack_config(config), ticks_slice, do_print=False)
         except Exception as e:
             print('debug a', e, config)
             fills = []

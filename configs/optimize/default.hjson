@@ -38,20 +38,29 @@
   # If start and stop are set to same value, it's treated as a fixed variable.
   ranges:
   {
+    # common parameters
+    min_span: [5000, 5000]
+    max_span: [400000, 400000]
+    n_spans: [3, 3]
+    hedge_psize_pct: [0.01, 1.0]
+    stop_psize_pct: [0.01, 1.0]
+    stop_eqbal_ratio_thr: [0.0, 0.9]
+
+    # long/shrt split
     leverage: [1, 16]
-    n_close_orders: [16, 16]
-    qty_pct: [0.0, 0.5]
-    ddown_factor: [0.0, 3.5]
-    pos_margin_grid_coeff: [-600.0, 600.0]
-    volatility_grid_coeff: [-1200.0, 1200.0]
-    volatility_qty_coeff: [-1200.0, 1200.0]
-    grid_spacing: [0.0002, 0.02]
-    markup_range: [0.0, 0.02]
-    min_markup: [0.0005, 0.012]
-    ema_span: [6000.0, 300000.0]
-    ema_spread: [0.0, 0.03]
-    stop_loss_bkr_diff: [0.2, 0.7]
-    stop_loss_pos_pct: [0.01, 0.2]
-    entry_bkr_diff_thr: [0.0, 0.0]
+    coeffs: [-1.5, 1.5]
+    iqty_const: [0.0, 1.0]
+    iprc_const: [0.9, 1.1]
+    rqty_const: [0.0, 4.0]
+    rprc_const: [0.9, 1.1]
+    markup_const: [0.8, 1.2]
+
+    # MA_idx = [1, n_spans]
+    MA_idx: [1, 999]
+
+    hedge_bkr_diff_thr: [0.0, 0.9]
+    stop_bkr_diff_thr: [0.0, 0.9]
+    entry_bkr_diff_thr: [0.0, 0.9]
+
   }
 }

@@ -270,16 +270,16 @@ def calc_stop_order(balance,
                     min_qty,
                     stop_bkr_diff_thr,
                     stop_psize_pct,
-                    stop_eq_bal_ratio_thr):
+                    stop_eqbal_ratio_thr):
     abs_shrt_psize = abs(shrt_psize)
     if long_psize > abs_shrt_psize:
-        if bkr_diff < stop_bkr_diff_thr[0] or equity / balance < stop_eq_bal_ratio_thr:
+        if bkr_diff < stop_bkr_diff_thr[0] or equity / balance < stop_eqbal_ratio_thr:
             stop_qty = min(long_psize, max(min_qty, round_dn(long_psize * stop_psize_pct, qty_step)))
             if stop_qty > min_qty:
                 long_psize = max(0.0, round_(long_psize - stop_qty, qty_step))
                 return -stop_qty, lowest_ask, long_psize, long_pprice, 'long_sclose'
     else:
-        if bkr_diff < stop_bkr_diff_thr[1] or equity / balance < stop_eq_bal_ratio_thr:
+        if bkr_diff < stop_bkr_diff_thr[1] or equity / balance < stop_eqbal_ratio_thr:
             stop_qty = min(abs_shrt_psize, max(min_qty, round_dn(abs_shrt_psize * stop_psize_pct, qty_step)))
             if stop_qty > min_qty:
                 shrt_psize = min(0.0, round_(shrt_psize + stop_qty, qty_step))
@@ -331,7 +331,7 @@ def iter_orders(balance,
                 hedge_psize_pct,
                 stop_bkr_diff_thr,
                 stop_psize_pct,
-                stop_eq_bal_ratio_thr,
+                stop_eqbal_ratio_thr,
                 entry_bkr_diff_thr,
                 iqty_const,
                 iprc_const,
@@ -369,7 +369,7 @@ def iter_orders(balance,
     :param hedge_psize_pct: tuple(float, float)
     :param stop_bkr_diff_thr: tuple(float, float)
     :param stop_psize_pct: tuple(float, float)
-    :param stop_eq_bal_ratio_thr: float
+    :param stop_eqbal_ratio_thr: float
     :param entry_bkr_diff_thr: tuple(float, float)
     :param iqty_const: tuple(float, float)
     :param iprc_const: tuple(float, float)
@@ -392,7 +392,7 @@ def iter_orders(balance,
     ### stop order ###
     stop_order = calc_stop_order(balance, long_psize, long_pprice, shrt_psize, shrt_pprice, highest_bid, lowest_ask,
                                  equity, bkr_diff, qty_step, min_qty, stop_bkr_diff_thr, stop_psize_pct,
-                                 stop_eq_bal_ratio_thr)
+                                 stop_eqbal_ratio_thr)
     if stop_order[0] != 0.0:
         yield stop_order
     long_close = calc_long_close(long_psize, long_pprice, lowest_ask, MA_ratios, price_step, markup_const, markup_MAr_coeffs)
@@ -628,7 +628,7 @@ def create_xk(config: dict):
     xk = {}
     keys = ['inverse', 'do_long', 'do_shrt', 'qty_step', 'price_step', 'min_qty', 'min_cost',
             'c_mult', 'leverage', 'hedge_bkr_diff_thr', 'hedge_psize_pct', 'stop_bkr_diff_thr',
-            'stop_psize_pct', 'stop_eq_bal_ratio_thr', 'entry_bkr_diff_thr', 'iqty_const', 'iprc_const', 'rqty_const',
+            'stop_psize_pct', 'stop_eqbal_ratio_thr', 'entry_bkr_diff_thr', 'iqty_const', 'iprc_const', 'rqty_const',
             'rprc_const', 'markup_const', 'iqty_MAr_coeffs', 'rprc_PBr_coeffs', 'iprc_MAr_coeffs',
             'rqty_MAr_coeffs', 'rprc_MAr_coeffs', 'markup_MAr_coeffs']
     for k in keys:
@@ -650,7 +650,7 @@ def get_template_live_config():
         "n_spans": 3,
         "hedge_psize_pct":    0.05,   # % of psize for hedge order
         "stop_psize_pct":     0.05,   # % of psize for stop loss order
-        "stop_eq_bal_ratio_thr": 0.1, # if equity / balance < thr: stop loss
+        "stop_eqbal_ratio_thr": 0.1, # if equity / balance < thr: stop loss
         "long": {
             "enabled":            True,
             "leverage":           10,     # borrow cap
