@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from datetime import datetime, timedelta
 from time import time
 
@@ -45,57 +46,57 @@ class Telegram:
 
     def add_handlers(self, updater):
         dispatcher = updater.dispatcher
-        dispatcher.add_handler(MessageHandler(Filters.regex('.*/balance'), self._balance))
-        dispatcher.add_handler(MessageHandler(Filters.regex('.*/open_orders'), self._open_orders))
-        dispatcher.add_handler(MessageHandler(Filters.regex('.*/position'), self._position))
-        dispatcher.add_handler(MessageHandler(Filters.regex('.*/show_config'), self.show_config))
+        dispatcher.add_handler(MessageHandler(Filters.regex(re.compile('.*/balance', re.UNICODE)), self._balance))
+        dispatcher.add_handler(MessageHandler(Filters.regex(re.compile('.*/open_orders', re.UNICODE)), self._open_orders))
+        dispatcher.add_handler(MessageHandler(Filters.regex(re.compile('.*/position', re.UNICODE)), self._position))
+        dispatcher.add_handler(MessageHandler(Filters.regex(re.compile('.*/show_config', re.UNICODE)), self.show_config))
         dispatcher.add_handler(
-            MessageHandler(Filters.regex('.*/reload_config'), self._reload_config))
+            MessageHandler(Filters.regex(re.compile('.*/reload_config', re.UNICODE)), self._reload_config))
         dispatcher.add_handler(
-            MessageHandler(Filters.regex('.*/closed_trades'), self._closed_trades))
-        dispatcher.add_handler(MessageHandler(Filters.regex('.*/daily'), self._daily))
-        dispatcher.add_handler(MessageHandler(Filters.regex('.*/help'), self._help))
+            MessageHandler(Filters.regex(re.compile('.*/closed_trades', re.UNICODE)), self._closed_trades))
+        dispatcher.add_handler(MessageHandler(Filters.regex(re.compile('.*/daily', re.UNICODE)), self._daily))
+        dispatcher.add_handler(MessageHandler(Filters.regex(re.compile('.*/help', re.UNICODE)), self._help))
         dispatcher.add_handler(ConversationHandler(
-            entry_points=[MessageHandler(Filters.regex('.*/stop'), self._begin_stop)],
+            entry_points=[MessageHandler(Filters.regex(re.compile('.*/stop', re.UNICODE)), self._begin_stop)],
             states={
-                1: [MessageHandler(Filters.regex('(graceful|freeze|shutdown|resume|cancel)'),
+                1: [MessageHandler(Filters.regex(re.compile('(graceful|freeze|shutdown|resume|cancel)', re.UNICODE)),
                                    self._stop_mode_chosen)],
-                2: [MessageHandler(Filters.regex('(confirm|abort)'), self._verify_stop_confirmation)],
+                2: [MessageHandler(Filters.regex(re.compile('(confirm|abort)', re.UNICODE)), self._verify_stop_confirmation)],
             },
             fallbacks=[CommandHandler('cancel', self._abort)]
         ))
         dispatcher.add_handler(ConversationHandler(
-            entry_points=[MessageHandler(Filters.regex('.*/set_leverage'), self._begin_set_leverage)],
+            entry_points=[MessageHandler(Filters.regex(re.compile('.*/set_leverage', re.UNICODE)), self._begin_set_leverage)],
             states={
-                1: [MessageHandler(Filters.regex('([0-9]*|cancel)'), self._leverage_chosen)],
-                2: [MessageHandler(Filters.regex('(confirm|abort)'), self._verify_leverage_confirmation)],
+                1: [MessageHandler(Filters.regex(re.compile('([0-9]*|cancel)', re.UNICODE)), self._leverage_chosen)],
+                2: [MessageHandler(Filters.regex(re.compile('(confirm|abort)', re.UNICODE)), self._verify_leverage_confirmation)],
             },
             fallbacks=[CommandHandler('cancel', self._abort)]
         ))
         dispatcher.add_handler(ConversationHandler(
-            entry_points=[MessageHandler(Filters.regex('.*/set_short'), self._verify_set_short)],
+            entry_points=[MessageHandler(Filters.regex(re.compile('.*/set_short', re.UNICODE)), self._verify_set_short)],
             states={
-                1: [MessageHandler(Filters.regex('(confirm|abort)'), self._verify_short_confirmation)],
+                1: [MessageHandler(Filters.regex(re.compile('(confirm|abort)', re.UNICODE)), self._verify_short_confirmation)],
             },
             fallbacks=[CommandHandler('cancel', self._abort)]
         ))
         dispatcher.add_handler(ConversationHandler(
-            entry_points=[MessageHandler(Filters.regex('.*/set_long'), self._verify_set_long)],
+            entry_points=[MessageHandler(Filters.regex(re.compile('.*/set_long', re.UNICODE)), self._verify_set_long)],
             states={
-                1: [MessageHandler(Filters.regex('(confirm|abort)'), self._verify_long_confirmation)],
+                1: [MessageHandler(Filters.regex(re.compile('(confirm|abort)', re.UNICODE)), self._verify_long_confirmation)],
             },
             fallbacks=[CommandHandler('cancel', self._abort)]
         ))
         dispatcher.add_handler(ConversationHandler(
-            entry_points=[MessageHandler(Filters.regex('.*/set_config'), self._begin_set_config)],
+            entry_points=[MessageHandler(Filters.regex(re.compile('.*/set_config', re.UNICODE)), self._begin_set_config)],
             states={
                 1: [CallbackQueryHandler(self._configfile_chosen)],
                 2: [CallbackQueryHandler(self._verify_setconfig_confirmation)],
             },
             fallbacks=[CommandHandler('cancel', self._abort)]
         ))
-        dispatcher.add_handler(MessageHandler(Filters.regex('.*/next'), self._next_page))
-        dispatcher.add_handler(MessageHandler(Filters.regex('.*/previous'), self._previous_page))
+        dispatcher.add_handler(MessageHandler(Filters.regex(re.compile('.*/next', re.UNICODE)), self._next_page))
+        dispatcher.add_handler(MessageHandler(Filters.regex(re.compile('.*/previous', re.UNICODE)), self._previous_page))
 
     def _begin_set_config(self, update: Update, _: CallbackContext) -> int:
         files = [f for f in os.listdir('configs/live') if f.endswith('.json')]
