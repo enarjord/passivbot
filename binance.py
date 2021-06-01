@@ -259,6 +259,9 @@ class BinanceBot(Bot):
         if params['type'] == 'LIMIT':
             params['timeInForce'] = 'GTX'
             params['price'] = str(order['price'])
+        elif params['type'] in ['STOP_MARKET', 'TAKE_PROFIT_MARKET']:
+            params['stop_price'] = str(order['price'])
+            params['close_position'] = 'true'
         if 'custom_id' in order:
             params['newClientOrderId'] = \
                 f"{order['custom_id']}_{str(int(time() * 1000))[8:]}_{int(np.random.random() * 1000)}"
