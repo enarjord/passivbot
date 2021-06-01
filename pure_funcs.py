@@ -547,27 +547,13 @@ def calc_spans(min_span: int, max_span: int, n_spans) -> [int]:
                            for i in range(0, n_spans)])
 
 
-def get_starting_coeffs(n_spans: int):
-    return np.array([[(x := 1 / (n_spans * 2)), x]] * n_spans)
-
-
 def fill_template_config(c, r=False):
     for side in ['long', 'shrt']:
         for k in c[side]:
             if 'MAr' in k:
                 c[side][k] = np.random.random((c['n_spans'], 2)) * 0.1 - 0.05 if r else np.zeros((c['n_spans'], 2))
-                '''
-                c[side][k] = get_starting_coeffs(c['n_spans'])
-                if r:
-                    c[side][k] += np.random.random(c[side][k].shape) * 0.1 - 0.05
-                '''
             elif 'PBr' in k:
                 c[side][k] = np.random.random((1, 2)) * 0.1 - 0.05 if r else  np.zeros((1, 2))
-                '''
-                c[side][k] = get_starting_coeffs(1)
-                if r:
-                    c[side][k] += np.random.random(c[side][k].shape) * 0.1 - 0.05
-                '''
     c['spans'] = calc_spans(c['min_span'], c['max_span'], c['n_spans'])
     return c
 
@@ -632,10 +618,10 @@ def create_xk(config: dict):
             'rprc_const', 'markup_const', 'iqty_MAr_coeffs', 'rprc_PBr_coeffs', 'iprc_MAr_coeffs',
             'rqty_MAr_coeffs', 'rprc_MAr_coeffs', 'markup_MAr_coeffs']
     for k in keys:
-        if k in config:
-            xk[k] = config[k]
-        elif k in config['long']:
+        if k in config['long']:
             xk[k] = (config['long'][k], config['shrt'][k])
+        elif k in config:
+            xk[k] = config[k]
 
     return xk
 

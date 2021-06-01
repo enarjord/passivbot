@@ -23,34 +23,34 @@ from jitted import round_
 from passivbot import ts_to_date, add_argparse_args
 from reporter import LogReporter
 from walk_forward_optimization import WFO
-from pure_funcs import pack_config, unpack_config
+from pure_funcs import pack_config, unpack_config, fill_template_config, get_template_live_config
 
 os.environ['TUNE_GLOBAL_CHECKPOINT_S'] = '120'
 
 
-def create_config(backtest_config: dict) -> dict:
-    config = unpack_config(backtest_config)
-    for k in config:
+def create_config(config: dict) -> dict:
+    unpacked = {**config, **unpack_config(fill_template_config(get_template_live_config()))}
+    for k in unpacked:
         if 'coeffs' in k:
-            config['ranges'][k] = config['ranges']['coeffs']
-        elif '§' in k and (k_ := k[k.find('§') + 1:]) in config['ranges']:
-            config['ranges'][k] = config['ranges'][k_]
-    for k in config['ranges']:
-        if config['ranges'][k][0] == config['ranges'][k][1]:
-            config[k] = config['ranges'][k][0]
+            unpacked['ranges'][k] = unpacked['ranges']['coeffs']
+        elif '§' in k and (k_ := k[k.find('§') + 1:]) in unpacked['ranges']:
+            unpacked['ranges'][k] = unpacked['ranges'][k_]
+    for k in unpacked['ranges']:
+        if unpacked['ranges'][k][0] == unpacked['ranges'][k][1]:
+            unpacked[k] = unpacked['ranges'][k][0]
         elif any(q in k for q in ['leverage', 'MA_idx']):
-            config[k] = tune.randint(config['ranges'][k][0], config['ranges'][k][1] + 1)
+            unpacked[k] = tune.randint(unpacked['ranges'][k][0], unpacked['ranges'][k][1] + 1)
         else:
-            config[k] = tune.uniform(config['ranges'][k][0], config['ranges'][k][1])
-    return config
+            unpacked[k] = tune.uniform(unpacked['ranges'][k][0], unpacked['ranges'][k][1])
+    return unpacked
 
 
-def clean_start_config(start_config: dict, config: dict, ranges: dict) -> dict:
-    clean_start = {}
-    for k, v in unpack_config(start_config).items():
+def clean_start_config(start_config: dict, config: dict) -> dict:
+    clean_start = unpack_config(start_config)
+    for k, v in clean_start.items():
         if k in config:
             if type(config[k]) == ray.tune.sample.Float or type(config[k]) == ray.tune.sample.Integer:
-                clean_start[k] = min(max(v, ranges[k][0]), ranges[k][1])
+                clean_start[k] = min(max(v, config['ranges'][k][0]), config['ranges'][k][1])
     return clean_start
 
 
@@ -142,41 +142,43 @@ def tune_report(result):
     )
 
 
-def backtest_tune(ticks: np.ndarray, backtest_config: dict, current_best: Union[dict, list] = None):
-    config = create_config(backtest_config)
+def backtest_tune(ticks: np.ndarray, config: dict, current_best: Union[dict, list] = None):
+    config = create_config(config)
+    print('debb 1')
+    pprint.pprint(config)
     n_days = round_((ticks[-1][2] - ticks[0][2]) / (1000 * 60 * 60 * 24), 0.1)
-    backtest_config['optimize_dirpath'] = os.path.join(backtest_config['optimize_dirpath'],
-                                                       ts_to_date(time())[:19].replace(':', ''), '')
-    if 'iters' in backtest_config:
-        iters = backtest_config['iters']
+    config['optimize_dirpath'] = os.path.join(config['optimize_dirpath'],
+                                                     ts_to_date(time())[:19].replace(':', ''), '')
+    if 'iters' in config:
+        iters = config['iters']
     else:
         print('Parameter iters should be defined in the configuration. Defaulting to 10.')
         iters = 10
-    if 'num_cpus' in backtest_config:
-        num_cpus = backtest_config['num_cpus']
+    if 'num_cpus' in config:
+        num_cpus = config['num_cpus']
     else:
         print('Parameter num_cpus should be defined in the configuration. Defaulting to 2.')
         num_cpus = 2
-    n_particles = backtest_config['n_particles'] if 'n_particles' in backtest_config else 10
+    n_particles = config['n_particles'] if 'n_particles' in config else 10
     phi1 = 1.4962
     phi2 = 1.4962
     omega = 0.7298
-    if 'options' in backtest_config:
-        phi1 = backtest_config['options']['c1']
-        phi2 = backtest_config['options']['c2']
-        omega = backtest_config['options']['w']
+    if 'options' in config:
+        phi1 = config['options']['c1']
+        phi2 = config['options']['c2']
+        omega = config['options']['w']
     current_best_params = []
     if current_best:
         if type(current_best) == list:
             for c in current_best:
-                c = clean_start_config(c, config, backtest_config['ranges'])
+                c = clean_start_config(c, config)
                 if c not in current_best_params:
                     current_best_params.append(c)
         else:
-            current_best = clean_start_config(current_best, config, backtest_config['ranges'])
+            current_best = clean_start_config(current_best, config)
             current_best_params.append(current_best)
 
-    ray.init(num_cpus=num_cpus, logging_level=logging.FATAL, log_to_driver=False)
+    ray.init(num_cpus=num_cpus)#, logging_level=logging.FATAL, log_to_driver=False)
     pso = ng.optimizers.ConfiguredPSO(transform='identity', popsize=n_particles, omega=omega, phip=phi1, phig=phi2)
     algo = NevergradSearch(optimizer=pso, points_to_evaluate=current_best_params)
     algo = ConcurrencyLimiter(algo, max_concurrent=num_cpus)
@@ -184,7 +186,7 @@ def backtest_tune(ticks: np.ndarray, backtest_config: dict, current_best: Union[
 
     if 'wfo' in config and config['wfo']:
         print('\n\nwalk forward optimization\n\n')
-        wfo = WFO(ticks, backtest_config, P_train=0.5).set_train_N(4)
+        wfo = WFO(ticks, config, P_train=0.5).set_train_N(4)
         backtest_wrap = lambda config: tune_report(wfo.backtest(config))
     else:
         print('\n\nsimple sliding window optimization\n\n')
@@ -192,29 +194,30 @@ def backtest_tune(ticks: np.ndarray, backtest_config: dict, current_best: Union[
     analysis = tune.run(
         backtest_wrap, metric='objective', mode='max', name='search',
         search_alg=algo, scheduler=scheduler, num_samples=iters, config=config, verbose=1,
-        reuse_actors=True, local_dir=backtest_config['optimize_dirpath'],
+        reuse_actors=True, local_dir=config['optimize_dirpath'],
         progress_reporter=LogReporter(metric_columns=['daily_gain',
                                                       'closest_bankruptcy',
                                                       'max_hrs_no_fills',
                                                       'max_hrs_no_fills_same_side',
                                                       'objective'],
-                                      parameter_columns=[k for k in backtest_config['ranges']
-                                                         if type(config[k]) == ray.tune.sample.Float
-                                                         or type(config[k]) == ray.tune.sample.Integer]),
+                                      parameter_columns=[k for k in config['ranges']
+                                                         if 'const' in k]),
+                                                         #if type(config[k]) == ray.tune.sample.Float
+                                                         #or type(config[k]) == ray.tune.sample.Integer]),
         raise_on_failed_trial=False
     )
     ray.shutdown()
     return analysis
 
 
-def save_results(analysis, backtest_config):
+def save_results(analysis, config):
     df = analysis.results_df
     df.reset_index(inplace=True)
     df.rename(columns={column: column.replace('config.', '') for column in df.columns}, inplace=True)
-    df = df[list(backtest_config['ranges'].keys()) + ['daily_gain', 'closest_bankruptcy', 'max_hrs_no_fills',
+    df = df[list(config['ranges'].keys()) + ['daily_gain', 'closest_bankruptcy', 'max_hrs_no_fills',
                                                       'max_hrs_no_fills_same_side', 'objective']].sort_values(
         'objective', ascending=False)
-    df.to_csv(os.path.join(backtest_config['optimize_dirpath'], 'results.csv'), index=False)
+    df.to_csv(os.path.join(config['optimize_dirpath'], 'results.csv'), index=False)
     print('Best candidate found:')
     pprint.pprint(analysis.best_config)
 

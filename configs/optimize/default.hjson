@@ -56,7 +56,7 @@
     markup_const: [0.8, 1.2]
 
     # MA_idx = [1, n_spans]
-    MA_idx: [1, 999]
+    MA_idx: [1, 1]
 
     hedge_bkr_diff_thr: [0.0, 0.9]
     stop_bkr_diff_thr: [0.0, 0.9]

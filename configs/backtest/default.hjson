@@ -8,7 +8,7 @@
   do_long: true
   do_shrt: true
 
-  start_date: 2020-11-11T11:11
+  start_date: 2021-05-01
   # set end_date: -1 to use now as end date
-  end_date: 2021-05-30T00:00
+  end_date: 2021-05-30
 }
