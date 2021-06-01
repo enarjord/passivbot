@@ -8,10 +8,10 @@
   minimum_bankruptcy_distance: 0.21
 
   # max hours between consecutive fills
-  max_hrs_no_fills: 48
+  max_hrs_no_fills: 72
 
   # max hours between consecutive same side fills (long / short)
-  max_hrs_no_fills_same_side: 96
+  max_hrs_no_fills_same_side: 144
 
 
 
@@ -20,9 +20,9 @@
   wfo: false
 
   # sliding window config:
-  sliding_window_size: 0.2
-  n_sliding_windows: 6
-  test_full: true
+  sliding_window_size: 1.0
+  n_sliding_windows: 1
+  test_full: false
 
   # set to 0.0 to disable breaking early
   # otherwise will break trial early on first window returning val {< or >} val_thr * (1 {- or +} break_early_factor)
