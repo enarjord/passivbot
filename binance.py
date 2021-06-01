@@ -259,7 +259,7 @@ class BinanceBot(Bot):
         if params['type'] == 'LIMIT':
             params['timeInForce'] = 'GTX'
             params['price'] = str(order['price'])
-        elif params['type'] in ['STOP_MARKET', 'TAKE_PROFIT_MARKET']:
+        elif params['type'] in ['STOP', 'TAKE_PROFIT']:
             params['stop_price'] = str(order['price'])
             params['close_position'] = 'true'
         if 'custom_id' in order:

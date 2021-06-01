@@ -348,12 +348,12 @@ class Bot:
                 break
             if tpl[4] == 'stop_loss_shrt_close':
                 shrt_close_orders.append({'side': 'buy', 'position_side': 'shrt', 'qty': abs(tpl[0]),
-                                          'price': tpl[1], 'type': 'stop_market', 'custom_id': tpl[4]})
+                                          'price': tpl[1], 'type': 'stop', 'custom_id': tpl[4]})
                 shrt_psize = tpl[2]
                 stop_loss_close = True
             elif tpl[4] == 'stop_loss_long_close':
                 long_close_orders.append({'side': 'sell', 'position_side': 'long', 'qty': abs(tpl[0]),
-                                          'price': tpl[1], 'type': 'stop_market', 'custom_id': tpl[4]})
+                                          'price': tpl[1], 'type': 'stop', 'custom_id': tpl[4]})
                 long_psize = tpl[2]
                 stop_loss_close = True
             elif tpl[0] == 0.0 or self.stop_mode in ['freeze']:
@@ -374,7 +374,7 @@ class Bot:
                     stop_loss_close:
                 break
             long_close_orders.append({'side': 'sell', 'position_side': 'long', 'qty': abs(ask_qty),
-                                      'price': float(ask_price), 'type': 'take_profit_market',
+                                      'price': float(ask_price), 'type': 'take_profit',
                                       'custom_id': 'close'})
 
         for bid_qty, bid_price, _ in iter_shrt_closes(balance, shrt_psize, shrt_pprice, self.ob[0],
@@ -384,7 +384,7 @@ class Bot:
                     stop_loss_close:
                 break
             shrt_close_orders.append({'side': 'buy', 'position_side': 'shrt', 'qty': abs(bid_qty),
-                                      'price': float(bid_price), 'type': 'take_profit_market',
+                                      'price': float(bid_price), 'type': 'take_profit',
                                       'custom_id': 'close'})
         return long_entry_orders + shrt_entry_orders + long_close_orders + shrt_close_orders
 
