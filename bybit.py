@@ -9,7 +9,8 @@ import aiohttp
 import numpy as np
 from dateutil import parser
 
-from passivbot import ts_to_date, print_, Bot, sort_dict_keys
+from pure_funcs import ts_to_date, sort_dict_keys
+from passivbot import print_, Bot
 from jitted import calc_long_pnl, calc_shrt_pnl
 
 

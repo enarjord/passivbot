@@ -8,7 +8,8 @@ from urllib.parse import urlencode
 import aiohttp
 import numpy as np
 
-from passivbot import load_key_secret, print_, ts_to_date, Bot, sort_dict_keys
+from pure_funcs import ts_to_date, sort_dict_keys
+from passivbot import load_key_secret, print_, Bot
 
 
 class BinanceBot(Bot):

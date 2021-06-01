@@ -2,9 +2,9 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
 import json
-from jitted import round_dynamic
-from analyze import candidate_to_live_config
-from pure_funcs import calc_bid_ask_thresholds
+from pure_funcs import round_dynamic, denumpyize, candidate_to_live_config
+from njit_funcs import calc_bid_ask_thresholds
+from procedures import dump_live_config
 
 
 def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
@@ -17,20 +17,17 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
     lines = []
     lines.append(f"gain percentage {round_dynamic(result['result']['gain'] * 100 - 100, 4)}%")
     lines.append(f"average_daily_gain percentage {round_dynamic((result['result']['average_daily_gain'] - 1) * 100, 3)}%")
-    lines.append(f"closest_liq percentage {round_dynamic(result['result']['closest_liq'] * 100, 4)}%")
+    lines.append(f"closest_bkr percentage {round_dynamic(result['result']['closest_bkr'] * 100, 4)}%")
     lines.append(f"starting balance {round_dynamic(result['starting_balance'], 3)}")
 
-    for key in [k for k in result['result'] if k not in ['gain', 'average_daily_gain', 'closest_liq', 'do_long', 'do_shrt']]:
+    for key in [k for k in result['result'] if k not in ['gain', 'average_daily_gain', 'closest_bkr', 'do_long', 'do_shrt']]:
         lines.append(f"{key} {round_dynamic(result['result'][key], 6)}")
     lines.append(f"long: {result['do_long']}, short: {result['do_shrt']}")
 
-    live_config = candidate_to_live_config(result)
-    json.dump(live_config, open(result['plots_dirpath'] + 'live_config.json', 'w'), indent=4)
-    json.dump(result, open(result['plots_dirpath'] + 'result.json', 'w'), indent=4)
+    dump_live_config(result, result['plots_dirpath'] + 'live_config.json')
+    json.dump(denumpyize(result), open(result['plots_dirpath'] + 'result.json', 'w'), indent=4)
 
-    ema = df.price.ewm(span=result['ema_span'], adjust=False).mean()
-    df.loc[:, 'bid_thr'] = ema * (1 - result['ema_spread'])
-    df.loc[:, 'ask_thr'] = ema * (1 + result['ema_spread'])
+    df = df.join(add_bid_ask_thresholds_from_config(df.price.values, result))
 
     print('writing backtest_result.txt...')
     with open(f"{result['plots_dirpath']}backtest_result.txt", 'w') as f:
@@ -51,9 +48,9 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
         start_ = z / n_parts
         end_ = (z + 1) / n_parts
         print(start_, end_)
-        fig = plot_fills(df, fdf.iloc[int(len(fdf) * start_):int(len(fdf) * end_)], liq_thr=0.1)
+        fig = plot_fills(df, fdf.iloc[int(len(fdf) * start_):int(len(fdf) * end_)], bkr_thr=0.1)
         fig.savefig(f"{result['plots_dirpath']}backtest_{z + 1}of{n_parts}.png")
-    fig = plot_fills(df, fdf, liq_thr=0.1)
+    fig = plot_fills(df, fdf, bkr_thr=0.1)
     fig.savefig(f"{result['plots_dirpath']}whole_backtest.png")
 
     print('plotting pos sizes...')
@@ -80,7 +77,7 @@ def add_bid_ask_thresholds_from_config(prices, config):
     return pd.DataFrame({'bid_thr': bids, 'ask_thr': asks})
 
 
-def plot_fills(df, fdf, side: int = 0, liq_thr=0.1):
+def plot_fills(df, fdf, side: int = 0, bkr_thr=0.1):
     plt.clf()
 
     dfc = df.loc[fdf.index[0]:fdf.index[-1]]
@@ -113,7 +110,7 @@ def plot_fills(df, fdf, side: int = 0, liq_thr=0.1):
         ssclose.price.plot(style=('bx'))
         shrts.shrt_pprice.fillna(method='ffill').plot(style='r--')
 
-    if 'liq_price' in fdf.columns:
-        fdf.liq_price.where(fdf.liq_diff < liq_thr, np.nan).plot(style='k--')
+    if 'bkr_price' in fdf.columns:
+        fdf.bkr_price.where(fdf.bkr_diff < bkr_thr, np.nan).plot(style='k--')
     return plt
 

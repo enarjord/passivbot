@@ -1,9 +1,5 @@
 import numpy as np
 import pandas as pd
-from pure_funcs import pack_config, get_template_live_config
-from passivbot import ts_to_date
-from dateutil import parser
-import datetime
 
 
 def objective_function(result: dict,
@@ -20,33 +16,6 @@ def objective_function(result: dict,
         )
     except:
         return -1
-
-
-def candidate_to_live_config(candidate: dict) -> dict:
-    packed = pack_config(candidate)
-    live_config = get_template_live_config()
-    sides = ['long', 'shrt']
-    for side in sides:
-        for k in live_config[side]:
-            if k in packed[side]:
-                live_config[side][k] = packed[side][k]
-    for k in live_config:
-        if k not in sides and k in packed:
-            live_config[k] = packed[k]
-    name = f"{packed['symbol'].lower()}"
-    if 'start_date' in candidate:
-        start_time = int(parser.parse(candidate["start_date"]).replace(
-            tzinfo=datetime.timezone.utc).timestamp() * 1000)
-        end_time = int(parser.parse(candidate["end_date"]).replace(
-            tzinfo=datetime.timezone.utc).timestamp() * 1000)
-        n_days = round((end_time - start_time) / (1000 * 60 * 60 * 24), 1)
-        name += f"_{n_days}_days"
-    if 'average_daily_gain' in candidate:
-        name += f"_adg{candidate['average_daily_gain']:.2f}"
-    elif 'daily_gain' in candidate:
-        name += f"_adg{candidate['daily_gain']:.2f}%"
-    live_config['config_name'] = name
-    return live_config
 
 
 # TODO: Make a class Returns?

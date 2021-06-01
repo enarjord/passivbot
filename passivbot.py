@@ -1,13 +1,12 @@
 import asyncio
-import datetime
 import json
 import logging
 import os
 import signal
-import sys
 from collections import deque
 from pathlib import Path
 from time import time
+from procedures import make_get_filepath, load_key_secret, print_, create_binance_bot, create_bybit_bot
 
 import numpy as np
 import argparse
@@ -15,111 +14,10 @@ import argparse
 import telegram_bot
 import websockets
 
-from jitted import round_, calc_diff, calc_ema, calc_cost, iter_entries, iter_long_closes, \
-    iter_shrt_closes, compress_float
+from njit_funcs import round_, calc_diff, calc_ema, qty_to_cost, iter_orders
+from pure_funcs import create_xk, compress_float, filter_orders
 
 logging.getLogger("telegram").setLevel(logging.CRITICAL)
-
-def get_keys():
-    return ['inverse', 'do_long', 'do_shrt', 'qty_step', 'price_step', 'min_qty', 'min_cost',
-            'c_mult', 'ddown_factor', 'qty_pct', 'leverage', 'n_close_orders',
-            'grid_spacing', 'pos_margin_grid_coeff', 'volatility_grid_coeff',
-            'volatility_qty_coeff', 'min_markup', 'markup_range', 'ema_span', 'ema_spread',
-            'stop_loss_liq_diff', 'stop_loss_pos_pct', 'entry_liq_diff_thr']
-
-
-def sort_dict_keys(d):
-    if type(d) == list:
-        return [sort_dict_keys(e) for e in d]
-    if type(d) != dict:
-        return d
-    return {key: sort_dict_keys(d[key]) for key in sorted(d)}
-
-
-def flatten_dict(d, parent_key='', sep='_'):
-    items = []
-    for k, v in d.items():
-        new_key = parent_key + sep + k if parent_key else k
-        if type(v) == dict:
-            items.extend(flatten_dict(v, new_key, sep=sep).items())
-        else:
-            items.append((new_key, v))
-    return dict(items)
-
-
-def make_get_filepath(filepath: str) -> str:
-    '''
-    if not is path, creates dir and subdirs for path, returns path
-    '''
-    dirpath = os.path.dirname(filepath) if filepath[-1] != '/' else filepath
-    if not os.path.isdir(dirpath):
-        os.makedirs(dirpath)
-    return filepath
-
-
-def load_key_secret(exchange: str, user: str) -> (str, str):
-    try:
-        keyfile = json.load(open('api-keys.json'))
-        # Checks that the user exists, and it is for the correct exchange
-        if user in keyfile and keyfile[user]["exchange"] == exchange:
-
-            # If we need to get the `market` key:
-            # market = keyfile[user]["market"]
-            # print("The Market Type is " + str(market))
-
-            keyList = [str(keyfile[user]["key"]), str(keyfile[user]["secret"])]
-
-            return keyList
-        elif user not in keyfile or keyfile[user]["exchange"] != exchange:
-            print("Looks like the keys aren't configured yet, or you entered the wrong username!")
-        raise Exception('API KeyFile Missing!')
-    except FileNotFoundError:
-        print("File Not Found!")
-        raise Exception('API KeyFile Missing!')
-
-
-def print_(args, r=False, n=False):
-    line = ts_to_date(time())[:19] + '  '
-    str_args = '{} ' * len(args)
-    line += str_args.format(*args)
-    if n:
-        print('\n' + line, end=' ')
-    elif r:
-        print('\r' + line, end=' ')
-    else:
-        print(line)
-    return line
-
-
-def ts_to_date(timestamp: float) -> str:
-    return str(datetime.datetime.fromtimestamp(timestamp)).replace(' ', 'T')
-
-
-def filter_orders(actual_orders: [dict],
-                  ideal_orders: [dict],
-                  keys: [str] = ['symbol', 'side', 'qty', 'price']) -> ([dict], [dict]):
-    # returns (orders_to_delete, orders_to_create)
-
-    if not actual_orders:
-        return [], ideal_orders
-    if not ideal_orders:
-        return actual_orders, []
-    actual_orders = actual_orders.copy()
-    orders_to_create = []
-    ideal_orders_cropped = [{k: o[k] for k in keys} for o in ideal_orders]
-    actual_orders_cropped = [{k: o[k] for k in keys} for o in actual_orders]
-    for ioc, io in zip(ideal_orders_cropped, ideal_orders):
-        matches = [(aoc, ao) for aoc, ao in zip(actual_orders_cropped, actual_orders) if aoc == ioc]
-        if matches:
-            actual_orders.remove(matches[0][1])
-            actual_orders_cropped.remove(matches[0][0])
-        else:
-            orders_to_create.append(io)
-    return actual_orders, orders_to_create
-
-
-def flatten(lst: list) -> list:
-    return [y for x in lst for y in x]
 
 
 class LockNotAvailableException(Exception):
@@ -127,6 +25,7 @@ class LockNotAvailableException(Exception):
 
 class Bot:
     def __init__(self, config: dict):
+        self.leverage = None
         self.config = config
         self.telegram = None
         self.xk = {}
@@ -137,8 +36,8 @@ class Bot:
         self.ema_alpha = 2 / (self.ema_span + 1)
         self.ema_alpha_ = 1 - self.ema_alpha
 
-        self.ts_locked = {'cancel_orders': 0, 'decide': 0, 'update_open_orders': 0,
-                          'update_position': 0, 'print': 0, 'create_orders': 0}
+        self.ts_locked = {'cancel_orders': 0.0, 'decide': 0.0, 'update_open_orders': 0.0,
+                          'update_position': 0.0, 'print': 0.0, 'create_orders': 0.0}
         self.ts_released = {k: 1 for k in self.ts_locked}
 
         self.position = {}
@@ -187,12 +86,15 @@ class Bot:
         setattr(self, key, self.config[key])
 
     async def _init(self):
-        self.xk = {k: float(self.config[k]) for k in get_keys()}
+        self.xk = create_xk(self.config)
 
     def dump_log(self, data) -> None:
         if self.config['logging_level'] > 0:
             with open(self.log_filepath, 'a') as f:
                 f.write(json.dumps({**{'log_timestamp': time()}, **data}) + '\n')
+    
+    async def fetch_open_orders(self):
+        raise NotImplementedError
 
     async def update_open_orders(self) -> None:
         if self.ts_locked['update_open_orders'] > self.ts_released['update_open_orders']:
@@ -211,6 +113,9 @@ class Bot:
             self.ts_released['update_open_orders'] = time()
         except Exception as e:
             print('error with update open orders', e)
+    
+    async def fetch_position(self):
+        raise NotImplementedError
 
     async def update_position(self) -> None:
         # also updates open orders
@@ -221,10 +126,10 @@ class Bot:
             position, _ = await asyncio.gather(self.fetch_position(),
                                                self.update_open_orders())
             position['used_margin'] = \
-                ((calc_cost(position['long']['size'], position['long']['price'],
+                ((qty_to_cost(position['long']['size'], position['long']['price'],
                             self.xk['inverse'], self.xk['c_mult'])
                   if position['long']['price'] else 0.0) +
-                 (calc_cost(position['shrt']['size'], position['shrt']['price'],
+                 (qty_to_cost(position['shrt']['size'], position['shrt']['price'],
                             self.xk['inverse'], self.xk['c_mult'])
                   if position['shrt']['price'] else 0.0)) / self.leverage
             position['available_margin'] = (position['equity'] - position['used_margin']) * 0.9
@@ -237,11 +142,11 @@ class Bot:
         except Exception as e:
             print('error with update position', e)
 
-    async def create_orders(self, orders_to_create: [dict]) -> dict:
+    async def create_orders(self, orders_to_create: [dict]) -> list:
         if not orders_to_create:
-            return
+            return []
         if self.ts_locked['create_orders'] > self.ts_released['create_orders']:
-            return
+            return []
         self.ts_locked['create_orders'] = time()
         creations = []
         for oc in sorted(orders_to_create, key=lambda x: x['qty']):
@@ -316,7 +221,7 @@ class Bot:
         self.process_websocket_ticks = True
 
     def calc_orders(self):
-        balance = self.position['wallet_balance'] * 0.9
+        balance = self.position['wallet_balance']
         long_psize = self.position['long']['size']
         long_pprice = self.position['long']['price']
         shrt_psize = self.position['shrt']['size']
@@ -613,7 +518,7 @@ class Bot:
                       f' trying to delete it, attempting removal of file')
                 self.remove_lock_file()
             else:
-                raise LockNotAvailableException("Another bot has the lock. "\
+                raise LockNotAvailableException("Another bot has the lock. "
                                                 f"To force acquire lock, delete .passivbotlock file: {self.lock_file}")
 
         pid = str(os.getpid())
@@ -629,6 +534,13 @@ class Bot:
             raise LockNotAvailableException("Lock is stolen by another bot")
         return
 
+    def execute_order(self, oc):
+        raise NotImplementedError
+
+    def execute_cancellation(self, oc):
+        raise NotImplementedError
+
+
 async def start_bot(bot):
     while not bot.stop_websocket:
         try:
@@ -637,20 +549,6 @@ async def start_bot(bot):
         except Exception as e:
             print('Websocket connection has been lost or unable to acquire lock to start, attempting to reinitialize the bot...', e)
             await asyncio.sleep(10)
-
-async def create_binance_bot(config: str):
-    from binance import BinanceBot
-    bot = BinanceBot(config)
-    await bot._init()
-    return bot
-
-
-async def create_bybit_bot(config: str):
-    from bybit import Bybit
-    bot = Bybit(config)
-    await bot._init()
-    return bot
-
 
 async def _start_telegram(account: dict, bot: Bot):
     telegram = telegram_bot.Telegram(token=account['telegram']['token'],
@@ -667,16 +565,16 @@ def add_argparse_args(parser):
                         default='configs/backtest/default.hjson', help='backtest config hjson file')
     parser.add_argument('-o', '--optimize_config', type=str, required=False, dest='optimize_config_path',
                         default='configs/optimize/default.hjson', help='optimize config hjson file')
-    parser.add_argument('-d', '--download-only', help='download only, do not dump ticks caches', action='store_true')
+    parser.add_argument('-d', '--download_only', help='download only, do not dump ticks caches', action='store_true')
     parser.add_argument('-s', '--symbol', type=str, required=False, dest='symbol',
                         default='none', help='specify symbol, overriding symbol from backtest config')
     parser.add_argument('-u', '--user', type=str, required=False, dest='user',
                         default='none',
                         help='specify user, a.k.a. account_name, overriding user from backtest config')
-    parser.add_argument('--start-date', type=str, required=False, dest='start_date',
+    parser.add_argument('--start_date', type=str, required=False, dest='start_date',
                         default='none',
                         help='specify start date, overriding value from backtest config')
-    parser.add_argument('--end-date', type=str, required=False, dest='end_date',
+    parser.add_argument('--end_date', type=str, required=False, dest='end_date',
                         default='none',
                         help='specify end date, overriding value from backtest config')
     return parser

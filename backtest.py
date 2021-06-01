@@ -1,20 +1,22 @@
 import asyncio
-import json
 import os
-import sys
 from time import time
 from analyze import analyze_fills
 
 import numpy as np
 import pandas as pd
 import argparse
+import pprint
 from plotting import dump_plots
 
-from downloader import Downloader, prep_config, load_live_config
-from pure_funcs import create_xk, calc_bankruptcy_price, iter_orders, calc_long_pnl, calc_shrt_pnl, \
-    iter_MA_ratios_chunks, calc_spans, calc_available_margin, calc_diff, qty_to_cost, round_, \
+from procedures import load_live_config
+from downloader import Downloader
+from procedures import prep_config, make_get_filepath
+from pure_funcs import create_xk, calc_spans, denumpyize, ts_to_date
+from njit_funcs import calc_bankruptcy_price, iter_orders, calc_long_pnl, calc_shrt_pnl, \
+    iter_MA_ratios_chunks, calc_available_margin, calc_diff, qty_to_cost, round_, \
     calc_new_psize_pprice
-from passivbot import make_get_filepath, ts_to_date, get_keys, add_argparse_args
+from passivbot import add_argparse_args
 
 
 def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, list, bool):
@@ -57,6 +59,7 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, list, bo
 
     zc = 0
 
+    
     closest_bkr = 1.0
 
     prev_update_plus_delay = ticks[max_span][2] + latency_simulation_ms
@@ -86,7 +89,7 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, list, bo
         if tick[1]:
             if bkr_diff < 0.1 and long_psize > -shrt_psize and tick[0] <= bkr_price:
                 fills.append({'qty': -long_psize, 'price': tick[0], 'pside': 'long',
-                              'type': 'long_liquidation', 'side': 'sel',
+                              'type': 'long_bankruptcy', 'side': 'sel',
                               'pnl': calc_long_pnl(long_pprice, tick[0], long_psize, xk['inverse'],
                                                    xk['c_mult']),
                               'fee_paid': -qty_to_cost(long_psize, tick[0], xk['inverse'],
@@ -129,7 +132,7 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, list, bo
         else:
             if bkr_diff < 0.05 and -shrt_psize > long_psize and tick[0] >= bkr_price:
                 fills.append({'qty': -shrt_psize, 'price': tick[0], 'pside': 'shrt',
-                              'type': 'shrt_liquidation', 'side': 'buy',
+                              'type': 'shrt_bankruptcy', 'side': 'buy',
                               'pnl': calc_shrt_pnl(shrt_pprice, tick[0], shrt_psize, xk['inverse'],
                                                    xk['c_mult']),
                               'fee_paid': -qty_to_cost(shrt_psize, tick[0], xk['inverse'],
@@ -226,7 +229,7 @@ def backtest(config: dict, ticks: np.ndarray, do_print=False) -> (list, list, bo
                 except:
                     fill['average_daily_gain'] = 0.0
                 all_fills.append(fill)
-                if balance <= 0.0 or 'liquidation' in fill['type']:
+                if balance <= 0.0 or 'bankruptcy' in fill['type']:
                     return all_fills, stats, False
             if do_print:
                 line = f"\r{k / len(ticks):.3f} "
@@ -281,7 +284,7 @@ async def main():
     ticks = await downloader.get_ticks(True)
     config['n_days'] = round_((ticks[-1][2] - ticks[0][2]) / (1000 * 60 * 60 * 24), 0.1)
     live_config = load_live_config(args.live_config_path)
-    print(json.dumps(live_config, indent=4))
+    pprint.pprint(denumpyize(live_config))
     plot_wrap(config, ticks, live_config)
 
 

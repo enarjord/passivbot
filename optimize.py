@@ -2,7 +2,6 @@ import argparse
 import asyncio
 import glob
 import json
-import logging
 import os
 import pprint
 from time import time
@@ -19,11 +18,11 @@ from ray.tune.suggest.nevergrad import NevergradSearch
 from analyze import analyze_fills, get_empty_analysis, objective_function
 from backtest import backtest, plot_wrap
 from downloader import Downloader, prep_config
-from jitted import round_
-from passivbot import ts_to_date, add_argparse_args
+from njit_funcs import round_
+from passivbot import add_argparse_args
 from reporter import LogReporter
 from walk_forward_optimization import WFO
-from pure_funcs import pack_config, unpack_config, fill_template_config, get_template_live_config
+from pure_funcs import pack_config, unpack_config, fill_template_config, get_template_live_config, ts_to_date
 
 os.environ['TUNE_GLOBAL_CHECKPOINT_S'] = '120'
 
@@ -151,9 +150,6 @@ def tune_report(result):
 
 def backtest_tune(ticks: np.ndarray, config: dict, current_best: Union[dict, list] = None):
     config = create_config(config)
-    print('debb 1')
-    pprint.pprint(config)
-    n_days = round_((ticks[-1][2] - ticks[0][2]) / (1000 * 60 * 60 * 24), 0.1)
     config['optimize_dirpath'] = os.path.join(config['optimize_dirpath'],
                                                      ts_to_date(time())[:19].replace(':', ''), '')
     if 'iters' in config:
@@ -245,7 +241,8 @@ async def main():
     print()
     for k in (keys := ['exchange', 'symbol', 'starting_balance', 'start_date', 'end_date',
                        'latency_simulation_ms', 'do_long', 'do_shrt', 'minimum_bankruptcy_distance',
-                       'max_hrs_no_fills', 'max_hrs_no_fills_same_side', 'iters', 'n_particles']):
+                       'max_hrs_no_fills', 'max_hrs_no_fills_same_side', 'iters', 'n_particles', 'sliding_window_size',
+                       'n_sliding_windows' 'test_full']):
         if k in config:
             print(f"{k: <{max(map(len, keys)) + 2}} {config[k]}")
     print()

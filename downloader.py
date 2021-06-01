@@ -1,15 +1,17 @@
 import gc
-from datetime import datetime
+import datetime
+import sys
 from io import BytesIO
 from time import sleep
 from urllib.request import urlopen
 from zipfile import ZipFile
 
-import hjson
 import pandas as pd
 from dateutil import parser
 
 from passivbot import *
+from procedures import prep_config
+from pure_funcs import ts_to_date, get_dummy_settings
 
 
 class Downloader:
@@ -647,95 +649,6 @@ class Downloader:
             time_data = np.load(self.time_filepath)
             # qty_data = np.load(self.qty_filepath)
             return price_data, buyer_maker_data, time_data  # , qty_data
-
-
-def get_dummy_settings(user: str, exchange: str, symbol: str):
-    return {**{k: 1.0 for k in get_keys()},
-            **{'user': user, 'exchange': exchange, 'symbol': symbol, 'config_name': '',
-               'logging_level': 0}}
-
-
-async def fetch_market_specific_settings(user: str, exchange: str, symbol: str):
-    tmp_live_settings = get_dummy_settings(user, exchange, symbol)
-    settings_from_exchange = {}
-    if exchange == 'binance':
-        bot = await create_binance_bot(tmp_live_settings)
-        settings_from_exchange['maker_fee'] = 0.00018
-        settings_from_exchange['taker_fee'] = 0.00036
-        settings_from_exchange['exchange'] = 'binance'
-    elif exchange == 'bybit':
-        bot = await create_bybit_bot(tmp_live_settings)
-        settings_from_exchange['maker_fee'] = -0.00025
-        settings_from_exchange['taker_fee'] = 0.00075
-        settings_from_exchange['exchange'] = 'bybit'
-    else:
-        raise Exception(f'unknown exchange {exchange}')
-    await bot.session.close()
-    if 'inverse' in bot.market_type:
-        settings_from_exchange['inverse'] = True
-    elif 'linear' in bot.market_type:
-        settings_from_exchange['inverse'] = False
-    else:
-        raise Exception('unknown market type')
-    for key in ['max_leverage', 'min_qty', 'min_cost', 'qty_step', 'price_step', 'max_leverage',
-                'c_mult']:
-        settings_from_exchange[key] = getattr(bot, key)
-    return settings_from_exchange
-
-
-async def prep_config(args) -> dict:
-    try:
-        bc = hjson.load(open(args.backtest_config_path))
-    except Exception as e:
-        raise Exception('failed to load backtest config', args.backtest_config_path, e)
-    try:
-        oc = hjson.load(open(args.optimize_config_path))
-    except Exception as e:
-        raise Exception('failed to load optimize config', args.optimize_config_path, e)
-    config = {**oc, **bc}
-    for key in ['symbol', 'user', 'start_date', 'end_date']:
-        if getattr(args, key) != 'none':
-            config[key] = getattr(args, key)
-    end_date = config['end_date'] if config['end_date'] and config['end_date'] != -1 else ts_to_date(time())[:16]
-    config['session_name'] = f"{config['start_date'].replace(' ', '').replace(':', '').replace('.', '')}_" \
-                             f"{end_date.replace(' ', '').replace(':', '').replace('.', '')}"
-
-    base_dirpath = os.path.join('backtests', config['exchange'], config['symbol'])
-    config['caches_dirpath'] = make_get_filepath(os.path.join(base_dirpath, 'caches', ''))
-    config['optimize_dirpath'] = make_get_filepath(os.path.join(base_dirpath, 'optimize', ''))
-    config['plots_dirpath'] = make_get_filepath(os.path.join(base_dirpath, 'plots', ''))
-
-    if os.path.exists((mss := config['caches_dirpath'] + 'market_specific_settings.json')):
-        market_specific_settings = json.load(open(mss))
-    else:
-        market_specific_settings = await fetch_market_specific_settings(config['user'], config['exchange'],
-                                                                        config['symbol'])
-        json.dump(market_specific_settings, open(mss, 'w'), indent=4)
-    config.update(market_specific_settings)
-
-    # setting absolute min/max ranges
-    for key in ['qty_pct', 'ddown_factor', 'ema_span', 'grid_spacing']:
-        if key in config['ranges']:
-            config['ranges'][key][0] = max(0.0, config['ranges'][key][0])
-    for key in ['qty_pct']:
-        if key in config['ranges']:
-            config['ranges'][key][1] = min(1.0, config['ranges'][key][1])
-
-    if 'leverage' in config['ranges']:
-        config['ranges']['leverage'][1] = min(config['ranges']['leverage'][1], config['max_leverage'])
-        config['ranges']['leverage'][0] = min(config['ranges']['leverage'][0], config['ranges']['leverage'][1])
-
-    return config
-
-
-def load_live_config(live_config_path: str) -> dict:
-    try:
-        live_config = json.load(open(live_config_path))
-        if 'entry_liq_diff_thr' not in live_config:
-            live_config['entry_liq_diff_thr'] = live_config['stop_loss_liq_diff']
-    except Exception as e:
-        raise Exception(f'failed to load live config {live_config_path} {e}')
-    return live_config
 
 
 async def main():

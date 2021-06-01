@@ -17,7 +17,8 @@ from telegram import KeyboardButton, ParseMode, ReplyKeyboardMarkup, Update, Inl
 from telegram.ext import Updater, CommandHandler, ConversationHandler, CallbackContext, \
     MessageHandler, Filters, CallbackQueryHandler
 
-from jitted import compress_float, round_, round_dynamic
+from njit_funcs import round_
+from pure_funcs import compress_float, round_dynamic
 
 
 class Telegram:

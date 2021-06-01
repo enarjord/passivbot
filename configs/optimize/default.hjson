@@ -47,17 +47,17 @@
     hedge_psize_pct: [0.01, 0.01]
     stop_psize_pct: [0.01, 0.01]
     stop_eqbal_ratio_thr: [0.0, 0.0]
-    coeffs: [-0.1, 0.1]
+    coeffs: [-0.02, 0.02]
 
     long§leverage: [1, 16]
     long§iqty_const: [0.0, 1.0]
     long§iprc_const: [0.95, 1.0]
     long§rqty_const: [0.0, 4.0]
     long§rprc_const: [0.95, 1.0]
-    long§markup_const: [1.0, 1.2]
+    long§markup_const: [1.0, 1.05]
 
     # MA_idx = [1, n_spans]
-    long§MA_idx: [1, 999]
+    long§MA_idx: [1, 1]
 
     long§hedge_bkr_diff_thr: [0.0, 0.0]
     long§stop_bkr_diff_thr: [0.0, 0.0]
@@ -68,10 +68,10 @@
     shrt§iprc_const: [1.0, 1.05]
     shrt§rqty_const: [0.0, 4.0]
     shrt§rprc_const: [1.0, 1.05]
-    shrt§markup_const: [0.8, 1.0]
+    shrt§markup_const: [0.95, 1.0]
 
     # MA_idx = [1, n_spans]
-    shrt§MA_idx: [1, 999]
+    shrt§MA_idx: [1, 1]
 
     shrt§hedge_bkr_diff_thr: [0.0, 0.0]
     shrt§stop_bkr_diff_thr: [0.0, 0.0]
