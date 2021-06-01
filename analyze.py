@@ -1,5 +1,9 @@
 import numpy as np
 import pandas as pd
+from pure_funcs import pack_config, get_template_live_config
+from passivbot import ts_to_date
+from dateutil import parser
+import datetime
 
 
 def objective_function(result: dict,
@@ -19,18 +23,29 @@ def objective_function(result: dict,
 
 
 def candidate_to_live_config(candidate: dict) -> dict:
-    live_config = {}
-    for k in ["config_name", "logging_level", "ddown_factor", "qty_pct", "leverage",
-              "n_close_orders", "grid_spacing", "pos_margin_grid_coeff",
-              "volatility_grid_coeff", "volatility_qty_coeff", "min_markup",
-              "markup_range", "do_long", "do_shrt", "ema_span", "ema_spread", "stop_loss_bkr_diff",
-              "stop_loss_pos_pct", "entry_bkr_diff_thr", "symbol"]:
-        if k in candidate:
-            live_config[k] = candidate[k]
-        else:
-            live_config[k] = 0.0
-    for k in ['do_long', 'do_shrt']:
-        live_config[k] = bool(live_config[k])
+    packed = pack_config(candidate)
+    live_config = get_template_live_config()
+    sides = ['long', 'shrt']
+    for side in sides:
+        for k in live_config[side]:
+            if k in packed[side]:
+                live_config[side][k] = packed[side][k]
+    for k in live_config:
+        if k not in sides and k in packed:
+            live_config[k] = packed[k]
+    name = f"{packed['symbol'].lower()}"
+    if 'start_date' in candidate:
+        start_time = int(parser.parse(candidate["start_date"]).replace(
+            tzinfo=datetime.timezone.utc).timestamp() * 1000)
+        end_time = int(parser.parse(candidate["end_date"]).replace(
+            tzinfo=datetime.timezone.utc).timestamp() * 1000)
+        n_days = round((end_time - start_time) / (1000 * 60 * 60 * 24), 1)
+        name += f"_{n_days}_days"
+    if 'average_daily_gain' in candidate:
+        name += f"_adg{candidate['average_daily_gain']:.2f}"
+    elif 'daily_gain' in candidate:
+        name += f"_adg{candidate['daily_gain']:.2f}%"
+    live_config['config_name'] = name
     return live_config
 
 

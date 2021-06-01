@@ -29,20 +29,27 @@ os.environ['TUNE_GLOBAL_CHECKPOINT_S'] = '120'
 
 
 def create_config(config: dict) -> dict:
-    unpacked = {**config, **unpack_config(fill_template_config(get_template_live_config()))}
-    for k in unpacked:
-        if 'coeffs' in k:
-            unpacked['ranges'][k] = unpacked['ranges']['coeffs']
-        elif '§' in k and (k_ := k[k.find('§') + 1:]) in unpacked['ranges']:
-            unpacked['ranges'][k] = unpacked['ranges'][k_]
-    for k in unpacked['ranges']:
-        if unpacked['ranges'][k][0] == unpacked['ranges'][k][1]:
-            unpacked[k] = unpacked['ranges'][k][0]
+    updated_ranges = {}
+    unpacked = unpack_config(fill_template_config(get_template_live_config(config['n_spans'])))
+    for k0 in unpacked:
+        if '§' in k0:
+            for k1 in config['ranges']:
+                if k1 in k0:
+                    updated_ranges[k0] = config['ranges'][k1]
+                    if 'MA_idx' in k0:
+                        updated_ranges[k0] = [updated_ranges[k0][0],
+                                              min(updated_ranges[k0][1], config['n_spans'])]
+                    elif 'leverage' in k0:
+                        updated_ranges[k0] = [updated_ranges[k0][0],
+                                              min(updated_ranges[k0][1], config['max_leverage'])]
+    for k in updated_ranges:
+        if updated_ranges[k][0] == updated_ranges[k][1]:
+            unpacked[k] = updated_ranges[k][0]
         elif any(q in k for q in ['leverage', 'MA_idx']):
-            unpacked[k] = tune.randint(unpacked['ranges'][k][0], unpacked['ranges'][k][1] + 1)
+            unpacked[k] = tune.randint(updated_ranges[k][0], updated_ranges[k][1])
         else:
-            unpacked[k] = tune.uniform(unpacked['ranges'][k][0], unpacked['ranges'][k][1])
-    return unpacked
+            unpacked[k] = tune.uniform(updated_ranges[k][0], updated_ranges[k][1])
+    return {**config, **unpacked, **{'ranges': updated_ranges}}
 
 
 def clean_start_config(start_config: dict, config: dict) -> dict:
@@ -127,7 +134,7 @@ def simple_sliding_window_wrap(config, ticks):
     except Exception as e:
         print('c', e)
         objective = -1
-    tune.report(objective=objective, daily_gain=result['adjusted_daily_gain'], closest_bankruptcy=result['closest_bkr'],
+    tune.report(objective=objective, daily_gain=result['average_daily_gain'], closest_bankruptcy=result['closest_bkr'],
                 max_hrs_no_fills=result['max_hrs_no_fills'],
                 max_hrs_no_fills_same_side=result['max_hrs_no_fills_same_side'])
 
@@ -201,7 +208,7 @@ def backtest_tune(ticks: np.ndarray, config: dict, current_best: Union[dict, lis
                                                       'max_hrs_no_fills_same_side',
                                                       'objective'],
                                       parameter_columns=[k for k in config['ranges']
-                                                         if 'const' in k]),
+                                                         if 'const' in k and '§' in k]),
                                                          #if type(config[k]) == ray.tune.sample.Float
                                                          #or type(config[k]) == ray.tune.sample.Integer]),
         raise_on_failed_trial=False

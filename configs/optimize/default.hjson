@@ -20,8 +20,8 @@
   wfo: false
 
   # sliding window config:
-  sliding_window_size: 1.0
-  n_sliding_windows: 1
+  sliding_window_size: 0.4
+  n_sliding_windows: 3
   test_full: false
 
   # set to 0.0 to disable breaking early
@@ -35,32 +35,47 @@
   sdev_max: 0.06
   metric: "returns_daily"
 
+  # ema settings
+  n_spans: 3
+
   # If start and stop are set to same value, it's treated as a fixed variable.
   ranges:
   {
     # common parameters
     min_span: [5000, 5000]
     max_span: [400000, 400000]
-    n_spans: [3, 3]
-    hedge_psize_pct: [0.01, 1.0]
-    stop_psize_pct: [0.01, 1.0]
-    stop_eqbal_ratio_thr: [0.0, 0.9]
+    hedge_psize_pct: [0.01, 0.01]
+    stop_psize_pct: [0.01, 0.01]
+    stop_eqbal_ratio_thr: [0.0, 0.0]
+    coeffs: [-0.1, 0.1]
 
-    # long/shrt split
-    leverage: [1, 16]
-    coeffs: [-1.5, 1.5]
-    iqty_const: [0.0, 1.0]
-    iprc_const: [0.9, 1.1]
-    rqty_const: [0.0, 4.0]
-    rprc_const: [0.9, 1.1]
-    markup_const: [0.8, 1.2]
+    long§leverage: [1, 16]
+    long§iqty_const: [0.0, 1.0]
+    long§iprc_const: [0.95, 1.0]
+    long§rqty_const: [0.0, 4.0]
+    long§rprc_const: [0.95, 1.0]
+    long§markup_const: [1.0, 1.2]
 
     # MA_idx = [1, n_spans]
-    MA_idx: [1, 1]
+    long§MA_idx: [1, 999]
 
-    hedge_bkr_diff_thr: [0.0, 0.9]
-    stop_bkr_diff_thr: [0.0, 0.9]
-    entry_bkr_diff_thr: [0.0, 0.9]
+    long§hedge_bkr_diff_thr: [0.0, 0.0]
+    long§stop_bkr_diff_thr: [0.0, 0.0]
+    long§entry_bkr_diff_thr: [0.0, 0.0]
+
+    shrt§leverage: [1, 16]
+    shrt§iqty_const: [0.0, 1.0]
+    shrt§iprc_const: [1.0, 1.05]
+    shrt§rqty_const: [0.0, 4.0]
+    shrt§rprc_const: [1.0, 1.05]
+    shrt§markup_const: [0.8, 1.0]
+
+    # MA_idx = [1, n_spans]
+    shrt§MA_idx: [1, 999]
+
+    shrt§hedge_bkr_diff_thr: [0.0, 0.0]
+    shrt§stop_bkr_diff_thr: [0.0, 0.0]
+    shrt§entry_bkr_diff_thr: [0.0, 0.0]
 
   }
 }

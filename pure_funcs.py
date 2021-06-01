@@ -627,13 +627,13 @@ def create_xk(config: dict):
 
 
 
-def get_template_live_config():
+def get_template_live_config(n_spans=3):
     return {
         "config_name": "name",
         "logging_level": 0,
         "min_span": 6000,
         "max_span": 300000,
-        "n_spans": 3,
+        "n_spans": n_spans,
         "hedge_psize_pct":    0.05,   # % of psize for hedge order
         "stop_psize_pct":     0.05,   # % of psize for stop loss order
         "stop_eqbal_ratio_thr": 0.1, # if equity / balance < thr: stop loss
