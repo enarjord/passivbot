@@ -1,7 +1,7 @@
 import numpy as np
 import datetime
 from dateutil import parser
-from njit_funcs import round_dynamic
+from njit_funcs import round_dynamic, calc_emas, calc_ratios
 
 
 def format_float(num):
@@ -58,7 +58,7 @@ def create_xk(config: dict) -> dict:
 
 
 def numpyize(x):
-    if type(x) == list:
+    if type(x) in [list, tuple]:
         return np.array([numpyize(e) for e in x])
     elif type(x) == dict:
         numpyd = {}
@@ -138,7 +138,7 @@ def pack_config(d):
     result = {}
     while any('$' in k for k in d):
         new = {}
-        for k, v in d.items():
+        for k, v in denumpyize(d).items():
             if '$' in k:
                 ks = k.split('$')
                 k0 = '$'.join(ks[:-1])
@@ -220,6 +220,15 @@ def get_dummy_settings(user: str, exchange: str, symbol: str):
     return dummy_settings
 
 
+def ticks_to_ticks_cache(ticks: np.ndarray, spans: np.ndarray, MA_idx: int) -> (np.ndarray,):
+    emas = calc_emas(ticks[:,0], spans)
+    ratios = calc_ratios(emas)
+    prices = ticks[:,0].astype(np.float32)
+    is_buyer_maker = ticks[:,1].astype(np.int8)
+    timestamps = ticks[:,2].astype(np.float64)
+    return prices, is_buyer_maker, timestamps, emas[:, MA_idx].astype(np.float32), ratios.astype(np.float32)
+
+
 def flatten(lst: list) -> list:
     return [y for x in lst for y in x]
 
@@ -231,6 +240,7 @@ def get_template_live_config(n_spans=3):
         "min_span": 6000,
         "max_span": 300000,
         "n_spans": n_spans,
+        "MA_idx":             1,      # index of ema span from which to calc initial entry prices
         "hedge_psize_pct":    0.05,   # % of psize for hedge order
         "stop_psize_pct":     0.05,   # % of psize for stop loss order
         "stop_eqbal_ratio_thr": 0.1,  # if equity / balance < thr: stop loss
@@ -257,7 +267,6 @@ def get_template_live_config(n_spans=3):
             "rprc_PBr_coeffs":    [],     # reentry Position cost to Balance ratio coeffs (PBr**2, PBr)
                                           # formerly pos_margin_grid_coeff
             "markup_MAr_coeffs":  [],     # markup price pct Moving Average ratio coeffs
-            "MA_idx":             1       # index of ema span from which to calc initial entry prices
         },
         "shrt": {
             "enabled":            True,
@@ -281,6 +290,5 @@ def get_template_live_config(n_spans=3):
             "rprc_PBr_coeffs":    [],     # reentry Position cost to Balance ratio coeffs (PBr**2, PBr)
                                           # formerly pos_margin_grid_coeff
             "markup_MAr_coeffs":  [],     # markup price pct Moving Average ratio coeffs
-            "MA_idx":             1       # index of ema span from which to calc initial entry prices
         }
     }

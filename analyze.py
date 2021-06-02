@@ -163,7 +163,7 @@ def analyze_fills(fills: list, bc: dict, last_ts: float) -> (pd.DataFrame, dict)
         'loss_sum': fdf[fdf.pnl < 0.0].pnl.sum(),
         'fee_sum': fdf.fee_paid.sum(),
         'final_equity': fdf.iloc[-1].equity,
-        'gain': (gain := fdf.iloc[-1].balance / bc['starting_balance']),
+        'gain': (gain := fdf.iloc[-1].equity / bc['starting_balance']),
         'max_drawdown': ((fdf.equity - fdf.balance).abs() / fdf.balance).max(),
         'n_days': (n_days := (last_ts - fdf.iloc[0].timestamp) / (1000 * 60 * 60 * 24)),
         'average_daily_gain': gain ** (1 / n_days) if gain > 0.0 and n_days > 0.0 else 0.0,

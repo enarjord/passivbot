@@ -27,7 +27,13 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
     dump_live_config(result, result['plots_dirpath'] + 'live_config.json')
     json.dump(denumpyize(result), open(result['plots_dirpath'] + 'result.json', 'w'), indent=4)
 
-    df = df.join(add_bid_ask_thresholds_from_config(df.price.values, result))
+    iprc_const = config['long']['iprc_const'], config['shrt']['iprc_const']
+    iprc_MAr_coeffs = np.array([config['long']['iprc_MAr_coeffs'], config['shrt']['iprc_MAr_coeffs']])
+
+    bid_thr, ask_thr = calc_bid_ask_thresholds(df.prices.values, df.ema.values,
+                                               df[[c for c in df.columns if 'ratio' in c]].values,
+                                               iprc_const, iprc_MAr_coeffs)
+    df = df.join(pd.DataFrame({'bid_thr': bid_thr, 'ask_thr': ask_thr}))
 
     print('writing backtest_result.txt...')
     with open(f"{result['plots_dirpath']}backtest_result.txt", 'w') as f:
@@ -67,14 +73,6 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
     print('min max', adg_c.min(), adg_c.max())
     adg_c.plot()
     plt.savefig(f"{result['plots_dirpath']}average_daily_gain_plot.png")
-
-
-def add_bid_ask_thresholds_from_config(prices, config):
-    iprc_MAr_coeffs = np.array([config['long']['iprc_MAr_coeffs'], config['shrt']['iprc_MAr_coeffs']])
-    iprc_const = config['long']['iprc_const'], config['shrt']['iprc_const']
-    MA_idx = np.array([config['long']['MA_idx'], config['shrt']['MA_idx']])
-    bids, asks = calc_bid_ask_thresholds(prices, config['spans'], iprc_const, iprc_MAr_coeffs, MA_idx)
-    return pd.DataFrame({'bid_thr': bids, 'ask_thr': asks})
 
 
 def plot_fills(df, fdf, side: int = 0, bkr_thr=0.1):

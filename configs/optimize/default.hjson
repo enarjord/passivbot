@@ -20,14 +20,14 @@
   wfo: false
 
   # sliding window config:
-  sliding_window_size: 0.4
-  n_sliding_windows: 3
+  sliding_window_size: 0.25
+  n_sliding_windows: 6
   test_full: false
 
   # set to 0.0 to disable breaking early
   # otherwise will break trial early on first window returning val {< or >} val_thr * (1 {- or +} break_early_factor)
   # e.g. break if a sub test returns closest_bkr < bkr_diff_thr * (1 - break_early_factor)
-  break_early_factor: 0.25
+  break_early_factor: 0.5
 
   # wfo config:
   # VWR
@@ -37,41 +37,36 @@
 
   # ema settings
   n_spans: 3
+  min_span: 6000
+  max_span: 360000
+  MA_idx: 1  # index of base ema
 
   # If start and stop are set to same value, it's treated as a fixed variable.
   ranges:
   {
     # common parameters
-    min_span: [5000, 5000]
-    max_span: [400000, 400000]
     hedge_psize_pct: [0.01, 0.01]
     stop_psize_pct: [0.01, 0.01]
     stop_eqbal_ratio_thr: [0.0, 0.0]
     coeffs: [-0.02, 0.02]
 
-    long§leverage: [1, 16]
+    long§leverage: [16, 16]
     long§iqty_const: [0.0, 1.0]
     long§iprc_const: [0.95, 1.0]
     long§rqty_const: [0.0, 4.0]
     long§rprc_const: [0.95, 1.0]
     long§markup_const: [1.0, 1.05]
 
-    # MA_idx = [1, n_spans]
-    long§MA_idx: [1, 1]
-
     long§hedge_bkr_diff_thr: [0.0, 0.0]
     long§stop_bkr_diff_thr: [0.0, 0.0]
     long§entry_bkr_diff_thr: [0.0, 0.0]
 
-    shrt§leverage: [1, 16]
+    shrt§leverage: [16, 16]
     shrt§iqty_const: [0.0, 1.0]
     shrt§iprc_const: [1.0, 1.05]
     shrt§rqty_const: [0.0, 4.0]
     shrt§rprc_const: [1.0, 1.05]
     shrt§markup_const: [0.95, 1.0]
-
-    # MA_idx = [1, n_spans]
-    shrt§MA_idx: [1, 1]
 
     shrt§hedge_bkr_diff_thr: [0.0, 0.0]
     shrt§stop_bkr_diff_thr: [0.0, 0.0]

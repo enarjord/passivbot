@@ -20,11 +20,12 @@ from backtest import backtest, plot_wrap
 from downloader import Downloader, prep_config
 from njit_funcs import round_
 from passivbot import add_argparse_args
+from procedures import make_get_ticks_cache
 from reporter import LogReporter
 from walk_forward_optimization import WFO
 from pure_funcs import pack_config, unpack_config, fill_template_config, get_template_live_config, ts_to_date
 
-os.environ['TUNE_GLOBAL_CHECKPOINT_S'] = '120'
+os.environ['TUNE_GLOBAL_CHECKPOINT_S'] = '240'
 
 
 def create_config(config: dict) -> dict:
@@ -69,24 +70,52 @@ def clean_result_config(config: dict) -> dict:
     return config
 
 
-def iter_slices(iterable, sliding_window_size: float, n_windows: int, yield_full: bool = True):
+def iter_slices(data, sliding_window_size: float, n_windows: int, yield_full: bool = False):
     for ix in np.linspace(1 - sliding_window_size, 0.0, n_windows):
-        yield iterable[int(round(len(iterable) * ix)):int(round(len(iterable) * (ix + sliding_window_size)))]
+        yield tuple([d[int(round(len(data[0]) * ix)):int(round(len(data[0]) * (ix + sliding_window_size)))]
+                     for d in data])
     if yield_full:
-        yield iterable
+        yield data
+
+
+def simple_sliding_window_wrap(config, data, do_print=False):
+    results = []
+    n = config['n_sliding_windows']
+    for z, data_slice in enumerate(iter_slices(data, config['sliding_window_size'], n)):
+        try:
+            fills, _, did_finish = backtest(pack_config(config), data_slice, do_print=do_print)
+        except Exception as e:
+            print('debug a', e, config)
+            fills = []
+        try:
+            _, result = analyze_fills(fills, config, data_slice[2][-1])
+        except Exception as e:
+            print('debug b', e)
+            result = get_empty_analysis(config)
+        result['score'] = result['average_daily_gain']
+        #result['score'] = objective_function(result, 'average_daily_gain', config)
+        results.append(result)
+        result['objective'] = np.mean([r['score'] for r in results])
+        print(f'\nz {z}, n {n}, adg {result["average_daily_gain"]:.4f}, bkr {result["closest_bkr"]:.4f}, '
+              f'score {result["score"]:.4f}, objective {result["objective"]:.4f}')
+        if result['objective'] < 1 - config['break_early_factor']:
+            break
+    tune.report(objective=result['objective'],
+                daily_gain=np.mean([r['average_daily_gain'] for r in results]),
+                closest_bankruptcy=np.min([r['closest_bkr'] for r in results]),
+                max_hrs_no_fills=np.max([r['max_hrs_no_fills'] for r in results]),
+                max_hrs_no_fills_same_side=np.max([r['max_hrs_no_fills_same_side'] for r in results]))
 
 
 def tanh(x):
     return np.tanh(10 * (x - 1))
 
 
-def simple_sliding_window_wrap(config, ticks):
-    sliding_window_size = config['sliding_window_size'] if 'sliding_window_size' in config else 0.4
-    n_windows = config['n_sliding_windows'] if 'n_sliding_windows' in config else 4
-    test_full = config['test_full'] if 'test_full' in config else False
+def simple_sliding_window_wrap_old(config, ticks):
     results = []
     finished_windows = 0.0
-    for ticks_slice in iter_slices(ticks, sliding_window_size, n_windows, yield_full=test_full):
+    for ticks_slice in iter_slices(ticks, config['sliding_window_size'], config['n_windows'],
+                                   yield_full=config['test_full']):
         try:
             fills, _, did_finish = backtest(pack_config(config), ticks_slice, do_print=False)
         except Exception as e:
@@ -129,7 +158,7 @@ def simple_sliding_window_wrap(config, ticks):
         result = get_empty_analysis(config)
 
     try:
-        objective = objective_function(result, 'average_daily_gain', config) * finished_windows / n_windows
+        objective = objective_function(result, 'average_daily_gain', config) * finished_windows / config['n_windows']
     except Exception as e:
         print('c', e)
         objective = -1
@@ -148,7 +177,7 @@ def tune_report(result):
     )
 
 
-def backtest_tune(ticks: np.ndarray, config: dict, current_best: Union[dict, list] = None):
+def backtest_tune(data: np.ndarray, config: dict, current_best: Union[dict, list] = None):
     config = create_config(config)
     config['optimize_dirpath'] = os.path.join(config['optimize_dirpath'],
                                                      ts_to_date(time())[:19].replace(':', ''), '')
@@ -189,11 +218,11 @@ def backtest_tune(ticks: np.ndarray, config: dict, current_best: Union[dict, lis
 
     if 'wfo' in config and config['wfo']:
         print('\n\nwalk forward optimization\n\n')
-        wfo = WFO(ticks, config, P_train=0.5).set_train_N(4)
+        wfo = WFO(data, config, P_train=0.5).set_train_N(4)
         backtest_wrap = lambda config: tune_report(wfo.backtest(config))
     else:
         print('\n\nsimple sliding window optimization\n\n')
-        backtest_wrap = tune.with_parameters(simple_sliding_window_wrap, ticks=ticks)
+        backtest_wrap = tune.with_parameters(simple_sliding_window_wrap, data=data)
     analysis = tune.run(
         backtest_wrap, metric='objective', mode='max', name='search',
         search_alg=algo, scheduler=scheduler, num_samples=iters, config=config, verbose=1,
@@ -247,6 +276,7 @@ async def main():
             print(f"{k: <{max(map(len, keys)) + 2}} {config[k]}")
     print()
     ticks = await downloader.get_ticks(True)
+    data = make_get_ticks_cache(config, ticks)
 
     start_candidate = None
     if args.starting_configs != 'none':
@@ -260,11 +290,11 @@ async def main():
         except Exception as e:
             print('Could not find specified configuration.', e)
     if start_candidate:
-        analysis = backtest_tune(ticks, config, start_candidate)
+        analysis = backtest_tune(data, config, start_candidate)
     else:
-        analysis = backtest_tune(ticks, config)
+        analysis = backtest_tune(data, config)
     save_results(analysis, config)
-    plot_wrap(config, ticks, clean_result_config(analysis.best_config))
+    plot_wrap(config, data, clean_result_config(analysis.best_config))
 
 
 if __name__ == '__main__':

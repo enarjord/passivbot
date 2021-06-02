@@ -76,59 +76,30 @@ def calc_ema(alpha, alpha_, prev_ema, new_val) -> float:
 
 
 @njit
-def calc_bid_ask_thresholds(xs: [float], spans: [int], iprc_const, iprc_MAr_coeffs, MA_idx):
-    bids = np.zeros(len(xs))
-    asks = np.zeros(len(xs))
-    alphas = 2 / (spans + 1)
-    alphas_ = 1 - alphas
-    prev_emas = np.repeat(xs[0], len(spans))
-    for i in range(len(xs)):
-        emas = prev_emas * alphas_ + xs[i] * alphas
-        prev_emas = emas
-        ratios = emas[:-1] / emas[1:]
-        bids[i] = emas[MA_idx[0]] * (iprc_const[0] + eqf(ratios, iprc_MAr_coeffs[0]))
-        asks[i] = emas[MA_idx[1]] * (iprc_const[1] + eqf(ratios, iprc_MAr_coeffs[1]))
+def calc_bid_ask_thresholds(prices: np.ndarray, emas: np.ndarray, ratios: np.ndarray,
+                            iprc_const, iprc_MAr_coeffs):
+    bids = np.zeros(len(prices))
+    asks = np.zeros(len(prices))
+    for i in range(len(prices)):
+        bids[i] = emas[i] * (iprc_const[0] + eqf(ratios[i], iprc_MAr_coeffs[0]))
+        asks[i] = emas[i] * (iprc_const[1] + eqf(ratios[i], iprc_MAr_coeffs[1]))
     return bids, asks
 
 
 @njit
-def calc_emas(alphas, alphas_, shape, xs, first_val, kc=0):
-    emas = np.empty(shape, dtype=np.float64)
-    emas[0] = first_val
-    for i in range(1, min(len(xs) - kc, len(emas))):
-        emas[i] = emas[i - 1] * alphas_ + xs[kc + i] * alphas
+def calc_emas(xs, spans):
+    emas = np.zeros((len(xs), len(spans)))
+    alphas = 2 / (spans + 1)
+    alphas_ = 1 - alphas
+    emas[0] = xs[0]
+    for i in range(1, len(xs)):
+        emas[i] = emas[i - 1] * alphas_ + xs[i] * alphas
     return emas
 
 
 @njit
 def calc_ratios(emas):
     return emas[:,:-1] / emas[:,1:]
-
-
-def iter_MA_ratios_chunks(xs: [float], spans: [int], chunk_size: int = 65536):
-
-    max_spans = max(spans)
-    if len(xs) < max_spans:
-        return
-
-    chunk_size = max(chunk_size, max_spans)
-    shape = (chunk_size, len(spans))
-
-    n_chunks = int(round_up(len(xs) / chunk_size, 1.0))
-
-    alphas = 2 / (spans + 1)
-    alphas_ = 1 - alphas
-
-    emass = calc_emas(alphas, alphas_, shape, xs, xs[0], 0)
-    yield emass, calc_ratios(emass), 0
-
-    for k in range(1, n_chunks):
-        kc = chunk_size * k
-        if kc >= len(xs):
-            break
-        new_emass = calc_emas(alphas, alphas_, shape, xs, emass[-1] * alphas_ + xs[kc] * alphas, kc)
-        yield new_emass, calc_ratios(new_emass), k
-        emass = new_emass
 
 
 @njit
@@ -259,6 +230,30 @@ def calc_stop_order(balance,
 
 
 @njit
+def calc_stop_order_new():
+    pcost_bal_ratio = qty_to_cost(psize, pprice, inverse, c_mult)
+    stop_qty = round_dn(psize * stop_psize_pct, qty_step)
+    stop_price = MA * (sprc_const[0] +
+                          eqf(MA_ratios, sprc_MAr_coeffs[0]) +
+                          eqf(np.array([pcost_bal_ratio]), sprc_PBr_coeffs[0]))
+    return stop_qty, stop_price
+
+
+def calc_long_stop_order():
+    qty, price = calc_stop_order_new()
+    price = max(MA, round_up(price, price_step))
+    return -qty, price
+
+
+def calc_shrt_stop_order():
+    qty, price = calc_stop_order_new()
+    price = min(MA, round_dn(price, price_step))
+    return qty, price
+
+                
+
+
+@njit
 def calc_long_close(long_psize, long_pprice, lowest_ask, MA_ratios, price_step, markup_const, markup_MAr_coeffs):
     if long_psize > 0.0:
         return (-long_psize,
@@ -283,7 +278,7 @@ def calc_long_order():
 
             if long_psize == 0.0:
                 ### initial long entry ###
-                long_entry_price = min(highest_bid, round_dn(calc_ientry_price(MA[0], MA_ratios, iprc_const[0],
+                long_entry_price = min(highest_bid, round_dn(calc_ientry_price(MA, MA_ratios, iprc_const[0],
                                                                                iprc_MAr_coeffs[0]), price_step))
                 if long_entry_price > 0.0:
                     min_entry_qty = calc_min_entry_qty(long_entry_price, inverse, qty_step, min_qty, min_cost)
@@ -421,7 +416,7 @@ def iter_orders(balance,
         if do_long:
             if long_psize == 0.0:
                 ### initial long entry ###
-                long_entry_price = min(highest_bid, round_dn(calc_ientry_price(MA[0], MA_ratios, iprc_const[0],
+                long_entry_price = min(highest_bid, round_dn(calc_ientry_price(MA, MA_ratios, iprc_const[0],
                                                                                iprc_MAr_coeffs[0]), price_step))
                 if long_entry_price > 0.0:
                     min_entry_qty = calc_min_entry_qty(long_entry_price, inverse, qty_step, min_qty, min_cost)
@@ -457,7 +452,7 @@ def iter_orders(balance,
         if do_shrt:
             if shrt_psize == 0.0:
                 ### initial shrt entry ###
-                shrt_entry_price = max(lowest_ask, round_up(calc_ientry_price(MA[1], MA_ratios, iprc_const[1],
+                shrt_entry_price = max(lowest_ask, round_up(calc_ientry_price(MA, MA_ratios, iprc_const[1],
                                                                               iprc_MAr_coeffs[1]), price_step))
                 if shrt_entry_price > 0.0:
                     min_entry_qty = calc_min_entry_qty(shrt_entry_price, inverse, qty_step, min_qty, min_cost)
