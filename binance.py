@@ -26,7 +26,7 @@ class BinanceBot(Bot):
             result = await response.text()
         return json.loads(result)
 
-    async def private_(self, type_: str, url: str, params: dict = {}) -> dict:
+    async def private_(self, type_: str, base_endpoint: str, url: str, params: dict = {}) -> dict:
         timestamp = int(time() * 1000)
         params.update({'timestamp': timestamp, 'recvWindow': 5000})
         for k in params:
@@ -39,19 +39,19 @@ class BinanceBot(Bot):
                                        urlencode(params).encode('utf-8'),
                                        hashlib.sha256).hexdigest()
         headers = {'X-MBX-APIKEY': self.key}
-        async with getattr(self.session, type_)(self.base_endpoint + url, params=params,
+        async with getattr(self.session, type_)(base_endpoint + url, params=params,
                                                 headers=headers) as response:
             result = await response.text()
         return json.loads(result)
 
     async def private_get(self, url: str, params: dict = {}) -> dict:
-        return await self.private_('get', url, params)
+        return await self.private_('get', self.base_endpoint, url, params)
 
-    async def private_post(self, url: str, params: dict = {}) -> dict:
-        return await self.private_('post', url, params)
+    async def private_post(self, base_endpoint: str, url: str, params: dict = {}) -> dict:
+        return await self.private_('post', base_endpoint, url, params)
 
     async def private_delete(self, url: str, params: dict = {}) -> dict:
-        return await self.private_('delete', url, params)
+        return await self.private_('delete', self.base_endpoint, url, params)
 
     def init_market_type(self):
         if self.symbol.endswith('USDT'):
@@ -99,6 +99,9 @@ class BinanceBot(Bot):
                 'position_side': '/dapi/v1/positionSide/dual',
                 'websocket': f"wss://dstream.binance.com/ws/{self.symbol.lower()}@aggTrade"
             }
+
+        self.spot_base_endpoint = 'https://api.binance.com'
+        self.endpoints['transfer'] = '/sapi/v1/asset/transfer'
 
     async def _init(self):
         self.init_market_type()
@@ -169,12 +172,14 @@ class BinanceBot(Bot):
             print('no positions or open orders in other symbols sharing margin wallet')
 
     async def execute_leverage_change(self):
-        return await self.private_post(self.endpoints['leverage'],
+        return await self.private_post(self.base_endpoint,
+                                       self.endpoints['leverage'],
                                        {'symbol': self.symbol, 'leverage': int(round(self.leverage))})
 
     async def init_exchange_config(self):
         try:
-            print(await self.private_post(self.endpoints['margin_type'],
+            print(await self.private_post(self.base_endpoint,
+                                          self.endpoints['margin_type'],
                                           {'symbol': self.symbol, 'marginType': 'CROSSED'}))
         except Exception as e:
             print(e)
@@ -191,7 +196,8 @@ class BinanceBot(Bot):
         except Exception as e:
             print(e)
         try:
-            res = await self.private_post(self.endpoints['position_side'],
+            res = await self.private_post(self.base_endpoint,
+                                          self.endpoints['position_side'],
                                           {'dualSidePosition': 'true'})
             print(res)
         except Exception as e:
@@ -262,7 +268,7 @@ class BinanceBot(Bot):
         if 'custom_id' in order:
             params['newClientOrderId'] = \
                 f"{order['custom_id']}_{str(int(time() * 1000))[8:]}_{int(np.random.random() * 1000)}"
-        o = await self.private_post(self.endpoints['create_order'], params)
+        o = await self.private_post(self.base_endpoint, self.endpoints['create_order'], params)
         if 'side' in o:
             return {'symbol': self.symbol,
                     'side': o['side'].lower(),
@@ -361,6 +367,14 @@ class BinanceBot(Bot):
 
     async def fetch_ticks_time(self, start_time: int, end_time: int = None, do_print: bool = True):
         return await self.fetch_ticks(start_time=start_time, end_time=end_time, do_print=do_print)
+
+    async def transfer(self, type: str, amount: float, asset: str):
+        params = {'type': type.upper(),
+                  'amount': amount,
+                  'asset': asset}
+        return await self.private_post(self.spot_base_endpoint,
+                                self.endpoints['transfer'],
+                                params)
 
     def calc_max_pos_size(self, balance: float, price: float):
         if self.market_type == 'linear_perpetual':
