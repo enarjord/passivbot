@@ -5,13 +5,13 @@
   options: {"c1": 1.4962, "c2": 1.4962, "w": 0.7298}
   n_particles: 24
 
-  minimum_bankruptcy_distance: 0.21
+  minimum_bankruptcy_distance: 0.14
 
   # max hours between consecutive fills
-  max_hrs_no_fills: 72
+  max_hrs_no_fills: 500
 
   # max hours between consecutive same side fills (long / short)
-  max_hrs_no_fills_same_side: 144
+  max_hrs_no_fills_same_side: 500
 
 
 

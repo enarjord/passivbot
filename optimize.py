@@ -92,8 +92,7 @@ def simple_sliding_window_wrap(config, data, do_print=False):
         except Exception as e:
             print('debug b', e)
             result = get_empty_analysis(config)
-        result['score'] = result['average_daily_gain']
-        #result['score'] = objective_function(result, 'average_daily_gain', config)
+        result['score'] = objective_function(result, 'average_daily_gain', config)
         results.append(result)
         result['objective'] = np.mean([r['score'] for r in results])
         print(f'\nz {z}, n {n}, adg {result["average_daily_gain"]:.4f}, bkr {result["closest_bkr"]:.4f}, '
