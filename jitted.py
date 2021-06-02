@@ -714,8 +714,8 @@ def calc_liq_price_binance(balance,
             return 0.0
         return max(0.0, numerator / denom)
     else:
-        mml = 0.006
-        mms = 0.006
+        mml = 0.01
+        mms = 0.01
         # tmm = max(long_pos_margin, shrt_pos_margin)
         numerator = (balance - abs_long_psize * long_pprice + abs_shrt_psize * shrt_pprice)
         denom = (abs_long_psize * mml + abs_shrt_psize * mms - abs_long_psize + abs_shrt_psize)
