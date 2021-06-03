@@ -51,6 +51,7 @@ def backtest(config: dict, data: (np.ndarray,), do_print=False, prev_emas: np.nd
     ob = [min(prices[0], prices[1]), max(prices[0], prices[1])]
 
     closest_bkr = 1.0
+    lowest_eqbal_ratio = 1.0
 
     prev_update_plus_delay = latency_simulation_ms
     update_triggered = False
@@ -166,6 +167,10 @@ def backtest(config: dict, data: (np.ndarray,), do_print=False, prev_emas: np.nd
             bids, asks = [], []
             bkr_diff = calc_diff(bkr_price, prices[k])
             closest_bkr = min(closest_bkr, bkr_diff)
+            equity = (balance +
+                      calc_long_pnl(long_pprice, prices[k], long_psize, xk['inverse'], xk['c_mult']) +
+                      calc_shrt_pnl(shrt_pprice, prices[k], shrt_psize, xk['inverse'], xk['c_mult']))
+            lowest_eqbal_ratio = min(lowest_eqbal_ratio, equity / balance)
             for tpl in iter_orders(balance, long_psize, long_pprice, shrt_psize, shrt_pprice,
                                    ob[0], ob[1], emas[k], prices[k], ratios[k], **xk):
                 if (len(bids) > 2 and len(asks) > 2) or len(bids) > 5 or len(asks) > 5:
@@ -204,18 +209,20 @@ def backtest(config: dict, data: (np.ndarray,), do_print=False, prev_emas: np.nd
                 fill['gain'] = fill['equity'] / config['starting_balance']
                 fill['n_days'] = (timestamps[k] - timestamps[0]) / (1000 * 60 * 60 * 24)
                 fill['closest_bkr'] = closest_bkr
+                fill['lowest_eqbal_ratio'] = lowest_eqbal_ratio
                 try:
                     fill['average_daily_gain'] = fill['gain'] ** (1 / fill['n_days']) \
                         if (fill['n_days'] > 0.5 and fill['gain'] > 0.0) else 0.0
                 except:
                     fill['average_daily_gain'] = 0.0
                 all_fills.append(fill)
-                if balance <= 0.0 or 'bankruptcy' in fill['type']:
+                if balance <= 0.0 or 'bankruptcy' in fill['type'] or lowest_eqbal_ratio < 0.07:
                     return all_fills, stats, False
             if do_print:
                 line = f"\r{k / len(prices):.3f} "
                 line += f"adg {all_fills[-1]['average_daily_gain']:.4f} "
                 line += f"closest_bkr {closest_bkr:.4f} "
+                line += f"lowest_eqbal_ratio {lowest_eqbal_ratio:.4f} "
                 print(line, end=' ')
 
     stats_update()

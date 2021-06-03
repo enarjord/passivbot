@@ -226,7 +226,8 @@ def ticks_to_ticks_cache(ticks: np.ndarray, spans: np.ndarray, MA_idx: int) -> (
     prices = ticks[:,0].astype(np.float32)
     is_buyer_maker = ticks[:,1].astype(np.int8)
     timestamps = ticks[:,2].astype(np.float64)
-    return prices, is_buyer_maker, timestamps, emas[:, MA_idx].astype(np.float32), ratios.astype(np.float32)
+    return (prices[max(spans):], is_buyer_maker[max(spans):], timestamps[max(spans):],
+            emas[max(spans):][:, MA_idx].astype(np.float32), ratios[max(spans):].astype(np.float32))
 
 
 def flatten(lst: list) -> list:
@@ -292,3 +293,15 @@ def get_template_live_config(n_spans=3):
             "markup_MAr_coeffs":  [],     # markup price pct Moving Average ratio coeffs
         }
     }
+
+
+def get_bid_ask_thresholds(data, config):
+    pass
+
+
+
+
+
+
+
+

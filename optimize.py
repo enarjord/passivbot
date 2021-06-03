@@ -82,15 +82,11 @@ def simple_sliding_window_wrap(config, data, do_print=False):
     results = []
     n = config['n_sliding_windows']
     for z, data_slice in enumerate(iter_slices(data, config['sliding_window_size'], n)):
-        try:
-            fills, _, did_finish = backtest(pack_config(config), data_slice, do_print=do_print)
-        except Exception as e:
-            print('debug a', e, config)
-            fills = []
-        try:
-            _, result = analyze_fills(fills, config, data_slice[2][-1])
-        except Exception as e:
-            print('debug b', e)
+        fills, _, did_finish = backtest(pack_config(config), data_slice, do_print=do_print)
+        result = analyze_fills(fills, config, data_slice[2][0], data_slice[2][-1])
+        if fills:
+            _, result = analyze_fills(fills, config, data_slice[2][0], data_slice[2][-1])
+        else:
             result = get_empty_analysis(config)
         result['score'] = objective_function(result, 'average_daily_gain', config)
         results.append(result)
@@ -131,8 +127,8 @@ def simple_sliding_window_wrap_old(config, ticks):
         if config['break_early_factor'] > 0.0 and \
                 (not did_finish or
                  result_['closest_bkr'] < config['minimum_bankruptcy_distance'] * (1 - config['break_early_factor']) or
-                 result_['max_hrs_no_fills'] > config['max_hrs_no_fills'] * (1 + config['break_early_factor']) or
-                 result_['max_hrs_no_fills_same_side'] > config['max_hrs_no_fills_same_side'] * (
+                 result_['max_hrs_no_fills'] > config['maximum_hrs_no_fills'] * (1 + config['break_early_factor']) or
+                 result_['max_hrs_no_fills_same_side'] > config['maximum_hrs_no_fills_same_side'] * (
                          1 + config['break_early_factor'])):
             break
     if results:
@@ -245,8 +241,8 @@ def save_results(analysis, config):
     df = analysis.results_df
     df.reset_index(inplace=True)
     df.rename(columns={column: column.replace('config.', '') for column in df.columns}, inplace=True)
-    df = df[list(config['ranges'].keys()) + ['daily_gain', 'closest_bankruptcy', 'max_hrs_no_fills',
-                                                      'max_hrs_no_fills_same_side', 'objective']].sort_values(
+    df = df[list(config['ranges'].keys()) + ['daily_gain', 'closest_bankruptcy', 'maximum_hrs_no_fills',
+                                             'maximum_hrs_no_fills_same_side', 'objective']].sort_values(
         'objective', ascending=False)
     df.to_csv(os.path.join(config['optimize_dirpath'], 'results.csv'), index=False)
     print('Best candidate found:')
@@ -269,7 +265,7 @@ async def main():
     print()
     for k in (keys := ['exchange', 'symbol', 'starting_balance', 'start_date', 'end_date',
                        'latency_simulation_ms', 'do_long', 'do_shrt', 'minimum_bankruptcy_distance',
-                       'max_hrs_no_fills', 'max_hrs_no_fills_same_side', 'iters', 'n_particles', 'sliding_window_size',
+                       'maximum_hrs_no_fills', 'maximum_hrs_no_fills_same_side', 'iters', 'n_particles', 'sliding_window_size',
                        'n_sliding_windows' 'test_full']):
         if k in config:
             print(f"{k: <{max(map(len, keys)) + 2}} {config[k]}")

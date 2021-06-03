@@ -10,8 +10,8 @@ def objective_function(result: dict,
     try:
         return (
                 result[metric]
-                * min(1.0, bc["max_hrs_no_fills"] / result["max_hrs_no_fills"])
-                * min(1.0, bc["max_hrs_no_fills_same_side"] / result["max_hrs_no_fills_same_side"])
+                * min(1.0, bc["maximum_hrs_no_fills"] / result["max_hrs_no_fills"])
+                * min(1.0, bc["maximum_hrs_no_fills_same_side"] / result["max_hrs_no_fills_same_side"])
                 * min(1.0, result["closest_bkr"] / bc["minimum_bankruptcy_distance"])
         )
     except:
@@ -140,7 +140,7 @@ def get_empty_analysis(bc: dict) -> dict:
     }
 
 
-def analyze_fills(fills: list, bc: dict, last_ts: float) -> (pd.DataFrame, dict):
+def analyze_fills(fills: list, bc: dict, first_ts: float, last_ts: float) -> (pd.DataFrame, dict):
     fdf = pd.DataFrame(fills)
 
     if fdf.empty:
@@ -149,24 +149,27 @@ def analyze_fills(fills: list, bc: dict, last_ts: float) -> (pd.DataFrame, dict)
     fdf = fdf.set_index('trade_id')
 
     if len(longs_ := fdf[fdf.pside == 'long']) > 0:
-        long_stuck = np.max(np.diff(list(longs_.timestamp) + [last_ts])) / (1000 * 60 * 60)
+        long_stuck = np.max(np.diff([first_ts] + list(longs_.timestamp) + [last_ts])) / (1000 * 60 * 60)
     else:
         long_stuck = 1000.0
     if len(shrts_ := fdf[fdf.pside == 'shrt']) > 0:
-        shrt_stuck = np.max(np.diff(list(shrts_.timestamp) + [last_ts])) / (1000 * 60 * 60)
+        shrt_stuck = np.max(np.diff([first_ts] + list(shrts_.timestamp) + [last_ts])) / (1000 * 60 * 60)
     else:
         shrt_stuck = 1000.0
 
     result = {
+        'starting_balance': bc['starting_balance'],
+        'final_balance': fdf.iloc[-1].balance,
+        'final_equity': fdf.iloc[-1].equity,
         'net_pnl_plus_fees': fdf.pnl.sum() + fdf.fee_paid.sum(),
+        'gain': (gain := fdf.iloc[-1].equity / bc['starting_balance']),
+        'n_days': (n_days := (last_ts - first_ts) / (1000 * 60 * 60 * 24)),
+        'average_daily_gain': gain ** (1 / n_days) if gain > 0.0 and n_days > 0.0 else 0.0,
         'profit_sum': fdf[fdf.pnl > 0.0].pnl.sum(),
         'loss_sum': fdf[fdf.pnl < 0.0].pnl.sum(),
         'fee_sum': fdf.fee_paid.sum(),
-        'final_equity': fdf.iloc[-1].equity,
-        'gain': (gain := fdf.iloc[-1].equity / bc['starting_balance']),
+        'lowest_eqbal_ratio': fdf.iloc[-1].lowest_eqbal_ratio,
         'max_drawdown': ((fdf.equity - fdf.balance).abs() / fdf.balance).max(),
-        'n_days': (n_days := (last_ts - fdf.iloc[0].timestamp) / (1000 * 60 * 60 * 24)),
-        'average_daily_gain': gain ** (1 / n_days) if gain > 0.0 and n_days > 0.0 else 0.0,
         'closest_bkr': fdf.closest_bkr.iloc[-1],
         'n_fills': len(fdf),
         'n_entries': len(fdf[fdf.type.str.contains('entry')]),
@@ -182,7 +185,7 @@ def analyze_fills(fills: list, bc: dict, last_ts: float) -> (pd.DataFrame, dict)
         'max_hrs_no_fills_long': long_stuck,
         'max_hrs_no_fills_shrt': shrt_stuck,
         'max_hrs_no_fills_same_side': max(long_stuck, shrt_stuck),
-        'max_hrs_no_fills': np.max(np.diff(list(fdf.timestamp) + [last_ts])) / (1000 * 60 * 60),
+        'max_hrs_no_fills': np.max(np.diff([first_ts] + list(fdf.timestamp) + [last_ts])) / (1000 * 60 * 60),
     }
     return fdf, result
 

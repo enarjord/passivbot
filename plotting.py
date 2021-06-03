@@ -84,6 +84,8 @@ def plot_fills(df, fdf, side: int = 0, bkr_thr=0.1):
         dfc.bid_thr.plot(style='b-.')
     if 'ask_thr' in dfc.columns:
         dfc.ask_thr.plot(style='r-.')
+    if 'ema' in dfc.columns:
+        dfc.ema.plot(style='k-.')
 
     if side >= 0:
         longs = fdf[fdf.pside == 'long']

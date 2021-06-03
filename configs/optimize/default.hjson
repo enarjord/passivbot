@@ -8,10 +8,10 @@
   minimum_bankruptcy_distance: 0.14
 
   # max hours between consecutive fills
-  max_hrs_no_fills: 500
+  maximum_hrs_no_fills: 500
 
   # max hours between consecutive same side fills (long / short)
-  max_hrs_no_fills_same_side: 500
+  maximum_hrs_no_fills_same_side: 500
 
 
 
@@ -39,7 +39,7 @@
   n_spans: 3
   min_span: 6000
   max_span: 360000
-  MA_idx: 1  # index of base ema
+  MA_idx: 2  # index of base ema
 
   # If start and stop are set to same value, it's treated as a fixed variable.
   ranges:
@@ -48,7 +48,7 @@
     hedge_psize_pct: [0.01, 0.01]
     stop_psize_pct: [0.01, 0.01]
     stop_eqbal_ratio_thr: [0.0, 0.0]
-    coeffs: [-0.02, 0.02]
+    coeffs: [-0.2, 0.2]
 
     long§leverage: [16, 16]
     long§iqty_const: [0.0, 1.0]

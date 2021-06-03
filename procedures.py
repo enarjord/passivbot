@@ -112,8 +112,9 @@ def print_(args, r=False, n=False):
 
 
 def make_get_ticks_cache(config: dict, ticks: np.ndarray) -> (np.ndarray,):
-    cache_dirpath = os.path.join(config['caches_dirpath'],
-                                 f"{config['session_name']}_spans_{'_'.join(map(str, config['spans']))}", '')
+    cache_dirpath = os.path.join(
+        config['caches_dirpath'],
+        f"{config['session_name']}_spans_{'_'.join(map(str, config['spans']))}_idx_{config['MA_idx']}", '')
     if os.path.exists(cache_dirpath):
         print('loading cached tick data')
         arrs = []
@@ -123,11 +124,13 @@ def make_get_ticks_cache(config: dict, ticks: np.ndarray) -> (np.ndarray,):
     else:
         print('dumping cache...')
         fpath = make_get_filepath(cache_dirpath)
-        prices, is_buyer_maker, timestamps, emas, ratios = ticks_to_ticks_cache(ticks, config['spans'], config['MA_idx'])
+        data = ticks_to_ticks_cache(ticks, config['spans'], config['MA_idx'])
         for fname, arr in zip(['prices', 'is_buyer_maker', 'timestamps', 'emas', 'ratios'],
-                              [prices, is_buyer_maker, timestamps, emas, ratios]):
+                              data):
             np.save(f'{fpath}{fname}.npy', arr[config['max_span']:])
-    return prices, is_buyer_maker, timestamps, emas, ratios
+        size_mb = np.sum([sys.getsizeof(d) for d in data]) / (1000 * 1000)
+        print(f'dumped {size_mb:.2f} mb of data')
+    return data
 
 
 async def fetch_market_specific_settings(user: str, exchange: str, symbol: str):
