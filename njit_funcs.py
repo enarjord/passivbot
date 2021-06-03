@@ -230,27 +230,47 @@ def calc_stop_order(balance,
 
 
 @njit
-def calc_stop_order_new():
-    pcost_bal_ratio = qty_to_cost(psize, pprice, inverse, c_mult)
-    stop_qty = round_dn(psize * stop_psize_pct, qty_step)
-    stop_price = MA * (sprc_const[0] +
-                          eqf(MA_ratios, sprc_MAr_coeffs[0]) +
-                          eqf(np.array([pcost_bal_ratio]), sprc_PBr_coeffs[0]))
-    return stop_qty, stop_price
+def calc_long_stop_order(balance,
+                         long_psize,
+                         long_pprice,
+                         long_close_price,
+                         shrt_entry_price,
+                         stop_PBr_bias,
 
-
-def calc_long_stop_order():
-    qty, price = calc_stop_order_new()
-    price = max(MA, round_up(price, price_step))
+                         inverse,
+                         qty_step,
+                         price_step,
+                         min_qty,
+                         c_mult,
+                         stop_psize_pct):
+    pcost_bal_ratio = qty_to_cost(long_psize, long_pprice, inverse, c_mult) / balance
+    price_range = long_close_price - shrt_entry_price
+    weight = max(0.0, min(1.0, pcost_bal_ratio - stop_PBr_bias))
+    price = round_up(long_close_price - price_range * weight, price_step)
+    qty = max(min_qty, round_dn(long_psize * stop_psize_pct, qty_step))
     return -qty, price
 
 
-def calc_shrt_stop_order():
-    qty, price = calc_stop_order_new()
-    price = min(MA, round_dn(price, price_step))
-    return qty, price
+@njit
+def calc_shrt_stop_order(balance,
+                         shrt_psize,
+                         shrt_pprice,
+                         shrt_close_price,
+                         long_entry_price,
+                         stop_PBr_bias,
 
-                
+                         inverse,
+                         qty_step,
+                         price_step,
+                         min_qty,
+                         c_mult,
+                         stop_psize_pct):
+    pcost_bal_ratio = qty_to_cost(shrt_psize, shrt_pprice, inverse, c_mult) / balance
+    price_range = shrt_close_price - long_entry_price
+    weight = max(0.0, min(1.0, pcost_bal_ratio - stop_PBr_bias))
+    price = round_dn(shrt_close_price + price_range * weight, price_step)
+    qty = max(min_qty, round_dn(abs(shrt_psize) * stop_psize_pct, qty_step))
+    return -qty, price
 
 
 @njit
@@ -276,41 +296,41 @@ def calc_shrt_close(shrt_psize, shrt_pprice, highest_bid, MA_ratios, price_step,
 @njit
 def calc_long_order():
 
-            if long_psize == 0.0:
-                ### initial long entry ###
-                long_entry_price = min(highest_bid, round_dn(calc_ientry_price(MA, MA_ratios, iprc_const[0],
-                                                                               iprc_MAr_coeffs[0]), price_step))
-                if long_entry_price > 0.0:
-                    min_entry_qty = calc_min_entry_qty(long_entry_price, inverse, qty_step, min_qty, min_cost)
-                    max_entry_qty = calc_max_entry_qty(long_entry_price, available_margin, inverse, qty_step, c_mult)
-                    long_entry_qty = calc_ientry_qty(balance, long_entry_price, MA_ratios, iqty_const[0],
-                                                     iqty_MAr_coeffs[0], qty_step, min_entry_qty, max_entry_qty,
-                                                     inverse, c_mult)
-                    if long_entry_qty > 0.0:
-                        new_bankruptcy_price = calc_bankruptcy_price(balance, long_entry_qty, long_entry_price,
-                                                                     shrt_psize, shrt_pprice, inverse, c_mult)
-                        if calc_diff(new_bankruptcy_price, last_price) > entry_bkr_diff_thr[0]:
-                            orders.append((long_entry_qty, long_entry_price, long_entry_qty, long_entry_price, 'long_ientry'))
-            else:
-                ### long reentry ###
-                long_entry_price = min(highest_bid,
-                                       round_dn(calc_rentry_price(balance, long_psize, long_pprice, MA_ratios,
-                                                                  rprc_const[0], rprc_PBr_coeffs[0], rprc_MAr_coeffs[0],
-                                                                  inverse, c_mult), price_step))
-                if long_entry_price > 0.0:
-                    min_entry_qty = calc_min_entry_qty(long_entry_price, inverse, qty_step, min_qty, min_cost)
-                    max_entry_qty = calc_max_entry_qty(long_entry_price, available_margin, inverse, qty_step, c_mult)
-                    long_entry_qty = 1.0
-                    long_entry_qty = calc_rentry_qty(long_psize, long_entry_price, MA_ratios, rqty_const[0],
-                                                     rqty_MAr_coeffs[0], qty_step, min_entry_qty, max_entry_qty)
-                    if long_entry_qty > 0.0:
-                        new_long_psize, new_long_pprice = calc_new_psize_pprice(long_psize, long_pprice, long_entry_qty,
-                                                                                long_entry_price, qty_step)
-                        new_bankruptcy_price = calc_bankruptcy_price(balance, new_long_psize, new_long_pprice,
-                                                                     shrt_psize, shrt_pprice, inverse, c_mult)
-                        if calc_diff(new_bankruptcy_price, last_price) > entry_bkr_diff_thr[0]:
-                            orders.append((long_entry_qty, long_entry_price,
-                                           new_long_psize, new_long_pprice, 'long_rentry'))
+    if long_psize == 0.0:
+        ### initial long entry ###
+        long_entry_price = min(highest_bid, round_dn(calc_ientry_price(MA, MA_ratios, iprc_const[0],
+                                                                       iprc_MAr_coeffs[0]), price_step))
+        if long_entry_price > 0.0:
+            min_entry_qty = calc_min_entry_qty(long_entry_price, inverse, qty_step, min_qty, min_cost)
+            max_entry_qty = calc_max_entry_qty(long_entry_price, available_margin, inverse, qty_step, c_mult)
+            long_entry_qty = calc_ientry_qty(balance, long_entry_price, MA_ratios, iqty_const[0],
+                                             iqty_MAr_coeffs[0], qty_step, min_entry_qty, max_entry_qty,
+                                             inverse, c_mult)
+            if long_entry_qty > 0.0:
+                new_bankruptcy_price = calc_bankruptcy_price(balance, long_entry_qty, long_entry_price,
+                                                             shrt_psize, shrt_pprice, inverse, c_mult)
+                if calc_diff(new_bankruptcy_price, last_price) > entry_bkr_diff_thr[0]:
+                    orders.append((long_entry_qty, long_entry_price, long_entry_qty, long_entry_price, 'long_ientry'))
+    else:
+        ### long reentry ###
+        long_entry_price = min(highest_bid,
+                               round_dn(calc_rentry_price(balance, long_psize, long_pprice, MA_ratios,
+                                                          rprc_const[0], rprc_PBr_coeffs[0], rprc_MAr_coeffs[0],
+                                                          inverse, c_mult), price_step))
+        if long_entry_price > 0.0:
+            min_entry_qty = calc_min_entry_qty(long_entry_price, inverse, qty_step, min_qty, min_cost)
+            max_entry_qty = calc_max_entry_qty(long_entry_price, available_margin, inverse, qty_step, c_mult)
+            long_entry_qty = 1.0
+            long_entry_qty = calc_rentry_qty(long_psize, long_entry_price, MA_ratios, rqty_const[0],
+                                             rqty_MAr_coeffs[0], qty_step, min_entry_qty, max_entry_qty)
+            if long_entry_qty > 0.0:
+                new_long_psize, new_long_pprice = calc_new_psize_pprice(long_psize, long_pprice, long_entry_qty,
+                                                                        long_entry_price, qty_step)
+                new_bankruptcy_price = calc_bankruptcy_price(balance, new_long_psize, new_long_pprice,
+                                                             shrt_psize, shrt_pprice, inverse, c_mult)
+                if calc_diff(new_bankruptcy_price, last_price) > entry_bkr_diff_thr[0]:
+                    orders.append((long_entry_qty, long_entry_price,
+                                   new_long_psize, new_long_pprice, 'long_rentry'))
 '''
 
 

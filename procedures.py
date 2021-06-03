@@ -128,7 +128,7 @@ def make_get_ticks_cache(config: dict, ticks: np.ndarray) -> (np.ndarray,):
         data = ticks_to_ticks_cache(ticks, config['spans'], config['MA_idx'])
         for fname, arr in zip(['prices', 'is_buyer_maker', 'timestamps', 'emas', 'ratios'],
                               data):
-            np.save(f'{fpath}{fname}.npy', arr[config['max_span']:])
+            np.save(f'{fpath}{fname}.npy', arr)
         size_mb = np.sum([sys.getsizeof(d) for d in data]) / (1000 * 1000)
         print(f'dumped {size_mb:.2f} mb of data')
     return data

@@ -214,7 +214,7 @@ def filter_orders(actual_orders: [dict],
 
 def get_dummy_settings(user: str, exchange: str, symbol: str):
     dummy_settings = get_template_live_config()
-    dummy_settings.update({k: 0.0 for k in get_keys() + ['stop_loss_liq_diff', 'ema_span']})
+    dummy_settings.update({k: 0.01 for k in get_keys() + ['stop_loss_liq_diff', 'ema_span']})
     dummy_settings.update({'user': user, 'exchange': exchange, 'symbol': symbol,
                            'config_name': '', 'logging_level': 0})
     return dummy_settings

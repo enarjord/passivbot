@@ -2,22 +2,6 @@ import numpy as np
 import pandas as pd
 
 
-def objective_function(result: dict,
-                       metric: str,
-                       bc: dict) -> float:
-    if result['n_fills'] == 0:
-        return -1
-    try:
-        return (
-                result[metric]
-                * min(1.0, bc["maximum_hrs_no_fills"] / result["max_hrs_no_fills"])
-                * min(1.0, bc["maximum_hrs_no_fills_same_side"] / result["max_hrs_no_fills_same_side"])
-                * min(1.0, result["closest_bkr"] / bc["minimum_bankruptcy_distance"])
-        )
-    except:
-        return -1
-
-
 # TODO: Make a class Returns?
 # Dict of interesting periods and their associated number of seconds
 PERIODS = {
@@ -125,6 +109,8 @@ def get_empty_analysis(bc: dict) -> dict:
         'max_drawdown': 0.0,
         'n_days': 0.0,
         'average_daily_gain': 0.0,
+        'adjusted_daily_gain': 0.0,
+        'lowest_eqbal_ratio': 0.0,
         'closest_bkr': 1.0,
         'n_fills': 0.0,
         'n_entries': 0.0,
@@ -164,7 +150,8 @@ def analyze_fills(fills: list, bc: dict, first_ts: float, last_ts: float) -> (pd
         'net_pnl_plus_fees': fdf.pnl.sum() + fdf.fee_paid.sum(),
         'gain': (gain := fdf.iloc[-1].equity / bc['starting_balance']),
         'n_days': (n_days := (last_ts - first_ts) / (1000 * 60 * 60 * 24)),
-        'average_daily_gain': gain ** (1 / n_days) if gain > 0.0 and n_days > 0.0 else 0.0,
+        'average_daily_gain': (adg := gain ** (1 / n_days) if gain > 0.0 and n_days > 0.0 else 0.0),
+        'adjusted_daily_gain': np.tanh(10 * (adg - 1)) + 1,
         'profit_sum': fdf[fdf.pnl > 0.0].pnl.sum(),
         'loss_sum': fdf[fdf.pnl < 0.0].pnl.sum(),
         'fee_sum': fdf.fee_paid.sum(),

@@ -10,5 +10,5 @@
 
   start_date: 2021-04-01
   # set end_date: -1 to use now as end date
-  end_date: 2021-05-30
+  end_date: 2021-04-20
 }

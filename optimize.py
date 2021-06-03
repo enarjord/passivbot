@@ -15,7 +15,7 @@ from ray.tune.schedulers import AsyncHyperBandScheduler
 from ray.tune.suggest import ConcurrencyLimiter
 from ray.tune.suggest.nevergrad import NevergradSearch
 
-from analyze import analyze_fills, get_empty_analysis, objective_function
+from analyze import analyze_fills, get_empty_analysis
 from backtest import backtest, plot_wrap
 from downloader import Downloader, prep_config
 from njit_funcs import round_
@@ -53,8 +53,8 @@ def create_config(config: dict) -> dict:
 
 
 def clean_start_config(start_config: dict, config: dict) -> dict:
-    clean_start = unpack_config(start_config)
-    for k, v in clean_start.items():
+    clean_start = {}
+    for k, v in unpack_config(start_config).items():
         if k in config:
             if type(config[k]) == ray.tune.sample.Float or type(config[k]) == ray.tune.sample.Integer:
                 clean_start[k] = min(max(v, config['ranges'][k][0]), config['ranges'][k][1])
@@ -70,7 +70,7 @@ def clean_result_config(config: dict) -> dict:
     return config
 
 
-def iter_slices(data, sliding_window_size: float, n_windows: int, yield_full: bool = False):
+def iter_slices_old(data, sliding_window_size: float, n_windows: int, yield_full: bool = False):
     for ix in np.linspace(1 - sliding_window_size, 0.0, n_windows):
         yield tuple([d[int(round(len(data[0]) * ix)):int(round(len(data[0]) * (ix + sliding_window_size)))]
                      for d in data])
@@ -78,32 +78,57 @@ def iter_slices(data, sliding_window_size: float, n_windows: int, yield_full: bo
         yield data
 
 
+def iter_slices(data, sliding_window_days: float):
+    ms_span = data[2][-1] - data[2][0]
+    sliding_window_ms = sliding_window_days * 24 * 60 * 60 * 1000
+    n_windows = int(round(ms_span / sliding_window_ms) + 1)
+    if sliding_window_ms > ms_span:
+        yield data
+        return
+    ms_thresholds = np.linspace(data[2][0], data[2][-1] - sliding_window_ms, n_windows)
+    for ms_threshold in ms_thresholds:
+        start_i = np.searchsorted(data[2], ms_threshold)
+        end_i = np.searchsorted(data[2], ms_threshold + sliding_window_ms)
+        yield tuple(d[start_i:end_i] for d in data)
+    for ds in iter_slices(data, sliding_window_days * 2):
+        yield ds
+
+
+def objective_function(analysis: dict, config: dict) -> float:
+    if analysis['n_fills'] == 0:
+        return -1.0
+    return (analysis['adjusted_daily_gain']
+            * min(1.0, config["maximum_hrs_no_fills"] / analysis["max_hrs_no_fills"])
+            * min(1.0, config["maximum_hrs_no_fills_same_side"] / analysis["max_hrs_no_fills_same_side"])
+            * min(1.0, analysis["lowest_eqbal_ratio"] / config["minimum_eqbal_ratio"]))
+
+
 def simple_sliding_window_wrap(config, data, do_print=False):
-    results = []
-    n = config['n_sliding_windows']
-    for z, data_slice in enumerate(iter_slices(data, config['sliding_window_size'], n)):
+    analyses = []
+    objective = 0.0
+    n_days = (data[2][-1] - data[2][0]) / (1000 * 60 * 60 * 24)
+    sliding_window_days = max(3.0, n_days * config['sliding_window_size']) # at least 3 days per slice
+    slices = list(iter_slices(data, sliding_window_days))
+    n_slices = len(slices)
+    print('n_days', n_days, 'sliding_window_days', sliding_window_days, 'n_slices', n_slices)
+    for z, data_slice in enumerate(slices):
         fills, _, did_finish = backtest(pack_config(config), data_slice, do_print=do_print)
-        result = analyze_fills(fills, config, data_slice[2][0], data_slice[2][-1])
-        if fills:
-            _, result = analyze_fills(fills, config, data_slice[2][0], data_slice[2][-1])
-        else:
-            result = get_empty_analysis(config)
-        result['score'] = objective_function(result, 'average_daily_gain', config)
-        results.append(result)
-        result['objective'] = np.mean([r['score'] for r in results])
-        print(f'\nz {z}, n {n}, adg {result["average_daily_gain"]:.4f}, bkr {result["closest_bkr"]:.4f}, '
-              f'score {result["score"]:.4f}, objective {result["objective"]:.4f}')
-        if result['objective'] < 1 - config['break_early_factor']:
+        _, analysis = analyze_fills(fills, config, data_slice[2][0], data_slice[2][-1])
+        analysis['score'] = objective_function(analysis, config)
+        analyses.append(analysis)
+        objective = np.mean([r['score'] for r in analyses]) * (z / n_slices)
+        print(f'z {z}, n {n_slices}, adg {analysis["average_daily_gain"]:.4f}, bkr {analysis["closest_bkr"]:.4f}, '
+              f'eqbal {analysis["lowest_eqbal_ratio"]:.4f} n_days {analysis["n_days"]:.1f} '
+              f'score {analysis["score"]:.4f}, objective {objective:.4f} '
+              f'scores {[round(e["score"], 2) for e in analyses]} ')
+        if z > n_slices * config['break_early_factor'] and \
+                (max([0.0, objective, analysis['score']]) < config['break_early_factor']):
             break
-    tune.report(objective=result['objective'],
-                daily_gain=np.mean([r['average_daily_gain'] for r in results]),
-                closest_bankruptcy=np.min([r['closest_bkr'] for r in results]),
-                max_hrs_no_fills=np.max([r['max_hrs_no_fills'] for r in results]),
-                max_hrs_no_fills_same_side=np.max([r['max_hrs_no_fills_same_side'] for r in results]))
-
-
-def tanh(x):
-    return np.tanh(10 * (x - 1))
+    tune.report(objective=objective,
+                daily_gain=np.mean([r['average_daily_gain'] for r in analyses]),
+                closest_bankruptcy=np.min([r['closest_bkr'] for r in analyses]),
+                max_hrs_no_fills=np.max([r['max_hrs_no_fills'] for r in analyses]),
+                max_hrs_no_fills_same_side=np.max([r['max_hrs_no_fills_same_side'] for r in analyses]))
 
 
 def simple_sliding_window_wrap_old(config, ticks):
@@ -228,7 +253,7 @@ def backtest_tune(data: np.ndarray, config: dict, current_best: Union[dict, list
                                                       'max_hrs_no_fills_same_side',
                                                       'objective'],
                                       parameter_columns=[k for k in config['ranges']
-                                                         if 'const' in k and '§' in k]),
+                                                         if 'iprc_const' in k and '§' in k]),
                                                          #if type(config[k]) == ray.tune.sample.Float
                                                          #or type(config[k]) == ray.tune.sample.Integer]),
         raise_on_failed_trial=False

@@ -7,13 +7,13 @@
 
   minimum_bankruptcy_distance: 0.14
 
+  minimum_eqbal_ratio: 0.5
+
   # max hours between consecutive fills
-  maximum_hrs_no_fills: 500
+  maximum_hrs_no_fills: 72
 
   # max hours between consecutive same side fills (long / short)
-  maximum_hrs_no_fills_same_side: 500
-
-
+  maximum_hrs_no_fills_same_side: 144
 
   # if wfo = true, will optimize with walk forward optimization.
   # otherwise, simple sliding window
@@ -21,13 +21,12 @@
 
   # sliding window config:
   sliding_window_size: 0.25
-  n_sliding_windows: 6
+  n_sliding_windows: 10
   test_full: false
 
   # set to 0.0 to disable breaking early
-  # otherwise will break trial early on first window returning val {< or >} val_thr * (1 {- or +} break_early_factor)
-  # e.g. break if a sub test returns closest_bkr < bkr_diff_thr * (1 - break_early_factor)
-  break_early_factor: 0.5
+  # if objective < break_early_factor: break
+  break_early_factor: 0.1
 
   # wfo config:
   # VWR
