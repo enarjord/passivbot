@@ -241,9 +241,18 @@ def save_results(analysis, config):
     df = analysis.results_df
     df.reset_index(inplace=True)
     df.rename(columns={column: column.replace('config.', '') for column in df.columns}, inplace=True)
+    '''
+    keys = [k for k in config['ranges'] if k in config]
+    for k in config:
+        if 'coeff' in k:
+            keys.append
+    keys += ['daily_gain', 'closest_bankruptcy', 'max_hrs_no_fills', 'max_hrs_no_fills_same_side', 'objective']
+
     df = df[list(config['ranges'].keys()) + ['daily_gain', 'closest_bankruptcy', 'maximum_hrs_no_fills',
                                              'maximum_hrs_no_fills_same_side', 'objective']].sort_values(
         'objective', ascending=False)
+    '''
+    df = df.sort_values('objective', ascending=False)
     df.to_csv(os.path.join(config['optimize_dirpath'], 'results.csv'), index=False)
     print('Best candidate found:')
     pprint.pprint(analysis.best_config)

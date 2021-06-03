@@ -37,9 +37,9 @@
 
   # ema settings
   n_spans: 3
-  min_span: 6000
+  min_span: 18000
   max_span: 360000
-  MA_idx: 2  # index of base ema
+  MA_idx: 1  # index of base ema
 
   # If start and stop are set to same value, it's treated as a fixed variable.
   ranges:
