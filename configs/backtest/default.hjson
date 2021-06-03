@@ -8,6 +8,8 @@
   do_long: true
   do_shrt: true
 
+  # format YYYY-MM-DDTHH:mm:ss
+  # e.g. 2020-02-18T19:34:59
   start_date: 2020-11-11T11:11
   # set end_date: -1 to use now as end date
   end_date: 2021-05-17T12:00
