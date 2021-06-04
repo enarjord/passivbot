@@ -1,20 +1,18 @@
+import argparse
 import asyncio
 import datetime
 import json
 import logging
 import os
 import signal
-import sys
 from collections import deque
 from pathlib import Path
 from time import time
 
 import numpy as np
-import argparse
-
-import telegram_bot
 import websockets
 
+import telegram_bot
 from jitted import round_, calc_diff, calc_ema, calc_cost, iter_entries, iter_long_closes, \
     iter_shrt_closes, compress_float
 
@@ -178,6 +176,8 @@ class Bot:
             config['entry_liq_diff_thr'] = config['stop_loss_liq_diff']
         if 'last_price_diff_limit' not in config:
             config['last_price_diff_limit'] = 0.15
+        if 'profit_trans_pct' not in config:
+            config['profit_trans_pct'] = 0.0
         self.config = config
         for key in config:
             setattr(self, key, config[key])
@@ -461,12 +461,16 @@ class Bot:
                                   item not in self.fills and item['side'] == 'sell' and item['position_side'] == 'long']
                 if len(new_fills_long) > 0:
                     realized_pnl_long = sum(fill['realized_pnl'] for fill in new_fills_long)
+                    if realized_pnl_long >= 0 and self.profit_trans_pct > 0.0:
+                        self.transfer(type_='UMFUTURE_MAIN', amount=realized_pnl_long * self.profit_trans_pct)
                     self.telegram.notify_order_filled(realized_pnl=realized_pnl_long, side='long')
 
                 new_fills_shrt = [item for item in fills if
                                   item not in self.fills and item['side'] == 'buy' and item['position_side'] == 'shrt']
                 if len(new_fills_shrt) > 0:
                     realized_pnl_shrt = sum(fill['realized_pnl'] for fill in new_fills_shrt)
+                    if realized_pnl_shrt >= 0 and self.profit_trans_pct > 0.0:
+                        self.transfer(type_='UMFUTURE_MAIN', amount=realized_pnl_shrt * self.profit_trans_pct)
                     self.telegram.notify_order_filled(realized_pnl=realized_pnl_shrt, side='short')
 
             self.fills = fills

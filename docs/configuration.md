@@ -24,4 +24,5 @@ In the configuration file provided to run live, the following parameters can be 
 | `ema_spread`            | Initial entry |
 | `stop_loss_liq_diff`    | Closing       |
 | `stop_loss_pos_pct`     | Closing       |
+| `profit_trans_pct`      | Closing       | Percentage indicating how much profit should be transferred to Spot wallet on each order filled
 | `entry_liq_diff_thr`    | Reentry       | The closest liquidation difference that an order is allowed to bring the position
