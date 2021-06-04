@@ -688,8 +688,7 @@ async def create_bybit_bot(config: str):
 
 
 async def _start_telegram(account: dict, bot: Bot):
-    telegram = telegram_bot.Telegram(token=account['telegram']['token'],
-                                     chat_id=account['telegram']['chat_id'],
+    telegram = telegram_bot.Telegram(config=account['telegram'],
                                      bot=bot,
                                      loop=asyncio.get_event_loop())
     telegram.log_start()
