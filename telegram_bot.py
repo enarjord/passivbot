@@ -176,12 +176,12 @@ class Telegram:
             self.send_msg(f'Request for transfer aborted')
             return ConversationHandler.END
 
-        async def _transfer_wallet(type: str, amount: float):
-            result = await self._bot.transfer(type=self.transfer_type, amount=self.transfer_amount, asset='USDT')
+        async def _transfer_wallet(type_: str, amount: float):
+            result = await self._bot.transfer(type_=self.transfer_type, amount=self.transfer_amount, asset='USDT')
             if 'code' in result:
                 self.send_msg(f'{result["msg"]}')
             else:
-                self.send_msg(f'Transferred {amount} using type {type}')
+                self.send_msg(f'Transferred {amount} using type {type_}')
         task = self.loop.create_task(_transfer_wallet(self.transfer_type, self.transfer_amount))
         task.add_done_callback(lambda fut: True) #ensures task is processed to prevent warning about not awaiting
         self.send_msg(f'Transferring...')
