@@ -138,11 +138,13 @@ class Bot:
         self.ema_alpha_ = 1 - self.ema_alpha
 
         self.ts_locked = {'cancel_orders': 0, 'decide': 0, 'update_open_orders': 0,
-                          'update_position': 0, 'print': 0, 'create_orders': 0}
+                          'update_position': 0, 'print': 0, 'create_orders': 0,
+                          'check_fills': 0}
         self.ts_released = {k: 1 for k in self.ts_locked}
 
         self.position = {}
         self.open_orders = []
+        self.fills = []
         self.highest_bid = 0.0
         self.lowest_ask = 9.9e9
         self.price = 0
@@ -417,6 +419,11 @@ class Bot:
     async def decide(self):
         if self.stop_mode is not None:
             print(f'{self.stop_mode} stop mode is active')
+
+        if self.price <= self.highest_bid or self.price >= self.lowest_ask:
+            self.ts_released['check_fills'] = 0
+            await self.check_fills()
+
         if self.price <= self.highest_bid:
             self.ts_locked['decide'] = time()
             print_(['bid maybe taken'], n=True)
@@ -436,6 +443,34 @@ class Bot:
             return
         if time() - self.ts_released['print'] >= 0.5:
             await self.update_output_information()
+
+    async def check_fills(self):
+        if self.ts_locked['check_fills'] > self.ts_released['check_fills']:
+            # return if another call is in progress
+            return
+        now = time()
+        if now - self.ts_locked['check_fills'] < 5:
+            # enforce minimum 5 sec delay between two calls
+            return
+        self.ts_locked['check_fills'] = now
+        if self.ts_locked['check_fills'] - self.ts_released['check_fills'] > 120:
+            # check fills if two mins since prev check has passed
+            fills = await self.fetch_fills()
+            if self.fills != fills:
+                new_fills_long = [item for item in fills if
+                                  item not in self.fills and item['side'] == 'sell' and item['position_side'] == 'long']
+                if len(new_fills_long) > 0:
+                    realized_pnl_long = sum(fill['realized_pnl'] for fill in new_fills_long)
+                    self.telegram.notify_order_filled(realized_pnl=realized_pnl_long, side='long')
+
+                new_fills_shrt = [item for item in fills if
+                                  item not in self.fills and item['side'] == 'buy' and item['position_side'] == 'shrt']
+                if len(new_fills_shrt) > 0:
+                    realized_pnl_shrt = sum(fill['realized_pnl'] for fill in new_fills_shrt)
+                    self.telegram.notify_order_filled(realized_pnl=realized_pnl_shrt, side='short')
+
+            self.fills = fills
+        self.ts_released['check_fills'] = time()
 
     async def update_output_information(self):
         self.ts_released['print'] = time()

@@ -626,6 +626,9 @@ class Telegram:
         else:
             self.send_msg('This command is not supported (yet) on Bybit')
 
+    def notify_order_filled(self, realized_pnl: float, side: str):
+        self.send_msg(f'Realized <pre>{round_(realized_pnl, self._bot.price_step)}</pre> {"profit" if realized_pnl >= 0 else "loss"} on {side}')
+
     def show_config(self, update=None, context=None):
         try:
             repo = git.Repo(search_parent_directories=True)
