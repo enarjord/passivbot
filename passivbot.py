@@ -422,7 +422,7 @@ class Bot:
 
         if self.price <= self.highest_bid or self.price >= self.lowest_ask:
             self.ts_released['check_fills'] = 0
-            await self.check_fills()
+            asyncio.create_task(self.check_fills())
 
         if self.price <= self.highest_bid:
             self.ts_locked['decide'] = time()
