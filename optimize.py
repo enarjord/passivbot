@@ -114,15 +114,16 @@ def simple_sliding_window_wrap(config, data, do_print=False):
     for z, data_slice in enumerate(slices):
         fills, _, did_finish = backtest(pack_config(config), data_slice, do_print=do_print)
         _, analysis = analyze_fills(fills, config, data_slice[2][0], data_slice[2][-1])
-        analysis['score'] = objective_function(analysis, config)
+        analysis['score'] = objective_function(analysis, config) * (analysis['n_days'] / n_days)
         analyses.append(analysis)
         objective = np.mean([r['score'] for r in analyses]) * (z / n_slices)
         print(f'z {z}, n {n_slices}, adg {analysis["average_daily_gain"]:.4f}, bkr {analysis["closest_bkr"]:.4f}, '
-              f'eqbal {analysis["lowest_eqbal_ratio"]:.4f} n_days {analysis["n_days"]:.1f} '
-              f'score {analysis["score"]:.4f}, objective {objective:.4f} '
-              f'scores {[round(e["score"], 2) for e in analyses]} ')
-        if z > n_slices * config['break_early_factor'] and \
-                (max([0.0, objective, analysis['score']]) < config['break_early_factor']):
+              f'eqbal {analysis["lowest_eqbal_ratio"]:.4f} n_days {analysis["n_days"]:.1f}, '
+              f'score {analysis["score"]:.4f}, objective {objective:.4f}, '
+              f'hrs stuck ss {str(round(analysis["max_hrs_no_fills_same_side"], 1)).zfill(4)}, '
+              f'scores {[round(e["score"], 2) for e in analyses]}, ')
+        # if at least 20% done and lowest eqbal < 0.1: break
+        if z > n_slices * 0.2 and np.min([r['lowest_eqbal_ratio'] for r in analyses]) < 0.1:
             break
     tune.report(objective=objective,
                 daily_gain=np.mean([r['average_daily_gain'] for r in analyses]),
@@ -199,6 +200,10 @@ def tune_report(result):
 
 def backtest_tune(data: np.ndarray, config: dict, current_best: Union[dict, list] = None):
     config = create_config(config)
+    print('tuning:')
+    for k, v in config.items():
+        if type(v) in [ray.tune.sample.Float, ray.tune.sample.Integer]:
+            print(k, v)
     config['optimize_dirpath'] = os.path.join(config['optimize_dirpath'],
                                                      ts_to_date(time())[:19].replace(':', ''), '')
     if 'iters' in config:
@@ -253,7 +258,7 @@ def backtest_tune(data: np.ndarray, config: dict, current_best: Union[dict, list
                                                       'max_hrs_no_fills_same_side',
                                                       'objective'],
                                       parameter_columns=[k for k in config['ranges']
-                                                         if 'iprc_const' in k and '§' in k]),
+                                                         if 'const' in k and '§' in k]),
                                                          #if type(config[k]) == ray.tune.sample.Float
                                                          #or type(config[k]) == ray.tune.sample.Integer]),
         raise_on_failed_trial=False
