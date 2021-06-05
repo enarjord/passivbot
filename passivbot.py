@@ -190,6 +190,7 @@ class Bot:
 
     async def _init(self):
         self.xk = {k: float(self.config[k]) for k in get_keys()}
+        self.fills = await self.fetch_fills()
 
     def dump_log(self, data) -> None:
         if self.config['logging_level'] > 0:
