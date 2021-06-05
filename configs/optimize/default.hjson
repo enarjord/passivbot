@@ -25,8 +25,9 @@
   test_full: false
 
   # set to 0.0 to disable breaking early
-  # if objective < break_early_factor: break
-  break_early_factor: 0.1
+  # if slice progress > break_early_factor and
+  # if lowest_eqbal_ratio < minimum_eqbal_ratio * break_early_factor: break
+  break_early_factor: 0.5
 
   # wfo config:
   # VWR
@@ -47,7 +48,7 @@
     hedge_psize_pct: [0.01, 0.01]
     stop_psize_pct: [0.01, 0.01]
     stop_eqbal_ratio_thr: [0.0, 0.0]
-    coeffs: [-0.2, 0.2]
+    coeffs: [0.0, 0.0]
 
     long§leverage: [16, 16]
     long§iqty_const: [0.0, 1.0]
