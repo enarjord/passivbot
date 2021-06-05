@@ -33,7 +33,7 @@ def fill_template_config(c, r=False):
         for k in c[side]:
             if 'MAr' in k:
                 c[side][k] = np.random.random((c['n_spans'], 2)) * 0.1 - 0.05 if r else np.zeros((c['n_spans'], 2))
-            elif 'PBr' in k:
+            elif 'PBr_coeff' in k:
                 c[side][k] = np.random.random((1, 2)) * 0.1 - 0.05 if r else  np.zeros((1, 2))
     c['spans'] = calc_spans(c['min_span'], c['max_span'], c['n_spans'])
     return c
@@ -44,7 +44,7 @@ def get_keys():
             'c_mult', 'leverage', 'hedge_bkr_diff_thr', 'hedge_psize_pct', 'stop_bkr_diff_thr',
             'stop_psize_pct', 'stop_eqbal_ratio_thr', 'entry_bkr_diff_thr', 'iqty_const', 'iprc_const', 'rqty_const',
             'rprc_const', 'markup_const', 'iqty_MAr_coeffs', 'rprc_PBr_coeffs', 'iprc_MAr_coeffs',
-            'rqty_MAr_coeffs', 'rprc_MAr_coeffs', 'markup_MAr_coeffs']
+            'rqty_MAr_coeffs', 'rprc_MAr_coeffs', 'markup_MAr_coeffs', 'stop_PBr_thr']
 
 def create_xk(config: dict) -> dict:
     xk = {}
@@ -242,15 +242,11 @@ def get_template_live_config(n_spans=3):
         "max_span": 300000,
         "n_spans": n_spans,
         "MA_idx":             1,      # index of ema span from which to calc initial entry prices
-        "hedge_psize_pct":    0.05,   # % of psize for hedge order
         "stop_psize_pct":     0.05,   # % of psize for stop loss order
-        "stop_eqbal_ratio_thr": 0.1,  # if equity / balance < thr: stop loss
         "long": {
             "enabled":            True,
             "leverage":           10,     # borrow cap
-            "hedge_bkr_diff_thr": 0.07,   # make counter order if diff(bkr, last) < thr
-            "stop_bkr_diff_thr":  0.07,   # partially close pos at a loss if diff(bkr, last) < thr
-            "entry_bkr_diff_thr": 0.07,   # prevent entries whose filling would result in diff(new_bkr, last) < thr
+            "stop_PBr_thr":       1.0,   # partially close pos at a loss if long PBr > thr
             "iqty_const":         0.01,   # initial entry qty pct
             "iprc_const":         0.991,  # initial entry price ema_spread
             "rqty_const":         1.0,    # reentry qty ddown factor
@@ -272,9 +268,7 @@ def get_template_live_config(n_spans=3):
         "shrt": {
             "enabled":            True,
             "leverage":           10,     # borrow cap
-            "hedge_bkr_diff_thr": 0.07,    # make counter order if diff(bkr, last) < thr
-            "stop_bkr_diff_thr":  0.07,   # partially close pos at a loss if diff(bkr, last) < thr
-            "entry_bkr_diff_thr": 0.07,   # prevent entries whose filling would result in diff(new_bkr, last) < thr
+            "stop_PBr_thr":       1.0,   # partially close pos at a loss if shrt PBr > thr
             "iqty_const":         0.01,   # initial entry qty pct
             "iprc_const":         1.009,  # initial entry price ema_spread
             "rqty_const":         1.0,    # reentry qty ddown factor
