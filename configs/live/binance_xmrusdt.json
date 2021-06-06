@@ -1,0 +1,20 @@
+{
+    "config_name": "xmrusdt_176_days_adg2.97%_liq22%",
+    "logging_level": 0,
+    "ddown_factor": 2.87266652098384,
+    "qty_pct": 0.4006013838132979,
+    "leverage": 4,
+    "n_close_orders": 16,
+    "grid_spacing": 0.0027546543109687,
+    "pos_margin_grid_coeff": 25.000581115260182,
+    "volatility_grid_coeff": 53.29623819281044,
+    "volatility_qty_coeff": -1049.1647569175063,
+    "min_markup": 0.0054855049349101,
+    "markup_range": 0.0046312730017832,
+    "do_long": true,
+    "do_shrt": true,
+    "ema_span": 11207.096105186987,
+    "ema_spread": 0.0068673283681542,
+    "stop_loss_liq_diff": 0.21,
+    "stop_loss_pos_pct": 0.05
+}

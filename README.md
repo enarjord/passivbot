@@ -2,10 +2,9 @@
   passivbot
 </h1>
 
-![passivbot Version](https://img.shields.io/badge/version-v3.4.0-blue)
-![GitHub issues](https://img.shields.io/github/issues/enarjord/passivbot)
+![passivbot Version](https://img.shields.io/badge/passivbot-3.5.3-blue)
 
-## Trading bot running on Bybit and Binance Futures using hedge mode when possible
+## Trading bot running on Bybit and Binance Futures
 
 :warning: **Use at own risk** :warning:
 
@@ -18,29 +17,12 @@ price
 
 It listens to websocket live stream of trades, and updates its orders continuously
 
-If there is a long position, it creates reentry bids below pos price, and reduce-only asks above pos price:
+If possible, it will use hedge mode
 
-`reentry_bid_price = pos_price * (1 - grid_spacing * (1 + (position_margin / wallet_balance) * grid_coefficient))`
-
-If there is a short position, it creates reentry asks above pos price, and reduce-only closing bids below pos price:
-
-`reentry_ask_price = pos_price * (1 + grid_spacing * (1 + (position_margin / wallet_balance) * grid_coefficient))`
-
-In hedge mode, stop loss works like this:
-
-```
-if diff(liq_price, last_price) < stop_loss_liq_diff:
-    if available margin:
-        enter opposite side
-    else:
-        close same side at a loss
-```
-
-In both cases liq price will be pushed away
 
 ### Requirements
 
-- Python == 3.8.x
+- Python >= 3.8
 - [requirements.txt](requirements.txt) dependencies
 
 ### Setup dependencies
@@ -61,7 +43,7 @@ In both cases liq price will be pushed away
 Example:
 
 ```bash
-python3 start_bot.py binance_01 XMRUSDT live_configs/binance_default.json
+python3 start_bot.py binance_01 XMRUSDT configs/live/binance_xmrusdt.json
 ```
 
 #### Run with docker
@@ -73,6 +55,20 @@ with `docker-compose up -d` (-d for background run). All code and files generate
 
 For graceful stopping of the bot, set `do_long`and `do_shrt` both to `false`, and bot will continue as normal, opening
 no new positions, until all existing positions are closed.
+
+#### Setting up Telegram
+
+The bot provides interfacing with the bot via Telegram via a telegram bot. In order to set it up, you'll need a telegram
+bot token and a chat-id. Once you have those, you can enable teleegram for each individual account that is specified in
+the api-keys.json file. There is an example telegram configuration in that file to get started. If a telegram configuration
+is not present for an account, telegram is disabled at startup.
+
+For setup instructions, see https://docs.microsoft.com/en-us/azure/bot-service/bot-service-channel-connect-telegram?view=azure-bot-service-4.0
+
+Start a chat with @getmyid_bot in telegram to get chat id.
+
+There are several commands & messages provided via Telegram, please issue a `/help` command in the telegram chat to see
+all the options.
 
 ### Documentation [WIP], see the wiki at:
 
@@ -101,14 +97,24 @@ claim as one's own or otherwise do whatever without permission from anybody.
 
 A backtester is included
 
-1. go to `backtest_configs/{config_name}.hjson` and adjust it
-2. run with `python3 backtest.py path_to_config.hjson`
+1. modify `configs/backtest/default.hjson` as desired
+2. run with `python3 backtest.py {path_to_live_config_to_test.json}`
+3. optional args: `-b or --backtest-config`: use different backtest config
 
-Will use numba's just in time compiler by default to speed up backtesting, add argument `--nojit` to disable numba:
+Will use numba's just in time compiler to speed up backtesting.
 
-`python3 backtest.py backtest_configs/{config_name}.hjson --nojit`
+## Optimizer
 
-See [wiki](https://github.com/enarjord/passivbot/wiki) for more info on backtesting
+To optimize a configuration by iterating multiple backtests,
+
+1. modify `configs/backtest/default.hjson` and `configs/optimize/default.hjson` as desired
+2. run with `python3 optimize.py`
+3. optional args: `-b or --backtest-config`: use different backtest config
+4. optional args: `-o or --optimize-config`: use different optimize config
+5. optionally make optimizer start from given candidate(s) by adding kwarg `--start {path_to_starting_candidate.json}`
+   if pointing to a directory, will use all .json files in that directory as starting candidates
+
+See [wiki](https://github.com/enarjord/passivbot/wiki) for more info on backtesting and optimizing
 
 ## Live settings
 

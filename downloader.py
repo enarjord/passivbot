@@ -1,8 +1,13 @@
 import gc
+from datetime import datetime
+from io import BytesIO
+from time import sleep
+from urllib.request import urlopen
+from zipfile import ZipFile
 
 import hjson
 import pandas as pd
-from dateutil import parser, tz
+from dateutil import parser
 
 from passivbot import *
 
@@ -12,20 +17,30 @@ class Downloader:
     Downloader class for tick data. Fetches data from specified time until now or specified time.
     """
 
-    def __init__(self, backtest_config: dict):
-        self.backtest_config = backtest_config
+    def __init__(self, config: dict):
+        self.fetch_delay_seconds = 0.75
+        self.config = config
+        self.price_filepath = os.path.join(config["caches_dirpath"], f"{config['session_name']}_price_cache.npy")
+        self.buyer_maker_filepath = os.path.join(config["caches_dirpath"],
+                                                 f"{config['session_name']}_buyer_maker_cache.npy")
+        self.time_filepath = os.path.join(config["caches_dirpath"], f"{config['session_name']}_time_cache.npy")
+        # self.qty_filepath = os.path.join(config["caches_dirpath"], f"{config['session_name']}_qty_cache.npy")
+        self.tick_filepath = os.path.join(config["caches_dirpath"], f"{config['session_name']}_ticks_cache.npy")
         try:
-            self.start_time = int(parser.parse(self.backtest_config["start_date"]).replace(
+            self.start_time = int(parser.parse(self.config["start_date"]).replace(
                 tzinfo=datetime.timezone.utc).timestamp() * 1000)
         except Exception:
-            print("Not recognized date format for start time.")
-        self.end_time = self.backtest_config["end_date"]
+            print("Unrecognized date format for start time.")
+        self.end_time = self.config["end_date"]
         if self.end_time != -1:
             try:
                 self.end_time = int(
                     parser.parse(self.end_time).replace(tzinfo=datetime.timezone.utc).timestamp() * 1000)
             except Exception:
-                print("Not recognized date format for end time.")
+                print("Unrecognized date format for end time.")
+        if self.config['exchange'] == 'binance':
+            self.daily_base_url = "https://data.binance.vision/data/futures/um/daily/aggTrades/"
+            self.monthly_base_url = "https://data.binance.vision/data/futures/um/monthly/aggTrades/"
 
     def validate_dataframe(self, df: pd.DataFrame) -> tuple:
         """
@@ -173,7 +188,7 @@ class Downloader:
             first_id = df["trade_id"].iloc[0]
             length = len(df)
             while not start_time >= first_ts or not start_time <= last_ts:
-                await asyncio.sleep(0.75)
+                loop_start = time()
                 nw_id, prev_div, forward = self.new_id(first_ts, last_ts, first_id, length, start_time, prev_div)
                 print_(['Current time span from', df["timestamp"].iloc[0], 'to', df["timestamp"].iloc[-1],
                         'with earliest trade id', df["trade_id"].iloc[0], 'estimating distance of', forward, 'trades'])
@@ -191,8 +206,42 @@ class Downloader:
                             break
                 except Exception:
                     print("Failed to fetch or transform...")
+                await asyncio.sleep(max(0.0, self.fetch_delay_seconds - time() + loop_start))
             print_(['Found id for start time!'])
             return df[df["timestamp"] >= start_time]
+
+    def get_zip(self, base_url, symbol, date):
+        """
+        Fetches a full day of trades from the Binance repository.
+        @param symbol: Symbol to fetch.
+        @param date: Day to download.
+        @return: Dataframe with full day.
+        """
+        print_(['Fetching', symbol, date])
+        url = "{}{}/{}-aggTrades-{}.zip".format(base_url, symbol.upper(), symbol.upper(), date)
+        df = pd.DataFrame(columns=['trade_id', 'price', 'qty', 'timestamp', 'is_buyer_maker'])
+        try:
+            resp = urlopen(url)
+            with ZipFile(BytesIO(resp.read())) as my_zip_file:
+                for contained_file in my_zip_file.namelist():
+                    tf = pd.read_csv(my_zip_file.open(contained_file),
+                                     names=['trade_id', 'price', 'qty', 'first', 'last', 'timestamp', 'is_buyer_maker'])
+                    tf.drop(errors='ignore', columns=['first', 'last'], inplace=True)
+                    tf["trade_id"] = tf["trade_id"].astype(np.int64)
+                    tf["price"] = tf["price"].astype(np.float64)
+                    tf["qty"] = tf["qty"].astype(np.float64)
+                    tf["timestamp"] = tf["timestamp"].astype(np.int64)
+                    tf["is_buyer_maker"] = tf["is_buyer_maker"].astype(np.int8)
+                    tf.sort_values("trade_id", inplace=True)
+                    tf.drop_duplicates("trade_id", inplace=True)
+                    tf.reset_index(drop=True, inplace=True)
+                    if df.empty:
+                        df = tf
+                    else:
+                        df = pd.concat([df, tf])
+        except Exception as e:
+            print('Failed to fetch', date, e)
+        return df
 
     async def download_ticks(self):
         """
@@ -200,28 +249,26 @@ class Downloader:
         Downloads any missing data based on the specified time frame.
         @return:
         """
-        if "historical_data_path" in self.backtest_config and self.backtest_config["historical_data_path"]:
+        if "historical_data_path" in self.config and self.config["historical_data_path"]:
             self.filepath = make_get_filepath(
-                os.path.join(self.backtest_config["historical_data_path"], "historical_data",
-                             self.backtest_config["exchange"], "agg_trades_futures",
-                             self.backtest_config["symbol"], ""))
+                os.path.join(self.config["historical_data_path"], "historical_data",
+                             self.config["exchange"], "agg_trades_futures",
+                             self.config["symbol"], ""))
         else:
             self.filepath = make_get_filepath(
-                os.path.join("historical_data", self.backtest_config["exchange"], "agg_trades_futures",
-                             self.backtest_config["symbol"], ""))
+                os.path.join("historical_data", self.config["exchange"], "agg_trades_futures",
+                             self.config["symbol"], ""))
 
-        if self.backtest_config["exchange"] == "binance":
-            self.bot = await create_binance_bot(self.backtest_config["user"],
-                                                get_dummy_settings(self.backtest_config["user"],
-                                                                   self.backtest_config["exchange"],
-                                                                   self.backtest_config["symbol"]))
-        elif self.backtest_config["exchange"] == "bybit":
-            self.bot = await create_bybit_bot(self.backtest_config["user"],
-                                              get_dummy_settings(self.backtest_config["user"],
-                                                                 self.backtest_config["exchange"],
-                                                                 self.backtest_config["symbol"]))
+        if self.config["exchange"] == "binance":
+            self.bot = await create_binance_bot(get_dummy_settings(self.config["user"],
+                                                                   self.config["exchange"],
+                                                                   self.config["symbol"]))
+        elif self.config["exchange"] == "bybit":
+            self.bot = await create_bybit_bot(get_dummy_settings(self.config["user"],
+                                                                 self.config["exchange"],
+                                                                 self.config["symbol"]))
         else:
-            print(self.backtest_config["exchange"], 'not found')
+            print(self.config["exchange"], 'not found')
             return
 
         filenames = self.get_filenames()
@@ -248,9 +295,11 @@ class Downloader:
                 if not gaps.empty and (f != filenames[-1] or str(first_id - first_id % 100000) not in f):
                     last_id = df["trade_id"].iloc[-1]
                     for i in filenames:
-                        if str(first_id - first_id % 100000) in i and (str(
-                                first_id - first_id % 100000 + 99999) in i or str(
-                            highest_id) in i or highest_id > last_id) and first_id != 1 and i != f:
+                        tmp_first_id = int(i.split("_")[0])
+                        tmp_last_id = int(i.split("_")[1])
+                        if (first_id - first_id % 100000) == tmp_first_id and (
+                                (first_id - first_id % 100000 + 99999) == tmp_last_id or (
+                                highest_id == tmp_first_id or highest_id == tmp_last_id) or highest_id > last_id) and first_id != 1 and i != f:
                             exists = True
                             break
                 if missing and df["timestamp"].iloc[-1] > self.start_time and not exists:
@@ -259,15 +308,18 @@ class Downloader:
                         print_(['Filling gaps from id', gaps["start"].iloc[i], 'to id', gaps["end"].iloc[i]])
                         current_id = gaps["start"].iloc[i]
                         while current_id < gaps["end"].iloc[i] and int(
-                                datetime.datetime.now(tz.UTC).timestamp() * 1000) - current_time > 10000:
+                                datetime.datetime.now(datetime.timezone.utc).timestamp() * 1000) - current_time > 10000:
+                            loop_start = time()
                             try:
                                 fetched_new_trades = await self.bot.fetch_ticks(int(current_id))
                                 tf = self.transform_ticks(fetched_new_trades)
                                 if tf.empty:
                                     print_(["Response empty. No new trades, exiting..."])
+                                    await asyncio.sleep(max(0.0, self.fetch_delay_seconds - time() + loop_start))
                                     break
                                 if current_id == tf["trade_id"].iloc[-1]:
                                     print_(["Same trade ID again. No new trades, exiting..."])
+                                    await asyncio.sleep(max(0.0, self.fetch_delay_seconds - time() + loop_start))
                                     break
                                 current_id = tf["trade_id"].iloc[-1]
                                 df = pd.concat([df, tf])
@@ -278,7 +330,7 @@ class Downloader:
                                 current_time = df["timestamp"].iloc[-1]
                             except Exception:
                                 print("Failed to fetch or transform...")
-                            await asyncio.sleep(0.75)
+                            await asyncio.sleep(max(0.0, self.fetch_delay_seconds - time() + loop_start))
                 if not df.empty:
                     if df["trade_id"].iloc[-1] > highest_id:
                         highest_id = df["trade_id"].iloc[-1]
@@ -321,21 +373,101 @@ class Downloader:
 
         for gaps in chunk_gaps:
             start_time, end_time, start_id, end_id = gaps
+            df = pd.DataFrame()
+
+            current_id = start_id + 1
+            current_time = start_time
+
+            if self.config['exchange'] == 'binance':
+                fetched_new_trades = await self.bot.fetch_ticks(1)
+                tf = self.transform_ticks(fetched_new_trades)
+                earliest = tf['timestamp'].iloc[0]
+
+                if earliest > start_time:
+                    start_time = earliest
+                    current_time = start_time
+
+                if end_time == -1:
+                    tmp = pd.date_range(
+                        start=datetime.datetime.fromtimestamp(start_time / 1000, datetime.timezone.utc).date(),
+                        end=datetime.datetime.now(datetime.timezone.utc).date(), freq='M').to_pydatetime()
+                else:
+                    tmp = pd.date_range(
+                        start=datetime.datetime.fromtimestamp(start_time / 1000, datetime.timezone.utc).date(),
+                        end=datetime.datetime.fromtimestamp(end_time / 1000, datetime.timezone.utc).date(),
+                        freq='M').to_pydatetime()
+
+                months = [date.strftime("%Y-%m") for date in tmp]
+
+                if months:
+                    new_start_time = datetime.datetime.combine(tmp[-1], datetime.time.max,
+                                                               datetime.timezone.utc).timestamp() * 1000 + 0.001
+                else:
+                    new_start_time = start_time
+
+                if end_time == -1:
+                    tmp = pd.date_range(
+                        start=datetime.datetime.fromtimestamp(new_start_time / 1000, datetime.timezone.utc).date(),
+                        end=datetime.datetime.now(datetime.timezone.utc).date(), freq='D').to_pydatetime()
+                else:
+                    tmp = pd.date_range(
+                        start=datetime.datetime.fromtimestamp(new_start_time / 1000, datetime.timezone.utc).date(),
+                        end=datetime.datetime.fromtimestamp(end_time / 1000, datetime.timezone.utc).date(),
+                        freq='D').to_pydatetime()
+
+                days = [date.strftime("%Y-%m-%d") for date in tmp]
+                dates = months
+                dates.extend(days)
+
+                df = pd.DataFrame(columns=['trade_id', 'price', 'qty', 'timestamp', 'is_buyer_maker'])
+
+                for date in dates:
+                    if len(date.split('-')) == 2:
+                        tf = self.get_zip(self.monthly_base_url, self.config['symbol'], date)
+                    elif len(date.split('-')) == 3:
+                        tf = self.get_zip(self.daily_base_url, self.config['symbol'], date)
+                    else:
+                        print("Something wrong with the date", date)
+                        tf = pd.DataFrame()
+                    tf = tf[tf['timestamp'] >= start_time]
+                    if end_time != -1:
+                        tf = tf[tf['timestamp'] <= end_time]
+                    if start_id != 0:
+                        tf = tf[tf['trade_id'] > start_id]
+                    if end_id != 0:
+                        tf = tf[tf['trade_id'] <= end_id]
+                    if df.empty:
+                        df = tf
+                    else:
+                        df = pd.concat([df, tf])
+                    df.sort_values("trade_id", inplace=True)
+                    df.drop_duplicates("trade_id", inplace=True)
+                    df.reset_index(drop=True, inplace=True)
+
+                    if not df.empty and (
+                            (df['trade_id'].iloc[0] % 100000 == 0 and len(df) >= 100000) or df['trade_id'].iloc[
+                        0] % 100000 != 0):
+                        for index, row in df[df['trade_id'] % 100000 == 0].iterrows():
+                            if index != 0:
+                                self.save_dataframe(df[(df['trade_id'] >= row['trade_id'] - 1000000) & (
+                                        df['trade_id'] < row['trade_id'])], "", True)
+                                df = df[df['trade_id'] >= row['trade_id']]
+                    if not df.empty:
+                        start_id = df["trade_id"].iloc[0] - 1
+                        start_time = df["timestamp"].iloc[0]
+                        current_time = df["timestamp"].iloc[-1]
+                        current_id = df["trade_id"].iloc[-1] + 1
 
             if start_id == 0:
                 df = await self.find_time(start_time)
                 current_id = df["trade_id"].iloc[-1] + 1
                 current_time = df["timestamp"].iloc[-1]
-            else:
-                df = pd.DataFrame()
-                current_id = start_id + 1
-                current_time = start_time
 
             end_id = sys.maxsize if end_id == 0 else end_id - 1
             end_time = sys.maxsize if end_time == -1 else end_time
 
-            if current_id <= end_id and current_time <= end_time and \
-                    int(datetime.datetime.now(tz.UTC).timestamp() * 1000) - current_time > 10000:
+            if current_id <= end_id and current_time <= end_time and int(
+                    datetime.datetime.now(datetime.timezone.utc).timestamp() * 1000) - current_time > 10000:
                 if end_time == sys.maxsize:
                     print_(['Downloading from', ts_to_date(float(current_time) / 1000), 'to current time...'])
                 else:
@@ -343,14 +475,17 @@ class Downloader:
                             ts_to_date(float(end_time) / 1000)])
 
             while current_id <= end_id and current_time <= end_time and int(
-                    datetime.datetime.now(tz.UTC).timestamp() * 1000) - current_time > 10000:
+                    datetime.datetime.now(datetime.timezone.utc).timestamp() * 1000) - current_time > 10000:
+                loop_start = time()
                 fetched_new_trades = await self.bot.fetch_ticks(int(current_id))
                 tf = self.transform_ticks(fetched_new_trades)
                 if tf.empty:
                     print_(["Response empty. No new trades, exiting..."])
+                    await asyncio.sleep(max(0.0, self.fetch_delay_seconds - time() + loop_start))
                     break
                 if current_id == tf["trade_id"].iloc[-1]:
                     print_(["Same trade ID again. No new trades, exiting..."])
+                    await asyncio.sleep(max(0.0, self.fetch_delay_seconds - time() + loop_start))
                     break
                 df = pd.concat([df, tf])
                 df.sort_values("trade_id", inplace=True)
@@ -366,7 +501,7 @@ class Downloader:
                     elif df["trade_id"].iloc[0] % 100000 != 0 and len(tf) == 1:
                         self.save_dataframe(df[:tf.index[-1]], "", True)
                         df = df[tf.index[-1]:]
-                await asyncio.sleep(0.75)
+                await asyncio.sleep(max(0.0, self.fetch_delay_seconds - time() + loop_start))
             if not df.empty:
                 df = df[df["timestamp"] >= start_time]
                 if start_id != 0 and not df.empty:
@@ -383,10 +518,9 @@ class Downloader:
         except:
             pass
 
-    async def prepare_files(self, filepaths: dict, single_file: bool = False):
+    async def prepare_files(self, single_file: bool = False):
         """
         Takes downloaded data and prepares numpy arrays for use in backtesting.
-        @param filepaths: Dictionary of filepaths.
         @param single_file: If a single array should be created ot multiple ones.
         @return:
         """
@@ -407,139 +541,71 @@ class Downloader:
         chunks = []
         df = pd.DataFrame()
 
-        if single_file:
-            for f in filenames:
+        for f in filenames:
+            if single_file:
                 chunk = pd.read_csv(os.path.join(self.filepath, f),
-                                    dtype={"price": np.float64, "is_buyer_maker": np.float64, "timestamp": np.float64},
-                                    usecols=["price", "is_buyer_maker", "timestamp"])
-                if self.end_time != -1:
-                    chunk = chunk[(chunk['timestamp'] >= self.start_time) & (chunk['timestamp'] <= self.end_time)]
-                else:
-                    chunk = chunk[(chunk['timestamp'] >= self.start_time)]
-                chunks.append(chunk)
-                if len(chunks) >= 100:
-                    if df.empty:
-                        df = pd.concat(chunks, axis=0)
-                    else:
-                        chunks.insert(0, df)
-                        df = pd.concat(chunks, axis=0)
-                    chunks = []
-                print('\rloaded chunk of data', f, ts_to_date(float(f.split("_")[2]) / 1000), end='     ')
-            print('\n')
-            if chunks:
+                                    dtype={"price": np.float64, "is_buyer_maker": np.float64, "timestamp": np.float64,
+                                           "qty": np.float64},
+                                    usecols=["price", "is_buyer_maker", "timestamp", "qty"])
+            else:
+                chunk = pd.read_csv(os.path.join(self.filepath, f),
+                                    dtype={"timestamp": np.int64, "price": np.float64, "is_buyer_maker": np.int8,
+                                           "qty": np.float64},
+                                    usecols=["timestamp", "price", "is_buyer_maker", "qty"])
+            if self.end_time != -1:
+                chunk = chunk[(chunk['timestamp'] >= self.start_time) & (chunk['timestamp'] <= self.end_time)]
+            else:
+                chunk = chunk[(chunk['timestamp'] >= self.start_time)]
+            chunks.append(chunk)
+            if len(chunks) >= 100:
                 if df.empty:
                     df = pd.concat(chunks, axis=0)
                 else:
                     chunks.insert(0, df)
                     df = pd.concat(chunks, axis=0)
-                del chunks
-            print_(["Saving single file with", len(df), " ticks to", filepaths["tick_filepath"], "..."])
-            np.save(filepaths["tick_filepath"], df[["price", "is_buyer_maker", "timestamp"]])
+                chunks = []
+            print('\rloaded chunk of data', f, ts_to_date(float(f.split("_")[2]) / 1000), end='     ')
+        print('\n')
+        if chunks:
+            if df.empty:
+                df = pd.concat(chunks, axis=0)
+            else:
+                chunks.insert(0, df)
+                df = pd.concat(chunks, axis=0)
+            del chunks
+
+        # df = df.groupby([(df.price != df.price.shift()).cumsum(), 'is_buyer_maker']).agg(
+        #     {'qty': 'sum', 'price': 'first', 'is_buyer_maker': 'first', 'timestamp': 'first'}).reset_index(
+        #     drop=True)
+        # df = df.groupby([(df.price != df.price.shift()).cumsum(), 'is_buyer_maker']).agg(
+        #     {'price': 'first', 'is_buyer_maker': 'first', 'timestamp': 'first'}).reset_index(drop=True)
+        df = df.groupby(
+            (~((df.price == df.price.shift(1)) & (df.is_buyer_maker == df.is_buyer_maker.shift(1)))).cumsum()).agg(
+            {'price': 'first', 'is_buyer_maker': 'first', 'timestamp': 'first', 'qty': 'sum'})
+
+        # compressed_ticks = df[["price", "is_buyer_maker", "timestamp", "qty"]].values
+        compressed_ticks = df[["price", "is_buyer_maker", "timestamp"]].values
+
+        if single_file:
+            print_(["Saving single file with", len(df), " ticks to", self.tick_filepath, "..."])
+            np.save(self.tick_filepath, compressed_ticks)
             print_(["Saved single file!"])
         else:
-            for f in filenames:
-                start_time = int(f.split("_")[2])
-                end_time = int(f.split("_")[3].split(".")[0])
-                if (start_time <= self.start_time <= end_time) or (
-                        self.end_time != -1 and start_time <= self.end_time <= end_time):
-                    chunk = pd.read_csv(os.path.join(self.filepath, f),
-                                        dtype={"timestamp": np.int64, "price": np.float64},
-                                        usecols=["timestamp", "price"])
-                    if self.end_time != -1:
-                        chunk = chunk[(chunk['timestamp'] >= self.start_time) & (chunk['timestamp'] <= self.end_time)][
-                            ["price"]]
-                    else:
-                        chunk = chunk[(chunk['timestamp'] >= self.start_time)][["price"]]
-                else:
-                    chunk = pd.read_csv(os.path.join(self.filepath, f), dtype={"price": np.float64}, usecols=["price"])
-                chunks.append(chunk)
-                if len(chunks) >= 100:
-                    if df.empty:
-                        df = pd.concat(chunks, axis=0)
-                    else:
-                        chunks.insert(0, df)
-                        df = pd.concat(chunks, axis=0)
-                    chunks = []
-                print('\rloaded chunk of price data', f, ts_to_date(float(f.split("_")[2]) / 1000), end='     ')
-            print('\n')
-            if chunks:
-                if df.empty:
-                    df = pd.concat(chunks, axis=0)
-                else:
-                    chunks.insert(0, df)
-                    df = pd.concat(chunks, axis=0)
-                del chunks
-            print_(["Saving price file with", len(df), " ticks to", filepaths["price_filepath"], "..."])
-            np.save(filepaths["price_filepath"], df["price"])
+            print_(["Saving price file with", len(df), " ticks to", self.price_filepath, "..."])
+            np.save(self.price_filepath, compressed_ticks[:, 0])
             print_(["Saved price file!"])
 
-            chunks = []
-            df = pd.DataFrame()
-            for f in filenames:
-                start_time = int(f.split("_")[2])
-                end_time = int(f.split("_")[3].split(".")[0])
-                if (start_time <= self.start_time <= end_time) or (
-                        self.end_time != -1 and start_time <= self.end_time <= end_time):
-                    chunk = pd.read_csv(os.path.join(self.filepath, f),
-                                        dtype={"timestamp": np.int64, "is_buyer_maker": np.int8},
-                                        usecols=["timestamp", "is_buyer_maker"])
-                    if self.end_time != -1:
-                        chunk = chunk[(chunk['timestamp'] >= self.start_time) & (chunk['timestamp'] <= self.end_time)][
-                            ["is_buyer_maker"]]
-                    else:
-                        chunk = chunk[(chunk['timestamp'] >= self.start_time)][["is_buyer_maker"]]
-                else:
-                    chunk = pd.read_csv(os.path.join(self.filepath, f), dtype={"is_buyer_maker": np.int8},
-                                        usecols=["is_buyer_maker"])
-                chunks.append(chunk)
-                if len(chunks) >= 100:
-                    if df.empty:
-                        df = pd.concat(chunks, axis=0)
-                    else:
-                        chunks.insert(0, df)
-                        df = pd.concat(chunks, axis=0)
-                    chunks = []
-                print('\rloaded chunk of buyer maker data', f, ts_to_date(float(f.split("_")[2]) / 1000), end='     ')
-            print('\n')
-            if chunks:
-                if df.empty:
-                    df = pd.concat(chunks, axis=0)
-                else:
-                    chunks.insert(0, df)
-                    df = pd.concat(chunks, axis=0)
-                del chunks
-            print_(["Saving buyer_maker file with", len(df), " ticks to", filepaths["buyer_maker_filepath"], "..."])
-            np.save(filepaths["buyer_maker_filepath"], df["is_buyer_maker"])
+            print_(["Saving buyer_maker file with", len(df), " ticks to", self.buyer_maker_filepath, "..."])
+            np.save(self.buyer_maker_filepath, compressed_ticks[:, 1])
             print_(["Saved buyer_maker file!"])
 
-            chunks = []
-            df = pd.DataFrame()
-            for f in filenames:
-                chunk = pd.read_csv(os.path.join(self.filepath, f), dtype=np.int64, usecols=["timestamp"])
-                if self.end_time != -1:
-                    chunk = chunk[(chunk['timestamp'] >= self.start_time) & (chunk['timestamp'] <= self.end_time)]
-                else:
-                    chunk = chunk[(chunk['timestamp'] >= self.start_time)]
-                chunks.append(chunk)
-                if len(chunks) >= 100:
-                    if df.empty:
-                        df = pd.concat(chunks, axis=0)
-                    else:
-                        chunks.insert(0, df)
-                        df = pd.concat(chunks, axis=0)
-                    chunks = []
-                print('\rloaded chunk of time data', f, ts_to_date(float(f.split("_")[2]) / 1000), end='     ')
-            print('\n')
-            if chunks:
-                if df.empty:
-                    df = pd.concat(chunks, axis=0)
-                else:
-                    chunks.insert(0, df)
-                    df = pd.concat(chunks, axis=0)
-                del chunks
-            print_(["Saving timestamp file with", len(df), " ticks to", filepaths["time_filepath"], "..."])
-            np.save(filepaths["time_filepath"], df["timestamp"])
+            print_(["Saving timestamp file with", len(df), " ticks to", self.time_filepath, "..."])
+            np.save(self.time_filepath, compressed_ticks[:, 2])
             print_(["Saved timestamp file!"])
+
+            # print_(["Saving qty file with", len(df), " ticks to", self.qty_filepath, "..."])
+            # np.save(self.qty_filepath, compressed_ticks[:, 3])
+            # print_(["Saved qty file!"])
 
     async def get_ticks(self, single_file: bool = False) -> (np.ndarray, np.ndarray, np.ndarray):
         """
@@ -547,139 +613,143 @@ class Downloader:
         If they do not exist or if their length doesn't match, download the missing data and create them.
         @return: A tuple of three numpy arrays.
         """
-        price_filepath = os.path.join(self.backtest_config["session_dirpath"], f"price_cache.npy")
-        buyer_maker_filepath = os.path.join(self.backtest_config["session_dirpath"], f"buyer_maker_cache.npy")
-        time_filepath = os.path.join(self.backtest_config["session_dirpath"], f"time_cache.npy")
-        tick_filepath = os.path.join(self.backtest_config["session_dirpath"], f"ticks_cache.npy")
-        filepaths = {"price_filepath": price_filepath, "buyer_maker_filepath": buyer_maker_filepath,
-                     "time_filepath": time_filepath, "tick_filepath": tick_filepath}
         if single_file:
-            if os.path.exists(tick_filepath):
-                print_(['Loading cached tick data'])
-                tick_data = np.load(tick_filepath)
+            if os.path.exists(self.tick_filepath):
+                print_(['Loading cached tick data from', self.tick_filepath])
+                tick_data = np.load(self.tick_filepath)
                 return tick_data
             await self.download_ticks()
-            await self.prepare_files(filepaths, single_file)
-            tick_data = np.load(tick_filepath)
+            await self.prepare_files(single_file)
+            tick_data = np.load(self.tick_filepath)
             return tick_data
         else:
-            if os.path.exists(price_filepath) and os.path.exists(buyer_maker_filepath) and os.path.exists(
-                    time_filepath):
-                print_(['Loading cached tick data'])
-                price_data = np.load(price_filepath)
-                buyer_maker_data = np.load(buyer_maker_filepath)
-                time_data = np.load(time_filepath)
-                if len(price_data) == len(buyer_maker_data) == len(time_data):
-                    return price_data, buyer_maker_data, time_data
+            if os.path.exists(self.price_filepath) and os.path.exists(self.buyer_maker_filepath) and os.path.exists(
+                    self.time_filepath):  # and os.path.exists(self.qty_filepath):
+                print_(['Loading cached tick data from', self.tick_filepath])
+                price_data = np.load(self.price_filepath)
+                buyer_maker_data = np.load(self.buyer_maker_filepath)
+                time_data = np.load(self.time_filepath)
+                # qty_data = np.load(self.qty_filepath)
+                if len(price_data) == len(buyer_maker_data) == len(time_data):  # == len(qty_data):
+                    return price_data, buyer_maker_data, time_data  # , qty_data
                 else:
                     print_(['Tick data does not match, starting over...'])
                     del price_data
                     del buyer_maker_data
                     del time_data
+                    # del qty_data
                     gc.collect()
 
             await self.download_ticks()
-            await self.prepare_files(filepaths, single_file)
-            price_data = np.load(price_filepath)
-            buyer_maker_data = np.load(buyer_maker_filepath)
-            time_data = np.load(time_filepath)
-            return price_data, buyer_maker_data, time_data
+            await self.prepare_files(single_file)
+            price_data = np.load(self.price_filepath)
+            buyer_maker_data = np.load(self.buyer_maker_filepath)
+            time_data = np.load(self.time_filepath)
+            # qty_data = np.load(self.qty_filepath)
+            return price_data, buyer_maker_data, time_data  # , qty_data
 
 
 def get_dummy_settings(user: str, exchange: str, symbol: str):
-    return {'user': user, 'exchange': exchange, 'symbol': symbol, 'ema_span': 1.0,
-            'config_name': '', 'leverage': 5, 'logging_level': 0}
+    return {**{k: 1.0 for k in get_keys()},
+            **{'user': user, 'exchange': exchange, 'symbol': symbol, 'config_name': '',
+               'logging_level': 0}}
 
 
-async def fetch_market_specific_settings(exchange: str, user: str, symbol: str):
+async def fetch_market_specific_settings(user: str, exchange: str, symbol: str):
     tmp_live_settings = get_dummy_settings(user, exchange, symbol)
     settings_from_exchange = {}
     if exchange == 'binance':
-        bot = await create_binance_bot(user, tmp_live_settings)
+        bot = await create_binance_bot(tmp_live_settings)
         settings_from_exchange['maker_fee'] = 0.00018
         settings_from_exchange['taker_fee'] = 0.00036
         settings_from_exchange['exchange'] = 'binance'
     elif exchange == 'bybit':
-        bot = await create_bybit_bot(user, tmp_live_settings)
+        bot = await create_bybit_bot(tmp_live_settings)
         settings_from_exchange['maker_fee'] = -0.00025
         settings_from_exchange['taker_fee'] = 0.00075
         settings_from_exchange['exchange'] = 'bybit'
     else:
         raise Exception(f'unknown exchange {exchange}')
+    await bot.session.close()
     if 'inverse' in bot.market_type:
         settings_from_exchange['inverse'] = True
     elif 'linear' in bot.market_type:
         settings_from_exchange['inverse'] = False
     else:
         raise Exception('unknown market type')
-    await bot.session.close()
     for key in ['max_leverage', 'min_qty', 'min_cost', 'qty_step', 'price_step', 'max_leverage',
                 'contract_multiplier']:
         settings_from_exchange[key] = getattr(bot, key)
     return settings_from_exchange
 
 
-async def prep_backtest_config(config_name: str):
-    backtest_config = hjson.load(open(config_name))
+async def prep_config(args) -> dict:
+    try:
+        bc = hjson.load(open(args.backtest_config_path))
+    except Exception as e:
+        raise Exception('failed to load backtest config', args.backtest_config_path, e)
+    try:
+        oc = hjson.load(open(args.optimize_config_path))
+    except Exception as e:
+        raise Exception('failed to load optimize config', args.optimize_config_path, e)
+    config = {**oc, **bc}
+    for key in ['symbol', 'user', 'start_date', 'end_date']:
+        if getattr(args, key) != 'none':
+            config[key] = getattr(args, key)
+    end_date = config['end_date'] if config['end_date'] and config['end_date'] != -1 else ts_to_date(time())[:16]
+    config['session_name'] = f"{config['start_date'].replace(' ', '').replace(':', '').replace('.', '')}_" \
+                             f"{end_date.replace(' ', '').replace(':', '').replace('.', '')}"
 
-    exchange = backtest_config['exchange']
-    user = backtest_config['user']
-    symbol = backtest_config['symbol']
-    session_name = backtest_config['session_name']
+    base_dirpath = os.path.join('backtests', config['exchange'], config['symbol'])
+    config['caches_dirpath'] = make_get_filepath(os.path.join(base_dirpath, 'caches', ''))
+    config['optimize_dirpath'] = make_get_filepath(os.path.join(base_dirpath, 'optimize', ''))
+    config['plots_dirpath'] = make_get_filepath(os.path.join(base_dirpath, 'plots', ''))
 
-    start_date = backtest_config['start_date'].replace(' ', '_').replace(':', '_').replace('.', '_')
-    if backtest_config['end_date'] and backtest_config['end_date'] != -1:
-        end_date = backtest_config['end_date'].replace(' ', '_').replace(':', '_').replace('.', '_')
-    else:
-        end_date = 'now'
-        backtest_config['end_date'] = -1
-
-    session_dirpath = make_get_filepath(
-        os.path.join('backtest_results', exchange, symbol, f"{session_name}_{start_date}_{end_date}", ''))
-
-    if os.path.exists((mss := session_dirpath + 'market_specific_settings.json')):
+    if os.path.exists((mss := config['caches_dirpath'] + 'market_specific_settings.json')):
         market_specific_settings = json.load(open(mss))
     else:
-        market_specific_settings = await fetch_market_specific_settings(exchange, user, symbol)
-        json.dump(market_specific_settings, open(mss, 'w'))
-    backtest_config.update(market_specific_settings)
+        market_specific_settings = await fetch_market_specific_settings(config['user'], config['exchange'],
+                                                                        config['symbol'])
+        json.dump(market_specific_settings, open(mss, 'w'), indent=4)
+    config.update(market_specific_settings)
 
     # setting absolute min/max ranges
-    for key in ['qty_pct', 'ddown_factor', 'ema_span', 'ema_spread',
-                'grid_coefficient', 'grid_spacing']:
-        if key in backtest_config['ranges']:
-            backtest_config['ranges'][key][0] = max(0.0, backtest_config['ranges'][key][0])
+    for key in ['qty_pct', 'ddown_factor', 'ema_span', 'grid_spacing']:
+        if key in config['ranges']:
+            config['ranges'][key][0] = max(0.0, config['ranges'][key][0])
     for key in ['qty_pct']:
-        if key in backtest_config['ranges']:
-            backtest_config['ranges'][key][1] = min(1.0, backtest_config['ranges'][key][1])
+        if key in config['ranges']:
+            config['ranges'][key][1] = min(1.0, config['ranges'][key][1])
 
-    if 'leverage' in backtest_config['ranges']:
-        backtest_config['ranges']['leverage'][1] = \
-            min(backtest_config['ranges']['leverage'][1],
-                backtest_config['max_leverage'])
-        backtest_config['ranges']['leverage'][0] = \
-            min(backtest_config['ranges']['leverage'][0],
-                backtest_config['ranges']['leverage'][1])
+    if 'leverage' in config['ranges']:
+        config['ranges']['leverage'][1] = min(config['ranges']['leverage'][1], config['max_leverage'])
+        config['ranges']['leverage'][0] = min(config['ranges']['leverage'][0], config['ranges']['leverage'][1])
 
-    backtest_config['session_dirpath'] = session_dirpath
-    return backtest_config
+    return config
 
 
-async def main(args: list):
-    config_name = args[1]
-    backtest_config = await prep_backtest_config(config_name)
-    downloader = Downloader(backtest_config)
+def load_live_config(live_config_path: str) -> dict:
+    try:
+        live_config = json.load(open(live_config_path))
+        if 'entry_liq_diff_thr' not in live_config:
+            live_config['entry_liq_diff_thr'] = live_config['stop_loss_liq_diff']
+    except Exception as e:
+        raise Exception(f'failed to load live config {live_config_path} {e}')
+    return live_config
 
-    price_filepath = os.path.join(backtest_config["session_dirpath"], f"price_cache.npy")
-    buyer_maker_filepath = os.path.join(backtest_config["session_dirpath"], f"buyer_maker_cache.npy")
-    time_filepath = os.path.join(backtest_config["session_dirpath"], f"time_cache.npy")
-    tick_filepath = os.path.join(backtest_config["session_dirpath"], f"ticks_cache.npy")
-    filepaths = {"price_filepath": price_filepath, "buyer_maker_filepath": buyer_maker_filepath,
-                 "time_filepath": time_filepath, "tick_filepath": tick_filepath}
+
+async def main():
+    parser = argparse.ArgumentParser(prog='Downloader', description='Download ticks from exchange API.')
+    parser = add_argparse_args(parser)
+
+    args = parser.parse_args()
+    config = await prep_config(args)
+    downloader = Downloader(config)
     await downloader.download_ticks()
-    if not '--only' in args:
-        await downloader.prepare_files(filepaths, '--single' in args)
+    if not args.download_only:
+        await downloader.prepare_files(True)
+    sleep(0.1)
 
 
 if __name__ == "__main__":
-    asyncio.run(main(sys.argv))
+    asyncio.run(main())

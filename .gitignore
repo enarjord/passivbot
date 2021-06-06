@@ -338,12 +338,10 @@ $RECYCLE.BIN/
 *.lnk
 
 # Backtest files
-!backtest_configs/xmr.hjson
-backtest_configs/*
-plots/
-backtest_results/
-
-# Run files
+backtests/
+!config/optimize/default.hjson
+!config/backtest/default.hjson
+config/
 historical_data/
 
 # Config files

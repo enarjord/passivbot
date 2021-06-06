@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v3.5.2] - 2021-05-10
+- walk forward optimization
+- more advanced backtest analysis tools
+
+## [v3.5.1] - 2021-05-09
+- optimize with sliding window
+- restructured dirs
+- new dirs
+- `backtests/{exchange}/{symbol}/optimize/`
+- `backtests/{exchange}/{symbol}/plots/`
+- `backtests/{exchange}/{symbol}/caches/`
+- if end_date = -1 in backtest_config.hjson, downloader will make a new ticks_cache.npy for each session
+- to reuse prev ticks cache, set end_date to a static date
+- when optimizing, intermediate_best_result.json is dumped as usable live_config
+
+## [v3.5.0] - 2021-05-02
+- added volatility indicator
+- split extract optimize.py from backtest.py
+- now `python3 backtest.py backtest_config.hjson live_config.json` will backtest and plot single candidate
+- `python3 optimize.py backtest_config.hjson` will optimize
+- refactoring of all @njit calcs, separating them into jitted.py
+- added telegram bot
+
 ## [v3.4.0] - 2021-04-14
 - added binance USDT-margined backtester with stoploss
 - added binance COIN-margined backtester with stoploss
