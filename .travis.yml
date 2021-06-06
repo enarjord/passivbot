@@ -10,6 +10,10 @@ script: true
 before_deploy:
 - mkdocs build --verbose --clean --strict
 deploy:
+  on:
+    branch:
+      - master
+      - docs_ci
   provider: s3
   access_key_id:
     secure: Y02H7CehKRrsmw89FrlNs4Fnzojq0A2q+pUurfEJxu2yekERigQM2c1WMJSlM+YpXuOFVwZ2LSZf1bobPKbyug/qOrQARYSlHCQIAq6ITTQuSFPNyBPR7ioMz5QY/aqabM8hlHmn6b8EED4Rl3c4DYe9sfluJHOQfhVjxz2D/JyHE9BD5Z/o6zkjYZM9lvgVyQgjrPTfKdKCmOGWwBy6iq3/xKVdcfMVLC2HpHVKOslOd5Foto3/Cpjdr2GFwYb/PQvnrqg03+BrmbllwUsJrplArsEDavYv0GIGvrTzNcE8yx0R25/vLE19dT63kqmtWdZJAb4XqOTKli09jvYTQwFbHO2OldXThM++N/q+JxN8gCrI4qUo0jiTfxtr1QPTxf2eLjKec8OTQAL3izfWM+qOte7+klN1Sd6LDC2yhTG4oGCX1jQHv31oofmZaSG0mKFC2DVfl7jgosbFXFaDvRPXNb/N5UBy9uFE6J3ELMyeZIlI7bkyyv4LHby2oSniHpK4nALeIiO14NbotsZ7+n5lN8FPtCH4TM32nXypRfpH9gXN29oB8x+paBMMdz6bQQh7gMcIup/HNWuuHZoArxXO8o4a16vvUscl3YA1TTYCgaNtquMolyBoY6L/ZDkUj3m17869otEIuKBGaS6ZJYn2WpZj+W3fCnFJGkkb0bM=
