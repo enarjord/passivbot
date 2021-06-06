@@ -587,8 +587,6 @@ def simple_backtest(data: (np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.nd
                     rqty_MAr_coeffs[0],
                     rprc_MAr_coeffs[0])
             if shrt_close[0] != 0.0 and prices[k] < shrt_close[1]:
-                print()
-                print(shrt_psize, shrt_pprice, shrt_entry, shrt_close)
                 fee_paid = -qty_to_cost(shrt_close[0], shrt_close[1], inverse, c_mult) * maker_fee
                 pnl = calc_shrt_pnl(shrt_pprice, shrt_close[1], shrt_close[0], inverse, c_mult)
                 balance = balance + fee_paid + pnl
@@ -598,12 +596,9 @@ def simple_backtest(data: (np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.nd
                 fills.append((k, pnl, fee_paid, balance, equity) + shrt_close)
                 shrt_close = (0.0, ) + shrt_close[1:]
                 next_update_ts = min(next_update_ts, timestamps[k] + latency_simulation_ms)
-                print(shrt_psize, shrt_pprice, shrt_entry, shrt_close)
             ob[0] = prices[k]
         else:
             while shrt_entry[0] != 0.0 and prices[k] > shrt_entry[1]:
-                print()
-                print(shrt_psize, shrt_pprice, shrt_entry, shrt_close)
                 fee_paid = -qty_to_cost(shrt_entry[0], shrt_entry[1], inverse, c_mult) * maker_fee
                 balance += fee_paid
                 shrt_psize, shrt_pprice = shrt_entry[2:4]
@@ -636,7 +631,6 @@ def simple_backtest(data: (np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.nd
                     rprc_PBr_coeffs[1],
                     rqty_MAr_coeffs[1],
                     rprc_MAr_coeffs[1])
-                print(shrt_psize, shrt_pprice, shrt_entry, shrt_close)
             if long_close[0] != 0.0 and prices[k] > long_close[1]:
                 fee_paid = -qty_to_cost(shrt_close[0], shrt_close[1], inverse, c_mult) * maker_fee
                 pnl = calc_long_pnl(long_pprice, long_close[1], long_close[0], inverse, c_mult)
