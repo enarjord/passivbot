@@ -88,7 +88,7 @@ def plot_fills(df, fdf, side: int = 0, bkr_thr=0.1):
         dfc.ema.plot(style='k-.')
 
     if side >= 0:
-        longs = fdf[fdf.pside == 'long']
+        longs = fdf[fdf.type.str.contains('long')]
         lnentry = longs[(longs.type == 'long_ientry') | (longs.type == 'long_rentry')]
         lhentry = longs[longs.type == 'long_hentry']
         lnclose = longs[longs.type == 'long_nclose']
@@ -97,9 +97,9 @@ def plot_fills(df, fdf, side: int = 0, bkr_thr=0.1):
         lhentry.price.plot(style='bx')
         lnclose.price.plot(style='r.')
         lsclose.price.plot(style=('rx'))
-        longs.long_pprice.fillna(method='ffill').plot(style='b--')
+        longs.where(longs.pprice != 0.0).pprice.fillna(method='ffill').plot(style='b--')
     if side <= 0:
-        shrts = fdf[fdf.pside == 'shrt']
+        shrts = fdf[fdf.type.str.contains('shrt')]
         snentry = shrts[(shrts.type == 'shrt_ientry') | (shrts.type == 'shrt_rentry')]
         shentry = shrts[shrts.type == 'shrt_hentry']
         snclose = shrts[shrts.type == 'shrt_nclose']
@@ -108,7 +108,7 @@ def plot_fills(df, fdf, side: int = 0, bkr_thr=0.1):
         shentry.price.plot(style='rx')
         snclose.price.plot(style='b.')
         ssclose.price.plot(style=('bx'))
-        shrts.shrt_pprice.fillna(method='ffill').plot(style='r--')
+        shrts.where(shrts.pprice != 0.0).pprice.fillna(method='ffill').plot(style='r--')
 
     if 'bkr_price' in fdf.columns:
         fdf.bkr_price.where(fdf.bkr_diff < bkr_thr, np.nan).plot(style='k--')

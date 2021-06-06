@@ -45,7 +45,7 @@ def create_config(config: dict) -> dict:
     for k in updated_ranges:
         if updated_ranges[k][0] == updated_ranges[k][1]:
             unpacked[k] = updated_ranges[k][0]
-        elif any(q in k for q in ['leverage', 'MA_idx']):
+        elif any(q in k for q in ['MA_idx']):
             unpacked[k] = tune.randint(updated_ranges[k][0], updated_ranges[k][1])
         else:
             unpacked[k] = tune.uniform(updated_ranges[k][0], updated_ranges[k][1])
