@@ -3,7 +3,7 @@ python: 3.8
 branches:
   only:
     - master
-    - docs-ci
+    - docs_ci
 install:
 - pip install -r requirements.txt
 script: true
