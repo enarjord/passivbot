@@ -329,3 +329,6 @@ class Bybit(Bot):
     async def subscribe_ws(self, ws):
         params = {'op': 'subscribe', 'args': ['trade.' + self.symbol]}
         await ws.send(json.dumps(params))
+
+    async def transfer(self, type_: str, amount: float, asset: str = 'USDT'):
+        return {'code': '-1', 'msg': 'Transferring funds not supported for Bybit'}

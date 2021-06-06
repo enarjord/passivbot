@@ -1,6 +1,5 @@
 import json
 import os
-import re
 from datetime import datetime, timedelta
 from time import time
 
@@ -22,11 +21,12 @@ from pure_funcs import compress_float, round_dynamic
 
 
 class Telegram:
-    def __init__(self, token: str, chat_id: str, bot, loop):
+    def __init__(self, config: dict, bot, loop):
         self._bot = bot
         self.loop = loop
-        self._chat_id = chat_id
-        self._updater = Updater(token=token)
+        self.config = config
+        self._chat_id = config['chat_id']
+        self._updater = Updater(token=config['token'])
         self.config_reload_ts = 0.0
         self.n_trades = 10
 
@@ -101,10 +101,10 @@ class Telegram:
             entry_points=[MessageHandler(Filters.regex('/transfer.*'), self._begin_transfer)],
             states={
                 1: [CallbackQueryHandler(self._transfer_type_chosen)],
-                2: [MessageHandler(Filters.regex('/[0-9\\.]*'), self._transfer_amount_chosen)],
+                2: [MessageHandler(Filters.regex('(/[0-9\\.]*)|cancel'), self._transfer_amount_chosen)],
                 3: [MessageHandler(Filters.regex('(confirm|abort)'), self._verify_transfer_confirmation)]
             },
-            fallbacks=[CommandHandler('cancel', self._abort)]
+            fallbacks=[MessageHandler(Filters.command, self._abort)]
         ))
         dispatcher.add_handler(MessageHandler(Filters.regex('/next.*'), self._next_page))
         dispatcher.add_handler(MessageHandler(Filters.regex('/previous.*'), self._previous_page))
@@ -145,11 +145,16 @@ class Telegram:
             update.effective_message.reply_text('Action aborted', reply_markup=self._keyboards[self._keyboard_idx])
             return ConversationHandler.END
 
-        update.effective_message.reply_text(text=text, parse_mode=ParseMode.HTML, reply_markup=None)
+        update.effective_message.reply_text(text=text, parse_mode=ParseMode.HTML, reply_markup=ReplyKeyboardMarkup([['cancel']]))
         return 2
 
     def _transfer_amount_chosen(self, update=None, context=None) -> int:
-        self.transfer_amount = float(update.effective_message.text.replace('/',''))
+        input = update.effective_message.text
+        if input == 'cancel':
+            update.effective_message.reply_text('Action aborted', reply_markup=self._keyboards[self._keyboard_idx])
+            return ConversationHandler.END
+
+        self.transfer_amount = float(input.replace('/',''))
 
         if self.transfer_type == 'MAIN_UMFUTURE':
             text = f'You have chosen to transfer {self.transfer_amount} from your Spot wallet to your USD-M Futures wallet.\n' \
@@ -626,6 +631,10 @@ class Telegram:
             task.add_done_callback(lambda fut: True) #ensures task is processed to prevent warning about not awaiting
         else:
             self.send_msg('This command is not supported (yet) on Bybit')
+
+    def notify_order_filled(self, realized_pnl: float, side: str):
+        if 'notify_fill' not in self.config or self.config['notify_fill'] is True:
+            self.send_msg(f'Realized <pre>{round_(realized_pnl, self._bot.price_step)}</pre> {"profit" if realized_pnl >= 0 else "loss"} on {side}')
 
     def show_config(self, update=None, context=None):
         try:

@@ -1,3 +1,4 @@
+import argparse
 import asyncio
 import json
 import logging
@@ -9,10 +10,8 @@ from time import time
 from procedures import make_get_filepath, load_key_secret, print_, create_binance_bot, create_bybit_bot
 
 import numpy as np
-import argparse
-
-import telegram_bot
 import websockets
+import telegram_bot
 
 from njit_funcs import round_, calc_diff, calc_ema, qty_to_cost, iter_orders
 from pure_funcs import create_xk, compress_float, filter_orders
@@ -36,12 +35,14 @@ class Bot:
         self.ema_alpha = 2 / (self.ema_span + 1)
         self.ema_alpha_ = 1 - self.ema_alpha
 
-        self.ts_locked = {'cancel_orders': 0.0, 'decide': 0.0, 'update_open_orders': 0.0,
-                          'update_position': 0.0, 'print': 0.0, 'create_orders': 0.0}
+        self.ts_locked = {'cancel_orders': 0, 'decide': 0, 'update_open_orders': 0,
+                          'update_position': 0, 'print': 0, 'create_orders': 0,
+                          'check_fills': 0}
         self.ts_released = {k: 1 for k in self.ts_locked}
 
         self.position = {}
         self.open_orders = []
+        self.fills = []
         self.highest_bid = 0.0
         self.lowest_ask = 9.9e9
         self.price = 0
@@ -75,6 +76,8 @@ class Bot:
             config['entry_liq_diff_thr'] = config['stop_loss_liq_diff']
         if 'last_price_diff_limit' not in config:
             config['last_price_diff_limit'] = 0.15
+        if 'profit_trans_pct' not in config:
+            config['profit_trans_pct'] = 0.0
         self.config = config
         for key in config:
             setattr(self, key, config[key])
@@ -86,7 +89,8 @@ class Bot:
         setattr(self, key, self.config[key])
 
     async def _init(self):
-        self.xk = create_xk(self.config)
+        self.xk = {k: float(self.config[k]) for k in get_keys()}
+        self.fills = await self.fetch_fills()
 
     def dump_log(self, data) -> None:
         if self.config['logging_level'] > 0:
@@ -160,7 +164,7 @@ class Bot:
                 o = await c
                 created_orders.append(o)
                 if 'side' in o:
-                    print_([' created order', o['symbol'], o['side'], o['position_side'], o['qty'],
+                    print_(['  created order', o['symbol'], o['side'], o['position_side'], o['qty'],
                             o['price']], n=True)
                 else:
                     print_(['error creating order b', o, oc], n=True)
@@ -322,16 +326,19 @@ class Bot:
     async def decide(self):
         if self.stop_mode is not None:
             print(f'{self.stop_mode} stop mode is active')
+
         if self.price <= self.highest_bid:
             self.ts_locked['decide'] = time()
             print_(['bid maybe taken'], n=True)
             await self.cancel_and_create()
+            asyncio.create_task(self.check_fills())
             self.ts_released['decide'] = time()
             return
         if self.price >= self.lowest_ask:
             self.ts_locked['decide'] = time()
             print_(['ask maybe taken'], n=True)
             await self.cancel_and_create()
+            asyncio.create_task(self.check_fills())
             self.ts_released['decide'] = time()
             return
         if time() - self.ts_locked['decide'] > 5:
@@ -341,6 +348,43 @@ class Bot:
             return
         if time() - self.ts_released['print'] >= 0.5:
             await self.update_output_information()
+
+        if time() - self.ts_released['check_fills'] > 120:
+            asyncio.create_task(self.check_fills())
+
+    async def check_fills(self):
+        if self.ts_locked['check_fills'] > self.ts_released['check_fills']:
+            # return if another call is in progress
+            return
+        now = time()
+        if now - self.ts_released['check_fills'] < 5.0:
+            # minimum 5 sec between consecutive check fills
+            return
+        self.ts_locked['check_fills'] = now
+        print_(['checking if new fills...\n'], n=True)
+        # check fills if two mins since prev check has passed
+        fills = await self.fetch_fills()
+        if self.fills != fills:
+            new_fills_long = [item for item in fills if item not in self.fills and
+                              item['side'] == 'sell' and item['position_side'] == 'long']
+            if len(new_fills_long) > 0:
+                realized_pnl_long = sum(fill['realized_pnl'] for fill in new_fills_long)
+                if realized_pnl_long >= 0 and self.profit_trans_pct > 0.0:
+                    self.transfer(type_='UMFUTURE_MAIN', amount=realized_pnl_long * self.profit_trans_pct)
+                if self.telegram is not None:
+                    self.telegram.notify_order_filled(realized_pnl=realized_pnl_long, side='long')
+
+            new_fills_shrt = [item for item in fills if item not in self.fills and
+                              item['side'] == 'buy' and item['position_side'] == 'shrt']
+            if len(new_fills_shrt) > 0:
+                realized_pnl_shrt = sum(fill['realized_pnl'] for fill in new_fills_shrt)
+                if realized_pnl_shrt >= 0 and self.profit_trans_pct > 0.0:
+                    self.transfer(type_='UMFUTURE_MAIN', amount=realized_pnl_shrt * self.profit_trans_pct)
+                if self.telegram is not None:
+                    self.telegram.notify_order_filled(realized_pnl=realized_pnl_shrt, side='short')
+
+        self.fills = fills
+        self.ts_released['check_fills'] = time()
 
     async def update_output_information(self):
         self.ts_released['print'] = time()
@@ -551,8 +595,7 @@ async def start_bot(bot):
             await asyncio.sleep(10)
 
 async def _start_telegram(account: dict, bot: Bot):
-    telegram = telegram_bot.Telegram(token=account['telegram']['token'],
-                                     chat_id=account['telegram']['chat_id'],
+    telegram = telegram_bot.Telegram(config=account['telegram'],
                                      bot=bot,
                                      loop=asyncio.get_event_loop())
     telegram.log_start()
