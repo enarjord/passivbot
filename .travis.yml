@@ -1,0 +1,23 @@
+language: python
+python: 3.8
+branches:
+  only:
+    - master
+install:
+- pip install -r requirements.txt
+script: true
+before_deploy:
+- mkdocs build
+deploy:
+  on:
+    branch:
+      - master
+  provider: s3
+  access_key_id: $AWS_ACCESS_KEY
+  secret_access_key: $AWS_SECRET
+  bucket: www.passivbot.com
+  region: eu-central-1
+  local_dir: site
+  upload-dir: latest
+  detect_encoding: true
+  skip_cleanup: true
