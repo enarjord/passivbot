@@ -204,8 +204,9 @@ def calc_long_entry(balance,
         comment = 'long_ientry'
     else:
         pbr = qty_to_cost(long_psize, long_pprice, inverse, c_mult) / balance
-        price = round_dn(long_pprice * (rprc_const + eqf(MA_ratios, rprc_MAr_coeffs) +
-                                        eqf(np.array([pbr]), rprc_PBr_coeffs, minus=0.0)), price_step)
+        price = min(highest_bid,
+                    round_dn(long_pprice * (rprc_const + eqf(MA_ratios, rprc_MAr_coeffs) +
+                                            eqf(np.array([pbr]), rprc_PBr_coeffs, minus=0.0)), price_step))
         min_entry_qty = calc_min_entry_qty(price, inverse, qty_step, min_qty, min_cost)
         max_entry_qty = calc_max_entry_qty(price, available_margin, inverse, qty_step, c_mult)
 
@@ -257,8 +258,9 @@ def calc_shrt_entry(balance,
         comment = 'shrt_ientry'
     else:
         pbr = qty_to_cost(shrt_psize, shrt_pprice, inverse, c_mult) / balance
-        price = round_dn(shrt_pprice * (rprc_const + eqf(MA_ratios, rprc_MAr_coeffs) +
-                                        eqf(np.array([pbr]), rprc_PBr_coeffs, minus=0.0)), price_step)
+        price = max(lowest_ask,
+                    round_dn(shrt_pprice * (rprc_const + eqf(MA_ratios, rprc_MAr_coeffs) +
+                                            eqf(np.array([pbr]), rprc_PBr_coeffs, minus=0.0)), price_step))
         min_entry_qty = calc_min_entry_qty(price, inverse, qty_step, min_qty, min_cost)
         max_entry_qty = calc_max_entry_qty(price, available_margin, inverse, qty_step, c_mult)
 
