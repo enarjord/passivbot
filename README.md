@@ -17,7 +17,9 @@ price
 
 It listens to websocket live stream of trades, and updates its orders continuously
 
-If possible, it will use hedge mode
+If possible, it will use hedge mode for simultaneous long and short positions
+
+Website: passivbot.com
 
 
 ### Requirements
