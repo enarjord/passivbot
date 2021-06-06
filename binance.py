@@ -368,7 +368,7 @@ class BinanceBot(Bot):
     async def fetch_ticks_time(self, start_time: int, end_time: int = None, do_print: bool = True):
         return await self.fetch_ticks(start_time=start_time, end_time=end_time, do_print=do_print)
 
-    async def transfer(self, type_: str, amount: float, asset: str):
+    async def transfer(self, type_: str, amount: float, asset: str = 'USDT'):
         params = {'type': type_.upper(),
                   'amount': amount,
                   'asset': asset}

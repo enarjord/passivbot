@@ -1,6 +1,5 @@
 import json
 import os
-import re
 from datetime import datetime, timedelta
 from time import time
 
@@ -21,11 +20,12 @@ from jitted import compress_float, round_, round_dynamic
 
 
 class Telegram:
-    def __init__(self, token: str, chat_id: str, bot, loop):
+    def __init__(self, config: dict, bot, loop):
         self._bot = bot
         self.loop = loop
-        self._chat_id = chat_id
-        self._updater = Updater(token=token)
+        self.config = config
+        self._chat_id = config['chat_id']
+        self._updater = Updater(token=config['token'])
         self.config_reload_ts = 0.0
         self.n_trades = 10
 
@@ -625,6 +625,10 @@ class Telegram:
             task.add_done_callback(lambda fut: True) #ensures task is processed to prevent warning about not awaiting
         else:
             self.send_msg('This command is not supported (yet) on Bybit')
+
+    def notify_order_filled(self, realized_pnl: float, side: str):
+        if 'notify_fill' not in self.config or self.config['notify_fill'] is True:
+            self.send_msg(f'Realized <pre>{round_(realized_pnl, self._bot.price_step)}</pre> {"profit" if realized_pnl >= 0 else "loss"} on {side}')
 
     def show_config(self, update=None, context=None):
         try:
