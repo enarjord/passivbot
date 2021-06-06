@@ -223,11 +223,11 @@ def get_dummy_settings(user: str, exchange: str, symbol: str):
 def ticks_to_ticks_cache(ticks: np.ndarray, spans: np.ndarray, MA_idx: int) -> (np.ndarray,):
     emas = calc_emas(ticks[:,0], spans)
     ratios = calc_ratios(emas)
-    prices = ticks[:,0].astype(np.float32)
+    prices = ticks[:,0].astype(np.float64)
     is_buyer_maker = ticks[:,1].astype(np.int8)
     timestamps = ticks[:,2].astype(np.float64)
     return (prices[max(spans):], is_buyer_maker[max(spans):], timestamps[max(spans):],
-            emas[max(spans):][:, MA_idx].astype(np.float32), ratios[max(spans):].astype(np.float32))
+            emas[max(spans):][:, MA_idx].astype(np.float64), ratios[max(spans):].astype(np.float64))
 
 
 def flatten(lst: list) -> list:
@@ -246,7 +246,7 @@ def get_template_live_config(n_spans=3):
         "long": {
             "enabled":            True,
             "leverage":           10,     # borrow cap
-            "stop_PBr_thr":       1.0,   # partially close pos at a loss if long PBr > thr
+            "stop_PBr_thr":       1.0,    # partially close pos at a loss if long PBr > thr
             "iqty_const":         0.01,   # initial entry qty pct
             "iprc_const":         0.991,  # initial entry price ema_spread
             "rqty_const":         1.0,    # reentry qty ddown factor
@@ -268,7 +268,7 @@ def get_template_live_config(n_spans=3):
         "shrt": {
             "enabled":            True,
             "leverage":           10,     # borrow cap
-            "stop_PBr_thr":       1.0,   # partially close pos at a loss if shrt PBr > thr
+            "stop_PBr_thr":       1.0,    # partially close pos at a loss if shrt PBr > thr
             "iqty_const":         0.01,   # initial entry qty pct
             "iprc_const":         1.009,  # initial entry price ema_spread
             "rqty_const":         1.0,    # reentry qty ddown factor

@@ -13,8 +13,8 @@ import numpy as np
 import websockets
 import telegram_bot
 
-from njit_funcs import round_, calc_diff, calc_ema, qty_to_cost, iter_orders
-from pure_funcs import create_xk, compress_float, filter_orders
+from njit_funcs import round_, calc_diff, calc_ema, qty_to_cost
+from pure_funcs import create_xk, compress_float, filter_orders, get_keys
 
 logging.getLogger("telegram").setLevel(logging.CRITICAL)
 

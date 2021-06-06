@@ -13,7 +13,7 @@ from procedures import load_live_config, make_get_ticks_cache
 from downloader import Downloader
 from procedures import prep_config, make_get_filepath
 from pure_funcs import create_xk, calc_spans, denumpyize, ts_to_date
-from njit_funcs import calc_bankruptcy_price, iter_orders, calc_long_pnl, calc_shrt_pnl, \
+from njit_funcs import calc_bankruptcy_price, calc_long_pnl, calc_shrt_pnl, \
     calc_available_margin, calc_diff, qty_to_cost, round_, \
     calc_new_psize_pprice
 from passivbot import add_argparse_args
