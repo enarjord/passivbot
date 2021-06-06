@@ -18,7 +18,7 @@ deploy:
   access_key_id: $AWS_ACCESS_KEY
   secret_access_key: $AWS_SECRET
   bucket: www.passivbot.com
-  cleanup: false
+  deploy.skip_cleanup: true
   region: eu-central-1
   local_dir: site
   upload-dir: latest

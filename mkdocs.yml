@@ -6,7 +6,8 @@ nav:
   - Configuration: configuration.md
   - Live: live.md
   - Backtesting: backtesting.md
-  - optimizer: optimizer.md
+  - Optimizer: optimizer.md
+  - Analysis: analysis.md
   - Telegram: telegram.md
   - Developers: developers.md
   - FAQ: faq.md
