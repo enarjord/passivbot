@@ -76,7 +76,7 @@ def load_key_secret(exchange: str, user: str) -> (str, str):
         raise Exception('API KeyFile Missing!')
 
 
-def print_(args, r=False, n=False):
+def print_(args: [str], r=False, n=False):
     line = ts_to_date(time())[:19] + '  '
     str_args = '{} ' * len(args)
     line += str_args.format(*args)
@@ -258,7 +258,7 @@ class Bot:
                 o = await c
                 created_orders.append(o)
                 if 'side' in o:
-                    print_([' created order', o['symbol'], o['side'], o['position_side'], o['qty'],
+                    print_(['  created order', o['symbol'], o['side'], o['position_side'], o['qty'],
                             o['price']], n=True)
                 else:
                     print_(['error creating order b', o, oc], n=True)
@@ -421,20 +421,18 @@ class Bot:
         if self.stop_mode is not None:
             print(f'{self.stop_mode} stop mode is active')
 
-        if self.price <= self.highest_bid or self.price >= self.lowest_ask:
-            self.ts_released['check_fills'] = 0
-            asyncio.create_task(self.check_fills())
-
         if self.price <= self.highest_bid:
             self.ts_locked['decide'] = time()
             print_(['bid maybe taken'], n=True)
             await self.cancel_and_create()
+            asyncio.create_task(self.check_fills())
             self.ts_released['decide'] = time()
             return
         if self.price >= self.lowest_ask:
             self.ts_locked['decide'] = time()
             print_(['ask maybe taken'], n=True)
             await self.cancel_and_create()
+            asyncio.create_task(self.check_fills())
             self.ts_released['decide'] = time()
             return
         if time() - self.ts_locked['decide'] > 5:
@@ -445,36 +443,41 @@ class Bot:
         if time() - self.ts_released['print'] >= 0.5:
             await self.update_output_information()
 
+        if time() - self.ts_released['check_fills'] > 120:
+            asyncio.create_task(self.check_fills())
+
     async def check_fills(self):
         if self.ts_locked['check_fills'] > self.ts_released['check_fills']:
             # return if another call is in progress
             return
         now = time()
-        if now - self.ts_locked['check_fills'] < 5:
-            # enforce minimum 5 sec delay between two calls
+        if now - self.ts_released['check_fills'] < 5.0:
+            # minimum 5 sec between consecutive check fills
             return
         self.ts_locked['check_fills'] = now
-        if self.ts_locked['check_fills'] - self.ts_released['check_fills'] > 120:
-            # check fills if two mins since prev check has passed
-            fills = await self.fetch_fills()
-            if self.fills != fills:
-                new_fills_long = [item for item in fills if
-                                  item not in self.fills and item['side'] == 'sell' and item['position_side'] == 'long']
-                if len(new_fills_long) > 0:
-                    realized_pnl_long = sum(fill['realized_pnl'] for fill in new_fills_long)
-                    if realized_pnl_long >= 0 and self.profit_trans_pct > 0.0:
-                        self.transfer(type_='UMFUTURE_MAIN', amount=realized_pnl_long * self.profit_trans_pct)
+        print_(['checking if new fills...\n'], n=True)
+        # check fills if two mins since prev check has passed
+        fills = await self.fetch_fills()
+        if self.fills != fills:
+            new_fills_long = [item for item in fills if item not in self.fills and
+                              item['side'] == 'sell' and item['position_side'] == 'long']
+            if len(new_fills_long) > 0:
+                realized_pnl_long = sum(fill['realized_pnl'] for fill in new_fills_long)
+                if realized_pnl_long >= 0 and self.profit_trans_pct > 0.0:
+                    self.transfer(type_='UMFUTURE_MAIN', amount=realized_pnl_long * self.profit_trans_pct)
+                if self.telegram is not None:
                     self.telegram.notify_order_filled(realized_pnl=realized_pnl_long, side='long')
 
-                new_fills_shrt = [item for item in fills if
-                                  item not in self.fills and item['side'] == 'buy' and item['position_side'] == 'shrt']
-                if len(new_fills_shrt) > 0:
-                    realized_pnl_shrt = sum(fill['realized_pnl'] for fill in new_fills_shrt)
-                    if realized_pnl_shrt >= 0 and self.profit_trans_pct > 0.0:
-                        self.transfer(type_='UMFUTURE_MAIN', amount=realized_pnl_shrt * self.profit_trans_pct)
+            new_fills_shrt = [item for item in fills if item not in self.fills and
+                              item['side'] == 'buy' and item['position_side'] == 'shrt']
+            if len(new_fills_shrt) > 0:
+                realized_pnl_shrt = sum(fill['realized_pnl'] for fill in new_fills_shrt)
+                if realized_pnl_shrt >= 0 and self.profit_trans_pct > 0.0:
+                    self.transfer(type_='UMFUTURE_MAIN', amount=realized_pnl_shrt * self.profit_trans_pct)
+                if self.telegram is not None:
                     self.telegram.notify_order_filled(realized_pnl=realized_pnl_shrt, side='short')
 
-            self.fills = fills
+        self.fills = fills
         self.ts_released['check_fills'] = time()
 
     async def update_output_information(self):
