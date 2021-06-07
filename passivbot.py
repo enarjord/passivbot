@@ -461,7 +461,6 @@ class Bot:
         fills = await self.fetch_fills()
         if self.fills != fills:
             await self.check_long_fills(fills)
-
             await self.check_shrt_fills(fills)
 
         self.fills = fills
