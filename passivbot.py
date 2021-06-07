@@ -349,7 +349,12 @@ class Bot:
                 len(shrt_entry_orders) >= self.n_open_orders_limit) or \
                     calc_diff(tpl[1], self.price) > self.last_price_diff_limit:
                 break
-            if tpl[4] == 'stop_loss_shrt_close':
+            if self.stop_mode in ['panic']:
+                shrt_close_orders.append({'side': 'buy', 'position_side': 'shrt', 'qty': abs(shrt_psize),
+                                          'type': 'market', 'reduce_only': True, 'custom_id': tpl[4]})
+                long_close_orders.append({'side': 'sell', 'position_side': 'long', 'qty': abs(long_psize),
+                                          'type': 'market', 'reduce_only': True, 'custom_id': tpl[4]})
+            elif tpl[4] == 'stop_loss_shrt_close':
                 shrt_close_orders.append({'side': 'buy', 'position_side': 'shrt', 'qty': abs(tpl[0]),
                                           'price': tpl[1], 'type': 'limit', 'reduce_only': True,
                                           'custom_id': tpl[4]})
