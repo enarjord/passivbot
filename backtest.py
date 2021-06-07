@@ -19,7 +19,7 @@ from njit_funcs import calc_bankruptcy_price, calc_long_pnl, calc_shrt_pnl, \
 from passivbot import add_argparse_args
 
 
-def backtest(config: dict, data: (np.ndarray,), do_print=False, prev_emas: np.ndarray = None) -> (list, list, bool):
+def backtest_old(config: dict, data: (np.ndarray,), do_print=False, prev_emas: np.ndarray = None) -> (list, list, bool):
     prices, is_buyer_maker, timestamps, emas, ratios = data
     long_psize, long_pprice = 0.0, 0.0
     shrt_psize, shrt_pprice = 0.0, 0.0

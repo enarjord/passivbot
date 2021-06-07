@@ -6,7 +6,7 @@ from operator import truediv as div
 from typing import Optional
 from copy import deepcopy
 from pandas.io.json._normalize import nested_to_record
-from backtest import backtest
+from njit_funcs import backtest
 from analyze import analyze_backtest
 from pure_funcs import ts_to_date
 import numpy as np

@@ -16,7 +16,8 @@ from ray.tune.suggest import ConcurrencyLimiter
 from ray.tune.suggest.nevergrad import NevergradSearch
 
 from analyze import analyze_fills, get_empty_analysis
-from backtest import backtest, plot_wrap
+from njit_funcs import backtest
+from backtest import plot_wrap
 from downloader import Downloader, prep_config
 from njit_funcs import round_
 from passivbot import add_argparse_args
