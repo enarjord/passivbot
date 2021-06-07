@@ -137,6 +137,8 @@ See [wiki](https://github.com/enarjord/passivbot/wiki) for more info on backtest
 
 - USDT TRC20 (Binance): `TJr3KYY8Bz7wRU7QLwoYQHk88LcaBJqQN5`
 
+https://www.buymeacoffee.com/enarjord
+
 ### Referrals
 
 - [Bybit](https://www.bybit.com/en-US/register?affiliate_id=16464&language=en-US&group_id=0&group_type=1)
