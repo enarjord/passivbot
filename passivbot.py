@@ -7,6 +7,7 @@ import os
 import signal
 from collections import deque
 from pathlib import Path
+from statistics import mean
 from time import time
 
 import numpy as np
@@ -459,26 +460,64 @@ class Bot:
         # check fills if two mins since prev check has passed
         fills = await self.fetch_fills()
         if self.fills != fills:
-            new_fills_long = [item for item in fills if item not in self.fills and
-                              item['side'] == 'sell' and item['position_side'] == 'long']
-            if len(new_fills_long) > 0:
-                realized_pnl_long = sum(fill['realized_pnl'] for fill in new_fills_long)
-                if realized_pnl_long >= 0 and self.profit_trans_pct > 0.0:
-                    self.transfer(type_='UMFUTURE_MAIN', amount=realized_pnl_long * self.profit_trans_pct)
-                if self.telegram is not None:
-                    self.telegram.notify_order_filled(realized_pnl=realized_pnl_long, side='long')
+            await self.check_long_fills(fills)
 
-            new_fills_shrt = [item for item in fills if item not in self.fills and
-                              item['side'] == 'buy' and item['position_side'] == 'shrt']
-            if len(new_fills_shrt) > 0:
-                realized_pnl_shrt = sum(fill['realized_pnl'] for fill in new_fills_shrt)
-                if realized_pnl_shrt >= 0 and self.profit_trans_pct > 0.0:
-                    self.transfer(type_='UMFUTURE_MAIN', amount=realized_pnl_shrt * self.profit_trans_pct)
-                if self.telegram is not None:
-                    self.telegram.notify_order_filled(realized_pnl=realized_pnl_shrt, side='short')
+            await self.check_shrt_fills(fills)
 
         self.fills = fills
         self.ts_released['check_fills'] = time()
+
+    async def check_shrt_fills(self, fills):
+        # closing orders
+        new_close_shrt = [item for item in fills if item not in self.fills and
+                          item['side'] == 'buy' and item['position_side'] == 'shrt']
+        if len(new_close_shrt) > 0:
+            realized_pnl_shrt = sum(fill['realized_pnl'] for fill in new_close_shrt)
+            if realized_pnl_shrt >= 0 and self.profit_trans_pct > 0.0:
+                amount = realized_pnl_shrt * self.profit_trans_pct
+                self.telegram(f'Transferring {amount} ({self.profit_trans_pct}%) of profit {realized_pnl_shrt} to Spot wallet')
+                transfer_result = self.transfer(type_='UMFUTURE_MAIN', amount=amount)
+                if 'code' in transfer_result:
+                    self.telegram.send_msg(f'Error transferring to Spot wallet: {transfer_result["msg"]}')
+                else:
+                    self.telegram.send_msg(f'Transferred {amount} to Spot wallet')
+            if self.telegram is not None:
+                self.telegram.notify_close_order_filled(realized_pnl=realized_pnl_shrt, position_side='short', side='buy')
+
+        # entry orders
+        new_open_shrt = [item for item in fills if item not in self.fills and
+                          item['side'] == 'sell' and item['position_side'] == 'shrt']
+        if len(new_open_shrt) > 0:
+            if self.telegram is not None:
+                size = sum(fill['qty'] for fill in new_open_shrt)
+                price = mean(fill['price'] for fill in new_open_shrt)
+                self.telegram.notify_entry_order_filled(size=size, price=price, position_side='short')
+
+    async def check_long_fills(self, fills):
+        #closing orders
+        new_close_long = [item for item in fills if item not in self.fills and
+                          item['side'] == 'sell' and item['position_side'] == 'long']
+        if len(new_close_long) > 0:
+            realized_pnl_long = sum(fill['realized_pnl'] for fill in new_close_long)
+            if realized_pnl_long >= 0 and self.profit_trans_pct > 0.0:
+                amount = realized_pnl_long * self.profit_trans_pct
+                self.telegram(f'Transferring {amount} ({self.profit_trans_pct}%) of profit {realized_pnl_long} to Spot wallet')
+                transfer_result = self.transfer(type_='UMFUTURE_MAIN', amount=amount)
+                if 'code' in transfer_result:
+                    self.send_msg(f'Error transferring to Spot wallet: {transfer_result["msg"]}')
+                else:
+                    self.send_msg(f'Transferred {amount} to Spot wallet')
+            if self.telegram is not None:
+                self.telegram.notify_close_order_filled(realized_pnl=realized_pnl_long, position_side='long')
+
+        # entry orders
+        new_open_long = [item for item in fills if item not in self.fills and
+                         item['side'] == 'buy' and item['position_side'] == 'long']
+        if len(new_open_long) > 0:
+            if self.telegram is not None:
+                size = sum(fill['qty'] for fill in new_open_long)
+                price = mean(fill['price'] for fill in new_open_long)
+                self.telegram.notify_entry_order_filled(size=size, price=price, position_side='long')
 
     async def update_output_information(self):
         self.ts_released['print'] = time()
