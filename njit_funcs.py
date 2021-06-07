@@ -225,6 +225,73 @@ def calc_long_entry(balance,
 
 
 @njit
+def calc_long_orders(balance,
+                     long_psize,
+                     long_pprice,
+                     highest_bid,
+                     lowest_ask,
+                     MA,
+                     MA_ratios,
+                     available_margin,
+ 
+                     inverse,
+                     qty_step,
+                     price_step,
+                     min_qty,
+                     min_cost,
+                     c_mult,
+                     stop_PBr_thr,
+                     iqty_const,
+                     iprc_const,
+                     rqty_const,
+                     rprc_const,
+                     markup_const,
+                     iqty_MAr_coeffs,
+                     iprc_MAr_coeffs,
+                     rprc_PBr_coeffs,
+                     rqty_MAr_coeffs,
+                     rprc_MAr_coeffs,
+                     markup_MAr_coeffs,
+                     stop_psize_pct):
+    if long_psize == 0.0:
+        price = min(highest_bid, round_dn(MA * (iprc_const + eqf(MA_ratios, iprc_MAr_coeffs)), price_step))
+        min_entry_qty = calc_min_entry_qty(price, inverse, qty_step, min_qty, min_cost)
+        bal_ito_contracts = cost_to_qty(balance, price, inverse, c_mult)
+        qty = max(min_entry_qty, round_dn(bal_ito_contracts * (iqty_const + eqf(MA_ratios, iqty_MAr_coeffs)), qty_step))
+        new_long_psize, new_long_pprice = calc_new_psize_pprice(long_psize, long_pprice, qty, price, qty_step)
+        long_entry = (qty, price, new_long_psize, new_long_pprice, 'long_ientry')
+        long_closes = [(0.0, 0.0, 0.0, 0.0, 'long_nclose')]
+    else:
+        pbr = qty_to_cost(long_psize, long_pprice, inverse, c_mult) / balance
+        entry_price = min(highest_bid,
+                          round_dn(long_pprice * (rprc_const + eqf(MA_ratios, rprc_MAr_coeffs) +
+                                                  eqf(np.array([pbr]), rprc_PBr_coeffs, minus=0.0)), price_step))
+        min_entry_qty = calc_min_entry_qty(entry_price, inverse, qty_step, min_qty, min_cost)
+        max_entry_qty = cost_to_qty(min(balance * (stop_PBr_thr + stop_psize_pct - pbr), available_margin),
+                                    entry_price, inverse, c_mult)
+
+        entry_qty = round_dn(min(max_entry_qty, max(min_entry_qty, long_psize * (rqty_const + eqf(MA_ratios, rqty_MAr_coeffs)))),
+                             qty_step)
+        if entry_qty < min_entry_qty:
+            entry_qty = 0.0
+        new_long_psize, new_long_pprice = calc_new_psize_pprice(long_psize, long_pprice, entry_qty, entry_price, qty_step)
+        long_entry = (entry_qty, entry_price, new_long_psize, new_long_pprice, 'long_rentry')
+        nclose_price = max(lowest_ask, round_up(long_pprice * (markup_const + eqf(MA_ratios, markup_MAr_coeffs)), price_step))
+        long_closes = []
+        if pbr > stop_PBr_thr:
+            stop_qty = -max(min_qty, round_dn(cost_to_qty(balance * (pbr - stop_PBr_thr), nclose_price), qty_step))
+            stop_price = max(lowest_ask, round_up(MA * (2.0 - iprc_const), price_step))
+            new_long_psize_after_stop = round_(long_psize + stop_qty, qty_step)
+            long_closes.append((stop_qty, stop_price, new_long_psize_after_stop, long_pprice, 'long_sclose'))
+            long_closes.append((new_long_psize_after_stop, nclose_price,
+                                round_(long_psize - new_long_psize_after_stop, qty_step), long_pprice, 'long_nclose'))
+
+        else:
+            long_closes.append((-long_psize, nclose_price, 0.0, 0.0, 'long_nclose'))
+        return long_entry, long_closes
+
+
+@njit
 def calc_shrt_entry(balance,
                     shrt_psize,
                     shrt_pprice,
