@@ -5,6 +5,7 @@ from time import sleep
 from urllib.request import urlopen
 from zipfile import ZipFile
 
+import sys
 import hjson
 import pandas as pd
 from dateutil import parser
