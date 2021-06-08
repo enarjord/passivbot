@@ -128,11 +128,11 @@ def get_empty_analysis(bc: dict) -> dict:
 
 def analyze_fills(fills: list, bc: dict, first_ts: float, last_ts: float) -> (pd.DataFrame, dict):
     fdf = pd.DataFrame(fills)
-    fdf.columns = ['trade_id', 'timestamp', 'pnl', 'fee_paid', 'balance', 'equity', 'pbr', 'qty', 'price', 'psize', 'pprice', 'type']
-    fdf = fdf.set_index('trade_id')
 
     if fdf.empty:
         return fdf, get_empty_analysis(bc)
+    fdf.columns = ['trade_id', 'timestamp', 'pnl', 'fee_paid', 'balance', 'equity', 'pbr', 'qty', 'price', 'psize', 'pprice', 'type']
+    fdf = fdf.set_index('trade_id')
 
     longs = fdf[fdf.type.str.contains('long')]
     shrts = fdf[fdf.type.str.contains('shrt')]

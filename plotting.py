@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import json
 from pure_funcs import round_dynamic, denumpyize, candidate_to_live_config
-from njit_funcs import calc_bid_ask_thresholds
+from njit_funcs import round_up
 from procedures import dump_live_config
 
 
@@ -27,6 +27,7 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
     dump_live_config(result, result['plots_dirpath'] + 'live_config.json')
     json.dump(denumpyize(result), open(result['plots_dirpath'] + 'result.json', 'w'), indent=4)
 
+    '''
     iprc_const = config['long']['iprc_const'], config['shrt']['iprc_const']
     iprc_MAr_coeffs = np.array([config['long']['iprc_MAr_coeffs'], config['shrt']['iprc_MAr_coeffs']])
 
@@ -34,6 +35,7 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
                                                df[[c for c in df.columns if 'ratio' in c]].values,
                                                iprc_const, iprc_MAr_coeffs)
     df = df.join(pd.DataFrame({'bid_thr': bid_thr, 'ask_thr': ask_thr}))
+    '''
 
     print('writing backtest_result.txt...')
     with open(f"{result['plots_dirpath']}backtest_result.txt", 'w') as f:
@@ -48,12 +50,11 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
     plt.savefig(f"{result['plots_dirpath']}balance_and_equity.png")
 
     print('plotting backtest whole and in chunks...')
-    n_parts = 7
-    # n_parts = int(round_up(result['n_days'], 1.0))
+    n_parts = max(3, int(round_up(result['n_days'] / 14, 1.0)))
     for z in range(n_parts):
         start_ = z / n_parts
         end_ = (z + 1) / n_parts
-        print(start_, end_)
+        print(f'{z} of {n_parts} {start_ * 100:.2f}% to {end_ * 100:.2f}%')
         fig = plot_fills(df, fdf.iloc[int(len(fdf) * start_):int(len(fdf) * end_)], bkr_thr=0.1)
         fig.savefig(f"{result['plots_dirpath']}backtest_{z + 1}of{n_parts}.png")
     fig = plot_fills(df, fdf, bkr_thr=0.1)
@@ -61,25 +62,16 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
 
     print('plotting pos sizes...')
     plt.clf()
-    fdf.long_psize.plot()
-    fdf.shrt_psize.plot()
+    fdf[fdf.psize > 0.0].psize.plot()
+    fdf[fdf.psize < 0.0].psize.plot()
     plt.savefig(f"{result['plots_dirpath']}psizes_plot.png")
-
-    print('plotting average daily gain...')
-    adg_ = fdf.average_daily_gain
-    adg_.index = np.linspace(0.0, 1.0, len(fdf))
-    plt.clf()
-    adg_c = adg_.iloc[int(len(fdf) * 0.1):]  # skipping first 10%
-    print('min max', adg_c.min(), adg_c.max())
-    adg_c.plot()
-    plt.savefig(f"{result['plots_dirpath']}average_daily_gain_plot.png")
 
 
 def plot_fills(df, fdf, side: int = 0, bkr_thr=0.1):
     plt.clf()
 
     dfc = df.loc[fdf.index[0]:fdf.index[-1]]
-    dfc.price.plot(style='y-')
+    dfc.price.iloc[::int(len(dfc) * 0.001)].plot(style='y-')
     if 'bid_thr' in dfc.columns:
         dfc.bid_thr.plot(style='b-.')
     if 'ask_thr' in dfc.columns:
