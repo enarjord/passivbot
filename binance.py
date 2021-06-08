@@ -370,12 +370,8 @@ class BinanceBot(Bot):
         return await self.fetch_ticks(start_time=start_time, end_time=end_time, do_print=do_print)
 
     async def transfer(self, type_: str, amount: float, asset: str = 'USDT'):
-        params = {'type': type_.upper(),
-                  'amount': amount,
-                  'asset': asset}
-        return await self.private_post(self.spot_base_endpoint,
-                                self.endpoints['transfer'],
-                                params)
+        params = {'type': type_.upper(), 'amount': amount, 'asset': asset}
+        return await self.private_post(self.spot_base_endpoint, self.endpoints['transfer'],  params)
 
     def calc_max_pos_size(self, balance: float, price: float):
         if self.market_type == 'linear_perpetual':
