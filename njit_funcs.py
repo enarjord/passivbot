@@ -167,7 +167,7 @@ def calc_new_psize_pprice(psize, pprice, qty, price, qty_step) -> (float, float)
 
 @njit
 def eqf(vals: np.ndarray, coeffs: np.ndarray, minus: float = 1.0) -> float:
-    return np.sum((vals ** 2 - minus) * coeffs[:, 0] + (np.abs(vals - minus) + minus) ** 2 * coeffs[:, 1])
+    return np.sum((vals ** 2 - minus) * coeffs[:, 0] + (vals - minus) * coeffs[:, 1])
 
 
 @njit
@@ -210,6 +210,7 @@ def calc_long_orders(balance,
         pbr = qty_to_cost(long_psize, long_pprice, inverse, c_mult) / balance
         nclose_price = round_up(long_pprice * (markup_const + eqf(MA_ratios, markup_MAr_coeffs)), price_step)
         if pbr > stop_PBr_thr:
+
             entry_price = round_dn(min([highest_bid, MA * iprc_const,
                                         long_pprice * (rprc_const + eqf(MA_ratios, rprc_MAr_coeffs) +
                                                        eqf(np.array([pbr]), rprc_PBr_coeffs, minus=0.0))]), price_step)
@@ -311,14 +312,6 @@ def calc_shrt_orders(balance,
                 entry_qty = min_entry_qty
         entry_type = 'shrt_rentry'
     else:
-        print('balance', balance,
-              'shrt_psize', shrt_psize,
-              'shrt_pprice', shrt_pprice,
-              'highest_bid', highest_bid,
-              'lowest_ask', lowest_ask,
-              'MA', MA,
-              'MA_ratios', MA_ratios,
-              'available_margin', available_margin,)
         raise Exception('shrt psize is greater than 0.0 ')
     entry_qty = -entry_qty
     new_psize, new_pprice = calc_new_psize_pprice(shrt_psize, shrt_pprice, entry_qty, entry_price, qty_step)
@@ -433,7 +426,7 @@ def calc_orders(balance,
     return long_entry, shrt_entry, long_closes, shrt_closes, bkr_price, available_margin
 
 
-#@njit
+@njit
 def backtest(data: (np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray),
              starting_balance,
              latency_simulation_ms,
@@ -480,7 +473,7 @@ def backtest(data: (np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray),
     fills = []
 
     long_entry, shrt_entry = (0.0, 0.0, 0.0, 0.0, ''), (0.0, 0.0, 0.0, 0.0, '')
-    long_closes, shrt_closes = [], []
+    long_closes, shrt_closes = [(0.0, 0.0, 0.0, 0.0, '')], [(0.0, 0.0, 0.0, 0.0, '')]
     bkr_price, available_margin = 0.0, 0.0
 
     prev_k = 0
@@ -514,7 +507,7 @@ def backtest(data: (np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray),
                 long_psize, long_pprice = long_entry[2:4]
                 equity = balance + calc_upnl(long_psize, long_pprice, shrt_psize, shrt_pprice,
                                              prices[k], inverse, c_mult)
-                fills.append((k, pnl, fee_paid, balance, equity, -long_psize, prices[k], 0.0, 0.0, 'long_bankruptcy'))
+                fills.append((k, pnl, fee_paid, balance, equity, 0.0, -long_psize, prices[k], 0.0, 0.0, 'long_bankruptcy'))
             if shrt_psize != 0.0:
 
                 fee_paid = -qty_to_cost(shrt_psize, shrt_pprice, inverse, c_mult) * maker_fee
@@ -523,7 +516,7 @@ def backtest(data: (np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray),
                 shrt_psize, shrt_pprice = shrt_entry[2:4]
                 equity = balance + calc_upnl(long_psize, long_pprice, shrt_psize, shrt_pprice,
                                              prices[k], inverse, c_mult)
-                fills.append((k, pnl, fee_paid, balance, equity, -shrt_psize, prices[k], 0.0, 0.0, 'shrt_bankruptcy'))
+                fills.append((k, pnl, fee_paid, balance, equity, 0.0, -shrt_psize, prices[k], 0.0, 0.0, 'shrt_bankruptcy'))
 
             return fills, False
 
@@ -534,7 +527,8 @@ def backtest(data: (np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray),
                 long_psize, long_pprice = long_entry[2:4]
                 equity = balance + calc_upnl(long_psize, long_pprice, shrt_psize, shrt_pprice,
                                              prices[k], inverse, c_mult)
-                fills.append((k, 0.0, fee_paid, balance, equity) + long_entry)
+                pbr = qty_to_cost(long_psize, long_pprice, inverse, c_mult) / balance
+                fills.append((k, 0.0, fee_paid, balance, equity, pbr) + long_entry)
                 next_update_ts = min(next_update_ts, timestamps[k] + latency_simulation_ms)
                 long_entry, _ = calc_long_orders(balance,
                                                  long_psize,
@@ -564,14 +558,15 @@ def backtest(data: (np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray),
                                                  rqty_MAr_coeffs[0],
                                                  rprc_MAr_coeffs[0],
                                                  markup_MAr_coeffs[0])
-            while shrt_closes and shrt_closes[0][0] != 0.0 and prices[k] < shrt_closes[0][1]:
+            while shrt_closes and shrt_psize != 0.0 and shrt_closes[0][0] != 0.0 and prices[k] < shrt_closes[0][1]:
                 fee_paid = -qty_to_cost(shrt_closes[0][0], shrt_closes[0][1], inverse, c_mult) * maker_fee
                 pnl = calc_shrt_pnl(shrt_pprice, shrt_closes[0][1], shrt_closes[0][0], inverse, c_mult)
                 balance = balance + fee_paid + pnl
                 shrt_psize, shrt_pprice = shrt_closes[0][2:4]
                 equity = balance + calc_upnl(long_psize, long_pprice, shrt_psize, shrt_pprice,
-                                                 prices[k], inverse, c_mult)
-                fills.append((k, pnl, fee_paid, balance, equity) + shrt_closes[0])
+                                             prices[k], inverse, c_mult)
+                pbr = qty_to_cost(shrt_psize, shrt_pprice, inverse, c_mult) / balance
+                fills.append((k, pnl, fee_paid, balance, equity, pbr) + shrt_closes[0])
                 shrt_closes = shrt_closes[1:]
                 next_update_ts = min(next_update_ts, timestamps[k] + latency_simulation_ms)
             ob[0] = prices[k]
@@ -582,7 +577,8 @@ def backtest(data: (np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray),
                 shrt_psize, shrt_pprice = shrt_entry[2:4]
                 equity = balance + calc_upnl(long_psize, long_pprice, shrt_psize, shrt_pprice,
                                              prices[k], inverse, c_mult)
-                fills.append((k, 0.0, fee_paid, balance, equity) + shrt_entry)
+                pbr = qty_to_cost(shrt_psize, shrt_pprice, inverse, c_mult) / balance
+                fills.append((k, 0.0, fee_paid, balance, equity, pbr) + shrt_entry)
                 next_update_ts = min(next_update_ts, timestamps[k] + latency_simulation_ms)
                 shrt_entry, _ = calc_shrt_orders(balance,
                                                  shrt_psize,
@@ -612,14 +608,15 @@ def backtest(data: (np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray),
                                                  rqty_MAr_coeffs[1],
                                                  rprc_MAr_coeffs[1],
                                                  markup_MAr_coeffs[1])
-            while long_closes and long_closes[0][0] != 0.0 and prices[k] > long_closes[0][1]:
+            while long_closes and long_psize != 0.0 and long_closes[0][0] != 0.0 and prices[k] > long_closes[0][1]:
                 fee_paid = -qty_to_cost(long_closes[0][0], long_closes[0][1], inverse, c_mult) * maker_fee
                 pnl = calc_long_pnl(long_pprice, long_closes[0][1], long_closes[0][0], inverse, c_mult)
                 balance = balance + fee_paid + pnl
                 long_psize, long_pprice = long_closes[0][2:4]
                 equity = balance + calc_upnl(long_psize, long_pprice, shrt_psize, shrt_pprice,
                                              prices[k], inverse, c_mult)
-                fills.append((k, pnl, fee_paid, balance, equity) + long_closes[0])
+                pbr = qty_to_cost(shrt_psize, shrt_pprice, inverse, c_mult) / balance
+                fills.append((k, pnl, fee_paid, balance, equity, pbr) + long_closes[0])
                 long_closes = long_closes[1:]
                 next_update_ts = min(next_update_ts, timestamps[k] + latency_simulation_ms)
             ob[1] = prices[k]
