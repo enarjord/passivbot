@@ -645,9 +645,13 @@ class Telegram:
         else:
             self.send_msg('This command is not supported (yet) on Bybit')
 
-    def notify_order_filled(self, realized_pnl: float, side: str):
-        if 'notify_fill' not in self.config or self.config['notify_fill'] is True:
-            self.send_msg(f'Realized <pre>{round_(realized_pnl, self._bot.price_step)}</pre> {"profit" if realized_pnl >= 0 else "loss"} on {side}')
+    def notify_close_order_filled(self, realized_pnl: float, position_side: str):
+        if 'notify_close_fill' not in self.config or self.config['notify_close_fill'] is True:
+            self.send_msg(f'Realized <pre>{round_(realized_pnl, self._bot.price_step)}</pre> {"profit" if realized_pnl >= 0 else "loss"} on {position_side}')
+
+    def notify_entry_order_filled(self, size: float, price:float, position_side: str):
+        if 'notify_entry_fill' not in self.config or self.config['notify_entry_fill'] is True:
+            self.send_msg(f'Entry order of size <pre>{size}</pre> at price <pre>{price}</pre> filled on {position_side}')
 
     def show_config(self, update=None, context=None):
         try:
