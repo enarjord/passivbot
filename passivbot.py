@@ -476,7 +476,7 @@ class Bot:
             if realized_pnl_shrt >= 0 and self.profit_trans_pct > 0.0:
                 amount = realized_pnl_shrt * self.profit_trans_pct
                 self.telegram.send_msg(f'Transferring {amount} ({self.profit_trans_pct * 100 }%) of profit {realized_pnl_shrt} to Spot wallet')
-                transfer_result = self.transfer(type_='UMFUTURE_MAIN', amount=amount)
+                transfer_result = await self.transfer(type_='UMFUTURE_MAIN', amount=amount)
                 if 'code' in transfer_result:
                     self.telegram.send_msg(f'Error transferring to Spot wallet: {transfer_result["msg"]}')
                 else:
@@ -505,7 +505,7 @@ class Bot:
             if realized_pnl_long >= 0 and self.profit_trans_pct > 0.0:
                 amount = realized_pnl_long * self.profit_trans_pct
                 self.telegram.send_msg(f'Transferring {amount} ({self.profit_trans_pct * 100}%) of profit {realized_pnl_long} to Spot wallet')
-                transfer_result = self.transfer(type_='UMFUTURE_MAIN', amount=amount)
+                transfer_result = await self.transfer(type_='UMFUTURE_MAIN', amount=amount)
                 if 'code' in transfer_result:
                     self.send_msg(f'Error transferring to Spot wallet: {transfer_result["msg"]}')
                 else:
