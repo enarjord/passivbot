@@ -128,20 +128,17 @@ def get_empty_analysis(bc: dict) -> dict:
 
 def analyze_fills(fills: list, bc: dict, first_ts: float, last_ts: float) -> (pd.DataFrame, dict):
     fdf = pd.DataFrame(fills)
+    fdf.columns = ['trade_id', 'timestamp', 'pnl', 'fee_paid', 'balance', 'equity', 'pbr', 'qty', 'price', 'psize', 'pprice', 'type']
+    fdf = fdf.set_index('trade_id')
 
     if fdf.empty:
         return fdf, get_empty_analysis(bc)
 
-    fdf = fdf.set_index('trade_id')
+    longs = fdf[fdf.type.str.contains('long')]
+    shrts = fdf[fdf.type.str.contains('shrt')]
 
-    if len(longs_ := fdf[fdf.pside == 'long']) > 0:
-        long_stuck = np.max(np.diff([first_ts] + list(longs_.timestamp) + [last_ts])) / (1000 * 60 * 60)
-    else:
-        long_stuck = 1000.0
-    if len(shrts_ := fdf[fdf.pside == 'shrt']) > 0:
-        shrt_stuck = np.max(np.diff([first_ts] + list(shrts_.timestamp) + [last_ts])) / (1000 * 60 * 60)
-    else:
-        shrt_stuck = 1000.0
+    long_stuck = np.max(np.diff([first_ts] + list(longs.timestamp) + [last_ts])) / (1000 * 60 * 60) if len(longs) > 0 else 1000.0
+    shrt_stuck = np.max(np.diff([first_ts] + list(shrts.timestamp) + [last_ts])) / (1000 * 60 * 60) if len(shrts) > 0 else 1000.0
 
     result = {
         'starting_balance': bc['starting_balance'],
@@ -155,20 +152,16 @@ def analyze_fills(fills: list, bc: dict, first_ts: float, last_ts: float) -> (pd
         'profit_sum': fdf[fdf.pnl > 0.0].pnl.sum(),
         'loss_sum': fdf[fdf.pnl < 0.0].pnl.sum(),
         'fee_sum': fdf.fee_paid.sum(),
-        'lowest_eqbal_ratio': fdf.iloc[-1].lowest_eqbal_ratio,
-        'max_drawdown': ((fdf.equity - fdf.balance).abs() / fdf.balance).max(),
-        'closest_bkr': fdf.closest_bkr.iloc[-1],
+        'lowest_eqbal_ratio': bc['lowest_eqbal_ratio'],
+        'closest_bkr': bc['closest_bkr'],
         'n_fills': len(fdf),
         'n_entries': len(fdf[fdf.type.str.contains('entry')]),
         'n_closes': len(fdf[fdf.type.str.contains('close')]),
-        'n_reentries': len(fdf[fdf.type.str.contains('reentry')]),
-        'n_initial_entries': len(fdf[fdf.type.str.contains('initial')]),
-        'n_normal_closes': len(fdf[(fdf.type == 'long_close') | (fdf.type == 'shrt_close')]),
-        'n_stop_loss_closes': len(fdf[(fdf.type.str.contains('stop_loss')) &
-                                      (fdf.type.str.contains('close'))]),
-        'n_stop_loss_entries': len(fdf[(fdf.type.str.contains('stop_loss')) &
-                                       (fdf.type.str.contains('entry'))]),
-        'biggest_psize': fdf[['long_psize', 'shrt_psize']].abs().max(axis=1).max(),
+        'n_reentries': len(fdf[fdf.type.str.contains('rentry')]),
+        'n_initial_entries': len(fdf[fdf.type.str.contains('ientry')]),
+        'n_normal_closes': len(fdf[fdf.type.str.contains('nclose')]),
+        'n_stop_loss_closes': len(fdf[fdf.type.str.contains('sclose')]),
+        'biggest_psize': fdf.psize.abs().max(),
         'max_hrs_no_fills_long': long_stuck,
         'max_hrs_no_fills_shrt': shrt_stuck,
         'max_hrs_no_fills_same_side': max(long_stuck, shrt_stuck),

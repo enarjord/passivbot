@@ -31,11 +31,14 @@ def plot_wrap(bc, data, live_config):
     config = {**bc, **live_config}
     print('starting_balance', config['starting_balance'])
     print('backtesting...')
-    fills, stats, did_finish = backtest(config, data, do_print=True)
+    sts = time()
+    fills, info = backtest(config, data, do_print=True)
+    print(f'{time() - sts:.2f} seconds elapsed')
     if not fills:
         print('no fills')
         return
-    fdf, result = analyze_fills(fills, config, data[2][-1])
+    fdf, result = analyze_fills(fills, {**config, **{'lowest_eqbal_ratio': info[1], 'closest_bkr': info[2]}},
+                                data[2][0], data[2][-1])
     config['result'] = result
     config['plots_dirpath'] = make_get_filepath(os.path.join(
         config['plots_dirpath'], f"{ts_to_date(time())[:19].replace(':', '')}", '')

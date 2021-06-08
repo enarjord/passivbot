@@ -8,13 +8,14 @@ from collections import deque
 from pathlib import Path
 from time import time
 from procedures import make_get_filepath, load_key_secret, print_, create_binance_bot, create_bybit_bot
+from pure_funcs import denumpyize
 
 import numpy as np
 import websockets
 import telegram_bot
 
 from njit_funcs import round_, calc_diff, calc_ema, qty_to_cost
-from pure_funcs import create_xk, compress_float, filter_orders, get_keys
+from pure_funcs import create_xk, compress_float, filter_orders, get_xk_keys
 
 logging.getLogger("telegram").setLevel(logging.CRITICAL)
 
@@ -89,7 +90,7 @@ class Bot:
         setattr(self, key, self.config[key])
 
     async def _init(self):
-        self.xk = {k: float(self.config[k]) for k in get_keys()}
+        self.xk = denumpyize(create_xk(self.config))
         self.fills = await self.fetch_fills()
 
     def dump_log(self, data) -> None:

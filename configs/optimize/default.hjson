@@ -21,7 +21,6 @@
 
   # sliding window config:
   sliding_window_size: 0.25
-  n_sliding_windows: 10
   test_full: false
 
   # set to 0.0 to disable breaking early
@@ -45,21 +44,16 @@
   ranges:
   {
     # common parameters
-    hedge_psize_pct: [0.01, 0.01]
     stop_psize_pct: [0.01, 0.01]
-    stop_eqbal_ratio_thr: [0.0, 0.0]
-    coeffs: [0.0, 0.0]
+    coeffs: [-0.2, 0.2]
 
-    long§leverage: [16, 16]
+    long§leverage: [0.5, 16.0]
     long§iqty_const: [0.0, 1.0]
     long§iprc_const: [0.95, 1.0]
     long§rqty_const: [0.0, 4.0]
     long§rprc_const: [0.95, 1.0]
     long§markup_const: [1.0, 1.05]
 
-    long§hedge_bkr_diff_thr: [0.0, 0.0]
-    long§stop_bkr_diff_thr: [0.0, 0.0]
-    long§entry_bkr_diff_thr: [0.0, 0.0]
 
     shrt§leverage: [16, 16]
     shrt§iqty_const: [0.0, 1.0]
@@ -68,9 +62,6 @@
     shrt§rprc_const: [1.0, 1.05]
     shrt§markup_const: [0.95, 1.0]
 
-    shrt§hedge_bkr_diff_thr: [0.0, 0.0]
-    shrt§stop_bkr_diff_thr: [0.0, 0.0]
-    shrt§entry_bkr_diff_thr: [0.0, 0.0]
 
   }
 }

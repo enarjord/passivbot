@@ -390,7 +390,7 @@ def calc_orders(balance,
                      rprc_PBr_coeffs[0],
                      rqty_MAr_coeffs[0],
                      rprc_MAr_coeffs[0],
-                     markup_MAr_coeffs[0]) if do_long else ((0.0, 0.0, 0.0, 0.0, ''), [(0.0, 0.0, 0.0, 0.0, '')])
+                     markup_MAr_coeffs[0]) if do_long else ((0.0, 0.0, 0.0, 0.0, ''), (0.0, 0.0, 0.0, 0.0, ''))
     shrt_entry, shrt_close = calc_shrt_orders(balance,
                      shrt_psize,
                      shrt_pprice,
@@ -418,7 +418,7 @@ def calc_orders(balance,
                      rprc_PBr_coeffs[1],
                      rqty_MAr_coeffs[1],
                      rprc_MAr_coeffs[1],
-                     markup_MAr_coeffs[1]) if do_shrt else ((0.0, 0.0, 0.0, 0.0, ''), [(0.0, 0.0, 0.0, 0.0, '')])
+                     markup_MAr_coeffs[1]) if do_shrt else ((0.0, 0.0, 0.0, 0.0, ''), (0.0, 0.0, 0.0, 0.0, ''))
     bkr_price = calc_bankruptcy_price(balance, long_psize, long_pprice, shrt_psize, shrt_pprice, inverse, c_mult)
     return long_entry, shrt_entry, long_close, shrt_close, bkr_price, available_margin
 
@@ -455,12 +455,9 @@ def njit_backtest(data: (np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndar
                      iqty_MAr_coeffs, iprc_MAr_coeffs, rprc_PBr_coeffs, rqty_MAr_coeffs, rprc_MAr_coeffs,
                      markup_MAr_coeffs)
 
-    balance = starting_balance
+    balance = equity = starting_balance
 
-    long_psize = 0.0
-    long_pprice = 0.0
-    shrt_psize = 0.0
-    shrt_pprice = 0.0
+    long_psize, long_pprice, shrt_psize, shrt_pprice = 0.0, 0.0, 0.0, 0.0
 
     next_update_ts = 0
 
@@ -473,6 +470,8 @@ def njit_backtest(data: (np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndar
 
     prev_k = 0
     prev_ob = [0.0, 0.0]
+    closest_bkr = 1.0
+    lowest_eqbal_ratio = 1.0
 
     for k in range(len(prices)):
 
@@ -490,6 +489,8 @@ def njit_backtest(data: (np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndar
                 ratios[k],
 
                 *static_params)
+            closest_bkr = min(closest_bkr, calc_diff(bkr_price, prices[k]))
+            lowest_eqbal_ratio = min(lowest_eqbal_ratio, equity / balance)
             next_update_ts = timestamps[k] + 5000
             prev_k = k
             prev_ob = ob
@@ -502,7 +503,7 @@ def njit_backtest(data: (np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndar
                 long_psize, long_pprice = long_entry[2:4]
                 equity = balance + calc_upnl(long_psize, long_pprice, shrt_psize, shrt_pprice,
                                              prices[k], inverse, c_mult)
-                fills.append((k, pnl, fee_paid, balance, equity, 0.0, -long_psize, prices[k], 0.0, 0.0, 'long_bankruptcy'))
+                fills.append((k, timestamps[k], pnl, fee_paid, balance, equity, 0.0, -long_psize, prices[k], 0.0, 0.0, 'long_bankruptcy'))
             if shrt_psize != 0.0:
 
                 fee_paid = -qty_to_cost(shrt_psize, shrt_pprice, inverse, c_mult) * maker_fee
@@ -511,9 +512,9 @@ def njit_backtest(data: (np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndar
                 shrt_psize, shrt_pprice = shrt_entry[2:4]
                 equity = balance + calc_upnl(long_psize, long_pprice, shrt_psize, shrt_pprice,
                                              prices[k], inverse, c_mult)
-                fills.append((k, pnl, fee_paid, balance, equity, 0.0, -shrt_psize, prices[k], 0.0, 0.0, 'shrt_bankruptcy'))
+                fills.append((k, timestamps[k], pnl, fee_paid, balance, equity, 0.0, -shrt_psize, prices[k], 0.0, 0.0, 'shrt_bankruptcy'))
 
-            return fills, False
+            return fills, (False, lowest_eqbal_ratio, closest_bkr)
 
         if buyer_maker[k]:
             while long_entry[0] != 0.0 and prices[k] < long_entry[1]:
@@ -523,7 +524,7 @@ def njit_backtest(data: (np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndar
                 equity = balance + calc_upnl(long_psize, long_pprice, shrt_psize, shrt_pprice,
                                              prices[k], inverse, c_mult)
                 pbr = qty_to_cost(long_psize, long_pprice, inverse, c_mult) / balance
-                fills.append((k, 0.0, fee_paid, balance, equity, pbr) + long_entry)
+                fills.append((k, timestamps[k], 0.0, fee_paid, balance, equity, pbr) + long_entry)
                 next_update_ts = min(next_update_ts, timestamps[k] + latency_simulation_ms)
                 long_entry, _ = calc_long_orders(balance,
                                                  long_psize,
@@ -561,7 +562,7 @@ def njit_backtest(data: (np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndar
                 equity = balance + calc_upnl(long_psize, long_pprice, shrt_psize, shrt_pprice,
                                              prices[k], inverse, c_mult)
                 pbr = qty_to_cost(shrt_psize, shrt_pprice, inverse, c_mult) / balance
-                fills.append((k, pnl, fee_paid, balance, equity, pbr) + shrt_close)
+                fills.append((k, timestamps[k], pnl, fee_paid, balance, equity, pbr) + shrt_close)
                 shrt_close = (0.0, 0.0, 0.0, 0.0, '')
                 next_update_ts = min(next_update_ts, timestamps[k] + latency_simulation_ms)
             ob[0] = prices[k]
@@ -573,7 +574,7 @@ def njit_backtest(data: (np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndar
                 equity = balance + calc_upnl(long_psize, long_pprice, shrt_psize, shrt_pprice,
                                              prices[k], inverse, c_mult)
                 pbr = qty_to_cost(shrt_psize, shrt_pprice, inverse, c_mult) / balance
-                fills.append((k, 0.0, fee_paid, balance, equity, pbr) + shrt_entry)
+                fills.append((k, timestamps[k], 0.0, fee_paid, balance, equity, pbr) + shrt_entry)
                 next_update_ts = min(next_update_ts, timestamps[k] + latency_simulation_ms)
                 shrt_entry, _ = calc_shrt_orders(balance,
                                                  shrt_psize,
@@ -611,12 +612,12 @@ def njit_backtest(data: (np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndar
                 equity = balance + calc_upnl(long_psize, long_pprice, shrt_psize, shrt_pprice,
                                              prices[k], inverse, c_mult)
                 pbr = qty_to_cost(shrt_psize, shrt_pprice, inverse, c_mult) / balance
-                fills.append((k, pnl, fee_paid, balance, equity, pbr) + long_close)
+                fills.append((k, timestamps[k], pnl, fee_paid, balance, equity, pbr) + long_close)
 
                 long_close = (0.0, 0.0, 0.0, 0.0, '')
                 next_update_ts = min(next_update_ts, timestamps[k] + latency_simulation_ms)
             ob[1] = prices[k]
-    return fills, True
+    return fills, (True, lowest_eqbal_ratio, closest_bkr)
 
 
 @njit

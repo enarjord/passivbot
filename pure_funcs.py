@@ -202,7 +202,7 @@ def filter_orders(actual_orders: [dict],
 
 def get_dummy_settings(user: str, exchange: str, symbol: str):
     dummy_settings = get_template_live_config()
-    dummy_settings.update({k: 0.01 for k in get_keys() + ['stop_loss_liq_diff', 'ema_span']})
+    dummy_settings.update({k: 0.01 for k in get_xk_keys() + ['stop_loss_liq_diff', 'ema_span']})
     dummy_settings.update({'user': user, 'exchange': exchange, 'symbol': symbol,
                            'config_name': '', 'logging_level': 0})
     return dummy_settings
@@ -233,7 +233,7 @@ def get_template_live_config(n_spans=3, randomize_coeffs=False):
         "stop_psize_pct":     0.05,   # % of psize for stop loss order
         "long": {
             "enabled":            True,
-            "leverage":           10,     # borrow cap and stop loss trigger
+            "leverage":           3.0,    # max pcost = balance * leverage
             "iqty_const":         0.01,   # initial entry qty pct
             "iprc_const":         0.991,  # initial entry price ema_spread
             "rqty_const":         1.0,    # reentry qty ddown factor
@@ -254,7 +254,7 @@ def get_template_live_config(n_spans=3, randomize_coeffs=False):
         },
         "shrt": {
             "enabled":            True,
-            "leverage":           10,     # borrow cap
+            "leverage":           3.0,    # max pcost = balance * leverage
             "iqty_const":         0.01,   # initial entry qty pct
             "iprc_const":         1.009,  # initial entry price ema_spread
             "rqty_const":         1.0,    # reentry qty ddown factor

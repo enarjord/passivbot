@@ -16,22 +16,21 @@ from ray.tune.suggest import ConcurrencyLimiter
 from ray.tune.suggest.nevergrad import NevergradSearch
 
 from analyze import analyze_fills, get_empty_analysis
-from njit_funcs import backtest
-from backtest import plot_wrap
+from backtest import plot_wrap, backtest
 from downloader import Downloader, prep_config
 from njit_funcs import round_
 from passivbot import add_argparse_args
 from procedures import make_get_ticks_cache
 from reporter import LogReporter
 # from walk_forward_optimization import WFO
-from pure_funcs import pack_config, unpack_config, fill_template_config, get_template_live_config, ts_to_date
+from pure_funcs import pack_config, unpack_config, get_template_live_config, ts_to_date
 
 os.environ['TUNE_GLOBAL_CHECKPOINT_S'] = '240'
 
 
 def create_config(config: dict) -> dict:
     updated_ranges = {}
-    unpacked = unpack_config(fill_template_config(get_template_live_config(config['n_spans'])))
+    unpacked = unpack_config(get_template_live_config(config['n_spans']))
     for k0 in unpacked:
         if '§' in k0:
             for k1 in config['ranges']:
@@ -99,8 +98,6 @@ def objective_function(analysis: dict, config: dict) -> float:
     if analysis['n_fills'] == 0:
         return -1.0
     return (analysis['adjusted_daily_gain']
-            * min(1.0, config["maximum_hrs_no_fills"] / analysis["max_hrs_no_fills"])
-            * min(1.0, config["maximum_hrs_no_fills_same_side"] / analysis["max_hrs_no_fills_same_side"])
             * min(1.0, analysis["lowest_eqbal_ratio"] / config["minimum_eqbal_ratio"]))
 
 
@@ -113,8 +110,9 @@ def simple_sliding_window_wrap(config, data, do_print=False):
     n_slices = len(slices)
     print('n_days', n_days, 'sliding_window_days', sliding_window_days, 'n_slices', n_slices)
     for z, data_slice in enumerate(slices):
-        fills, did_finish = backtest(pack_config(config), data_slice, do_print=do_print)
-        _, analysis = analyze_fills(fills, config, data_slice[2][0], data_slice[2][-1])
+        fills, info = backtest(pack_config(config), data_slice, do_print=do_print)
+        _, analysis = analyze_fills(fills, {**config, **{'lowest_eqbal_ratio': info[1], 'closest_bkr': info[2]}},
+            data_slice[2][0], data_slice[2][-1])
         analysis['score'] = objective_function(analysis, config) * (analysis['n_days'] / n_days)
         analyses.append(analysis)
         objective = np.mean([r['score'] for r in analyses]) * (z / n_slices)
@@ -131,62 +129,6 @@ def simple_sliding_window_wrap(config, data, do_print=False):
                 closest_bankruptcy=np.min([r['closest_bkr'] for r in analyses]),
                 max_hrs_no_fills=np.max([r['max_hrs_no_fills'] for r in analyses]),
                 max_hrs_no_fills_same_side=np.max([r['max_hrs_no_fills_same_side'] for r in analyses]))
-
-
-def simple_sliding_window_wrap_old(config, ticks):
-    results = []
-    finished_windows = 0.0
-    for ticks_slice in iter_slices(ticks, config['sliding_window_size'], config['n_windows'],
-                                   yield_full=config['test_full']):
-        try:
-            fills, did_finish = backtest(pack_config(config), ticks_slice, do_print=False)
-        except Exception as e:
-            print('debug a', e, config)
-            fills = []
-            did_finish = False
-        try:
-            _, result_ = analyze_fills(fills, config, ticks_slice[-1][2])
-        except Exception as e:
-            print('b', e)
-            result_ = get_empty_analysis(config)
-        results.append(result_)
-        finished_windows += 1.0
-        if config['break_early_factor'] > 0.0 and \
-                (not did_finish or
-                 result_['closest_bkr'] < config['minimum_bankruptcy_distance'] * (1 - config['break_early_factor']) or
-                 result_['max_hrs_no_fills'] > config['maximum_hrs_no_fills'] * (1 + config['break_early_factor']) or
-                 result_['max_hrs_no_fills_same_side'] > config['maximum_hrs_no_fills_same_side'] * (
-                         1 + config['break_early_factor'])):
-            break
-    if results:
-        result = {}
-        for k in results[0]:
-            try:
-                if k == 'closest_bkr':
-                    result[k] = np.min([r[k] for r in results])
-                elif k == 'average_daily_gain':
-                    if (denominator := np.sum([r['n_days'] for r in results])) == 0.0:
-                        result[k] = 1.0
-                    else:
-                        result[k] = np.sum([r[k] * r['n_days'] for r in results]) / denominator
-                    result['adjusted_daily_gain'] = np.mean([tanh(r[k]) for r in results])
-                elif 'max_hrs_no_fills' in k:
-                    result[k] = np.max([r[k] for r in results])
-                else:
-                    result[k] = np.mean([r[k] for r in results])
-            except:
-                result[k] = results[0][k]
-    else:
-        result = get_empty_analysis(config)
-
-    try:
-        objective = objective_function(result, 'average_daily_gain', config) * finished_windows / config['n_windows']
-    except Exception as e:
-        print('c', e)
-        objective = -1
-    tune.report(objective=objective, daily_gain=result['average_daily_gain'], closest_bankruptcy=result['closest_bkr'],
-                max_hrs_no_fills=result['max_hrs_no_fills'],
-                max_hrs_no_fills_same_side=result['max_hrs_no_fills_same_side'])
 
 
 def tune_report(result):
@@ -305,8 +247,7 @@ async def main():
     print()
     for k in (keys := ['exchange', 'symbol', 'starting_balance', 'start_date', 'end_date',
                        'latency_simulation_ms', 'do_long', 'do_shrt', 'minimum_bankruptcy_distance',
-                       'maximum_hrs_no_fills', 'maximum_hrs_no_fills_same_side', 'iters', 'n_particles', 'sliding_window_size',
-                       'n_sliding_windows' 'test_full']):
+                       'maximum_hrs_no_fills', 'maximum_hrs_no_fills_same_side', 'iters', 'n_particles', 'sliding_window_size']):
         if k in config:
             print(f"{k: <{max(map(len, keys)) + 2}} {config[k]}")
     print()
