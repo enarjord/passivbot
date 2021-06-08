@@ -23,7 +23,7 @@ from njit_funcs import round_
 from passivbot import add_argparse_args
 from procedures import make_get_ticks_cache
 from reporter import LogReporter
-from walk_forward_optimization import WFO
+# from walk_forward_optimization import WFO
 from pure_funcs import pack_config, unpack_config, fill_template_config, get_template_live_config, ts_to_date
 
 os.environ['TUNE_GLOBAL_CHECKPOINT_S'] = '240'
@@ -113,7 +113,7 @@ def simple_sliding_window_wrap(config, data, do_print=False):
     n_slices = len(slices)
     print('n_days', n_days, 'sliding_window_days', sliding_window_days, 'n_slices', n_slices)
     for z, data_slice in enumerate(slices):
-        fills, _, did_finish = backtest(pack_config(config), data_slice, do_print=do_print)
+        fills, did_finish = backtest(pack_config(config), data_slice, do_print=do_print)
         _, analysis = analyze_fills(fills, config, data_slice[2][0], data_slice[2][-1])
         analysis['score'] = objective_function(analysis, config) * (analysis['n_days'] / n_days)
         analyses.append(analysis)
@@ -139,7 +139,7 @@ def simple_sliding_window_wrap_old(config, ticks):
     for ticks_slice in iter_slices(ticks, config['sliding_window_size'], config['n_windows'],
                                    yield_full=config['test_full']):
         try:
-            fills, _, did_finish = backtest(pack_config(config), ticks_slice, do_print=False)
+            fills, did_finish = backtest(pack_config(config), ticks_slice, do_print=False)
         except Exception as e:
             print('debug a', e, config)
             fills = []
@@ -242,7 +242,7 @@ def backtest_tune(data: np.ndarray, config: dict, current_best: Union[dict, list
     algo = ConcurrencyLimiter(algo, max_concurrent=num_cpus)
     scheduler = AsyncHyperBandScheduler()
 
-    if 'wfo' in config and config['wfo']:
+    if False:  # 'wfo' in config and config['wfo']:
         print('\n\nwalk forward optimization\n\n')
         wfo = WFO(data, config, P_train=0.5).set_train_N(4)
         backtest_wrap = lambda config: tune_report(wfo.backtest(config))

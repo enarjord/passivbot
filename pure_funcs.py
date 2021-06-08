@@ -28,32 +28,20 @@ def calc_spans(min_span: int, max_span: int, n_spans: int) -> np.ndarray:
                            for i in range(0, n_spans)])
 
 
-def fill_template_config(c, r=False):
-    for side in ['long', 'shrt']:
-        for k in c[side]:
-            if 'MAr' in k:
-                c[side][k] = np.random.random((c['n_spans'], 2)) * 0.1 - 0.05 if r else np.zeros((c['n_spans'], 2))
-            elif 'PBr_coeff' in k:
-                c[side][k] = np.random.random((1, 2)) * 0.1 - 0.05 if r else  np.zeros((1, 2))
-    c['spans'] = calc_spans(c['min_span'], c['max_span'], c['n_spans'])
-    return c
+def get_xk_keys():
+    return ['inverse', 'do_long', 'do_shrt', 'qty_step', 'price_step', 'min_qty', 'min_cost', 'c_mult',
+            'stop_psize_pct', 'leverage', 'iqty_const', 'iprc_const', 'rqty_const', 'rprc_const',
+            'markup_const', 'iqty_MAr_coeffs', 'iprc_MAr_coeffs', 'rprc_PBr_coeffs', 'rqty_MAr_coeffs',
+            'rprc_MAr_coeffs', 'markup_MAr_coeffs']
 
-
-def get_keys():
-    return ['inverse', 'do_long', 'do_shrt', 'qty_step', 'price_step', 'min_qty', 'min_cost',
-            'c_mult', 'leverage', 'hedge_bkr_diff_thr', 'hedge_psize_pct', 'stop_bkr_diff_thr',
-            'stop_psize_pct', 'stop_eqbal_ratio_thr', 'entry_bkr_diff_thr', 'iqty_const', 'iprc_const', 'rqty_const',
-            'rprc_const', 'markup_const', 'iqty_MAr_coeffs', 'rprc_PBr_coeffs', 'iprc_MAr_coeffs',
-            'rqty_MAr_coeffs', 'rprc_MAr_coeffs', 'markup_MAr_coeffs', 'stop_PBr_thr']
 
 def create_xk(config: dict) -> dict:
     xk = {}
-    for k in get_keys():
+    for k in get_xk_keys():
         if k in config['long']:
             xk[k] = (config['long'][k], config['shrt'][k])
         elif k in config:
             xk[k] = config[k]
-
     return xk
 
 
@@ -225,7 +213,7 @@ def ticks_to_ticks_cache(ticks: np.ndarray, spans: np.ndarray, MA_idx: int) -> (
     ratios = calc_ratios(emas)
     prices = ticks[:,0].astype(np.float64)
     is_buyer_maker = ticks[:,1].astype(np.int8)
-    timestamps = ticks[:,2].astype(np.float64)
+    timestamps = ticks[:,2].astype(np.int64)
     return (prices[max(spans):], is_buyer_maker[max(spans):], timestamps[max(spans):],
             emas[max(spans):][:, MA_idx].astype(np.float64), ratios[max(spans):].astype(np.float64))
 
@@ -234,8 +222,8 @@ def flatten(lst: list) -> list:
     return [y for x in lst for y in x]
 
 
-def get_template_live_config(n_spans=3):
-    return {
+def get_template_live_config(n_spans=3, randomize_coeffs=False):
+    config = {
         "config_name": "name",
         "logging_level": 0,
         "min_span": 6000,
@@ -245,8 +233,7 @@ def get_template_live_config(n_spans=3):
         "stop_psize_pct":     0.05,   # % of psize for stop loss order
         "long": {
             "enabled":            True,
-            "leverage":           10,     # borrow cap
-            "stop_PBr_thr":       1.0,    # partially close pos at a loss if long PBr > thr
+            "leverage":           10,     # borrow cap and stop loss trigger
             "iqty_const":         0.01,   # initial entry qty pct
             "iprc_const":         0.991,  # initial entry price ema_spread
             "rqty_const":         1.0,    # reentry qty ddown factor
@@ -268,7 +255,6 @@ def get_template_live_config(n_spans=3):
         "shrt": {
             "enabled":            True,
             "leverage":           10,     # borrow cap
-            "stop_PBr_thr":       1.0,    # partially close pos at a loss if shrt PBr > thr
             "iqty_const":         0.01,   # initial entry qty pct
             "iprc_const":         1.009,  # initial entry price ema_spread
             "rqty_const":         1.0,    # reentry qty ddown factor
@@ -287,6 +273,16 @@ def get_template_live_config(n_spans=3):
             "markup_MAr_coeffs":  [],     # markup price pct Moving Average ratio coeffs
         }
     }
+    for side in ['long', 'shrt']:
+        for k in config[side]:
+            if 'MAr' in k:
+                config[side][k] = np.random.random((config['n_spans'], 2)) * 0.1 - 0.05 \
+                    if randomize_coeffs else np.zeros((config['n_spans'], 2))
+            elif 'PBr_coeff' in k:
+                config[side][k] = np.random.random((1, 2)) * 0.1 - 0.05 \
+                    if randomize_coeffs else  np.zeros((1, 2))
+    config['spans'] = calc_spans(config['min_span'], config['max_span'], config['n_spans'])
+    return config
 
 
 def get_bid_ask_thresholds(data, config):
