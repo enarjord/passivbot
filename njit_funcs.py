@@ -167,7 +167,7 @@ def calc_new_psize_pprice(psize, pprice, qty, price, qty_step) -> (float, float)
 
 @njit
 def eqf(vals: np.ndarray, coeffs: np.ndarray, minus: float = 1.0) -> float:
-    return np.sum((vals ** 2 - minus) * coeffs[:, 0] + (vals - minus) * coeffs[:, 1])
+    return np.sum((vals ** 2 - minus) * coeffs[:, 0] + np.abs(vals - minus) * coeffs[:, 1])
 
 
 @njit
@@ -216,9 +216,7 @@ def calc_long_orders(balance,
                                                        eqf(np.array([pbr]), rprc_PBr_coeffs, minus=0.0))]), price_step)
             stop_qty = -max(min_qty, round_dn(long_psize * stop_psize_pct, qty_step))
             stop_price = max(lowest_ask, round_up(MA * (2.0 - iprc_const), price_step))
-            long_psize_if_stop, long_pprice_if_stop = \
-                calc_new_psize_pprice(long_psize, long_pprice, stop_qty, stop_price, qty_step)
-            long_closes = [(stop_qty, stop_price, long_psize_if_stop, long_pprice_if_stop, 'long_sclose'),
+            long_closes = [(stop_qty, stop_price, round_(long_psize + stop_qty, qty_step), long_pprice, 'long_sclose'),
                            (-max(0.0, round_(long_psize + stop_qty, qty_step)), nclose_price, 0.0, 0.0, 'long_nclose')]
         else:
             entry_price = round_dn(min(highest_bid,
@@ -242,7 +240,7 @@ def calc_long_orders(balance,
 
     new_psize, new_pprice = calc_new_psize_pprice(long_psize, long_pprice, entry_qty, entry_price, qty_step)
     return ((entry_qty, entry_price, new_psize, new_pprice, entry_type),
-            sorted(long_closes, key=lambda x: x[1], reverse=True))
+            sorted(long_closes, key=lambda x: x[1], reverse=False))
 
 
 @njit
@@ -290,9 +288,7 @@ def calc_shrt_orders(balance,
                                                        eqf(np.array([pbr]), rprc_PBr_coeffs, minus=0.0))]), price_step)
             stop_qty = max(min_qty, round_dn(-shrt_psize * stop_psize_pct, qty_step))
             stop_price = min(highest_bid, round_dn(MA * (2.0 - iprc_const), price_step))
-            shrt_psize_if_stop, shrt_pprice_if_stop = \
-                calc_new_psize_pprice(shrt_psize, shrt_pprice, stop_qty, stop_price, qty_step)
-            shrt_closes = [(stop_qty, stop_price, shrt_psize_if_stop, shrt_pprice_if_stop, 'shrt_sclose'),
+            shrt_closes = [(stop_qty, stop_price, round_(shrt_psize + stop_qty, qty_step), shrt_pprice, 'shrt_sclose'),
                            (max(0.0, round_(-shrt_psize - stop_qty, qty_step)), nclose_price, 0.0, 0.0, 'shrt_nclose')]
         else:
             entry_price = round_up(max(lowest_ask,
@@ -316,7 +312,7 @@ def calc_shrt_orders(balance,
     entry_qty = -entry_qty
     new_psize, new_pprice = calc_new_psize_pprice(shrt_psize, shrt_pprice, entry_qty, entry_price, qty_step)
     return ((entry_qty, entry_price, new_psize, new_pprice, entry_type),
-            sorted(shrt_closes, key=lambda x: x[1], reverse=False))
+            sorted(shrt_closes, key=lambda x: x[1], reverse=True))
 
 
 @njit
