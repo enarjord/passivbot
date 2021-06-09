@@ -215,7 +215,7 @@ def ticks_to_ticks_cache(ticks: np.ndarray, spans: np.ndarray, MA_idx: int) -> (
     is_buyer_maker = ticks[:,1].astype(np.int8)
     timestamps = ticks[:,2].astype(np.int64)
     return (prices[max(spans):], is_buyer_maker[max(spans):], timestamps[max(spans):],
-            emas[max(spans):][:, MA_idx].astype(np.float64), ratios[max(spans):].astype(np.float64))
+            emas[max(spans):][:, MA_idx].astype(np.float32), ratios[max(spans):].astype(np.float32))
 
 
 def flatten(lst: list) -> list:

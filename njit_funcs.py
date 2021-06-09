@@ -499,19 +499,16 @@ def njit_backtest(data: (np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndar
             if long_psize != 0.0:
                 fee_paid = -qty_to_cost(long_psize, long_pprice, inverse, c_mult) * maker_fee
                 pnl = calc_long_pnl(long_pprice, prices[k], -long_psize, inverse, c_mult)
-                balance = balance + fee_paid + pnl
-                long_psize, long_pprice = long_entry[2:4]
-                equity = balance + calc_upnl(long_psize, long_pprice, shrt_psize, shrt_pprice,
-                                             prices[k], inverse, c_mult)
+                balance = 0.0
+                equity = 0.0
+                long_psize, long_pprice = 0.0, 0.0
                 fills.append((k, timestamps[k], pnl, fee_paid, balance, equity, 0.0, -long_psize, prices[k], 0.0, 0.0, 'long_bankruptcy'))
             if shrt_psize != 0.0:
 
                 fee_paid = -qty_to_cost(shrt_psize, shrt_pprice, inverse, c_mult) * maker_fee
                 pnl = calc_shrt_pnl(shrt_pprice, prices[k], -shrt_psize, inverse, c_mult)
-                balance = balance + fee_paid + pnl
-                shrt_psize, shrt_pprice = shrt_entry[2:4]
-                equity = balance + calc_upnl(long_psize, long_pprice, shrt_psize, shrt_pprice,
-                                             prices[k], inverse, c_mult)
+                balance, equity = 0.0, 0.0
+                shrt_psize, shrt_pprice = 0.0, 0.0
                 fills.append((k, timestamps[k], pnl, fee_paid, balance, equity, 0.0, -shrt_psize, prices[k], 0.0, 0.0, 'shrt_bankruptcy'))
 
             return fills, (False, lowest_eqbal_ratio, closest_bkr)
@@ -520,7 +517,8 @@ def njit_backtest(data: (np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndar
             while long_entry[0] != 0.0 and prices[k] < long_entry[1]:
                 fee_paid = -qty_to_cost(long_entry[0], long_entry[1], inverse, c_mult) * maker_fee
                 balance += fee_paid
-                long_psize, long_pprice = long_entry[2:4]
+                long_psize, long_pprice = calc_new_psize_pprice(long_psize, long_pprice, long_entry[0],
+                                                                long_entry[1], qty_step)
                 equity = balance + calc_upnl(long_psize, long_pprice, shrt_psize, shrt_pprice,
                                              prices[k], inverse, c_mult)
                 pbr = qty_to_cost(long_psize, long_pprice, inverse, c_mult) / balance
@@ -558,7 +556,7 @@ def njit_backtest(data: (np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndar
                 fee_paid = -qty_to_cost(shrt_close[0], shrt_close[1], inverse, c_mult) * maker_fee
                 pnl = calc_shrt_pnl(shrt_pprice, shrt_close[1], shrt_close[0], inverse, c_mult)
                 balance = balance + fee_paid + pnl
-                shrt_psize, shrt_pprice = shrt_close[2:4]
+                shrt_psize = round_(shrt_psize + shrt_close[0], qty_step)
                 equity = balance + calc_upnl(long_psize, long_pprice, shrt_psize, shrt_pprice,
                                              prices[k], inverse, c_mult)
                 pbr = qty_to_cost(shrt_psize, shrt_pprice, inverse, c_mult) / balance
@@ -570,7 +568,8 @@ def njit_backtest(data: (np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndar
             while shrt_entry[0] != 0.0 and prices[k] > shrt_entry[1]:
                 fee_paid = -qty_to_cost(shrt_entry[0], shrt_entry[1], inverse, c_mult) * maker_fee
                 balance += fee_paid
-                shrt_psize, shrt_pprice = shrt_entry[2:4]
+                shrt_psize, shrt_pprice = calc_new_psize_pprice(shrt_psize, shrt_pprice, shrt_entry[0],
+                                                                shrt_entry[1], qty_step)
                 equity = balance + calc_upnl(long_psize, long_pprice, shrt_psize, shrt_pprice,
                                              prices[k], inverse, c_mult)
                 pbr = qty_to_cost(shrt_psize, shrt_pprice, inverse, c_mult) / balance
@@ -608,7 +607,7 @@ def njit_backtest(data: (np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndar
                 fee_paid = -qty_to_cost(long_close[0], long_close[1], inverse, c_mult) * maker_fee
                 pnl = calc_long_pnl(long_pprice, long_close[1], long_close[0], inverse, c_mult)
                 balance = balance + fee_paid + pnl
-                long_psize, long_pprice = long_close[2:4]
+                long_psize = round_(long_psize + long_close[0], qty_step)
                 equity = balance + calc_upnl(long_psize, long_pprice, shrt_psize, shrt_pprice,
                                              prices[k], inverse, c_mult)
                 pbr = qty_to_cost(shrt_psize, shrt_pprice, inverse, c_mult) / balance
