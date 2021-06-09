@@ -1,6 +1,5 @@
 import json
 import os
-import re
 from datetime import datetime, timedelta
 from time import time
 
@@ -21,21 +20,23 @@ from jitted import compress_float, round_, round_dynamic
 
 
 class Telegram:
-    def __init__(self, token: str, chat_id: str, bot, loop):
+    def __init__(self, config: dict, bot, loop):
         self._bot = bot
         self.loop = loop
-        self._chat_id = chat_id
-        self._updater = Updater(token=token)
+        self.config = config
+        self._chat_id = config['chat_id']
+        self._updater = Updater(token=config['token'])
         self.config_reload_ts = 0.0
         self.n_trades = 10
 
         first_keyboard_buttons = [
-            [KeyboardButton('\U0001F4B8 /daily'), KeyboardButton('\U0001F4CB /open_orders'), KeyboardButton('\U0001F4CC /position')],
-            [KeyboardButton('\U0000274E /closed_trades'), KeyboardButton('\U0001F4DD /show_config'), KeyboardButton('\U0000267B /reload_config')],
-            [KeyboardButton('\U0001F4B3 /balance'), KeyboardButton('\U00002753 /help'), KeyboardButton('\U000023E9 /next')]]
+            [KeyboardButton('/daily \U0001F4B8'), KeyboardButton('/open_orders \U0001F4CB'), KeyboardButton('/position \U0001F4CC')],
+            [KeyboardButton('/closed_trades \U0000274E'), KeyboardButton('/show_config \U0001F4DD'), KeyboardButton('/reload_config \U0000267B')],
+            [KeyboardButton('/balance \U0001F4B3'), KeyboardButton('/help \U00002753'), KeyboardButton('/next \U000023E9')]]
         second_keyboard_buttons = [
-            [KeyboardButton('\U000026A1 /set_leverage'), KeyboardButton('\U0001F4C9 /set_short'), KeyboardButton('\U0001F4C8 /set_long')],
-            [KeyboardButton('\U000023EA /previous'), KeyboardButton('\U0001F4C4 /set_config'), KeyboardButton('\U000026D4 /stop')]
+            [KeyboardButton('/set_leverage \U000026A1'), KeyboardButton('/set_short \U0001F4C9'), KeyboardButton('/set_long \U0001F4C8')],
+            [KeyboardButton('/transfer \U0001F3E6'), KeyboardButton('/set_config \U0001F4C4'), KeyboardButton('/stop \U000026D4')],
+            [KeyboardButton('/previous \U000023EA')]
         ]
         self._keyboard_idx = 0
         self._keyboards = [ReplyKeyboardMarkup(first_keyboard_buttons, resize_keyboard=True),
@@ -46,57 +47,151 @@ class Telegram:
 
     def add_handlers(self, updater):
         dispatcher = updater.dispatcher
-        dispatcher.add_handler(MessageHandler(Filters.regex(re.compile('.*/balance', re.UNICODE)), self._balance))
-        dispatcher.add_handler(MessageHandler(Filters.regex(re.compile('.*/open_orders', re.UNICODE)), self._open_orders))
-        dispatcher.add_handler(MessageHandler(Filters.regex(re.compile('.*/position', re.UNICODE)), self._position))
-        dispatcher.add_handler(MessageHandler(Filters.regex(re.compile('.*/show_config', re.UNICODE)), self.show_config))
+        dispatcher.add_handler(MessageHandler(Filters.regex('/balance.*'), self._balance))
+        dispatcher.add_handler(MessageHandler(Filters.regex('/open_orders.*'), self._open_orders))
+        dispatcher.add_handler(MessageHandler(Filters.regex('/position.*'), self._position))
+        dispatcher.add_handler(MessageHandler(Filters.regex('/show_config.*'), self.show_config))
         dispatcher.add_handler(
-            MessageHandler(Filters.regex(re.compile('.*/reload_config', re.UNICODE)), self._reload_config))
+            MessageHandler(Filters.regex('/reload_config.*'), self._reload_config))
         dispatcher.add_handler(
-            MessageHandler(Filters.regex(re.compile('.*/closed_trades', re.UNICODE)), self._closed_trades))
-        dispatcher.add_handler(MessageHandler(Filters.regex(re.compile('.*/daily', re.UNICODE)), self._daily))
-        dispatcher.add_handler(MessageHandler(Filters.regex(re.compile('.*/help', re.UNICODE)), self._help))
+            MessageHandler(Filters.regex('/closed_trades.*'), self._closed_trades))
+        dispatcher.add_handler(MessageHandler(Filters.regex('/daily.*'), self._daily))
+        dispatcher.add_handler(MessageHandler(Filters.regex('/help.*'), self._help))
         dispatcher.add_handler(ConversationHandler(
-            entry_points=[MessageHandler(Filters.regex(re.compile('.*/stop', re.UNICODE)), self._begin_stop)],
+            entry_points=[MessageHandler(Filters.regex('/stop.*'), self._begin_stop)],
             states={
-                1: [MessageHandler(Filters.regex(re.compile('(graceful|freeze|shutdown|resume|cancel)', re.UNICODE)),
+                1: [MessageHandler(Filters.regex('(graceful|freeze|shutdown|panic|resume|cancel)'),
                                    self._stop_mode_chosen)],
-                2: [MessageHandler(Filters.regex(re.compile('(confirm|abort)', re.UNICODE)), self._verify_stop_confirmation)],
+                2: [MessageHandler(Filters.regex('(confirm|abort)'), self._verify_stop_confirmation)]
             },
             fallbacks=[CommandHandler('cancel', self._abort)]
         ))
         dispatcher.add_handler(ConversationHandler(
-            entry_points=[MessageHandler(Filters.regex(re.compile('.*/set_leverage', re.UNICODE)), self._begin_set_leverage)],
+            entry_points=[MessageHandler(Filters.regex('/set_leverage.*'), self._begin_set_leverage)],
             states={
-                1: [MessageHandler(Filters.regex(re.compile('([0-9]*|cancel)', re.UNICODE)), self._leverage_chosen)],
-                2: [MessageHandler(Filters.regex(re.compile('(confirm|abort)', re.UNICODE)), self._verify_leverage_confirmation)],
+                1: [MessageHandler(Filters.regex('([0-9]*|cancel)'), self._leverage_chosen)],
+                2: [MessageHandler(Filters.regex('(confirm|abort)'), self._verify_leverage_confirmation)]
             },
             fallbacks=[CommandHandler('cancel', self._abort)]
         ))
         dispatcher.add_handler(ConversationHandler(
-            entry_points=[MessageHandler(Filters.regex(re.compile('.*/set_short', re.UNICODE)), self._verify_set_short)],
+            entry_points=[MessageHandler(Filters.regex('/set_short.*'), self._verify_set_short)],
             states={
-                1: [MessageHandler(Filters.regex(re.compile('(confirm|abort)', re.UNICODE)), self._verify_short_confirmation)],
+                1: [MessageHandler(Filters.regex('(confirm|abort)'), self._verify_short_confirmation)]
             },
             fallbacks=[CommandHandler('cancel', self._abort)]
         ))
         dispatcher.add_handler(ConversationHandler(
-            entry_points=[MessageHandler(Filters.regex(re.compile('.*/set_long', re.UNICODE)), self._verify_set_long)],
+            entry_points=[MessageHandler(Filters.regex('/set_long.*'), self._verify_set_long)],
             states={
-                1: [MessageHandler(Filters.regex(re.compile('(confirm|abort)', re.UNICODE)), self._verify_long_confirmation)],
+                1: [MessageHandler(Filters.regex('(confirm|abort)'), self._verify_long_confirmation)]
             },
             fallbacks=[CommandHandler('cancel', self._abort)]
         ))
         dispatcher.add_handler(ConversationHandler(
-            entry_points=[MessageHandler(Filters.regex(re.compile('.*/set_config', re.UNICODE)), self._begin_set_config)],
+            entry_points=[MessageHandler(Filters.regex('/set_config.*'), self._begin_set_config)],
             states={
                 1: [CallbackQueryHandler(self._configfile_chosen)],
-                2: [CallbackQueryHandler(self._verify_setconfig_confirmation)],
+                2: [CallbackQueryHandler(self._verify_setconfig_confirmation)]
             },
             fallbacks=[CommandHandler('cancel', self._abort)]
         ))
-        dispatcher.add_handler(MessageHandler(Filters.regex(re.compile('.*/next', re.UNICODE)), self._next_page))
-        dispatcher.add_handler(MessageHandler(Filters.regex(re.compile('.*/previous', re.UNICODE)), self._previous_page))
+        dispatcher.add_handler(ConversationHandler(
+            entry_points=[MessageHandler(Filters.regex('/transfer.*'), self._begin_transfer)],
+            states={
+                1: [CallbackQueryHandler(self._transfer_type_chosen)],
+                2: [MessageHandler(Filters.regex('(/[0-9\\.]*)|cancel'), self._transfer_amount_chosen)],
+                3: [MessageHandler(Filters.regex('(confirm|abort)'), self._verify_transfer_confirmation)]
+            },
+            fallbacks=[MessageHandler(Filters.command, self._abort)]
+        ))
+        dispatcher.add_handler(MessageHandler(Filters.regex('/next.*'), self._next_page))
+        dispatcher.add_handler(MessageHandler(Filters.regex('/previous.*'), self._previous_page))
+
+    def _begin_transfer(self, update: Update, _: CallbackContext) -> int:
+        if self._bot.exchange == 'bybit':
+            self.send_msg('This command is not supported (yet)')
+            return
+
+        self.transfer_type = None
+        self.transfer_amount = 0
+
+        buttons = [
+            [InlineKeyboardButton('Spot -> USD-M Futures', callback_data='MAIN_UMFUTURE'),
+             InlineKeyboardButton('USD-M Futures -> Spot', callback_data='UMFUTURE_MAIN'),
+             InlineKeyboardButton('cancel', callback_data='cancel')]
+        ]
+        update.message.reply_text(
+            text='You have chosen to transfer balance in your account. Please select the type of transfer you want to perform:',
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup(buttons)
+        )
+
+        return 1
+
+    def _transfer_type_chosen(self, update=None, context=None) -> int:
+        query = update.callback_query
+        query.answer()
+
+        self.transfer_type = query.data
+        if self.transfer_type == 'MAIN_UMFUTURE':
+            text = 'You have chosen to transfer funds from your Spot wallet to your USD-M Futures wallet.\n' \
+                   'Please specify the amount of USDT you want to transfer (<pre>prefixed with / if privacy mode is not disabled</pre>):'
+        elif self.transfer_type == 'UMFUTURE_MAIN':
+            text = 'You have chosen to transfer funds from your USD-M Futures wallet to your Spot wallet.\n' \
+                   'Please specify the amount of USDT you want to transfer (<pre>prefixed with / if privacy mode is not disabled</pre>):'
+        elif self.transfer_type == 'cancel':
+            update.effective_message.reply_text('Action aborted', reply_markup=self._keyboards[self._keyboard_idx])
+            return ConversationHandler.END
+
+        update.effective_message.reply_text(text=text, parse_mode=ParseMode.HTML, reply_markup=ReplyKeyboardMarkup([['cancel']]))
+        return 2
+
+    def _transfer_amount_chosen(self, update=None, context=None) -> int:
+        input = update.effective_message.text
+        if input == 'cancel':
+            update.effective_message.reply_text('Action aborted', reply_markup=self._keyboards[self._keyboard_idx])
+            return ConversationHandler.END
+
+        self.transfer_amount = float(input.replace('/',''))
+
+        if self.transfer_type == 'MAIN_UMFUTURE':
+            text = f'You have chosen to transfer {self.transfer_amount} from your Spot wallet to your USD-M Futures wallet.\n' \
+                   'Please confirm that you want to execute this transfer.\n' \
+                   'Please be aware that this can have influence on open position(s)!'
+        elif self.transfer_type == 'UMFUTURE_MAIN':
+            text = f'You have chosen to transfer {self.transfer_amount} from your USD-M Futures wallet to your Spot wallet.\n' \
+                   'Please confirm that you want to execute this transfer.\n' \
+                   'Please be aware that this can have influence on open position(s)!'
+
+        reply_keyboard = [['confirm', 'abort']]
+        update.message.reply_text(
+            text=text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True)
+        )
+        return 3
+
+    def _verify_transfer_confirmation(self, update: Update, _: CallbackContext) -> int:
+        answer = update.effective_message.text
+
+        if answer not in ['confirm', 'abort']:
+            return 3
+        elif answer == 'abort':
+            self.send_msg(f'Request for transfer aborted')
+            return ConversationHandler.END
+
+        async def _transfer_wallet(type_: str, amount: float):
+            result = await self._bot.transfer(type_=self.transfer_type, amount=self.transfer_amount, asset='USDT')
+            if 'code' in result:
+                self.send_msg(f'{result["msg"]}')
+            else:
+                self.send_msg(f'Transferred {amount} using type {type_}')
+        task = self.loop.create_task(_transfer_wallet(self.transfer_type, self.transfer_amount))
+        task.add_done_callback(lambda fut: True) #ensures task is processed to prevent warning about not awaiting
+        self.send_msg(f'Transferring...')
+
+        return ConversationHandler.END
 
     def _begin_set_config(self, update: Update, _: CallbackContext) -> int:
         files = [f for f in os.listdir('configs/live') if f.endswith('.json')]
@@ -132,6 +227,10 @@ class Telegram:
 
         if answer not in ['confirm', 'abort']:
             return 2
+
+        if answer == 'abort':
+            self.send_msg(f'Request for setting config was aborted')
+            return ConversationHandler.END
 
         if self.config_reload_ts > 0.0 and time() - self.config_reload_ts < 60 * 5:
             self.send_msg('Config reload in progress, please wait')
@@ -269,12 +368,13 @@ class Telegram:
 
     def _begin_stop(self, update: Update, _: CallbackContext) -> int:
         self.stop_mode_requested = ''
-        reply_keyboard = [['graceful', 'freeze', 'shutdown'],
-                          ['resume', 'cancel']]
+        reply_keyboard = [['graceful', 'freeze', 'panic'],
+                          ['shutdown', 'resume', 'cancel']]
         update.message.reply_text(
             text='To stop the bot, please choose one of the following modes:\n'
             '<pre>graceful</pre>: prevents the bot from opening new positions, but completes the existing position as usual\n'
             '<pre>freeze</pre>: prevents the bot from opening positions, and cancels all open orders to open/reenter positions\n'
+            '<pre>panic</pre>: immediately closes all open positions against market price, and cancels all open orders to open/reenter positions\n'
             '<pre>shutdown</pre>: immediately shuts down the bot, not making any further modifications to the current orders or positions\n'
             '<pre>resume</pre>: clears the stop mode and resumes normal operation\n'
             'Or send /cancel to abort stop-mode activation',
@@ -295,6 +395,10 @@ class Telegram:
             msg = f'You have chosen to shut down the bot.\n' \
                   f'Please confirm that you want to activate this stop mode by replying with either <pre>confirm</pre> or <pre>abort</pre>\n' \
                   f'\U00002757<b>Be aware that you cannot restart or control the bot from telegram anymore after confirming!!</b>\U00002757'
+        elif self.stop_mode_requested == 'panic':
+            msg = f'You have chosen to activate the stop mode panic.\n' \
+                  f'Please confirm that you want to activate this stop mode by replying with either <pre>confirm</pre> or <pre>abort</pre>\n' \
+                  f'<b>\U00002757\U00002757\U00002757Be aware that this will actively close all open positions, EVEN IF THEY ARE IN LOSS\U00002757\U00002757\U00002757</b>'
         else:
             msg = f'You have chosen to activate the stop mode <pre>{update.message.text}</pre>\n' \
                   f'Please confirm that you want to activate this stop mode by replying with either <pre>confirm</pre> or <pre>abort</pre>'
@@ -316,7 +420,7 @@ class Telegram:
                 self._bot.stop_mode = 'graceful'
                 self.send_msg(
                     'Graceful stop mode activated. No longer opening new long or short positions, existing positions will still be managed.'
-                    'Please be aware that this change is NOT persisted between restarts. To clear the stop-mode, you can use <pre>/reload_config</pre>')
+                    'Please be aware that this change is NOT persisted between restarts. To clear the stop-mode, you can use <pre>/reload_config</pre> or select <pre>resume</pre> from the <pre>/stop</pre> action')
             elif self.stop_mode_requested == 'freeze':
                 self.previous_do_long = self._bot.do_long
                 self.previous_do_shrt = self._bot.do_shrt
@@ -325,7 +429,16 @@ class Telegram:
                 self._bot.stop_mode = 'freeze'
                 self.send_msg(
                     'Freeze stop mode activated. No longer opening new long or short positions, all orders for reentry will be cancelled.'
-                    'Please be aware that this change is NOT persisted between restarts. To clear the stop-mode, you can use <pre>/reload_config</pre>')
+                    'Please be aware that this change is NOT persisted between restarts. To clear the stop-mode, you can use <pre>/reload_config</pre> or select <pre>resume</pre> from the <pre>/stop</pre> action')
+            if self.stop_mode_requested == 'panic':
+                self.previous_do_long = self._bot.do_long
+                self.previous_do_shrt = self._bot.do_shrt
+                self._bot.set_config_value('do_long', False)
+                self._bot.set_config_value('do_shrt', False)
+                self._bot.stop_mode = 'panic'
+                self.send_msg(
+                    'Panic stop mode activated. No longer opening new long or short positions, existing positions will immediately be closed.'
+                    'Please be aware that this change is NOT persisted between restarts. To clear the stop-mode, you can use <pre>/reload_config</pre> or select <pre>resume</pre> from the <pre>/stop</pre> action')
             elif self.stop_mode_requested == 'shutdown':
                 self._bot.stop_websocket = True
                 self.send_msg(
@@ -532,6 +645,14 @@ class Telegram:
             task.add_done_callback(lambda fut: True) #ensures task is processed to prevent warning about not awaiting
         else:
             self.send_msg('This command is not supported (yet) on Bybit')
+
+    def notify_close_order_filled(self, realized_pnl: float, position_side: str):
+        if 'notify_close_fill' not in self.config or self.config['notify_close_fill'] is True:
+            self.send_msg(f'Realized <pre>{round_(realized_pnl, self._bot.price_step)}</pre> {"profit" if realized_pnl >= 0 else "loss"} on {position_side}')
+
+    def notify_entry_order_filled(self, size: float, price:float, position_side: str):
+        if 'notify_entry_fill' not in self.config or self.config['notify_entry_fill'] is True:
+            self.send_msg(f'Entry order of size <pre>{size}</pre> at price <pre>{price}</pre> filled on {position_side}')
 
     def show_config(self, update=None, context=None):
         try:

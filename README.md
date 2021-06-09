@@ -17,7 +17,9 @@ price
 
 It listens to websocket live stream of trades, and updates its orders continuously
 
-If possible, it will use hedge mode
+If possible, it will use hedge mode for simultaneous long and short positions
+
+Website: passivbot.com
 
 
 ### Requirements
@@ -134,6 +136,8 @@ See [wiki](https://github.com/enarjord/passivbot/wiki) for more info on backtest
 - XLM: `GDSTC6KQR6BCTA7BH45B3MTSY52EVZ4UZTPZEBAZHJMJHTUQQ5SM57S7`
 
 - USDT TRC20 (Binance): `TJr3KYY8Bz7wRU7QLwoYQHk88LcaBJqQN5`
+
+https://www.buymeacoffee.com/enarjord
 
 ### Referrals
 

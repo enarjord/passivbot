@@ -281,6 +281,10 @@ class Bybit(Bot):
                 print_(['fetched no new trades', self.symbol])
         return trades
 
+    async def fetch_fills(self, limit: int = 1000, from_id: int = None, start_time: int = None, end_time: int = None):
+        print('fetch_fills not implemented for Bybit')
+        return []
+
     def calc_margin_cost(self, qty: float, price: float) -> float:
         return qty / price / self.leverage
 
@@ -328,3 +332,9 @@ class Bybit(Bot):
     async def subscribe_ws(self, ws):
         params = {'op': 'subscribe', 'args': ['trade.' + self.symbol]}
         await ws.send(json.dumps(params))
+
+    async def transfer(self, type_: str, amount: float, asset: str = 'USDT'):
+        return {'code': '-1', 'msg': 'Transferring funds not supported for Bybit'}
+
+    async def fetch_fills(self, limit: int = 1000, from_id: int = None, start_time: int = None, end_time: int = None):
+        return []

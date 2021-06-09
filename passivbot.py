@@ -1,20 +1,18 @@
+import argparse
 import asyncio
 import datetime
 import json
 import logging
 import os
 import signal
-import sys
 from collections import deque
 from pathlib import Path
 from time import time
 
 import numpy as np
-import argparse
-
-import telegram_bot
 import websockets
 
+import telegram_bot
 from jitted import round_, calc_diff, calc_ema, calc_cost, iter_entries, iter_long_closes, \
     iter_shrt_closes, compress_float
 
@@ -78,7 +76,7 @@ def load_key_secret(exchange: str, user: str) -> (str, str):
         raise Exception('API KeyFile Missing!')
 
 
-def print_(args, r=False, n=False):
+def print_(args: [str], r=False, n=False):
     line = ts_to_date(time())[:19] + '  '
     str_args = '{} ' * len(args)
     line += str_args.format(*args)
@@ -138,11 +136,13 @@ class Bot:
         self.ema_alpha_ = 1 - self.ema_alpha
 
         self.ts_locked = {'cancel_orders': 0, 'decide': 0, 'update_open_orders': 0,
-                          'update_position': 0, 'print': 0, 'create_orders': 0}
+                          'update_position': 0, 'print': 0, 'create_orders': 0,
+                          'check_fills': 0}
         self.ts_released = {k: 1 for k in self.ts_locked}
 
         self.position = {}
         self.open_orders = []
+        self.fills = []
         self.highest_bid = 0.0
         self.lowest_ask = 9.9e9
         self.price = 0
@@ -176,6 +176,8 @@ class Bot:
             config['entry_liq_diff_thr'] = config['stop_loss_liq_diff']
         if 'last_price_diff_limit' not in config:
             config['last_price_diff_limit'] = 0.15
+        if 'profit_trans_pct' not in config:
+            config['profit_trans_pct'] = 0.0
         self.config = config
         for key in config:
             setattr(self, key, config[key])
@@ -188,6 +190,7 @@ class Bot:
 
     async def _init(self):
         self.xk = {k: float(self.config[k]) for k in get_keys()}
+        self.fills = await self.fetch_fills()
 
     def dump_log(self, data) -> None:
         if self.config['logging_level'] > 0:
@@ -255,7 +258,7 @@ class Bot:
                 o = await c
                 created_orders.append(o)
                 if 'side' in o:
-                    print_([' created order', o['symbol'], o['side'], o['position_side'], o['qty'],
+                    print_(['  created order', o['symbol'], o['side'], o['position_side'], o['qty'],
                             o['price']], n=True)
                 else:
                     print_(['error creating order b', o, oc], n=True)
@@ -336,6 +339,16 @@ class Bot:
         liq_price = self.position['long']['liquidation_price'] if long_psize > abs(shrt_psize) \
             else self.position['shrt']['liquidation_price']
 
+        if self.stop_mode in ['panic']:
+            panic_orders = []
+            if long_psize != 0.0:
+                panic_orders.append({'side': 'sell', 'position_side': 'long', 'qty': abs(long_psize), 'price': self.ob[1],
+                                     'type': 'market', 'reduce_only': True, 'custom_id': 'long_panic'})
+            if shrt_psize != 0.0:
+                panic_orders.append({'side': 'buy', 'position_side': 'shrt', 'qty': abs(shrt_psize), 'price': self.ob[0],
+                                     'type': 'market', 'reduce_only': True, 'custom_id': 'shrt_panic'})
+            return panic_orders
+
         long_entry_orders, shrt_entry_orders, long_close_orders, shrt_close_orders = [], [], [], []
         stop_loss_close = False
 
@@ -346,7 +359,7 @@ class Bot:
                 len(shrt_entry_orders) >= self.n_open_orders_limit) or \
                     calc_diff(tpl[1], self.price) > self.last_price_diff_limit:
                 break
-            if tpl[4] == 'stop_loss_shrt_close':
+            elif tpl[4] == 'stop_loss_shrt_close':
                 shrt_close_orders.append({'side': 'buy', 'position_side': 'shrt', 'qty': abs(tpl[0]),
                                           'price': tpl[1], 'type': 'limit', 'reduce_only': True,
                                           'custom_id': tpl[4]})
@@ -417,16 +430,19 @@ class Bot:
     async def decide(self):
         if self.stop_mode is not None:
             print(f'{self.stop_mode} stop mode is active')
+
         if self.price <= self.highest_bid:
             self.ts_locked['decide'] = time()
             print_(['bid maybe taken'], n=True)
             await self.cancel_and_create()
+            asyncio.create_task(self.check_fills())
             self.ts_released['decide'] = time()
             return
         if self.price >= self.lowest_ask:
             self.ts_locked['decide'] = time()
             print_(['ask maybe taken'], n=True)
             await self.cancel_and_create()
+            asyncio.create_task(self.check_fills())
             self.ts_released['decide'] = time()
             return
         if time() - self.ts_locked['decide'] > 5:
@@ -436,6 +452,86 @@ class Bot:
             return
         if time() - self.ts_released['print'] >= 0.5:
             await self.update_output_information()
+
+        if time() - self.ts_released['check_fills'] > 120:
+            asyncio.create_task(self.check_fills())
+
+    async def check_fills(self):
+        if self.ts_locked['check_fills'] > self.ts_released['check_fills']:
+            # return if another call is in progress
+            return
+        now = time()
+        if now - self.ts_released['check_fills'] < 5.0:
+            # minimum 5 sec between consecutive check fills
+            return
+        self.ts_locked['check_fills'] = now
+        print_(['checking if new fills...\n'], n=True)
+        # check fills if two mins since prev check has passed
+        fills = await self.fetch_fills()
+        if self.fills != fills:
+            await self.check_long_fills(fills)
+            await self.check_shrt_fills(fills)
+
+        self.fills = fills
+        self.ts_released['check_fills'] = time()
+
+    async def check_shrt_fills(self, fills):
+        # closing orders
+        new_shrt_closes = [item for item in fills if item not in self.fills and
+                           item['side'] == 'buy' and item['position_side'] == 'shrt']
+        if len(new_shrt_closes) > 0:
+            realized_pnl_shrt = sum(fill['realized_pnl'] for fill in new_shrt_closes)
+            if self.telegram is not None:
+                self.telegram.notify_close_order_filled(realized_pnl=realized_pnl_shrt, position_side='short')
+            if realized_pnl_shrt >= 0 and self.profit_trans_pct > 0.0:
+                amount = realized_pnl_shrt * self.profit_trans_pct
+                self.telegram.send_msg(f'Transferring {round_(amount, 0.001)} USDT ({self.profit_trans_pct * 100 }%) of profit {round_(realized_pnl_shrt, self.price_step)} to Spot wallet')
+                transfer_result = await self.transfer(type_='UMFUTURE_MAIN', amount=amount)
+                if 'code' in transfer_result:
+                    self.telegram.send_msg(f'Error transferring to Spot wallet: {transfer_result["msg"]}')
+                else:
+                    self.telegram.send_msg(f'Transferred {round_(amount, 0.001)} USDT to Spot wallet')
+
+        # entry orders
+        new_shrt_entries = [item for item in fills if item not in self.fills and
+                            item['side'] == 'sell' and item['position_side'] == 'shrt']
+        if len(new_shrt_entries) > 0:
+            if self.telegram is not None:
+                qty_sum = sum(fill['qty'] for fill in new_shrt_entries)
+                cost = sum(fill['qty'] / fill['price'] if self.inverse else fill['qty'] * fill['price']
+                           for fill in new_shrt_entries)
+                # volume weighted average price
+                vwap = qty_sum / cost if self.inverse else cost / qty_sum
+                self.telegram.notify_entry_order_filled(size=qty_sum, price=vwap, position_side='short')
+
+    async def check_long_fills(self, fills):
+        #closing orders
+        new_long_closes = [item for item in fills if item not in self.fills and
+                          item['side'] == 'sell' and item['position_side'] == 'long']
+        if len(new_long_closes) > 0:
+            realized_pnl_long = sum(fill['realized_pnl'] for fill in new_long_closes)
+            if self.telegram is not None:
+                self.telegram.notify_close_order_filled(realized_pnl=realized_pnl_long, position_side='long')
+            if realized_pnl_long >= 0 and self.profit_trans_pct > 0.0:
+                amount = realized_pnl_long * self.profit_trans_pct
+                self.telegram.send_msg(f'Transferring {round_(amount, 0.001)} USDT ({self.profit_trans_pct * 100 }%) of profit {round_(realized_pnl_long, self.price_step)} to Spot wallet')
+                transfer_result = await self.transfer(type_='UMFUTURE_MAIN', amount=amount)
+                if 'code' in transfer_result:
+                    self.telegram.send_msg(f'Error transferring to Spot wallet: {transfer_result["msg"]}')
+                else:
+                    self.telegram.send_msg(f'Transferred {round_(amount, 0.001)} USDT to Spot wallet')
+
+        # entry orders
+        new_long_entries = [item for item in fills if item not in self.fills and
+                            item['side'] == 'buy' and item['position_side'] == 'long']
+        if len(new_long_entries) > 0:
+            if self.telegram is not None:
+                qty_sum = sum(fill['qty'] for fill in new_long_entries)
+                cost = sum(fill['qty'] / fill['price'] if self.inverse else fill['qty'] * fill['price']
+                           for fill in new_long_entries)
+                # volume weighted average price
+                vwap = qty_sum / cost if self.inverse else cost / qty_sum
+                self.telegram.notify_entry_order_filled(size=qty_sum, price=vwap, position_side='long')
 
     async def update_output_information(self):
         self.ts_released['print'] = time()
@@ -653,8 +749,7 @@ async def create_bybit_bot(config: str):
 
 
 async def _start_telegram(account: dict, bot: Bot):
-    telegram = telegram_bot.Telegram(token=account['telegram']['token'],
-                                     chat_id=account['telegram']['chat_id'],
+    telegram = telegram_bot.Telegram(config=account['telegram'],
                                      bot=bot,
                                      loop=asyncio.get_event_loop())
     telegram.log_start()
