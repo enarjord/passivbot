@@ -61,7 +61,7 @@ class Telegram:
         dispatcher.add_handler(ConversationHandler(
             entry_points=[MessageHandler(Filters.regex('/stop.*'), self._begin_stop)],
             states={
-                1: [MessageHandler(Filters.regex('(graceful|freeze|shutdown|resume|cancel)'),
+                1: [MessageHandler(Filters.regex('(graceful|freeze|shutdown|panic|resume|cancel)'),
                                    self._stop_mode_chosen)],
                 2: [MessageHandler(Filters.regex('(confirm|abort)'), self._verify_stop_confirmation)]
             },
@@ -229,8 +229,9 @@ class Telegram:
         if answer not in ['confirm', 'abort']:
             return 2
 
-        if update.message.text == 'abort':
+        if answer == 'abort':
             self.send_msg(f'Request for setting config was aborted')
+            return ConversationHandler.END
 
         if self.config_reload_ts > 0.0 and time() - self.config_reload_ts < 60 * 5:
             self.send_msg('Config reload in progress, please wait')
@@ -368,12 +369,13 @@ class Telegram:
 
     def _begin_stop(self, update: Update, _: CallbackContext) -> int:
         self.stop_mode_requested = ''
-        reply_keyboard = [['graceful', 'freeze', 'shutdown'],
-                          ['resume', 'cancel']]
+        reply_keyboard = [['graceful', 'freeze', 'panic'],
+                          ['shutdown', 'resume', 'cancel']]
         update.message.reply_text(
             text='To stop the bot, please choose one of the following modes:\n'
             '<pre>graceful</pre>: prevents the bot from opening new positions, but completes the existing position as usual\n'
             '<pre>freeze</pre>: prevents the bot from opening positions, and cancels all open orders to open/reenter positions\n'
+            '<pre>panic</pre>: immediately closes all open positions against market price, and cancels all open orders to open/reenter positions\n'
             '<pre>shutdown</pre>: immediately shuts down the bot, not making any further modifications to the current orders or positions\n'
             '<pre>resume</pre>: clears the stop mode and resumes normal operation\n'
             'Or send /cancel to abort stop-mode activation',
@@ -394,6 +396,10 @@ class Telegram:
             msg = f'You have chosen to shut down the bot.\n' \
                   f'Please confirm that you want to activate this stop mode by replying with either <pre>confirm</pre> or <pre>abort</pre>\n' \
                   f'\U00002757<b>Be aware that you cannot restart or control the bot from telegram anymore after confirming!!</b>\U00002757'
+        elif self.stop_mode_requested == 'panic':
+            msg = f'You have chosen to activate the stop mode panic.\n' \
+                  f'Please confirm that you want to activate this stop mode by replying with either <pre>confirm</pre> or <pre>abort</pre>\n' \
+                  f'<b>\U00002757\U00002757\U00002757Be aware that this will actively close all open positions, EVEN IF THEY ARE IN LOSS\U00002757\U00002757\U00002757</b>'
         else:
             msg = f'You have chosen to activate the stop mode <pre>{update.message.text}</pre>\n' \
                   f'Please confirm that you want to activate this stop mode by replying with either <pre>confirm</pre> or <pre>abort</pre>'
@@ -415,7 +421,7 @@ class Telegram:
                 self._bot.stop_mode = 'graceful'
                 self.send_msg(
                     'Graceful stop mode activated. No longer opening new long or short positions, existing positions will still be managed.'
-                    'Please be aware that this change is NOT persisted between restarts. To clear the stop-mode, you can use <pre>/reload_config</pre>')
+                    'Please be aware that this change is NOT persisted between restarts. To clear the stop-mode, you can use <pre>/reload_config</pre> or select <pre>resume</pre> from the <pre>/stop</pre> action')
             elif self.stop_mode_requested == 'freeze':
                 self.previous_do_long = self._bot.do_long
                 self.previous_do_shrt = self._bot.do_shrt
@@ -424,7 +430,16 @@ class Telegram:
                 self._bot.stop_mode = 'freeze'
                 self.send_msg(
                     'Freeze stop mode activated. No longer opening new long or short positions, all orders for reentry will be cancelled.'
-                    'Please be aware that this change is NOT persisted between restarts. To clear the stop-mode, you can use <pre>/reload_config</pre>')
+                    'Please be aware that this change is NOT persisted between restarts. To clear the stop-mode, you can use <pre>/reload_config</pre> or select <pre>resume</pre> from the <pre>/stop</pre> action')
+            if self.stop_mode_requested == 'panic':
+                self.previous_do_long = self._bot.do_long
+                self.previous_do_shrt = self._bot.do_shrt
+                self._bot.set_config_value('do_long', False)
+                self._bot.set_config_value('do_shrt', False)
+                self._bot.stop_mode = 'panic'
+                self.send_msg(
+                    'Panic stop mode activated. No longer opening new long or short positions, existing positions will immediately be closed.'
+                    'Please be aware that this change is NOT persisted between restarts. To clear the stop-mode, you can use <pre>/reload_config</pre> or select <pre>resume</pre> from the <pre>/stop</pre> action')
             elif self.stop_mode_requested == 'shutdown':
                 self._bot.stop_websocket = True
                 self.send_msg(
