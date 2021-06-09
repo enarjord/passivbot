@@ -507,9 +507,9 @@ class Bot:
                 self.telegram.send_msg(f'Transferring {amount} ({self.profit_trans_pct * 100}%) of profit {realized_pnl_long} to Spot wallet')
                 transfer_result = await self.transfer(type_='UMFUTURE_MAIN', amount=amount)
                 if 'code' in transfer_result:
-                    self.send_msg(f'Error transferring to Spot wallet: {transfer_result["msg"]}')
+                    self.telegram.send_msg(f'Error transferring to Spot wallet: {transfer_result["msg"]}')
                 else:
-                    self.send_msg(f'Transferred {amount} to Spot wallet')
+                    self.telegram.send_msg(f'Transferred {amount} to Spot wallet')
 
         # entry orders
         new_long_entries = [item for item in fills if item not in self.fills and
