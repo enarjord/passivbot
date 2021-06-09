@@ -517,7 +517,7 @@ class Bot:
                 self.telegram.send_msg(f'Transferring {round_(amount, 0.001)} USDT ({self.profit_trans_pct * 100 }%) of profit {round_(realized_pnl_long, self.price_step)} to Spot wallet')
                 transfer_result = await self.transfer(type_='UMFUTURE_MAIN', amount=amount)
                 if 'code' in transfer_result:
-                    self.send_msg(f'Error transferring to Spot wallet: {transfer_result["msg"]}')
+                    self.telegram.send_msg(f'Error transferring to Spot wallet: {transfer_result["msg"]}')
                 else:
                     self.telegram.send_msg(f'Transferred {round_(amount, 0.001)} USDT to Spot wallet')
 
