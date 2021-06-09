@@ -228,8 +228,9 @@ class Telegram:
         if answer not in ['confirm', 'abort']:
             return 2
 
-        if update.message.text == 'abort':
+        if answer == 'abort':
             self.send_msg(f'Request for setting config was aborted')
+            return ConversationHandler.END
 
         if self.config_reload_ts > 0.0 and time() - self.config_reload_ts < 60 * 5:
             self.send_msg('Config reload in progress, please wait')

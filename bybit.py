@@ -335,3 +335,6 @@ class Bybit(Bot):
 
     async def transfer(self, type_: str, amount: float, asset: str = 'USDT'):
         return {'code': '-1', 'msg': 'Transferring funds not supported for Bybit'}
+
+    async def fetch_fills(self, limit: int = 1000, from_id: int = None, start_time: int = None, end_time: int = None):
+        return []
