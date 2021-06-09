@@ -124,7 +124,7 @@ def simple_sliding_window_wrap(config, data, do_print=False):
               f'hrs stuck ss {str(round(analysis["max_hrs_no_fills_same_side"], 1)).zfill(4)}, '
               f'scores {[round(e["score"], 2) for e in analyses]}, ')
         # if at least 20% done and lowest eqbal < 0.1: break
-        if z > n_slices * 0.2 and np.min([r['lowest_eqbal_ratio'] for r in analyses]) < 0.1:
+        if z > n_slices * config['break_early_factor'] and np.min([r['lowest_eqbal_ratio'] for r in analyses]) < 0.1:
             break
     tune.report(objective=objective,
                 daily_gain=np.mean([r['average_daily_gain'] for r in analyses]),

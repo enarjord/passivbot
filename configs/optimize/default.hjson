@@ -6,33 +6,16 @@
   n_particles: 24
 
   minimum_bankruptcy_distance: 0.14
-
   minimum_eqbal_ratio: 0.5
-
-  # max hours between consecutive fills
   maximum_hrs_no_fills: 72
-
-  # max hours between consecutive same side fills (long / short)
   maximum_hrs_no_fills_same_side: 144
 
-  # if wfo = true, will optimize with walk forward optimization.
-  # otherwise, simple sliding window
-  wfo: false
-
-  # sliding window config:
   sliding_window_size: 0.25
   test_full: false
 
   # set to 0.0 to disable breaking early
-  # if slice progress > break_early_factor and
-  # if lowest_eqbal_ratio < minimum_eqbal_ratio * break_early_factor: break
-  break_early_factor: 0.5
-
-  # wfo config:
-  # VWR
-  tau: 0.8
-  sdev_max: 0.06
-  metric: "returns_daily"
+  # will break early if any slice's lowest_eqbal_ratio < 0.1
+  break_early_factor: 0.2
 
   # ema settings
   n_spans: 3
@@ -40,14 +23,14 @@
   max_span: 360000
   MA_idx: 1  # index of base ema
 
-  # If start and stop are set to same value, it's treated as a fixed variable.
+  # If lower and upper bound are set to same value, it's treated as a fixed variable.
   ranges:
   {
     # common parameters
-    stop_psize_pct: [0.01, 0.01]
+    stop_psize_pct: [0.0, 1.0]
     coeffs: [-0.2, 0.2]
 
-    long§leverage: [0.5, 16.0]
+    long§leverage: [0.5, 20.0]
     long§iqty_const: [0.0, 1.0]
     long§iprc_const: [0.95, 1.0]
     long§rqty_const: [0.0, 4.0]
@@ -55,7 +38,7 @@
     long§markup_const: [1.0, 1.05]
 
 
-    shrt§leverage: [16, 16]
+    shrt§leverage: [0.5, 20.0]
     shrt§iqty_const: [0.0, 1.0]
     shrt§iprc_const: [1.0, 1.05]
     shrt§rqty_const: [0.0, 4.0]

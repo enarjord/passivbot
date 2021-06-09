@@ -230,9 +230,9 @@ def get_template_live_config(n_spans=3, randomize_coeffs=False):
         "max_span": 300000,
         "n_spans": n_spans,
         "MA_idx":             1,      # index of ema span from which to calc initial entry prices
-        "stop_psize_pct":     0.05,   # % of psize for stop loss order
         "long": {
             "enabled":            True,
+            "stop_psize_pct":     0.05,   # % of psize for stop loss order
             "leverage":           3.0,    # max pcost = balance * leverage
             "iqty_const":         0.01,   # initial entry qty pct
             "iprc_const":         0.991,  # initial entry price ema_spread
@@ -254,6 +254,7 @@ def get_template_live_config(n_spans=3, randomize_coeffs=False):
         },
         "shrt": {
             "enabled":            True,
+            "stop_psize_pct":     0.05,   # % of psize for stop loss order
             "leverage":           3.0,    # max pcost = balance * leverage
             "iqty_const":         0.01,   # initial entry qty pct
             "iprc_const":         1.009,  # initial entry price ema_spread
