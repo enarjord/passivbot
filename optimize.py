@@ -98,6 +98,8 @@ def objective_function(analysis: dict, config: dict) -> float:
     if analysis['n_fills'] == 0:
         return -1.0
     return (analysis['adjusted_daily_gain']
+            * min(1.0, config["maximum_hrs_no_fills"] / analysis["max_hrs_no_fills"])
+            * min(1.0, config["maximum_hrs_no_fills_same_side"] / analysis["max_hrs_no_fills_same_side"])
             * min(1.0, analysis["lowest_eqbal_ratio"] / config["minimum_eqbal_ratio"]))
 
 
@@ -112,7 +114,7 @@ def simple_sliding_window_wrap(config, data, do_print=False):
     for z, data_slice in enumerate(slices):
         fills, info = backtest(pack_config(config), data_slice, do_print=do_print)
         _, analysis = analyze_fills(fills, {**config, **{'lowest_eqbal_ratio': info[1], 'closest_bkr': info[2]}},
-            data_slice[2][0], data_slice[2][-1])
+                                    data_slice[2][0], data_slice[2][-1])
         analysis['score'] = objective_function(analysis, config) * (analysis['n_days'] / n_days)
         analyses.append(analysis)
         objective = np.mean([r['score'] for r in analyses]) * (z / n_slices)
