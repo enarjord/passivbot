@@ -339,6 +339,16 @@ class Bot:
         liq_price = self.position['long']['liquidation_price'] if long_psize > abs(shrt_psize) \
             else self.position['shrt']['liquidation_price']
 
+        if self.stop_mode in ['panic']:
+            panic_orders = []
+            if long_psize != 0.0:
+                panic_orders.append({'side': 'sell', 'position_side': 'long', 'qty': abs(long_psize), 'price': self.ob[1],
+                                     'type': 'market', 'reduce_only': True, 'custom_id': 'long_panic'})
+            if shrt_psize != 0.0:
+                panic_orders.append({'side': 'buy', 'position_side': 'shrt', 'qty': abs(shrt_psize), 'price': self.ob[0],
+                                     'type': 'market', 'reduce_only': True, 'custom_id': 'shrt_panic'})
+            return panic_orders
+
         long_entry_orders, shrt_entry_orders, long_close_orders, shrt_close_orders = [], [], [], []
         stop_loss_close = False
 
@@ -349,7 +359,7 @@ class Bot:
                 len(shrt_entry_orders) >= self.n_open_orders_limit) or \
                     calc_diff(tpl[1], self.price) > self.last_price_diff_limit:
                 break
-            if tpl[4] == 'stop_loss_shrt_close':
+            elif tpl[4] == 'stop_loss_shrt_close':
                 shrt_close_orders.append({'side': 'buy', 'position_side': 'shrt', 'qty': abs(tpl[0]),
                                           'price': tpl[1], 'type': 'limit', 'reduce_only': True,
                                           'custom_id': tpl[4]})
@@ -475,12 +485,12 @@ class Bot:
                 self.telegram.notify_close_order_filled(realized_pnl=realized_pnl_shrt, position_side='short')
             if realized_pnl_shrt >= 0 and self.profit_trans_pct > 0.0:
                 amount = realized_pnl_shrt * self.profit_trans_pct
-                self.telegram.send_msg(f'Transferring {amount} ({self.profit_trans_pct * 100 }%) of profit {realized_pnl_shrt} to Spot wallet')
+                self.telegram.send_msg(f'Transferring {round_(amount, 0.001)} USDT ({self.profit_trans_pct * 100 }%) of profit {round_(realized_pnl_shrt, self.price_step)} to Spot wallet')
                 transfer_result = await self.transfer(type_='UMFUTURE_MAIN', amount=amount)
                 if 'code' in transfer_result:
                     self.telegram.send_msg(f'Error transferring to Spot wallet: {transfer_result["msg"]}')
                 else:
-                    self.telegram.send_msg(f'Transferred {amount} to Spot wallet')
+                    self.telegram.send_msg(f'Transferred {round_(amount, 0.001)} USDT to Spot wallet')
 
         # entry orders
         new_shrt_entries = [item for item in fills if item not in self.fills and
@@ -504,12 +514,12 @@ class Bot:
                 self.telegram.notify_close_order_filled(realized_pnl=realized_pnl_long, position_side='long')
             if realized_pnl_long >= 0 and self.profit_trans_pct > 0.0:
                 amount = realized_pnl_long * self.profit_trans_pct
-                self.telegram.send_msg(f'Transferring {amount} ({self.profit_trans_pct * 100}%) of profit {realized_pnl_long} to Spot wallet')
+                self.telegram.send_msg(f'Transferring {round_(amount, 0.001)} USDT ({self.profit_trans_pct * 100 }%) of profit {round_(realized_pnl_long, self.price_step)} to Spot wallet')
                 transfer_result = await self.transfer(type_='UMFUTURE_MAIN', amount=amount)
                 if 'code' in transfer_result:
                     self.telegram.send_msg(f'Error transferring to Spot wallet: {transfer_result["msg"]}')
                 else:
-                    self.telegram.send_msg(f'Transferred {amount} to Spot wallet')
+                    self.telegram.send_msg(f'Transferred {round_(amount, 0.001)} USDT to Spot wallet')
 
         # entry orders
         new_long_entries = [item for item in fills if item not in self.fills and
