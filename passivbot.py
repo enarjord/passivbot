@@ -339,6 +339,16 @@ class Bot:
         liq_price = self.position['long']['liquidation_price'] if long_psize > abs(shrt_psize) \
             else self.position['shrt']['liquidation_price']
 
+        if self.stop_mode in ['panic']:
+            panic_orders = []
+            if long_psize != 0.0:
+                panic_orders.append({'side': 'sell', 'position_side': 'long', 'qty': abs(long_psize), 'price': self.ob[1],
+                                     'type': 'market', 'reduce_only': True, 'custom_id': 'long_panic'})
+            if shrt_psize != 0.0:
+                panic_orders.append({'side': 'buy', 'position_side': 'shrt', 'qty': abs(shrt_psize), 'price': self.ob[0],
+                                     'type': 'market', 'reduce_only': True, 'custom_id': 'shrt_panic'})
+            return panic_orders
+
         long_entry_orders, shrt_entry_orders, long_close_orders, shrt_close_orders = [], [], [], []
         stop_loss_close = False
 
@@ -349,7 +359,7 @@ class Bot:
                 len(shrt_entry_orders) >= self.n_open_orders_limit) or \
                     calc_diff(tpl[1], self.price) > self.last_price_diff_limit:
                 break
-            if tpl[4] == 'stop_loss_shrt_close':
+            elif tpl[4] == 'stop_loss_shrt_close':
                 shrt_close_orders.append({'side': 'buy', 'position_side': 'shrt', 'qty': abs(tpl[0]),
                                           'price': tpl[1], 'type': 'limit', 'reduce_only': True,
                                           'custom_id': tpl[4]})
