@@ -657,7 +657,7 @@ class Telegram:
 
     def notify_entry_order_filled(self, size: float, price:float, position_side: str):
         if 'notify_entry_fill' not in self.config or self.config['notify_entry_fill'] is True:
-            self.send_msg(f'Entry order of size <pre>{size}</pre> at price <pre>{price}</pre> filled on {position_side}')
+            self.send_msg(f'Entry order of size <pre>{size}</pre> at price <pre>{round_(price, self._bot.price_step)}</pre> filled on {position_side}')
 
     def show_config(self, update=None, context=None):
         try:
