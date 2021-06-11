@@ -247,7 +247,8 @@ async def main():
     else:
         analysis = backtest_tune(data, config)
     save_results(analysis, config)
-    plot_wrap(config, data, clean_result_config(analysis.best_config))
+    config.update(clean_result_config(analysis.best_config))
+    plot_wrap(config, data)
 
 
 if __name__ == '__main__':
