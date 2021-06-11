@@ -22,7 +22,6 @@ from njit_funcs import round_
 from passivbot import add_argparse_args
 from procedures import make_get_ticks_cache
 from reporter import LogReporter
-# from walk_forward_optimization import WFO
 from pure_funcs import pack_config, unpack_config, get_template_live_config, ts_to_date
 
 os.environ['TUNE_GLOBAL_CHECKPOINT_S'] = '240'
@@ -30,7 +29,8 @@ os.environ['TUNE_GLOBAL_CHECKPOINT_S'] = '240'
 
 def create_config(config: dict) -> dict:
     updated_ranges = {}
-    unpacked = unpack_config(get_template_live_config(config['n_spans']))
+    unpacked = unpack_config(get_template_live_config(config['min_span'], config['max_span'], config['n_spans']))
+
     for k0 in unpacked:
         if '§' in k0:
             for k1 in config['ranges']:
@@ -70,14 +70,6 @@ def clean_result_config(config: dict) -> dict:
     return config
 
 
-def iter_slices_old(data, sliding_window_size: float, n_windows: int, yield_full: bool = False):
-    for ix in np.linspace(1 - sliding_window_size, 0.0, n_windows):
-        yield tuple([d[int(round(len(data[0]) * ix)):int(round(len(data[0]) * (ix + sliding_window_size)))]
-                     for d in data])
-    if yield_full:
-        yield data
-
-
 def iter_slices(data, sliding_window_days: float):
     ms_span = data[2][-1] - data[2][0]
     sliding_window_ms = sliding_window_days * 24 * 60 * 60 * 1000
@@ -100,7 +92,7 @@ def objective_function(analysis: dict, config: dict) -> float:
     return (analysis['adjusted_daily_gain']
             * min(1.0, config["maximum_hrs_no_fills"] / analysis["max_hrs_no_fills"])
             * min(1.0, config["maximum_hrs_no_fills_same_side"] / analysis["max_hrs_no_fills_same_side"])
-            * min(1.0, analysis["lowest_eqbal_ratio"] / config["minimum_eqbal_ratio"]))
+            * min(1.0, analysis["closest_bkr"] / config["minimum_bankruptcy_distance"]))
 
 
 def simple_sliding_window_wrap(config, data, do_print=False):
@@ -108,7 +100,7 @@ def simple_sliding_window_wrap(config, data, do_print=False):
     objective = 0.0
     n_days = (data[2][-1] - data[2][0]) / (1000 * 60 * 60 * 24)
     sliding_window_days = max(3.0, n_days * config['sliding_window_size']) # at least 3 days per slice
-    slices = list(iter_slices(data, sliding_window_days))
+    slices = list(iter_slices(data, sliding_window_days)) if config['sliding_window_size'] < 1.0 else [data]
     n_slices = len(slices)
     print('n_days', n_days, 'sliding_window_days', sliding_window_days, 'n_slices', n_slices)
     for z, data_slice in enumerate(slices):
@@ -117,14 +109,13 @@ def simple_sliding_window_wrap(config, data, do_print=False):
                                     data_slice[2][0], data_slice[2][-1])
         analysis['score'] = objective_function(analysis, config) * (analysis['n_days'] / n_days)
         analyses.append(analysis)
-        objective = np.mean([r['score'] for r in analyses]) * (z / n_slices)
+        objective = np.mean([r['score'] for r in analyses]) * ((z + 1) / n_slices)
         print(f'z {z}, n {n_slices}, adg {analysis["average_daily_gain"]:.4f}, bkr {analysis["closest_bkr"]:.4f}, '
               f'eqbal {analysis["lowest_eqbal_ratio"]:.4f} n_days {analysis["n_days"]:.1f}, '
               f'score {analysis["score"]:.4f}, objective {objective:.4f}, '
               f'hrs stuck ss {str(round(analysis["max_hrs_no_fills_same_side"], 1)).zfill(4)}, '
               f'scores {[round(e["score"], 2) for e in analyses]}, ')
-        # if at least 20% done and lowest eqbal < 0.1: break
-        if z > n_slices * config['break_early_factor'] and np.min([r['lowest_eqbal_ratio'] for r in analyses]) < 0.1:
+        if analysis['closest_bkr'] < config['bankruptcy_distance_break_thr']:
             break
     tune.report(objective=objective,
                 daily_gain=np.mean([r['average_daily_gain'] for r in analyses]),
@@ -186,13 +177,8 @@ def backtest_tune(data: np.ndarray, config: dict, current_best: Union[dict, list
     algo = ConcurrencyLimiter(algo, max_concurrent=num_cpus)
     scheduler = AsyncHyperBandScheduler()
 
-    if False:  # 'wfo' in config and config['wfo']:
-        print('\n\nwalk forward optimization\n\n')
-        wfo = WFO(data, config, P_train=0.5).set_train_N(4)
-        backtest_wrap = lambda config: tune_report(wfo.backtest(config))
-    else:
-        print('\n\nsimple sliding window optimization\n\n')
-        backtest_wrap = tune.with_parameters(simple_sliding_window_wrap, data=data)
+    print('\n\nsimple sliding window optimization\n\n')
+    backtest_wrap = tune.with_parameters(simple_sliding_window_wrap, data=data)
     analysis = tune.run(
         backtest_wrap, metric='objective', mode='max', name='search',
         search_alg=algo, scheduler=scheduler, num_samples=iters, config=config, verbose=1,
@@ -203,7 +189,7 @@ def backtest_tune(data: np.ndarray, config: dict, current_best: Union[dict, list
                                                       'max_hrs_no_fills_same_side',
                                                       'objective'],
                                       parameter_columns=[k for k in config['ranges']
-                                                         if 'const' in k and '§' in k]),
+                                                         if any(k0 in k for k0 in ['const', 'leverage']) and '§' in k]),
                                                          #if type(config[k]) == ray.tune.sample.Float
                                                          #or type(config[k]) == ray.tune.sample.Integer]),
         raise_on_failed_trial=False
@@ -216,17 +202,6 @@ def save_results(analysis, config):
     df = analysis.results_df
     df.reset_index(inplace=True)
     df.rename(columns={column: column.replace('config.', '') for column in df.columns}, inplace=True)
-    '''
-    keys = [k for k in config['ranges'] if k in config]
-    for k in config:
-        if 'coeff' in k:
-            keys.append
-    keys += ['daily_gain', 'closest_bankruptcy', 'max_hrs_no_fills', 'max_hrs_no_fills_same_side', 'objective']
-
-    df = df[list(config['ranges'].keys()) + ['daily_gain', 'closest_bankruptcy', 'maximum_hrs_no_fills',
-                                             'maximum_hrs_no_fills_same_side', 'objective']].sort_values(
-        'objective', ascending=False)
-    '''
     df = df.sort_values('objective', ascending=False)
     df.to_csv(os.path.join(config['optimize_dirpath'], 'results.csv'), index=False)
     print('Best candidate found:')
@@ -247,9 +222,9 @@ async def main():
         return
     downloader = Downloader(config)
     print()
-    for k in (keys := ['exchange', 'symbol', 'starting_balance', 'start_date', 'end_date',
-                       'latency_simulation_ms', 'do_long', 'do_shrt', 'minimum_bankruptcy_distance',
-                       'maximum_hrs_no_fills', 'maximum_hrs_no_fills_same_side', 'iters', 'n_particles', 'sliding_window_size']):
+    for k in (keys := ['exchange', 'symbol', 'starting_balance', 'start_date', 'end_date', 'latency_simulation_ms',
+                       'do_long', 'do_shrt', 'minimum_bankruptcy_distance', 'maximum_hrs_no_fills',
+                       'maximum_hrs_no_fills_same_side', 'iters', 'n_particles', 'sliding_window_size']):
         if k in config:
             print(f"{k: <{max(map(len, keys)) + 2}} {config[k]}")
     print()

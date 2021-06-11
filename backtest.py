@@ -25,10 +25,9 @@ def backtest(config: dict, data: (np.ndarray,), do_print=False) -> (list, bool):
                          config['maker_fee'], **xk)
 
 
-def plot_wrap(bc, data, live_config):
+def plot_wrap(config, data):
     n_days = round_((data[2][-1] - data[2][0]) / (1000 * 60 * 60 * 24), 0.1)
     print('n_days', round_(n_days, 0.1))
-    config = {**bc, **live_config}
     print('starting_balance', config['starting_balance'])
     print('backtesting...')
     sts = time()
@@ -70,11 +69,12 @@ async def main():
     downloader = Downloader(config)
     ticks = await downloader.get_ticks(True)
     live_config = load_live_config(args.live_config_path)
-    config = {**config, **live_config}
+    config.update(live_config)
+    pprint.pprint(config)
     data = make_get_ticks_cache(config, ticks)
     config['n_days'] = round_((data[2][-1] - data[2][0]) / (1000 * 60 * 60 * 24), 0.1)
     pprint.pprint(denumpyize(live_config))
-    plot_wrap(config, data, live_config)
+    plot_wrap(config, data)
 
 
 if __name__ == '__main__':

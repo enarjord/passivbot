@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 import datetime
 from dateutil import parser
 from njit_funcs import round_dynamic, calc_emas, calc_ratios
@@ -69,6 +70,10 @@ def denumpyize(x):
         for k, v in x.items():
             denumpyd[k] = denumpyize(v)
         return denumpyd
+    elif type(x) == list:
+        return [denumpyize(z) for z in x]
+    elif type(x) == tuple:
+        return tuple([denumpyize(z) for z in x])
     else:
         return x
 
@@ -83,7 +88,9 @@ def date_to_ts(d):
 
 def candidate_to_live_config(candidate: dict) -> dict:
     packed = pack_config(candidate)
-    live_config = get_template_live_config()
+    live_config = get_template_live_config(min_span=candidate['min_span'],
+                                           max_span=candidate['max_span'],
+                                           n_spans=candidate['n_spans'])
     sides = ['long', 'shrt']
     for side in sides:
         for k in live_config[side]:
@@ -222,12 +229,13 @@ def flatten(lst: list) -> list:
     return [y for x in lst for y in x]
 
 
-def get_template_live_config(n_spans=3, randomize_coeffs=False):
+
+def get_template_live_config(min_span=6000, max_span=300000, n_spans=3, randomize_coeffs=False):
     config = {
         "config_name": "name",
         "logging_level": 0,
-        "min_span": 6000,
-        "max_span": 300000,
+        "min_span": min_span,
+        "max_span": max_span,
         "n_spans": n_spans,
         "MA_idx":             1,      # index of ema span from which to calc initial entry prices
         "long": {
@@ -290,6 +298,51 @@ def get_bid_ask_thresholds(data, config):
     pass
 
 
+def ema_from_samples(samples, span):
+    pass
+
+
+def powspace(start, stop, power, num):
+    start = np.power(start, 1.0/float(power))
+    stop = np.power(stop, 1.0/float(power))
+    return np.power(np.linspace(start, stop, num=num), power) 
+
+
+def calc_sample_idxs(span: int, max_n_samples: int, ticks_per_fetch: int = 1000):
+    n_samples = min(max_n_samples, int(round(span / ticks_per_fetch)))
+    sample_idxs = np.linspace(0, span - ticks_per_fetch, n_samples).round().astype(int)
+    return sample_idxs
+
+
+def get_ids_to_fetch(spans: [int], last_id: int, max_n_samples: int = 60, ticks_per_fetch: int = 1000):
+    max_span = max(spans)
+    n_samples = int(round((max_span - ticks_per_fetch * 2) / ticks_per_fetch))
+    first_fetch_id = last_id - ticks_per_fetch * 2
+    if n_samples < max_n_samples:
+        return np.arange(first_fetch_id, last_id - max_span - ticks_per_fetch, -ticks_per_fetch)
+    if len(spans) == 1:
+        return np.linspace(first_fetch_id, last_id - spans[0], max_n_samples).round().astype(int)
+    samples_per_span = max_n_samples // len(spans)
+    all_idxs = []
+    prev_last_id = last_id
+    for i in range(len(spans)):
+        idxs = get_ids_to_fetch(spans[i:i+1], prev_last_id, samples_per_span)
+        all_idxs.append(idxs)
+        samples_leftover = max_n_samples - sum(map(len, all_idxs))
+        samples_per_span = samples_leftover // max(1, len(spans) - i - 1)
+        prev_last_id = idxs[-1] + 1000
+    return np.array(flatten(all_idxs))[::-1]
+
+
+def calc_indicators_from_ticks_with_gaps(spans, ticks_with_gaps):
+    df = pd.DataFrame(ticks_with_gaps).set_index('trade_id').sort_index()
+    df = df.reindex(np.arange(df.index[0], df.index[-1])).interpolate(method='linear')
+    df = df.groupby(
+        (~((df.price == df.price.shift(1)) & (df.is_buyer_maker == df.is_buyer_maker.shift(1)))).cumsum()).agg(
+        {'price': 'first', 'is_buyer_maker': 'first'})
+    emas = calc_emas(df.price.values, np.array(spans))
+    ratios = calc_ratios(emas)
+    return emas, ratios
 
 
 

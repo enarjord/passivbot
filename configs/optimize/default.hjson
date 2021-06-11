@@ -5,32 +5,29 @@
   options: {"c1": 1.4962, "c2": 1.4962, "w": 0.7298}
   n_particles: 24
 
-  minimum_bankruptcy_distance: 0.14
-  minimum_eqbal_ratio: 0.5
+  minimum_bankruptcy_distance: 0.4
   maximum_hrs_no_fills: 72
-  maximum_hrs_no_fills_same_side: 144
+  maximum_hrs_no_fills_same_side: 96
 
-  sliding_window_size: 0.25
-  test_full: false
+  sliding_window_size: 0.1
 
   # set to 0.0 to disable breaking early
-  # will break early if any slice's lowest_eqbal_ratio < 0.1
-  break_early_factor: 0.2
+  # will break early if any slice's lowest_eqbal_ratio < bankruptcy_distance_break_thr
+  bankruptcy_distance_break_thr: 0.2
 
   # ema settings
   n_spans: 3
-  min_span: 18000
+  min_span: 9000
   max_span: 360000
   MA_idx: 1  # index of base ema
 
   # If lower and upper bound are set to same value, it's treated as a fixed variable.
   ranges:
   {
-    # common parameters
     stop_psize_pct: [0.0, 1.0]
-    coeffs: [-0.2, 0.2]
+    coeffs: [-0.3, 0.3]
 
-    long§leverage: [0.5, 20.0]
+    long§leverage: [0.1, 5.0]
     long§iqty_const: [0.0, 1.0]
     long§iprc_const: [0.95, 1.0]
     long§rqty_const: [0.0, 4.0]
@@ -38,7 +35,7 @@
     long§markup_const: [1.0, 1.05]
 
 
-    shrt§leverage: [0.5, 20.0]
+    shrt§leverage: [0.1, 5.0]
     shrt§iqty_const: [0.0, 1.0]
     shrt§iprc_const: [1.0, 1.05]
     shrt§rqty_const: [0.0, 4.0]
