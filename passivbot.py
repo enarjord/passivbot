@@ -1,5 +1,6 @@
 import argparse
 import asyncio
+import datetime
 import json
 import logging
 import os
@@ -7,15 +8,12 @@ import signal
 from collections import deque
 from pathlib import Path
 from time import time
-from procedures import make_get_filepath, load_key_secret, print_, create_binance_bot, create_bybit_bot
-from pure_funcs import denumpyize
-
+from procedures import load_live_config, make_get_filepath, load_key_secret
+from pure_funcs import get_xk_keys, get_ids_to_fetch, flatten, calc_indicators_from_ticks_with_gaps, \
+    drop_consecutive_same_prices
 import numpy as np
 import websockets
 import telegram_bot
-
-from njit_funcs import round_, calc_diff, calc_ema, qty_to_cost
-from pure_funcs import create_xk, compress_float, filter_orders, get_xk_keys
 
 logging.getLogger("telegram").setLevel(logging.CRITICAL)
 
@@ -25,15 +23,13 @@ class LockNotAvailableException(Exception):
 
 class Bot:
     def __init__(self, config: dict):
-        self.leverage = None
         self.config = config
         self.telegram = None
         self.xk = {}
 
         self.set_config(config)
 
-        self.ema_span = int(round(self.ema_span))
-        self.ema_alpha = 2 / (self.ema_span + 1)
+        self.ema_alpha = 2 / (self.spans + 1)
         self.ema_alpha_ = 1 - self.ema_alpha
 
         self.ts_locked = {'cancel_orders': 0, 'decide': 0, 'update_open_orders': 0,
@@ -53,11 +49,16 @@ class Bot:
         self.ob = [0.0, 0.0]
         self.ema = 0.0
 
+        self.emas = np.zeros(len(self.spans))
+        self.ratios = np.zeros(len(self.spans) - 1)
+        self.stop_band_lower = 0.0
+        self.stop_band_upper = 0.0
+
         self.n_open_orders_limit = 8
         self.n_orders_per_execution = 4
 
         self.hedge_mode = True
-        self.c_mult = self.config['c_mult'] = 1.0
+        self.contract_multiplier = self.config['contract_multiplier'] = 1.0
 
         self.log_filepath = make_get_filepath(f"logs/{self.exchange}/{config['config_name']}.log")
 
@@ -67,10 +68,10 @@ class Bot:
 
         self.stop_websocket = False
         self.process_websocket_ticks = True
-        self.lock_file = f"{str(Path.home())}/.passivbotlock"
+        self.lock_file = f"{str(Path.home())}/.{self.exchange}_passivbotlock"
 
     def set_config(self, config):
-        config['ema_span'] = int(round(config['ema_span']))
+        config['spans'] = config['spans'].round().astype(int)
         if 'stop_mode' not in config:
             config['stop_mode'] = None
         if 'entry_liq_diff_thr' not in config:
@@ -90,16 +91,13 @@ class Bot:
         setattr(self, key, self.config[key])
 
     async def _init(self):
-        self.xk = denumpyize(create_xk(self.config))
+        self.xk = {k: float(self.config[k]) for k in get_xk_keys()}
         self.fills = await self.fetch_fills()
 
     def dump_log(self, data) -> None:
         if self.config['logging_level'] > 0:
             with open(self.log_filepath, 'a') as f:
                 f.write(json.dumps({**{'log_timestamp': time()}, **data}) + '\n')
-    
-    async def fetch_open_orders(self):
-        raise NotImplementedError
 
     async def update_open_orders(self) -> None:
         if self.ts_locked['update_open_orders'] > self.ts_released['update_open_orders']:
@@ -118,9 +116,6 @@ class Bot:
             self.ts_released['update_open_orders'] = time()
         except Exception as e:
             print('error with update open orders', e)
-    
-    async def fetch_position(self):
-        raise NotImplementedError
 
     async def update_position(self) -> None:
         # also updates open orders
@@ -131,11 +126,11 @@ class Bot:
             position, _ = await asyncio.gather(self.fetch_position(),
                                                self.update_open_orders())
             position['used_margin'] = \
-                ((qty_to_cost(position['long']['size'], position['long']['price'],
-                            self.xk['inverse'], self.xk['c_mult'])
+                ((calc_cost(position['long']['size'], position['long']['price'],
+                            self.xk['inverse'], self.xk['contract_multiplier'])
                   if position['long']['price'] else 0.0) +
-                 (qty_to_cost(position['shrt']['size'], position['shrt']['price'],
-                            self.xk['inverse'], self.xk['c_mult'])
+                 (calc_cost(position['shrt']['size'], position['shrt']['price'],
+                            self.xk['inverse'], self.xk['contract_multiplier'])
                   if position['shrt']['price'] else 0.0)) / self.leverage
             position['available_margin'] = (position['equity'] - position['used_margin']) * 0.9
             position['long']['liq_diff'] = calc_diff(position['long']['liquidation_price'], self.price)
@@ -147,11 +142,11 @@ class Bot:
         except Exception as e:
             print('error with update position', e)
 
-    async def create_orders(self, orders_to_create: [dict]) -> list:
+    async def create_orders(self, orders_to_create: [dict]) -> dict:
         if not orders_to_create:
-            return []
+            return
         if self.ts_locked['create_orders'] > self.ts_released['create_orders']:
-            return []
+            return
         self.ts_locked['create_orders'] = time()
         creations = []
         for oc in sorted(orders_to_create, key=lambda x: x['qty']):
@@ -226,7 +221,7 @@ class Bot:
         self.process_websocket_ticks = True
 
     def calc_orders(self):
-        balance = self.position['wallet_balance']
+        balance = self.position['wallet_balance'] * 0.9
         long_psize = self.position['long']['size']
         long_pprice = self.position['long']['price']
         shrt_psize = self.position['shrt']['size']
@@ -487,60 +482,21 @@ class Bot:
                     print('flushing', key)
                     self.ts_released[key] = now
 
-    async def fetch_compressed_ticks(self):
-
-        def drop_consecutive_same_prices(ticks_):
-            compressed_ = [ticks_[0]]
-            for i in range(1, len(ticks_)):
-                if ticks_[i]['price'] != compressed_[-1]['price'] or \
-                        ticks_[i]['is_buyer_maker'] != compressed_[-1]['is_buyer_maker']:
-                    compressed_.append(ticks_[i])
-            return compressed_
-
-        ticks_unabridged = await self.fetch_ticks(do_print=False)
-        ticks_per_fetch = len(ticks_unabridged)
-        ticks = drop_consecutive_same_prices(ticks_unabridged)
-        if self.exchange == 'bybit' and self.market_type == 'linear_perpetual':
-            print('\nwarning:  bybit linear usdt symbols only allows fetching most recent 1000 ticks')
-            return ticks
-        delay_between_fetches = 0.55
-        print()
-        while True:
-            print(f'\rfetching ticks... {len(ticks)} of {self.ema_span} ', end= ' ')
-            sts = time()
-            new_ticks = await self.fetch_ticks(from_id=ticks[0]['trade_id'] - ticks_per_fetch,
-                                               do_print=False)
-            wait_for = max(0.0, delay_between_fetches - (time() - sts))
-            ticks = drop_consecutive_same_prices(sorted(new_ticks + ticks,
-                                                        key=lambda x: x['trade_id']))
-            if len(ticks) > self.ema_span:
-                break
-            await asyncio.sleep(wait_for)
-        new_ticks = await self.fetch_ticks(do_print=False)
-        return drop_consecutive_same_prices(sorted(ticks + new_ticks, key=lambda x: x['trade_id']))
-
     async def init_indicators(self):
-        ticks = await self.fetch_compressed_ticks()
-        ema = ticks[0]['price']
-        self.tick_prices_deque = deque(maxlen=self.ema_span)
-        for tick in ticks:
-            self.tick_prices_deque.append(tick['price'])
-            ema = ema * self.ema_alpha_ + tick['price'] * self.ema_alpha
-        if len(self.tick_prices_deque) < self.ema_span:
-            print('\nwarning: insufficient ticks fetched, filling deque with duplicate ticks...')
-            print('ema and volatility will be inaccurate until deque is filled with websocket ticks')
-            while len(self.tick_prices_deque) < self.ema_span:
-                self.tick_prices_deque.extend([t['price'] for t in ticks])
-        self.ema = ema
-        self.sum_prices = sum(self.tick_prices_deque)
-        self.sum_prices_squared = sum([e ** 2 for e in self.tick_prices_deque])
-        self.price_std = np.sqrt((self.sum_prices_squared / len(self.tick_prices_deque) -
-                                 ((self.sum_prices / len(self.tick_prices_deque)) ** 2)))
-        self.volatility = self.price_std / self.ema
-        print('\ndebug len ticks, prices deque, ema_span')
-        print(len(ticks), len(self.tick_prices_deque), self.ema_span)
+        ticks = await self.fetch_ticks()
+        if self.exchange == 'bybit' and 'linear' in self.market_type:
+            print('\nwarning: insufficient ticks fetched')
+            print('emas and ema ratios will be inaccurate until websocket catches up')
+            self.emas = calc_emas(np.array([e['price'] for e in ticks]), self.spans)[-1]
+            self.ratios = emas[:-1] / emas[1:]
+        else:
+            idxs = get_ids_to_fetch(self.spans[1:], ticks[-1]['trade_id'])
+            fetched_ticks = await asyncio.gather(*[self.fetch_ticks(from_id=int(i)) for i in idxs])
+            compressed = drop_consecutive_same_prices(sorted(flatten(fetched_ticks) + ticks, key=lambda x: x['trade_id']))
+            self.emas, self.ratios = calc_indicators_from_ticks_with_gaps(self.spans, compressed)
+        self.stop_band_lower, self.stop_band_upper = min(self.emas), max(self.emas)
 
-    def update_indicators(self, ticks: dict):
+    def update_indicators(self, ticks):
         for tick in ticks:
             self.agg_qty += tick['qty']
             if tick['price'] == self.price and tick['is_buyer_maker'] == self.is_buyer_maker:
@@ -553,15 +509,9 @@ class Bot:
                 self.ob[0] = tick['price']
             else:
                 self.ob[1] = tick['price']
-            self.ema = calc_ema(self.ema_alpha, self.ema_alpha_, self.ema, tick['price'])
-            self.sum_prices -= self.tick_prices_deque[0]
-            self.sum_prices_squared -= self.tick_prices_deque[0] ** 2
-            self.tick_prices_deque.append(tick['price'])
-            self.sum_prices += self.tick_prices_deque[-1]
-            self.sum_prices_squared += self.tick_prices_deque[-1] ** 2
-        self.price_std = np.sqrt((self.sum_prices_squared / len(self.tick_prices_deque) -
-                                 ((self.sum_prices / len(self.tick_prices_deque)) ** 2)))
-        self.volatility = self.price_std / self.ema
+            self.emas = self.emas * self.ema_alpha_ + tick['price'] * self.ema_alpha
+            self.ratios = self.emas[:-1] / self.emas[1:]
+            self.stop_band_lower, self.stop_band_upper = min(self.emas), max(self.emas)
 
     async def start_websocket(self) -> None:
         self.stop_websocket = False
@@ -571,7 +521,6 @@ class Bot:
         await self.init_exchange_config()
         await self.init_indicators()
         await self.init_order_book()
-        self.remove_lock_file()
         k = 1
         async with websockets.connect(self.endpoints['websocket']) as ws:
             await self.subscribe_ws(ws)
@@ -598,55 +547,14 @@ class Bot:
                     if 'success' not in msg:
                         print('error in websocket', e, msg)
 
-    def remove_lock_file(self):
-        try:
-            if os.path.exists(self.lock_file):
-                os.remove(self.lock_file)
-                print('The lock file has been removed succesfully')
-            else:
-                print("The lock file doesn't exists, no need to do anything, but it should've been there!")
-        except:
-            print(f"Failed to remove the lock file! Please remove the file {self.lock_file} manually to ensure fast restarts")
-
-    async def acquire_interprocess_lock(self):
-        if os.path.exists(self.lock_file):
-            #if the file was last modified over 15 minutes ago, assume that something went wrong
-            if time() - os.path.getmtime(self.lock_file) > 15 * 60:
-                print(f'File {self.lock_file} last modified more than 15 minutes ago. Assuming something went wrong'
-                      f' trying to delete it, attempting removal of file')
-                self.remove_lock_file()
-            else:
-                raise LockNotAvailableException("Another bot has the lock. "
-                                                f"To force acquire lock, delete .passivbotlock file: {self.lock_file}")
-
-        pid = str(os.getpid())
-        with open(self.lock_file, 'w') as f:
-            f.write(pid)
-            f.flush()
-            f.close()
-
-        await asyncio.sleep(5)
-
-        pid_in_file = open(self.lock_file).read()
-        if pid_in_file != pid:
-            raise LockNotAvailableException("Lock is stolen by another bot")
-        return
-
-    def execute_order(self, oc):
-        raise NotImplementedError
-
-    def execute_cancellation(self, oc):
-        raise NotImplementedError
-
-
 async def start_bot(bot):
     while not bot.stop_websocket:
         try:
-            await bot.acquire_interprocess_lock()
             await bot.start_websocket()
         except Exception as e:
-            print('Websocket connection has been lost or unable to acquire lock to start, attempting to reinitialize the bot...', e)
+            print('Websocket connection has been lost, attempting to reinitialize the bot...', e)
             await asyncio.sleep(10)
+
 
 async def _start_telegram(account: dict, bot: Bot):
     telegram = telegram_bot.Telegram(config=account['telegram'],
@@ -662,7 +570,7 @@ def add_argparse_args(parser):
                         default='configs/backtest/default.hjson', help='backtest config hjson file')
     parser.add_argument('-o', '--optimize_config', type=str, required=False, dest='optimize_config_path',
                         default='configs/optimize/default.hjson', help='optimize config hjson file')
-    parser.add_argument('-d', '--download_only', help='download only, do not dump ticks caches', action='store_true')
+    parser.add_argument('-d', '--download-only', help='download only, do not dump ticks caches', action='store_true')
     parser.add_argument('-s', '--symbol', type=str, required=False, dest='symbol',
                         default='none', help='specify symbol, overriding symbol from backtest config')
     parser.add_argument('-u', '--user', type=str, required=False, dest='user',
@@ -698,7 +606,7 @@ async def main() -> None:
         print('unrecognized account name', args.user, e)
         return
     try:
-        config = json.load(open(args.live_config_path))
+        config = load_live_config(args.live_config_path)
     except Exception as e:
         print(e, 'failed to load config', args.live_config_path)
         return
@@ -708,13 +616,15 @@ async def main() -> None:
     config['live_config_path'] = args.live_config_path
 
     if account['exchange'] == 'binance':
+        from procedures import create_binance_bot
         bot = await create_binance_bot(config)
     elif account['exchange'] == 'bybit':
+        from procedures import create_bybit_bot
         bot = await create_bybit_bot(config)
     else:
         raise Exception('unknown exchange', account['exchange'])
     print('using config')
-    print(json.dumps(config, indent=4))
+    pprint.pprint(config)
 
     if 'telegram' in account and account['telegram']['enabled']:
         telegram = await _start_telegram(account=account, bot=bot)

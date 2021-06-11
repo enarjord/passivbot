@@ -71,7 +71,7 @@ def plot_fills(df, fdf, side: int = 0, bkr_thr=0.1):
     plt.clf()
 
     dfc = df.loc[fdf.index[0]:fdf.index[-1]]
-    dfc.price.iloc[::int(len(dfc) * 0.0001)].plot(style='y-')
+    dfc.price.iloc[::max(1, int(len(dfc) * 0.0001))].plot(style='y-')
     if 'bid_thr' in dfc.columns:
         dfc.bid_thr.plot(style='b-.')
     if 'ask_thr' in dfc.columns:

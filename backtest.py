@@ -70,7 +70,6 @@ async def main():
     ticks = await downloader.get_ticks(True)
     live_config = load_live_config(args.live_config_path)
     config.update(live_config)
-    pprint.pprint(config)
     data = make_get_ticks_cache(config, ticks)
     config['n_days'] = round_((data[2][-1] - data[2][0]) / (1000 * 60 * 60 * 24), 0.1)
     pprint.pprint(denumpyize(live_config))

@@ -221,8 +221,13 @@ def ticks_to_ticks_cache(ticks: np.ndarray, spans: np.ndarray, MA_idx: int) -> (
     prices = ticks[:,0].astype(np.float64)
     is_buyer_maker = ticks[:,1].astype(np.int8)
     timestamps = ticks[:,2].astype(np.int64)
+
+    stop_band_lower = emas.min(axis=1)
+    stop_band_upper = emas.max(axis=1)
+
     return (prices[max(spans):], is_buyer_maker[max(spans):], timestamps[max(spans):],
-            emas[max(spans):][:, MA_idx].astype(np.float32), ratios[max(spans):].astype(np.float32))
+            emas[max(spans):][:, MA_idx].astype(np.float32), ratios[max(spans):].astype(np.float32),
+            stop_band_lower[max(spans):].astype(np.float32), stop_band_upper[max(spans):].astype(np.float32))
 
 
 def flatten(lst: list) -> list:
@@ -340,12 +345,14 @@ def calc_indicators_from_ticks_with_gaps(spans, ticks_with_gaps):
     df = df.groupby(
         (~((df.price == df.price.shift(1)) & (df.is_buyer_maker == df.is_buyer_maker.shift(1)))).cumsum()).agg(
         {'price': 'first', 'is_buyer_maker': 'first'})
-    emas = calc_emas(df.price.values, np.array(spans))
-    ratios = calc_ratios(emas)
-    return emas, ratios
+    emas = calc_emas(df.price.values, np.array(spans))[-1]
+    return emas, emas[:-1] / emas[1:]
 
 
-
-
-
-
+def drop_consecutive_same_prices(ticks: [dict]) -> [dict]:
+    compressed = [ticks[0]]
+    for i in range(1, len(ticks)):
+        if ticks[i]['price'] != compressed[-1]['price'] or \
+                ticks[i]['is_buyer_maker'] != compressed[-1]['is_buyer_maker']:
+            compressed.append(ticks[i])
+    return compressed

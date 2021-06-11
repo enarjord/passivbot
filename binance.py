@@ -9,7 +9,8 @@ import aiohttp
 import numpy as np
 
 from pure_funcs import ts_to_date, sort_dict_keys
-from passivbot import load_key_secret, print_, Bot
+from passivbot import Bot
+from procedures import load_key_secret, print_
 
 
 class BinanceBot(Bot):
@@ -175,7 +176,8 @@ class BinanceBot(Bot):
     async def execute_leverage_change(self):
         return await self.private_post(self.base_endpoint,
                                        self.endpoints['leverage'],
-                                       {'symbol': self.symbol, 'leverage': int(round(self.leverage))})
+                                       {'symbol': self.symbol,
+                                        'leverage': int(round(min(self.max_leverage, self.leverage * 2)))})
 
     async def init_exchange_config(self):
         try:

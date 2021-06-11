@@ -177,6 +177,8 @@ def calc_long_orders(balance,
                      highest_bid,
                      lowest_ask,
                      MA,
+                     stop_band_lower,
+                     stop_band_upper,
                      MA_ratios,
                      available_margin,
  
@@ -211,11 +213,11 @@ def calc_long_orders(balance,
         nclose_price = round_up(long_pprice * (markup_const + eqf(MA_ratios, markup_MAr_coeffs)), price_step)
         if pbr > leverage:
 
-            entry_price = round_dn(min([highest_bid, MA * iprc_const,
+            entry_price = round_dn(min([highest_bid, stop_band_lower,
                                         long_pprice * (rprc_const + eqf(MA_ratios, rprc_MAr_coeffs) +
                                                        eqf(np.array([pbr]), rprc_PBr_coeffs, minus=0.0))]), price_step)
             stop_qty = -max(min_qty, round_dn(long_psize * stop_psize_pct, qty_step))
-            stop_price = max(lowest_ask, round_up(MA * (2.0 - iprc_const), price_step))
+            stop_price = max(lowest_ask, round_up(stop_band_upper, price_step))
             if stop_price >= nclose_price:
                 long_close = (-long_psize, nclose_price, 0.0, 0.0, 'long_nclose')
             else:
@@ -251,6 +253,8 @@ def calc_shrt_orders(balance,
                      highest_bid,
                      lowest_ask,
                      MA,
+                     stop_band_lower,
+                     stop_band_upper,
                      MA_ratios,
                      available_margin,
  
@@ -284,11 +288,11 @@ def calc_shrt_orders(balance,
         pbr = qty_to_cost(shrt_psize, shrt_pprice, inverse, c_mult) / balance
         nclose_price = round_dn(shrt_pprice * (markup_const + eqf(MA_ratios, markup_MAr_coeffs)), price_step)
         if pbr > leverage:
-            entry_price = round_up(max([lowest_ask, MA * iprc_const,
+            entry_price = round_up(max([lowest_ask, stop_band_upper,
                                         shrt_pprice * (rprc_const + eqf(MA_ratios, rprc_MAr_coeffs) +
                                                        eqf(np.array([pbr]), rprc_PBr_coeffs, minus=0.0))]), price_step)
             stop_qty = max(min_qty, round_dn(-shrt_psize * stop_psize_pct, qty_step))
-            stop_price = min(highest_bid, round_dn(MA * (2.0 - iprc_const), price_step))
+            stop_price = min(highest_bid, round_dn(stop_band_lower, price_step))
             if stop_price <= nclose_price:
                 shrt_close = (-shrt_psize, nclose_price, 0.0, 0.0, 'shrt_nclose')
             else:
@@ -338,6 +342,8 @@ def calc_orders(balance,
                 lowest_ask,
                 last_price,
                 MA,
+                stop_band_lower,
+                stop_band_upper,
                 MA_ratios,
  
                 inverse,
@@ -369,6 +375,8 @@ def calc_orders(balance,
                      highest_bid,
                      lowest_ask,
                      MA,
+                     stop_band_lower,
+                     stop_band_upper,
                      MA_ratios,
                      available_margin,
 
@@ -397,6 +405,8 @@ def calc_orders(balance,
                      highest_bid,
                      lowest_ask,
                      MA,
+                     stop_band_lower,
+                     stop_band_upper,
                      MA_ratios,
                      available_margin,
 
@@ -424,7 +434,7 @@ def calc_orders(balance,
 
 
 @njit
-def njit_backtest(data: (np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray),
+def njit_backtest(data: (np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray),
                   starting_balance,
                   latency_simulation_ms,
                   maker_fee,
@@ -449,7 +459,7 @@ def njit_backtest(data: (np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndar
                   rqty_MAr_coeffs,
                   rprc_MAr_coeffs,
                   markup_MAr_coeffs):
-    prices, buyer_maker, timestamps, emas, ratios = data
+    prices, buyer_maker, timestamps, emas, ratios, stop_band_lower, stop_band_upper = data
     static_params = (inverse, do_long, do_shrt, qty_step, price_step, min_qty, min_cost, c_mult,
                      stop_psize_pct, leverage, iqty_const, iprc_const, rqty_const, rprc_const, markup_const,
                      iqty_MAr_coeffs, iprc_MAr_coeffs, rprc_PBr_coeffs, rqty_MAr_coeffs, rprc_MAr_coeffs,
@@ -486,6 +496,8 @@ def njit_backtest(data: (np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndar
                 ob[1],
                 prices[k],
                 emas[k],
+                stop_band_lower[k],
+                stop_band_upper[k],
                 ratios[k],
 
                 *static_params)
@@ -494,6 +506,9 @@ def njit_backtest(data: (np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndar
             next_update_ts = timestamps[k] + 5000
             prev_k = k
             prev_ob = ob
+
+        if equity / starting_balance < 0.1:
+            return fills, (False, lowest_eqbal_ratio, closest_bkr)
 
         if calc_diff(bkr_price, prices[k]) < 0.05:
             if long_psize != 0.0:
@@ -530,6 +545,8 @@ def njit_backtest(data: (np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndar
                                                  prev_ob[0],
                                                  prev_ob[1],
                                                  emas[prev_k],
+                                                 stop_band_lower[prev_k],
+                                                 stop_band_upper[prev_k],
                                                  ratios[prev_k],
                                                  available_margin,
 
@@ -581,6 +598,8 @@ def njit_backtest(data: (np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndar
                                                  prev_ob[0],
                                                  prev_ob[1],
                                                  emas[prev_k],
+                                                 stop_band_lower[prev_k],
+                                                 stop_band_upper[prev_k],
                                                  ratios[prev_k],
                                                  available_margin,
 

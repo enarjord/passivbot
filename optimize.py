@@ -99,11 +99,12 @@ def simple_sliding_window_wrap(config, data, do_print=False):
     analyses = []
     objective = 0.0
     n_days = config['n_days']
-    sliding_window_days = max(3.0, n_days * config['sliding_window_size']) # at least 3 days per slice
-    slices = list(iter_slices(data, sliding_window_days)) if config['sliding_window_size'] < 1.0 else [data]
-    n_slices = len(slices)
-    print('n_days', n_days, 'sliding_window_days', sliding_window_days, 'n_slices', n_slices)
-    for z, data_slice in enumerate(slices):
+    sliding_window_days = max(3.0, config['n_days'] * config['sliding_window_size']) # at least 3 days per slice
+    config['sliding_window_days'] = sliding_window_days
+    data_slices = list(iter_slices(data, sliding_window_days)) if config['sliding_window_size'] < 1.0 else [data]
+    n_slices = len(data_slices)
+    print('n_days', n_days, 'sliding_window_days', config['sliding_window_days'], 'n_slices', n_slices)
+    for z, data_slice in enumerate(data_slices):
         fills, info = backtest(pack_config(config), data_slice, do_print=do_print)
         _, analysis = analyze_fills(fills, {**config, **{'lowest_eqbal_ratio': info[1], 'closest_bkr': info[2]}},
                                     data_slice[2][0], data_slice[2][-1])
@@ -178,20 +179,22 @@ def backtest_tune(data: np.ndarray, config: dict, current_best: Union[dict, list
     scheduler = AsyncHyperBandScheduler()
 
     print('\n\nsimple sliding window optimization\n\n')
+
     backtest_wrap = tune.with_parameters(simple_sliding_window_wrap, data=data)
     analysis = tune.run(
         backtest_wrap, metric='objective', mode='max', name='search',
         search_alg=algo, scheduler=scheduler, num_samples=iters, config=config, verbose=1,
         reuse_actors=True, local_dir=config['optimize_dirpath'],
-        progress_reporter=LogReporter(metric_columns=['daily_gain',
-                                                      'closest_bankruptcy',
-                                                      'max_hrs_no_fills',
-                                                      'max_hrs_no_fills_same_side',
-                                                      'objective'],
-                                      parameter_columns=[k for k in config['ranges']
-                                                         if any(k0 in k for k0 in ['const', 'leverage']) and '§' in k]),
-                                                         #if type(config[k]) == ray.tune.sample.Float
-                                                         #or type(config[k]) == ray.tune.sample.Integer]),
+        progress_reporter=LogReporter(
+            metric_columns=['daily_gain',
+                            'closest_bankruptcy',
+                            'max_hrs_no_fills',
+                            'max_hrs_no_fills_same_side',
+                            'objective'],
+            parameter_columns=[k for k in config['ranges']
+                               if any(k0 in k for k0 in ['const', 'leverage', 'stop_psize_pct']) and '§' in k]),
+                               #if type(config[k]) == ray.tune.sample.Float
+                               #or type(config[k]) == ray.tune.sample.Integer]),
         raise_on_failed_trial=False
     )
     ray.shutdown()
@@ -224,7 +227,7 @@ async def main():
     print()
     for k in (keys := ['exchange', 'symbol', 'starting_balance', 'start_date', 'end_date', 'latency_simulation_ms',
                        'do_long', 'do_shrt', 'minimum_bankruptcy_distance', 'maximum_hrs_no_fills',
-                       'maximum_hrs_no_fills_same_side', 'iters', 'n_particles', 'sliding_window_size']):
+                       'maximum_hrs_no_fills_same_side', 'iters', 'n_particles', 'sliding_window_size', 'min_span', 'max_span', 'n_spans']):
         if k in config:
             print(f"{k: <{max(map(len, keys)) + 2}} {config[k]}")
     print()

@@ -119,14 +119,14 @@ def make_get_ticks_cache(config: dict, ticks: np.ndarray) -> (np.ndarray,):
     if os.path.exists(cache_dirpath):
         print('loading cached tick data')
         arrs = []
-        for fname in ['prices', 'is_buyer_maker', 'timestamps', 'emas', 'ratios']:
+        for fname in ['prices', 'is_buyer_maker', 'timestamps', 'emas', 'ratios', 'stop_band_lower', 'stop_band_upper']:
             arrs.append(np.load(f'{cache_dirpath}{fname}.npy'))
         return tuple(arrs)
     else:
         print('dumping cache...')
         fpath = make_get_filepath(cache_dirpath)
         data = ticks_to_ticks_cache(ticks, config['spans'], config['MA_idx'])
-        for fname, arr in zip(['prices', 'is_buyer_maker', 'timestamps', 'emas', 'ratios'],
+        for fname, arr in zip(['prices', 'is_buyer_maker', 'timestamps', 'emas', 'ratios', 'stop_band_lower', 'stop_band_upper'],
                               data):
             np.save(f'{fpath}{fname}.npy', arr)
         size_mb = np.sum([sys.getsizeof(d) for d in data]) / (1000 * 1000)
