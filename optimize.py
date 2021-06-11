@@ -98,7 +98,7 @@ def objective_function(analysis: dict, config: dict) -> float:
 def simple_sliding_window_wrap(config, data, do_print=False):
     analyses = []
     objective = 0.0
-    n_days = (data[2][-1] - data[2][0]) / (1000 * 60 * 60 * 24)
+    n_days = config['n_days']
     sliding_window_days = max(3.0, n_days * config['sliding_window_size']) # at least 3 days per slice
     slices = list(iter_slices(data, sliding_window_days)) if config['sliding_window_size'] < 1.0 else [data]
     n_slices = len(slices)
@@ -230,6 +230,7 @@ async def main():
     print()
     ticks = await downloader.get_ticks(True)
     data = make_get_ticks_cache(config, ticks)
+    config['n_days'] = (data[2][-1] - data[2][0]) / (1000 * 60 * 60 * 24)
 
     start_candidate = None
     if args.starting_configs != 'none':
@@ -248,7 +249,7 @@ async def main():
         analysis = backtest_tune(data, config)
     save_results(analysis, config)
     config.update(clean_result_config(analysis.best_config))
-    plot_wrap(config, data)
+    plot_wrap(pack_config(config), data)
 
 
 if __name__ == '__main__':
