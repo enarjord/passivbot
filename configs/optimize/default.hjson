@@ -25,7 +25,9 @@
   ranges:
   {
     stop_psize_pct: [0.0, 1.0]
-    coeffs: [-0.3, 0.3]
+    MAr_coeffs: [-0.0, 0.0]
+    PBr_coeffs: [-0.4, 0.4]
+
 
     long§leverage: [0.1, 5.0]
     long§iqty_const: [0.0, 1.0]
