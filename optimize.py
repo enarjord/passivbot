@@ -140,7 +140,7 @@ def backtest_tune(data: np.ndarray, config: dict, current_best: Union[dict, list
     print('tuning:')
     for k, v in config.items():
         if type(v) in [ray.tune.sample.Float, ray.tune.sample.Integer]:
-            print(k, v)
+            print(k, (v.lower, v.upper))
     config['optimize_dirpath'] = os.path.join(config['optimize_dirpath'],
                                                      ts_to_date(time())[:19].replace(':', ''), '')
     if 'iters' in config:
@@ -162,7 +162,7 @@ def backtest_tune(data: np.ndarray, config: dict, current_best: Union[dict, list
         phi2 = config['options']['c2']
         omega = config['options']['w']
     current_best_params = []
-    if current_best:
+    if current_best is not None:
         if type(current_best) == list:
             for c in current_best:
                 c = clean_start_config(c, config)
@@ -215,7 +215,7 @@ async def main():
     parser = argparse.ArgumentParser(prog='Optimize', description='Optimize passivbot config.')
     parser = add_argparse_args(parser)
     parser.add_argument('-t', '--start', type=str, required=False, dest='starting_configs',
-                        default='none',
+                        default=None,
                         help='start with given live configs.  single json file or dir with multiple json files')
     args = parser.parse_args()
 
@@ -227,7 +227,8 @@ async def main():
     print()
     for k in (keys := ['exchange', 'symbol', 'starting_balance', 'start_date', 'end_date', 'latency_simulation_ms',
                        'do_long', 'do_shrt', 'minimum_bankruptcy_distance', 'maximum_hrs_no_fills',
-                       'maximum_hrs_no_fills_same_side', 'iters', 'n_particles', 'sliding_window_size', 'min_span', 'max_span', 'n_spans']):
+                       'maximum_hrs_no_fills_same_side', 'iters', 'n_particles', 'sliding_window_size',
+                       'min_span', 'max_span', 'n_spans']):
         if k in config:
             print(f"{k: <{max(map(len, keys)) + 2}} {config[k]}")
     print()
@@ -236,7 +237,7 @@ async def main():
     config['n_days'] = (data[2][-1] - data[2][0]) / (1000 * 60 * 60 * 24)
 
     start_candidate = None
-    if args.starting_configs != 'none':
+    if args.starting_configs is not None:
         try:
             if os.path.isdir(args.starting_configs):
                 start_candidate = [json.load(open(f)) for f in glob.glob(os.path.join(args.starting_configs, '*.json'))]
@@ -246,10 +247,7 @@ async def main():
                 print('Starting with specified configuration.')
         except Exception as e:
             print('Could not find specified configuration.', e)
-    if start_candidate:
-        analysis = backtest_tune(data, config, start_candidate)
-    else:
-        analysis = backtest_tune(data, config)
+    analysis = backtest_tune(data, config, start_candidate)
     save_results(analysis, config)
     config.update(clean_result_config(analysis.best_config))
     plot_wrap(pack_config(config), data)

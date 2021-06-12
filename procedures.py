@@ -33,7 +33,7 @@ async def prep_config(args) -> dict:
         raise Exception('failed to load optimize config', args.optimize_config_path, e)
     config = {**oc, **bc}
     for key in ['symbol', 'user', 'start_date', 'end_date']:
-        if getattr(args, key) != 'none':
+        if getattr(args, key) is not None:
             config[key] = getattr(args, key)
     end_date = config['end_date'] if config['end_date'] and config['end_date'] != -1 else ts_to_date(time())[:16]
     config['session_name'] = f"{config['start_date'].replace(' ', '').replace(':', '').replace('.', '')}_" \

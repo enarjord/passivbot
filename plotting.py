@@ -62,8 +62,8 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
 
     print('plotting pos sizes...')
     plt.clf()
-    fdf[fdf.psize > 0.0].psize.plot()
-    fdf[fdf.psize < 0.0].psize.plot()
+    longs = fdf[fdf.type.str.contains('long')].psize.plot()
+    shrts = fdf[fdf.type.str.contains('shrt')].psize.plot()
     plt.savefig(f"{result['plots_dirpath']}psizes_plot.png")
 
 
@@ -72,12 +72,14 @@ def plot_fills(df, fdf, side: int = 0, bkr_thr=0.1):
 
     dfc = df.loc[fdf.index[0]:fdf.index[-1]]
     dfc.price.iloc[::max(1, int(len(dfc) * 0.0001))].plot(style='y-')
-    if 'bid_thr' in dfc.columns:
-        dfc.bid_thr.plot(style='b-.')
-    if 'ask_thr' in dfc.columns:
-        dfc.ask_thr.plot(style='r-.')
+    if 'stop_band_lower' in dfc.columns:
+        dfc.stop_band_lower.plot(style='c-.')
+    if 'stop_band_upper' in dfc.columns:
+        dfc.stop_band_upper.plot(style='c-.')
+    '''
     if 'ema' in dfc.columns:
         dfc.ema.plot(style='k-.')
+    '''
 
     if side >= 0:
         longs = fdf[fdf.type.str.contains('long')]

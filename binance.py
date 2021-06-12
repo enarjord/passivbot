@@ -136,7 +136,7 @@ class BinanceBot(Bot):
                 except AttributeError:
                     self.min_cost = self.config['min_cost'] = 0.0
                 break
-        max_lev = 10
+        max_lev = 25 # lowest max lev for any binance futures symbol, as per 2021-06-12
         for e in leverage_bracket:
             if ('pair' in e and e['pair'] == self.pair) or \
                     ('symbol' in e and e['symbol'] == self.symbol):

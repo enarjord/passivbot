@@ -572,15 +572,15 @@ def add_argparse_args(parser):
                         default='configs/optimize/default.hjson', help='optimize config hjson file')
     parser.add_argument('-d', '--download-only', help='download only, do not dump ticks caches', action='store_true')
     parser.add_argument('-s', '--symbol', type=str, required=False, dest='symbol',
-                        default='none', help='specify symbol, overriding symbol from backtest config')
+                        default=None, help='specify symbol, overriding symbol from backtest config')
     parser.add_argument('-u', '--user', type=str, required=False, dest='user',
-                        default='none',
+                        default=None,
                         help='specify user, a.k.a. account_name, overriding user from backtest config')
     parser.add_argument('--start_date', type=str, required=False, dest='start_date',
-                        default='none',
+                        default=None,
                         help='specify start date, overriding value from backtest config')
     parser.add_argument('--end_date', type=str, required=False, dest='end_date',
-                        default='none',
+                        default=None,
                         help='specify end date, overriding value from backtest config')
     return parser
 

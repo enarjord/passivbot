@@ -31,9 +31,9 @@ def calc_spans(min_span: int, max_span: int, n_spans: int) -> np.ndarray:
 
 def get_xk_keys():
     return ['inverse', 'do_long', 'do_shrt', 'qty_step', 'price_step', 'min_qty', 'min_cost', 'c_mult',
-            'stop_psize_pct', 'leverage', 'iqty_const', 'iprc_const', 'rqty_const', 'rprc_const',
-            'markup_const', 'iqty_MAr_coeffs', 'iprc_MAr_coeffs', 'rprc_PBr_coeffs', 'rqty_MAr_coeffs',
-            'rprc_MAr_coeffs', 'markup_MAr_coeffs']
+            'max_leverage', 'stop_psize_pct', 'leverage', 'iqty_const', 'iprc_const', 'rqty_const',
+            'rprc_const', 'markup_const', 'iqty_MAr_coeffs', 'iprc_MAr_coeffs', 'rprc_PBr_coeffs',
+            'rqty_MAr_coeffs', 'rprc_MAr_coeffs', 'markup_MAr_coeffs']
 
 
 def create_xk(config: dict) -> dict:

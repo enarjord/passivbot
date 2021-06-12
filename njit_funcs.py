@@ -141,17 +141,17 @@ def calc_available_margin(balance,
                           shrt_psize,
                           shrt_pprice,
                           last_price,
-                          inverse, c_mult, leverage) -> float:
+                          inverse, c_mult, max_leverage) -> float:
     used_margin = 0.0
     equity = balance
     if long_pprice and long_psize:
         long_psize_real = long_psize * c_mult
         equity += calc_long_pnl(long_pprice, last_price, long_psize_real, inverse, c_mult)
-        used_margin += qty_to_cost(long_psize_real, long_pprice, inverse, c_mult) / leverage[0]
+        used_margin += qty_to_cost(long_psize_real, long_pprice, inverse, c_mult) / max_leverage
     if shrt_pprice and shrt_psize:
         shrt_psize_real = shrt_psize * c_mult
         equity += calc_shrt_pnl(shrt_pprice, last_price, shrt_psize_real, inverse, c_mult)
-        used_margin += qty_to_cost(shrt_psize_real, shrt_pprice, inverse, c_mult) / leverage[1]
+        used_margin += qty_to_cost(shrt_psize_real, shrt_pprice, inverse, c_mult) / max_leverage
     return max(0.0, equity - used_margin)
 
 
@@ -354,6 +354,7 @@ def calc_orders(balance,
                 min_qty,
                 min_cost,
                 c_mult,
+                max_leverage,
                 stop_psize_pct,
                 leverage,
                 iqty_const,
@@ -368,7 +369,7 @@ def calc_orders(balance,
                 rprc_MAr_coeffs,
                 markup_MAr_coeffs):
     available_margin = calc_available_margin(balance, long_psize, long_pprice, shrt_psize, shrt_pprice,
-                                             last_price, inverse, c_mult, leverage)
+                                             last_price, inverse, c_mult, max_leverage)
     long_entry, long_close = calc_long_orders(balance,
                      long_psize,
                      long_pprice,
@@ -446,6 +447,7 @@ def njit_backtest(data: (np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndar
                   min_qty,
                   min_cost,
                   c_mult,
+                  max_leverage,
                   stop_psize_pct,
                   leverage,
                   iqty_const,
@@ -460,7 +462,7 @@ def njit_backtest(data: (np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndar
                   rprc_MAr_coeffs,
                   markup_MAr_coeffs):
     prices, buyer_maker, timestamps, emas, ratios, stop_band_lower, stop_band_upper = data
-    static_params = (inverse, do_long, do_shrt, qty_step, price_step, min_qty, min_cost, c_mult,
+    static_params = (inverse, do_long, do_shrt, qty_step, price_step, min_qty, min_cost, c_mult, max_leverage,
                      stop_psize_pct, leverage, iqty_const, iprc_const, rqty_const, rprc_const, markup_const,
                      iqty_MAr_coeffs, iprc_MAr_coeffs, rprc_PBr_coeffs, rqty_MAr_coeffs, rprc_MAr_coeffs,
                      markup_MAr_coeffs)
