@@ -556,7 +556,7 @@ class Downloader:
                                     usecols=["price", "is_buyer_maker", "timestamp"])  # , "qty"])
             else:
                 chunk = pd.read_csv(os.path.join(self.filepath, f),
-                                    dtype={"timestamp": np.int64, "price": np.float32, "is_buyer_maker": np.int8},
+                                    dtype={"timestamp": np.int64, "price": np.float64, "is_buyer_maker": np.int8},
                                     # "qty": np.float32},
                                     usecols=["timestamp", "price", "is_buyer_maker"])  # , "qty"])
             if self.end_time != -1:
@@ -667,32 +667,27 @@ class Downloader:
             '')
         if not os.path.exists(cache_dirpath):
             prices, is_buyer_maker, timestamps = await self.get_ticks(False)
+            prices = np.reshape(prices, prices.size)
+            is_buyer_maker = np.reshape(is_buyer_maker, is_buyer_maker.size)
+            timestamps = np.reshape(timestamps, timestamps.size)
             fpath = make_get_filepath(cache_dirpath)
-            emas, ratios, stop_band_lower, stop_band_upper = ticks_to_ticks_cache(prices, self.config['spans'],
-                                                                                  self.config['MA_idx'])
-            data = (prices, is_buyer_maker, timestamps, emas, ratios, stop_band_lower, stop_band_upper)
+            emas = ticks_to_ticks_cache(prices, self.config['spans'])
+            data = (prices[max(self.config['spans']):], is_buyer_maker[max(self.config['spans']):],
+                    timestamps[max(self.config['spans']):], emas)
             print('dumping cache...')
-            for fname, arr in zip(
-                    ['prices', 'is_buyer_maker', 'timestamps', 'emas', 'ratios', 'stop_band_lower', 'stop_band_upper'],
-                    data):
-                if fname in ['prices', 'is_buyer_maker', 'timestamps']:
-                    np.save(f'{fpath}{fname}.npy', arr[max(self.config['spans']):])
-                else:
-                    np.save(f'{fpath}{fname}.npy', arr)
+            for fname, arr in zip(['prices', 'is_buyer_maker', 'timestamps', 'emas'], data):
+                np.save(f'{fpath}{fname}.npy', arr)
             size_mb = np.sum([sys.getsizeof(d) for d in data]) / (1000 * 1000)
             print(f'dumped {size_mb:.2f} mb of data')
             del prices
             del is_buyer_maker
             del timestamps
             del emas
-            del ratios
-            del stop_band_lower
-            del stop_band_upper
             del data
             gc.collect()
         print('loading cached tick data')
         arrs = []
-        for fname in ['prices', 'is_buyer_maker', 'timestamps', 'emas', 'ratios', 'stop_band_lower', 'stop_band_upper']:
+        for fname in ['prices', 'is_buyer_maker', 'timestamps', 'emas']:
             arrs.append(np.load(f'{cache_dirpath}{fname}.npy'))
         return tuple(arrs)
 

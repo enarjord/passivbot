@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 from dateutil import parser
 
-from njit_funcs import round_dynamic, calc_emas, calc_ratios
+from njit_funcs import round_dynamic, calc_emas
 
 
 def format_float(num):
@@ -27,8 +27,8 @@ def compress_float(n: float, d: int) -> str:
 
 
 def calc_spans(min_span: int, max_span: int, n_spans: int) -> np.ndarray:
-    return np.array([1] + [int(round(min_span * ((max_span / min_span) ** (1 / (n_spans - 1))) ** i))
-                           for i in range(0, n_spans)])
+    return np.array([int(round(min_span * ((max_span / min_span) ** (1 / (n_spans - 1))) ** i))
+                     for i in range(0, n_spans)])
 
 
 def get_xk_keys():
@@ -217,14 +217,10 @@ def get_dummy_settings(user: str, exchange: str, symbol: str):
     return dummy_settings
 
 
-def ticks_to_ticks_cache(prices: np.ndarray, spans: np.ndarray, MA_idx: int) -> (np.ndarray,):
-    emas = calc_emas(prices, np.array(spans, dtype=np.float32))
-    ratios = calc_ratios(emas)
+def ticks_to_ticks_cache(prices: np.ndarray, spans: np.ndarray) -> (np.ndarray,):
+    emas = calc_emas(prices, np.array(spans))  # , dtype=np.float32))
 
-    stop_band_lower = emas.min(axis=1)
-    stop_band_upper = emas.max(axis=1)
-
-    return emas[max(spans):][:, MA_idx], ratios[max(spans):], stop_band_lower[max(spans):], stop_band_upper[max(spans):]
+    return emas[max(spans):]
 
 
 def flatten(lst: list) -> list:
@@ -238,7 +234,6 @@ def get_template_live_config(min_span=6000, max_span=300000, n_spans=3, randomiz
         "min_span": min_span,
         "max_span": max_span,
         "n_spans": n_spans,
-        "MA_idx": 1,  # index of ema span from which to calc initial entry prices
         "long": {
             "enabled": True,
             "stop_psize_pct": 0.05,  # % of psize for stop loss order
@@ -295,26 +290,6 @@ def get_template_live_config(min_span=6000, max_span=300000, n_spans=3, randomiz
     return config
 
 
-def get_bid_ask_thresholds(data, config):
-    pass
-
-
-def ema_from_samples(samples, span):
-    pass
-
-
-def powspace(start, stop, power, num):
-    start = np.power(start, 1.0 / float(power))
-    stop = np.power(stop, 1.0 / float(power))
-    return np.power(np.linspace(start, stop, num=num), power)
-
-
-def calc_sample_idxs(span: int, max_n_samples: int, ticks_per_fetch: int = 1000):
-    n_samples = min(max_n_samples, int(round(span / ticks_per_fetch)))
-    sample_idxs = np.linspace(0, span - ticks_per_fetch, n_samples).round().astype(int)
-    return sample_idxs
-
-
 def get_ids_to_fetch(spans: [int], last_id: int, max_n_samples: int = 60, ticks_per_fetch: int = 1000):
     max_span = max(spans)
     n_samples = int(round((max_span - ticks_per_fetch * 2) / ticks_per_fetch))
@@ -342,7 +317,7 @@ def calc_indicators_from_ticks_with_gaps(spans, ticks_with_gaps):
         (~((df.price == df.price.shift(1)) & (df.is_buyer_maker == df.is_buyer_maker.shift(1)))).cumsum()).agg(
         {'price': 'first', 'is_buyer_maker': 'first'})
     emas = calc_emas(df.price.values, np.array(spans))[-1]
-    return emas, emas[:-1] / emas[1:]
+    return emas
 
 
 def drop_consecutive_same_prices(ticks: [dict]) -> [dict]:

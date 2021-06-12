@@ -27,16 +27,6 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
     dump_live_config(result, result['plots_dirpath'] + 'live_config.json')
     json.dump(denumpyize(result), open(result['plots_dirpath'] + 'result.json', 'w'), indent=4)
 
-    '''
-    iprc_const = config['long']['iprc_const'], config['shrt']['iprc_const']
-    iprc_MAr_coeffs = np.array([config['long']['iprc_MAr_coeffs'], config['shrt']['iprc_MAr_coeffs']])
-
-    bid_thr, ask_thr = calc_bid_ask_thresholds(df.prices.values, df.ema.values,
-                                               df[[c for c in df.columns if 'ratio' in c]].values,
-                                               iprc_const, iprc_MAr_coeffs)
-    df = df.join(pd.DataFrame({'bid_thr': bid_thr, 'ask_thr': ask_thr}))
-    '''
-
     print('writing backtest_result.txt...')
     with open(f"{result['plots_dirpath']}backtest_result.txt", 'w') as f:
         for line in lines:
