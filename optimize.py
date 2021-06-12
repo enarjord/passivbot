@@ -36,17 +36,12 @@ def create_config(config: dict) -> dict:
             for k1 in config['ranges']:
                 if k1 in k0:
                     updated_ranges[k0] = config['ranges'][k1]
-                    if 'MA_idx' in k0:
-                        updated_ranges[k0] = [updated_ranges[k0][0],
-                                              min(updated_ranges[k0][1], config['n_spans'])]
-                    elif 'leverage' in k0:
+                    if 'leverage' in k0:
                         updated_ranges[k0] = [updated_ranges[k0][0],
                                               min(updated_ranges[k0][1], config['max_leverage'])]
     for k in updated_ranges:
         if updated_ranges[k][0] == updated_ranges[k][1]:
             unpacked[k] = updated_ranges[k][0]
-        elif any(q in k for q in ['MA_idx']):
-            unpacked[k] = tune.randint(updated_ranges[k][0], updated_ranges[k][1])
         else:
             unpacked[k] = tune.uniform(updated_ranges[k][0], updated_ranges[k][1])
     return {**config, **unpacked, **{'ranges': updated_ranges}}

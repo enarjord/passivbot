@@ -4,7 +4,6 @@
     "min_span": 9000,
     "max_span": 160000,
     "n_spans": 3,
-    "MA_idx": 1,
     "long": {
         "enabled": true,
         "stop_psize_pct": 0.9327133629894611,
@@ -178,7 +177,6 @@
         ]
     },
     "spans": [
-        1,
         9000,
         37947,
         160000
