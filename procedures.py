@@ -115,7 +115,7 @@ def print_(args, r=False, n=False):
 def make_get_ticks_cache(config: dict, ticks: np.ndarray) -> (np.ndarray,):
     cache_dirpath = os.path.join(
         config['caches_dirpath'],
-        f"{config['session_name']}_spans_{'_'.join(map(str, config['spans']))}_idx_{config['MA_idx']}", '')
+        f"{config['session_name']}_spans_{'_'.join(map(str, config['spans']))}", '')
     if os.path.exists(cache_dirpath):
         print('loading cached tick data')
         arrs = []
