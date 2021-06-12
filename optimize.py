@@ -73,7 +73,7 @@ def iter_slices(data, sliding_window_days: float):
         yield data
         return
     ms_thresholds = np.linspace(data[2][0], data[2][-1] - sliding_window_ms, n_windows)
-    for ms_threshold in ms_thresholds:
+    for ms_threshold in ms_thresholds[::-1]:
         start_i = np.searchsorted(data[2], ms_threshold)
         end_i = np.searchsorted(data[2], ms_threshold + sliding_window_ms)
         yield tuple(d[start_i:end_i] for d in data)
