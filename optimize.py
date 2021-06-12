@@ -15,14 +15,14 @@ from ray.tune.schedulers import AsyncHyperBandScheduler
 from ray.tune.suggest import ConcurrencyLimiter
 from ray.tune.suggest.nevergrad import NevergradSearch
 
-from analyze import analyze_fills, get_empty_analysis
-from backtest import plot_wrap, backtest
-from downloader import Downloader, prep_config
-from njit_funcs import round_
+from analyze import analyze_fills
+from backtest import backtest
+from backtest import plot_wrap
+from downloader import Downloader
 from passivbot import add_argparse_args
-from procedures import make_get_ticks_cache
-from reporter import LogReporter
+from procedures import prep_config
 from pure_funcs import pack_config, unpack_config, get_template_live_config, ts_to_date
+from reporter import LogReporter
 
 os.environ['TUNE_GLOBAL_CHECKPOINT_S'] = '240'
 
@@ -99,7 +99,7 @@ def simple_sliding_window_wrap(config, data, do_print=False):
     analyses = []
     objective = 0.0
     n_days = config['n_days']
-    sliding_window_days = max(3.0, config['n_days'] * config['sliding_window_size']) # at least 3 days per slice
+    sliding_window_days = max(3.0, config['n_days'] * config['sliding_window_size'])  # at least 3 days per slice
     config['sliding_window_days'] = sliding_window_days
     data_slices = list(iter_slices(data, sliding_window_days)) if config['sliding_window_size'] < 1.0 else [data]
     n_slices = len(data_slices)
@@ -142,7 +142,7 @@ def backtest_tune(data: np.ndarray, config: dict, current_best: Union[dict, list
         if type(v) in [ray.tune.sample.Float, ray.tune.sample.Integer]:
             print(k, (v.lower, v.upper))
     config['optimize_dirpath'] = os.path.join(config['optimize_dirpath'],
-                                                     ts_to_date(time())[:19].replace(':', ''), '')
+                                              ts_to_date(time())[:19].replace(':', ''), '')
     if 'iters' in config:
         iters = config['iters']
     else:
@@ -172,7 +172,7 @@ def backtest_tune(data: np.ndarray, config: dict, current_best: Union[dict, list
             current_best = clean_start_config(current_best, config)
             current_best_params.append(current_best)
 
-    ray.init(num_cpus=num_cpus)#, logging_level=logging.FATAL, log_to_driver=False)
+    ray.init(num_cpus=num_cpus)  # , logging_level=logging.FATAL, log_to_driver=False)
     pso = ng.optimizers.ConfiguredPSO(transform='identity', popsize=n_particles, omega=omega, phip=phi1, phig=phi2)
     algo = NevergradSearch(optimizer=pso, points_to_evaluate=current_best_params)
     algo = ConcurrencyLimiter(algo, max_concurrent=num_cpus)
@@ -193,8 +193,8 @@ def backtest_tune(data: np.ndarray, config: dict, current_best: Union[dict, list
                             'objective'],
             parameter_columns=[k for k in config['ranges']
                                if any(k0 in k for k0 in ['const', 'leverage', 'stop_psize_pct']) and '§' in k]),
-                               #if type(config[k]) == ray.tune.sample.Float
-                               #or type(config[k]) == ray.tune.sample.Integer]),
+        # if type(config[k]) == ray.tune.sample.Float
+        # or type(config[k]) == ray.tune.sample.Integer]),
         raise_on_failed_trial=False
     )
     ray.shutdown()
@@ -232,8 +232,7 @@ async def main():
         if k in config:
             print(f"{k: <{max(map(len, keys)) + 2}} {config[k]}")
     print()
-    ticks = await downloader.get_ticks(True)
-    data = make_get_ticks_cache(config, ticks)
+    data = await downloader.get_data()
     config['n_days'] = (data[2][-1] - data[2][0]) / (1000 * 60 * 60 * 24)
 
     start_candidate = None
