@@ -1,7 +1,9 @@
+import datetime
+
 import numpy as np
 import pandas as pd
-import datetime
 from dateutil import parser
+
 from njit_funcs import round_dynamic, calc_emas, calc_ratios
 
 
@@ -10,7 +12,7 @@ def format_float(num):
 
 
 def compress_float(n: float, d: int) -> str:
-    if n / 10**d >= 1:
+    if n / 10 ** d >= 1:
         n = round(n)
     else:
         n = round_dynamic(n, d)
@@ -25,7 +27,7 @@ def compress_float(n: float, d: int) -> str:
 
 
 def calc_spans(min_span: int, max_span: int, n_spans: int) -> np.ndarray:
-    return np.array([1] + [int(round(min_span * ((max_span / min_span)**(1 / (n_spans - 1))) ** i))
+    return np.array([1] + [int(round(min_span * ((max_span / min_span) ** (1 / (n_spans - 1))) ** i))
                            for i in range(0, n_spans)])
 
 
@@ -151,7 +153,7 @@ def pack_config(d):
         else:
             new[k] = v
     d = new
-                
+
     new = {}
     for k, v in d.items():
         if '§' in k:
@@ -229,7 +231,6 @@ def flatten(lst: list) -> list:
     return [y for x in lst for y in x]
 
 
-
 def get_template_live_config(min_span=6000, max_span=300000, n_spans=3, randomize_coeffs=False):
     config = {
         "config_name": "name",
@@ -237,49 +238,49 @@ def get_template_live_config(min_span=6000, max_span=300000, n_spans=3, randomiz
         "min_span": min_span,
         "max_span": max_span,
         "n_spans": n_spans,
-        "MA_idx":             1,      # index of ema span from which to calc initial entry prices
+        "MA_idx": 1,  # index of ema span from which to calc initial entry prices
         "long": {
-            "enabled":            True,
-            "stop_psize_pct":     0.05,   # % of psize for stop loss order
-            "leverage":           3.0,    # max pcost = balance * leverage
-            "iqty_const":         0.01,   # initial entry qty pct
-            "iprc_const":         0.991,  # initial entry price ema_spread
-            "rqty_const":         1.0,    # reentry qty ddown factor
-            "rprc_const":         0.98,   # reentry price grid spacing
-            "markup_const":       1.003,  # markup
+            "enabled": True,
+            "stop_psize_pct": 0.05,  # % of psize for stop loss order
+            "leverage": 3.0,  # max pcost = balance * leverage
+            "iqty_const": 0.01,  # initial entry qty pct
+            "iprc_const": 0.991,  # initial entry price ema_spread
+            "rqty_const": 1.0,  # reentry qty ddown factor
+            "rprc_const": 0.98,  # reentry price grid spacing
+            "markup_const": 1.003,  # markup
 
-                                          # coeffs: [[quadratic_coeff, linear_coeff]] * n_spans
-                                          # e.g. n_spans = 3,
-                                          # coeffs = [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]]
-                                          # all coeff ranges [min, max] = [-10.0, 10.0]
-            "iqty_MAr_coeffs":    [],     # initial qty pct Moving Average ratio coeffs    formerly qty_pct
-            "iprc_MAr_coeffs":    [],     # initial price pct Moving Average ratio coeffs  formerly ema_spread
-            "rqty_MAr_coeffs":    [],     # reentry qty pct Moving Average ratio coeffs    formerly ddown_factor
-            "rprc_MAr_coeffs":    [],     # reentry price pct Moving Average ratio coeffs  formerly grid_spacing
-            "rprc_PBr_coeffs":    [],     # reentry Position cost to Balance ratio coeffs (PBr**2, PBr)
-                                          # formerly pos_margin_grid_coeff
-            "markup_MAr_coeffs":  [],     # markup price pct Moving Average ratio coeffs
+            # coeffs: [[quadratic_coeff, linear_coeff]] * n_spans
+            # e.g. n_spans = 3,
+            # coeffs = [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]]
+            # all coeff ranges [min, max] = [-10.0, 10.0]
+            "iqty_MAr_coeffs": [],  # initial qty pct Moving Average ratio coeffs    formerly qty_pct
+            "iprc_MAr_coeffs": [],  # initial price pct Moving Average ratio coeffs  formerly ema_spread
+            "rqty_MAr_coeffs": [],  # reentry qty pct Moving Average ratio coeffs    formerly ddown_factor
+            "rprc_MAr_coeffs": [],  # reentry price pct Moving Average ratio coeffs  formerly grid_spacing
+            "rprc_PBr_coeffs": [],  # reentry Position cost to Balance ratio coeffs (PBr**2, PBr)
+            # formerly pos_margin_grid_coeff
+            "markup_MAr_coeffs": [],  # markup price pct Moving Average ratio coeffs
         },
         "shrt": {
-            "enabled":            True,
-            "stop_psize_pct":     0.05,   # % of psize for stop loss order
-            "leverage":           3.0,    # max pcost = balance * leverage
-            "iqty_const":         0.01,   # initial entry qty pct
-            "iprc_const":         1.009,  # initial entry price ema_spread
-            "rqty_const":         1.0,    # reentry qty ddown factor
-            "rprc_const":         1.02,   # reentry price grid spacing
-            "markup_const":       0.997,  # markup
-                                          # coeffs: [[quadratic_coeff, linear_coeff]] * n_spans
-                                          # e.g. n_spans = 3,
-                                          # coeffs = [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]]
-                                          # all coeff ranges [min, max] = [-10.0, 10.0]
-            "iqty_MAr_coeffs":    [],     # initial qty pct Moving Average ratio coeffs    formerly qty_pct
-            "iprc_MAr_coeffs":    [],     # initial price pct Moving Average ratio coeffs  formerly ema_spread
-            "rqty_MAr_coeffs":    [],     # reentry qty pct Moving Average ratio coeffs    formerly ddown_factor
-            "rprc_MAr_coeffs":    [],     # reentry price pct Moving Average ratio coeffs  formerly grid_spacing
-            "rprc_PBr_coeffs":    [],     # reentry Position cost to Balance ratio coeffs (PBr**2, PBr)
-                                          # formerly pos_margin_grid_coeff
-            "markup_MAr_coeffs":  [],     # markup price pct Moving Average ratio coeffs
+            "enabled": True,
+            "stop_psize_pct": 0.05,  # % of psize for stop loss order
+            "leverage": 3.0,  # max pcost = balance * leverage
+            "iqty_const": 0.01,  # initial entry qty pct
+            "iprc_const": 1.009,  # initial entry price ema_spread
+            "rqty_const": 1.0,  # reentry qty ddown factor
+            "rprc_const": 1.02,  # reentry price grid spacing
+            "markup_const": 0.997,  # markup
+            # coeffs: [[quadratic_coeff, linear_coeff]] * n_spans
+            # e.g. n_spans = 3,
+            # coeffs = [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]]
+            # all coeff ranges [min, max] = [-10.0, 10.0]
+            "iqty_MAr_coeffs": [],  # initial qty pct Moving Average ratio coeffs    formerly qty_pct
+            "iprc_MAr_coeffs": [],  # initial price pct Moving Average ratio coeffs  formerly ema_spread
+            "rqty_MAr_coeffs": [],  # reentry qty pct Moving Average ratio coeffs    formerly ddown_factor
+            "rprc_MAr_coeffs": [],  # reentry price pct Moving Average ratio coeffs  formerly grid_spacing
+            "rprc_PBr_coeffs": [],  # reentry Position cost to Balance ratio coeffs (PBr**2, PBr)
+            # formerly pos_margin_grid_coeff
+            "markup_MAr_coeffs": [],  # markup price pct Moving Average ratio coeffs
         }
     }
     for side in ['long', 'shrt']:
@@ -289,7 +290,7 @@ def get_template_live_config(min_span=6000, max_span=300000, n_spans=3, randomiz
                     if randomize_coeffs else np.zeros((config['n_spans'], 2))
             elif 'PBr_coeff' in k:
                 config[side][k] = np.random.random((1, 2)) * 0.1 - 0.05 \
-                    if randomize_coeffs else  np.zeros((1, 2))
+                    if randomize_coeffs else np.zeros((1, 2))
     config['spans'] = calc_spans(config['min_span'], config['max_span'], config['n_spans'])
     return config
 
@@ -303,9 +304,9 @@ def ema_from_samples(samples, span):
 
 
 def powspace(start, stop, power, num):
-    start = np.power(start, 1.0/float(power))
-    stop = np.power(stop, 1.0/float(power))
-    return np.power(np.linspace(start, stop, num=num), power) 
+    start = np.power(start, 1.0 / float(power))
+    stop = np.power(stop, 1.0 / float(power))
+    return np.power(np.linspace(start, stop, num=num), power)
 
 
 def calc_sample_idxs(span: int, max_n_samples: int, ticks_per_fetch: int = 1000):
@@ -326,7 +327,7 @@ def get_ids_to_fetch(spans: [int], last_id: int, max_n_samples: int = 60, ticks_
     all_idxs = []
     prev_last_id = last_id
     for i in range(len(spans)):
-        idxs = get_ids_to_fetch(spans[i:i+1], prev_last_id, samples_per_span)
+        idxs = get_ids_to_fetch(spans[i:i + 1], prev_last_id, samples_per_span)
         all_idxs.append(idxs)
         samples_leftover = max_n_samples - sum(map(len, all_idxs))
         samples_per_span = samples_leftover // max(1, len(spans) - i - 1)
