@@ -52,9 +52,7 @@ class Bot:
         self.ob = [0.0, 0.0]
 
         self.emas = np.zeros(len(self.spans))
-        self.ratios = np.zeros(len(self.spans) - 1)
-        self.stop_band_lower = 0.0
-        self.stop_band_upper = 0.0
+        self.ratios = np.zeros(len(self.spans))
 
         self.n_open_orders_limit = 8
         self.n_orders_per_execution = 4
@@ -273,10 +271,7 @@ class Bot:
                 self.ob[0],
                 self.ob[1],
                 self.price,
-                self.emas[self.MA_idx],
-                self.stop_band_lower,
-                self.stop_band_upper,
-                self.ratios,
+                self.emas,
                 **self.xk)
             if not long_closed and long_close[0] != 0.0 and \
                     calc_diff(long_close[1], self.price) < self.last_price_diff_limit:
@@ -494,13 +489,12 @@ class Bot:
             print('\nwarning: insufficient ticks fetched')
             print('emas and ema ratios will be inaccurate until websocket catches up')
             self.emas = calc_emas(np.array([e['price'] for e in ticks]), self.spans)[-1]
-            self.ratios = self.emas[:-1] / self.emas[1:]
         else:
-            idxs = get_ids_to_fetch(self.spans[1:], ticks[-1]['trade_id'])
+            idxs = get_ids_to_fetch(self.spans, ticks[-1]['trade_id'])
             fetched_ticks = await asyncio.gather(*[self.fetch_ticks(from_id=int(i)) for i in idxs])
             compressed = drop_consecutive_same_prices(sorted(flatten(fetched_ticks) + ticks, key=lambda x: x['trade_id']))
-            self.emas, self.ratios = calc_indicators_from_ticks_with_gaps(self.spans, compressed)
-        self.stop_band_lower, self.stop_band_upper = min(self.emas), max(self.emas)
+            self.emas = calc_indicators_from_ticks_with_gaps(self.spans, compressed)
+        self.ratios = np.append(self.price, self.emas[:-1]) / self.emas
 
     def update_indicators(self, ticks):
         for tick in ticks:
@@ -516,8 +510,7 @@ class Bot:
             else:
                 self.ob[1] = tick['price']
             self.emas = self.emas * self.ema_alpha_ + tick['price'] * self.ema_alpha
-            self.ratios = self.emas[:-1] / self.emas[1:]
-            self.stop_band_lower, self.stop_band_upper = min(self.emas), max(self.emas)
+            self.ratios = np.append(self.price, self.emas[:-1]) / self.emas
 
     async def start_websocket(self) -> None:
         self.stop_websocket = False
