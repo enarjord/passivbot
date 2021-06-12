@@ -215,19 +215,14 @@ def get_dummy_settings(user: str, exchange: str, symbol: str):
     return dummy_settings
 
 
-def ticks_to_ticks_cache(ticks: np.ndarray, spans: np.ndarray, MA_idx: int) -> (np.ndarray,):
-    emas = calc_emas(ticks[:,0], spans)
+def ticks_to_ticks_cache(prices: np.ndarray, spans: np.ndarray, MA_idx: int) -> (np.ndarray,):
+    emas = calc_emas(prices, np.array(spans, dtype=np.float32))
     ratios = calc_ratios(emas)
-    prices = ticks[:,0].astype(np.float64)
-    is_buyer_maker = ticks[:,1].astype(np.int8)
-    timestamps = ticks[:,2].astype(np.int64)
 
     stop_band_lower = emas.min(axis=1)
     stop_band_upper = emas.max(axis=1)
 
-    return (prices[max(spans):], is_buyer_maker[max(spans):], timestamps[max(spans):],
-            emas[max(spans):][:, MA_idx].astype(np.float32), ratios[max(spans):].astype(np.float32),
-            stop_band_lower[max(spans):].astype(np.float32), stop_band_upper[max(spans):].astype(np.float32))
+    return emas[max(spans):][:, MA_idx], ratios[max(spans):], stop_band_lower[max(spans):], stop_band_upper[max(spans):]
 
 
 def flatten(lst: list) -> list:
