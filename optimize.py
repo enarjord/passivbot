@@ -4,11 +4,13 @@ import glob
 import json
 import os
 import pprint
+import sys
 from time import time
 from typing import Union
 
 import nevergrad as ng
 import numpy as np
+import psutil
 import ray
 from ray import tune
 from ray.tune.schedulers import AsyncHyperBandScheduler
@@ -131,6 +133,11 @@ def tune_report(result):
 
 
 def backtest_tune(data: np.ndarray, config: dict, current_best: Union[dict, list] = None):
+    memory = int(np.sum([sys.getsizeof(d) for d in data]) * 1.2)
+    virtual_memory = psutil.virtual_memory()
+    if (virtual_memory.available - memory) / virtual_memory.total < 0.1:
+        print("Available memory would drop below 10%. Please reduce the time span.")
+        return None
     config = create_config(config)
     print('tuning:')
     for k, v in config.items():
@@ -167,7 +174,8 @@ def backtest_tune(data: np.ndarray, config: dict, current_best: Union[dict, list
             current_best = clean_start_config(current_best, config)
             current_best_params.append(current_best)
 
-    ray.init(num_cpus=num_cpus)  # , logging_level=logging.FATAL, log_to_driver=False)
+    ray.init(num_cpus=num_cpus,
+             object_store_memory=memory if memory > 4000000000 else None)  # , logging_level=logging.FATAL, log_to_driver=False)
     pso = ng.optimizers.ConfiguredPSO(transform='identity', popsize=n_particles, omega=omega, phip=phi1, phig=phi2)
     algo = NevergradSearch(optimizer=pso, points_to_evaluate=current_best_params)
     algo = ConcurrencyLimiter(algo, max_concurrent=num_cpus)
@@ -242,9 +250,10 @@ async def main():
         except Exception as e:
             print('Could not find specified configuration.', e)
     analysis = backtest_tune(data, config, start_candidate)
-    save_results(analysis, config)
-    config.update(clean_result_config(analysis.best_config))
-    plot_wrap(pack_config(config), data)
+    if analysis:
+        save_results(analysis, config)
+        config.update(clean_result_config(analysis.best_config))
+        plot_wrap(pack_config(config), data)
 
 
 if __name__ == '__main__':
