@@ -1,16 +1,16 @@
 import argparse
 import asyncio
-import datetime
 import json
 import logging
 import os
 import signal
-from collections import deque
+import pprint
 from pathlib import Path
 from time import time
-from procedures import load_live_config, make_get_filepath, load_key_secret
+from procedures import load_live_config, make_get_filepath, load_key_secret, print_
 from pure_funcs import get_xk_keys, get_ids_to_fetch, flatten, calc_indicators_from_ticks_with_gaps, \
-    drop_consecutive_same_prices
+    drop_consecutive_same_prices, filter_orders, compress_float, create_xk, round_dynamic
+from njit_funcs import calc_orders, calc_new_psize_pprice, qty_to_cost, calc_diff, round_, calc_emas
 import numpy as np
 import websockets
 import telegram_bot
@@ -24,18 +24,21 @@ class LockNotAvailableException(Exception):
 class Bot:
     def __init__(self, config: dict):
         self.config = config
+        self.config['do_long'] = config['long']['enabled']
+        self.config['do_shrt'] = config['shrt']['enabled']
+        self.config['max_leverage'] = 25
         self.telegram = None
         self.xk = {}
 
-        self.set_config(config)
+        self.set_config(self.config)
 
-        self.ema_alpha = 2 / (self.spans + 1)
-        self.ema_alpha_ = 1 - self.ema_alpha
+        self.ema_alpha = 2.0 / (self.spans + 1.0)
+        self.ema_alpha_ = 1.0 - self.ema_alpha
 
-        self.ts_locked = {'cancel_orders': 0, 'decide': 0, 'update_open_orders': 0,
-                          'update_position': 0, 'print': 0, 'create_orders': 0,
-                          'check_fills': 0}
-        self.ts_released = {k: 1 for k in self.ts_locked}
+        self.ts_locked = {'cancel_orders': 0.0, 'decide': 0.0, 'update_open_orders': 0.0,
+                          'update_position': 0.0, 'print': 0.0, 'create_orders': 0.0,
+                          'check_fills': 0.0}
+        self.ts_released = {k: 1.0 for k in self.ts_locked}
 
         self.position = {}
         self.open_orders = []
@@ -47,7 +50,6 @@ class Bot:
         self.agg_qty = 0.0
         self.qty = 0.0
         self.ob = [0.0, 0.0]
-        self.ema = 0.0
 
         self.emas = np.zeros(len(self.spans))
         self.ratios = np.zeros(len(self.spans) - 1)
@@ -58,7 +60,7 @@ class Bot:
         self.n_orders_per_execution = 4
 
         self.hedge_mode = True
-        self.contract_multiplier = self.config['contract_multiplier'] = 1.0
+        self.c_mult = self.config['c_mult'] = 1.0
 
         self.log_filepath = make_get_filepath(f"logs/{self.exchange}/{config['config_name']}.log")
 
@@ -74,8 +76,6 @@ class Bot:
         config['spans'] = config['spans'].round().astype(int)
         if 'stop_mode' not in config:
             config['stop_mode'] = None
-        if 'entry_liq_diff_thr' not in config:
-            config['entry_liq_diff_thr'] = config['stop_loss_liq_diff']
         if 'last_price_diff_limit' not in config:
             config['last_price_diff_limit'] = 0.15
         if 'profit_trans_pct' not in config:
@@ -91,7 +91,7 @@ class Bot:
         setattr(self, key, self.config[key])
 
     async def _init(self):
-        self.xk = {k: float(self.config[k]) for k in get_xk_keys()}
+        self.xk = create_xk(self.config)
         self.fills = await self.fetch_fills()
 
     def dump_log(self, data) -> None:
@@ -126,15 +126,19 @@ class Bot:
             position, _ = await asyncio.gather(self.fetch_position(),
                                                self.update_open_orders())
             position['used_margin'] = \
-                ((calc_cost(position['long']['size'], position['long']['price'],
-                            self.xk['inverse'], self.xk['contract_multiplier'])
+                ((qty_to_cost(position['long']['size'], position['long']['price'],
+                              self.xk['inverse'], self.xk['c_mult'])
                   if position['long']['price'] else 0.0) +
-                 (calc_cost(position['shrt']['size'], position['shrt']['price'],
-                            self.xk['inverse'], self.xk['contract_multiplier'])
-                  if position['shrt']['price'] else 0.0)) / self.leverage
+                 (qty_to_cost(position['shrt']['size'], position['shrt']['price'],
+                              self.xk['inverse'], self.xk['c_mult'])
+                  if position['shrt']['price'] else 0.0)) / self.max_leverage
             position['available_margin'] = (position['equity'] - position['used_margin']) * 0.9
             position['long']['liq_diff'] = calc_diff(position['long']['liquidation_price'], self.price)
             position['shrt']['liq_diff'] = calc_diff(position['shrt']['liquidation_price'], self.price)
+            position['long']['pbr'] = qty_to_cost(position['long']['size'], position['long']['price'],
+                                                  self.xk['inverse'], self.xk['c_mult']) / position['wallet_balance']
+            position['shrt']['pbr'] = qty_to_cost(position['shrt']['size'], position['shrt']['price'],
+                                                  self.xk['inverse'], self.xk['c_mult']) / position['wallet_balance']
             if self.position != position:
                 self.dump_log({'log_type': 'position', 'data': position})
             self.position = position
@@ -144,9 +148,9 @@ class Bot:
 
     async def create_orders(self, orders_to_create: [dict]) -> dict:
         if not orders_to_create:
-            return
+            return {}
         if self.ts_locked['create_orders'] > self.ts_released['create_orders']:
-            return
+            return {}
         self.ts_locked['create_orders'] = time()
         creations = []
         for oc in sorted(orders_to_create, key=lambda x: x['qty']):
@@ -221,7 +225,7 @@ class Bot:
         self.process_websocket_ticks = True
 
     def calc_orders(self):
-        balance = self.position['wallet_balance'] * 0.9
+        balance = self.position['wallet_balance']
         long_psize = self.position['long']['size']
         long_pprice = self.position['long']['price']
         shrt_psize = self.position['shrt']['size']
@@ -238,9 +242,6 @@ class Bot:
         self.xk['do_long'] = do_long
         self.xk['do_shrt'] = do_shrt
 
-        liq_price = self.position['long']['liquidation_price'] if long_psize > abs(shrt_psize) \
-            else self.position['shrt']['liquidation_price']
-
         if self.stop_mode in ['panic']:
             panic_orders = []
             if long_psize != 0.0:
@@ -251,59 +252,66 @@ class Bot:
                                      'type': 'market', 'reduce_only': True, 'custom_id': 'shrt_panic'})
             return panic_orders
 
-        long_entry_orders, shrt_entry_orders, long_close_orders, shrt_close_orders = [], [], [], []
-        stop_loss_close = False
 
-        for tpl in iter_entries(balance, long_psize, long_pprice, shrt_psize, shrt_pprice,
-                                liq_price, self.ob[0], self.ob[1], self.ema, self.price,
-                                self.volatility, **self.xk):
-            if (len(long_entry_orders) >= self.n_open_orders_limit and
-                len(shrt_entry_orders) >= self.n_open_orders_limit) or \
-                    calc_diff(tpl[1], self.price) > self.last_price_diff_limit:
-                break
-            elif tpl[4] == 'stop_loss_shrt_close':
-                shrt_close_orders.append({'side': 'buy', 'position_side': 'shrt', 'qty': abs(tpl[0]),
-                                          'price': tpl[1], 'type': 'limit', 'reduce_only': True,
-                                          'custom_id': tpl[4]})
-                shrt_psize = tpl[2]
-                stop_loss_close = True
-            elif tpl[4] == 'stop_loss_long_close':
-                long_close_orders.append({'side': 'sell', 'position_side': 'long', 'qty': abs(tpl[0]),
-                                          'price': tpl[1], 'type': 'limit', 'reduce_only': True,
-                                          'custom_id': tpl[4]})
-                long_psize = tpl[2]
-                stop_loss_close = True
-            elif tpl[0] == 0.0 or self.stop_mode in ['freeze']:
-                continue
-            elif tpl[0] > 0.0:
-                long_entry_orders.append({'side': 'buy', 'position_side': 'long', 'qty': tpl[0],
-                                          'price': tpl[1], 'type': 'limit', 'reduce_only': False,
-                                          'custom_id': tpl[4]})
+        orders = []
+        long_closed, shrt_closed = long_psize == 0.0, shrt_psize == 0.0
+        long_done, shrt_done = False, False
+
+        inf_loop_prevention = 100
+        i = 0
+
+        while True:
+            i += 1
+            if i >= inf_loop_prevention:
+                raise Exception('warning -- infinite loop in calc_orders')
+            long_entry, shrt_entry, long_close, shrt_close, bkr_price, available_margin = calc_orders(
+                balance,
+                long_psize,
+                long_pprice,
+                shrt_psize,
+                shrt_pprice,
+                self.ob[0],
+                self.ob[1],
+                self.price,
+                self.emas[self.MA_idx],
+                self.stop_band_lower,
+                self.stop_band_upper,
+                self.ratios,
+                **self.xk)
+            if not long_closed and long_close[0] != 0.0 and \
+                    calc_diff(long_close[1], self.price) < self.last_price_diff_limit:
+                orders.append({'side': 'sell', 'position_side': 'long', 'qty': abs(float(long_close[0])),
+                               'price': float(long_close[1]), 'type': 'limit', 'reduce_only': True,
+                               'custom_id': long_close[4]})
+                long_closed = True
+            if not shrt_closed and shrt_close[0] != 0.0 and \
+                    calc_diff(shrt_close[1], self.price) < self.last_price_diff_limit:
+                orders.append({'side': 'buy', 'position_side': 'shrt', 'qty': abs(float(shrt_close[0])),
+                               'price': float(shrt_close[1]), 'type': 'limit', 'reduce_only': True,
+                               'custom_id': shrt_close[4]})
+                shrt_closed = True
+            if self.stop_mode not in ['freeze'] and long_entry[0] != 0.0 and \
+                    calc_diff(long_entry[1], self.price) < self.last_price_diff_limit:
+                orders.append({'side': 'buy', 'position_side': 'long', 'qty': float(long_entry[0]),
+                               'price': float(long_entry[1]), 'type': 'limit', 'reduce_only': False,
+                               'custom_id': long_entry[4]})
+                long_psize, long_pprice = calc_new_psize_pprice(long_psize, long_pprice,
+                                                                long_entry[0], long_entry[1], self.qty_step)
             else:
-                shrt_entry_orders.append({'side': 'sell', 'position_side': 'shrt', 'qty': abs(tpl[0]),
-                                          'price': tpl[1], 'type': 'limit', 'reduce_only': False,
-                                          'custom_id': tpl[4]})
-
-        for ask_qty, ask_price, _ in iter_long_closes(balance, long_psize, long_pprice, self.ob[1],
-                                                      **self.xk):
-            if len(long_close_orders) >= self.n_open_orders_limit or \
-                    calc_diff(ask_price, self.price) > self.last_price_diff_limit or \
-                    stop_loss_close:
+                long_done = True
+            if self.stop_mode not in ['freeze'] and shrt_entry[0] != 0.0 and \
+                    calc_diff(shrt_entry[1], self.price) < self.last_price_diff_limit:
+                orders.append({'side': 'sell', 'position_side': 'shrt', 'qty': abs(float(shrt_entry[0])),
+                               'price': float(shrt_entry[1]), 'type': 'limit', 'reduce_only': False,
+                               'custom_id': shrt_entry[4]})
+                shrt_psize, shrt_pprice = calc_new_psize_pprice(shrt_psize, shrt_pprice,
+                                                                shrt_entry[0], shrt_entry[1], self.qty_step)
+            else:
+                shrt_done = True
+            if len(orders) >= self.n_open_orders_limit or (long_done and shrt_done):
                 break
-            long_close_orders.append({'side': 'sell', 'position_side': 'long', 'qty': abs(ask_qty),
-                                      'price': float(ask_price), 'type': 'limit',
-                                      'reduce_only': True, 'custom_id': 'close'})
+        return orders
 
-        for bid_qty, bid_price, _ in iter_shrt_closes(balance, shrt_psize, shrt_pprice, self.ob[0],
-                                                      **self.xk):
-            if len(shrt_close_orders) >= self.n_open_orders_limit or \
-                    calc_diff(bid_price, self.price) > self.last_price_diff_limit or \
-                    stop_loss_close:
-                break
-            shrt_close_orders.append({'side': 'buy', 'position_side': 'shrt', 'qty': abs(bid_qty),
-                                      'price': float(bid_price), 'type': 'limit',
-                                      'reduce_only': True, 'custom_id': 'close'})
-        return long_entry_orders + shrt_entry_orders + long_close_orders + shrt_close_orders
 
     async def cancel_and_create(self):
         await asyncio.sleep(0.005)
@@ -462,16 +470,14 @@ class Bot:
         line += f"e@ {shrt_entries[0]['price'] if shrt_entries else 0.0} "
         if self.position['long']['size'] > abs(self.position['shrt']['size']):
             liq_price = self.position['long']['liquidation_price']
-            sl_trigger_price = liq_price / (1 - self.stop_loss_liq_diff)
         else:
             liq_price = self.position['shrt']['liquidation_price']
-            sl_trigger_price = liq_price / (1 + self.stop_loss_liq_diff)
-        line += f"|| last {self.price} liq {compress_float(liq_price, 5)} "
-        line += f"sl trig {compress_float(sl_trigger_price, 5)} "
-        line += f"ema {compress_float(self.ema, 5)} "
+        line += f"|| last {self.price} liq {round_dynamic(liq_price, 5)} "
+
+        line += f"lpbr {self.position['long']['pbr']:.3f} spbr {self.position['shrt']['pbr']:.3f} "
+        line += f"EMAr {[round_dynamic(r, 4) for r in self.ratios]} "
         line += f"bal {compress_float(self.position['wallet_balance'], 3)} "
         line += f"eq {compress_float(self.position['equity'], 3)} "
-        line += f"v. {compress_float(self.volatility, 5)} "
         print_([line], r=True)
 
     def flush_stuck_locks(self, timeout: float = 4.0) -> None:
@@ -488,7 +494,7 @@ class Bot:
             print('\nwarning: insufficient ticks fetched')
             print('emas and ema ratios will be inaccurate until websocket catches up')
             self.emas = calc_emas(np.array([e['price'] for e in ticks]), self.spans)[-1]
-            self.ratios = emas[:-1] / emas[1:]
+            self.ratios = self.emas[:-1] / self.emas[1:]
         else:
             idxs = get_ids_to_fetch(self.spans[1:], ticks[-1]['trade_id'])
             fetched_ticks = await asyncio.gather(*[self.fetch_ticks(from_id=int(i)) for i in idxs])

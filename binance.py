@@ -143,7 +143,7 @@ class BinanceBot(Bot):
                 for br in e['brackets']:
                     max_lev = max(max_lev, int(br['initialLeverage']))
                 break
-        self.max_leverage = max_lev
+        self.max_leverage = self.config['max_leverage'] = max_lev
         await super()._init()
         await self.init_order_book()
         await self.update_position()
@@ -177,7 +177,7 @@ class BinanceBot(Bot):
         return await self.private_post(self.base_endpoint,
                                        self.endpoints['leverage'],
                                        {'symbol': self.symbol,
-                                        'leverage': int(round(min(self.max_leverage, self.leverage * 2)))})
+                                        'leverage': int(round(min(self.max_leverage, max(self.xk['leverage']) * 2)))})
 
     async def init_exchange_config(self):
         try:
