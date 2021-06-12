@@ -68,7 +68,7 @@ def clean_result_config(config: dict) -> dict:
 def iter_slices(data, sliding_window_days: float):
     ms_span = data[2][-1] - data[2][0]
     sliding_window_ms = sliding_window_days * 24 * 60 * 60 * 1000
-    n_windows = int(round(ms_span / sliding_window_ms) + 1)
+    n_windows = int(np.round(ms_span / sliding_window_ms) + 1)
     if sliding_window_ms > ms_span:
         yield data
         return
