@@ -114,8 +114,14 @@ def simple_sliding_window_wrap(config, data, do_print=False):
               f'score {analysis["score"]:.4f}, objective {objective:.4f}, '
               f'hrs stuck ss {str(round(analysis["max_hrs_no_fills_same_side"], 1)).zfill(4)}, '
               f'scores {[round(e["score"], 2) for e in analyses]}, ')
-        if analysis['closest_bkr'] < config['bankruptcy_distance_break_thr']:
-            break
+        bef = config['break_early_factor']
+        if bef > 0.0:
+            if analysis['closest_bkr'] < config['minimum_bankruptcy_distance'] * (1 - bef):
+                break
+            if analysis['max_hrs_no_fills'] > config['maximum_hrs_no_fills'] * (1 + bef):
+                break
+            if analysis['max_hrs_no_fills_same_side'] > config['maximum_hrs_no_fills_same_side'] * (1 + bef):
+                break
     tune.report(objective=objective,
                 daily_gain=np.mean([r['average_daily_gain'] for r in analyses]),
                 closest_bankruptcy=np.min([r['closest_bkr'] for r in analyses]),
@@ -196,7 +202,8 @@ def backtest_tune(data: np.ndarray, config: dict, current_best: Union[dict, list
                             'max_hrs_no_fills_same_side',
                             'objective'],
             parameter_columns=[k for k in config['ranges']
-                               if any(k0 in k for k0 in ['const', 'leverage', 'stop_psize_pct', '_span']) and '§' in k]),
+                               if (any(k0 in k for k0 in ['const', 'leverage', 'stop_psize_pct']) and '§' in k)
+                               or '_span' in k]),
         # if type(config[k]) == ray.tune.sample.Float
         # or type(config[k]) == ray.tune.sample.Integer]),
         raise_on_failed_trial=False
