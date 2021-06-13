@@ -16,7 +16,7 @@ from dateutil import parser
 
 from passivbot import add_argparse_args
 from procedures import prep_config, make_get_filepath, create_binance_bot, create_bybit_bot, print_
-from pure_funcs import ts_to_date, get_dummy_settings, ticks_to_ticks_cache
+from pure_funcs import ts_to_date, get_dummy_settings
 
 
 class Downloader:
@@ -663,7 +663,7 @@ class Downloader:
         """
         cache_dirpath = os.path.join(
             self.config['caches_dirpath'],
-            f"{self.config['session_name']}_spans_{'_'.join(map(str, self.config['spans']))}",
+            f"{self.config['session_name']}_n_spans_{self.config['n_spans']}",
             '')
         if not os.path.exists(cache_dirpath):
             prices, is_buyer_maker, timestamps = await self.get_ticks(False)
@@ -671,23 +671,20 @@ class Downloader:
             is_buyer_maker = np.reshape(is_buyer_maker, is_buyer_maker.size)
             timestamps = np.reshape(timestamps, timestamps.size)
             fpath = make_get_filepath(cache_dirpath)
-            emas = ticks_to_ticks_cache(prices, self.config['spans'])
-            data = (prices[max(self.config['spans']):], is_buyer_maker[max(self.config['spans']):],
-                    timestamps[max(self.config['spans']):], emas)
+            data = (prices, is_buyer_maker, timestamps)
             print('dumping cache...')
-            for fname, arr in zip(['prices', 'is_buyer_maker', 'timestamps', 'emas'], data):
+            for fname, arr in zip(['prices', 'is_buyer_maker', 'timestamps'], data):
                 np.save(f'{fpath}{fname}.npy', arr)
             size_mb = np.sum([sys.getsizeof(d) for d in data]) / (1000 * 1000)
             print(f'dumped {size_mb:.2f} mb of data')
             del prices
             del is_buyer_maker
             del timestamps
-            del emas
             del data
             gc.collect()
         print('loading cached tick data')
         arrs = []
-        for fname in ['prices', 'is_buyer_maker', 'timestamps', 'emas']:
+        for fname in ['prices', 'is_buyer_maker', 'timestamps']:
             arrs.append(np.load(f'{cache_dirpath}{fname}.npy'))
         return tuple(arrs)
 
