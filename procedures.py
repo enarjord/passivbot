@@ -49,18 +49,9 @@ async def prep_config(args) -> dict:
         json.dump(market_specific_settings, open(mss, 'w'), indent=4)
     config.update(market_specific_settings)
 
-    # setting absolute min/max ranges
-    for key in ['qty_pct', 'ddown_factor', 'ema_span', 'grid_spacing']:
-        if key in config['ranges']:
-            config['ranges'][key][0] = max(0.0, config['ranges'][key][0])
-    for key in ['qty_pct']:
-        if key in config['ranges']:
-            config['ranges'][key][1] = min(1.0, config['ranges'][key][1])
-
     if 'leverage' in config['ranges']:
         config['ranges']['leverage'][1] = min(config['ranges']['leverage'][1], config['max_leverage'])
         config['ranges']['leverage'][0] = min(config['ranges']['leverage'][0], config['ranges']['leverage'][1])
-    config['spans'] = calc_spans(config['min_span'], config['max_span'], config['n_spans'])
 
     return config
 

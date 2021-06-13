@@ -31,7 +31,7 @@ os.environ['TUNE_GLOBAL_CHECKPOINT_S'] = '240'
 
 def create_config(config: dict) -> dict:
     updated_ranges = {}
-    unpacked = unpack_config(get_template_live_config(config['min_span'], config['max_span'], config['n_spans']))
+    unpacked = unpack_config(get_template_live_config(config['n_spans']))
 
     for k0 in unpacked:
         if '§' in k0:
@@ -67,7 +67,7 @@ def clean_result_config(config: dict) -> dict:
     return config
 
 
-def iter_slices(data, sliding_window_days: float):
+def iter_slices(data, sliding_window_days: float, ticks_to_prepend: int = 0):
     ms_span = data[2][-1] - data[2][0]
     sliding_window_ms = sliding_window_days * 24 * 60 * 60 * 1000
     n_windows = int(np.round(ms_span / sliding_window_ms) + 1)
@@ -76,10 +76,10 @@ def iter_slices(data, sliding_window_days: float):
         return
     ms_thresholds = np.linspace(data[2][0], data[2][-1] - sliding_window_ms, n_windows)
     for ms_threshold in ms_thresholds[::-1]:
-        start_i = np.searchsorted(data[2], ms_threshold)
+        start_i = max(0, np.searchsorted(data[2], ms_threshold) - ticks_to_prepend)
         end_i = np.searchsorted(data[2], ms_threshold + sliding_window_ms)
         yield tuple(d[start_i:end_i] for d in data)
-    for ds in iter_slices(data, sliding_window_days * 2):
+    for ds in iter_slices(data, sliding_window_days * 2, ticks_to_prepend):
         yield ds
 
 
@@ -98,7 +98,8 @@ def simple_sliding_window_wrap(config, data, do_print=False):
     n_days = config['n_days']
     sliding_window_days = max(3.0, config['n_days'] * config['sliding_window_size'])  # at least 3 days per slice
     config['sliding_window_days'] = sliding_window_days
-    data_slices = list(iter_slices(data, sliding_window_days)) if config['sliding_window_size'] < 1.0 else [data]
+    data_slices = list(iter_slices(data, sliding_window_days, int(config['max_span']))) \
+        if config['sliding_window_size'] < 1.0 else [data]
     n_slices = len(data_slices)
     print('n_days', n_days, 'sliding_window_days', config['sliding_window_days'], 'n_slices', n_slices)
     for z, data_slice in enumerate(data_slices):
@@ -195,7 +196,7 @@ def backtest_tune(data: np.ndarray, config: dict, current_best: Union[dict, list
                             'max_hrs_no_fills_same_side',
                             'objective'],
             parameter_columns=[k for k in config['ranges']
-                               if any(k0 in k for k0 in ['const', 'leverage', 'stop_psize_pct']) and '§' in k]),
+                               if any(k0 in k for k0 in ['const', 'leverage', 'stop_psize_pct', '_span']) and '§' in k]),
         # if type(config[k]) == ray.tune.sample.Float
         # or type(config[k]) == ray.tune.sample.Integer]),
         raise_on_failed_trial=False

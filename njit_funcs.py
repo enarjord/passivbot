@@ -345,6 +345,7 @@ def calc_orders(balance,
                 min_cost,
                 c_mult,
                 max_leverage,
+                spans,
                 stop_psize_pct,
                 leverage,
                 iqty_const,
@@ -425,8 +426,19 @@ def calc_orders(balance,
     return long_entry, shrt_entry, long_close, shrt_close, bkr_price, available_margin
 
 
+
 @njit
-def njit_backtest(data: (np.ndarray, np.ndarray, np.ndarray, np.ndarray),
+def calc_emas_last(xs, spans):
+    alphas = 2.0 / (spans + 1.0)
+    alphas_ = 1.0 - alphas
+    emas = np.repeat(xs[0], len(spans))
+    for i in range(1, len(xs)):
+        emas = emas * alphas_ + xs[i] * alphas
+    return emas
+
+
+@njit
+def njit_backtest(data: (np.ndarray, np.ndarray, np.ndarray),
                   starting_balance,
                   latency_simulation_ms,
                   maker_fee,
@@ -439,6 +451,7 @@ def njit_backtest(data: (np.ndarray, np.ndarray, np.ndarray, np.ndarray),
                   min_cost,
                   c_mult,
                   max_leverage,
+                  spans,
                   stop_psize_pct,
                   leverage,
                   iqty_const,
@@ -453,11 +466,11 @@ def njit_backtest(data: (np.ndarray, np.ndarray, np.ndarray, np.ndarray),
                   rprc_MAr_coeffs,
                   markup_MAr_coeffs):
 
-    prices, buyer_maker, timestamps, MAs = data
+    prices, buyer_maker, timestamps = data
     static_params = (inverse, do_long, do_shrt, qty_step, price_step, min_qty, min_cost, c_mult, max_leverage,
-                     stop_psize_pct, leverage, iqty_const, iprc_const, rqty_const, rprc_const, markup_const,
-                     iqty_MAr_coeffs, iprc_MAr_coeffs, rprc_PBr_coeffs, rqty_MAr_coeffs, rprc_MAr_coeffs,
-                     markup_MAr_coeffs)
+                     spans, stop_psize_pct, leverage, iqty_const, iprc_const, rqty_const, rprc_const,
+                     markup_const, iqty_MAr_coeffs, iprc_MAr_coeffs, rprc_PBr_coeffs, rqty_MAr_coeffs,
+                     rprc_MAr_coeffs, markup_MAr_coeffs)
 
     balance = equity = starting_balance
     long_psize, long_pprice, shrt_psize, shrt_pprice = 0.0, 0.0, 0.0, 0.0
@@ -472,8 +485,10 @@ def njit_backtest(data: (np.ndarray, np.ndarray, np.ndarray, np.ndarray),
     prev_ob = [0.0, 0.0]
     closest_bkr = 1.0
     lowest_eqbal_ratio = 1.0
-
-    for k in range(len(prices)):
+    alphas = 2.0 / (spans + 1.0)
+    alphas_ = 1.0 - alphas
+    MAs = calc_emas_last(prices[:spans.max()], spans)
+    for k in range(spans.max(), len(prices)):
 
         if timestamps[k] > next_update_ts:
             long_entry, shrt_entry, long_close, shrt_close, bkr_price, available_margin = calc_orders(
@@ -485,13 +500,14 @@ def njit_backtest(data: (np.ndarray, np.ndarray, np.ndarray, np.ndarray),
                 ob[0],
                 ob[1],
                 prices[k],
-                MAs[k],
+                MAs,
 
                 *static_params)
             closest_bkr = min(closest_bkr, calc_diff(bkr_price, prices[k]))
             lowest_eqbal_ratio = min(lowest_eqbal_ratio, equity / balance)
             next_update_ts = timestamps[k] + 5000
             prev_k = k
+            prev_MAs = MAs
             prev_ob = ob
 
         if equity / starting_balance < 0.1:
@@ -531,9 +547,9 @@ def njit_backtest(data: (np.ndarray, np.ndarray, np.ndarray, np.ndarray),
                                                  long_pprice,
                                                  prev_ob[0],
                                                  prev_ob[1],
-                                                 MAs[prev_k].min(),
-                                                 MAs[prev_k].max(),
-                                                 np.append(prices[prev_k], MAs[prev_k][:-1]) / MAs[prev_k],
+                                                 prev_MAs.min(),
+                                                 prev_MAs.max(),
+                                                 np.append(prices[prev_k], prev_MAs[:-1]) / prev_MAs,
                                                  available_margin,
 
                                                  inverse,
@@ -583,9 +599,9 @@ def njit_backtest(data: (np.ndarray, np.ndarray, np.ndarray, np.ndarray),
                                                  shrt_pprice,
                                                  prev_ob[0],
                                                  prev_ob[1],
-                                                 MAs[prev_k].min(),
-                                                 MAs[prev_k].max(),
-                                                 np.append(prices[prev_k], MAs[prev_k][:-1]) / MAs[prev_k],
+                                                 prev_MAs.min(),
+                                                 prev_MAs.max(),
+                                                 np.append(prices[prev_k], prev_MAs[:-1]) / prev_MAs,
                                                  available_margin,
 
                                                  inverse,
@@ -620,6 +636,7 @@ def njit_backtest(data: (np.ndarray, np.ndarray, np.ndarray, np.ndarray),
                 long_close = (0.0, 0.0, 0.0, 0.0, '')
                 next_update_ts = min(next_update_ts, timestamps[k] + latency_simulation_ms)
             ob[1] = prices[k]
+        MAs = MAs * alphas_ + prices[k] * alphas
     return fills, (True, lowest_eqbal_ratio, closest_bkr)
 
 

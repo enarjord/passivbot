@@ -33,7 +33,7 @@ def calc_spans(min_span: int, max_span: int, n_spans: int) -> np.ndarray:
 
 def get_xk_keys():
     return ['inverse', 'do_long', 'do_shrt', 'qty_step', 'price_step', 'min_qty', 'min_cost', 'c_mult',
-            'max_leverage', 'stop_psize_pct', 'leverage', 'iqty_const', 'iprc_const', 'rqty_const',
+            'max_leverage', 'spans', 'stop_psize_pct', 'leverage', 'iqty_const', 'iprc_const', 'rqty_const',
             'rprc_const', 'markup_const', 'iqty_MAr_coeffs', 'iprc_MAr_coeffs', 'rprc_PBr_coeffs',
             'rqty_MAr_coeffs', 'rprc_MAr_coeffs', 'markup_MAr_coeffs']
 
@@ -45,6 +45,7 @@ def create_xk(config: dict) -> dict:
             xk[k] = (config['long'][k], config['shrt'][k])
         elif k in config:
             xk[k] = config[k]
+    xk['spans'] = calc_spans(config['min_span'], config['max_span'], config['n_spans'])
     return xk
 
 
@@ -90,9 +91,7 @@ def date_to_ts(d):
 
 def candidate_to_live_config(candidate: dict) -> dict:
     packed = pack_config(candidate)
-    live_config = get_template_live_config(min_span=candidate['min_span'],
-                                           max_span=candidate['max_span'],
-                                           n_spans=candidate['n_spans'])
+    live_config = get_template_live_config(n_spans=candidate['n_spans'])
     sides = ['long', 'shrt']
     for side in sides:
         for k in live_config[side]:
@@ -210,29 +209,23 @@ def filter_orders(actual_orders: [dict],
 
 
 def get_dummy_settings(user: str, exchange: str, symbol: str):
-    dummy_settings = get_template_live_config()
-    dummy_settings.update({k: 0.01 for k in get_xk_keys() + ['stop_loss_liq_diff', 'ema_span']})
+    dummy_settings = get_template_live_config(n_spans=3)
+    dummy_settings.update({k: 1.0 for k in get_xk_keys() + ['stop_loss_liq_diff', 'ema_span']})
     dummy_settings.update({'user': user, 'exchange': exchange, 'symbol': symbol,
-                           'config_name': '', 'logging_level': 0})
+                           'config_name': '', 'logging_level': 0, 'spans': np.array([6000, 90000])})
     return dummy_settings
-
-
-def ticks_to_ticks_cache(prices: np.ndarray, spans: np.ndarray) -> (np.ndarray,):
-    emas = calc_emas(prices, np.array(spans))  # , dtype=np.float32))
-
-    return emas[max(spans):]
 
 
 def flatten(lst: list) -> list:
     return [y for x in lst for y in x]
 
 
-def get_template_live_config(min_span=6000, max_span=300000, n_spans=3, randomize_coeffs=False):
+def get_template_live_config(n_spans: int, randomize_coeffs=False):
     config = {
         "config_name": "name",
         "logging_level": 0,
-        "min_span": min_span,
-        "max_span": max_span,
+        "min_span": 9000.0,
+        "max_span": 160000.0,
         "n_spans": n_spans,
         "long": {
             "enabled": True,
@@ -286,7 +279,6 @@ def get_template_live_config(min_span=6000, max_span=300000, n_spans=3, randomiz
             elif 'PBr_coeff' in k:
                 config[side][k] = np.random.random((1, 2)) * 0.1 - 0.05 \
                     if randomize_coeffs else np.zeros((1, 2))
-    config['spans'] = calc_spans(config['min_span'], config['max_span'], config['n_spans'])
     return config
 
 
