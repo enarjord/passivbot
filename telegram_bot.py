@@ -533,11 +533,16 @@ class Telegram:
         if bool(self._bot.position):
             async def _balance_async():
                 position = await self._bot.fetch_position()
-                msg = f'Balance {self._bot.margin_coin if hasattr(self._bot, "margin_coin") else ""}\n' \
+                account = await self._bot.fetch_account()
+                usdt_balance = list(asset for asset in account['balances'] if asset['asset'] == 'USDT')[0]
+
+                msg = f'Futures balance {self._bot.margin_coin if hasattr(self._bot, "margin_coin") else ""}:\n' \
                       f'Wallet balance: {compress_float(position["wallet_balance"], 4)}\n' \
                       f'Equity: {compress_float(self._bot.position["equity"], 4)}\n' \
                       f'Locked margin: {compress_float(self._bot.position["used_margin"], 4)}\n' \
-                      f'Available margin: {compress_float(self._bot.position["available_margin"], 4)}'
+                      f'Available margin: {compress_float(self._bot.position["available_margin"], 4)}\n\n' \
+                      f'Spot balance:\n' \
+                      f'USDT: {compress_float(float(usdt_balance["free"]) + float(usdt_balance["locked"]), 4)} ({compress_float(float(usdt_balance["locked"]), 4)} locked)'
                 self.send_msg(msg)
 
             self.send_msg('Retrieving balance...')
@@ -653,7 +658,7 @@ class Telegram:
 
     def notify_entry_order_filled(self, size: float, price:float, position_side: str):
         if 'notify_entry_fill' not in self.config or self.config['notify_entry_fill'] is True:
-            self.send_msg(f'Entry order of size <pre>{size}</pre> at price <pre>{price}</pre> filled on {position_side}')
+            self.send_msg(f'Entry order of size <pre>{size}</pre> at price <pre>{round_(price, self._bot.price_step)}</pre> filled on {position_side}')
 
     def show_config(self, update=None, context=None):
         try:

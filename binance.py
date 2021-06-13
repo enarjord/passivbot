@@ -46,8 +46,11 @@ class BinanceBot(Bot):
             result = await response.text()
         return json.loads(result)
 
-    async def private_get(self, url: str, params: dict = {}) -> dict:
-        return await self.private_('get', self.base_endpoint, url, params)
+    async def private_get(self, url: str, params: dict = {}, base_endpoint: str = None) -> dict:
+        if base_endpoint is not None:
+            return await self.private_('get', base_endpoint, url, params)
+        else:
+            return await self.private_('get', self.base_endpoint, url, params)
 
     async def private_post(self, base_endpoint: str, url: str, params: dict = {}) -> dict:
         return await self.private_('post', base_endpoint, url, params)
@@ -104,6 +107,7 @@ class BinanceBot(Bot):
 
         self.spot_base_endpoint = 'https://api.binance.com'
         self.endpoints['transfer'] = '/sapi/v1/asset/transfer'
+        self.endpoints['account'] = '/api/v3/account'
 
     async def _init(self):
         self.init_market_type()
@@ -339,6 +343,13 @@ class BinanceBot(Bot):
             print('error fetching incoming: ', e)
             return []
         return income
+
+    async def fetch_account(self):
+        try:
+            return await self.private_get(base_endpoint=self.spot_base_endpoint, url=self.endpoints['account'])
+        except Exception as e:
+            print('error fetching account: ', e)
+            return {'balances': []}
 
     async def fetch_ticks(self, from_id: int = None, start_time: int = None, end_time: int = None,
                           do_print: bool = True):
