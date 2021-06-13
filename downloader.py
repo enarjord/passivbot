@@ -663,7 +663,7 @@ class Downloader:
         """
         cache_dirpath = os.path.join(
             self.config['caches_dirpath'],
-            f"{self.config['session_name']}_spans_{'_'.join(map(str, self.config['spans']))}_idx_{self.config['MA_idx']}",
+            f"{self.config['session_name']}_spans_{'_'.join(map(str, self.config['spans']))}",
             '')
         if not os.path.exists(cache_dirpath):
             prices, is_buyer_maker, timestamps = await self.get_ticks(False)
