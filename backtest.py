@@ -40,8 +40,8 @@ def plot_wrap(config, data):
         config['plots_dirpath'], f"{ts_to_date(time())[:19].replace(':', '')}", '')
     )
     fdf.to_csv(config['plots_dirpath'] + "fills.csv")
-    df = pd.DataFrame({**{'price': data[0], 'buyer_maker': data[1], 'timestamp': data[2], 'ema': data[3]},
-                       **{f'ratio_{i}': data[4][:, i] for i in range(len(data[4][0]))}})
+    df = pd.DataFrame({**{'price': data[0], 'buyer_maker': data[1], 'timestamp': data[2]},
+                       **{}})
     print('dumping plots...')
     dump_plots(config, fdf, df)
 
