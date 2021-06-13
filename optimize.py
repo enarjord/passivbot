@@ -4,25 +4,27 @@ import glob
 import json
 import os
 import pprint
+import sys
 from time import time
 from typing import Union
 
 import nevergrad as ng
 import numpy as np
+import psutil
 import ray
 from ray import tune
 from ray.tune.schedulers import AsyncHyperBandScheduler
 from ray.tune.suggest import ConcurrencyLimiter
 from ray.tune.suggest.nevergrad import NevergradSearch
 
-from analyze import analyze_fills, get_empty_analysis
-from backtest import plot_wrap, backtest
-from downloader import Downloader, prep_config
-from njit_funcs import round_
+from analyze import analyze_fills
+from backtest import backtest
+from backtest import plot_wrap
+from downloader import Downloader
 from passivbot import add_argparse_args
-from procedures import make_get_ticks_cache
-from reporter import LogReporter
+from procedures import prep_config
 from pure_funcs import pack_config, unpack_config, get_template_live_config, ts_to_date
+from reporter import LogReporter
 
 os.environ['TUNE_GLOBAL_CHECKPOINT_S'] = '240'
 
@@ -68,7 +70,7 @@ def clean_result_config(config: dict) -> dict:
 def iter_slices(data, sliding_window_days: float):
     ms_span = data[2][-1] - data[2][0]
     sliding_window_ms = sliding_window_days * 24 * 60 * 60 * 1000
-    n_windows = int(round(ms_span / sliding_window_ms) + 1)
+    n_windows = int(np.round(ms_span / sliding_window_ms) + 1)
     if sliding_window_ms > ms_span:
         yield data
         return
@@ -94,7 +96,7 @@ def simple_sliding_window_wrap(config, data, do_print=False):
     analyses = []
     objective = 0.0
     n_days = config['n_days']
-    sliding_window_days = max(3.0, config['n_days'] * config['sliding_window_size']) # at least 3 days per slice
+    sliding_window_days = max(3.0, config['n_days'] * config['sliding_window_size'])  # at least 3 days per slice
     config['sliding_window_days'] = sliding_window_days
     data_slices = list(iter_slices(data, sliding_window_days)) if config['sliding_window_size'] < 1.0 else [data]
     n_slices = len(data_slices)
@@ -131,13 +133,18 @@ def tune_report(result):
 
 
 def backtest_tune(data: np.ndarray, config: dict, current_best: Union[dict, list] = None):
+    memory = int(np.sum([sys.getsizeof(d) for d in data]) * 1.2)
+    virtual_memory = psutil.virtual_memory()
+    if (virtual_memory.available - memory) / virtual_memory.total < 0.1:
+        print("Available memory would drop below 10%. Please reduce the time span.")
+        return None
     config = create_config(config)
     print('tuning:')
     for k, v in config.items():
         if type(v) in [ray.tune.sample.Float, ray.tune.sample.Integer]:
             print(k, (v.lower, v.upper))
     config['optimize_dirpath'] = os.path.join(config['optimize_dirpath'],
-                                                     ts_to_date(time())[:19].replace(':', ''), '')
+                                              ts_to_date(time())[:19].replace(':', ''), '')
     if 'iters' in config:
         iters = config['iters']
     else:
@@ -167,7 +174,8 @@ def backtest_tune(data: np.ndarray, config: dict, current_best: Union[dict, list
             current_best = clean_start_config(current_best, config)
             current_best_params.append(current_best)
 
-    ray.init(num_cpus=num_cpus)#, logging_level=logging.FATAL, log_to_driver=False)
+    ray.init(num_cpus=num_cpus,
+             object_store_memory=memory if memory > 4000000000 else None)  # , logging_level=logging.FATAL, log_to_driver=False)
     pso = ng.optimizers.ConfiguredPSO(transform='identity', popsize=n_particles, omega=omega, phip=phi1, phig=phi2)
     algo = NevergradSearch(optimizer=pso, points_to_evaluate=current_best_params)
     algo = ConcurrencyLimiter(algo, max_concurrent=num_cpus)
@@ -188,8 +196,8 @@ def backtest_tune(data: np.ndarray, config: dict, current_best: Union[dict, list
                             'objective'],
             parameter_columns=[k for k in config['ranges']
                                if any(k0 in k for k0 in ['const', 'leverage', 'stop_psize_pct']) and '§' in k]),
-                               #if type(config[k]) == ray.tune.sample.Float
-                               #or type(config[k]) == ray.tune.sample.Integer]),
+        # if type(config[k]) == ray.tune.sample.Float
+        # or type(config[k]) == ray.tune.sample.Integer]),
         raise_on_failed_trial=False
     )
     ray.shutdown()
@@ -227,8 +235,7 @@ async def main():
         if k in config:
             print(f"{k: <{max(map(len, keys)) + 2}} {config[k]}")
     print()
-    ticks = await downloader.get_ticks(True)
-    data = make_get_ticks_cache(config, ticks)
+    data = await downloader.get_data()
     config['n_days'] = (data[2][-1] - data[2][0]) / (1000 * 60 * 60 * 24)
 
     start_candidate = None
@@ -243,9 +250,10 @@ async def main():
         except Exception as e:
             print('Could not find specified configuration.', e)
     analysis = backtest_tune(data, config, start_candidate)
-    save_results(analysis, config)
-    config.update(clean_result_config(analysis.best_config))
-    plot_wrap(pack_config(config), data)
+    if analysis:
+        save_results(analysis, config)
+        config.update(clean_result_config(analysis.best_config))
+        plot_wrap(pack_config(config), data)
 
 
 if __name__ == '__main__':

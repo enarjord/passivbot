@@ -88,7 +88,7 @@ def calc_bid_ask_thresholds(prices: np.ndarray, MAs: np.ndarray, iprc_const, ipr
 
 @njit
 def calc_emas(xs, spans):
-    emas = np.zeros((len(xs), len(spans)))
+    emas = np.zeros((len(xs), len(spans)))#, dtype=np.float32)
     alphas = 2 / (spans + 1)
     alphas_ = 1 - alphas
     emas[0] = xs[0]
