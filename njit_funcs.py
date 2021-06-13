@@ -425,7 +425,7 @@ def calc_orders(balance,
     return long_entry, shrt_entry, long_close, shrt_close, bkr_price, available_margin
 
 
-# @njit
+@njit
 def njit_backtest(data: (np.ndarray, np.ndarray, np.ndarray, np.ndarray),
                   starting_balance,
                   latency_simulation_ms,
