@@ -102,10 +102,14 @@ def candidate_to_live_config(candidate: dict) -> dict:
             live_config[k] = packed[k]
     live_config['spans'] = calc_spans(live_config['min_span'], live_config['max_span'], live_config['n_spans'])
     name = f"{packed['symbol'].lower()}"
-    if 'start_date' in candidate:
+    if 'n_days' in candidate:
+        n_days = candidate['n_days']
+    elif 'start_date' in candidate:
         n_days = round((date_to_ts(candidate['end_date']) -
                         date_to_ts(candidate['start_date'])) / (1000 * 60 * 60 * 24), 1)
-        name += f"_{n_days}_days"
+    else:
+        n_days = 0
+    name += f"_{n_days}_days"
     if 'average_daily_gain' in candidate:
         name += f"_adg{(candidate['average_daily_gain'] - 1) * 100:.2f}"
     elif 'daily_gain' in candidate:

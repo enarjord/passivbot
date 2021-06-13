@@ -23,8 +23,8 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
     for key in [k for k in result['result'] if k not in ['gain', 'average_daily_gain', 'closest_bkr', 'do_long', 'do_shrt']]:
         lines.append(f"{key} {round_dynamic(result['result'][key], 6)}")
     lines.append(f"long: {result['do_long']}, short: {result['do_shrt']}")
-
-    dump_live_config(result, result['plots_dirpath'] + 'live_config.json')
+    live_config = candidate_to_live_config(result)
+    dump_live_config(live_config, result['plots_dirpath'] + 'live_config.json')
     json.dump(denumpyize(result), open(result['plots_dirpath'] + 'result.json', 'w'), indent=4)
 
     print('writing backtest_result.txt...')
