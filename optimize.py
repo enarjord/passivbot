@@ -17,13 +17,12 @@ from ray.tune.schedulers import AsyncHyperBandScheduler
 from ray.tune.suggest import ConcurrencyLimiter
 from ray.tune.suggest.nevergrad import NevergradSearch
 
-from analyze import analyze_fills
 from backtest import backtest
 from backtest import plot_wrap
 from downloader import Downloader
 from passivbot import add_argparse_args
 from procedures import prep_config
-from pure_funcs import pack_config, unpack_config, get_template_live_config, ts_to_date
+from pure_funcs import pack_config, unpack_config, get_template_live_config, ts_to_date, analyze_fills
 from reporter import LogReporter
 
 os.environ['TUNE_GLOBAL_CHECKPOINT_S'] = '240'
@@ -34,7 +33,7 @@ def create_config(config: dict) -> dict:
     unpacked = unpack_config(get_template_live_config(config['n_spans']))
 
     for k0 in unpacked:
-        if '§' in k0:
+        if '§' in k0 or k0 in config['ranges']:
             for k1 in config['ranges']:
                 if k1 in k0:
                     updated_ranges[k0] = config['ranges'][k1]
@@ -105,7 +104,8 @@ def simple_sliding_window_wrap(config, data, do_print=False):
     for z, data_slice in enumerate(data_slices):
         fills, info = backtest(pack_config(config), data_slice, do_print=do_print)
         _, analysis = analyze_fills(fills, {**config, **{'lowest_eqbal_ratio': info[1], 'closest_bkr': info[2]}},
-                                    data_slice[2][0], data_slice[2][-1])
+                                    data_slice[2][max(0, min(len(data_slice[2]) - 1, int(config['max_span'])))],
+                                    data_slice[2][-1])
         analysis['score'] = objective_function(analysis, config) * (analysis['n_days'] / n_days)
         analyses.append(analysis)
         objective = np.mean([r['score'] for r in analyses]) * ((z + 1) / n_slices)
