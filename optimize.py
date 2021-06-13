@@ -108,7 +108,8 @@ def simple_sliding_window_wrap(config, data, do_print=False):
                                     data_slice[2][-1])
         analysis['score'] = objective_function(analysis, config) * (analysis['n_days'] / n_days)
         analyses.append(analysis)
-        objective = np.mean([r['score'] for r in analyses]) * ((z + 1) / n_slices)
+        #objective = np.mean([r['score'] for r in analyses]) * ((z + 1) / n_slices)
+        objective = np.mean([r['score'] for r in analyses]) * (2**(z + 1))
         print(f'z {z}, n {n_slices}, adg {analysis["average_daily_gain"]:.4f}, bkr {analysis["closest_bkr"]:.4f}, '
               f'eqbal {analysis["lowest_eqbal_ratio"]:.4f} n_days {analysis["n_days"]:.1f}, '
               f'score {analysis["score"]:.4f}, objective {objective:.4f}, '
