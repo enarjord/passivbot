@@ -1,4 +1,5 @@
 import json
+import pprint
 import os
 from time import time
 
@@ -16,7 +17,11 @@ def load_live_config(live_config_path: str) -> dict:
 
 
 def dump_live_config(config: dict, path: str):
-    json.dump(denumpyize(candidate_to_live_config(config)), open(path, 'w'), indent=4)
+    pretty_str = pprint.pformat(denumpyize(config))
+    for r in [("'", '"'), ('True', 'true'), ('False', 'false')]:
+        pretty_str = pretty_str.replace(*r)
+    with open(path, 'w') as f:
+        f.write(pretty_str)
 
 
 async def prep_config(args) -> dict:
