@@ -14,8 +14,7 @@ import numpy as np
 import pandas as pd
 from dateutil import parser
 
-from passivbot import add_argparse_args
-from procedures import prep_config, make_get_filepath, create_binance_bot, create_bybit_bot, print_
+from procedures import prep_config, make_get_filepath, create_binance_bot, create_bybit_bot, print_, add_argparse_args
 from pure_funcs import ts_to_date, get_dummy_settings
 
 

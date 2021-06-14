@@ -9,9 +9,8 @@ import pandas as pd
 
 from downloader import Downloader
 from njit_funcs import njit_backtest, round_
-from passivbot import add_argparse_args
 from plotting import dump_plots
-from procedures import prep_config, make_get_filepath, load_live_config
+from procedures import prep_config, make_get_filepath, load_live_config, add_argparse_args
 from pure_funcs import create_xk, denumpyize, ts_to_date, analyze_fills
 
 

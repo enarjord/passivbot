@@ -20,8 +20,7 @@ from ray.tune.suggest.nevergrad import NevergradSearch
 from backtest import backtest
 from backtest import plot_wrap
 from downloader import Downloader
-from passivbot import add_argparse_args
-from procedures import prep_config
+from procedures import prep_config, add_argparse_args
 from pure_funcs import pack_config, unpack_config, get_template_live_config, ts_to_date, analyze_fills
 from reporter import LogReporter
 

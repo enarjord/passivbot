@@ -111,11 +111,11 @@ def candidate_to_live_config(candidate: dict) -> dict:
         n_days = 0
     name += f"_{n_days}_days"
     if 'average_daily_gain' in candidate:
-        name += f"_adg{(candidate['average_daily_gain'] - 1) * 100:.2f}"
+        name += f"_adg{(candidate['average_daily_gain'] - 1) * 100:.2f}%"
     elif 'daily_gain' in candidate:
         name += f"_adg{(candidate['daily_gain'] - 1) * 100:.2f}%"
     live_config['config_name'] = name
-    return live_config
+    return denumpyize(live_config)
 
 
 def unpack_config(d):

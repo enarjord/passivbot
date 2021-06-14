@@ -17,7 +17,7 @@ def load_live_config(live_config_path: str) -> dict:
 
 
 def dump_live_config(config: dict, path: str):
-    pretty_str = pprint.pformat(denumpyize(config))
+    pretty_str = pprint.pformat(candidate_to_live_config(config))
     for r in [("'", '"'), ('True', 'true'), ('False', 'false')]:
         pretty_str = pretty_str.replace(*r)
     with open(path, 'w') as f:
@@ -145,3 +145,24 @@ async def create_bybit_bot(config: dict):
     bot = Bybit(config)
     await bot._init()
     return bot
+
+
+def add_argparse_args(parser):
+    parser.add_argument('--nojit', help='disable numba', action='store_true')
+    parser.add_argument('-b', '--backtest_config', type=str, required=False, dest='backtest_config_path',
+                        default='configs/backtest/default.hjson', help='backtest config hjson file')
+    parser.add_argument('-o', '--optimize_config', type=str, required=False, dest='optimize_config_path',
+                        default='configs/optimize/default.hjson', help='optimize config hjson file')
+    parser.add_argument('-d', '--download-only', help='download only, do not dump ticks caches', action='store_true')
+    parser.add_argument('-s', '--symbol', type=str, required=False, dest='symbol',
+                        default=None, help='specify symbol, overriding symbol from backtest config')
+    parser.add_argument('-u', '--user', type=str, required=False, dest='user',
+                        default=None,
+                        help='specify user, a.k.a. account_name, overriding user from backtest config')
+    parser.add_argument('--start_date', type=str, required=False, dest='start_date',
+                        default=None,
+                        help='specify start date, overriding value from backtest config')
+    parser.add_argument('--end_date', type=str, required=False, dest='end_date',
+                        default=None,
+                        help='specify end date, overriding value from backtest config')
+    return parser
