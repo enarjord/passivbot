@@ -115,17 +115,27 @@ class BacktestPSO:
                 if analysis['max_hrs_no_fills_same_side'] > config['maximum_hrs_no_fills_same_side'] * (1 + bef):
                     break
         global lock, BEST_OBJECTIVE
-        try:
-            lock.acquire()
-            with open(self.config['optimize_dirpath'] + 'intermediate_results.txt', 'a') as f:
-                f.write(json.dumps(analyses) + '\n')
-            if objective > BEST_OBJECTIVE:
-                if analyses:
-                    config['average_daily_gain'] = np.mean([e['average_daily_gain'] for e in analyses])
-                dump_live_config(config, self.config['optimize_dirpath'] + 'intermediate_best_results.json')
-                BEST_OBJECTIVE = objective
-        finally:
-            lock.release()
+        if analyses:
+            try:
+                lock.acquire()
+                to_dump = {}
+                for k in ['average_daily_gain', 'score']:
+                    to_dump[k] = np.mean([e[k] for e in analyses])
+                for k in ['lowest_eqbal_ratio', 'closest_bkr']:
+                    to_dump[k] = np.min([e[k] for e in analyses])
+                for k in ['max_hrs_no_fills', 'max_hrs_no_fills_same_side']:
+                    to_dump[k] = np.max([e[k] for e in analyses])
+                to_dump['objective'] = objective
+                to_dump['slices_finished'] = z
+                with open(self.config['optimize_dirpath'] + 'intermediate_results.txt', 'a') as f:
+                    f.write(json.dumps(to_dump) + '\n')
+                if objective > BEST_OBJECTIVE:
+                    if analyses:
+                        config['average_daily_gain'] = np.mean([e['average_daily_gain'] for e in analyses])
+                    dump_live_config(config, self.config['optimize_dirpath'] + 'intermediate_best_results.json')
+                    BEST_OBJECTIVE = objective
+            finally:
+                lock.release()
         return -objective
         
 
