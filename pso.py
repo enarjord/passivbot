@@ -8,7 +8,7 @@ from pure_funcs import denumpyize, numpyize, get_template_live_config, candidate
     get_template_live_config, unpack_config, pack_config, analyze_fills, ts_to_date
 from procedures import dump_live_config, load_live_config, make_get_filepath, add_argparse_args
 from time import time
-from optimize import iter_slices
+from optimize import iter_slices, iter_slices_full_first, objective_function, create_config
 import os
 import sys
 import argparse
@@ -23,20 +23,6 @@ lock = Lock()
 BEST_OBJECTIVE = 0.0
 
 
-def get_expand_ranges(config: dict) -> dict:
-    expanded_ranges = OrderedDict()
-    unpacked = unpack_config(get_template_live_config(config['n_spans']))
-    
-    for k0 in unpacked:
-        if '£' in k0 or k0 in unpacked:
-            for k1 in config['ranges']:
-                if k1 in k0 and config['ranges'][k1][0] != config['ranges'][k1][1]:
-                    expanded_ranges[k0] = config['ranges'][k1]
-                    if 'leverage' in k0:
-                        expanded_ranges[k0] = [expanded_ranges[k0][0],
-                                              min(expanded_ranges[k0][1], config['max_leverage'])]
-    return expanded_ranges
-                    
 def get_bounds(ranges: dict) -> tuple:     
     return (np.array([float(v[0]) for k, v in ranges.items()]),
             np.array([float(v[1]) for k, v in ranges.items()]))
@@ -46,7 +32,7 @@ class BacktestPSO:
     def __init__(self, data, config):
         self.data = data
         self.config = config
-        self.expanded_ranges = get_expand_ranges(config)
+        self.expanded_ranges = create_config(config)['ranges']
         self.bounds = get_bounds(self.expanded_ranges)
     
     def config_to_xs(self, config):
@@ -61,15 +47,6 @@ class BacktestPSO:
         for i, k in enumerate(self.expanded_ranges):
             config[k] = xs[i]
         return numpyize(pack_config(config))
-    
-    
-    def objective_function(self, analysis: dict, config: dict) -> float:
-        if analysis['n_fills'] == 0:
-            return -1.0
-        return (analysis['adjusted_daily_gain']
-                * min(1.0, config["maximum_hrs_no_fills"] / analysis["max_hrs_no_fills"])
-                * min(1.0, config["maximum_hrs_no_fills_same_side"] / analysis["max_hrs_no_fills_same_side"])
-                * min(1.0, analysis["closest_bkr"] / config["minimum_bankruptcy_distance"]))
     
     def rf(self, xss):
         return np.array([self.single_rf(xs) for xs in xss])
@@ -97,7 +74,7 @@ class BacktestPSO:
             _, analysis = analyze_fills(fills, {**config, **{'lowest_eqbal_ratio': info[1], 'closest_bkr': info[2]}},
                                         data_slice[2][int(config['max_span'])],
                                         data_slice[2][-1])
-            analysis['score'] = self.objective_function(analysis, config) * (analysis['n_days'] / config['n_days'])
+            analysis['score'] = objective_function(analysis, config) * (analysis['n_days'] / config['n_days'])
             analyses.append(analysis)
             objective = np.mean([e['score'] for e in analyses]) * 2 ** (z + 1)
             analyses[-1]['objective'] = objective
@@ -137,19 +114,15 @@ class BacktestPSO:
             finally:
                 lock.release()
         return -objective
-        
-
 
 
 async def main():
-
     parser = argparse.ArgumentParser(prog='Optimize', description='Optimize passivbot config.')
     parser = add_argparse_args(parser)
     parser.add_argument('-t', '--start', type=str, required=False, dest='starting_configs',
                         default=None,
                         help='start with given live configs.  single json file or dir with multiple json files')
     args = parser.parse_args()
-
     config = await prep_config(args)
     try:
 
@@ -200,6 +173,3 @@ async def main():
 
 if __name__ == '__main__':
     asyncio.run(main())
-
-
-

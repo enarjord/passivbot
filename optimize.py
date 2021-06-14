@@ -65,20 +65,10 @@ def clean_result_config(config: dict) -> dict:
     return config
 
 
-def iter_slices_o(data, sliding_window_days: float, ticks_to_prepend: int = 0):
-    ms_span = data[2][-1] - data[2][0]
-    sliding_window_ms = sliding_window_days * 24 * 60 * 60 * 1000
-    n_windows = int(np.round(ms_span / sliding_window_ms) + 1)
-    if sliding_window_ms > ms_span:
-        yield data
-        return
-    ms_thresholds = np.linspace(data[2][0], data[2][-1] - sliding_window_ms, n_windows)
-    for ms_threshold in ms_thresholds[::-1]:
-        start_i = max(0, np.searchsorted(data[2], ms_threshold) - ticks_to_prepend)
-        end_i = np.searchsorted(data[2], ms_threshold + sliding_window_ms)
-        yield tuple(d[start_i:end_i] for d in data)
-    for ds in iter_slices(data, sliding_window_days * 2, ticks_to_prepend):
-        yield ds
+def iter_slices_full_first(data, sliding_window_days, ticks_to_prepend, minimum_days):
+    yield data
+    for d in iter_slices(data, sliding_window_days, ticks_to_prepend, minimum_days):
+        yield d
 
 
 def iter_slices(data, sliding_window_days: float, ticks_to_prepend: int = 0, minimum_days: float = 7.0):
