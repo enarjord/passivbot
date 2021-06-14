@@ -33,7 +33,7 @@ def create_config(config: dict) -> dict:
     unpacked = unpack_config(get_template_live_config(config['n_spans']))
 
     for k0 in unpacked:
-        if '§' in k0 or k0 in config['ranges']:
+        if '£' in k0 or k0 in config['ranges']:
             for k1 in config['ranges']:
                 if k1 in k0:
                     updated_ranges[k0] = config['ranges'][k1]
@@ -203,7 +203,7 @@ def backtest_tune(data: np.ndarray, config: dict, current_best: Union[dict, list
                             'max_hrs_no_fills_same_side',
                             'objective'],
             parameter_columns=[k for k in config['ranges']
-                               if (any(k0 in k for k0 in ['const', 'leverage', 'stop_psize_pct']) and '§' in k)
+                               if (any(k0 in k for k0 in ['const', 'leverage', 'stop_psize_pct']) and '£' in k)
                                or '_span' in k]),
         # if type(config[k]) == ray.tune.sample.Float
         # or type(config[k]) == ray.tune.sample.Integer]),

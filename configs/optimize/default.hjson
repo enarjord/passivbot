@@ -5,14 +5,14 @@
   options: {"c1": 1.4962, "c2": 1.4962, "w": 0.7298}
   n_particles: 24
 
-  minimum_bankruptcy_distance: 0.4
-  maximum_hrs_no_fills: 72
-  maximum_hrs_no_fills_same_side: 144
+  minimum_bankruptcy_distance: 0.2
+  maximum_hrs_no_fills: 96
+  maximum_hrs_no_fills_same_side: 160
 
-  sliding_window_size: 0.1
+  sliding_window_size: 0.05
 
   # set to 0.0 to disable breaking early
-  break_early_factor: 0.1
+  break_early_factor: 0.15
 
   # ema settings
   n_spans: 3
@@ -23,21 +23,21 @@
     min_span: [4000.0, 20000.0]
     max_span: [80000.0, 460000.0]
     stop_psize_pct: [0.0, 1.0]
-    MAr_coeffs: [-0.0, 0.0]
-    PBr_coeffs: [-0.3, 0.3]
+    MAr_coeffs: [-0.02, 0.02]
+    PBr_coeffs: [-0.5, 0.5]
 
-    long§leverage: [0.1, 15.0]
-    long§iqty_const: [0.0, 1.0]
-    long§iprc_const: [0.95, 1.05]
-    long§rqty_const: [0.0, 4.0]
-    long§rprc_const: [0.95, 1.0]
-    long§markup_const: [1.0, 1.05]
+    long£leverage: [0.1, 15.0]
+    long£iqty_const: [0.0, 1.0]
+    long£iprc_const: [0.95, 1.05]
+    long£rqty_const: [0.0, 4.0]
+    long£rprc_const: [0.95, 1.0]
+    long£markup_const: [1.0, 1.05]
 
-    shrt§leverage: [0.1, 15.0]
-    shrt§iqty_const: [0.0, 1.0]
-    shrt§iprc_const: [0.95, 1.05]
-    shrt§rqty_const: [0.0, 4.0]
-    shrt§rprc_const: [1.0, 1.05]
-    shrt§markup_const: [0.95, 1.0]
+    shrt£leverage: [0.1, 15.0]
+    shrt£iqty_const: [0.0, 1.0]
+    shrt£iprc_const: [0.95, 1.05]
+    shrt£rqty_const: [0.0, 4.0]
+    shrt£rprc_const: [1.0, 1.05]
+    shrt£markup_const: [0.95, 1.0]
   }
 }

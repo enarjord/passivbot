@@ -120,7 +120,7 @@ def candidate_to_live_config(candidate: dict) -> dict:
 
 def unpack_config(d):
     new = {}
-    for k, v in flatten_dict(d, sep='§').items():
+    for k, v in flatten_dict(d, sep='£').items():
         try:
             assert type(v) != str
             for _ in v:
@@ -159,8 +159,8 @@ def pack_config(d):
 
     new = {}
     for k, v in d.items():
-        if '§' in k:
-            k0, k1 = k.split('§')
+        if '£' in k:
+            k0, k1 = k.split('£')
             if k0 in new:
                 new[k0][k1] = v
             else:
