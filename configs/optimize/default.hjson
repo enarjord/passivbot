@@ -9,7 +9,8 @@
   maximum_hrs_no_fills: 96
   maximum_hrs_no_fills_same_side: 160
 
-  sliding_window_size: 0.05
+  # set to 0.0 to do disable sliding windows
+  sliding_window_days: 7.0
 
   # set to 0.0 to disable breaking early
   break_early_factor: 0.15
@@ -23,7 +24,7 @@
     min_span: [4000.0, 20000.0]
     max_span: [80000.0, 460000.0]
     stop_psize_pct: [0.0, 1.0]
-    MAr_coeffs: [-0.02, 0.02]
+    MAr_coeffs: [-0.0, 0.0]
     PBr_coeffs: [-0.5, 0.5]
 
     long£leverage: [0.1, 15.0]

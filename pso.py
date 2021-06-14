@@ -8,7 +8,7 @@ from pure_funcs import denumpyize, numpyize, get_template_live_config, candidate
     get_template_live_config, unpack_config, pack_config, analyze_fills, ts_to_date
 from procedures import dump_live_config, load_live_config, make_get_filepath, add_argparse_args
 from time import time
-from njit_funcs import calc_bid_ask_thresholds
+from optimize import iter_slices
 import os
 import sys
 import argparse
@@ -40,22 +40,6 @@ def get_expand_ranges(config: dict) -> dict:
 def get_bounds(ranges: dict) -> tuple:     
     return (np.array([float(v[0]) for k, v in ranges.items()]),
             np.array([float(v[1]) for k, v in ranges.items()]))
-
-
-def iter_slices(data, sliding_window_days: float, ticks_to_prepend: int = 0):
-    ms_span = data[2][-1] - data[2][0]
-    sliding_window_ms = sliding_window_days * 24 * 60 * 60 * 1000
-    n_windows = int(np.round(ms_span / sliding_window_ms) + 1)
-    if sliding_window_ms > ms_span:
-        yield data
-        return
-    ms_thresholds = np.linspace(data[2][0], data[2][-1] - sliding_window_ms, n_windows)
-    for ms_threshold in ms_thresholds[::-1]:
-        start_i = max(0, np.searchsorted(data[2], ms_threshold) - ticks_to_prepend)
-        end_i = np.searchsorted(data[2], ms_threshold + sliding_window_ms)
-        yield tuple(d[start_i:end_i] for d in data)
-    for ds in iter_slices(data, sliding_window_days * 2, ticks_to_prepend):
-        yield ds
 
 
 class BacktestPSO:
@@ -93,11 +77,17 @@ class BacktestPSO:
     def single_rf(self, xs):
         config = self.xs_to_config(xs)
         #pprint.pprint(config)
-        sliding_window_days = 7.0
+        sliding_window_days = max([config['maximum_hrs_no_fills'] / 24,
+                                   config['maximum_hrs_no_fills_same_side'] / 24,
+                                   config['sliding_window_days']]) * 1.05
         analyses = []
         objective = 0.0
-        for z, data_slice in enumerate(iter_slices(self.data, sliding_window_days, ticks_to_prepend=int(config['max_span']))):
-            print(f'backtesting slice {z}', end=' ')
+        for z, data_slice in enumerate(iter_slices(self.data, sliding_window_days,
+                                                   ticks_to_prepend=int(config['max_span']),
+                                                   minimum_days=sliding_window_days * 0.95)):
+            if len(data_slice[0]) == 0:
+                print('debug b no data')
+                continue
             try:
                 fills, info = backtest(config, data_slice)
             except Exception as e:
@@ -105,13 +95,13 @@ class BacktestPSO:
                 break
             result = {**config, **{'lowest_eqbal_ratio': info[1], 'closest_bkr': info[2]}}
             _, analysis = analyze_fills(fills, {**config, **{'lowest_eqbal_ratio': info[1], 'closest_bkr': info[2]}},
-                                        data_slice[2][max(0, min(len(data_slice[2]) - 1, int(config['max_span'])))],
+                                        data_slice[2][int(config['max_span'])],
                                         data_slice[2][-1])
             analysis['score'] = self.objective_function(analysis, config) * (analysis['n_days'] / config['n_days'])
             analyses.append(analysis)
             objective = np.mean([e['score'] for e in analyses]) * 2 ** (z + 1)
             analyses[-1]['objective'] = objective
-            print(f'adg {analysis["average_daily_gain"]:.4f}, bkr {analysis["closest_bkr"]:.4f}, '
+            print(f'{str(z).rjust(3, " ")} adg {analysis["average_daily_gain"]:.4f}, bkr {analysis["closest_bkr"]:.4f}, '
                   f'eqbal {analysis["lowest_eqbal_ratio"]:.4f} n_days {analysis["n_days"]:.1f}, '
                   f'score {analysis["score"]:.4f}, objective {objective:.4f}, '
                   f'hrs stuck ss {str(round(analysis["max_hrs_no_fills_same_side"], 1)).zfill(4)}, '

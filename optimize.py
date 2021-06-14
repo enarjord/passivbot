@@ -65,7 +65,7 @@ def clean_result_config(config: dict) -> dict:
     return config
 
 
-def iter_slices(data, sliding_window_days: float, ticks_to_prepend: int = 0):
+def iter_slices_o(data, sliding_window_days: float, ticks_to_prepend: int = 0):
     ms_span = data[2][-1] - data[2][0]
     sliding_window_ms = sliding_window_days * 24 * 60 * 60 * 1000
     n_windows = int(np.round(ms_span / sliding_window_ms) + 1)
@@ -81,6 +81,28 @@ def iter_slices(data, sliding_window_days: float, ticks_to_prepend: int = 0):
         yield ds
 
 
+def iter_slices(data, sliding_window_days: float, ticks_to_prepend: int = 0, minimum_days: float = 7.0):
+    sliding_window_ms = sliding_window_days * 24 * 60 * 60 * 1000
+    minimum_ms = minimum_days * 24 * 60 * 60 * 1000
+    span_ms = data[2][-1] - data[2][0]
+    if min(span_ms, sliding_window_ms) < minimum_ms:
+        raise Exception('time span too short')
+    if sliding_window_ms > span_ms:
+        yield data
+        return
+    n_windows = int(np.ceil(span_ms / sliding_window_ms)) + 1
+    thresholds_ms = np.linspace(data[2][ticks_to_prepend], data[2][-1] - sliding_window_ms, n_windows)
+
+    for threshold_ms in thresholds_ms[::-1]:
+        start_i = max(0, np.searchsorted(data[2], threshold_ms) - int(ticks_to_prepend))
+        end_i = np.searchsorted(data[2], threshold_ms + sliding_window_ms)
+        sspan = data[2][end_i] - data[2][start_i]
+        yield tuple(d[start_i:end_i] for d in data)
+    for ds in iter_slices(data, sliding_window_days * 2, ticks_to_prepend, minimum_days):
+        yield ds
+
+
+
 def objective_function(analysis: dict, config: dict) -> float:
     if analysis['n_fills'] == 0:
         return -1.0
@@ -94,12 +116,14 @@ def simple_sliding_window_wrap(config, data, do_print=False):
     analyses = []
     objective = 0.0
     n_days = config['n_days']
-    sliding_window_days = max(3.0, config['n_days'] * config['sliding_window_size'])  # at least 3 days per slice
-    config['sliding_window_days'] = sliding_window_days
-    data_slices = list(iter_slices(data, sliding_window_days, int(config['max_span']))) \
-        if config['sliding_window_size'] < 1.0 else [data]
+    sliding_window_days = max([config['maximum_hrs_no_fills'] / 24,
+                               config['maximum_hrs_no_fills_same_side'] / 24,
+                               config['sliding_window_days']]) * 1.05
+    data_slices = list(iter_slices(data, sliding_window_days, int(config['max_span']),
+                                   minimum_days=sliding_window_days * 0.95)) \
+        if config['sliding_window_days'] != 0.0 else [data]
     n_slices = len(data_slices)
-    print('n_days', n_days, 'sliding_window_days', config['sliding_window_days'], 'n_slices', n_slices)
+    print('n_days', n_days, 'sliding_window_days', sliding_window_days, 'n_slices', n_slices)
     for z, data_slice in enumerate(data_slices):
         fills, info = backtest(pack_config(config), data_slice, do_print=do_print)
         _, analysis = analyze_fills(fills, {**config, **{'lowest_eqbal_ratio': info[1], 'closest_bkr': info[2]}},
@@ -238,7 +262,7 @@ async def main():
     print()
     for k in (keys := ['exchange', 'symbol', 'starting_balance', 'start_date', 'end_date', 'latency_simulation_ms',
                        'do_long', 'do_shrt', 'minimum_bankruptcy_distance', 'maximum_hrs_no_fills',
-                       'maximum_hrs_no_fills_same_side', 'iters', 'n_particles', 'sliding_window_size',
+                       'maximum_hrs_no_fills_same_side', 'iters', 'n_particles', 'sliding_window_days',
                        'min_span', 'max_span', 'n_spans']):
         if k in config:
             print(f"{k: <{max(map(len, keys)) + 2}} {config[k]}")
