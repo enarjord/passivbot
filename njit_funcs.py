@@ -195,8 +195,8 @@ def calc_long_orders(balance,
                      rqty_MAr_coeffs,
                      rprc_MAr_coeffs,
                      markup_MAr_coeffs) -> ((float, float, float, float, str), (float, float, float, float, str)):
+    entry_price = min(highest_bid, round_dn(MA_band_lower * (iprc_const + eqf(MA_ratios, iprc_MAr_coeffs)), price_step))
     if long_psize == 0.0:
-        entry_price = min(highest_bid, round_dn(MA_band_lower * (iprc_const + eqf(MA_ratios, iprc_MAr_coeffs)), price_step))
         entry_qty = max(calc_min_entry_qty(entry_price, inverse, qty_step, min_qty, min_cost),
                         round_dn(cost_to_qty(balance, entry_price, inverse, c_mult) *
                                  (iqty_const + eqf(MA_ratios, iqty_MAr_coeffs)), qty_step))
@@ -205,9 +205,9 @@ def calc_long_orders(balance,
     elif long_psize > 0.0:
         pbr = qty_to_cost(long_psize, long_pprice, inverse, c_mult) / balance
         nclose_price = round_up(long_pprice * (markup_const + eqf(MA_ratios, markup_MAr_coeffs)), price_step)
-        entry_price = round_dn(min([highest_bid, MA_band_lower,
-                                    long_pprice * (rprc_const + eqf(MA_ratios, rprc_MAr_coeffs) +
-                                                   eqf(np.array([pbr]), rprc_PBr_coeffs, minus=0.0))]), price_step)
+        entry_price = min(entry_price,
+                          round_dn(long_pprice * (rprc_const + eqf(MA_ratios, rprc_MAr_coeffs) +
+                                                  eqf(np.array([pbr]), rprc_PBr_coeffs, minus=0.0)), price_step))
         min_entry_qty = calc_min_entry_qty(entry_price, inverse, qty_step, min_qty, min_cost)
         max_entry_qty = cost_to_qty(min(balance * (leverage + stop_psize_pct - pbr), available_margin),
                                     entry_price, inverse, c_mult)
@@ -264,19 +264,19 @@ def calc_shrt_orders(balance,
                      rqty_MAr_coeffs,
                      rprc_MAr_coeffs,
                      markup_MAr_coeffs) -> ((float, float, float, float, str), [(float, float, float, float, str)]):
+    entry_price = max(lowest_ask, round_up(MA_band_upper * (iprc_const + eqf(MA_ratios, iprc_MAr_coeffs)), price_step))
     if shrt_psize == 0.0:
-        entry_price = max(lowest_ask, round_up(MA_band_upper * (iprc_const + eqf(MA_ratios, iprc_MAr_coeffs)), price_step))
         entry_qty = max(calc_min_entry_qty(entry_price, inverse, qty_step, min_qty, min_cost),
-                       round_dn(cost_to_qty(balance, entry_price, inverse, c_mult) *
-                                (iqty_const + eqf(MA_ratios, iqty_MAr_coeffs)), qty_step))
+                        round_dn(cost_to_qty(balance, entry_price, inverse, c_mult) *
+                                 (iqty_const + eqf(MA_ratios, iqty_MAr_coeffs)), qty_step))
         entry_type = 'shrt_ientry'
         shrt_close = (0.0, 0.0, 0.0, 0.0, 'shrt_nclose')
     elif shrt_psize < 0.0:
         pbr = qty_to_cost(shrt_psize, shrt_pprice, inverse, c_mult) / balance
         nclose_price = round_dn(shrt_pprice * (markup_const + eqf(MA_ratios, markup_MAr_coeffs)), price_step)
-        entry_price = round_up(max([lowest_ask, MA_band_upper,
-                                    shrt_pprice * (rprc_const + eqf(MA_ratios, rprc_MAr_coeffs) +
-                                                   eqf(np.array([pbr]), rprc_PBr_coeffs, minus=0.0))]), price_step)
+        entry_price = max(entry_price,
+                          round_up(shrt_pprice * (rprc_const + eqf(MA_ratios, rprc_MAr_coeffs) +
+                                                  eqf(np.array([pbr]), rprc_PBr_coeffs, minus=0.0)), price_step))
         min_entry_qty = calc_min_entry_qty(entry_price, inverse, qty_step, min_qty, min_cost)
         max_entry_qty = cost_to_qty(min(balance * (leverage + stop_psize_pct - pbr), available_margin),
                                     entry_price, inverse, c_mult)
