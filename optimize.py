@@ -91,8 +91,8 @@ def iter_slices(data, sliding_window_days: float, ticks_to_prepend: int = 0, min
     thresholds_ms = np.linspace(data[2][ticks_to_prepend], data[2][-1] - sliding_window_ms, n_windows)
 
     for threshold_ms in thresholds_ms[::-1]:
-        start_i = max(0, np.searchsorted(data[2], threshold_ms) - int(ticks_to_prepend))
-        end_i = min(np.searchsorted(data[2], threshold_ms + sliding_window_ms), len(data[2]) - 1)
+        start_i = max(0, int(np.argmax(data[2] >= threshold_ms) - ticks_to_prepend))
+        end_i = min(len(data[2]) - 1, int(np.argmax(data[2] >= threshold_ms + sliding_window_ms)))
         yield tuple(d[start_i:end_i] for d in data)
     for ds in iter_slices(data, sliding_window_days * 2, ticks_to_prepend, minimum_days):
         yield ds
