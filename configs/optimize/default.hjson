@@ -12,6 +12,11 @@
   # set to 0.0 to do disable sliding windows
   sliding_window_days: 7.0
 
+  # for each completed slice, objective is multiplied by reward_multiplier_base**(z + 1)
+  # where z is enumerator of slices
+  # if objective becomes too large, reduce reward_multiplier_base to some num > 1.0
+  reward_multiplier_base: 1.2
+
   # set to 0.0 to disable breaking early
   break_early_factor: 0.15
 

@@ -133,7 +133,7 @@ def single_sliding_window_run(config, data, do_print=False) -> (float, [dict]):
                                     data_slice[2][-1])
         analysis['score'] = objective_function(analysis, config) * (analysis['n_days'] / config['n_days'])
         analyses.append(analysis)
-        objective = np.mean([e['score'] for e in analyses]) * 2 ** (z + 1)
+        objective = np.mean([e['score'] for e in analyses]) * max(1.01, config['reward_multiplier_base']) ** (z + 1)
         analyses[-1]['objective'] = objective
         line = (f'{str(z).rjust(3, " ")} adg {analysis["average_daily_gain"]:.4f}, '
                 f'bkr {analysis["closest_bkr"]:.4f}, '
