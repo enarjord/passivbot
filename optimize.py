@@ -93,7 +93,6 @@ def iter_slices(data, sliding_window_days: float, ticks_to_prepend: int = 0, min
     for threshold_ms in thresholds_ms[::-1]:
         start_i = max(0, np.searchsorted(data[2], threshold_ms) - int(ticks_to_prepend))
         end_i = min(np.searchsorted(data[2], threshold_ms + sliding_window_ms), len(data[2]) - 1)
-        sspan = data[2][end_i] - data[2][start_i]
         yield tuple(d[start_i:end_i] for d in data)
     for ds in iter_slices(data, sliding_window_days * 2, ticks_to_prepend, minimum_days):
         yield ds
@@ -154,6 +153,11 @@ def single_sliding_window_run(config, data, do_print=False) -> (float, [dict]):
                 break
             if analysis['max_hrs_no_fills_same_side'] > config['maximum_hrs_no_fills_same_side'] * (1 + bef):
                 line += f"broke on max_hrs_no_fills_ss {analysis['max_hrs_no_fills_same_side']:.4f}, {config['maximum_hrs_no_fills_same_side']}, {bef}"
+                print(line)
+                break
+            mean_adg = np.mean([r['average_daily_gain'] for r in analyses])
+            if z > 2 and mean_adg < 0.995:
+                line += f"broke on low adg {mean_adg:.4f} "
                 print(line)
                 break
         print(line)
