@@ -17,6 +17,7 @@ from ray.tune.schedulers import AsyncHyperBandScheduler
 from ray.tune.suggest import ConcurrencyLimiter
 from ray.tune.suggest.nevergrad import NevergradSearch
 
+from collections import OrderedDict
 from backtest import backtest
 from backtest import plot_wrap
 from downloader import Downloader
@@ -27,8 +28,8 @@ from reporter import LogReporter
 os.environ['TUNE_GLOBAL_CHECKPOINT_S'] = '240'
 
 
-def create_config(config: dict) -> dict:
-    updated_ranges = {}
+def get_expanded_ranges(config: dict) -> dict:
+    updated_ranges = OrderedDict()
     unpacked = unpack_config(get_template_live_config(config['n_spans']))
 
     for k0 in unpacked:
@@ -39,6 +40,12 @@ def create_config(config: dict) -> dict:
                     if 'leverage' in k0:
                         updated_ranges[k0] = [updated_ranges[k0][0],
                                               min(updated_ranges[k0][1], config['max_leverage'])]
+    return updated_ranges
+
+
+def create_config(config: dict) -> dict:
+    updated_ranges = get_expanded_ranges(config)
+    unpacked = unpack_config(get_template_live_config(config['n_spans']))
     for k in updated_ranges:
         if updated_ranges[k][0] == updated_ranges[k][1]:
             unpacked[k] = updated_ranges[k][0]
@@ -85,12 +92,11 @@ def iter_slices(data, sliding_window_days: float, ticks_to_prepend: int = 0, min
 
     for threshold_ms in thresholds_ms[::-1]:
         start_i = max(0, np.searchsorted(data[2], threshold_ms) - int(ticks_to_prepend))
-        end_i = np.searchsorted(data[2], threshold_ms + sliding_window_ms)
+        end_i = min(np.searchsorted(data[2], threshold_ms + sliding_window_ms), len(data[2]) - 1)
         sspan = data[2][end_i] - data[2][start_i]
         yield tuple(d[start_i:end_i] for d in data)
     for ds in iter_slices(data, sliding_window_days * 2, ticks_to_prepend, minimum_days):
         yield ds
-
 
 
 def objective_function(analysis: dict, config: dict) -> float:
@@ -102,55 +108,64 @@ def objective_function(analysis: dict, config: dict) -> float:
             * min(1.0, analysis["closest_bkr"] / config["minimum_bankruptcy_distance"]))
 
 
-def simple_sliding_window_wrap(config, data, do_print=False):
+def single_sliding_window_run(config, data, do_print=False) -> (float, [dict]):
     analyses = []
     objective = 0.0
     n_days = config['n_days']
     sliding_window_days = max([config['maximum_hrs_no_fills'] / 24,
                                config['maximum_hrs_no_fills_same_side'] / 24,
                                config['sliding_window_days']]) * 1.05
-    data_slices = list(iter_slices(data, sliding_window_days, int(config['max_span']),
-                                   minimum_days=sliding_window_days * 0.95)) \
-        if config['sliding_window_days'] != 0.0 else [data]
-    n_slices = len(data_slices)
-    print('n_days', n_days, 'sliding_window_days', sliding_window_days, 'n_slices', n_slices)
-    for z, data_slice in enumerate(data_slices):
-        fills, info = backtest(pack_config(config), data_slice, do_print=do_print)
+    analyses = []
+    objective = 0.0
+    for z, data_slice in enumerate(iter_slices(data, sliding_window_days,
+                                               ticks_to_prepend=int(config['max_span']),
+                                               minimum_days=sliding_window_days * 0.95)):
+        if len(data_slice[0]) == 0:
+            print('debug b no data')
+            continue
+        try:
+            fills, info = backtest(pack_config(config), data_slice)
+        except Exception as e:
+            print(e)
+            break
+        result = {**config, **{'lowest_eqbal_ratio': info[1], 'closest_bkr': info[2]}}
         _, analysis = analyze_fills(fills, {**config, **{'lowest_eqbal_ratio': info[1], 'closest_bkr': info[2]}},
-                                    data_slice[2][max(0, min(len(data_slice[2]) - 1, int(config['max_span'])))],
+                                    data_slice[2][int(config['max_span'])],
                                     data_slice[2][-1])
-        analysis['score'] = objective_function(analysis, config) * (analysis['n_days'] / n_days)
+        analysis['score'] = objective_function(analysis, config) * (analysis['n_days'] / config['n_days'])
         analyses.append(analysis)
-        #objective = np.mean([r['score'] for r in analyses]) * ((z + 1) / n_slices)
-        objective = np.mean([r['score'] for r in analyses]) * (2**(z + 1))
-        print(f'z {z}, n {n_slices}, adg {analysis["average_daily_gain"]:.4f}, bkr {analysis["closest_bkr"]:.4f}, '
-              f'eqbal {analysis["lowest_eqbal_ratio"]:.4f} n_days {analysis["n_days"]:.1f}, '
-              f'score {analysis["score"]:.4f}, objective {objective:.4f}, '
-              f'hrs stuck ss {str(round(analysis["max_hrs_no_fills_same_side"], 1)).zfill(4)}, '
-              f'scores {[round(e["score"], 2) for e in analyses]}, ')
+        objective = np.mean([e['score'] for e in analyses]) * 2 ** (z + 1)
+        analyses[-1]['objective'] = objective
+        line = (f'{str(z).rjust(3, " ")} adg {analysis["average_daily_gain"]:.4f}, '
+                f'bkr {analysis["closest_bkr"]:.4f}, '
+                f'eqbal {analysis["lowest_eqbal_ratio"]:.4f} n_days {analysis["n_days"]:.1f}, '
+                f'score {analysis["score"]:.4f}, objective {objective:.4f}, '
+                f'hrs stuck ss {str(round(analysis["max_hrs_no_fills_same_side"], 1)).zfill(4)}, '
+                f'scores {[round(e["score"], 2) for e in analyses]}, ')
         bef = config['break_early_factor']
         if bef > 0.0:
             if analysis['closest_bkr'] < config['minimum_bankruptcy_distance'] * (1 - bef):
+                line += f"broke on min_bkr_dist {analysis['closest_bkr']:.4f}, {config['minimum_bankruptcy_distance']}, {bef}"
+                print(line)
                 break
             if analysis['max_hrs_no_fills'] > config['maximum_hrs_no_fills'] * (1 + bef):
+                line += f"broke on max_hrs_no_fills {analysis['max_hrs_no_fills']:.4f}, {config['maximum_hrs_no_fills']}, {bef}"
+                print(line)
                 break
             if analysis['max_hrs_no_fills_same_side'] > config['maximum_hrs_no_fills_same_side'] * (1 + bef):
+                line += f"broke on max_hrs_no_fills_ss {analysis['max_hrs_no_fills_same_side']:.4f}, {config['maximum_hrs_no_fills_same_side']}, {bef}"
+                print(line)
                 break
+        print(line)
+    return objective, analyses
+
+def simple_sliding_window_wrap(config, data, do_print=False):
+    objective, analyses = single_sliding_window_run(config, data)
     tune.report(objective=objective,
                 daily_gain=np.mean([r['average_daily_gain'] for r in analyses]),
                 closest_bankruptcy=np.min([r['closest_bkr'] for r in analyses]),
                 max_hrs_no_fills=np.max([r['max_hrs_no_fills'] for r in analyses]),
                 max_hrs_no_fills_same_side=np.max([r['max_hrs_no_fills_same_side'] for r in analyses]))
-
-
-def tune_report(result):
-    tune.report(
-        objective=result["objective_gmean"],
-        daily_gain=result["daily_gains_gmean"],
-        closest_bankruptcy=result["closest_bkr"],
-        max_hrs_no_fills=result["max_hrs_no_fills"],
-        max_hrs_no_fills_same_side=result["max_hrs_no_fills_same_side"],
-    )
 
 
 def backtest_tune(data: np.ndarray, config: dict, current_best: Union[dict, list] = None):

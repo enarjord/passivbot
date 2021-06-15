@@ -5,10 +5,10 @@ from backtest import backtest
 from plotting import plot_fills
 from downloader import Downloader, prep_config
 from pure_funcs import denumpyize, numpyize, get_template_live_config, candidate_to_live_config, calc_spans, \
-    get_template_live_config, unpack_config, pack_config, analyze_fills, ts_to_date
+    get_template_live_config, unpack_config, pack_config, analyze_fills, ts_to_date, denanify
 from procedures import dump_live_config, load_live_config, make_get_filepath, add_argparse_args
 from time import time
-from optimize import iter_slices, iter_slices_full_first, objective_function, create_config
+from optimize import iter_slices, iter_slices_full_first, objective_function, get_expanded_ranges, single_sliding_window_run
 import os
 import sys
 import argparse
@@ -32,7 +32,10 @@ class BacktestPSO:
     def __init__(self, data, config):
         self.data = data
         self.config = config
-        self.expanded_ranges = create_config(config)['ranges']
+        self.expanded_ranges = get_expanded_ranges(config)
+        for k in list(self.expanded_ranges):
+            if self.expanded_ranges[k][0] == self.expanded_ranges[k][1]:
+                del self.expanded_ranges[k]
         self.bounds = get_bounds(self.expanded_ranges)
     
     def config_to_xs(self, config):
@@ -46,51 +49,14 @@ class BacktestPSO:
         config = self.config.copy()
         for i, k in enumerate(self.expanded_ranges):
             config[k] = xs[i]
-        return numpyize(pack_config(config))
+        return numpyize(denanify(pack_config(config)))
     
     def rf(self, xss):
         return np.array([self.single_rf(xs) for xs in xss])
 
     def single_rf(self, xs):
         config = self.xs_to_config(xs)
-        #pprint.pprint(config)
-        sliding_window_days = max([config['maximum_hrs_no_fills'] / 24,
-                                   config['maximum_hrs_no_fills_same_side'] / 24,
-                                   config['sliding_window_days']]) * 1.05
-        analyses = []
-        objective = 0.0
-        for z, data_slice in enumerate(iter_slices(self.data, sliding_window_days,
-                                                   ticks_to_prepend=int(config['max_span']),
-                                                   minimum_days=sliding_window_days * 0.95)):
-            if len(data_slice[0]) == 0:
-                print('debug b no data')
-                continue
-            try:
-                fills, info = backtest(config, data_slice)
-            except Exception as e:
-                print(e)
-                break
-            result = {**config, **{'lowest_eqbal_ratio': info[1], 'closest_bkr': info[2]}}
-            _, analysis = analyze_fills(fills, {**config, **{'lowest_eqbal_ratio': info[1], 'closest_bkr': info[2]}},
-                                        data_slice[2][int(config['max_span'])],
-                                        data_slice[2][-1])
-            analysis['score'] = objective_function(analysis, config) * (analysis['n_days'] / config['n_days'])
-            analyses.append(analysis)
-            objective = np.mean([e['score'] for e in analyses]) * 2 ** (z + 1)
-            analyses[-1]['objective'] = objective
-            print(f'{str(z).rjust(3, " ")} adg {analysis["average_daily_gain"]:.4f}, bkr {analysis["closest_bkr"]:.4f}, '
-                  f'eqbal {analysis["lowest_eqbal_ratio"]:.4f} n_days {analysis["n_days"]:.1f}, '
-                  f'score {analysis["score"]:.4f}, objective {objective:.4f}, '
-                  f'hrs stuck ss {str(round(analysis["max_hrs_no_fills_same_side"], 1)).zfill(4)}, '
-                  f'scores {[round(e["score"], 2) for e in analyses]}, ')
-            bef = config['break_early_factor']
-            if bef > 0.0:
-                if analysis['closest_bkr'] < config['minimum_bankruptcy_distance'] * (1 - bef):
-                    break
-                if analysis['max_hrs_no_fills'] > config['maximum_hrs_no_fills'] * (1 + bef):
-                    break
-                if analysis['max_hrs_no_fills_same_side'] > config['maximum_hrs_no_fills_same_side'] * (1 + bef):
-                    break
+        objective, analyses = single_sliding_window_run(config, self.data)
         global lock, BEST_OBJECTIVE
         if analyses:
             try:
@@ -103,7 +69,6 @@ class BacktestPSO:
                 for k in ['max_hrs_no_fills', 'max_hrs_no_fills_same_side']:
                     to_dump[k] = np.max([e[k] for e in analyses])
                 to_dump['objective'] = objective
-                to_dump['slices_finished'] = z
                 with open(self.config['optimize_dirpath'] + 'intermediate_results.txt', 'a') as f:
                     f.write(json.dumps(to_dump) + '\n')
                 if objective > BEST_OBJECTIVE:
@@ -149,9 +114,8 @@ async def main():
         print()
 
         bpso = BacktestPSO(tuple(shdata), config)
-        lc = load_live_config('configs/live/binance_btsusdt.json')
-        xs = bpso.config_to_xs(lc)
-        optimizer = ps.single.GlobalBestPSO(n_particles=24, dimensions=len(xs), options=config['options'],
+
+        optimizer = ps.single.GlobalBestPSO(n_particles=24, dimensions=len(bpso.bounds[0]), options=config['options'],
                                             bounds=bpso.bounds, init_pos=None)
         # todo: implement starting configs
         cost, pos = optimizer.optimize(bpso.rf, iters=config['iters'], n_processes=config['num_cpus'])

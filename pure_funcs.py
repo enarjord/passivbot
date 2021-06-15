@@ -81,6 +81,27 @@ def denumpyize(x):
         return x
 
 
+def denanify(x, nan=0.0, posinf=0.0, neginf=0.0):
+    try:
+        assert type(x) != str
+        _ = float(x)
+        return np.nan_to_num(x, nan=nan, posinf=posinf, neginf=neginf)
+    except:
+        if type(x) == list:
+            return [denanify(e) for e in x]
+        elif type(x) == tuple:
+            return tuple(denanify(e) for e in x)
+        elif type(x) == np.ndarray:
+            return np.array([denanify(e) for e in x], dtype=x.dtype)
+        elif type(x) == dict:
+            denanified = {}
+            for k, v in x.items():
+                denanified[k] = denanify(v)
+            return denanified
+        else:
+            return x
+
+
 def ts_to_date(timestamp: float) -> str:
     return str(datetime.datetime.fromtimestamp(timestamp)).replace(' ', 'T')
 
