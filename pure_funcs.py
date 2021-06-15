@@ -137,6 +137,8 @@ def candidate_to_live_config(candidate: dict) -> dict:
         name += f"_adg{(candidate['average_daily_gain'] - 1) * 100:.2f}%"
     elif 'daily_gain' in candidate:
         name += f"_adg{(candidate['daily_gain'] - 1) * 100:.2f}%"
+    if 'objective' in candidate:
+        name += f"_obj{candidate['objective']:.2f}"
     live_config['config_name'] = name
     return denumpyize(live_config)
 

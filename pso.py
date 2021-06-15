@@ -75,7 +75,7 @@ class BacktestPSO:
                 if objective > BEST_OBJECTIVE:
                     if analyses:
                         config['average_daily_gain'] = np.mean([e['average_daily_gain'] for e in analyses])
-                    dump_live_config(config, self.config['optimize_dirpath'] + 'intermediate_best_results.json')
+                    dump_live_config({**config, **{'objective': objective}}, self.config['optimize_dirpath'] + 'intermediate_best_results.json')
                     BEST_OBJECTIVE = objective
             finally:
                 lock.release()

@@ -139,8 +139,7 @@ def single_sliding_window_run(config, data, do_print=False) -> (float, [dict]):
                 f'bkr {analysis["closest_bkr"]:.4f}, '
                 f'eqbal {analysis["lowest_eqbal_ratio"]:.4f} n_days {analysis["n_days"]:.1f}, '
                 f'score {analysis["score"]:.4f}, objective {objective:.4f}, '
-                f'hrs stuck ss {str(round(analysis["max_hrs_no_fills_same_side"], 1)).zfill(4)}, '
-                f'scores {[round(e["score"], 2) for e in analyses]}, ')
+                f'hrs stuck ss {str(round(analysis["max_hrs_no_fills_same_side"], 1)).zfill(4)}, ')
         bef = config['break_early_factor']
         if bef > 0.0:
             if analysis['closest_bkr'] < config['minimum_bankruptcy_distance'] * (1 - bef):
@@ -156,7 +155,7 @@ def single_sliding_window_run(config, data, do_print=False) -> (float, [dict]):
                 print(line)
                 break
             mean_adg = np.mean([r['average_daily_gain'] for r in analyses])
-            if z > 2 and mean_adg < 0.995:
+            if z > 5 and mean_adg < 0.99:
                 line += f"broke on low adg {mean_adg:.4f} "
                 print(line)
                 break
