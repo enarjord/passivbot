@@ -182,8 +182,6 @@ def backtest_tune(data: np.ndarray, config: dict, current_best: Union[dict, list
     for k, v in config.items():
         if type(v) in [ray.tune.sample.Float, ray.tune.sample.Integer]:
             print(k, (v.lower, v.upper))
-    config['optimize_dirpath'] = os.path.join(config['optimize_dirpath'],
-                                              ts_to_date(time())[:19].replace(':', ''), '')
     if 'iters' in config:
         iters = config['iters']
     else:
@@ -277,6 +275,8 @@ async def main():
     print()
     data = await downloader.get_data()
     config['n_days'] = (data[2][-1] - data[2][0]) / (1000 * 60 * 60 * 24)
+    config['optimize_dirpath'] = os.path.join(config['optimize_dirpath'],
+                                              ts_to_date(time())[:19].replace(':', ''), '')
 
     start_candidate = None
     if args.starting_configs is not None:
