@@ -68,6 +68,8 @@ def denumpyize(x):
         return int(x)
     elif type(x) == np.ndarray:
         return [denumpyize(e) for e in x]
+    elif type(x) == np.bool_:
+        return bool(x)
     elif type(x) == dict:
         denumpyd = {}
         for k, v in x.items():
