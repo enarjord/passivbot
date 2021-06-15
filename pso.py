@@ -69,6 +69,7 @@ class BacktestPSO:
                 for k in ['max_hrs_no_fills', 'max_hrs_no_fills_same_side']:
                     to_dump[k] = np.max([e[k] for e in analyses])
                 to_dump['objective'] = objective
+                to_dump.update(candidate_to_live_config(config))
                 with open(self.config['optimize_dirpath'] + 'intermediate_results.txt', 'a') as f:
                     f.write(json.dumps(to_dump) + '\n')
                 if objective > BEST_OBJECTIVE:
