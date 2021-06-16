@@ -17,7 +17,7 @@ from telegram.ext import Updater, CommandHandler, ConversationHandler, CallbackC
     MessageHandler, Filters, CallbackQueryHandler
 
 from njit_funcs import round_
-from pure_funcs import compress_float, round_dynamic
+from pure_funcs import compress_float, round_dynamic, denumpyize
 
 
 class Telegram:
@@ -671,7 +671,7 @@ class Telegram:
         msg = f'<pre><b>Version:</b></pre> {sha_short},\n' \
               f'<pre>Symbol</pre>: {self._bot.symbol}\n' \
               f'<pre><b>Config:</b></pre> \n' \
-              f'{json.dumps(self._bot.config, indent=4)}'
+              f'{json.dumps(denumpyize(self._bot.config), indent=4)}'
         self.send_msg(msg)
 
     def log_start(self):
