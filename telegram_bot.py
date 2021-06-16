@@ -505,13 +505,17 @@ class Telegram:
         if 'long' in self._bot.position:
             long_position = self._bot.position['long']
             shrt_position = self._bot.position['shrt']
+            closest_long_price = min([o['price'] for o in self._bot.open_orders if o['position_side'] == 'long' and o['side'] == 'sell'])
+            closest_shrt_price = max([o['price'] for o in self._bot.open_orders if o['position_side'] == 'shrt' and o['side'] == 'buy'])
 
             position_table.add_row([f'Size', round_dynamic(long_position['size'], 3),
                                     round_dynamic(shrt_position['size'], 3)])
             position_table.add_row(['Price', round_dynamic(long_position['price'], 3),
                                     round_dynamic(shrt_position['price'], 3)])
-            position_table.add_row(['Curr.price', round_dynamic(self._bot.price, 3),
-                                    round_dynamic(self._bot.price, 3)])
+            position_table.add_row(['Curr.price', round_(self._bot.price, self._bot.price_step),
+                                    round_(self._bot.price, self._bot.price_step)])
+            position_table.add_row(['Close price', round_(closest_long_price, self._bot.price_step),
+                                    round_(closest_shrt_price, self._bot.price_step)])
             position_table.add_row(['Leverage', compress_float(long_position['leverage'], 3),
                                      compress_float(shrt_position['leverage'], 3)])
             position_table.add_row(['Liq.price', round_dynamic(long_position['liquidation_price'], 3),
