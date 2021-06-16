@@ -481,8 +481,10 @@ class Bot:
                            item['side'] == 'buy' and item['position_side'] == 'shrt']
         if len(new_shrt_closes) > 0:
             realized_pnl_shrt = sum(fill['realized_pnl'] for fill in new_shrt_closes)
+            qty = sum([fill['qty'] for fill in new_shrt_closes])
+            fee = sum([fill['fee_paid'] for fill in new_shrt_closes])
             if self.telegram is not None:
-                self.telegram.notify_close_order_filled(realized_pnl=realized_pnl_shrt, position_side='short')
+                self.telegram.notify_close_order_filled(realized_pnl=realized_pnl_shrt, position_side='short', qty=qty, fee=fee, wallet_balance=self.position['wallet_balance'])
             if realized_pnl_shrt >= 0 and self.profit_trans_pct > 0.0:
                 amount = realized_pnl_shrt * self.profit_trans_pct
                 self.telegram.send_msg(f'Transferring {round_(amount, 0.001)} USDT ({self.profit_trans_pct * 100 }%) of profit {round_(realized_pnl_shrt, self.price_step)} to Spot wallet')
