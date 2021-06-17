@@ -658,9 +658,16 @@ class Telegram:
         else:
             self.send_msg('This command is not supported (yet) on Bybit')
 
-    def notify_close_order_filled(self, realized_pnl: float, position_side: str):
+    def notify_close_order_filled(self, realized_pnl: float, position_side: str, qty: float, fee: float, wallet_balance: float):
         if 'notify_close_fill' not in self.config or self.config['notify_close_fill'] is True:
-            self.send_msg(f'Realized <pre>{round_(realized_pnl, self._bot.price_step)}</pre> {"profit" if realized_pnl >= 0 else "loss"} on {position_side}')
+            icon = "\U00002733" if realized_pnl >= 0 else "\U0000274C"
+            self.send_msg(f'''
+                <b>{icon} {self._bot.exchange.capitalize()}</b> Closed {position_side} {self._bot.pair}
+                <b>Amount:</b> <pre>{round_(qty, self._bot.price_step)}</pre>
+                <b>Price:</b> <pre>{round_(self._bot.price, self._bot.price_step)}</pre>
+                <b>Fee:</b> <pre>{round_(fee, self._bot.price_step)} {self._bot.margin_coin} ({round_(fee/realized_pnl * 100, self._bot.price_step)}%)</pre>
+                <b>PNL:</b> <pre>{round_(realized_pnl, self._bot.price_step)} {self._bot.margin_coin} ({round_(realized_pnl/wallet_balance * 100, self._bot.price_step)}%)</pre>
+                ''')
 
     def notify_entry_order_filled(self, size: float, price:float, position_side: str):
         if 'notify_entry_fill' not in self.config or self.config['notify_entry_fill'] is True:
