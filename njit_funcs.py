@@ -204,28 +204,35 @@ def calc_long_orders(balance,
         long_close = (0.0, 0.0, 0.0, 0.0, 'long_nclose')
     elif long_psize > 0.0:
         pbr = qty_to_cost(long_psize, long_pprice, inverse, c_mult) / balance
-        nclose_price = round_up(long_pprice * (markup_const + eqf(MA_ratios, markup_MAr_coeffs)), price_step)
         entry_price = min(entry_price,
                           round_dn(long_pprice * (rprc_const + eqf(MA_ratios, rprc_MAr_coeffs) +
                                                   eqf(np.array([pbr]), rprc_PBr_coeffs, minus=0.0)), price_step))
         min_entry_qty = calc_min_entry_qty(entry_price, inverse, qty_step, min_qty, min_cost)
-        max_entry_qty = cost_to_qty(min(balance * (leverage + stop_psize_pct - pbr), available_margin),
+        max_entry_qty = cost_to_qty(min(balance * (leverage + max(0.0, stop_psize_pct) - pbr), available_margin),
                                     entry_price, inverse, c_mult)
         base_entry_qty = cost_to_qty(balance, entry_price, inverse, c_mult) * (iqty_const + eqf(MA_ratios, iqty_MAr_coeffs))
         entry_qty = round_dn(min(max_entry_qty,
                                  base_entry_qty + (long_psize * (rqty_const + eqf(MA_ratios, rqty_MAr_coeffs)))), qty_step)
-        if pbr > leverage:
-            if entry_qty < min_entry_qty:
-                entry_qty = 0.0
-            stop_qty = -max(min_qty, round_dn(long_psize * min(1.0, pbr - leverage), qty_step))
-            stop_price = max(lowest_ask, round_up(MA_band_upper, price_step))
-            if stop_price >= nclose_price:
-                long_close = (-long_psize, nclose_price, 0.0, 0.0, 'long_nclose')
-            else:
-                long_close = (stop_qty, stop_price, round_(long_psize + stop_qty, qty_step), long_pprice, 'long_sclose')
+        nclose_price = round_up(long_pprice * (markup_const + eqf(MA_ratios, markup_MAr_coeffs)), price_step)
+        if entry_qty < min_entry_qty:
+            entry_qty = 0.0
+        if stop_psize_pct < 0.0:
+            # v3.6.2 behavior
+            close_price = max(lowest_ask, min(nclose_price, round_up(MA_band_upper, price_step)))
+            close_type = 'long_nclose' if close_price > long_pprice else 'long_sclose'
+            long_close = (-long_psize, close_price, 0.0, 0.0, close_type)
         else:
-            entry_qty = max(entry_qty, min_entry_qty)
-            long_close = (-long_psize, nclose_price, 0.0, 0.0, 'long_nclose')
+            # v3.6.1 behavior
+            if pbr > leverage:
+                stop_qty = -max(min_qty, round_dn(long_psize * min(1.0, pbr - leverage), qty_step))
+                sclose_price = max(lowest_ask, round_up(MA_band_upper, price_step))
+                if sclose_price >= nclose_price:
+                    long_close = (-long_psize, nclose_price, 0.0, 0.0, 'long_nclose')
+                else:
+                    long_close = (stop_qty, sclose_price, round_(long_psize + stop_qty, qty_step), long_pprice, 'long_sclose')
+            else:
+                entry_qty = max(entry_qty, min_entry_qty)
+                long_close = (-long_psize, nclose_price, 0.0, 0.0, 'long_nclose')
         entry_type = 'long_rentry'
     else:
         raise Exception('long psize is less than 0.0')
@@ -273,30 +280,36 @@ def calc_shrt_orders(balance,
         shrt_close = (0.0, 0.0, 0.0, 0.0, 'shrt_nclose')
     elif shrt_psize < 0.0:
         pbr = qty_to_cost(shrt_psize, shrt_pprice, inverse, c_mult) / balance
-        nclose_price = round_dn(shrt_pprice * (markup_const + eqf(MA_ratios, markup_MAr_coeffs)), price_step)
         entry_price = max(entry_price,
                           round_up(shrt_pprice * (rprc_const + eqf(MA_ratios, rprc_MAr_coeffs) +
                                                   eqf(np.array([pbr]), rprc_PBr_coeffs, minus=0.0)), price_step))
         min_entry_qty = calc_min_entry_qty(entry_price, inverse, qty_step, min_qty, min_cost)
-        max_entry_qty = cost_to_qty(min(balance * (leverage + stop_psize_pct - pbr), available_margin),
+        max_entry_qty = cost_to_qty(min(balance * (leverage + max(0.0, stop_psize_pct) - pbr), available_margin),
                                     entry_price, inverse, c_mult)
 
         base_entry_qty = cost_to_qty(balance, entry_price, inverse, c_mult) * (iqty_const + eqf(MA_ratios, iqty_MAr_coeffs))
         entry_qty = round_dn(min(max_entry_qty,
                                  base_entry_qty + (-shrt_psize * (rqty_const + eqf(MA_ratios, rqty_MAr_coeffs)))), qty_step)
-
-        if pbr > leverage:
-            if entry_qty < min_entry_qty:
-                entry_qty = 0.0
-            stop_qty = max(min_qty, round_dn(-shrt_psize * min(1.0, pbr - leverage), qty_step))
-            stop_price = min(highest_bid, round_dn(MA_band_lower, price_step))
-            if stop_price <= nclose_price:
-                shrt_close = (-shrt_psize, nclose_price, 0.0, 0.0, 'shrt_nclose')
-            else:
-                shrt_close = (stop_qty, stop_price, round_(shrt_psize + stop_qty, qty_step), shrt_pprice, 'shrt_sclose')
+        nclose_price = round_dn(shrt_pprice * (markup_const + eqf(MA_ratios, markup_MAr_coeffs)), price_step)
+        if entry_qty < min_entry_qty:
+            entry_qty = 0.0
+        if stop_psize_pct < 0.0:
+            # v3.6.2 behavior
+            close_price = min(highest_bid, max(nclose_price, round_dn(MA_band_lower, price_step)))
+            close_type = 'shrt_nclose' if close_price < shrt_pprice else 'shrt_sclose'
+            shrt_close = (-shrt_psize, close_price, 0.0, 0.0, close_type)
         else:
-            entry_qty = max(entry_qty, min_entry_qty)
-            shrt_close = (-shrt_psize, nclose_price, 0.0, 0.0, 'shrt_nclose')
+            # v3.6.1 beahvior
+            if pbr > leverage:
+                stop_qty = max(min_qty, round_dn(-shrt_psize * min(1.0, pbr - leverage), qty_step))
+                stop_price = min(highest_bid, round_dn(MA_band_lower, price_step))
+                if stop_price <= nclose_price:
+                    shrt_close = (-shrt_psize, nclose_price, 0.0, 0.0, 'shrt_nclose')
+                else:
+                    shrt_close = (stop_qty, stop_price, round_(shrt_psize + stop_qty, qty_step), shrt_pprice, 'shrt_sclose')
+            else:
+                entry_qty = max(entry_qty, min_entry_qty)
+                shrt_close = (-shrt_psize, nclose_price, 0.0, 0.0, 'shrt_nclose')
 
         entry_type = 'shrt_rentry'
     else:
