@@ -51,18 +51,18 @@ async def main():
     args = parser.parse_args()
 
     config = await prep_config(args)
-    print()
-    for k in (keys := ['exchange', 'symbol', 'starting_balance', 'start_date', 'end_date',
-                       'latency_simulation_ms', 'do_long', 'do_shrt']):
-        if k in config:
-            print(f"{k: <{max(map(len, keys)) + 2}} {config[k]}")
-    print()
     if config['exchange'] == 'bybit' and not config['inverse']:
         print('bybit usdt linear backtesting not supported')
         return
     downloader = Downloader(config)
     live_config = load_live_config(args.live_config_path)
     config.update(live_config)
+    print()
+    for k in (keys := ['exchange', 'symbol', 'starting_balance', 'start_date', 'end_date',
+                       'latency_simulation_ms']):
+        if k in config:
+            print(f"{k: <{max(map(len, keys)) + 2}} {config[k]}")
+    print()
     data = await downloader.get_data()
     config['n_days'] = round_((data[2][-1] - data[2][0]) / (1000 * 60 * 60 * 24), 0.1)
     pprint.pprint(denumpyize(live_config))
