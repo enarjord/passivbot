@@ -17,7 +17,7 @@ from telegram.ext import Updater, CommandHandler, ConversationHandler, CallbackC
     MessageHandler, Filters, CallbackQueryHandler
 
 from njit_funcs import round_
-from pure_funcs import compress_float, round_dynamic
+from pure_funcs import compress_float, round_dynamic, denumpyize
 
 
 class Telegram:
@@ -519,6 +519,8 @@ class Telegram:
                  round_dynamic(shrt_position['liquidation_price'], 3)])
             position_table.add_row(['Liq.diff.%', round_dynamic(float(long_position['liq_diff']) * 100, 3),
                  round_dynamic(float(shrt_position['liq_diff']) * 100, 3)])
+            position_table.add_row(['Cost/balance', round_dynamic(float(long_position['pbr']) * 100, 3),
+                        round_dynamic(float(shrt_position['pbr']) * 100, 3)])
             position_table.add_row([f'UPNL {self._bot.margin_coin}', round_dynamic(float(long_position['upnl']), 3),
                                     round_dynamic(float(shrt_position['upnl']), 3)])
 
@@ -671,7 +673,7 @@ class Telegram:
         msg = f'<pre><b>Version:</b></pre> {sha_short},\n' \
               f'<pre>Symbol</pre>: {self._bot.symbol}\n' \
               f'<pre><b>Config:</b></pre> \n' \
-              f'{json.dumps(self._bot.config, indent=4)}'
+              f'{json.dumps(denumpyize(self._bot.config), indent=4)}'
         self.send_msg(msg)
 
     def log_start(self):
