@@ -23,6 +23,23 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
     for key in [k for k in result['result'] if k not in ['gain', 'average_daily_gain', 'closest_bkr', 'do_long', 'do_shrt']]:
         lines.append(f"{key} {round_dynamic(result['result'][key], 6)}")
     lines.append(f"long: {result['do_long']}, short: {result['do_shrt']}")
+
+    longs = fdf[fdf.type.str.contains('long')]
+    shrts = fdf[fdf.type.str.contains('shrt')]
+
+    lines.append(f"n long ientries {len(longs[longs.type == 'long_ientry'])}")
+    lines.append(f"n long rentries {len(longs[longs.type == 'long_rentry'])}")
+    lines.append(f"n long ncloses {len(longs[longs.type == 'long_nclose'])}")
+    lines.append(f"n long scloses {len(longs[longs.type == 'long_sclose'])}")
+    lines.append(f"long pnl sum {longs.pnl.sum()}")
+
+    lines.append(f"n shrt ientries {len(shrts[shrts.type == 'shrt_ientry'])}")
+    lines.append(f"n shrt rentries {len(shrts[shrts.type == 'shrt_rentry'])}")
+    lines.append(f"n shrt ncloses {len(shrts[shrts.type == 'shrt_nclose'])}")
+    lines.append(f"n shrt scloses {len(shrts[shrts.type == 'shrt_sclose'])}")
+    lines.append(f"shrt pnl sum {shrts.pnl.sum()}")
+
+
     live_config = candidate_to_live_config(result)
     dump_live_config(live_config, result['plots_dirpath'] + 'live_config.json')
     json.dump(denumpyize(result), open(result['plots_dirpath'] + 'result.json', 'w'), indent=4)
@@ -39,6 +56,15 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
     fdf.equity.plot()
     plt.savefig(f"{result['plots_dirpath']}balance_and_equity.png")
 
+
+    plt.clf()
+    longs.pnl.cumsum().plot()
+    plt.savefig(f"{result['plots_dirpath']}pnl_cumsum_long.png")
+
+    plt.clf()
+    shrts.pnl.cumsum().plot()
+    plt.savefig(f"{result['plots_dirpath']}pnl_cumsum_shrt.png")
+
     print('plotting backtest whole and in chunks...')
     n_parts = max(3, int(round_up(result['n_days'] / 14, 1.0)))
     for z in range(n_parts):
@@ -52,8 +78,8 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
 
     print('plotting pos sizes...')
     plt.clf()
-    longs = fdf[fdf.type.str.contains('long')].psize.plot()
-    shrts = fdf[fdf.type.str.contains('shrt')].psize.plot()
+    longs.psize.plot()
+    shrts.psize.plot()
     plt.savefig(f"{result['plots_dirpath']}psizes_plot.png")
 
 
