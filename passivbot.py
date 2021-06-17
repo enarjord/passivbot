@@ -9,7 +9,7 @@ from pathlib import Path
 from time import time
 from procedures import load_live_config, make_get_filepath, load_key_secret, print_
 from pure_funcs import get_xk_keys, get_ids_to_fetch, flatten, calc_indicators_from_ticks_with_gaps, \
-    drop_consecutive_same_prices, filter_orders, compress_float, create_xk, round_dynamic
+    drop_consecutive_same_prices, filter_orders, compress_float, create_xk, round_dynamic, denumpyize
 from njit_funcs import calc_orders, calc_new_psize_pprice, qty_to_cost, calc_diff, round_, calc_emas
 import numpy as np
 import websockets
@@ -606,6 +606,8 @@ async def main() -> None:
         return
     try:
         config = load_live_config(args.live_config_path)
+        print('using config')
+        pprint.pprint(denumpyize(config))
     except Exception as e:
         print(e, 'failed to load config', args.live_config_path)
         return
@@ -622,8 +624,6 @@ async def main() -> None:
         bot = await create_bybit_bot(config)
     else:
         raise Exception('unknown exchange', account['exchange'])
-    print('using config')
-    pprint.pprint(config)
 
     if 'telegram' in account and account['telegram']['enabled']:
         telegram = await _start_telegram(account=account, bot=bot)
