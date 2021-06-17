@@ -40,6 +40,8 @@ def get_xk_keys():
 
 def create_xk(config: dict) -> dict:
     xk = {}
+    config['do_long'] = config['long']['enabled']
+    config['do_shrt'] = config['shrt']['enabled']
     for k in get_xk_keys():
         if k in config['long']:
             xk[k] = (config['long'][k], config['shrt'][k])
