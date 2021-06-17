@@ -506,8 +506,8 @@ class Telegram:
         if 'long' in self._bot.position:
             long_position = self._bot.position['long']
             shrt_position = self._bot.position['shrt']
-            closest_long_price = min([o['price'] for o in self._bot.open_orders if o['position_side'] == 'long' and o['side'] == 'sell'])
-            closest_shrt_price = max([o['price'] for o in self._bot.open_orders if o['position_side'] == 'shrt' and o['side'] == 'buy'])
+            closest_long_price = min([o['price'] for o in self._bot.open_orders if o['position_side'] == 'long' and o['side'] == 'sell'] or [0])
+            closest_shrt_price = max([o['price'] for o in self._bot.open_orders if o['position_side'] == 'shrt' and o['side'] == 'buy'] or [0])
 
             position_table.add_row([f'Size', round_dynamic(long_position['size'], 3),
                                     round_dynamic(shrt_position['size'], 3)])
@@ -523,9 +523,8 @@ class Telegram:
                  round_dynamic(shrt_position['liquidation_price'], 3)])
             position_table.add_row(['Liq.diff.%', round_dynamic(float(long_position['liq_diff']) * 100, 3),
                  round_dynamic(float(shrt_position['liq_diff']) * 100, 3)])
-            position_table.add_row(['Cost/balance', round_dynamic(float(long_position['pbr']) * 100, 3),
-                        round_dynamic(float(shrt_position['pbr']) * 100, 3)])
-            position_table.add_row([f'UPNL {self._bot.margin_coin}', round_dynamic(float(long_position['upnl']), 3),
+            position_table.add_row(['Cost/balance', round_dynamic(float(long_position['pbr']) * 100, 3), round_dynamic(float(shrt_position['pbr']) * 100, 3)])
+            position_table.add_row([f'UPNL {self._bot.margin_coin if hasattr(self._bot, "margin_coin") else ""}', round_dynamic(float(long_position['upnl']), 3),
                                     round_dynamic(float(shrt_position['upnl']), 3)])
 
             table_msg = position_table.get_string(border=True, padding_width=1,
