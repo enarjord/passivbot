@@ -6,11 +6,11 @@
   n_particles: 24
 
   minimum_bankruptcy_distance: 0.2
-  maximum_hrs_no_fills: 96
-  maximum_hrs_no_fills_same_side: 160
+  maximum_hrs_no_fills: 72.0
+  maximum_hrs_no_fills_same_side: 144.0
 
   # set to 0.0 to do disable sliding windows
-  sliding_window_days: 7.0
+  sliding_window_days: 11.0
 
   # for each completed slice, objective is multiplied by reward_multiplier_base**(z + 1)
   # where z is enumerator of slices
@@ -34,7 +34,7 @@
     long£stop_psize_pct: [0.0, 1.0]
     long£leverage: [0.1, 15.0]
     long£iqty_const: [0.0, 1.0]
-    long£iprc_const: [0.95, 1.05]
+    long£iprc_const: [0.95, 1.0]
     long£rqty_const: [0.0, 4.0]
     long£rprc_const: [0.95, 1.0]
     long£markup_const: [1.0, 1.05]
@@ -42,7 +42,7 @@
     shrt£stop_psize_pct: [0.0, 1.0]
     shrt£leverage: [0.1, 15.0]
     shrt£iqty_const: [0.0, 1.0]
-    shrt£iprc_const: [0.95, 1.05]
+    shrt£iprc_const: [1.0, 1.05]
     shrt£rqty_const: [0.0, 4.0]
     shrt£rprc_const: [1.0, 1.05]
     shrt£markup_const: [0.95, 1.0]
