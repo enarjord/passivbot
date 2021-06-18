@@ -115,7 +115,6 @@ def single_sliding_window_run(config, data, do_print=False) -> (float, [dict]):
                                config['maximum_hrs_no_fills_same_side'] / 24,
                                config['sliding_window_days']]) * 1.05
     analyses = []
-    objective = 0.0
     for z, data_slice in enumerate(iter_slices(data, sliding_window_days,
                                                ticks_to_prepend=int(config['max_span']),
                                                minimum_days=sliding_window_days * 0.95)):
@@ -154,9 +153,8 @@ def single_sliding_window_run(config, data, do_print=False) -> (float, [dict]):
                 line += f"broke on max_hrs_no_fills_ss {analysis['max_hrs_no_fills_same_side']:.4f}, {config['maximum_hrs_no_fills_same_side']}, {bef}"
                 print(line)
                 break
-            mean_adg = np.mean([r['average_daily_gain'] for r in analyses])
-            if z > 5 and mean_adg < 0.99:
-                line += f"broke on low adg {mean_adg:.4f} "
+            if analysis['average_daily_gain'] < 1.0:
+                line += f"broke on low adg {analysis['average_daily_gain']:.4f} "
                 print(line)
                 break
         print(line)
@@ -165,7 +163,7 @@ def single_sliding_window_run(config, data, do_print=False) -> (float, [dict]):
 def simple_sliding_window_wrap(config, data, do_print=False):
     objective, analyses = single_sliding_window_run(config, data)
     tune.report(objective=objective,
-                daily_gain=np.mean([r['average_daily_gain'] for r in analyses]),
+                daily_gain=np.min([r['average_daily_gain'] for r in analyses]),
                 closest_bankruptcy=np.min([r['closest_bkr'] for r in analyses]),
                 max_hrs_no_fills=np.max([r['max_hrs_no_fills'] for r in analyses]),
                 max_hrs_no_fills_same_side=np.max([r['max_hrs_no_fills_same_side'] for r in analyses]))
