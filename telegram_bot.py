@@ -36,8 +36,8 @@ class Telegram:
             [KeyboardButton('/balance \U0001F4B3'), KeyboardButton('/help \U00002753'), KeyboardButton('/next \U000023E9')]]
         second_keyboard_buttons = [
             [KeyboardButton('/set_leverage \U000026A1'), KeyboardButton('/set_short \U0001F4C9'), KeyboardButton('/set_long \U0001F4C8')],
-            [KeyboardButton('/transfer \U0001F3E6'), KeyboardButton('/set_config \U0001F4C4'), KeyboardButton('/stop \U000026D4')],
-            [KeyboardButton('/previous \U000023EA')]
+            [KeyboardButton('/transfer \U0001F3E6'), KeyboardButton('/set_profit_transfer \U0001F4DD'), KeyboardButton('/set_config \U0001F4C4')],
+            [KeyboardButton('/previous \U000023EA'), KeyboardButton('/stop \U000026D4')]
         ]
         self._keyboard_idx = 0
         self._keyboards = [ReplyKeyboardMarkup(first_keyboard_buttons, resize_keyboard=True),
@@ -106,6 +106,16 @@ class Telegram:
             },
             fallbacks=[MessageHandler(Filters.command, self._abort)]
         ))
+
+        dispatcher.add_handler(ConversationHandler(
+            entry_points=[MessageHandler(Filters.regex('/set_profit_transfer.*'), self._begin_set_profit_transfer)],
+            states={
+                1: [MessageHandler(Filters.regex('([0-9]*|cancel)'), self._profit_transfer_chosen)],
+                2: [MessageHandler(Filters.regex('(confirm|abort)'), self._verify_profit_transfer_confirmation)]
+            },
+            fallbacks=[CommandHandler('cancel', self._abort)]
+        ))
+
         dispatcher.add_handler(MessageHandler(Filters.regex('/next.*'), self._next_page))
         dispatcher.add_handler(MessageHandler(Filters.regex('/previous.*'), self._previous_page))
 
@@ -295,7 +305,7 @@ class Telegram:
         return ConversationHandler.END
 
     def _begin_set_leverage(self, update: Update, _: CallbackContext) -> int:
-        self.stop_mode_requested = ''
+        self.leverage_chosen = None
         reply_keyboard = [['1', '3', '4'],
                           ['6', '7', '10'],
                           ['15', '20', 'cancel']]
@@ -350,6 +360,62 @@ class Telegram:
             self.leverage_chosen = ''
             self.send_msg(
                 'Request for setting leverage was aborted')
+        else:
+            self.leverage_chosen = ''
+            update.message.reply_text(text=f'Something went wrong, either <pre>confirm</pre> or <pre>abort</pre> was expected, but {update.message.text} was sent',
+                                      parse_mode=ParseMode.HTML,
+                                      reply_markup=self._keyboards[self._keyboard_idx])
+        return ConversationHandler.END
+
+    def _begin_set_profit_transfer(self, update: Update, _: CallbackContext) -> int:
+        self.profit_transfer_pct_chosen = None
+        reply_keyboard = [['0.0', '0.2', '0.25'],
+                          ['0.3', '0.4', '0.5'],
+                          ['0.75', '1', 'cancel']]
+        update.message.reply_text(
+            text='To modify the profit transfer percentage, please pick the desired amount using the buttons below,'
+                 'or type in the desired profit transfer amount yourself (value between 0 and 1).\n'
+                 'Setting the value to 0 disables profit transfer, and 1 transfers all profit.\n'
+                 'Note that the that <b>this change is not persisted between restarts!</b>\n'
+                 'Or send /cancel to abort modifying the profit transfer',
+            parse_mode=ParseMode.HTML,
+            reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True)
+        )
+        return 1
+
+    def _profit_transfer_chosen(self, update: Update, _: CallbackContext) -> int:
+        if update.message.text == 'cancel':
+            self.send_msg('Request for changing profit transfer was cancelled')
+            return ConversationHandler.END
+
+        try:
+            self.profit_transfer_pct_chosen = float(update.message.text)
+            if self.profit_transfer_pct_chosen < 0 or self.profit_transfer_pct_chosen > 1:
+                self.send_msg(f'Invalid profit transfer percentage provided. The value for the profit transfer must be a value between 0 and 1 (inclusive), indicating a range of 0% to 100%')
+                return ConversationHandler.END
+        except:
+            self.send_msg(f'Invalid profit transfer percentage provided. The value must be between 0 and 1. Aborting conversation.')
+            return ConversationHandler.END
+
+        reply_keyboard = [['confirm', 'abort']]
+        update.message.reply_text(
+            text=f'You have chosen to change the profit transfer percentage to <pre>{self.profit_transfer_pct_chosen}</pre>.\n'
+                 f'Please confirm that you want to activate this by replying with either <pre>confirm</pre> or <pre>abort</pre>\n'
+                 f'<b>Please be aware that this setting is not persisted between restarts!</b>',
+            parse_mode=ParseMode.HTML,
+            reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True)
+        )
+        return 2
+
+    def _verify_profit_transfer_confirmation(self, update: Update, _: CallbackContext) -> int:
+        if update.message.text == 'confirm':
+            self._bot.set_config_value('profit_trans_pct', self.profit_transfer_pct_chosen)
+            self.send_msg(
+                f'Profit transfer percentage set to {self.profit_transfer_pct_chosen}.\n'
+                'Please be aware that this change is NOT persisted between restarts. To reset the profit transfer percentage, you can use <pre>/reload_config</pre>')
+        elif update.message.text == 'abort':
+            self.profit_transfer_pct_chosen = None
+            self.send_msg('Request for setting profit transfer amount was aborted')
         else:
             self.leverage_chosen = ''
             update.message.reply_text(text=f'Something went wrong, either <pre>confirm</pre> or <pre>abort</pre> was expected, but {update.message.text} was sent',
@@ -661,8 +727,8 @@ class Telegram:
         if 'notify_entry_fill' not in self.config or self.config['notify_entry_fill'] is True:
             icon = "\U00002733"
             self.send_msg(f'<b>{icon} {self._bot.exchange.capitalize()} {self._bot.pair}</b> Opened {position_side}\n'
-                          f'<b>Amount: </b><pre>{round_(qty, self._bot.price_step)}</pre>\n'
-                          f'<b>Total size: </b><pre>{round_(total_size, self._bot.price_step)}</pre>\n'
+                          f'<b>Amount: </b><pre>{round_(qty, self._bot.qty_step)}</pre>\n'
+                          f'<b>Total size: </b><pre>{round_(total_size, self._bot.qty_step)}</pre>\n'
                           f'<b>Price: </b><pre>{round_(price, self._bot.price_step)}</pre>\n'
                           f'<b>Fee: </b><pre>{round_(fee, self._bot.price_step)} {self._bot.margin_coin} ({round_(fee/(qty * price) * 100, self._bot.price_step)}%)</pre>')
 
@@ -671,8 +737,8 @@ class Telegram:
             icon = "\U00002705" if realized_pnl >= 0 else "\U0000274C"
             self.send_msg(f'<b>{icon} {self._bot.exchange.capitalize()} {self._bot.pair}</b> Closed {position_side}\n'
                 f'<b>PNL: </b><pre>{round_(realized_pnl, self._bot.price_step)} {self._bot.margin_coin} ({round_(realized_pnl/wallet_balance * 100, self._bot.price_step)}%)</pre>\n'
-                f'<b>Amount: </b><pre>{round_(qty, self._bot.price_step)}</pre>\n'
-                f'<b>Remaining size: </b><pre>{round_(remaining_size, self._bot.price_step)}</pre>\n'
+                f'<b>Amount: </b><pre>{round_(qty, self._bot.qty_step)}</pre>\n'
+                f'<b>Remaining size: </b><pre>{round_(remaining_size, self._bot.qty_step)}</pre>\n'
                 f'<b>Price: </b><pre>{round_(price, self._bot.price_step)}</pre>\n'
                 f'<b>Fee: </b><pre>{round_(fee, self._bot.price_step)} {self._bot.margin_coin} ({round_(fee/realized_pnl * 100, self._bot.price_step)}%)</pre>')
 
