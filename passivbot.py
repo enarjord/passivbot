@@ -483,9 +483,16 @@ class Bot:
             realized_pnl_shrt = sum(fill['realized_pnl'] for fill in new_shrt_closes)
             if self.telegram is not None:
                 qty_sum = sum([fill['qty'] for fill in new_shrt_closes])
+                cost = sum(fill['qty'] / fill['price'] if self.inverse else fill['qty'] * fill['price']
+                           for fill in new_shrt_closes)
+                # volume weighted average price
+                vwap = qty_sum / cost if self.inverse else cost / qty_sum
                 fee = sum([fill['fee_paid'] for fill in new_shrt_closes])
                 total_size = self.position['shrt']['size']
-                self.telegram.notify_close_order_filled(realized_pnl=realized_pnl_shrt, position_side='short', qty=qty_sum, fee=fee, wallet_balance=self.position['wallet_balance'], remaining_size=total_size)
+                self.telegram.notify_close_order_filled(realized_pnl=realized_pnl_shrt, position_side='short',
+                                                        qty=qty_sum, fee=fee,
+                                                        wallet_balance=self.position['wallet_balance'],
+                                                        remaining_size=total_size, price=vwap)
             if realized_pnl_shrt >= 0 and self.profit_trans_pct > 0.0:
                 amount = realized_pnl_shrt * self.profit_trans_pct
                 self.telegram.send_msg(f'Transferring {round_(amount, 0.001)} USDT ({self.profit_trans_pct * 100 }%) of profit {round_(realized_pnl_shrt, self.price_step)} to Spot wallet')
@@ -517,9 +524,16 @@ class Bot:
             realized_pnl_long = sum(fill['realized_pnl'] for fill in new_long_closes)
             if self.telegram is not None:
                 qty_sum = sum([fill['qty'] for fill in new_long_closes])
+                cost = sum(fill['qty'] / fill['price'] if self.inverse else fill['qty'] * fill['price']
+                           for fill in new_long_closes)
+                # volume weighted average price
+                vwap = qty_sum / cost if self.inverse else cost / qty_sum
                 fee = sum([fill['fee_paid'] for fill in new_long_closes])
                 total_size = self.position['long']['size']
-                self.telegram.notify_close_order_filled(realized_pnl=realized_pnl_long, position_side='short', qty=qty_sum, fee=fee, wallet_balance=self.position['wallet_balance'], remaining_size=total_size)
+                self.telegram.notify_close_order_filled(realized_pnl=realized_pnl_long, position_side='short',
+                                                        qty=qty_sum, fee=fee,
+                                                        wallet_balance=self.position['wallet_balance'],
+                                                        remaining_size=total_size, price=vwap)
             if realized_pnl_long >= 0 and self.profit_trans_pct > 0.0:
                 amount = realized_pnl_long * self.profit_trans_pct
                 self.telegram.send_msg(f'Transferring {round_(amount, 0.001)} USDT ({self.profit_trans_pct * 100 }%) of profit {round_(realized_pnl_long, self.price_step)} to Spot wallet')
