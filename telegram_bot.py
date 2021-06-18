@@ -659,8 +659,8 @@ class Telegram:
         if 'notify_entry_fill' not in self.config or self.config['notify_entry_fill'] is True:
             icon = "\U00002733"
             self.send_msg(f'<b>{icon} {self._bot.exchange.capitalize()} {self._bot.pair}</b> Opened {position_side}\n'
-                          f'<b>Amount: </b><pre>{round_(qty, self._bot.price_step)}</pre>\n'
-                          f'<b>Total size: </b><pre>{round_(total_size, self._bot.price_step)}</pre>\n'
+                          f'<b>Amount: </b><pre>{round_(qty, self._bot.qty_step)}</pre>\n'
+                          f'<b>Total size: </b><pre>{round_(total_size, self._bot.qty_step)}</pre>\n'
                           f'<b>Price: </b><pre>{round_(price, self._bot.price_step)}</pre>\n'
                           f'<b>Fee: </b><pre>{round_(fee, self._bot.price_step)} {self._bot.margin_coin} ({round_(fee/(qty * price) * 100, self._bot.price_step)}%)</pre>')
 
@@ -669,8 +669,8 @@ class Telegram:
             icon = "\U00002705" if realized_pnl >= 0 else "\U0000274C"
             self.send_msg(f'<b>{icon} {self._bot.exchange.capitalize()} {self._bot.pair}</b> Closed {position_side}\n'
                 f'<b>PNL: </b><pre>{round_(realized_pnl, self._bot.price_step)} {self._bot.margin_coin} ({round_(realized_pnl/wallet_balance * 100, self._bot.price_step)}%)</pre>\n'
-                f'<b>Amount: </b><pre>{round_(qty, self._bot.price_step)}</pre>\n'
-                f'<b>Remaining size: </b><pre>{round_(remaining_size, self._bot.price_step)}</pre>\n'
+                f'<b>Amount: </b><pre>{round_(qty, self._bot.qty_step)}</pre>\n'
+                f'<b>Remaining size: </b><pre>{round_(remaining_size, self._bot.qty_step)}</pre>\n'
                 f'<b>Price: </b><pre>{round_(price, self._bot.price_step)}</pre>\n'
                 f'<b>Fee: </b><pre>{round_(fee, self._bot.price_step)} {self._bot.margin_coin} ({round_(fee/realized_pnl * 100, self._bot.price_step)}%)</pre>')
 
