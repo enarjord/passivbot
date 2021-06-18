@@ -657,20 +657,24 @@ class Telegram:
         else:
             self.send_msg('This command is not supported (yet) on Bybit')
 
-    def notify_close_order_filled(self, realized_pnl: float, position_side: str, qty: float, fee: float, wallet_balance: float):
-        if 'notify_close_fill' not in self.config or self.config['notify_close_fill'] is True:
-            icon = "\U00002733" if realized_pnl >= 0 else "\U0000274C"
-            self.send_msg(f'''
-                <b>{icon} {self._bot.exchange.capitalize()}</b> Closed {position_side} {self._bot.pair}
-                <b>Amount:</b> <pre>{round_(qty, self._bot.price_step)}</pre>
-                <b>Price:</b> <pre>{round_(self._bot.price, self._bot.price_step)}</pre>
-                <b>Fee:</b> <pre>{round_(fee, self._bot.price_step)} {self._bot.margin_coin} ({round_(fee/realized_pnl * 100, self._bot.price_step)}%)</pre>
-                <b>PNL:</b> <pre>{round_(realized_pnl, self._bot.price_step)} {self._bot.margin_coin} ({round_(realized_pnl/wallet_balance * 100, self._bot.price_step)}%)</pre>
-                ''')
-
-    def notify_entry_order_filled(self, size: float, price:float, position_side: str):
+    def notify_entry_order_filled(self, position_side: str, qty: float, fee: float, price: float, total_size: float):
         if 'notify_entry_fill' not in self.config or self.config['notify_entry_fill'] is True:
-            self.send_msg(f'Entry order of size <pre>{size}</pre> at price <pre>{round_(price, self._bot.price_step)}</pre> filled on {position_side}')
+            icon = "\U00002733"
+            self.send_msg(f'<b>{icon} {self._bot.exchange.capitalize()} {self._bot.pair}</b> Opened {position_side}\n'
+                          f'<b>Amount: </b><pre>{round_(qty, self._bot.price_step)}</pre>\n'
+                          f'<b>Total size: </b><pre>{round_(total_size, self._bot.price_step)}</pre>\n'
+                          f'<b>Price: </b><pre>{round_(price, self._bot.price_step)}</pre>\n'
+                          f'<b>Fee: </b><pre>{round_(fee, self._bot.price_step)} {self._bot.margin_coin} ({round_(fee/(qty * price) * 100, self._bot.price_step)}%)</pre>')
+
+    def notify_close_order_filled(self, realized_pnl: float, position_side: str, qty: float, fee: float, wallet_balance: float, remaining_size: float, price: float):
+        if 'notify_close_fill' not in self.config or self.config['notify_close_fill'] is True:
+            icon = "\U00002705" if realized_pnl >= 0 else "\U0000274C"
+            self.send_msg(f'<b>{icon} {self._bot.exchange.capitalize()} {self._bot.pair}</b> Closed {position_side}\n'
+                f'<b>PNL: </b><pre>{round_(realized_pnl, self._bot.price_step)} {self._bot.margin_coin} ({round_(realized_pnl/wallet_balance * 100, self._bot.price_step)}%)</pre>\n'
+                f'<b>Amount: </b><pre>{round_(qty, self._bot.price_step)}</pre>\n'
+                f'<b>Remaining size: </b><pre>{round_(remaining_size, self._bot.price_step)}</pre>\n'
+                f'<b>Price: </b><pre>{round_(price, self._bot.price_step)}</pre>\n'
+                f'<b>Fee: </b><pre>{round_(fee, self._bot.price_step)} {self._bot.margin_coin} ({round_(fee/realized_pnl * 100, self._bot.price_step)}%)</pre>')
 
     def show_config(self, update=None, context=None):
         try:
