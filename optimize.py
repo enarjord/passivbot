@@ -98,10 +98,10 @@ def iter_slices(data, sliding_window_days: float, ticks_to_prepend: int = 0, min
         yield ds
 
 
-def objective_function(analysis: dict, config: dict) -> float:
+def objective_function(analysis: dict, config: dict, metric='adjusted_daily_gain') -> float:
     if analysis['n_fills'] == 0:
         return -1.0
-    return (analysis['adjusted_daily_gain']
+    return (analysis[metric]
             * min(1.0, config["maximum_hrs_no_fills"] / analysis["max_hrs_no_fills"])
             * min(1.0, config["maximum_hrs_no_fills_same_side"] / analysis["max_hrs_no_fills_same_side"])
             * min(1.0, analysis["closest_bkr"] / config["minimum_bankruptcy_distance"]))
@@ -111,9 +111,9 @@ def single_sliding_window_run(config, data, do_print=False) -> (float, [dict]):
     analyses = []
     objective = 0.0
     n_days = config['n_days']
-    sliding_window_days = max([config['maximum_hrs_no_fills'] / 24,
-                               config['maximum_hrs_no_fills_same_side'] / 24,
-                               config['sliding_window_days']]) * 1.05
+    sliding_window_days = min(n_days, max([config['maximum_hrs_no_fills'] / 24,
+                                           config['maximum_hrs_no_fills_same_side'] / 24,
+                                           config['sliding_window_days']]) * 1.05)
     analyses = []
     for z, data_slice in enumerate(iter_slices(data, sliding_window_days,
                                                ticks_to_prepend=int(config['max_span']),
