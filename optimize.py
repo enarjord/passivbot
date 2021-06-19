@@ -111,6 +111,7 @@ def single_sliding_window_run(config, data, do_print=False) -> (float, [dict]):
     analyses = []
     objective = 0.0
     n_days = config['n_days']
+    metric = config['metric'] if 'metric' in config else 'adjusted_daily_gain'
     sliding_window_days = min(n_days, max([config['maximum_hrs_no_fills'] / 24,
                                            config['maximum_hrs_no_fills_same_side'] / 24,
                                            config['sliding_window_days']]) * 1.05)
@@ -130,7 +131,7 @@ def single_sliding_window_run(config, data, do_print=False) -> (float, [dict]):
         _, analysis = analyze_fills(fills, {**config, **{'lowest_eqbal_ratio': info[1], 'closest_bkr': info[2]}},
                                     data_slice[2][int(config['max_span'])],
                                     data_slice[2][-1])
-        analysis['score'] = objective_function(analysis, config) * (analysis['n_days'] / config['n_days'])
+        analysis['score'] = objective_function(analysis, config, metric=metric) * (analysis['n_days'] / config['n_days'])
         analyses.append(analysis)
         objective = np.mean([e['score'] for e in analyses]) * max(1.01, config['reward_multiplier_base']) ** (z + 1)
         analyses[-1]['objective'] = objective
@@ -266,7 +267,7 @@ async def main():
     print()
     for k in (keys := ['exchange', 'symbol', 'starting_balance', 'start_date', 'end_date', 'latency_simulation_ms',
                        'do_long', 'do_shrt', 'minimum_bankruptcy_distance', 'maximum_hrs_no_fills',
-                       'maximum_hrs_no_fills_same_side', 'iters', 'n_particles', 'sliding_window_days',
+                       'maximum_hrs_no_fills_same_side', 'iters', 'n_particles', 'sliding_window_days', 'metric',
                        'min_span', 'max_span', 'n_spans']):
         if k in config:
             print(f"{k: <{max(map(len, keys)) + 2}} {config[k]}")
