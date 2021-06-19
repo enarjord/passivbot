@@ -1,4 +1,6 @@
 import pyswarms as ps
+import asyncio
+import aiomultiprocess
 from multiprocessing import shared_memory, Lock
 from collections import OrderedDict
 from backtest import backtest
@@ -21,6 +23,86 @@ import asyncio
 
 lock = Lock()
 BEST_OBJECTIVE = 0.0
+
+
+async def aiowrap(func, args=()):
+    result = await aiomultiprocess.Worker(target=func, args=args)
+    return result
+
+
+class Worker:
+    def __init__(self, data, config):
+        self.data = data
+        self.config = config
+        self.expanded_ranges = get_expanded_ranges(config)
+        for k in list(self.expanded_ranges):
+            if self.expanded_ranges[k][0] == self.expanded_ranges[k][1]:
+                del self.expanded_ranges[k]
+        self.bounds = get_bounds(self.expanded_ranges)
+        self.result = None
+        self.done = True
+        self.idle = True
+
+    async def run_task(self, candidate):
+        self.done = False
+        self.idle = False
+        config = self.candidate_to_config(candidate)
+        self.result = single_sliding_window_run(config, self.data)
+        self.done = True
+
+    def process_result(self):
+        result = self.result.copy()
+        self.result = None
+        return result
+
+    def config_to_xs(self, config):
+        xs = np.zeros(len(self.bounds[0]))
+        unpacked = unpack_config(config)
+        for i, k in enumerate(self.expanded_ranges):
+            xs[i] = unpacked[k]
+        return xs
+    
+    def xs_to_config(self, xs):
+        config = self.config.copy()
+        for i, k in enumerate(self.expanded_ranges):
+            config[k] = xs[i]
+        return numpyize(denanify(pack_config(config)))
+    
+    def rf(self, xss):
+        return np.array([self.single_rf(xs) for xs in xss])
+
+    def single_rf(self, xs):
+        config = self.xs_to_config(xs)
+        objective, analyses = single_sliding_window_run(config, self.data)
+        return -objective
+
+
+def dump_result(result):
+    pass
+
+
+def custom_pso(data, config):
+    workers = {i: Worker(data, config) for i in range(config['num_cpus'])}
+    results = []
+    k = 0
+    while True:
+        if k >= config['iters']:
+            break
+        for worker in workers:
+            if worker.idle:
+                asyncio.create_task(worker.run_task(candidate))
+                pass
+            elif worker.done:
+                result = worker.process_result()
+                results.append(result)
+                if result['objective'] > best_objective:
+                    best_objective = result['objective']
+                    best_result = result
+                dump_result(result)
+                k += 1
+                worker.idle = True
+        await asyncio.sleep(0.01)
+
 
 
 def get_bounds(ranges: dict) -> tuple:     

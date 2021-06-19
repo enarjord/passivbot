@@ -142,12 +142,12 @@ def calc_available_margin(balance,
     if long_pprice and long_psize:
         long_psize_real = long_psize * c_mult
         equity += calc_long_pnl(long_pprice, last_price, long_psize_real, inverse, c_mult)
-        used_margin += qty_to_cost(long_psize_real, long_pprice, inverse, c_mult) / max_leverage
+        used_margin += qty_to_cost(long_psize_real, long_pprice, inverse, c_mult)
     if shrt_pprice and shrt_psize:
         shrt_psize_real = shrt_psize * c_mult
         equity += calc_shrt_pnl(shrt_pprice, last_price, shrt_psize_real, inverse, c_mult)
-        used_margin += qty_to_cost(shrt_psize_real, shrt_pprice, inverse, c_mult) / max_leverage
-    return max(0.0, equity - used_margin)
+        used_margin += qty_to_cost(shrt_psize_real, shrt_pprice, inverse, c_mult)
+    return max(0.0, equity * max_leverage - used_margin)
 
 
 @njit
