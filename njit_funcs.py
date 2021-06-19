@@ -197,9 +197,11 @@ def calc_long_orders(balance,
                      markup_MAr_coeffs) -> ((float, float, float, float, str), (float, float, float, float, str)):
     entry_price = min(highest_bid, round_dn(MA_band_lower * (iprc_const + eqf(MA_ratios, iprc_MAr_coeffs)), price_step))
     if long_psize == 0.0:
-        entry_qty = max(calc_min_entry_qty(entry_price, inverse, qty_step, min_qty, min_cost),
-                        round_dn(cost_to_qty(balance, entry_price, inverse, c_mult) *
-                                 (iqty_const + eqf(MA_ratios, iqty_MAr_coeffs)), qty_step))
+        min_entry_qty = calc_min_entry_qty(entry_price, inverse, qty_step, min_qty, min_cost)
+        max_entry_qty = cost_to_qty(min(balance * (leverage + max(0.0, stop_psize_pct)), available_margin),
+                                    entry_price, inverse, c_mult)
+        base_entry_qty = cost_to_qty(balance, entry_price, inverse, c_mult) * (iqty_const + eqf(MA_ratios, iqty_MAr_coeffs))
+        entry_qty = max(min_entry_qty, round_dn(min(max_entry_qty, base_entry_qty), qty_step))
         entry_type = 'long_ientry'
         long_close = (0.0, 0.0, 0.0, 0.0, 'long_nclose')
     elif long_psize > 0.0:
@@ -273,9 +275,11 @@ def calc_shrt_orders(balance,
                      markup_MAr_coeffs) -> ((float, float, float, float, str), [(float, float, float, float, str)]):
     entry_price = max(lowest_ask, round_up(MA_band_upper * (iprc_const + eqf(MA_ratios, iprc_MAr_coeffs)), price_step))
     if shrt_psize == 0.0:
-        entry_qty = max(calc_min_entry_qty(entry_price, inverse, qty_step, min_qty, min_cost),
-                        round_dn(cost_to_qty(balance, entry_price, inverse, c_mult) *
-                                 (iqty_const + eqf(MA_ratios, iqty_MAr_coeffs)), qty_step))
+        min_entry_qty = calc_min_entry_qty(entry_price, inverse, qty_step, min_qty, min_cost)
+        max_entry_qty = cost_to_qty(min(balance * (leverage + max(0.0, stop_psize_pct)), available_margin),
+                                    entry_price, inverse, c_mult)
+        base_entry_qty = cost_to_qty(balance, entry_price, inverse, c_mult) * (iqty_const + eqf(MA_ratios, iqty_MAr_coeffs))
+        entry_qty = max(min_entry_qty, round_dn(min(max_entry_qty, base_entry_qty), qty_step))
         entry_type = 'shrt_ientry'
         shrt_close = (0.0, 0.0, 0.0, 0.0, 'shrt_nclose')
     elif shrt_psize < 0.0:
