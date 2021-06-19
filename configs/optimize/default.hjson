@@ -3,9 +3,9 @@
   iters: 10000
   num_cpus: 4
   options: {"c1": 1.4962, "c2": 1.4962, "w": 0.7298}
-  n_particles: 24
+  n_particles: 48
 
-  minimum_bankruptcy_distance: 0.2
+  minimum_bankruptcy_distance: 0.15
   maximum_hrs_no_fills: 72.0
   maximum_hrs_no_fills_same_side: 144.0
 
@@ -16,6 +16,8 @@
   # where z is enumerator of slices
   # if objective becomes too large, reduce reward_multiplier_base to some num > 1.0
   reward_multiplier_base: 1.2
+
+  metric: adjusted_daily_gain
 
   # set to 0.0 to disable breaking early
   break_early_factor: 0.15
@@ -31,19 +33,19 @@
     MAr_coeffs: [-0.0, 0.0]
     PBr_coeffs: [-0.5, 0.5]
 
-    long£stop_psize_pct: [0.0, 1.0]
+    long£stop_psize_pct: [-0.1, 1.0]
     long£leverage: [0.1, 15.0]
-    long£iqty_const: [0.0, 1.0]
+    long£iqty_const: [0.0, 3.0]
     long£iprc_const: [0.95, 1.0]
-    long£rqty_const: [0.0, 4.0]
+    long£rqty_const: [0.0, 3.0]
     long£rprc_const: [0.95, 1.0]
     long£markup_const: [1.0, 1.05]
 
-    shrt£stop_psize_pct: [0.0, 1.0]
+    shrt£stop_psize_pct: [-0.1, 1.0]
     shrt£leverage: [0.1, 15.0]
-    shrt£iqty_const: [0.0, 1.0]
+    shrt£iqty_const: [0.0, 3.0]
     shrt£iprc_const: [1.0, 1.05]
-    shrt£rqty_const: [0.0, 4.0]
+    shrt£rqty_const: [0.0, 3.0]
     shrt£rprc_const: [1.0, 1.05]
     shrt£markup_const: [0.95, 1.0]
   }
