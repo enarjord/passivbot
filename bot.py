@@ -229,9 +229,9 @@ class Bot:
 
     def update_position(self, long: dict = None, short: dict = None):
         self.position_lock.acquire()
-        if long:
+        if long is not None:
             self.position['LONG'] = long
-        if short:
+        if short is not None:
             self.position['SHORT'] = short
         self.position_lock.release()
 
