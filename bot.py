@@ -94,7 +94,7 @@ class Bot:
         self.stop_websocket = False
         self.process_websocket_ticks = True
 
-        self.base_endpoint = 'https://fapi.binance.com'
+        self.base_endpoint = 'https://testnet.binancefuture.com/'  # 'https://fapi.binance.com'
         self.endpoints = {
             'listenkey': '/fapi/v1/listenKey',
             'position': '/fapi/v2/positionRisk',
@@ -111,7 +111,7 @@ class Bot:
             'margin_type': '/fapi/v1/marginType',
             'leverage': '/fapi/v1/leverage',
             'position_side': '/fapi/v1/positionSide/dual',
-            'websocket': 'wss://fstream.binance.com/ws/'
+            'websocket': 'wss://stream.binancefuture.com/ws/'  # 'wss://fstream.binance.com/ws/'
         }
         self.listen_updater = None
 
@@ -505,3 +505,17 @@ class Bot:
     async def decide(self):
         if True:
             pass
+
+
+async def start_bot(bot):
+    await asyncio.gather(bot.start_listen_update(), bot.start_user_data(), bot.start_websocket())
+
+
+async def main() -> None:
+    bot = Bot({'symbol': 'BTCUSDT', 'user': 'binance', 'exchange': 'binance', 'percent': 0.1, 'leverage': 20})
+    await bot.init()
+    await start_bot(bot)
+
+
+if __name__ == '__main__':
+    asyncio.run(main())
