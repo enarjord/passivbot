@@ -3,7 +3,7 @@ import datetime
 import hashlib
 import hmac
 import json
-from threading import Thread, Lock, Timer
+from threading import Lock
 from time import time
 from urllib.parse import urlencode
 
@@ -153,9 +153,6 @@ class Bot:
                 except AttributeError:
                     self.min_cost = self.config['min_cost'] = 0.0
                 break
-
-        self.user_thread = Thread(target=self.start_user_data)
-        self.user_thread.start()
 
     async def reset(self):
         self.balance_lock.acquire()
@@ -391,10 +388,6 @@ class Bot:
                 await self.reset()
                 self.listenKey = await self.private_post(self.endpoints['listenkey'], {})
                 self.listenKey = self.listenKey['listenKey']
-                if self.listen_updater:
-                    self.listen_updater.cancel()
-                self.listen_updater = Timer(60, self.update_listen)
-                self.listen_updater.start()
                 async with websockets.connect(self.endpoints['websocket'] + self.listenKey) as ws:
                     async for msg in ws:
                         if msg is None:
