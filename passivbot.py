@@ -417,7 +417,7 @@ class Bot:
                            for fill in new_shrt_entries)
                 # volume weighted average price
                 vwap = qty_sum / cost if self.inverse else cost / qty_sum
-                fee = sum([fill['fee_paid'] for fill in new_shrt_closes])
+                fee = sum([fill['fee_paid'] for fill in new_shrt_entries])
                 total_size = self.position['shrt']['size']
                 self.telegram.notify_entry_order_filled(position_side='short', qty=qty_sum, fee=fee, price=vwap, total_size=total_size)
 
@@ -435,7 +435,7 @@ class Bot:
                 vwap = qty_sum / cost if self.inverse else cost / qty_sum
                 fee = sum([fill['fee_paid'] for fill in new_long_closes])
                 total_size = self.position['long']['size']
-                self.telegram.notify_close_order_filled(realized_pnl=realized_pnl_long, position_side='short',
+                self.telegram.notify_close_order_filled(realized_pnl=realized_pnl_long, position_side='long',
                                                         qty=qty_sum, fee=fee,
                                                         wallet_balance=self.position['wallet_balance'],
                                                         remaining_size=total_size, price=vwap)
@@ -458,8 +458,8 @@ class Bot:
                            for fill in new_long_entries)
                 # volume weighted average price
                 vwap = qty_sum / cost if self.inverse else cost / qty_sum
-                fee = sum([fill['fee_paid'] for fill in new_long_closes])
-                total_size = self.position['shrt']['size']
+                fee = sum([fill['fee_paid'] for fill in new_long_entries])
+                total_size = self.position['long']['size']
                 self.telegram.notify_entry_order_filled(position_side='long', qty=qty_sum, fee=fee, price=vwap, total_size=total_size)
 
     async def update_output_information(self):
