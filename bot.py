@@ -5,10 +5,10 @@ import hmac
 import json
 from threading import Lock
 from time import time
+from typing import Union
 from urllib.parse import urlencode
 
 import aiohttp
-import numpy as np
 import websockets
 
 from functions import sort_dict_keys, print_, load_key_secret, load_config, add_or_append
@@ -372,38 +372,28 @@ class Bot:
         return await self.private_post(self.endpoints['leverage'],
                                        {'symbol': self.symbol, 'leverage': int(self.config['leverage'])})
 
-    async def execute_order(self, order: dict) -> dict:
+    async def execute_order(self, order: dict) -> Union[dict, bool]:
         params = {'symbol': self.symbol,
                   'side': order['side'].upper(),
-                  'positionSide': order['position_side'].replace('shrt', 'short').upper(),
+                  'positionSide': order['positionSide'].upper(),
                   'type': order['type'].upper(),
-                  'quantity': str(order['qty'])}
+                  'quantity': str(order['quantity'])}
         if params['type'] == 'LIMIT':
             params['timeInForce'] = 'GTX'
             params['price'] = str(order['price'])
-        if 'custom_id' in order:
-            params['newClientOrderId'] = \
-                f"{order['custom_id']}_{str(int(time() * 1000))[8:]}_{int(np.random.random() * 1000)}"
         o = await self.private_post(self.endpoints['create_order'], params)
-        if 'side' in o:
-            return {'symbol': self.symbol,
-                    'side': o['side'].lower(),
-                    'position_side': o['positionSide'].lower().replace('short', 'shrt'),
-                    'type': o['type'].lower(),
-                    'qty': float(o['origQty']),
-                    'price': float(o['price'])}
-        else:
+        if 'code' in o:
             return o
-
-    async def execute_cancellation(self, order: dict) -> [dict]:
-        cancellation = await self.private_delete(self.endpoints['cancel_order'],
-                                                 {'symbol': self.symbol, 'orderId': order['order_id']})
-        if 'side' in cancellation:
-            return {'symbol': self.symbol, 'side': cancellation['side'].lower(),
-                    'position_side': cancellation['positionSide'].lower().replace('short', 'shrt'),
-                    'qty': float(cancellation['origQty']), 'price': float(cancellation['price'])}
         else:
-            return cancellation
+            return True
+
+    async def execute_cancellation(self, order: dict) -> Union[dict, bool]:
+        c = await self.private_delete(self.endpoints['cancel_order'],
+                                      {'symbol': self.symbol, 'orderId': order['orderId']})
+        if 'code' in c:
+            return c
+        else:
+            return True
 
     async def create_orders(self, orders_to_create: [dict]) -> [dict]:
         if not orders_to_create:
