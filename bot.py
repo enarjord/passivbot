@@ -315,8 +315,6 @@ class Bot:
     async def start_listen_update(self) -> None:
         while True:
             await asyncio.sleep(60)
-            self.listenKey = await self.private_post(self.endpoints['listenkey'], {})
-            self.listenKey = self.listenKey['listenKey']
             if self.listenKey:
                 await self.private_put(self.endpoints['listenkey'], {})
             else:
