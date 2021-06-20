@@ -201,9 +201,9 @@ class Bot:
                      # 'liquidation_price': float(p['liquidationPrice']),
                      # 'leverage': float(p['leverage']),
                      'upnl': float(p['unRealizedProfit'])}
-                if p['positionSide'] == 'LONG':
+                if p['positionSide'] == 'LONG' and float(p['positionAmt']) != 0.0:
                     long = d
-                elif p['positionSide'] == 'SHORT':
+                elif p['positionSide'] == 'SHORT' and float(p['positionAmt']) != 0.0:
                     short = d
         self.update_position(long, short)
 
