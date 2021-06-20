@@ -316,7 +316,11 @@ class Bot:
         while True:
             await asyncio.sleep(60)
             if self.listenKey:
-                await self.private_put(self.endpoints['listenkey'], {})
+                try:
+                    await self.private_put(self.endpoints['listenkey'], {})
+                except Exception as e_listen:
+                    print('Could not refresh listen key')
+                    print(e_listen)
             else:
                 try:
                     tmp = await self.private_post(self.endpoints['listenkey'], {})
@@ -352,19 +356,20 @@ class Bot:
                 await asyncio.sleep(5)
 
     async def start_websocket(self) -> None:
-        async with websockets.connect(self.endpoints['websocket'] + f"{self.symbol.lower()}@kline_1m") as ws:
-            async for msg in ws:
-                if msg is None:
-                    continue
-                try:
-                    msg = json.loads(msg)
-                    print(msg)
-                    if msg['k']['x']:
-                        print('Kline closed, do something')
-                        asyncio.create_task(self.decide())
-                except Exception as e:
-                    if 'success' not in msg:
-                        print('error in websocket', e, msg)
+        while True:
+            async with websockets.connect(self.endpoints['websocket'] + f"{self.symbol.lower()}@kline_1m") as ws:
+                async for msg in ws:
+                    if msg is None:
+                        continue
+                    try:
+                        msg = json.loads(msg)
+                        print(msg)
+                        if msg['k']['x']:
+                            print('Kline closed, do something')
+                            asyncio.create_task(self.decide())
+                    except Exception as e:
+                        if 'success' not in msg:
+                            print('error in websocket', e, msg)
 
     async def execute_leverage_change(self):
         return await self.private_post(self.endpoints['leverage'],
