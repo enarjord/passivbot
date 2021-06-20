@@ -471,7 +471,8 @@ async def start_bot(bot):
 
 
 async def main() -> None:
-    bot = Bot({'symbol': 'BTCUSDT', 'user': 'binance', 'exchange': 'binance', 'percent': 0.1, 'leverage': 20})
+    config = load_config('configs/test.hjson')
+    bot = Bot(config)
     await bot.init()
     await start_bot(bot)
 
