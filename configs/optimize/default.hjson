@@ -31,8 +31,8 @@
     min_span: [4000.0, 20000.0]
     max_span: [80000.0, 460000.0]
     MAr_coeffs: [-0.0, 0.0]
-    PBr_coeffs: [-0.5, 0.5]
 
+    long£rprc_PBr_coeffs: [-1.0, 0.1]
     long£stop_psize_pct: [-0.1, 1.0]
     long£leverage: [0.1, 15.0]
     long£iqty_const: [0.0, 3.0]
@@ -41,6 +41,7 @@
     long£rprc_const: [0.95, 1.0]
     long£markup_const: [1.0, 1.05]
 
+    shrt£rprc_PBr_coeffs: [-0.1, 1.0]
     shrt£stop_psize_pct: [-0.1, 1.0]
     shrt£leverage: [0.1, 15.0]
     shrt£iqty_const: [0.0, 3.0]

@@ -239,7 +239,7 @@ def backtest_tune(data: np.ndarray, config: dict, current_best: Union[dict, list
                             'max_hrs_no_fills_same_side',
                             'objective'],
             parameter_columns=[k for k in config['ranges']
-                               if (any(k0 in k for k0 in ['const', 'leverage', 'stop_psize_pct']) and '£' in k)
+                               if (any(k0 in k for k0 in ['const', 'leverage', 'stop_psize_pct', 'PBr']) and '£' in k)
                                or '_span' in k]),
         # if type(config[k]) == ray.tune.sample.Float
         # or type(config[k]) == ray.tune.sample.Integer]),
