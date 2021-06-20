@@ -11,8 +11,8 @@
 
   # set to 0.0 to do disable sliding windows
   # otherwise sliding window days will be max([maximum_hrs_no_fills / 24,
-                                               maximum_hrs_no_fills_same_side / 24,
-                                               sliding_window_days])
+  #                                            maximum_hrs_no_fills_same_side / 24,
+  #                                            sliding_window_days])
   sliding_window_days: 4.0
 
   # for each completed slice, objective is multiplied by reward_multiplier_base**(z + 1)
