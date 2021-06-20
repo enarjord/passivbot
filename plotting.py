@@ -15,6 +15,8 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
         return x * 100 - 100
 
     lines = []
+    lines.append(f"exchange {result['exchange'] if 'exchange' in result else 'unknown'}")
+    lines.append(f"symbol {result['symbol'] if 'symbol' in result else 'unknown'}")
     lines.append(f"gain percentage {round_dynamic(result['result']['gain'] * 100 - 100, 4)}%")
     lines.append(f"average_daily_gain percentage {round_dynamic((result['result']['average_daily_gain'] - 1) * 100, 3)}%")
     lines.append(f"closest_bkr percentage {round_dynamic(result['result']['closest_bkr'] * 100, 4)}%")
