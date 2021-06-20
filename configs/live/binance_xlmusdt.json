@@ -1,4 +1,4 @@
-{"config_name": "long_only_183_days_adg2.12%_closest_bankruptcy23%",
+{"config_name": "xlmusdt_long_only_183_days_adg2.12%_closest_bankruptcy23%",
  "logging_level": 0,
  "long": {"enabled": true,
           "iprc_MAr_coeffs": [[0, 0], [0, 0], [0, 0]],
