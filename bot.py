@@ -348,24 +348,42 @@ class Bot:
                 break
         if 'P' in account:
             position = self.get_position()
-            last_position = None
+            last_long = None
+            last_short = None
             for p in account['P']:
                 if p['s'] == self.symbol:
                     d = {'size': float(p['pa']),
                          'price': float(p['ep']),
                          'upnl': float(p['up'])}
-                    last_position = (p['ps'].upper(), d)
-            if last_position:
-                if last_position[1]['price'] == 0.0 and position[last_position[0]]:
-                    if last_position[0] == 'LONG':
-                        self.update_position({}, None)
-                    if last_position[0] == 'SHORT':
-                        self.update_position(None, {})
-                elif last_position[1]['price'] != 0.0:
-                    if last_position[0] == 'LONG':
-                        self.update_position(last_position[1], None)
-                    if last_position[0] == 'SHORT':
-                        self.update_position(None, last_position[1])
+                    if p['ps'].upper() == 'LONG':
+                        last_long = d
+                    if p['ps'].upper() == 'SHORT':
+                        last_short = d
+            if last_long:
+                if last_long['price'] == 0.0 and position['LONG']:
+                    self.update_position({}, None)
+                elif last_long['price'] != 0.0:
+                    self.update_position(last_long, None)
+            if last_short:
+                if last_short['price'] == 0.0 and position['SHORT']:
+                    self.update_position(None, {})
+                elif last_short['price'] != 0.0:
+                    self.update_position(None, last_short)
+
+    async def start_listen_update(self) -> None:
+        while True:
+            await asyncio.sleep(60)
+            self.listenKey = await self.private_post(self.endpoints['listenkey'], {})
+            self.listenKey = self.listenKey['listenKey']
+            if self.listenKey:
+                await self.private_put(self.endpoints['listenkey'], {})
+            else:
+                try:
+                    tmp = await self.private_post(self.endpoints['listenkey'], {})
+                    self.listenKey = tmp['listenKey']
+                except Exception as e_listen:
+                    print('Could not initialize listen key')
+                    print(e_listen)
 
     async def start_user_data(self) -> None:
         while True:
