@@ -414,7 +414,11 @@ class Bot:
                 if msg is None:
                     continue
                 try:
-                    asyncio.create_task(self.decide())
+                    msg = json.loads(msg)
+                    print(msg)
+                    if msg['k']['x']:
+                        print('Kline closed, do something')
+                        asyncio.create_task(self.decide())
                 except Exception as e:
                     if 'success' not in msg:
                         print('error in websocket', e, msg)
