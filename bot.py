@@ -400,13 +400,13 @@ class Bot:
                         if msg is None:
                             continue
                         try:
+                            msg = json.loads(msg)
                             if 'e' in msg:
-                                if msg['o']['s'].upper() == self.symbol:
-                                    if msg['e'] == 'ORDER_TRADE_UPDATE':
+                                if msg['e'] == 'ORDER_TRADE_UPDATE':
+                                    if msg['o']['s'].upper() == self.symbol:
                                         await self.handle_order_update(msg['o'])
-                                    elif msg['e'] == 'ACCOUNT_UPDATE':
-                                        await self.handle_account_update(msg['a'])
-                            print(msg)
+                                elif msg['e'] == 'ACCOUNT_UPDATE':
+                                    await self.handle_account_update(msg['a'])
                         except Exception as e:
                             if 'success' not in msg:
                                 print('error in websocket', e, msg)
