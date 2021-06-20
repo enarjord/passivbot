@@ -45,7 +45,10 @@ def get_expanded_ranges(config: dict) -> dict:
 
 def create_config(config: dict) -> dict:
     updated_ranges = get_expanded_ranges(config)
-    unpacked = unpack_config(get_template_live_config(config['n_spans']))
+    template = get_template_live_config(config['n_spans'])
+    template['long']['enabled'] = config['do_long']
+    template['shrt']['enabled'] = config['do_shrt']
+    unpacked = unpack_config(template)
     for k in updated_ranges:
         if updated_ranges[k][0] == updated_ranges[k][1]:
             unpacked[k] = updated_ranges[k][0]

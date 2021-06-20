@@ -10,7 +10,10 @@
   maximum_hrs_no_fills_same_side: 144.0
 
   # set to 0.0 to do disable sliding windows
-  sliding_window_days: 11.0
+  # otherwise sliding window days will be max([maximum_hrs_no_fills / 24,
+                                               maximum_hrs_no_fills_same_side / 24,
+                                               sliding_window_days])
+  sliding_window_days: 4.0
 
   # for each completed slice, objective is multiplied by reward_multiplier_base**(z + 1)
   # where z is enumerator of slices
@@ -24,6 +27,10 @@
 
   # ema settings
   n_spans: 3
+
+  # will override any starting configs' long/shrt enabled parameter
+  do_long: true
+  do_shrt: true
 
   # If lower and upper bound are set to same value, it's treated as a fixed variable.
   ranges:

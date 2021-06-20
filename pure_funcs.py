@@ -395,8 +395,20 @@ def analyze_fills(fills: list, bc: dict, first_ts: float, last_ts: float) -> (pd
     longs = fdf[fdf.type.str.contains('long')]
     shrts = fdf[fdf.type.str.contains('shrt')]
 
-    long_stuck = np.max(np.diff([first_ts] + list(longs.timestamp) + [last_ts])) / (1000 * 60 * 60) if len(longs) > 0 else 1000.0
-    shrt_stuck = np.max(np.diff([first_ts] + list(shrts.timestamp) + [last_ts])) / (1000 * 60 * 60) if len(shrts) > 0 else 1000.0
+    if bc['do_long']:
+        if len(longs) > 0:
+            long_stuck = np.max(np.diff([first_ts] + list(longs.timestamp) + [last_ts])) / (1000 * 60 * 60)
+        else:
+            long_stuck = 1000.0
+    else:
+        long_stuck = 0.0
+    if bc['do_shrt']:
+        if len(shrts) > 0:
+            shrt_stuck = np.max(np.diff([first_ts] + list(shrts.timestamp) + [last_ts])) / (1000 * 60 * 60)
+        else:
+            shrt_stuck = 1000.0
+    else:
+        shrt_stuck = 0.0
 
     result = {
         'starting_balance': bc['starting_balance'],
