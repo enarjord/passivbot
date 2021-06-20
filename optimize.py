@@ -84,7 +84,7 @@ def iter_slices(data, sliding_window_days: float, ticks_to_prepend: int = 0, min
     span_ms = data[2][-1] - data[2][0]
     if min(span_ms, sliding_window_ms) < minimum_ms:
         raise Exception('time span too short')
-    if sliding_window_ms > span_ms:
+    if sliding_window_ms > span_ms * 0.999:
         yield data
         return
     n_windows = int(np.ceil(span_ms / sliding_window_ms)) + 1
@@ -112,9 +112,12 @@ def single_sliding_window_run(config, data, do_print=False) -> (float, [dict]):
     objective = 0.0
     n_days = config['n_days']
     metric = config['metric'] if 'metric' in config else 'adjusted_daily_gain'
-    sliding_window_days = min(n_days, max([config['maximum_hrs_no_fills'] / 24,
-                                           config['maximum_hrs_no_fills_same_side'] / 24,
-                                           config['sliding_window_days']]) * 1.05)
+    if config['sliding_window_days'] == 0.0:
+        sliding_window_days = n_days
+    else:
+        sliding_window_days = min(n_days, max([config['maximum_hrs_no_fills'] / 24,
+                                               config['maximum_hrs_no_fills_same_side'] / 24,
+                                               config['sliding_window_days']]) * 1.05)
     analyses = []
     for z, data_slice in enumerate(iter_slices(data, sliding_window_days,
                                                ticks_to_prepend=int(config['max_span']),
