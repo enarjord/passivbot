@@ -17,18 +17,8 @@ from functions import sort_dict_keys, print_, load_key_secret, load_config, add_
 class Bot:
     def __init__(self, config: dict):
         self.config = config
-        self.reentry_grid = {'DCA1': (0.6, 1.0),
-                             'DCA2': (0.6, 1.0),
-                             'DCA3': (1.4, 3.0),
-                             'DCA4': (1.7, 2.0),
-                             'DCA5': (2.3, 2.0),
-                             'DCA6': (3.4, 2.2)}
-
-        self.tp_grid = {'TP1': (0.2, 1.0),
-                        'TP2': (0.2, 1.0),
-                        'TP3': (0.2, 1.0),
-                        'TP4': (0.2, 1.0),
-                        'TP5': (0.2, 1.0)}
+        self.reentry_grid = config['reentry_grid']
+        self.tp_grid = config['tp_grid']
 
         self.symbol = config['symbol']
         if 'USDT' in self.symbol:
