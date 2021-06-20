@@ -11,45 +11,7 @@ import aiohttp
 import numpy as np
 import websockets
 
-
-def sort_dict_keys(d):
-    if type(d) == list:
-        return [sort_dict_keys(e) for e in d]
-    if type(d) != dict:
-        return d
-    return {key: sort_dict_keys(d[key]) for key in sorted(d)}
-
-
-def ts_to_date(timestamp: float) -> str:
-    return str(datetime.datetime.fromtimestamp(timestamp)).replace(' ', 'T')
-
-
-def print_(args, r=False, n=False):
-    line = ts_to_date(time())[:19] + '  '
-    str_args = '{} ' * len(args)
-    line += str_args.format(*args)
-    if n:
-        print('\n' + line, end=' ')
-    elif r:
-        print('\r' + line, end=' ')
-    else:
-        print(line)
-    return line
-
-
-def load_key_secret(exchange: str, user: str) -> (str, str):
-    try:
-        keyfile = json.load(open('api-keys.json'))
-        # Checks that the user exists, and it is for the correct exchange
-        if user in keyfile and keyfile[user]["exchange"] == exchange:
-            keyList = [str(keyfile[user]["key"]), str(keyfile[user]["secret"])]
-            return keyList
-        elif user not in keyfile or keyfile[user]["exchange"] != exchange:
-            print("Looks like the keys aren't configured yet, or you entered the wrong username!")
-        raise Exception('API KeyFile Missing!')
-    except FileNotFoundError:
-        print("File Not Found!")
-        raise Exception('API KeyFile Missing!')
+from functions import sort_dict_keys, print_, load_key_secret, load_config, add_or_append
 
 
 class Bot:
@@ -312,13 +274,6 @@ class Bot:
     async def private_delete(self, url: str, params: dict = {}) -> dict:
         return await self.private_('delete', url, params)
 
-    def add_or_append(self, dict, key, value):
-        if key in dict:
-            dict[key].append(value)
-        else:
-            dict[key] = [value]
-        return dict
-
     async def handle_order_update(self, order):
         d = {'order_id': int(order['i']),
              'price': float(order['p']),
@@ -330,12 +285,12 @@ class Bot:
         delete_orders = {}
         if order['X'] in ['CANCELED', 'FILLED', 'EXPIRED', 'NEW_INSURANCE',
                           'NEW_ADL']:
-            delete_orders = self.add_or_append(delete_orders, order['ps'].upper(), d)
+            delete_orders = add_or_append(delete_orders, order['ps'].upper(), d)
         if order['X'] in ['NEW']:
-            add_orders = self.add_or_append(add_orders, order['ps'].upper(), d)
+            add_orders = add_or_append(add_orders, order['ps'].upper(), d)
         if order['X'] in ['PARTIALLY_FILLED']:
-            delete_orders = self.add_or_append(delete_orders, order['ps'].upper(), d)
-            add_orders = self.add_or_append(add_orders, order['ps'].upper(), d)
+            delete_orders = add_or_append(delete_orders, order['ps'].upper(), d)
+            add_orders = add_or_append(add_orders, order['ps'].upper(), d)
         self.update_orders(add_orders, delete_orders)
 
     async def handle_account_update(self, account):
