@@ -157,8 +157,13 @@ def single_sliding_window_run(config, data, do_print=False) -> (float, [dict]):
                 line += f"broke on max_hrs_no_fills_ss {analysis['max_hrs_no_fills_same_side']:.4f}, {config['maximum_hrs_no_fills_same_side']}, {bef}"
                 print(line)
                 break
-            if analysis['average_daily_gain'] < 1.0:
+            if analysis['average_daily_gain'] < 0.996:
                 line += f"broke on low adg {analysis['average_daily_gain']:.4f} "
+                print(line)
+                break
+            mean_adg = np.mean([e['average_daily_gain'] for e in analyses])
+            if z > 2 and mean_adg < 1.0:
+                line += f"broke on low mean adg {mean_adg:.4f} "
                 print(line)
                 break
         print(line)
