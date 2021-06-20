@@ -78,12 +78,9 @@ def iter_slices_full_first(data, sliding_window_days, ticks_to_prepend, minimum_
         yield d
 
 
-def iter_slices(data, sliding_window_days: float, ticks_to_prepend: int = 0, minimum_days: float = 7.0):
+def iter_slices(data, sliding_window_days: float, ticks_to_prepend: int = 0):
     sliding_window_ms = sliding_window_days * 24 * 60 * 60 * 1000
-    minimum_ms = minimum_days * 24 * 60 * 60 * 1000
     span_ms = data[2][-1] - data[2][0]
-    if min(span_ms, sliding_window_ms) < minimum_ms:
-        raise Exception('time span too short')
     if sliding_window_ms > span_ms * 0.999:
         yield data
         return
@@ -94,7 +91,7 @@ def iter_slices(data, sliding_window_days: float, ticks_to_prepend: int = 0, min
         start_i = max(0, int(np.argmax(data[2] >= threshold_ms) - ticks_to_prepend))
         end_i = min(len(data[2]) - 1, int(np.argmax(data[2] >= threshold_ms + sliding_window_ms)))
         yield tuple(d[start_i:end_i] for d in data)
-    for ds in iter_slices(data, sliding_window_days * 2, ticks_to_prepend, minimum_days):
+    for ds in iter_slices(data, sliding_window_days * 2, ticks_to_prepend):
         yield ds
 
 
@@ -117,11 +114,10 @@ def single_sliding_window_run(config, data, do_print=False) -> (float, [dict]):
     else:
         sliding_window_days = min(n_days, max([config['maximum_hrs_no_fills'] / 24,
                                                config['maximum_hrs_no_fills_same_side'] / 24,
-                                               config['sliding_window_days']]) * 1.05)
+                                               config['sliding_window_days']]))
     analyses = []
     for z, data_slice in enumerate(iter_slices(data, sliding_window_days,
-                                               ticks_to_prepend=int(config['max_span']),
-                                               minimum_days=sliding_window_days * 0.95)):
+                                               ticks_to_prepend=int(config['max_span']))):
         if len(data_slice[0]) == 0:
             print('debug b no data')
             continue
@@ -172,7 +168,7 @@ def single_sliding_window_run(config, data, do_print=False) -> (float, [dict]):
 def simple_sliding_window_wrap(config, data, do_print=False):
     objective, analyses = single_sliding_window_run(config, data)
     tune.report(objective=objective,
-                daily_gain=np.min([r['average_daily_gain'] for r in analyses]),
+                daily_gain=np.mean([r['average_daily_gain'] for r in analyses]),
                 closest_bankruptcy=np.min([r['closest_bkr'] for r in analyses]),
                 max_hrs_no_fills=np.max([r['max_hrs_no_fills'] for r in analyses]),
                 max_hrs_no_fills_same_side=np.max([r['max_hrs_no_fills_same_side'] for r in analyses]))
