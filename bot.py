@@ -315,10 +315,12 @@ class Bot:
     async def private_delete(self, url: str, params: dict = {}) -> dict:
         return await self.private_('delete', url, params)
 
-    async def update_listen(self):
-        await self.private_put(self.endpoints['listenkey'], {})
-        self.listen_updater = Timer(60, self.update_listen)
-        self.listen_updater.start()
+    def add_or_append(self, dict, key, value):
+        if key in dict:
+            dict[key].append(value)
+        else:
+            dict[key] = [value]
+        return dict
 
     async def handle_order_update(self, order):
         d = {'order_id': int(order['i']),
@@ -327,16 +329,16 @@ class Bot:
              'type': order['o'].upper(),
              'side': order['S'].upper(),
              'timestamp': int(order['T'])}
-        add_orders = {'LONG': [], 'SHORT': []}
-        delete_orders = {'LONG': [], 'SHORT': []}
+        add_orders = {}
+        delete_orders = {}
         if order['X'] in ['CANCELED', 'FILLED', 'EXPIRED', 'NEW_INSURANCE',
                           'NEW_ADL']:
-            delete_orders[order['ps'].upper()].append(d)
+            delete_orders = self.add_or_append(delete_orders, order['ps'].upper(), d)
         if order['X'] in ['NEW']:
-            add_orders[order['ps'].upper()].append(d)
+            add_orders = self.add_or_append(add_orders, order['ps'].upper(), d)
         if order['X'] in ['PARTIALLY_FILLED']:
-            delete_orders[order['ps'].upper()].append(d)
-            add_orders[order['ps'].upper()].append(d)
+            delete_orders = self.add_or_append(delete_orders, order['ps'].upper(), d)
+            add_orders = self.add_or_append(add_orders, order['ps'].upper(), d)
         self.update_orders(add_orders, delete_orders)
 
     async def handle_account_update(self, account):
