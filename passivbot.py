@@ -9,7 +9,8 @@ from pathlib import Path
 from time import time
 from procedures import load_live_config, make_get_filepath, load_key_secret, print_
 from pure_funcs import get_xk_keys, get_ids_to_fetch, flatten, calc_indicators_from_ticks_with_gaps, \
-    drop_consecutive_same_prices, filter_orders, compress_float, create_xk, round_dynamic, denumpyize
+    drop_consecutive_same_prices, filter_orders, compress_float, create_xk, round_dynamic, denumpyize, \
+    calc_spans
 from njit_funcs import calc_orders, calc_new_psize_pprice, qty_to_cost, calc_diff, round_, calc_emas
 import numpy as np
 import websockets
@@ -71,7 +72,7 @@ class Bot:
         self.lock_file = f"{str(Path.home())}/.{self.exchange}_passivbotlock"
 
     def set_config(self, config):
-        config['spans'] = config['spans'].round().astype(int)
+        config['spans'] = calc_spans(config['min_span'], config['max_span'], config['n_spans'])
         if 'stop_mode' not in config:
             config['stop_mode'] = None
         if 'last_price_diff_limit' not in config:

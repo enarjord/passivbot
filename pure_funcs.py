@@ -125,7 +125,6 @@ def candidate_to_live_config(candidate: dict) -> dict:
     for k in live_config:
         if k not in sides and k in packed:
             live_config[k] = packed[k]
-    live_config['spans'] = calc_spans(live_config['min_span'], live_config['max_span'], live_config['n_spans'])
     name = f"{packed['symbol'].lower()}" if 'symbol' in packed else 'unknown'
     if 'n_days' in candidate:
         n_days = candidate['n_days']
