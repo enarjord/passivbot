@@ -110,8 +110,8 @@ async def fetch_market_specific_settings(user: str, exchange: str, symbol: str):
     settings_from_exchange = {}
     if exchange == 'binance':
         bot = await create_binance_bot(tmp_live_settings)
-        settings_from_exchange['maker_fee'] = 0.00018
-        settings_from_exchange['taker_fee'] = 0.00036
+        settings_from_exchange['maker_fee'] = 0.0002
+        settings_from_exchange['taker_fee'] = 0.0004
         settings_from_exchange['exchange'] = 'binance'
     elif exchange == 'bybit':
         bot = await create_bybit_bot(tmp_live_settings)
