@@ -76,7 +76,7 @@ class Bot:
         if 'stop_mode' not in config:
             config['stop_mode'] = None
         if 'last_price_diff_limit' not in config:
-            config['last_price_diff_limit'] = 0.15
+            config['last_price_diff_limit'] = 0.3
         if 'profit_trans_pct' not in config:
             config['profit_trans_pct'] = 0.0
         self.config = config
