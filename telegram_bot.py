@@ -1,5 +1,6 @@
 import json
 import os
+from procedures import load_live_config
 from datetime import datetime, timedelta
 from time import time
 
@@ -633,9 +634,9 @@ class Telegram:
 
     def _activate_config(self, config_path):
         try:
-            config = json.load(open(config_path))
+            config = load_live_config(config_path)
         except Exception:
-            self.send_msg(f"Failed to load config file {self._bot.live_config_path}")
+            self.send_msg(f"Failed to load config file {config_path}")
             self.config_reload_ts = 0.0
             return
 
