@@ -686,11 +686,11 @@ async def fetch_market_specific_settings(user: str, exchange: str, symbol: str):
 
 async def prep_config(args) -> dict:
     try:
-        bc = hjson.load(open(args.backtest_config_path))
+        bc = hjson.load(open(args.backtest_config_path, encoding='utf-8'))
     except Exception as e:
         raise Exception('failed to load backtest config', args.backtest_config_path, e)
     try:
-        oc = hjson.load(open(args.optimize_config_path))
+        oc = hjson.load(open(args.optimize_config_path, encoding='utf-8'))
     except Exception as e:
         raise Exception('failed to load optimize config', args.optimize_config_path, e)
     config = {**oc, **bc}
