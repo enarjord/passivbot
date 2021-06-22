@@ -5,15 +5,15 @@
   options: {"c1": 1.4962, "c2": 1.4962, "w": 0.7298}
   n_particles: 48
 
-  minimum_bankruptcy_distance: 0.15
+  minimum_bankruptcy_distance: 0.3
   maximum_hrs_no_fills: 72.0
   maximum_hrs_no_fills_same_side: 144.0
 
   # set to 0.0 to do disable sliding windows
-  # otherwise sliding window days will be max([maximum_hrs_no_fills / 24,
-  #                                            maximum_hrs_no_fills_same_side / 24,
+  # otherwise sliding window days will be max([maximum_hrs_no_fills / 24 * 2.1,
+  #                                            maximum_hrs_no_fills_same_side / 24 * 2.1,
   #                                            sliding_window_days])
-  sliding_window_days: 4.0
+  sliding_window_days: 7.0
 
   # for each completed slice, objective is multiplied by reward_multiplier_base**(z + 1)
   # where z is enumerator of slices
