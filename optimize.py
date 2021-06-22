@@ -116,8 +116,8 @@ def single_sliding_window_run(config, data, do_print=False) -> (float, [dict]):
         sliding_window_days = n_days
     else:
         # sliding window n days should be greater than max hrs no fills
-        sliding_window_days = min(n_days, max([config['maximum_hrs_no_fills'] * 1.5 / 24,
-                                               config['maximum_hrs_no_fills_same_side'] * 1.5 / 24,
+        sliding_window_days = min(n_days, max([config['maximum_hrs_no_fills'] * 2.1 / 24,
+                                               config['maximum_hrs_no_fills_same_side'] * 2.1 / 24,
                                                config['sliding_window_days']]))
     analyses = []
     for z, data_slice in enumerate(iter_slices(data, sliding_window_days,
