@@ -85,19 +85,13 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
     plt.savefig(f"{result['plots_dirpath']}psizes_plot.png")
 
 
-def plot_fills(df, fdf, side: int = 0, bkr_thr=0.1):
+def plot_fills(df, fdf_, side: int = 0, bkr_thr=0.1):
     plt.clf()
 
-    dfc = df.loc[fdf.index[0]:fdf.index[-1]]
+    dfc = df.loc[fdf_.index[0]:fdf_.index[-1]]
+    dfc = dfc.set_index('timestamp')
+    fdf = fdf_.set_index('timestamp')
     dfc.price.iloc[::max(1, int(len(dfc) * 0.0001))].plot(style='y-')
-    if 'stop_band_lower' in dfc.columns:
-        dfc.stop_band_lower.plot(style='c-.')
-    if 'stop_band_upper' in dfc.columns:
-        dfc.stop_band_upper.plot(style='c-.')
-    '''
-    if 'ema' in dfc.columns:
-        dfc.ema.plot(style='k-.')
-    '''
 
     if side >= 0:
         longs = fdf[fdf.type.str.contains('long')]

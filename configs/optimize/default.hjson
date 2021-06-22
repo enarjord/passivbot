@@ -5,9 +5,14 @@
   options: {"c1": 1.4962, "c2": 1.4962, "w": 0.7298}
   n_particles: 48
 
+  # set to 0.0 to disable breaking early
+  break_early_factor: 0.25
+
   minimum_bankruptcy_distance: 0.3
-  maximum_hrs_no_fills: 72.0
-  maximum_hrs_no_fills_same_side: 144.0
+  minimum_equity_balance_ratio: 0.75
+  minimum_slice_adg: 0.995
+  maximum_hrs_no_fills: 96.0
+  maximum_hrs_no_fills_same_side: 192.0
 
   # set to 0.0 to do disable sliding windows
   # otherwise sliding window days will be max([maximum_hrs_no_fills / 24 * 2.1,
@@ -22,9 +27,6 @@
 
   metric: adjusted_daily_gain
 
-  # set to 0.0 to disable breaking early
-  break_early_factor: 0.15
-
   # ema settings
   n_spans: 3
 
@@ -37,11 +39,11 @@
   {
     min_span: [4000.0, 20000.0]
     max_span: [80000.0, 460000.0]
-    MAr_coeffs: [-0.0, 0.0]
+    MAr_coeffs: [-0.05, 0.05]
 
     long£rprc_PBr_coeffs: [-1.0, 0.1]
-    long£stop_psize_pct: [-0.1, 1.0]
-    long£leverage: [0.1, 15.0]
+    long£pbr_stop_loss: [-0.1, 1.0]
+    long£pbr_limit: [0.1, 1.0]
     long£iqty_const: [0.0, 3.0]
     long£iprc_const: [0.95, 1.0]
     long£rqty_const: [0.0, 3.0]
@@ -49,8 +51,8 @@
     long£markup_const: [1.0, 1.05]
 
     shrt£rprc_PBr_coeffs: [-0.1, 1.0]
-    shrt£stop_psize_pct: [-0.1, 1.0]
-    shrt£leverage: [0.1, 15.0]
+    shrt£pbr_stop_loss: [-0.1, 1.0]
+    shrt£pbr_limit: [0.1, 1.0]
     shrt£iqty_const: [0.0, 3.0]
     shrt£iprc_const: [1.0, 1.05]
     shrt£rqty_const: [0.0, 3.0]

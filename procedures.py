@@ -54,9 +54,9 @@ async def prep_config(args) -> dict:
         json.dump(market_specific_settings, open(mss, 'w'), indent=4)
     config.update(market_specific_settings)
 
-    if 'leverage' in config['ranges']:
-        config['ranges']['leverage'][1] = min(config['ranges']['leverage'][1], config['max_leverage'])
-        config['ranges']['leverage'][0] = min(config['ranges']['leverage'][0], config['ranges']['leverage'][1])
+    if 'pbr_limit' in config['ranges']:
+        config['ranges']['pbr_limit'][1] = min(config['ranges']['pbr_limit'][1], config['max_leverage'])
+        config['ranges']['pbr_limit'][0] = min(config['ranges']['pbr_limit'][0], config['ranges']['pbr_limit'][1])
 
     return config
 

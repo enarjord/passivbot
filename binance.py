@@ -181,7 +181,7 @@ class BinanceBot(Bot):
         return await self.private_post(self.base_endpoint,
                                        self.endpoints['leverage'],
                                        {'symbol': self.symbol,
-                                        'leverage': int(round(min(self.max_leverage, max(self.xk['leverage']) * 2)))})
+                                        'leverage': int(round(min(self.max_leverage, max(self.xk['pbr_limit']) * 2)))})
 
     async def init_exchange_config(self):
         try:
@@ -385,12 +385,6 @@ class BinanceBot(Bot):
     async def transfer(self, type_: str, amount: float, asset: str = 'USDT'):
         params = {'type': type_.upper(), 'amount': amount, 'asset': asset}
         return await self.private_post(self.spot_base_endpoint, self.endpoints['transfer'],  params)
-
-    def calc_max_pos_size(self, balance: float, price: float):
-        if self.market_type == 'linear_perpetual':
-            return min((balance / price) * self.leverage, self.max_pos_size_ito_usdt / price) * 0.92
-        elif self.market_type == 'inverse_coin_margined':
-            return min((balance * price) * self.leverage, self.max_pos_size_ito_coin * price) * 0.92
 
     def standardize_websocket_ticks(self, data: dict) -> [dict]:
         try:

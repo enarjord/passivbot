@@ -5,7 +5,7 @@
           "iprc_const": 0.9805187532350037,
           "iqty_MAr_coeffs": [[0, 0], [0, 0], [0, 0]],
           "iqty_const": 1.6134458945244115,
-          "leverage": 5.0,
+          "pbr_limit": 5.0,
           "markup_MAr_coeffs": [[0, 0], [0, 0], [0, 0]],
           "markup_const": 1.0090634498077609,
           "rprc_MAr_coeffs": [[0, 0], [0, 0], [0, 0]],
@@ -13,7 +13,7 @@
           "rprc_const": 0.953420703051854,
           "rqty_MAr_coeffs": [[0, 0], [0, 0], [0, 0]],
           "rqty_const": 2.2957943240790377,
-          "stop_psize_pct": 0.9099665697917227},
+          "pbr_stop_loss": 0.9099665697917227},
  "max_span": 300551.5223096188,
  "min_span": 5647.940692799655,
  "n_spans": 3,
@@ -22,7 +22,7 @@
           "iprc_const": 1.0046461790264003,
           "iqty_MAr_coeffs": [[0, 0], [0, 0], [0, 0]],
           "iqty_const": 0.3722799572975457,
-          "leverage": 5.0,
+          "pbr_limit": 5.0,
           "markup_MAr_coeffs": [[0, 0], [0, 0], [0, 0]],
           "markup_const": 0.9620252311928779,
           "rprc_MAr_coeffs": [[0, 0], [0, 0], [0, 0]],
@@ -30,4 +30,4 @@
           "rprc_const": 1.0062984389882497,
           "rqty_MAr_coeffs": [[0, 0], [0, 0], [0, 0]],
           "rqty_const": 2.221815483277581,
-          "stop_psize_pct": 0.3334914492020602}}
+          "pbr_stop_loss": 0.3334914492020602}}

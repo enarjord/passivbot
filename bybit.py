@@ -286,12 +286,6 @@ class Bybit(Bot):
         print('fetch_fills not implemented for Bybit')
         return []
 
-    def calc_margin_cost(self, qty: float, price: float) -> float:
-        return qty / price / self.leverage
-
-    def calc_max_pos_size(self, balance: float, price: float):
-        return balance * price * self.leverage * 0.95
-
     async def init_exchange_config(self):
         try:
             # set cross mode

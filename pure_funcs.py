@@ -33,7 +33,7 @@ def calc_spans(min_span: int, max_span: int, n_spans: int) -> np.ndarray:
 
 def get_xk_keys():
     return ['inverse', 'do_long', 'do_shrt', 'qty_step', 'price_step', 'min_qty', 'min_cost', 'c_mult',
-            'max_leverage', 'spans', 'stop_psize_pct', 'leverage', 'iqty_const', 'iprc_const', 'rqty_const',
+            'max_leverage', 'spans', 'pbr_stop_loss', 'pbr_limit', 'iqty_const', 'iprc_const', 'rqty_const',
             'rprc_const', 'markup_const', 'iqty_MAr_coeffs', 'iprc_MAr_coeffs', 'rprc_PBr_coeffs',
             'rqty_MAr_coeffs', 'rprc_MAr_coeffs', 'markup_MAr_coeffs']
 
@@ -259,8 +259,8 @@ def get_template_live_config(n_spans: int, randomize_coeffs=False):
         "n_spans": n_spans,
         "long": {
             "enabled": True,
-            "stop_psize_pct": 0.05,  # % of psize for stop loss order
-            "leverage": 3.0,  # max pcost = balance * leverage
+            "pbr_stop_loss": 0.05,  # % of psize for stop loss order
+            "pbr_limit": 3.0,  # max pcost = balance * pbr_limit
             "iqty_const": 0.01,  # initial entry qty pct
             "iprc_const": 0.991,  # initial entry price ema_spread
             "rqty_const": 1.0,  # reentry qty ddown factor
@@ -281,8 +281,8 @@ def get_template_live_config(n_spans: int, randomize_coeffs=False):
         },
         "shrt": {
             "enabled": True,
-            "stop_psize_pct": 0.05,  # % of psize for stop loss order
-            "leverage": 3.0,  # max pcost = balance * leverage
+            "pbr_stop_loss": 0.05,  # % of psize for stop loss order
+            "pbr_limit": 3.0,  # max pcost = balance * pbr_limit
             "iqty_const": 0.01,  # initial entry qty pct
             "iprc_const": 1.009,  # initial entry price ema_spread
             "rqty_const": 1.0,  # reentry qty ddown factor

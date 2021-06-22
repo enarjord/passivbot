@@ -182,8 +182,8 @@ def calc_long_orders(balance,
                      min_qty,
                      min_cost,
                      c_mult,
-                     stop_psize_pct,
-                     leverage,
+                     pbr_stop_loss,
+                     pbr_limit,
                      iqty_const,
                      iprc_const,
                      rqty_const,
@@ -198,7 +198,7 @@ def calc_long_orders(balance,
     entry_price = min(highest_bid, round_dn(MA_band_lower * (iprc_const + eqf(MA_ratios, iprc_MAr_coeffs)), price_step))
     if long_psize == 0.0:
         min_entry_qty = calc_min_entry_qty(entry_price, inverse, qty_step, min_qty, min_cost)
-        max_entry_qty = cost_to_qty(min(balance * (leverage + max(0.0, stop_psize_pct)), available_margin),
+        max_entry_qty = cost_to_qty(min(balance * (pbr_limit + max(0.0, pbr_stop_loss)), available_margin),
                                     entry_price, inverse, c_mult)
         base_entry_qty = cost_to_qty(balance, entry_price, inverse, c_mult) * (iqty_const + eqf(MA_ratios, iqty_MAr_coeffs))
         entry_qty = max(min_entry_qty, round_dn(min(max_entry_qty, base_entry_qty), qty_step))
@@ -210,7 +210,7 @@ def calc_long_orders(balance,
                           round_dn(long_pprice * (rprc_const + eqf(MA_ratios, rprc_MAr_coeffs) +
                                                   eqf(np.array([pbr]), rprc_PBr_coeffs, minus=0.0)), price_step))
         min_entry_qty = calc_min_entry_qty(entry_price, inverse, qty_step, min_qty, min_cost)
-        max_entry_qty = cost_to_qty(min(balance * (leverage + max(0.0, stop_psize_pct) - pbr), available_margin),
+        max_entry_qty = cost_to_qty(min(balance * (pbr_limit + max(0.0, pbr_stop_loss) - pbr), available_margin),
                                     entry_price, inverse, c_mult)
         base_entry_qty = cost_to_qty(balance, entry_price, inverse, c_mult) * (iqty_const + eqf(MA_ratios, iqty_MAr_coeffs))
         entry_qty = round_dn(min(max_entry_qty,
@@ -218,15 +218,15 @@ def calc_long_orders(balance,
         nclose_price = round_up(long_pprice * (markup_const + eqf(MA_ratios, markup_MAr_coeffs)), price_step)
         if entry_qty < min_entry_qty:
             entry_qty = 0.0
-        if stop_psize_pct < 0.0:
+        if pbr_stop_loss < 0.0:
             # v3.6.2 behavior
             close_price = max(lowest_ask, min(nclose_price, round_up(MA_band_upper, price_step)))
             close_type = 'long_nclose' if close_price > long_pprice else 'long_sclose'
             long_close = (-long_psize, close_price, 0.0, 0.0, close_type)
         else:
             # v3.6.1 behavior
-            if pbr > leverage:
-                stop_qty = -max(min_qty, round_dn(long_psize * min(1.0, pbr - leverage), qty_step))
+            if pbr > pbr_limit:
+                stop_qty = -max(min_qty, round_dn(long_psize * min(1.0, pbr - pbr_limit), qty_step))
                 sclose_price = max(lowest_ask, round_up(MA_band_upper, price_step))
                 if sclose_price >= nclose_price:
                     long_close = (-long_psize, nclose_price, 0.0, 0.0, 'long_nclose')
@@ -260,8 +260,8 @@ def calc_shrt_orders(balance,
                      min_qty,
                      min_cost,
                      c_mult,
-                     stop_psize_pct,
-                     leverage,
+                     pbr_stop_loss,
+                     pbr_limit,
                      iqty_const,
                      iprc_const,
                      rqty_const,
@@ -276,7 +276,7 @@ def calc_shrt_orders(balance,
     entry_price = max(lowest_ask, round_up(MA_band_upper * (iprc_const + eqf(MA_ratios, iprc_MAr_coeffs)), price_step))
     if shrt_psize == 0.0:
         min_entry_qty = calc_min_entry_qty(entry_price, inverse, qty_step, min_qty, min_cost)
-        max_entry_qty = cost_to_qty(min(balance * (leverage + max(0.0, stop_psize_pct)), available_margin),
+        max_entry_qty = cost_to_qty(min(balance * (pbr_limit + max(0.0, pbr_stop_loss)), available_margin),
                                     entry_price, inverse, c_mult)
         base_entry_qty = cost_to_qty(balance, entry_price, inverse, c_mult) * (iqty_const + eqf(MA_ratios, iqty_MAr_coeffs))
         entry_qty = max(min_entry_qty, round_dn(min(max_entry_qty, base_entry_qty), qty_step))
@@ -288,7 +288,7 @@ def calc_shrt_orders(balance,
                           round_up(shrt_pprice * (rprc_const + eqf(MA_ratios, rprc_MAr_coeffs) +
                                                   eqf(np.array([pbr]), rprc_PBr_coeffs, minus=0.0)), price_step))
         min_entry_qty = calc_min_entry_qty(entry_price, inverse, qty_step, min_qty, min_cost)
-        max_entry_qty = cost_to_qty(min(balance * (leverage + max(0.0, stop_psize_pct) - pbr), available_margin),
+        max_entry_qty = cost_to_qty(min(balance * (pbr_limit + max(0.0, pbr_stop_loss) - pbr), available_margin),
                                     entry_price, inverse, c_mult)
 
         base_entry_qty = cost_to_qty(balance, entry_price, inverse, c_mult) * (iqty_const + eqf(MA_ratios, iqty_MAr_coeffs))
@@ -297,15 +297,15 @@ def calc_shrt_orders(balance,
         nclose_price = round_dn(shrt_pprice * (markup_const + eqf(MA_ratios, markup_MAr_coeffs)), price_step)
         if entry_qty < min_entry_qty:
             entry_qty = 0.0
-        if stop_psize_pct < 0.0:
+        if pbr_stop_loss < 0.0:
             # v3.6.2 behavior
             close_price = min(highest_bid, max(nclose_price, round_dn(MA_band_lower, price_step)))
             close_type = 'shrt_nclose' if close_price < shrt_pprice else 'shrt_sclose'
             shrt_close = (-shrt_psize, close_price, 0.0, 0.0, close_type)
         else:
             # v3.6.1 beahvior
-            if pbr > leverage:
-                stop_qty = max(min_qty, round_dn(-shrt_psize * min(1.0, pbr - leverage), qty_step))
+            if pbr > pbr_limit:
+                stop_qty = max(min_qty, round_dn(-shrt_psize * min(1.0, pbr - pbr_limit), qty_step))
                 stop_price = min(highest_bid, round_dn(MA_band_lower, price_step))
                 if stop_price <= nclose_price:
                     shrt_close = (-shrt_psize, nclose_price, 0.0, 0.0, 'shrt_nclose')
@@ -355,8 +355,8 @@ def calc_orders(balance,
                 c_mult,
                 max_leverage,
                 spans,
-                stop_psize_pct,
-                leverage,
+                pbr_stop_loss,
+                pbr_limit,
                 iqty_const,
                 iprc_const,
                 rqty_const,
@@ -389,8 +389,8 @@ def calc_orders(balance,
                      min_qty,
                      min_cost,
                      c_mult,
-                     stop_psize_pct[0],
-                     leverage[0],
+                     pbr_stop_loss[0],
+                     pbr_limit[0],
                      iqty_const[0],
                      iprc_const[0],
                      rqty_const[0],
@@ -418,8 +418,8 @@ def calc_orders(balance,
                      min_qty,
                      min_cost,
                      c_mult,
-                     stop_psize_pct[1],
-                     leverage[1],
+                     pbr_stop_loss[1],
+                     pbr_limit[1],
                      iqty_const[1],
                      iprc_const[1],
                      rqty_const[1],
@@ -461,8 +461,8 @@ def njit_backtest(data: (np.ndarray, np.ndarray, np.ndarray),
                   c_mult,
                   max_leverage,
                   spans,
-                  stop_psize_pct,
-                  leverage,
+                  pbr_stop_loss,
+                  pbr_limit,
                   iqty_const,
                   iprc_const,
                   rqty_const,
@@ -477,7 +477,7 @@ def njit_backtest(data: (np.ndarray, np.ndarray, np.ndarray),
 
     prices, buyer_maker, timestamps = data
     static_params = (inverse, do_long, do_shrt, qty_step, price_step, min_qty, min_cost, c_mult, max_leverage,
-                     spans, stop_psize_pct, leverage, iqty_const, iprc_const, rqty_const, rprc_const,
+                     spans, pbr_stop_loss, pbr_limit, iqty_const, iprc_const, rqty_const, rprc_const,
                      markup_const, iqty_MAr_coeffs, iprc_MAr_coeffs, rprc_PBr_coeffs, rqty_MAr_coeffs,
                      rprc_MAr_coeffs, markup_MAr_coeffs)
 
@@ -569,8 +569,8 @@ def njit_backtest(data: (np.ndarray, np.ndarray, np.ndarray),
                                                  min_qty,
                                                  min_cost,
                                                  c_mult,
-                                                 stop_psize_pct[0],
-                                                 leverage[0],
+                                                 pbr_stop_loss[0],
+                                                 pbr_limit[0],
                                                  iqty_const[0],
                                                  iprc_const[0],
                                                  rqty_const[0],
@@ -621,8 +621,8 @@ def njit_backtest(data: (np.ndarray, np.ndarray, np.ndarray),
                                                  min_qty,
                                                  min_cost,
                                                  c_mult,
-                                                 stop_psize_pct[1],
-                                                 leverage[1],
+                                                 pbr_stop_loss[1],
+                                                 pbr_limit[1],
                                                  iqty_const[1],
                                                  iprc_const[1],
                                                  rqty_const[1],

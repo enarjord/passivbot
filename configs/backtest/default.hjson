@@ -1,13 +1,13 @@
 {
   exchange: binance
-  user: account_name
+  user: ebinance
   symbol: XMRUSDT
   latency_simulation_ms: 750
   starting_balance: 100.0
 
   # format YYYY-MM-DDTHH:mm:ss
   # e.g. 2020-02-18T19:34:59
-  start_date: 2020-12-16
+  start_date: 2021-05-26
   # set end_date: -1 to use now as end date
-  end_date: 2021-06-17
+  end_date: 2021-06-22
 }

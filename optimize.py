@@ -37,7 +37,7 @@ def get_expanded_ranges(config: dict) -> dict:
             for k1 in config['ranges']:
                 if k1 in k0:
                     updated_ranges[k0] = config['ranges'][k1]
-                    if 'leverage' in k0:
+                    if 'pbr_limit' in k0:
                         updated_ranges[k0] = [updated_ranges[k0][0],
                                               min(updated_ranges[k0][1], config['max_leverage'])]
     return updated_ranges
@@ -101,10 +101,13 @@ def iter_slices(data, sliding_window_days: float, ticks_to_prepend: int = 0):
 def objective_function(analysis: dict, config: dict, metric='adjusted_daily_gain') -> float:
     if analysis['n_fills'] == 0:
         return -1.0
-    return (analysis[metric]
-            * min(1.0, config["maximum_hrs_no_fills"] / analysis["max_hrs_no_fills"])
-            * min(1.0, config["maximum_hrs_no_fills_same_side"] / analysis["max_hrs_no_fills_same_side"])
-            * min(1.0, analysis["closest_bkr"] / config["minimum_bankruptcy_distance"]))
+    return (
+        analysis[metric]
+        * min(1.0, config['maximum_hrs_no_fills'] / analysis['max_hrs_no_fills'])
+        * min(1.0, config['maximum_hrs_no_fills_same_side'] / analysis['max_hrs_no_fills_same_side'])
+        * min(1.0, analysis['closest_bkr'] / config['minimum_bankruptcy_distance'])
+        * min(1.0, analysis['lowest_eqbal_ratio'] / config['minimum_equity_balance_ratio'])
+    )
 
 
 def single_sliding_window_run(config, data, do_print=False) -> (float, [dict]):
@@ -143,21 +146,24 @@ def single_sliding_window_run(config, data, do_print=False) -> (float, [dict]):
                 f'eqbal {analysis["lowest_eqbal_ratio"]:.4f} n_days {analysis["n_days"]:.1f}, '
                 f'score {analysis["score"]:.4f}, objective {objective:.4f}, '
                 f'hrs stuck ss {str(round(analysis["max_hrs_no_fills_same_side"], 1)).zfill(4)}, ')
-        bef = config['break_early_factor']
-        if bef > 0.0:
+        if (bef := config['break_early_factor']) != 0.0:
             if analysis['closest_bkr'] < config['minimum_bankruptcy_distance'] * (1 - bef):
-                line += f"broke on min_bkr_dist {analysis['closest_bkr']:.4f}, {config['minimum_bankruptcy_distance']}, {bef}"
+                line += f"broke on min_bkr_dist {analysis['closest_bkr']:.4f}, {config['minimum_bankruptcy_distance']}"
+                print(line)
+                break
+            if analysis['lowest_eqbal_ratio'] < config['minimum_equity_balance_ratio'] * (1 - bef):
+                line += f"broke on low eqbal ratio {analysis['lowest_eqbal_ratio']:.4f} "
                 print(line)
                 break
             if analysis['max_hrs_no_fills'] > config['maximum_hrs_no_fills'] * (1 + bef):
-                line += f"broke on max_hrs_no_fills {analysis['max_hrs_no_fills']:.4f}, {config['maximum_hrs_no_fills']}, {bef}"
+                line += f"broke on max_hrs_no_fills {analysis['max_hrs_no_fills']:.4f}, {config['maximum_hrs_no_fills']}"
                 print(line)
                 break
             if analysis['max_hrs_no_fills_same_side'] > config['maximum_hrs_no_fills_same_side'] * (1 + bef):
-                line += f"broke on max_hrs_no_fills_ss {analysis['max_hrs_no_fills_same_side']:.4f}, {config['maximum_hrs_no_fills_same_side']}, {bef}"
+                line += f"broke on max_hrs_no_fills_ss {analysis['max_hrs_no_fills_same_side']:.4f}, {config['maximum_hrs_no_fills_same_side']}"
                 print(line)
                 break
-            if analysis['average_daily_gain'] < 0.996:
+            if analysis['average_daily_gain'] < config['minimum_slice_adg']:
                 line += f"broke on low adg {analysis['average_daily_gain']:.4f} "
                 print(line)
                 break
@@ -166,16 +172,17 @@ def single_sliding_window_run(config, data, do_print=False) -> (float, [dict]):
                 line += f"broke on low mean adg {mean_adg:.4f} "
                 print(line)
                 break
-        print(line)
+            print(line)
     return objective, analyses
 
 def simple_sliding_window_wrap(config, data, do_print=False):
     objective, analyses = single_sliding_window_run(config, data)
     tune.report(objective=objective,
                 daily_gain=np.mean([r['average_daily_gain'] for r in analyses]),
-                closest_bankruptcy=np.min([r['closest_bkr'] for r in analyses]),
+                closest_bkr=np.min([r['closest_bkr'] for r in analyses]),
+                lowest_eqbal_r=np.min([r['lowest_eqbal_ratio'] for r in analyses]),
                 max_hrs_no_fills=np.max([r['max_hrs_no_fills'] for r in analyses]),
-                max_hrs_no_fills_same_side=np.max([r['max_hrs_no_fills_same_side'] for r in analyses]))
+                max_hrs_no_fills_ss=np.max([r['max_hrs_no_fills_same_side'] for r in analyses]))
 
 
 def backtest_tune(data: np.ndarray, config: dict, current_best: Union[dict, list] = None):
@@ -234,15 +241,12 @@ def backtest_tune(data: np.ndarray, config: dict, current_best: Union[dict, list
         reuse_actors=True, local_dir=config['optimize_dirpath'],
         progress_reporter=LogReporter(
             metric_columns=['daily_gain',
-                            'closest_bankruptcy',
+                            'closest_bkr',
+                            'lowest_eqbal_r',
                             'max_hrs_no_fills',
-                            'max_hrs_no_fills_same_side',
+                            'max_hrs_no_fills_ss',
                             'objective'],
-            parameter_columns=[k for k in config['ranges']
-                               if (any(k0 in k for k0 in ['const', 'leverage', 'stop_psize_pct', 'PBr']) and '£' in k)
-                               or '_span' in k]),
-        # if type(config[k]) == ray.tune.sample.Float
-        # or type(config[k]) == ray.tune.sample.Integer]),
+            parameter_columns=[k for k in config['ranges'] if '_span' in k]),
         raise_on_failed_trial=False
     )
     ray.shutdown()
