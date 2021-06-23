@@ -6,13 +6,13 @@
   n_particles: 48
 
   # set to 0.0 to disable breaking early
-  break_early_factor: 0.25
+  break_early_factor: 0.5
 
-  minimum_bankruptcy_distance: 0.3
-  minimum_equity_balance_ratio: 0.5
+  minimum_bankruptcy_distance: 0.4
+  minimum_equity_balance_ratio: 0.4
   minimum_slice_adg: 0.999
-  maximum_hrs_no_fills: 96.0
-  maximum_hrs_no_fills_same_side: 192.0
+  maximum_hrs_no_fills: 120.0
+  maximum_hrs_no_fills_same_side: 240.0
 
   # set to 0.0 to do disable sliding windows
   # otherwise sliding window days will be max([maximum_hrs_no_fills / 24 * 2.1,
@@ -37,24 +37,24 @@
   # If lower and upper bound are set to same value, it's treated as a fixed variable.
   ranges:
   {
-    min_span: [4000.0, 20000.0]
-    max_span: [80000.0, 460000.0]
-    MAr_coeffs: [-0.02, 0.02]
+    min_span: [4000.0, 40000.0]
+    max_span: [60000.0, 600000.0]
+    MAr_coeffs: [-0.1, 0.1]
 
     long£rprc_PBr_coeffs: [-1.0, 0.1]
     long£pbr_stop_loss: [-0.1, 1.0]
-    long£pbr_limit: [0.1, 2.0]
-    long£iqty_const: [0.0, 3.0]
+    long£pbr_limit: [0.1, 4.0]
+    long£iqty_const: [0.01, 0.5]
     long£iprc_const: [0.975, 1.0]
     long£rqty_const: [0.0, 3.0]
-    long£rprc_const: [0.975, 1.0]
+    long£rprc_const: [0.975, 1.01]
     long£markup_const: [1.0, 1.025]
 
     shrt£rprc_PBr_coeffs: [-0.1, 1.0]
     shrt£pbr_stop_loss: [-0.1, 1.0]
-    shrt£pbr_limit: [0.1, 2.0]
-    shrt£iqty_const: [0.0, 3.0]
-    shrt£iprc_const: [1.0, 1.025]
+    shrt£pbr_limit: [0.1, 4.0]
+    shrt£iqty_const: [0.01, 0.5]
+    shrt£iprc_const: [0.99, 1.025]
     shrt£rqty_const: [0.0, 3.0]
     shrt£rprc_const: [1.0, 1.025]
     shrt£markup_const: [0.975, 1.0]
