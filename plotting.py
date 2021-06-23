@@ -91,11 +91,11 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
 
 def plot_fills(df, fdf_, side: int = 0, bkr_thr=0.1):
     plt.clf()
-
-    dfc = df.loc[fdf_.index[0]:fdf_.index[-1]]
-    dfc = dfc.set_index('timestamp')
     fdf = fdf_.set_index('timestamp')
-    dfc.price.iloc[::max(1, int(len(dfc) * 0.0001))].plot(style='y-')
+    dfc = df.iloc[::max(1, int(len(df) * 0.0001))]
+    dfc = dfc[(dfc.timestamp > fdf.index[0]) & (dfc.timestamp < fdf.index[-1])].set_index('timestamp')
+    dfc = dfc.loc[fdf.index[0]:fdf.index[-1]]
+    dfc.price.plot(style='y-')
 
     if side >= 0:
         longs = fdf[fdf.type.str.contains('long')]
