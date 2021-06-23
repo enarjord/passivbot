@@ -416,11 +416,12 @@ class Bot:
         to_cancel = sorted(to_cancel, key=lambda x: calc_diff(x['price'], self.price))
         to_create = sorted(to_create, key=lambda x: calc_diff(x['price'], self.price))
         results = []
-        if to_cancel:
-            results.append(asyncio.create_task(self.cancel_orders(to_cancel[:self.n_orders_per_execution])))
-            await asyncio.sleep(0.005)  # sleep 5 ms between sending cancellations and creations
-        if to_create:
-            results.append(await self.create_orders(to_create[:self.n_orders_per_execution]))
+        if self.stop_mode not in ['manual']:
+            if to_cancel:
+                results.append(asyncio.create_task(self.cancel_orders(to_cancel[:self.n_orders_per_execution])))
+                await asyncio.sleep(0.005)  # sleep 5 ms between sending cancellations and creations
+            if to_create:
+                results.append(await self.create_orders(to_create[:self.n_orders_per_execution]))
         await asyncio.sleep(0.005)
         await self.update_position()
         if any(results):
