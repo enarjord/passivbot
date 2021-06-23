@@ -67,6 +67,10 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
     shrts.pnl.cumsum().plot()
     plt.savefig(f"{result['plots_dirpath']}pnl_cumsum_shrt.png")
 
+    plt.clf()
+    fdf.adg.plot()
+    plt.savefig(f"{result['plots_dirpath']}adg.png")
+
     print('plotting backtest whole and in chunks...')
     n_parts = max(3, int(round_up(result['n_days'] / 14, 1.0)))
     for z in range(n_parts):

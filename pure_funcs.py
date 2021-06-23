@@ -389,7 +389,8 @@ def analyze_fills(fills: list, bc: dict, first_ts: float, last_ts: float) -> (pd
     if fdf.empty:
         return fdf, get_empty_analysis(bc)
     fdf.columns = ['trade_id', 'timestamp', 'pnl', 'fee_paid', 'balance', 'equity', 'pbr', 'qty', 'price', 'psize', 'pprice', 'type']
-    fdf = fdf.set_index('trade_id')
+    adgs = (fdf.equity / bc['starting_balance']) ** (1 / ((fdf.timestamp - first_ts) / (1000 * 60 * 60 * 24)))
+    fdf = fdf.join(adgs.rename('adg')).set_index('trade_id')
 
     longs = fdf[fdf.type.str.contains('long')]
     shrts = fdf[fdf.type.str.contains('shrt')]
