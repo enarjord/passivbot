@@ -553,7 +553,7 @@ class Telegram:
               '/set_short: initiates a conversion via which the user can enable/disable shorting\n' \
               '/set_long: initiates a conversion via which the user can enable/disable long\n' \
               '/set_config: initiates a conversion via which the user can switch to a different configuration file\n' \
-              '/help: This help page\n'
+              '/help: This help page'
         self.send_msg(msg)
 
     def _open_orders(self, update=None, context=None):
