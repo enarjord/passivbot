@@ -772,9 +772,19 @@ class Telegram:
                 parse_mode=ParseMode.HTML,
                 reply_markup=self._keyboards[self._keyboard_idx],
                 disable_notification=False
-            ).message_id
+            )
         except Exception as e:
-            print(f'Failed to send telegram message: {e}')
+            print(f'Error sending telegram message: {e}')
+            try:
+                self._updater.bot.send_message(
+                    self._chat_id,
+                    text=f'Error sending message: {e}',
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=self._keyboards[self._keyboard_idx],
+                    disable_notification=False
+                )
+            except Exception as fe:
+                print(f'Failed to send error message: {fe}')
 
     def exit(self):
         try:
