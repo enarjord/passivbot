@@ -758,11 +758,16 @@ class Telegram:
         except:
             sha_short = 'UNKNOWN'
 
-        msg = f'<pre><b>Version:</b></pre> {sha_short},\n' \
-              f'<pre>Symbol</pre>: {self._bot.symbol}\n' \
-              f'<pre><b>Config:</b></pre> \n' \
-              f'{json.dumps(denumpyize(self._bot.config), indent=4)}'
-        self.send_msg(msg)
+        cfg = denumpyize(self._bot.config)
+        long_cfg = cfg.pop('long', None)
+        shrt_cfg = cfg.pop('shrt', None)
+
+        self.send_msg(f'<pre><b>Version:</b></pre> {sha_short},\n' \
+                      f'<pre>Symbol</pre>: {self._bot.symbol}\n' \
+                      f'<pre><b>Config:</b></pre> \n' \
+                      f'{json.dumps(cfg, indent=4)}')
+        self.send_msg(f'<pre><b>Short</b></pre>:\n{json.dumps(shrt_cfg, indent=4)}')
+        self.send_msg(f'<pre><b>Long</b></pre>:\n{json.dumps(long_cfg, indent=4)}')
 
     def log_start(self):
         self.send_msg('<b>Passivbot started!</b>')
