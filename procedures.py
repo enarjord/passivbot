@@ -1,11 +1,10 @@
 import json
 import pprint
 import os
-from time import time
-
 import hjson
-
-from pure_funcs import numpyize, denumpyize, candidate_to_live_config, ts_to_date, get_dummy_settings, calc_spans
+from time import time
+from pure_funcs import numpyize, denumpyize, candidate_to_live_config, ts_to_date, get_dummy_settings, calc_spans, \
+    config_pretty_str
 
 
 def load_live_config(live_config_path: str) -> dict:
@@ -17,9 +16,7 @@ def load_live_config(live_config_path: str) -> dict:
 
 
 def dump_live_config(config: dict, path: str):
-    pretty_str = pprint.pformat(candidate_to_live_config(config))
-    for r in [("'", '"'), ('True', 'true'), ('False', 'false')]:
-        pretty_str = pretty_str.replace(*r)
+    pretty_str = config_pretty_str(candidate_to_live_config(config))
     with open(path, 'w') as f:
         f.write(pretty_str)
 
