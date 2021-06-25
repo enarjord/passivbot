@@ -3,6 +3,7 @@ import os
 from procedures import load_live_config
 from datetime import datetime, timedelta
 from time import time
+from pure_funcs import config_pretty_str
 
 try:
     import git
@@ -765,9 +766,9 @@ class Telegram:
         self.send_msg(f'<pre><b>Version:</b></pre> {sha_short},\n' \
                       f'<pre>Symbol</pre>: {self._bot.symbol}\n' \
                       f'<pre><b>Config:</b></pre> \n' \
-                      f'{json.dumps(cfg, indent=4)}')
-        self.send_msg(f'<pre><b>Short</b></pre>:\n{json.dumps(shrt_cfg, indent=4)}')
-        self.send_msg(f'<pre><b>Long</b></pre>:\n{json.dumps(long_cfg, indent=4)}')
+                      f'{config_pretty_str(cfg)}')
+        self.send_msg(f'<pre><b>Short</b></pre>:\n{config_pretty_str(shrt_cfg)}')
+        self.send_msg(f'<pre><b>Long</b></pre>:\n{config_pretty_str(long_cfg)}')
 
     def log_start(self):
         self.send_msg('<b>Passivbot started!</b>')
