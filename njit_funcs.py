@@ -226,8 +226,8 @@ def calc_long_orders(balance,
         else:
             # v3.6.1 behavior
             if pbr > pbr_limit:
-                sclose_qty = -max(min_qty, round_dn(long_psize * min(1.0, pbr - pbr_limit), qty_step))
                 sclose_price = max(lowest_ask, round_up(MA_band_upper, price_step))
+                sclose_qty = -max(min_qty, round_dn(cost_to_qty(balance * min(1.0, pbr - pbr_limit), sclose_price, inverse, c_mult), qty_step))
                 if sclose_price >= nclose_price:
                     long_close = (-long_psize, nclose_price, 0.0, 0.0, 'long_nclose')
                 else:
@@ -305,12 +305,12 @@ def calc_shrt_orders(balance,
         else:
             # v3.6.1 beahvior
             if pbr > pbr_limit:
-                sclose_qty = max(min_qty, round_dn(-shrt_psize * min(1.0, pbr - pbr_limit), qty_step))
-                stop_price = min(highest_bid, round_dn(MA_band_lower, price_step))
-                if stop_price <= nclose_price:
+                sclose_price = min(highest_bid, round_dn(MA_band_lower, price_step))
+                sclose_qty = max(min_qty, round_dn(cost_to_qty(balance * min(1.0, pbr - pbr_limit), sclose_price, inverse, c_mult), qty_step))
+                if sclose_price <= nclose_price:
                     shrt_close = (-shrt_psize, nclose_price, 0.0, 0.0, 'shrt_nclose')
                 else:
-                    shrt_close = (sclose_qty, stop_price, round_(shrt_psize + sclose_qty, qty_step), shrt_pprice, 'shrt_sclose')
+                    shrt_close = (sclose_qty, sclose_price, round_(shrt_psize + sclose_qty, qty_step), shrt_pprice, 'shrt_sclose')
             else:
                 entry_qty = max(entry_qty, min_entry_qty)
                 shrt_close = (-shrt_psize, nclose_price, 0.0, 0.0, 'shrt_nclose')
