@@ -178,10 +178,10 @@ class BinanceBot(Bot):
             print('no positions or open orders in other symbols sharing margin wallet')
 
     async def execute_leverage_change(self):
+        lev = int(min(self.max_leverage, max(3.0, np.ceil(max(self.xk['pbr_limit']) * 2))))
         return await self.private_post(self.base_endpoint,
                                        self.endpoints['leverage'],
-                                       {'symbol': self.symbol,
-                                        'leverage': int(round(min(self.max_leverage, max(self.xk['pbr_limit']) * 2)))})
+                                       {'symbol': self.symbol, 'leverage': lev})
 
     async def init_exchange_config(self):
         try:
