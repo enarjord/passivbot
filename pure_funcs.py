@@ -2,6 +2,7 @@ import datetime
 
 import numpy as np
 import pandas as pd
+import pprint
 from dateutil import parser
 
 from njit_funcs import round_dynamic, calc_emas
@@ -112,6 +113,13 @@ def ts_to_date(timestamp: float) -> str:
 
 def date_to_ts(d):
     return int(parser.parse(d).replace(tzinfo=datetime.timezone.utc).timestamp() * 1000)
+
+
+def config_pretty_str(config: dict):
+    pretty_str = pprint.pformat(config)
+    for r in [("'", '"'), ('True', 'true'), ('False', 'false')]:
+        pretty_str = pretty_str.replace(*r)
+    return pretty_str
 
 
 def candidate_to_live_config(candidate: dict) -> dict:
