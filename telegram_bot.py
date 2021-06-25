@@ -730,7 +730,7 @@ class Telegram:
 
     def notify_entry_order_filled(self, position_side: str, qty: float, fee: float, price: float, total_size: float):
         if 'notify_entry_fill' not in self.config or self.config['notify_entry_fill'] is True:
-            icon = "\U00002733"
+            icon = "\U0001F535"
             self.send_msg(f'<b>{icon} {self._bot.exchange.capitalize()} {self._bot.pair}</b> Opened {position_side}\n'
                           f'<b>Amount: </b><pre>{round_(qty, self._bot.qty_step)}</pre>\n'
                           f'<b>Total size: </b><pre>{round_(total_size, self._bot.qty_step)}</pre>\n'
