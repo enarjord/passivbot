@@ -164,14 +164,22 @@ def analyze_fills(fills: list, bc: dict, last_ts: float) -> (pd.DataFrame, dict)
 
     fdf = fdf.set_index('trade_id')
 
-    if len(longs_ := fdf[fdf.pside == 'long']) > 0:
-        long_stuck = np.max(np.diff(list(longs_.timestamp) + [last_ts])) / (1000 * 60 * 60)
+    longs = fdf[fdf.pside =='long']
+    shrts = fdf[fdf.pside =='shrt']
+    if bc['do_long']:
+        if len(longs) > 0:
+            long_stuck = np.max(np.diff(list(longs.timestamp) + [last_ts])) / (1000 * 60 * 60)
+        else:
+            long_stuck = 1000.0
     else:
-        long_stuck = 1000.0
-    if len(shrts_ := fdf[fdf.pside == 'shrt']) > 0:
-        shrt_stuck = np.max(np.diff(list(shrts_.timestamp) + [last_ts])) / (1000 * 60 * 60)
+        long_stuck = 0.0
+    if bc['do_shrt']:
+        if len(shrts) > 0:
+            shrt_stuck = np.max(np.diff(list(shrts.timestamp) + [last_ts])) / (1000 * 60 * 60)
+        else:
+            shrt_stuck = 1000.0
     else:
-        shrt_stuck = 1000.0
+        shrt_stuck = 0.0
 
     result = {
         'net_pnl_plus_fees': fdf.pnl.sum() + fdf.fee_paid.sum(),
