@@ -31,9 +31,13 @@ async def prep_config(args) -> dict:
     except Exception as e:
         raise Exception('failed to load optimize config', args.optimize_config_path, e)
     config = {**oc, **bc}
-    for key in ['symbol', 'user', 'start_date', 'end_date', 'starting_balance']:
+    for key in ['exchange', 'symbol', 'user', 'start_date', 'end_date', 'starting_balance']:
         if getattr(args, key) is not None:
             config[key] = getattr(args, key)
+
+    if config['exchange'] == 'bybit' and config['symbol'].endswith('USDT'):
+        raise Exception('error: bybit linear usdt markets backtesting and optimizing not supported')
+
     end_date = config['end_date'] if config['end_date'] and config['end_date'] != -1 else ts_to_date(time())[:16]
     config['session_name'] = f"{config['start_date'].replace(' ', '').replace(':', '').replace('.', '')}_" \
                              f"{end_date.replace(' ', '').replace(':', '').replace('.', '')}"
@@ -43,17 +47,26 @@ async def prep_config(args) -> dict:
     config['optimize_dirpath'] = make_get_filepath(os.path.join(base_dirpath, 'optimize', ''))
     config['plots_dirpath'] = make_get_filepath(os.path.join(base_dirpath, 'plots', ''))
 
-    if os.path.exists((mss := config['caches_dirpath'] + 'market_specific_settings.json')):
-        market_specific_settings = json.load(open(mss))
-    else:
+    mss = config['caches_dirpath'] + 'market_specific_settings.json'
+    try:
+        print('fetching market_specific_settings...')
         market_specific_settings = await fetch_market_specific_settings(config['user'], config['exchange'],
                                                                         config['symbol'])
         json.dump(market_specific_settings, open(mss, 'w'), indent=4)
+    except Exception as e:
+        print('failed to fetch market_specific_settings', e)
+        try:
+            if os.path.exists(mss):
+                market_specific_settings = json.load(open(mss))
+            print('using cached market_specific_settings')
+        except Exception as e1:
+            raise Exception('failed to load cached market_specific_settings')
     config.update(market_specific_settings)
 
     if 'pbr_limit' in config['ranges']:
         config['ranges']['pbr_limit'][1] = min(config['ranges']['pbr_limit'][1], config['max_leverage'])
         config['ranges']['pbr_limit'][0] = min(config['ranges']['pbr_limit'][0], config['ranges']['pbr_limit'][1])
+
 
     return config
 
@@ -125,7 +138,7 @@ async def fetch_market_specific_settings(user: str, exchange: str, symbol: str):
     else:
         raise Exception('unknown market type')
     for key in ['max_leverage', 'min_qty', 'min_cost', 'qty_step', 'price_step', 'max_leverage',
-                'c_mult']:
+                'c_mult', 'hedge_mode']:
         settings_from_exchange[key] = getattr(bot, key)
     return settings_from_exchange
 
@@ -153,6 +166,8 @@ def add_argparse_args(parser):
     parser.add_argument('-d', '--download-only', help='download only, do not dump ticks caches', action='store_true')
     parser.add_argument('-s', '--symbol', type=str, required=False, dest='symbol',
                         default=None, help='specify symbol, overriding symbol from backtest config')
+    parser.add_argument('-e', '--exchange', type=str, required=False, dest='exchange',
+                        default=None, help='specify exchange (binance/bybit), overriding exchange from backtest config')
     parser.add_argument('-u', '--user', type=str, required=False, dest='user',
                         default=None,
                         help='specify user, a.k.a. account_name, overriding user from backtest config')

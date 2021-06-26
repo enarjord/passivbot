@@ -345,6 +345,7 @@ def calc_orders(balance,
                 last_price,
                 MAs,
  
+                hedge_mode,
                 inverse,
                 do_long,
                 do_shrt,
@@ -373,6 +374,13 @@ def calc_orders(balance,
     MA_band_upper = MAs.max()
     available_margin = calc_available_margin(balance, long_psize, long_pprice, shrt_psize, shrt_pprice,
                                              last_price, inverse, c_mult, max_leverage)
+    if hedge_mode:
+        do_long_ = do_long
+        do_shrt_ = do_shrt
+    else:
+        no_pos = long_psize == 0.0 and shrt_psize == 0.0
+        do_long_ = (no_pos and do_long) or long_psize != 0.0
+        do_shrt_ = (no_pos and do_shrt) or shrt_psize != 0.0
     long_entry, long_close = calc_long_orders(balance,
                      long_psize,
                      long_pprice,
@@ -401,7 +409,7 @@ def calc_orders(balance,
                      rprc_PBr_coeffs[0],
                      rqty_MAr_coeffs[0],
                      rprc_MAr_coeffs[0],
-                     markup_MAr_coeffs[0]) if do_long else ((0.0, 0.0, 0.0, 0.0, ''), (0.0, 0.0, 0.0, 0.0, ''))
+                     markup_MAr_coeffs[0]) if do_long_ else ((0.0, 0.0, 0.0, 0.0, ''), (0.0, 0.0, 0.0, 0.0, ''))
     shrt_entry, shrt_close = calc_shrt_orders(balance,
                      shrt_psize,
                      shrt_pprice,
@@ -430,7 +438,7 @@ def calc_orders(balance,
                      rprc_PBr_coeffs[1],
                      rqty_MAr_coeffs[1],
                      rprc_MAr_coeffs[1],
-                     markup_MAr_coeffs[1]) if do_shrt else ((0.0, 0.0, 0.0, 0.0, ''), (0.0, 0.0, 0.0, 0.0, ''))
+                     markup_MAr_coeffs[1]) if do_shrt_ else ((0.0, 0.0, 0.0, 0.0, ''), (0.0, 0.0, 0.0, 0.0, ''))
     bkr_price = calc_bankruptcy_price(balance, long_psize, long_pprice, shrt_psize, shrt_pprice, inverse, c_mult)
     return long_entry, shrt_entry, long_close, shrt_close, bkr_price, available_margin
 
@@ -451,6 +459,7 @@ def njit_backtest(data: (np.ndarray, np.ndarray, np.ndarray),
                   starting_balance,
                   latency_simulation_ms,
                   maker_fee,
+                  hedge_mode,
                   inverse,
                   do_long,
                   do_shrt,
@@ -476,7 +485,7 @@ def njit_backtest(data: (np.ndarray, np.ndarray, np.ndarray),
                   markup_MAr_coeffs):
 
     prices, buyer_maker, timestamps = data
-    static_params = (inverse, do_long, do_shrt, qty_step, price_step, min_qty, min_cost, c_mult, max_leverage,
+    static_params = (hedge_mode, inverse, do_long, do_shrt, qty_step, price_step, min_qty, min_cost, c_mult, max_leverage,
                      spans, pbr_stop_loss, pbr_limit, iqty_const, iprc_const, rqty_const, rprc_const,
                      markup_const, iqty_MAr_coeffs, iprc_MAr_coeffs, rprc_PBr_coeffs, rqty_MAr_coeffs,
                      rprc_MAr_coeffs, markup_MAr_coeffs)
