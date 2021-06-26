@@ -31,6 +31,7 @@ class Bot:
         self.telegram = None
         self.xk = {}
 
+        self.hedge_mode = self.config['hedge_mode'] = True
         self.set_config(self.config)
 
         self.ema_alpha = 2.0 / (self.spans + 1.0)
@@ -58,7 +59,6 @@ class Bot:
         self.n_open_orders_limit = 8
         self.n_orders_per_execution = 4
 
-        self.hedge_mode = True
         self.c_mult = self.config['c_mult'] = 1.0
 
         self.log_filepath = make_get_filepath(f"logs/{self.exchange}/{config['config_name']}.log")

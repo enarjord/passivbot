@@ -82,7 +82,7 @@ class Bybit(Bot):
                                   'websocket': 'wss://stream.bybit.com/realtime',
                                   'created_at_key': 'created_at'}
 
-                self.hedge_mode = False
+                self.hedge_mode = self.config['hedge_mode'] = False
             else:
                 print('inverse futures')
                 self.market_type = 'inverse_futures'
