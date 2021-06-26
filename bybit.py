@@ -11,7 +11,7 @@ from dateutil import parser
 
 from pure_funcs import ts_to_date, sort_dict_keys
 from passivbot import print_, Bot
-from jitted import calc_long_pnl, calc_shrt_pnl
+from njit_funcs import calc_long_pnl, calc_shrt_pnl
 
 
 def first_capitalized(s: str):
