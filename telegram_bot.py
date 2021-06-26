@@ -586,19 +586,17 @@ class Telegram:
 
             position_table.add_row([f'Size', round_dynamic(long_position['size'], 3),
                                     round_dynamic(shrt_position['size'], 3)])
-            position_table.add_row(['Price', round_dynamic(long_position['price'], 3),
+            position_table.add_row(['Entry price', round_dynamic(long_position['price'], 3),
                                     round_dynamic(shrt_position['price'], 3)])
             position_table.add_row(['Curr.price', round_(self._bot.price, self._bot.price_step),
                                     round_(self._bot.price, self._bot.price_step)])
             position_table.add_row(['Close price', round_(closest_long_price, self._bot.price_step),
                                     round_(closest_shrt_price, self._bot.price_step)])
-            position_table.add_row(['Leverage', compress_float(long_position['leverage'], 3),
-                                     compress_float(shrt_position['leverage'], 3)])
+            position_table.add_row(['Cost/balance', round_dynamic(float(long_position['pbr']), 3), round_dynamic(float(shrt_position['pbr']), 3)])
             position_table.add_row(['Liq.price', round_dynamic(long_position['liquidation_price'], 3),
                  round_dynamic(shrt_position['liquidation_price'], 3)])
             position_table.add_row(['Liq.diff.%', round_dynamic(float(long_position['liq_diff']) * 100, 3),
                  round_dynamic(float(shrt_position['liq_diff']) * 100, 3)])
-            position_table.add_row(['Cost/balance', round_dynamic(float(long_position['pbr']), 3), round_dynamic(float(shrt_position['pbr']), 3)])
             position_table.add_row([f'UPNL {self._bot.margin_coin if hasattr(self._bot, "margin_coin") else ""}', round_dynamic(float(long_position['upnl']), 3),
                                     round_dynamic(float(shrt_position['upnl']), 3)])
 
