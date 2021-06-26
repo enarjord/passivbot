@@ -33,7 +33,7 @@ def calc_spans(min_span: int, max_span: int, n_spans: int) -> np.ndarray:
 
 
 def get_xk_keys():
-    return ['inverse', 'do_long', 'do_shrt', 'qty_step', 'price_step', 'min_qty', 'min_cost', 'c_mult',
+    return ['hedge_mode', 'inverse', 'do_long', 'do_shrt', 'qty_step', 'price_step', 'min_qty', 'min_cost', 'c_mult',
             'max_leverage', 'spans', 'pbr_stop_loss', 'pbr_limit', 'iqty_const', 'iprc_const', 'rqty_const',
             'rprc_const', 'markup_const', 'iqty_MAr_coeffs', 'iprc_MAr_coeffs', 'rprc_PBr_coeffs',
             'rqty_MAr_coeffs', 'rprc_MAr_coeffs', 'markup_MAr_coeffs']
@@ -41,14 +41,17 @@ def get_xk_keys():
 
 def create_xk(config: dict) -> dict:
     xk = {}
-    config['do_long'] = config['long']['enabled']
-    config['do_shrt'] = config['shrt']['enabled']
+    config_ = config.copy()
+    config_['do_long'] = config['long']['enabled']
+    config_['do_shrt'] = config['shrt']['enabled']
+    config_['spans'] = calc_spans(config['min_span'], config['max_span'], config['n_spans'])
     for k in get_xk_keys():
-        if k in config['long']:
-            xk[k] = (config['long'][k], config['shrt'][k])
-        elif k in config:
-            xk[k] = config[k]
-    xk['spans'] = calc_spans(config['min_span'], config['max_span'], config['n_spans'])
+        if k in config_['long']:
+            xk[k] = (config_['long'][k], config_['shrt'][k])
+        elif k in config_:
+            xk[k] = config_[k]
+        else:
+            raise Exception('failed to create xk', k)
     return xk
 
 
@@ -405,17 +408,25 @@ def analyze_fills(fills: list, bc: dict, first_ts: float, last_ts: float) -> (pd
 
     if bc['do_long']:
         if len(longs) > 0:
-            long_stuck = np.max(np.diff([first_ts] + list(longs.timestamp) + [last_ts])) / (1000 * 60 * 60)
+            long_fill_ts_diffs = np.diff([first_ts] + list(longs.timestamp) + [last_ts]) / (1000 * 60 * 60)
+            long_stuck_mean = np.mean(long_fill_ts_diffs)
+            long_stuck = np.max(long_fill_ts_diffs)
         else:
+            long_stuck_mean = 1000.0
             long_stuck = 1000.0
     else:
+        long_stuck_mean = 0.0
         long_stuck = 0.0
     if bc['do_shrt']:
         if len(shrts) > 0:
-            shrt_stuck = np.max(np.diff([first_ts] + list(shrts.timestamp) + [last_ts])) / (1000 * 60 * 60)
+            shrt_fill_ts_diffs = np.diff([first_ts] + list(shrts.timestamp) + [last_ts]) / (1000 * 60 * 60)
+            shrt_stuck_mean = np.mean(shrt_fill_ts_diffs)
+            shrt_stuck = np.max(shrt_fill_ts_diffs)
         else:
+            shrt_stuck_mean = 1000.0
             shrt_stuck = 1000.0
     else:
+        shrt_stuck_mean = 0.0
         shrt_stuck = 0.0
 
     result = {
@@ -440,6 +451,9 @@ def analyze_fills(fills: list, bc: dict, first_ts: float, last_ts: float) -> (pd
         'n_normal_closes': len(fdf[fdf.type.str.contains('nclose')]),
         'n_stop_loss_closes': len(fdf[fdf.type.str.contains('sclose')]),
         'biggest_psize': fdf.psize.abs().max(),
+        'mean_hrs_between_fills': np.mean(np.diff([first_ts] + list(fdf.timestamp) + [last_ts])) / (1000 * 60 * 60),
+        'mean_hrs_between_fills_long': long_stuck_mean,
+        'mean_hrs_between_fills_shrt': shrt_stuck_mean,
         'max_hrs_no_fills_long': long_stuck,
         'max_hrs_no_fills_shrt': shrt_stuck,
         'max_hrs_no_fills_same_side': max(long_stuck, shrt_stuck),
