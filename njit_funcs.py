@@ -227,7 +227,8 @@ def calc_long_orders(balance,
             # v3.6.1 behavior
             if pbr > pbr_limit:
                 sclose_price = max(lowest_ask, round_up(MA_band_upper, price_step))
-                sclose_qty = -max(min_qty, round_dn(cost_to_qty(balance * min(1.0, pbr - pbr_limit), sclose_price, inverse, c_mult), qty_step))
+                sclose_qty = -min(long_psize, max(min_qty, round_dn(cost_to_qty(balance * min(1.0, pbr - pbr_limit),
+                                                                                sclose_price, inverse, c_mult), qty_step)))
                 if sclose_price >= nclose_price:
                     long_close = (-long_psize, nclose_price, 0.0, 0.0, 'long_nclose')
                 else:
@@ -306,7 +307,8 @@ def calc_shrt_orders(balance,
             # v3.6.1 beahvior
             if pbr > pbr_limit:
                 sclose_price = min(highest_bid, round_dn(MA_band_lower, price_step))
-                sclose_qty = max(min_qty, round_dn(cost_to_qty(balance * min(1.0, pbr - pbr_limit), sclose_price, inverse, c_mult), qty_step))
+                sclose_qty = min(-shrt_psize, max(min_qty, round_dn(cost_to_qty(balance * min(1.0, pbr - pbr_limit),
+                                                                                sclose_price, inverse, c_mult), qty_step)))
                 if sclose_price <= nclose_price:
                     shrt_close = (-shrt_psize, nclose_price, 0.0, 0.0, 'shrt_nclose')
                 else:
@@ -592,6 +594,12 @@ def njit_backtest(data: (np.ndarray, np.ndarray, np.ndarray),
                                                  rprc_MAr_coeffs[0],
                                                  markup_MAr_coeffs[0])
             if shrt_psize != 0.0 and shrt_close[0] != 0.0 and prices[k] < shrt_close[1]:
+                if shrt_close[0] > -shrt_psize:
+                    print('warning: shrt close qty greater than shrt psize')
+                    print('shrt_psize', shrt_psize)
+                    print('shrt_pprice', shrt_pprice)
+                    print('shrt_close', shrt_close)
+                    shrt_close = (-shrt_psize,) + shrt_close[1:]
                 fee_paid = -qty_to_cost(shrt_close[0], shrt_close[1], inverse, c_mult) * maker_fee
                 pnl = calc_shrt_pnl(shrt_pprice, shrt_close[1], shrt_close[0], inverse, c_mult)
                 balance = balance + fee_paid + pnl
@@ -644,6 +652,12 @@ def njit_backtest(data: (np.ndarray, np.ndarray, np.ndarray),
                                                  rprc_MAr_coeffs[1],
                                                  markup_MAr_coeffs[1])
             if long_psize != 0.0 and long_close[0] != 0.0 and prices[k] > long_close[1]:
+                if -long_close[0] > long_psize:
+                    print('warning: long close qty greater than long psize')
+                    print('long_psize', long_psize)
+                    print('long_pprice', long_pprice)
+                    print('long_close', long_close)
+                    long_close = (-long_psize,) + long_close[1:]
                 fee_paid = -qty_to_cost(long_close[0], long_close[1], inverse, c_mult) * maker_fee
                 pnl = calc_long_pnl(long_pprice, long_close[1], long_close[0], inverse, c_mult)
                 balance = balance + fee_paid + pnl
