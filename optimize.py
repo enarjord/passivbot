@@ -177,12 +177,20 @@ def single_sliding_window_run(config, data, do_print=False) -> (float, [dict]):
 
 def simple_sliding_window_wrap(config, data, do_print=False):
     objective, analyses = single_sliding_window_run(config, data)
-    tune.report(objective=objective,
-                daily_gain=np.mean([r['average_daily_gain'] for r in analyses]),
-                closest_bkr=np.min([r['closest_bkr'] for r in analyses]),
-                lowest_eqbal_r=np.min([r['lowest_eqbal_ratio'] for r in analyses]),
-                max_hrs_no_fills=np.max([r['max_hrs_no_fills'] for r in analyses]),
-                max_hrs_no_fills_ss=np.max([r['max_hrs_no_fills_same_side'] for r in analyses]))
+    if not analyses:
+        tune.report(objective=0.0,
+                    daily_gain=0.0,
+                    closest_bkr=0.0,
+                    lowest_eqbal_r=0.0,
+                    max_hrs_no_fills=1000.0,
+                    max_hrs_no_fills_ss=1000.0)
+    else:
+        tune.report(objective=objective,
+                    daily_gain=np.mean([r['average_daily_gain'] for r in analyses]),
+                    closest_bkr=np.min([r['closest_bkr'] for r in analyses]),
+                    lowest_eqbal_r=np.min([r['lowest_eqbal_ratio'] for r in analyses]),
+                    max_hrs_no_fills=np.max([r['max_hrs_no_fills'] for r in analyses]),
+                    max_hrs_no_fills_ss=np.max([r['max_hrs_no_fills_same_side'] for r in analyses]))
 
 
 def backtest_tune(data: np.ndarray, config: dict, current_best: Union[dict, list] = None):
