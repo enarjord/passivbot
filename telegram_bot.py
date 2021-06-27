@@ -58,7 +58,7 @@ class Telegram:
             MessageHandler(Filters.regex('/reload_config.*'), self._reload_config))
         dispatcher.add_handler(
             MessageHandler(Filters.regex('/closed_trades.*'), self._closed_trades))
-        dispatcher.add_handler(MessageHandler(Filters.regex('/daily.*'), self._daily))
+        dispatcher.add_handler(CommandHandler('daily', self._daily))
         dispatcher.add_handler(MessageHandler(Filters.regex('/help.*'), self._help))
         dispatcher.add_handler(ConversationHandler(
             entry_points=[MessageHandler(Filters.regex('/stop.*'), self._begin_stop)],
@@ -551,7 +551,7 @@ class Telegram:
               '/show_config: the active configuration used\n' \
               '/reload_config: reload the configuration from disk, based on the file initially used\n' \
               "/closed_trades: a brief overview of bot's last 10 closed trades\n" \
-              '/daily: an overview of daily profit\n' \
+              '/daily <days>: an overview of daily profit, defaulting to 7 days\n' \
               '/set_leverage: initiates a conversion via which the user can modify the active leverage\n' \
               '/set_short: initiates a conversion via which the user can enable/disable shorting\n' \
               '/set_long: initiates a conversion via which the user can enable/disable long\n' \
@@ -685,8 +685,7 @@ class Telegram:
 
     def _daily(self, update=None, context=None):
         if self._bot.exchange == 'binance':
-            async def send_daily_async():
-                nr_of_days = 7
+            async def send_daily_async(nr_of_days:int):
                 today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
                 daily = {}
                 position = await self._bot.fetch_position()
@@ -725,7 +724,11 @@ class Telegram:
                 self.send_msg(msg)
 
             self.send_msg('Calculating daily pnl...')
-            task = self.loop.create_task(send_daily_async())
+            try:
+                nr_of_days = int(context.args[0])
+            except:
+                nr_of_days = 7
+            task = self.loop.create_task(send_daily_async(nr_of_days))
             task.add_done_callback(lambda fut: True) #ensures task is processed to prevent warning about not awaiting
         else:
             self.send_msg('This command is not supported (yet) on Bybit')
