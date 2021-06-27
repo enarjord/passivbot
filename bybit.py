@@ -120,7 +120,7 @@ class Bybit(Bot):
             if e['name'] == self.symbol:
                 break
         else:
-            raise Exception('symbol missing')
+            raise Exception(f'symbol missing {self.symbol}')
         self.max_leverage = e['leverage_filter']['max_leverage']
         self.coin = e['base_currency']
         self.quot = e['quote_currency']
