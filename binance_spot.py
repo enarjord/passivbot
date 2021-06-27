@@ -183,11 +183,10 @@ class BinanceBotSpot(Bot):
     async def execute_order(self, order: dict) -> dict:
         params = {'symbol': self.symbol,
                   'side': order['side'].upper(),
-                  'positionSide': order['position_side'].replace('shrt', 'short').upper(),
                   'type': order['type'].upper(),
                   'quantity': str(order['qty'])}
         if params['type'] == 'LIMIT':
-            params['timeInForce'] = 'GTX'
+            params['timeInForce'] = 'GTC'
             params['price'] = str(order['price'])
         if 'custom_id' in order:
             params['newClientOrderId'] = \
@@ -196,7 +195,7 @@ class BinanceBotSpot(Bot):
         if 'side' in o:
             return {'symbol': self.symbol,
                     'side': o['side'].lower(),
-                    'position_side': o['positionSide'].lower().replace('short', 'shrt'),
+                    'position_side': 'long',
                     'type': o['type'].lower(),
                     'qty': float(o['origQty']),
                     'price': float(o['price'])}
@@ -208,7 +207,7 @@ class BinanceBotSpot(Bot):
                                                  {'symbol': self.symbol, 'orderId': order['order_id']})
         if 'side' in cancellation:
             return {'symbol': self.symbol, 'side': cancellation['side'].lower(),
-                    'position_side': cancellation['positionSide'].lower().replace('short', 'shrt'),
+                    'position_side': 'long',
                     'qty': float(cancellation['origQty']), 'price': float(cancellation['price'])}
         else:
             return cancellation
@@ -241,6 +240,7 @@ class BinanceBotSpot(Bot):
         return fills
 
     async def fetch_income(self, limit: int = 1000, start_time: int = None, end_time: int = None):
+        return []
         params = {'symbol': self.symbol, 'limit': limit}
         if start_time is not None:
             params['startTime'] = start_time
@@ -278,7 +278,7 @@ class BinanceBotSpot(Bot):
         if end_time is not None:
             params['endTime'] = end_time
         try:
-            fetched = await self.private_get(self.endpoints['ticks'], params)
+            fetched = await self.public_get(self.endpoints['ticks'], params)
         except Exception as e:
             print('error fetching ticks a', e)
             return []
