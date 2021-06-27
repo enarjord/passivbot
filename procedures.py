@@ -150,6 +150,13 @@ async def create_binance_bot(config: dict):
     return bot
 
 
+async def create_binance_bot_spot(config: dict):
+    from binance_spot import BinanceBotSpot
+    bot = BinanceBotSpot(config)
+    await bot._init()
+    return bot
+
+
 async def create_bybit_bot(config: dict):
     from bybit import Bybit
     bot = Bybit(config)
