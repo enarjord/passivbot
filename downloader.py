@@ -45,8 +45,17 @@ class Downloader:
             except Exception:
                 print("Unrecognized date format for end time.")
         if self.config['exchange'] == 'binance':
-            self.daily_base_url = "https://data.binance.vision/data/futures/um/daily/aggTrades/"
-            self.monthly_base_url = "https://data.binance.vision/data/futures/um/monthly/aggTrades/"
+            if 'spot' in self.config and self.config['spot']:
+                self.daily_base_url = "https://data.binance.vision/data/daily/aggTrades/"
+                self.monthly_base_url = "https://data.binance.vision/data/monthly/aggTrades/"
+            else:
+                market_type = 'cm' if config['inverse'] else 'um'
+                self.daily_base_url = f"https://data.binance.vision/data/futures/{market_type}/daily/aggTrades/"
+                self.monthly_base_url = f"https://data.binance.vision/data/futures/{market_type}/monthly/aggTrades/"
+        elif self.config['exchange'] == 'bybit':
+            self.daily_base_url = 'https://public.bybit.com/trading/'
+        else:
+            raise Exception(f"unknown exchange {config['exchange']}")
 
     def validate_dataframe(self, df: pd.DataFrame) -> tuple:
         """
@@ -245,6 +254,37 @@ class Downloader:
                         df = tf
                     else:
                         df = pd.concat([df, tf])
+        except Exception as e:
+            print('Failed to fetch', date, e)
+        return df
+
+    def get_csv_gz(self, base_url, symbol, date):
+        """
+        Fetches a full day of trades from the Bybit repository.
+        @param symbol: Symbol to fetch.
+        @param date: Day to download.
+        @return: Dataframe with full day.
+        """
+        print_(['Fetching', symbol, date])
+        url = f"{base_url}{symbol.upper()}/{symbol.upper()}{date}.csv.gz"
+        df = pd.DataFrame(columns=['trade_id', 'price', 'qty', 'timestamp', 'is_buyer_maker'])
+        try:
+            resp = urlopen(url)
+            with gzip.open(BytesIO(resp.read())) as f:
+                tf = pd.read_csv(f)
+                tf.drop(errors='ignore', columns=['tickDirection', 'trdMatchID', 'grossValue', 'homeNotional', 'foreignNotional'], inplace=True)
+                tf["trade_id"] = tf["trade_id"].astype(np.int64)
+                tf["price"] = tf["price"].astype(np.float64)
+                tf["qty"] = tf["qty"].astype(np.float64)
+                tf["timestamp"] = tf["timestamp"].astype(np.int64)
+                tf["is_buyer_maker"] = tf["is_buyer_maker"].astype(np.int8)
+                tf.sort_values("trade_id", inplace=True)
+                tf.drop_duplicates("trade_id", inplace=True)
+                tf.reset_index(drop=True, inplace=True)
+                if df.empty:
+                    df = tf
+                else:
+                    df = pd.concat([df, tf])
         except Exception as e:
             print('Failed to fetch', date, e)
         return df
@@ -463,6 +503,80 @@ class Downloader:
                         start_time = df["timestamp"].iloc[0]
                         current_time = df["timestamp"].iloc[-1]
                         current_id = df["trade_id"].iloc[-1] + 1
+            elif False: #self.config['exchange'] == 'bybit':
+
+                # work in progress
+
+                fetched_new_trades = await self.bot.fetch_ticks(1)
+                tf = self.transform_ticks(fetched_new_trades)
+                earliest = tf['timestamp'].iloc[0]
+
+                if earliest > start_time:
+                    start_time = earliest
+                    current_time = start_time
+
+                if end_time == -1:
+                    tmp = pd.date_range(
+                        start=datetime.datetime.fromtimestamp(start_time / 1000, datetime.timezone.utc).date(),
+                        end=datetime.datetime.now(datetime.timezone.utc).date(), freq='M').to_pydatetime()
+                else:
+                    tmp = pd.date_range(
+                        start=datetime.datetime.fromtimestamp(start_time / 1000, datetime.timezone.utc).date(),
+                        end=datetime.datetime.fromtimestamp(end_time / 1000, datetime.timezone.utc).date(),
+                        freq='M').to_pydatetime()
+
+                if end_time == -1:
+                    tmp = pd.date_range(
+                        start=datetime.datetime.fromtimestamp(new_start_time / 1000, datetime.timezone.utc).date(),
+                        end=datetime.datetime.now(datetime.timezone.utc).date(), freq='D').to_pydatetime()
+                else:
+                    tmp = pd.date_range(
+                        start=datetime.datetime.fromtimestamp(new_start_time / 1000, datetime.timezone.utc).date(),
+                        end=datetime.datetime.fromtimestamp(end_time / 1000, datetime.timezone.utc).date(),
+                        freq='D').to_pydatetime()
+
+                days = [date.strftime("%Y-%m-%d") for date in tmp]
+                dates = days
+
+                df = pd.DataFrame(columns=['trade_id', 'price', 'qty', 'timestamp', 'is_buyer_maker'])
+
+                for date in dates:
+                    if len(date.split('-')) == 3:
+                        tf = self.get_csv_gz(self.daily_base_url, self.config['symbol'], date)
+                    else:
+                        print("Something wrong with the date", date)
+                        tf = pd.DataFrame()
+                    tf = tf[tf['timestamp'] >= start_time]
+                    if end_time != -1:
+                        tf = tf[tf['timestamp'] <= end_time]
+                    if start_id != 0:
+                        tf = tf[tf['trade_id'] > start_id]
+                    if end_id != 0:
+                        tf = tf[tf['trade_id'] <= end_id]
+                    if df.empty:
+                        df = tf
+                    else:
+                        df = pd.concat([df, tf])
+                    df.sort_values("trade_id", inplace=True)
+                    df.drop_duplicates("trade_id", inplace=True)
+                    df.reset_index(drop=True, inplace=True)
+
+                    if not df.empty and (
+                            (df['trade_id'].iloc[0] % 100000 == 0 and len(df) >= 100000) or df['trade_id'].iloc[
+                        0] % 100000 != 0):
+                        for index, row in df[df['trade_id'] % 100000 == 0].iterrows():
+                            if index != 0:
+                                self.save_dataframe(df[(df['trade_id'] >= row['trade_id'] - 1000000) & (
+                                        df['trade_id'] < row['trade_id'])], "", True)
+                                df = df[df['trade_id'] >= row['trade_id']]
+                    if not df.empty:
+                        start_id = df["trade_id"].iloc[0] - 1
+                        start_time = df["timestamp"].iloc[0]
+                        current_time = df["timestamp"].iloc[-1]
+                        current_id = df["trade_id"].iloc[-1] + 1
+
+
+
 
             if start_id == 0:
                 df = await self.find_time(start_time)
