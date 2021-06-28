@@ -134,10 +134,12 @@ class Bot:
             position['available_margin'] = (position['equity'] - position['used_margin']) * 0.9
             position['long']['liq_diff'] = calc_diff(position['long']['liquidation_price'], self.price)
             position['shrt']['liq_diff'] = calc_diff(position['shrt']['liquidation_price'], self.price)
-            position['long']['pbr'] = qty_to_cost(position['long']['size'], position['long']['price'],
-                                                  self.xk['inverse'], self.xk['c_mult']) / position['wallet_balance']
-            position['shrt']['pbr'] = qty_to_cost(position['shrt']['size'], position['shrt']['price'],
-                                                  self.xk['inverse'], self.xk['c_mult']) / position['wallet_balance']
+            position['long']['pbr'] = (qty_to_cost(position['long']['size'], position['long']['price'],
+                                                   self.xk['inverse'], self.xk['c_mult']) /
+                                       position['wallet_balance']) if position['wallet_balance'] else 0.0
+            position['shrt']['pbr'] = (qty_to_cost(position['shrt']['size'], position['shrt']['price'],
+                                                   self.xk['inverse'], self.xk['c_mult']) /
+                                       position['wallet_balance']) if position['wallet_balance'] else 0.0
             if self.position != position:
                 self.dump_log({'log_type': 'position', 'data': position})
             self.position = position
