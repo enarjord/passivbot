@@ -735,7 +735,7 @@ class Telegram:
 
     def notify_entry_order_filled(self, position_side: str, qty: float, fee: float, price: float, total_size: float):
         if 'notify_entry_fill' not in self.config or self.config['notify_entry_fill'] is True:
-            icon = "\U00002733"
+            icon = "\U0001F535"
             self.send_msg(f'<b>{icon} {self._bot.exchange.capitalize()} {self._bot.pair}</b> Opened {position_side}\n'
                           f'<b>Amount: </b><pre>{round_(qty, self._bot.qty_step)}</pre>\n'
                           f'<b>Total size: </b><pre>{round_(total_size, self._bot.qty_step)}</pre>\n'
@@ -782,9 +782,19 @@ class Telegram:
                 parse_mode=ParseMode.HTML,
                 reply_markup=self._keyboards[self._keyboard_idx],
                 disable_notification=False
-            ).message_id
+            )
         except Exception as e:
-            print(f'Failed to send telegram message: {e}')
+            print(f'Error sending telegram message: {e}')
+            try:
+                self._updater.bot.send_message(
+                    self._chat_id,
+                    text=f'Error sending message: {e}',
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=self._keyboards[self._keyboard_idx],
+                    disable_notification=False
+                )
+            except Exception as fe:
+                print(f'Failed to send error message: {fe}')
 
     def exit(self):
         try:
