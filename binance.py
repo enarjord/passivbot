@@ -58,12 +58,15 @@ class BinanceBot(Bot):
     async def private_delete(self, url: str, params: dict = {}) -> dict:
         return await self.private_('delete', self.base_endpoint, url, params)
 
-    def init_market_type(self):
-        if self.symbol.endswith('USDT'):
+    async def init_market_type(self):
+        fapi_endpoint = 'https://fapi.binance.com'
+        dapi_endpoint = 'https://dapi.binance.com'
+        fapi_info = await self.private_get('/fapi/v1/exchangeInfo', base_endpoint=fapi_endpoint)
+        if self.symbol in {e['symbol'] for e in fapi_info['symbols']}:
             print('linear perpetual')
             self.market_type = 'linear_perpetual'
             self.inverse = self.config['inverse'] = False
-            self.base_endpoint = 'https://fapi.binance.com'
+            self.base_endpoint = fapi_endpoint
             self.endpoints = {
                 'position': '/fapi/v2/positionRisk',
                 'balance': '/fapi/v2/balance',
@@ -81,36 +84,39 @@ class BinanceBot(Bot):
                 'position_side': '/fapi/v1/positionSide/dual',
                 'websocket': f"wss://fstream.binance.com/ws/{self.symbol.lower()}@aggTrade"
             }
-
         else:
-            print('inverse coin margined')
-            self.base_endpoint = 'https://dapi.binance.com'
-            self.market_type = 'inverse_coin_margined'
-            self.inverse = self.config['inverse'] = True
-            self.endpoints = {
-                'position': '/dapi/v1/positionRisk',
-                'balance': '/dapi/v1/balance',
-                'exchange_info': '/dapi/v1/exchangeInfo',
-                'leverage_bracket': '/dapi/v1/leverageBracket',
-                'open_orders': '/dapi/v1/openOrders',
-                'ticker': '/dapi/v1/ticker/bookTicker',
-                'fills': '/dapi/v1/userTrades',
-                'income': '/dapi/v1/income',
-                'create_order': '/dapi/v1/order',
-                'cancel_order': '/dapi/v1/order',
-                'ticks': '/dapi/v1/aggTrades',
-                'margin_type': '/dapi/v1/marginType',
-                'leverage': '/dapi/v1/leverage',
-                'position_side': '/dapi/v1/positionSide/dual',
-                'websocket': f"wss://dstream.binance.com/ws/{self.symbol.lower()}@aggTrade"
-            }
+            dapi_info = await self.private_get('/dapi/v1/exchangeInfo', base_endpoint=dapi_endpoint)
+            if self.symbol in {e['symbol'] for e in dapi_info['symbols']}:
+                print('inverse coin margined')
+                self.base_endpoint = dapi_endpoint
+                self.market_type = 'inverse_coin_margined'
+                self.inverse = self.config['inverse'] = True
+                self.endpoints = {
+                    'position': '/dapi/v1/positionRisk',
+                    'balance': '/dapi/v1/balance',
+                    'exchange_info': '/dapi/v1/exchangeInfo',
+                    'leverage_bracket': '/dapi/v1/leverageBracket',
+                    'open_orders': '/dapi/v1/openOrders',
+                    'ticker': '/dapi/v1/ticker/bookTicker',
+                    'fills': '/dapi/v1/userTrades',
+                    'income': '/dapi/v1/income',
+                    'create_order': '/dapi/v1/order',
+                    'cancel_order': '/dapi/v1/order',
+                    'ticks': '/dapi/v1/aggTrades',
+                    'margin_type': '/dapi/v1/marginType',
+                    'leverage': '/dapi/v1/leverage',
+                    'position_side': '/dapi/v1/positionSide/dual',
+                    'websocket': f"wss://dstream.binance.com/ws/{self.symbol.lower()}@aggTrade"
+                }
+            else:
+                raise Exception(f'unknown symbol {self.symbol}')
 
         self.spot_base_endpoint = 'https://api.binance.com'
         self.endpoints['transfer'] = '/sapi/v1/asset/transfer'
         self.endpoints['account'] = '/api/v3/account'
 
     async def _init(self):
-        self.init_market_type()
+        await self.init_market_type()
         exchange_info, leverage_bracket = await asyncio.gather(
             self.public_get(self.endpoints['exchange_info']),
             self.private_get(self.endpoints['leverage_bracket']),
@@ -241,6 +247,7 @@ class BinanceBot(Bot):
                                                           else {'pair': self.pair})),
             self.private_get(self.endpoints['balance'], {})
         )
+        positions = [e for e in positions if e['symbol'] == self.symbol]
         position = {}
         if positions:
             for p in positions:
