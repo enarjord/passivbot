@@ -4,6 +4,7 @@ import datetime
 import gc
 import os
 import sys
+import gzip
 from io import BytesIO
 from time import sleep
 from time import time
@@ -36,14 +37,12 @@ class Downloader:
             self.start_time = int(parser.parse(self.config["start_date"]).replace(
                 tzinfo=datetime.timezone.utc).timestamp() * 1000)
         except Exception:
-            print("Unrecognized date format for start time.")
-        self.end_time = self.config["end_date"]
-        if self.end_time != -1:
-            try:
-                self.end_time = int(
-                    parser.parse(self.end_time).replace(tzinfo=datetime.timezone.utc).timestamp() * 1000)
-            except Exception:
-                print("Unrecognized date format for end time.")
+            print(f"Unrecognized date format for start time {self.config['start_date']}")
+        try:
+            self.end_time = int(parser.parse(self.config["end_date"]).replace(
+                tzinfo=datetime.timezone.utc).timestamp() * 1000)
+        except Exception:
+            raise Exception(f"Unrecognized date format for end time {self.config['end_date']}")
         if self.config['exchange'] == 'binance':
             if 'spot' in self.config and self.config['spot']:
                 self.daily_base_url = "https://data.binance.vision/data/daily/aggTrades/"
@@ -210,7 +209,7 @@ class Downloader:
                 if nw_id > highest_id:
                     nw_id = highest_id
                 try:
-                    ticks = await self.bot.fetch_ticks(from_id=nw_id)
+                    ticks = await self.bot.fetch_ticks(from_id=nw_id, do_print=False)
                     df = self.transform_ticks(ticks)
                     if not df.empty:
                         first_ts = df["timestamp"].iloc[0]
@@ -258,7 +257,45 @@ class Downloader:
             print('Failed to fetch', date, e)
         return df
 
-    def get_csv_gz(self, base_url, symbol, date):
+    async def find_df_enclosing_timestamp(self, timestamp, guessed_chunk=None):
+        if guessed_chunk is not None:
+            if guessed_chunk[0]['timestamp'] < timestamp < guessed_chunk[-1]['timestamp']:
+                print_(['found id'])
+                return self.transform_ticks(guessed_chunk)
+        else:
+            guessed_chunk = sorted(await self.bot.fetch_ticks(do_print=False), key=lambda x: x['trade_id'])
+            return await self.find_df_enclosing_timestamp(timestamp, guessed_chunk)
+
+
+        if timestamp < guessed_chunk[0]['timestamp']:
+            guessed_id = (guessed_chunk[0]['trade_id'] -
+                          len(guessed_chunk) * 
+                          (guessed_chunk[0]['timestamp'] - timestamp) /
+                           (guessed_chunk[-1]['timestamp'] - guessed_chunk[0]['timestamp']))
+        else:
+            guessed_id = (guessed_chunk[-1]['trade_id'] +
+                          len(guessed_chunk) * 
+                          (timestamp - guessed_chunk[-1]['timestamp']) /
+                           (guessed_chunk[-1]['timestamp'] - guessed_chunk[0]['timestamp']))
+        guessed_id = int(guessed_id - len(guessed_chunk) / 2)
+        guessed_chunk = sorted(await self.bot.fetch_ticks(guessed_id, do_print=False), key=lambda x: x['trade_id'])
+        print_([f"guessed_id {guessed_id} earliest ts {ts_to_date(guessed_chunk[0]['timestamp'] / 1000)[:19]} last ts {ts_to_date(guessed_chunk[-1]['timestamp'] / 1000)[:19]} target ts {ts_to_date(timestamp / 1000)[:19]}"])
+        return await self.find_df_enclosing_timestamp(timestamp, guessed_chunk)
+
+    def deduce_trade_ids(self, daily_ticks, df_for_id_matching):
+        for idx in [0, -1]:
+            match = daily_ticks[(daily_ticks.timestamp == df_for_id_matching.timestamp.iloc[idx]) &
+                                (daily_ticks.price == df_for_id_matching.price.iloc[idx]) &
+                                (daily_ticks.qty == df_for_id_matching.qty.iloc[idx])]
+            if len(match) == 1:
+                id_at_match = df_for_id_matching.trade_id.iloc[idx]
+                return np.arange(id_at_match - match.index[0], id_at_match - match.index[0] + len(daily_ticks))
+                #trade_ids = np.arange(id_at_match, id_at_match + len(daily_ticks.loc[match.index:]))
+                return match, id_at_match
+        raise Exception('unable to make trade ids')
+
+
+    async def get_csv_gz(self, base_url, symbol, date, df_for_id_matching):
         """
         Fetches a full day of trades from the Bybit repository.
         @param symbol: Symbol to fetch.
@@ -271,20 +308,20 @@ class Downloader:
         try:
             resp = urlopen(url)
             with gzip.open(BytesIO(resp.read())) as f:
-                tf = pd.read_csv(f)
-                tf.drop(errors='ignore', columns=['tickDirection', 'trdMatchID', 'grossValue', 'homeNotional', 'foreignNotional'], inplace=True)
-                tf["trade_id"] = tf["trade_id"].astype(np.int64)
-                tf["price"] = tf["price"].astype(np.float64)
-                tf["qty"] = tf["qty"].astype(np.float64)
-                tf["timestamp"] = tf["timestamp"].astype(np.int64)
-                tf["is_buyer_maker"] = tf["is_buyer_maker"].astype(np.int8)
-                tf.sort_values("trade_id", inplace=True)
-                tf.drop_duplicates("trade_id", inplace=True)
+                ff = pd.read_csv(f)
+                trade_ids = np.zeros(len(ff)).astype(np.int64)
+                tf = pd.DataFrame({
+                    'trade_id': trade_ids,
+                    'price': ff.price.astype(np.float64),
+                    'qty': ff['size'].astype(np.float64),
+                    'timestamp': (ff.timestamp * 1000).astype(np.int64),
+                    'is_buyer_maker': (ff.side == 'Sell').astype(np.int8)
+                })
+                tf["trade_id"] = deduce_trade_ids(tf, df_for_id_matching)
+                tf.sort_values("timestamp", inplace=True)
                 tf.reset_index(drop=True, inplace=True)
-                if df.empty:
-                    df = tf
-                else:
-                    df = pd.concat([df, tf])
+                del ff
+                df = tf
         except Exception as e:
             print('Failed to fetch', date, e)
         return df
@@ -503,7 +540,7 @@ class Downloader:
                         start_time = df["timestamp"].iloc[0]
                         current_time = df["timestamp"].iloc[-1]
                         current_id = df["trade_id"].iloc[-1] + 1
-            elif False: #self.config['exchange'] == 'bybit':
+            elif False:#self.config['exchange'] == 'bybit':
 
                 # work in progress
 
@@ -515,34 +552,25 @@ class Downloader:
                     start_time = earliest
                     current_time = start_time
 
-                if end_time == -1:
-                    tmp = pd.date_range(
-                        start=datetime.datetime.fromtimestamp(start_time / 1000, datetime.timezone.utc).date(),
-                        end=datetime.datetime.now(datetime.timezone.utc).date(), freq='M').to_pydatetime()
-                else:
-                    tmp = pd.date_range(
-                        start=datetime.datetime.fromtimestamp(start_time / 1000, datetime.timezone.utc).date(),
-                        end=datetime.datetime.fromtimestamp(end_time / 1000, datetime.timezone.utc).date(),
-                        freq='M').to_pydatetime()
-
-                if end_time == -1:
-                    tmp = pd.date_range(
-                        start=datetime.datetime.fromtimestamp(new_start_time / 1000, datetime.timezone.utc).date(),
-                        end=datetime.datetime.now(datetime.timezone.utc).date(), freq='D').to_pydatetime()
-                else:
-                    tmp = pd.date_range(
-                        start=datetime.datetime.fromtimestamp(new_start_time / 1000, datetime.timezone.utc).date(),
-                        end=datetime.datetime.fromtimestamp(end_time / 1000, datetime.timezone.utc).date(),
-                        freq='D').to_pydatetime()
+                tmp = pd.date_range(
+                    start=datetime.datetime.fromtimestamp(start_time / 1000, datetime.timezone.utc).date(),
+                    end=datetime.datetime.fromtimestamp(end_time / 1000, datetime.timezone.utc).date(),
+                    freq='D').to_pydatetime()
 
                 days = [date.strftime("%Y-%m-%d") for date in tmp]
                 dates = days
+
+
+                if start_id == 0:
+                    df_for_id_matching = await self.find_df_enclosing_timestamp(start_time)
+                else:
+                    df_for_id_matching = await self.fetch_ticks(start_id - 100)
 
                 df = pd.DataFrame(columns=['trade_id', 'price', 'qty', 'timestamp', 'is_buyer_maker'])
 
                 for date in dates:
                     if len(date.split('-')) == 3:
-                        tf = self.get_csv_gz(self.daily_base_url, self.config['symbol'], date)
+                        tf = self.get_csv_gz(self.daily_base_url, self.config['symbol'], date, df_for_id_matching)
                     else:
                         print("Something wrong with the date", date)
                         tf = pd.DataFrame()
