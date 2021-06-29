@@ -37,12 +37,14 @@ class Downloader:
             self.start_time = int(parser.parse(self.config["start_date"]).replace(
                 tzinfo=datetime.timezone.utc).timestamp() * 1000)
         except Exception:
-            print(f"Unrecognized date format for start time {self.config['start_date']}")
-        try:
-            self.end_time = int(parser.parse(self.config["end_date"]).replace(
-                tzinfo=datetime.timezone.utc).timestamp() * 1000)
-        except Exception:
-            raise Exception(f"Unrecognized date format for end time {self.config['end_date']}")
+            raise Exception(f"Unrecognized date format for start time {config['start_date']}")
+        self.end_time = self.config["end_date"]
+        if self.end_time != -1:
+            try:
+                self.end_time = int(
+                    parser.parse(self.end_time).replace(tzinfo=datetime.timezone.utc).timestamp() * 1000)
+            except Exception:
+                raise Exception(f"Unrecognized date format for end time {config['end_date']}")
         if self.config['exchange'] == 'binance':
             if 'spot' in self.config and self.config['spot']:
                 self.daily_base_url = "https://data.binance.vision/data/daily/aggTrades/"
