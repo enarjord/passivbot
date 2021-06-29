@@ -20,6 +20,8 @@ theme:
   palette:
     primary: 'blue grey'
     accent: 'tear'
+extra_javascript:
+  - 'https://code.jquery.com/jquery-3.3.1.slim.min.js'
 markdown_extensions:
   - admonition
 extra:
