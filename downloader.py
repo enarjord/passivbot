@@ -209,7 +209,7 @@ class Downloader:
                 if nw_id > highest_id:
                     nw_id = highest_id
                 try:
-                    ticks = await self.bot.fetch_ticks(from_id=nw_id, do_print=False)
+                    ticks = await self.bot.fetch_ticks(from_id=int(nw_id), do_print=False)
                     df = self.transform_ticks(ticks)
                     if not df.empty:
                         first_ts = df["timestamp"].iloc[0]
