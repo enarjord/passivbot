@@ -1,5 +1,7 @@
 {
+  # bybit or binance
   exchange: binance
+
   user: your_user_name
   symbol: XMRUSDT
   latency_simulation_ms: 750
@@ -7,7 +9,6 @@
 
   # format YYYY-MM-DDTHH:mm:ss
   # e.g. 2020-02-18T19:34:59
-  start_date: 2020-06-21
-  # set end_date: -1 to use now as end date
-  end_date: 2021-06-22
+  start_date: 2020-06-28
+  end_date: 2021-06-29
 }
