@@ -200,6 +200,14 @@ def backtest_tune(data: np.ndarray, config: dict, current_best: Union[dict, list
         print("Available memory would drop below 10%. Please reduce the time span.")
         return None
     config = create_config(config)
+    if type(config['max_span']) in [ray.tune.sample.Float, ray.tune.sample.Integer]:
+        max_span_upper = config['max_span'].upper
+    else:
+        max_span_upper = config['max_span']
+    if len(data[2]) < max_span_upper * 1.5:
+        raise Exception( "too few ticks or to high upper range for max span,\n"
+                         "please use more backtest data or reduce max span\n"
+                        f"n_ticks {len(data[2])}, max_span {int(max_span_upper)}")
     print('tuning:')
     for k, v in config.items():
         if type(v) in [ray.tune.sample.Float, ray.tune.sample.Integer]:
