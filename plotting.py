@@ -92,7 +92,7 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
 def plot_fills(df, fdf_, side: int = 0, bkr_thr=0.1):
     plt.clf()
     fdf = fdf_.set_index('timestamp')
-    dfc = df.iloc[::max(1, int(len(df) * 0.0001))]
+    dfc = df.iloc[::max(1, int(len(df) * 0.00001))]
     dfc = dfc[(dfc.timestamp > fdf.index[0]) & (dfc.timestamp < fdf.index[-1])].set_index('timestamp')
     dfc = dfc.loc[fdf.index[0]:fdf.index[-1]]
     dfc.price.plot(style='y-')
