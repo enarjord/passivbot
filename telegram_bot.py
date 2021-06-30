@@ -207,7 +207,7 @@ class Telegram:
         return ConversationHandler.END
 
     def _begin_set_config(self, update: Update, _: CallbackContext) -> int:
-        files = [f for f in os.listdir('configs/live') if f.endswith('.json')]
+        files = sorted([f for f in os.listdir('configs/live') if f.endswith('.json')])
         buttons = []
         for file in files:
             buttons.append([InlineKeyboardButton(file, callback_data=file)])
