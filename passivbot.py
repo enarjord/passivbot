@@ -520,7 +520,8 @@ class Bot:
         else:
             idxs = get_ids_to_fetch(self.spans, ticks[-1]['trade_id'])
             fetched_ticks = await asyncio.gather(*[self.fetch_ticks(from_id=int(i)) for i in idxs])
-            compressed = drop_consecutive_same_prices(sorted(flatten(fetched_ticks) + ticks, key=lambda x: x['trade_id']))
+            latest_ticks = await self.fetch_ticks()
+            compressed = drop_consecutive_same_prices(sorted(flatten(fetched_ticks) + ticks + latest_ticks, key=lambda x: x['trade_id']))
             self.emas = calc_indicators_from_ticks_with_gaps(self.spans, compressed)
         self.ratios = np.append(self.price, self.emas[:-1]) / self.emas
 
