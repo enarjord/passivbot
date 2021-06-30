@@ -1,5 +1,21 @@
 # Running the bot live
 
+### Usage:
+
+#### Supports exchanges Bybit futures and Binance futures, using hedge mode when supported
+
+1. Add your api key and secret in file [api-keys.json](api-keys.json)
+2.
+```shell
+python3 start_bot.py {account_name} {symbol} {path/to/config.json}
+   ```
+
+Example:
+
+```shell
+python3 start_bot.py binance_01 XMRUSDT configs/live/binance_xmrusdt.json
+```
+
 ## Default configurations
 
 There are a limited number of configurations provided by default in the repository. These configurations
