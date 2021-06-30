@@ -1,7 +1,9 @@
 import json
 import os
+from procedures import load_live_config
 from datetime import datetime, timedelta
 from time import time
+from pure_funcs import config_pretty_str
 
 try:
     import git
@@ -16,7 +18,8 @@ from telegram import KeyboardButton, ParseMode, ReplyKeyboardMarkup, Update, Inl
 from telegram.ext import Updater, CommandHandler, ConversationHandler, CallbackContext, \
     MessageHandler, Filters, CallbackQueryHandler
 
-from jitted import compress_float, round_, round_dynamic
+from njit_funcs import round_
+from pure_funcs import compress_float, round_dynamic, denumpyize
 
 
 class Telegram:
@@ -35,8 +38,8 @@ class Telegram:
             [KeyboardButton('/balance \U0001F4B3'), KeyboardButton('/help \U00002753'), KeyboardButton('/next \U000023E9')]]
         second_keyboard_buttons = [
             [KeyboardButton('/set_leverage \U000026A1'), KeyboardButton('/set_short \U0001F4C9'), KeyboardButton('/set_long \U0001F4C8')],
-            [KeyboardButton('/transfer \U0001F3E6'), KeyboardButton('/set_config \U0001F4C4'), KeyboardButton('/stop \U000026D4')],
-            [KeyboardButton('/previous \U000023EA')]
+            [KeyboardButton('/transfer \U0001F3E6'), KeyboardButton('/set_profit_transfer \U0001F4DD'), KeyboardButton('/set_config \U0001F4C4')],
+            [KeyboardButton('/previous \U000023EA'), KeyboardButton('/stop \U000026D4')]
         ]
         self._keyboard_idx = 0
         self._keyboards = [ReplyKeyboardMarkup(first_keyboard_buttons, resize_keyboard=True),
@@ -55,12 +58,12 @@ class Telegram:
             MessageHandler(Filters.regex('/reload_config.*'), self._reload_config))
         dispatcher.add_handler(
             MessageHandler(Filters.regex('/closed_trades.*'), self._closed_trades))
-        dispatcher.add_handler(MessageHandler(Filters.regex('/daily.*'), self._daily))
+        dispatcher.add_handler(CommandHandler('daily', self._daily))
         dispatcher.add_handler(MessageHandler(Filters.regex('/help.*'), self._help))
         dispatcher.add_handler(ConversationHandler(
             entry_points=[MessageHandler(Filters.regex('/stop.*'), self._begin_stop)],
             states={
-                1: [MessageHandler(Filters.regex('(graceful|freeze|shutdown|panic|resume|cancel)'),
+                1: [MessageHandler(Filters.regex('(graceful|freeze|shutdown|panic|manual|resume|cancel)'),
                                    self._stop_mode_chosen)],
                 2: [MessageHandler(Filters.regex('(confirm|abort)'), self._verify_stop_confirmation)]
             },
@@ -105,6 +108,16 @@ class Telegram:
             },
             fallbacks=[MessageHandler(Filters.command, self._abort)]
         ))
+
+        dispatcher.add_handler(ConversationHandler(
+            entry_points=[MessageHandler(Filters.regex('/set_profit_transfer.*'), self._begin_set_profit_transfer)],
+            states={
+                1: [MessageHandler(Filters.regex('([0-9]*|cancel)'), self._profit_transfer_chosen)],
+                2: [MessageHandler(Filters.regex('(confirm|abort)'), self._verify_profit_transfer_confirmation)]
+            },
+            fallbacks=[CommandHandler('cancel', self._abort)]
+        ))
+
         dispatcher.add_handler(MessageHandler(Filters.regex('/next.*'), self._next_page))
         dispatcher.add_handler(MessageHandler(Filters.regex('/previous.*'), self._previous_page))
 
@@ -194,7 +207,7 @@ class Telegram:
         return ConversationHandler.END
 
     def _begin_set_config(self, update: Update, _: CallbackContext) -> int:
-        files = [f for f in os.listdir('configs/live') if f.endswith('.json')]
+        files = sorted([f for f in os.listdir('configs/live') if f.endswith('.json')])
         buttons = []
         for file in files:
             buttons.append([InlineKeyboardButton(file, callback_data=file)])
@@ -294,7 +307,7 @@ class Telegram:
         return ConversationHandler.END
 
     def _begin_set_leverage(self, update: Update, _: CallbackContext) -> int:
-        self.stop_mode_requested = ''
+        self.leverage_chosen = None
         reply_keyboard = [['1', '3', '4'],
                           ['6', '7', '10'],
                           ['15', '20', 'cancel']]
@@ -356,6 +369,62 @@ class Telegram:
                                       reply_markup=self._keyboards[self._keyboard_idx])
         return ConversationHandler.END
 
+    def _begin_set_profit_transfer(self, update: Update, _: CallbackContext) -> int:
+        self.profit_transfer_pct_chosen = None
+        reply_keyboard = [['0.0', '0.2', '0.25'],
+                          ['0.3', '0.4', '0.5'],
+                          ['0.75', '1', 'cancel']]
+        update.message.reply_text(
+            text='To modify the profit transfer percentage, please pick the desired amount using the buttons below,'
+                 'or type in the desired profit transfer amount yourself (value between 0 and 1).\n'
+                 'Setting the value to 0 disables profit transfer, and 1 transfers all profit.\n'
+                 'Note that the that <b>this change is not persisted between restarts!</b>\n'
+                 'Or send /cancel to abort modifying the profit transfer',
+            parse_mode=ParseMode.HTML,
+            reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True)
+        )
+        return 1
+
+    def _profit_transfer_chosen(self, update: Update, _: CallbackContext) -> int:
+        if update.message.text == 'cancel':
+            self.send_msg('Request for changing profit transfer was cancelled')
+            return ConversationHandler.END
+
+        try:
+            self.profit_transfer_pct_chosen = float(update.message.text)
+            if self.profit_transfer_pct_chosen < 0 or self.profit_transfer_pct_chosen > 1:
+                self.send_msg(f'Invalid profit transfer percentage provided. The value for the profit transfer must be a value between 0 and 1 (inclusive), indicating a range of 0% to 100%')
+                return ConversationHandler.END
+        except:
+            self.send_msg(f'Invalid profit transfer percentage provided. The value must be between 0 and 1. Aborting conversation.')
+            return ConversationHandler.END
+
+        reply_keyboard = [['confirm', 'abort']]
+        update.message.reply_text(
+            text=f'You have chosen to change the profit transfer percentage to <pre>{self.profit_transfer_pct_chosen}</pre>.\n'
+                 f'Please confirm that you want to activate this by replying with either <pre>confirm</pre> or <pre>abort</pre>\n'
+                 f'<b>Please be aware that this setting is not persisted between restarts!</b>',
+            parse_mode=ParseMode.HTML,
+            reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True)
+        )
+        return 2
+
+    def _verify_profit_transfer_confirmation(self, update: Update, _: CallbackContext) -> int:
+        if update.message.text == 'confirm':
+            self._bot.set_config_value('profit_trans_pct', self.profit_transfer_pct_chosen)
+            self.send_msg(
+                f'Profit transfer percentage set to {self.profit_transfer_pct_chosen}.\n'
+                'Please be aware that this change is NOT persisted between restarts. To reset the profit transfer percentage, you can use <pre>/reload_config</pre>')
+        elif update.message.text == 'abort':
+            self.profit_transfer_pct_chosen = None
+            self.send_msg('Request for setting profit transfer amount was aborted')
+        else:
+            self.leverage_chosen = ''
+            update.message.reply_text(text=f'Something went wrong, either <pre>confirm</pre> or <pre>abort</pre> was expected, but {update.message.text} was sent',
+                                      parse_mode=ParseMode.HTML,
+                                      reply_markup=self._keyboards[self._keyboard_idx])
+        return ConversationHandler.END
+
     def _previous_page(self, update=None, context=None):
         if self._keyboard_idx > 0:
             self._keyboard_idx = self._keyboard_idx - 1
@@ -369,12 +438,14 @@ class Telegram:
     def _begin_stop(self, update: Update, _: CallbackContext) -> int:
         self.stop_mode_requested = ''
         reply_keyboard = [['graceful', 'freeze', 'panic'],
-                          ['shutdown', 'resume', 'cancel']]
+                          ['shutdown', 'manual', 'resume'],
+                          ['cancel']]
         update.message.reply_text(
             text='To stop the bot, please choose one of the following modes:\n'
             '<pre>graceful</pre>: prevents the bot from opening new positions, but completes the existing position as usual\n'
             '<pre>freeze</pre>: prevents the bot from opening positions, and cancels all open orders to open/reenter positions\n'
             '<pre>panic</pre>: immediately closes all open positions against market price, and cancels all open orders to open/reenter positions\n'
+            '<pre>manual</pre>: immediately stops automatic order creation & cancelling, and effectively disables the bot to stop doing anything on the exchange\n'
             '<pre>shutdown</pre>: immediately shuts down the bot, not making any further modifications to the current orders or positions\n'
             '<pre>resume</pre>: clears the stop mode and resumes normal operation\n'
             'Or send /cancel to abort stop-mode activation',
@@ -439,6 +510,11 @@ class Telegram:
                 self.send_msg(
                     'Panic stop mode activated. No longer opening new long or short positions, existing positions will immediately be closed.'
                     'Please be aware that this change is NOT persisted between restarts. To clear the stop-mode, you can use <pre>/reload_config</pre> or select <pre>resume</pre> from the <pre>/stop</pre> action')
+            if self.stop_mode_requested == 'manual':
+                self._bot.stop_mode = 'manual'
+                self.send_msg(
+                    'Manual stop mode activated. No longer creating or cancelling orders on the exchange.\n'
+                    'Please be aware that this change is NOT persisted between restarts. To clear the stop-mode, you can use <pre>/reload_config</pre> or select <pre>resume</pre> from the <pre>/stop</pre> action')
             elif self.stop_mode_requested == 'shutdown':
                 self._bot.stop_websocket = True
                 self.send_msg(
@@ -475,12 +551,12 @@ class Telegram:
               '/show_config: the active configuration used\n' \
               '/reload_config: reload the configuration from disk, based on the file initially used\n' \
               "/closed_trades: a brief overview of bot's last 10 closed trades\n" \
-              '/daily: an overview of daily profit\n' \
+              '/daily <days>: an overview of daily profit, defaulting to 7 days\n' \
               '/set_leverage: initiates a conversion via which the user can modify the active leverage\n' \
               '/set_short: initiates a conversion via which the user can enable/disable shorting\n' \
               '/set_long: initiates a conversion via which the user can enable/disable long\n' \
               '/set_config: initiates a conversion via which the user can switch to a different configuration file\n' \
-              '/help: This help page\n'
+              '/help: This help page'
         self.send_msg(msg)
 
     def _open_orders(self, update=None, context=None):
@@ -505,20 +581,23 @@ class Telegram:
         if 'long' in self._bot.position:
             long_position = self._bot.position['long']
             shrt_position = self._bot.position['shrt']
+            closest_long_price = min([o['price'] for o in self._bot.open_orders if o['position_side'] == 'long' and o['side'] == 'sell'] or [0])
+            closest_shrt_price = max([o['price'] for o in self._bot.open_orders if o['position_side'] == 'shrt' and o['side'] == 'buy'] or [0])
 
             position_table.add_row([f'Size', round_dynamic(long_position['size'], 3),
                                     round_dynamic(shrt_position['size'], 3)])
-            position_table.add_row(['Price', round_dynamic(long_position['price'], 3),
+            position_table.add_row(['Entry price', round_dynamic(long_position['price'], 3),
                                     round_dynamic(shrt_position['price'], 3)])
-            position_table.add_row(['Curr.price', round_dynamic(self._bot.price, 3),
-                                    round_dynamic(self._bot.price, 3)])
-            position_table.add_row(['Leverage', compress_float(long_position['leverage'], 3),
-                                     compress_float(shrt_position['leverage'], 3)])
+            position_table.add_row(['Curr.price', round_(self._bot.price, self._bot.price_step),
+                                    round_(self._bot.price, self._bot.price_step)])
+            position_table.add_row(['Close price', round_(closest_long_price, self._bot.price_step),
+                                    round_(closest_shrt_price, self._bot.price_step)])
+            position_table.add_row(['Cost/balance', round_dynamic(float(long_position['pbr']), 3), round_dynamic(float(shrt_position['pbr']), 3)])
             position_table.add_row(['Liq.price', round_dynamic(long_position['liquidation_price'], 3),
                  round_dynamic(shrt_position['liquidation_price'], 3)])
             position_table.add_row(['Liq.diff.%', round_dynamic(float(long_position['liq_diff']) * 100, 3),
                  round_dynamic(float(shrt_position['liq_diff']) * 100, 3)])
-            position_table.add_row([f'UPNL {self._bot.margin_coin}', round_dynamic(float(long_position['upnl']), 3),
+            position_table.add_row([f'UPNL {self._bot.margin_coin if hasattr(self._bot, "margin_coin") else ""}', round_dynamic(float(long_position['upnl']), 3),
                                     round_dynamic(float(shrt_position['upnl']), 3)])
 
             table_msg = position_table.get_string(border=True, padding_width=1,
@@ -532,11 +611,16 @@ class Telegram:
         if bool(self._bot.position):
             async def _balance_async():
                 position = await self._bot.fetch_position()
-                msg = f'Balance {self._bot.margin_coin if hasattr(self._bot, "margin_coin") else ""}\n' \
+                account = await self._bot.fetch_account()
+                usdt_balance = list(asset for asset in account['balances'] if asset['asset'] == 'USDT')[0]
+
+                msg = f'Futures balance {self._bot.margin_coin if hasattr(self._bot, "margin_coin") else ""}:\n' \
                       f'Wallet balance: {compress_float(position["wallet_balance"], 4)}\n' \
                       f'Equity: {compress_float(self._bot.position["equity"], 4)}\n' \
                       f'Locked margin: {compress_float(self._bot.position["used_margin"], 4)}\n' \
-                      f'Available margin: {compress_float(self._bot.position["available_margin"], 4)}'
+                      f'Available margin: {compress_float(self._bot.position["available_margin"], 4)}\n\n' \
+                      f'Spot balance:\n' \
+                      f'USDT: {compress_float(float(usdt_balance["free"]) + float(usdt_balance["locked"]), 4)} ({compress_float(float(usdt_balance["locked"]), 4)} locked)'
                 self.send_msg(msg)
 
             self.send_msg('Retrieving balance...')
@@ -556,9 +640,9 @@ class Telegram:
 
     def _activate_config(self, config_path):
         try:
-            config = json.load(open(config_path))
+            config = load_live_config(config_path)
         except Exception:
-            self.send_msg(f"Failed to load config file {self._bot.live_config_path}")
+            self.send_msg(f"Failed to load config file {config_path}")
             self.config_reload_ts = 0.0
             return
 
@@ -601,8 +685,7 @@ class Telegram:
 
     def _daily(self, update=None, context=None):
         if self._bot.exchange == 'binance':
-            async def send_daily_async():
-                nr_of_days = 7
+            async def send_daily_async(nr_of_days:int):
                 today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
                 daily = {}
                 position = await self._bot.fetch_position()
@@ -641,18 +724,33 @@ class Telegram:
                 self.send_msg(msg)
 
             self.send_msg('Calculating daily pnl...')
-            task = self.loop.create_task(send_daily_async())
+            try:
+                nr_of_days = int(context.args[0])
+            except:
+                nr_of_days = 7
+            task = self.loop.create_task(send_daily_async(nr_of_days))
             task.add_done_callback(lambda fut: True) #ensures task is processed to prevent warning about not awaiting
         else:
             self.send_msg('This command is not supported (yet) on Bybit')
 
-    def notify_close_order_filled(self, realized_pnl: float, position_side: str):
-        if 'notify_close_fill' not in self.config or self.config['notify_close_fill'] is True:
-            self.send_msg(f'Realized <pre>{round_(realized_pnl, self._bot.price_step)}</pre> {"profit" if realized_pnl >= 0 else "loss"} on {position_side}')
-
-    def notify_entry_order_filled(self, size: float, price:float, position_side: str):
+    def notify_entry_order_filled(self, position_side: str, qty: float, fee: float, price: float, total_size: float):
         if 'notify_entry_fill' not in self.config or self.config['notify_entry_fill'] is True:
-            self.send_msg(f'Entry order of size <pre>{size}</pre> at price <pre>{price}</pre> filled on {position_side}')
+            icon = "\U0001F535"
+            self.send_msg(f'<b>{icon} {self._bot.exchange.capitalize()} {self._bot.pair}</b> Opened {position_side}\n'
+                          f'<b>Amount: </b><pre>{round_(qty, self._bot.qty_step)}</pre>\n'
+                          f'<b>Total size: </b><pre>{round_(total_size, self._bot.qty_step)}</pre>\n'
+                          f'<b>Price: </b><pre>{round_(price, self._bot.price_step)}</pre>\n'
+                          f'<b>Fee: </b><pre>{round_(fee, self._bot.price_step)} {self._bot.margin_coin} ({round_(fee/(qty * price) * 100, self._bot.price_step)}%)</pre>')
+
+    def notify_close_order_filled(self, realized_pnl: float, position_side: str, qty: float, fee: float, wallet_balance: float, remaining_size: float, price: float):
+        if 'notify_close_fill' not in self.config or self.config['notify_close_fill'] is True:
+            icon = "\U00002705" if realized_pnl >= 0 else "\U0000274C"
+            self.send_msg(f'<b>{icon} {self._bot.exchange.capitalize()} {self._bot.pair}</b> Closed {position_side}\n'
+                f'<b>PNL: </b><pre>{round_(realized_pnl, self._bot.price_step)} {self._bot.margin_coin} ({round_(realized_pnl/wallet_balance * 100, self._bot.price_step)}%)</pre>\n'
+                f'<b>Amount: </b><pre>{round_(qty, self._bot.qty_step)}</pre>\n'
+                f'<b>Remaining size: </b><pre>{round_(remaining_size, self._bot.qty_step)}</pre>\n'
+                f'<b>Price: </b><pre>{round_(price, self._bot.price_step)}</pre>\n'
+                f'<b>Fee: </b><pre>{round_(fee, self._bot.price_step)} {self._bot.margin_coin} ({round_(fee/realized_pnl * 100, self._bot.price_step)}%)</pre>')
 
     def show_config(self, update=None, context=None):
         try:
@@ -662,11 +760,16 @@ class Telegram:
         except:
             sha_short = 'UNKNOWN'
 
-        msg = f'<pre><b>Version:</b></pre> {sha_short},\n' \
-              f'<pre>Symbol</pre>: {self._bot.symbol}\n' \
-              f'<pre><b>Config:</b></pre> \n' \
-              f'{json.dumps(self._bot.config, indent=4)}'
-        self.send_msg(msg)
+        cfg = denumpyize(self._bot.config)
+        long_cfg = cfg.pop('long', None)
+        shrt_cfg = cfg.pop('shrt', None)
+
+        self.send_msg(f'<pre><b>Version:</b></pre> {sha_short},\n' \
+                      f'<pre>Symbol</pre>: {self._bot.symbol}\n' \
+                      f'<pre><b>Config:</b></pre> \n' \
+                      f'{config_pretty_str(cfg)}')
+        self.send_msg(f'<pre><b>Short</b></pre>:\n{config_pretty_str(shrt_cfg)}')
+        self.send_msg(f'<pre><b>Long</b></pre>:\n{config_pretty_str(long_cfg)}')
 
     def log_start(self):
         self.send_msg('<b>Passivbot started!</b>')
@@ -679,9 +782,19 @@ class Telegram:
                 parse_mode=ParseMode.HTML,
                 reply_markup=self._keyboards[self._keyboard_idx],
                 disable_notification=False
-            ).message_id
+            )
         except Exception as e:
-            print(f'Failed to send telegram message: {e}')
+            print(f'Error sending telegram message: {e}')
+            try:
+                self._updater.bot.send_message(
+                    self._chat_id,
+                    text=f'Error sending message: {e}',
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=self._keyboards[self._keyboard_idx],
+                    disable_notification=False
+                )
+            except Exception as fe:
+                print(f'Failed to send error message: {fe}')
 
     def exit(self):
         try:

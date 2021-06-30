@@ -9,8 +9,9 @@ import aiohttp
 import numpy as np
 from dateutil import parser
 
-from passivbot import ts_to_date, print_, Bot, sort_dict_keys
-from jitted import calc_long_pnl, calc_shrt_pnl
+from pure_funcs import ts_to_date, sort_dict_keys
+from passivbot import print_, Bot
+from njit_funcs import calc_long_pnl, calc_shrt_pnl
 
 
 def first_capitalized(s: str):
@@ -81,7 +82,7 @@ class Bybit(Bot):
                                   'websocket': 'wss://stream.bybit.com/realtime',
                                   'created_at_key': 'created_at'}
 
-                self.hedge_mode = False
+                self.hedge_mode = self.config['hedge_mode'] = False
             else:
                 print('inverse futures')
                 self.market_type = 'inverse_futures'
@@ -103,7 +104,7 @@ class Bybit(Bot):
             elif 'close' in o['order_link_id']:
                 position_side = 'shrt'
             else:
-                position_side = 'unknown'
+                position_side = 'both'
         else:
             if 'entry' in o['order_link_id']:
                 position_side = 'shrt'
@@ -119,7 +120,7 @@ class Bybit(Bot):
             if e['name'] == self.symbol:
                 break
         else:
-            raise Exception('symbol missing')
+            raise Exception(f'symbol missing {self.symbol}')
         self.max_leverage = e['leverage_filter']['max_leverage']
         self.coin = e['base_currency']
         self.quot = e['quote_currency']
@@ -139,7 +140,6 @@ class Bybit(Bot):
 
     async def fetch_open_orders(self) -> [dict]:
         fetched = await self.private_get(self.endpoints['open_orders'], {'symbol': self.symbol})
-
         return [{'order_id': elm['order_id'],
                  'custom_id': elm['order_link_id'],
                  'symbol': elm['symbol'],
@@ -213,11 +213,11 @@ class Bybit(Bot):
                             'liquidation_price': float(shrt_pos['liq_price'])}
         position['long']['upnl'] = calc_long_pnl(position['long']['price'], self.price,
                                                  position['long']['size'], self.xk['inverse'],
-                                                 self.xk['contract_multiplier']) \
+                                                 self.xk['c_mult']) \
             if position['long']['price'] != 0.0 else 0.0
         position['shrt']['upnl'] = calc_shrt_pnl(position['shrt']['price'], self.price,
                                                  position['shrt']['size'], self.xk['inverse'],
-                                                 self.xk['contract_multiplier']) \
+                                                 self.xk['c_mult']) \
             if position['shrt']['price'] != 0.0 else 0.0
         upnl = position['long']['upnl'] + position['shrt']['upnl']
         position['equity'] = position['wallet_balance'] + upnl
@@ -232,10 +232,10 @@ class Bybit(Bot):
         if self.hedge_mode:
             params['position_idx'] = 1 if order['position_side'] == 'long' else 2
             if self.market_type == 'linear_perpetual':
-                params['reduce_only'] = order['custom_id'] == 'close'
+                params['reduce_only'] = 'close' in order['custom_id']
         else:
             params['position_idx'] = 0
-            params['reduce_only'] = order['custom_id'] == 'close'
+            params['reduce_only'] = 'close' in order['custom_id']
         if params['order_type'] == 'Limit':
             params['time_in_force'] = 'PostOnly'
             params['price'] = str(order['price'])
@@ -284,12 +284,6 @@ class Bybit(Bot):
     async def fetch_fills(self, limit: int = 1000, from_id: int = None, start_time: int = None, end_time: int = None):
         print('fetch_fills not implemented for Bybit')
         return []
-
-    def calc_margin_cost(self, qty: float, price: float) -> float:
-        return qty / price / self.leverage
-
-    def calc_max_pos_size(self, balance: float, price: float):
-        return balance * price * self.leverage * 0.95
 
     async def init_exchange_config(self):
         try:

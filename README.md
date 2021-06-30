@@ -2,7 +2,7 @@
   passivbot
 </h1>
 
-![passivbot Version](https://img.shields.io/badge/passivbot-3.5.3-blue)
+![passivbot Version](https://img.shields.io/badge/passivbot-3.6.4-blue)
 
 ## Trading bot running on Bybit and Binance Futures
 

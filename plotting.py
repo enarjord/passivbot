@@ -2,8 +2,9 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
 import json
-from jitted import round_dynamic
-from analyze import candidate_to_live_config
+from pure_funcs import round_dynamic, denumpyize, candidate_to_live_config
+from njit_funcs import round_up
+from procedures import dump_live_config
 
 
 def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
@@ -14,22 +15,36 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
         return x * 100 - 100
 
     lines = []
+    lines.append(f"exchange {result['exchange'] if 'exchange' in result else 'unknown'}")
+    lines.append(f"symbol {result['symbol'] if 'symbol' in result else 'unknown'}")
     lines.append(f"gain percentage {round_dynamic(result['result']['gain'] * 100 - 100, 4)}%")
     lines.append(f"average_daily_gain percentage {round_dynamic((result['result']['average_daily_gain'] - 1) * 100, 3)}%")
-    lines.append(f"closest_liq percentage {round_dynamic(result['result']['closest_liq'] * 100, 4)}%")
+    lines.append(f"closest_bkr percentage {round_dynamic(result['result']['closest_bkr'] * 100, 4)}%")
     lines.append(f"starting balance {round_dynamic(result['starting_balance'], 3)}")
 
-    for key in [k for k in result['result'] if k not in ['gain', 'average_daily_gain', 'closest_liq', 'do_long', 'do_shrt']]:
+    for key in [k for k in result['result'] if k not in ['gain', 'average_daily_gain', 'closest_bkr', 'do_long', 'do_shrt']]:
         lines.append(f"{key} {round_dynamic(result['result'][key], 6)}")
     lines.append(f"long: {result['do_long']}, short: {result['do_shrt']}")
 
-    live_config = candidate_to_live_config(result)
-    json.dump(live_config, open(result['plots_dirpath'] + 'live_config.json', 'w'), indent=4)
-    json.dump(result, open(result['plots_dirpath'] + 'result.json', 'w'), indent=4)
+    longs = fdf[fdf.type.str.contains('long')]
+    shrts = fdf[fdf.type.str.contains('shrt')]
 
-    ema = df.price.ewm(span=result['ema_span'], adjust=False).mean()
-    df.loc[:, 'bid_thr'] = ema * (1 - result['ema_spread'])
-    df.loc[:, 'ask_thr'] = ema * (1 + result['ema_spread'])
+    lines.append(f"n long ientries {len(longs[longs.type == 'long_ientry'])}")
+    lines.append(f"n long rentries {len(longs[longs.type == 'long_rentry'])}")
+    lines.append(f"n long ncloses {len(longs[longs.type == 'long_nclose'])}")
+    lines.append(f"n long scloses {len(longs[longs.type == 'long_sclose'])}")
+    lines.append(f"long pnl sum {longs.pnl.sum()}")
+
+    lines.append(f"n shrt ientries {len(shrts[shrts.type == 'shrt_ientry'])}")
+    lines.append(f"n shrt rentries {len(shrts[shrts.type == 'shrt_rentry'])}")
+    lines.append(f"n shrt ncloses {len(shrts[shrts.type == 'shrt_nclose'])}")
+    lines.append(f"n shrt scloses {len(shrts[shrts.type == 'shrt_sclose'])}")
+    lines.append(f"shrt pnl sum {shrts.pnl.sum()}")
+
+
+    live_config = candidate_to_live_config(result)
+    dump_live_config(live_config, result['plots_dirpath'] + 'live_config.json')
+    json.dump(denumpyize(result), open(result['plots_dirpath'] + 'result.json', 'w'), indent=4)
 
     print('writing backtest_result.txt...')
     with open(f"{result['plots_dirpath']}backtest_result.txt", 'w') as f:
@@ -43,68 +58,69 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
     fdf.equity.plot()
     plt.savefig(f"{result['plots_dirpath']}balance_and_equity.png")
 
+
+    plt.clf()
+    longs.pnl.cumsum().plot()
+    plt.savefig(f"{result['plots_dirpath']}pnl_cumsum_long.png")
+
+    plt.clf()
+    shrts.pnl.cumsum().plot()
+    plt.savefig(f"{result['plots_dirpath']}pnl_cumsum_shrt.png")
+
+    plt.clf()
+    fdf.adg.plot()
+    plt.savefig(f"{result['plots_dirpath']}adg.png")
+
     print('plotting backtest whole and in chunks...')
-    n_parts = 7
-    # n_parts = int(round_up(result['n_days'], 1.0))
+    n_parts = max(3, int(round_up(result['n_days'] / 14, 1.0)))
     for z in range(n_parts):
         start_ = z / n_parts
         end_ = (z + 1) / n_parts
-        print(start_, end_)
-        fig = plot_fills(df, fdf.iloc[int(len(fdf) * start_):int(len(fdf) * end_)], liq_thr=0.1)
+        print(f'{z} of {n_parts} {start_ * 100:.2f}% to {end_ * 100:.2f}%')
+        fig = plot_fills(df, fdf.iloc[int(len(fdf) * start_):int(len(fdf) * end_)], bkr_thr=0.1)
         fig.savefig(f"{result['plots_dirpath']}backtest_{z + 1}of{n_parts}.png")
-    fig = plot_fills(df, fdf, liq_thr=0.1)
+    fig = plot_fills(df, fdf, bkr_thr=0.1)
     fig.savefig(f"{result['plots_dirpath']}whole_backtest.png")
 
     print('plotting pos sizes...')
     plt.clf()
-    fdf.long_psize.plot()
-    fdf.shrt_psize.plot()
+    longs.psize.plot()
+    shrts.psize.plot()
     plt.savefig(f"{result['plots_dirpath']}psizes_plot.png")
 
-    print('plotting average daily gain...')
-    adg_ = fdf.average_daily_gain
-    adg_.index = np.linspace(0.0, 1.0, len(fdf))
+
+def plot_fills(df, fdf_, side: int = 0, bkr_thr=0.1):
     plt.clf()
-    adg_c = adg_.iloc[int(len(fdf) * 0.1):]  # skipping first 10%
-    print('min max', adg_c.min(), adg_c.max())
-    adg_c.plot()
-    plt.savefig(f"{result['plots_dirpath']}average_daily_gain_plot.png")
-
-
-def plot_fills(df, fdf, side_: int = 0, liq_thr=0.1):
-    plt.clf()
-
-    dfc = df.loc[fdf.index[0]:fdf.index[-1]]
+    fdf = fdf_.set_index('timestamp')
+    dfc = df.iloc[::max(1, int(len(df) * 0.00001))]
+    dfc = dfc[(dfc.timestamp > fdf.index[0]) & (dfc.timestamp < fdf.index[-1])].set_index('timestamp')
+    dfc = dfc.loc[fdf.index[0]:fdf.index[-1]]
     dfc.price.plot(style='y-')
-    if 'bid_thr' in dfc.columns:
-        dfc.bid_thr.plot(style='b-')
-    if 'ask_thr' in dfc.columns:
-        dfc.ask_thr.plot(style='r-')
 
-    if side_ >= 0:
-        longs = fdf[fdf.pside == 'long']
-        lentry = longs[(longs.type == 'long_entry') | (longs.type == 'long_reentry')]
-        lclose = longs[longs.type == 'long_close']
-        lstopclose = longs[longs.type == 'stop_loss_long_close']
-        lstopentry = longs[longs.type == 'stop_loss_long_entry']
-        lentry.price.plot(style='b.')
-        lstopentry.price.plot(style='bx')
-        lclose.price.plot(style='r.')
-        lstopclose.price.plot(style=('rx'))
-        longs.long_pprice.fillna(method='ffill').plot(style='b--')
-    if side_ <= 0:
-        shrts = fdf[fdf.pside == 'shrt']
-        sentry = shrts[(shrts.type == 'shrt_entry') | (shrts.type == 'shrt_reentry')]
-        sclose = shrts[shrts.type == 'shrt_close']
-        sstopclose = shrts[shrts.type == 'stop_loss_shrt_close']
-        sstopentry = shrts[shrts.type == 'stop_loss_shrt_entry']
-        sentry.price.plot(style='r.')
-        sstopentry.price.plot(style='rx')
-        sclose.price.plot(style='b.')
-        sstopclose.price.plot(style=('bx'))
-        shrts.shrt_pprice.fillna(method='ffill').plot(style='r--')
+    if side >= 0:
+        longs = fdf[fdf.type.str.contains('long')]
+        lnentry = longs[(longs.type == 'long_ientry') | (longs.type == 'long_rentry')]
+        lhentry = longs[longs.type == 'long_hentry']
+        lnclose = longs[longs.type == 'long_nclose']
+        lsclose = longs[longs.type == 'long_sclose']
+        lnentry.price.plot(style='b.')
+        lhentry.price.plot(style='bx')
+        lnclose.price.plot(style='r.')
+        lsclose.price.plot(style=('rx'))
+        longs.where(longs.pprice != 0.0).pprice.fillna(method='ffill').plot(style='b--')
+    if side <= 0:
+        shrts = fdf[fdf.type.str.contains('shrt')]
+        snentry = shrts[(shrts.type == 'shrt_ientry') | (shrts.type == 'shrt_rentry')]
+        shentry = shrts[shrts.type == 'shrt_hentry']
+        snclose = shrts[shrts.type == 'shrt_nclose']
+        ssclose = shrts[shrts.type == 'shrt_sclose']
+        snentry.price.plot(style='r.')
+        shentry.price.plot(style='rx')
+        snclose.price.plot(style='b.')
+        ssclose.price.plot(style=('bx'))
+        shrts.where(shrts.pprice != 0.0).pprice.fillna(method='ffill').plot(style='r--')
 
-    if 'liq_price' in fdf.columns:
-        fdf.liq_price.where(fdf.liq_diff < liq_thr, np.nan).plot(style='k--')
+    if 'bkr_price' in fdf.columns:
+        fdf.bkr_price.where(fdf.bkr_diff < bkr_thr, np.nan).plot(style='k--')
     return plt
 

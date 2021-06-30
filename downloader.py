@@ -1,16 +1,22 @@
+import argparse
+import asyncio
+import datetime
 import gc
-from datetime import datetime
+import os
+import sys
+import gzip
 from io import BytesIO
 from time import sleep
+from time import time
 from urllib.request import urlopen
 from zipfile import ZipFile
 
-import sys
-import hjson
+import numpy as np
 import pandas as pd
 from dateutil import parser
 
-from passivbot import *
+from procedures import prep_config, make_get_filepath, create_binance_bot, create_bybit_bot, print_, add_argparse_args
+from pure_funcs import ts_to_date, get_dummy_settings
 
 
 class Downloader:
@@ -31,17 +37,26 @@ class Downloader:
             self.start_time = int(parser.parse(self.config["start_date"]).replace(
                 tzinfo=datetime.timezone.utc).timestamp() * 1000)
         except Exception:
-            print("Unrecognized date format for start time.")
+            raise Exception(f"Unrecognized date format for start time {config['start_date']}")
         self.end_time = self.config["end_date"]
         if self.end_time != -1:
             try:
                 self.end_time = int(
                     parser.parse(self.end_time).replace(tzinfo=datetime.timezone.utc).timestamp() * 1000)
             except Exception:
-                print("Unrecognized date format for end time.")
+                raise Exception(f"Unrecognized date format for end time {config['end_date']}")
         if self.config['exchange'] == 'binance':
-            self.daily_base_url = "https://data.binance.vision/data/futures/um/daily/aggTrades/"
-            self.monthly_base_url = "https://data.binance.vision/data/futures/um/monthly/aggTrades/"
+            if 'spot' in self.config and self.config['spot']:
+                self.daily_base_url = "https://data.binance.vision/data/daily/aggTrades/"
+                self.monthly_base_url = "https://data.binance.vision/data/monthly/aggTrades/"
+            else:
+                market_type = 'cm' if config['inverse'] else 'um'
+                self.daily_base_url = f"https://data.binance.vision/data/futures/{market_type}/daily/aggTrades/"
+                self.monthly_base_url = f"https://data.binance.vision/data/futures/{market_type}/monthly/aggTrades/"
+        elif self.config['exchange'] == 'bybit':
+            self.daily_base_url = 'https://public.bybit.com/trading/'
+        else:
+            raise Exception(f"unknown exchange {config['exchange']}")
 
     def validate_dataframe(self, df: pd.DataFrame) -> tuple:
         """
@@ -196,7 +211,7 @@ class Downloader:
                 if nw_id > highest_id:
                     nw_id = highest_id
                 try:
-                    ticks = await self.bot.fetch_ticks(from_id=nw_id)
+                    ticks = await self.bot.fetch_ticks(from_id=int(nw_id), do_print=False)
                     df = self.transform_ticks(ticks)
                     if not df.empty:
                         first_ts = df["timestamp"].iloc[0]
@@ -240,6 +255,75 @@ class Downloader:
                         df = tf
                     else:
                         df = pd.concat([df, tf])
+        except Exception as e:
+            print('Failed to fetch', date, e)
+        return df
+
+    async def find_df_enclosing_timestamp(self, timestamp, guessed_chunk=None):
+        if guessed_chunk is not None:
+            if guessed_chunk[0]['timestamp'] < timestamp < guessed_chunk[-1]['timestamp']:
+                print_(['found id'])
+                return self.transform_ticks(guessed_chunk)
+        else:
+            guessed_chunk = sorted(await self.bot.fetch_ticks(do_print=False), key=lambda x: x['trade_id'])
+            return await self.find_df_enclosing_timestamp(timestamp, guessed_chunk)
+
+
+        if timestamp < guessed_chunk[0]['timestamp']:
+            guessed_id = (guessed_chunk[0]['trade_id'] -
+                          len(guessed_chunk) * 
+                          (guessed_chunk[0]['timestamp'] - timestamp) /
+                           (guessed_chunk[-1]['timestamp'] - guessed_chunk[0]['timestamp']))
+        else:
+            guessed_id = (guessed_chunk[-1]['trade_id'] +
+                          len(guessed_chunk) * 
+                          (timestamp - guessed_chunk[-1]['timestamp']) /
+                           (guessed_chunk[-1]['timestamp'] - guessed_chunk[0]['timestamp']))
+        guessed_id = int(guessed_id - len(guessed_chunk) / 2)
+        guessed_chunk = sorted(await self.bot.fetch_ticks(guessed_id, do_print=False), key=lambda x: x['trade_id'])
+        print_([f"guessed_id {guessed_id} earliest ts {ts_to_date(guessed_chunk[0]['timestamp'] / 1000)[:19]} last ts {ts_to_date(guessed_chunk[-1]['timestamp'] / 1000)[:19]} target ts {ts_to_date(timestamp / 1000)[:19]}"])
+        return await self.find_df_enclosing_timestamp(timestamp, guessed_chunk)
+
+    def deduce_trade_ids(self, daily_ticks, df_for_id_matching):
+        for idx in [0, -1]:
+            match = daily_ticks[(daily_ticks.timestamp == df_for_id_matching.timestamp.iloc[idx]) &
+                                (daily_ticks.price == df_for_id_matching.price.iloc[idx]) &
+                                (daily_ticks.qty == df_for_id_matching.qty.iloc[idx])]
+            if len(match) == 1:
+                id_at_match = df_for_id_matching.trade_id.iloc[idx]
+                return np.arange(id_at_match - match.index[0], id_at_match - match.index[0] + len(daily_ticks))
+                #trade_ids = np.arange(id_at_match, id_at_match + len(daily_ticks.loc[match.index:]))
+                return match, id_at_match
+        raise Exception('unable to make trade ids')
+
+
+    async def get_csv_gz(self, base_url, symbol, date, df_for_id_matching):
+        """
+        Fetches a full day of trades from the Bybit repository.
+        @param symbol: Symbol to fetch.
+        @param date: Day to download.
+        @return: Dataframe with full day.
+        """
+        print_(['Fetching', symbol, date])
+        url = f"{base_url}{symbol.upper()}/{symbol.upper()}{date}.csv.gz"
+        df = pd.DataFrame(columns=['trade_id', 'price', 'qty', 'timestamp', 'is_buyer_maker'])
+        try:
+            resp = urlopen(url)
+            with gzip.open(BytesIO(resp.read())) as f:
+                ff = pd.read_csv(f)
+                trade_ids = np.zeros(len(ff)).astype(np.int64)
+                tf = pd.DataFrame({
+                    'trade_id': trade_ids,
+                    'price': ff.price.astype(np.float64),
+                    'qty': ff['size'].astype(np.float64),
+                    'timestamp': (ff.timestamp * 1000).astype(np.int64),
+                    'is_buyer_maker': (ff.side == 'Sell').astype(np.int8)
+                })
+                tf["trade_id"] = deduce_trade_ids(tf, df_for_id_matching)
+                tf.sort_values("timestamp", inplace=True)
+                tf.reset_index(drop=True, inplace=True)
+                del ff
+                df = tf
         except Exception as e:
             print('Failed to fetch', date, e)
         return df
@@ -458,6 +542,71 @@ class Downloader:
                         start_time = df["timestamp"].iloc[0]
                         current_time = df["timestamp"].iloc[-1]
                         current_id = df["trade_id"].iloc[-1] + 1
+            elif False:#self.config['exchange'] == 'bybit':
+
+                # work in progress
+
+                fetched_new_trades = await self.bot.fetch_ticks(1)
+                tf = self.transform_ticks(fetched_new_trades)
+                earliest = tf['timestamp'].iloc[0]
+
+                if earliest > start_time:
+                    start_time = earliest
+                    current_time = start_time
+
+                tmp = pd.date_range(
+                    start=datetime.datetime.fromtimestamp(start_time / 1000, datetime.timezone.utc).date(),
+                    end=datetime.datetime.fromtimestamp(end_time / 1000, datetime.timezone.utc).date(),
+                    freq='D').to_pydatetime()
+
+                days = [date.strftime("%Y-%m-%d") for date in tmp]
+                dates = days
+
+
+                if start_id == 0:
+                    df_for_id_matching = await self.find_df_enclosing_timestamp(start_time)
+                else:
+                    df_for_id_matching = await self.fetch_ticks(start_id - 100)
+
+                df = pd.DataFrame(columns=['trade_id', 'price', 'qty', 'timestamp', 'is_buyer_maker'])
+
+                for date in dates:
+                    if len(date.split('-')) == 3:
+                        tf = self.get_csv_gz(self.daily_base_url, self.config['symbol'], date, df_for_id_matching)
+                    else:
+                        print("Something wrong with the date", date)
+                        tf = pd.DataFrame()
+                    tf = tf[tf['timestamp'] >= start_time]
+                    if end_time != -1:
+                        tf = tf[tf['timestamp'] <= end_time]
+                    if start_id != 0:
+                        tf = tf[tf['trade_id'] > start_id]
+                    if end_id != 0:
+                        tf = tf[tf['trade_id'] <= end_id]
+                    if df.empty:
+                        df = tf
+                    else:
+                        df = pd.concat([df, tf])
+                    df.sort_values("trade_id", inplace=True)
+                    df.drop_duplicates("trade_id", inplace=True)
+                    df.reset_index(drop=True, inplace=True)
+
+                    if not df.empty and (
+                            (df['trade_id'].iloc[0] % 100000 == 0 and len(df) >= 100000) or df['trade_id'].iloc[
+                        0] % 100000 != 0):
+                        for index, row in df[df['trade_id'] % 100000 == 0].iterrows():
+                            if index != 0:
+                                self.save_dataframe(df[(df['trade_id'] >= row['trade_id'] - 1000000) & (
+                                        df['trade_id'] < row['trade_id'])], "", True)
+                                df = df[df['trade_id'] >= row['trade_id']]
+                    if not df.empty:
+                        start_id = df["trade_id"].iloc[0] - 1
+                        start_time = df["timestamp"].iloc[0]
+                        current_time = df["timestamp"].iloc[-1]
+                        current_id = df["trade_id"].iloc[-1] + 1
+
+
+
 
             if start_id == 0:
                 df = await self.find_time(start_time)
@@ -545,14 +694,14 @@ class Downloader:
         for f in filenames:
             if single_file:
                 chunk = pd.read_csv(os.path.join(self.filepath, f),
-                                    dtype={"price": np.float64, "is_buyer_maker": np.float64, "timestamp": np.float64,
-                                           "qty": np.float64},
-                                    usecols=["price", "is_buyer_maker", "timestamp", "qty"])
+                                    dtype={"price": np.float64, "is_buyer_maker": np.float64, "timestamp": np.float64},
+                                    # "qty": np.float64},
+                                    usecols=["price", "is_buyer_maker", "timestamp"])  # , "qty"])
             else:
                 chunk = pd.read_csv(os.path.join(self.filepath, f),
-                                    dtype={"timestamp": np.int64, "price": np.float64, "is_buyer_maker": np.int8,
-                                           "qty": np.float64},
-                                    usecols=["timestamp", "price", "is_buyer_maker", "qty"])
+                                    dtype={"timestamp": np.int64, "price": np.float64, "is_buyer_maker": np.int8},
+                                    # "qty": np.float32},
+                                    usecols=["timestamp", "price", "is_buyer_maker"])  # , "qty"])
             if self.end_time != -1:
                 chunk = chunk[(chunk['timestamp'] >= self.start_time) & (chunk['timestamp'] <= self.end_time)]
             else:
@@ -582,26 +731,25 @@ class Downloader:
         #     {'price': 'first', 'is_buyer_maker': 'first', 'timestamp': 'first'}).reset_index(drop=True)
         df = df.groupby(
             (~((df.price == df.price.shift(1)) & (df.is_buyer_maker == df.is_buyer_maker.shift(1)))).cumsum()).agg(
-            {'price': 'first', 'is_buyer_maker': 'first', 'timestamp': 'first', 'qty': 'sum'})
-
-        # compressed_ticks = df[["price", "is_buyer_maker", "timestamp", "qty"]].values
-        compressed_ticks = df[["price", "is_buyer_maker", "timestamp"]].values
+            {'price': 'first', 'is_buyer_maker': 'first', 'timestamp': 'first'})  # , 'qty': 'sum'})
 
         if single_file:
+            # compressed_ticks = df[["price", "is_buyer_maker", "timestamp", "qty"]].values
+            compressed_ticks = df[["price", "is_buyer_maker", "timestamp"]].values
             print_(["Saving single file with", len(df), " ticks to", self.tick_filepath, "..."])
             np.save(self.tick_filepath, compressed_ticks)
             print_(["Saved single file!"])
         else:
             print_(["Saving price file with", len(df), " ticks to", self.price_filepath, "..."])
-            np.save(self.price_filepath, compressed_ticks[:, 0])
+            np.save(self.price_filepath, df[["price"]].values)
             print_(["Saved price file!"])
 
             print_(["Saving buyer_maker file with", len(df), " ticks to", self.buyer_maker_filepath, "..."])
-            np.save(self.buyer_maker_filepath, compressed_ticks[:, 1])
+            np.save(self.buyer_maker_filepath, df[["is_buyer_maker"]].values)
             print_(["Saved buyer_maker file!"])
 
             print_(["Saving timestamp file with", len(df), " ticks to", self.time_filepath, "..."])
-            np.save(self.time_filepath, compressed_ticks[:, 2])
+            np.save(self.time_filepath, df[["timestamp"]].values)
             print_(["Saved timestamp file!"])
 
             # print_(["Saving qty file with", len(df), " ticks to", self.qty_filepath, "..."])
@@ -649,94 +797,39 @@ class Downloader:
             # qty_data = np.load(self.qty_filepath)
             return price_data, buyer_maker_data, time_data  # , qty_data
 
-
-def get_dummy_settings(user: str, exchange: str, symbol: str):
-    return {**{k: 1.0 for k in get_keys()},
-            **{'user': user, 'exchange': exchange, 'symbol': symbol, 'config_name': '',
-               'logging_level': 0}}
-
-
-async def fetch_market_specific_settings(user: str, exchange: str, symbol: str):
-    tmp_live_settings = get_dummy_settings(user, exchange, symbol)
-    settings_from_exchange = {}
-    if exchange == 'binance':
-        bot = await create_binance_bot(tmp_live_settings)
-        settings_from_exchange['maker_fee'] = 0.00018
-        settings_from_exchange['taker_fee'] = 0.00036
-        settings_from_exchange['exchange'] = 'binance'
-    elif exchange == 'bybit':
-        bot = await create_bybit_bot(tmp_live_settings)
-        settings_from_exchange['maker_fee'] = -0.00025
-        settings_from_exchange['taker_fee'] = 0.00075
-        settings_from_exchange['exchange'] = 'bybit'
-    else:
-        raise Exception(f'unknown exchange {exchange}')
-    await bot.session.close()
-    if 'inverse' in bot.market_type:
-        settings_from_exchange['inverse'] = True
-    elif 'linear' in bot.market_type:
-        settings_from_exchange['inverse'] = False
-    else:
-        raise Exception('unknown market type')
-    for key in ['max_leverage', 'min_qty', 'min_cost', 'qty_step', 'price_step', 'max_leverage',
-                'contract_multiplier']:
-        settings_from_exchange[key] = getattr(bot, key)
-    return settings_from_exchange
-
-
-async def prep_config(args) -> dict:
-    try:
-        bc = hjson.load(open(args.backtest_config_path))
-    except Exception as e:
-        raise Exception('failed to load backtest config', args.backtest_config_path, e)
-    try:
-        oc = hjson.load(open(args.optimize_config_path))
-    except Exception as e:
-        raise Exception('failed to load optimize config', args.optimize_config_path, e)
-    config = {**oc, **bc}
-    for key in ['symbol', 'user', 'start_date', 'end_date']:
-        if getattr(args, key) != 'none':
-            config[key] = getattr(args, key)
-    end_date = config['end_date'] if config['end_date'] and config['end_date'] != -1 else ts_to_date(time())[:16]
-    config['session_name'] = f"{config['start_date'].replace(' ', '').replace(':', '').replace('.', '')}_" \
-                             f"{end_date.replace(' ', '').replace(':', '').replace('.', '')}"
-
-    base_dirpath = os.path.join('backtests', config['exchange'], config['symbol'])
-    config['caches_dirpath'] = make_get_filepath(os.path.join(base_dirpath, 'caches', ''))
-    config['optimize_dirpath'] = make_get_filepath(os.path.join(base_dirpath, 'optimize', ''))
-    config['plots_dirpath'] = make_get_filepath(os.path.join(base_dirpath, 'plots', ''))
-
-    if os.path.exists((mss := config['caches_dirpath'] + 'market_specific_settings.json')):
-        market_specific_settings = json.load(open(mss))
-    else:
-        market_specific_settings = await fetch_market_specific_settings(config['user'], config['exchange'],
-                                                                        config['symbol'])
-        json.dump(market_specific_settings, open(mss, 'w'), indent=4)
-    config.update(market_specific_settings)
-
-    # setting absolute min/max ranges
-    for key in ['qty_pct', 'ddown_factor', 'ema_span', 'grid_spacing']:
-        if key in config['ranges']:
-            config['ranges'][key][0] = max(0.0, config['ranges'][key][0])
-    for key in ['qty_pct']:
-        if key in config['ranges']:
-            config['ranges'][key][1] = min(1.0, config['ranges'][key][1])
-
-    if 'leverage' in config['ranges']:
-        config['ranges']['leverage'][1] = min(config['ranges']['leverage'][1], config['max_leverage'])
-        config['ranges']['leverage'][0] = min(config['ranges']['leverage'][0], config['ranges']['leverage'][1])
-
-    return config
-
-
-def load_live_config(live_config_path: str) -> dict:
-    try:
-        live_config = json.load(open(live_config_path))
-        if 'entry_liq_diff_thr' not in live_config:
-            live_config['entry_liq_diff_thr'] = live_config['stop_loss_liq_diff']
-    except Exception as e:
-        raise Exception(f'failed to load live config {live_config_path} {e}')
-    return live_config
+    async def get_data(self) -> (np.ndarray,):
+        """
+        Function for direct use in the backtester/optimizer. Checks if the numpy arrays exist and if so loads them.
+        If they do not exist or if their length doesn't match, download the missing data, create them, and create
+        additional data.
+        @return: A tuple of numpy arrays.
+        """
+        cache_dirpath = os.path.join(
+            self.config['caches_dirpath'],
+            f"{self.config['session_name']}_n_spans_{self.config['n_spans']}",
+            '')
+        if not os.path.exists(cache_dirpath):
+            prices, is_buyer_maker, timestamps = await self.get_ticks(False)
+            prices = np.reshape(prices, prices.size)
+            is_buyer_maker = np.reshape(is_buyer_maker, is_buyer_maker.size)
+            timestamps = np.reshape(timestamps, timestamps.size)
+            fpath = make_get_filepath(cache_dirpath)
+            data = (prices, is_buyer_maker, timestamps)
+            print('dumping cache...')
+            for fname, arr in zip(['prices', 'is_buyer_maker', 'timestamps'], data):
+                np.save(f'{fpath}{fname}.npy', arr)
+            size_mb = np.sum([sys.getsizeof(d) for d in data]) / (1000 * 1000)
+            print(f'dumped {size_mb:.2f} mb of data')
+            del prices
+            del is_buyer_maker
+            del timestamps
+            del data
+            gc.collect()
+        print('loading cached tick data')
+        arrs = []
+        for fname in ['prices', 'is_buyer_maker', 'timestamps']:
+            arrs.append(np.load(f'{cache_dirpath}{fname}.npy'))
+        return tuple(arrs)
 
 
 async def main():
@@ -748,7 +841,7 @@ async def main():
     downloader = Downloader(config)
     await downloader.download_ticks()
     if not args.download_only:
-        await downloader.prepare_files(True)
+        await downloader.prepare_files(False)
     sleep(0.1)
 
 

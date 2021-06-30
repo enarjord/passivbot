@@ -8,17 +8,15 @@ from urllib.parse import urlencode
 import aiohttp
 import numpy as np
 
-from pure_funcs import ts_to_date, sort_dict_keys
+from pure_funcs import ts_to_date, sort_dict_keys, calc_pprice_from_fills
 from passivbot import Bot
 from procedures import load_key_secret, print_
 
 
-class BinanceBot(Bot):
+class BinanceBotSpot(Bot):
     def __init__(self, config: dict):
-        self.exchange = 'binance'
+        self.exchange = 'binance_spot'
         super().__init__(config)
-        self.max_pos_size_ito_usdt = 0.0
-        self.max_pos_size_ito_coin = 0.0
         self.session = aiohttp.ClientSession()
         self.base_endpoint = ''
         self.key, self.secret = load_key_secret('binance', config['user'])
@@ -58,107 +56,53 @@ class BinanceBot(Bot):
     async def private_delete(self, url: str, params: dict = {}) -> dict:
         return await self.private_('delete', self.base_endpoint, url, params)
 
-    async def init_market_type(self):
-        fapi_endpoint = 'https://fapi.binance.com'
-        dapi_endpoint = 'https://dapi.binance.com'
-        fapi_info = await self.private_get('/fapi/v1/exchangeInfo', base_endpoint=fapi_endpoint)
-        if self.symbol in {e['symbol'] for e in fapi_info['symbols']}:
-            print('linear perpetual')
-            self.market_type = 'linear_perpetual'
-            self.inverse = self.config['inverse'] = False
-            self.base_endpoint = fapi_endpoint
-            self.endpoints = {
-                'position': '/fapi/v2/positionRisk',
-                'balance': '/fapi/v2/balance',
-                'exchange_info': '/fapi/v1/exchangeInfo',
-                'leverage_bracket': '/fapi/v1/leverageBracket',
-                'open_orders': '/fapi/v1/openOrders',
-                'ticker': '/fapi/v1/ticker/bookTicker',
-                'fills': '/fapi/v1/userTrades',
-                'income': '/fapi/v1/income',
-                'create_order': '/fapi/v1/order',
-                'cancel_order': '/fapi/v1/order',
-                'ticks': '/fapi/v1/aggTrades',
-                'margin_type': '/fapi/v1/marginType',
-                'leverage': '/fapi/v1/leverage',
-                'position_side': '/fapi/v1/positionSide/dual',
-                'websocket': f"wss://fstream.binance.com/ws/{self.symbol.lower()}@aggTrade"
-            }
-        else:
-            dapi_info = await self.private_get('/dapi/v1/exchangeInfo', base_endpoint=dapi_endpoint)
-            if self.symbol in {e['symbol'] for e in dapi_info['symbols']}:
-                print('inverse coin margined')
-                self.base_endpoint = dapi_endpoint
-                self.market_type = 'inverse_coin_margined'
-                self.inverse = self.config['inverse'] = True
-                self.endpoints = {
-                    'position': '/dapi/v1/positionRisk',
-                    'balance': '/dapi/v1/balance',
-                    'exchange_info': '/dapi/v1/exchangeInfo',
-                    'leverage_bracket': '/dapi/v1/leverageBracket',
-                    'open_orders': '/dapi/v1/openOrders',
-                    'ticker': '/dapi/v1/ticker/bookTicker',
-                    'fills': '/dapi/v1/userTrades',
-                    'income': '/dapi/v1/income',
-                    'create_order': '/dapi/v1/order',
-                    'cancel_order': '/dapi/v1/order',
-                    'ticks': '/dapi/v1/aggTrades',
-                    'margin_type': '/dapi/v1/marginType',
-                    'leverage': '/dapi/v1/leverage',
-                    'position_side': '/dapi/v1/positionSide/dual',
-                    'websocket': f"wss://dstream.binance.com/ws/{self.symbol.lower()}@aggTrade"
-                }
-            else:
-                raise Exception(f'unknown symbol {self.symbol}')
-
-        self.spot_base_endpoint = 'https://api.binance.com'
+    def init_market_type(self):
+        print('spot market')
+        self.market_type = 'spot'
+        self.inverse = self.config['inverse'] = False
+        self.base_endpoint = 'https://api.binance.com'
+        self.endpoints = {
+            'balance': '/api/v3/account',
+            'exchange_info': '/api/v3/exchangeInfo',
+            'open_orders': '/api/v3/openOrders',
+            'ticker': '/api/v3/ticker/bookTicker',
+            'fills': '/api/v3/myTrades',
+            'create_order': '/api/v3/order',
+            'cancel_order': '/api/v3/order',
+            'ticks': '/api/v3/aggTrades',
+            'websocket': f"wss://stream.binance.com/ws/{self.symbol.lower()}@aggTrade"
+        }
         self.endpoints['transfer'] = '/sapi/v1/asset/transfer'
         self.endpoints['account'] = '/api/v3/account'
 
     async def _init(self):
-        await self.init_market_type()
-        exchange_info, leverage_bracket = await asyncio.gather(
-            self.public_get(self.endpoints['exchange_info']),
-            self.private_get(self.endpoints['leverage_bracket']),
-        )
+        self.init_market_type()
+        exchange_info = await self.public_get(self.endpoints['exchange_info'])
         for e in exchange_info['symbols']:
             if e['symbol'] == self.symbol:
                 self.coin = e['baseAsset']
                 self.quot = e['quoteAsset']
-                self.margin_coin = e['marginAsset']
-                self.pair = e['pair']
-                if self.market_type == 'inverse_coin_margined':
-                    self.c_mult = self.config['c_mult'] = \
-                        float(e['contractSize'])
-                price_precision = e['pricePrecision']
-                qty_precision = e['quantityPrecision']
                 for q in e['filters']:
                     if q['filterType'] == 'LOT_SIZE':
                         self.min_qty = self.config['min_qty'] = float(q['minQty'])
-                    elif q['filterType'] == 'MARKET_LOT_SIZE':
                         self.qty_step = self.config['qty_step'] = float(q['stepSize'])
                     elif q['filterType'] == 'PRICE_FILTER':
                         self.price_step = self.config['price_step'] = float(q['tickSize'])
                     elif q['filterType'] == 'MIN_NOTIONAL':
-                        self.min_cost = self.config['min_cost'] = float(q['notional'])
+                        self.min_cost = self.config['min_cost'] = float(q['minNotional'])
                 try:
                     z = self.min_cost
                 except AttributeError:
                     self.min_cost = self.config['min_cost'] = 0.0
                 break
-        max_lev = 25 # lowest max lev for any binance futures symbol, as per 2021-06-12
-        for e in leverage_bracket:
-            if ('pair' in e and e['pair'] == self.pair) or \
-                    ('symbol' in e and e['symbol'] == self.symbol):
-                for br in e['brackets']:
-                    max_lev = max(max_lev, int(br['initialLeverage']))
-                break
-        self.max_leverage = self.config['max_leverage'] = max_lev
+
         await super()._init()
         await self.init_order_book()
         await self.update_position()
 
     async def check_if_other_positions(self, abort=True):
+        return
+        # todo...
         positions, open_orders = await asyncio.gather(
             self.private_get(self.endpoints['position']),
             self.private_get(self.endpoints['open_orders'])
@@ -184,40 +128,9 @@ class BinanceBot(Bot):
             print('no positions or open orders in other symbols sharing margin wallet')
 
     async def execute_leverage_change(self):
-        lev = int(min(self.max_leverage, max(3.0, np.ceil(max(self.xk['pbr_limit']) * 2))))
-        return await self.private_post(self.base_endpoint,
-                                       self.endpoints['leverage'],
-                                       {'symbol': self.symbol, 'leverage': lev})
+        pass
 
     async def init_exchange_config(self):
-        try:
-            print(await self.private_post(self.base_endpoint,
-                                          self.endpoints['margin_type'],
-                                          {'symbol': self.symbol, 'marginType': 'CROSSED'}))
-        except Exception as e:
-            print(e)
-        try:
-            lev = await self.execute_leverage_change()
-            print_([lev])
-            if self.market_type == 'linear_perpetual':
-                self.max_pos_size_ito_usdt = float(lev['maxNotionalValue'])
-                print('max pos size in terms of usdt', self.max_pos_size_ito_usdt)
-            elif self.market_type == 'inverse_coin_margined':
-                self.max_pos_size_ito_coin = float(lev['maxQty'])
-                print('max pos size in terms of coin', self.max_pos_size_ito_coin)
-
-        except Exception as e:
-            print(e)
-        try:
-            res = await self.private_post(self.base_endpoint,
-                                          self.endpoints['position_side'],
-                                          {'dualSidePosition': 'true'})
-            print(res)
-        except Exception as e:
-            if '"code":-4059' not in e.args[0]:
-                print(e)
-                print('unable to set hedge mode, aborting')
-                raise Exception('failed to set hedge mode')
         await self.check_if_other_positions()
 
     async def init_order_book(self):
@@ -235,49 +148,45 @@ class BinanceBot(Bot):
              'qty': float(e['origQty']),
              'type': e['type'].lower(),
              'side': e['side'].lower(),
-             'position_side': e['positionSide'].lower().replace('short', 'shrt'),
+             'position_side': 'long',
              'timestamp': int(e['time'])}
             for e in await self.private_get(self.endpoints['open_orders'], {'symbol': self.symbol})
         ]
 
     async def fetch_position(self) -> dict:
-        positions, balance = await asyncio.gather(
-            self.private_get(self.endpoints['position'], ({'symbol': self.symbol}
-                                                          if self.market_type == 'linear_perpetual'
-                                                          else {'pair': self.pair})),
-            self.private_get(self.endpoints['balance'], {})
-        )
-        positions = [e for e in positions if e['symbol'] == self.symbol]
-        position = {}
-        if positions:
-            for p in positions:
-                if p['positionSide'] == 'LONG':
-                    position['long'] = {'size': float(p['positionAmt']),
-                                        'price': float(p['entryPrice']),
-                                        'liquidation_price': float(p['liquidationPrice']),
-                                        'upnl': float(p['unRealizedProfit']),
-                                        'leverage': float(p['leverage'])}
-                elif p['positionSide'] == 'SHORT':
-                    position['shrt'] = {'size': float(p['positionAmt']),
-                                        'price': float(p['entryPrice']),
-                                        'liquidation_price': float(p['liquidationPrice']),
-                                        'upnl': float(p['unRealizedProfit']),
-                                        'leverage': float(p['leverage'])}
-        for e in balance:
-            if e['asset'] == (self.quot if self.market_type == 'linear_perpetual' else self.coin):
-                position['wallet_balance'] = float(e['balance'])
-                position['equity'] = position['wallet_balance'] + float(e['crossUnPnl'])
+        balances, fills = await asyncio.gather(self.private_get(self.endpoints['balance']),
+                                               self.fetch_fills())
+        balance = {}
+        for elm in balances['balances']:
+            for k in [self.quot, self.coin]:
+                if elm['asset'] == k:
+                    balance[k] = {'free': float(elm['free'])}
+                    balance[k]['locked'] = float(elm['locked'])
+                    balance[k]['onhand'] = balance[k]['free'] + balance[k]['locked']
+                    break
+            if self.quot in balance and self.coin in balance:
                 break
+        position = {'long': {'size': balance[self.coin]['onhand'],
+                             'price': calc_pprice_from_fills(balance[self.coin]['onhand'], fills), # to be calculated
+                             'liquidation_price': 0.0,
+                             'upnl': 0.0, # to be calculated
+                             'leverage': 1.0},
+                    'shrt': {'size': 0.0,
+                             'price': 0.0,
+                             'liquidation_price': 0.0,
+                             'upnl': 0.0,
+                             'leverage': 0.0},
+                    'wallet_balance': balance[self.quot]['onhand'],
+                    'equity': balance[self.quot]['onhand'] + balance[self.coin]['onhand'] * self.price}
         return position
 
     async def execute_order(self, order: dict) -> dict:
         params = {'symbol': self.symbol,
                   'side': order['side'].upper(),
-                  'positionSide': order['position_side'].replace('shrt', 'short').upper(),
                   'type': order['type'].upper(),
                   'quantity': str(order['qty'])}
         if params['type'] == 'LIMIT':
-            params['timeInForce'] = 'GTX'
+            params['timeInForce'] = 'GTC'
             params['price'] = str(order['price'])
         if 'custom_id' in order:
             params['newClientOrderId'] = \
@@ -286,7 +195,7 @@ class BinanceBot(Bot):
         if 'side' in o:
             return {'symbol': self.symbol,
                     'side': o['side'].lower(),
-                    'position_side': o['positionSide'].lower().replace('short', 'shrt'),
+                    'position_side': 'long',
                     'type': o['type'].lower(),
                     'qty': float(o['origQty']),
                     'price': float(o['price'])}
@@ -298,13 +207,13 @@ class BinanceBot(Bot):
                                                  {'symbol': self.symbol, 'orderId': order['order_id']})
         if 'side' in cancellation:
             return {'symbol': self.symbol, 'side': cancellation['side'].lower(),
-                    'position_side': cancellation['positionSide'].lower().replace('short', 'shrt'),
+                    'position_side': 'long',
                     'qty': float(cancellation['origQty']), 'price': float(cancellation['price'])}
         else:
             return cancellation
 
     async def fetch_fills(self, limit: int = 1000, from_id: int = None, start_time: int = None, end_time: int = None):
-        params = {'symbol': self.symbol, 'limit': min(100, limit) if self.inverse else limit}
+        params = {'symbol': self.symbol, 'limit': min(1000, max(500, limit))}
         if from_id is not None:
             params['fromId'] = max(0, from_id)
         if start_time is not None:
@@ -315,22 +224,23 @@ class BinanceBot(Bot):
             fetched = await self.private_get(self.endpoints['fills'], params)
             fills = [{'symbol': x['symbol'],
                       'order_id': int(x['orderId']),
-                      'side': x['side'].lower(),
+                      'side': 'buy' if x['isBuyer'] else 'sell',
                       'price': float(x['price']),
                       'qty': float(x['qty']),
-                      'realized_pnl': float(x['realizedPnl']),
-                      'cost': float(x['baseQty']) if self.inverse else float(x['quoteQty']),
+                      'realized_pnl': 0.0,
+                      'cost': float(x['quoteQty']),
                       'fee_paid': float(x['commission']),
                       'fee_token': x['commissionAsset'],
                       'timestamp': int(x['time']),
-                      'position_side': x['positionSide'].lower().replace('short', 'shrt'),
-                      'is_maker': x['maker']} for x in fetched]
+                      'position_side': 'long',
+                      'is_maker': x['isMaker']} for x in fetched]
         except Exception as e:
             print('error fetching fills a', e)
             return []
         return fills
 
     async def fetch_income(self, limit: int = 1000, start_time: int = None, end_time: int = None):
+        return []
         params = {'symbol': self.symbol, 'limit': limit}
         if start_time is not None:
             params['startTime'] = start_time
@@ -368,7 +278,7 @@ class BinanceBot(Bot):
         if end_time is not None:
             params['endTime'] = end_time
         try:
-            fetched = await self.private_get(self.endpoints['ticks'], params)
+            fetched = await self.public_get(self.endpoints['ticks'], params)
         except Exception as e:
             print('error fetching ticks a', e)
             return []
