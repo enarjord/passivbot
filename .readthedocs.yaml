@@ -5,7 +5,10 @@
 # Required
 version: 2
 
-formats: all
+mkdocs:
+  configuration: mkdocs.yml
+
+formats: []
 
 # Optionally set the version of Python and requirements required to build your docs
 python:
