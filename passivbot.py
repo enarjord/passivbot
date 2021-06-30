@@ -103,7 +103,7 @@ class Bot:
             return
         try:
             open_orders = await self.fetch_open_orders()
-            open_orders = [x for x in open_orders if open_orders['symbol'] == self.symbol]
+            open_orders = [x for x in open_orders if x['symbol'] == self.symbol]
             self.highest_bid, self.lowest_ask = 0.0, 9.9e9
             for o in open_orders:
                 if o['side'] == 'buy':
