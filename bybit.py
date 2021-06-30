@@ -104,7 +104,7 @@ class Bybit(Bot):
             elif 'close' in o['order_link_id']:
                 position_side = 'shrt'
             else:
-                position_side = 'unknown'
+                position_side = 'both'
         else:
             if 'entry' in o['order_link_id']:
                 position_side = 'shrt'
@@ -140,7 +140,6 @@ class Bybit(Bot):
 
     async def fetch_open_orders(self) -> [dict]:
         fetched = await self.private_get(self.endpoints['open_orders'], {'symbol': self.symbol})
-
         return [{'order_id': elm['order_id'],
                  'custom_id': elm['order_link_id'],
                  'symbol': elm['symbol'],
@@ -233,10 +232,10 @@ class Bybit(Bot):
         if self.hedge_mode:
             params['position_idx'] = 1 if order['position_side'] == 'long' else 2
             if self.market_type == 'linear_perpetual':
-                params['reduce_only'] = order['custom_id'] == 'close'
+                params['reduce_only'] = 'close' in order['custom_id']
         else:
             params['position_idx'] = 0
-            params['reduce_only'] = order['custom_id'] == 'close'
+            params['reduce_only'] = 'close' in order['custom_id']
         if params['order_type'] == 'Limit':
             params['time_in_force'] = 'PostOnly'
             params['price'] = str(order['price'])
