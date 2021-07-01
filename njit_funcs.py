@@ -224,10 +224,8 @@ def calc_long_orders(balance,
             # v3.6.1 behavior
             if pbr > pbr_limit:
                 sclose_price = max(lowest_ask, round_up(MA_band_upper, price_step))
-                min_close_qty = calc_min_entry_qty(sclose_price, inverse, qty_step, min_qty, min_cost) if spot else min_qty
-                sclose_qty = -min(long_psize, max(min_close_qty,
-                                                  round_dn(cost_to_qty(balance * min(1.0, pbr - pbr_limit),
-                                                                       sclose_price, inverse, c_mult), qty_step)))
+                sclose_qty = -min(long_psize, max(min_qty, round_dn(cost_to_qty(balance * min(1.0, pbr - pbr_limit),
+                                                                                sclose_price, inverse, c_mult), qty_step)))
                 if sclose_price >= nclose_price:
                     long_close = (-long_psize, nclose_price, 0.0, 0.0, 'long_nclose')
                 else:
@@ -238,6 +236,14 @@ def calc_long_orders(balance,
         entry_type = 'long_rentry'
     else:
         raise Exception('long psize is less than 0.0')
+
+    if spot and long_close[0] != 0.0:
+        min_close_qty = calc_min_entry_qty(long_close[1], inverse, qty_step, min_qty, min_cost)
+        close_qty = round_dn(min(long_psize, max(min_close_qty, abs(long_close[0]))), qty_step)
+        if close_qty < min_close_qty:
+            long_close = (0.0, 0.0, 0.0, 0.0, 'long_nclose')
+        else:
+            long_close = (-close_qty,) + long_close[1:]
 
     new_psize, new_pprice = calc_new_psize_pprice(long_psize, long_pprice, entry_qty, entry_price, qty_step)
     return (entry_qty, entry_price, new_psize, new_pprice, entry_type), long_close
@@ -307,10 +313,8 @@ def calc_shrt_orders(balance,
             # v3.6.1 beahvior
             if pbr > pbr_limit:
                 sclose_price = min(highest_bid, round_dn(MA_band_lower, price_step))
-                min_close_qty = calc_min_entry_qty(sclose_price, inverse, qty_step, min_qty, min_cost) if spot else min_qty
-                sclose_qty = min(-shrt_psize, max(min_close_qty,
-                                                  round_dn(cost_to_qty(balance * min(1.0, pbr - pbr_limit),
-                                                                       sclose_price, inverse, c_mult), qty_step)))
+                sclose_qty = min(-shrt_psize, max(min_qty, round_dn(cost_to_qty(balance * min(1.0, pbr - pbr_limit),
+                                                                                sclose_price, inverse, c_mult), qty_step)))
                 if sclose_price <= nclose_price:
                     shrt_close = (-shrt_psize, nclose_price, 0.0, 0.0, 'shrt_nclose')
                 else:
