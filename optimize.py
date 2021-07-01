@@ -167,8 +167,7 @@ def single_sliding_window_run(config, data, do_print=False) -> (float, [dict]):
                 line += f"broke on low adg {analysis['average_daily_gain']:.4f} "
                 print(line)
                 break
-            mean_adg = np.mean([e['average_daily_gain'] for e in analyses])
-            if z > 2 and mean_adg < 1.0:
+            if z > 2 and (mean_adg := np.mean([e['average_daily_gain'] for e in analyses])) < 1.0:
                 line += f"broke on low mean adg {mean_adg:.4f} "
                 print(line)
                 break
