@@ -33,7 +33,7 @@ def calc_spans(min_span: int, max_span: int, n_spans: int) -> np.ndarray:
 
 
 def get_xk_keys():
-    return ['hedge_mode', 'inverse', 'do_long', 'do_shrt', 'qty_step', 'price_step', 'min_qty', 'min_cost', 'c_mult',
+    return ['spot', 'hedge_mode', 'inverse', 'do_long', 'do_shrt', 'qty_step', 'price_step', 'min_qty', 'min_cost', 'c_mult',
             'max_leverage', 'spans', 'pbr_stop_loss', 'pbr_limit', 'iqty_const', 'iprc_const', 'rqty_const',
             'rprc_const', 'markup_const', 'iqty_MAr_coeffs', 'iprc_MAr_coeffs', 'rprc_PBr_coeffs',
             'rqty_MAr_coeffs', 'rprc_MAr_coeffs', 'markup_MAr_coeffs']
@@ -44,6 +44,8 @@ def create_xk(config: dict) -> dict:
     config_ = config.copy()
     config_['do_long'] = config['long']['enabled']
     config_['do_shrt'] = config['shrt']['enabled']
+    if 'spot' not in config_:
+        config_['spot'] = False
     config_['spans'] = calc_spans(config['min_span'], config['max_span'], config['n_spans'])
     for k in get_xk_keys():
         if k in config_['long']:

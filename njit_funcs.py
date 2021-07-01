@@ -172,6 +172,7 @@ def calc_long_orders(balance,
                      MA_ratios,
                      available_margin,
  
+                     spot,
                      inverse,
                      qty_step,
                      price_step,
@@ -223,8 +224,10 @@ def calc_long_orders(balance,
             # v3.6.1 behavior
             if pbr > pbr_limit:
                 sclose_price = max(lowest_ask, round_up(MA_band_upper, price_step))
-                sclose_qty = -min(long_psize, max(min_qty, round_dn(cost_to_qty(balance * min(1.0, pbr - pbr_limit),
-                                                                                sclose_price, inverse, c_mult), qty_step)))
+                min_close_qty = calc_min_entry_qty(sclose_price, inverse, qty_step, min_qty, min_cost) if spot else min_qty
+                sclose_qty = -min(long_psize, max(min_close_qty,
+                                                  round_dn(cost_to_qty(balance * min(1.0, pbr - pbr_limit),
+                                                                       sclose_price, inverse, c_mult), qty_step)))
                 if sclose_price >= nclose_price:
                     long_close = (-long_psize, nclose_price, 0.0, 0.0, 'long_nclose')
                 else:
@@ -251,6 +254,7 @@ def calc_shrt_orders(balance,
                      MA_ratios,
                      available_margin,
  
+                     spot,
                      inverse,
                      qty_step,
                      price_step,
@@ -303,8 +307,10 @@ def calc_shrt_orders(balance,
             # v3.6.1 beahvior
             if pbr > pbr_limit:
                 sclose_price = min(highest_bid, round_dn(MA_band_lower, price_step))
-                sclose_qty = min(-shrt_psize, max(min_qty, round_dn(cost_to_qty(balance * min(1.0, pbr - pbr_limit),
-                                                                                sclose_price, inverse, c_mult), qty_step)))
+                min_close_qty = calc_min_entry_qty(sclose_price, inverse, qty_step, min_qty, min_cost) if spot else min_qty
+                sclose_qty = min(-shrt_psize, max(min_close_qty,
+                                                  round_dn(cost_to_qty(balance * min(1.0, pbr - pbr_limit),
+                                                                       sclose_price, inverse, c_mult), qty_step)))
                 if sclose_price <= nclose_price:
                     shrt_close = (-shrt_psize, nclose_price, 0.0, 0.0, 'shrt_nclose')
                 else:
@@ -343,6 +349,7 @@ def calc_orders(balance,
                 last_price,
                 MAs,
  
+                spot,
                 hedge_mode,
                 inverse,
                 do_long,
@@ -389,6 +396,7 @@ def calc_orders(balance,
                      MA_ratios,
                      available_margin,
 
+                     spot,
                      inverse,
                      qty_step,
                      price_step,
@@ -418,6 +426,7 @@ def calc_orders(balance,
                      MA_ratios,
                      available_margin,
 
+                     spot,
                      inverse,
                      qty_step,
                      price_step,
@@ -457,6 +466,7 @@ def njit_backtest(data: (np.ndarray, np.ndarray, np.ndarray),
                   starting_balance,
                   latency_simulation_ms,
                   maker_fee,
+                  spot,
                   hedge_mode,
                   inverse,
                   do_long,
@@ -483,10 +493,10 @@ def njit_backtest(data: (np.ndarray, np.ndarray, np.ndarray),
                   markup_MAr_coeffs):
 
     prices, buyer_maker, timestamps = data
-    static_params = (hedge_mode, inverse, do_long, do_shrt, qty_step, price_step, min_qty, min_cost, c_mult, max_leverage,
-                     spans, pbr_stop_loss, pbr_limit, iqty_const, iprc_const, rqty_const, rprc_const,
-                     markup_const, iqty_MAr_coeffs, iprc_MAr_coeffs, rprc_PBr_coeffs, rqty_MAr_coeffs,
-                     rprc_MAr_coeffs, markup_MAr_coeffs)
+    static_params = (spot, hedge_mode, inverse, do_long, do_shrt, qty_step, price_step, min_qty, min_cost,
+                     c_mult, max_leverage, spans, pbr_stop_loss, pbr_limit, iqty_const, iprc_const,
+                     rqty_const, rprc_const, markup_const, iqty_MAr_coeffs, iprc_MAr_coeffs, rprc_PBr_coeffs,
+                     rqty_MAr_coeffs, rprc_MAr_coeffs, markup_MAr_coeffs)
 
     balance = equity = starting_balance
     long_psize, long_pprice, shrt_psize, shrt_pprice = 0.0, 0.0, 0.0, 0.0
@@ -570,6 +580,7 @@ def njit_backtest(data: (np.ndarray, np.ndarray, np.ndarray),
                                                  np.append(prices[prev_k], prev_MAs[:-1]) / prev_MAs,
                                                  available_margin,
 
+                                                 spot,
                                                  inverse,
                                                  qty_step,
                                                  price_step,
@@ -628,6 +639,7 @@ def njit_backtest(data: (np.ndarray, np.ndarray, np.ndarray),
                                                  np.append(prices[prev_k], prev_MAs[:-1]) / prev_MAs,
                                                  available_margin,
 
+                                                 spot,
                                                  inverse,
                                                  qty_step,
                                                  price_step,
