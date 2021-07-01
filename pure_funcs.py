@@ -471,7 +471,7 @@ def calc_pprice_from_fills(coin_balance, fills, n_fills_limit=100):
         return 0.0
     relevant_fills = []
     qty_sum = 0.0
-    for fill in fills[:n_fills_limit][::-1]:
+    for fill in fills[::-1][:n_fills_limit]:
         if fill['side'] == 'buy':
             adjusted_qty = min(fill['qty'], coin_balance - qty_sum)
             qty_sum += adjusted_qty
