@@ -547,7 +547,9 @@ class Bot:
         self.process_websocket_ticks = True
         print_([self.endpoints['websocket']])
         await self.update_position()
-        await self.init_exchange_config()
+        abort = await self.init_exchange_config()
+        if abort:
+            return
         await self.init_indicators()
         await self.init_order_book()
         k = 1
