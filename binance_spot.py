@@ -60,6 +60,8 @@ class BinanceBotSpot(Bot):
         print('spot market')
         self.market_type = 'spot'
         self.inverse = self.config['inverse'] = False
+        self.spot = True
+        self.hedge_mode = False
         self.base_endpoint = 'https://api.binance.com'
         self.endpoints = {
             'balance': '/api/v3/account',
@@ -154,8 +156,8 @@ class BinanceBotSpot(Bot):
         ]
 
     async def fetch_position(self) -> dict:
-        balances, fills = await asyncio.gather(self.private_get(self.endpoints['balance']),
-                                               self.fetch_fills())
+        balances, self.fills = await asyncio.gather(self.private_get(self.endpoints['balance']),
+                                                    self.fetch_fills())
         balance = {}
         for elm in balances['balances']:
             for k in [self.quot, self.coin]:
@@ -167,7 +169,7 @@ class BinanceBotSpot(Bot):
             if self.quot in balance and self.coin in balance:
                 break
         position = {'long': {'size': balance[self.coin]['onhand'],
-                             'price': calc_pprice_from_fills(balance[self.coin]['onhand'], fills),
+                             'price': calc_pprice_from_fills(balance[self.coin]['onhand'], self.fills),
                              'liquidation_price': 0.0,
                              'upnl': 0.0, # to be calculated
                              'leverage': 1.0},
