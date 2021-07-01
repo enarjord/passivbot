@@ -256,7 +256,6 @@ class Bot:
 
 
         orders = []
-        long_closed, shrt_closed = long_psize == 0.0, shrt_psize == 0.0
         long_done, shrt_done = False, False
 
         inf_loop_prevention = 100
@@ -277,18 +276,16 @@ class Bot:
                 self.price,
                 self.emas,
                 **self.xk)
-            if not long_closed and long_close[0] != 0.0 and \
+            if i == 1 and long_close[0] != 0.0 and \
                     calc_diff(long_close[1], self.price) < self.last_price_diff_limit:
                 orders.append({'side': 'sell', 'position_side': 'long', 'qty': abs(float(long_close[0])),
                                'price': float(long_close[1]), 'type': 'limit', 'reduce_only': True,
                                'custom_id': long_close[4]})
-                long_closed = True
-            if not shrt_closed and shrt_close[0] != 0.0 and \
+            if i == 1 and shrt_close[0] != 0.0 and \
                     calc_diff(shrt_close[1], self.price) < self.last_price_diff_limit:
                 orders.append({'side': 'buy', 'position_side': 'shrt', 'qty': abs(float(shrt_close[0])),
                                'price': float(shrt_close[1]), 'type': 'limit', 'reduce_only': True,
                                'custom_id': shrt_close[4]})
-                shrt_closed = True
             if self.stop_mode not in ['freeze'] and long_entry[0] != 0.0 and \
                     calc_diff(long_entry[1], self.price) < self.last_price_diff_limit:
                 orders.append({'side': 'buy', 'position_side': 'long', 'qty': float(long_entry[0]),
@@ -369,6 +366,9 @@ class Bot:
     async def check_fills(self):
         if self.ts_locked['check_fills'] > self.ts_released['check_fills']:
             # return if another call is in progress
+            return
+        if self.exchange == 'bybit':
+            # bybit not supported
             return
         now = time()
         if now - self.ts_released['check_fills'] < 5.0:
@@ -512,14 +512,14 @@ class Bot:
                     print('flushing', key)
                     self.ts_released[key] = now
 
-    async def init_indicators(self):
+    async def init_indicators(self, max_n_samples: int = 60):
         ticks = await self.fetch_ticks()
         if self.exchange == 'bybit' and 'linear' in self.market_type:
             print('\nwarning: insufficient ticks fetched')
             print('emas and ema ratios will be inaccurate until websocket catches up')
             self.emas = calc_emas(np.array([e['price'] for e in ticks]), self.spans)[-1]
         else:
-            idxs = get_ids_to_fetch(self.spans, ticks[-1]['trade_id'])
+            idxs = get_ids_to_fetch(self.spans, ticks[-1]['trade_id'], max_n_samples=max_n_samples)
             fetched_ticks = await asyncio.gather(*[self.fetch_ticks(from_id=int(i)) for i in idxs])
             latest_ticks = await self.fetch_ticks()
             compressed = drop_consecutive_same_prices(sorted(flatten(fetched_ticks) + ticks + latest_ticks, key=lambda x: x['trade_id']))
