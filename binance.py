@@ -158,7 +158,7 @@ class BinanceBot(Bot):
         await self.init_order_book()
         await self.update_position()
 
-    async def check_if_other_positions(self, abort=True):
+    async def check_if_other_positions(self):
         positions, open_orders = await asyncio.gather(
             self.private_get(self.endpoints['position']),
             self.private_get(self.endpoints['open_orders'])
@@ -178,10 +178,14 @@ class BinanceBot(Bot):
                 print('\n\n')
                 do_abort = True
         if do_abort:
-            if abort:
-                raise Exception('please close other positions and cancel other open orders')
+            if not ('allow_sharing_wallet' in self.config and self.config['allow_sharing_wallet']):
+                print('please close other positions and cancel other open orders '
+                      'or add "allow_sharing_wallet": True to config')
+                self.stop()
+                return True
         else:
             print('no positions or open orders in other symbols sharing margin wallet')
+        return False
 
     async def execute_leverage_change(self):
         lev = int(min(self.max_leverage, max(3.0, np.ceil(max(self.xk['pbr_limit']) * 2))))
@@ -218,7 +222,7 @@ class BinanceBot(Bot):
                 print(e)
                 print('unable to set hedge mode, aborting')
                 raise Exception('failed to set hedge mode')
-        await self.check_if_other_positions()
+        return await self.check_if_other_positions()
 
     async def init_order_book(self):
         ticker = await self.public_get(self.endpoints['ticker'], {'symbol': self.symbol})
