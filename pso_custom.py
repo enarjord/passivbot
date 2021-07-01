@@ -24,15 +24,9 @@ def pso_multiprocess(bt, n_particles, bounds, c1, c2, w, lr=1.0, initial_positio
     positions = np.array([[np.random.uniform(bounds[0][i], bounds[1][i])
                            for i in range(len(bounds[0]))]
                           for _ in range(n_particles)])
-    if len(initial_positions) > n_particles:
-        print(f'warning: {len(initial_positions)} given starting positions with {n_particles} particles')
-        print('will choose random subset of starting positions')
-        print('to use all starting positions, increase n particles >= n starting positions')
-    for i, pos in enumerate(np.random.permutation(initial_positions)[:len(positions)]):
-        print('starting_pos', pos)
-        positions[i] = np.where(pos > bounds[0], pos, bounds[0])
-        positions[i] = np.where(positions[i] < bounds[1], positions[i], bounds[1])
-
+    positions[:len(initial_positions)] = initial_positions[:len(positions)]
+    positions = np.where(positions > bounds[0], positions, bounds[0])
+    positions = np.where(positions < bounds[1], positions, bounds[1])
     velocities = np.zeros_like(positions)
     lbests = np.zeros_like(positions)
     lbest_scores = np.zeros(len(positions))
@@ -176,20 +170,7 @@ async def main():
 
 
         backtest_wrap = BacktestWrap(tuple(shdata), config)
-        initial_positions = []
-        if args.starting_configs is not None:
-            try:
-                if os.path.isdir(args.starting_configs):
-                    candidates = [load_live_config(f) for f in glob.glob(os.path.join(args.starting_configs, '*.json'))]
-                    print('Starting with all configurations in directory.')
-                else:
-                    candidates = [load_live_config(args.starting_configs)]
-                    print('Starting with specified configuration.')
-                initial_positions.extend([backtest_wrap.config_to_xs(c) for c in candidates])
-            except Exception as e:
-                print('Could not find specified configuration.', e)
-
-
+        initial_positions = get_initial_positions(args, config, backtest_wrap)
         pso_multiprocess(backtest_wrap, config['n_particles'], backtest_wrap.bounds,
                          config['options']['c1'], config['options']['c2'], config['options']['w'],
                          lr=1.0, initial_positions=initial_positions)
@@ -198,6 +179,34 @@ async def main():
         for shm in shms:
             shm.close()
             shm.unlink()
+
+def get_initial_positions(args, config, backtest_wrap):
+    if args.starting_configs is None:
+        return []
+    else:
+        try:
+            if os.path.isdir(args.starting_configs):
+                candidates = [load_live_config(f) for f in glob.glob(os.path.join(args.starting_configs, '*.json'))]
+                print('Starting with all configurations in directory.')
+            else:
+                candidates = [load_live_config(args.starting_configs)]
+                print('Starting with specified configuration.')
+            initial_positions = [backtest_wrap.config_to_xs(c) for c in candidates]
+        except Exception as e:
+            print('Could not find specified configuration.', e)
+            return []
+
+    if len(initial_positions) > config['n_particles']:
+        print(f"warning: {len(initial_positions)} given starting positions with {config['n_particles']} particles")
+        print('will choose random subset of starting positions')
+        print('to use all starting positions, increase n particles >= n starting positions')
+    cropped_initial_positions = []
+    for i, pos in enumerate(np.random.permutation(initial_positions)[:config['n_particles']]):
+        cropped_initial_positions[i] = np.where(pos > backtest_wrap.bounds[0], pos, backtest_wrap.bounds[0])
+        cropped_initial_positions[i] = np.where(cropped_initial_positions[i] < backtest_wrap.bounds[1],
+                                                cropped_initial_positions[i], backtest_wrap.bounds[1])
+    return cropped_initial_positions
+
 
 
 if __name__ == '__main__':
