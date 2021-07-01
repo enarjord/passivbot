@@ -167,7 +167,7 @@ class BinanceBotSpot(Bot):
             if self.quot in balance and self.coin in balance:
                 break
         position = {'long': {'size': balance[self.coin]['onhand'],
-                             'price': calc_pprice_from_fills(balance[self.coin]['onhand'], fills), # to be calculated
+                             'price': calc_pprice_from_fills(balance[self.coin]['onhand'], fills),
                              'liquidation_price': 0.0,
                              'upnl': 0.0, # to be calculated
                              'leverage': 1.0},
@@ -178,6 +178,9 @@ class BinanceBotSpot(Bot):
                              'leverage': 0.0},
                     'wallet_balance': balance[self.quot]['onhand'],
                     'equity': balance[self.quot]['onhand'] + balance[self.coin]['onhand'] * self.price}
+        if position['long']['size'] * position['long']['price'] < self.min_cost:
+            position['long']['size'] = 0.0
+            position['long']['price'] = 0.0
         return position
 
     async def execute_order(self, order: dict) -> dict:
