@@ -463,30 +463,31 @@ def analyze_fills(fills: list, bc: dict, first_ts: float, last_ts: float) -> (pd
     return fdf, result
 
 
-def calc_pprice_from_fills(coin_balance, fills):
+def calc_pprice_from_fills(coin_balance, fills, n_fills_limit=100):
     # assumes fills are sorted old to new
-    pprice = 0.0
+    if coin_balance == 0.0 or len(fills) == 0:
+        return 0.0
+    relevant_fills = []
     qty_sum = 0.0
-    cost_sum = 0.0
-    i = 0
-    for fill in fills[::-1]:
-        i -= 1
+    for fill in fills[:n_fills_limit][::-1]:
         if fill['side'] == 'buy':
             adjusted_qty = min(fill['qty'], coin_balance - qty_sum)
-            adjusted_cost = fill['cost'] * (adjusted_qty / fill['qty'])
             qty_sum += adjusted_qty
-            cost_sum += adjusted_cost
-            pprice = cost_sum / qty_sum if qty_sum else 0.0
+            relevant_fills.append({**fill, **{'qty': adjusted_qty}})
+            if qty_sum >= coin_balance * 0.999:
+                break
         else:
-            qty_sum -= fill['qty']
-            cost_sum -= fill['cost']
-        if qty_sum >= coin_balance * 0.999:
-            break
+            qty_sum -= abs(fill['qty'])
+            relevant_fills.append(fill)
+    psize, pprice = 0.0, 0.0
+    for fill in relevant_fills[::-1]:
+        if fill['side'] == 'buy':
+            new_psize = psize + fill['qty']
+            pprice = pprice * (psize / new_psize) + fill['price'] * (fill['qty'] / new_psize)
+            psize = new_psize
+        else:
+            psize -= abs(fill['qty'])
     return pprice
-
-
-
-
 
 
 
