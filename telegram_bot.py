@@ -369,7 +369,7 @@ class Telegram:
         update.message.reply_text(
             text='To modify the telegram notification, please pick the desired amount using the buttons below,'
                  'Note that the that <b>this change is not persisted between restarts!</b>\n'
-                 'Or send /cancel to abort modifying the telegram notification,
+                 'Or send /cancel to abort modifying the telegram notification',
             parse_mode=ParseMode.HTML,
             reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True)
         )
