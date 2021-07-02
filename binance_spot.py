@@ -168,17 +168,18 @@ class BinanceBotSpot(Bot):
                     break
             if self.quot in balance and self.coin in balance:
                 break
+        pprice = calc_pprice_from_fills(balance[self.coin]['onhand'], self.fills)
         position = {'long': {'size': balance[self.coin]['onhand'],
-                             'price': calc_pprice_from_fills(balance[self.coin]['onhand'], self.fills),
+                             'price': pprice,
                              'liquidation_price': 0.0,
-                             'upnl': 0.0, # to be calculated
+                             'upnl': balance[self.coin]['onhand'] * (self.price - pprice),
                              'leverage': 1.0},
                     'shrt': {'size': 0.0,
                              'price': 0.0,
                              'liquidation_price': 0.0,
                              'upnl': 0.0,
                              'leverage': 0.0},
-                    'wallet_balance': balance[self.quot]['onhand'],
+                    'wallet_balance': balance[self.quot]['onhand'] + balance[self.coin]['onhand'] * pprice,
                     'equity': balance[self.quot]['onhand'] + balance[self.coin]['onhand'] * self.price}
         if position['long']['size'] * position['long']['price'] < self.min_cost:
             position['long']['size'] = 0.0
