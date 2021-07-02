@@ -63,27 +63,5 @@ us at [this Discord server](https://discord.gg/QAF2H2UmzZ) or at [this Telegram 
 
 ## License
 
-Passivbot is released freely without conditions.
-Anybody may copy, distribute, modify, use or misuse for commercial,
-non-commercial, educational or non-educational purposes, censor,
-claim as one's own or otherwise do whatever without permission from anybody.
-
-## Support the project
-
-Passivbot is actively developed by the owner, and any donation that you would like to make to show your appreciation
-of the work being performed is much appreciated. In case you want to make a donation or contribute to the development
-of the bot, please use the wallet addresses or referral links mentioned below.
-
-### Wallet addresses
-
-Coin | Address
----- | -------
-**XMR** | `49gUQ1jasDK23tJTMCvP4mQUUwndeLWAwSgdCFn6ovmRKXZAjQnVp2JZ2K4UuDDdYMNam1HE8ELZoWdeJPRfYEa9QSEK6XZ`
-**Nano**| `nano_1nf3knbhapee5ruwg7i8sqekx3zmifdeijr8495t9kgp3uyunik7b9cuyhf5`
-**EOS** | `nbt4rhnhpjan`
-**XLM** | `GDSTC6KQR6BCTA7BH45B3MTSY52EVZ4UZTPZEBAZHJMJHTUQQ5SM57S7`
-**USDT TRC20 (Binance)** | `TJr3KYY8Bz7wRU7QLwoYQHk88LcaBJqQN5`
-
-### Referral links
-
-[Bybit](https://www.bybit.com/en-US/register?affiliate_id=16464&language=en-US&group_id=0&group_type=1) [Binance](https://www.binance.cc/en/register?ref=TII4B07C)
+Passivbot is released freely without conditions. Anybody may copy, distribute, modify, use or misuse for commercial, non-commercial, 
+educational or non-educational purposes, censor, claim as one's own or otherwise do whatever without permission from anybody.

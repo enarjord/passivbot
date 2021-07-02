@@ -25,6 +25,7 @@ Configuration parameters that this applies to, are prepended with `short§long:`
 | `logging_level`         | Indication if logging is to be written to file<br/>**0**: Don't write to logfile<br/>**1**: Write to logfile<br/>**Category:** User<br/>**Datatype:** Integer
 | `short§long:enabled`    | Enables/disables the applicable position side<br/>**Category:** User<br/>**Datatype:** Boolean
 | `allow_sharing_wallet`  | Indicates if the bot is allowed to start when a position already exists on another symbol<br/>**Category:** User<br/>**Datatype:** Boolean
+| `last_price_diff_limit` | Determines until what price the orders are calculated up front<br/>**Category:** User<br/>**Datatype:** Float
 | `n_spans`               | Number of spans used to determine initial entry<br/>**Category:** Initial entry<br/>**Datatype:** Integer
 | `max_spans`             | Maximum number of ticks used in MA spans<br/>**Category:** Initial entry<br/>**Datatype:** Float
 | `min_spans`             | Minimum number of ticks used in MA spans<br/>**Category:** Initial entry<br/>**Datatype:** Float
@@ -45,13 +46,128 @@ Configuration parameters that this applies to, are prepended with `short§long:`
 
 ## Initial trade entry
 
+Once the bot has started, it will start to create limit orders to enter a position. Depending on whether you have long and/or short enabled
+it will create limit orders for either side. The bot relies uses Exponential Moving Averages to calculate the entry points and stoplosses.
+The price of the first limit order is calculated as follows:
+
+```python
+For long: lower_EMA_band * iprc_const
+For short: upper_EMA_band * iprc_const
+```
+
+The EMA upper and lower band (depending on short or long) are calculated by taking the minimum and maximum value of the different EMAs.
+The bot calculates EMA based on raw trades (also referred to as ticks) using the following formula:
+
+```python
+ema = prev_ema * (1 - alpha) + tick_price * alpha
+
+alpha = 2 / (span + 1)
+```
+
+The fastest EMA is defined by the configuration parameters `min_spans`, while the slowest EMA is defined by the configuration parameter `max_spans`.
+The configuration parameters `n_spans` defines the number of spans used in the calculation.
+
+An example of the entry price for a short limit order for initial entry:
+
+```gherkin
+Given that the iprc_const is 1.005
+And that the EMAs are [33.4, 32.1, 32.9]
+Then the initial entry price is calculated as 33.4 * 1.005 = 33.567
+```
+
+The size of the inital entry order is calculated as follows:
+
+```python
+balance_in_terms_of_contracts * iqty_const
+```
+
+An example of the entry size for a short limit order for initial entry:
+
+```gherkin
+Given that the iqty_const is 0.03
+And that the balance is $200
+Then the initial entry will is calculated as $200 * 0.03 = $6
+```
+
+The configuration parameters `MAr_coeffs` can modify how the ratio between the EMA spans are calculated.
+This can be disabled by setting these configuration parameters to 0.0.  
+
 ## Reentry
+
+Once the bot is in a position, it will calculate a potential next reentry on the same position side. This allows the bot
+to keep the closing price close to the reentry price, allowing it to (if all goes well) close the position in profit without
+requiring the price to retract to the initial entry price for making profit. In order to so, the reentries will be bigger
+in quantity on each reentry in order to compensate for the existing position.
+As long as there is sufficient balance, the bot will keep creating reentry orders based on the previous reentry order until
+the allowed balance is spent. 
+
+The next reentry price is calculated using the following formula:
+
+```python
+For long: min(initial long entry price, long position price * long§rprc_const)
+For short: max(initial short entry price, short position price * short§rprc_const)
+```
+
+Apart from using the above formula to calculate the next reentry price, the `long§rprc_PBR_coeffs` parameters are used
+to modify the grid space in proportion to the position size.
+
+The ratio of position cost to balance times PBr_coeffs is added to rprc_const. An example of how this influences the reentry price:
+
+```gherkin
+Given that the current position size is 0.23
+And that the position price is 250.0
+And that the balance is $80.0
+Then the position cost is 0.23 * 250.0 = 57.5
+And position cost to balance ratio is 57.5 / 80 = 0.71875
+```
+
+In order to determine the reentry price modificatier, the following formula is used:
+
+```python
+Reentry price modified = position cost to balance ratio ** 2 * PBr_coeffs[0] + position cost to balance ratio * PBr_coeffs[1]
+```
+
+Let's look at an example on calculating the next reentry for a long position to illustrate this:
+
+```gherkin
+Given that the reentry price constant is 0.98
+And the PBr_coeffs is [-0.05, 0.01]
+Then the reentry price is rprc_const + 0.71875**2 * -0.05 + 0.71875 * 0.01 == 0.98 + -0.018642578125000003 == 0.961357421875
+And the next reentry will be ~3.86% instead of 2.0% lower than long pprice.
+```
+
+The next reentry quantity is calculated using the following formula:
+
+```python
+initial entry quantity + position size * short§rqty_const
+```
+
+!!!Info
+   When reentry limit orders are calculated, any reentry order that makes the position cost higher than `pbr_limit` + `pbr_stoploss` is not created.
 
 ## Closing trades
 
+Once a position is opened, it can either be closed when it is in profit, or get into a stoploss position. Both situations are
+described in the following sections.
+
 ### Taking profit
 
-### Limiting loss
+Once the position reaches a predefined price, it will be closed, resulting in profit to be taken. The closing order for
+this is calculated up front. The price at which the entire position will be closed is calculated using the following formula:
+
+```python
+closing price = position_price * markup_const
+```
+
+As you can see in the formula, increasing the `markup_const` will increase the profit. Be aware that the price will also
+need to move further to reach that price though!
+
+### Stoploss
+
+When Passivbot is in a position, it has a notion of the position cost for the current position.
+When the position cost is greater than the specified `pbr_limit + pbr_stoploss`, Passivbot will partially close the open
+position to bring the position cost back to this specified limit. By doing so, the bot ensures that the position cost
+will never be greater than `pbr_limit + pbr_stoploss`.
 
 ## Logging
 

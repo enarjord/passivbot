@@ -46,6 +46,17 @@ If you found a good config and want to share this configuration, please feel fre
 While the bot is running, you can use Telegram to control the bot. This includes getting information on the results,
 open trades as well as pausing the bot, and much more. You can read more on how to set up [Telegram here](telegram.md).
 
+## Startup checks
+
+When you start Passivbot, it will verify if there are no positions open on other coins. If there is an existing position
+found on at least 1 other symbol, the bot will shut down. The reason for this is that the bot operates in cross-mode for futures,
+which means that it will start influencing the existing position. If you want to, you can disable this check by setting
+the configuration parameter `allow_sharing_wallet` to `false`.
+
+When Passivbot is started, it will (if possible) set the position mode to `hedge` on the exchange, and set the leverage
+to such a level that you do not run into errors about insufficient margin. To accomplish this, the configuration parameter
+`pbr_limit` is taken into account to determine the appropriate leverage to set on the exchange.
+
 ## Stopping bot
 
 !!! Warning
