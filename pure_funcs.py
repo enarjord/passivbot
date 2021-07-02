@@ -472,23 +472,25 @@ def calc_pprice_from_fills(coin_balance, fills, n_fills_limit=100):
     relevant_fills = []
     qty_sum = 0.0
     for fill in fills[::-1][:n_fills_limit]:
+        abs_qty = fill['qty']
         if fill['side'] == 'buy':
-            adjusted_qty = min(fill['qty'], coin_balance - qty_sum)
+            adjusted_qty = min(abs_qty, coin_balance - qty_sum)
             qty_sum += adjusted_qty
             relevant_fills.append({**fill, **{'qty': adjusted_qty}})
             if qty_sum >= coin_balance * 0.999:
                 break
         else:
-            qty_sum -= abs(fill['qty'])
+            qty_sum -= abs_qty
             relevant_fills.append(fill)
     psize, pprice = 0.0, 0.0
     for fill in relevant_fills[::-1]:
+        abs_qty = abs(fill['qty'])
         if fill['side'] == 'buy':
-            new_psize = psize + fill['qty']
-            pprice = pprice * (psize / new_psize) + fill['price'] * (fill['qty'] / new_psize)
+            new_psize = psize + abs_qty
+            pprice = pprice * (psize / new_psize) + fill['price'] * (abs_qty / new_psize)
             psize = new_psize
         else:
-            psize -= abs(fill['qty'])
+            psize -= abs_qty
     return pprice
 
 
