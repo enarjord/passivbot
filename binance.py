@@ -252,7 +252,8 @@ class BinanceBot(Bot):
             self.private_get(self.endpoints['balance'], {})
         )
         positions = [e for e in positions if e['symbol'] == self.symbol]
-        position = {}
+        position = {'long': {'size': 0.0, 'price': 0.0, 'liquidation_price': 0.0, 'upnl': 0.0, 'leverage': 0.0},
+                    'shrt': {'size': 0.0, 'price': 0.0, 'liquidation_price': 0.0, 'upnl': 0.0, 'leverage': 0.0}}
         if positions:
             for p in positions:
                 if p['positionSide'] == 'LONG':
