@@ -419,7 +419,7 @@ class Telegram:
                 self.send_msg(f'Request for {"disabling" if self.config["notify_entry_fill"] is True else "enabling"} notification entry fill was aborted')
 
             elif self._set_notification_chosen == 'close_fill':
-                self.send_msg(f'Request for {"disabling" if self.config["notify_close_fill"] is True else "enabling"} notification entry close was aborted')
+                self.send_msg(f'Request for {"disabling" if self.config["notify_close_fill"] is True else "enabling"} notification close fill was aborted')
 
         else:
             update.message.reply_text(text=f'Something went wrong, either <pre>confirm</pre> or <pre>abort</pre> was expected, but {update.message.text} was sent',
