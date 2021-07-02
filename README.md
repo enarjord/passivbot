@@ -1,7 +1,5 @@
 ![Passivbot](docs/images/logo.png)
 
-![passivbot Version](https://img.shields.io/badge/passivbot-3.5.3-blue)
-
 # Trading bot running on Bybit and Binance Futures
 
 :warning: **Use at own risk** :warning:
