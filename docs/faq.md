@@ -36,8 +36,5 @@ A: A small repository of community tested configurations are available with thei
 **Q: I want to help with development, but don't know where to start.**  
 A: Join our discord to get involved with the community!
 
-**Q: I struck gold using the bot, what now?**  
-A: Awesome! @Enarjord works on this project and gives it away for free. Consider sliding some of your profits his way using the donation addresses found on the Home page or in the Readme.md.
-
 **Q: My bot liquidated me, what now?**  
 A: As PassivBot is still under development, it can do some strange things on occasion. As such, we suggest not using any money you cannot afford to lose. If you have trade data, notice an anomaly, or need some help figuring out what went wrong, post your data to the Discord and/or Telegram. The community is extremely helpful and may be able to provide some guidance.

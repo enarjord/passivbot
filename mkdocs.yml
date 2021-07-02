@@ -26,6 +26,8 @@ theme:
 markdown_extensions:
   - attr_list
   - admonition
+  - toc:
+      permalink: True
 extra:
   version:
     provider: mike
