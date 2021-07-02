@@ -367,7 +367,7 @@ class Telegram:
         reply_keyboard = [['entry_fill', 'close_fill'],
                           ['cancel']]
         update.message.reply_text(
-            text='To modify the telegram notification, please pick the desired amount using the buttons below,'
+            text='To modify the telegram notification, please choose one of notification type by using the buttons below,'
                  'Note that the that <b>this change is not persisted between restarts!</b>\n'
                  'Or send /cancel to abort modifying the telegram notification',
             parse_mode=ParseMode.HTML,
