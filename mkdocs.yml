@@ -21,6 +21,7 @@ theme:
     primary: 'blue grey'
     accent: 'tear'
 markdown_extensions:
+  - attr_list
   - admonition
 extra:
   version:
