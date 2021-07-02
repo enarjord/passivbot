@@ -28,6 +28,8 @@ markdown_extensions:
   - admonition
   - toc:
       permalink: True
+  - pymdownx.inlinehilite
+  - pymdownx.superfences
 extra:
   version:
     provider: mike

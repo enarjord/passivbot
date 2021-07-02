@@ -51,8 +51,8 @@ it will create limit orders for either side. The bot relies uses Exponential Mov
 The price of the first limit order is calculated as follows:
 
 ```python
-For long: lower_EMA_band * iprc_const
-For short: upper_EMA_band * iprc_const
+long = lower_EMA_band * iprc_const
+short = upper_EMA_band * iprc_const
 ```
 
 The EMA upper and lower band (depending on short or long) are calculated by taking the minimum and maximum value of the different EMAs.
@@ -104,8 +104,8 @@ the allowed balance is spent.
 The next reentry price is calculated using the following formula:
 
 ```python
-For long: min(initial long entry price, long position price * long§rprc_const)
-For short: max(initial short entry price, short position price * short§rprc_const)
+long = min(initial long entry price, long position price * long§rprc_const)
+short = max(initial short entry price, short position price * short§rprc_const)
 ```
 
 Apart from using the above formula to calculate the next reentry price, the `long§rprc_PBR_coeffs` parameters are used
@@ -139,11 +139,11 @@ And the next reentry will be ~3.86% instead of 2.0% lower than long pprice.
 The next reentry quantity is calculated using the following formula:
 
 ```python
-initial entry quantity + position size * short§rqty_const
+order_size = initial entry quantity + position size * short§rqty_const
 ```
 
 !!!Info
-   When reentry limit orders are calculated, any reentry order that makes the position cost higher than `pbr_limit` + `pbr_stoploss` is not created.
+   When reentry limit orders are calculated, any reentry order that makes the position cost higher than `pbr_limit + pbr_stoploss` is not created.
 
 ## Closing trades
 
@@ -156,7 +156,7 @@ Once the position reaches a predefined price, it will be closed, resulting in pr
 this is calculated up front. The price at which the entire position will be closed is calculated using the following formula:
 
 ```python
-closing price = position_price * markup_const
+closing_price = position_price * markup_const
 ```
 
 As you can see in the formula, increasing the `markup_const` will increase the profit. Be aware that the price will also
