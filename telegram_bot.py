@@ -34,7 +34,7 @@ class Telegram:
 
         first_keyboard_buttons = [
             [KeyboardButton('/daily \U0001F4B8'), KeyboardButton('/open_orders \U0001F4CB'), KeyboardButton('/position \U0001F4CC')],
-            [KeyboardButton('/closed_trades \U0000274E'), KeyboardButton('/show_config \U0001F4DD')],
+            [KeyboardButton('/closed_trades \U0000274E'), KeyboardButton('/show_config \U0001F4DD'), KeyboardButton('/set_notification \U0001F514')],
             [KeyboardButton('/balance \U0001F4B3'), KeyboardButton('/help \U00002753'), KeyboardButton('/next \U000023E9')]]
         second_keyboard_buttons = [
             [KeyboardButton('/reload_config \U0000267B'), KeyboardButton('/set_short \U0001F4C9'), KeyboardButton('/set_long \U0001F4C8')],
@@ -106,6 +106,15 @@ class Telegram:
             states={
                 1: [MessageHandler(Filters.regex('([0-9]*|cancel)'), self._profit_transfer_chosen)],
                 2: [MessageHandler(Filters.regex('(confirm|abort)'), self._verify_profit_transfer_confirmation)]
+            },
+            fallbacks=[CommandHandler('cancel', self._abort)]
+        ))
+
+        dispatcher.add_handler(ConversationHandler(
+            entry_points=[MessageHandler(Filters.regex('/set_notification.*'), self._begin_set_notification)],
+            states={
+                1: [MessageHandler(Filters.regex('(entry_fill|close_fill|cancel)'), self._set_notification_chosen)],
+                2: [MessageHandler(Filters.regex('(confirm|abort)'), self._verify_set_notification_confirmation)]
             },
             fallbacks=[CommandHandler('cancel', self._abort)]
         ))
@@ -349,6 +358,70 @@ class Telegram:
             self.send_msg('Request for setting profit transfer amount was aborted')
         else:
             self.profit_transfer_pct_chosen = None
+            update.message.reply_text(text=f'Something went wrong, either <pre>confirm</pre> or <pre>abort</pre> was expected, but {update.message.text} was sent',
+                                      parse_mode=ParseMode.HTML,
+                                      reply_markup=self._keyboards[self._keyboard_idx])
+        return ConversationHandler.END
+
+    def _begin_set_notification(self, update: Update, _: CallbackContext) -> int:
+        reply_keyboard = [['entry_fill', 'close_fill'],
+                          ['cancel']]
+        update.message.reply_text(
+            text='To modify the telegram notification, please pick the desired amount using the buttons below,'
+                 'Note that the that <b>this change is not persisted between restarts!</b>\n'
+                 'Or send /cancel to abort modifying the telegram notification,
+            parse_mode=ParseMode.HTML,
+            reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True)
+        )
+        return 1
+
+    def _set_notification_chosen(self, update: Update, _: CallbackContext) -> int:
+        if update.message.text == 'cancel':
+            self.send_msg('Request for changing telegram notification was cancelled')
+            return ConversationHandler.END
+        self._set_notification_chosen = update.message.text
+        reply_keyboard = [['confirm', 'abort']]
+        
+        if self._set_notification_chosen == 'entry_fill':
+            msg = f'Notify entry fill is currently <pre>{"enabled" if self.config["notify_entry_fill"] is True else "disabled"}</pre>.\n' \
+                f'You have chosen to <pre>{"disable" if self.config["notify_entry_fill"] is True else "enable"}</pre> for notification entry fill.\n' \
+                f'Please confirm that you want to change this by replying with either <pre>confirm</pre> or <pre>abort</pre>\n' \
+                f'<b>Please be aware that this setting is not persisted between restarts!</b>'
+        elif self._set_notification_chosen == 'close_fill':
+            msg = f'Notify close fill is currently <pre>{"enabled" if self.config["notify_close_fill"] is True else "disabled"}</pre>.\n' \
+                f'You have chosen to <pre>{"disable" if self.config["notify_close_fill"] is True else "enable"}</pre> for notification close fill.\n' \
+                f'Please confirm that you want to change this by replying with either <pre>confirm</pre> or <pre>abort</pre>\n' \
+                f'<b>Please be aware that this setting is not persisted between restarts!</b>'
+
+        update.message.reply_text(
+            text=msg,
+            parse_mode=ParseMode.HTML,
+            reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True)
+        )
+        return 2
+
+    def _verify_set_notification_confirmation(self, update: Update, _: CallbackContext) -> int:
+        if update.message.text == 'confirm':
+            if self._set_notification_chosen == 'entry_fill':
+                self.config['notify_entry_fill'] = not self.config['notify_entry_fill'] 
+                self.send_msg(
+                    f'Notify entry fill is now <pre>{"enabled" if self.config["notify_entry_fill"] is True else "disabled"}</pre>.\n'
+                    'Please be aware that this change is NOT persisted between restarts.')
+
+            elif self._set_notification_chosen == 'close_fill':
+                self.config['notify_close_fill'] = not self.config['notify_close_fill']
+                self.send_msg(
+                    f'Notify close fill is now <pre>{"enabled" if self.config["notify_close_fill"] is True else "disabled"}</pre>.\n'
+                    'Please be aware that this change is NOT persisted between restarts.')
+
+        elif update.message.text == 'abort':
+            if self._set_notification_chosen == 'entry_fill':
+                self.send_msg(f'Request for {"disabling" if self.config["notify_entry_fill"] is True else "enabling"} notification entry fill was aborted')
+
+            elif self._set_notification_chosen == 'close_fill':
+                self.send_msg(f'Request for {"disabling" if self.config["notify_close_fill"] is True else "enabling"} notification entry close was aborted')
+
+        else:
             update.message.reply_text(text=f'Something went wrong, either <pre>confirm</pre> or <pre>abort</pre> was expected, but {update.message.text} was sent',
                                       parse_mode=ParseMode.HTML,
                                       reply_markup=self._keyboards[self._keyboard_idx])
