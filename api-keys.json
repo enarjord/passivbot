@@ -5,6 +5,8 @@
         "secret": "secret",
         "telegram": {
             "enabled": false,
+            "notify_entry_fill": false,
+            "notify_close_fill": false,
             "token": "bot_token",
             "chat_id": "chat_id"
         }

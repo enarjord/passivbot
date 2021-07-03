@@ -8,17 +8,17 @@
   # set to 0.0 to disable breaking early
   break_early_factor: 0.5
 
-  minimum_bankruptcy_distance: 0.4
-  minimum_equity_balance_ratio: 0.4
-  minimum_slice_adg: 0.999
-  maximum_hrs_no_fills: 120.0
-  maximum_hrs_no_fills_same_side: 240.0
+  minimum_bankruptcy_distance: 0.5
+  minimum_equity_balance_ratio: 0.5
+  minimum_slice_adg: 1.0
+  maximum_hrs_no_fills: 72.0
+  maximum_hrs_no_fills_same_side: 144.0
 
   # set to 0.0 to do disable sliding windows
   # otherwise sliding window days will be max([maximum_hrs_no_fills / 24 * 2.1,
   #                                            maximum_hrs_no_fills_same_side / 24 * 2.1,
   #                                            sliding_window_days])
-  sliding_window_days: 7.0
+  sliding_window_days: 21.0
 
   # for each completed slice, objective is multiplied by reward_multiplier_base**(z + 1)
   # where z is enumerator of slices
@@ -39,7 +39,7 @@
   {
     min_span: [4000.0, 40000.0]
     max_span: [60000.0, 600000.0]
-    MAr_coeffs: [-0.1, 0.1]
+    MAr_coeffs: [-0.0, 0.0]
 
     long£rprc_PBr_coeffs: [-1.0, 0.1]
     long£pbr_stop_loss: [-0.1, 1.0]
