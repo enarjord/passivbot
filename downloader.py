@@ -15,7 +15,8 @@ import numpy as np
 import pandas as pd
 from dateutil import parser
 
-from procedures import prep_config, make_get_filepath, create_binance_bot, create_bybit_bot, print_, add_argparse_args
+from procedures import prep_config, make_get_filepath, create_binance_bot, create_bybit_bot, create_binance_bot_spot, \
+    print_, add_argparse_args
 from pure_funcs import ts_to_date, get_dummy_settings
 
 
@@ -27,6 +28,7 @@ class Downloader:
     def __init__(self, config: dict):
         self.fetch_delay_seconds = 0.75
         self.config = config
+        self.spot = 'spot' in config and config['spot']
         self.price_filepath = os.path.join(config["caches_dirpath"], f"{config['session_name']}_price_cache.npy")
         self.buyer_maker_filepath = os.path.join(config["caches_dirpath"],
                                                  f"{config['session_name']}_buyer_maker_cache.npy")
@@ -46,9 +48,9 @@ class Downloader:
             except Exception:
                 raise Exception(f"Unrecognized date format for end time {config['end_date']}")
         if self.config['exchange'] == 'binance':
-            if 'spot' in self.config and self.config['spot']:
-                self.daily_base_url = "https://data.binance.vision/data/daily/aggTrades/"
-                self.monthly_base_url = "https://data.binance.vision/data/monthly/aggTrades/"
+            if self.spot:
+                self.daily_base_url = "https://data.binance.vision/data/spot/daily/aggTrades/"
+                self.monthly_base_url = "https://data.binance.vision/data/spot/monthly/aggTrades/"
             else:
                 market_type = 'cm' if config['inverse'] else 'um'
                 self.daily_base_url = f"https://data.binance.vision/data/futures/{market_type}/daily/aggTrades/"
@@ -236,13 +238,16 @@ class Downloader:
         print_(['Fetching', symbol, date])
         url = "{}{}/{}-aggTrades-{}.zip".format(base_url, symbol.upper(), symbol.upper(), date)
         df = pd.DataFrame(columns=['trade_id', 'price', 'qty', 'timestamp', 'is_buyer_maker'])
+        column_names = ['trade_id', 'price', 'qty', 'first', 'last', 'timestamp', 'is_buyer_maker']
+        if self.spot:
+            column_names.append('best_match')
         try:
             resp = urlopen(url)
             with ZipFile(BytesIO(resp.read())) as my_zip_file:
                 for contained_file in my_zip_file.namelist():
                     tf = pd.read_csv(my_zip_file.open(contained_file),
-                                     names=['trade_id', 'price', 'qty', 'first', 'last', 'timestamp', 'is_buyer_maker'])
-                    tf.drop(errors='ignore', columns=['first', 'last'], inplace=True)
+                                     names=column_names)
+                    tf.drop(errors='ignore', columns=['first', 'last', 'best_match'], inplace=True)
                     tf["trade_id"] = tf["trade_id"].astype(np.int64)
                     tf["price"] = tf["price"].astype(np.float64)
                     tf["qty"] = tf["qty"].astype(np.float64)
@@ -337,17 +342,22 @@ class Downloader:
         if "historical_data_path" in self.config and self.config["historical_data_path"]:
             self.filepath = make_get_filepath(
                 os.path.join(self.config["historical_data_path"], "historical_data",
-                             self.config["exchange"], "agg_trades_futures",
+                             self.config["exchange"], f"agg_trades_{'spot' if self.spot else 'futures'}",
                              self.config["symbol"], ""))
         else:
             self.filepath = make_get_filepath(
-                os.path.join("historical_data", self.config["exchange"], "agg_trades_futures",
+                os.path.join("historical_data", self.config["exchange"], f"agg_trades_{'spot' if self.spot else 'futures'}",
                              self.config["symbol"], ""))
 
         if self.config["exchange"] == "binance":
-            self.bot = await create_binance_bot(get_dummy_settings(self.config["user"],
-                                                                   self.config["exchange"],
-                                                                   self.config["symbol"]))
+            if self.spot:
+                self.bot = await create_binance_bot_spot(get_dummy_settings(self.config["user"],
+                                                                            self.config["exchange"],
+                                                                            self.config["symbol"]))
+            else:
+                self.bot = await create_binance_bot(get_dummy_settings(self.config["user"],
+                                                                       self.config["exchange"],
+                                                                       self.config["symbol"]))
         elif self.config["exchange"] == "bybit":
             self.bot = await create_bybit_bot(get_dummy_settings(self.config["user"],
                                                                  self.config["exchange"],
@@ -475,34 +485,15 @@ class Downloader:
                 if end_time == -1:
                     tmp = pd.date_range(
                         start=datetime.datetime.fromtimestamp(start_time / 1000, datetime.timezone.utc).date(),
-                        end=datetime.datetime.now(datetime.timezone.utc).date(), freq='M').to_pydatetime()
+                        end=datetime.datetime.now(datetime.timezone.utc).date(), freq='D').to_pydatetime()
                 else:
                     tmp = pd.date_range(
                         start=datetime.datetime.fromtimestamp(start_time / 1000, datetime.timezone.utc).date(),
                         end=datetime.datetime.fromtimestamp(end_time / 1000, datetime.timezone.utc).date(),
-                        freq='M').to_pydatetime()
-
-                months = [date.strftime("%Y-%m") for date in tmp]
-
-                if months:
-                    new_start_time = datetime.datetime.combine(tmp[-1], datetime.time.max,
-                                                               datetime.timezone.utc).timestamp() * 1000 + 0.001
-                else:
-                    new_start_time = start_time
-
-                if end_time == -1:
-                    tmp = pd.date_range(
-                        start=datetime.datetime.fromtimestamp(new_start_time / 1000, datetime.timezone.utc).date(),
-                        end=datetime.datetime.now(datetime.timezone.utc).date(), freq='D').to_pydatetime()
-                else:
-                    tmp = pd.date_range(
-                        start=datetime.datetime.fromtimestamp(new_start_time / 1000, datetime.timezone.utc).date(),
-                        end=datetime.datetime.fromtimestamp(end_time / 1000, datetime.timezone.utc).date(),
                         freq='D').to_pydatetime()
-
                 days = [date.strftime("%Y-%m-%d") for date in tmp]
-                dates = months
-                dates.extend(days)
+                months = sorted(set([d[:7] for d in days]))
+                dates = sorted(months + [d for d in days if d[:7] not in months])
 
                 df = pd.DataFrame(columns=['trade_id', 'price', 'qty', 'timestamp', 'is_buyer_maker'])
 
