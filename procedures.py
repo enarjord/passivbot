@@ -42,7 +42,9 @@ async def prep_config(args) -> dict:
     config['session_name'] = f"{config['start_date'].replace(' ', '').replace(':', '').replace('.', '')}_" \
                              f"{end_date.replace(' ', '').replace(':', '').replace('.', '')}"
 
-    base_dirpath = os.path.join('backtests', config['exchange'], config['symbol'])
+    base_dirpath = os.path.join('backtests',
+                                f"{config['exchange']}{'_spot' if 'spot' in config and config['spot'] else ''}",
+                                config['symbol'])
     config['caches_dirpath'] = make_get_filepath(os.path.join(base_dirpath, 'caches', ''))
     config['optimize_dirpath'] = make_get_filepath(os.path.join(base_dirpath, 'optimize', ''))
     config['plots_dirpath'] = make_get_filepath(os.path.join(base_dirpath, 'plots', ''))
@@ -50,8 +52,7 @@ async def prep_config(args) -> dict:
     mss = config['caches_dirpath'] + 'market_specific_settings.json'
     try:
         print('fetching market_specific_settings...')
-        market_specific_settings = await fetch_market_specific_settings(config['user'], config['exchange'],
-                                                                        config['symbol'])
+        market_specific_settings = await fetch_market_specific_settings(config)
         json.dump(market_specific_settings, open(mss, 'w'), indent=4)
     except Exception as e:
         print('failed to fetch market_specific_settings', e)
@@ -115,13 +116,24 @@ def print_(args, r=False, n=False):
     return line
 
 
-async def fetch_market_specific_settings(user: str, exchange: str, symbol: str):
+async def fetch_market_specific_settings(config: dict):
+    user = config['user']
+    exchange = config['exchange']
+    symbol = config['symbol']
     tmp_live_settings = get_dummy_settings(user, exchange, symbol)
     settings_from_exchange = {}
     if exchange == 'binance':
-        bot = await create_binance_bot(tmp_live_settings)
-        settings_from_exchange['maker_fee'] = 0.0002
-        settings_from_exchange['taker_fee'] = 0.0004
+        if 'spot' in config and config['spot']:
+            bot = await create_binance_bot_spot(tmp_live_settings)
+            settings_from_exchange['maker_fee'] = 0.001
+            settings_from_exchange['taker_fee'] = 0.001
+            settings_from_exchange['spot'] = True
+            settings_from_exchange['hedge_mode'] = False
+        else:
+            bot = await create_binance_bot(tmp_live_settings)
+            settings_from_exchange['maker_fee'] = 0.0002
+            settings_from_exchange['taker_fee'] = 0.0004
+            settings_from_exchange['spot'] = False
         settings_from_exchange['exchange'] = 'binance'
     elif exchange == 'bybit':
         bot = await create_bybit_bot(tmp_live_settings)
@@ -133,7 +145,7 @@ async def fetch_market_specific_settings(user: str, exchange: str, symbol: str):
     await bot.session.close()
     if 'inverse' in bot.market_type:
         settings_from_exchange['inverse'] = True
-    elif 'linear' in bot.market_type:
+    elif any(x in bot.market_type for x in ['linear', 'spot']):
         settings_from_exchange['inverse'] = False
     else:
         raise Exception('unknown market type')
