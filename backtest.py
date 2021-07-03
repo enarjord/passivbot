@@ -58,7 +58,7 @@ async def main():
     live_config = load_live_config(args.live_config_path)
     config.update(live_config)
     print()
-    for k in (keys := ['exchange', 'symbol', 'starting_balance', 'start_date', 'end_date',
+    for k in (keys := ['exchange', 'spot', 'symbol', 'starting_balance', 'start_date', 'end_date',
                        'latency_simulation_ms']):
         if k in config:
             print(f"{k: <{max(map(len, keys)) + 2}} {config[k]}")
