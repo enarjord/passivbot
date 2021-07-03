@@ -290,9 +290,14 @@ async def main():
     if config['exchange'] == 'bybit' and not config['inverse']:
         print('bybit usdt linear backtesting not supported')
         return
+    if not (config['do_long'] and config['do_shrt']):
+        if not (config['do_long'] or config['do_shrt']):
+            raise Exception('both long and shrt disabled')
+        print(f"{'long' if config['do_long'] else 'shrt'} only, setting maximum_hrs_no_fills = maximum_hrs_no_fills_same_side")
+        config['maximum_hrs_no_fills'] = config['maximum_hrs_no_fills_same_side']
     downloader = Downloader(config)
     print()
-    for k in (keys := ['exchange', 'symbol', 'starting_balance', 'start_date', 'end_date', 'latency_simulation_ms',
+    for k in (keys := ['exchange', 'symbol', 'spot', 'starting_balance', 'start_date', 'end_date', 'latency_simulation_ms',
                        'do_long', 'do_shrt', 'minimum_bankruptcy_distance', 'maximum_hrs_no_fills',
                        'maximum_hrs_no_fills_same_side', 'iters', 'n_particles', 'sliding_window_days', 'metric',
                        'min_span', 'max_span', 'n_spans']):
