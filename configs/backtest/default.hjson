@@ -1,14 +1,15 @@
 {
   # bybit or binance
   exchange: binance
+  spot: true
 
   user: your_user_name
-  symbol: XMRUSDT
+  symbol: ADAETH
   latency_simulation_ms: 750
-  starting_balance: 100.0
+  starting_balance: 0.1
 
   # format YYYY-MM-DDTHH:mm:ss
   # e.g. 2020-02-18T19:34:59
-  start_date: 2020-06-28
+  start_date: 2020-11-17
   end_date: 2021-06-29
 }
