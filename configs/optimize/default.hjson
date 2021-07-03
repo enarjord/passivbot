@@ -37,8 +37,8 @@
   # If lower and upper bound are set to same value, it's treated as a fixed variable.
   ranges:
   {
-    min_span: [4000.0, 40000.0]
-    max_span: [60000.0, 600000.0]
+    min_span: [2000.0, 40000.0]
+    max_span: [40000.0, 600000.0]
     MAr_coeffs: [-0.0, 0.0]
 
     long£rprc_PBr_coeffs: [-1.0, 0.1]
