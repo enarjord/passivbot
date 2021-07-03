@@ -142,8 +142,8 @@ The next reentry quantity is calculated using the following formula:
 order_size = initial entry quantity + position size * short§rqty_const
 ```
 
-!!!Info
-   When reentry limit orders are calculated, any reentry order that makes the position cost higher than `pbr_limit + pbr_stoploss` is not created.
+!!! Info
+    When reentry limit orders are calculated, any reentry order that makes the position cost higher than `pbr_limit + pbr_stoploss` is not created.
 
 ## Closing trades
 
@@ -183,3 +183,15 @@ The config_name is the value that is specified in the `config_name` parameter in
 !!! Warning
     Be aware that Windows can have a limitation on the maximum path length of a file. If you run into a problem with this,
     you can try moving Passivbot to a different location that results in a shorter pathname, or a shorter value in the `config_name` parameter.
+
+## Automatic profit transfer
+
+Passivbot provides functionality to automatically transfer a specified percentage of profit on closed trades to the spot wallet.
+The transfer is performed in USDT, and the percentage transferred is defined by the `profit_trans_pct` configuration parameter.
+
+Besides automatic profit transfer, you can also manually transfer funds between your spot and futures wallet using Telegram.
+You can read more on this functionality in the [Telegram](telegram.md) section.
+
+!!! Info
+    In order to use this functionality, make sure you enable `Universal Transfer` on your API key.<br/>
+    This functionality is currently only supported on **Binance**

@@ -44,9 +44,14 @@ The following requirements are applicable for installing Passivbot:
 
 ## Hardware requirements
 
-Passivbot is a very lightweight bot, and can easily be run on a single-core machine with 1GB of RAM.
+Passivbot is a very lightweight bot, and can easily be run live on a single-core machine with 1GB of RAM.
 While the hardware requirements are very low, you may run into issues when running it on things like a Raspberry Pi.
 In case you do, please let us know so we can help out & improve the bot!
+
+Be aware that running an optimize on a long period may require a lot of memory. Since Passivbot acts on trade data (ticks)
+insteead of OHLCV data, the amount of memory is dependent on the amount of trades made in the selected time period.
+If you want to optimize on BTC for the last 365 days, it will take significantly more memory than optimizing on a coin
+like BTS for example.
 
 !!! Warning
     It should be very possible to run multiple bots on a single machine. Be aware that you may run into other
