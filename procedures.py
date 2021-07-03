@@ -67,7 +67,9 @@ async def prep_config(args) -> dict:
     if 'pbr_limit' in config['ranges']:
         config['ranges']['pbr_limit'][1] = min(config['ranges']['pbr_limit'][1], config['max_leverage'])
         config['ranges']['pbr_limit'][0] = min(config['ranges']['pbr_limit'][0], config['ranges']['pbr_limit'][1])
-
+    if 'spot' in config and config['spot']:
+        config['do_long'] = True
+        config['do_shrt'] = False
 
     return config
 
