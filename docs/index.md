@@ -24,8 +24,10 @@ It provides support for automatically optimize configurations, backtest using hi
 
 ## Supported exchanges
 
-Currently the following exchanges are implemented and supported for trading futures. The bot does not use
+Currently the exchanges **Binance** and **Bybit** are implemented and supported for trading futures. The bot does not use
 ccxt, so other exchanges cannot be used.
+
+Not all functionality is supported on bot exchanges, depending on the API's that bot exchanges expose and development efforts.
 
 !!! Info
     If you would like to have support added for an exchange not supported yet, 
@@ -48,13 +50,13 @@ Passivbot is a very lightweight bot, and can easily be run live on a single-core
 While the hardware requirements are very low, you may run into issues when running it on things like a Raspberry Pi.
 In case you do, please let us know so we can help out & improve the bot!
 
-Be aware that running an optimize on a long period may require a lot of memory. Since Passivbot acts on trade data (ticks)
-insteead of OHLCV data, the amount of memory is dependent on the amount of trades made in the selected time period.
+Be aware that running an optimize on a long period may require a lot of memory and CPU power. Since Passivbot acts on
+trade data (ticks) instead of OHLCV data, the amount of memory is dependent on the amount of trades made in the selected time period.
 If you want to optimize on BTC for the last 365 days, it will take significantly more memory than optimizing on a coin
 like BTS for example.
 
 !!! Warning
-    It should be very possible to run multiple bots on a single machine. Be aware that you may run into other
+    It should be very possible to run multiple bots on a single machine. Be aware however that you may run into other
     limitations like rate limiting of exchanges.
 
 ## Support
