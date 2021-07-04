@@ -378,12 +378,15 @@ class Bot:
     async def execute_order(self, order: dict) -> Union[dict, bool]:
         params = {'symbol': self.symbol,
                   'side': order['side'].upper(),
-                  'positionSide': order['positionSide'].upper(),
+                  'positionSide': order['position_side'].upper(),
                   'type': order['type'].upper(),
-                  'quantity': str(order['quantity'])}
+                  'quantity': str(order['qty'])}
         if params['type'] == 'LIMIT':
             params['timeInForce'] = 'GTX'
             params['price'] = str(order['price'])
+        if params['type'] == 'TAKE_PROFIT':
+            params['price'] = str(order['price'])
+            params['stopPrice'] = str(order['stop_price'])
         o = await self.private_post(self.endpoints['create_order'], params)
         if 'code' in o:
             return o
