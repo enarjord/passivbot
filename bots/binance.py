@@ -398,67 +398,44 @@ class Bot:
         else:
             return True
 
-    async def create_orders(self, orders_to_create: [dict]) -> [dict]:
+    async def create_orders(self, orders_to_create: [dict]):
         if not orders_to_create:
-            return {}
+            return
         creations = []
         for oc in orders_to_create:
             try:
                 creations.append((oc, asyncio.create_task(self.execute_order(oc))))
             except Exception as e:
-                print_(['error creating order a', oc, e], n=True)
-        created_orders = []
+                print_(['Error creating order', oc, e], n=True)
         for oc, c in creations:
             try:
                 o = await c
-                created_orders.append(o)
-                if 'side' in o:
-                    print_([' created order', o['symbol'], o['side'], o['position_side'], o['qty'],
-                            o['price']], n=True)
+                if type(o) == bool:
+                    if not o:
+                        print_(['Error creating order'], n=True)
                 else:
-                    print_(['error creating order b', o, oc], n=True)
+                    print_(['Error creating order', o], n=True)
             except Exception as e:
-                print_(['error creating order c', oc, c.exception(), e], n=True)
-        return created_orders
+                print_(['Error creating order', oc, c.exception(), e], n=True)
+        return
 
-    async def cancel_orders(self, orders_to_cancel: [dict]) -> [dict]:
+    async def cancel_orders(self, orders_to_cancel: [dict]):
         if not orders_to_cancel:
-            return []
+            return
         deletions = []
         for oc in orders_to_cancel:
             try:
                 deletions.append((oc, asyncio.create_task(self.execute_cancellation(oc))))
             except Exception as e:
-                print_(['error cancelling order a', oc, e])
-        canceled_orders = []
+                print_(['Error cancelling order a', oc, e], n=True)
         for oc, c in deletions:
             try:
                 o = await c
-                canceled_orders.append(o)
-                if 'side' in o:
-                    print_(['cancelled order', o['symbol'], o['side'], o['position_side'], o['qty'],
-                            o['price']], n=True)
+                if type(o) == bool:
+                    if not o:
+                        print_(['Error cancelling order'], n=True)
                 else:
-                    print_(['error cancelling order', o], n=True)
+                    print_(['Error cancelling order', o], n=True)
             except Exception as e:
-                print_(['error cancelling order b', oc, c.exception(), e], n=True)
-        return canceled_orders
-
-    async def decide(self):
-        if True:
-            pass
-
-
-async def start_bot(bot):
-    await asyncio.gather(bot.start_listen_update(), bot.start_user_data(), bot.start_websocket())
-
-
-async def main() -> None:
-    config = load_config('configs/test.hjson')
-    bot = Bot(config)
-    await bot.init()
-    await start_bot(bot)
-
-
-if __name__ == '__main__':
-    asyncio.run(main())
+                print_(['Error cancelling order', oc, c.exception(), e], n=True)
+        return
