@@ -1,0 +1,7 @@
+{
+    "binance" : {
+        "exchange": "binance",
+        "key": "",
+        "secret": ""
+    }
+}
