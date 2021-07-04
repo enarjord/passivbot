@@ -9,6 +9,7 @@ import aiohttp
 import numpy as np
 
 from pure_funcs import ts_to_date, sort_dict_keys, calc_pprice_from_fills
+from njit_funcs import round_dn
 from passivbot import Bot
 from procedures import load_key_secret, print_
 
@@ -16,6 +17,7 @@ from procedures import load_key_secret, print_
 class BinanceBotSpot(Bot):
     def __init__(self, config: dict):
         self.exchange = 'binance_spot'
+        self.balance = {}
         super().__init__(config)
         self.session = aiohttp.ClientSession()
         self.base_endpoint = ''
@@ -102,6 +104,18 @@ class BinanceBotSpot(Bot):
         await self.init_order_book()
         await self.update_position()
 
+    def calc_orders(self):
+        orders = super().calc_orders()
+        orders = sorted(orders, key=lambda x: x['price'])
+        sum_buy_cost = sum([o['qty'] * o['price'] for o in orders if o['side'] == 'buy'])
+        excess_cost = max(0.0, sum_buy_cost - self.balance[self.quot]['onhand'])
+        if excess_cost:
+            orders[0]['qty'] = round_dn((orders[0]['qty'] * orders[0]['price'] - excess_cost) / orders[0]['price'], self.qty_step)
+            if orders[0]['qty'] < max(self.min_qty, self.min_cost / orders[0]['price']):
+                orders = orders[1:]
+        return orders
+
+
     async def check_if_other_positions(self, abort=True):
         return
         # todo...
@@ -184,6 +198,7 @@ class BinanceBotSpot(Bot):
         if position['long']['size'] * position['long']['price'] < self.min_cost:
             position['long']['size'] = 0.0
             position['long']['price'] = 0.0
+        self.balance = balance
         return position
 
     async def execute_order(self, order: dict) -> dict:
