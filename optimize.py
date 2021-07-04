@@ -2,54 +2,67 @@ import argparse
 import asyncio
 import glob
 import json
-import logging
 import os
 import pprint
+import sys
 from time import time
 from typing import Union
 
 import nevergrad as ng
 import numpy as np
+import psutil
 import ray
 from ray import tune
 from ray.tune.schedulers import AsyncHyperBandScheduler
 from ray.tune.suggest import ConcurrencyLimiter
 from ray.tune.suggest.nevergrad import NevergradSearch
 
-from analyze import analyze_fills, get_empty_analysis, objective_function
-from backtest import backtest, plot_wrap
-from downloader import Downloader, prep_config
-from jitted import round_
-from passivbot import ts_to_date, add_argparse_args
+from collections import OrderedDict
+from backtest import backtest
+from backtest import plot_wrap
+from downloader import Downloader
+from procedures import prep_config, add_argparse_args
+from pure_funcs import pack_config, unpack_config, get_template_live_config, ts_to_date, analyze_fills
 from reporter import LogReporter
-from walk_forward_optimization import WFO
 
-os.environ['TUNE_GLOBAL_CHECKPOINT_S'] = '120'
+os.environ['TUNE_GLOBAL_CHECKPOINT_S'] = '240'
 
 
-def create_config(backtest_config: dict) -> dict:
-    '''
-    config = {k: backtest_config[k] for k in backtest_config
-              if k in get_keys() + ['exchange', 'starting_balance']}
-              #if k not in {'session_name', 'user', 'symbol', 'start_date', 'end_date', 'ranges'}}
-    '''
-    config = backtest_config
-    for k in backtest_config['ranges']:
-        if backtest_config['ranges'][k][0] == backtest_config['ranges'][k][1]:
-            config[k] = backtest_config['ranges'][k][0]
-        elif k in ['n_close_orders', 'leverage']:
-            config[k] = tune.randint(backtest_config['ranges'][k][0], backtest_config['ranges'][k][1] + 1)
+def get_expanded_ranges(config: dict) -> dict:
+    updated_ranges = OrderedDict()
+    unpacked = unpack_config(get_template_live_config(config['n_spans']))
+
+    for k0 in unpacked:
+        if '£' in k0 or k0 in config['ranges']:
+            for k1 in config['ranges']:
+                if k1 in k0:
+                    updated_ranges[k0] = config['ranges'][k1]
+                    if 'pbr_limit' in k0:
+                        updated_ranges[k0] = [updated_ranges[k0][0],
+                                              min(updated_ranges[k0][1], config['max_leverage'])]
+    return updated_ranges
+
+
+def create_config(config: dict) -> dict:
+    updated_ranges = get_expanded_ranges(config)
+    template = get_template_live_config(config['n_spans'])
+    template['long']['enabled'] = config['do_long']
+    template['shrt']['enabled'] = config['do_shrt']
+    unpacked = unpack_config(template)
+    for k in updated_ranges:
+        if updated_ranges[k][0] == updated_ranges[k][1]:
+            unpacked[k] = updated_ranges[k][0]
         else:
-            config[k] = tune.uniform(backtest_config['ranges'][k][0], backtest_config['ranges'][k][1])
-    return config
+            unpacked[k] = tune.uniform(updated_ranges[k][0], updated_ranges[k][1])
+    return {**config, **unpacked, **{'ranges': updated_ranges}}
 
 
-def clean_start_config(start_config: dict, config: dict, ranges: dict) -> dict:
+def clean_start_config(start_config: dict, config: dict) -> dict:
     clean_start = {}
-    for k, v in start_config.items():
-        if k in config and k not in ['do_long', 'do_shrt']:
+    for k, v in unpack_config(start_config).items():
+        if k in config:
             if type(config[k]) == ray.tune.sample.Float or type(config[k]) == ray.tune.sample.Integer:
-                clean_start[k] = min(max(v, ranges[k][0]), ranges[k][1])
+                clean_start[k] = min(max(v, config['ranges'][k][0]), config['ranges'][k][1])
     return clean_start
 
 
@@ -62,159 +75,205 @@ def clean_result_config(config: dict) -> dict:
     return config
 
 
-def iter_slices(iterable, sliding_window_size: float, n_windows: int, yield_full: bool = True):
-    for ix in np.linspace(1 - sliding_window_size, 0.0, n_windows):
-        yield iterable[int(round(len(iterable) * ix)):int(round(len(iterable) * (ix + sliding_window_size)))]
-    if yield_full:
-        yield iterable
+def iter_slices_full_first(data, sliding_window_days, ticks_to_prepend, minimum_days):
+    yield data
+    for d in iter_slices(data, sliding_window_days, ticks_to_prepend, minimum_days):
+        yield d
 
 
-def tanh(x):
-    return np.tanh(10 * (x - 1))
+def iter_slices(data, sliding_window_days: float, ticks_to_prepend: int = 0):
+    sliding_window_ms = sliding_window_days * 24 * 60 * 60 * 1000
+    span_ms = data[2][-1] - data[2][0]
+    if sliding_window_ms > span_ms * 0.999:
+        yield data
+        return
+    n_windows = int(np.ceil(span_ms / sliding_window_ms)) + 1
+    thresholds_ms = np.linspace(data[2][ticks_to_prepend], data[2][-1] - sliding_window_ms, n_windows)
+
+    for threshold_ms in thresholds_ms[::-1]:
+        start_i = max(0, int(np.argmax(data[2] >= threshold_ms) - ticks_to_prepend))
+        end_i = min(len(data[2]) - 1, int(np.argmax(data[2] >= threshold_ms + sliding_window_ms)))
+        yield tuple(d[start_i:end_i] for d in data)
+    for ds in iter_slices(data, sliding_window_days * 2, ticks_to_prepend):
+        yield ds
 
 
-def simple_sliding_window_wrap(config, ticks):
-    sliding_window_size = config['sliding_window_size'] if 'sliding_window_size' in config else 0.4
-    n_windows = config['n_sliding_windows'] if 'n_sliding_windows' in config else 4
-    test_full = config['test_full'] if 'test_full' in config else False
-    results = []
-    finished_windows = 0.0
-    for ticks_slice in iter_slices(ticks, sliding_window_size, n_windows, yield_full=test_full):
-        try:
-            fills, _, did_finish = backtest(config, ticks_slice)
-        except Exception as e:
-            print('debug a', e, config)
-            fills = []
-            did_finish = False
-        try:
-            _, result_ = analyze_fills(fills, config, ticks_slice[-1][2])
-        except Exception as e:
-            print('b', e)
-            result_ = get_empty_analysis(config)
-        results.append(result_)
-        finished_windows += 1.0
-        if config['break_early_factor'] > 0.0 and \
-                (not did_finish or
-                 result_['closest_liq'] < config['minimum_liquidation_distance'] * (1 - config['break_early_factor']) or
-                 result_['max_hrs_no_fills'] > config['max_hrs_no_fills'] * (1 + config['break_early_factor']) or
-                 result_['max_hrs_no_fills_same_side'] > config['max_hrs_no_fills_same_side'] * (
-                         1 + config['break_early_factor'])):
-            break
-    if results:
-        result = {}
-        for k in results[0]:
-            try:
-                if k == 'closest_liq':
-                    result[k] = np.min([r[k] for r in results])
-                elif k == 'average_daily_gain':
-                    if (denominator := np.sum([r['n_days'] for r in results])) == 0.0:
-                        result[k] = 1.0
-                    else:
-                        result[k] = np.sum([r[k] * r['n_days'] for r in results]) / denominator
-                    result['adjusted_daily_gain'] = np.mean(
-                        [tanh(r[k]) for r in results]) * finished_windows / n_windows
-                elif 'max_hrs_no_fills' in k:
-                    result[k] = np.max([r[k] for r in results])
-                else:
-                    result[k] = np.mean([r[k] for r in results])
-            except:
-                result[k] = results[0][k]
-    else:
-        result = get_empty_analysis(config)
-
-    try:
-        objective = objective_function(result, 'adjusted_daily_gain', config)
-    except Exception as e:
-        print('c', e)
-        objective = -1
-    tune.report(objective=objective, daily_gain=result['average_daily_gain'], closest_liquidation=result['closest_liq'],
-                max_hrs_no_fills=result['max_hrs_no_fills'],
-                max_hrs_no_fills_same_side=result['max_hrs_no_fills_same_side'])
-
-
-def tune_report(result):
-    tune.report(
-        objective=result["objective_gmean"],
-        daily_gain=result["daily_gains_gmean"],
-        closest_liquidation=result["closest_liq"],
-        max_hrs_no_fills=result["max_hrs_no_fills"],
-        max_hrs_no_fills_same_side=result["max_hrs_no_fills_same_side"],
+def objective_function(analysis: dict, config: dict, metric='adjusted_daily_gain') -> float:
+    if analysis['n_fills'] == 0:
+        return -1.0
+    return (
+        analysis[metric]
+        * min(1.0, config['maximum_hrs_no_fills'] / analysis['max_hrs_no_fills'])
+        * min(1.0, config['maximum_hrs_no_fills_same_side'] / analysis['max_hrs_no_fills_same_side'])
+        * min(1.0, analysis['closest_bkr'] / config['minimum_bankruptcy_distance'])
+        * min(1.0, analysis['lowest_eqbal_ratio'] / config['minimum_equity_balance_ratio'])
     )
 
 
-def backtest_tune(ticks: np.ndarray, backtest_config: dict, current_best: Union[dict, list] = None):
-    config = create_config(backtest_config)
-    n_days = round_((ticks[-1][2] - ticks[0][2]) / (1000 * 60 * 60 * 24), 0.1)
-    backtest_config['optimize_dirpath'] = os.path.join(backtest_config['optimize_dirpath'],
-                                                       ts_to_date(time())[:19].replace(':', ''), '')
-    if 'iters' in backtest_config:
-        iters = backtest_config['iters']
+def single_sliding_window_run(config, data, do_print=False) -> (float, [dict]):
+    analyses = []
+    objective = 0.0
+    n_days = config['n_days']
+    metric = config['metric'] if 'metric' in config else 'adjusted_daily_gain'
+    if config['sliding_window_days'] == 0.0:
+        sliding_window_days = n_days
+    else:
+        # sliding window n days should be greater than max hrs no fills
+        sliding_window_days = min(n_days, max([config['maximum_hrs_no_fills'] * 2.1 / 24,
+                                               config['maximum_hrs_no_fills_same_side'] * 2.1 / 24,
+                                               config['sliding_window_days']]))
+    analyses = []
+    for z, data_slice in enumerate(iter_slices(data, sliding_window_days,
+                                               ticks_to_prepend=int(config['max_span']))):
+        if len(data_slice[0]) == 0:
+            print('debug b no data')
+            continue
+        try:
+            fills, info = backtest(pack_config(config), data_slice)
+        except Exception as e:
+            print(e)
+            break
+        result = {**config, **{'lowest_eqbal_ratio': info[1], 'closest_bkr': info[2]}}
+        _, analysis = analyze_fills(fills, {**config, **{'lowest_eqbal_ratio': info[1], 'closest_bkr': info[2]}},
+                                    data_slice[2][int(config['max_span'])],
+                                    data_slice[2][-1])
+        analysis['score'] = objective_function(analysis, config, metric=metric) * (analysis['n_days'] / config['n_days'])
+        analyses.append(analysis)
+        objective = np.mean([e['score'] for e in analyses]) * max(1.01, config['reward_multiplier_base']) ** (z + 1)
+        analyses[-1]['objective'] = objective
+        line = (f'{str(z).rjust(3, " ")} adg {analysis["average_daily_gain"]:.4f}, '
+                f'bkr {analysis["closest_bkr"]:.4f}, '
+                f'eqbal {analysis["lowest_eqbal_ratio"]:.4f} n_days {analysis["n_days"]:.1f}, '
+                f'score {analysis["score"]:.4f}, objective {objective:.4f}, '
+                f'hrs stuck ss {str(round(analysis["max_hrs_no_fills_same_side"], 1)).zfill(4)}, ')
+        if (bef := config['break_early_factor']) != 0.0:
+            if analysis['closest_bkr'] < config['minimum_bankruptcy_distance'] * (1 - bef):
+                line += f"broke on min_bkr_dist {analysis['closest_bkr']:.4f}, {config['minimum_bankruptcy_distance']}"
+                print(line)
+                break
+            if analysis['lowest_eqbal_ratio'] < config['minimum_equity_balance_ratio'] * (1 - bef):
+                line += f"broke on low eqbal ratio {analysis['lowest_eqbal_ratio']:.4f} "
+                print(line)
+                break
+            if analysis['max_hrs_no_fills'] > config['maximum_hrs_no_fills'] * (1 + bef):
+                line += f"broke on max_hrs_no_fills {analysis['max_hrs_no_fills']:.4f}, {config['maximum_hrs_no_fills']}"
+                print(line)
+                break
+            if analysis['max_hrs_no_fills_same_side'] > config['maximum_hrs_no_fills_same_side'] * (1 + bef):
+                line += f"broke on max_hrs_no_fills_ss {analysis['max_hrs_no_fills_same_side']:.4f}, {config['maximum_hrs_no_fills_same_side']}"
+                print(line)
+                break
+            if analysis['average_daily_gain'] < config['minimum_slice_adg']:
+                line += f"broke on low adg {analysis['average_daily_gain']:.4f} "
+                print(line)
+                break
+            if z > 2 and (mean_adg := np.mean([e['average_daily_gain'] for e in analyses])) < 1.0:
+                line += f"broke on low mean adg {mean_adg:.4f} "
+                print(line)
+                break
+            print(line)
+    return objective, analyses
+
+def simple_sliding_window_wrap(config, data, do_print=False):
+    objective, analyses = single_sliding_window_run(config, data)
+    if not analyses:
+        tune.report(objective=0.0,
+                    daily_gain=0.0,
+                    closest_bkr=0.0,
+                    lowest_eqbal_r=0.0,
+                    max_hrs_no_fills=1000.0,
+                    max_hrs_no_fills_ss=1000.0)
+    else:
+        tune.report(objective=objective,
+                    daily_gain=np.mean([r['average_daily_gain'] for r in analyses]),
+                    closest_bkr=np.min([r['closest_bkr'] for r in analyses]),
+                    lowest_eqbal_r=np.min([r['lowest_eqbal_ratio'] for r in analyses]),
+                    max_hrs_no_fills=np.max([r['max_hrs_no_fills'] for r in analyses]),
+                    max_hrs_no_fills_ss=np.max([r['max_hrs_no_fills_same_side'] for r in analyses]))
+
+
+def backtest_tune(data: np.ndarray, config: dict, current_best: Union[dict, list] = None):
+    memory = int(np.sum([sys.getsizeof(d) for d in data]) * 1.2)
+    virtual_memory = psutil.virtual_memory()
+    if (virtual_memory.available - memory) / virtual_memory.total < 0.1:
+        print("Available memory would drop below 10%. Please reduce the time span.")
+        return None
+    config = create_config(config)
+    if type(config['max_span']) in [ray.tune.sample.Float, ray.tune.sample.Integer]:
+        max_span_upper = config['max_span'].upper
+    else:
+        max_span_upper = config['max_span']
+    if len(data[2]) < max_span_upper * 1.5:
+        raise Exception( "too few ticks or to high upper range for max span,\n"
+                         "please use more backtest data or reduce max span\n"
+                        f"n_ticks {len(data[2])}, max_span {int(max_span_upper)}")
+    print('tuning:')
+    for k, v in config.items():
+        if type(v) in [ray.tune.sample.Float, ray.tune.sample.Integer]:
+            print(k, (v.lower, v.upper))
+    if 'iters' in config:
+        iters = config['iters']
     else:
         print('Parameter iters should be defined in the configuration. Defaulting to 10.')
         iters = 10
-    if 'num_cpus' in backtest_config:
-        num_cpus = backtest_config['num_cpus']
+    if 'num_cpus' in config:
+        num_cpus = config['num_cpus']
     else:
         print('Parameter num_cpus should be defined in the configuration. Defaulting to 2.')
         num_cpus = 2
-    n_particles = backtest_config['n_particles'] if 'n_particles' in backtest_config else 10
+    n_particles = config['n_particles'] if 'n_particles' in config else 10
     phi1 = 1.4962
     phi2 = 1.4962
     omega = 0.7298
-    if 'options' in backtest_config:
-        phi1 = backtest_config['options']['c1']
-        phi2 = backtest_config['options']['c2']
-        omega = backtest_config['options']['w']
+    if 'options' in config:
+        phi1 = config['options']['c1']
+        phi2 = config['options']['c2']
+        omega = config['options']['w']
     current_best_params = []
-    if current_best:
+    if current_best is not None:
         if type(current_best) == list:
             for c in current_best:
-                c = clean_start_config(c, config, backtest_config['ranges'])
+                c = clean_start_config(c, config)
                 if c not in current_best_params:
                     current_best_params.append(c)
         else:
-            current_best = clean_start_config(current_best, config, backtest_config['ranges'])
+            current_best = clean_start_config(current_best, config)
             current_best_params.append(current_best)
 
-    ray.init(num_cpus=num_cpus, logging_level=logging.FATAL, log_to_driver=False)
+    ray.init(num_cpus=num_cpus,
+             object_store_memory=memory if memory > 4000000000 else None)  # , logging_level=logging.FATAL, log_to_driver=False)
     pso = ng.optimizers.ConfiguredPSO(transform='identity', popsize=n_particles, omega=omega, phip=phi1, phig=phi2)
     algo = NevergradSearch(optimizer=pso, points_to_evaluate=current_best_params)
     algo = ConcurrencyLimiter(algo, max_concurrent=num_cpus)
     scheduler = AsyncHyperBandScheduler()
 
-    if 'wfo' in config and config['wfo']:
-        print('\n\nwalk forward optimization\n\n')
-        wfo = WFO(ticks, backtest_config, P_train=0.5).set_train_N(4)
-        backtest_wrap = lambda config: tune_report(wfo.backtest(config))
-    else:
-        print('\n\nsimple sliding window optimization\n\n')
-        backtest_wrap = tune.with_parameters(simple_sliding_window_wrap, ticks=ticks)
+    print('\n\nsimple sliding window optimization\n\n')
+
+    backtest_wrap = tune.with_parameters(simple_sliding_window_wrap, data=data)
     analysis = tune.run(
         backtest_wrap, metric='objective', mode='max', name='search',
         search_alg=algo, scheduler=scheduler, num_samples=iters, config=config, verbose=1,
-        reuse_actors=True, local_dir=backtest_config['optimize_dirpath'],
-        progress_reporter=LogReporter(metric_columns=['daily_gain',
-                                                      'closest_liquidation',
-                                                      'max_hrs_no_fills',
-                                                      'max_hrs_no_fills_same_side',
-                                                      'objective'],
-                                      parameter_columns=[k for k in backtest_config['ranges']
-                                                         if type(config[k]) == ray.tune.sample.Float
-                                                         or type(config[k]) == ray.tune.sample.Integer]),
+        reuse_actors=True, local_dir=config['optimize_dirpath'],
+        progress_reporter=LogReporter(
+            metric_columns=['daily_gain',
+                            'closest_bkr',
+                            'lowest_eqbal_r',
+                            'max_hrs_no_fills',
+                            'max_hrs_no_fills_ss',
+                            'objective'],
+            parameter_columns=[k for k in config['ranges'] if '_span' in k]),
         raise_on_failed_trial=False
     )
     ray.shutdown()
     return analysis
 
 
-def save_results(analysis, backtest_config):
+def save_results(analysis, config):
     df = analysis.results_df
     df.reset_index(inplace=True)
     df.rename(columns={column: column.replace('config.', '') for column in df.columns}, inplace=True)
-    df = df[list(backtest_config['ranges'].keys()) + ['daily_gain', 'closest_liquidation', 'max_hrs_no_fills',
-                                                      'max_hrs_no_fills_same_side', 'objective']].sort_values(
-        'objective', ascending=False)
-    df.to_csv(os.path.join(backtest_config['optimize_dirpath'], 'results.csv'), index=False)
+    df = df.sort_values('objective', ascending=False)
+    df.to_csv(os.path.join(config['optimize_dirpath'], 'results.csv'), index=False)
     print('Best candidate found:')
     pprint.pprint(analysis.best_config)
 
@@ -223,7 +282,7 @@ async def main():
     parser = argparse.ArgumentParser(prog='Optimize', description='Optimize passivbot config.')
     parser = add_argparse_args(parser)
     parser.add_argument('-t', '--start', type=str, required=False, dest='starting_configs',
-                        default='none',
+                        default=None,
                         help='start with given live configs.  single json file or dir with multiple json files')
     args = parser.parse_args()
 
@@ -233,16 +292,20 @@ async def main():
         return
     downloader = Downloader(config)
     print()
-    for k in (keys := ['exchange', 'symbol', 'starting_balance', 'start_date', 'end_date',
-                       'latency_simulation_ms', 'do_long', 'do_shrt', 'minimum_liquidation_distance',
-                       'max_hrs_no_fills', 'max_hrs_no_fills_same_side', 'iters', 'n_particles']):
+    for k in (keys := ['exchange', 'symbol', 'starting_balance', 'start_date', 'end_date', 'latency_simulation_ms',
+                       'do_long', 'do_shrt', 'minimum_bankruptcy_distance', 'maximum_hrs_no_fills',
+                       'maximum_hrs_no_fills_same_side', 'iters', 'n_particles', 'sliding_window_days', 'metric',
+                       'min_span', 'max_span', 'n_spans']):
         if k in config:
             print(f"{k: <{max(map(len, keys)) + 2}} {config[k]}")
     print()
-    ticks = await downloader.get_ticks(True)
+    data = await downloader.get_data()
+    config['n_days'] = (data[2][-1] - data[2][0]) / (1000 * 60 * 60 * 24)
+    config['optimize_dirpath'] = os.path.join(config['optimize_dirpath'],
+                                              ts_to_date(time())[:19].replace(':', ''), '')
 
     start_candidate = None
-    if args.starting_configs != 'none':
+    if args.starting_configs is not None:
         try:
             if os.path.isdir(args.starting_configs):
                 start_candidate = [json.load(open(f)) for f in glob.glob(os.path.join(args.starting_configs, '*.json'))]
@@ -252,12 +315,11 @@ async def main():
                 print('Starting with specified configuration.')
         except Exception as e:
             print('Could not find specified configuration.', e)
-    if start_candidate:
-        analysis = backtest_tune(ticks, config, start_candidate)
-    else:
-        analysis = backtest_tune(ticks, config)
-    save_results(analysis, config)
-    plot_wrap(config, ticks, clean_result_config(analysis.best_config))
+    analysis = backtest_tune(data, config, start_candidate)
+    if analysis:
+        save_results(analysis, config)
+        config.update(clean_result_config(analysis.best_config))
+        plot_wrap(pack_config(config), data)
 
 
 if __name__ == '__main__':

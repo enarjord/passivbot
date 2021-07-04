@@ -9,7 +9,8 @@ from ray.tune.progress_reporter import memory_debug_str, trial_errors_str, _get_
 from ray.tune.trial import Trial
 from ray.tune.utils import unflattened_lookup
 from tabulate import tabulate
-from analyze import candidate_to_live_config
+from pure_funcs import candidate_to_live_config
+from procedures import dump_live_config
 
 try:
     from collections.abc import Mapping, MutableMapping
@@ -192,10 +193,8 @@ class LogReporter(CLIReporter):
                 df[df[self._metric] > 0].to_csv(
                     os.path.join(config['optimize_dirpath'], 'intermediate_results.csv'), index=False)
                 if best_eval:
-                    intermediate_result = candidate_to_live_config({**best_config, **best_eval.copy()})
-                    json.dump(intermediate_result,
-                              open(os.path.join(best_config['optimize_dirpath'], 'intermediate_best_result.json'), 'w'),
-                              indent=4)
+                    dump_live_config({**best_config, **best_eval.copy()},
+                                     os.path.join(best_config['optimize_dirpath'], 'intermediate_best_result.json'))
         except Exception as e:
             print("Something went wrong", e)
 

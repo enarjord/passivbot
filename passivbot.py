@@ -1,123 +1,22 @@
 import argparse
 import asyncio
-import datetime
 import json
 import logging
 import os
 import signal
-from collections import deque
+import pprint
 from pathlib import Path
 from time import time
-
+from procedures import load_live_config, make_get_filepath, load_key_secret, print_
+from pure_funcs import get_xk_keys, get_ids_to_fetch, flatten, calc_indicators_from_ticks_with_gaps, \
+    drop_consecutive_same_prices, filter_orders, compress_float, create_xk, round_dynamic, denumpyize, \
+    calc_spans
+from njit_funcs import calc_orders, calc_new_psize_pprice, qty_to_cost, calc_diff, round_, calc_emas
 import numpy as np
 import websockets
-
 import telegram_bot
-from jitted import round_, calc_diff, calc_ema, calc_cost, iter_entries, iter_long_closes, \
-    iter_shrt_closes, compress_float
 
 logging.getLogger("telegram").setLevel(logging.CRITICAL)
-
-def get_keys():
-    return ['inverse', 'do_long', 'do_shrt', 'qty_step', 'price_step', 'min_qty', 'min_cost',
-            'contract_multiplier', 'ddown_factor', 'qty_pct', 'leverage', 'n_close_orders',
-            'grid_spacing', 'pos_margin_grid_coeff', 'volatility_grid_coeff',
-            'volatility_qty_coeff', 'min_markup', 'markup_range', 'ema_span', 'ema_spread',
-            'stop_loss_liq_diff', 'stop_loss_pos_pct', 'entry_liq_diff_thr']
-
-
-def sort_dict_keys(d):
-    if type(d) == list:
-        return [sort_dict_keys(e) for e in d]
-    if type(d) != dict:
-        return d
-    return {key: sort_dict_keys(d[key]) for key in sorted(d)}
-
-
-def flatten_dict(d, parent_key='', sep='_'):
-    items = []
-    for k, v in d.items():
-        new_key = parent_key + sep + k if parent_key else k
-        if type(v) == dict:
-            items.extend(flatten_dict(v, new_key, sep=sep).items())
-        else:
-            items.append((new_key, v))
-    return dict(items)
-
-
-def make_get_filepath(filepath: str) -> str:
-    '''
-    if not is path, creates dir and subdirs for path, returns path
-    '''
-    dirpath = os.path.dirname(filepath) if filepath[-1] != '/' else filepath
-    if not os.path.isdir(dirpath):
-        os.makedirs(dirpath)
-    return filepath
-
-
-def load_key_secret(exchange: str, user: str) -> (str, str):
-    try:
-        keyfile = json.load(open('api-keys.json'))
-        # Checks that the user exists, and it is for the correct exchange
-        if user in keyfile and keyfile[user]["exchange"] == exchange:
-
-            # If we need to get the `market` key:
-            # market = keyfile[user]["market"]
-            # print("The Market Type is " + str(market))
-
-            keyList = [str(keyfile[user]["key"]), str(keyfile[user]["secret"])]
-
-            return keyList
-        elif user not in keyfile or keyfile[user]["exchange"] != exchange:
-            print("Looks like the keys aren't configured yet, or you entered the wrong username!")
-        raise Exception('API KeyFile Missing!')
-    except FileNotFoundError:
-        print("File Not Found!")
-        raise Exception('API KeyFile Missing!')
-
-
-def print_(args: [str], r=False, n=False):
-    line = ts_to_date(time())[:19] + '  '
-    str_args = '{} ' * len(args)
-    line += str_args.format(*args)
-    if n:
-        print('\n' + line, end=' ')
-    elif r:
-        print('\r' + line, end=' ')
-    else:
-        print(line)
-    return line
-
-
-def ts_to_date(timestamp: float) -> str:
-    return str(datetime.datetime.fromtimestamp(timestamp)).replace(' ', 'T')
-
-
-def filter_orders(actual_orders: [dict],
-                  ideal_orders: [dict],
-                  keys: [str] = ['symbol', 'side', 'qty', 'price']) -> ([dict], [dict]):
-    # returns (orders_to_delete, orders_to_create)
-
-    if not actual_orders:
-        return [], ideal_orders
-    if not ideal_orders:
-        return actual_orders, []
-    actual_orders = actual_orders.copy()
-    orders_to_create = []
-    ideal_orders_cropped = [{k: o[k] for k in keys} for o in ideal_orders]
-    actual_orders_cropped = [{k: o[k] for k in keys} for o in actual_orders]
-    for ioc, io in zip(ideal_orders_cropped, ideal_orders):
-        matches = [(aoc, ao) for aoc, ao in zip(actual_orders_cropped, actual_orders) if aoc == ioc]
-        if matches:
-            actual_orders.remove(matches[0][1])
-            actual_orders_cropped.remove(matches[0][0])
-        else:
-            orders_to_create.append(io)
-    return actual_orders, orders_to_create
-
-
-def flatten(lst: list) -> list:
-    return [y for x in lst for y in x]
 
 
 class LockNotAvailableException(Exception):
@@ -126,19 +25,22 @@ class LockNotAvailableException(Exception):
 class Bot:
     def __init__(self, config: dict):
         self.config = config
+        self.config['do_long'] = config['long']['enabled']
+        self.config['do_shrt'] = config['shrt']['enabled']
+        self.config['max_leverage'] = 25
         self.telegram = None
         self.xk = {}
 
-        self.set_config(config)
+        self.hedge_mode = self.config['hedge_mode'] = True
+        self.set_config(self.config)
 
-        self.ema_span = int(round(self.ema_span))
-        self.ema_alpha = 2 / (self.ema_span + 1)
-        self.ema_alpha_ = 1 - self.ema_alpha
+        self.ema_alpha = 2.0 / (self.spans + 1.0)
+        self.ema_alpha_ = 1.0 - self.ema_alpha
 
-        self.ts_locked = {'cancel_orders': 0, 'decide': 0, 'update_open_orders': 0,
-                          'update_position': 0, 'print': 0, 'create_orders': 0,
-                          'check_fills': 0}
-        self.ts_released = {k: 1 for k in self.ts_locked}
+        self.ts_locked = {'cancel_orders': 0.0, 'decide': 0.0, 'update_open_orders': 0.0,
+                          'update_position': 0.0, 'print': 0.0, 'create_orders': 0.0,
+                          'check_fills': 0.0}
+        self.ts_released = {k: 1.0 for k in self.ts_locked}
 
         self.position = {}
         self.open_orders = []
@@ -150,13 +52,14 @@ class Bot:
         self.agg_qty = 0.0
         self.qty = 0.0
         self.ob = [0.0, 0.0]
-        self.ema = 0.0
+
+        self.emas = np.zeros(len(self.spans))
+        self.ratios = np.zeros(len(self.spans))
 
         self.n_open_orders_limit = 8
         self.n_orders_per_execution = 4
 
-        self.hedge_mode = True
-        self.contract_multiplier = self.config['contract_multiplier'] = 1.0
+        self.c_mult = self.config['c_mult'] = 1.0
 
         self.log_filepath = make_get_filepath(f"logs/{self.exchange}/{config['config_name']}.log")
 
@@ -166,16 +69,14 @@ class Bot:
 
         self.stop_websocket = False
         self.process_websocket_ticks = True
-        self.lock_file = f"{str(Path.home())}/.passivbotlock"
+        self.lock_file = f"{str(Path.home())}/.{self.exchange}_passivbotlock"
 
     def set_config(self, config):
-        config['ema_span'] = int(round(config['ema_span']))
+        config['spans'] = calc_spans(config['min_span'], config['max_span'], config['n_spans'])
         if 'stop_mode' not in config:
             config['stop_mode'] = None
-        if 'entry_liq_diff_thr' not in config:
-            config['entry_liq_diff_thr'] = config['stop_loss_liq_diff']
         if 'last_price_diff_limit' not in config:
-            config['last_price_diff_limit'] = 0.15
+            config['last_price_diff_limit'] = 0.3
         if 'profit_trans_pct' not in config:
             config['profit_trans_pct'] = 0.0
         self.config = config
@@ -189,7 +90,7 @@ class Bot:
         setattr(self, key, self.config[key])
 
     async def _init(self):
-        self.xk = {k: float(self.config[k]) for k in get_keys()}
+        self.xk = create_xk(self.config)
         self.fills = await self.fetch_fills()
 
     def dump_log(self, data) -> None:
@@ -202,6 +103,7 @@ class Bot:
             return
         try:
             open_orders = await self.fetch_open_orders()
+            open_orders = [x for x in open_orders if x['symbol'] == self.symbol]
             self.highest_bid, self.lowest_ask = 0.0, 9.9e9
             for o in open_orders:
                 if o['side'] == 'buy':
@@ -224,15 +126,21 @@ class Bot:
             position, _ = await asyncio.gather(self.fetch_position(),
                                                self.update_open_orders())
             position['used_margin'] = \
-                ((calc_cost(position['long']['size'], position['long']['price'],
-                            self.xk['inverse'], self.xk['contract_multiplier'])
+                ((qty_to_cost(position['long']['size'], position['long']['price'],
+                              self.xk['inverse'], self.xk['c_mult'])
                   if position['long']['price'] else 0.0) +
-                 (calc_cost(position['shrt']['size'], position['shrt']['price'],
-                            self.xk['inverse'], self.xk['contract_multiplier'])
-                  if position['shrt']['price'] else 0.0)) / self.leverage
+                 (qty_to_cost(position['shrt']['size'], position['shrt']['price'],
+                              self.xk['inverse'], self.xk['c_mult'])
+                  if position['shrt']['price'] else 0.0)) / self.max_leverage
             position['available_margin'] = (position['equity'] - position['used_margin']) * 0.9
             position['long']['liq_diff'] = calc_diff(position['long']['liquidation_price'], self.price)
             position['shrt']['liq_diff'] = calc_diff(position['shrt']['liquidation_price'], self.price)
+            position['long']['pbr'] = (qty_to_cost(position['long']['size'], position['long']['price'],
+                                                   self.xk['inverse'], self.xk['c_mult']) /
+                                       position['wallet_balance']) if position['wallet_balance'] else 0.0
+            position['shrt']['pbr'] = (qty_to_cost(position['shrt']['size'], position['shrt']['price'],
+                                                   self.xk['inverse'], self.xk['c_mult']) /
+                                       position['wallet_balance']) if position['wallet_balance'] else 0.0
             if self.position != position:
                 self.dump_log({'log_type': 'position', 'data': position})
             self.position = position
@@ -242,9 +150,9 @@ class Bot:
 
     async def create_orders(self, orders_to_create: [dict]) -> dict:
         if not orders_to_create:
-            return
+            return {}
         if self.ts_locked['create_orders'] > self.ts_released['create_orders']:
-            return
+            return {}
         self.ts_locked['create_orders'] = time()
         creations = []
         for oc in sorted(orders_to_create, key=lambda x: x['qty']):
@@ -319,7 +227,7 @@ class Bot:
         self.process_websocket_ticks = True
 
     def calc_orders(self):
-        balance = self.position['wallet_balance'] * 0.9
+        balance = self.position['wallet_balance']
         long_psize = self.position['long']['size']
         long_pprice = self.position['long']['price']
         shrt_psize = self.position['shrt']['size']
@@ -336,9 +244,6 @@ class Bot:
         self.xk['do_long'] = do_long
         self.xk['do_shrt'] = do_shrt
 
-        liq_price = self.position['long']['liquidation_price'] if long_psize > abs(shrt_psize) \
-            else self.position['shrt']['liquidation_price']
-
         if self.stop_mode in ['panic']:
             panic_orders = []
             if long_psize != 0.0:
@@ -349,59 +254,63 @@ class Bot:
                                      'type': 'market', 'reduce_only': True, 'custom_id': 'shrt_panic'})
             return panic_orders
 
-        long_entry_orders, shrt_entry_orders, long_close_orders, shrt_close_orders = [], [], [], []
-        stop_loss_close = False
 
-        for tpl in iter_entries(balance, long_psize, long_pprice, shrt_psize, shrt_pprice,
-                                liq_price, self.ob[0], self.ob[1], self.ema, self.price,
-                                self.volatility, **self.xk):
-            if (len(long_entry_orders) >= self.n_open_orders_limit and
-                len(shrt_entry_orders) >= self.n_open_orders_limit) or \
-                    calc_diff(tpl[1], self.price) > self.last_price_diff_limit:
-                break
-            elif tpl[4] == 'stop_loss_shrt_close':
-                shrt_close_orders.append({'side': 'buy', 'position_side': 'shrt', 'qty': abs(tpl[0]),
-                                          'price': tpl[1], 'type': 'limit', 'reduce_only': True,
-                                          'custom_id': tpl[4]})
-                shrt_psize = tpl[2]
-                stop_loss_close = True
-            elif tpl[4] == 'stop_loss_long_close':
-                long_close_orders.append({'side': 'sell', 'position_side': 'long', 'qty': abs(tpl[0]),
-                                          'price': tpl[1], 'type': 'limit', 'reduce_only': True,
-                                          'custom_id': tpl[4]})
-                long_psize = tpl[2]
-                stop_loss_close = True
-            elif tpl[0] == 0.0 or self.stop_mode in ['freeze']:
-                continue
-            elif tpl[0] > 0.0:
-                long_entry_orders.append({'side': 'buy', 'position_side': 'long', 'qty': tpl[0],
-                                          'price': tpl[1], 'type': 'limit', 'reduce_only': False,
-                                          'custom_id': tpl[4]})
+        orders = []
+        long_closed, shrt_closed = long_psize == 0.0, shrt_psize == 0.0
+        long_done, shrt_done = False, False
+
+        inf_loop_prevention = 100
+        i = 0
+
+        while True:
+            i += 1
+            if i >= inf_loop_prevention:
+                raise Exception('warning -- infinite loop in calc_orders')
+            long_entry, shrt_entry, long_close, shrt_close, bkr_price, available_margin = calc_orders(
+                balance,
+                long_psize,
+                long_pprice,
+                shrt_psize,
+                shrt_pprice,
+                self.ob[0],
+                self.ob[1],
+                self.price,
+                self.emas,
+                **self.xk)
+            if not long_closed and long_close[0] != 0.0 and \
+                    calc_diff(long_close[1], self.price) < self.last_price_diff_limit:
+                orders.append({'side': 'sell', 'position_side': 'long', 'qty': abs(float(long_close[0])),
+                               'price': float(long_close[1]), 'type': 'limit', 'reduce_only': True,
+                               'custom_id': long_close[4]})
+                long_closed = True
+            if not shrt_closed and shrt_close[0] != 0.0 and \
+                    calc_diff(shrt_close[1], self.price) < self.last_price_diff_limit:
+                orders.append({'side': 'buy', 'position_side': 'shrt', 'qty': abs(float(shrt_close[0])),
+                               'price': float(shrt_close[1]), 'type': 'limit', 'reduce_only': True,
+                               'custom_id': shrt_close[4]})
+                shrt_closed = True
+            if self.stop_mode not in ['freeze'] and long_entry[0] != 0.0 and \
+                    calc_diff(long_entry[1], self.price) < self.last_price_diff_limit:
+                orders.append({'side': 'buy', 'position_side': 'long', 'qty': float(long_entry[0]),
+                               'price': float(long_entry[1]), 'type': 'limit', 'reduce_only': False,
+                               'custom_id': long_entry[4]})
+                long_psize, long_pprice = calc_new_psize_pprice(long_psize, long_pprice,
+                                                                long_entry[0], long_entry[1], self.qty_step)
             else:
-                shrt_entry_orders.append({'side': 'sell', 'position_side': 'shrt', 'qty': abs(tpl[0]),
-                                          'price': tpl[1], 'type': 'limit', 'reduce_only': False,
-                                          'custom_id': tpl[4]})
-
-        for ask_qty, ask_price, _ in iter_long_closes(balance, long_psize, long_pprice, self.ob[1],
-                                                      **self.xk):
-            if len(long_close_orders) >= self.n_open_orders_limit or \
-                    calc_diff(ask_price, self.price) > self.last_price_diff_limit or \
-                    stop_loss_close:
+                long_done = True
+            if self.stop_mode not in ['freeze'] and shrt_entry[0] != 0.0 and \
+                    calc_diff(shrt_entry[1], self.price) < self.last_price_diff_limit:
+                orders.append({'side': 'sell', 'position_side': 'shrt', 'qty': abs(float(shrt_entry[0])),
+                               'price': float(shrt_entry[1]), 'type': 'limit', 'reduce_only': False,
+                               'custom_id': shrt_entry[4]})
+                shrt_psize, shrt_pprice = calc_new_psize_pprice(shrt_psize, shrt_pprice,
+                                                                shrt_entry[0], shrt_entry[1], self.qty_step)
+            else:
+                shrt_done = True
+            if len(orders) >= self.n_open_orders_limit or (long_done and shrt_done):
                 break
-            long_close_orders.append({'side': 'sell', 'position_side': 'long', 'qty': abs(ask_qty),
-                                      'price': float(ask_price), 'type': 'limit',
-                                      'reduce_only': True, 'custom_id': 'close'})
+        return orders
 
-        for bid_qty, bid_price, _ in iter_shrt_closes(balance, shrt_psize, shrt_pprice, self.ob[0],
-                                                      **self.xk):
-            if len(shrt_close_orders) >= self.n_open_orders_limit or \
-                    calc_diff(bid_price, self.price) > self.last_price_diff_limit or \
-                    stop_loss_close:
-                break
-            shrt_close_orders.append({'side': 'buy', 'position_side': 'shrt', 'qty': abs(bid_qty),
-                                      'price': float(bid_price), 'type': 'limit',
-                                      'reduce_only': True, 'custom_id': 'close'})
-        return long_entry_orders + shrt_entry_orders + long_close_orders + shrt_close_orders
 
     async def cancel_and_create(self):
         await asyncio.sleep(0.005)
@@ -585,16 +494,14 @@ class Bot:
         line += f"e@ {shrt_entries[0]['price'] if shrt_entries else 0.0} "
         if self.position['long']['size'] > abs(self.position['shrt']['size']):
             liq_price = self.position['long']['liquidation_price']
-            sl_trigger_price = liq_price / (1 - self.stop_loss_liq_diff)
         else:
             liq_price = self.position['shrt']['liquidation_price']
-            sl_trigger_price = liq_price / (1 + self.stop_loss_liq_diff)
-        line += f"|| last {self.price} liq {compress_float(liq_price, 5)} "
-        line += f"sl trig {compress_float(sl_trigger_price, 5)} "
-        line += f"ema {compress_float(self.ema, 5)} "
+        line += f"|| last {self.price} liq {round_dynamic(liq_price, 5)} "
+
+        line += f"lpbr {self.position['long']['pbr']:.3f} spbr {self.position['shrt']['pbr']:.3f} "
+        line += f"EMAr {[round_dynamic(r, 4) for r in self.ratios]} "
         line += f"bal {compress_float(self.position['wallet_balance'], 3)} "
         line += f"eq {compress_float(self.position['equity'], 3)} "
-        line += f"v. {compress_float(self.volatility, 5)} "
         print_([line], r=True)
 
     def flush_stuck_locks(self, timeout: float = 4.0) -> None:
@@ -605,60 +512,21 @@ class Bot:
                     print('flushing', key)
                     self.ts_released[key] = now
 
-    async def fetch_compressed_ticks(self):
-
-        def drop_consecutive_same_prices(ticks_):
-            compressed_ = [ticks_[0]]
-            for i in range(1, len(ticks_)):
-                if ticks_[i]['price'] != compressed_[-1]['price'] or \
-                        ticks_[i]['is_buyer_maker'] != compressed_[-1]['is_buyer_maker']:
-                    compressed_.append(ticks_[i])
-            return compressed_
-
-        ticks_unabridged = await self.fetch_ticks(do_print=False)
-        ticks_per_fetch = len(ticks_unabridged)
-        ticks = drop_consecutive_same_prices(ticks_unabridged)
-        if self.exchange == 'bybit' and self.market_type == 'linear_perpetual':
-            print('\nwarning:  bybit linear usdt symbols only allows fetching most recent 1000 ticks')
-            return ticks
-        delay_between_fetches = 0.55
-        print()
-        while True:
-            print(f'\rfetching ticks... {len(ticks)} of {self.ema_span} ', end= ' ')
-            sts = time()
-            new_ticks = await self.fetch_ticks(from_id=ticks[0]['trade_id'] - ticks_per_fetch,
-                                               do_print=False)
-            wait_for = max(0.0, delay_between_fetches - (time() - sts))
-            ticks = drop_consecutive_same_prices(sorted(new_ticks + ticks,
-                                                        key=lambda x: x['trade_id']))
-            if len(ticks) > self.ema_span:
-                break
-            await asyncio.sleep(wait_for)
-        new_ticks = await self.fetch_ticks(do_print=False)
-        return drop_consecutive_same_prices(sorted(ticks + new_ticks, key=lambda x: x['trade_id']))
-
     async def init_indicators(self):
-        ticks = await self.fetch_compressed_ticks()
-        ema = ticks[0]['price']
-        self.tick_prices_deque = deque(maxlen=self.ema_span)
-        for tick in ticks:
-            self.tick_prices_deque.append(tick['price'])
-            ema = ema * self.ema_alpha_ + tick['price'] * self.ema_alpha
-        if len(self.tick_prices_deque) < self.ema_span:
-            print('\nwarning: insufficient ticks fetched, filling deque with duplicate ticks...')
-            print('ema and volatility will be inaccurate until deque is filled with websocket ticks')
-            while len(self.tick_prices_deque) < self.ema_span:
-                self.tick_prices_deque.extend([t['price'] for t in ticks])
-        self.ema = ema
-        self.sum_prices = sum(self.tick_prices_deque)
-        self.sum_prices_squared = sum([e ** 2 for e in self.tick_prices_deque])
-        self.price_std = np.sqrt((self.sum_prices_squared / len(self.tick_prices_deque) -
-                                 ((self.sum_prices / len(self.tick_prices_deque)) ** 2)))
-        self.volatility = self.price_std / self.ema
-        print('\ndebug len ticks, prices deque, ema_span')
-        print(len(ticks), len(self.tick_prices_deque), self.ema_span)
+        ticks = await self.fetch_ticks()
+        if self.exchange == 'bybit' and 'linear' in self.market_type:
+            print('\nwarning: insufficient ticks fetched')
+            print('emas and ema ratios will be inaccurate until websocket catches up')
+            self.emas = calc_emas(np.array([e['price'] for e in ticks]), self.spans)[-1]
+        else:
+            idxs = get_ids_to_fetch(self.spans, ticks[-1]['trade_id'])
+            fetched_ticks = await asyncio.gather(*[self.fetch_ticks(from_id=int(i)) for i in idxs])
+            latest_ticks = await self.fetch_ticks()
+            compressed = drop_consecutive_same_prices(sorted(flatten(fetched_ticks) + ticks + latest_ticks, key=lambda x: x['trade_id']))
+            self.emas = calc_indicators_from_ticks_with_gaps(self.spans, compressed)
+        self.ratios = np.append(self.price, self.emas[:-1]) / self.emas
 
-    def update_indicators(self, ticks: dict):
+    def update_indicators(self, ticks):
         for tick in ticks:
             self.agg_qty += tick['qty']
             if tick['price'] == self.price and tick['is_buyer_maker'] == self.is_buyer_maker:
@@ -671,25 +539,19 @@ class Bot:
                 self.ob[0] = tick['price']
             else:
                 self.ob[1] = tick['price']
-            self.ema = calc_ema(self.ema_alpha, self.ema_alpha_, self.ema, tick['price'])
-            self.sum_prices -= self.tick_prices_deque[0]
-            self.sum_prices_squared -= self.tick_prices_deque[0] ** 2
-            self.tick_prices_deque.append(tick['price'])
-            self.sum_prices += self.tick_prices_deque[-1]
-            self.sum_prices_squared += self.tick_prices_deque[-1] ** 2
-        self.price_std = np.sqrt((self.sum_prices_squared / len(self.tick_prices_deque) -
-                                 ((self.sum_prices / len(self.tick_prices_deque)) ** 2)))
-        self.volatility = self.price_std / self.ema
+            self.emas = self.emas * self.ema_alpha_ + tick['price'] * self.ema_alpha
+            self.ratios = np.append(self.price, self.emas[:-1]) / self.emas
 
     async def start_websocket(self) -> None:
         self.stop_websocket = False
         self.process_websocket_ticks = True
         print_([self.endpoints['websocket']])
         await self.update_position()
-        await self.init_exchange_config()
+        abort = await self.init_exchange_config()
+        if abort:
+            return
         await self.init_indicators()
         await self.init_order_book()
-        self.remove_lock_file()
         k = 1
         async with websockets.connect(self.endpoints['websocket']) as ws:
             await self.subscribe_ws(ws)
@@ -716,61 +578,13 @@ class Bot:
                     if 'success' not in msg:
                         print('error in websocket', e, msg)
 
-    def remove_lock_file(self):
-        try:
-            if os.path.exists(self.lock_file):
-                os.remove(self.lock_file)
-                print('The lock file has been removed succesfully')
-            else:
-                print("The lock file doesn't exists, no need to do anything, but it should've been there!")
-        except:
-            print(f"Failed to remove the lock file! Please remove the file {self.lock_file} manually to ensure fast restarts")
-
-    async def acquire_interprocess_lock(self):
-        if os.path.exists(self.lock_file):
-            #if the file was last modified over 15 minutes ago, assume that something went wrong
-            if time() - os.path.getmtime(self.lock_file) > 15 * 60:
-                print(f'File {self.lock_file} last modified more than 15 minutes ago. Assuming something went wrong'
-                      f' trying to delete it, attempting removal of file')
-                self.remove_lock_file()
-            else:
-                raise LockNotAvailableException("Another bot has the lock. "\
-                                                f"To force acquire lock, delete .passivbotlock file: {self.lock_file}")
-
-        pid = str(os.getpid())
-        with open(self.lock_file, 'w') as f:
-            f.write(pid)
-            f.flush()
-            f.close()
-
-        await asyncio.sleep(5)
-
-        pid_in_file = open(self.lock_file).read()
-        if pid_in_file != pid:
-            raise LockNotAvailableException("Lock is stolen by another bot")
-        return
-
 async def start_bot(bot):
     while not bot.stop_websocket:
         try:
-            await bot.acquire_interprocess_lock()
             await bot.start_websocket()
         except Exception as e:
-            print('Websocket connection has been lost or unable to acquire lock to start, attempting to reinitialize the bot...', e)
+            print('Websocket connection has been lost, attempting to reinitialize the bot...', e)
             await asyncio.sleep(10)
-
-async def create_binance_bot(config: str):
-    from binance import BinanceBot
-    bot = BinanceBot(config)
-    await bot._init()
-    return bot
-
-
-async def create_bybit_bot(config: str):
-    from bybit import Bybit
-    bot = Bybit(config)
-    await bot._init()
-    return bot
 
 
 async def _start_telegram(account: dict, bot: Bot):
@@ -789,15 +603,15 @@ def add_argparse_args(parser):
                         default='configs/optimize/default.hjson', help='optimize config hjson file')
     parser.add_argument('-d', '--download-only', help='download only, do not dump ticks caches', action='store_true')
     parser.add_argument('-s', '--symbol', type=str, required=False, dest='symbol',
-                        default='none', help='specify symbol, overriding symbol from backtest config')
+                        default=None, help='specify symbol, overriding symbol from backtest config')
     parser.add_argument('-u', '--user', type=str, required=False, dest='user',
-                        default='none',
+                        default=None,
                         help='specify user, a.k.a. account_name, overriding user from backtest config')
-    parser.add_argument('--start-date', type=str, required=False, dest='start_date',
-                        default='none',
+    parser.add_argument('--start_date', type=str, required=False, dest='start_date',
+                        default=None,
                         help='specify start date, overriding value from backtest config')
-    parser.add_argument('--end-date', type=str, required=False, dest='end_date',
-                        default='none',
+    parser.add_argument('--end_date', type=str, required=False, dest='end_date',
+                        default=None,
                         help='specify end date, overriding value from backtest config')
     return parser
 
@@ -823,7 +637,9 @@ async def main() -> None:
         print('unrecognized account name', args.user, e)
         return
     try:
-        config = json.load(open(args.live_config_path))
+        config = load_live_config(args.live_config_path)
+        print('using config')
+        pprint.pprint(denumpyize(config))
     except Exception as e:
         print(e, 'failed to load config', args.live_config_path)
         return
@@ -833,13 +649,13 @@ async def main() -> None:
     config['live_config_path'] = args.live_config_path
 
     if account['exchange'] == 'binance':
+        from procedures import create_binance_bot
         bot = await create_binance_bot(config)
     elif account['exchange'] == 'bybit':
+        from procedures import create_bybit_bot
         bot = await create_bybit_bot(config)
     else:
         raise Exception('unknown exchange', account['exchange'])
-    print('using config')
-    print(json.dumps(config, indent=4))
 
     if 'telegram' in account and account['telegram']['enabled']:
         telegram = await _start_telegram(account=account, bot=bot)

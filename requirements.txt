@@ -16,5 +16,6 @@ prettytable>=2.1.0
 nptyping>=1.4.2
 mkdocs>=1.1.2
 mkdocs-material>=7.1.5
+psutil>=5.8.0
 markdown>=3.3.4
 pymdown-extensions>=8.2
