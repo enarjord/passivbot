@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import pprint
 from dateutil import parser
+from empyrical import sharpe_ratio
 
 from njit_funcs import round_dynamic, calc_emas
 
@@ -394,6 +395,14 @@ def get_empty_analysis(bc: dict) -> dict:
         'max_hrs_no_fills': 1000.0,
     }
 
+def timestamp2string(timeStamp):
+    try:
+        d = datetime.datetime.fromtimestamp(timeStamp/1000)
+        str1 = d.strftime("%Y-%m-%d")
+        return str1
+    except Exception as e:
+        print (e)
+        return ''
 
 def analyze_fills(fills: list, bc: dict, first_ts: float, last_ts: float) -> (pd.DataFrame, dict):
     fdf = pd.DataFrame(fills)
@@ -429,6 +438,9 @@ def analyze_fills(fills: list, bc: dict, first_ts: float, last_ts: float) -> (pd
     else:
         shrt_stuck_mean = 0.0
         shrt_stuck = 0.0
+        
+    fdf['datetime'] = fdf.timestamp.apply(timestamp2string)
+    sharp = sharpe_ratio(fdf.groupby(fdf.datetime)['pnl'].sum(), risk_free=0, period='daily', annualization=None)
 
     result = {
         'starting_balance': bc['starting_balance'],
@@ -439,6 +451,7 @@ def analyze_fills(fills: list, bc: dict, first_ts: float, last_ts: float) -> (pd
         'n_days': (n_days := (last_ts - first_ts) / (1000 * 60 * 60 * 24)),
         'average_daily_gain': (adg := gain ** (1 / n_days) if gain > 0.0 and n_days > 0.0 else 0.0),
         'adjusted_daily_gain': np.tanh(10 * (adg - 1)) + 1,
+        'sharp_gain_ratio': sharp/(adg**n_days),
         'profit_sum': fdf[fdf.pnl > 0.0].pnl.sum(),
         'loss_sum': fdf[fdf.pnl < 0.0].pnl.sum(),
         'fee_sum': fdf.fee_paid.sum(),
