@@ -1,21 +1,70 @@
 # Backtesting
 
-##Summary
+If you want to see how a configuration will perform, you can run it through a backtest that is provided by Passivbot.
+While backtesting will not give you a guarantee on the performance for the future, it does give you valuable insight
+into how the bot would have performed in the past.
 
-1. modify `configs/backtest/default.hjson` as desired
-2. run with `python3 backtest.py {path_to_live_config_to_test.json}`
-3. optional args: `-b or --backtest-config`: use different backtest config
+When you run the backtester, you should receive some output as it begins downloading the necessary price
+data from the exchange (using the API keys you provided earlier). The price data is cached on the machine
+and can be re-used between backtests and optimize sessions. This also means if you interrupt or close 
+the process, it will continue downloading price data where it left off. 
+The bot comes packaged with a downloader that allows the rapid retrieval of price data based upon
+provided dates, and works independently of the backtesting unit.
 
-Will use numba's just in time compiler to speed up backtesting.
+!!! Warning
+    The bot runs backtests on trade data, making it as accurate as possible in backtesting. Be aware that other factors
+    like latency and exchange connection issues can also play a role when you run a bot live.
 
-##Detailed explanation
+## Running a backtest
 
-You need to specify your settings for backtesting. Generally, setting your variables manually can lead to the bot going awry over time, so exercise caution when using hand-crafted configurations. PassivBot comes with a backtester, a script designed to assist you in finding the best configuration for your use case.
+To execute a backtest, you can execute the following command from the root folder:
 
-Utilizing the backtester is the best way to come up with new configurations, but requires that you have a basal understanding of the configuration file. The backtester's job is to look at a coin pair's price history (ETH/USDT for the last 30 days for example), examine your provided conditions (leverage, percent balance, grid spacing and so on...), and test those settings over the timeframe you selected. The bot will iterate through every trade as if it were doing it live, and return the best found results to the user. These settings (if they are profitable) are then re-used to generate new settings based upon the most likely profitable configurations. This process repeats itself as many times as the user chooses and upon completion returns the most profitable configuration for the bot, over that timeframe. There is a default backtesting configuration with the bot in every version, so examine it and set the test parameters to suit your desired results.
+```shell
+python3 backtest.py
+```
 
-Note that there are two different kinds of configuration files. The formatting for a backtesting configuration file is not always the same as the formatting for a live usage configuration file. Always retain the template configuration file as a reference for the formatting of your version. If an update makes your version obsolete, you will need a reference for the formatting if you don't plan to immediately update. Some parameters have specific formatting they must abide by. For more in-depth information on configuring each of the values, refer to the version-specific documentation.
+Running this command without any arguments will make the backtester use the details provided in the `configs/backtest/default.hjson` file.
+When you first checkout the project, you will need to setup your exchange credentials in the `api-keys.json` (please read [Running live](live.md) for more details).
+The backtest needs a connection to the exchange to be able to download the trade data required for the backtest.
 
-When you run the backtester, you should receive some output as it begins downloading the necessary price data from the exchange (using the API keys you provided earlier). The price data is cached on the machine and can be re-used between backtests. This also means if you interrupt or close the process, it will continue downloading price data where it left off. Newer versions of the bot come packaged with a downloader that allows the rapid retrieval of price data based upon provided dates, and works independently of the backtesting unit. Once the necessary price data has been downloaded, the backtester will begin with the starting candidate, test against the price history, and continue iterating through the ranges for each variable. Once the history for a given asset is downloaded, additional price history can simply be tacked on to the end of the cache (done automatically), cutting down testing times. The backtesting process is computed by the CPU, and can be time consuming depending on the testing period, despite optimization. Take this in to account when beginning your test.
+In the `configs/backtest/default.hjson`, the account name (specified in `api-keys.json`) needs to be provided. After updating
+the `configs/backtest/default.hjson` with your account name, you should be able to succesfully run a backtest.
 
-The key to finding new, profitable configurations is using the backtester often and familiarizing yourself with the settings and ranges. Adjusting the ranges narrows the proverbial 'area' the PassivBot needs to search for good configurations, reducing the test time while potentially cutting more or less profitable settings out of the search range.
+Apart from the account name, there are a number of other parameters you can specify in the backtest configuration file:
+
+* the exchange
+* the account name (must match one specified in `api-keys.json`)
+* the symbol to backtest on
+* the latency to simulate during backtesting
+* the starting balance
+* the start and end date for the backtest
+
+### Command-line arguments
+
+Other than modifying the `default.hjson` file, it is also possible to specify a number of configuration options to use via the commandline.
+One or more arguments are provided to the backtester using the following syntax on the command line:
+
+```shell
+python3 backtest.py <key> <value>
+```
+
+The following options can be provided to the backtester. Note that any argument provided will override a value specified in the backtest configuration file.
+
+| Key | Description
+| --- | -----------
+| --nojit | Disables the use of numba's just in time compiler during backtests
+| -b / --backtest_config | The backtest config hjson file to use<br/>**Default value:** configs/backtest/default.hjson
+| -d / --download-only | Instructs the backtest to only download the data, but not dump the ticks caches to disk
+| -s / --symbol | The symbol to run the backtest on
+| -u / --user | The name of the account used to download trade data
+| --start-date | The starting date of the backtest<br/>**Syntax:** YYYY-MM-DDThh:mm
+| --end-date | The end date of the backtest<br/>**Syntax:** YYYY-MM-DDThh:mm
+
+## Backtest results
+
+When the backtest is completed, the results will be shown on the console. This includes things like average daily gain,
+maximum time that Passivbot was stuck etc. Apart from showing these results in the terminal, these results are
+also stored in `backtests/{exchange}/{symbol}/plots/{datetime}/backtest_result.txt`. This folder will also
+include the actual `live_config.json` file that was used for the plot, and several graphical plots. One of these
+for example is the `balance_and_equity.png`, which shows how the balance and equity evolved during the course of
+the backtest.

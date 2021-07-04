@@ -1,12 +1,16 @@
 site_name: Passivbot
+site_url: https://www.passivbot.com
+repo_url: https://github.com/enarjord/passivbot
+use_directory_urls: True
+docs_dir: docs
 nav:
   - Home: index.md
   - How it works: how-it-works.md
   - Installation: installation.md
   - Configuration: configuration.md
-  - Live: live.md
+  - Running live: live.md
   - Backtesting: backtesting.md
-  - Optimizer: optimizer.md
+  - Optimizer: optimize.md
   - Analysis: analysis.md
   - Telegram: telegram.md
   - Developers: developers.md
@@ -15,9 +19,17 @@ theme:
   name: material
   logo: 'images/logo.png'
   favicon: 'images/logo.png'
-  custom_dir: 'docs'
+  custom_dir: 'docs/overrides'
   palette:
     primary: 'blue grey'
     accent: 'tear'
 markdown_extensions:
+  - attr_list
   - admonition
+  - toc:
+      permalink: True
+  - pymdownx.inlinehilite
+  - pymdownx.superfences
+extra:
+  version:
+    provider: mike
