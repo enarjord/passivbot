@@ -631,11 +631,9 @@ async def main() -> None:
     if account['exchange'] == 'binance':
         if config['spot']:
             from procedures import create_binance_bot_spot
-            print('before', config['long'])
             config['long']['pbr_limit'] = min(config['long']['pbr_limit'], max(0.0, 0.95 - config['long']['pbr_stop_loss']))
             config['long']['enabled'] = True
             config['shrt']['enabled'] = False
-            print('after', config['long'])
             bot = await create_binance_bot_spot(config)
         else:
             from procedures import create_binance_bot
