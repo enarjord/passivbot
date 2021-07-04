@@ -7,7 +7,7 @@ import signal
 import pprint
 from pathlib import Path
 from time import time
-from procedures import load_live_config, make_get_filepath, load_key_secret, print_
+from procedures import load_live_config, make_get_filepath, load_key_secret, print_, add_argparse_args
 from pure_funcs import get_xk_keys, get_ids_to_fetch, flatten, calc_indicators_from_ticks_with_gaps, \
     drop_consecutive_same_prices, filter_orders, compress_float, create_xk, round_dynamic, denumpyize, \
     calc_spans
@@ -595,27 +595,6 @@ async def _start_telegram(account: dict, bot: Bot):
     return telegram
 
 
-def add_argparse_args(parser):
-    parser.add_argument('--nojit', help='disable numba', action='store_true')
-    parser.add_argument('-b', '--backtest_config', type=str, required=False, dest='backtest_config_path',
-                        default='configs/backtest/default.hjson', help='backtest config hjson file')
-    parser.add_argument('-o', '--optimize_config', type=str, required=False, dest='optimize_config_path',
-                        default='configs/optimize/default.hjson', help='optimize config hjson file')
-    parser.add_argument('-d', '--download-only', help='download only, do not dump ticks caches', action='store_true')
-    parser.add_argument('-s', '--symbol', type=str, required=False, dest='symbol',
-                        default=None, help='specify symbol, overriding symbol from backtest config')
-    parser.add_argument('-u', '--user', type=str, required=False, dest='user',
-                        default=None,
-                        help='specify user, a.k.a. account_name, overriding user from backtest config')
-    parser.add_argument('--start_date', type=str, required=False, dest='start_date',
-                        default=None,
-                        help='specify start date, overriding value from backtest config')
-    parser.add_argument('--end_date', type=str, required=False, dest='end_date',
-                        default=None,
-                        help='specify end date, overriding value from backtest config')
-    return parser
-
-
 def get_passivbot_argparser():
     parser = argparse.ArgumentParser(prog='passivbot', description='run passivbot')
     parser.add_argument('user', type=str, help='user/account_name defined in api-keys.json')
@@ -647,10 +626,20 @@ async def main() -> None:
     config['exchange'] = account['exchange']
     config['symbol'] = args.symbol
     config['live_config_path'] = args.live_config_path
+    config['spot'] = args.spot
 
     if account['exchange'] == 'binance':
-        from procedures import create_binance_bot
-        bot = await create_binance_bot(config)
+        if config['spot']:
+            from procedures import create_binance_bot_spot
+            print('before', config['long'])
+            config['long']['pbr_limit'] = min(config['long']['pbr_limit'], max(0.0, 0.95 - config['long']['pbr_stop_loss']))
+            config['long']['enabled'] = True
+            config['shrt']['enabled'] = False
+            print('after', config['long'])
+            bot = await create_binance_bot_spot(config)
+        else:
+            from procedures import create_binance_bot
+            bot = await create_binance_bot(config)
     elif account['exchange'] == 'bybit':
         from procedures import create_bybit_bot
         bot = await create_bybit_bot(config)
