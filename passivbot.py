@@ -25,9 +25,8 @@ class LockNotAvailableException(Exception):
 class Bot:
     def __init__(self, config: dict):
         self.config = config
-        self.spot = 'spot' in config and config['spot']
-        self.config['do_long'] = config['long']['enabled'] if not self.spot else True
-        self.config['do_shrt'] = config['shrt']['enabled'] if not self.spot else False
+        self.config['do_long'] = config['long']['enabled']
+        self.config['do_shrt'] = config['shrt']['enabled']
         self.config['max_leverage'] = 25
         self.telegram = None
         self.xk = {}
@@ -287,7 +286,7 @@ class Bot:
                 orders.append({'side': 'buy', 'position_side': 'shrt', 'qty': abs(float(shrt_close[0])),
                                'price': float(shrt_close[1]), 'type': 'limit', 'reduce_only': True,
                                'custom_id': shrt_close[4]})
-            if self.stop_mode not in ['freeze'] and long_entry[0] != 0.0 and \
+            if not long_done and self.stop_mode not in ['freeze'] and long_entry[0] != 0.0 and \
                     calc_diff(long_entry[1], self.price) < self.last_price_diff_limit:
                 orders.append({'side': 'buy', 'position_side': 'long', 'qty': float(long_entry[0]),
                                'price': float(long_entry[1]), 'type': 'limit', 'reduce_only': False,
@@ -296,7 +295,7 @@ class Bot:
                                                                 long_entry[0], long_entry[1], self.qty_step)
             else:
                 long_done = True
-            if self.stop_mode not in ['freeze'] and shrt_entry[0] != 0.0 and \
+            if not shrt_done and self.stop_mode not in ['freeze'] and shrt_entry[0] != 0.0 and \
                     calc_diff(shrt_entry[1], self.price) < self.last_price_diff_limit:
                 orders.append({'side': 'sell', 'position_side': 'shrt', 'qty': abs(float(shrt_entry[0])),
                                'price': float(shrt_entry[1]), 'type': 'limit', 'reduce_only': False,
@@ -632,9 +631,6 @@ async def main() -> None:
     if account['exchange'] == 'binance':
         if config['spot']:
             from procedures import create_binance_bot_spot
-            config['long']['pbr_limit'] = min(config['long']['pbr_limit'], max(0.0, 0.95 - config['long']['pbr_stop_loss']))
-            config['long']['enabled'] = True
-            config['shrt']['enabled'] = False
             bot = await create_binance_bot_spot(config)
         else:
             from procedures import create_binance_bot
