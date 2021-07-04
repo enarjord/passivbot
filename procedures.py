@@ -201,7 +201,7 @@ def add_argparse_args(parser):
     parser.add_argument('--starting_balance', type=float, required=False, dest='starting_balance',
                         default=None,
                         help='specify starting_balance, overriding value from backtest config')
-    parser.add_argument('--spot', type=bool, required=False, dest='spot', default=False,
+    parser.add_argument('--spot', action='store_true',
                         help='specify whether spot, overriding value from backtest config')
 
     return parser
