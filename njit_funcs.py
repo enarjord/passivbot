@@ -87,6 +87,26 @@ def calc_bid_ask_thresholds(prices: np.ndarray, MAs: np.ndarray, iprc_const, ipr
 
 
 @njit
+def compress_ticks(ticks: np.ndarray, ms_sample_size: int = 1000) -> np.ndarray:
+    # ticks format [[price, qty, timestamp, is_buyer_maker]]
+    # returns [[price, qty, timestamp]]
+    timestamps = ticks[:,2] // ms_sample_size * ms_sample_size
+    new_timestamps = np.arange(timestamps[0], timestamps[-1], ms_sample_size)
+    prices = np.zeros_like(new_timestamps)
+    prices[0] = ticks[0][0]
+    qty = np.zeros_like(new_timestamps)
+    k = 0
+    for i in range(len(ticks)):
+        if timestamps[i] == new_timestamps[k]:
+            prices[k] = ticks[i][0]
+            qty[k] += ticks[i][1]
+        else:
+            k += 1
+            prices[k] = prices[k - 1]
+    return prices, qty, new_timestamps.astype(int)
+
+
+@njit
 def calc_emas(xs, spans):
     emas = np.zeros((len(xs), len(spans)))#, dtype=np.float32)
     alphas = 2 / (spans + 1)
