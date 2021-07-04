@@ -44,7 +44,7 @@ class Bot:
 
         self.position = {}
         self.open_orders = []
-        self.fills = []
+        self.fills = set()
         self.highest_bid = 0.0
         self.lowest_ask = 9.9e9
         self.price = 0
@@ -91,7 +91,8 @@ class Bot:
 
     async def _init(self):
         self.xk = create_xk(self.config)
-        self.fills = await self.fetch_fills()
+        fills = await self.fetch_fills()
+        self.fills.update(fills)
 
     def dump_log(self, data) -> None:
         if self.config['logging_level'] > 0:
@@ -382,7 +383,8 @@ class Bot:
             await self.check_long_fills(fills)
             await self.check_shrt_fills(fills)
 
-        self.fills = fills
+        self.fills.update(fills) # add all orders to the set
+        [self.fills.remove(x) for x in self.fills if x['timestamp'] < time() - 60 * 60 * 24 * 14] # remove orders older than 14 days
         self.ts_released['check_fills'] = time()
 
     async def check_shrt_fills(self, fills):
