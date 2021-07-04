@@ -1,10 +1,10 @@
 FROM python:3.8-slim-buster
 
-WORKDIR /app
+WORKDIR /passivbot
 
 # Telegram implementation require git to determine the version
 RUN apt-get update && apt-get install git -y
 
-COPY requirements.txt /app
+ADD ./* /passivbot/
 
 RUN pip install -r requirements.txt
