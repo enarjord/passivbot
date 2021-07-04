@@ -1,6 +1,5 @@
 import datetime
 import json
-from time import time
 
 import hjson
 
@@ -18,7 +17,7 @@ def ts_to_date(timestamp: float) -> str:
 
 
 def print_(args, r=False, n=False):
-    line = ts_to_date(time())[:19] + '  '
+    line = str(datetime.datetime.now()) + '  '
     str_args = '{} ' * len(args)
     line += str_args.format(*args)
     if n:
@@ -45,7 +44,7 @@ def load_key_secret(exchange: str, user: str) -> (str, str):
         raise Exception('API KeyFile Missing!')
 
 
-def load_config(path: str) -> dict:
+def load_base_config(path: str) -> dict:
     try:
         config = hjson.load(open(path))
         return config
@@ -53,6 +52,7 @@ def load_config(path: str) -> dict:
         print('Could not read config')
         print(e)
         return {}
+
 
 def add_or_append(dict, key, value):
     if key in dict:
