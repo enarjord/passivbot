@@ -1,7 +1,6 @@
 import argparse
 import asyncio
 
-from bots.binance import BinanceBot
 from functions import load_base_config, print_
 
 
@@ -17,6 +16,7 @@ async def main() -> None:
     try:
         config = load_base_config(args.c)
         if config['exchange'] == 'binance':
+            from bots.binance import BinanceBot
             bot = BinanceBot(config)
         else:
             print_(['Exchange not supported.'], n=True)
