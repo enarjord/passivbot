@@ -1,7 +1,8 @@
+import argparse
 import asyncio
 
 from bots.binance import BinanceBot
-from functions import load_base_config
+from functions import load_base_config, print_
 
 
 async def start_bot(bot):
@@ -9,10 +10,22 @@ async def start_bot(bot):
 
 
 async def main() -> None:
-    config = load_base_config('configs/test.hjson')
-    bot = BinanceBot(config)
-    await bot.init()
-    await start_bot(bot)
+    argparser = argparse.ArgumentParser(prog='GridTrader', add_help=True,
+                                        description='Grid trading bot with fixed grid.')
+    argparser.add_argument('-c', '--config', type=str, required=True, dest='c', help='Path to the config')
+    args = argparser.parse_args()
+    try:
+        config = load_base_config(args.c)
+        if config['exchange'] == 'binance':
+            bot = BinanceBot(config)
+        else:
+            print_(['Exchange not supported.'], n=True)
+            return
+        await bot.init()
+        await start_bot(bot)
+    except Exception as e:
+        print_(['Could not start', e])
+        return
 
 
 if __name__ == '__main__':
