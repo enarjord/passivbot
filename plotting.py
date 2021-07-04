@@ -19,7 +19,7 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
     lines.append(f"symbol {result['symbol'] if 'symbol' in result else 'unknown'}")
     lines.append(f"gain percentage {round_dynamic(result['result']['gain'] * 100 - 100, 4)}%")
     lines.append(f"average_daily_gain percentage {round_dynamic((result['result']['average_daily_gain'] - 1) * 100, 3)}%")
-    lines.append(f"sharp_gain_ratio percentage {round_dynamic(result['result']['sharp_gain_ratio'] * 100, 3)}%")
+    lines.append(f"sharpe_ratio percentage {round_dynamic(result['result']['sharpe_ratio'] * 100, 3)}%")
     lines.append(f"closest_bkr percentage {round_dynamic(result['result']['closest_bkr'] * 100, 4)}%")
     lines.append(f"starting balance {round_dynamic(result['starting_balance'], 3)}")
 
