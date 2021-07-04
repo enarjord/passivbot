@@ -25,8 +25,9 @@ class LockNotAvailableException(Exception):
 class Bot:
     def __init__(self, config: dict):
         self.config = config
-        self.config['do_long'] = config['long']['enabled']
-        self.config['do_shrt'] = config['shrt']['enabled']
+        self.spot = 'spot' in config and config['spot']
+        self.config['do_long'] = config['long']['enabled'] if not self.spot else True
+        self.config['do_shrt'] = config['shrt']['enabled'] if not self.spot else False
         self.config['max_leverage'] = 25
         self.telegram = None
         self.xk = {}
