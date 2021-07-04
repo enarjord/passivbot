@@ -492,7 +492,8 @@ class Downloader:
                         end=datetime.datetime.fromtimestamp(end_time / 1000, datetime.timezone.utc).date(),
                         freq='D').to_pydatetime()
                 days = [date.strftime("%Y-%m-%d") for date in tmp]
-                months = sorted(set([d[:7] for d in days]))
+                current_month = ts_to_date(time() - 60 * 60 * 3)[:7]
+                months = sorted([e for e in set([d[:7] for d in days]) if e != current_month])
                 dates = sorted(months + [d for d in days if d[:7] not in months])
 
                 df = pd.DataFrame(columns=['trade_id', 'price', 'qty', 'timestamp', 'is_buyer_maker'])
