@@ -19,6 +19,13 @@ class BinanceBotSpot(Bot):
         self.exchange = 'binance_spot'
         self.balance = {}
         super().__init__(config)
+        self.spot = self.config['spot'] = True
+        self.inverse = self.config['inverse'] = False
+        self.config['long']['pbr_limit'] = min(self.config['long']['pbr_limit'],
+                                               max(0.0, 1.0 - self.config['long']['pbr_stop_loss']))
+        self.hedge_mode = self.config['hedge_mode'] = False
+        self.do_long = self.config['do_long'] = self.config['long']['enabled'] = True
+        self.do_shrt = self.config['do_shrt'] = self.config['shrt']['enabled'] = False
         self.session = aiohttp.ClientSession()
         self.base_endpoint = ''
         self.key, self.secret = load_key_secret('binance', config['user'])
@@ -117,31 +124,8 @@ class BinanceBotSpot(Bot):
 
 
     async def check_if_other_positions(self, abort=True):
-        return
+        pass
         # todo...
-        positions, open_orders = await asyncio.gather(
-            self.private_get(self.endpoints['position']),
-            self.private_get(self.endpoints['open_orders'])
-        )
-        do_abort = False
-        for e in positions:
-            if float(e['positionAmt']) != 0.0:
-                if e['symbol'] != self.symbol and self.margin_coin in e['symbol']:
-                    print('\n\nWARNING\n\n')
-                    print('account has position in other symbol:', e)
-                    print('\n\n')
-                    do_abort = True
-        for e in open_orders:
-            if e['symbol'] != self.symbol and self.margin_coin in e['symbol']:
-                print('\n\nWARNING\n\n')
-                print('account has open orders in other symbol:', e)
-                print('\n\n')
-                do_abort = True
-        if do_abort:
-            if abort:
-                raise Exception('please close other positions and cancel other open orders')
-        else:
-            print('no positions or open orders in other symbols sharing margin wallet')
 
     async def execute_leverage_change(self):
         pass
