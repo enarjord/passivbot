@@ -59,6 +59,15 @@ class Downloader:
             self.daily_base_url = 'https://public.bybit.com/trading/'
         else:
             raise Exception(f"unknown exchange {config['exchange']}")
+        if "historical_data_path" in self.config and self.config["historical_data_path"]:
+            self.filepath = make_get_filepath(
+                os.path.join(self.config["historical_data_path"], "historical_data",
+                             self.config["exchange"], f"agg_trades_{'spot' if self.spot else 'futures'}",
+                             self.config["symbol"], ""))
+        else:
+            self.filepath = make_get_filepath(
+                os.path.join("historical_data", self.config["exchange"], f"agg_trades_{'spot' if self.spot else 'futures'}",
+                             self.config["symbol"], ""))
 
     def validate_dataframe(self, df: pd.DataFrame) -> tuple:
         """
@@ -339,15 +348,6 @@ class Downloader:
         Downloads any missing data based on the specified time frame.
         @return:
         """
-        if "historical_data_path" in self.config and self.config["historical_data_path"]:
-            self.filepath = make_get_filepath(
-                os.path.join(self.config["historical_data_path"], "historical_data",
-                             self.config["exchange"], f"agg_trades_{'spot' if self.spot else 'futures'}",
-                             self.config["symbol"], ""))
-        else:
-            self.filepath = make_get_filepath(
-                os.path.join("historical_data", self.config["exchange"], f"agg_trades_{'spot' if self.spot else 'futures'}",
-                             self.config["symbol"], ""))
 
         if self.config["exchange"] == "binance":
             if self.spot:
@@ -659,6 +659,47 @@ class Downloader:
             await self.bot.session.close()
         except:
             pass
+
+    def get_unabridged_df(self):
+        filenames = self.get_filenames()
+        start_index = 0
+        for i in range(len(filenames)):
+            if int(filenames[i].split("_")[2]) <= self.start_time <= int(filenames[i].split("_")[3].split(".")[0]):
+                start_index = i
+                break
+        end_index = -1
+        if self.end_time != -1:
+            for i in range(len(filenames)):
+                if int(filenames[i].split("_")[2]) <= self.end_time <= int(filenames[i].split("_")[3].split(".")[0]):
+                    end_index = i
+                    break
+        filenames = filenames[start_index:] if end_index == -1 else filenames[start_index:end_index + 1]
+        df = pd.DataFrame()
+        chunks = []
+        for f in filenames:
+            chunk = pd.read_csv(os.path.join(self.filepath, f)).set_index('trade_id')
+            if self.end_time != -1:
+                chunk = chunk[(chunk['timestamp'] >= self.start_time) & (chunk['timestamp'] <= self.end_time)]
+            else:
+                chunk = chunk[(chunk['timestamp'] >= self.start_time)]
+            chunks.append(chunk)
+            if len(chunks) >= 100:
+                if df.empty:
+                    df = pd.concat(chunks, axis=0)
+                else:
+                    chunks.insert(0, df)
+                    df = pd.concat(chunks, axis=0)
+                chunks = []
+            print('\rloaded chunk of data', f, ts_to_date(float(f.split("_")[2]) / 1000), end='     ')
+        print()
+        if chunks:
+            if df.empty:
+                df = pd.concat(chunks, axis=0)
+            else:
+                chunks.insert(0, df)
+                df = pd.concat(chunks, axis=0)
+            del chunks
+        return df
 
     async def prepare_files(self, single_file: bool = False):
         """
