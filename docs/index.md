@@ -1,61 +1,74 @@
 # Welcome to Passivbot!
 
-![passivbot Version](https://img.shields.io/badge/passivbot-3.5.3-blue)
+![Passivbot](images/logo.png)
+
+<a class="github-button" href="https://github.com/enarjord/passivbot" data-icon="octicon-star" data-size="large" aria-label="Star enarjord/passivbot on GitHub">Star</a>
+<a class="github-button" href="https://github.com/enarjord/passivbot/fork" data-icon="octicon-repo-forked" data-size="large" aria-label="Fork enarjord/passivbot on GitHub">Fork</a>
 
 !!! Warning
-    **Use at your own risk! The rule of thumb is "if you don't understand it, don't do it!" We are not responsible for how your bot may behave.**
+    **Use at your own risk! You should never trade with money you cannot or are are afraid to miss.**
+
+    WE ARE NOT RESPONSIBLE FOR HOW THE BOT BEHAVES, OR ANY LOSSES THAT MAY BE A RESULT OF USING THE BOT!
+
+    If you don't understand how the bot works, you should not use it. You are always welcome to ask for help or get more
+    information on how it works exactly if the documentation does not provide enough information. 
 
 ## Overview
 
-Passivbot is a trading bot running on Bybit and Binance Futures built in Python.
+Passivbot is a fully automated trading bot built in Python. The goal of Passivbot is to provide a stable, risk-free
+trading bot that is able to accumulate profit over time without manual actions.
 
-The bot's purpose is to accumulate tokens over time.
+Passivbot trades using futures markets, using an advanced form of grid trading to place opening and closing orders.
 
-It is a market maker bot working in futures markets, making multiple post only limit orders above and below current
-price.
+It provides support for automatically optimize configurations, backtest using historic data, and running in live mode.
 
-It listens to websocket live stream of trades, and updates its orders continuously.
+## Supported exchanges
 
-If possible, it will use hedge mode.
+Currently the exchanges **Binance** and **Bybit** are implemented and supported for trading futures. The bot does not use
+ccxt, so other exchanges cannot be used.
 
-### Documentation [WIP], see the wiki at:
+Not all functionality is supported on bot exchanges, depending on the API's that bot exchanges expose and development efforts.
 
-https://github.com/enarjord/passivbot/wiki
+!!! Info
+    If you would like to have support added for an exchange not supported yet, 
+    you can always get in touch to see  what the  options are
 
-### Support
+## Software Requirements
+
+The following requirements are applicable for installing Passivbot:
+
+- Git 2.17 or above
+- Python 3.8.x (newer versions aren't supported yet)
+- Supported OS: 
+    - Mac
+    - Linux
+    - Windows
+
+## Hardware requirements
+
+Passivbot is a very lightweight bot, and can easily be run live on a single-core machine with 1GB of RAM.
+While the hardware requirements are very low, you may run into issues when running it on things like a Raspberry Pi.
+In case you do, please let us know so we can help out & improve the bot!
+
+Be aware that running an optimize on a long period may require a lot of memory and CPU power. Since Passivbot acts on
+trade data (ticks) instead of OHLCV data, the amount of memory is dependent on the amount of trades made in the selected time period.
+If you want to optimize on BTC for the last 365 days, it will take significantly more memory than optimizing on a coin
+like BTS for example.
+
+!!! Warning
+    It should be very possible to run multiple bots on a single machine. Be aware however that you may run into other
+    limitations like rate limiting of exchanges.
+
+## Support
+
+In case you run into trouble, have questions or would just like to get in touch with the community, you can find
+us at [this Discord server](https://discord.gg/QAF2H2UmzZ) or at [this Telegram channel](https://t.me/passivbot_futures).
 
 [![Discord](https://img.shields.io/badge/Discord-7289DA?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/QAF2H2UmzZ)
 
 [![Telegram](https://img.shields.io/badge/Telegram-2CA5E0?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/passivbot_futures)
 
-### Resources
+## License
 
-- Repository of settings and their backtesting results: https://github.com/JohnKearney1/PassivBot-Configurations
-
-### [Changelog](changelog.md)
-
-### License
-
-Released freely without conditions.
-Anybody may copy, distribute, modify, use or misuse for commercial,
-non-commercial, educational or non-educational purposes, censor,
-claim as one's own or otherwise do whatever without permission from anybody.
-
-## Support the project
-
-### Feel free to make a donation to show support of the work
-
-- XMR: `49gUQ1jasDK23tJTMCvP4mQUUwndeLWAwSgdCFn6ovmRKXZAjQnVp2JZ2K4UuDDdYMNam1HE8ELZoWdeJPRfYEa9QSEK6XZ`
-
-- Nano: `nano_1nf3knbhapee5ruwg7i8sqekx3zmifdeijr8495t9kgp3uyunik7b9cuyhf5`
-
-- EOS: `nbt4rhnhpjan`
-
-- XLM: `GDSTC6KQR6BCTA7BH45B3MTSY52EVZ4UZTPZEBAZHJMJHTUQQ5SM57S7`
-
-- USDT TRC20 (Binance): `TJr3KYY8Bz7wRU7QLwoYQHk88LcaBJqQN5`
-
-### Referrals
-
-- [Bybit](https://www.bybit.com/en-US/register?affiliate_id=16464&language=en-US&group_id=0&group_type=1)
-- [Binance](https://www.binance.cc/en/register?ref=TII4B07C)
+Passivbot is released freely without conditions. Anybody may copy, distribute, modify, use or misuse for commercial, non-commercial, 
+educational or non-educational purposes, censor, claim as one's own or otherwise do whatever without permission from anybody.
