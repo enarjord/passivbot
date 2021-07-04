@@ -59,3 +59,12 @@ The following options can be provided to the backtester. Note that any argument 
 | -u / --user | The name of the account used to download trade data
 | --start-date | The starting date of the backtest<br/>**Syntax:** YYYY-MM-DDThh:mm
 | --end-date | The end date of the backtest<br/>**Syntax:** YYYY-MM-DDThh:mm
+
+## Backtest results
+
+When the backtest is completed, the results will be shown on the console. This includes things like average daily gain,
+maximum time that Passivbot was stuck etc. Apart from showing these results in the terminal, these results are
+also stored in `backtests/{exchange}/{symbol}/plots/{datetime}/backtest_result.txt`. This folder will also
+include the actual `live_config.json` file that was used for the plot, and several graphical plots. One of these
+for example is the `balance_and_equity.png`, which shows how the balance and equity evolved during the course of
+the backtest.
