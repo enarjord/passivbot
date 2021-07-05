@@ -341,7 +341,8 @@ def get_ids_to_fetch(spans: [int], last_id: int, max_n_samples: int = 60, ticks_
         all_idxs.append(idxs)
         samples_leftover = max_n_samples - sum(map(len, all_idxs))
         samples_per_span = samples_leftover // max(1, len(spans) - i - 1)
-        prev_last_id = idxs[-1] + 1000
+        if len(idxs) > 0:
+            prev_last_id = idxs[-1] + 1000
     idxs = np.array(flatten(all_idxs))[::-1]
     return np.unique(idxs[idxs > 0])
 
