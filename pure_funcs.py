@@ -382,6 +382,7 @@ def get_empty_analysis(bc: dict) -> dict:
         'n_days': 0.0,
         'average_daily_gain': 0.0,
         'adjusted_daily_gain': 0.0,
+        'sharpe_ratio': 0.0,
         'lowest_eqbal_ratio': 0.0,
         'closest_bkr': 1.0,
         'n_fills': 0.0,
@@ -432,7 +433,14 @@ def analyze_fills(fills: list, bc: dict, first_ts: float, last_ts: float) -> (pd
     else:
         shrt_stuck_mean = 0.0
         shrt_stuck = 0.0
-
+        
+    ms_span = 1000 * 60 * 60 * 24 * bc['sharpe_ratio_n_days']
+    groups = fdf.groupby(fdf.timestamp // ms_span)
+    periodic_gains = groups.pnl.sum() / groups.balance.first()
+    periodic_gains = periodic_gains.reindex(np.arange(periodic_gains.index[0], periodic_gains.index[-1])).fillna(0.0)
+    periodic_gains_std = periodic_gains.std()
+    sharpe_ratio = periodic_gains.mean() / periodic_gains_std if periodic_gains_std != 0.0 else -20.0
+    sharpe_ratio = np.nan_to_num(sharpe_ratio)
     result = {
         'starting_balance': bc['starting_balance'],
         'final_balance': fdf.iloc[-1].balance,
@@ -442,6 +450,7 @@ def analyze_fills(fills: list, bc: dict, first_ts: float, last_ts: float) -> (pd
         'n_days': (n_days := (last_ts - first_ts) / (1000 * 60 * 60 * 24)),
         'average_daily_gain': (adg := gain ** (1 / n_days) if gain > 0.0 and n_days > 0.0 else 0.0),
         'adjusted_daily_gain': np.tanh(10 * (adg - 1)) + 1,
+        'sharpe_ratio': sharpe_ratio,
         'profit_sum': fdf[fdf.pnl > 0.0].pnl.sum(),
         'loss_sum': fdf[fdf.pnl < 0.0].pnl.sum(),
         'fee_sum': fdf.fee_paid.sum(),

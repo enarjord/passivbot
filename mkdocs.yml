@@ -11,8 +11,10 @@ nav:
   - Running live: live.md
   - Backtesting: backtesting.md
   - Optimizer: optimize.md
+  - Tuning by hand: handtuning.md
   - Analysis: analysis.md
   - Telegram: telegram.md
+  - First-time users: walkthrough.md
   - Developers: developers.md
   - FAQ: faq.md
 theme:
