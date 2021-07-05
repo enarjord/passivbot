@@ -93,7 +93,7 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
 
 
 def plot_fills(df, fdf_, side: int = 0, bkr_thr=0.1):
-    if fdf.empty:
+    if fdf_.empty:
         return
     plt.clf()
     fdf = fdf_.set_index('timestamp')
