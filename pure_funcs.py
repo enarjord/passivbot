@@ -433,7 +433,7 @@ def analyze_fills(fills: list, bc: dict, first_ts: float, last_ts: float) -> (pd
         shrt_stuck = 0.0
         
     ms_span = 1000 * 60 * 60 * 24  # days
-    pnls = fdf.groupby(fdf.timestamp // ms_span).pnl.sum()/fdf.groupby(fdf.timestamp//ms_span)['balance'].first()
+    pnls = fdf.groupby(fdf.timestamp // ms_span).pnl.sum() / fdf.groupby(fdf.timestamp//ms_span).balance.first()
     pnls = pnls.reindex(np.arange(pnls.index[0], pnls.index[-1])).fillna(0.0)
     pnls_std = pnls.std()
     sharpe_ratio = pnls.mean() / pnls_std * np.sqrt(365) if pnls_std != 0.0 else -20.0
