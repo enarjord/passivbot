@@ -2,9 +2,12 @@ import json
 import pprint
 import os
 import hjson
+import pandas as pd
+import numpy as np
 from time import time
 from pure_funcs import numpyize, denumpyize, candidate_to_live_config, ts_to_date, get_dummy_settings, calc_spans, \
-    config_pretty_str
+    config_pretty_str, date_to_ts
+from njit_funcs import calc_samples
 
 
 def load_live_config(live_config_path: str) -> dict:
@@ -205,3 +208,43 @@ def add_argparse_args(parser):
                         help='specify whether spot, overriding value from backtest config')
 
     return parser
+
+
+def make_tick_samples(config: dict, sec_span: int = 1):
+
+    '''
+    makes tick samples from agg_trades
+    tick samples are [(qty, price, timestamp)]
+    config must include parameters
+    - exchange: str
+    - symbol: str
+    - spot: bool
+    - start_date: str
+    - end_date: str
+    '''
+    for key in ['exchange', 'symbol', 'spot', 'start_date', 'end_date']:
+        assert key in config
+    start_ts = date_to_ts(config['start_date'])
+    end_ts = date_to_ts(config['end_date'])
+    ticks_filepath = os.path.join('historical_data', config['exchange'], f"agg_trades_{'spot' if config['spot'] else 'futures'}", config['symbol'], '')
+    if not os.path.exists(ticks_filepath):
+        return
+    ticks_filenames = sorted([f for f in os.listdir(ticks_filepath) if f.endswith('.csv')])
+    ticks = np.empty((0, 3))
+    sts = time()
+    for f in ticks_filenames:
+        _, _, first_ts, last_ts = map(int, f.replace('.csv', '').split('_'))
+        if first_ts > end_ts or last_ts < start_ts:
+            continue
+        print(f'\rloading chunk {ts_to_date(first_ts / 1000)}', end='  ')
+        tdf = pd.read_csv(ticks_filepath + f)
+        ticks = np.concatenate((ticks, tdf[['qty', 'price', 'timestamp']].values))
+        del tdf
+    samples = calc_samples(ticks[ticks[:, 2].argsort()], sec_span * 1000)
+    print(f'took {time() - sts:.2f} seconds to load {len(ticks)} ticks, creating {len(samples)} samples')
+    del ticks
+    return samples
+
+
+
+
