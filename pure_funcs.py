@@ -437,6 +437,7 @@ def analyze_fills(fills: list, bc: dict, first_ts: float, last_ts: float) -> (pd
     periodic_gains = periodic_gains.reindex(np.arange(periodic_gains.index[0], periodic_gains.index[-1])).fillna(0.0)
     periodic_gains_std = periodic_gains.std()
     sharpe_ratio = periodic_gains.mean() / periodic_gains_std if periodic_gains_std != 0.0 else -20.0
+    sharpe_ratio = np.nan_to_num(sharpe_ratio)
     result = {
         'starting_balance': bc['starting_balance'],
         'final_balance': fdf.iloc[-1].balance,
