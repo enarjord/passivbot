@@ -56,6 +56,8 @@ async def main():
         return
     downloader = Downloader(config)
     live_config = load_live_config(args.live_config_path)
+    live_config['long']['enabled'] = config['do_long']
+    live_config['shrt']['enabled'] = config['do_shrt']
     config.update(live_config)
     print()
     for k in (keys := ['exchange', 'spot', 'symbol', 'starting_balance', 'start_date', 'end_date',
