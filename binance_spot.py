@@ -8,7 +8,7 @@ from urllib.parse import urlencode
 import aiohttp
 import numpy as np
 
-from pure_funcs import ts_to_date, sort_dict_keys, calc_pprice_from_fills
+from pure_funcs import ts_to_date, sort_dict_keys, calc_pprice_from_fills, format_float
 from njit_funcs import round_dn
 from passivbot import Bot
 from procedures import load_key_secret, print_
@@ -189,10 +189,10 @@ class BinanceBotSpot(Bot):
         params = {'symbol': self.symbol,
                   'side': order['side'].upper(),
                   'type': order['type'].upper(),
-                  'quantity': str(order['qty'])}
+                  'quantity': format_float(order['qty'])}
         if params['type'] == 'LIMIT':
             params['timeInForce'] = 'GTC'
-            params['price'] = str(order['price'])
+            params['price'] = format_float(order['price'])
         if 'custom_id' in order:
             params['newClientOrderId'] = \
                 f"{order['custom_id']}_{str(int(time() * 1000))[8:]}_{int(np.random.random() * 1000)}"
