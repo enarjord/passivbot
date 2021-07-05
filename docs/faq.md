@@ -9,6 +9,9 @@ A: Yes! PassivBot is open source for anybody to use, redistribute, or modify wit
 **Q: My API keys aren't working!**  
 A: Make sure you've setup your account correctly with the exchange, and opened your futures account prior to generating your API Keys. Some users have reported that API keys generated prior to successfully opening the "futures" portion of their account are rendered useless due to account protection protocols enforced by your exchange.
 
+**Q: Why does the bot cancel and create orders so much?**
+A: Bot calculates ideal orders and compares them to actual orders.  Matching orders will be kept, deviating orders will be deleted and missing orders will be created.  Bot checks if orders are correct about once every 5 sec or less.  It's not a problem if bot cancels and creates often, as long as exchange's rate limit isn't exceeded.  Since initial entries are based on moving averages, entry prices may change often.
+
 **Q: How much should I invest with the bot?**  
 A: Never more than you are willing to lose. While backtests may show good results, and many have achieved high ROI using PassivBot, liquidations or soft stops do happen and are unpredictable. You alone are responsible for how you utilize the bot.
 
@@ -19,7 +22,7 @@ A: We don't suggest it. PassivBot treats the balance of your futures wallet as i
 A: Backtesting makes the assumption that forthcoming price action will be largely similar to the price history that was tested. Additionally, the backtest is unable to account for some factors such as errant market makers, partially filled orders, or increasing volume's effect on market prices. Backtesting is meant to provide insight into how a particular configuration behaves under the tested time period. Often, wildly profitable strategies may appear in a backtest, but fail to yield the same results in live testing due to "over-fitting". For this reason, we generally consider conservative settings to be the most reliable.
 
 **Q: Should I intervene to help my bot sometimes?**  
-A: While this is largely a matter of personal choice, most of the community advises against it. Adding extra capital, market closing orders, or manually placing new orders all have potential to wildly throw the configuration out of balance. Depending on your settings, the bot is usually able to right itself, but if it is unable it could self-liquidate. If you find yourself having to manually intervene too often; check your leverage and balance settings, then check your double down and grid spacing settings.
+A: This is largely a matter of personal choice.  Adding extra capital, opening/closing orders with market orders are all fine, bot will adjust itself.  Depending on your settings, the bot may be able to get out of a tricky position by itself, but if it is unable it could self-liquidate. If you find yourself having to manually intervene too often; check your config.
 
 **Q: How do I make "Conservative" settings if I get my configurations from the backtester?**  
 A: Firstly, the backtester provides some options to discard overly risky configurations. This is the best method of searching for conservative, sustainably profitable configurations. Additionally, if you did not make your own configuration, you can simply lower the balance parameters to specify how much of your margin balance is being used in trades. You can specify a percentage of your balance (this is the total amount the bot can use as margin), where the unused portion will serve to pad your liquidation price. The caveat to this method is that it will lower the profit efficiency of your settings as only a portion of every profit taken is used to compound into the next trade.

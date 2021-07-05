@@ -27,7 +27,7 @@ If there is specific functionality that users would like to receive, they can pl
 this functionality properly in Passivbot. If you want to create a pledge, or get an overview of the current pledges
 that have been made, join [this Discord server](https://discord.gg/QAF2H2UmzZ).
 
-In order to create a pledge, just post the following message on the appropriate Discord channel:
+In order to create a pledge, just declare your pledge formally in the appropriate Discord channel, for example something like:
 
 ```
 ############

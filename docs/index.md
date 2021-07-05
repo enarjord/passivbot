@@ -8,14 +8,14 @@
 !!! Warning
     **Use at your own risk! You should never trade with money you cannot or are are afraid to miss.**
 
-    WE ARE NOT RESPONSIBLE FOR HOW THE BOT BEHAVES, OR ANY LOSSES THAT MAY BE A RESULT OF USING THE BOT!
+    YOU ALONE ARE RESPONSIBLE FOR HOW THE BOT BEHAVES, AND FOR ANY LOSSES THAT MAY BE A RESULT OF USING THE BOT!
 
     If you don't understand how the bot works, you should not use it. You are always welcome to ask for help or get more
     information on how it works exactly if the documentation does not provide enough information. 
 
 ## Overview
 
-Passivbot is a fully automated trading bot built in Python. The goal of Passivbot is to provide a stable, risk-free
+Passivbot is a fully automated trading bot built in Python. The goal of Passivbot is to provide a stable, low-risk
 trading bot that is able to accumulate profit over time without manual actions.
 
 Passivbot trades using futures markets, using an advanced form of grid trading to place opening and closing orders.
@@ -27,7 +27,7 @@ It provides support for automatically optimize configurations, backtest using hi
 Currently the exchanges **Binance** and **Bybit** are implemented and supported for trading futures. The bot does not use
 ccxt, so other exchanges cannot be used.
 
-Not all functionality is supported on bot exchanges, depending on the API's that bot exchanges expose and development efforts.
+Not all functionality is supported on bot exchanges, depending on the APIs that bot exchanges expose and development efforts.
 
 !!! Info
     If you would like to have support added for an exchange not supported yet, 
