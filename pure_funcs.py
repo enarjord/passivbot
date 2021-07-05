@@ -380,6 +380,7 @@ def get_empty_analysis(bc: dict) -> dict:
         'average_daily_gain': 0.0,
         'adjusted_daily_gain': 0.0,
         'sharpe_ratio': 0.0,
+        'sharpe_gain_ratio': 0.0,
         'lowest_eqbal_ratio': 0.0,
         'closest_bkr': 1.0,
         'n_fills': 0.0,
@@ -436,16 +437,19 @@ def analyze_fills(fills: list, bc: dict, first_ts: float, last_ts: float) -> (pd
     pnls = pnls.reindex(np.arange(pnls.index[0], pnls.index[-1])).fillna(0.0)
     pnls_std = pnls.std()
     sharpe_ratio = pnls.mean() / pnls_std if pnls_std != 0.0 else -20.0
+    gain = fdf.iloc[-1].equity / bc['starting_balance']
+    sharpe_gain_ratio = sharpe_ratio / gain if gain else 0.0
     result = {
         'starting_balance': bc['starting_balance'],
         'final_balance': fdf.iloc[-1].balance,
         'final_equity': fdf.iloc[-1].equity,
         'net_pnl_plus_fees': fdf.pnl.sum() + fdf.fee_paid.sum(),
-        'gain': (gain := fdf.iloc[-1].equity / bc['starting_balance']),
+        'gain': gain,
         'n_days': (n_days := (last_ts - first_ts) / (1000 * 60 * 60 * 24)),
         'average_daily_gain': (adg := gain ** (1 / n_days) if gain > 0.0 and n_days > 0.0 else 0.0),
         'adjusted_daily_gain': np.tanh(10 * (adg - 1)) + 1,
         'sharpe_ratio': sharpe_ratio,
+        'sharpe_gain_ratio': sharpe_gain_ratio,
         'profit_sum': fdf[fdf.pnl > 0.0].pnl.sum(),
         'loss_sum': fdf[fdf.pnl < 0.0].pnl.sum(),
         'fee_sum': fdf.fee_paid.sum(),
