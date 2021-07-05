@@ -1,3 +1,4 @@
+import traceback
 import argparse
 import asyncio
 import json
@@ -584,6 +585,7 @@ async def start_bot(bot):
             await bot.start_websocket()
         except Exception as e:
             print('Websocket connection has been lost, attempting to reinitialize the bot...', e)
+            traceback.print_exc()
             await asyncio.sleep(10)
 
 
