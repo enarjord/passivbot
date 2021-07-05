@@ -9,7 +9,7 @@ A: Yes! PassivBot is open source for anybody to use, redistribute, or modify wit
 **Q: My API keys aren't working!**  
 A: Make sure you've setup your account correctly with the exchange, and opened your futures account prior to generating your API Keys. Some users have reported that API keys generated prior to successfully opening the "futures" portion of their account are rendered useless due to account protection protocols enforced by your exchange.
 
-**Q: Why does the bot cancel and create orders so much?**
+**Q: Why does the bot cancel and create orders so much?**  
 A: Bot calculates ideal orders and compares them to actual orders.  Matching orders will be kept, deviating orders will be deleted and missing orders will be created.  Bot checks if orders are correct about once every 5 sec or less.  It's not a problem if bot cancels and creates often, as long as exchange's rate limit isn't exceeded.  Since initial entries are based on moving averages, entry prices may change often.
 
 **Q: How much should I invest with the bot?**  
