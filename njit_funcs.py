@@ -213,7 +213,7 @@ def calc_long_orders(balance,
                      rprc_MAr_coeffs,
                      markup_MAr_coeffs) -> ((float, float, float, float, str), (float, float, float, float, str)):
     entry_price = min(highest_bid, round_dn(MA_band_lower * (iprc_const + eqf(MA_ratios, iprc_MAr_coeffs)), price_step))
-    if long_psize == 0.0:
+    if long_psize == 0.0 or (spot and (long_psize < calc_min_entry_qty(long_pprice, inverse, qty_step, min_qty, min_cost))):
         min_entry_qty = calc_min_entry_qty(entry_price, inverse, qty_step, min_qty, min_cost)
         max_entry_qty = cost_to_qty(min(balance * (pbr_limit + max(0.0, pbr_stop_loss)), available_margin),
                                     entry_price, inverse, c_mult)
