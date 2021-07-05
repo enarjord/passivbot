@@ -20,10 +20,10 @@ provided dates, and works independently of the backtesting unit.
 To execute a backtest, you can execute the following command from the root folder:
 
 ```shell
-python3 backtest.py
+python3 backtest.py path/to/config_to_test.json
 ```
 
-Running this command without any arguments will make the backtester use the details provided in the `configs/backtest/default.hjson` file.
+Running this command without any arguments other than path to live_config will make the backtester use the details provided in the `configs/backtest/default.hjson` file.
 When you first checkout the project, you will need to setup your exchange credentials in the `api-keys.json` (please read [Running live](live.md) for more details).
 The backtest needs a connection to the exchange to be able to download the trade data required for the backtest.
 
