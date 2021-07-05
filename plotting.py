@@ -78,7 +78,10 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
         end_ = (z + 1) / n_parts
         print(f'{z} of {n_parts} {start_ * 100:.2f}% to {end_ * 100:.2f}%')
         fig = plot_fills(df, fdf.iloc[int(len(fdf) * start_):int(len(fdf) * end_)], bkr_thr=0.1)
-        fig.savefig(f"{result['plots_dirpath']}backtest_{z + 1}of{n_parts}.png")
+        if fig is not None:
+            fig.savefig(f"{result['plots_dirpath']}backtest_{z + 1}of{n_parts}.png")
+        else:
+            print('no fills...')
     fig = plot_fills(df, fdf, bkr_thr=0.1)
     fig.savefig(f"{result['plots_dirpath']}whole_backtest.png")
 
@@ -90,6 +93,8 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
 
 
 def plot_fills(df, fdf_, side: int = 0, bkr_thr=0.1):
+    if fdf.empty:
+        return
     plt.clf()
     fdf = fdf_.set_index('timestamp')
     dfc = df.iloc[::max(1, int(len(df) * 0.00001))]
@@ -123,4 +128,3 @@ def plot_fills(df, fdf_, side: int = 0, bkr_thr=0.1):
     if 'bkr_price' in fdf.columns:
         fdf.bkr_price.where(fdf.bkr_diff < bkr_thr, np.nan).plot(style='k--')
     return plt
-
