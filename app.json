@@ -1,0 +1,23 @@
+ {
+    "name": "passivbot",
+    "description": "Trading bot running on Bybit and Binance Futures",
+    "logo": "https://github.com/ghostnetrn/passivbot/raw/master/docs/images/logo.png",
+    "repository": "https://github.com/ghostnetrn/passivbot",
+	"formation": {
+    "worker": {
+      "quantity": 1,
+      "size": "free"
+    }
+	},
+    "keywords": ["python", "binance","trading","trader","bot","market","maker","algo","crypto"],
+    "env": {
+      "key": {
+        "description": "API Key Binance",
+        "required": true
+      },
+      "secret": {
+        "description": "API Secret Binance",
+        "required": true
+      }
+    }
+  }
