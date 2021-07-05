@@ -18,6 +18,19 @@
       "secret": {
         "description": "API Secret Binance",
         "required": true
+      },
+	  "enabled": {
+        "description": "Telegram",
+        "required": true,
+		"value": true
+      },
+	  "token": {
+        "description": "Bot Token",
+        "required": true
+      },
+	  "chat_id": {
+        "description": "Chat id",
+        "required": true
       }
     }
   }
