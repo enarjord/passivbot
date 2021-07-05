@@ -12,13 +12,9 @@ Next, open a command line / terminal and navigate to the PassivBot root director
 jupyter lab
 ```
 
-``
-
 The Jupyter Interface should open, and display the PassivBot folder in the toolbar on the left. Navigate to the file ‘backtesting_notes.ipynb’. The ‘backtesting_notes.ipynb’ file only needs a single change before you can get the results of your backtest. 
 Under cell 5 of the file, find and change the symbol to the currency pair your backtesting results are for. 
-For example, if we are backtesting Ethereum:
-
-`symbol = 'ETHUSDT'`
+For example, if we are backtesting Ethereum use `symbol = ETHUSDT`.
 
 Save the file, and return focus to the first cell. 
 You may now use ‘shift + enter’ to step through the code sequentially, or hit the ‘play’ icon. 
