@@ -128,4 +128,3 @@ def plot_fills(df, fdf_, side: int = 0, bkr_thr=0.1):
     if 'bkr_price' in fdf.columns:
         fdf.bkr_price.where(fdf.bkr_diff < bkr_thr, np.nan).plot(style='k--')
     return plt
-
