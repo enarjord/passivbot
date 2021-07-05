@@ -107,7 +107,7 @@ def objective_function(analysis: dict, config: dict, metric='adjusted_daily_gain
         * min(1.0, config['maximum_hrs_no_fills_same_side'] / analysis['max_hrs_no_fills_same_side'])
         * min(1.0, analysis['closest_bkr'] / config['minimum_bankruptcy_distance'])
         * min(1.0, analysis['lowest_eqbal_ratio'] / config['minimum_equity_balance_ratio'])
-        * min(1.0, analysis['sharpe_ratio'] / config['minimum_sharpe_ratio'])
+        * min(1.0, analysis['sharpe_gain_ratio'] / config['minimum_sharpe_gain_ratio'])
     )
 
 
@@ -145,7 +145,7 @@ def single_sliding_window_run(config, data, do_print=False) -> (float, [dict]):
         line = (f'{str(z).rjust(3, " ")} adg {analysis["average_daily_gain"]:.4f}, '
                 f'bkr {analysis["closest_bkr"]:.4f}, '
                 f'eqbal {analysis["lowest_eqbal_ratio"]:.4f} n_days {analysis["n_days"]:.1f}, '
-                f'sharpe_ratio {analysis["sharpe_ratio"]:.4f} , '
+                f'sharpe_gain_ratio {analysis["sharpe_gain_ratio"]:.4f} , '
                 f'score {analysis["score"]:.4f}, objective {objective:.4f}, '
                 f'hrs stuck ss {str(round(analysis["max_hrs_no_fills_same_side"], 1)).zfill(4)}, ')
         if (bef := config['break_early_factor']) != 0.0:
@@ -165,8 +165,8 @@ def single_sliding_window_run(config, data, do_print=False) -> (float, [dict]):
                 line += f"broke on max_hrs_no_fills_ss {analysis['max_hrs_no_fills_same_side']:.4f}, {config['maximum_hrs_no_fills_same_side']}"
                 print(line)
                 break
-            if analysis['sharpe_ratio'] < config['minimum_sharpe_ratio'] * (1 - bef):
-                line += f"broke on low sharpe ratio {analysis['sharpe_ratio']:.4f} "
+            if analysis['sharpe_gain_ratio'] < config['minimum_sharpe_gain_ratio'] * (1 - bef):
+                line += f"broke on low sharpe gain ratio {analysis['sharpe_gain_ratio']:.4f} "
                 print(line)
                 break
             if analysis['average_daily_gain'] < config['minimum_slice_adg']:
@@ -194,7 +194,7 @@ def simple_sliding_window_wrap(config, data, do_print=False):
                     daily_gain=np.mean([r['average_daily_gain'] for r in analyses]),
                     closest_bkr=np.min([r['closest_bkr'] for r in analyses]),
                     lowest_eqbal_r=np.min([r['lowest_eqbal_ratio'] for r in analyses]),
-                    sharpe_ratio=np.mean([r['sharpe_ratio'] for r in analyses]),
+                    sharpe_gain_ratio=np.mean([r['sharpe_gain_ratio'] for r in analyses]),
                     max_hrs_no_fills=np.max([r['max_hrs_no_fills'] for r in analyses]),
                     max_hrs_no_fills_ss=np.max([r['max_hrs_no_fills_same_side'] for r in analyses]))
 
@@ -265,7 +265,7 @@ def backtest_tune(data: np.ndarray, config: dict, current_best: Union[dict, list
             metric_columns=['daily_gain',
                             'closest_bkr',
                             'lowest_eqbal_r',
-                            'sharpe_ratio',
+                            'sharpe_gain_ratio',
                             'max_hrs_no_fills',
                             'max_hrs_no_fills_ss',
                             'objective'],
@@ -302,7 +302,7 @@ async def main():
     print()
     for k in (keys := ['exchange', 'symbol', 'starting_balance', 'start_date',
                        'end_date', 'latency_simulation_ms',
-                       'do_long', 'do_shrt', 'minimum_sharpe_ratio',
+                       'do_long', 'do_shrt', 'minimum_sharpe_gain_ratio',
                        'minimum_bankruptcy_distance', 'maximum_hrs_no_fills',
                        'maximum_hrs_no_fills_same_side', 'iters', 'n_particles', 'sliding_window_days', 'metric',
                        'min_span', 'max_span', 'n_spans']):
