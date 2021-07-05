@@ -9,7 +9,7 @@ basic understanding of the configuration file. The optimizer's job is to look at
 history (ETH/USDT for the last 30 days for example), examine your provided conditions (leverage, percent balance,
 grid spacing and so on...), and test those settings over the timeframe you selected. The bot will iterate
 through every trade as if it were doing it live, and return the best found results to the user. In order
-to find the best result possible across many iterations, Passivbot relies op [particle swarm optimization](https://en.wikipedia.org/wiki/Particle_swarm_optimization).
+to find the best result possible across many iterations, Passivbot relies on [particle swarm optimization](https://en.wikipedia.org/wiki/Particle_swarm_optimization).
 There is a default optimize configuration with the bot in every version, so examine it and set the test
 parameters to suit your desired results.
 
