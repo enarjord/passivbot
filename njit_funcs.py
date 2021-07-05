@@ -87,23 +87,28 @@ def calc_bid_ask_thresholds(prices: np.ndarray, MAs: np.ndarray, iprc_const, ipr
 
 
 @njit
-def compress_ticks(ticks: np.ndarray, ms_sample_size: int = 1000) -> np.ndarray:
-    # ticks format [[price, qty, timestamp, is_buyer_maker]]
-    # returns [[price, qty, timestamp]]
-    timestamps = ticks[:,2] // ms_sample_size * ms_sample_size
-    new_timestamps = np.arange(timestamps[0], timestamps[-1], ms_sample_size)
-    prices = np.zeros_like(new_timestamps)
-    prices[0] = ticks[0][0]
-    qty = np.zeros_like(new_timestamps)
+def calc_samples(ticks: np.ndarray, ms_sample_size: int = 1000) -> np.ndarray:
+    # ticks [[qty, price, timestamp]]
+    sampled_timestamps = np.arange(ticks[:, 2][0] // ms_sample_size * ms_sample_size,
+                                   ticks[:, 2][-1] // ms_sample_size * ms_sample_size,
+                                   ms_sample_size)
+    samples = np.zeros((len(sampled_timestamps), 3))
+    samples[:, 2] = sampled_timestamps
+    i = 0
+    ts = sampled_timestamps[0]
     k = 0
-    for i in range(len(ticks)):
-        if timestamps[i] == new_timestamps[k]:
-            prices[k] = ticks[i][0]
-            qty[k] += ticks[i][1]
+    while i < len(ticks):
+        if ts == samples[:, 2][k]:
+            samples[:,0][k] += ticks[:, 0][i]
+            samples[:,1][k] = ticks[:, 1][i]
+            i += 1
+            ts = ticks[:, 2][i] // ms_sample_size * ms_sample_size
         else:
             k += 1
-            prices[k] = prices[k - 1]
-    return prices, qty, new_timestamps.astype(int)
+            if k >= len(samples):
+                break
+            samples[:, 1][k] = samples[:, 1][k - 1]
+    return samples
 
 
 @njit
@@ -257,13 +262,21 @@ def calc_long_orders(balance,
     else:
         raise Exception('long psize is less than 0.0')
 
-    if spot and long_close[0] != 0.0:
-        min_close_qty = calc_min_entry_qty(long_close[1], inverse, qty_step, min_qty, min_cost)
-        close_qty = round_dn(min(long_psize, max(min_close_qty, abs(long_close[0]))), qty_step)
-        if close_qty < min_close_qty:
-            long_close = (0.0, 0.0, 0.0, 0.0, 'long_nclose')
-        else:
-            long_close = (-close_qty,) + long_close[1:]
+    if spot:
+        if entry_qty != 0.0:
+            equity = calc_equity(balance, long_psize, long_pprice, 0.0, 0.0, highest_bid, inverse, c_mult)
+            excess_cost = max(0.0, qty_to_cost(long_psize + entry_qty, highest_bid, inverse, c_mult) - equity)
+            if excess_cost:
+                entry_qty = round_dn((qty_to_cost(entry_qty, entry_price, inverse, c_mult) - excess_cost) / entry_price, qty_step)
+                if entry_qty < min_entry_qty:
+                    entry_qty = 0.0
+        if long_close[0] != 0.0:
+            min_close_qty = calc_min_entry_qty(long_close[1], inverse, qty_step, min_qty, min_cost)
+            close_qty = round_dn(min(long_psize, max(min_close_qty, abs(long_close[0]))), qty_step)
+            if close_qty < min_close_qty:
+                long_close = (0.0, 0.0, 0.0, 0.0, 'long_nclose')
+            else:
+                long_close = (-close_qty,) + long_close[1:]
 
     new_psize, new_pprice = calc_new_psize_pprice(long_psize, long_pprice, entry_qty, entry_price, qty_step)
     return (entry_qty, entry_price, new_psize, new_pprice, entry_type), long_close
@@ -439,7 +452,7 @@ def calc_orders(balance,
                      rprc_PBr_coeffs[0],
                      rqty_MAr_coeffs[0],
                      rprc_MAr_coeffs[0],
-                     markup_MAr_coeffs[0]) if do_long_ else ((0.0, 0.0, 0.0, 0.0, ''), (0.0, 0.0, 0.0, 0.0, ''))
+                     markup_MAr_coeffs[0]) if (spot or do_long_) else ((0.0, 0.0, 0.0, 0.0, ''), (0.0, 0.0, 0.0, 0.0, ''))
     shrt_entry, shrt_close = calc_shrt_orders(balance,
                      shrt_psize,
                      shrt_pprice,
@@ -469,7 +482,7 @@ def calc_orders(balance,
                      rprc_PBr_coeffs[1],
                      rqty_MAr_coeffs[1],
                      rprc_MAr_coeffs[1],
-                     markup_MAr_coeffs[1]) if do_shrt_ else ((0.0, 0.0, 0.0, 0.0, ''), (0.0, 0.0, 0.0, 0.0, ''))
+                     markup_MAr_coeffs[1]) if (do_shrt_ and not spot) else ((0.0, 0.0, 0.0, 0.0, ''), (0.0, 0.0, 0.0, 0.0, ''))
     bkr_price = calc_bankruptcy_price(balance, long_psize, long_pprice, shrt_psize, shrt_pprice, inverse, c_mult)
     return long_entry, shrt_entry, long_close, shrt_close, bkr_price, available_margin
 
