@@ -31,7 +31,7 @@ Not all functionality is supported on bot exchanges, depending on the APIs that 
 
 !!! Info
     If you would like to have support added for an exchange not supported yet, 
-    you can always get in touch to see  what the  options are
+    you can always get in touch to see what the options are.
 
 ## Software Requirements
 
