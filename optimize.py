@@ -145,7 +145,8 @@ def single_sliding_window_run(config, data, do_print=False) -> (float, [dict]):
         line = (f'{str(z).rjust(3, " ")} adg {analysis["average_daily_gain"]:.4f}, '
                 f'bkr {analysis["closest_bkr"]:.4f}, '
                 f'eqbal {analysis["lowest_eqbal_ratio"]:.4f} n_days {analysis["n_days"]:.1f}, '
-                f'sharpe_ratio {analysis["sharpe_ratio"]:.4f} , '
+                f'shrp_ratio {analysis["sharpe_ratio"]:.4f} , '
+                f'avg_{int(round(config["periodic_gain_n_days"]))}days_gain {analysis["average_periodic_gain"]:.4f}, '
                 f'score {analysis["score"]:.4f}, objective {objective:.4f}, '
                 f'hrs stuck ss {str(round(analysis["max_hrs_no_fills_same_side"], 1)).zfill(4)}, ')
         if (bef := config['break_early_factor']) != 0.0:
@@ -189,6 +190,8 @@ def simple_sliding_window_wrap(config, data, do_print=False):
                     daily_gain=0.0,
                     closest_bkr=0.0,
                     lowest_eqbal_r=0.0,
+                    sharpe_ratio=0.0,
+                    avg_periodic_gain=0.0,
                     max_hrs_no_fills=1000.0,
                     max_hrs_no_fills_ss=1000.0)
     else:
@@ -197,6 +200,7 @@ def simple_sliding_window_wrap(config, data, do_print=False):
                     closest_bkr=np.min([r['closest_bkr'] for r in analyses]),
                     lowest_eqbal_r=np.min([r['lowest_eqbal_ratio'] for r in analyses]),
                     sharpe_ratio=np.mean([r['sharpe_ratio'] for r in analyses]),
+                    avg_periodic_gain=np.mean([r['average_periodic_gain'] for r in analyses]),
                     max_hrs_no_fills=np.max([r['max_hrs_no_fills'] for r in analyses]),
                     max_hrs_no_fills_ss=np.max([r['max_hrs_no_fills_same_side'] for r in analyses]))
 
@@ -268,6 +272,7 @@ def backtest_tune(data: np.ndarray, config: dict, current_best: Union[dict, list
                             'closest_bkr',
                             'lowest_eqbal_r',
                             'sharpe_ratio',
+                            'avg_periodic_gain',
                             'max_hrs_no_fills',
                             'max_hrs_no_fills_ss',
                             'objective'],
@@ -309,7 +314,7 @@ async def main():
     print()
     for k in (keys := ['exchange', 'symbol', 'spot', 'starting_balance', 'start_date',
                        'end_date', 'latency_simulation_ms',
-                       'do_long', 'do_shrt', 'minimum_sharpe_ratio', 'sharpe_ratio_n_days',
+                       'do_long', 'do_shrt', 'minimum_sharpe_ratio', 'periodic_gain_n_days',
                        'minimum_bankruptcy_distance', 'maximum_hrs_no_fills',
                        'maximum_hrs_no_fills_same_side', 'iters', 'n_particles', 'sliding_window_days', 'metric',
                        'min_span', 'max_span', 'n_spans']):
