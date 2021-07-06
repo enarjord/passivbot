@@ -11,7 +11,7 @@ import numpy as np
 from pure_funcs import ts_to_date, sort_dict_keys, calc_pprice_from_fills, format_float
 from njit_funcs import round_dn
 from passivbot import Bot
-from procedures import load_key_secret, print_
+from procedures import print_
 
 
 class BinanceBotSpot(Bot):
@@ -28,7 +28,6 @@ class BinanceBotSpot(Bot):
         self.do_shrt = self.config['do_shrt'] = self.config['shrt']['enabled'] = False
         self.session = aiohttp.ClientSession()
         self.base_endpoint = ''
-        self.key, self.secret = load_key_secret('binance', config['user'])
 
     async def public_get(self, url: str, params: dict = {}) -> dict:
         async with self.session.get(self.base_endpoint + url, params=params) as response:
