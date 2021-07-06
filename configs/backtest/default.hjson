@@ -1,15 +1,14 @@
 {
-  # bybit or binance
-  exchange: binance
   spot: true
 
+  # exchange from api-keys.json is used
   user: your_user_name
   symbol: ADAETH
   latency_simulation_ms: 750
-  starting_balance: 0.1
+  starting_balance: 0.05
 
   # format YYYY-MM-DDTHH:mm:ss
   # e.g. 2020-02-18T19:34:59
-  start_date: 2020-11-17
-  end_date: 2021-06-29
+  start_date: 2021-01
+  end_date: 2021-07
 }
