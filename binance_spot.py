@@ -92,7 +92,7 @@ class BinanceBotSpot(Bot):
         for e in exchange_info['symbols']:
             if e['symbol'] == self.symbol:
                 self.coin = e['baseAsset']
-                self.quot = e['quoteAsset']
+                self.quot = self.margin_coin = e['quoteAsset']
                 for q in e['filters']:
                     if q['filterType'] == 'LOT_SIZE':
                         self.min_qty = self.config['min_qty'] = float(q['minQty'])
