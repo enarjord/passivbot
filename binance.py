@@ -10,7 +10,7 @@ import numpy as np
 
 from pure_funcs import ts_to_date, sort_dict_keys
 from passivbot import Bot
-from procedures import load_key_secret, print_
+from procedures import print_
 
 
 class BinanceBot(Bot):
@@ -21,7 +21,6 @@ class BinanceBot(Bot):
         self.max_pos_size_ito_coin = 0.0
         self.session = aiohttp.ClientSession()
         self.base_endpoint = ''
-        self.key, self.secret = load_key_secret('binance', config['user'])
 
     async def public_get(self, url: str, params: dict = {}) -> dict:
         async with self.session.get(self.base_endpoint + url, params=params) as response:
