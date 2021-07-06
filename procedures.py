@@ -238,6 +238,7 @@ def make_tick_samples(config: dict, sec_span: int = 1):
             continue
         print(f'\rloading chunk {ts_to_date(first_ts / 1000)}', end='  ')
         tdf = pd.read_csv(ticks_filepath + f)
+        tdf = tdf[(tdf.timestamp >= start_ts) & (tdf.timestamp <= end_ts)]
         ticks = np.concatenate((ticks, tdf[['qty', 'price', 'timestamp']].values))
         del tdf
     samples = calc_samples(ticks[ticks[:, 2].argsort()], sec_span * 1000)
