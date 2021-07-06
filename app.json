@@ -1,8 +1,8 @@
  {
     "name": "passivbot",
     "description": "Trading bot running on Bybit and Binance Futures",
-    "logo": "https://github.com/ghostnetrn/passivbot/raw/master/docs/images/logo.png",
-    "repository": "https://github.com/ghostnetrn/passivbot",
+    "logo": "https://github.com/enarjord/passivbot/raw/master/docs/images/logo.png",
+    "repository": "https://github.com/enarjord/passivbot",
 	"formation": {
     "worker": {
       "quantity": 1,
