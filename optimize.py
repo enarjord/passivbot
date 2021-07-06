@@ -193,16 +193,17 @@ def simple_sliding_window_wrap(config, data, do_print=False):
                     sharpe_ratio=0.0,
                     avg_periodic_gain=0.0,
                     max_hrs_no_fills=1000.0,
-                    max_hrs_no_fills_ss=1000.0)
+                    max_hrs_no_fills_ss=1000.0,
+                    **{config['avg_periodic_gain_key']: 0.0})
     else:
         tune.report(objective=objective,
                     daily_gain=np.mean([r['average_daily_gain'] for r in analyses]),
                     closest_bkr=np.min([r['closest_bkr'] for r in analyses]),
                     lowest_eqbal_r=np.min([r['lowest_eqbal_ratio'] for r in analyses]),
                     sharpe_ratio=np.mean([r['sharpe_ratio'] for r in analyses]),
-                    avg_periodic_gain=np.mean([r['average_periodic_gain'] for r in analyses]),
                     max_hrs_no_fills=np.max([r['max_hrs_no_fills'] for r in analyses]),
-                    max_hrs_no_fills_ss=np.max([r['max_hrs_no_fills_same_side'] for r in analyses]))
+                    max_hrs_no_fills_ss=np.max([r['max_hrs_no_fills_same_side'] for r in analyses]),
+                    **{config['avg_periodic_gain_key']: np.mean([r['average_periodic_gain'] for r in analyses])})
 
 
 def backtest_tune(data: np.ndarray, config: dict, current_best: Union[dict, list] = None):
@@ -272,7 +273,7 @@ def backtest_tune(data: np.ndarray, config: dict, current_best: Union[dict, list
                             'closest_bkr',
                             'lowest_eqbal_r',
                             'sharpe_ratio',
-                            'avg_periodic_gain',
+                            config['avg_periodic_gain_key'],
                             'max_hrs_no_fills',
                             'max_hrs_no_fills_ss',
                             'objective'],
