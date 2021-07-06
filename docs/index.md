@@ -25,7 +25,7 @@ It provides support for automatically optimize configurations, backtest using hi
 ## Supported exchanges
 
 Currently the exchanges **Binance** and **Bybit** are implemented and supported for trading futures. The bot does not use
-ccxt, so other exchanges cannot be used.
+[ccxt[(https://github.com/ccxt/ccxt), so other exchanges cannot be used.
 
 Not all functionality is supported on bot exchanges, depending on the APIs that bot exchanges expose and development efforts.
 
