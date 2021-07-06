@@ -55,6 +55,8 @@ trade data (ticks) instead of OHLCV data, the amount of memory is dependent on t
 If you want to optimize on BTC for the last 365 days, it will take significantly more memory than optimizing on a coin
 like BTS for example.
 
+For running the optimizer, a minimum of 8gb of memory is recommended.
+
 !!! Warning
     It should be very possible to run multiple bots on a single machine. Be aware however that you may run into other
     limitations like rate limiting of exchanges.
