@@ -8,7 +8,7 @@ import signal
 import pprint
 from pathlib import Path
 from time import time
-from procedures import load_live_config, make_get_filepath, load_key_secret, print_, add_argparse_args
+from procedures import load_live_config, make_get_filepath, load_exchange_key_secret, print_, add_argparse_args
 from pure_funcs import get_xk_keys, get_ids_to_fetch, flatten, calc_indicators_from_ticks_with_gaps, \
     drop_consecutive_same_prices, filter_orders, compress_float, create_xk, round_dynamic, denumpyize, \
     calc_spans
@@ -64,7 +64,7 @@ class Bot:
 
         self.log_filepath = make_get_filepath(f"logs/{self.exchange}/{config['config_name']}.log")
 
-        self.key, self.secret = load_key_secret(config['exchange'], self.user)
+        _, self.key, self.secret = load_exchange_key_secret(self.user)
 
         self.log_level = 0
 
