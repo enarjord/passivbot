@@ -59,6 +59,9 @@ vi api-keys.json
 
 ## Run the optimizer for a config
 
+!!! Warning
+    For running the optimizer, a minimum of 8gb is recommended, and 16gb would be advisable. 
+
 Once you've set up your account, you can try to find a good config using the optimizer. If you want, you can limit the
 search space by modifying by creating your own optimize configuration. You can do so by copying and modifying the default
 optimize configuration file:
@@ -70,10 +73,13 @@ vi configs/optimize/myconfig.hjson
 :wq
 ```
 
+!!! Info
+    To learn about the different search space parameters, please refer to the [Configuration](configuration.md) page.
+
 After this, you can start an optimize run on a symbol (XLMUSDT in this example):
 
 ```shell
-python3 optimize.py -u binance_01 -s XLMUSDT -o configs/optimize/myconfig.hjson --start-date 2021-06-01T00:00 --end-date 2021-07-01T00:00 
+python3 optimize.py -u binance_01 -s XLMUSDT -o configs/optimize/myconfig.hjson --start_date 2021-06-01T00:00 --end_date 2021-07-01T00:00 
 ```
 
 ## Run the backtest for a config
@@ -81,7 +87,7 @@ python3 optimize.py -u binance_01 -s XLMUSDT -o configs/optimize/myconfig.hjson 
 After the optimizer finishes, it will run a backtest for you. You can also manually trigger the same result the optimize produced:
 
 ```shell
-python3 backtest.py -u binance_01 -s XLMUSDT --start-date 2021-06-01T00:00 --end-date 2021-07-01T00:00 backtest/binance/XLMUSDT/plots/{date}/live_config.json
+python3 backtest.py -u binance_01 -s XLMUSDT --start_date 2021-06-01T00:00 --end_date 2021-07-01T00:00 backtest/binance/XLMUSDT/plots/{date}/live_config.json
 ```
 
 If you're happy with the config, copy it over to your live config file:
