@@ -60,7 +60,7 @@ vi api-keys.json
 ## Run the optimizer for a config
 
 !!! Warning
-    For running the optimizer, a minimum of 8gb is recommended, and 16gb would be advisable. 
+    For running the optimizer, a minimum of 8gb is recommended, and 16gb is be advisable. 
 
 Once you've set up your account, you can try to find a good config using the optimizer. If you want, you can limit the
 search space by modifying by creating your own optimize configuration. You can do so by copying and modifying the default
