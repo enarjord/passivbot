@@ -59,7 +59,7 @@ vi api-keys.json
 
 ## Run the optimizer for a config
 
-Once you've set up your account, you can try to find a good config using the optimizer. If you want, you can limit the
+Once you've set up your account, you can try to find a good config using [the optimizer](optimize.md). If you want, you can limit the
 search space by modifying by creating your own optimize configuration. You can do so by copying and modifying the default
 optimize configuration file:
 
