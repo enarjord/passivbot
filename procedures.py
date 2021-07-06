@@ -34,12 +34,17 @@ async def prep_config(args) -> dict:
     except Exception as e:
         raise Exception('failed to load optimize config', args.optimize_config_path, e)
     config = {**oc, **bc}
-    for key in ['exchange', 'symbol', 'user', 'start_date', 'end_date', 'starting_balance', 'spot']:
+    for key in ['symbol', 'user', 'start_date', 'end_date', 'starting_balance']:
         if getattr(args, key) is not None:
             config[key] = getattr(args, key)
+    for key in ['spot']:
+        # for args store_true, override only if True
+        if getattr(args, key):
+            config[key] = True
+    config['exchange'], _, _ = load_exchange_key_secret(config['user'])
 
     if config['exchange'] == 'bybit' and config['symbol'].endswith('USDT'):
-        raise Exception('error: bybit linear usdt markets backtesting and optimizing not supported')
+        raise Exception('error: bybit linear usdt markets backtesting and optimizing not supported at this time')
 
     end_date = config['end_date'] if config['end_date'] and config['end_date'] != -1 else ts_to_date(time())[:16]
     config['session_name'] = f"{config['start_date'].replace(' ', '').replace(':', '').replace('.', '')}_" \
@@ -51,6 +56,8 @@ async def prep_config(args) -> dict:
     config['caches_dirpath'] = make_get_filepath(os.path.join(base_dirpath, 'caches', ''))
     config['optimize_dirpath'] = make_get_filepath(os.path.join(base_dirpath, 'optimize', ''))
     config['plots_dirpath'] = make_get_filepath(os.path.join(base_dirpath, 'plots', ''))
+
+    config['avg_periodic_gain_key'] = f"avg_{int(round(config['periodic_gain_n_days']))}days_gain"
 
     mss = config['caches_dirpath'] + 'market_specific_settings.json'
     try:
@@ -87,20 +94,12 @@ def make_get_filepath(filepath: str) -> str:
     return filepath
 
 
-def load_key_secret(exchange: str, user: str) -> (str, str):
+def load_exchange_key_secret(user: str) -> (str, str, str):
     try:
         keyfile = json.load(open('api-keys.json'))
-        # Checks that the user exists, and it is for the correct exchange
-        if user in keyfile and keyfile[user]["exchange"] == exchange:
-
-            # If we need to get the `market` key:
-            # market = keyfile[user]["market"]
-            # print("The Market Type is " + str(market))
-
-            keyList = [str(keyfile[user]["key"]), str(keyfile[user]["secret"])]
-
-            return keyList
-        elif user not in keyfile or keyfile[user]["exchange"] != exchange:
+        if user in keyfile:
+            return keyfile[user]['exchange'], keyfile[user]['key'], keyfile[user]['secret']
+        else:
             print("Looks like the keys aren't configured yet, or you entered the wrong username!")
         raise Exception('API KeyFile Missing!')
     except FileNotFoundError:
@@ -190,10 +189,7 @@ def add_argparse_args(parser):
     parser.add_argument('-d', '--download-only', help='download only, do not dump ticks caches', action='store_true')
     parser.add_argument('-s', '--symbol', type=str, required=False, dest='symbol',
                         default=None, help='specify symbol, overriding symbol from backtest config')
-    parser.add_argument('-e', '--exchange', type=str, required=False, dest='exchange',
-                        default=None, help='specify exchange (binance/bybit), overriding exchange from backtest config')
-    parser.add_argument('-u', '--user', type=str, required=False, dest='user',
-                        default=None,
+    parser.add_argument('-u', '--user', type=str, required=False, dest='user', default=None,
                         help='specify user, a.k.a. account_name, overriding user from backtest config')
     parser.add_argument('--start_date', type=str, required=False, dest='start_date',
                         default=None,
