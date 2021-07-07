@@ -10,7 +10,7 @@ In order to set up telegram, you'll need a telegram bot token and a chat-id. Onc
 for each individual account that is specified in the `api-keys.json` file. There is an example telegram configuration in
 the file to get started. If a telegram configuration is not present for an account, Telegram is disabled at startup.
 
-For setup instructions, see https |//docs.microsoft.com/en-us/azure/bot-service/bot-service-channel-connect-telegram?view=azure-bot-service-4.0
+For setup instructions, see https://docs.microsoft.com/en-us/azure/bot-service/bot-service-channel-connect-telegram?view=azure-bot-service-4.0
 
 Start a chat with @getmyid_bot in telegram to get chat id.
 
