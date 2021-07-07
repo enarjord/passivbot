@@ -387,7 +387,7 @@ class Bot:
         self.filled_order_ids.update([f['order_id'] for f in fills])
         # remove orders older than 14 days to prevent building up the list indefinitely
         self.filled_order_ids.difference_update([f['order_id'] for f in fills
-                                                 if f['timestamp'] < time() * 1000 - (1000 * 60 * 60 * 24 * 14)])
+                                                 if f['timestamp'] < (time() - 60 * 60 * 24 * 14) * 1000])
         self.ts_released['check_fills'] = time()
 
     async def check_shrt_fills(self, new_fills):
