@@ -39,6 +39,10 @@ After running the installation commands above, you need to create an API key on 
 This will provide you with a key and a secret, that you need to fill in in the `api-keys.json`. The instructions below
 assume your key is `{X}` and your secret is `{Y}`.
 
+!!! Warning
+    Make sure you enable `futures` on the API key. Also, be aware that on Binance you have to complete a quiz before you
+    can trade futures. Apart from that, you need to make sure there are funds present in the futures wallet. 
+
 Also, you will need to get a Telegram token & chat-id to fill into the `api-keys.json`. Please refer to the [Telegram](telegram.md)
 section for instructions on how to set this up.
 
