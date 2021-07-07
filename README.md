@@ -28,7 +28,7 @@ A number of pre-optimized configurations for Passivbot can be found at https://g
 
 ## Documentation:
 
-For more detailed information about Passivbot, you can look at the documentation on https://passivbot.readthedocs.org
+For more detailed information about Passivbot, you can look at the documentation on https://www.passivbot.com
 
 ## Support
 
