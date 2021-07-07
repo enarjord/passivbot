@@ -237,7 +237,7 @@ def calc_long_orders(balance,
         base_entry_qty = cost_to_qty(balance, entry_price, inverse, c_mult) * (iqty_const + eqf(MA_ratios, iqty_MAr_coeffs))
         entry_qty = round_dn(min(max_entry_qty,
                                  base_entry_qty + (long_psize * (rqty_const + eqf(MA_ratios, rqty_MAr_coeffs)))), qty_step)
-        nclose_price = round_up(long_pprice * (markup_const + eqf(MA_ratios, markup_MAr_coeffs)), price_step)
+        nclose_price = max(lowest_ask, round_up(long_pprice * (markup_const + eqf(MA_ratios, markup_MAr_coeffs)), price_step))
         if entry_qty < min_entry_qty:
             entry_qty = 0.0
         if pbr_stop_loss < 0.0:
