@@ -92,7 +92,7 @@ class Bot:
     async def _init(self):
         self.xk = create_xk(self.config)
         fills = await self.fetch_fills()
-        [self.filled_order_ids.add(f['order_id']) for f in fills]
+        self.filled_order_ids.update([f['order_id'] for f in fills])
 
     def dump_log(self, data) -> None:
         if self.config['logging_level'] > 0:
@@ -384,10 +384,10 @@ class Bot:
             await self.check_long_fills(new_fills)
             await self.check_shrt_fills(new_fills)
 
-        [self.filled_order_ids.add(f['order_id']) for f in fills]
+        self.filled_order_ids.update([f['order_id'] for f in fills])
         # remove orders older than 14 days to prevent building up the list indefinitely
-        [self.filled_order_ids.remove(x['order_id']) for x in fills
-            if x['order_id'] in self.filled_order_ids and x['timestamp'] < int(time() * 1000 - (1000 * 60 * 60 * 24 * 14))]
+        self.filled_order_ids.difference_update([f['order_id'] for f in fills
+                                                 if f['timestamp'] < time() * 1000 - (1000 * 60 * 60 * 24 * 14)])
         self.ts_released['check_fills'] = time()
 
     async def check_shrt_fills(self, new_fills):
