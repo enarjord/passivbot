@@ -145,8 +145,8 @@ def single_sliding_window_run(config, data, do_print=False) -> (float, [dict]):
         line = (f'{str(z).rjust(3, " ")} adg {analysis["average_daily_gain"]:.4f}, '
                 f'bkr {analysis["closest_bkr"]:.4f}, '
                 f'eqbal {analysis["lowest_eqbal_ratio"]:.4f} n_days {analysis["n_days"]:.1f}, '
-                f'shrp_ratio {analysis["sharpe_ratio"]:.4f} , '
-                f'avg_{int(round(config["periodic_gain_n_days"]))}days_gain {analysis["average_periodic_gain"]:.4f}, '
+                f'shrp {analysis["sharpe_ratio"]:.4f} , '
+                f'{config["avg_periodic_gain_key"]} {analysis["average_periodic_gain"]:.4f}, '
                 f'score {analysis["score"]:.4f}, objective {objective:.4f}, '
                 f'hrs stuck ss {str(round(analysis["max_hrs_no_fills_same_side"], 1)).zfill(4)}, ')
         if (bef := config['break_early_factor']) != 0.0:
