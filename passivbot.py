@@ -255,7 +255,6 @@ class Bot:
                                      'type': 'market', 'reduce_only': True, 'custom_id': 'shrt_panic'})
             return panic_orders
 
-
         orders = []
         long_done, shrt_done = False, False
 
