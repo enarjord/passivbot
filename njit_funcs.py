@@ -245,6 +245,8 @@ def calc_long_orders(balance,
             close_price = max(lowest_ask, min(nclose_price, round_up(MA_band_upper, price_step)))
             close_type = 'long_nclose' if close_price > long_pprice else 'long_sclose'
             long_close = (-long_psize, close_price, 0.0, 0.0, close_type)
+        elif pbr_stop_loss == 0.0:
+            long_close = (-long_psize, nclose_price, 0.0, 0.0, 'long_nclose')
         else:
             # v3.6.1 behavior
             if pbr > pbr_limit:
@@ -342,6 +344,8 @@ def calc_shrt_orders(balance,
             close_price = min(highest_bid, max(nclose_price, round_dn(MA_band_lower, price_step)))
             close_type = 'shrt_nclose' if close_price < shrt_pprice else 'shrt_sclose'
             shrt_close = (-shrt_psize, close_price, 0.0, 0.0, close_type)
+        elif pbr_stop_loss == 0.0:
+            shrt_close = (-shrt_psize, nclose_price, 0.0, 0.0, 'shrt_nclose')
         else:
             # v3.6.1 beahvior
             if pbr > pbr_limit:
