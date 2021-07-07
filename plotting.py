@@ -19,11 +19,11 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
     lines.append(f"symbol {result['symbol'] if 'symbol' in result else 'unknown'}")
     lines.append(f"gain percentage {round_dynamic(result['result']['gain'] * 100 - 100, 4)}%")
     lines.append(f"average_daily_gain percentage {round_dynamic((result['result']['average_daily_gain'] - 1) * 100, 3)}%")
-    lines.append(f"sharpe_ratio percentage {round_dynamic(result['result']['sharpe_ratio'] * 100, 3)}%")
+    avg_pgain_key = result['avg_periodic_gain_key']
+    lines.append(f"{result['avg_periodic_gain_key']} percentage {round_dynamic(result['result']['average_periodic_gain'] * 100, 3)}%")
     lines.append(f"closest_bkr percentage {round_dynamic(result['result']['closest_bkr'] * 100, 4)}%")
-    lines.append(f"starting balance {round_dynamic(result['starting_balance'], 3)}")
 
-    for key in [k for k in result['result'] if k not in ['gain', 'average_daily_gain', 'closest_bkr', 'do_long', 'do_shrt']]:
+    for key in [k for k in result['result'] if k not in ['gain', 'average_daily_gain', 'average_periodic_gain', 'closest_bkr', 'do_long', 'do_shrt']]:
         lines.append(f"{key} {round_dynamic(result['result'][key], 6)}")
     lines.append(f"long: {result['do_long']}, short: {result['do_shrt']}")
 
