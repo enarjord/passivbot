@@ -38,7 +38,7 @@ python3 start_bot.py binance_01 XMRUSDT configs/live/binance_xmrusdt.json
 
 There are a number of configurations provided by default in the repository. These configurations are optimized and
 backtested over a longer period of time, and provide a good starting point for setting up your own perfect
-configuration. You can find these configurations in the [configs/live](configs/live) directory.
+configuration. You can find these configurations in the [configs/live](https://github.com/enarjord/passivbot/tree/master/configs/live) directory.
 
 There is also a public repository available with a lot of optimized & backtested configurations on multiple coins at
 [this](https://github.com/JohnKearney1/PassivBot-Configurations) github repository.
