@@ -133,7 +133,7 @@ Let's look at an example on calculating the next reentry for a long position to 
 Given that the reentry price constant is 0.98
 And the PBr_coeffs is [-0.05, 0.01]
 Then the reentry price is rprc_const + 0.71875**2 * -0.05 + 0.71875 * 0.01 == 0.98 + -0.018642578125000003 == 0.961357421875
-And the next reentry will be ~3.86% instead of 2.0% lower than long pprice.
+And the next reentry will be ~3.86% instead of 2.0% lower than long position entry price.
 ```
 
 The next reentry quantity is calculated using the following formula:
