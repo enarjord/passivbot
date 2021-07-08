@@ -38,8 +38,9 @@ async def prep_config(args) -> dict:
         if getattr(args, key) is not None:
             config[key] = getattr(args, key)
     for key in ['spot']:
-        # for args store_true, override only if True
-        if getattr(args, key):
+        if getattr(args, key) == False:
+            config[key] = False
+        elif getattr(args, key):
             config[key] = True
     config['exchange'], _, _ = load_exchange_key_secret(config['user'])
 
