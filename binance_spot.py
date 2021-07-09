@@ -71,6 +71,7 @@ class BinanceBotSpot(Bot):
         self.spot = True
         self.hedge_mode = False
         self.base_endpoint = 'https://api.binance.com'
+        self.pair = self.symbol
         self.endpoints = {
             'balance': '/api/v3/account',
             'exchange_info': '/api/v3/exchangeInfo',
@@ -244,30 +245,12 @@ class BinanceBotSpot(Bot):
         return fills
 
     async def fetch_income(self, limit: int = 1000, start_time: int = None, end_time: int = None):
+        print('fetch income not implemented in spot')
         return []
-        params = {'symbol': self.symbol, 'limit': limit}
-        if start_time is not None:
-            params['startTime'] = start_time
-        if end_time is not None:
-            params['endTime'] = end_time
-        try:
-            fetched = await self.private_get(self.endpoints['income'], params)
-            income = [{'symbol': x['symbol'],
-                      'incomeType': x['incomeType'],
-                      'income': float(x['income']),
-                      'asset': x['asset'],
-                      'info': x['info'],
-                      'timestamp': int(x['time']),
-                      'tranId': x['tranId'],
-                      'tradeId': x['tradeId']} for x in fetched]
-        except Exception as e:
-            print('error fetching incoming: ', e)
-            return []
-        return income
 
     async def fetch_account(self):
         try:
-            return await self.private_get(base_endpoint=self.spot_base_endpoint, url=self.endpoints['account'])
+            return await self.private_get(self.endpoints['balance'])
         except Exception as e:
             print('error fetching account: ', e)
             return {'balances': []}
@@ -304,8 +287,8 @@ class BinanceBotSpot(Bot):
         return await self.fetch_ticks(start_time=start_time, end_time=end_time, do_print=do_print)
 
     async def transfer(self, type_: str, amount: float, asset: str = 'USDT'):
-        params = {'type': type_.upper(), 'amount': amount, 'asset': asset}
-        return await self.private_post(self.spot_base_endpoint, self.endpoints['transfer'],  params)
+        print('transfer not implemented in spot')
+        return
 
     def standardize_websocket_ticks(self, data: dict) -> [dict]:
         try:
