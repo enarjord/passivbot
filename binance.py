@@ -78,6 +78,7 @@ class BinanceBot(Bot):
                 'create_order': '/fapi/v1/order',
                 'cancel_order': '/fapi/v1/order',
                 'ticks': '/fapi/v1/aggTrades',
+                'ohlcvs': '/fapi/v1/klines',
                 'margin_type': '/fapi/v1/marginType',
                 'leverage': '/fapi/v1/leverage',
                 'position_side': '/fapi/v1/positionSide/dual',
@@ -102,6 +103,7 @@ class BinanceBot(Bot):
                     'create_order': '/dapi/v1/order',
                     'cancel_order': '/dapi/v1/order',
                     'ticks': '/dapi/v1/aggTrades',
+                    'ohlcvs': '/dapi/v1/klines',
                     'margin_type': '/dapi/v1/marginType',
                     'leverage': '/dapi/v1/leverage',
                     'position_side': '/dapi/v1/positionSide/dual',
@@ -392,6 +394,17 @@ class BinanceBot(Bot):
 
     async def fetch_ticks_time(self, start_time: int, end_time: int = None, do_print: bool = True):
         return await self.fetch_ticks(start_time=start_time, end_time=end_time, do_print=do_print)
+
+    async def fetch_ohlcvs(self, start_time: int = None, interval='1m', limit=1500):
+        # m -> minutes; h -> hours; d -> days; w -> weeks; M -> months
+        assert interval in ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w', '1M']
+        params = {'symbol': self.symbol, 'interval': interval, 'limit': limit}
+        if start_time is not None:
+            params['startTime'] = int(start_time)
+        fetched = await self.public_get(self.endpoints['ohlcvs'], params)
+        return [{**{'timestamp': int(e[0])},
+                 **{k: float(e[i + 1]) for i, k in enumerate(['open', 'high', 'low', 'close', 'volume'])}}
+                for e in fetched]
 
     async def transfer(self, type_: str, amount: float, asset: str = 'USDT'):
         params = {'type': type_.upper(), 'amount': amount, 'asset': asset}

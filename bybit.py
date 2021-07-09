@@ -66,6 +66,7 @@ class Bybit(Bot):
                               'create_order': '/private/linear/order/create',
                               'cancel_order': '/private/linear/order/cancel',
                               'ticks': '/public/linear/recent-trading-records',
+                              'ohlcvs': '/public/linear/kline',
                               'websocket': 'wss://stream.bybit.com/realtime_public',
                               'created_at_key': 'created_time'}
 
@@ -79,6 +80,7 @@ class Bybit(Bot):
                                   'create_order': '/v2/private/order/create',
                                   'cancel_order': '/v2/private/order/cancel',
                                   'ticks': '/v2/public/trading-records',
+                                  'ohlcvs': '/v2/public/kline/list',
                                   'websocket': 'wss://stream.bybit.com/realtime',
                                   'created_at_key': 'created_at'}
 
@@ -91,6 +93,7 @@ class Bybit(Bot):
                                   'create_order': '/futures/private/order/create',
                                   'cancel_order': '/futures/private/order/cancel',
                                   'ticks': '/v2/public/trading-records',
+                                  'ohlcvs': '/v2/public/kline/list',
                                   'websocket': 'wss://stream.bybit.com/realtime',
                                   'created_at_key': 'created_at'}
 
@@ -280,6 +283,27 @@ class Bybit(Bot):
             if do_print:
                 print_(['fetched no new trades', self.symbol])
         return trades
+
+
+    async def fetch_ohlcvs(self, start_time: int = None, interval='1m', limit=200):
+        # m -> minutes; h -> hours; d -> days; w -> weeks; M -> months
+        interval_map = {'1m': 1, '3m': 3, '5m': 5, '15m': 15, '30m': 30, '1h': 60, '2h': 120, '4h': 240, '6h': 360,
+                        '12h': 720, '1d': 'D', '1w': 'W', '1M': 'M'}
+        assert interval in interval_map
+        params = {'symbol': self.symbol, 'interval': interval_map[interval], 'limit': limit}
+        if start_time is None:
+            server_time = await self.public_get('/v2/public/time')
+            if type(interval_map[interval]) == str:
+                minutes = {'D': 1, 'W': 7, 'M': 30}[interval_map[interval]] * 60 * 24
+            else:
+                minutes = interval_map[interval]
+            params['from'] = int(round(float(server_time['time_now']))) - 60 * minutes * limit
+        else:
+            params['from'] = int(start_time / 1000)
+        fetched = await self.public_get(self.endpoints['ohlcvs'], params)
+        return [{**{'timestamp': e['open_time'] * 1000},
+                 **{k: float(e[k]) for k in ['open', 'high', 'low', 'close', 'volume']}}
+                for e in fetched['result']]
 
     async def fetch_fills(self, limit: int = 1000, from_id: int = None, start_time: int = None, end_time: int = None):
         print('fetch_fills not implemented for Bybit')

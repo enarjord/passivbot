@@ -81,6 +81,7 @@ class BinanceBotSpot(Bot):
             'create_order': '/api/v3/order',
             'cancel_order': '/api/v3/order',
             'ticks': '/api/v3/aggTrades',
+            'ohlcvs': '/api/v3/klines',
             'websocket': f"wss://stream.binance.com/ws/{self.symbol.lower()}@aggTrade"
         }
         self.endpoints['transfer'] = '/sapi/v1/asset/transfer'
@@ -285,6 +286,17 @@ class BinanceBotSpot(Bot):
 
     async def fetch_ticks_time(self, start_time: int, end_time: int = None, do_print: bool = True):
         return await self.fetch_ticks(start_time=start_time, end_time=end_time, do_print=do_print)
+
+    async def fetch_ohlcvs(self, start_time: int = None, interval='1m', limit=1000):
+        # m -> minutes; h -> hours; d -> days; w -> weeks; M -> months
+        assert interval in ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w', '1M']
+        params = {'symbol': self.symbol, 'interval': interval, 'limit': limit}
+        if start_time is not None:
+            params['startTime'] = int(start_time)
+        fetched = await self.public_get(self.endpoints['ohlcvs'], params)
+        return [{**{'timestamp': int(e[0])},
+                 **{k: float(e[i + 1]) for i, k in enumerate(['open', 'high', 'low', 'close', 'volume'])}}
+                for e in fetched]
 
     async def transfer(self, type_: str, amount: float, asset: str = 'USDT'):
         print('transfer not implemented in spot')
