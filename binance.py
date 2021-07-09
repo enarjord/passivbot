@@ -7,6 +7,7 @@ from urllib.parse import urlencode
 
 import aiohttp
 import numpy as np
+import traceback
 
 from pure_funcs import ts_to_date, sort_dict_keys
 from passivbot import Bot
@@ -397,14 +398,21 @@ class BinanceBot(Bot):
 
     async def fetch_ohlcvs(self, start_time: int = None, interval='1m', limit=1500):
         # m -> minutes; h -> hours; d -> days; w -> weeks; M -> months
-        assert interval in ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w', '1M']
+        interval_map = {'1m': 1, '3m': 3, '5m': 5, '15m': 15, '30m': 30, '1h': 60, '2h': 120, '4h': 240, '6h': 360,
+                        '12h': 720, '1d': 60 * 60 * 24, '1w': 60 * 60 * 24 * 7, '1M': 60 * 60 * 24 * 30}
+        assert interval in interval_map
         params = {'symbol': self.symbol, 'interval': interval, 'limit': limit}
         if start_time is not None:
             params['startTime'] = int(start_time)
-        fetched = await self.public_get(self.endpoints['ohlcvs'], params)
-        return [{**{'timestamp': int(e[0])},
-                 **{k: float(e[i + 1]) for i, k in enumerate(['open', 'high', 'low', 'close', 'volume'])}}
-                for e in fetched]
+            params['endTime'] = params['startTime'] + interval_map[interval] * 60 * 1000 * limit
+        try:
+            fetched = await self.public_get(self.endpoints['ohlcvs'], params)
+            return [{**{'timestamp': int(e[0])},
+                     **{k: float(e[i + 1]) for i, k in enumerate(['open', 'high', 'low', 'close', 'volume'])}}
+                    for e in fetched]
+        except Exception as e:
+            print('error fetching ohlcvs', fetched, e)
+            traceback.print_exc()
 
     async def transfer(self, type_: str, amount: float, asset: str = 'USDT'):
         params = {'type': type_.upper(), 'amount': amount, 'asset': asset}
