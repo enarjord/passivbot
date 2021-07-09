@@ -236,9 +236,9 @@ def make_tick_samples(config: dict, sec_span: int = 1):
         print(f'\rloading chunk {ts_to_date(first_ts / 1000)}', end='  ')
         tdf = pd.read_csv(ticks_filepath + f)
         tdf = tdf[(tdf.timestamp >= start_ts) & (tdf.timestamp <= end_ts)]
-        ticks = np.concatenate((ticks, tdf[['qty', 'price', 'timestamp']].values))
+        ticks = np.concatenate((ticks, tdf[['timestamp', 'qty', 'price']].values))
         del tdf
-    samples = calc_samples(ticks[ticks[:, 2].argsort()], sec_span * 1000)
+    samples = calc_samples(ticks[ticks[:, 0].argsort()], sec_span * 1000)
     print(f'took {time() - sts:.2f} seconds to load {len(ticks)} ticks, creating {len(samples)} samples')
     del ticks
     return samples
