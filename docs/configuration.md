@@ -55,6 +55,10 @@ When you look at a chart with the initial entry orders, the chart will typically
 What you see on the chart are two limit orders: one above the current price for entering a short position, and the other below
 the current price for entering a long position.
 
+!!! Info
+    While looking at the chart on your exchange can be helpful, it's often not very practical. If you've got [Telegram](telegram.md)
+    set up, you can also get an overview of the limit orders by using the `/open_orders` command.
+
 The price of the first limit order is calculated as follows:
 
 ```python
