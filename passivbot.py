@@ -12,7 +12,7 @@ from procedures import load_live_config, make_get_filepath, load_exchange_key_se
 from pure_funcs import get_xk_keys, get_ids_to_fetch, flatten, calc_indicators_from_ticks_with_gaps, \
     drop_consecutive_same_prices, filter_orders, compress_float, create_xk, round_dynamic, denumpyize, \
     calc_spans
-from njit_funcs import calc_orders, calc_new_psize_pprice, qty_to_cost, calc_diff, round_, calc_emas
+from njit_funcs import calc_orders, calc_new_psize_pprice, qty_to_cost, calc_diff, round_, calc_emas, calc_samples
 import numpy as np
 import websockets
 import telegram_bot
@@ -25,6 +25,7 @@ class LockNotAvailableException(Exception):
 
 class Bot:
     def __init__(self, config: dict):
+        self.spot = False
         self.config = config
         self.config['do_long'] = config['long']['enabled']
         self.config['do_shrt'] = config['shrt']['enabled']
@@ -526,6 +527,34 @@ class Bot:
             compressed = drop_consecutive_same_prices(sorted(flatten(fetched_ticks) + ticks + latest_ticks, key=lambda x: x['trade_id']))
             self.emas = calc_indicators_from_ticks_with_gaps(self.spans, compressed)
         self.ratios = np.append(self.price, self.emas[:-1]) / self.emas
+
+    async def init_indicators_samples(self, max_n_samples: int = 60):
+        ticks = await self.fetch_ticks(do_print=False)
+        if self.exchange == 'binance':
+            ohlcvs_per_fetch = 1000 if self.spot else 1500
+            additional_ticks = await asyncio.gather(*[self.fetch_ticks(from_id=ticks[0]['trade_id'] - 1000 * i, do_print=False)
+                                                      for i in range(1, 11)])
+        else:
+            ohlcvs_per_fetch = 200
+            if 'linear' in self.market_type:
+                additional_ticks = []
+            else:
+                additional_ticks = await asyncio.gather(*[self.fetch_ticks(from_id=ticks[0]['trade_id'] - 1000 * i, do_print=False)
+                                                          for i in range(1, 11)])
+        ticksd = {e['trade_id']: e for e in ticks + flatten(additional_ticks)}
+        ticks = sorted(ticksd.values(), key=lambda x: x['trade_id'])
+        millis_per_fetch = 1000 * 60 * ohlcvs_per_fetch
+        first_fetch_ts = ticks[0]['timestamp'] // 60 * 60 - millis_per_fetch
+        last_fetch_ts = first_fetch_ts - max(self.spans) * 60 * 60 * 1000
+        if last_fetch_ts + millis_per_fetch * (max_n_samples - 10) > first_fetch_ts:
+            timestamps_to_fetch = np.arange(first_fetch_ts, last_fetch_ts - millis_per_fetch, -millis_per_fetch)
+        else:
+            timestamps_to_fetch = np.linspace(first_fetch_ts, last_fetch_ts - millis_per_fetch, max_n_samples - 10)
+        ohlcvs = flatten(await asyncio.gather(*[self.fetch_ohlcvs(start_time=ts) for ts in timestamps_to_fetch]))
+        combined = np.array(sorted([[e['timestamp'], e['qty'], e['price']] for e in ticks] +
+                                   [[e['timestamp'], e['volume'], e['open']] for e in ohlcvs]))
+        samples = calc_samples(combined)
+        return samples
 
     def update_indicators(self, ticks):
         for tick in ticks:
