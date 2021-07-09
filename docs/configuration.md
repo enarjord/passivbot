@@ -48,6 +48,13 @@ Configuration parameters that this applies to, are prepended with `short§long:`
 
 Once the bot has started, it will start to create limit orders to enter a position. Depending on whether you have long and/or short enabled
 it will create limit orders for either side. The bot relies uses Exponential Moving Averages to calculate the entry points and stoplosses.
+When you look at a chart with the initial entry orders, the chart will typically look like this:
+
+![Initial entry](images/initial_entry.png)
+
+What you see on the chart are two limit orders: one above the current price for entering a short position, and the other below
+the current price for entering a long position.
+
 The price of the first limit order is calculated as follows:
 
 ```python
@@ -99,7 +106,19 @@ to keep the closing price close to the reentry price, allowing it to (if all goe
 requiring the price to retract to the initial entry price for making profit. In order to so, the reentries will be bigger
 in quantity on each reentry in order to compensate for the existing position.
 As long as there is sufficient balance, the bot will keep creating reentry orders based on the previous reentry order until
-the allowed balance is spent. 
+the allowed balance is spent. A chart with a position on both sides will tyically look like this:
+
+![Reentry](images/reentry.png)
+
+On the chart you can see there are currently two positions open (the two PNL lines are an indication of this, which indicate
+the entry price). Right beyond those PNL lines are the limit orders for taking profit. In the chart you see above, there is
+also another limit order at the top, which is the first reentry order for the short position.
+
+!!! Info
+    Depending on your configuration, you may not (yet) see all possible reentries. The bot will only create the orders that are
+    within 15% of the current price. This way, the bot can avoid running into rate limit issues. If you want to see more reentry
+    orders that are further away, you can set the configuration parameter `last_price_diff_limit` to a value between 0 and 1 (1
+    being 100%)
 
 The next reentry price is calculated using the following formula:
 
