@@ -88,26 +88,26 @@ def calc_bid_ask_thresholds(prices: np.ndarray, MAs: np.ndarray, iprc_const, ipr
 
 @njit
 def calc_samples(ticks: np.ndarray, sample_size_ms: int = 1000) -> np.ndarray:
-    # ticks [[qty, price, timestamp]]
-    sampled_timestamps = np.arange(ticks[:, 2][0] // sample_size_ms * sample_size_ms,
-                                   ticks[:, 2][-1] // sample_size_ms * sample_size_ms + sample_size_ms,
+    # ticks [[timestamp, qty, price]]
+    sampled_timestamps = np.arange(ticks[:, 0][0] // sample_size_ms * sample_size_ms,
+                                   ticks[:, 0][-1] // sample_size_ms * sample_size_ms + sample_size_ms,
                                    sample_size_ms)
     samples = np.zeros((len(sampled_timestamps), 3))
-    samples[:, 2] = sampled_timestamps
+    samples[:, 0] = sampled_timestamps
     i = 0
     ts = sampled_timestamps[0]
     k = 0
     while i < len(ticks):
-        if ts == samples[:, 2][k]:
-            samples[:,0][k] += ticks[:, 0][i]
-            samples[:,1][k] = ticks[:, 1][i]
+        if ts == samples[:, 0][k]:
+            samples[:,1][k] += ticks[:, 1][i]
+            samples[:,2][k] = ticks[:, 2][i]
             i += 1
-            ts = ticks[:, 2][i] // sample_size_ms * sample_size_ms
+            ts = ticks[:, 0][i] // sample_size_ms * sample_size_ms
         else:
             k += 1
             if k >= len(samples):
                 break
-            samples[:, 1][k] = samples[:, 1][k - 1]
+            samples[:, 2][k] = samples[:, 2][k - 1]
     return samples
 
 
@@ -534,10 +534,9 @@ def njit_backtest_samples(ticks: np.ndarray,
                   rprc_MAr_coeffs,
                   markup_MAr_coeffs):
 
-    #qtys, prices, timestamps = ticks
-    qtys = ticks[:, 0]
-    prices = ticks[:, 1]
-    timestamps = ticks[:, 2]
+    timestamps = ticks[:, 0]
+    qtys = ticks[:, 1]
+    prices = ticks[:, 2]
     static_params = (spot, hedge_mode, inverse, do_long, do_shrt, qty_step, price_step, min_qty, min_cost,
                      c_mult, max_leverage, spans, pbr_stop_loss, pbr_limit, iqty_const, iprc_const,
                      rqty_const, rprc_const, markup_const, iqty_MAr_coeffs, iprc_MAr_coeffs, rprc_PBr_coeffs,
