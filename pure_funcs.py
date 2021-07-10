@@ -510,6 +510,13 @@ def calc_pprice_from_fills(coin_balance, fills, n_fills_limit=100):
     return pprice
 
 
+def spotify_live_config(live_config):
+    spotified = live_config.copy()
+    spotified['shrt']['enabled'] = False
+    spotified['long']['pbr_limit'] = min(spotified['long']['pbr_limit'],
+                                         max(0.0, 1.0 - spotified['long']['pbr_stop_loss']))
+    return spotified
+
 
 
 
