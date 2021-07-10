@@ -31,7 +31,7 @@ def plot_wrap(config, data):
         print('no fills')
         return
     fdf, result = analyze_fills(fills, {**config, **{'lowest_eqbal_ratio': info[1], 'closest_bkr': info[2]}},
-                                data[0][0], data[-1][-1])
+                                data[0][0], data[-1][0])
     config['result'] = result
     config['plots_dirpath'] = make_get_filepath(os.path.join(
         config['plots_dirpath'], f"{ts_to_date(time())[:19].replace(':', '')}", '')
