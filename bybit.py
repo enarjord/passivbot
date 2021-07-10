@@ -54,7 +54,7 @@ class Bybit(Bot):
         self.base_endpoint = 'https://api.bybit.com'
         self.endpoints = {}
         self.market_type = ''
-        self.session = aiohttp.ClientSession(headers={'passivbotbybit': 'passivbotbybit'})
+        self.session = aiohttp.ClientSession(headers={'referer': 'passivbotbybit'})
 
     def init_market_type(self):
         if self.symbol.endswith('USDT'):
