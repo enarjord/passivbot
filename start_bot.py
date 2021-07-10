@@ -9,8 +9,14 @@ restart_k = 0
 
 while True:
     try:
-        print(f"\nStarting {sys.argv[1]} {sys.argv[2]} {sys.argv[3]}")
-        p = Popen(f"{sys.executable} passivbot.py {sys.argv[1]} {sys.argv[2]} {sys.argv[3]} --nojit {'--spot' if '--spot' in sys.argv else ''}", shell=True)
+        if '--market_type' in sys.argv:
+            market_type = sys.argv[sys.argv.index('--market_type') + 1]
+        elif '-m' in sys.argv:
+            market_type = sys.argv[sys.argv.index('-m') + 1]
+        else:
+            market_type = 'futures'
+        print(f"\nStarting {sys.argv[1]} {sys.argv[2]} {sys.argv[3]} {market_type}")
+        p = Popen(f"{sys.executable} passivbot.py {sys.argv[1]} {sys.argv[2]} {sys.argv[3]} --nojit --market_type {market_type}", shell=True)
         exitcode = p.wait()
         if exitcode != 0:
             restart_k += 1
