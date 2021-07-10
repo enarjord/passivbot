@@ -17,6 +17,7 @@ from dateutil import parser
 
 from procedures import prep_config, make_get_filepath, create_binance_bot, create_bybit_bot, create_binance_bot_spot, \
     print_, add_argparse_args
+from njit_funcs import calc_samples
 from pure_funcs import ts_to_date, get_dummy_settings
 
 
@@ -29,11 +30,6 @@ class Downloader:
         self.fetch_delay_seconds = 0.75
         self.config = config
         self.spot = 'spot' in config and config['spot']
-        self.price_filepath = os.path.join(config["caches_dirpath"], f"{config['session_name']}_price_cache.npy")
-        self.buyer_maker_filepath = os.path.join(config["caches_dirpath"],
-                                                 f"{config['session_name']}_buyer_maker_cache.npy")
-        self.time_filepath = os.path.join(config["caches_dirpath"], f"{config['session_name']}_time_cache.npy")
-        # self.qty_filepath = os.path.join(config["caches_dirpath"], f"{config['session_name']}_qty_cache.npy")
         self.tick_filepath = os.path.join(config["caches_dirpath"], f"{config['session_name']}_ticks_cache.npy")
         try:
             self.start_time = int(parser.parse(self.config["start_date"]).replace(
@@ -727,14 +723,14 @@ class Downloader:
         for f in filenames:
             if single_file:
                 chunk = pd.read_csv(os.path.join(self.filepath, f),
-                                    dtype={"price": np.float64, "is_buyer_maker": np.float64, "timestamp": np.float64},
-                                    # "qty": np.float64},
-                                    usecols=["price", "is_buyer_maker", "timestamp"])  # , "qty"])
+                                    dtype={"price": np.float64, "is_buyer_maker": np.float64, "timestamp": np.float64,
+                                           "qty": np.float64},
+                                    usecols=["price", "is_buyer_maker", "timestamp", "qty"])
             else:
                 chunk = pd.read_csv(os.path.join(self.filepath, f),
-                                    dtype={"timestamp": np.int64, "price": np.float64, "is_buyer_maker": np.int8},
-                                    # "qty": np.float32},
-                                    usecols=["timestamp", "price", "is_buyer_maker"])  # , "qty"])
+                                    dtype={"timestamp": np.int64, "price": np.float64, "is_buyer_maker": np.int8,
+                                           "qty": np.float32},
+                                    usecols=["timestamp", "price", "is_buyer_maker", "qty"])
             if self.end_time != -1:
                 chunk = chunk[(chunk['timestamp'] >= self.start_time) & (chunk['timestamp'] <= self.end_time)]
             else:
@@ -757,112 +753,26 @@ class Downloader:
                 df = pd.concat(chunks, axis=0)
             del chunks
 
-        # df = df.groupby([(df.price != df.price.shift()).cumsum(), 'is_buyer_maker']).agg(
-        #     {'qty': 'sum', 'price': 'first', 'is_buyer_maker': 'first', 'timestamp': 'first'}).reset_index(
-        #     drop=True)
-        # df = df.groupby([(df.price != df.price.shift()).cumsum(), 'is_buyer_maker']).agg(
-        #     {'price': 'first', 'is_buyer_maker': 'first', 'timestamp': 'first'}).reset_index(drop=True)
-        df = df.groupby(
-            (~((df.price == df.price.shift(1)) & (df.is_buyer_maker == df.is_buyer_maker.shift(1)))).cumsum()).agg(
-            {'price': 'first', 'is_buyer_maker': 'first', 'timestamp': 'first'})  # , 'qty': 'sum'})
-
-        if single_file:
-            # compressed_ticks = df[["price", "is_buyer_maker", "timestamp", "qty"]].values
-            compressed_ticks = df[["price", "is_buyer_maker", "timestamp"]].values
+        if True: #single_file:
+            sampled_ticks = calc_samples(df[["timestamp", "qty", "price"]].values)
             print_(["Saving single file with", len(df), " ticks to", self.tick_filepath, "..."])
-            np.save(self.tick_filepath, compressed_ticks)
+            np.save(self.tick_filepath, sampled_ticks)
             print_(["Saved single file!"])
-        else:
-            print_(["Saving price file with", len(df), " ticks to", self.price_filepath, "..."])
-            np.save(self.price_filepath, df[["price"]].values)
-            print_(["Saved price file!"])
 
-            print_(["Saving buyer_maker file with", len(df), " ticks to", self.buyer_maker_filepath, "..."])
-            np.save(self.buyer_maker_filepath, df[["is_buyer_maker"]].values)
-            print_(["Saved buyer_maker file!"])
-
-            print_(["Saving timestamp file with", len(df), " ticks to", self.time_filepath, "..."])
-            np.save(self.time_filepath, df[["timestamp"]].values)
-            print_(["Saved timestamp file!"])
-
-            # print_(["Saving qty file with", len(df), " ticks to", self.qty_filepath, "..."])
-            # np.save(self.qty_filepath, compressed_ticks[:, 3])
-            # print_(["Saved qty file!"])
-
-    async def get_ticks(self, single_file: bool = False) -> (np.ndarray, np.ndarray, np.ndarray):
+    async def get_sampled_ticks(self) -> np.ndarray:
         """
         Function for direct use in the backtester. Checks if the numpy arrays exist and if so loads them.
         If they do not exist or if their length doesn't match, download the missing data and create them.
-        @return: A tuple of three numpy arrays.
+        @return: numpy array.
         """
-        if single_file:
-            if os.path.exists(self.tick_filepath):
-                print_(['Loading cached tick data from', self.tick_filepath])
-                tick_data = np.load(self.tick_filepath)
-                return tick_data
-            await self.download_ticks()
-            await self.prepare_files(single_file)
+        if os.path.exists(self.tick_filepath):
+            print_(['Loading cached tick data from', self.tick_filepath])
             tick_data = np.load(self.tick_filepath)
             return tick_data
-        else:
-            if os.path.exists(self.price_filepath) and os.path.exists(self.buyer_maker_filepath) and os.path.exists(
-                    self.time_filepath):  # and os.path.exists(self.qty_filepath):
-                print_(['Loading cached tick data from', self.tick_filepath])
-                price_data = np.load(self.price_filepath)
-                buyer_maker_data = np.load(self.buyer_maker_filepath)
-                time_data = np.load(self.time_filepath)
-                # qty_data = np.load(self.qty_filepath)
-                if len(price_data) == len(buyer_maker_data) == len(time_data):  # == len(qty_data):
-                    return price_data, buyer_maker_data, time_data  # , qty_data
-                else:
-                    print_(['Tick data does not match, starting over...'])
-                    del price_data
-                    del buyer_maker_data
-                    del time_data
-                    # del qty_data
-                    gc.collect()
-
-            await self.download_ticks()
-            await self.prepare_files(single_file)
-            price_data = np.load(self.price_filepath)
-            buyer_maker_data = np.load(self.buyer_maker_filepath)
-            time_data = np.load(self.time_filepath)
-            # qty_data = np.load(self.qty_filepath)
-            return price_data, buyer_maker_data, time_data  # , qty_data
-
-    async def get_data(self) -> (np.ndarray,):
-        """
-        Function for direct use in the backtester/optimizer. Checks if the numpy arrays exist and if so loads them.
-        If they do not exist or if their length doesn't match, download the missing data, create them, and create
-        additional data.
-        @return: A tuple of numpy arrays.
-        """
-        cache_dirpath = os.path.join(
-            self.config['caches_dirpath'],
-            f"{self.config['session_name']}_n_spans_{self.config['n_spans']}",
-            '')
-        if not os.path.exists(cache_dirpath):
-            prices, is_buyer_maker, timestamps = await self.get_ticks(False)
-            prices = np.reshape(prices, prices.size)
-            is_buyer_maker = np.reshape(is_buyer_maker, is_buyer_maker.size)
-            timestamps = np.reshape(timestamps, timestamps.size)
-            fpath = make_get_filepath(cache_dirpath)
-            data = (prices, is_buyer_maker, timestamps)
-            print('dumping cache...')
-            for fname, arr in zip(['prices', 'is_buyer_maker', 'timestamps'], data):
-                np.save(f'{fpath}{fname}.npy', arr)
-            size_mb = np.sum([sys.getsizeof(d) for d in data]) / (1000 * 1000)
-            print(f'dumped {size_mb:.2f} mb of data')
-            del prices
-            del is_buyer_maker
-            del timestamps
-            del data
-            gc.collect()
-        print('loading cached tick data')
-        arrs = []
-        for fname in ['prices', 'is_buyer_maker', 'timestamps']:
-            arrs.append(np.load(f'{cache_dirpath}{fname}.npy'))
-        return tuple(arrs)
+        await self.download_ticks()
+        await self.prepare_files(single_file)
+        tick_data = np.load(self.tick_filepath)
+        return tick_data
 
 
 async def main():
