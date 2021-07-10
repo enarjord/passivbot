@@ -24,7 +24,7 @@ class BinanceBot(Bot):
 
         self.leverage = config['leverage']
 
-        self.base_endpoint = 'https://testnet.binancefuture.com/'  # 'https://fapi.binance.com'
+        self.base_endpoint = 'https://testnet.binancefuture.com'  # 'https://fapi.binance.com'
         self.endpoints = {
             'listenkey': '/fapi/v1/listenKey',
             'position': '/fapi/v2/positionRisk',
@@ -170,8 +170,10 @@ class BinanceBot(Bot):
              'action': msg['o']['X'],
              'position_side': msg['o']['ps'].upper()}
         if 'ot' in msg['o']:
-            if msg['o']['ot'] == 'MARKET':
+            if msg['o']['ot'] == 'MARKET' and o['action'] != 'PARTIALLY_FILLED':
                 o['price'] = float(msg['o']['ap'])
+        if o['action'] == 'PARTIALLY_FILLED':
+            o['qty'] = o['qty'] - float(msg['o']['z'])
         return o
 
     def prepare_account(self, msg) -> dict:
