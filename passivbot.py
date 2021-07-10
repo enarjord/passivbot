@@ -521,20 +521,6 @@ class Bot:
                     self.ts_released[key] = now
 
     async def init_indicators(self, max_n_samples: int = 60):
-        ticks = await self.fetch_ticks()
-        if self.exchange == 'bybit' and 'linear' in self.market_type:
-            print('\nwarning: insufficient ticks fetched')
-            print('emas and ema ratios will be inaccurate until websocket catches up')
-            self.emas = calc_emas(np.array([e['price'] for e in ticks]), self.spans)[-1]
-        else:
-            idxs = get_ids_to_fetch(self.spans, ticks[-1]['trade_id'], max_n_samples=max_n_samples)
-            fetched_ticks = await asyncio.gather(*[self.fetch_ticks(from_id=int(i)) for i in idxs])
-            latest_ticks = await self.fetch_ticks()
-            compressed = drop_consecutive_same_prices(sorted(flatten(fetched_ticks) + ticks + latest_ticks, key=lambda x: x['trade_id']))
-            self.emas = calc_indicators_from_ticks_with_gaps(self.spans, compressed)
-        self.ratios = np.append(self.price, self.emas[:-1]) / self.emas
-
-    async def init_indicators_sampled(self, max_n_samples: int = 60):
         ticks = await self.fetch_ticks(do_print=False)
         if self.exchange == 'binance':
             ohlcvs_per_fetch = 1000 if self.spot else 1500
@@ -565,22 +551,6 @@ class Bot:
         self.ema_sec = int(combined[-1][0] // 1000 * 1000)
 
     def update_indicators(self, ticks):
-        for tick in ticks:
-            self.agg_qty += tick['qty']
-            if tick['price'] == self.price and tick['is_buyer_maker'] == self.is_buyer_maker:
-                continue
-            self.qty = self.agg_qty
-            self.agg_qty = 0.0
-            self.price = tick['price']
-            self.is_buyer_maker = tick['is_buyer_maker']
-            if tick['is_buyer_maker']:
-                self.ob[0] = tick['price']
-            else:
-                self.ob[1] = tick['price']
-            self.emas = self.emas * self.ema_alpha_ + tick['price'] * self.ema_alpha
-            self.ratios = np.append(self.price, self.emas[:-1]) / self.emas
-
-    def update_indicators_sampled(self, ticks):
         for tick in ticks:
             self.price = tick['price']
             self.agg_qty += tick['qty']
