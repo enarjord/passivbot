@@ -34,14 +34,17 @@ async def prep_config(args) -> dict:
     except Exception as e:
         raise Exception('failed to load optimize config', args.optimize_config_path, e)
     config = {**oc, **bc}
-    for key in ['symbol', 'user', 'start_date', 'end_date', 'starting_balance']:
-        if getattr(args, key) is not None:
-            config[key] = getattr(args, key)
-    for key in ['spot']:
-        if getattr(args, key) == False:
-            config[key] = False
-        elif getattr(args, key):
-            config[key] = True
+
+    for key in ['symbol', 'user', 'start_date', 'end_date', 'starting_balance', 'spot']:
+        argval = getattr(args, key)
+        if argval is not None:
+            if type(argval) == str:
+                if argval.lower() in ['false', 'no', 'n']:
+                    argval = False
+                elif argval.lower() in ['true', 'yes', 'y']:
+                    print('here')
+                    argval = True
+            config[key] = argval
     config['exchange'], _, _ = load_exchange_key_secret(config['user'])
 
     if config['exchange'] == 'bybit' and config['symbol'].endswith('USDT'):
@@ -201,7 +204,7 @@ def add_argparse_args(parser):
     parser.add_argument('--starting_balance', type=float, required=False, dest='starting_balance',
                         default=None,
                         help='specify starting_balance, overriding value from backtest config')
-    parser.add_argument('--spot', action='store_true',
+    parser.add_argument('--spot', type=str, required=False, dest='spot', default=None,
                         help='specify whether spot, overriding value from backtest config')
 
     return parser
