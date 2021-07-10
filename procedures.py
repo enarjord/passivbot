@@ -35,16 +35,10 @@ async def prep_config(args) -> dict:
         raise Exception('failed to load optimize config', args.optimize_config_path, e)
     config = {**oc, **bc}
 
-    for key in ['symbol', 'user', 'start_date', 'end_date', 'starting_balance', 'spot']:
-        argval = getattr(args, key)
-        if argval is not None:
-            if type(argval) == str:
-                if argval.lower() in ['false', 'no', 'n']:
-                    argval = False
-                elif argval.lower() in ['true', 'yes', 'y']:
-                    print('here')
-                    argval = True
-            config[key] = argval
+    for key in ['symbol', 'user', 'start_date', 'end_date', 'starting_balance']:
+        if getattr(args, key) is not None:
+            config[key] = getattr(args, key)
+    config['spot'] = args.market_type == 'spot'
     config['exchange'], _, _ = load_exchange_key_secret(config['user'])
 
     if config['exchange'] == 'bybit' and config['symbol'].endswith('USDT'):
@@ -81,7 +75,7 @@ async def prep_config(args) -> dict:
     if 'pbr_limit' in config['ranges']:
         config['ranges']['pbr_limit'][1] = min(config['ranges']['pbr_limit'][1], config['max_leverage'])
         config['ranges']['pbr_limit'][0] = min(config['ranges']['pbr_limit'][0], config['ranges']['pbr_limit'][1])
-    if 'spot' in config and config['spot']:
+    if config['spot']:
         config['do_long'] = True
         config['do_shrt'] = False
 
@@ -204,8 +198,8 @@ def add_argparse_args(parser):
     parser.add_argument('--starting_balance', type=float, required=False, dest='starting_balance',
                         default=None,
                         help='specify starting_balance, overriding value from backtest config')
-    parser.add_argument('--spot', type=str, required=False, dest='spot', default=None,
-                        help='specify whether spot, overriding value from backtest config')
+    parser.add_argument('-m', '--market_type', type=str, required=False, dest='market_type', default='futures',
+                        help='specify whether spot or futures (default), overriding value from backtest config')
 
     return parser
 
