@@ -37,4 +37,57 @@ The following commands are available via telegram |
 | `/set_config`         | initiates a conversion via which the user can switch to a different configuration file  
 | `/transfer`           | initiates a conversion via which the user can transfer USDT funds between the spot and futures wallet<br/>**Note:** To enable this functionality, make sure you enable `Universal Transfer` on the API key  
 | `/set_profit_transfer`| initiates a conversion via which the user can specify the percentage of profit that will automatically transferred to thee spot wallet<br/>**Note:** To enable this functionality, make sure you enable `Universal Transfer` on the API key
-| `/stop`               | initiates a conversation via which the user can activate a stop mode
+| `/stop`               | initiates a conversation via which the user can activate a stop-mode
+
+## Stop-mode
+
+By using the `/stop` command in telegram, you can activate one of the available stop-modes. Each stop-mode has a different purpose
+and effect, so please read carefully through the following sections to understand each stop-mode. The Telegram conversation when
+you activate a stop-mode also has a general overview of what happens on each stop-mode.
+
+### Graceful
+
+When you activate the stop-mode `graceful`, the bot will continue to support the current open positions. This means it will keep
+creating reentries as normal, until the position is closed. When there is no open position, it will **not** enter a new position.
+This stop-mode can be useful when you want to stop the bot, but have time available to just the bot roll out until it's no longer
+in a position.
+
+### Freeze
+
+After activating the stop-mode `freeze`, the bot will cancel all open orders. Any open position is left alone, but the bot
+will no longer reenter, nor will it create initial entry orders. This stop-mode can be useful if you don't want your position to
+increase (for example because you fear your position might get dangerous if it reenters).
+
+!!! Info
+    If you create an order on the exchange when stop-modee `freeze` is enabled, your manual orders will be cancelled by the bot.
+    If you want to manually manage your position, please see stop-mode `manual`.
+
+### Manual
+
+Upon activating the stop-mode `manual`, the bot will not perform any more actions on the exchange. Any orders already created
+will be left as-is, and no orders will be cancelled. This stop-mode can bee useful for example when you have a position open
+that is in a dangerous state, and you want to manually manage the position (for example by opening a position on the opposite
+side to drive away the liquidation price).
+
+### Shutdown
+
+Upon activating stop-mode `shutdown`, the but will completely shut down, leaving no process open on the server.
+
+!!! Warning
+    After activating this stop-mode, you will **NOT** be able to start the bot again via Telegram. You'll need to manually
+    start the bot again.
+
+### Panic
+
+When the stop-mode `panic` is activated, the bot will immediately sell all open positions against market price and stop
+further trading. This stop-mode can be useful when you're in a position and want to get out immediately, regardless of the
+current profit or loss on the open position(s).
+
+!!! Warning
+    Activating this stop-mode will immediately sell all open positions at market price. It does **NOT** take the amount of
+    loss into account, it simply sells everything. MAKE SURE THIS IS WHAT YOU WANT TO DO!
+
+### Resume
+
+When a stop-mode is activated (you can check the parameter `stop_mode` in the `/show_config` command), you can use this
+mode to resume normal operation.
