@@ -12,7 +12,8 @@ from procedures import load_live_config, make_get_filepath, load_exchange_key_se
 from pure_funcs import get_xk_keys, get_ids_to_fetch, flatten, calc_indicators_from_ticks_with_gaps, \
     drop_consecutive_same_prices, filter_orders, compress_float, create_xk, round_dynamic, denumpyize, \
     calc_spans
-from njit_funcs import calc_orders, calc_new_psize_pprice, qty_to_cost, calc_diff, round_, calc_emas, calc_samples
+from njit_funcs import calc_orders, calc_new_psize_pprice, qty_to_cost, calc_diff, round_, calc_emas, \
+    calc_samples, calc_emas_last
 import numpy as np
 import websockets
 import telegram_bot
@@ -38,6 +39,11 @@ class Bot:
 
         self.ema_alpha = 2.0 / (self.spans + 1.0)
         self.ema_alpha_ = 1.0 - self.ema_alpha
+
+        self.spans_secs = self.spans * 60 * 60  # spans is in hours
+        self.ema_alpha_secs = 2.0 / (self.spans_secs + 1.0)
+        self.ema_alpha_secs_ = 1.0 - self.ema_alpha_secs
+        self.ema_sec = 0
 
         self.ts_locked = {'cancel_orders': 0.0, 'decide': 0.0, 'update_open_orders': 0.0,
                           'update_position': 0.0, 'print': 0.0, 'create_orders': 0.0,
@@ -528,7 +534,7 @@ class Bot:
             self.emas = calc_indicators_from_ticks_with_gaps(self.spans, compressed)
         self.ratios = np.append(self.price, self.emas[:-1]) / self.emas
 
-    async def init_indicators_samples(self, max_n_samples: int = 60):
+    async def init_indicators_sampled(self, max_n_samples: int = 60):
         ticks = await self.fetch_ticks(do_print=False)
         if self.exchange == 'binance':
             ohlcvs_per_fetch = 1000 if self.spot else 1500
@@ -554,7 +560,9 @@ class Bot:
         combined = np.array(sorted([[e['timestamp'], e['qty'], e['price']] for e in ticks] +
                                    [[e['timestamp'], e['volume'], e['open']] for e in ohlcvs]))
         samples = calc_samples(combined)
-        return samples
+        self.emas = calc_emas_last(samples[:, 2], self.spans_secs)
+        self.ratios = np.append(self.price, self.emas[:-1]) / self.emas
+        self.ema_sec = int(combined[-1][0])
 
     def update_indicators(self, ticks):
         for tick in ticks:
@@ -571,6 +579,25 @@ class Bot:
                 self.ob[1] = tick['price']
             self.emas = self.emas * self.ema_alpha_ + tick['price'] * self.ema_alpha
             self.ratios = np.append(self.price, self.emas[:-1]) / self.emas
+
+    def update_indicators_sampled(self, ticks):
+        for tick in ticks:
+            self.price = tick['price']
+            self.agg_qty += tick['qty']
+            if tick['is_buyer_maker']:
+                self.ob[0] = tick['price']
+            else:
+                self.ob[1] = tick['price']
+            ts_sec = int(tick['timestamp'] // 1000 * 1000)
+            if ts_sec <= self.ema_sec:
+                self.ema_sec = ts_sec
+                continue
+            self.qty = self.agg_qty
+            self.agg_qty = 0.0
+            for sec in range(self.ema_sec, ts_sec, 1000):
+                self.emas = self.emas * self.ema_alpha_secs_ + self.price * self.ema_alpha_secs
+                self.ratios = np.append(self.price, self.emas[:-1]) / self.emas
+            self.ema_sec = ts_sec
 
     async def start_websocket(self) -> None:
         self.stop_websocket = False
