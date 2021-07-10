@@ -40,7 +40,7 @@ class Bot:
         self.ema_alpha = 2.0 / (self.spans + 1.0)
         self.ema_alpha_ = 1.0 - self.ema_alpha
 
-        self.spans_secs = self.spans * 60 * 60  # spans is in hours
+        self.spans_secs = self.spans * 60  # spans are in minutes
         self.ema_alpha_secs = 2.0 / (self.spans_secs + 1.0)
         self.ema_alpha_secs_ = 1.0 - self.ema_alpha_secs
         self.ema_sec = 0
@@ -562,7 +562,7 @@ class Bot:
         samples = calc_samples(combined)
         self.emas = calc_emas_last(samples[:, 2], self.spans_secs)
         self.ratios = np.append(self.price, self.emas[:-1]) / self.emas
-        self.ema_sec = int(combined[-1][0])
+        self.ema_sec = int(combined[-1][0] // 1000 * 1000)
 
     def update_indicators(self, ticks):
         for tick in ticks:
@@ -594,10 +594,10 @@ class Bot:
                 continue
             self.qty = self.agg_qty
             self.agg_qty = 0.0
-            for sec in range(self.ema_sec, ts_sec, 1000):
+            while self.ema_sec < ts_sec:
                 self.emas = self.emas * self.ema_alpha_secs_ + self.price * self.ema_alpha_secs
-                self.ratios = np.append(self.price, self.emas[:-1]) / self.emas
-            self.ema_sec = ts_sec
+                self.ema_sec += 1000
+            self.ratios = np.append(self.price, self.emas[:-1]) / self.emas
 
     async def start_websocket(self) -> None:
         self.stop_websocket = False
