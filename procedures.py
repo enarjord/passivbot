@@ -66,7 +66,7 @@ async def prep_config(args) -> dict:
         market_specific_settings = await fetch_market_specific_settings(config)
         json.dump(market_specific_settings, open(mss, 'w'), indent=4)
     except Exception as e:
-        print('failed to fetch market_specific_settings', e)
+        print('\nfailed to fetch market_specific_settings', e, '\n')
         try:
             if os.path.exists(mss):
                 market_specific_settings = json.load(open(mss))
