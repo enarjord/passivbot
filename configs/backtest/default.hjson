@@ -1,14 +1,15 @@
 {
-  spot: true
+  # futures or spot
+  market_type: spot
 
   # exchange from api-keys.json is used
   user: your_user_name
-  symbol: ADAETH
+  symbol: PAXGUSDT
   latency_simulation_ms: 750
-  starting_balance: 0.05
+  starting_balance: 100
 
   # format YYYY-MM-DDTHH:mm:ss
   # e.g. 2020-02-18T19:34:59
-  start_date: 2021-01
-  end_date: 2021-07
+  start_date: 2021-01-01
+  end_date: 2021-07-10
 }
