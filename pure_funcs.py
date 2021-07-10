@@ -28,8 +28,7 @@ def compress_float(n: float, d: int) -> str:
 
 
 def calc_spans(min_span: int, max_span: int, n_spans: int) -> np.ndarray:
-    return np.array([int(round(min_span * ((max_span / min_span) ** (1 / (n_spans - 1))) ** i))
-                     for i in range(0, n_spans)])
+    return np.array([min_span * ((max_span / min_span) ** (1 / (n_spans - 1))) ** i for i in range(0, n_spans)])
 
 
 def get_xk_keys():
@@ -42,10 +41,14 @@ def get_xk_keys():
 def create_xk(config: dict) -> dict:
     xk = {}
     config_ = config.copy()
-    config_['do_long'] = config['long']['enabled']
-    config_['do_shrt'] = config['shrt']['enabled']
-    if 'spot' not in config_:
-        config_['spot'] = False
+    if config_['spot']:
+        config_['do_long'] = config['long']['enabled'] = True
+        config_['do_shrt'] = config['shrt']['enabled'] = False
+        config_['long']['pbr_limit'] = min(config_['long']['pbr_limit'],
+                                           max(0.0, 1.0 - config_['long']['pbr_stop_loss']))
+    else:
+        config_['do_long'] = config['long']['enabled']
+        config_['do_shrt'] = config['shrt']['enabled']
     config_['spans'] = calc_spans(config['min_span'], config['max_span'], config['n_spans'])
     for k in get_xk_keys():
         if k in config_['long']:
@@ -267,8 +270,8 @@ def get_template_live_config(n_spans: int, randomize_coeffs=False):
     config = {
         "config_name": "name",
         "logging_level": 0,
-        "min_span": 9000.0,
-        "max_span": 160000.0,
+        "min_span": 10.0,  # minutes
+        "max_span": 420.0,  # minutes
         "n_spans": n_spans,
         "long": {
             "enabled": True,
