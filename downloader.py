@@ -770,7 +770,7 @@ class Downloader:
             tick_data = np.load(self.tick_filepath)
             return tick_data
         await self.download_ticks()
-        await self.prepare_files(single_file)
+        await self.prepare_files()
         tick_data = np.load(self.tick_filepath)
         return tick_data
 
