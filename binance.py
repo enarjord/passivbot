@@ -420,9 +420,10 @@ class BinanceBot(Bot):
 
     def standardize_websocket_ticks(self, data: dict) -> [dict]:
         try:
-            return [{'price': float(data['p']), 'qty': float(data['q']), 'is_buyer_maker': data['m']}]
+            return [{'timestamp': int(data['T']), 'price': float(data['p']), 'qty': float(data['q']),
+                     'is_buyer_maker': data['m']}]
         except Exception as e:
-            print('error in websocket tick', e)
+            print('error in websocket tick', e, data)
         return []
 
     async def subscribe_ws(self, ws):
