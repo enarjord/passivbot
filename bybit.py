@@ -54,7 +54,7 @@ class Bybit(Bot):
         self.base_endpoint = 'https://api.bybit.com'
         self.endpoints = {}
         self.market_type = ''
-        self.session = aiohttp.ClientSession()
+        self.session = aiohttp.ClientSession(headers={'passivbotbybit': 'passivbotbybit'})
 
     def init_market_type(self):
         if self.symbol.endswith('USDT'):
@@ -342,7 +342,8 @@ class Bybit(Bot):
         ticks = []
         for e in data['data']:
             try:
-                ticks.append({'price': float(e['price']), 'qty': float(e['size']), 'is_buyer_maker': e['side'] == 'Sell'})
+                ticks.append({'timestamp': int(e['trade_time_ms']), 'price': float(e['price']), 'qty': float(e['size']),
+                              'is_buyer_maker': e['side'] == 'Sell'})
             except Exception as ex:
                 print('error in websocket tick', e, ex)
         return ticks
