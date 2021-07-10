@@ -125,7 +125,7 @@ def single_sliding_window_run(config, data, do_print=False) -> (float, [dict]):
                                                config['sliding_window_days']]))
     analyses = []
     for z, data_slice in enumerate(iter_slices(data, sliding_window_days,
-                                               ticks_to_prepend=int(config['max_span']))):
+                                               ticks_to_prepend=int(round(config['max_span'])))):
         if len(data_slice[0]) == 0:
             print('debug b no data')
             continue
