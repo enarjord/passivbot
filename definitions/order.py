@@ -20,6 +20,7 @@ CALCULATED = 'CALCULATED'
     ('symbol', types.string),
     ('order_id', types.int64),
     ('price', types.float64),
+    ('stop_price', types.float64),
     ('qty', types.float64),
     ('type', types.string),
     ('side', types.string),
@@ -32,11 +33,12 @@ class Order:
     A class representing an order.
     """
 
-    def __init__(self, symbol: str, order_id: int, price: float, qty: float, type: str, side: str, timestamp: int,
-                 action: str, position_side: str):
+    def __init__(self, symbol: str, order_id: int, price: float, stop_price: float, qty: float, type: str, side: str,
+                 timestamp: int, action: str, position_side: str):
         self.symbol = symbol.upper()
         self.order_id = order_id
         self.price = price
+        self.stop_price = stop_price
         self.qty = qty
         self.type = type.upper()
         self.side = side.upper()

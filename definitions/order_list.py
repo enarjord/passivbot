@@ -7,14 +7,14 @@ from definitions.order import Order
 @njit
 def empty_order_list():
     l = typed.List()
-    l.append(Order('', 0, 0.0, 0.0, '', '', 0, '', ''))
+    l.append(Order('', 0, 0.0, 0.0, 0.0, '', '', 0, '', ''))
     l.clear()
     return l
 
 
 @jitclass([
-    ("long", types.ListType(typeof(Order('', 0, 0.0, 0.0, '', '', 0, '', '')))),
-    ("short", types.ListType(typeof(Order('', 0, 0.0, 0.0, '', '', 0, '', ''))))
+    ("long", types.ListType(typeof(Order('', 0, 0.0, 0.0, 0.0, '', '', 0, '', '')))),
+    ("short", types.ListType(typeof(Order('', 0, 0.0, 0.0, 0.0, '', '', 0, '', ''))))
 ])
 class OrderList:
     """
