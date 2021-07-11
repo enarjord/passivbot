@@ -16,11 +16,11 @@ Configuration's parameters may be optimized to a given period of historical data
 
 ## Grid Trading
 
-passivbot may be described as a market making DCA scalping grid trader.
+Passivbot may be described as a market making DCA scalping grid trader.
 
 - Market maker: passivbot is a pure maker. It never takes orders, only makes them.
 
-- DCA: Dollar Cost Averaging. It will typically make up to several reentries after an initial entry, in an attempt to acheive better average entry price, similar to a Matingale betting system.
+- DCA: Dollar Cost Averaging. It will typically make up to several reentries after an initial entry, in an attempt to acheive better average entry price, similar to a Martingale betting system.
 
 - Scalping: It will typically close positions at small markups, in the range of 0.1-2.0%
 
