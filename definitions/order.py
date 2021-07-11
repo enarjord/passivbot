@@ -22,6 +22,7 @@ SELL = 'SELL'
 
 LONG = 'LONG'
 SHORT = 'SHORT'
+BOTH = 'BOTH'
 
 
 @jitclass([
@@ -53,3 +54,17 @@ class Order:
         self.timestamp = timestamp
         self.action = action.upper()
         self.position_side = position_side.upper()
+
+    def equal(self, order):
+        """
+        Check for equality between two orders.
+        :param order: The order to check against.
+        :return: If equal or not.
+        """
+        if self.symbol == order.symbol and self.order_id == order.order_id and self.price == order.price \
+                and self.stop_price == order.stop_price and self.qty == order.qty and self.type == order.type \
+                and self.side == order.side and self.timestamp == order.timestamp and self.action == order.action \
+                and self.position_side == order.position_side:
+            return True
+        else:
+            return False
