@@ -23,7 +23,7 @@ class OrderList:
 
     def __init__(self):
         """
-        Initializes the two lists as empty typed lists.
+        Creates two empty lists of orders, one for SHORT and one for LONG.
         """
         self.long = empty_order_list()
         self.short = empty_order_list()

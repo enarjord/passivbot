@@ -14,6 +14,9 @@ class PositionList:
     """
 
     def __init__(self):
+        """
+        Creates two empty positions, one for SHORT and one for LONG.
+        """
         self.long = Position('', 0.0, 0.0, 0.0, 0.0, 0, '')
         self.short = Position('', 0.0, 0.0, 0.0, 0.0, 0, '')
 
