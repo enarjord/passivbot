@@ -17,22 +17,20 @@ class PositionList:
         self.long = Position('', 0.0, 0.0, 0.0, 0.0, 0, '')
         self.short = Position('', 0.0, 0.0, 0.0, 0.0, 0, '')
 
-    def update_long(self, symbol: str, size: float, price: float, liquidation_price: float, upnl: float, leverage: int,
-                    position_side: str):
-        self.long.symbol = symbol
-        self.long.size = size
-        self.long.price = price
-        self.long.liquidation_price = liquidation_price
-        self.long.upnl = upnl
-        self.long.leverage = leverage
-        self.long.position_side = position_side
+    def update_long(self, position: Position):
+        self.long.symbol = position.symbol
+        self.long.size = position.size
+        self.long.price = position.price
+        self.long.liquidation_price = position.liquidation_price
+        self.long.upnl = position.upnl
+        self.long.leverage = position.leverage
+        self.long.position_side = position.position_side
 
-    def update_short(self, symbol: str, size: float, price: float, liquidation_price: float, upnl: float, leverage: int,
-                     position_side: str):
-        self.short.symbol = symbol
-        self.short.size = size
-        self.short.price = price
-        self.short.liquidation_price = liquidation_price
-        self.short.upnl = upnl
-        self.short.leverage = leverage
-        self.short.position_side = position_side
+    def update_short(self, position: Position):
+        self.short.symbol = position.symbol
+        self.short.size = position.size
+        self.short.price = position.price
+        self.short.liquidation_price = position.liquidation_price
+        self.short.upnl = position.upnl
+        self.short.leverage = position.leverage
+        self.short.position_side = position.position_side
