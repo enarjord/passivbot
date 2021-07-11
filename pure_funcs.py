@@ -41,12 +41,14 @@ def get_xk_keys():
 def create_xk(config: dict) -> dict:
     xk = {}
     config_ = config.copy()
-    if config_['spot']:
+    if config_['market_type'] == 'spot':
+        config_['spot'] = True
         config_['do_long'] = config['long']['enabled'] = True
         config_['do_shrt'] = config['shrt']['enabled'] = False
         config_['long']['pbr_limit'] = min(config_['long']['pbr_limit'],
                                            max(0.0, 1.0 - config_['long']['pbr_stop_loss']))
     else:
+        config_['spot'] = False
         config_['do_long'] = config['long']['enabled']
         config_['do_shrt'] = config['shrt']['enabled']
     config_['spans'] = calc_spans(config['min_span'], config['max_span'], config['n_spans'])
