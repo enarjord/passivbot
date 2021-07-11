@@ -25,3 +25,16 @@ class Position:
         self.upnl = upnl
         self.leverage = leverage
         self.position_side = position_side.upper()
+
+    def equal(self, position):
+        """
+        Check for equality between two positions.
+        :param position: The position to check against.
+        :return: If equal or not.
+        """
+        if self.symbol == position.symbol and self.size == position.size and self.price == position.price \
+                and self.liquidation_price == position.liquidation_price and self.upnl == position.upnl \
+                and self.leverage == position.leverage and self.position_side == position.position_side:
+            return True
+        else:
+            return False
