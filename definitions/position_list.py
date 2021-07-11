@@ -18,6 +18,11 @@ class PositionList:
         self.short = Position('', 0.0, 0.0, 0.0, 0.0, 0, '')
 
     def update_long(self, position: Position):
+        """
+        Updates the values of the long position.
+        :param position: New position.
+        :return:
+        """
         self.long.symbol = position.symbol
         self.long.size = position.size
         self.long.price = position.price
@@ -27,6 +32,11 @@ class PositionList:
         self.long.position_side = position.position_side
 
     def update_short(self, position: Position):
+        """
+        Updates the values of the short position.
+        :param position: New position.
+        :return:
+        """
         self.short.symbol = position.symbol
         self.short.size = position.size
         self.short.price = position.price
@@ -34,3 +44,13 @@ class PositionList:
         self.short.upnl = position.upnl
         self.short.leverage = position.leverage
         self.short.position_side = position.position_side
+
+    def copy(self):
+        """
+        Creates a new object with the current positions.
+        :return: New positions.
+        """
+        p = PositionList()
+        p.update_long(self.long)
+        p.update_short(self.short)
+        return p

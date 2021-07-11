@@ -81,3 +81,13 @@ class OrderList:
 
         for i in sorted(to_delete, reverse=True):
             self.short.pop(i)
+
+    def copy(self):
+        """
+        Creates a new object with the current orders.
+        :return: New order list.
+        """
+        o = OrderList()
+        o.add_long(self.long)
+        o.add_short(self.short)
+        return o
