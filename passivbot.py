@@ -508,6 +508,7 @@ class Bot:
 
         line += f"lpbr {self.position['long']['pbr']:.3f} spbr {self.position['shrt']['pbr']:.3f} "
         line += f"EMAr {[round_dynamic(r, 4) for r in self.ratios]} "
+        line += f"EMAs {[round_dynamic(e, 5) for e in self.emas]} "
         line += f"bal {compress_float(self.position['wallet_balance'], 3)} "
         line += f"eq {compress_float(self.position['equity'], 3)} "
         print_([line], r=True)
@@ -536,8 +537,8 @@ class Bot:
         ticksd = {e['trade_id']: e for e in ticks + flatten(additional_ticks)}
         ticks = sorted(ticksd.values(), key=lambda x: x['trade_id'])
         millis_per_fetch = 1000 * 60 * ohlcvs_per_fetch
-        first_fetch_ts = ticks[0]['timestamp'] // 60 * 60 - millis_per_fetch
-        last_fetch_ts = first_fetch_ts - max(self.spans) * 60 * 60 * 1000
+        first_fetch_ts = ticks[0]['timestamp'] // 1000 * 1000 - millis_per_fetch
+        last_fetch_ts = first_fetch_ts - max(self.spans) * 60 * 1000
         if last_fetch_ts + millis_per_fetch * (max_n_samples - 10) > first_fetch_ts:
             timestamps_to_fetch = np.arange(first_fetch_ts, last_fetch_ts - millis_per_fetch, -millis_per_fetch)
         else:
@@ -545,7 +546,15 @@ class Bot:
         ohlcvs = flatten(await asyncio.gather(*[self.fetch_ohlcvs(start_time=ts) for ts in timestamps_to_fetch]))
         combined = np.array(sorted([[e['timestamp'], e['qty'], e['price']] for e in ticks] +
                                    [[e['timestamp'], e['volume'], e['open']] for e in ohlcvs]))
+        from pure_funcs import ts_to_date
+        print('\n\ndevug\n\n')
+        print(len(combined), 'len(combined)')
+        print(ts_to_date(combined[0][0] / 1000), 'ts_to_date(combined[0][0] / 1000)')
+        print(ts_to_date(combined[-1][0] / 1000), 'ts_to_date(combined[-1][0] / 1000)')
+        print(self.spans, 'self.spans')
         samples = calc_samples(combined)
+        print(samples[0], 'samples[0]')
+        print(samples[-1], 'samples[-1]')
         self.emas = calc_emas_last(samples[:, 2], self.spans_secs)
         self.ratios = np.append(self.price, self.emas[:-1]) / self.emas
         self.ema_sec = int(combined[-1][0] // 1000 * 1000)
@@ -654,10 +663,10 @@ async def main() -> None:
     config['exchange'] = account['exchange']
     config['symbol'] = args.symbol
     config['live_config_path'] = args.live_config_path
-    config['spot'] = args.spot
+    config['market_type'] = args.market_type
 
     if account['exchange'] == 'binance':
-        if config['spot']:
+        if config['market_type'] == 'spot':
             from procedures import create_binance_bot_spot
             bot = await create_binance_bot_spot(config)
         else:
