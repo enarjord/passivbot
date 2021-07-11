@@ -59,3 +59,41 @@ def add_or_append(dict, key, value):
     else:
         dict[key] = [value]
     return dict
+
+
+def print_order(order):
+    print('Symbol', order.symbol)
+    print('Order_id', order.order_id)
+    print('Price', order.price)
+    print('Qty', order.qty)
+    print('Type', order.type)
+    print('Side', order.side)
+    print('Timestamp', order.timestamp)
+    print('Action', order.action)
+    print('Position_side', order.position_side)
+
+
+def print_position(position):
+    print('Symbol', position.symbol)
+    print('Size', position.size)
+    print('Price', position.price)
+    print('Liquidation_price', position.liquidation_price)
+    print('Upnl', position.upnl)
+    print('Leverage', position.leverage)
+    print('Position_side', position.position_side)
+
+
+def print_order_list(order_list):
+    print('Long:')
+    for order in order_list.long:
+        print_order(order)
+    print('Short:')
+    for order in order_list.short:
+        print_order(order)
+
+
+def print_position_list(position_list):
+    print('Long:')
+    print_position(position_list.long)
+    print('Short:')
+    print_position(position_list.short)
