@@ -43,7 +43,7 @@
     max_span: [720.0, 30000.0]
     MAr_coeffs: [-0.4, 0.4]
 
-    long£rprc_PBr_coeffs: [-0.5, 0.1]
+    long£rprc_PBr_coeffs: [-1.0, 0.1]
     long£pbr_stop_loss: [-0.1, 0.5]
     long£pbr_limit: [0.1, 2.0]
     long£iqty_const: [0.01, 0.5]
@@ -52,7 +52,7 @@
     long£rprc_const: [0.97, 1.0]
     long£markup_const: [1.0, 1.03]
 
-    shrt£rprc_PBr_coeffs: [-0.1, 0.5]
+    shrt£rprc_PBr_coeffs: [-0.1, 1.0]
     shrt£pbr_stop_loss: [-0.1, 0.5]
     shrt£pbr_limit: [0.1, 2.0]
     shrt£iqty_const: [0.01, 0.5]
