@@ -97,17 +97,19 @@ def calc_samples(ticks: np.ndarray, sample_size_ms: int = 1000) -> np.ndarray:
     i = 0
     ts = sampled_timestamps[0]
     k = 0
-    while i < len(ticks):
-        if ts == samples[:, 0][k]:
-            samples[:,1][k] += ticks[:, 1][i]
-            samples[:,2][k] = ticks[:, 2][i]
+    while True:
+        if ts == samples[k][0]:
+            samples[k][1] += ticks[i][1]
+            samples[k][2] = ticks[i][2]
             i += 1
-            ts = ticks[:, 0][i] // sample_size_ms * sample_size_ms
+            if i >= len(ticks):
+                break
+            ts = ticks[i][0] // sample_size_ms * sample_size_ms
         else:
             k += 1
             if k >= len(samples):
                 break
-            samples[:, 2][k] = samples[:, 2][k - 1]
+            samples[k][2] = samples[k - 1][2]
     return samples
 
 
