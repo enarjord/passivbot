@@ -82,6 +82,22 @@ class OrderList:
         for i in sorted(to_delete, reverse=True):
             self.short.pop(i)
 
+    def update_long(self, orders: typed.List):
+        """
+        Update long orders by setting it to the new list.
+        :param orders: New long orders.
+        :return:
+        """
+        self.long = orders
+
+    def update_short(self, orders: typed.List):
+        """
+        Update short orders by setting it to the new list.
+        :param orders: New short orders.
+        :return:
+        """
+        self.short = orders
+
     def copy(self):
         """
         Creates a new object with the current orders.
