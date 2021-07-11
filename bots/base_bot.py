@@ -1,14 +1,34 @@
 import asyncio
 import json
 from threading import Lock
-from typing import Union
+from typing import Union, Tuple, List
 
 import aiohttp
+import numpy as np
 import websockets
+from numba import njit
 
-from functions import load_key_secret, add_or_append
+from definitions.order import NEW, PARTIALY_FILLED, FILLED, CANCELED, EXPIRED, LONG, SHORT, NEW_INSURANCE, NEW_ADL
+from definitions.order import Order
+from definitions.order_list import OrderList, empty_order_list
+from definitions.position import Position
+from definitions.position_list import PositionList
+from functions import load_key_secret
 from functions import print_
 from strategies.grid import Grid
+
+ORDER_UPDATE = 'order'
+ACCOUNT_UPDATE = 'account'
+
+
+@njit
+def round_dn(n, step, safety_rounding=10) -> float:
+    return np.round(np.floor(np.round(n / step, safety_rounding)) * step, safety_rounding)
+
+
+@njit
+def round_up(n, step, safety_rounding=10) -> float:
+    return np.round(np.ceil(np.round(n / step, safety_rounding)) * step, safety_rounding)
 
 
 class Bot:
@@ -25,9 +45,9 @@ class Bot:
 
         self.session = aiohttp.ClientSession()
 
-        self.position = {'LONG': {}, 'SHORT': {}}
+        self.position = PositionList()
         self.position_lock = Lock()
-        self.open_orders = {'LONG': [], 'SHORT': []}
+        self.open_orders = OrderList()
         self.open_orders_lock = Lock()
 
         self.long = True
@@ -63,19 +83,19 @@ class Bot:
     async def init(self):
         raise NotImplementedError
 
-    async def fetch_orders(self):
+    async def fetch_orders(self) -> List[Order]:
         raise NotImplementedError
 
-    async def fetch_position(self):
+    async def fetch_position(self) -> Tuple[Position, Position]:
         raise NotImplementedError
 
-    async def fetch_balance(self):
+    async def fetch_balance(self) -> float:
         raise NotImplementedError
 
-    def prepare_order(self, msg) -> dict:
+    def prepare_order(self, msg) -> Order:
         raise NotImplementedError
 
-    def prepare_account(self, msg) -> dict:
+    def prepare_account(self, msg) -> Tuple[float, Position, Position]:
         raise NotImplementedError
 
     async def public_get(self, url: str, params: dict = {}) -> dict:
@@ -102,15 +122,35 @@ class Bot:
     def determine_update_type(self, msg) -> str:
         raise NotImplementedError
 
+    def precompile(self):
+        p = Position('', 0.0, 0.0, 0.0, 0.0, 0, '')
+        p.equal(p)
+        o = Order('', 0, 0.0, 0.0, 0.0, '', '', 0, '', '')
+        o.equal(o)
+        pl = PositionList()
+        pl.update_long(p)
+        pl.update_short(p)
+        pl.copy()
+        ol = OrderList()
+        ol.add_long(empty_order_list())
+        ol.add_short(empty_order_list())
+        ol.delete_long(empty_order_list())
+        ol.delete_short(empty_order_list())
+        ol.update_long(empty_order_list())
+        ol.update_short(empty_order_list())
+        ol.copy()
+        self.strategy.precompile()
+
     async def reset(self):
+        self.precompile()
         self.balance_lock.acquire()
         self.balance = 0
         self.balance_lock.release()
         self.position_lock.acquire()
-        self.position = {'LONG': {}, 'SHORT': {}}
+        self.position = PositionList()
         self.position_lock.release()
         self.open_orders_lock.acquire()
-        self.open_orders = {'LONG': [], 'SHORT': []}
+        self.open_orders = OrderList()
         self.open_orders_lock.release()
         await self.init_orders()
         await self.init_position()
@@ -119,7 +159,7 @@ class Bot:
 
     async def init_orders(self):
         add_orders = await self.fetch_orders()
-        self.update_orders(add_orders, {})
+        self.update_orders(add_orders, [])
 
     async def init_position(self):
         long, short = await self.fetch_position()
@@ -129,25 +169,32 @@ class Bot:
         bal = await self.fetch_balance()
         self.update_balance(bal)
 
-    def update_orders(self, add_orders: dict = {}, delete_orders: dict = {}):
+    def update_orders(self, add_orders: list = [], delete_orders: list = []):
         self.open_orders_lock.acquire()
-        for side, orders in delete_orders.items():
-            for j in range(len(orders)):
-                for i in range(len(self.open_orders[side])):
-                    if self.open_orders[side][i]['order_id'] == orders[j]['order_id']:
-                        del self.open_orders[side][i]
-                        break
-        for side, orders in add_orders.items():
-            for j in range(len(orders)):
-                self.open_orders[side].append(orders[j])
+        add_long = empty_order_list()
+        add_short = empty_order_list()
+        delete_long = empty_order_list()
+        delete_short = empty_order_list()
+        for order in delete_orders:
+            if order.position_side == LONG:
+                delete_long.append(order)
+            elif order.position_side == SHORT:
+                delete_short.append(order)
+        for order in add_orders:
+            if order.position_side == LONG:
+                add_long.append(order)
+            elif order.position_side == SHORT:
+                add_short.append(order)
+        self.open_orders.delete_long(delete_long)
+        self.open_orders.delete_short(delete_short)
+        self.open_orders.add_long(add_long)
+        self.open_orders.add_short(add_short)
         self.open_orders_lock.release()
 
-    def update_position(self, long: dict = None, short: dict = None):
+    def update_position(self, long: Position, short: Position):
         self.position_lock.acquire()
-        if long is not None:
-            self.position['LONG'] = long
-        if short is not None:
-            self.position['SHORT'] = short
+        self.position.update_long(long)
+        self.position.update_short(short)
         self.position_lock.release()
 
     def update_balance(self, balance: float = None):
@@ -174,44 +221,26 @@ class Bot:
         self.balance_lock.release()
         return balance
 
-    async def handle_order_update(self, order):
-        d = {'order_id': order['order_id'],
-             'price': order['price'],
-             'qty': order['qty'],
-             'type': order['type'],
-             'side': order['side'],
-             'timestamp': order['timestamp']}
-        add_orders = {}
-        delete_orders = {}
-        if order['action'] in ['CANCELED', 'FILLED', 'EXPIRED', 'NEW_INSURANCE', 'NEW_ADL']:
-            delete_orders = add_or_append(delete_orders, order['position_side'], d)
-        if order['action'] in ['NEW']:
-            add_orders = add_or_append(add_orders, order['position_side'], d)
-        if order['action'] in ['PARTIALLY_FILLED']:
-            delete_orders = add_or_append(delete_orders, order['position_side'], d)
-            add_orders = add_or_append(add_orders, order['position_side'], d)
-        if order['action'] == 'FILLED':
+    async def handle_order_update(self, order: Order):
+        add_orders = []
+        delete_orders = []
+        if order.action in [CANCELED, FILLED, EXPIRED, NEW_INSURANCE, NEW_ADL]:
+            delete_orders.append(order)
+        if order.action in [NEW]:
+            add_orders.append(order)
+        if order.action in [PARTIALY_FILLED]:
+            delete_orders.append(order)
+            add_orders.append(order)
+        if order.action == FILLED:
             self.last_filled_order = order
             self.order_fill_change = True
         self.update_orders(add_orders, delete_orders)
 
-    async def handle_account_update(self, account):
-        self.update_balance(account['balance'])
-        if 'position' in account:
-            position = self.get_position()
-            if 'last_long' in account['position']:
-                last_long = account['position']['last_long']
-                if last_long['price'] == 0.0 and position['LONG']:
-                    self.update_position({}, None)
-                elif last_long['price'] != 0.0:
-                    self.update_position(last_long, None)
-            if 'last_short' in account['position']:
-                last_short = account['position']['last_short']
-                if last_short['price'] == 0.0 and position['SHORT']:
-                    self.update_position(None, {})
-                elif last_short['price'] != 0.0:
-                    self.update_position(None, last_short)
+    async def handle_account_update(self, balance: float, long: Position, short: Position):
+        self.update_balance(balance)
+        if not self.position.long.equal(long) or not self.position.short.equal(short):
             self.position_change = True
+        self.update_position(long, short)
 
     async def start_heartbeat(self) -> None:
         while True:
@@ -233,19 +262,20 @@ class Bot:
                             msg = json.loads(msg)
                             type = self.determine_update_type(msg)
                             if type:
-                                if type == 'order':
+                                # print(msg)
+                                if type == ORDER_UPDATE:
                                     await self.handle_order_update(self.prepare_order(msg))
-                                elif type == 'account':
-                                    await self.handle_account_update(self.prepare_account(msg))
+                                elif type == ACCOUNT_UPDATE:
+                                    await self.handle_account_update(*self.prepare_account(msg))
                                 if self.position_change and self.order_fill_change:
                                     self.strategy.update_balance(self.get_balance())
                                     self.strategy.update_orders(self.get_orders())
-                                    changed_orders = self.strategy.on_update(self.get_position(),
-                                                                             self.last_filled_order)
+                                    add_orders, delete_orders = self.strategy.on_update(self.get_position(),
+                                                                                        self.last_filled_order)
                                     self.strategy.update_values(self.get_balance(), self.get_position(),
                                                                 self.get_orders())
-                                    asyncio.create_task(self.cancel_orders(changed_orders['cancel']))
-                                    asyncio.create_task(self.create_orders(changed_orders['add']))
+                                    asyncio.create_task(self.cancel_orders(delete_orders))
+                                    asyncio.create_task(self.create_orders(add_orders))
                                     self.position_change = False
                                     self.order_fill_change = False
                         except Exception as e:
@@ -274,20 +304,40 @@ class Bot:
     async def execute_leverage_change(self):
         raise NotImplementedError
 
-    async def execute_order(self, order: dict) -> Union[dict, bool]:
+    async def execute_order(self, order: Order) -> Union[dict, bool]:
         raise NotImplementedError
 
-    async def execute_cancellation(self, order: dict) -> Union[dict, bool]:
+    async def execute_cancellation(self, order: Order) -> Union[dict, bool]:
         raise NotImplementedError
 
-    async def create_orders(self, orders_to_create: [dict]) -> [dict]:
+    async def create_orders(self, orders_to_create: List[Order]):
         raise NotImplementedError
 
-    async def cancel_orders(self, orders_to_cancel: [dict]) -> [dict]:
+    async def cancel_orders(self, orders_to_cancel: List[Order]):
         raise NotImplementedError
+
+    def correct_float_precision(self, order):
+        if not np.isclose(order.price, round_dn(order.price, self.price_step), rtol=1e-60, atol=1e-60):
+            if order.price > round_dn(order.price, self.price_step):
+                order.price = round_up(order.price, self.price_step)
+            else:
+                order.price = round_dn(order.price, self.price_step)
+        if not np.isclose(order.stop_price, round_dn(order.stop_price, self.price_step), rtol=1e-60, atol=1e-60):
+            if order.stop_price > round_dn(order.stop_price, self.price_step):
+                order.stop_price = round_up(order.stop_price, self.price_step)
+            else:
+                order.stop_price = round_dn(order.stop_price, self.price_step)
+        if not np.isclose(order.qty, round_dn(order.qty, self.qty_step), rtol=1e-60, atol=1e-60):
+            if order.qty > round_dn(order.qty, self.qty_step):
+                order.qty = round_up(order.qty, self.qty_step)
+            else:
+                order.qty = round_dn(order.qty, self.qty_step)
+        return order
 
     async def decide(self, price):
-        changed_orders = self.strategy.make_decision(self.get_balance(), self.get_position(), self.get_orders(), price)
+        add_orders, delete_orders = self.strategy.make_decision(self.get_balance(), self.get_position(),
+                                                                self.get_orders(), price)
         self.strategy.update_values(self.get_balance(), self.get_position(), self.get_orders())
-        await self.cancel_orders(changed_orders['cancel'])
-        await self.create_orders(changed_orders['add'])
+
+        await self.cancel_orders(delete_orders)
+        await self.create_orders(add_orders)

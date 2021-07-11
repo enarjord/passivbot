@@ -3,11 +3,39 @@ import hashlib
 import hmac
 import json
 from time import time
-from typing import Union
+from typing import Union, Tuple, List
 from urllib.parse import urlencode
 
-from bots.base_bot import Bot
-from functions import sort_dict_keys, print_
+from bots.base_bot import Bot, ORDER_UPDATE, ACCOUNT_UPDATE
+from definitions.order import Order
+from definitions.order import TP, SL, LIMIT, MARKET, LQ, NEW, PARTIALY_FILLED, FILLED, CANCELED, EXPIRED, TRADE, \
+    CALCULATED, BUY, SELL, LONG, SHORT, BOTH, NEW_INSURANCE, NEW_ADL
+from definitions.position import Position
+from functions import sort_dict_keys, print_, print_order
+
+order_mapping = {'BUY': BUY, 'SELL': SELL, 'MARKET': MARKET, 'LIMIT': LIMIT, 'STOP': SL, 'TAKE_PROFIT': TP,
+                 'LIQUIDATYION': LQ, 'NEW': NEW, 'CANCELED': CANCELED, 'CALCULATED': CALCULATED, 'EXPIRED': EXPIRED,
+                 'TRADE': TRADE, 'PARTIALLY_FILLED': PARTIALY_FILLED, 'FILLED': FILLED, 'LONG': LONG, 'SHORT': SHORT,
+                 'BOTH': BOTH, 'NEW_INSURANCE': NEW_INSURANCE, 'NEW_ADL': NEW_ADL}
+
+reverse_order_mapping = {TP: 'TAKE_PROFIT', SL: 'STOP_LOSS', LIMIT: 'LIMIT', MARKET: 'MARKET', BUY: 'BUY', SELL: 'SELL',
+                         LONG: 'LONG', SHORT: 'SHORT'}
+
+
+def mapping(item):
+    try:
+        return order_mapping[item.upper()]
+    except Exception as e:
+        print('Could not map', e)
+        return ''
+
+
+def reverse_mapping(item):
+    try:
+        return reverse_order_mapping[item]
+    except Exception as e:
+        print('Could not map', e)
+        return ''
 
 
 class BinanceBot(Bot):
@@ -84,43 +112,48 @@ class BinanceBot(Bot):
                 break
         self.strategy.update_steps(self.qty_step, self.price_step)
 
-    async def fetch_orders(self):
+    async def fetch_orders(self) -> List[Order]:
         ords = await self.private_get(self.endpoints['open_orders'], {'symbol': self.symbol})
-        orders = {'LONG': [], 'SHORT': []}
+        # orders = {'LONG': [], 'SHORT': []}
+        orders = []
         for o in ords:
             if o['symbol'] == self.symbol:
-                d = {'order_id': int(o['orderId']),
-                     'price': float(o['price']),
-                     'qty': float(o['origQty']),
-                     'type': o['type'].upper(),
-                     'side': o['side'].upper(),
-                     'timestamp': int(o['time'])}
-                if o['positionSide'].upper() == 'LONG':
-                    orders['LONG'].append(d)
-                elif o['positionSide'].upper() == 'SHORT':
-                    orders['SHORT'].append(d)
+                order = Order(o['symbol'].upper(),
+                              int(o['orderId']),
+                              float(o['price']),
+                              float(o['stopPrice']),
+                              float(o['origQty']),
+                              mapping(o['type']),
+                              mapping(o['side']),
+                              int(o['time']),
+                              mapping(o['status']),
+                              mapping(o['positionSide']))
+                if order.position_side == LONG or order.position_side == SHORT:
+                    orders.append(order)
                 else:
                     print_([o], n=True)
         return orders
 
-    async def fetch_position(self):
+    async def fetch_position(self) -> Tuple[Position, Position]:
         pos = await self.private_get(self.endpoints['position'], ({'symbol': self.symbol}))
-        long = None
-        short = None
+        long = Position('', 0.0, 0.0, 0.0, 0.0, 0, '')
+        short = Position('', 0.0, 0.0, 0.0, 0.0, 0, '')
         for p in pos:
             if p['symbol'] == self.symbol:
-                d = {'size': float(p['positionAmt']),
-                     'price': float(p['entryPrice']),
-                     # 'liquidation_price': float(p['liquidationPrice']),
-                     # 'leverage': float(p['leverage']),
-                     'upnl': float(p['unRealizedProfit'])}
-                if p['positionSide'] == 'LONG' and float(p['positionAmt']) != 0.0:
-                    long = d
-                elif p['positionSide'] == 'SHORT' and float(p['positionAmt']) != 0.0:
-                    short = d
+                position = Position(p['symbol'].upper(),
+                                    float(p['positionAmt']),
+                                    float(p['entryPrice']),
+                                    float(p['liquidationPrice']),
+                                    float(p['unRealizedProfit']),
+                                    int(p['leverage']),
+                                    mapping(p['positionSide']))
+                if position.position_side == LONG and position.size != 0.0:
+                    long = position
+                elif position.position_side == SHORT and position.size != 0.0:
+                    short = position
         return long, short
 
-    async def fetch_balance(self):
+    async def fetch_balance(self) -> float:
         bal = await self.private_get(self.endpoints['balance'], {})
         for b in bal:
             if b['asset'] == self.quote_asset:
@@ -160,43 +193,47 @@ class BinanceBot(Bot):
     async def private_delete(self, url: str, params: dict = {}) -> dict:
         return await self.private_('delete', url, params)
 
-    def prepare_order(self, msg) -> dict:
-        o = {'order_id': int(msg['o']['i']),
-             'price': float(msg['o']['p']),
-             'qty': float(msg['o']['q']),
-             'type': msg['o']['o'].upper(),
-             'side': msg['o']['S'].upper(),
-             'timestamp': int(msg['o']['T']),
-             'action': msg['o']['X'],
-             'position_side': msg['o']['ps'].upper()}
+    def prepare_order(self, msg) -> Order:
+        order = Order(msg['o']['s'].upper(),
+                      int(msg['o']['i']),
+                      float(msg['o']['p']),
+                      0.0,
+                      float(msg['o']['q']),
+                      mapping(msg['o']['o']),
+                      mapping(msg['o']['S']),
+                      int(msg['o']['T']),
+                      mapping(msg['o']['X']),
+                      mapping(msg['o']['ps']))
         if 'ot' in msg['o']:
-            if msg['o']['ot'] == 'MARKET' and o['action'] != 'PARTIALLY_FILLED':
-                o['price'] = float(msg['o']['ap'])
-        if o['action'] == 'PARTIALLY_FILLED':
-            o['qty'] = o['qty'] - float(msg['o']['z'])
-        return o
+            if mapping(msg['o']['ot']) == MARKET and order.action != PARTIALY_FILLED:
+                order.price = float(msg['o']['ap'])
+        if order.action == PARTIALY_FILLED:
+            order.qty = order.qty - float(msg['o']['z'])
+        return order
 
-    def prepare_account(self, msg) -> dict:
-        a = {}
+    def prepare_account(self, msg) -> Tuple[float, Position, Position]:
+        balance = None
+        last_long = Position('', 0.0, 0.0, 0.0, 0.0, 0, '')
+        last_short = Position('', 0.0, 0.0, 0.0, 0.0, 0, '')
         for b in msg['a']['B']:
             if b['a'].upper() == self.quote_asset:
-                a['balance'] = float(b['wb'])
+                balance = float(b['wb'])
                 break
         if 'P' in msg['a']:
-            a['position'] = {}
-            a['position']['last_long'] = None
-            a['position']['last_short'] = None
             for p in msg['a']['P']:
                 if p['s'] == self.symbol:
-                    d = {'size': float(p['pa']),
-                         'price': float(p['ep']),
-                         'upnl': float(p['up']),
-                         'leverage': self.leverage}
-                    if p['ps'].upper() == 'LONG':
-                        a['position']['last_long'] = d
-                    if p['ps'].upper() == 'SHORT':
-                        a['position']['last_short'] = d
-        return a
+                    position = Position(p['s'].upper(),
+                                        float(p['pa']),
+                                        float(p['ep']),
+                                        0.0,
+                                        float(p['up']),
+                                        self.leverage,
+                                        mapping(p['ps']))
+                    if position.position_side == LONG:
+                        last_long = position
+                    if position.position_side == SHORT:
+                        last_short = position
+        return balance, last_long, last_short
 
     async def update_heartbeat(self):
         if self.listenKey:
@@ -217,79 +254,81 @@ class BinanceBot(Bot):
         if 'e' in msg:
             if msg['e'] == 'ORDER_TRADE_UPDATE':
                 if msg['o']['s'].upper() == self.symbol:
-                    type = 'order'
+                    type = ORDER_UPDATE
             elif msg['e'] == 'ACCOUNT_UPDATE':
-                type = 'account'
+                type = ACCOUNT_UPDATE
         return type
 
     async def execute_leverage_change(self):
         return await self.private_post(self.endpoints['leverage'],
                                        {'symbol': self.symbol, 'leverage': int(self.config['leverage'])})
 
-    async def execute_order(self, order: dict) -> Union[dict, bool]:
-        params = {'symbol': self.symbol,
-                  'side': order['side'].upper(),
-                  'positionSide': order['position_side'].upper(),
-                  'type': order['type'].upper(),
-                  'quantity': str(order['qty'])}
-        if params['type'] == 'LIMIT':
+    async def execute_order(self, order: Order) -> Union[dict, bool]:
+        params = {'symbol': order.symbol,
+                  'side': reverse_mapping(order.side),
+                  'positionSide': reverse_mapping(order.position_side),
+                  'type': reverse_mapping(order.type),
+                  'quantity': str(order.qty)}
+        if params['type'] == LIMIT:
             params['timeInForce'] = 'GTX'
-            params['price'] = str(order['price'])
-        if params['type'] == 'TAKE_PROFIT':
-            params['price'] = str(order['price'])
-            params['stopPrice'] = str(order['stop_price'])
+            params['price'] = str(order.price)
+        if params['type'] == TP:
+            params['price'] = str(order.price)
+            params['stopPrice'] = str(order.stop_price)
         o = await self.private_post(self.endpoints['create_order'], params)
         if 'code' in o:
             return o
         else:
             return True
 
-    async def execute_cancellation(self, order: dict) -> Union[dict, bool]:
+    async def execute_cancellation(self, order: Order) -> Union[dict, bool]:
         c = await self.private_delete(self.endpoints['cancel_order'],
-                                      {'symbol': self.symbol, 'orderId': order['order_id']})
+                                      {'symbol': order.symbol, 'orderId': order.order_id})
         if 'code' in c:
             return c
         else:
             return True
 
-    async def create_orders(self, orders_to_create: [dict]):
+    async def create_orders(self, orders_to_create: List[Order]):
         if not orders_to_create:
             return
         creations = []
-        for oc in orders_to_create:
+        for order in orders_to_create:
             try:
-                creations.append((oc, asyncio.create_task(self.execute_order(oc))))
+                order = self.correct_float_precision(order)
+                creations.append((order, asyncio.create_task(self.execute_order(order))))
             except Exception as e:
-                print_(['Error creating order', oc, e], n=True)
-        for oc, c in creations:
+                print_(['Error creating order', print_order(order), e], n=True)
+        for order, c in creations:
             try:
                 o = await c
                 if type(o) == bool:
                     if not o:
-                        print_(['Error creating order'], n=True)
+                        print_(['Error creating order', print_order(order)], n=True)
                 else:
-                    print_(['Error creating order', o], n=True)
+                    print_(['Error creating order', print_order(order), o], n=True)
             except Exception as e:
-                print_(['Error creating order', oc, c.exception(), e], n=True)
+                print_(['Error creating order', print_order(order), c.exception(), e], n=True)
         return
 
-    async def cancel_orders(self, orders_to_cancel: [dict]):
+    async def cancel_orders(self, orders_to_cancel: List[Order]):
         if not orders_to_cancel:
             return
         deletions = []
-        for oc in orders_to_cancel:
+        for order in orders_to_cancel:
             try:
-                deletions.append((oc, asyncio.create_task(self.execute_cancellation(oc))))
+                order = self.correct_float_precision(order)
+                deletions.append((order, asyncio.create_task(self.execute_cancellation(order))))
             except Exception as e:
-                print_(['Error cancelling order a', oc, e], n=True)
-        for oc, c in deletions:
+                print_(['Error cancelling order a', print_order(order), e], n=True)
+        for order, c in deletions:
             try:
                 o = await c
                 if type(o) == bool:
                     if not o:
-                        print_(['Error cancelling order'], n=True)
+                        print_(['Error cancelling order', print_order(order)], n=True)
                 else:
-                    print_(['Error cancelling order', o], n=True)
+                    print_(['Error cancelling order', print_order(order), o], n=True)
             except Exception as e:
-                print_(['Error cancelling order', oc, c.exception(), e], n=True)
+                print_(['Error cancelling order', print_order(order), c.exception(), e], n=True)
         return

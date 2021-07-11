@@ -1,6 +1,11 @@
+from typing import List, Tuple
+
 import numpy as np
 from numba import njit
 
+from definitions.order import Order, TP, SELL, LONG, LIMIT, BUY
+from definitions.order_list import OrderList, empty_order_list
+from definitions.position_list import PositionList
 from functions import print_
 from strategies.base_strategy import Strategy
 
@@ -41,6 +46,8 @@ def get_dca_grid(current_price, position_size, position_price, leverage, reentry
         reentry_prices.append(current_price)
         reentry_sizes.append(position_size)
         max_pos += current_price * position_size
+    reentry_prices = np.array(reentry_prices)
+    reentry_sizes = np.array(reentry_sizes)
     return reentry_prices, reentry_sizes
 
 
@@ -63,76 +70,76 @@ class Grid(Strategy):
         self.tp_grid = self.config['tp_grid']
         self.percent = self.config['percent']
 
-    def make_decision(self, balance, position, orders, price) -> dict:
-        changed_orders = {'cancel': [],
-                          'add': []}
-        return changed_orders
+    def precompile(self):
+        round_dn(0.0, 0.01)
+        get_initial_position(0.01, np.array([[0.1, 1.0]]), 1, 0.1, 0.01, 0.01)
+        get_dca_grid(0.01, 0.01, 0.01, 1, np.array([[0.1, 1.0]]), 1, 0.1, 0.01, 0.01)
+        get_tp_grid(0.01, 0.01, np.array([[0.1, 1.0]]), 0.01, 0.01)
 
-    def on_update(self, position, last_filled_order):
-        changed_orders = {'cancel': [],
-                          'add': []}
+    def make_decision(self, balance: float, position: PositionList, orders: OrderList, price: float) -> Tuple[
+        List[Order], List[Order]]:
+        add_orders = empty_order_list()
+        delete_orders = empty_order_list()
+        return add_orders, delete_orders
+
+    def on_update(self, position: PositionList, last_filled_order: Order) -> Tuple[List[Order], List[Order]]:
+        add_orders = empty_order_list()
+        delete_orders = empty_order_list()
         try:
-            if not self.position['LONG'] and position['LONG']:
-                changed_orders['add'].extend(self.calculate_dca_tp(last_filled_order['price'], position))
-            elif self.position['LONG'] and not position['LONG']:
-                for order in self.open_orders['LONG']:
-                    changed_orders['cancel'].append(order)
+            if self.position.long.size == 0.0 and position.long.size != 0.0:
+                add_orders.extend(self.calculate_dca_tp(last_filled_order.price, position))
+            elif self.position.long.size != 0.0 and position.long.size == 0.0:
+                for order in self.open_orders.long:
+                    delete_orders.append(order)
             else:
-                if last_filled_order['type'] == 'LIMIT' and last_filled_order['position_side'] == 'LONG' and \
-                        last_filled_order['side'] == 'BUY':
+                if last_filled_order.type == LIMIT and last_filled_order.position_side == LONG \
+                        and last_filled_order.side == BUY:
                     # Reentry triggered
                     # Update TP grid
-                    for order in self.open_orders['LONG']:
-                        if order['type'] == 'TAKE_PROFIT':
-                            changed_orders['cancel'].append(order)
-                    changed_orders['add'].extend(self.prepare_tp_orders(last_filled_order['price'], position))
-                elif last_filled_order['type'] == 'TAKE_PROFIT' and last_filled_order['position_side'] == 'LONG' and \
-                        last_filled_order['side'] == 'SELL':
+                    for order in self.open_orders.long:
+                        if order.type == TP:
+                            delete_orders.append(order)
+                    add_orders.extend(self.prepare_tp_orders(last_filled_order.price, position))
+                elif last_filled_order.type == TP and last_filled_order.position_side == LONG \
+                        and last_filled_order.side == SELL:
                     # TP triggered
                     # Update reentry grid
-                    for order in self.open_orders['LONG']:
-                        if order['type'] == 'LIMIT':
-                            changed_orders['cancel'].append(order)
-                    changed_orders['add'].extend(self.prepare_reentry_orders(last_filled_order['price'], position))
+                    for order in self.open_orders.long:
+                        if order.type == LIMIT:
+                            delete_orders.append(order)
+                    add_orders.extend(self.prepare_reentry_orders(last_filled_order.price, position))
                 else:
                     # Position was changed but not by the strategy
                     # Recalculate both
-                    for order in self.open_orders['LONG']:
-                        changed_orders['cancel'].append(order)
-                    changed_orders['add'].extend(self.calculate_dca_tp(last_filled_order['price'], position))
+                    for order in self.open_orders.long:
+                        delete_orders.append(order)
+                    add_orders.extend(self.calculate_dca_tp(last_filled_order.price, position))
         except Exception as e:
             print_(['On update error', e], n=True)
-        return changed_orders
+        return add_orders, delete_orders
 
-    def prepare_tp_orders(self, price, position):
-        orders = []
-        tp_prices, tp_sizes = get_tp_grid(price, position['LONG']['size'], self.tp_grid, self.qty_step, self.price_step)
+    def prepare_tp_orders(self, price: float, position: PositionList) -> List[Order]:
+        orders = empty_order_list()
+        tp_prices, tp_sizes = get_tp_grid(price, position.long.size, self.tp_grid, self.qty_step, self.price_step)
         for i in range(len(tp_prices)):
-            order = {'side': 'SELL',
-                     'position_side': 'LONG',
-                     'type': 'TAKE_PROFIT',
-                     'qty': tp_sizes[i],
-                     'price': tp_prices[i],
-                     'stop_price': tp_prices[i]}
+            order = Order(position.long.symbol, 0, float(tp_prices[i]), float(tp_prices[i]), float(tp_sizes[i]), TP,
+                          SELL, 0, '', LONG)
             orders.append(order)
         return orders
 
-    def prepare_reentry_orders(self, price, position):
-        orders = []
-        reentry_prices, reentry_sizes = get_dca_grid(price, position['LONG']['size'], position['LONG']['price'],
-                                                     position['LONG']['leverage'], self.reentry_grid, self.balance,
+    def prepare_reentry_orders(self, price: float, position: PositionList) -> List[Order]:
+        orders = empty_order_list()
+        reentry_prices, reentry_sizes = get_dca_grid(price, position.long.size, position.long.price,
+                                                     position.long.leverage, self.reentry_grid, self.balance,
                                                      self.percent, self.qty_step, self.price_step)
         for i in range(len(reentry_prices)):
-            order = {'side': 'BUY',
-                     'position_side': 'LONG',
-                     'type': 'LIMIT',
-                     'qty': reentry_sizes[i] * position['LONG']['leverage'],
-                     'price': reentry_prices[i]}
+            order = Order(position.long.symbol, 0, float(reentry_prices[i]), float(reentry_prices[i]),
+                          float(reentry_sizes[i] * float(position.long.leverage)), LIMIT, BUY, 0, '', LONG)
             orders.append(order)
         return orders
 
-    def calculate_dca_tp(self, price, position):
-        orders = []
+    def calculate_dca_tp(self, price: float, position: PositionList) -> List[Order]:
+        orders = empty_order_list()
         orders.extend(self.prepare_reentry_orders(price, position))
         orders.extend(self.prepare_tp_orders(price, position))
         return orders
