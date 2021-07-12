@@ -89,13 +89,13 @@ def calc_bid_ask_thresholds(prices: np.ndarray, MAs: np.ndarray, iprc_const, ipr
 @njit
 def calc_samples(ticks: np.ndarray, sample_size_ms: int = 1000) -> np.ndarray:
     # ticks [[timestamp, qty, price]]
-    sampled_timestamps = np.arange(ticks[:, 0][0] // sample_size_ms * sample_size_ms,
-                                   ticks[:, 0][-1] // sample_size_ms * sample_size_ms + sample_size_ms,
+    sampled_timestamps = np.arange(ticks[0][0] // sample_size_ms * sample_size_ms,
+                                   ticks[-1][0] // sample_size_ms * sample_size_ms + sample_size_ms,
                                    sample_size_ms)
     samples = np.zeros((len(sampled_timestamps), 3))
     samples[:, 0] = sampled_timestamps
-    i = 0
     ts = sampled_timestamps[0]
+    i = 0
     k = 0
     while True:
         if ts == samples[k][0]:
