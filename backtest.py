@@ -11,7 +11,7 @@ from downloader import Downloader
 from njit_funcs import njit_backtest, round_
 from plotting import dump_plots
 from procedures import prep_config, make_get_filepath, load_live_config, add_argparse_args
-from pure_funcs import create_xk, denumpyize, ts_to_date, analyze_fills, spotify_live_config
+from pure_funcs import create_xk, denumpyize, ts_to_date, analyze_fills, spotify_config
 
 
 def backtest(config: dict, data: (np.ndarray,), do_print=False) -> (list, bool):
@@ -57,8 +57,8 @@ async def main():
     live_config = load_live_config(args.live_config_path)
     live_config['long']['enabled'] = config['do_long']
     live_config['shrt']['enabled'] = config['do_shrt']
-    if config['market_type'] == 'spot':
-        live_config = spotify_live_config(live_config)
+    if 'spot' in config['market_type']:
+        live_config = spotify_config(live_config)
     config.update(live_config)
     print()
     for k in (keys := ['exchange', 'spot', 'symbol', 'starting_balance', 'start_date', 'end_date',
