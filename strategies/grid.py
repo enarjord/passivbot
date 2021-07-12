@@ -2,6 +2,8 @@ from typing import List, Tuple
 
 import numpy as np
 from numba import njit
+from numba import types
+from numba.experimental import jitclass
 
 from definitions.order import Order, TP, SELL, LONG, LIMIT, BUY
 from definitions.order_list import OrderList, empty_order_list
@@ -63,14 +65,67 @@ def get_tp_grid(current_price, position_size, tp_grid, qty_step, price_step):
     return tp_prices, tp_sizes
 
 
+@jitclass([
+    ('reentry_grid', types.float64[:, :]),
+    ('tp_grid', types.float64[:, :]),
+    ('percent', types.float64),
+])
+class StrategyConfig:
+    """
+    Strategy config for the grid trading strategy.
+    """
+
+    def __init__(self, reentry_grid: np.ndarray, tp_grid: np.ndarray, percent: float):
+        """
+        Initializes a strategy config for the grid trading strategy.
+        :param reentry_grid: The reentry grid to use.
+        :param tp_grid: The take profit grid to use.
+        :param percent: The wallet percentage to use.
+        """
+        self.reentry_grid = reentry_grid
+        self.tp_grid = tp_grid
+        self.percent = percent
+
+
+def convert_dict_to_config(config: dict) -> StrategyConfig:
+    """
+    Converts the strategy config from a dictionary to a grid strategy config.
+    :param config: The strategy part of the config.
+    :return: A jitclass grid StrategyConfig.
+    """
+    grid = []
+    for k, v in config['reentry_grid'].items():
+        grid.append([v[0], v[1]])
+    reentry_grid = np.array(grid)
+    grid = []
+    for k, v in config['tp_grid'].items():
+        grid.append([v[0], v[1]])
+    tp_grid = np.array(grid)
+    percent = config['percent']
+    strategy_config = StrategyConfig(reentry_grid, tp_grid, percent)
+    return strategy_config
+
+
 class Grid(Strategy):
-    def __init__(self, config):
+    """
+    Grid trading strategy using a fixed grid.
+    """
+
+    def __init__(self, config: StrategyConfig):
+        """
+        Initializes a grid strategy with a grid strategy config.
+        :param config:
+        """
         super().__init__(config)
-        self.reentry_grid = self.config['reentry_grid']
-        self.tp_grid = self.config['tp_grid']
-        self.percent = self.config['percent']
+        self.reentry_grid = self.config.reentry_grid
+        self.tp_grid = self.config.tp_grid
+        self.percent = self.config.percent
 
     def precompile(self):
+        """
+        Compiles all used functions.
+        :return:
+        """
         round_dn(0.0, 0.01)
         get_initial_position(0.01, np.array([[0.1, 1.0]]), 1, 0.1, 0.01, 0.01)
         get_dca_grid(0.01, 0.01, 0.01, 1, np.array([[0.1, 1.0]]), 1, 0.1, 0.01, 0.01)
@@ -78,11 +133,27 @@ class Grid(Strategy):
 
     def make_decision(self, balance: float, position: PositionList, orders: OrderList, price: float) -> Tuple[
         List[Order], List[Order]]:
+        """
+        Makes a decision based on a price update.
+        :param balance: Current balance.
+        :param position: Current position.
+        :param orders: Current orders.
+        :param price: Current price.
+        :return: Two typed lists of orders, orders to add and orders to delete.
+        """
         add_orders = empty_order_list()
         delete_orders = empty_order_list()
         return add_orders, delete_orders
 
     def on_update(self, position: PositionList, last_filled_order: Order) -> Tuple[List[Order], List[Order]]:
+        """
+        Called on a position and order update. Creates the full grid when the order is new. Removes the grid when the
+        position closed. Updates the take profit grid when a reentry triggered and vice versa the reentry grid when a
+        take profit triggered.
+        :param position: The new position.
+        :param last_filled_order: The last filled order.
+        :return: Two typed lists of orders, orders to add and orders to delete.
+        """
         add_orders = empty_order_list()
         delete_orders = empty_order_list()
         try:
@@ -119,6 +190,12 @@ class Grid(Strategy):
         return add_orders, delete_orders
 
     def prepare_tp_orders(self, price: float, position: PositionList) -> List[Order]:
+        """
+        Prepares the take profit orders. Calculates the grid and converts it to order list.
+        :param price: Price to use for grid calculation.
+        :param position: Current position.
+        :return: Typed list of orders.
+        """
         orders = empty_order_list()
         tp_prices, tp_sizes = get_tp_grid(price, position.long.size, self.tp_grid, self.qty_step, self.price_step)
         for i in range(len(tp_prices)):
@@ -128,6 +205,12 @@ class Grid(Strategy):
         return orders
 
     def prepare_reentry_orders(self, price: float, position: PositionList) -> List[Order]:
+        """
+        Prepares the reentry orders. Calculates the grid and converts it to order list.
+        :param price: Price to use for grid calculation.
+        :param position: Current position.
+        :return: Typed list of orders.
+        """
         orders = empty_order_list()
         reentry_prices, reentry_sizes = get_dca_grid(price, position.long.size, position.long.price,
                                                      position.long.leverage, self.reentry_grid, self.balance,
@@ -139,22 +222,13 @@ class Grid(Strategy):
         return orders
 
     def calculate_dca_tp(self, price: float, position: PositionList) -> List[Order]:
+        """
+        Calculates both grids.
+        :param price: Price to use for grid calculation.
+        :param position: Current position.
+        :return: Typed list of orders.
+        """
         orders = empty_order_list()
         orders.extend(self.prepare_reentry_orders(price, position))
         orders.extend(self.prepare_tp_orders(price, position))
         return orders
-
-    def load_strategy_config(self, config: dict) -> dict:
-        try:
-            grid = []
-            for k, v in config['reentry_grid'].items():
-                grid.append([v[0], v[1]])
-            config['reentry_grid'] = np.array(grid)
-            grid = []
-            for k, v in config['tp_grid'].items():
-                grid.append([v[0], v[1]])
-            config['tp_grid'] = np.array(grid)
-            return config
-        except Exception as e:
-            print_(['Could not read strategy config', e], n=True)
-            return {}
