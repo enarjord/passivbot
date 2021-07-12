@@ -8,7 +8,7 @@ import numpy as np
 import websockets
 from numba import njit
 
-from definitions.order import NEW, PARTIALY_FILLED, FILLED, CANCELED, EXPIRED, LONG, SHORT, NEW_INSURANCE, NEW_ADL
+from definitions.order import NEW, PARTIALLY_FILLED, FILLED, CANCELED, EXPIRED, LONG, SHORT, NEW_INSURANCE, NEW_ADL
 from definitions.order import Order
 from definitions.order_list import OrderList, empty_order_list
 from definitions.position import Position
@@ -228,7 +228,7 @@ class Bot:
             delete_orders.append(order)
         if order.action in [NEW]:
             add_orders.append(order)
-        if order.action in [PARTIALY_FILLED]:
+        if order.action in [PARTIALLY_FILLED]:
             delete_orders.append(order)
             add_orders.append(order)
         if order.action == FILLED:

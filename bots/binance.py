@@ -8,14 +8,14 @@ from urllib.parse import urlencode
 
 from bots.base_bot import Bot, ORDER_UPDATE, ACCOUNT_UPDATE
 from definitions.order import Order
-from definitions.order import TP, SL, LIMIT, MARKET, LQ, NEW, PARTIALY_FILLED, FILLED, CANCELED, EXPIRED, TRADE, \
+from definitions.order import TP, SL, LIMIT, MARKET, LQ, NEW, PARTIALLY_FILLED, FILLED, CANCELED, EXPIRED, TRADE, \
     CALCULATED, BUY, SELL, LONG, SHORT, BOTH, NEW_INSURANCE, NEW_ADL
 from definitions.position import Position
 from functions import sort_dict_keys, print_, print_order
 
 order_mapping = {'BUY': BUY, 'SELL': SELL, 'MARKET': MARKET, 'LIMIT': LIMIT, 'STOP': SL, 'TAKE_PROFIT': TP,
                  'LIQUIDATYION': LQ, 'NEW': NEW, 'CANCELED': CANCELED, 'CALCULATED': CALCULATED, 'EXPIRED': EXPIRED,
-                 'TRADE': TRADE, 'PARTIALLY_FILLED': PARTIALY_FILLED, 'FILLED': FILLED, 'LONG': LONG, 'SHORT': SHORT,
+                 'TRADE': TRADE, 'PARTIALLY_FILLED': PARTIALLY_FILLED, 'FILLED': FILLED, 'LONG': LONG, 'SHORT': SHORT,
                  'BOTH': BOTH, 'NEW_INSURANCE': NEW_INSURANCE, 'NEW_ADL': NEW_ADL}
 
 reverse_order_mapping = {TP: 'TAKE_PROFIT', SL: 'STOP_LOSS', LIMIT: 'LIMIT', MARKET: 'MARKET', BUY: 'BUY', SELL: 'SELL',
@@ -205,9 +205,9 @@ class BinanceBot(Bot):
                       mapping(msg['o']['X']),
                       mapping(msg['o']['ps']))
         if 'ot' in msg['o']:
-            if mapping(msg['o']['ot']) == MARKET and order.action != PARTIALY_FILLED:
+            if mapping(msg['o']['ot']) == MARKET and order.action != PARTIALLY_FILLED:
                 order.price = float(msg['o']['ap'])
-        if order.action == PARTIALY_FILLED:
+        if order.action == PARTIALLY_FILLED:
             order.qty = order.qty - float(msg['o']['z'])
         return order
 
