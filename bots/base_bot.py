@@ -15,7 +15,7 @@ from definitions.position import Position
 from definitions.position_list import PositionList
 from functions import load_key_secret
 from functions import print_
-from strategies.grid import Grid
+from strategies.grid import Grid, convert_dict_to_config
 
 ORDER_UPDATE = 'order'
 ACCOUNT_UPDATE = 'account'
@@ -34,7 +34,7 @@ def round_up(n, step, safety_rounding=10) -> float:
 class Bot:
     def __init__(self, config: dict):
         self.config = config
-        self.strategy = Grid(config)
+        self.strategy = Grid(convert_dict_to_config(config['strategy']))
 
         self.symbol = config['symbol']
 
