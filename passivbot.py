@@ -11,7 +11,7 @@ from time import time
 from procedures import load_live_config, make_get_filepath, load_exchange_key_secret, print_, add_argparse_args
 from pure_funcs import get_xk_keys, get_ids_to_fetch, flatten, calc_indicators_from_ticks_with_gaps, \
     drop_consecutive_same_prices, filter_orders, compress_float, create_xk, round_dynamic, denumpyize, \
-    calc_spans
+    calc_spans, spotify_config
 from njit_funcs import calc_orders, calc_new_psize_pprice, qty_to_cost, calc_diff, round_, calc_emas, \
     calc_samples, calc_emas_last
 import numpy as np
@@ -156,6 +156,9 @@ class Bot:
             self.ts_released['update_position'] = time()
         except Exception as e:
             print('error with update position', e)
+
+    async def update_fills(self) -> None:
+        fetched = self.fetch_fills()
 
     async def create_orders(self, orders_to_create: [dict]) -> dict:
         if not orders_to_create:
@@ -547,7 +550,7 @@ class Bot:
         combined = np.array(sorted([[e['timestamp'], e['qty'], e['price']] for e in ticks] +
                                    [[e['timestamp'], e['volume'], e['open']] for e in ohlcvs]))
         from pure_funcs import ts_to_date
-        print('\n\ndevug\n\n')
+        print('\n\ndebug\n\n')
         print(len(combined), 'len(combined)')
         print(ts_to_date(combined[0][0] / 1000), 'ts_to_date(combined[0][0] / 1000)')
         print(ts_to_date(combined[-1][0] / 1000), 'ts_to_date(combined[-1][0] / 1000)')
@@ -654,8 +657,6 @@ async def main() -> None:
         return
     try:
         config = load_live_config(args.live_config_path)
-        print('using config')
-        pprint.pprint(denumpyize(config))
     except Exception as e:
         print(e, 'failed to load config', args.live_config_path)
         return
@@ -669,6 +670,7 @@ async def main() -> None:
         if 'spot' in config['market_type']:
             from procedures import create_binance_bot_spot
             bot = await create_binance_bot_spot(config)
+            config = spotify_config(config)
         else:
             from procedures import create_binance_bot
             bot = await create_binance_bot(config)
@@ -677,6 +679,9 @@ async def main() -> None:
         bot = await create_bybit_bot(config)
     else:
         raise Exception('unknown exchange', account['exchange'])
+
+    print('using config')
+    pprint.pprint(denumpyize(config))
 
     if 'telegram' in account and account['telegram']['enabled']:
         telegram = await _start_telegram(account=account, bot=bot)
