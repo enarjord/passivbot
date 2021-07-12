@@ -347,17 +347,11 @@ class Downloader:
 
         if self.config["exchange"] == "binance":
             if self.spot:
-                self.bot = await create_binance_bot_spot(get_dummy_settings(self.config["user"],
-                                                                            self.config["exchange"],
-                                                                            self.config["symbol"]))
+                self.bot = await create_binance_bot_spot(get_dummy_settings(self.config))
             else:
-                self.bot = await create_binance_bot(get_dummy_settings(self.config["user"],
-                                                                       self.config["exchange"],
-                                                                       self.config["symbol"]))
+                self.bot = await create_binance_bot(get_dummy_settings(self.config))
         elif self.config["exchange"] == "bybit":
-            self.bot = await create_bybit_bot(get_dummy_settings(self.config["user"],
-                                                                 self.config["exchange"],
-                                                                 self.config["symbol"]))
+            self.bot = await create_bybit_bot(get_dummy_settings(self.config))
         else:
             print(self.config["exchange"], 'not found')
             return

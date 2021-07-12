@@ -35,10 +35,13 @@ async def prep_config(args) -> dict:
         raise Exception('failed to load optimize config', args.optimize_config_path, e)
     config = {**oc, **bc}
 
-    for key in ['symbol', 'user', 'start_date', 'end_date', 'starting_balance']:
+    for key in ['symbol', 'user', 'start_date', 'end_date', 'starting_balance', 'market_type']:
         if getattr(args, key) is not None:
             config[key] = getattr(args, key)
-    config['spot'] = args.market_type == 'spot'
+    if args.market_type is None:
+        config['spot'] = False
+    else:
+        config['spot'] = args.market_type == 'spot'
     config['exchange'], _, _ = load_exchange_key_secret(config['user'])
 
     if config['exchange'] == 'bybit' and config['symbol'].endswith('USDT'):
@@ -122,10 +125,11 @@ async def fetch_market_specific_settings(config: dict):
     user = config['user']
     exchange = config['exchange']
     symbol = config['symbol']
-    tmp_live_settings = get_dummy_settings(user, exchange, symbol)
+    tmp_live_settings = get_dummy_settings(config)
     settings_from_exchange = {}
     if exchange == 'binance':
-        if 'spot' in config and config['spot']:
+        if 'spot' in config['market_type']:
+            print('here\n\n\n')
             bot = await create_binance_bot_spot(tmp_live_settings)
             settings_from_exchange['maker_fee'] = 0.001
             settings_from_exchange['taker_fee'] = 0.001
@@ -138,6 +142,8 @@ async def fetch_market_specific_settings(config: dict):
             settings_from_exchange['spot'] = False
         settings_from_exchange['exchange'] = 'binance'
     elif exchange == 'bybit':
+        if 'spot' in config['market_type']:
+            raise Exception('spot not implemented on bybit')
         bot = await create_bybit_bot(tmp_live_settings)
         settings_from_exchange['maker_fee'] = -0.00025
         settings_from_exchange['taker_fee'] = 0.00075
@@ -198,7 +204,7 @@ def add_argparse_args(parser):
     parser.add_argument('--starting_balance', type=float, required=False, dest='starting_balance',
                         default=None,
                         help='specify starting_balance, overriding value from backtest config')
-    parser.add_argument('-m', '--market_type', type=str, required=False, dest='market_type', default='futures',
+    parser.add_argument('-m', '--market_type', type=str, required=False, dest='market_type', default=None,
                         help='specify whether spot or futures (default), overriding value from backtest config')
 
     return parser

@@ -64,7 +64,7 @@ class BinanceBot(Bot):
         fapi_info = await self.private_get('/fapi/v1/exchangeInfo', base_endpoint=fapi_endpoint)
         if self.symbol in {e['symbol'] for e in fapi_info['symbols']}:
             print('linear perpetual')
-            self.market_type = 'linear_perpetual'
+            self.market_type += '_linear_perpetual'
             self.inverse = self.config['inverse'] = False
             self.base_endpoint = fapi_endpoint
             self.endpoints = {
@@ -90,7 +90,7 @@ class BinanceBot(Bot):
             if self.symbol in {e['symbol'] for e in dapi_info['symbols']}:
                 print('inverse coin margined')
                 self.base_endpoint = dapi_endpoint
-                self.market_type = 'inverse_coin_margined'
+                self.market_type += '_inverse_coin_margined'
                 self.inverse = self.config['inverse'] = True
                 self.endpoints = {
                     'position': '/dapi/v1/positionRisk',
@@ -129,7 +129,7 @@ class BinanceBot(Bot):
                 self.quot = e['quoteAsset']
                 self.margin_coin = e['marginAsset']
                 self.pair = e['pair']
-                if self.market_type == 'inverse_coin_margined':
+                if 'inverse_coin_margined' in self.market_type:
                     self.c_mult = self.config['c_mult'] = \
                         float(e['contractSize'])
                 price_precision = e['pricePrecision']
@@ -205,10 +205,10 @@ class BinanceBot(Bot):
         try:
             lev = await self.execute_leverage_change()
             print_([lev])
-            if self.market_type == 'linear_perpetual':
+            if 'linear_perpetual' in self.market_type:
                 self.max_pos_size_ito_usdt = float(lev['maxNotionalValue'])
                 print('max pos size in terms of usdt', self.max_pos_size_ito_usdt)
-            elif self.market_type == 'inverse_coin_margined':
+            elif 'inverse_coin_margined' in self.market_type:
                 self.max_pos_size_ito_coin = float(lev['maxQty'])
                 print('max pos size in terms of coin', self.max_pos_size_ito_coin)
 
@@ -228,7 +228,7 @@ class BinanceBot(Bot):
 
     async def init_order_book(self):
         ticker = await self.public_get(self.endpoints['ticker'], {'symbol': self.symbol})
-        if self.market_type == 'inverse_coin_margined':
+        if 'inverse_coin_margined' in self.market_type:
             ticker = ticker[0]
         self.ob = [float(ticker['bidPrice']), float(ticker['askPrice'])]
         self.price = np.random.choice(self.ob)
@@ -249,7 +249,7 @@ class BinanceBot(Bot):
     async def fetch_position(self) -> dict:
         positions, balance = await asyncio.gather(
             self.private_get(self.endpoints['position'], ({'symbol': self.symbol}
-                                                          if self.market_type == 'linear_perpetual'
+                                                          if 'linear_perpetual' in self.market_type
                                                           else {'pair': self.pair})),
             self.private_get(self.endpoints['balance'], {})
         )
@@ -271,7 +271,7 @@ class BinanceBot(Bot):
                                         'upnl': float(p['unRealizedProfit']),
                                         'leverage': float(p['leverage'])}
         for e in balance:
-            if e['asset'] == (self.quot if self.market_type == 'linear_perpetual' else self.coin):
+            if e['asset'] == (self.quot if 'linear_perpetual' in self.market_type else self.coin):
                 position['wallet_balance'] = float(e['balance'])
                 position['equity'] = position['wallet_balance'] + float(e['crossUnPnl'])
                 break

@@ -53,13 +53,12 @@ class Bybit(Bot):
         super().__init__(config)
         self.base_endpoint = 'https://api.bybit.com'
         self.endpoints = {}
-        self.market_type = ''
         self.session = aiohttp.ClientSession(headers={'referer': 'passivbotbybit'})
 
     def init_market_type(self):
         if self.symbol.endswith('USDT'):
             print('linear perpetual')
-            self.market_type = 'linear_perpetual'
+            self.market_type += '_linear_perpetual'
             self.inverse = self.config['inverse'] = False
             self.endpoints = {'position': '/private/linear/position/list',
                               'open_orders': '/private/linear/order/search',
@@ -74,7 +73,7 @@ class Bybit(Bot):
             self.inverse = self.config['inverse'] = True
             if self.symbol.endswith('USD'):
                 print('inverse perpetual')
-                self.market_type = 'inverse_perpetual'
+                self.market_type += '_inverse_perpetual'
                 self.endpoints = {'position': '/v2/private/position/list',
                                   'open_orders': '/v2/private/order',
                                   'create_order': '/v2/private/order/create',
@@ -87,7 +86,7 @@ class Bybit(Bot):
                 self.hedge_mode = self.config['hedge_mode'] = False
             else:
                 print('inverse futures')
-                self.market_type = 'inverse_futures'
+                self.market_type += '_inverse_futures'
                 self.endpoints = {'position': '/futures/private/position/list',
                                   'open_orders': '/futures/private/order',
                                   'create_order': '/futures/private/order/create',
@@ -181,7 +180,7 @@ class Bybit(Bot):
 
     async def fetch_position(self) -> dict:
         position = {}
-        if self.market_type == 'linear_perpetual':
+        if 'linear_perpetual' in self.market_type:
             fetched, bal = await asyncio.gather(
                 self.private_get(self.endpoints['position'], {'symbol': self.symbol}),
                 self.private_get(self.endpoints['balance'], {'coin': self.quot})
@@ -195,14 +194,14 @@ class Bybit(Bot):
                 self.private_get(self.endpoints['balance'], {'coin': self.coin})
             )
             position['wallet_balance'] = float(bal['result'][self.coin]['wallet_balance'])
-            if self.market_type == 'inverse_perpetual':
+            if 'inverse_perpetual' in self.market_type:
                 if fetched['result']['side'] == 'Buy':
                     long_pos = fetched['result']
                     shrt_pos = {'size': 0.0, 'entry_price': 0.0, 'leverage': 0.0, 'liq_price': 0.0}
                 else:
                     long_pos = {'size': 0.0, 'entry_price': 0.0, 'leverage': 0.0, 'liq_price': 0.0}
                     shrt_pos = fetched['result']
-            elif self.market_type == 'inverse_futures':
+            elif 'inverse_futures' in self.market_type:
                 long_pos = [e['data'] for e in fetched['result'] if e['data']['position_idx'] == 1][0]
                 shrt_pos = [e['data'] for e in fetched['result'] if e['data']['position_idx'] == 2][0]
 
@@ -230,11 +229,11 @@ class Bybit(Bot):
         params = {'symbol': self.symbol,
                   'side': first_capitalized(order['side']),
                   'order_type': first_capitalized(order['type']),
-                  'qty': float(order['qty']) if self.market_type == 'linear_perpetual' else int(order['qty']),
+                  'qty': float(order['qty']) if 'linear_perpetual' in self.market_type else int(order['qty']),
                   'close_on_trigger': False}
         if self.hedge_mode:
             params['position_idx'] = 1 if order['position_side'] == 'long' else 2
-            if self.market_type == 'linear_perpetual':
+            if 'linear_perpetual' in self.market_type:
                 params['reduce_only'] = 'close' in order['custom_id']
         else:
             params['position_idx'] = 0
@@ -312,7 +311,7 @@ class Bybit(Bot):
     async def init_exchange_config(self):
         try:
             # set cross mode
-            if self.market_type == 'inverse_futures':
+            if 'inverse_futures' in self.market_type:
                 res = await asyncio.gather(
                     self.private_post('/futures/private/position/leverage/save',
                                       {'symbol': self.symbol, 'position_idx': 1,
@@ -325,12 +324,12 @@ class Bybit(Bot):
                 res = await self.private_post('/futures/private/position/switch-mode',
                                               {'symbol': self.symbol, 'mode': 3})
                 print(res)
-            elif self.market_type == 'linear_perpetual':
+            elif 'linear_perpetual' in self.market_type:
                 res = await self.private_post('/private/linear/position/switch-isolated',
                                               {'symbol': self.symbol, 'is_isolated': False,
                                                'buy_leverage': 0,
                                                'sell_leverage': 0})
-            elif self.market_type == 'inverse_perpetual':
+            elif 'inverse_perpetual' in self.market_type:
                 res = await self.private_post('/v2/private/position/leverage/save',
                                               {'symbol': self.symbol, 'leverage': 0})
 

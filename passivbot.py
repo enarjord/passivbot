@@ -666,7 +666,7 @@ async def main() -> None:
     config['market_type'] = args.market_type
 
     if account['exchange'] == 'binance':
-        if config['market_type'] == 'spot':
+        if 'spot' in config['market_type']:
             from procedures import create_binance_bot_spot
             bot = await create_binance_bot_spot(config)
         else:

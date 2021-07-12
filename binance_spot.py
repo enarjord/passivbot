@@ -67,7 +67,8 @@ class BinanceBotSpot(Bot):
 
     def init_market_type(self):
         print('spot market')
-        self.market_type = 'spot'
+        if 'spot' not in self.market_type:
+            self.market_type += '_spot'
         self.inverse = self.config['inverse'] = False
         self.spot = True
         self.hedge_mode = False
@@ -137,8 +138,6 @@ class BinanceBotSpot(Bot):
 
     async def init_order_book(self):
         ticker = await self.public_get(self.endpoints['ticker'], {'symbol': self.symbol})
-        if self.market_type == 'inverse_coin_margined':
-            ticker = ticker[0]
         self.ob = [float(ticker['bidPrice']), float(ticker['askPrice'])]
         self.price = np.random.choice(self.ob)
 

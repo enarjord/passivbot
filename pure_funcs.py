@@ -41,12 +41,8 @@ def get_xk_keys():
 def create_xk(config: dict) -> dict:
     xk = {}
     config_ = config.copy()
-    if config_['market_type'] == 'spot':
-        config_['spot'] = True
-        config_['do_long'] = config['long']['enabled'] = True
-        config_['do_shrt'] = config['shrt']['enabled'] = False
-        config_['long']['pbr_limit'] = min(config_['long']['pbr_limit'],
-                                           max(0.0, 1.0 - config_['long']['pbr_stop_loss']))
+    if 'spot' in config_['market_type']:
+        config_ = spotify_config(config_)
     else:
         config_['spot'] = False
         config_['do_long'] = config['long']['enabled']
@@ -256,12 +252,12 @@ def filter_orders(actual_orders: [dict],
     return actual_orders, orders_to_create
 
 
-def get_dummy_settings(user: str, exchange: str, symbol: str):
+def get_dummy_settings(config: dict):
     dummy_settings = get_template_live_config(n_spans=3)
     dummy_settings.update({k: 1.0 for k in get_xk_keys() + ['stop_loss_liq_diff', 'ema_span']})
-    dummy_settings.update({'user': user, 'exchange': exchange, 'symbol': symbol,
+    dummy_settings.update({'user': config['user'], 'exchange': config['exchange'], 'symbol': config['symbol'],
                            'config_name': '', 'logging_level': 0, 'spans': np.array([6000, 90000])})
-    return dummy_settings
+    return {**config, **dummy_settings}
 
 
 def flatten(lst: list) -> list:
@@ -512,11 +508,32 @@ def calc_pprice_from_fills(coin_balance, fills, n_fills_limit=100):
     return pprice
 
 
-def spotify_live_config(live_config):
-    spotified = live_config.copy()
-    spotified['shrt']['enabled'] = False
-    spotified['long']['pbr_limit'] = min(spotified['long']['pbr_limit'],
-                                         max(0.0, 1.0 - spotified['long']['pbr_stop_loss']))
+def nullify(x):
+    if type(x) in [list, tuple]:
+        return [nullify(x1) for x1 in x]
+    elif type(x) == np.ndarray:
+        return numpyize([nullify(x1) for x1 in x])
+    elif type(x) == dict:
+        return {k: nullify(x[k]) for k in x}
+    elif type(x) in [bool, np.bool_]:
+        return x
+    else:
+        return 0.0
+
+
+def spotify_config(config: dict, nullify_shrt=True) -> dict:
+    spotified = config.copy()
+
+    spotified['spot'] = True
+    if 'spot' not in spotified['market_type']:
+        spotified['market_type'] += '_spot'
+    spotified['do_long'] = spotified['long']['enabled'] = True
+    spotified['do_shrt'] = spotified['shrt']['enabled'] = False
+    spotified['long']['pbr_stop_loss'] = min(1.0, spotified['long']['pbr_stop_loss'])
+    spotified['long']['pbr_limit'] = max(0.0, min(spotified['long']['pbr_limit'],
+                                                  1.0 - spotified['long']['pbr_stop_loss']))
+    if nullify_shrt:
+        spotified['shrt'] = nullify(spotified['shrt'])
     return spotified
 
 
