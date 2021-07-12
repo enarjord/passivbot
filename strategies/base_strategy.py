@@ -43,11 +43,11 @@ class Strategy:
         :param config: Containing the content for the strategy in form of a StrategyConfig.
         """
         self.config = config
-        self.balance = 0
+        self.balance = 0.0
         self.position = PositionList()
         self.open_orders = OrderList()
-        self.qty_step = None
-        self.price_step = None
+        self.qty_step = 0.0
+        self.price_step = 0.0
 
     def precompile(self):
         """
