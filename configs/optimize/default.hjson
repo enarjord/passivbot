@@ -8,6 +8,8 @@
   # set to 0.0 to disable breaking early
   break_early_factor: 0.5
 
+  minimum_sharpe_ratio: 1.1
+  sharpe_ratio_n_days: 3.0
   minimum_bankruptcy_distance: 0.5
   minimum_equity_balance_ratio: 0.5
   minimum_slice_adg: 1.0

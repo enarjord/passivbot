@@ -44,7 +44,7 @@ class Bot:
 
         self.position = {}
         self.open_orders = []
-        self.fills = []
+        self.filled_order_ids = set()
         self.highest_bid = 0.0
         self.lowest_ask = 9.9e9
         self.price = 0
@@ -91,7 +91,8 @@ class Bot:
 
     async def _init(self):
         self.xk = create_xk(self.config)
-        self.fills = await self.fetch_fills()
+        fills = await self.fetch_fills()
+        self.filled_order_ids.update([f['order_id'] for f in fills])
 
     def dump_log(self, data) -> None:
         if self.config['logging_level'] > 0:
@@ -378,17 +379,20 @@ class Bot:
         print_(['checking if new fills...\n'], n=True)
         # check fills if two mins since prev check has passed
         fills = await self.fetch_fills()
-        if self.fills != fills:
-            await self.check_long_fills(fills)
-            await self.check_shrt_fills(fills)
+        new_fills = [f for f in fills if f['order_id'] not in self.filled_order_ids]
+        if len(new_fills) > 0:
+            await self.check_long_fills(new_fills)
+            await self.check_shrt_fills(new_fills)
 
-        self.fills = fills
+        self.filled_order_ids.update([f['order_id'] for f in fills])
+        # remove orders older than 14 days to prevent building up the list indefinitely
+        self.filled_order_ids.difference_update([f['order_id'] for f in fills
+                                                 if f['timestamp'] < (time() - 60 * 60 * 24 * 14) * 1000])
         self.ts_released['check_fills'] = time()
 
-    async def check_shrt_fills(self, fills):
+    async def check_shrt_fills(self, new_fills):
         # closing orders
-        new_shrt_closes = [item for item in fills if item not in self.fills and
-                           item['side'] == 'buy' and item['position_side'] == 'shrt']
+        new_shrt_closes = [item for item in new_fills if item['side'] == 'buy' and item['position_side'] == 'shrt']
         if len(new_shrt_closes) > 0:
             realized_pnl_shrt = sum(fill['realized_pnl'] for fill in new_shrt_closes)
             if self.telegram is not None:
@@ -413,8 +417,7 @@ class Bot:
                     self.telegram.send_msg(f'Transferred {round_(amount, 0.001)} USDT to Spot wallet')
 
         # entry orders
-        new_shrt_entries = [item for item in fills if item not in self.fills and
-                            item['side'] == 'sell' and item['position_side'] == 'shrt']
+        new_shrt_entries = [item for item in new_fills if item['side'] == 'sell' and item['position_side'] == 'shrt']
         if len(new_shrt_entries) > 0:
             if self.telegram is not None:
                 qty_sum = sum(fill['qty'] for fill in new_shrt_entries)
@@ -426,10 +429,9 @@ class Bot:
                 total_size = self.position['shrt']['size']
                 self.telegram.notify_entry_order_filled(position_side='short', qty=qty_sum, fee=fee, price=vwap, total_size=total_size)
 
-    async def check_long_fills(self, fills):
+    async def check_long_fills(self, new_fills):
         #closing orders
-        new_long_closes = [item for item in fills if item not in self.fills and
-                          item['side'] == 'sell' and item['position_side'] == 'long']
+        new_long_closes = [item for item in new_fills if item['side'] == 'sell' and item['position_side'] == 'long']
         if len(new_long_closes) > 0:
             realized_pnl_long = sum(fill['realized_pnl'] for fill in new_long_closes)
             if self.telegram is not None:
@@ -454,8 +456,7 @@ class Bot:
                     self.telegram.send_msg(f'Transferred {round_(amount, 0.001)} USDT to Spot wallet')
 
         # entry orders
-        new_long_entries = [item for item in fills if item not in self.fills and
-                            item['side'] == 'buy' and item['position_side'] == 'long']
+        new_long_entries = [item for item in new_fills if item['side'] == 'buy' and item['position_side'] == 'long']
         if len(new_long_entries) > 0:
             if self.telegram is not None:
                 qty_sum = sum(fill['qty'] for fill in new_long_entries)

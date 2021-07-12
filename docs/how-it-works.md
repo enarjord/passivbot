@@ -1,20 +1,64 @@
-#How it works
+# How it works
 
-##Grid Trading
+A python script is given access to user's exchange account and listens to websocket stream of live trades in the selected market, automatically creating and cancelling limit buy and sell orders.
 
-PassivBot uses a preferential buy / sell grid to scalp trade indecisive price action. A grid consists of a range of buy and sell orders wherein a position is entered, and doubled down on as the price moves against the trade. This is known as the Martingale Strategy and is a key factor of Passiv's underlying strategy. Dollar cost averaging into the position averages out the breakeven price closer to the mark price, and when the market rebounds or pulls back, limit “reduce” orders are used to slowly scale out of your position at the average mark price within your take profit range. Grid trading essentially trades volatility in arbitrary ranges set by a certain risk tolerance, margin balance, and aggression coefficient. As such, they can operate fairly quickly, executing order changes up to once per-second and sometimes filling orders even faster.
+It works primarily in futures markets, spot markets in development.  If exchange allows it, hedge mode is used to allow simultaneous long and short positions.
 
-Traditional grid trading is slower, as properly weighting risk for the ranges requires a high step coefficient, and reduces the average purchased amount per-entry. Traditional grid trading often involves creating a buy and sell grid over a very large swath of price history with fixed values. Traders not willing to face potential liquidation are relegated to trading with a fraction of their futures balance, and must monitor the positions somewhat regularly to prevent fast price movement from destroying a trade or eating away at profits. As a result, traditional grid traders may have hundreds or thousands of entry orders and just as many exit orders. This prevents double down rules from letting the liquidation price go awry, but has a negative effect on short term P/L, especially when trading with small sums. Comparing these more conservative algorithms to other less risky investments, an interest account for example, reveals little added benefit to using a grid trading layout over just sticking your money in a bank, and often implies more risk.
+The bot bases its decisions on account's positions, open orders and balance, and multiple EMAs of different spans.
 
-##Preferential Grid Trading
+The EMAs are used to smoothe initial entries and stop loss orders.
 
-Preferential grid trading takes the fundamentals of grid trading and expunges upon them to attempt to form an algorithm that not only DCA’s it’s entries and exits based on relative price action, but tries to predict or go with the major trend using external data. Using indicators in tandem with exchange data (ex. volatility indicator + volume) allows a given program to add preference values to a given position (long or short) to influence the next re-entry. The indicators used can be anything, so long as there is a definite rule. In essence, simply adding an exponential moving average does nothing unless the bot has a ruleset by which to interpret the EMA. Older versions of PassivBot utilize indicators in this way, while newer versions (v3+) replace this logic. Newer logic uses hedged positions that attempt to profit on both sides of volatility, and hold the losing position until there is a reasonable or profitable exit point.
+Bot's live behavior is deterministic and may be simulated on historical price data, using the included backtester.
 
-##PassivBot Implementation
+Its behavior is changed by adjusting the configuration to suit a particular market and user's preference.
 
-PassivBot is a Python 3 implementation of the aforementioned grid trading framework designed around Perpetual Futures Derivatives. The bot is designed simply as a framework for conducting grid trading, and doesn’t have any set preference, although it comes with example configurations to define expected formatting. PassivBot can be broken down into three distinct sections of operation:
+Configuration's parameters may be optimized to a given period of historical data by backtesting up to thousands of candidates, converging upon the config whose backtest result best satisfy specified criteria.
 
-Configuration & API Keys – Connecting your exchange with PassivBot using API keys, and understanding the configuration files.
-Backtesting Configurations – Testing a given configuration over previous price history, and using iterating loops to find desirable / profitable settings.
-Live Usage – Using the bot in a live account, expected behavior, typical quirks, risks, and troubleshooting.
-For version specific information about configuring or using your version of the bot, refer to your version's documentation.
+## Grid Trading
+
+Passivbot may be described as a market making DCA scalping grid trader.
+
+- Market maker: passivbot is a pure maker. It never takes orders, only makes them.
+
+- DCA: Dollar Cost Averaging. It will typically make up to several reentries after an initial entry, in an attempt to acheive better average entry price, similar to a Martingale betting system.
+
+- Scalping: It will typically close positions at small markups, in the range of 0.1-2.0%
+
+- Grid trading: Its reentries may be calculated in advance and put on the books, thus making a grid of orders.
+
+
+## Noise Harvesting
+
+There are price fluctuations in most markets, and the price noise may be "harvested".  Ideally passivbot functions like a wind turbine or solar panel, passively gathering energy (money) from the environment (market).
+
+For version specific information about configuring or using your version of the bot, refer to your version's
+documentation using the version popup at the bottom of the website.
+
+## Wallet exposure
+
+One important thing to understand about the bot is that it trades on the futures market using cross mode. This means that any open
+position is able to tap into the enture futures wallet for margin to support the position. In order to guard the wallet from
+undesired exposure to position margin, it uses a concept called position-cost-to-balance-ratio (abbreviated as pbr).
+
+If you're going to use this bot, it's important to understand this concept so you can understand and configure the bot the way you want to.
+
+The main thing to understand is that the bot does NOT work with leverage as the exchanges do. Instead, the bot works with a concept
+of a borrow cap. This borrow cap is the maximum amount of leveraged wallet you have at your disposal. The borrow cap is defined
+as the maximum leverage allowed on the symbol by the exchange. This symbol represents the maximum value for the pbr_limit parameter.
+
+If you would have a wallet of 100 USDT and traded on BTCUSDT (which has a max leverage of 125), your maximum position cost (position size & position price)
+could be up to 12500 (125 * 100).
+
+You can make sure that your position will not be allowed to exceed X% of your unleveraged balance by making sure that your
+pbr_limit + pbr_stop_loss parameters do not exceeed 0.1 (=10%). If the price of the symbol would drop to 0, you'd lose
+a maximum of 10% of your wallet.
+
+The bot will makee sure that your position size does not ever surpass pbr_limit + pbr_stop_loss. When the bot crosses this value,
+it reduced to position down to the specific pbr_limit.
+
+A simpler explanation: if you have 100 bananas and use 10 of them to buy 12 apples, and theee price of apples in terms of bananas drops to zero,
+your equity is 90 bananas (meaning your max exposure is 10%). This makes it very possible to run multiple pairs on the same account. 
+If you were to set the pbr_limit to 0.05 on 10 bots, all of them combined will not expose more than 50% of your unleveraged balance.
+
+!!! Info
+    Please check the [Configuratio](configuration.md) page for an in-depth description of the configuration parameters available.
