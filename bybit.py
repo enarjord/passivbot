@@ -26,22 +26,6 @@ def format_tick(tick: dict) -> dict:
             'is_buyer_maker': tick['side'] == 'Sell'}
 
 
-async def fetch_ticks(cc, symbol: str, from_id: int = None, do_print=True) -> [dict]:
-    params = {'symbol': symbol, 'limit': 1000}
-    if from_id:
-        params['from'] = max(0, from_id)
-    try:
-        fetched_trades = await cc.v2_public_get_trading_records(params=params)
-    except Exception as e:
-        print(e)
-        return []
-    trades = [format_tick(t) for t in fetched_trades['result']]
-    if do_print:
-        print_(['fetched trades', symbol, trades[0]['trade_id'],
-                ts_to_date(trades[0]['timestamp'] / 1000)])
-    return trades
-
-
 def date_to_ts(date: str):
     return parser.parse(date).timestamp() * 1000
 
@@ -65,6 +49,8 @@ class Bybit(Bot):
                               'create_order': '/private/linear/order/create',
                               'cancel_order': '/private/linear/order/cancel',
                               'ticks': '/public/linear/recent-trading-records',
+                              'fills': '/private/linear/trade/execution/list',
+                              'pnls': '/private/linear/trade/closed-pnl/list',
                               'ohlcvs': '/public/linear/kline',
                               'websocket': 'wss://stream.bybit.com/realtime_public',
                               'created_at_key': 'created_time'}
@@ -79,6 +65,8 @@ class Bybit(Bot):
                                   'create_order': '/v2/private/order/create',
                                   'cancel_order': '/v2/private/order/cancel',
                                   'ticks': '/v2/public/trading-records',
+                                  'fills': '/v2/private/execution/list',
+                                  'pnls': '/v2/private/trade/closed-pnl/list',
                                   'ohlcvs': '/v2/public/kline/list',
                                   'websocket': 'wss://stream.bybit.com/realtime',
                                   'created_at_key': 'created_at'}
@@ -92,6 +80,8 @@ class Bybit(Bot):
                                   'create_order': '/futures/private/order/create',
                                   'cancel_order': '/futures/private/order/cancel',
                                   'ticks': '/v2/public/trading-records',
+                                  'fills': '/futures/private/execution/list',
+                                  'pnls': '/futures/private/trade/closed-pnl/list',
                                   'ohlcvs': '/v2/public/kline/list',
                                   'websocket': 'wss://stream.bybit.com/realtime',
                                   'created_at_key': 'created_at'}
@@ -131,6 +121,7 @@ class Bybit(Bot):
         self.min_qty = self.config['min_qty'] = float(e['lot_size_filter']['min_trading_qty'])
         self.min_cost = self.config['min_cost'] = 0.0
         self.init_market_type()
+        self.margin_coin = self.coin if self.inverse else self.quot
         await super()._init()
         await self.init_order_book()
         await self.update_position()
@@ -304,7 +295,37 @@ class Bybit(Bot):
                  **{k: float(e[k]) for k in ['open', 'high', 'low', 'close', 'volume']}}
                 for e in fetched['result']]
 
-    async def fetch_fills(self, limit: int = 1000, from_id: int = None, start_time: int = None, end_time: int = None):
+    async def fetch_fills(self, limit: int = 200, from_id: int = None, start_time: int = None, end_time: int = None):
+        return []
+        ffills, fpnls = await asyncio.gather(self.private_get(self.endpoints['fills'], {'symbol': self.symbol, 'limit': limit}),
+                                             self.private_get(self.endpoints['pnls'], {'symbol': self.symbol, 'limit': 50}))
+        return ffills, fpnls
+        try:
+            fills = []
+            for x in fetched['result']['data'][::-1]:
+                qty, price = float(x['order_qty']), float(x['price'])
+                if not qty or not price:
+                    continue
+                fill = {'symbol': x['symbol'],
+                        'id': str(x['exec_id']),
+                        'order_id': str(x['order_id']),
+                        'side': x['side'].lower(),
+                        'price': price,
+                        'qty': qty,
+                        'realized_pnl': 0.0,
+                        'cost': (cost := qty / price if self.inverse else qty * price),
+                        'fee_paid': float(x['exec_fee']),
+                        'fee_token': self.margin_coin,
+                        'timestamp': int(x['trade_time_ms']),
+                        'position_side': self.determine_pos_side(x),
+                        'is_maker': x['fee_rate'] < 0.0} 
+                fills.append(fill)
+            return fills
+        except Exception as e:
+            print('error fetching fills', e)
+            return []
+        print('ntufnt')
+        return fetched
         print('fetch_fills not implemented for Bybit')
         return []
 
@@ -354,5 +375,3 @@ class Bybit(Bot):
     async def transfer(self, type_: str, amount: float, asset: str = 'USDT'):
         return {'code': '-1', 'msg': 'Transferring funds not supported for Bybit'}
 
-    async def fetch_fills(self, limit: int = 1000, from_id: int = None, start_time: int = None, end_time: int = None):
-        return []
