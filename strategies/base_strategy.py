@@ -1,5 +1,6 @@
 from typing import List, Tuple
 
+from numba import typeof, types
 from numba.experimental import jitclass
 
 from definitions.order import Order
@@ -31,12 +32,22 @@ def convert_dict_to_config(config: dict) -> StrategyConfig:
     return strategy_config
 
 
+base_strategy_spec = [
+    # ("config", typeof(StrategyConfig())),
+    ("balance", types.float64),
+    ("position", typeof(PositionList())),
+    ("open_orders", typeof(OrderList())),
+    ("qty_step", types.float64),
+    ("price_step", types.float64)
+]
+
+
 class Strategy:
     """
     Base strategy class specifying base functionality like updating values.
     """
 
-    def __init__(self, config: StrategyConfig):
+    def __init__(self, config):
         """
         Initializes a base strategy with Strategy config and empty values for balance, position, open orders, qty step,
         and price step.
