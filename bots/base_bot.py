@@ -8,13 +8,12 @@ import numpy as np
 import websockets
 from numba import njit
 
-from definitions.order import NEW, PARTIALLY_FILLED, FILLED, CANCELED, EXPIRED, LONG, SHORT, NEW_INSURANCE, NEW_ADL
-from definitions.order import Order
+from definitions.order import Order, NEW, PARTIALLY_FILLED, FILLED, CANCELED, EXPIRED, LONG, SHORT, NEW_INSURANCE, \
+    NEW_ADL
 from definitions.order_list import OrderList, empty_order_list
 from definitions.position import Position
 from definitions.position_list import PositionList
-from functions import load_key_secret
-from functions import print_
+from functions import load_key_secret, print_
 from strategies.grid import Grid, convert_dict_to_config
 
 ORDER_UPDATE = 'order'
@@ -123,6 +122,7 @@ class Bot:
         raise NotImplementedError
 
     def precompile(self):
+        print_(['Precompiling...'], n=True)
         p = Position('', 0.0, 0.0, 0.0, 0.0, 0, '')
         p.equal(p)
         o = Order('', 0, 0.0, 0.0, 0.0, '', '', 0, '', '')
@@ -140,6 +140,7 @@ class Bot:
         ol.update_short(empty_order_list())
         ol.copy()
         self.strategy.precompile()
+        print_(['Precompile finished.'], n=True)
 
     async def reset(self):
         self.precompile()
@@ -279,9 +280,9 @@ class Bot:
                                     self.position_change = False
                                     self.order_fill_change = False
                         except Exception as e:
-                            print_(['User stream error', e], n=True)
+                            print_(['User stream error inner', e], n=True)
             except Exception as e_out:
-                print_(['User stream error', e_out], n=True)
+                print_(['User stream error outer', e_out], n=True)
                 print_(['Retrying to connect in 5 seconds...'], n=True)
                 await asyncio.sleep(5)
 
