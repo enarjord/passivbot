@@ -1,15 +1,13 @@
 from typing import List, Tuple
 
 import numpy as np
-from numba import njit
-from numba import types
+from numba import types, typeof, njit
 from numba.experimental import jitclass
 
 from definitions.order import Order, TP, SELL, LONG, LIMIT, BUY
 from definitions.order_list import OrderList, empty_order_list
 from definitions.position_list import PositionList
-from functions import print_
-from strategies.base_strategy import Strategy
+from strategies.base_strategy import Strategy, base_strategy_spec
 
 
 @njit
@@ -119,13 +117,14 @@ class Grid(Strategy):
     """
     Grid trading strategy using a fixed grid.
     """
+    __init_Base = Strategy.__init__
 
     def __init__(self, config: StrategyConfig):
         """
         Initializes a grid strategy with a grid strategy config.
         :param config:
         """
-        super().__init__(config)
+        self.__init_Base(config)
         self.reentry_grid = self.config.reentry_grid
         self.tp_grid = self.config.tp_grid
         self.percent = self.config.percent
