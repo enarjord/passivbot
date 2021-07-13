@@ -508,6 +508,50 @@ def calc_pprice_from_fills(coin_balance, fills, n_fills_limit=100):
     return pprice
 
 
+def get_position_fills(long_psize: float, shrt_psize: float, fills: [dict]) -> [dict]:
+    '''
+    assumes fills are sorted old to new
+    returns fills since initial entry
+    '''
+    long_psize *= 0.999
+    shrt_psize *= 0.999
+    long_qty_sum = 0.0
+    shrt_qty_sum = 0.0
+    long_done, shrt_done = long_psize == 0.0, shrt_psize == 0.0
+    if long_done and shrt_done:
+        return [], []
+    long_pfills, shrt_pfills = [], []
+    for x in fills[::-1]:
+        if x['position_side'] == 'long':
+            if not long_done:
+                long_qty_sum += x['qty'] * (1.0 if x['side'] == 'buy' else -1.0)
+                long_pfills.append(x)
+                long_done = long_qty_sum >= long_psize
+        else:
+            if not shrt_done:
+                shrt_qty_sum += x['qty'] * (1.0 if x['side'] == 'sell' else -1.0)
+                print(x, shrt_qty_sum)
+                shrt_pfills.append(x)
+                shrt_done = shrt_qty_sum >= shrt_psize
+    return long_pfills[::-1], shrt_pfills[::-1]
+
+
+def calc_long_pprice(long_psize, long_pfills):
+    '''
+    assumes long pfills are sorted old to new
+    '''
+    psize, pprice = 0.0, 0.0
+    for fill in long_pfills:
+        abs_qty = abs(fill['qty'])
+        if fill['side'] == 'buy':
+            new_psize = psize + abs_qty
+            pprice = pprice * (psize / new_psize) + fill['price'] * (abs_qty / new_psize)
+            psize = new_psize
+        else:
+            psize -= abs_qty
+    return pprice
+
+
 def nullify(x):
     if type(x) in [list, tuple]:
         return [nullify(x1) for x1 in x]
