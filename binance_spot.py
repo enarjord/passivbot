@@ -9,7 +9,7 @@ import aiohttp
 import numpy as np
 import traceback
 
-from pure_funcs import ts_to_date, sort_dict_keys, calc_pprice_from_fills, format_float
+from pure_funcs import ts_to_date, sort_dict_keys, calc_long_pprice, format_float, get_position_fills
 from njit_funcs import round_dn
 from passivbot import Bot
 from procedures import print_
@@ -155,8 +155,8 @@ class BinanceBotSpot(Bot):
         ]
 
     async def fetch_position(self) -> dict:
-        balances, self.fills = await asyncio.gather(self.private_get(self.endpoints['balance']),
-                                                    self.fetch_fills())
+        balances, new_fills = await asyncio.gather(self.private_get(self.endpoints['balance']),
+                                                   self.update_fills())
         balance = {}
         for elm in balances['balances']:
             for k in [self.quot, self.coin]:
@@ -167,22 +167,23 @@ class BinanceBotSpot(Bot):
                     break
             if self.quot in balance and self.coin in balance:
                 break
-        pprice = calc_pprice_from_fills(balance[self.coin]['onhand'], self.fills)
-        position = {'long': {'size': balance[self.coin]['onhand'],
-                             'price': pprice,
+        long_psize = round_dn(balance[self.coin]['onhand'], self.qty_step)
+        self.long_pfills, self.shrt_pfills = get_position_fills(long_psize, 0.0, self.fills)
+        long_pprice = calc_long_pprice(long_psize, self.long_pfills) if long_psize else 0.0
+        if long_psize * long_pprice < self.min_cost:
+            long_psize, long_pprice, self.long_pfills = 0.0, 0.0, []
+        position = {'long': {'size': long_psize,
+                             'price': long_pprice,
                              'liquidation_price': 0.0,
-                             'upnl': balance[self.coin]['onhand'] * (self.price - pprice),
+                             'upnl': long_psize * (self.price - long_pprice),
                              'leverage': 1.0},
                     'shrt': {'size': 0.0,
                              'price': 0.0,
                              'liquidation_price': 0.0,
                              'upnl': 0.0,
                              'leverage': 0.0},
-                    'wallet_balance': balance[self.quot]['onhand'] + balance[self.coin]['onhand'] * pprice,
+                    'wallet_balance': balance[self.quot]['onhand'] + balance[self.coin]['onhand'] * long_pprice,
                     'equity': balance[self.quot]['onhand'] + balance[self.coin]['onhand'] * self.price}
-        if position['long']['size'] * position['long']['price'] < self.min_cost:
-            position['long']['size'] = 0.0
-            position['long']['price'] = 0.0
         self.balance = balance
         return position
 
@@ -229,6 +230,7 @@ class BinanceBotSpot(Bot):
         try:
             fetched = await self.private_get(self.endpoints['fills'], params)
             fills = [{'symbol': x['symbol'],
+                      'id': int(x['id']),
                       'order_id': int(x['orderId']),
                       'side': 'buy' if x['isBuyer'] else 'sell',
                       'price': float(x['price']),
