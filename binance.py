@@ -255,7 +255,8 @@ class BinanceBot(Bot):
         )
         positions = [e for e in positions if e['symbol'] == self.symbol]
         position = {'long': {'size': 0.0, 'price': 0.0, 'liquidation_price': 0.0, 'upnl': 0.0, 'leverage': 0.0},
-                    'shrt': {'size': 0.0, 'price': 0.0, 'liquidation_price': 0.0, 'upnl': 0.0, 'leverage': 0.0}}
+                    'shrt': {'size': 0.0, 'price': 0.0, 'liquidation_price': 0.0, 'upnl': 0.0, 'leverage': 0.0},
+                    'wallet_balance': 0.0, 'equity': 0.0}
         if positions:
             for p in positions:
                 if p['positionSide'] == 'LONG':
@@ -321,6 +322,7 @@ class BinanceBot(Bot):
         try:
             fetched = await self.private_get(self.endpoints['fills'], params)
             fills = [{'symbol': x['symbol'],
+                      'id': int(x['id']),
                       'order_id': int(x['orderId']),
                       'side': x['side'].lower(),
                       'price': float(x['price']),
@@ -336,6 +338,7 @@ class BinanceBot(Bot):
             print('error fetching fills a', e)
             return []
         return fills
+
 
     async def fetch_income(self, limit: int = 1000, start_time: int = None, end_time: int = None):
         params = {'symbol': self.symbol, 'limit': limit}
