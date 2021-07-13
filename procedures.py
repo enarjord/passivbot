@@ -129,7 +129,6 @@ async def fetch_market_specific_settings(config: dict):
     settings_from_exchange = {}
     if exchange == 'binance':
         if 'spot' in config['market_type']:
-            print('here\n\n\n')
             bot = await create_binance_bot_spot(tmp_live_settings)
             settings_from_exchange['maker_fee'] = 0.001
             settings_from_exchange['taker_fee'] = 0.001
