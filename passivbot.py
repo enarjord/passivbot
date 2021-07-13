@@ -11,7 +11,7 @@ from time import time
 from procedures import load_live_config, make_get_filepath, load_exchange_key_secret, print_, add_argparse_args
 from pure_funcs import get_xk_keys, get_ids_to_fetch, flatten, calc_indicators_from_ticks_with_gaps, \
     drop_consecutive_same_prices, filter_orders, compress_float, create_xk, round_dynamic, denumpyize, \
-    calc_spans, spotify_config
+    calc_spans, spotify_config, get_position_fills
 from njit_funcs import calc_orders, calc_new_psize_pprice, qty_to_cost, calc_diff, round_, calc_emas, \
     calc_samples, calc_emas_last
 import numpy as np
@@ -47,12 +47,14 @@ class Bot:
 
         self.ts_locked = {'cancel_orders': 0.0, 'decide': 0.0, 'update_open_orders': 0.0,
                           'update_position': 0.0, 'print': 0.0, 'create_orders': 0.0,
-                          'check_fills': 0.0}
+                          'check_fills': 0.0, 'update_fills': 0.0}
         self.ts_released = {k: 1.0 for k in self.ts_locked}
 
         self.position = {}
         self.open_orders = []
-        self.filled_order_ids = set()
+        self.fills = []
+        self.long_pfills = []
+        self.shrt_pfills = []
         self.highest_bid = 0.0
         self.lowest_ask = 9.9e9
         self.price = 0
@@ -99,8 +101,7 @@ class Bot:
 
     async def _init(self):
         self.xk = create_xk(self.config)
-        fills = await self.fetch_fills()
-        self.filled_order_ids.update([f['order_id'] for f in fills])
+        self.fills = await self.fetch_fills()
 
     def dump_log(self, data) -> None:
         if self.config['logging_level'] > 0:
@@ -122,9 +123,10 @@ class Bot:
             if self.open_orders != open_orders:
                 self.dump_log({'log_type': 'open_orders', 'data': open_orders})
             self.open_orders = open_orders
-            self.ts_released['update_open_orders'] = time()
         except Exception as e:
             print('error with update open orders', e)
+        finally:
+            self.ts_released['update_open_orders'] = time()
 
     async def update_position(self) -> None:
         # also updates open orders
@@ -151,14 +153,46 @@ class Bot:
                                                    self.xk['inverse'], self.xk['c_mult']) /
                                        position['wallet_balance']) if position['wallet_balance'] else 0.0
             if self.position != position:
+                if self.position and not 'spot' in self.market_type and \
+                        (self.position['long']['size'] != position['long']['size'] or
+                         self.position['shrt']['size'] != position['shrt']['size']):
+                    # update fills if position size changed
+                    await self.update_fills()
                 self.dump_log({'log_type': 'position', 'data': position})
             self.position = position
-            self.ts_released['update_position'] = time()
+            self.long_pfills, self.shrt_pfills = get_position_fills(self.position['long']['size'],
+                                                                    abs(self.position['shrt']['size']),
+                                                                    self.fills)
         except Exception as e:
             print('error with update position', e)
+        finally:
+            self.ts_released['update_position'] = time()
 
-    async def update_fills(self) -> None:
-        fetched = self.fetch_fills()
+    async def update_fills(self, max_n_fills=1000) -> [dict]:
+        '''
+        fetches recent fills
+        updates self.fills, drops older fills max_n_fills
+        returns list of new fills
+        '''
+        if self.ts_locked['update_fills'] > self.ts_released['update_fills']:
+            return
+        self.ts_locked['update_fills'] = time()
+        try:
+            ids_set = set([x['order_id'] for x in self.fills])
+            fetched = await self.fetch_fills()
+            new_fills = [x for x in fetched if x['order_id'] not in ids_set]
+            if new_fills:
+                self.fills = sorted([x for x in self.fills + new_fills], key=lambda x: x['order_id'])[-1000:]
+                self.long_pfills, self.shrt_pfills = get_position_fills(self.position['long']['size'],
+                                                                        abs(self.position['shrt']['size']),
+                                                                        self.fills)
+            return new_fills
+        except Exception as e:
+            print('error with update fills', e)
+        finally:
+            self.ts_released['update_fills'] = time()
+
+
 
     async def create_orders(self, orders_to_create: [dict]) -> dict:
         if not orders_to_create:
@@ -381,24 +415,20 @@ class Bot:
         if self.exchange == 'bybit':
             # bybit not supported
             return
-        now = time()
-        if now - self.ts_released['check_fills'] < 5.0:
-            # minimum 5 sec between consecutive check fills
-            return
-        self.ts_locked['check_fills'] = now
-        print_(['checking if new fills...\n'], n=True)
-        # check fills if two mins since prev check has passed
-        fills = await self.fetch_fills()
-        new_fills = [f for f in fills if f['order_id'] not in self.filled_order_ids]
-        if len(new_fills) > 0:
-            await self.check_long_fills(new_fills)
-            await self.check_shrt_fills(new_fills)
-
-        self.filled_order_ids.update([f['order_id'] for f in fills])
-        # remove orders older than 14 days to prevent building up the list indefinitely
-        self.filled_order_ids.difference_update([f['order_id'] for f in fills
-                                                 if f['timestamp'] < (time() - 60 * 60 * 24 * 14) * 1000])
-        self.ts_released['check_fills'] = time()
+        try:
+            now = time()
+            if now - self.ts_released['check_fills'] < 5.0:
+                # minimum 5 sec between consecutive check fills
+                return
+            self.ts_locked['check_fills'] = now
+            print_(['checking if new fills...\n'], n=True)
+            # check fills if two mins since prev check has passed
+            new_fills = await self.update_fills()
+            if new_fills:
+                await self.check_long_fills(new_fills)
+                await self.check_shrt_fills(new_fills)
+        finally:
+            self.ts_released['check_fills'] = time()
 
     async def check_shrt_fills(self, new_fills):
         # closing orders
@@ -511,7 +541,6 @@ class Bot:
 
         line += f"lpbr {self.position['long']['pbr']:.3f} spbr {self.position['shrt']['pbr']:.3f} "
         line += f"EMAr {[round_dynamic(r, 4) for r in self.ratios]} "
-        line += f"EMAs {[round_dynamic(e, 5) for e in self.emas]} "
         line += f"bal {compress_float(self.position['wallet_balance'], 3)} "
         line += f"eq {compress_float(self.position['equity'], 3)} "
         print_([line], r=True)
