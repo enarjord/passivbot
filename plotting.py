@@ -30,16 +30,20 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
     longs = fdf[fdf.type.str.contains('long')]
     shrts = fdf[fdf.type.str.contains('shrt')]
 
-    lines.append(f"n long ientries {len(longs[longs.type == 'long_ientry'])}")
-    lines.append(f"n long rentries {len(longs[longs.type == 'long_rentry'])}")
-    lines.append(f"n long ncloses {len(longs[longs.type == 'long_nclose'])}")
-    lines.append(f"n long scloses {len(longs[longs.type == 'long_sclose'])}")
+    lines.append(f"n long ientries {len(longs[longs.type.str.contains('ientry')])}")
+    lines.append(f"n long rentries {len(longs[longs.type.str.contains('rentry')])}")
+    lines.append(f"n long ncloses {len(longs[longs.type.str.contains('nclose')])}")
+    lines.append(f"n long scloses {len(longs[longs.type.str.contains('sclose')])}")
+    lines.append(f"n long partial fills {len(longs[longs.type.str.contains('partial')])}")
+
     lines.append(f"long pnl sum {longs.pnl.sum()}")
 
-    lines.append(f"n shrt ientries {len(shrts[shrts.type == 'shrt_ientry'])}")
-    lines.append(f"n shrt rentries {len(shrts[shrts.type == 'shrt_rentry'])}")
-    lines.append(f"n shrt ncloses {len(shrts[shrts.type == 'shrt_nclose'])}")
-    lines.append(f"n shrt scloses {len(shrts[shrts.type == 'shrt_sclose'])}")
+    lines.append(f"n shrt ientries {len(shrts[shrts.type.str.contains('ientry')])}")
+    lines.append(f"n shrt rentries {len(shrts[shrts.type.str.contains('rentry')])}")
+    lines.append(f"n shrt ncloses {len(shrts[shrts.type.str.contains('nclose')])}")
+    lines.append(f"n shrt scloses {len(shrts[shrts.type.str.contains('sclose')])}")
+    lines.append(f"n shrt partial fills {len(shrts[shrts.type.str.contains('partial')])}")
+
     lines.append(f"shrt pnl sum {shrts.pnl.sum()}")
 
 
