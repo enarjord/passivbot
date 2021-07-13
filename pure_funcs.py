@@ -530,7 +530,6 @@ def get_position_fills(long_psize: float, shrt_psize: float, fills: [dict]) -> [
         else:
             if not shrt_done:
                 shrt_qty_sum += x['qty'] * (1.0 if x['side'] == 'sell' else -1.0)
-                print(x, shrt_qty_sum)
                 shrt_pfills.append(x)
                 shrt_done = shrt_qty_sum >= shrt_psize
     return long_pfills[::-1], shrt_pfills[::-1]
