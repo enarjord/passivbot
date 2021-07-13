@@ -53,14 +53,6 @@ def load_base_config(path: str) -> dict:
         return {}
 
 
-def add_or_append(dict, key, value):
-    if key in dict:
-        dict[key].append(value)
-    else:
-        dict[key] = [value]
-    return dict
-
-
 def print_order(order):
     print('Symbol', order.symbol, 'Order_id', order.order_id, 'Price', order.price, 'Stop price', order.stop_price,
           'Qty', order.qty, 'Type', order.type, 'Side', order.side, 'Timestamp', order.timestamp, 'Action',
