@@ -107,23 +107,23 @@ def plot_fills(df, fdf_, side: int = 0, bkr_thr=0.1):
 
     if side >= 0:
         longs = fdf[fdf.type.str.contains('long')]
-        lnentry = longs[(longs.type == 'long_ientry') | (longs.type == 'long_rentry')]
-        lhentry = longs[longs.type == 'long_hentry']
-        lnclose = longs[longs.type == 'long_nclose']
-        lsclose = longs[longs.type == 'long_sclose']
-        lnentry.price.plot(style='b.')
-        lhentry.price.plot(style='bx')
+        lientry = longs[longs.type.str.contains('long_ientry')]
+        lrentry = longs[longs.type.str.contains('long_rentry')]
+        lnclose = longs[longs.type.str.contains('long_nclose')]
+        lsclose = longs[longs.type.str.contains('long_sclose')]
+        lientry.price.plot(style='b.')
+        lrentry.price.plot(style='b.')
         lnclose.price.plot(style='r.')
         lsclose.price.plot(style=('rx'))
         longs.where(longs.pprice != 0.0).pprice.fillna(method='ffill').plot(style='b--')
     if side <= 0:
         shrts = fdf[fdf.type.str.contains('shrt')]
-        snentry = shrts[(shrts.type == 'shrt_ientry') | (shrts.type == 'shrt_rentry')]
-        shentry = shrts[shrts.type == 'shrt_hentry']
-        snclose = shrts[shrts.type == 'shrt_nclose']
-        ssclose = shrts[shrts.type == 'shrt_sclose']
-        snentry.price.plot(style='r.')
-        shentry.price.plot(style='rx')
+        sientry = shrts[shrts.type.str.contains('shrt_ientry')]
+        srentry = shrts[shrts.type.str.contains('shrt_rentry')]
+        snclose = shrts[shrts.type.str.contains('shrt_nclose')]
+        ssclose = shrts[shrts.type.str.contains('shrt_sclose')]
+        sientry.price.plot(style='r.')
+        srentry.price.plot(style='r.')
         snclose.price.plot(style='b.')
         ssclose.price.plot(style=('bx'))
         shrts.where(shrts.pprice != 0.0).pprice.fillna(method='ffill').plot(style='r--')
