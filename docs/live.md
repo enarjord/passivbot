@@ -6,8 +6,12 @@ how you can start your bot, and anything relating to keeping the system running 
 ## Usage
 
 In order to start the bot in live mode, you will need two things:
-1) setup your API-keys and (optionally) setup your telegram settings in the `api-keys.json` file in the root folder
+1) setup your API-keys and (optionally) your telegram settings in the `api-keys.json` file in the root folder.
 2) have the config file you want to use in live mode readily available for the bot (typically placed in `configs/live`)
+
+!!! Warning
+    Make sure you enable `futures` on the API key. Also, be aware that on Binance you have to complete a quiz before you
+    can trade futures. Apart from that, you need to make sure there are funds present in the futures wallet.
 
 You can use your favorite text editor to setup the account details in the `api-keys.json` file. There's a sample template
 already available when you check out the repository, so you can simply put the required information in the expected places.
@@ -34,7 +38,7 @@ python3 start_bot.py binance_01 XMRUSDT configs/live/binance_xmrusdt.json
 
 There are a number of configurations provided by default in the repository. These configurations are optimized and
 backtested over a longer period of time, and provide a good starting point for setting up your own perfect
-configuration. You can find these configurations in the [configs/live](configs/live) directory.
+configuration. You can find these configurations in the [configs/live](https://github.com/enarjord/passivbot/tree/master/configs/live) directory.
 
 There is also a public repository available with a lot of optimized & backtested configurations on multiple coins at
 [this](https://github.com/JohnKearney1/PassivBot-Configurations) github repository.

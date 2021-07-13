@@ -25,13 +25,13 @@ It provides support for automatically optimize configurations, backtest using hi
 ## Supported exchanges
 
 Currently the exchanges **Binance** and **Bybit** are implemented and supported for trading futures. The bot does not use
-ccxt, so other exchanges cannot be used.
+[ccxt](https://github.com/ccxt/ccxt), so other exchanges cannot be used.
 
 Not all functionality is supported on bot exchanges, depending on the APIs that bot exchanges expose and development efforts.
 
 !!! Info
     If you would like to have support added for an exchange not supported yet, 
-    you can always get in touch to see  what the  options are
+    you can always get in touch to see what the options are.
 
 ## Software Requirements
 
@@ -54,6 +54,8 @@ Be aware that running an optimize on a long period may require a lot of memory a
 trade data (ticks) instead of OHLCV data, the amount of memory is dependent on the amount of trades made in the selected time period.
 If you want to optimize on BTC for the last 365 days, it will take significantly more memory than optimizing on a coin
 like BTS for example.
+
+For running the optimizer, a minimum of 8gb of memory is recommended.
 
 !!! Warning
     It should be very possible to run multiple bots on a single machine. Be aware however that you may run into other

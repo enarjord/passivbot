@@ -57,8 +57,8 @@ The following options can be provided to the backtester. Note that any argument 
 | -d / --download-only | Instructs the backtest to only download the data, but not dump the ticks caches to disk
 | -s / --symbol | The symbol to run the backtest on
 | -u / --user | The name of the account used to download trade data
-| --start-date | The starting date of the backtest<br/>**Syntax:** YYYY-MM-DDThh:mm
-| --end-date | The end date of the backtest<br/>**Syntax:** YYYY-MM-DDThh:mm
+| --start_date | The starting date of the backtest<br/>**Syntax:** YYYY-MM-DDThh:mm
+| --end_date | The end date of the backtest<br/>**Syntax:** YYYY-MM-DDThh:mm
 
 ## Backtest results
 
