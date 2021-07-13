@@ -504,7 +504,6 @@ def calc_emas_last(xs, spans):
     return emas
 
 
-
 @njit
 def njit_backtest(ticks: np.ndarray,
                   starting_balance,
@@ -610,15 +609,18 @@ def njit_backtest(ticks: np.ndarray,
 
                 return fills, (False, lowest_eqbal_ratio, closest_bkr)
 
-        while long_entry[0] != 0.0 and prices[k] < long_entry[1]:
+        if long_entry[0] > 0.0 and prices[k] < long_entry[1]:
             if qtys[k] < long_entry[0]:
                 partial_fill = True
                 long_entry_qty = qtys[k]
+                long_entry_comment = long_entry[4] + '_partial'
             else:
                 partial_fill = False
                 long_entry_qty = long_entry[0]
+                long_entry_comment = long_entry[4] + '_full'
             long_psize, long_pprice = calc_new_psize_pprice(long_psize, long_pprice, long_entry_qty,
                                                             long_entry[1], qty_step)
+            long_entry = (long_entry_qty, long_entry[1], long_psize, long_pprice, long_entry_comment)
             fee_paid = -qty_to_cost(long_entry[0], long_entry[1], inverse, c_mult) * maker_fee
             balance += fee_paid
             equity = calc_equity(balance, long_psize, long_pprice, shrt_psize, shrt_pprice, prices[k], inverse, c_mult)
@@ -626,10 +628,10 @@ def njit_backtest(ticks: np.ndarray,
             fills.append((k, timestamps[k], 0.0, fee_paid, balance, equity, pbr) + long_entry)
             next_update_ts = min(next_update_ts, timestamps[k] + latency_simulation_ms)
             if partial_fill:
-                new_long_psize, new_long_pprice = calc_new_psize_pprice(long_psize, long_pprice, long_entry_qty,
+                remaining_qty = round_(long_entry[0] - long_entry_qty, qty_step)
+                new_long_psize, new_long_pprice = calc_new_psize_pprice(long_psize, long_pprice, remaining_qty,
                                                                         long_entry[1], qty_step)
-                long_entry = (long_entry[0] - long_entry_qty, long_entry[1], new_long_psize, new_long_pprice, long_entry[4])
-                break
+                long_entry = (remaining_qty, long_entry[1], new_long_psize, new_long_pprice, long_entry_comment)
             else:
                 long_entry, _ = calc_long_orders(balance,
                                                  long_psize,
@@ -661,12 +663,14 @@ def njit_backtest(ticks: np.ndarray,
                                                  rqty_MAr_coeffs[0],
                                                  rprc_MAr_coeffs[0],
                                                  markup_MAr_coeffs[0])
-        if shrt_psize != 0.0 and shrt_close[0] != 0.0 and prices[k] < shrt_close[1]:
+        if shrt_psize < 0.0 and shrt_close[0] > 0.0 and prices[k] < shrt_close[1]:
             if qtys[k] < shrt_close[0]:
                 partial_fill = True
+                shrt_close_comment = shrt_close[4] + '_partial'
                 shrt_close_qty = qtys[k]
             else:
                 partial_fill = False
+                shrt_close_comment = shrt_close[4] + '_full'
                 shrt_close_qty = shrt_close[0]
             new_shrt_psize = round_(shrt_psize + shrt_close_qty, qty_step)
             if new_shrt_psize > 0.0:
@@ -677,6 +681,7 @@ def njit_backtest(ticks: np.ndarray,
                 shrt_close_qty = -shrt_psize
                 new_shrt_psize, shrt_pprice = 0.0, 0.0
             shrt_psize = new_shrt_psize
+            shrt_close = (shrt_close_qty, shrt_close[1], new_shrt_psize, shrt_pprice, shrt_close_comment)
             fee_paid = -qty_to_cost(shrt_close_qty, shrt_close[1], inverse, c_mult) * maker_fee
             pnl = calc_shrt_pnl(shrt_pprice, shrt_close[1], shrt_close_qty, inverse, c_mult)
             balance += fee_paid + pnl
@@ -685,18 +690,21 @@ def njit_backtest(ticks: np.ndarray,
             fills.append((k, timestamps[k], pnl, fee_paid, balance, equity, pbr) + shrt_close)
             next_update_ts = min(next_update_ts, timestamps[k] + latency_simulation_ms)
             if partial_fill:
-                shrt_close = (shrt_close[0] - shrt_close_qty, shrt_close[1], shrt_psize, shrt_pprice, shrt_close[4])
+                shrt_close = (shrt_close[0] - shrt_close_qty, shrt_close[1], shrt_psize, shrt_pprice, shrt_close_comment)
             else:
                 shrt_close = (0.0, 0.0, 0.0, 0.0, '')
-        while shrt_entry[0] != 0.0 and prices[k] > shrt_entry[1]:
+        if shrt_entry[0] != 0.0 and prices[k] > shrt_entry[1]:
             if qtys[k] < -shrt_entry[0]:
                 partial_fill = True
+                shrt_entry_comment = shrt_entry[4] + '_partial'
                 shrt_entry_qty = -qtys[k]
             else:
                 partial_fill = False
+                shrt_entry_comment = shrt_entry[4] + '_full'
                 shrt_entry_qty = shrt_entry[0]
             shrt_psize, shrt_pprice = calc_new_psize_pprice(shrt_psize, shrt_pprice, shrt_entry_qty,
                                                             shrt_entry[1], qty_step)
+            shrt_entry = (shrt_entry_qty, shrt_entry[1], shrt_psize, shrt_pprice, shrt_entry_comment)
             fee_paid = -qty_to_cost(shrt_entry[0], shrt_entry[1], inverse, c_mult) * maker_fee
             balance += fee_paid
             equity = calc_equity(balance, long_psize, long_pprice, shrt_psize, shrt_pprice, prices[k], inverse, c_mult)
@@ -704,10 +712,10 @@ def njit_backtest(ticks: np.ndarray,
             fills.append((k, timestamps[k], 0.0, fee_paid, balance, equity, pbr) + shrt_entry)
             next_update_ts = min(next_update_ts, timestamps[k] + latency_simulation_ms)
             if partial_fill:
-                new_shrt_psize, new_shrt_pprice = calc_new_psize_pprice(shrt_psize, shrt_pprice, shrt_entry_qty,
+                remaining_qty = shrt_entry[0] - shrt_entry_qty
+                new_shrt_psize, new_shrt_pprice = calc_new_psize_pprice(shrt_psize, shrt_pprice, remaining_qty,
                                                                         shrt_entry[1], qty_step)
-                shrt_entry = (shrt_entry[0] - shrt_entry_qty, shrt_entry[1], new_shrt_psize, new_shrt_pprice, shrt_entry[4])
-                break
+                shrt_entry = (remaining_qty, shrt_entry[1], new_shrt_psize, new_shrt_pprice, shrt_entry_comment)
             else:
                 shrt_entry, _ = calc_shrt_orders(balance,
                                                  shrt_psize,
@@ -742,9 +750,11 @@ def njit_backtest(ticks: np.ndarray,
         if long_psize != 0.0 and long_close[0] != 0.0 and prices[k] > long_close[1]:
             if qtys[k] < -long_close[0]:
                 partial_fill = True
+                long_close_comment = long_close[4] + '_partial'
                 long_close_qty = -qtys[k]
             else:
                 partial_fill = False
+                long_close_comment = long_close[4] + '_full'
                 long_close_qty = long_close[0]
             new_long_psize = round_(long_psize + long_close_qty, qty_step)
             if new_long_psize < 0.0:
@@ -755,7 +765,8 @@ def njit_backtest(ticks: np.ndarray,
                 long_close_qty = -long_psize
                 new_long_psize, long_pprice = 0.0, 0.0
             long_psize = new_long_psize
-            fee_paid = -qty_to_cost(long_close_qty, long_close[1], inverse, c_mult) * maker_fee
+            long_close = (long_close_qty, long_close[1], long_psize, long_pprice, long_close_comment)
+            fee_paid = -qty_to_cost(long_close[0], long_close[1], inverse, c_mult) * maker_fee
             pnl = calc_long_pnl(long_pprice, long_close[1], long_close_qty, inverse, c_mult)
             balance += fee_paid + pnl
             equity = calc_equity(balance, long_psize, long_pprice, shrt_psize, shrt_pprice, prices[k], inverse, c_mult)
@@ -763,7 +774,7 @@ def njit_backtest(ticks: np.ndarray,
             fills.append((k, timestamps[k], pnl, fee_paid, balance, equity, pbr) + long_close)
             next_update_ts = min(next_update_ts, timestamps[k] + latency_simulation_ms)
             if partial_fill:
-                long_close = (long_close[0] - long_close_qty, long_close[1], long_psize, long_pprice, long_close[4])
+                long_close = (long_close[0] - long_close_qty, long_close[1], long_psize, long_pprice, long_close_comment)
             else:
                 long_close = (0.0, 0.0, 0.0, 0.0, '')
         MAs = new_MAs
