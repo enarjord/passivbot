@@ -156,37 +156,34 @@ class Grid(Strategy):
         """
         add_orders = empty_order_list()
         delete_orders = empty_order_list()
-        try:
-            if self.position.long.size == 0.0 and position.long.size != 0.0:
-                add_orders.extend(self.calculate_dca_tp(last_filled_order.price, position))
-            elif self.position.long.size != 0.0 and position.long.size == 0.0:
+        if self.position.long.size == 0.0 and position.long.size != 0.0:
+            add_orders.extend(self.calculate_dca_tp(last_filled_order.price, position))
+        elif self.position.long.size != 0.0 and position.long.size == 0.0:
+            for order in self.open_orders.long:
+                delete_orders.append(order)
+        else:
+            if last_filled_order.type == LIMIT and last_filled_order.position_side == LONG \
+                    and last_filled_order.side == BUY:
+                # Reentry triggered
+                # Update TP grid
+                for order in self.open_orders.long:
+                    if order.type == TP:
+                        delete_orders.append(order)
+                add_orders.extend(self.prepare_tp_orders(last_filled_order.price, position))
+            elif last_filled_order.type == TP and last_filled_order.position_side == LONG \
+                    and last_filled_order.side == SELL:
+                # TP triggered
+                # Update reentry grid
+                for order in self.open_orders.long:
+                    if order.type == LIMIT:
+                        delete_orders.append(order)
+                add_orders.extend(self.prepare_reentry_orders(last_filled_order.price, position))
+            else:
+                # Position was changed but not by the strategy
+                # Recalculate both
                 for order in self.open_orders.long:
                     delete_orders.append(order)
-            else:
-                if last_filled_order.type == LIMIT and last_filled_order.position_side == LONG \
-                        and last_filled_order.side == BUY:
-                    # Reentry triggered
-                    # Update TP grid
-                    for order in self.open_orders.long:
-                        if order.type == TP:
-                            delete_orders.append(order)
-                    add_orders.extend(self.prepare_tp_orders(last_filled_order.price, position))
-                elif last_filled_order.type == TP and last_filled_order.position_side == LONG \
-                        and last_filled_order.side == SELL:
-                    # TP triggered
-                    # Update reentry grid
-                    for order in self.open_orders.long:
-                        if order.type == LIMIT:
-                            delete_orders.append(order)
-                    add_orders.extend(self.prepare_reentry_orders(last_filled_order.price, position))
-                else:
-                    # Position was changed but not by the strategy
-                    # Recalculate both
-                    for order in self.open_orders.long:
-                        delete_orders.append(order)
-                    add_orders.extend(self.calculate_dca_tp(last_filled_order.price, position))
-        except Exception as e:
-            print_(['On update error', e], n=True)
+                add_orders.extend(self.calculate_dca_tp(last_filled_order.price, position))
         return add_orders, delete_orders
 
     def prepare_tp_orders(self, price: float, position: PositionList) -> List[Order]:
