@@ -14,7 +14,7 @@ from procedures import prep_config, make_get_filepath, load_live_config, add_arg
 from pure_funcs import create_xk, denumpyize, ts_to_date, analyze_fills, spotify_config
 
 
-def backtest(config: dict, data: (np.ndarray,), do_print=False) -> (list, bool):
+def backtest(config: dict, data: np.ndarray, do_print=False) -> (list, bool):
     xk = create_xk(config)
     return njit_backtest(data, config['starting_balance'], config['latency_simulation_ms'],
                          config['maker_fee'], **xk)
