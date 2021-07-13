@@ -13,11 +13,30 @@ from strategies.base_strategy import Strategy, base_strategy_spec
 
 @njit
 def round_dn(n, step, safety_rounding=10) -> float:
+    """
+    Round a float to the closest lower step size.
+    :param n: Float to round.
+    :param step: Step size to round to.
+    :param safety_rounding: Precision rounding safety.
+    :return: Rounded float.
+    """
     return np.round(np.floor(np.round(n / step, safety_rounding)) * step, safety_rounding)
 
 
 @njit
-def get_initial_position(current_price, reentry_grid, wallet_balance, wallet_percent, qty_step, price_step):
+def get_initial_position(current_price: float, reentry_grid: np.ndarray, wallet_balance: float, wallet_percent: float,
+                         qty_step: float, price_step: float) -> float:
+    """
+    Calculates the initial unleveraged position size. Uses a percentage of the wallet balance as the limit of the
+    cumulative entries.
+    :param current_price: The current price to consider.
+    :param reentry_grid: The grid in form of a 2D array.
+    :param wallet_balance: The current wallet balance.
+    :param wallet_percent: The percentage of the wallet balance to use.
+    :param qty_step: The quantity step of the pair.
+    :param price_step: The price step of the pair.
+    :return: Initial unleveraged position size.
+    """
     available_balance = wallet_balance * wallet_percent
     price = current_price
     mult = 1.0
@@ -32,8 +51,23 @@ def get_initial_position(current_price, reentry_grid, wallet_balance, wallet_per
 
 
 @njit
-def get_dca_grid(current_price, position_size, position_price, leverage, reentry_grid, wallet_balance, wallet_percent,
-                 qty_step, price_step):
+def get_dca_grid(current_price: float, position_size: float, position_price: float, leverage: int,
+                 reentry_grid: np.ndarray, wallet_balance: float, wallet_percent: float, qty_step: float,
+                 price_step: float) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Calculates the unleveraged reentry grid based on the current position size and the current price.
+    :param current_price: The current price to consider. Either the price where the initial position was entered, or
+    the price where a take profit enter triggered.
+    :param position_size: The size of the current position.
+    :param position_price: The price of the current position.
+    :param leverage: The leverage of the position.
+    :param reentry_grid: The grid in form of a 2D array.
+    :param wallet_balance: The current wallet balance.
+    :param wallet_percent: The percentage of the wallet balance to use.
+    :param qty_step: The quantity step of the pair.
+    :param price_step: The price step of the pair.
+    :return: The unleveraged reenry values, including price and size.
+    """
     available_balance = wallet_balance * wallet_percent
     reentry_prices = []
     reentry_sizes = []
@@ -53,7 +87,18 @@ def get_dca_grid(current_price, position_size, position_price, leverage, reentry
 
 
 @njit
-def get_tp_grid(current_price, position_size, tp_grid, qty_step, price_step):
+def get_tp_grid(current_price: float, position_size: float, tp_grid: np.ndarray, qty_step: float, price_step: float) -> \
+        Tuple[np.ndarray, np.ndarray]:
+    """
+    Calculates the leveraged take profit grid based on the current position size and current price.
+    :param current_price: The current price to consider. Either the price where the initial position was entered, or
+    the price where a reentry enter triggered.
+    :param position_size: The size of the current position.
+    :param tp_grid: The grid in form of a 2D array.
+    :param qty_step: The quantity step of the pair.
+    :param price_step: The price step of the pair.
+    :return: The leveraged take profit values, including price and size.
+    """
     tp_prices = np.zeros(len(tp_grid))
     tp_sizes = np.zeros(len(tp_grid))
     for i in range(len(tp_grid)):
