@@ -1,10 +1,16 @@
 import argparse
 import asyncio
 
+from bots.base_bot import Bot
 from functions import load_base_config, print_
 
 
-async def start_bot(bot):
+async def start_bot(bot: Bot):
+    """
+    Starts the three continuous functions of the bot.
+    :param bot: The bot to start.
+    :return:
+    """
     await asyncio.gather(bot.start_heartbeat(), bot.start_user_data(), bot.start_websocket())
 
 
