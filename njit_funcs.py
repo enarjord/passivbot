@@ -567,6 +567,7 @@ def njit_backtest(ticks: np.ndarray,
 
         closest_bkr = min(closest_bkr, calc_diff(bkr_price, prices[k]))
         if timestamps[k] >= next_update_ts:
+            # simulate small delay between bot and exchange
             long_entry, shrt_entry, long_close, shrt_close, bkr_price, available_margin = calc_orders(
                 balance,
                 long_psize,
@@ -587,23 +588,27 @@ def njit_backtest(ticks: np.ndarray,
             prev_MAs = MAs
 
             if equity / starting_balance < 0.1:
+                # break if 90% of starting balance is lost
                 return fills, (False, lowest_eqbal_ratio, closest_bkr)
 
             if closest_bkr < 0.06:
+                # consider bankruptcy within 6% as liquidation
                 if long_psize != 0.0:
                     fee_paid = -qty_to_cost(long_psize, long_pprice, inverse, c_mult) * maker_fee
                     pnl = calc_long_pnl(long_pprice, prices[k], -long_psize, inverse, c_mult)
                     balance = 0.0
                     equity = 0.0
                     long_psize, long_pprice = 0.0, 0.0
-                    fills.append((k, timestamps[k], pnl, fee_paid, balance, equity, 0.0, -long_psize, prices[k], 0.0, 0.0, 'long_bankruptcy'))
+                    fills.append((k, timestamps[k], pnl, fee_paid, balance, equity,
+                                  0.0, -long_psize, prices[k], 0.0, 0.0, 'long_bankruptcy'))
                 if shrt_psize != 0.0:
 
                     fee_paid = -qty_to_cost(shrt_psize, shrt_pprice, inverse, c_mult) * maker_fee
                     pnl = calc_shrt_pnl(shrt_pprice, prices[k], -shrt_psize, inverse, c_mult)
                     balance, equity = 0.0, 0.0
                     shrt_psize, shrt_pprice = 0.0, 0.0
-                    fills.append((k, timestamps[k], pnl, fee_paid, balance, equity, 0.0, -shrt_psize, prices[k], 0.0, 0.0, 'shrt_bankruptcy'))
+                    fills.append((k, timestamps[k], pnl, fee_paid, balance, equity,
+                                  0.0, -shrt_psize, prices[k], 0.0, 0.0, 'shrt_bankruptcy'))
 
                 return fills, (False, lowest_eqbal_ratio, closest_bkr)
 
@@ -618,12 +623,12 @@ def njit_backtest(ticks: np.ndarray,
                 long_entry_comment = long_entry[2] + '_full'
             long_psize, long_pprice = calc_new_psize_pprice(long_psize, long_pprice, long_entry_qty,
                                                             long_entry[1], qty_step)
-            long_entry = (long_entry_qty, long_entry[1], long_entry_comment)
-            fee_paid = -qty_to_cost(long_entry[0], long_entry[1], inverse, c_mult) * maker_fee
+            fee_paid = -qty_to_cost(long_entry_qty, long_entry[1], inverse, c_mult) * maker_fee
             balance += fee_paid
             equity = calc_equity(balance, long_psize, long_pprice, shrt_psize, shrt_pprice, prices[k], inverse, c_mult)
             pbr = qty_to_cost(long_psize, long_pprice, inverse, c_mult) / balance
-            fills.append((k, timestamps[k], 0.0, fee_paid, balance, equity, pbr) + long_entry[:2] + (long_psize, long_pprice, long_entry[2]))
+            fills.append((k, timestamps[k], 0.0, fee_paid, balance, equity, pbr,
+                          long_entry_qty, long_entry[1], long_psize, long_pprice, long_entry_comment))
             next_update_ts = min(next_update_ts, timestamps[k] + latency_simulation_ms)
             if partial_fill:
                 long_entry = (round_(long_entry[0] - long_entry_qty, qty_step), long_entry[1], long_entry_comment)
@@ -676,13 +681,13 @@ def njit_backtest(ticks: np.ndarray,
                 shrt_close_qty = -shrt_psize
                 new_shrt_psize, shrt_pprice = 0.0, 0.0
             shrt_psize = new_shrt_psize
-            shrt_close = (shrt_close_qty, shrt_close[1], shrt_close_comment)
             fee_paid = -qty_to_cost(shrt_close_qty, shrt_close[1], inverse, c_mult) * maker_fee
             pnl = calc_shrt_pnl(shrt_pprice, shrt_close[1], shrt_close_qty, inverse, c_mult)
             balance += fee_paid + pnl
             equity = calc_equity(balance, long_psize, long_pprice, shrt_psize, shrt_pprice, prices[k], inverse, c_mult)
             pbr = qty_to_cost(shrt_psize, shrt_pprice, inverse, c_mult) / balance
-            fills.append((k, timestamps[k], pnl, fee_paid, balance, equity, pbr) + shrt_close[:2] + (shrt_psize, shrt_pprice, shrt_close[2]))
+            fills.append((k, timestamps[k], pnl, fee_paid, balance, equity, pbr,
+                          shrt_close_qty, shrt_close[1], shrt_psize, shrt_pprice, shrt_close_comment))
             next_update_ts = min(next_update_ts, timestamps[k] + latency_simulation_ms)
             if partial_fill:
                 shrt_close = (shrt_close[0] - shrt_close_qty, shrt_close[1], shrt_close_comment)
@@ -699,12 +704,12 @@ def njit_backtest(ticks: np.ndarray,
                 shrt_entry_qty = shrt_entry[0]
             shrt_psize, shrt_pprice = calc_new_psize_pprice(shrt_psize, shrt_pprice, shrt_entry_qty,
                                                             shrt_entry[1], qty_step)
-            shrt_entry = (shrt_entry_qty, shrt_entry[1], shrt_entry_comment)
-            fee_paid = -qty_to_cost(shrt_entry[0], shrt_entry[1], inverse, c_mult) * maker_fee
+            fee_paid = -qty_to_cost(shrt_entry_qty, shrt_entry[1], inverse, c_mult) * maker_fee
             balance += fee_paid
             equity = calc_equity(balance, long_psize, long_pprice, shrt_psize, shrt_pprice, prices[k], inverse, c_mult)
             pbr = qty_to_cost(shrt_psize, shrt_pprice, inverse, c_mult) / balance
-            fills.append((k, timestamps[k], 0.0, fee_paid, balance, equity, pbr) + shrt_entry[:2] + (shrt_psize, shrt_pprice, shrt_close[2]))
+            fills.append((k, timestamps[k], 0.0, fee_paid, balance, equity, pbr,
+                          shrt_entry_qty, shrt_entry[1], shrt_psize, shrt_pprice, shrt_entry_comment))
             next_update_ts = min(next_update_ts, timestamps[k] + latency_simulation_ms)
             if partial_fill:
                 shrt_entry = (shrt_entry[0] - shrt_entry_qty, shrt_entry[1], shrt_entry_comment)
@@ -757,13 +762,13 @@ def njit_backtest(ticks: np.ndarray,
                 long_close_qty = -long_psize
                 new_long_psize, long_pprice = 0.0, 0.0
             long_psize = new_long_psize
-            long_close = (long_close_qty, long_close[1], long_close_comment)
-            fee_paid = -qty_to_cost(long_close[0], long_close[1], inverse, c_mult) * maker_fee
+            fee_paid = -qty_to_cost(long_close_qty, long_close[1], inverse, c_mult) * maker_fee
             pnl = calc_long_pnl(long_pprice, long_close[1], long_close_qty, inverse, c_mult)
             balance += fee_paid + pnl
             equity = calc_equity(balance, long_psize, long_pprice, shrt_psize, shrt_pprice, prices[k], inverse, c_mult)
             pbr = qty_to_cost(long_psize, long_pprice, inverse, c_mult) / balance
-            fills.append((k, timestamps[k], pnl, fee_paid, balance, equity, pbr) + long_close[:2] + (long_psize, long_pprice, long_close[2]))
+            fills.append((k, timestamps[k], pnl, fee_paid, balance, equity, pbr,
+                          long_close_qty, long_close[1], long_psize, long_pprice, long_close_comment))
             next_update_ts = min(next_update_ts, timestamps[k] + latency_simulation_ms)
             if partial_fill:
                 long_close = (long_close[0] - long_close_qty, long_close[1], long_close_comment)
