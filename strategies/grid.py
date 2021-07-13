@@ -106,6 +106,15 @@ def convert_dict_to_config(config: dict) -> StrategyConfig:
     return strategy_config
 
 
+@jitclass([
+              ("config", typeof(StrategyConfig(np.asarray([[0.0, 0.0]]), np.asarray([[0.0, 0.0]]), 0.0))),
+          ]
+          + base_strategy_spec +
+          [
+              ('reentry_grid', types.float64[:, :]),
+              ('tp_grid', types.float64[:, :]),
+              ('percent', types.float64),
+          ])
 class Grid(Strategy):
     """
     Grid trading strategy using a fixed grid.
