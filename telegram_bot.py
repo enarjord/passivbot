@@ -1,9 +1,9 @@
-import json
 import os
 from procedures import load_live_config
 from datetime import datetime, timedelta
 from time import time
 from pure_funcs import config_pretty_str
+from typing import Optional
 
 try:
     import git
@@ -14,7 +14,7 @@ except Exception as e:
           "please make sure you have git installed properly. The bot will work fine without it.")
 from prettytable import PrettyTable, HEADER
 from telegram import KeyboardButton, ParseMode, ReplyKeyboardMarkup, Update, InlineKeyboardButton, \
-    InlineKeyboardMarkup
+    InlineKeyboardMarkup, CallbackQuery
 from telegram.ext import Updater, CommandHandler, ConversationHandler, CallbackContext, \
     MessageHandler, Filters, CallbackQueryHandler
 
@@ -50,9 +50,9 @@ class Telegram:
 
     def add_handlers(self, updater):
         dispatcher = updater.dispatcher
-        dispatcher.add_handler(MessageHandler(Filters.regex('/balance.*'), self._balance))
+        dispatcher.add_handler(CommandHandler('balance', self._balance))
         dispatcher.add_handler(MessageHandler(Filters.regex('/open_orders.*'), self._open_orders))
-        dispatcher.add_handler(MessageHandler(Filters.regex('/position.*'), self._position))
+        dispatcher.add_handler(CommandHandler('position', self._position))
         dispatcher.add_handler(MessageHandler(Filters.regex('/show_config.*'), self.show_config))
         dispatcher.add_handler(
             MessageHandler(Filters.regex('/reload_config.*'), self._reload_config))
@@ -112,6 +112,8 @@ class Telegram:
 
         dispatcher.add_handler(MessageHandler(Filters.regex('/next.*'), self._next_page))
         dispatcher.add_handler(MessageHandler(Filters.regex('/previous.*'), self._previous_page))
+        dispatcher.add_handler(CallbackQueryHandler(self._position, pattern='update_position'))
+        dispatcher.add_handler(CallbackQueryHandler(self._balance, pattern='update_balance'))
 
     def _begin_transfer(self, update: Update, _: CallbackContext) -> int:
         if self._bot.exchange == 'bybit':
@@ -531,7 +533,7 @@ class Telegram:
             table_msg = position_table.get_string(border=True, padding_width=1,
                                                   junction_char=' ', vertical_char=' ',
                                                   hrules=HEADER)
-            self.send_msg(f'<pre>{table_msg}</pre>')
+            self.send_msg(f'<pre>{table_msg}</pre>', refreshable=True, callback_path='update_position', query=update.callback_query)
         else:
             self.send_msg("Position not initialized yet, please try again later")
 
@@ -549,7 +551,7 @@ class Telegram:
                       f'Available margin: {compress_float(self._bot.position["available_margin"], 4)}\n\n' \
                       f'Spot balance:\n' \
                       f'USDT: {compress_float(float(usdt_balance["free"]) + float(usdt_balance["locked"]), 4)} ({compress_float(float(usdt_balance["locked"]), 4)} locked)'
-                self.send_msg(msg)
+                self.send_msg(msg, refreshable=True, callback_path='update_balance', query=update.callback_query)
 
             self.send_msg('Retrieving balance...')
             task = self.loop.create_task(_balance_async())
@@ -702,13 +704,22 @@ class Telegram:
     def log_start(self):
         self.send_msg('<b>Passivbot started!</b>')
 
-    def send_msg(self, msg: str):
+    def send_msg(self, msg: str, refreshable: bool = False, callback_path: str = "", query: Optional[CallbackQuery] = None):
         try:
+            if query:
+                self._update_msg(query=query, msg=msg, callback_path=callback_path, refreshable=refreshable)
+                return
+
+            if refreshable:
+                reply_markup = InlineKeyboardMarkup([[InlineKeyboardButton("Refresh", callback_data=callback_path)]])
+            else:
+                reply_markup = self._keyboards[self._keyboard_idx]
+
             self._updater.bot.send_message(
                 self._chat_id,
                 text=msg,
                 parse_mode=ParseMode.HTML,
-                reply_markup=self._keyboards[self._keyboard_idx],
+                reply_markup=reply_markup,
                 disable_notification=False
             )
         except Exception as e:
@@ -723,6 +734,31 @@ class Telegram:
                 )
             except Exception as fe:
                 print(f'Failed to send error message: {fe}')
+
+    def _update_msg(self, query: CallbackQuery, msg: str, callback_path: str = "",
+                    refreshable: bool = False) -> None:
+        if refreshable:
+            reply_markup = InlineKeyboardMarkup([
+                [InlineKeyboardButton("Refresh", callback_data=callback_path)],
+            ])
+        else:
+            reply_markup = InlineKeyboardMarkup([[]])
+        msg += "\nUpdated: {}".format(datetime.now().ctime())
+        if not query.message:
+            return
+        chat_id = query.message.chat_id
+        message_id = query.message.message_id
+
+        try:
+            self._updater.bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=msg,
+                parse_mode=ParseMode.HTML,
+                reply_markup=reply_markup
+            )
+        except Exception as fe:
+            print(f'Failed to send error message: {fe}')
 
     def exit(self):
         try:
