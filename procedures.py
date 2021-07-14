@@ -52,7 +52,7 @@ async def prep_config(args) -> dict:
                              f"{end_date.replace(' ', '').replace(':', '').replace('.', '')}"
 
     base_dirpath = os.path.join('backtests',
-                                f"{config['exchange']}{'_spot' if 'spot' in config and config['spot'] else ''}",
+                                f"{config['exchange']}{'_spot' if 'spot' in config['market_type'] else ''}",
                                 config['symbol'])
     config['caches_dirpath'] = make_get_filepath(os.path.join(base_dirpath, 'caches', ''))
     config['optimize_dirpath'] = make_get_filepath(os.path.join(base_dirpath, 'optimize', ''))
