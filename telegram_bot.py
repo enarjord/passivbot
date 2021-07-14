@@ -51,15 +51,22 @@ class Telegram:
     def add_handlers(self, updater):
         dispatcher = updater.dispatcher
         dispatcher.add_handler(CommandHandler('balance', self._balance))
-        dispatcher.add_handler(MessageHandler(Filters.regex('/open_orders.*'), self._open_orders))
+        dispatcher.add_handler(CommandHandler('open_orders', self._open_orders))
         dispatcher.add_handler(CommandHandler('position', self._position))
-        dispatcher.add_handler(MessageHandler(Filters.regex('/show_config.*'), self.show_config))
-        dispatcher.add_handler(
-            MessageHandler(Filters.regex('/reload_config.*'), self._reload_config))
-        dispatcher.add_handler(
-            MessageHandler(Filters.regex('/closed_trades.*'), self._closed_trades))
+        dispatcher.add_handler(CommandHandler('show_config', self.show_config))
+        dispatcher.add_handler(CommandHandler('reload_config', self._reload_config))
+        dispatcher.add_handler(CommandHandler('closed_trades', self._closed_trades))
         dispatcher.add_handler(CommandHandler('daily', self._daily))
-        dispatcher.add_handler(MessageHandler(Filters.regex('/help.*'), self._help))
+        dispatcher.add_handler(CommandHandler('help', self._help))
+        dispatcher.add_handler(CommandHandler('next', self._next_page))
+        dispatcher.add_handler(CommandHandler('previous', self._previous_page))
+
+        dispatcher.add_handler(CallbackQueryHandler(self._balance, pattern='update_balance'))
+        dispatcher.add_handler(CallbackQueryHandler(self._open_orders, pattern='update_open_orders'))
+        dispatcher.add_handler(CallbackQueryHandler(self._position, pattern='update_position'))
+        dispatcher.add_handler(CallbackQueryHandler(self._closed_trades, pattern='closed_trades'))
+        dispatcher.add_handler(CallbackQueryHandler(self._daily, pattern='update_daily'))
+
         dispatcher.add_handler(ConversationHandler(
             entry_points=[MessageHandler(Filters.regex('/stop.*'), self._begin_stop)],
             states={
@@ -109,11 +116,6 @@ class Telegram:
             },
             fallbacks=[CommandHandler('cancel', self._abort)]
         ))
-
-        dispatcher.add_handler(MessageHandler(Filters.regex('/next.*'), self._next_page))
-        dispatcher.add_handler(MessageHandler(Filters.regex('/previous.*'), self._previous_page))
-        dispatcher.add_handler(CallbackQueryHandler(self._position, pattern='update_position'))
-        dispatcher.add_handler(CallbackQueryHandler(self._balance, pattern='update_balance'))
 
     def _begin_transfer(self, update: Update, _: CallbackContext) -> int:
         if self._bot.exchange == 'bybit':
@@ -504,7 +506,7 @@ class Telegram:
                                            junction_char=' ', vertical_char=' ', hrules=HEADER)
         msg = f'Current price: {round_(self._bot.price, self._bot.price_step)}\n' \
               f'<pre>{table_msg}</pre>'
-        self.send_msg(msg)
+        self.send_msg(msg, refreshable=True, callback_path='update_open_orders', query=update.callback_query)
 
     def _position(self, update=None, context=None):
         position_table = PrettyTable(['', 'Long', 'Short'])
@@ -605,7 +607,7 @@ class Telegram:
 
                 msg = f'Closed trades:\n' \
                       f'<pre>{table.get_string(border=True, padding_width=1, junction_char=" ", vertical_char=" ", hrules=HEADER)}</pre>'
-                self.send_msg(msg)
+                self.send_msg(msg, refreshable=True, callback_path='closed_trades', query=update.callback_query)
 
             self.send_msg(f'Fetching last {self.n_trades} trades...')
             task = self.loop.create_task(send_closed_trades_async())
@@ -651,7 +653,7 @@ class Telegram:
                 table.add_row(['Total', f'{round_dynamic(pnl_sum, 3)} ({round_(pct_sum, 0.01)}%)'])
 
                 msg = f'<pre>{table.get_string(border=True, padding_width=1, junction_char=" ", vertical_char=" ", hrules=HEADER)}</pre>'
-                self.send_msg(msg)
+                self.send_msg(msg, refreshable=True, callback_path='update_daily', query=update.callback_query)
 
             self.send_msg('Calculating daily pnl...')
             try:
