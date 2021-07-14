@@ -53,10 +53,11 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
     table.add_row(['Max hours no fills (same side)', round_dynamic(result['result']['max_hrs_no_fills_same_side'], 6)])
     table.add_row(['Max hours no fills', round_dynamic(result['result']['max_hrs_no_fills'], 6)])
 
+    longs = fdf[fdf.type.str.contains('long')]
+    shrts = fdf[fdf.type.str.contains('shrt')]
     if result['do_long']:
         table.add_row([' ', ' '])
         table.add_row(['Long', result['do_long']])
-        longs = fdf[fdf.type.str.contains('long')]
         table.add_row(["No. inital entries", len(longs[longs.type.str.contains('long_ientry')])])
         table.add_row(["No. reentries", len(longs[longs.type.str.contains('long_rentry')])])
         table.add_row(["No. normal closes", len(longs[longs.type.str.contains('long_nclose')])])
@@ -69,7 +70,6 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
     if result['do_shrt']:
         table.add_row([' ', ' '])
         table.add_row(['Short', result['do_shrt']])
-        shrts = fdf[fdf.type.str.contains('shrt')]
         table.add_row(["No. initial entries", len(shrts[shrts.type.str.contains('shrt_ientry')])])
         table.add_row(["No. reentries", len(shrts[shrts.type.str.contains('shrt_rentry')])])
         table.add_row(["No. normal closes", len(shrts[shrts.type.str.contains('shrt_nclose')])])
