@@ -5,43 +5,77 @@ import json
 from pure_funcs import round_dynamic, denumpyize, candidate_to_live_config
 from njit_funcs import round_up
 from procedures import dump_live_config
+from prettytable import PrettyTable
 
 
 def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
     plt.rcParams['figure.figsize'] = [29, 18]
     pd.set_option('precision', 10)
 
-    def gain_conv(x):
-        return x * 100 - 100
+    table = PrettyTable(["Metric", "Value"])
+    table.align['Metric'] = 'l'
+    table.align['Value'] = 'l'
+    table.title = 'Summary'
 
-    lines = []
-    lines.append(f"exchange {result['exchange'] if 'exchange' in result else 'unknown'}")
-    lines.append(f"symbol {result['symbol'] if 'symbol' in result else 'unknown'}")
-    lines.append(f"gain percentage {round_dynamic(result['result']['gain'] * 100 - 100, 4)}%")
-    lines.append(f"average_daily_gain percentage {round_dynamic((result['result']['average_daily_gain'] - 1) * 100, 3)}%")
-    avg_pgain_key = result['avg_periodic_gain_key']
-    lines.append(f"{result['avg_periodic_gain_key']} percentage {round_dynamic(result['result']['average_periodic_gain'] * 100, 3)}%")
-    lines.append(f"closest_bkr percentage {round_dynamic(result['result']['closest_bkr'] * 100, 4)}%")
+    table.add_row(['Exchange', result['exchange'] if 'exchange' in result else 'unknown'])
+    table.add_row(['Symbol', result['symbol'] if 'symbol' in result else 'unknown'])
+    table.add_row(['Starting balance', round_dynamic(result['result']['starting_balance'], 6)])
+    table.add_row(['Final balance', round_dynamic(result['result']['final_balance'], 6)])
+    table.add_row(['Final equity', round_dynamic(result['result']['final_equity'], 6)])
+    table.add_row(['Net PNL + fees', round_dynamic(result['result']['net_pnl_plus_fees'], 6)])
+    table.add_row(['Gain', round_dynamic(result['result']['gain'], 6)])
+    table.add_row(['Total gain percentage', f"{round_dynamic(result['result']['gain'] * 100 - 100, 4)}%"])
+    table.add_row(['Average daily gain', round_dynamic(result['result']['average_daily_gain'], 6)])
+    table.add_row(['Average daily gain percentage', f"{round_dynamic((result['result']['average_daily_gain'] - 1) * 100, 3)}%"])
+    table.add_row(['Adjusted daily gain', round_dynamic(result['result']['adjusted_daily_gain'], 6)])
+    table.add_row([f"{result['avg_periodic_gain_key']} percentage", f"{round_dynamic(result['result']['average_periodic_gain'] * 100, 3)}%"])
+    table.add_row(['Average periodic gain', round_dynamic(result['result']['average_periodic_gain'], 6)])
+    table.add_row(['Closest bankruptcy percentage', f"{round_dynamic(result['result']['closest_bkr'] * 100, 4)}%"])
+    table.add_row([' ', ' '])
+    table.add_row(['No. days', round_dynamic(result['result']['n_days'], 6)])
+    table.add_row(['Sharpe ratio', round_dynamic(result['result']['sharpe_ratio'], 6)])
+    table.add_row(['Profit sum', round_dynamic(result['result']['profit_sum'], 6)])
+    table.add_row(['Loss sum', round_dynamic(result['result']['loss_sum'], 6)])
+    table.add_row(['Fee sum', round_dynamic(result['result']['fee_sum'], 6)])
+    table.add_row(['Lowest equity/balance ratio', round_dynamic(result['result']['lowest_eqbal_ratio'], 6)])
+    table.add_row(['Closest bankruptcy', round_dynamic(result['result']['closest_bkr'], 6)])
+    table.add_row(['Biggest position size', round_dynamic(result['result']['biggest_psize'], 6)])
+    table.add_row([' ', ' '])
+    table.add_row(['No. fills', round_dynamic(result['result']['n_fills'], 6)])
+    table.add_row(['No. entries', round_dynamic(result['result']['n_entries'], 6)])
+    table.add_row(['No. closes', round_dynamic(result['result']['n_closes'], 6)])
+    table.add_row(['No. initial entries', round_dynamic(result['result']['n_initial_entries'], 6)])
+    table.add_row(['No. reentries', round_dynamic(result['result']['n_reentries'], 6)])
+    table.add_row(['No. normal closes', round_dynamic(result['result']['n_normal_closes'], 6)])
+    table.add_row(['No. stoploss closes', round_dynamic(result['result']['n_stop_loss_closes'], 6)])
+    table.add_row([' ', ' '])
+    table.add_row(['Mean hours between fills', round_dynamic(result['result']['mean_hrs_between_fills'], 6)])
+    table.add_row(['Max hours no fills (same side)', round_dynamic(result['result']['max_hrs_no_fills_same_side'], 6)])
+    table.add_row(['Max hours no fills', round_dynamic(result['result']['max_hrs_no_fills'], 6)])
 
-    for key in [k for k in result['result'] if k not in ['gain', 'average_daily_gain', 'average_periodic_gain', 'closest_bkr', 'do_long', 'do_shrt']]:
-        lines.append(f"{key} {round_dynamic(result['result'][key], 6)}")
-    lines.append(f"long: {result['do_long']}, short: {result['do_shrt']}")
+    if result['do_long']:
+        table.add_row([' ', ' '])
+        table.add_row(['Long', result['do_long']])
+        longs = fdf[fdf.type.str.contains('long')]
+        table.add_row(["No. inital entries", len(longs[longs.type == 'long_ientry'])])
+        table.add_row(["No. reentries", len(longs[longs.type == 'long_rentry'])])
+        table.add_row(["No. normal closes", len(longs[longs.type == 'long_nclose'])])
+        table.add_row(["No. stoploss closes", len(longs[longs.type == 'long_sclose'])])
+        table.add_row(['Mean hours between fills (long)', round_dynamic(result['result']['mean_hrs_between_fills_long'], 6)])
+        table.add_row(['Max hours no fills (long)', round_dynamic(result['result']['max_hrs_no_fills_long'], 6)])
+        table.add_row(["PNL sum", longs.pnl.sum()])
 
-    longs = fdf[fdf.type.str.contains('long')]
-    shrts = fdf[fdf.type.str.contains('shrt')]
-
-    lines.append(f"n long ientries {len(longs[longs.type == 'long_ientry'])}")
-    lines.append(f"n long rentries {len(longs[longs.type == 'long_rentry'])}")
-    lines.append(f"n long ncloses {len(longs[longs.type == 'long_nclose'])}")
-    lines.append(f"n long scloses {len(longs[longs.type == 'long_sclose'])}")
-    lines.append(f"long pnl sum {longs.pnl.sum()}")
-
-    lines.append(f"n shrt ientries {len(shrts[shrts.type == 'shrt_ientry'])}")
-    lines.append(f"n shrt rentries {len(shrts[shrts.type == 'shrt_rentry'])}")
-    lines.append(f"n shrt ncloses {len(shrts[shrts.type == 'shrt_nclose'])}")
-    lines.append(f"n shrt scloses {len(shrts[shrts.type == 'shrt_sclose'])}")
-    lines.append(f"shrt pnl sum {shrts.pnl.sum()}")
-
+    if result['do_shrt']:
+        table.add_row([' ', ' '])
+        table.add_row(['Short', result['do_shrt']])
+        shrts = fdf[fdf.type.str.contains('shrt')]
+        table.add_row(["No. initial entries", len(shrts[shrts.type == 'shrt_ientry'])])
+        table.add_row(["No. reentries", len(shrts[shrts.type == 'shrt_rentry'])])
+        table.add_row(["No. normal closes", len(shrts[shrts.type == 'shrt_nclose'])])
+        table.add_row(["No. stoploss closes", len(shrts[shrts.type == 'shrt_sclose'])])
+        table.add_row(['Mean hours between fills (short)', round_dynamic(result['result']['mean_hrs_between_fills_shrt'], 6)])
+        table.add_row(['Max hours no fills (short)', round_dynamic(result['result']['max_hrs_no_fills_shrt'], 6)])
+        table.add_row(["PNL sum", shrts.pnl.sum()])
 
     live_config = candidate_to_live_config(result)
     dump_live_config(live_config, result['plots_dirpath'] + 'live_config.json')
@@ -49,9 +83,9 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
 
     print('writing backtest_result.txt...')
     with open(f"{result['plots_dirpath']}backtest_result.txt", 'w') as f:
-        for line in lines:
-            print(line)
-            f.write(line + '\n')
+        output = table.get_string(border=True, padding_width=1)
+        print(output)
+        f.write(output)
 
     print('plotting balance and equity...')
     plt.clf()
