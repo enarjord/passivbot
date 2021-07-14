@@ -743,7 +743,7 @@ class Telegram:
             ])
         else:
             reply_markup = InlineKeyboardMarkup([[]])
-        msg += "\nUpdated: {}".format(datetime.now().ctime())
+        msg += "\n\nUpdated: {}".format(datetime.now().ctime())
         if not query.message:
             return
         chat_id = query.message.chat_id
