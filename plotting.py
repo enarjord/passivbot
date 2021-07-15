@@ -6,9 +6,11 @@ from pure_funcs import round_dynamic, denumpyize, candidate_to_live_config
 from njit_funcs import round_up
 from procedures import dump_live_config
 from prettytable import PrettyTable
+from colorama import init, Fore
 
 
 def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
+    init(autoreset=True)
     plt.rcParams['figure.figsize'] = [29, 18]
     pd.set_option('precision', 10)
 
@@ -22,24 +24,22 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
     table.add_row(['Symbol', result['symbol'] if 'symbol' in result else 'unknown'])
     table.add_row(['No. days', round_dynamic(result['result']['n_days'], 6)])
     table.add_row(['Starting balance', round_dynamic(result['result']['starting_balance'], 6)])
-    table.add_row(['Final balance', round_dynamic(result['result']['final_balance'], 6)])
-    table.add_row(['Final equity', round_dynamic(result['result']['final_equity'], 6)])
-    table.add_row(['Net PNL + fees', round_dynamic(result['result']['net_pnl_plus_fees'], 6)])
-    table.add_row(['Gain ratio', round_dynamic(result['result']['gain'], 6)])
-    table.add_row(['Total gain percentage', f"{round_dynamic(result['result']['gain'] * 100 - 100, 4)}%"])
-    table.add_row(['Average daily gain', round_dynamic(result['result']['average_daily_gain'], 6)])
-    table.add_row(['Average daily gain percentage', f"{round_dynamic((result['result']['average_daily_gain'] - 1) * 100, 3)}%"])
-    table.add_row(['Adjusted daily gain', round_dynamic(result['result']['adjusted_daily_gain'], 6)])
-    table.add_row([f"{result['avg_periodic_gain_key']} percentage", f"{round_dynamic(result['result']['average_periodic_gain'] * 100, 3)}%"])
-    table.add_row(['Average periodic gain', round_dynamic(result['result']['average_periodic_gain'], 6)])
-    table.add_row(['Closest bankruptcy percentage', f"{round_dynamic(result['result']['closest_bkr'] * 100, 4)}%"])
+    profit_color = Fore.RED if result['result']['final_balance'] < result['result']['starting_balance'] else Fore.RESET
+    table.add_row(['Final balance', f"{profit_color}{round_dynamic(result['result']['final_balance'], 6)}{Fore.RESET}"])
+    table.add_row(['Final equity', f"{profit_color}{round_dynamic(result['result']['final_equity'], 6)}{Fore.RESET}"])
+    table.add_row(['Net PNL + fees', f"{profit_color}{round_dynamic(result['result']['net_pnl_plus_fees'], 6)}{Fore.RESET}"])
+    table.add_row(['Total gain percentage', f"{profit_color}{round_dynamic(result['result']['gain'] * 100 - 100, 4)}%{Fore.RESET}"])
+    table.add_row(['Average daily gain percentage', f"{profit_color}{round_dynamic((result['result']['average_daily_gain'] - 1) * 100, 3)}%{Fore.RESET}"])
+    table.add_row(['Adjusted daily gain', f"{profit_color}{round_dynamic(result['result']['adjusted_daily_gain'], 6)}{Fore.RESET}"])
+    table.add_row([f"{result['avg_periodic_gain_key']} percentage", f"{profit_color}{round_dynamic(result['result']['average_periodic_gain'] * 100, 3)}%{Fore.RESET}"])
+    bankruptcy_color = Fore.RED if result['result']['closest_bkr'] < 0.4 else Fore.YELLOW if result['result']['closest_bkr'] < 0.8 else Fore.RESET
+    table.add_row(['Closest bankruptcy percentage', f"{bankruptcy_color}{round_dynamic(result['result']['closest_bkr'] * 100, 4)}%{Fore.RESET}"])
     table.add_row([' ', ' '])
     table.add_row(['Sharpe ratio', round_dynamic(result['result']['sharpe_ratio'], 6)])
-    table.add_row(['Profit sum', round_dynamic(result['result']['profit_sum'], 6)])
-    table.add_row(['Loss sum', round_dynamic(result['result']['loss_sum'], 6)])
+    table.add_row(['Profit sum', f"{profit_color}{round_dynamic(result['result']['profit_sum'], 6)}{Fore.RESET}"])
+    table.add_row(['Loss sum', f"{Fore.RED}{round_dynamic(result['result']['loss_sum'], 6)}{Fore.RESET}"])
     table.add_row(['Fee sum', round_dynamic(result['result']['fee_sum'], 6)])
     table.add_row(['Lowest equity/balance ratio', round_dynamic(result['result']['lowest_eqbal_ratio'], 6)])
-    table.add_row(['Closest bankruptcy', round_dynamic(result['result']['closest_bkr'], 6)])
     table.add_row(['Biggest position size', round_dynamic(result['result']['biggest_psize'], 6)])
     table.add_row([' ', ' '])
     table.add_row(['No. fills', round_dynamic(result['result']['n_fills'], 6)])
@@ -66,7 +66,8 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
         table.add_row(["No. partial fills", len(longs[longs.type.str.contains('partial')])])
         table.add_row(['Mean hours between fills (long)', round_dynamic(result['result']['mean_hrs_between_fills_long'], 6)])
         table.add_row(['Max hours no fills (long)', round_dynamic(result['result']['max_hrs_no_fills_long'], 6)])
-        table.add_row(["PNL sum", longs.pnl.sum()])
+        profit_color = Fore.RED if longs.pnl.sum() < 0 else Fore.RESET
+        table.add_row(["PNL sum", f"{profit_color}{longs.pnl.sum()}{Fore.RESET}"])
 
     if result['do_shrt']:
         table.add_row([' ', ' '])
@@ -78,7 +79,8 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
         table.add_row(["No. partial fills", len(shrts[shrts.type.str.contains('partial')])])
         table.add_row(['Mean hours between fills (short)', round_dynamic(result['result']['mean_hrs_between_fills_shrt'], 6)])
         table.add_row(['Max hours no fills (short)', round_dynamic(result['result']['max_hrs_no_fills_shrt'], 6)])
-        table.add_row(["PNL sum", shrts.pnl.sum()])
+        profit_color = Fore.RED if shrts.pnl.sum() < 0 else Fore.RESET
+        table.add_row(["PNL sum", f"{profit_color}{shrts.pnl.sum()}{Fore.RESET}"])
 
     live_config = candidate_to_live_config(result)
     dump_live_config(live_config, result['plots_dirpath'] + 'live_config.json')
