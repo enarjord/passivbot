@@ -18,6 +18,7 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
     table.title = 'Summary'
 
     table.add_row(['Exchange', result['exchange'] if 'exchange' in result else 'unknown'])
+    table.add_row(['Market type', result['market_type'] if 'market_type' in result else 'unknown'])
     table.add_row(['Symbol', result['symbol'] if 'symbol' in result else 'unknown'])
     table.add_row(['No. days', round_dynamic(result['result']['n_days'], 6)])
     table.add_row(['Starting balance', round_dynamic(result['result']['starting_balance'], 6)])
@@ -83,13 +84,13 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
     dump_live_config(live_config, result['plots_dirpath'] + 'live_config.json')
     json.dump(denumpyize(result), open(result['plots_dirpath'] + 'result.json', 'w'), indent=4)
 
-    print('writing backtest_result.txt...')
+    print('writing backtest_result.txt...\n')
     with open(f"{result['plots_dirpath']}backtest_result.txt", 'w') as f:
         output = table.get_string(border=True, padding_width=1)
         print(output)
         f.write(output)
 
-    print('plotting balance and equity...')
+    print('\nplotting balance and equity...')
     plt.clf()
     fdf.balance.plot()
     fdf.equity.plot()
