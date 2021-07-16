@@ -5,59 +5,94 @@ import json
 from pure_funcs import round_dynamic, denumpyize, candidate_to_live_config
 from njit_funcs import round_up
 from procedures import dump_live_config
+from prettytable import PrettyTable
+from colorama import init, Fore
 
 
 def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
+    init(autoreset=True)
     plt.rcParams['figure.figsize'] = [29, 18]
     pd.set_option('precision', 10)
 
-    def gain_conv(x):
-        return x * 100 - 100
+    table = PrettyTable(["Metric", "Value"])
+    table.align['Metric'] = 'l'
+    table.align['Value'] = 'l'
+    table.title = 'Summary'
 
-    lines = []
-    lines.append(f"exchange {result['exchange'] if 'exchange' in result else 'unknown'}")
-    lines.append(f"symbol {result['symbol'] if 'symbol' in result else 'unknown'}")
-    lines.append(f"gain percentage {round_dynamic(result['result']['gain'] * 100 - 100, 4)}%")
-    lines.append(f"average_daily_gain percentage {round_dynamic((result['result']['average_daily_gain'] - 1) * 100, 3)}%")
-    avg_pgain_key = result['avg_periodic_gain_key']
-    lines.append(f"{result['avg_periodic_gain_key']} percentage {round_dynamic(result['result']['average_periodic_gain'] * 100, 3)}%")
-    lines.append(f"closest_bkr percentage {round_dynamic(result['result']['closest_bkr'] * 100, 4)}%")
-
-    for key in [k for k in result['result'] if k not in ['gain', 'average_daily_gain', 'average_periodic_gain', 'closest_bkr', 'do_long', 'do_shrt']]:
-        lines.append(f"{key} {round_dynamic(result['result'][key], 6)}")
-    lines.append(f"long: {result['do_long']}, short: {result['do_shrt']}")
+    table.add_row(['Exchange', result['exchange'] if 'exchange' in result else 'unknown'])
+    table.add_row(['Market type', result['market_type'] if 'market_type' in result else 'unknown'])
+    table.add_row(['Symbol', result['symbol'] if 'symbol' in result else 'unknown'])
+    table.add_row(['No. days', round_dynamic(result['result']['n_days'], 6)])
+    table.add_row(['Starting balance', round_dynamic(result['result']['starting_balance'], 6)])
+    profit_color = Fore.RED if result['result']['final_balance'] < result['result']['starting_balance'] else Fore.RESET
+    table.add_row(['Final balance', f"{profit_color}{round_dynamic(result['result']['final_balance'], 6)}{Fore.RESET}"])
+    table.add_row(['Final equity', f"{profit_color}{round_dynamic(result['result']['final_equity'], 6)}{Fore.RESET}"])
+    table.add_row(['Net PNL + fees', f"{profit_color}{round_dynamic(result['result']['net_pnl_plus_fees'], 6)}{Fore.RESET}"])
+    table.add_row(['Total gain percentage', f"{profit_color}{round_dynamic(result['result']['gain'] * 100 - 100, 4)}%{Fore.RESET}"])
+    table.add_row(['Average daily gain percentage', f"{profit_color}{round_dynamic((result['result']['average_daily_gain'] - 1) * 100, 3)}%{Fore.RESET}"])
+    table.add_row(['Adjusted daily gain', f"{profit_color}{round_dynamic(result['result']['adjusted_daily_gain'], 6)}{Fore.RESET}"])
+    table.add_row([f"{result['avg_periodic_gain_key']} percentage", f"{profit_color}{round_dynamic(result['result']['average_periodic_gain'] * 100, 3)}%{Fore.RESET}"])
+    bankruptcy_color = Fore.RED if result['result']['closest_bkr'] < 0.4 else Fore.YELLOW if result['result']['closest_bkr'] < 0.8 else Fore.RESET
+    table.add_row(['Closest bankruptcy percentage', f"{bankruptcy_color}{round_dynamic(result['result']['closest_bkr'] * 100, 4)}%{Fore.RESET}"])
+    table.add_row([' ', ' '])
+    table.add_row(['Sharpe ratio', round_dynamic(result['result']['sharpe_ratio'], 6)])
+    table.add_row(['Profit sum', f"{profit_color}{round_dynamic(result['result']['profit_sum'], 6)}{Fore.RESET}"])
+    table.add_row(['Loss sum', f"{Fore.RED}{round_dynamic(result['result']['loss_sum'], 6)}{Fore.RESET}"])
+    table.add_row(['Fee sum', round_dynamic(result['result']['fee_sum'], 6)])
+    table.add_row(['Lowest equity/balance ratio', round_dynamic(result['result']['lowest_eqbal_ratio'], 6)])
+    table.add_row(['Biggest position size', round_dynamic(result['result']['biggest_psize'], 6)])
+    table.add_row([' ', ' '])
+    table.add_row(['No. fills', round_dynamic(result['result']['n_fills'], 6)])
+    table.add_row(['No. entries', round_dynamic(result['result']['n_entries'], 6)])
+    table.add_row(['No. closes', round_dynamic(result['result']['n_closes'], 6)])
+    table.add_row(['No. initial entries', round_dynamic(result['result']['n_initial_entries'], 6)])
+    table.add_row(['No. reentries', round_dynamic(result['result']['n_reentries'], 6)])
+    table.add_row(['No. normal closes', round_dynamic(result['result']['n_normal_closes'], 6)])
+    table.add_row(['No. stoploss closes', round_dynamic(result['result']['n_stop_loss_closes'], 6)])
+    table.add_row([' ', ' '])
+    table.add_row(['Mean hours between fills', round_dynamic(result['result']['mean_hrs_between_fills'], 6)])
+    table.add_row(['Max hours no fills (same side)', round_dynamic(result['result']['max_hrs_no_fills_same_side'], 6)])
+    table.add_row(['Max hours no fills', round_dynamic(result['result']['max_hrs_no_fills'], 6)])
 
     longs = fdf[fdf.type.str.contains('long')]
     shrts = fdf[fdf.type.str.contains('shrt')]
+    if result['do_long']:
+        table.add_row([' ', ' '])
+        table.add_row(['Long', result['do_long']])
+        table.add_row(["No. inital entries", len(longs[longs.type.str.contains('long_ientry')])])
+        table.add_row(["No. reentries", len(longs[longs.type.str.contains('long_rentry')])])
+        table.add_row(["No. normal closes", len(longs[longs.type.str.contains('long_nclose')])])
+        table.add_row(["No. stoploss closes", len(longs[longs.type.str.contains('long_sclose')])])
+        table.add_row(["No. partial fills", len(longs[longs.type.str.contains('partial')])])
+        table.add_row(['Mean hours between fills (long)', round_dynamic(result['result']['mean_hrs_between_fills_long'], 6)])
+        table.add_row(['Max hours no fills (long)', round_dynamic(result['result']['max_hrs_no_fills_long'], 6)])
+        profit_color = Fore.RED if longs.pnl.sum() < 0 else Fore.RESET
+        table.add_row(["PNL sum", f"{profit_color}{longs.pnl.sum()}{Fore.RESET}"])
 
-    lines.append(f"n long ientries {len(longs[longs.type.str.contains('ientry')])}")
-    lines.append(f"n long rentries {len(longs[longs.type.str.contains('rentry')])}")
-    lines.append(f"n long ncloses {len(longs[longs.type.str.contains('nclose')])}")
-    lines.append(f"n long scloses {len(longs[longs.type.str.contains('sclose')])}")
-    lines.append(f"n long partial fills {len(longs[longs.type.str.contains('partial')])}")
-
-    lines.append(f"long pnl sum {longs.pnl.sum()}")
-
-    lines.append(f"n shrt ientries {len(shrts[shrts.type.str.contains('ientry')])}")
-    lines.append(f"n shrt rentries {len(shrts[shrts.type.str.contains('rentry')])}")
-    lines.append(f"n shrt ncloses {len(shrts[shrts.type.str.contains('nclose')])}")
-    lines.append(f"n shrt scloses {len(shrts[shrts.type.str.contains('sclose')])}")
-    lines.append(f"n shrt partial fills {len(shrts[shrts.type.str.contains('partial')])}")
-
-    lines.append(f"shrt pnl sum {shrts.pnl.sum()}")
-
+    if result['do_shrt']:
+        table.add_row([' ', ' '])
+        table.add_row(['Short', result['do_shrt']])
+        table.add_row(["No. initial entries", len(shrts[shrts.type.str.contains('shrt_ientry')])])
+        table.add_row(["No. reentries", len(shrts[shrts.type.str.contains('shrt_rentry')])])
+        table.add_row(["No. normal closes", len(shrts[shrts.type.str.contains('shrt_nclose')])])
+        table.add_row(["No. stoploss closes", len(shrts[shrts.type.str.contains('shrt_sclose')])])
+        table.add_row(["No. partial fills", len(shrts[shrts.type.str.contains('partial')])])
+        table.add_row(['Mean hours between fills (short)', round_dynamic(result['result']['mean_hrs_between_fills_shrt'], 6)])
+        table.add_row(['Max hours no fills (short)', round_dynamic(result['result']['max_hrs_no_fills_shrt'], 6)])
+        profit_color = Fore.RED if shrts.pnl.sum() < 0 else Fore.RESET
+        table.add_row(["PNL sum", f"{profit_color}{shrts.pnl.sum()}{Fore.RESET}"])
 
     live_config = candidate_to_live_config(result)
     dump_live_config(live_config, result['plots_dirpath'] + 'live_config.json')
     json.dump(denumpyize(result), open(result['plots_dirpath'] + 'result.json', 'w'), indent=4)
 
-    print('writing backtest_result.txt...')
+    print('writing backtest_result.txt...\n')
     with open(f"{result['plots_dirpath']}backtest_result.txt", 'w') as f:
-        for line in lines:
-            print(line)
-            f.write(line + '\n')
+        output = table.get_string(border=True, padding_width=1)
+        print(output)
+        f.write(output)
 
-    print('plotting balance and equity...')
+    print('\nplotting balance and equity...')
     plt.clf()
     fdf.balance.plot()
     fdf.equity.plot()
