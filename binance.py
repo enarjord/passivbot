@@ -190,7 +190,7 @@ class BinanceBot(Bot):
         return False
 
     async def execute_leverage_change(self):
-        lev = int(min(self.max_leverage, max(3.0, np.ceil(max(self.xk['pbr_limit']) * 2))))
+        lev = int(min(self.max_leverage, max(3.0, np.ceil(max(self.xk['pbr_limit']) * 3))))
         return await self.private_post(self.base_endpoint,
                                        self.endpoints['leverage'],
                                        {'symbol': self.symbol, 'leverage': lev})
