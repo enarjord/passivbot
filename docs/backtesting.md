@@ -74,3 +74,6 @@ blue line in the graph represents the balance, and the orange line represents th
 
 Besides this file, a number of `backtest_XofY.jpg` are also created. These represent the entire backtest period, but are
 split up into separate files for easier inspection and zooming.
+
+On these plots the blue dotted line is the long position price, and the red dotted line represents the short position price. 
+Blue dots are buys (long entries or short closes) and red dots are sells (short entries or long closes).
