@@ -1,15 +1,7 @@
-from numba import types, typed, typeof, njit
+from numba import types, typed, typeof
 from numba.experimental import jitclass
 
-from definitions.order import Order
-
-
-@njit
-def empty_order_list():
-    l = typed.List()
-    l.append(Order('', 0, 0.0, 0.0, 0.0, '', '', 0, '', ''))
-    l.clear()
-    return l
+from definitions.order import Order, empty_order_list
 
 
 @jitclass([

@@ -1,4 +1,4 @@
-from numba import types
+from numba import types, njit, typed
 from numba.experimental import jitclass
 
 TP = 'TAKE_PROFIT'
@@ -82,3 +82,11 @@ class Order:
             return True
         else:
             return False
+
+
+@njit
+def empty_order_list():
+    l = typed.List()
+    l.append(Order('', 0, 0.0, 0.0, 0.0, '', '', 0, '', ''))
+    l.clear()
+    return l
