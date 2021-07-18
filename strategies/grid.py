@@ -4,6 +4,7 @@ import numpy as np
 from numba import types, typeof, njit
 from numba.experimental import jitclass
 
+from definitions.candle import Candle, empty_candle_list
 from definitions.order import Order, TP, SELL, LONG, LIMIT, BUY, FILLED
 from definitions.order_list import OrderList, empty_order_list
 from definitions.position import Position
@@ -185,21 +186,23 @@ class Grid(Strategy):
         get_dca_grid(0.01, 0.01, 0.01, 1, np.array([[0.1, 1.0]]), 1, 0.1, 0.01, 0.01)
         get_tp_grid(0.01, 0.01, np.array([[0.1, 1.0]]), 0.01, 0.01)
         self.on_update(PositionList(), Order('XYZ', 0, 0.0, 0.0, 0.0, LIMIT, BUY, 0, FILLED, LONG))
-        self.make_decision(self.balance, PositionList(), OrderList(), 0.0)
+        price_list = empty_candle_list()
+        price_list.append(Candle(0.0, 0.0, 0.0, 0.0, 0.0))
+        self.make_decision(self.balance, PositionList(), OrderList(), price_list)
         self.prepare_tp_orders(0.0, PositionList())
         p = PositionList()
         p.update_long(Position('XYZ', 0.0, 0.0, 0.0, 0.0, 1, 'LONG'))
         self.prepare_reentry_orders(0.0, p)
         self.calculate_dca_tp(0.0, p)
 
-    def make_decision(self, balance: float, position: PositionList, orders: OrderList, price: float) -> Tuple[
+    def make_decision(self, balance: float, position: PositionList, orders: OrderList, prices: List[Candle]) -> Tuple[
         List[Order], List[Order]]:
         """
         Makes a decision based on a price update.
         :param balance: Current balance.
         :param position: Current position.
         :param orders: Current orders.
-        :param price: Current price.
+        :param prices: Current price list.
         :return: Two typed lists of orders, orders to add and orders to delete.
         """
         add_orders = empty_order_list()

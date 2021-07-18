@@ -3,6 +3,7 @@ from typing import List, Tuple
 from numba import typeof, types
 from numba.experimental import jitclass
 
+from definitions.candle import Candle
 from definitions.order import Order
 from definitions.order_list import OrderList, empty_order_list
 from definitions.position_list import PositionList
@@ -37,6 +38,7 @@ base_strategy_spec = [
     ("balance", types.float64),
     ("position", typeof(PositionList())),
     ("open_orders", typeof(OrderList())),
+    ("call_interval", types.float64),
     ("qty_step", types.float64),
     ("price_step", types.float64)
 ]
@@ -57,6 +59,7 @@ class Strategy:
         self.balance = 0.0
         self.position = PositionList()
         self.open_orders = OrderList()
+        self.call_interval = 1.0
         self.qty_step = 0.0
         self.price_step = 0.0
 
@@ -68,15 +71,17 @@ class Strategy:
         """
         pass
 
-    def update_steps(self, qty_step, price_step):
+    def update_steps(self, qty_step, price_step, call_interval):
         """
         Assigns the qty and price step to the strategy. Depending on pair and exchange.
         :param qty_step: The step size of the quantity of an order for this pair and exchange.
         :param price_step: The step size of the price of an order for this pair and exchange.
+        :param call_interval: The call interval for the strategy. A multiple of 0.25 seconds.
         :return:
         """
         self.qty_step = qty_step
         self.price_step = price_step
+        self.call_interval = call_interval
 
     def update_balance(self, balance: float):
         """
@@ -116,14 +121,14 @@ class Strategy:
         self.update_position(position)
         self.update_orders(orders)
 
-    def make_decision(self, balance: float, position: PositionList, orders: OrderList, price: float) -> Tuple[
+    def make_decision(self, balance: float, position: PositionList, orders: OrderList, prices: List[Candle]) -> Tuple[
         List[Order], List[Order]]:
         """
         Base function to make a decision on a price update.
         :param balance: Current balance.
         :param position: Current position.
         :param orders: Current orders.
-        :param price: Current price.
+        :param prices: Current price list.
         :return: Two typed lists of orders, orders to add and orders to delete.
         """
         add_orders = empty_order_list()

@@ -3,6 +3,7 @@
     user: binance
     exchange: binance
     leverage: 20
+    call_interval: 1.0
     strategy:
     {
         percent: 0.1
