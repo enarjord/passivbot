@@ -5,8 +5,8 @@ from numba import types, typeof, njit
 from numba.experimental import jitclass
 
 from definitions.candle import Candle, empty_candle_list
-from definitions.order import Order, TP, SELL, LONG, LIMIT, BUY, FILLED
-from definitions.order_list import OrderList, empty_order_list
+from definitions.order import Order, empty_order_list, TP, SELL, LONG, LIMIT, BUY, FILLED
+from definitions.order_list import OrderList
 from definitions.position import Position
 from definitions.position_list import PositionList
 from strategies.base_strategy import Strategy, base_strategy_spec

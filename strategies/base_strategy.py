@@ -4,8 +4,8 @@ from numba import typeof, types
 from numba.experimental import jitclass
 
 from definitions.candle import Candle
-from definitions.order import Order
-from definitions.order_list import OrderList, empty_order_list
+from definitions.order import Order, empty_order_list
+from definitions.order_list import OrderList
 from definitions.position_list import PositionList
 
 
