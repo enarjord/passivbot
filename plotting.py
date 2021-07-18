@@ -82,8 +82,7 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
         profit_color = Fore.RED if shrts.pnl.sum() < 0 else Fore.RESET
         table.add_row(["PNL sum", f"{profit_color}{shrts.pnl.sum()}{Fore.RESET}"])
 
-    live_config = candidate_to_live_config(result)
-    dump_live_config(live_config, result['plots_dirpath'] + 'live_config.json')
+    dump_live_config(result, result['plots_dirpath'] + 'live_config.json')
     json.dump(denumpyize(result), open(result['plots_dirpath'] + 'result.json', 'w'), indent=4)
 
     print('writing backtest_result.txt...\n')

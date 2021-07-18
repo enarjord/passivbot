@@ -139,21 +139,24 @@ def candidate_to_live_config(candidate: dict) -> dict:
     for k in live_config:
         if k not in sides and k in packed:
             live_config[k] = packed[k]
-    name = f"{packed['symbol'].lower()}" if 'symbol' in packed else 'unknown'
-    if 'n_days' in candidate:
-        n_days = candidate['n_days']
-    elif 'start_date' in candidate:
-        n_days = round((date_to_ts(candidate['end_date']) -
-                        date_to_ts(candidate['start_date'])) / (1000 * 60 * 60 * 24), 1)
+
+    result_dict = candidate['result'] if 'result' in candidate else candidate
+    name = f"{result_dict['exchange'].lower()}_" if 'exchange' in result_dict else 'unknown_'
+    name += f"{result_dict['symbol'].lower()}" if 'symbol' in result_dict else 'unknown'
+    if 'n_days' in result_dict:
+        n_days = result_dict['n_days']
+    elif 'start_date' in result_dict:
+        n_days = (date_to_ts(result_dict['end_date']) -
+                  date_to_ts(result_dict['start_date'])) / (1000 * 60 * 60 * 24)
     else:
         n_days = 0
-    name += f"_{n_days}_days"
-    if 'average_daily_gain' in candidate:
-        name += f"_adg{(candidate['average_daily_gain'] - 1) * 100:.2f}%"
-    elif 'daily_gain' in candidate:
-        name += f"_adg{(candidate['daily_gain'] - 1) * 100:.2f}%"
-    if 'objective' in candidate:
-        name += f"_obj{candidate['objective']:.2f}"
+    name += f"_{n_days:.0f}days"
+    if 'average_daily_gain' in result_dict:
+        name += f"_adg{(result_dict['average_daily_gain'] - 1) * 100:.2f}%"
+    elif 'daily_gain' in result_dict:
+        name += f"_adg{(result_dict['daily_gain'] - 1) * 100:.2f}%"
+    if 'closest_bkr' in result_dict:
+        name += f"_bkr{(result_dict['closest_bkr']) * 100:.2f}%"
     live_config['config_name'] = name
     return denumpyize(live_config)
 
@@ -373,6 +376,8 @@ import pandas as pd
 
 def get_empty_analysis(bc: dict) -> dict:
     return {
+        'exchange': bc['exchange'] if 'exchange' in bc else 'unknown',
+        'symbol': bc['symbol'] if 'symbol' in bc else 'unknown',
         'net_pnl_plus_fees': 0.0,
         'profit_sum': 0.0,
         'loss_sum': 0.0,
@@ -445,6 +450,8 @@ def analyze_fills(fills: list, bc: dict, first_ts: float, last_ts: float) -> (pd
     sharpe_ratio = periodic_gains_mean / periodic_gains_std if periodic_gains_std != 0.0 else -20.0
     sharpe_ratio = np.nan_to_num(sharpe_ratio)
     result = {
+        'exchange': bc['exchange'] if 'exchange' in bc else 'unknown',
+        'symbol': bc['symbol'] if 'symbol' in bc else 'unknown',
         'starting_balance': bc['starting_balance'],
         'final_balance': fdf.iloc[-1].balance,
         'final_equity': fdf.iloc[-1].equity,
