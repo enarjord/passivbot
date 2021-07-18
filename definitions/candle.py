@@ -9,7 +9,7 @@ from numba.experimental import jitclass
     ('close', types.float64),
     ('qty', types.float64)
 ])
-class Order:
+class Candle:
     """
     A class representing a candle.
     """
