@@ -1,4 +1,4 @@
-from numba import types
+from numba import types, typed, njit
 from numba.experimental import jitclass
 
 
@@ -28,3 +28,11 @@ class Candle:
         self.low = low
         self.close = close
         self.qty = qty
+
+
+@njit
+def empty_candle_list():
+    l = typed.List()
+    l.append(Candle(0.0, 0.0, 0.0, 0.0, 0.0))
+    l.clear()
+    return l
