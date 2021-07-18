@@ -4,6 +4,7 @@ from typing import Union
 
 import hjson
 
+from definitions.candle import Candle
 from definitions.order import Order
 from definitions.order_list import OrderList
 from definitions.position import Position
@@ -85,6 +86,15 @@ def load_base_config(path: str) -> dict:
     except Exception as e:
         print_(["Could not read config", e], n=True)
         return {}
+
+
+def print_candle(candle: Candle):
+    """
+    Prints a Candle.
+    :param candle: The candle to print.
+    :return:
+    """
+    print('Open', candle.open, 'Low', candle.low, 'High', candle.high, 'Close', candle.close)
 
 
 def print_order(order: Order):
