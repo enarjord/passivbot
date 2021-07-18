@@ -94,7 +94,8 @@ def print_candle(candle: Candle):
     :param candle: The candle to print.
     :return:
     """
-    print('Open', candle.open, 'High', candle.high, 'Low', candle.low, 'High', candle.high, 'Close', candle.close)
+    print('Open', candle.open, 'High', candle.high, 'Low', candle.low, 'High', candle.high, 'Close', candle.close,
+          'Quantity', candle.qty)
 
 
 def print_order(order: Order):
