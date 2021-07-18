@@ -6,9 +6,10 @@ from time import time
 from typing import Union, Tuple, List
 from urllib.parse import urlencode
 
-from bots.base_bot import Bot, ORDER_UPDATE, ACCOUNT_UPDATE
-from definitions.order import Order
-from definitions.order import TP, SL, LIMIT, MARKET, LQ, NEW, PARTIALLY_FILLED, FILLED, CANCELED, EXPIRED, TRADE, \
+from bots.base_bot import ORDER_UPDATE, ACCOUNT_UPDATE
+from bots.base_live_bot import LiveBot
+from definitions.candle import Candle
+from definitions.order import Order, TP, SL, LIMIT, MARKET, LQ, NEW, PARTIALLY_FILLED, FILLED, CANCELED, EXPIRED, TRADE, \
     CALCULATED, BUY, SELL, LONG, SHORT, BOTH, NEW_INSURANCE, NEW_ADL
 from definitions.position import Position
 from functions import sort_dict_keys, print_, print_order
@@ -38,9 +39,9 @@ def reverse_mapping(item):
         return ''
 
 
-class BinanceBot(Bot):
+class BinanceBot(LiveBot):
     def __init__(self, config: dict):
-        super().__init__(config)
+        super(BinanceBot, self).__init__(config)
         if 'USDT' in self.symbol:
             self.quote_asset = 'USDT'
         else:
@@ -110,11 +111,10 @@ class BinanceBot(Bot):
                 except AttributeError:
                     self.min_cost = self.config['min_cost'] = 0.0
                 break
-        self.strategy.update_steps(self.qty_step, self.price_step)
+        self.strategy.update_steps(self.qty_step, self.price_step, self.call_interval)
 
     async def fetch_orders(self) -> List[Order]:
         ords = await self.private_get(self.endpoints['open_orders'], {'symbol': self.symbol})
-        # orders = {'LONG': [], 'SHORT': []}
         orders = []
         for o in ords:
             if o['symbol'] == self.symbol:
@@ -235,6 +235,13 @@ class BinanceBot(Bot):
                         last_short = position
         return balance, last_long, last_short
 
+    def prepare_candle(self, msg, previous_candle: Candle) -> Candle:
+        candle = Candle(float(msg['k']['o']), float(msg['k']['h']), float(msg['k']['l']), float(msg['k']['c']),
+                        float(msg['k']['v']))
+        if bool(msg['k']['x']):
+            candle.qty = candle.qty - previous_candle.qty
+        return candle
+
     async def update_heartbeat(self):
         if self.listenKey:
             try:
@@ -289,7 +296,7 @@ class BinanceBot(Bot):
         else:
             return True
 
-    async def create_orders(self, orders_to_create: List[Order]):
+    async def async_create_orders(self, orders_to_create: List[Order]):
         if not orders_to_create:
             return
         creations = []
@@ -311,7 +318,7 @@ class BinanceBot(Bot):
                 print_(['Error creating order', print_order(order), c.exception(), e], n=True)
         return
 
-    async def cancel_orders(self, orders_to_cancel: List[Order]):
+    async def async_cancel_orders(self, orders_to_cancel: List[Order]):
         if not orders_to_cancel:
             return
         deletions = []
