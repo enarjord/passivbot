@@ -7,6 +7,7 @@ from njit_funcs import round_up
 from procedures import dump_live_config
 from prettytable import PrettyTable
 from colorama import init, Fore
+import re
 
 
 def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
@@ -89,7 +90,7 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
     with open(f"{result['plots_dirpath']}backtest_result.txt", 'w') as f:
         output = table.get_string(border=True, padding_width=1)
         print(output)
-        f.write(output)
+        f.write(re.sub('\033\\[([0-9]+)(;[0-9]+)*m', '', output))
 
     print('\nplotting balance and equity...')
     plt.clf()
