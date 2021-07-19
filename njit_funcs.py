@@ -315,7 +315,7 @@ def calc_shrt_orders(balance,
 
         entry_type = 'shrt_rentry'
     else:
-        raise Exception('shrt psize is greater than 0.0 ')
+        raise Exception('shrt psize is greater than 0.0. Please make sure you have funds available in your futures wallet')
     entry_qty = -entry_qty
     new_psize, new_pprice = calc_new_psize_pprice(shrt_psize, shrt_pprice, entry_qty, entry_price, qty_step)
     return (entry_qty, entry_price, new_psize, new_pprice, entry_type), shrt_close
