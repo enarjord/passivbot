@@ -15,6 +15,7 @@ nav:
   - Analysis: analysis.md
   - Telegram: telegram.md
   - First-time users: walkthrough.md
+  - Installing on a Pi: raspberry.md
   - Developers: developers.md
   - FAQ: faq.md
 theme:
