@@ -68,3 +68,12 @@ also stored in `backtests/{exchange}/{symbol}/plots/{datetime}/backtest_result.t
 include the actual `live_config.json` file that was used for the plot, and several graphical plots. One of these
 for example is the `balance_and_equity.png`, which shows how the balance and equity evolved during the course of
 the backtest.
+
+The file `balance_and_equity.jpg` will show how the balance and equity progressed during the period being backtested. The
+blue line in the graph represents the balance, and the orange line represents the equity.
+
+Besides this file, a number of `backtest_XofY.jpg` are also created. These represent the entire backtest period, but are
+split up into separate files for easier inspection and zooming.
+
+On these plots the blue dotted line is the long position price, and the red dotted line represents the short position price. 
+Blue dots are buys (long entries or short closes) and red dots are sells (short entries or long closes).

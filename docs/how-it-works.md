@@ -61,4 +61,4 @@ your equity is 90 bananas (meaning your max exposure is 10%). This makes it very
 If you were to set the pbr_limit to 0.05 on 10 bots, all of them combined will not expose more than 50% of your unleveraged balance.
 
 !!! Info
-    Please check the [Configuratio](configuration.md) page for an in-depth description of the configuration parameters available.
+    Please check the [Configuration](configuration.md) page for an in-depth description of the configuration parameters available.
