@@ -40,7 +40,6 @@ pip3.8 install setuptools --upgrade
 Clone the repository:
 
 ```shell
-cd
 git clone https://github.com/enarjord/passivbot.git
 cd passivbot
 ```
