@@ -111,7 +111,7 @@ screen -S mypassivbot
 Once you're satisfied with the configuration, start the bot:
 
 ```shell
-python3 start.py binance_01 XLMUSDT configs/mycnfig.json
+python3 start_bot.py binance_01 XLMUSDT configs/mycnfig.json
 ```
 
 If the bot started succesfully, you should receive a message **Passivbot started!**. After this, you can disconnect
