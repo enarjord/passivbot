@@ -480,7 +480,7 @@ class Telegram:
               '/show_config: the active configuration used\n' \
               '/reload_config: reload the configuration from disk, based on the file initially used\n' \
               "/closed_trades: a brief overview of bot's last 10 closed trades\n" \
-              '/daily <days>: an overview of daily profit, defaulting to 7 days\n' \
+              '/daily [days]: an overview of daily profit, defaulting to 7 days\n' \
               '/set_short: initiates a conversion via which the user can enable/disable shorting\n' \
               '/set_long: initiates a conversion via which the user can enable/disable long\n' \
               '/set_config: initiates a conversion via which the user can switch to a different configuration file\n' \
