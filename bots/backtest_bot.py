@@ -38,7 +38,8 @@ class BacktestConfig:
 @jitclass(base_bot_spec +
           [
               ("config", typeof(BacktestConfig(0.0, 0.0, 1.0, 1.0))),
-              ("config", typeof(to_be_replaced_strategy)),
+              ("strategy", typeof(to_be_replaced_strategy)),
+              ("data", types.float64[:, :])
           ])
 class BacktestBot(Bot):
     __init_Base = Bot.__init__
