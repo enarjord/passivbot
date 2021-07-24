@@ -11,14 +11,13 @@ from definitions.candle import Candle, empty_candle_list
 from definitions.order import Order, empty_order_list
 from definitions.position import Position
 from functions import load_key_secret, print_
-from strategies.grid import Grid, convert_dict_to_config
 
 
 class LiveBot(Bot):
-    def __init__(self, config: dict):
+    def __init__(self, config: dict, strategy):
         super(LiveBot, self).__init__()
         self.config = config
-        self.strategy = Grid(convert_dict_to_config(config['strategy']))
+        self.strategy = strategy
 
         self.symbol = config['symbol']
 

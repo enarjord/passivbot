@@ -40,8 +40,8 @@ def reverse_mapping(item):
 
 
 class BinanceBot(LiveBot):
-    def __init__(self, config: dict):
-        super(BinanceBot, self).__init__(config)
+    def __init__(self, config: dict, strategy):
+        super(BinanceBot, self).__init__(config, strategy)
         if 'USDT' in self.symbol:
             self.quote_asset = 'USDT'
         else:
