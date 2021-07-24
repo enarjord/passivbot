@@ -293,3 +293,7 @@ class Grid(Strategy):
         orders.extend(self.prepare_reentry_orders(price, position))
         orders.extend(self.prepare_tp_orders(price, position))
         return orders
+
+
+strategy_definition = Grid(StrategyConfig(np.zeros((1, 1)), np.zeros((1, 1)), 0.0))
+

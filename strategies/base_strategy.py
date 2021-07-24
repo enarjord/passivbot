@@ -145,3 +145,6 @@ class Strategy:
         add_orders = empty_order_list()
         delete_orders = empty_order_list()
         return add_orders, delete_orders
+
+
+strategy_definition = Strategy(StrategyConfig())
