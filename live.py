@@ -1,11 +1,11 @@
 import argparse
 import asyncio
 
-from bots.base_bot import Bot
+from bots.base_live_bot import LiveBot
 from functions import load_base_config, print_, load_module_from_file
 
 
-async def start_bot(bot: Bot):
+async def start_bot(bot: LiveBot):
     """
     Starts the three continuous functions of the bot.
     :param bot: The bot to start.
