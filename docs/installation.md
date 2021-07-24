@@ -120,7 +120,7 @@ Install llvmlite:
 ```shell
 sudo apt install llvm-9
 LLVM_CONFIG=llvm-config-9 pip3.8 install llvmlite
-````
+```
 
 Install the requirements:
 
