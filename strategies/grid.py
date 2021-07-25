@@ -187,7 +187,7 @@ class Grid(Strategy):
         get_tp_grid(0.01, 0.01, np.array([[0.1, 1.0]]), 0.01, 0.01)
         self.on_update(PositionList(), Order('XYZ', 0, 0.0, 0.0, 0.0, LIMIT, BUY, 0, FILLED, LONG))
         price_list = empty_candle_list()
-        price_list.append(Candle(0.0, 0.0, 0.0, 0.0, 0.0))
+        price_list.append(Candle(0, 0.0, 0.0, 0.0, 0.0, 0.0))
         self.make_decision(self.balance, PositionList(), OrderList(), price_list)
         self.prepare_tp_orders(0.0, PositionList())
         p = PositionList()
@@ -296,4 +296,3 @@ class Grid(Strategy):
 
 
 strategy_definition = Grid(StrategyConfig(np.zeros((1, 1)), np.zeros((1, 1)), 0.0))
-
