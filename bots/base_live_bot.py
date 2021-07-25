@@ -10,6 +10,7 @@ from bots.base_bot import Bot, ORDER_UPDATE, ACCOUNT_UPDATE
 from definitions.candle import Candle, empty_candle_list
 from definitions.order import Order, empty_order_list
 from definitions.position import Position
+from definitions.tick import empty_tick_list
 from functions import load_key_secret, print_
 
 
@@ -47,7 +48,8 @@ class LiveBot(Bot):
             'leverage': '',
             'position_side': '',
             'websocket': '',
-            'websocket_user': ''
+            'websocket_user': '',
+            'websocket_data': ''
         }
 
     async def async_init(self):
@@ -155,17 +157,40 @@ class LiveBot(Bot):
     async def start_websocket(self) -> None:
         while True:
             price_list = empty_candle_list()
+            tick_list = empty_tick_list()
+            last_tick_update = 0
             last_update = datetime.datetime.now()
-            last_candle = Candle(0.0, 0.0, 0.0, 0.0, 0.0)
-            async with websockets.connect(self.endpoints['websocket'] + f"{self.symbol.lower()}@kline_1m") as ws:
+            last_candle = Candle(0, 0.0, 0.0, 0.0, 0.0, 0.0)
+            async with websockets.connect(self.endpoints['websocket_data']) as ws:
                 async for msg in ws:
                     if msg is None:
                         continue
                     try:
                         msg = json.loads(msg)
-                        candle = self.prepare_candle(msg, last_candle)
-                        price_list.append(candle)
-                        last_candle = candle
+                        # print_([msg], n=True)
+                        tick = self.prepare_tick(msg)
+                        if last_tick_update == 0:
+                            # Make sure it starts at a base unit
+                            # If tick interval is 250ms the base unit is either 0.0, 0.25, 0.5, or 0.75 seconds
+                            last_tick_update = int(tick.timestamp - (tick.timestamp % (self.tick_interval * 1000)))
+                        # print_tick(tick)
+                        if tick.timestamp - last_tick_update < self.tick_interval * 1000:
+                            tick_list.append(tick)
+                        else:
+                            tick_list.append(tick)
+                            # Calculate the time when the candle of the current tick ends
+                            next_update = int(tick.timestamp - (tick.timestamp % (self.tick_interval * 1000))) + int(
+                                self.tick_interval * 1000)
+                            # Calculate a list of candles based on the given ticks, gaps are filled
+                            # The tick list and last update are already updated
+                            candles, tick_list, last_tick_update = self.prepare_candles(tick_list, last_tick_update,
+                                                                                        next_update, last_candle)
+                            if candles:
+                                # Update last candle
+                                last_candle = candles[-1]
+                            # print_candle(last_candle)
+                            # Extend candle list with new candles
+                            price_list.extend(candles)
                         current = datetime.datetime.now()
                         if current - last_update >= datetime.timedelta(seconds=self.strategy.call_interval):
                             last_update = current

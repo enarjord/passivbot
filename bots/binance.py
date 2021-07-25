@@ -8,10 +8,10 @@ from urllib.parse import urlencode
 
 from bots.base_bot import ORDER_UPDATE, ACCOUNT_UPDATE
 from bots.base_live_bot import LiveBot
-from definitions.candle import Candle
 from definitions.order import Order, TP, SL, LIMIT, MARKET, LQ, NEW, PARTIALLY_FILLED, FILLED, CANCELED, EXPIRED, TRADE, \
     CALCULATED, BUY, SELL, LONG, SHORT, BOTH, NEW_INSURANCE, NEW_ADL
 from definitions.position import Position
+from definitions.tick import Tick
 from functions import sort_dict_keys, print_, print_order
 
 order_mapping = {'BUY': BUY, 'SELL': SELL, 'MARKET': MARKET, 'LIMIT': LIMIT, 'STOP': SL, 'TAKE_PROFIT': TP,
@@ -71,7 +71,9 @@ class BinanceBot(LiveBot):
             'leverage': '/fapi/v1/leverage',
             'position_side': '/fapi/v1/positionSide/dual',
             'websocket': 'wss://stream.binancefuture.com/ws/',  # 'wss://fstream.binance.com/ws/'
-            'websocket_user': ''
+            'websocket_user': '',
+            'websocket_data': f"wss://stream.binancefuture.com/ws/{self.symbol.lower()}@aggTrade"
+            # f"wss://fstream.binance.com/ws/{self.symbol.lower()}@aggTrade"
         }
 
     async def init(self):
@@ -235,12 +237,9 @@ class BinanceBot(LiveBot):
                         last_short = position
         return balance, last_long, last_short
 
-    def prepare_candle(self, msg, previous_candle: Candle) -> Candle:
-        candle = Candle(float(msg['k']['o']), float(msg['k']['h']), float(msg['k']['l']), float(msg['k']['c']),
-                        float(msg['k']['v']))
-        if bool(msg['k']['x']):
-            candle.qty = candle.qty - previous_candle.qty
-        return candle
+    def prepare_tick(self, msg) -> Tick:
+        tick = Tick(int(msg['T']), float(msg['p']), float(msg['q']), bool(msg['m']))
+        return tick
 
     async def update_heartbeat(self):
         if self.listenKey:
