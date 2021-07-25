@@ -28,8 +28,7 @@ def round_up(n, step, safety_rounding=10) -> float:
 
 @njit
 def aggregate_candle(tick_list: List[Tick], candle_list: List[Candle], lowest_time: int, last_candle: Candle,
-                     tick_interval: float) -> List[
-    Candle]:
+                     tick_interval: float) -> List[Candle]:
     if tick_list:
         prices = []
         qty = []
@@ -56,8 +55,7 @@ def aggregate_candle(tick_list: List[Tick], candle_list: List[Candle], lowest_ti
 
 @njit
 def prepare_candles(ticks: List[Tick], last_update_time: int, max_update_time: int, last_candle: Candle,
-                    tick_interval: float) -> Tuple[
-    List[Candle], List[Tick], int]:
+                    tick_interval: float) -> Tuple[List[Candle], List[Tick], int]:
     tmp_tick_list = empty_tick_list()
     candle_list = empty_candle_list()
     current_lowest_time = last_update_time
