@@ -27,7 +27,8 @@ def round_up(n, step, safety_rounding=10) -> float:
 
 
 @njit
-def aggregate_candle(tick_list: List[Tick], candle_list: List[Candle], lowest_time: int, last_candle: Candle) -> List[
+def aggregate_candle(tick_list: List[Tick], candle_list: List[Candle], lowest_time: int, last_candle: Candle,
+                     tick_interval: float) -> List[
     Candle]:
     if tick_list:
         prices = []
@@ -37,17 +38,18 @@ def aggregate_candle(tick_list: List[Tick], candle_list: List[Candle], lowest_ti
             qty.append(t.qty)
         prices = np.asarray(prices)
         qty = np.asarray(qty)
-        candle = Candle(lowest_time, prices[0], np.max(prices), np.min(prices), prices[-1], np.sum(qty))
+        candle = Candle(lowest_time + int(tick_interval * 1000), prices[0], np.max(prices), np.min(prices), prices[-1],
+                        np.sum(qty))
         candle_list.append(candle)
     else:
         if candle_list:
             last_candle = candle_list[-1]
-            candle = Candle(lowest_time, last_candle.close, last_candle.close, last_candle.close, last_candle.close,
-                            0.0)
+            candle = Candle(lowest_time + int(tick_interval * 1000), last_candle.close, last_candle.close,
+                            last_candle.close, last_candle.close, 0.0)
             candle_list.append(candle)
         else:
-            candle = Candle(lowest_time, last_candle.close, last_candle.close, last_candle.close, last_candle.close,
-                            0.0)
+            candle = Candle(lowest_time + int(tick_interval * 1000), last_candle.close, last_candle.close,
+                            last_candle.close, last_candle.close, 0.0)
             candle_list.append(candle)
     return candle_list
 
@@ -66,7 +68,8 @@ def prepare_candles(ticks: List[Tick], last_update_time: int, max_update_time: i
             while (current_lowest_time + tick_interval * 1000 - 1) < int(
                     tick.timestamp - (tick.timestamp % (tick_interval * 1000))) and (
                     current_lowest_time + tick_interval * 1000) < max_update_time:
-                candle_list = aggregate_candle(tmp_tick_list, candle_list, current_lowest_time, last_candle)
+                candle_list = aggregate_candle(tmp_tick_list, candle_list, current_lowest_time, last_candle,
+                                               tick_interval)
                 tmp_tick_list = empty_tick_list()
                 current_lowest_time += int(tick_interval * 1000)
             tmp_tick_list.append(tick)
