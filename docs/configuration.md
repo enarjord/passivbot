@@ -41,8 +41,9 @@ Configuration parameters that this applies to, are prepended with `short§long:`
 | `short§long:rprc_MAr_coeffs` | Reentry price Mean Average coefficients<br/>**Category:** Reentry<br/>**Datatype:** [[Float, Float]..]
 | `short§long:markup_const` | Profit markup constant<br/>**Category:** Taking profit<br/>**Datatype:** <br/>**Datatype:** Float
 | `short§long:markup_MAr_coeffs` | Markup Mean Average coefficients<br/>**Category:** Taking profit<br/>**Datatype:** [[Float, Float]..]
-| `short§long:pbr_stop_loss` | Position cost to balance ratio stoploss<br/>**Category:** Stoploss<br/>**Datatype:** <br/>**Datatype:** Float
+| `short§long:pbr_stop_loss` | Position cost to balance ratio stoploss<br/>**Category:** Stoploss<br/>**Datatype:** Float
 | `profit_trans_pct`      | Percentage indicating how much profit should be transferred to Spot wallet on each order filled<br/>**Category:** Closing<br/>**Datatype:** Float
+| `cross_wallet_pct`      | Percentage of the total wallet that is used in calculating orders<br/>**Category:** User<br/>**Datatype:** Float
 
 ## Initial trade entry
 
@@ -218,3 +219,12 @@ You can read more on this functionality in the [Telegram](telegram.md) section.
 !!! Info
     In order to use this functionality, make sure you enable `Universal Transfer` on your API key.<br/>
     This functionality is currently only supported on **Binance**
+
+## Limit wallet balance used
+
+To make the bot even safer then a good config already makes it, you may choose to limit the amount of total wallet balance to be used
+by the bot. Since the bot opens positions in cross mode, this will give your bot an extra buffer in case of unforeseen extreme volatility in the market.
+
+To limit the bot to only use a certain percentage of the entire wallet balance, you can set the parameter `cross_wallet_pct`. If not set, the
+parameters defaults to `1.0`, meaning the bot will be allowed to utilize the entire wallet for opening positions. For example, when you set the
+value to `0.1`, the bot will only utilize 10% of the total wallet balance.

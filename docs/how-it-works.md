@@ -50,7 +50,7 @@ If you would have a wallet of 100 USDT and traded on BTCUSDT (which has a max le
 could be up to 12500 (125 * 100).
 
 You can make sure that your position will not be allowed to exceed X% of your unleveraged balance by making sure that your
-pbr_limit + pbr_stop_loss parameters do not exceeed 0.1 (=10%). If the price of the symbol would drop to 0, you'd lose
+pbr_limit + pbr_stop_loss parameters do not exceed 0.1 (=10%). If the price of the symbol would drop to 0, you'd lose
 a maximum of 10% of your wallet.
 
 The bot will makee sure that your position size does not ever surpass pbr_limit + pbr_stop_loss. When the bot crosses this value,
@@ -60,5 +60,9 @@ A simpler explanation: if you have 100 bananas and use 10 of them to buy 12 appl
 your equity is 90 bananas (meaning your max exposure is 10%). This makes it very possible to run multiple pairs on the same account. 
 If you were to set the pbr_limit to 0.05 on 10 bots, all of them combined will not expose more than 50% of your unleveraged balance.
 
+Another option available is to use the configuration parameter `cross_wallet_pct` to limit the amount of the wallet that is available
+in absolute terms.
+
 !!! Info
     Please check the [Configuration](configuration.md) page for an in-depth description of the configuration parameters available.
+
