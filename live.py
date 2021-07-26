@@ -2,7 +2,8 @@ import argparse
 import asyncio
 
 from bots.base_live_bot import LiveBot
-from functions import load_base_config, print_, load_module_from_file
+from helpers.loaders import load_base_config, load_module_from_file
+from helpers.print_functions import print_
 
 
 async def start_bot(bot: LiveBot):

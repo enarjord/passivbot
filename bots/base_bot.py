@@ -10,7 +10,7 @@ from definitions.order_list import OrderList
 from definitions.position import Position
 from definitions.position_list import PositionList
 from definitions.tick import Tick, empty_tick_list
-from functions import print_
+from helpers.print_functions import print_
 
 ORDER_UPDATE = 'order'
 ACCOUNT_UPDATE = 'account'

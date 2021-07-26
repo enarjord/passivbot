@@ -11,7 +11,8 @@ from definitions.candle import Candle, empty_candle_list
 from definitions.order import Order, empty_order_list
 from definitions.position import Position
 from definitions.tick import empty_tick_list
-from functions import load_key_secret, print_
+from helpers.loaders import load_key_secret
+from helpers.print_functions import print_
 
 
 class LiveBot(Bot):

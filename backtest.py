@@ -2,7 +2,8 @@ import argparse
 
 import numpy as np
 
-from functions import load_base_config, load_module_from_file, get_strategy_definition, print_
+from helpers.loaders import load_base_config, load_module_from_file, get_strategy_definition
+from helpers.print_functions import print_
 
 if __name__ == '__main__':
     argparser = argparse.ArgumentParser(prog='GridTrader', add_help=True,

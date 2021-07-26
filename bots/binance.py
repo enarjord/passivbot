@@ -12,7 +12,8 @@ from definitions.order import Order, TP, SL, LIMIT, MARKET, LQ, NEW, PARTIALLY_F
     CALCULATED, BUY, SELL, LONG, SHORT, BOTH, NEW_INSURANCE, NEW_ADL
 from definitions.position import Position
 from definitions.tick import Tick
-from functions import sort_dict_keys, print_, print_order
+from helpers.misc import sort_dict_keys
+from helpers.print_functions import print_, print_order
 
 order_mapping = {'BUY': BUY, 'SELL': SELL, 'MARKET': MARKET, 'LIMIT': LIMIT, 'STOP': SL, 'TAKE_PROFIT': TP,
                  'LIQUIDATYION': LQ, 'NEW': NEW, 'CANCELED': CANCELED, 'CALCULATED': CALCULATED, 'EXPIRED': EXPIRED,
