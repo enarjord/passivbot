@@ -91,51 +91,51 @@ async def main():
                         default=None,
                         help='start with given live configs.  single json file or dir with multiple json files')
     args = parser.parse_args()
-    config = await prep_config(args)
-    try:
+    for config in await prep_config(args):
+        try:
 
-        template_live_config = get_template_live_config(config['n_spans'])
-        config = {**template_live_config, **config}
-        dl = Downloader(config)
-        data = await dl.get_data()
-        shms = [shared_memory.SharedMemory(create=True, size=d.nbytes) for d in data]
-        shdata = [np.ndarray(d.shape, dtype=d.dtype, buffer=shms[i].buf) for i, d in enumerate(data)]
-        for i in range(len(data)):
-            shdata[i][:] = data[i][:]
-        del data
-        config['n_days'] = (shdata[2][-1] - shdata[2][0]) / (1000 * 60 * 60 * 24)
-        config['optimize_dirpath'] = make_get_filepath(os.path.join(config['optimize_dirpath'],
-                                                                    ts_to_date(time())[:19].replace(':', ''), ''))
+            template_live_config = get_template_live_config(config['n_spans'])
+            config = {**template_live_config, **config}
+            dl = Downloader(config)
+            data = await dl.get_data()
+            shms = [shared_memory.SharedMemory(create=True, size=d.nbytes) for d in data]
+            shdata = [np.ndarray(d.shape, dtype=d.dtype, buffer=shms[i].buf) for i, d in enumerate(data)]
+            for i in range(len(data)):
+                shdata[i][:] = data[i][:]
+            del data
+            config['n_days'] = (shdata[2][-1] - shdata[2][0]) / (1000 * 60 * 60 * 24)
+            config['optimize_dirpath'] = make_get_filepath(os.path.join(config['optimize_dirpath'],
+                                                                        ts_to_date(time())[:19].replace(':', ''), ''))
 
-        print()
-        for k in (keys := ['exchange', 'symbol', 'starting_balance', 'start_date', 'end_date', 'latency_simulation_ms',
-                           'do_long', 'do_shrt', 'minimum_bankruptcy_distance', 'maximum_hrs_no_fills',
-                           'maximum_hrs_no_fills_same_side', 'iters', 'n_particles', 'sliding_window_size',
-                           'n_spans']):
-            if k in config:
-                print(f"{k: <{max(map(len, keys)) + 2}} {config[k]}")
-        print()
+            print()
+            for k in (keys := ['exchange', 'symbol', 'starting_balance', 'start_date', 'end_date', 'latency_simulation_ms',
+                               'do_long', 'do_shrt', 'minimum_bankruptcy_distance', 'maximum_hrs_no_fills',
+                               'maximum_hrs_no_fills_same_side', 'iters', 'n_particles', 'sliding_window_size',
+                               'n_spans']):
+                if k in config:
+                    print(f"{k: <{max(map(len, keys)) + 2}} {config[k]}")
+            print()
 
-        bpso = BacktestPSO(tuple(shdata), config)
+            bpso = BacktestPSO(tuple(shdata), config)
 
-        optimizer = ps.single.GlobalBestPSO(n_particles=24, dimensions=len(bpso.bounds[0]), options=config['options'],
-                                            bounds=bpso.bounds, init_pos=None)
-        # todo: implement starting configs
-        cost, pos = optimizer.optimize(bpso.rf, iters=config['iters'], n_processes=config['num_cpus'])
-        print(cost, pos)
-        best_candidate = bpso.xs_to_config(pos)
-        print('best candidate', best_candidate)
-        '''
-        conf = bpso.xs_to_config(xs)
-        print('starting...')
-        objective = bpso.rf(xs)
-        print(objective)
-        '''
-    finally:
-        del shdata
-        for shm in shms:
-            shm.close()
-            shm.unlink()
+            optimizer = ps.single.GlobalBestPSO(n_particles=24, dimensions=len(bpso.bounds[0]), options=config['options'],
+                                                bounds=bpso.bounds, init_pos=None)
+            # todo: implement starting configs
+            cost, pos = optimizer.optimize(bpso.rf, iters=config['iters'], n_processes=config['num_cpus'])
+            print(cost, pos)
+            best_candidate = bpso.xs_to_config(pos)
+            print('best candidate', best_candidate)
+            '''
+            conf = bpso.xs_to_config(xs)
+            print('starting...')
+            objective = bpso.rf(xs)
+            print(objective)
+            '''
+        finally:
+            del shdata
+            for shm in shms:
+                shm.close()
+                shm.unlink()
 
 
 if __name__ == '__main__':

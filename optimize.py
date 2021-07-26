@@ -299,15 +299,7 @@ def save_results(analysis, config):
     pprint.pprint(analysis.best_config)
 
 
-async def main():
-    parser = argparse.ArgumentParser(prog='Optimize', description='Optimize passivbot config.')
-    parser = add_argparse_args(parser)
-    parser.add_argument('-t', '--start', type=str, required=False, dest='starting_configs',
-                        default=None,
-                        help='start with given live configs.  single json file or dir with multiple json files')
-    args = parser.parse_args()
-
-    config = await prep_config(args)
+async def execute_optimize(config):
     if config['exchange'] == 'bybit' and not config['inverse']:
         print('bybit usdt linear backtesting not supported')
         return
@@ -333,13 +325,13 @@ async def main():
                                               ts_to_date(time())[:19].replace(':', ''), '')
 
     start_candidate = None
-    if args.starting_configs is not None:
+    if config['starting_configs'] is not None:
         try:
-            if os.path.isdir(args.starting_configs):
+            if os.path.isdir(config['starting_configs']):
                 start_candidate = [json.load(open(f)) for f in glob.glob(os.path.join(args.starting_configs, '*.json'))]
                 print('Starting with all configurations in directory.')
             else:
-                start_candidate = json.load(open(args.starting_configs))
+                start_candidate = json.load(open(config['starting_configs']))
                 print('Starting with specified configuration.')
         except Exception as e:
             print('Could not find specified configuration.', e)
@@ -348,6 +340,17 @@ async def main():
         save_results(analysis, config)
         config.update(clean_result_config(analysis.best_config))
         plot_wrap(pack_config(config), data)
+
+async def main():
+    parser = argparse.ArgumentParser(prog='Optimize', description='Optimize passivbot config.')
+    parser = add_argparse_args(parser)
+    parser.add_argument('-t', '--start', type=str, required=False, dest='starting_configs',
+                        default=None,
+                        help='start with given live configs.  single json file or dir with multiple json files')
+    args = parser.parse_args()
+
+    for config in await prep_config(args):
+        await execute_optimize(config)
 
 
 if __name__ == '__main__':
