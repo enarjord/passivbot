@@ -87,8 +87,8 @@ def calculate_long_pnl(entry_price: float, close_price: float, quantity: float, 
 
 
 @njit
-def calculate_shrt_pnl(entry_price: float, close_price: float, quantity: float, inverse: float,
-                       contract_multiplier: float) -> float:
+def calculate_short_pnl(entry_price: float, close_price: float, quantity: float, inverse: float,
+                        contract_multiplier: float) -> float:
     """
     Calculates the profit and loss of a short position change.
     :param entry_price: The entry price of the position.
@@ -150,9 +150,44 @@ def calculate_available_margin(balance: float, long_position_size: float, long_p
         equity += calculate_long_pnl(long_position_price, last_price, long_position_size, inverse, contract_multiplier)
         used_margin += quantity_to_cost(long_position_size, long_position_price, inverse, contract_multiplier)
     if shrt_position_price and shrt_position_size:
-        equity += calculate_shrt_pnl(shrt_position_price, last_price, shrt_position_size, inverse, contract_multiplier)
+        equity += calculate_short_pnl(shrt_position_price, last_price, shrt_position_size, inverse, contract_multiplier)
         used_margin += quantity_to_cost(shrt_position_size, shrt_position_price, inverse, contract_multiplier)
     return max(0.0, equity * leverage - used_margin)
+
+
+@njit
+def calculate_bankruptcy_price(balance: float, long_position_size: float, long_position_price: float,
+                               shrt_position_size: float, shrt_position_price: float, inverse: bool,
+                               contract_multiplier: float):
+    """
+    Calculates the bankruptcy price.
+    :param balance: The current balance.
+    :param long_position_size: The current long position size.
+    :param long_position_price: The current long position price.
+    :param shrt_position_size: The current short position size.
+    :param shrt_position_price: The current short position price.
+    :param inverse: Whether it is an inverse contract or not.
+    :param contract_multiplier: The multiplier of the contract.
+    :return:
+    """
+    long_position_price = nan_to_0(long_position_price)
+    shrt_position_price = nan_to_0(shrt_position_price)
+    long_position_size *= contract_multiplier
+    shrt_position_size = abs(shrt_position_size) * contract_multiplier
+    if inverse:
+        shrt_cost = shrt_position_size / shrt_position_price if shrt_position_price > 0.0 else 0.0
+        long_cost = long_position_size / long_position_price if long_position_price > 0.0 else 0.0
+        denominator = (shrt_cost - long_cost - balance)
+        if denominator == 0.0:
+            return 0.0
+        bankruptcy_price = (shrt_position_size - long_position_size) / denominator
+    else:
+        denominator = long_position_size - shrt_position_size
+        if denominator == 0.0:
+            return 0.0
+        bankruptcy_price = (
+                                   -balance + long_position_size * long_position_price - shrt_position_size * shrt_position_price) / denominator
+    return max(0.0, bankruptcy_price)
 
 
 @njit
