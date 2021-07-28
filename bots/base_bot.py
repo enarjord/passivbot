@@ -16,6 +16,33 @@ from helpers.print_functions import print_
 ORDER_UPDATE = 'order'
 ACCOUNT_UPDATE = 'account'
 
+
+def correct_float_precision(order: Order, price_step: float, quantity_step: float) -> Order:
+    """
+    Correct the precision of the order price and quantity if the rounding went wrong.
+    :param order: The order to correct.
+    :param price_step: The price step to use.
+    :param quantity_step: The quantity step to use.
+    :return: The corrected order.
+    """
+    if not np.isclose(order.price, round_dn(order.price, price_step), rtol=1e-60, atol=1e-60):
+        if order.price > round_dn(order.price, price_step):
+            order.price = round_up(order.price, price_step)
+        else:
+            order.price = round_dn(order.price, price_step)
+    if not np.isclose(order.stop_price, round_dn(order.stop_price, price_step), rtol=1e-60, atol=1e-60):
+        if order.stop_price > round_dn(order.stop_price, price_step):
+            order.stop_price = round_up(order.stop_price, price_step)
+        else:
+            order.stop_price = round_dn(order.stop_price, price_step)
+    if not np.isclose(order.qty, round_dn(order.qty, quantity_step), rtol=1e-60, atol=1e-60):
+        if order.qty > round_dn(order.qty, quantity_step):
+            order.qty = round_up(order.qty, quantity_step)
+        else:
+            order.qty = round_dn(order.qty, quantity_step)
+    return order
+
+
 base_bot_spec = [
     ("balance", types.float64),
     ("position", typeof(PositionList())),
@@ -33,7 +60,14 @@ base_bot_spec = [
 
 
 class Bot:
+    """
+    Base bot class that contains functions and attributes for a bot.
+    """
+
     def __init__(self):
+        """
+        Initializes the base attributes of the bot.
+        """
         self.balance = 0.0
 
         self.position = PositionList()
@@ -52,30 +86,73 @@ class Bot:
         self.order_fill_change = False
 
     def init(self):
+        """
+        Updates the quantity step, price step, and call interval of the strategy.
+        :return:
+        """
         self.strategy.update_steps(self.quantity_step, self.price_step, self.call_interval)
 
     def prepare_order(self, msg) -> Order:
+        """
+        Function to get an order in the correct format.
+        :param msg: Message that needs to be translated.
+        :return: An order object.
+        """
         raise NotImplementedError
 
     def prepare_account(self, msg) -> Tuple[float, Position, Position]:
+        """
+        Function to get an account update in the correct format.
+        :param msg: Message that needs to be translated.
+        :return: A tuple of balance, long position, and short position.
+        """
         raise NotImplementedError
 
-    def prepare_candles(self, ticks: List[Tick], last_update_time: int, max_update_time: int, last_candle: Candle) -> \
-            Tuple[List[Candle], List[Tick], int]:
-        candle_list, ticks, current_lowest_time = prepare_candles(ticks, last_update_time, max_update_time, last_candle,
+    def prepare_candles(self, tick_list: List[Tick], last_candle_start_time: int, max_candle_start_time: int,
+                        last_candle: Candle) -> Tuple[List[Candle], List[Tick], int]:
+        """
+        Prepares a list of ticks into one or more candles. Fills in gap in candles if update time is longer than the
+        tick interval.
+        :param tick_list: The list of ticks to aggregate.
+        :param last_candle_start_time: The last time this function was called.
+        :param max_candle_start_time: The stop time to aggregate. This represents the current, not finished, tick
+        interval.
+        :param last_candle: The last candle of the last aggregation.
+        :return: A list of candles, a list of not yet aggregated ticks, the timestamp of the current candle.
+        """
+        candle_list, ticks, current_lowest_time = prepare_candles(tick_list, last_candle_start_time,
+                                                                  max_candle_start_time, last_candle,
                                                                   self.tick_interval)
         return candle_list, ticks, current_lowest_time
 
     def prepare_tick(self, msg) -> Tick:
+        """
+        Function to get a tick update in the correct format.
+        :param msg: Message that needs to be translated.
+        :return: A tick object.
+        """
         raise NotImplementedError
 
     def update_heartbeat(self):
+        """
+        Function that triggers an update of the websocket, if needed.
+        :return:
+        """
         pass
 
     def determine_update_type(self, msg) -> str:
+        """
+        Function that determines whether the message is an order or account update.
+        :param msg: Message that needs to be identified.
+        :return: ORDER_UPDATE or ACCOUNT_UPDATE.
+        """
         raise NotImplementedError
 
     def precompile(self):
+        """
+        Triggers the compilation of numba classes and functions by calling them. Used to avoid compilation at first use.
+        :return:
+        """
         print_(['Precompiling...'], n=True)
         tick_list = empty_tick_list()
         times = [1, 200, 750]
@@ -109,6 +186,10 @@ class Bot:
         print_(['Precompile finished.'], n=True)
 
     def reset(self):
+        """
+        Resets the bot to an empty state.
+        :return:
+        """
         self.precompile()
         self.balance = 0
         self.position = PositionList()
@@ -116,18 +197,36 @@ class Bot:
         self.strategy.update_values(self.get_balance(), self.get_position(), self.get_orders())
 
     def init_orders(self):
+        """
+        Base function to initialize orders.
+        :return:
+        """
         add_orders = empty_order_list()
         delete_orders = empty_order_list()
         self.update_orders(add_orders, delete_orders)
 
     def init_position(self):
+        """
+        Base function to initialize positions.
+        :return:
+        """
         self.update_position(Position('XYZ', 0.0, 0.0, 0.0, 0.0, 1, LONG),
                              Position('XYZ', 0.0, 0.0, 0.0, 0.0, 1, SHORT))
 
     def init_balance(self):
+        """
+        Base function to initialize balance.
+        :return:
+        """
         self.update_balance(0.0)
 
     def update_orders(self, add_orders: List[Order], delete_orders: List[Order]):
+        """
+        Sorts the orders into long and short orders and adds/removes them from the current open orders.
+        :param add_orders: Orders to add to the open orders.
+        :param delete_orders: Orders to remove from the open orders.
+        :return:
+        """
         add_long = empty_order_list()
         add_short = empty_order_list()
         delete_long = empty_order_list()
@@ -148,26 +247,55 @@ class Bot:
         self.open_orders.add_short(add_short)
 
     def update_position(self, long: Position, short: Position):
+        """
+        Updates positions on both sides.
+        :param long: The new long position.
+        :param short: The new short position.
+        :return:
+        """
         self.position.update_long(long)
         self.position.update_short(short)
 
     def update_balance(self, balance: float = None):
+        """
+        Updates the balance.
+        :param balance: The new balance.
+        :return:
+        """
         if balance:
             self.balance = balance
 
-    def get_orders(self):
+    def get_orders(self) -> OrderList:
+        """
+        Returns a copy of the current open orders.
+        :return: Copy of the open orders.
+        """
         open_orders = self.open_orders.copy()
         return open_orders
 
-    def get_position(self):
+    def get_position(self) -> PositionList:
+        """
+        Returns a copy of the current positions.
+        :return: Copy of current positions.
+        """
         position = self.position.copy()
         return position
 
-    def get_balance(self):
+    def get_balance(self) -> float:
+        """
+        Returns the current balance.
+        :return: Current balance.
+        """
         balance = self.balance
         return balance
 
     def handle_order_update(self, order: Order):
+        """
+        Handles an orders update by either deleting, adding, or changing the open orders. Also sets the attribute
+        order_fill_change to True if the order was FILLED and last_filled_order to the processed order.
+        :param order: The order to process.
+        :return:
+        """
         add_orders = empty_order_list()
         delete_orders = empty_order_list()
         if order.action in [CANCELED, FILLED, EXPIRED, NEW_INSURANCE, NEW_ADL]:
@@ -183,36 +311,43 @@ class Bot:
         self.update_orders(add_orders, delete_orders)
 
     def handle_account_update(self, balance: float, long: Position, short: Position):
+        """
+        Handles an account update which includes balance and position changes. Also sets the attribute position_change
+        to True.
+        :param balance: The new balance.
+        :param long: The new long position.
+        :param short: The new short position.
+        :return:
+        """
         self.update_balance(balance)
         if not self.position.long.equal(long) or not self.position.short.equal(short):
             self.position_change = True
         self.update_position(long, short)
 
     def create_orders(self, orders_to_create: List[Order]):
+        """
+        Base function to execute order creation.
+        :param orders_to_create: Orders to create/send to the exchange.
+        :return:
+        """
         pass
 
     def cancel_orders(self, orders_to_cancel: List[Order]):
+        """
+        Base function to execute order cancellation.
+        :param orders_to_cancel: Orders to cancel/send to the exchange.
+        :return:
+        """
         pass
 
-    def correct_float_precision(self, order):
-        if not np.isclose(order.price, round_dn(order.price, self.price_step), rtol=1e-60, atol=1e-60):
-            if order.price > round_dn(order.price, self.price_step):
-                order.price = round_up(order.price, self.price_step)
-            else:
-                order.price = round_dn(order.price, self.price_step)
-        if not np.isclose(order.stop_price, round_dn(order.stop_price, self.price_step), rtol=1e-60, atol=1e-60):
-            if order.stop_price > round_dn(order.stop_price, self.price_step):
-                order.stop_price = round_up(order.stop_price, self.price_step)
-            else:
-                order.stop_price = round_dn(order.stop_price, self.price_step)
-        if not np.isclose(order.qty, round_dn(order.qty, self.quantity_step), rtol=1e-60, atol=1e-60):
-            if order.qty > round_dn(order.qty, self.quantity_step):
-                order.qty = round_up(order.qty, self.quantity_step)
-            else:
-                order.qty = round_dn(order.qty, self.quantity_step)
-        return order
-
     def execute_strategy_update(self):
+        """
+        Executes the update function of the strategy. Updates the balance and orders before but not the position to
+        give the opportunity of using the change between position in the strategy. Updates all values including the
+        position after the strategy update function was called.
+        Executes the creation and cancellation of orders and resets order_fill_change and position_change.
+        :return:
+        """
         self.strategy.update_balance(self.get_balance())
         self.strategy.update_orders(self.get_orders())
         add_orders, delete_orders = self.strategy.on_update(self.get_position(), self.last_filled_order)
@@ -224,6 +359,12 @@ class Bot:
         return add_orders, delete_orders
 
     def decide(self, prices: List[Candle]):
+        """
+        Executes the decision making function of the strategy. Afterward, it updates all values of the strategy.
+        Executes the creation and cancellation of orders and resets order_fill_change and position_change.
+        :param prices:
+        :return:
+        """
         add_orders, delete_orders = self.strategy.make_decision(self.get_balance(), self.get_position(),
                                                                 self.get_orders(), prices)
         self.strategy.update_values(self.get_balance(), self.get_position(), self.get_orders())

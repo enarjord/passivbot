@@ -4,7 +4,7 @@ import numpy as np
 from numba import typeof, types
 from numba.experimental import jitclass
 
-from bots.base_bot import Bot, base_bot_spec
+from bots.base_bot import Bot, base_bot_spec, correct_float_precision
 from definitions.candle import Candle, empty_candle_list
 from definitions.order import Order, LONG, SHORT, CANCELED, NEW, MARKET, LIMIT, FILLED, PARTIALLY_FILLED, TP, SL, LQ, \
     CALCULATED, SELL, BUY, empty_order_list
@@ -271,7 +271,7 @@ class BacktestBot(Bot):
         short_add = empty_order_list()
         for order in orders_to_create:
             order.symbol = self.symbol
-            order = self.correct_float_precision(order)
+            order = correct_float_precision(order, self.price_step, self.quantity_step)
             order.timestamp = self.current_timestamp
             order.action = NEW
             if order.position_side == LONG:
@@ -286,7 +286,7 @@ class BacktestBot(Bot):
         short_delete = empty_order_list()
         for order in orders_to_cancel:
             order.symbol = self.symbol
-            order = self.correct_float_precision(order)
+            order = correct_float_precision(order, self.price_step, self.quantity_step)
             order.timestamp = self.current_timestamp
             order.action = CANCELED
             if order.position_side == LONG:
