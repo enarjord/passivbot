@@ -1,78 +1,20 @@
 from typing import Tuple, List
 
 import numpy as np
-from numba import njit, types, typeof
+from numba import types, typeof
 
-from definitions.candle import Candle, empty_candle_list
+from definitions.candle import Candle
 from definitions.order import Order, empty_order_list, NEW, PARTIALLY_FILLED, FILLED, CANCELED, EXPIRED, LONG, SHORT, \
     NEW_INSURANCE, NEW_ADL
 from definitions.order_list import OrderList
 from definitions.position import Position
 from definitions.position_list import PositionList
 from definitions.tick import Tick, empty_tick_list
+from helpers.optimized import round_dn, round_up, prepare_candles
 from helpers.print_functions import print_
 
 ORDER_UPDATE = 'order'
 ACCOUNT_UPDATE = 'account'
-
-
-@njit
-def round_dn(n, step, safety_rounding=10) -> float:
-    return np.round(np.floor(np.round(n / step, safety_rounding)) * step, safety_rounding)
-
-
-@njit
-def round_up(n, step, safety_rounding=10) -> float:
-    return np.round(np.ceil(np.round(n / step, safety_rounding)) * step, safety_rounding)
-
-
-@njit
-def aggregate_candle(tick_list: List[Tick], candle_list: List[Candle], lowest_time: int, last_candle: Candle,
-                     tick_interval: float) -> List[Candle]:
-    if tick_list:
-        prices = []
-        qty = []
-        for t in tick_list:
-            prices.append(t.price)
-            qty.append(t.qty)
-        prices = np.asarray(prices)
-        qty = np.asarray(qty)
-        candle = Candle(lowest_time + int(tick_interval * 1000), prices[0], np.max(prices), np.min(prices), prices[-1],
-                        np.sum(qty))
-        candle_list.append(candle)
-    else:
-        if candle_list:
-            last_candle = candle_list[-1]
-            candle = Candle(lowest_time + int(tick_interval * 1000), last_candle.close, last_candle.close,
-                            last_candle.close, last_candle.close, 0.0)
-            candle_list.append(candle)
-        else:
-            candle = Candle(lowest_time + int(tick_interval * 1000), last_candle.close, last_candle.close,
-                            last_candle.close, last_candle.close, 0.0)
-            candle_list.append(candle)
-    return candle_list
-
-
-@njit
-def prepare_candles(ticks: List[Tick], last_update_time: int, max_update_time: int, last_candle: Candle,
-                    tick_interval: float) -> Tuple[List[Candle], List[Tick], int]:
-    tmp_tick_list = empty_tick_list()
-    candle_list = empty_candle_list()
-    current_lowest_time = last_update_time
-    for tick in ticks:
-        if tick.timestamp < (current_lowest_time + tick_interval * 1000):
-            tmp_tick_list.append(tick)
-        else:
-            while (current_lowest_time + tick_interval * 1000 - 1) < int(
-                    tick.timestamp - (tick.timestamp % (tick_interval * 1000))) and (
-                    current_lowest_time + tick_interval * 1000) < max_update_time:
-                candle_list = aggregate_candle(tmp_tick_list, candle_list, current_lowest_time, last_candle,
-                                               tick_interval)
-                tmp_tick_list = empty_tick_list()
-                current_lowest_time += int(tick_interval * 1000)
-            tmp_tick_list.append(tick)
-    return candle_list, tmp_tick_list, current_lowest_time
-
 
 base_bot_spec = [
     ("balance", types.float64),
