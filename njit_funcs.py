@@ -238,10 +238,12 @@ def calc_long_orders(balance,
                                     entry_price, inverse, c_mult)
         base_entry_qty = cost_to_qty(balance, entry_price, inverse, c_mult) * (iqty_const + eqf(MA_ratios, iqty_MAr_coeffs))
         entry_qty = round_dn(min(max_entry_qty,
-                                 base_entry_qty + (long_psize * (rqty_const + eqf(MA_ratios, rqty_MAr_coeffs)))), qty_step)
+                                 max(min_entry_qty,
+                                     base_entry_qty + (long_psize * (rqty_const + eqf(MA_ratios, rqty_MAr_coeffs))))), qty_step)
         nclose_price = max(lowest_ask, round_up(long_pprice * (markup_const + eqf(MA_ratios, markup_MAr_coeffs)), price_step))
         if entry_qty < min_entry_qty:
             entry_qty = 0.0
+
         if pbr_stop_loss < 0.0:
             # v3.6.2 behavior
             close_price = max(lowest_ask, min(nclose_price, round_up(MA_band_upper, price_step)))
@@ -336,7 +338,8 @@ def calc_shrt_orders(balance,
 
         base_entry_qty = cost_to_qty(balance, entry_price, inverse, c_mult) * (iqty_const + eqf(MA_ratios, iqty_MAr_coeffs))
         entry_qty = round_dn(min(max_entry_qty,
-                                 base_entry_qty + (-shrt_psize * (rqty_const + eqf(MA_ratios, rqty_MAr_coeffs)))), qty_step)
+                                 max(min_entry_qty,
+                                     base_entry_qty + (-shrt_psize * (rqty_const + eqf(MA_ratios, rqty_MAr_coeffs)))), qty_step))
         nclose_price = round_dn(shrt_pprice * (markup_const + eqf(MA_ratios, markup_MAr_coeffs)), price_step)
         if entry_qty < min_entry_qty:
             entry_qty = 0.0
@@ -776,6 +779,119 @@ def njit_backtest(ticks: np.ndarray,
                 long_close = (0.0, 0.0, '')
         MAs = new_MAs
     return fills, (True, lowest_eqbal_ratio, closest_bkr)
+
+
+@njit
+def njit_backtest_bancor(ticks: np.ndarray,
+                         starting_balance,
+                         latency_simulation_ms,
+                         maker_fee,
+                         qty_step,
+                         price_step,
+                         min_qty,
+                         min_cost,
+                         spans,
+                         qty_pct,
+                         bancor_price_spread,
+                         MA_band_spread):
+    timestamps = ticks[:, 0]
+    qtys = ticks[:, 1]
+    prices = ticks[:, 2]
+
+    quot_balance = starting_balance / 2
+    coin_balance = quot_balance / ticks[0][2]
+
+    next_update_ts = 0
+    fills = []
+
+    bid, ask = (0.0, 0.0, ''), (0.0, 0.0, '')
+
+    prev_k = 0
+    # spans are in minutes, convert to sample size
+    spans = np.array([span / ((timestamps[1] - timestamps[0]) / (1000 * 60)) for span in spans])
+
+    alphas = 2.0 / (spans + 1.0)
+    alphas_ = 1.0 - alphas
+    start_idx = int(round(spans.max()))
+    MAs = calc_emas_last(prices[:start_idx], spans)
+    for k in range(start_idx, len(prices)):
+        new_MAs = MAs * alphas_ + prices[k] * alphas
+        if qtys[k] == 0.0:
+            MAs = new_MAs
+            continue
+
+        if timestamps[k] >= next_update_ts:
+            # simulate small delay between bot and exchange
+            bid, ask = calc_bancor_bid_ask(quot_balance,
+                                           coin_balance,
+                                           min(MAs),
+                                           max(MAs),
+                                           prices[k],
+                                           prices[k],
+                                           qty_step,
+                                           price_step,
+                                           min_qty,
+                                           min_cost,
+                                           qty_pct,
+                                           bancor_price_spread,
+                                           MA_band_spread)
+            next_update_ts = timestamps[k] + 5000
+        if bid[0] > 0.0 and prices[k] < bid[1]:
+            if qtys[k] < bid[0]:
+                partial_fill = True
+                bid_qty = qtys[k]
+                bid_comment = bid[2] + '_partial'
+            else:
+                partial_fill = False
+                bid_qty = bid[0]
+                bid_comment = bid[2] + '_full'
+            quot_balance -= 0
+            long_psize, long_pprice = calc_new_psize_pprice(long_psize, long_pprice, long_entry_qty,
+                                                            long_entry[1], qty_step)
+            fee_paid = -qty_to_cost(long_entry_qty, long_entry[1], inverse, c_mult) * maker_fee
+            balance += fee_paid
+            equity = calc_equity(balance, long_psize, long_pprice, shrt_psize, shrt_pprice, prices[k], inverse, c_mult)
+            pbr = qty_to_cost(long_psize, long_pprice, inverse, c_mult) / balance
+            fills.append((k, timestamps[k], 0.0, fee_paid, balance, equity, pbr,
+                          long_entry_qty, long_entry[1], long_psize, long_pprice, long_entry_comment))
+            next_update_ts = min(next_update_ts, timestamps[k] + latency_simulation_ms)
+        MAs = new_MAs
+
+
+@njit
+def calc_bancor_bid_ask(quot_balance,
+                        coin_balance,
+                        MA_band_lower,
+                        MA_band_upper,
+                        highest_bid,
+                        lowest_ask,
+                        qty_step,
+                        price_step,
+                        min_qty,
+                        min_cost,
+                        qty_pct,
+                        bancor_price_spread,
+                        MA_band_spread) -> ((float, float, str), (float, float, str)):
+    bancor_price = quot_balance / coin_balance
+    bid_price = round_dn(min([bancor_price * (1 - bancor_price_spread),
+                              MA_band_lower * (1 - MA_band_spread),
+                              highest_bid]), price_step)
+    ask_price = round_up(max([bancor_price * (1 + bancor_price_spread),
+                              MA_band_upper * (1 + MA_band_spread),
+                              lowest_ask]), price_step)
+    min_bid_entry_qty = calc_min_entry_qty(bid_price, False, qty_step, min_qty, min_cost)
+    bid_qty = round_dn(min(cost_to_qty(quot_balance, bid_price, False, 1.0),
+                           max(coin_balance * 2 * qty_pct, min_bid_entry_qty)), qty_step)
+    if bid_qty < min_bid_entry_qty:
+        bid_qty = 0.0
+    min_ask_entry_qty = calc_min_entry_qty(ask_price, False, qty_step, min_qty, min_cost)
+    ask_qty = round_dn(min(coin_balance, max(coin_balance * 2 * qty_pct, min_ask_entry_qty)), qty_step)
+    if ask_qty < min_ask_entry_qty:
+        ask_qty = 0.0
+    return (bid_qty, bid_price, 'bancor_bid'), (ask_qty, ask_price, 'bancor_ask')
+
+
+
 
 
 @njit
