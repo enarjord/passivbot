@@ -1,6 +1,7 @@
 from numba import typeof
 from numba.experimental import jitclass
 
+from definitions.order import LONG, SHORT
 from definitions.position import Position
 
 
@@ -17,8 +18,8 @@ class PositionList:
         """
         Creates two empty positions, one for SHORT and one for LONG.
         """
-        self.long = Position('', 0.0, 0.0, 0.0, 0.0, 0, '')
-        self.short = Position('', 0.0, 0.0, 0.0, 0.0, 0, '')
+        self.long = Position('', 0.0, 0.0, 0.0, 0.0, 0, LONG)
+        self.short = Position('', 0.0, 0.0, 0.0, 0.0, 0, SHORT)
 
     def update_long(self, position: Position):
         """
