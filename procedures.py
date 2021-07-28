@@ -38,7 +38,7 @@ def load_config_files(config_paths: []) -> dict:
 async def prep_config(args) -> []:
     base_config = load_config_files([args.backtest_config_path, args.optimize_config_path])
 
-    for key in ['symbol', 'user', 'start_date', 'end_date', 'starting_balance', 'market_type', 'starting_configs']:
+    for key in ['symbol', 'user', 'start_date', 'end_date', 'starting_balance', 'market_type', 'starting_configs', 'base_dir']:
         if getattr(args, key) is not None:
             base_config[key] = getattr(args, key)
         elif key not in base_config:
@@ -62,7 +62,10 @@ async def prep_config(args) -> []:
         config['session_name'] = f"{config['start_date'].replace(' ', '').replace(':', '').replace('.', '')}_" \
                                  f"{end_date.replace(' ', '').replace(':', '').replace('.', '')}"
 
-        base_dirpath = os.path.join(f"{config['base_dir'] if 'base_dir' in config else 'backtests'}",
+        if config['base_dir'].startswith('~'):
+            raise Exception("error: using the ~ to indicate the user's home directory is not supported")
+
+        base_dirpath = os.path.join(config['base_dir'],
                                     f"{config['exchange']}{'_spot' if 'spot' in config['market_type'] else ''}",
                                     config['symbol'])
         config['caches_dirpath'] = make_get_filepath(os.path.join(base_dirpath, 'caches', ''))
@@ -222,6 +225,8 @@ def add_argparse_args(parser):
                         help='specify starting_balance, overriding value from backtest config')
     parser.add_argument('-m', '--market_type', type=str, required=False, dest='market_type', default=None,
                         help='specify whether spot or futures (default), overriding value from backtest config')
+    parser.add_argument('-bd', '--base_dir', type=str, required=False, dest='base_dir', default='backtests',
+                        help='specify the base output directory for the results')
 
     return parser
 
