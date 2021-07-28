@@ -8,14 +8,14 @@ from numba.experimental import jitclass
     ('high', types.float64),
     ('low', types.float64),
     ('close', types.float64),
-    ('qty', types.float64)
+    ('volume', types.float64)
 ])
 class Candle:
     """
     A class representing a candle.
     """
 
-    def __init__(self, timestamp: int, open: float, high: float, low: float, close: float, qty: float):
+    def __init__(self, timestamp: int, open: float, high: float, low: float, close: float, volume: float):
         """
         Creates a candle.
         :param timestamp: The timestamp of the candle.
@@ -23,14 +23,14 @@ class Candle:
         :param high: The highest price of the candle.
         :param low: The lowest price of the candle.
         :param close: The close price of the candle.
-        :param qty: The quantity of the candle.
+        :param volume: The quantity of the candle.
         """
         self.timestamp = timestamp
         self.open = open
         self.high = high
         self.low = low
         self.close = close
-        self.qty = qty
+        self.volume = volume
 
 
 @njit
