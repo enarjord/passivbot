@@ -22,7 +22,7 @@ base_bot_spec = [
     ("open_orders", typeof(OrderList())),
     ("long", types.boolean),
     ("short", types.boolean),
-    ("qty_step", types.float64),
+    ("quantity_step", types.float64),
     ("price_step", types.float64),
     ("call_interval", types.float64),
     ("tick_interval", types.float64),
@@ -42,7 +42,7 @@ class Bot:
         self.long = True
         self.short = False
 
-        self.qty_step = 0.0
+        self.quantity_step = 0.0
         self.price_step = 0.0
         self.call_interval = 1.0
         self.tick_interval = 0.25
@@ -52,7 +52,7 @@ class Bot:
         self.order_fill_change = False
 
     def init(self):
-        self.strategy.update_steps(self.qty_step, self.price_step, self.call_interval)
+        self.strategy.update_steps(self.quantity_step, self.price_step, self.call_interval)
 
     def prepare_order(self, msg) -> Order:
         raise NotImplementedError
@@ -205,11 +205,11 @@ class Bot:
                 order.stop_price = round_up(order.stop_price, self.price_step)
             else:
                 order.stop_price = round_dn(order.stop_price, self.price_step)
-        if not np.isclose(order.qty, round_dn(order.qty, self.qty_step), rtol=1e-60, atol=1e-60):
-            if order.qty > round_dn(order.qty, self.qty_step):
-                order.qty = round_up(order.qty, self.qty_step)
+        if not np.isclose(order.qty, round_dn(order.qty, self.quantity_step), rtol=1e-60, atol=1e-60):
+            if order.qty > round_dn(order.qty, self.quantity_step):
+                order.qty = round_up(order.qty, self.quantity_step)
             else:
-                order.qty = round_dn(order.qty, self.qty_step)
+                order.qty = round_dn(order.qty, self.quantity_step)
         return order
 
     def execute_strategy_update(self):
