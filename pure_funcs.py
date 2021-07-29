@@ -440,11 +440,13 @@ def analyze_fills(fills: list, bc: dict, first_ts: float, last_ts: float) -> (pd
     else:
         shrt_stuck_mean = 0.0
         shrt_stuck = 0.0
-        
+
     ms_span = 1000 * 60 * 60 * 24 * bc['periodic_gain_n_days']
-    groups = fdf.groupby(fdf.timestamp // ms_span)
-    periodic_gains = groups.pnl.sum() / groups.balance.first()
-    periodic_gains = periodic_gains.reindex(np.arange(periodic_gains.index[0], periodic_gains.index[-1])).fillna(0.0)
+    buckets = fdf.timestamp // ms_span * ms_span
+    buckets = buckets + (fdf.timestamp.iloc[0] - buckets.iloc[0])
+    groups = fdf.groupby(buckets)
+    periodic_gains = groups.balance.last() / groups.balance.first() - 1  # realized profits
+    periodic_gains = periodic_gains.reindex(np.arange(periodic_gains.index[0], periodic_gains.index[-1], ms_span)).fillna(0.0)
     periodic_gains_mean = np.nan_to_num(periodic_gains.mean())
     periodic_gains_std = periodic_gains.std()
     sharpe_ratio = periodic_gains_mean / periodic_gains_std if periodic_gains_std != 0.0 else -20.0
@@ -518,7 +520,7 @@ def calc_pprice_from_fills(coin_balance, fills, n_fills_limit=100):
 def get_position_fills(long_psize: float, shrt_psize: float, fills: [dict]) -> [dict]:
     '''
     assumes fills are sorted old to new
-    returns fills since initial entry
+    returns fills since and including initial entry
     '''
     long_psize *= 0.999
     shrt_psize *= 0.999
@@ -534,7 +536,7 @@ def get_position_fills(long_psize: float, shrt_psize: float, fills: [dict]) -> [
                 long_qty_sum += x['qty'] * (1.0 if x['side'] == 'buy' else -1.0)
                 long_pfills.append(x)
                 long_done = long_qty_sum >= long_psize
-        else:
+        elif x['position_side'] == 'shrt':
             if not shrt_done:
                 shrt_qty_sum += x['qty'] * (1.0 if x['side'] == 'sell' else -1.0)
                 shrt_pfills.append(x)
