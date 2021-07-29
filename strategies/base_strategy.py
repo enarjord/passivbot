@@ -147,4 +147,6 @@ class Strategy:
         return add_orders, delete_orders
 
 
+# Strategy definition used in initializing the backtesting bot.
+# Ensure that this is correctly defined.
 strategy_definition = Strategy(StrategyConfig())

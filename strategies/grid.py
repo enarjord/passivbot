@@ -295,4 +295,6 @@ class Grid(Strategy):
         return orders
 
 
+# Strategy definition used in initializing the backtesting bot.
+# Ensure that this is correctly defined.
 strategy_definition = Grid(StrategyConfig(np.zeros((1, 1)), np.zeros((1, 1)), 0.0))
