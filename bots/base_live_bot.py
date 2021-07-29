@@ -93,40 +93,103 @@ class LiveBot(Bot):
         }
 
     async def async_init(self):
+        """
+        Calls the base init function and provides async support. To be implemented by the exchange implementation.
+        :return:
+        """
         self.init()
         pass
 
     async def fetch_orders(self) -> List[Order]:
+        """
+        Function to fetch current open orders. To be implemented by the exchange implementation.
+        :return: A list of current open orders.
+        """
         raise NotImplementedError
 
     async def fetch_position(self) -> Tuple[Position, Position]:
+        """
+        Function to fetch current position. To be implemented by the exchange implementation.
+        :return: The current long and short position.
+        """
         raise NotImplementedError
 
     async def fetch_balance(self) -> float:
+        """
+        Function to fetch current balance. To be implemented by the exchange implementation.
+        :return: The current balance.
+        """
         raise NotImplementedError
 
     async def public_get(self, url: str, params: dict = {}) -> dict:
+        """
+        Function for public API endpoints. To be implemented by the exchange implementation.
+        :param url: The URL to use in accordance with the base URL.
+        :param params: The parameters to pass to the call.
+        :return: The answer decoded into json.
+        """
         raise NotImplementedError
 
     async def private_(self, type_: str, url: str, params: dict = {}) -> dict:
+        """
+        Base function for private API endpoints. Needs to calculate signature, encoding, and headers.
+        To be implemented by the exchange implementation.
+        :param type_: The type of call to call specific function.
+        :param url: The URL to use in accordance with the base URL.
+        :param params: The parameters to pass to the call.
+        :return: The answer decoded into json.
+        """
         raise NotImplementedError
 
     async def private_get(self, url: str, params: dict = {}) -> dict:
+        """
+        Function for private GET API endpoints. To be implemented by the exchange implementation.
+        :param url: The URL to use in accordance with the base URL.
+        :param params: The parameters to pass to the call.
+        :return: The answer string.
+        """
         raise NotImplementedError
 
     async def private_post(self, url: str, params: dict = {}) -> dict:
+        """
+        Function for private POST API endpoints. To be implemented by the exchange implementation.
+        :param url: The URL to use in accordance with the base URL.
+        :param params: The parameters to pass to the call.
+        :return: The answer string.
+        """
         raise NotImplementedError
 
     async def private_put(self, url: str, params: dict = {}) -> dict:
+        """
+        Function for private PUT API endpoints. To be implemented by the exchange implementation.
+        :param url: The URL to use in accordance with the base URL.
+        :param params: The parameters to pass to the call.
+        :return: The answer string.
+        """
         raise NotImplementedError
 
     async def private_delete(self, url: str, params: dict = {}) -> dict:
+        """
+        Function for private DELETE API endpoints. To be implemented by the exchange implementation.
+        :param url: The URL to use in accordance with the base URL.
+        :param params: The parameters to pass to the call.
+        :return: The answer string.
+        """
         raise NotImplementedError
 
     async def update_heartbeat(self):
+        """
+        Function that triggers an update of the websocket, if needed.
+        :return:
+        """
         pass
 
     async def async_reset(self):
+        """
+        Resets the bot to an empty state and fetches data from the exchange again. Also updates the strategy with
+        values.
+        :return:
+        """
         self.reset()
         await self.async_init_orders()
         await self.async_init_position()
@@ -134,6 +197,10 @@ class LiveBot(Bot):
         self.strategy.update_values(self.get_balance(), self.get_position(), self.get_orders())
 
     async def async_init_orders(self):
+        """
+        Initializes open orders by fetching them from the exchange.
+        :return:
+        """
         self.init_orders()
         a = await self.fetch_orders()
         add_orders = empty_order_list()
@@ -143,31 +210,62 @@ class LiveBot(Bot):
         self.update_orders(add_orders, delete_orders)
 
     async def async_init_position(self):
+        """
+        Initializes positions by fetching them from the exchange.
+        :return:
+        """
         self.init_orders()
         long, short = await self.fetch_position()
         self.update_position(long, short)
 
     async def async_init_balance(self):
+        """
+        Initializes balance by fetching it from the exchange.
+        :return:
+        """
         self.init_balance()
         bal = await self.fetch_balance()
         self.update_balance(bal)
 
-    async def async_handle_order_update(self, msg):
+    async def async_handle_order_update(self, msg: dict):
+        """
+        Async wrapper for the order updates. Translates the exchange specific msg into an Order.
+        Handles an orders update by either deleting, adding, or changing the open orders. Also sets the attribute
+        order_fill_change to True if the order was FILLED and last_filled_order to the processed order.
+        :param msg: The order message to process.
+        :return:
+        """
         self.handle_order_update(self.prepare_order(msg))
         if self.position_change and self.order_fill_change:
             asyncio.create_task(self.async_execute_strategy_update())
 
-    async def async_handle_account_update(self, msg):
+    async def async_handle_account_update(self, msg: dict):
+        """
+        Async wrapper for the position and balance updates. Translates the exchange specific msg into Positions.
+        Handles an account update which includes balance and position changes. Also sets the attribute position_change
+        to True.
+        :param msg: The account message to process.
+        :return:
+        """
         self.handle_account_update(*self.prepare_account(msg))
         if self.position_change and self.order_fill_change:
             asyncio.create_task(self.async_execute_strategy_update())
 
     async def start_heartbeat(self) -> None:
+        """
+        Heartbeat function to keep the websocket alive if needed.
+        :return:
+        """
         while True:
             await asyncio.sleep(60)
             await self.update_heartbeat()
 
     async def start_user_data(self) -> None:
+        """
+        Function to start the user data stream. Triggers order and account updates and keeps the state of the bot in
+        sync with the exchange.
+        :return:
+        """
         while True:
             try:
                 self.position_change = False
@@ -195,6 +293,13 @@ class LiveBot(Bot):
                 await asyncio.sleep(5)
 
     async def start_websocket(self) -> None:
+        """
+        Function to start the price stream. Accumulates ticks and aggregates them to a candle based on the specified
+        tick interval filling gaps if necessary. Also triggers the strategy decision making function after the specified
+        interval. It is not guaranteed that the strategy is called exactly after each interval but it depends if a new
+        message came in.
+        :return:
+        """
         while True:
             price_list = empty_candle_list()
             tick_list = empty_tick_list()
@@ -242,21 +347,47 @@ class LiveBot(Bot):
                             print_(['Error in price stream', e, msg], n=True)
 
     async def execute_leverage_change(self):
+        """
+        Function to execute the leverage change and ensure that the leverage is set correctly on the exchange. To be
+        implemented by the exchange implementation.
+        :return:
+        """
         raise NotImplementedError
 
     async def async_create_orders(self, orders_to_create: List[Order]):
+        """
+        Async base function for the order creation function. To be implemented by the exchange implementation.
+        :param orders_to_create: Orders to create/send to the exchange.
+        :return:
+        """
         raise NotImplementedError
 
     async def async_cancel_orders(self, orders_to_cancel: List[Order]):
+        """
+        Async base function for the order cancellation function. To be implemented by the exchange implementation.
+        :param orders_to_cancel: Orders to cancel/send to the exchange.
+        :return:
+        """
         raise NotImplementedError
 
     async def async_execute_strategy_update(self):
+        """
+        Async wrapper for the base strategy execution function. Calls the base function and creates creation and
+        cancellation tasks.
+        :return:
+        """
         add_orders, delete_orders = self.execute_strategy_update()
 
         asyncio.create_task(self.async_cancel_orders(delete_orders))
         asyncio.create_task(self.async_create_orders(add_orders))
 
     async def async_decide(self, prices: List[Candle]):
+        """
+        Async wrapper for the base strategy decision making function. Calls the base function and creates creation and
+        cancellation tasks.
+        :param prices: A list of candles since the last time this function was called.
+        :return:
+        """
         add_orders, delete_orders = self.decide(prices)
 
         await self.async_cancel_orders(delete_orders)
