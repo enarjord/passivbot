@@ -24,7 +24,12 @@ reverse_order_mapping = {TP: 'TAKE_PROFIT', SL: 'STOP_LOSS', LIMIT: 'LIMIT', MAR
                          LONG: 'LONG', SHORT: 'SHORT'}
 
 
-def mapping(item):
+def mapping(item: str) -> str:
+    """
+    Function to map Binance specific order terminology to a neutral format.
+    :param item: The item to map.
+    :return: The neutral format.
+    """
     try:
         return order_mapping[item.upper()]
     except Exception as e:
@@ -32,7 +37,12 @@ def mapping(item):
         return ''
 
 
-def reverse_mapping(item):
+def reverse_mapping(item: str) -> str:
+    """
+    Function to map a neutral format to Binance specific order terminology.
+    :param item: The item to map.
+    :return: The Binance specific format.
+    """
     try:
         return reverse_order_mapping[item]
     except Exception as e:
@@ -41,7 +51,17 @@ def reverse_mapping(item):
 
 
 class BinanceBot(LiveBot):
+    """
+    Binance specific implementation of the live bot.
+    """
+
     def __init__(self, config: LiveConfig, strategy):
+        """
+        Creates an instance of the Binance live bot with configuration and strategy. Sets endpoints to the Binance API
+        endpoints.
+        :param config: A live configuration class.
+        :param strategy: A strategy implementing the logic.
+        """
         super(BinanceBot, self).__init__(config, strategy)
         if 'USDT' in self.symbol:
             self.quote_asset = 'USDT'
@@ -78,6 +98,11 @@ class BinanceBot(LiveBot):
         }
 
     async def init(self):
+        """
+        Binance specific initialization. Sets it to hedge mode, gets exchange specific information, and sets the
+        leverage. Also updates the strategy values.
+        :return:
+        """
         try:
             res = await self.private_post(self.endpoints['position_side'], {'dualSidePosition': 'true'})
             print_([res], n=True)
@@ -117,6 +142,10 @@ class BinanceBot(LiveBot):
         self.strategy.update_steps(self.quantity_step, self.price_step, self.call_interval)
 
     async def fetch_orders(self) -> List[Order]:
+        """
+        Function to fetch current open orders. Fetches and converts all open orders.
+        :return: A list of current open orders.
+        """
         ords = await self.private_get(self.endpoints['open_orders'], {'symbol': self.symbol})
         orders = []
         for o in ords:
@@ -138,6 +167,10 @@ class BinanceBot(LiveBot):
         return orders
 
     async def fetch_position(self) -> Tuple[Position, Position]:
+        """
+        Function to fetch current position. Fetches and converts long and short position.
+        :return: The current long and short position.
+        """
         pos = await self.private_get(self.endpoints['position'], ({'symbol': self.symbol}))
         long = Position('', 0.0, 0.0, 0.0, 0.0, 0, '')
         short = Position('', 0.0, 0.0, 0.0, 0.0, 0, '')
@@ -157,17 +190,35 @@ class BinanceBot(LiveBot):
         return long, short
 
     async def fetch_balance(self) -> float:
+        """
+        Function to fetch current balance. Fetches the balance for the base asset.
+        :return: The current balance.
+        """
         bal = await self.private_get(self.endpoints['balance'], {})
         for b in bal:
             if b['asset'] == self.quote_asset:
                 return float(b['balance'])
 
     async def public_get(self, url: str, params: dict = {}) -> dict:
+        """
+        Function for public API endpoints. Uses the underlying session to execute the call.
+        :param url: The URL to use in accordance with the base URL.
+        :param params: The parameters to pass to the call.
+        :return: The answer decoded into json.
+        """
         async with self.session.get(self.base_endpoint + url, params=params) as response:
             result = await response.text()
         return json.loads(result)
 
     async def private_(self, type_: str, url: str, params: dict = {}) -> dict:
+        """
+        Base function for private API endpoints. Calculates signature, encoding, and headers. Uses the underlying
+        session to execute the call.
+        :param type_: The type of call to call specific function.
+        :param url: The URL to use in accordance with the base URL.
+        :param params: The parameters to pass to the call.
+        :return: The answer decoded into json.
+        """
         timestamp = int(time() * 1000)
         params.update({'timestamp': timestamp, 'recvWindow': 5000})
         for k in params:
@@ -185,18 +236,47 @@ class BinanceBot(LiveBot):
         return json.loads(result)
 
     async def private_get(self, url: str, params: dict = {}) -> dict:
+        """
+        Function for private GET API endpoints. Calls the base private function with correct type.
+        :param url: The URL to use in accordance with the base URL.
+        :param params: The parameters to pass to the call.
+        :return: The answer string.
+        """
         return await self.private_('get', url, params)
 
     async def private_post(self, url: str, params: dict = {}) -> dict:
+        """
+        Function for private POST API endpoints. Calls the base private function with correct type.
+        :param url: The URL to use in accordance with the base URL.
+        :param params: The parameters to pass to the call.
+        :return: The answer string.
+        """
         return await self.private_('post', url, params)
 
     async def private_put(self, url: str, params: dict = {}) -> dict:
+        """
+        Function for private PUT API endpoints. Calls the base private function with correct type.
+        :param url: The URL to use in accordance with the base URL.
+        :param params: The parameters to pass to the call.
+        :return: The answer string.
+        """
         return await self.private_('put', url, params)
 
     async def private_delete(self, url: str, params: dict = {}) -> dict:
+        """
+        Function for private DELETE API endpoints. Calls the base private function with correct type.
+        :param url: The URL to use in accordance with the base URL.
+        :param params: The parameters to pass to the call.
+        :return: The answer string.
+        """
         return await self.private_('delete', url, params)
 
     def prepare_order(self, msg) -> Order:
+        """
+        Function to get an order in the correct format.
+        :param msg: Message that needs to be translated.
+        :return: An order object.
+        """
         order = Order(msg['o']['s'].upper(),
                       int(msg['o']['i']),
                       float(msg['o']['p']),
@@ -215,6 +295,11 @@ class BinanceBot(LiveBot):
         return order
 
     def prepare_account(self, msg) -> Tuple[float, Position, Position]:
+        """
+        Function to get an account update in the correct format.
+        :param msg: Message that needs to be translated.
+        :return: A tuple of balance, long position, and short position.
+        """
         balance = None
         last_long = Position('', 0.0, 0.0, 0.0, 0.0, 0, '')
         last_short = Position('', 0.0, 0.0, 0.0, 0.0, 0, '')
@@ -239,10 +324,20 @@ class BinanceBot(LiveBot):
         return balance, last_long, last_short
 
     def prepare_tick(self, msg) -> Tick:
+        """
+        Function to get a tick update in the correct format.
+        :param msg: Message that needs to be translated.
+        :return: A tick object.
+        """
         tick = Tick(int(msg['T']), float(msg['p']), float(msg['q']), bool(msg['m']))
         return tick
 
     async def update_heartbeat(self):
+        """
+        Function that triggers an update of the websocket or initializes it. Uses an empty POST request to get a listen
+        key. If a key exists, it uses an empty PUT request to the key endpoint to keep the key valid.
+        :return:
+        """
         if self.listenKey:
             try:
                 await self.private_put(self.endpoints['listenkey'], {})
@@ -257,6 +352,11 @@ class BinanceBot(LiveBot):
                 print_(['Could not initialize listen key', e_listen], n=True)
 
     def determine_update_type(self, msg) -> str:
+        """
+        Function that determines whether the message is an order or account update.
+        :param msg: Message that needs to be identified.
+        :return: ORDER_UPDATE or ACCOUNT_UPDATE.
+        """
         type = None
         if 'e' in msg:
             if msg['e'] == 'ORDER_TRADE_UPDATE':
@@ -267,10 +367,20 @@ class BinanceBot(LiveBot):
         return type
 
     async def execute_leverage_change(self):
+        """
+        Function to execute the leverage change and ensure that the leverage is set correctly on the exchange.
+        :return:
+        """
         return await self.private_post(self.endpoints['leverage'],
                                        {'symbol': self.symbol, 'leverage': int(self.config['leverage'])})
 
     async def execute_order(self, order: Order) -> Union[dict, bool]:
+        """
+        Executes an order creation request. Adds the necessary attributes to the parameters depending on the execution
+        type.
+        :param order: The order to create.
+        :return: True if it was successful or the error message.
+        """
         params = {'symbol': order.symbol,
                   'side': reverse_mapping(order.side),
                   'positionSide': reverse_mapping(order.position_side),
@@ -289,6 +399,11 @@ class BinanceBot(LiveBot):
             return True
 
     async def execute_cancellation(self, order: Order) -> Union[dict, bool]:
+        """
+        Executes an order cancellation request.
+        :param order: The order to cancel.
+        :return: True if it was successful or the error message.
+        """
         c = await self.private_delete(self.endpoints['cancel_order'],
                                       {'symbol': order.symbol, 'orderId': order.order_id})
         if 'code' in c:
@@ -297,6 +412,11 @@ class BinanceBot(LiveBot):
             return True
 
     async def async_create_orders(self, orders_to_create: List[Order]):
+        """
+        Creates and schedules execution for each creation order. Checks whether the orders were received correctly.
+        :param orders_to_create: Orders to create/send to the exchange.
+        :return:
+        """
         if not orders_to_create:
             return
         creations = []
@@ -319,6 +439,11 @@ class BinanceBot(LiveBot):
         return
 
     async def async_cancel_orders(self, orders_to_cancel: List[Order]):
+        """
+        Creates and schedules execution for each cancellation order. Checks whether the orders were received correctly.
+        :param orders_to_cancel: Orders to cancel/send to the exchange.
+        :return:
+        """
         if not orders_to_cancel:
             return
         deletions = []

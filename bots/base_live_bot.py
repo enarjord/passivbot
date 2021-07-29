@@ -52,7 +52,7 @@ class LiveBot(Bot):
 
     def __init__(self, config: LiveConfig, strategy):
         """
-
+        Creates an instance of the live bot with configuration and strategy.
         :param config: A live configuration class.
         :param strategy: A strategy implementing the logic.
         """
@@ -179,7 +179,7 @@ class LiveBot(Bot):
 
     async def update_heartbeat(self):
         """
-        Function that triggers an update of the websocket, if needed.
+        Function that triggers an update of the websocket or initializes it, if needed.
         :return:
         """
         pass
