@@ -9,19 +9,8 @@ from definitions.order import Order, empty_order_list, TP, SELL, LONG, LIMIT, BU
 from definitions.order_list import OrderList
 from definitions.position import Position
 from definitions.position_list import PositionList
+from helpers.optimized import round_dn
 from strategies.base_strategy import Strategy, base_strategy_spec
-
-
-@njit
-def round_dn(n, step, safety_rounding=10) -> float:
-    """
-    Round a float to the closest lower step size.
-    :param n: Float to round.
-    :param step: Step size to round to.
-    :param safety_rounding: Precision rounding safety.
-    :return: Rounded float.
-    """
-    return np.round(np.floor(np.round(n / step, safety_rounding)) * step, safety_rounding)
 
 
 @njit
