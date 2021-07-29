@@ -774,12 +774,12 @@ async def main():
     parser = add_argparse_args(parser)
 
     args = parser.parse_args()
-    config = await prep_config(args)
-    downloader = Downloader(config)
-    await downloader.download_ticks()
-    if not args.download_only:
-        await downloader.prepare_files(False)
-    sleep(0.1)
+    for config in await prep_config(args):
+        downloader = Downloader(config)
+        await downloader.download_ticks()
+        if not args.download_only:
+            await downloader.prepare_files(False)
+        sleep(0.1)
 
 
 if __name__ == "__main__":

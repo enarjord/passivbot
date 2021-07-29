@@ -24,42 +24,71 @@ def dump_live_config(config: dict, path: str):
         f.write(pretty_str)
 
 
-async def prep_config(args) -> dict:
-    try:
-        bc = hjson.load(open(args.backtest_config_path, encoding='utf-8'))
-    except Exception as e:
-        raise Exception('failed to load backtest config', args.backtest_config_path, e)
-    try:
-        oc = hjson.load(open(args.optimize_config_path, encoding='utf-8'))
-    except Exception as e:
-        raise Exception('failed to load optimize config', args.optimize_config_path, e)
-    config = {**oc, **bc}
+def load_config_files(config_paths: []) -> dict:
+    config = {}
+    for config_path in config_paths:
+        try:
+            loaded_config = hjson.load(open(config_path, encoding='utf-8'))
+            config = {**config, **loaded_config}
+        except Exception as e:
+            raise Exception('failed to load config file', config_path, e)
+    return config
 
-    for key in ['symbol', 'user', 'start_date', 'end_date', 'starting_balance', 'market_type']:
+
+async def prep_config(args) -> []:
+    base_config = load_config_files([args.backtest_config_path, args.optimize_config_path])
+
+    for key in ['symbol', 'user', 'start_date', 'end_date', 'starting_balance', 'market_type', 'starting_configs', 'base_dir']:
         if getattr(args, key) is not None:
-            config[key] = getattr(args, key)
-    if args.market_type is None:
-        config['spot'] = False
-    else:
-        config['spot'] = args.market_type == 'spot'
-    config['exchange'], _, _ = load_exchange_key_secret(config['user'])
+            base_config[key] = getattr(args, key)
+        elif key not in base_config:
+            base_config[key] = None
 
-    if config['exchange'] == 'bybit' and config['symbol'].endswith('USDT'):
-        raise Exception('error: bybit linear usdt markets backtesting and optimizing not supported at this time')
+    all_configs = []
 
-    end_date = config['end_date'] if config['end_date'] and config['end_date'] != -1 else ts_to_date(time())[:16]
-    config['session_name'] = f"{config['start_date'].replace(' ', '').replace(':', '').replace('.', '')}_" \
-                             f"{end_date.replace(' ', '').replace(':', '').replace('.', '')}"
+    for symbol in base_config['symbol'].split(','):
+        config = base_config.copy()
+        config['symbol'] = symbol
+        if args.market_type is None:
+            config['spot'] = False
+        else:
+            config['spot'] = args.market_type == 'spot'
+        config['exchange'], _, _ = load_exchange_key_secret(config['user'])
 
-    base_dirpath = os.path.join('backtests',
-                                f"{config['exchange']}{'_spot' if 'spot' in config['market_type'] else ''}",
-                                config['symbol'])
-    config['caches_dirpath'] = make_get_filepath(os.path.join(base_dirpath, 'caches', ''))
-    config['optimize_dirpath'] = make_get_filepath(os.path.join(base_dirpath, 'optimize', ''))
-    config['plots_dirpath'] = make_get_filepath(os.path.join(base_dirpath, 'plots', ''))
+        if config['exchange'] == 'bybit' and config['symbol'].endswith('USDT'):
+            raise Exception('error: bybit linear usdt markets backtesting and optimizing not supported at this time')
 
-    config['avg_periodic_gain_key'] = f"avg_{int(round(config['periodic_gain_n_days']))}days_gain"
+        end_date = config['end_date'] if config['end_date'] and config['end_date'] != -1 else ts_to_date(time())[:16]
+        config['session_name'] = f"{config['start_date'].replace(' ', '').replace(':', '').replace('.', '')}_" \
+                                 f"{end_date.replace(' ', '').replace(':', '').replace('.', '')}"
 
+        if config['base_dir'].startswith('~'):
+            raise Exception("error: using the ~ to indicate the user's home directory is not supported")
+
+        base_dirpath = os.path.join(config['base_dir'],
+                                    f"{config['exchange']}{'_spot' if 'spot' in config['market_type'] else ''}",
+                                    config['symbol'])
+        config['caches_dirpath'] = make_get_filepath(os.path.join(base_dirpath, 'caches', ''))
+        config['optimize_dirpath'] = make_get_filepath(os.path.join(base_dirpath, 'optimize', ''))
+        config['plots_dirpath'] = make_get_filepath(os.path.join(base_dirpath, 'plots', ''))
+
+        config['avg_periodic_gain_key'] = f"avg_{int(round(config['periodic_gain_n_days']))}days_gain"
+
+        await add_market_specific_settings(config)
+
+        if 'pbr_limit' in config['ranges']:
+            config['ranges']['pbr_limit'][1] = min(config['ranges']['pbr_limit'][1], config['max_leverage'])
+            config['ranges']['pbr_limit'][0] = min(config['ranges']['pbr_limit'][0], config['ranges']['pbr_limit'][1])
+        if config['spot']:
+            config['do_long'] = True
+            config['do_shrt'] = False
+
+        all_configs.append(config)
+
+    return all_configs
+
+
+async def add_market_specific_settings(config):
     mss = config['caches_dirpath'] + 'market_specific_settings.json'
     try:
         print('fetching market_specific_settings...')
@@ -71,18 +100,9 @@ async def prep_config(args) -> dict:
             if os.path.exists(mss):
                 market_specific_settings = json.load(open(mss))
             print('using cached market_specific_settings')
-        except Exception as e1:
+        except Exception:
             raise Exception('failed to load cached market_specific_settings')
     config.update(market_specific_settings)
-
-    if 'pbr_limit' in config['ranges']:
-        config['ranges']['pbr_limit'][1] = min(config['ranges']['pbr_limit'][1], config['max_leverage'])
-        config['ranges']['pbr_limit'][0] = min(config['ranges']['pbr_limit'][0], config['ranges']['pbr_limit'][1])
-    if config['spot']:
-        config['do_long'] = True
-        config['do_shrt'] = False
-
-    return config
 
 
 def make_get_filepath(filepath: str) -> str:
@@ -205,6 +225,8 @@ def add_argparse_args(parser):
                         help='specify starting_balance, overriding value from backtest config')
     parser.add_argument('-m', '--market_type', type=str, required=False, dest='market_type', default=None,
                         help='specify whether spot or futures (default), overriding value from backtest config')
+    parser.add_argument('-bd', '--base_dir', type=str, required=False, dest='base_dir', default='backtests',
+                        help='specify the base output directory for the results')
 
     return parser
 

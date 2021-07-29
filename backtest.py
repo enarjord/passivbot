@@ -49,27 +49,27 @@ async def main():
     parser = add_argparse_args(parser)
     args = parser.parse_args()
 
-    config = await prep_config(args)
-    if config['exchange'] == 'bybit' and not config['inverse']:
-        print('bybit usdt linear backtesting not supported')
-        return
-    downloader = Downloader(config)
-    live_config = load_live_config(args.live_config_path)
-    live_config['long']['enabled'] = config['do_long']
-    live_config['shrt']['enabled'] = config['do_shrt']
-    if 'spot' in config['market_type']:
-        live_config = spotify_config(live_config)
-    config.update(live_config)
-    print()
-    for k in (keys := ['exchange', 'spot', 'symbol', 'starting_balance', 'start_date', 'end_date',
-                       'latency_simulation_ms']):
-        if k in config:
-            print(f"{k: <{max(map(len, keys)) + 2}} {config[k]}")
-    print()
-    data = await downloader.get_sampled_ticks()
-    config['n_days'] = round_((data[-1][0] - data[0][0]) / (1000 * 60 * 60 * 24), 0.1)
-    pprint.pprint(denumpyize(live_config))
-    plot_wrap(config, data)
+    for config in await prep_config(args):
+        if config['exchange'] == 'bybit' and not config['inverse']:
+            print('bybit usdt linear backtesting not supported')
+            return
+        downloader = Downloader(config)
+        live_config = load_live_config(args.live_config_path)
+        live_config['long']['enabled'] = config['do_long']
+        live_config['shrt']['enabled'] = config['do_shrt']
+        if 'spot' in config['market_type']:
+            live_config = spotify_config(live_config)
+        config.update(live_config)
+        print()
+        for k in (keys := ['exchange', 'spot', 'symbol', 'starting_balance', 'start_date', 'end_date',
+                           'latency_simulation_ms']):
+            if k in config:
+                print(f"{k: <{max(map(len, keys)) + 2}} {config[k]}")
+        print()
+        data = await downloader.get_sampled_ticks()
+        config['n_days'] = round_((data[-1][0] - data[0][0]) / (1000 * 60 * 60 * 24), 0.1)
+        pprint.pprint(denumpyize(live_config))
+        plot_wrap(config, data)
 
 
 if __name__ == '__main__':
