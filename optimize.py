@@ -124,10 +124,10 @@ def single_sliding_window_run(config, data, do_print=False) -> (float, [dict]):
         # sliding window n days should be greater than max hrs no fills
         sliding_window_days = min(n_days, max([config['maximum_hrs_no_fills'] * 2.1 / 24,
                                                config['maximum_hrs_no_fills_same_side'] * 2.1 / 24,
+                                               config['periodic_gain_n_days'] * 1.1,
                                                config['sliding_window_days']]))
     sample_size_ms = data[1][0] - data[0][0]
     max_span_ito_n_samples = int(config['max_span'] * 60 / (sample_size_ms / 1000))
-    analyses = []
     for z, data_slice in enumerate(iter_slices(data, sliding_window_days, max_span=int(round(config['max_span'])))):
         if len(data_slice[0]) == 0:
             print('debug b no data')
@@ -161,6 +161,10 @@ def single_sliding_window_run(config, data, do_print=False) -> (float, [dict]):
                 line += f"broke on low eqbal ratio {analysis['lowest_eqbal_ratio']:.4f} "
                 print(line)
                 break
+            if analysis['sharpe_ratio'] < config['minimum_sharpe_ratio'] * (1 - bef):
+                line += f"broke on low sharpe ratio {analysis['sharpe_ratio']:.4f} {config['minimum_sharpe_ratio']} "
+                print(line)
+                break
             if analysis['max_hrs_no_fills'] > config['maximum_hrs_no_fills'] * (1 + bef):
                 line += f"broke on max_hrs_no_fills {analysis['max_hrs_no_fills']:.4f}, {config['maximum_hrs_no_fills']}"
                 print(line)
@@ -169,12 +173,6 @@ def single_sliding_window_run(config, data, do_print=False) -> (float, [dict]):
                 line += f"broke on max_hrs_no_fills_ss {analysis['max_hrs_no_fills_same_side']:.4f}, {config['maximum_hrs_no_fills_same_side']}"
                 print(line)
                 break
-            '''
-            if analysis['sharpe_ratio'] < config['minimum_sharpe_ratio'] * (1 - bef):
-                line += f"broke on low sharpe ratio {analysis['sharpe_ratio']:.4f} "
-                print(line)
-                break
-            '''
             if analysis['average_daily_gain'] < config['minimum_slice_adg']:
                 line += f"broke on low adg {analysis['average_daily_gain']:.4f} "
                 print(line)
