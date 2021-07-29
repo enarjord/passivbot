@@ -5,6 +5,8 @@ from typing import Tuple, List
 
 import aiohttp
 import websockets
+from numba import types
+from numba.experimental import jitclass
 
 from bots.base_bot import Bot, ORDER_UPDATE, ACCOUNT_UPDATE
 from definitions.candle import Candle, empty_candle_list
@@ -15,21 +17,58 @@ from helpers.loaders import load_key_secret
 from helpers.print_functions import print_
 
 
+@jitclass([
+    ('symbol', types.string),
+    ('user', types.string),
+    ('exchange', types.string),
+    ('leverage', types.int64),
+    ('call_interval', types.float64)
+])
+class LiveConfig:
+    """
+    A class representing a live config.
+    """
+
+    def __init__(self, symbol: str, user: str, exchange: str, leverage: int, call_interval: float):
+        """
+        Creates a live config.
+        :param symbol: The symbol to use.
+        :param user: The user for the API keys.
+        :param exchange: The exchange to use.
+        :param leverage: The leverage to use.
+        :param call_interval: Call interval for strategy to use in live.
+        """
+        self.symbol = symbol
+        self.user = user
+        self.exchange = exchange
+        self.leverage = leverage
+        self.call_interval = call_interval
+
+
 class LiveBot(Bot):
-    def __init__(self, config: dict, strategy):
+    """
+    Live implementation of the base bot class using async functions and websockets.
+    """
+
+    def __init__(self, config: LiveConfig, strategy):
+        """
+
+        :param config: A live configuration class.
+        :param strategy: A strategy implementing the logic.
+        """
         super(LiveBot, self).__init__()
         self.config = config
         self.strategy = strategy
 
-        self.symbol = config['symbol']
+        self.symbol = config.symbol
 
-        self.user = config['user']
+        self.user = config.user
 
         self.session = aiohttp.ClientSession()
 
-        self.key, self.secret = load_key_secret(config['exchange'], self.user)
+        self.key, self.secret = load_key_secret(config.exchange, self.user)
 
-        self.call_interval = config['call_interval']
+        self.call_interval = config.call_interval
 
         self.base_endpoint = ''
         self.endpoints = {

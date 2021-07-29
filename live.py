@@ -1,7 +1,7 @@
 import argparse
 import asyncio
 
-from bots.base_live_bot import LiveBot
+from bots.base_live_bot import LiveBot, LiveConfig
 from helpers.loaders import load_base_config, load_module_from_file
 from helpers.print_functions import print_
 
@@ -29,7 +29,9 @@ async def main() -> None:
         strategy_config = strategy_module.convert_dict_to_config(config['strategy'])
         # Create a strategy based on the strategy module and the provided class
         strategy = getattr(strategy_module, config['strategy_class'])(strategy_config)
-        if config['exchange'] == 'binance':
+        config = LiveConfig(config['symbol'], config['user'], config['exchange'], config['leverage'],
+                            config['call_interval'])
+        if config.exchange == 'binance':
             from bots.binance import BinanceBot
             bot = BinanceBot(config, strategy)
         else:
