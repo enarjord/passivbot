@@ -97,7 +97,7 @@ python3 backtest.py -u binance_01 -s XLMUSDT --start_date 2021-06-01T00:00 --end
 If you're happy with the config, copy it over to your live config file:
 
 ```shell
-cp ./backtest/binance/XLMUSDT/plots/{date}/live_config.json ./configs/myconfig.json
+cp backtests/binance/XLMUSDT/plots/{date}/live_config.json configs/live/myconfig.json
 ```
 
 ## Starting the bot
@@ -111,7 +111,7 @@ screen -S mypassivbot
 Once you're satisfied with the configuration, start the bot:
 
 ```shell
-python3 start_bot.py binance_01 XLMUSDT ./configs/myconfig.json
+python3 start_bot.py binance_01 XLMUSDT configs/live/myconfig.json
 ```
 
 If the bot started succesfully, you should receive a message **Passivbot started!**. After this, you can disconnect
