@@ -845,17 +845,37 @@ def njit_backtest_bancor(ticks: np.ndarray,
                 partial_fill = False
                 bid_qty = bid[0]
                 bid_comment = bid[2] + '_full'
-            quot_balance -= 0
-            long_psize, long_pprice = calc_new_psize_pprice(long_psize, long_pprice, long_entry_qty,
-                                                            long_entry[1], qty_step)
-            fee_paid = -qty_to_cost(long_entry_qty, long_entry[1], inverse, c_mult) * maker_fee
-            balance += fee_paid
-            equity = calc_equity(balance, long_psize, long_pprice, shrt_psize, shrt_pprice, prices[k], inverse, c_mult)
-            pbr = qty_to_cost(long_psize, long_pprice, inverse, c_mult) / balance
-            fills.append((k, timestamps[k], 0.0, fee_paid, balance, equity, pbr,
-                          long_entry_qty, long_entry[1], long_psize, long_pprice, long_entry_comment))
+            quot_balance -= bid_qty * bid[1]
+            fee_paid = -bid_qty * maker_fee
+            coin_balance += (bid_qty + fee_paid)
+            fills.append((k, timestamps[k], fee_paid, 'coin', bid_qty, bid[1], quot_balance, coin_balance, bid_comment))
             next_update_ts = min(next_update_ts, timestamps[k] + latency_simulation_ms)
+            if partial_fill:
+                bid = (bid[0] - bid_qty, bid[1], bid_comment)
+            else:
+                bid = (0.0, 0.0, '')
+        if ask[0] < 0.0 and prices[k] > ask[1]:
+            if qtys[k] < -ask[0]:
+                partial_fill = True
+                ask_qty = -qtys[k]
+                ask_comment = ask[2] + '_partial'
+            else:
+                partial_fill = False
+                ask_qty = ask[0]
+                ask_comment = ask[2] + '_full'
+            coin_balance += ask_qty
+            cost = qty_to_cost(ask_qty, ask[1], False, 1.0)
+            fee_paid = -cost * maker_fee
+            quot_balance += cost + fee_paid
+            fills.append((k, timestamps[k], fee_paid, 'quot', ask_qty, ask[1], quot_balance, coin_balance, ask_comment))
+            next_update_ts = min(next_update_ts, timestamps[k] + latency_simulation_ms)
+            if partial_fill:
+                ask = (ask[0] - ask_qty, ask[1], ask_comment)
+            else:
+                ask = (0.0, 0.0, '')
+
         MAs = new_MAs
+    return fills
 
 
 @njit
@@ -888,7 +908,7 @@ def calc_bancor_bid_ask(quot_balance,
     ask_qty = round_dn(min(coin_balance, max(coin_balance * 2 * qty_pct, min_ask_entry_qty)), qty_step)
     if ask_qty < min_ask_entry_qty:
         ask_qty = 0.0
-    return (bid_qty, bid_price, 'bancor_bid'), (ask_qty, ask_price, 'bancor_ask')
+    return (bid_qty, bid_price, 'bancor_bid'), (-ask_qty, ask_price, 'bancor_ask')
 
 
 
