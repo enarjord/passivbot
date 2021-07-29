@@ -61,10 +61,23 @@ class BacktestConfig:
               ("current_timestamp", types.int64),
               ("latency", types.float64)
           ])
+# ToDo:
+#  Add list of fills after each order fill.
+#  Add (hourly) statistics.
 class BacktestBot(Bot):
+    """
+    A class to backtest a strategy. Can not be directly imported due to dynamically loading the correct strategy
+    definition into the numba jitclass definition.
+    """
     __init_Base = Bot.__init__
 
-    def __init__(self, config, strategy, data: np.ndarray):
+    def __init__(self, config: BacktestConfig, strategy, data: np.ndarray):
+        """
+        Creates an instance of the backtest bot with configuration, strategy, and data.
+        :param config: A backtest configuration class.
+        :param strategy: A strategy implementing the logic.
+        :param data: The data consisting of timestamp, open, high, low, close, and volume candles.
+        """
         self.__init_Base()
         self.config = config
         self.strategy = strategy
@@ -90,6 +103,8 @@ class BacktestBot(Bot):
         :param last_candle: The candle to use for the checks.
         :return: Whether the account can continue.
         """
+        # ToDo:
+        #  Include min notional and min quantity checks for each order.
         # Check if the positions got liquidated in the last candle
         if calculate_available_margin(self.get_balance(), self.get_position().long.size,
                                       self.get_position().long.price, self.get_position().short.size,
@@ -246,11 +261,21 @@ class BacktestBot(Bot):
         self.orders_to_execute.delete_short(orders_to_remove)
         return True
 
-    def prepare_candle(self, row):
+    def prepare_candle(self, row: np.ndarray) -> Candle:
+        """
+        Converts a row of data into a candle object.
+        :param row: The row to convert.
+        :return: A candle object.
+        """
         candle = Candle(row[1], row[2], row[3], row[4], row[5])
         return candle
 
     def start_websocket(self) -> None:
+        """
+        Executes the iteration over the provided data. Triggers updating of sent orders, open orders, position, and
+        balance after each candle tick. Also executes the strategy decision logic after the specified call interval.
+        :return:
+        """
         price_list = empty_candle_list()
         last_update = self.data[0, 0]
         # Time, open, high, low, close, qty
@@ -267,6 +292,12 @@ class BacktestBot(Bot):
                 price_list = empty_candle_list()
 
     def create_orders(self, orders_to_create: List[Order]):
+        """
+        Adds the order to the ones waiting for the exchange to accept. Also corrects the precision and sets the
+        timestamp and action. This is for new orders.
+        :param orders_to_create: A list of orders to submit to the exchange.
+        :return:
+        """
         long_add = empty_order_list()
         short_add = empty_order_list()
         for order in orders_to_create:
@@ -282,6 +313,12 @@ class BacktestBot(Bot):
         self.orders_to_execute.add_short(short_add)
 
     def cancel_orders(self, orders_to_cancel: List[Order]):
+        """
+        Adds the order to the ones waiting for the exchange to accept. Also corrects the precision and sets the
+        timestamp and action.This is for order cancellations.
+        :param orders_to_cancel: A list of orders to submit to the exchange.
+        :return:
+        """
         long_delete = empty_order_list()
         short_delete = empty_order_list()
         for order in orders_to_cancel:
