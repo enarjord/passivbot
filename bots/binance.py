@@ -7,7 +7,7 @@ from typing import Union, Tuple, List
 from urllib.parse import urlencode
 
 from bots.base_bot import ORDER_UPDATE, ACCOUNT_UPDATE, correct_float_precision
-from bots.base_live_bot import LiveBot
+from bots.base_live_bot import LiveBot, LiveConfig
 from definitions.order import Order, TP, SL, LIMIT, MARKET, LQ, NEW, PARTIALLY_FILLED, FILLED, CANCELED, EXPIRED, TRADE, \
     CALCULATED, BUY, SELL, LONG, SHORT, BOTH, NEW_INSURANCE, NEW_ADL
 from definitions.position import Position
@@ -41,7 +41,7 @@ def reverse_mapping(item):
 
 
 class BinanceBot(LiveBot):
-    def __init__(self, config: dict, strategy):
+    def __init__(self, config: LiveConfig, strategy):
         super(BinanceBot, self).__init__(config, strategy)
         if 'USDT' in self.symbol:
             self.quote_asset = 'USDT'
@@ -52,7 +52,7 @@ class BinanceBot(LiveBot):
 
         self.listenKey = None
 
-        self.leverage = config['leverage']
+        self.leverage = config.leverage
 
         self.base_endpoint = 'https://testnet.binancefuture.com'  # 'https://fapi.binance.com'
         self.endpoints = {
