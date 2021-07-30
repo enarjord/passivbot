@@ -105,8 +105,6 @@ class BacktestBot(Bot):
         :param last_candle: The candle to use for the checks.
         :return: Whether the account can continue.
         """
-        # ToDo:
-        #  Include min notional and min quantity checks for each order.
         # Check if the positions got liquidated in the last candle
         if calculate_available_margin(self.get_balance(), self.get_position().long.size,
                                       self.get_position().long.price, self.get_position().short.size,
