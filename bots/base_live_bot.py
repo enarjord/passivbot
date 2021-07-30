@@ -61,6 +61,7 @@ class LiveBot(Bot):
         self.strategy = strategy
 
         self.symbol = config.symbol
+        self.leverage = config.leverage
 
         self.user = config.user
 

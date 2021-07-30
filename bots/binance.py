@@ -72,8 +72,6 @@ class BinanceBot(LiveBot):
 
         self.listenKey = None
 
-        self.leverage = config.leverage
-
         self.base_endpoint = 'https://testnet.binancefuture.com'  # 'https://fapi.binance.com'
         self.endpoints = {
             'listenkey': '/fapi/v1/listenKey',

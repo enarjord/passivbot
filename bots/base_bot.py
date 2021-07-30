@@ -19,12 +19,12 @@ base_bot_spec = [
     ("balance", types.float64),
     ("position", typeof(PositionList())),
     ("open_orders", typeof(OrderList())),
-    ("long", types.boolean),
-    ("short", types.boolean),
     ("quantity_step", types.float64),
     ("price_step", types.float64),
     ("call_interval", types.float64),
     ("tick_interval", types.float64),
+    ("leverage", types.float64),
+    ("symbol", types.string),
     ("last_filled_order", typeof(Order('', 0, 0.0, 0.0, 0.0, '', '', 0, '', ''))),
     ("position_change", types.boolean),
     ("order_fill_change", types.boolean)
@@ -45,13 +45,12 @@ class Bot:
         self.position = PositionList()
         self.open_orders = OrderList()
 
-        self.long = True
-        self.short = False
-
         self.quantity_step = 0.0
         self.price_step = 0.0
         self.call_interval = 1.0
         self.tick_interval = 0.25
+        self.leverage = 1.0
+        self.symbol = ''
 
         self.last_filled_order = Order('', 0, 0.0, 0.0, 0.0, '', '', 0, '', '')
         self.position_change = False

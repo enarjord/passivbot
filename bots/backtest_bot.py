@@ -59,7 +59,9 @@ class BacktestConfig:
               ("orders_to_execute", typeof(OrderList())),
               ("data", types.float64[:, :]),
               ("current_timestamp", types.int64),
-              ("latency", types.float64)
+              ("latency", types.float64),
+              ("maker_fee", types.float64),
+              ("taker_fee", types.float64)
           ])
 # ToDo:
 #  Add list of fills after each order fill.
