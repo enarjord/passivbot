@@ -18,16 +18,16 @@
 Passivbot is a fully automated trading bot built in Python. The goal of Passivbot is to provide a stable, low-risk
 trading bot that is able to accumulate profit over time without manual actions.
 
-Passivbot trades using futures markets, using an advanced form of grid trading to place opening and closing orders.
+Passivbot trades in futures and spot markets, using an advanced form of grid trading to place opening and closing orders.
 
 It provides support for automatically optimize configurations, backtest using historic data, and running in live mode.
 
 ## Supported exchanges
 
-Currently the exchanges **Binance** and **Bybit** are implemented and supported for trading futures. The bot does not use
-[ccxt](https://github.com/ccxt/ccxt), so other exchanges cannot be used.
+Currently the exchanges **Binance Futures**, **Binance Spot** and **Bybit Futures** are implemented and supported.  
+The bot does not use [ccxt](https://github.com/ccxt/ccxt), so other exchanges cannot be used.
 
-Not all functionality is supported on bot exchanges, depending on the APIs that bot exchanges expose and development efforts.
+Not all functionality is supported on both exchanges, depending on the APIs that exchanges expose and development efforts.
 
 !!! Info
     If you would like to have support added for an exchange not supported yet, 
