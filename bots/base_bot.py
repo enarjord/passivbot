@@ -10,7 +10,7 @@ from definitions.position import Position
 from definitions.position_list import PositionList
 from definitions.tick import Tick, empty_tick_list
 from helpers.optimized import prepare_candles, correct_order_float_precision
-from helpers.print_functions import print_
+from helpers.print_functions import print_, print_order
 
 ORDER_UPDATE = 'order'
 ACCOUNT_UPDATE = 'account'
@@ -332,6 +332,53 @@ class Bot:
 
         return add_orders, delete_orders
 
+    def filter_orders(self, add_orders: List[Order], delete_orders: List[Order], print=False) -> Tuple[
+        List[Order], List[Order]]:
+        """
+        Filters out orders that have either a quantity below the minimum quantity or a cost (price times quantity) that
+        is below the minimal cost.
+        :param add_orders: Orders to create/send to the exchange.
+        :param delete_orders: Orders to cancel/send to the exchange.
+        :param print: Whether to print that an order was removed.
+        :return: The filtered add and delete orders.
+        """
+        add_orders_new = empty_order_list()
+        delete_orders_new = empty_order_list()
+
+        for order in add_orders:
+            if order.qty < self.minimal_quantity:
+                if print:
+                    print_(["Quantity too small"])
+                    print_order(order)
+            elif order.price != 0.0 and order.price * order.qty < self.minimal_cost:
+                if print:
+                    print_(["Cost too small"])
+                    print_order(order)
+            elif order.stop_price != 0.0 and order.stop_price * order.qty < self.minimal_cost:
+                if print:
+                    print_(["Cost too small"])
+                    print_order(order)
+            else:
+                add_orders_new.append(order)
+
+        for order in delete_orders:
+            if order.qty < self.minimal_quantity:
+                if print:
+                    print_(["Quantity too small"])
+                    print_order(order)
+            elif order.price != 0.0 and order.price * order.qty < self.minimal_cost:
+                if print:
+                    print_(["Cost too small"])
+                    print_order(order)
+            elif order.stop_price != 0.0 and order.stop_price * order.qty < self.minimal_cost:
+                if print:
+                    print_(["Cost too small"])
+                    print_order(order)
+            else:
+                delete_orders_new.append(order)
+
+        return add_orders_new, delete_orders_new
+
     def execute_strategy_update(self) -> Tuple[List[Order], List[Order]]:
         """
         Executes the update function of the strategy. Updates the balance and orders before but not the position to
@@ -344,6 +391,7 @@ class Bot:
         self.strategy.update_orders(self.get_orders())
         add_orders, delete_orders = self.strategy.on_update(self.get_position(), self.last_filled_order)
         add_orders, delete_orders = self.correct_orders(add_orders, delete_orders)
+        add_orders, delete_orders = self.filter_orders(add_orders, delete_orders)
         self.strategy.update_values(self.get_balance(), self.get_position(), self.get_orders())
         self.cancel_orders(delete_orders)
         self.create_orders(add_orders)
