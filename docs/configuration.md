@@ -222,7 +222,7 @@ You can read more on this functionality in the [Telegram](telegram.md) section.
 
 ## Limit wallet balance used
 
-To make the bot even safer then a good config already makes it, you may choose to limit the amount of total wallet balance to be used
+To make the bot even safer than a good config already makes it, you may choose to limit the amount of total wallet balance to be used
 by the bot. Since the bot opens positions in cross mode, this will give your bot an extra buffer in case of unforeseen extreme volatility in the market.
 
 To limit the bot to only use a certain percentage of the entire wallet balance, you can set the parameter `cross_wallet_pct`. If not set, the
