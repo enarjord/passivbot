@@ -22,9 +22,8 @@ class Fill:
     """
 
     def __init__(self, order_id: int, timestamp: int, profit_and_loss: float, fee_paid: float, balance: float,
-                 equity: float,
-                 position_balance_ratio: float, qty: float, price: float, position_size: float, position_price: float,
-                 type: str):
+                 equity: float, position_balance_ratio: float, qty: float, price: float, position_size: float,
+                 position_price: float, type: str):
         """
         Create a fill.
         :param order_id: The id of the trade it was filled.
