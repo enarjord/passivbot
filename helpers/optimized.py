@@ -4,11 +4,62 @@ import numpy as np
 from numba import njit
 
 from definitions.candle import Candle, empty_candle_list
+from definitions.order import Order
 from definitions.tick import Tick, empty_tick_list
 
 
 @njit
-def round_dn(n, step, safety_rounding=10) -> float:
+def isclose(x: float, y: float, atol: float = 1.e-60, rtol: float = 1.e-60):
+    """
+    Test closeness of two floating point numbers. Simplified version of numpy.isclose that only works for single numbers
+    and doesn't consider that a number could be NaN.
+    :param x: First number to compare.
+    :param y: Second number to compare.
+    :param atol: Absolute tolerance parameter.
+    :param rtol: Relative tolerance parameter.
+    :return: Whether or not the numbers are close.
+    """
+    return abs(x - y) <= atol + rtol * abs(y)
+
+
+@njit
+def round_up_or_down(value: float, step: float):
+    """
+    Rounds a value up or down to the corresponding step depending on distance to the rounded up or down step.
+    :param value: The value to round.
+    :param step: The step to use.
+    :return: The rounded value.
+    """
+    if abs(value - round_down(value, step)) < abs(value - round_up(value, step)):
+        return round_down(value, step)
+    else:
+        return round_up(value, step)
+
+
+@njit
+def correct_order_float_precision(order: Order, price_step: float, quantity_step: float) -> Order:
+    """
+    Correct the precision of the order price and quantity if the rounding went wrong.
+    :param order: The order to correct.
+    :param price_step: The price step to use.
+    :param quantity_step: The quantity step to use.
+    :return: The corrected order.
+    """
+    if not isclose(order.price, round_down(order.price, price_step)) or not isclose(order.price,
+                                                                                    round_up(order.price, price_step)):
+        order.price = round_up_or_down(order.price, price_step)
+    if not isclose(order.stop_price, round_down(order.stop_price, price_step)) or not isclose(order.stop_price,
+                                                                                              round_up(order.stop_price,
+                                                                                                       price_step)):
+        order.stop_price = round_up_or_down(order.stop_price, price_step)
+    if not isclose(order.qty, round_down(order.qty, quantity_step)) or not isclose(order.qty,
+                                                                                   round_up(order.qty, quantity_step)):
+        order.qty = round_up_or_down(order.qty, quantity_step)
+    return order
+
+
+@njit
+def round_down(n, step, safety_rounding=10) -> float:
     """
     Round a float to the closest lower step size.
     :param n: Float to round.
