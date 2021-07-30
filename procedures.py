@@ -39,7 +39,7 @@ async def prep_config(args) -> []:
     base_config = load_config_files([args.backtest_config_path, args.optimize_config_path])
 
     for key in ['symbol', 'user', 'start_date', 'end_date', 'starting_balance', 'market_type', 'starting_configs', 'base_dir']:
-        if key in args and getattr(args, key) is not None:
+        if hasattr(args, key) and getattr(args, key) is not None:
             base_config[key] = getattr(args, key)
         elif key not in base_config:
             base_config[key] = None
