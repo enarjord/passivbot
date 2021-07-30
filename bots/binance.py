@@ -6,7 +6,7 @@ from time import time
 from typing import Union, Tuple, List
 from urllib.parse import urlencode
 
-from bots.base_bot import ORDER_UPDATE, ACCOUNT_UPDATE, correct_float_precision
+from bots.base_bot import ORDER_UPDATE, ACCOUNT_UPDATE
 from bots.base_live_bot import LiveBot, LiveConfig
 from definitions.order import Order, TP, SL, LIMIT, MARKET, LQ, NEW, PARTIALLY_FILLED, FILLED, CANCELED, EXPIRED, TRADE, \
     CALCULATED, BUY, SELL, LONG, SHORT, BOTH, NEW_INSURANCE, NEW_ADL
@@ -422,7 +422,6 @@ class BinanceBot(LiveBot):
         creations = []
         for order in orders_to_create:
             try:
-                order = correct_float_precision(order, self.price_step, self.quantity_step)
                 creations.append((order, asyncio.create_task(self.execute_order(order))))
             except Exception as e:
                 print_(['Error creating order', print_order(order), e], n=True)
@@ -449,7 +448,6 @@ class BinanceBot(LiveBot):
         deletions = []
         for order in orders_to_cancel:
             try:
-                order = correct_float_precision(order, self.price_step, self.quantity_step)
                 deletions.append((order, asyncio.create_task(self.execute_cancellation(order))))
             except Exception as e:
                 print_(['Error cancelling order a', print_order(order), e], n=True)

@@ -4,14 +4,14 @@ import numpy as np
 from numba import typeof, types
 from numba.experimental import jitclass
 
-from bots.base_bot import Bot, base_bot_spec, correct_float_precision
+from bots.base_bot import Bot, base_bot_spec
 from definitions.candle import Candle, empty_candle_list
 from definitions.order import Order, LONG, SHORT, CANCELED, NEW, MARKET, LIMIT, FILLED, PARTIALLY_FILLED, TP, SL, LQ, \
     CALCULATED, SELL, BUY, empty_order_list
 from definitions.order_list import OrderList
 from definitions.position import Position
 from helpers.optimized import calculate_available_margin, quantity_to_cost, calculate_long_pnl, calculate_short_pnl, \
-    round_dn, calculate_new_position_size_position_price, calculate_bankruptcy_price
+    round_down, calculate_new_position_size_position_price, calculate_bankruptcy_price
 
 
 @jitclass([
@@ -132,8 +132,9 @@ class BacktestBot(Bot):
             if order.type == MARKET:
                 # Market types take the average price of the last candle
                 execution = True
-                o.price = round_dn(np.average([last_candle.open, last_candle.high, last_candle.low, last_candle.close]),
-                                   self.price_step)
+                o.price = round_down(
+                    np.average([last_candle.open, last_candle.high, last_candle.low, last_candle.close]),
+                    self.price_step)
             if last_candle.low < order.price:
                 if (order.type == LIMIT and order.side == BUY) or order.type == SL:
                     # Limit buy orders and stop loss are treated the same way
@@ -184,8 +185,9 @@ class BacktestBot(Bot):
             if order.type == MARKET:
                 # Market types take the average price of the last candle
                 execution = True
-                o.price = round_dn(np.average([last_candle.open, last_candle.high, last_candle.low, last_candle.close]),
-                                   self.price_step)
+                o.price = round_down(
+                    np.average([last_candle.open, last_candle.high, last_candle.low, last_candle.close]),
+                    self.price_step)
             if last_candle.high > order.price:
                 if (order.type == LIMIT and order.side == BUY) or order.type == SL:
                     # Limit buy orders and stop loss are treated the same way
@@ -302,7 +304,6 @@ class BacktestBot(Bot):
         short_add = empty_order_list()
         for order in orders_to_create:
             order.symbol = self.symbol
-            order = correct_float_precision(order, self.price_step, self.quantity_step)
             order.timestamp = self.current_timestamp
             order.action = NEW
             if order.position_side == LONG:
@@ -323,7 +324,6 @@ class BacktestBot(Bot):
         short_delete = empty_order_list()
         for order in orders_to_cancel:
             order.symbol = self.symbol
-            order = correct_float_precision(order, self.price_step, self.quantity_step)
             order.timestamp = self.current_timestamp
             order.action = CANCELED
             if order.position_side == LONG:

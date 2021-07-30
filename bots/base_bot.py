@@ -1,6 +1,5 @@
 from typing import Tuple, List
 
-import numpy as np
 from numba import types, typeof
 
 from definitions.candle import Candle
@@ -10,38 +9,11 @@ from definitions.order_list import OrderList
 from definitions.position import Position
 from definitions.position_list import PositionList
 from definitions.tick import Tick, empty_tick_list
-from helpers.optimized import round_dn, round_up, prepare_candles
+from helpers.optimized import prepare_candles, correct_order_float_precision
 from helpers.print_functions import print_
 
 ORDER_UPDATE = 'order'
 ACCOUNT_UPDATE = 'account'
-
-
-def correct_float_precision(order: Order, price_step: float, quantity_step: float) -> Order:
-    """
-    Correct the precision of the order price and quantity if the rounding went wrong.
-    :param order: The order to correct.
-    :param price_step: The price step to use.
-    :param quantity_step: The quantity step to use.
-    :return: The corrected order.
-    """
-    if not np.isclose(order.price, round_dn(order.price, price_step), rtol=1e-60, atol=1e-60):
-        if order.price > round_dn(order.price, price_step):
-            order.price = round_up(order.price, price_step)
-        else:
-            order.price = round_dn(order.price, price_step)
-    if not np.isclose(order.stop_price, round_dn(order.stop_price, price_step), rtol=1e-60, atol=1e-60):
-        if order.stop_price > round_dn(order.stop_price, price_step):
-            order.stop_price = round_up(order.stop_price, price_step)
-        else:
-            order.stop_price = round_dn(order.stop_price, price_step)
-    if not np.isclose(order.qty, round_dn(order.qty, quantity_step), rtol=1e-60, atol=1e-60):
-        if order.qty > round_dn(order.qty, quantity_step):
-            order.qty = round_up(order.qty, quantity_step)
-        else:
-            order.qty = round_dn(order.qty, quantity_step)
-    return order
-
 
 base_bot_spec = [
     ("balance", types.float64),
@@ -340,7 +312,23 @@ class Bot:
         """
         pass
 
-    def execute_strategy_update(self):
+    def correct_orders(self, add_orders: List[Order], delete_orders: List[Order]) -> Tuple[List[Order], List[Order]]:
+        """
+        Corrects the floating point attributes of all orders.
+        :param add_orders: Orders to create/send to the exchange.
+        :param delete_orders: Orders to cancel/send to the exchange.
+        :return: A tuple of two lists of Orders.
+        """
+        for i in range(len(add_orders)):
+            o = correct_order_float_precision(add_orders[i], self.price_step, self.quantity_step)
+            add_orders[i] = o
+        for i in range(len(delete_orders)):
+            o = correct_order_float_precision(delete_orders[i], self.price_step, self.quantity_step)
+            delete_orders[i] = o
+
+        return add_orders, delete_orders
+
+    def execute_strategy_update(self) -> Tuple[List[Order], List[Order]]:
         """
         Executes the update function of the strategy. Updates the balance and orders before but not the position to
         give the opportunity of using the change between position in the strategy. Updates all values including the
@@ -351,6 +339,7 @@ class Bot:
         self.strategy.update_balance(self.get_balance())
         self.strategy.update_orders(self.get_orders())
         add_orders, delete_orders = self.strategy.on_update(self.get_position(), self.last_filled_order)
+        add_orders, delete_orders = self.correct_orders(add_orders, delete_orders)
         self.strategy.update_values(self.get_balance(), self.get_position(), self.get_orders())
         self.cancel_orders(delete_orders)
         self.create_orders(add_orders)
@@ -358,7 +347,7 @@ class Bot:
         self.position_change = False
         return add_orders, delete_orders
 
-    def decide(self, prices: List[Candle]):
+    def decide(self, prices: List[Candle]) -> Tuple[List[Order], List[Order]]:
         """
         Executes the decision making function of the strategy. Afterward, it updates all values of the strategy.
         Executes the creation and cancellation of orders and resets order_fill_change and position_change.
@@ -367,6 +356,7 @@ class Bot:
         """
         add_orders, delete_orders = self.strategy.make_decision(self.get_balance(), self.get_position(),
                                                                 self.get_orders(), prices)
+        add_orders, delete_orders = self.correct_orders(add_orders, delete_orders)
         self.strategy.update_values(self.get_balance(), self.get_position(), self.get_orders())
 
         self.cancel_orders(delete_orders)
