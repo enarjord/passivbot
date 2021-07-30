@@ -9,7 +9,7 @@ from definitions.order import Order, empty_order_list, TP, SELL, LONG, LIMIT, BU
 from definitions.order_list import OrderList
 from definitions.position import Position
 from definitions.position_list import PositionList
-from helpers.optimized import round_dn
+from helpers.optimized import round_down
 from strategies.base_strategy import Strategy, base_strategy_spec
 
 
@@ -33,10 +33,10 @@ def get_initial_position(current_price: float, reentry_grid: np.ndarray, wallet_
     sums = np.zeros(len(reentry_grid) + 1)
     sums[0] = current_price
     for i in range(len(reentry_grid)):
-        price = round_dn(price * (1 - reentry_grid[i][0] / 100), price_step)
+        price = round_down(price * (1 - reentry_grid[i][0] / 100), price_step)
         mult *= reentry_grid[i][1]
         sums[i + 1] = price * mult
-    initial_size = round_dn(available_balance / np.sum(sums), qty_step)
+    initial_size = round_down(available_balance / np.sum(sums), qty_step)
     return initial_size
 
 
@@ -64,8 +64,8 @@ def get_dca_grid(current_price: float, position_size: float, position_price: flo
     position_size /= leverage
     max_pos = position_size * position_price
     for v in reentry_grid:
-        current_price = round_dn(current_price * (1 - v[0] / 100), price_step)
-        position_size = round_dn(position_size * v[1], qty_step)
+        current_price = round_down(current_price * (1 - v[0] / 100), price_step)
+        position_size = round_down(position_size * v[1], qty_step)
         if max_pos + current_price * position_size > available_balance:
             break
         reentry_prices.append(current_price)
@@ -92,10 +92,10 @@ def get_tp_grid(current_price: float, position_size: float, tp_grid: np.ndarray,
     tp_prices = np.zeros(len(tp_grid))
     tp_sizes = np.zeros(len(tp_grid))
     for i in range(len(tp_grid)):
-        tp_prices[i] = round_dn(current_price * (1 + tp_grid[i][0] / 100), price_step)
-        tp_sizes[i] = round_dn(position_size * tp_grid[i][1], qty_step)
+        tp_prices[i] = round_down(current_price * (1 + tp_grid[i][0] / 100), price_step)
+        tp_sizes[i] = round_down(position_size * tp_grid[i][1], qty_step)
     if np.sum(tp_sizes) < position_size:
-        tp_sizes[-1] = round_dn(tp_sizes[-1] + position_size - np.sum(tp_sizes), qty_step)
+        tp_sizes[-1] = round_down(tp_sizes[-1] + position_size - np.sum(tp_sizes), qty_step)
     return tp_prices, tp_sizes
 
 
@@ -170,7 +170,7 @@ class Grid(Strategy):
         Compiles all used functions.
         :return:
         """
-        round_dn(0.0, 0.01)
+        round_down(0.0, 0.01)
         get_initial_position(0.01, np.array([[0.1, 1.0]]), 1, 0.1, 0.01, 0.01)
         get_dca_grid(0.01, 0.01, 0.01, 1, np.array([[0.1, 1.0]]), 1, 0.1, 0.01, 0.01)
         get_tp_grid(0.01, 0.01, np.array([[0.1, 1.0]]), 0.01, 0.01)
