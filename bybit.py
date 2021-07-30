@@ -26,22 +26,6 @@ def format_tick(tick: dict) -> dict:
             'is_buyer_maker': tick['side'] == 'Sell'}
 
 
-async def fetch_ticks(cc, symbol: str, from_id: int = None, do_print=True) -> [dict]:
-    params = {'symbol': symbol, 'limit': 1000}
-    if from_id:
-        params['from'] = max(0, from_id)
-    try:
-        fetched_trades = await cc.v2_public_get_trading_records(params=params)
-    except Exception as e:
-        print(e)
-        return []
-    trades = [format_tick(t) for t in fetched_trades['result']]
-    if do_print:
-        print_(['fetched trades', symbol, trades[0]['trade_id'],
-                ts_to_date(trades[0]['timestamp'] / 1000)])
-    return trades
-
-
 def date_to_ts(date: str):
     return parser.parse(date).timestamp() * 1000
 
@@ -53,19 +37,21 @@ class Bybit(Bot):
         super().__init__(config)
         self.base_endpoint = 'https://api.bybit.com'
         self.endpoints = {}
-        self.market_type = ''
-        self.session = aiohttp.ClientSession()
+        self.session = aiohttp.ClientSession(headers={'referer': 'passivbotbybit'})
 
     def init_market_type(self):
         if self.symbol.endswith('USDT'):
             print('linear perpetual')
-            self.market_type = 'linear_perpetual'
+            self.market_type += '_linear_perpetual'
             self.inverse = self.config['inverse'] = False
             self.endpoints = {'position': '/private/linear/position/list',
                               'open_orders': '/private/linear/order/search',
                               'create_order': '/private/linear/order/create',
                               'cancel_order': '/private/linear/order/cancel',
                               'ticks': '/public/linear/recent-trading-records',
+                              'fills': '/private/linear/trade/execution/list',
+                              'pnls': '/private/linear/trade/closed-pnl/list',
+                              'ohlcvs': '/public/linear/kline',
                               'websocket': 'wss://stream.bybit.com/realtime_public',
                               'created_at_key': 'created_time'}
 
@@ -73,24 +59,30 @@ class Bybit(Bot):
             self.inverse = self.config['inverse'] = True
             if self.symbol.endswith('USD'):
                 print('inverse perpetual')
-                self.market_type = 'inverse_perpetual'
+                self.market_type += '_inverse_perpetual'
                 self.endpoints = {'position': '/v2/private/position/list',
                                   'open_orders': '/v2/private/order',
                                   'create_order': '/v2/private/order/create',
                                   'cancel_order': '/v2/private/order/cancel',
                                   'ticks': '/v2/public/trading-records',
+                                  'fills': '/v2/private/execution/list',
+                                  'pnls': '/v2/private/trade/closed-pnl/list',
+                                  'ohlcvs': '/v2/public/kline/list',
                                   'websocket': 'wss://stream.bybit.com/realtime',
                                   'created_at_key': 'created_at'}
 
                 self.hedge_mode = self.config['hedge_mode'] = False
             else:
                 print('inverse futures')
-                self.market_type = 'inverse_futures'
+                self.market_type += '_inverse_futures'
                 self.endpoints = {'position': '/futures/private/position/list',
                                   'open_orders': '/futures/private/order',
                                   'create_order': '/futures/private/order/create',
                                   'cancel_order': '/futures/private/order/cancel',
                                   'ticks': '/v2/public/trading-records',
+                                  'fills': '/futures/private/execution/list',
+                                  'pnls': '/futures/private/trade/closed-pnl/list',
+                                  'ohlcvs': '/v2/public/kline/list',
                                   'websocket': 'wss://stream.bybit.com/realtime',
                                   'created_at_key': 'created_at'}
 
@@ -129,6 +121,7 @@ class Bybit(Bot):
         self.min_qty = self.config['min_qty'] = float(e['lot_size_filter']['min_trading_qty'])
         self.min_cost = self.config['min_cost'] = 0.0
         self.init_market_type()
+        self.margin_coin = self.coin if self.inverse else self.quot
         await super()._init()
         await self.init_order_book()
         await self.update_position()
@@ -178,7 +171,7 @@ class Bybit(Bot):
 
     async def fetch_position(self) -> dict:
         position = {}
-        if self.market_type == 'linear_perpetual':
+        if 'linear_perpetual' in self.market_type:
             fetched, bal = await asyncio.gather(
                 self.private_get(self.endpoints['position'], {'symbol': self.symbol}),
                 self.private_get(self.endpoints['balance'], {'coin': self.quot})
@@ -192,14 +185,14 @@ class Bybit(Bot):
                 self.private_get(self.endpoints['balance'], {'coin': self.coin})
             )
             position['wallet_balance'] = float(bal['result'][self.coin]['wallet_balance'])
-            if self.market_type == 'inverse_perpetual':
+            if 'inverse_perpetual' in self.market_type:
                 if fetched['result']['side'] == 'Buy':
                     long_pos = fetched['result']
                     shrt_pos = {'size': 0.0, 'entry_price': 0.0, 'leverage': 0.0, 'liq_price': 0.0}
                 else:
                     long_pos = {'size': 0.0, 'entry_price': 0.0, 'leverage': 0.0, 'liq_price': 0.0}
                     shrt_pos = fetched['result']
-            elif self.market_type == 'inverse_futures':
+            elif 'inverse_futures' in self.market_type:
                 long_pos = [e['data'] for e in fetched['result'] if e['data']['position_idx'] == 1][0]
                 shrt_pos = [e['data'] for e in fetched['result'] if e['data']['position_idx'] == 2][0]
 
@@ -227,11 +220,11 @@ class Bybit(Bot):
         params = {'symbol': self.symbol,
                   'side': first_capitalized(order['side']),
                   'order_type': first_capitalized(order['type']),
-                  'qty': float(order['qty']) if self.market_type == 'linear_perpetual' else int(order['qty']),
+                  'qty': float(order['qty']) if 'linear_perpetual' in self.market_type else int(order['qty']),
                   'close_on_trigger': False}
         if self.hedge_mode:
             params['position_idx'] = 1 if order['position_side'] == 'long' else 2
-            if self.market_type == 'linear_perpetual':
+            if 'linear_perpetual' in self.market_type:
                 params['reduce_only'] = 'close' in order['custom_id']
         else:
             params['position_idx'] = 0
@@ -281,14 +274,65 @@ class Bybit(Bot):
                 print_(['fetched no new trades', self.symbol])
         return trades
 
-    async def fetch_fills(self, limit: int = 1000, from_id: int = None, start_time: int = None, end_time: int = None):
+
+    async def fetch_ohlcvs(self, start_time: int = None, interval='1m', limit=200):
+        # m -> minutes; h -> hours; d -> days; w -> weeks; M -> months
+        interval_map = {'1m': 1, '3m': 3, '5m': 5, '15m': 15, '30m': 30, '1h': 60, '2h': 120, '4h': 240, '6h': 360,
+                        '12h': 720, '1d': 'D', '1w': 'W', '1M': 'M'}
+        assert interval in interval_map
+        params = {'symbol': self.symbol, 'interval': interval_map[interval], 'limit': limit}
+        if start_time is None:
+            server_time = await self.public_get('/v2/public/time')
+            if type(interval_map[interval]) == str:
+                minutes = {'D': 1, 'W': 7, 'M': 30}[interval_map[interval]] * 60 * 24
+            else:
+                minutes = interval_map[interval]
+            params['from'] = int(round(float(server_time['time_now']))) - 60 * minutes * limit
+        else:
+            params['from'] = int(start_time / 1000)
+        fetched = await self.public_get(self.endpoints['ohlcvs'], params)
+        return [{**{'timestamp': e['open_time'] * 1000},
+                 **{k: float(e[k]) for k in ['open', 'high', 'low', 'close', 'volume']}}
+                for e in fetched['result']]
+
+    async def fetch_fills(self, limit: int = 200, from_id: int = None, start_time: int = None, end_time: int = None):
+        return []
+        ffills, fpnls = await asyncio.gather(self.private_get(self.endpoints['fills'], {'symbol': self.symbol, 'limit': limit}),
+                                             self.private_get(self.endpoints['pnls'], {'symbol': self.symbol, 'limit': 50}))
+        return ffills, fpnls
+        try:
+            fills = []
+            for x in fetched['result']['data'][::-1]:
+                qty, price = float(x['order_qty']), float(x['price'])
+                if not qty or not price:
+                    continue
+                fill = {'symbol': x['symbol'],
+                        'id': str(x['exec_id']),
+                        'order_id': str(x['order_id']),
+                        'side': x['side'].lower(),
+                        'price': price,
+                        'qty': qty,
+                        'realized_pnl': 0.0,
+                        'cost': (cost := qty / price if self.inverse else qty * price),
+                        'fee_paid': float(x['exec_fee']),
+                        'fee_token': self.margin_coin,
+                        'timestamp': int(x['trade_time_ms']),
+                        'position_side': self.determine_pos_side(x),
+                        'is_maker': x['fee_rate'] < 0.0} 
+                fills.append(fill)
+            return fills
+        except Exception as e:
+            print('error fetching fills', e)
+            return []
+        print('ntufnt')
+        return fetched
         print('fetch_fills not implemented for Bybit')
         return []
 
     async def init_exchange_config(self):
         try:
             # set cross mode
-            if self.market_type == 'inverse_futures':
+            if 'inverse_futures' in self.market_type:
                 res = await asyncio.gather(
                     self.private_post('/futures/private/position/leverage/save',
                                       {'symbol': self.symbol, 'position_idx': 1,
@@ -301,12 +345,12 @@ class Bybit(Bot):
                 res = await self.private_post('/futures/private/position/switch-mode',
                                               {'symbol': self.symbol, 'mode': 3})
                 print(res)
-            elif self.market_type == 'linear_perpetual':
+            elif 'linear_perpetual' in self.market_type:
                 res = await self.private_post('/private/linear/position/switch-isolated',
                                               {'symbol': self.symbol, 'is_isolated': False,
                                                'buy_leverage': 0,
                                                'sell_leverage': 0})
-            elif self.market_type == 'inverse_perpetual':
+            elif 'inverse_perpetual' in self.market_type:
                 res = await self.private_post('/v2/private/position/leverage/save',
                                               {'symbol': self.symbol, 'leverage': 0})
 
@@ -318,7 +362,8 @@ class Bybit(Bot):
         ticks = []
         for e in data['data']:
             try:
-                ticks.append({'price': float(e['price']), 'qty': float(e['size']), 'is_buyer_maker': e['side'] == 'Sell'})
+                ticks.append({'timestamp': int(e['trade_time_ms']), 'price': float(e['price']), 'qty': float(e['size']),
+                              'is_buyer_maker': e['side'] == 'Sell'})
             except Exception as ex:
                 print('error in websocket tick', e, ex)
         return ticks
@@ -330,5 +375,3 @@ class Bybit(Bot):
     async def transfer(self, type_: str, amount: float, asset: str = 'USDT'):
         return {'code': '-1', 'msg': 'Transferring funds not supported for Bybit'}
 
-    async def fetch_fills(self, limit: int = 1000, from_id: int = None, start_time: int = None, end_time: int = None):
-        return []
