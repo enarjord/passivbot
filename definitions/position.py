@@ -8,7 +8,7 @@ from numba.experimental import jitclass
     ('price', types.float64),
     ('liquidation_price', types.float64),
     ('upnl', types.float64),
-    ('leverage', types.int64),
+    ('leverage', types.float64),
     ('position_side', types.string)
 ])
 class Position:
@@ -16,7 +16,7 @@ class Position:
     A class representing a position.
     """
 
-    def __init__(self, symbol: str, size: float, price: float, liquidation_price: float, upnl: float, leverage: int,
+    def __init__(self, symbol: str, size: float, price: float, liquidation_price: float, upnl: float, leverage: float,
                  position_side: str):
         """
         Creates a position.

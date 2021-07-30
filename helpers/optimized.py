@@ -181,7 +181,7 @@ def calculate_new_position_size_position_price(position_size: float, position_pr
 @njit
 def calculate_available_margin(balance: float, long_position_size: float, long_position_price: float,
                                shrt_position_size: float, shrt_position_price: float, last_price: float, inverse: bool,
-                               contract_multiplier: float, leverage: int) -> float:
+                               contract_multiplier: float, leverage: float) -> float:
     """
     Calculates the currently available margin.
     :param balance: The current balance.

@@ -170,8 +170,8 @@ class BinanceBot(LiveBot):
         :return: The current long and short position.
         """
         pos = await self.private_get(self.endpoints['position'], ({'symbol': self.symbol}))
-        long = Position('', 0.0, 0.0, 0.0, 0.0, 0, '')
-        short = Position('', 0.0, 0.0, 0.0, 0.0, 0, '')
+        long = Position('', 0.0, 0.0, 0.0, 0.0, 0.0, '')
+        short = Position('', 0.0, 0.0, 0.0, 0.0, 0.0, '')
         for p in pos:
             if p['symbol'] == self.symbol:
                 position = Position(p['symbol'].upper(),
@@ -179,7 +179,7 @@ class BinanceBot(LiveBot):
                                     float(p['entryPrice']),
                                     float(p['liquidationPrice']),
                                     float(p['unRealizedProfit']),
-                                    int(p['leverage']),
+                                    float(p['leverage']),
                                     mapping(p['positionSide']))
                 if position.position_side == LONG and position.size != 0.0:
                     long = position
@@ -299,8 +299,8 @@ class BinanceBot(LiveBot):
         :return: A tuple of balance, long position, and short position.
         """
         balance = None
-        last_long = Position('', 0.0, 0.0, 0.0, 0.0, 0, '')
-        last_short = Position('', 0.0, 0.0, 0.0, 0.0, 0, '')
+        last_long = Position('', 0.0, 0.0, 0.0, 0.0, 0.0, '')
+        last_short = Position('', 0.0, 0.0, 0.0, 0.0, 0.0, '')
         for b in msg['a']['B']:
             if b['a'].upper() == self.quote_asset:
                 balance = float(b['wb'])
@@ -370,7 +370,7 @@ class BinanceBot(LiveBot):
         :return:
         """
         return await self.private_post(self.endpoints['leverage'],
-                                       {'symbol': self.symbol, 'leverage': int(self.config['leverage'])})
+                                       {'symbol': self.symbol, 'leverage': int(self.leverage)})
 
     async def execute_order(self, order: Order) -> Union[dict, bool]:
         """

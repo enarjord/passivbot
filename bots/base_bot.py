@@ -137,7 +137,7 @@ class Bot:
                                                                           tick_interval)
         c = Candle(0, 0.0, 0.0, 0.0, 0.0, 0.0)
         t = Tick(0, 0.0, 0.0, False)
-        p = Position('', 0.0, 0.0, 0.0, 0.0, 0, '')
+        p = Position('', 0.0, 0.0, 0.0, 0.0, 0.0, '')
         p.equal(p)
         o = Order('', 0, 0.0, 0.0, 0.0, '', '', 0, '', '')
         o.equal(o)
@@ -181,8 +181,8 @@ class Bot:
         Base function to initialize positions.
         :return:
         """
-        self.update_position(Position('XYZ', 0.0, 0.0, 0.0, 0.0, 1, LONG),
-                             Position('XYZ', 0.0, 0.0, 0.0, 0.0, 1, SHORT))
+        self.update_position(Position('XYZ', 0.0, 0.0, 0.0, 0.0, 1.0, LONG),
+                             Position('XYZ', 0.0, 0.0, 0.0, 0.0, 1.0, SHORT))
 
     def init_balance(self):
         """

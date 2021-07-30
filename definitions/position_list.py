@@ -6,8 +6,8 @@ from definitions.position import Position
 
 
 @jitclass([
-    ("long", typeof(Position('', 0.0, 0.0, 0.0, 0.0, 0, ''))),
-    ("short", typeof(Position('', 0.0, 0.0, 0.0, 0.0, 0, '')))
+    ("long", typeof(Position('', 0.0, 0.0, 0.0, 0.0, 0.0, ''))),
+    ("short", typeof(Position('', 0.0, 0.0, 0.0, 0.0, 0.0, '')))
 ])
 class PositionList:
     """
@@ -18,8 +18,8 @@ class PositionList:
         """
         Creates two empty positions, one for SHORT and one for LONG.
         """
-        self.long = Position('', 0.0, 0.0, 0.0, 0.0, 0, LONG)
-        self.short = Position('', 0.0, 0.0, 0.0, 0.0, 0, SHORT)
+        self.long = Position('', 0.0, 0.0, 0.0, 0.0, 0.0, LONG)
+        self.short = Position('', 0.0, 0.0, 0.0, 0.0, 0.0, SHORT)
 
     def update_long(self, position: Position):
         """

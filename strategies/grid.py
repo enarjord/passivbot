@@ -180,7 +180,7 @@ class Grid(Strategy):
         self.make_decision(self.balance, PositionList(), OrderList(), price_list)
         self.prepare_tp_orders(0.0, PositionList())
         p = PositionList()
-        p.update_long(Position('XYZ', 0.0, 0.0, 0.0, 0.0, 1, 'LONG'))
+        p.update_long(Position('XYZ', 0.0, 0.0, 0.0, 0.0, 1.0, 'LONG'))
         self.prepare_reentry_orders(0.0, p)
         self.calculate_dca_tp(0.0, p)
 
