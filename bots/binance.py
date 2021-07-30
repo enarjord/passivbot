@@ -125,19 +125,20 @@ class BinanceBot(LiveBot):
             if e['symbol'] == self.symbol:
                 for q in e['filters']:
                     if q['filterType'] == 'LOT_SIZE':
-                        self.min_qty = self.config['min_qty'] = float(q['minQty'])
+                        self.minimal_quantity = float(q['minQty'])
                     elif q['filterType'] == 'MARKET_LOT_SIZE':
-                        self.quantity_step = self.config['qty_step'] = float(q['stepSize'])
+                        self.quantity_step = float(q['stepSize'])
                     elif q['filterType'] == 'PRICE_FILTER':
-                        self.price_step = self.config['price_step'] = float(q['tickSize'])
+                        self.price_step = float(q['tickSize'])
                     elif q['filterType'] == 'MIN_NOTIONAL':
-                        self.min_cost = self.config['min_cost'] = float(q['notional'])
+                        self.minimal_cost = float(q['notional'])
                 try:
-                    z = self.min_cost
+                    z = self.minimal_cost
                 except AttributeError:
-                    self.min_cost = self.config['min_cost'] = 0.0
+                    self.minimal_cost = 0.0
                 break
-        self.strategy.update_steps(self.quantity_step, self.price_step, self.call_interval)
+        self.strategy.update_steps(self.quantity_step, self.price_step, self.minimal_quantity, self.minimal_cost,
+                                   self.call_interval)
 
     async def fetch_orders(self) -> List[Order]:
         """

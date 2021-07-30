@@ -39,8 +39,10 @@ base_strategy_spec = [
     ("position", typeof(PositionList())),
     ("open_orders", typeof(OrderList())),
     ("call_interval", types.float64),
-    ("qty_step", types.float64),
-    ("price_step", types.float64)
+    ("quantity_step", types.float64),
+    ("price_step", types.float64),
+    ("minimal_quantity", types.float64),
+    ("minimal_cost", types.float64)
 ]
 
 
@@ -60,8 +62,10 @@ class Strategy:
         self.position = PositionList()
         self.open_orders = OrderList()
         self.call_interval = 1.0
-        self.qty_step = 0.0
+        self.quantity_step = 0.0
         self.price_step = 0.0
+        self.minimal_quantity = 0.0
+        self.minimal_cost = 0.0
 
     def precompile(self):
         """
@@ -71,16 +75,21 @@ class Strategy:
         """
         pass
 
-    def update_steps(self, qty_step, price_step, call_interval):
+    def update_steps(self, quantity_step: float, price_step: float, minimal_quantity: float, minimal_cost: float,
+                     call_interval: float):
         """
         Assigns the qty and price step to the strategy. Depending on pair and exchange.
-        :param qty_step: The step size of the quantity of an order for this pair and exchange.
+        :param quantity_step: The step size of the quantity of an order for this pair and exchange.
         :param price_step: The step size of the price of an order for this pair and exchange.
+        :param minimal_quantity: The minimal size of the quantity of an order for this pair and exchange.
+        :param minimal_cost: The minimal cost of an order for this pair and exchange.
         :param call_interval: The call interval for the strategy. A multiple of 0.25 seconds.
         :return:
         """
-        self.qty_step = qty_step
+        self.quantity_step = quantity_step
         self.price_step = price_step
+        self.minimal_quantity = minimal_quantity
+        self.minimal_cost = minimal_cost
         self.call_interval = call_interval
 
     def update_balance(self, balance: float):

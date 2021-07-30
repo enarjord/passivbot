@@ -20,6 +20,8 @@ base_bot_spec = [
     ("position", typeof(PositionList())),
     ("open_orders", typeof(OrderList())),
     ("quantity_step", types.float64),
+    ("minimal_quantity", types.float64),
+    ("minimal_cost", types.float64),
     ("price_step", types.float64),
     ("call_interval", types.float64),
     ("tick_interval", types.float64),
@@ -47,6 +49,8 @@ class Bot:
 
         self.quantity_step = 0.0
         self.price_step = 0.0
+        self.minimal_quantity = 0.0
+        self.minimal_cost = 0.0
         self.call_interval = 1.0
         self.tick_interval = 0.25
         self.leverage = 1.0
@@ -61,7 +65,8 @@ class Bot:
         Updates the quantity step, price step, and call interval of the strategy.
         :return:
         """
-        self.strategy.update_steps(self.quantity_step, self.price_step, self.call_interval)
+        self.strategy.update_steps(self.quantity_step, self.price_step, self.minimal_quantity, self.minimal_cost,
+                                   self.call_interval)
 
     def prepare_order(self, msg) -> Order:
         """
