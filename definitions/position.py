@@ -75,8 +75,8 @@ def copy_position(position: Position) -> Position:
     Creates a new instance of a Position with the same values as the Position that the function was called with.
     The position can not directly have a copy method because using the type in the method does not allow to call it
     indirectly.
-    :param position: The order to copy.
-    :return: The copied order.
+    :param position: The position to copy.
+    :return: The position order.
     """
     return Position(position.symbol, position.size, position.price, position.liquidation_price, position.upnl,
                     position.leverage, position.position_side)
