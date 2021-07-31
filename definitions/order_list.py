@@ -1,12 +1,14 @@
-from numba import types, typed, typeof
+from typing import List
+
+from numba import types, typeof
 from numba.experimental import jitclass
 
-from definitions.order import Order, empty_order_list
+from definitions.order import Order, empty_order_list, copy_order, empty_order
 
 
 @jitclass([
-    ("long", types.ListType(typeof(Order('', 0, 0.0, 0.0, 0.0, '', '', 0, '', '')))),
-    ("short", types.ListType(typeof(Order('', 0, 0.0, 0.0, 0.0, '', '', 0, '', ''))))
+    ("long", types.ListType(typeof(empty_order()))),
+    ("short", types.ListType(typeof(empty_order())))
 ])
 class OrderList:
     """
@@ -20,7 +22,7 @@ class OrderList:
         self.long = empty_order_list()
         self.short = empty_order_list()
 
-    def add_long(self, orders: typed.List):
+    def add_long(self, orders: List[Order]):
         """
         Adds orders to the long list.
         Requires a typed numba list of the form numba.typed.List().
@@ -30,7 +32,7 @@ class OrderList:
         for o in orders:
             self.long.append(o)
 
-    def add_short(self, orders: typed.List):
+    def add_short(self, orders: List[Order]):
         """
         Adds orders to the short list.
         Requires a typed numba list of the form numba.typed.List().
@@ -40,7 +42,7 @@ class OrderList:
         for o in orders:
             self.short.append(o)
 
-    def delete_long(self, orders: typed.List):
+    def delete_long(self, orders: List[Order]):
         """
         Deletes the provided orders from the list of long orders.
         Requires a typed numba list of the form numba.typed.List().
@@ -57,7 +59,7 @@ class OrderList:
         for i in sorted(to_delete, reverse=True):
             self.long.pop(i)
 
-    def delete_short(self, orders: typed.List):
+    def delete_short(self, orders: List[Order]):
         """
         Deletes the provided orders from the list of short orders.
         Requires a typed numba list of the form numba.typed.List().
@@ -74,7 +76,7 @@ class OrderList:
         for i in sorted(to_delete, reverse=True):
             self.short.pop(i)
 
-    def update_long(self, orders: typed.List):
+    def update_long(self, orders: List[Order]):
         """
         Update long orders by setting it to the new list.
         :param orders: New long orders.
@@ -82,7 +84,7 @@ class OrderList:
         """
         self.long = orders
 
-    def update_short(self, orders: typed.List):
+    def update_short(self, orders: List[Order]):
         """
         Update short orders by setting it to the new list.
         :param orders: New short orders.
@@ -92,10 +94,16 @@ class OrderList:
 
     def copy(self):
         """
-        Creates a new object with the current orders.
-        :return: New order list.
+        Creates a new OrderList object with the current values. Does a deep copy of all orders.
+        :return: New OrderList.
         """
         o = OrderList()
-        o.add_long(self.long)
-        o.add_short(self.short)
+        orders = empty_order_list()
+        for order in self.long:
+            orders.append(copy_order(order))
+        o.add_long(orders)
+        orders = empty_order_list()
+        for order in self.short:
+            orders.append(copy_order(order))
+        o.add_short(orders)
         return o
