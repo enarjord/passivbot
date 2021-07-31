@@ -1,3 +1,5 @@
+from typing import List
+
 from numba import types, njit, typed
 from numba.experimental import jitclass
 
@@ -28,8 +30,28 @@ class Tick:
 
 
 @njit
-def empty_tick_list():
+def empty_tick_list() -> List[Tick]:
     l = typed.List()
-    l.append(Tick(0, 0.0, 0.0, False))
+    l.append(empty_tick())
     l.clear()
     return l
+
+
+@njit
+def empty_tick() -> Tick:
+    """
+    Returns an empty Tick with all values set to 0 except is_buyer_maker to False.
+    :return: Empty Tick.
+    """
+    t = Tick(0, 0.0, 0.0, False)
+    return t
+
+
+@njit
+def precompile_tick():
+    """
+    Precompile function for Tick. Executes all methods and functions in script.
+    :return:
+    """
+    t = empty_tick()
+    empty_tick_list()

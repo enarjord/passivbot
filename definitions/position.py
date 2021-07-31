@@ -83,7 +83,7 @@ def copy_position(position: Position) -> Position:
 
 
 @njit
-def empty_long_position():
+def empty_long_position() -> Position:
     """
     Creates an empty long Position.
     :return: Empty long Position.
@@ -93,10 +93,23 @@ def empty_long_position():
 
 
 @njit
-def empty_short_position():
+def empty_short_position() -> Position:
     """
     Creates an empty short Position.
     :return: Empty short Position.
     """
     p = Position('', 0.0, 0.0, 0.0, 0.0, 1.0, SHORT)
     return p
+
+
+@njit
+def precompile_position():
+    """
+    Precompile function for Position. Executes all methods and functions in script.
+    :return:
+    """
+    p = empty_long_position()
+    p = empty_short_position()
+    p.equal(p)
+    p.empty()
+    copy_position(p)

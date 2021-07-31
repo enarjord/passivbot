@@ -39,7 +39,7 @@ BOTH = 'BOTH'
     ('action', types.string),
     ('position_side', types.string)
 ])
-class Order(object):
+class Order:
     """
     A class representing an order.
     """
@@ -136,3 +136,16 @@ def empty_order() -> Order:
     """
     o = Order('', 0, 0.0, 0.0, 0.0, '', '', 0, '', '')
     return o
+
+
+@njit
+def precompile_order():
+    """
+    Precompile function for Order. Executes all methods and functions in script.
+    :return:
+    """
+    o = empty_order()
+    o.equal(o)
+    o.empty()
+    copy_order(o)
+    empty_order_list()

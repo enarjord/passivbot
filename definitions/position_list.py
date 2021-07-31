@@ -1,12 +1,12 @@
-from numba import typeof
+from numba import typeof, njit
 from numba.experimental import jitclass
 
 from definitions.position import Position, empty_long_position, empty_short_position, copy_position
 
 
 @jitclass([
-    ("long", typeof(Position('', 0.0, 0.0, 0.0, 0.0, 0.0, ''))),
-    ("short", typeof(Position('', 0.0, 0.0, 0.0, 0.0, 0.0, '')))
+    ("long", typeof(empty_long_position())),
+    ("short", typeof(empty_short_position()))
 ])
 class PositionList:
     """
@@ -57,3 +57,17 @@ class PositionList:
         p.update_long(copy_position(self.long))
         p.update_short(copy_position(self.short))
         return p
+
+
+@njit
+def precompile_position_list():
+    """
+    Precompile function for OrderList. Executes all methods and functions in script.
+    :return:
+    """
+    p = PositionList()
+    l = empty_long_position()
+    p.update_long(l)
+    l = empty_short_position()
+    p.update_short(l)
+    p.copy()

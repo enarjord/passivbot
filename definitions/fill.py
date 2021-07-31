@@ -1,3 +1,5 @@
+from typing import List
+
 from numba import types, njit, typed
 from numba.experimental import jitclass
 
@@ -54,8 +56,30 @@ class Fill:
 
 
 @njit
-def empty_fill_list():
+def empty_fill_list() -> List[Fill]:
+    """
+    Returns an empty Fill typed list.
+    :return: Empty Fill typed list.
+    """
     l = typed.List()
-    l.append(Fill(0, 0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, ''))
+    l.append(empty_fill())
     l.clear()
     return l
+
+
+@njit
+def empty_fill() -> Fill:
+    """
+    Returns an empty Fill.
+    :return: Empty Fill.
+    """
+    return Fill(0, 0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, '')
+
+
+def precompile_fill():
+    """
+    Precompile function for Fill. Executes all methods and functions in script.
+    :return:
+    """
+    f = empty_fill()
+    empty_fill_list()

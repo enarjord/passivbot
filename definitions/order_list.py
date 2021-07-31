@@ -1,6 +1,6 @@
 from typing import List
 
-from numba import types, typeof
+from numba import types, typeof, njit
 from numba.experimental import jitclass
 
 from definitions.order import Order, empty_order_list, copy_order, empty_order
@@ -107,3 +107,20 @@ class OrderList:
             orders.append(copy_order(order))
         o.add_short(orders)
         return o
+
+
+@njit
+def precompile_order_list():
+    """
+    Precompile function for OrderList. Executes all methods and functions in script.
+    :return:
+    """
+    o = OrderList()
+    l = empty_order_list()
+    o.add_long(l)
+    o.add_short(l)
+    o.delete_long(l)
+    o.delete_short(l)
+    o.update_long(l)
+    o.update_short(l)
+    o.copy()

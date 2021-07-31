@@ -1,3 +1,5 @@
+from typing import List
+
 from numba import types, typed, njit
 from numba.experimental import jitclass
 
@@ -70,7 +72,7 @@ def copy_candle(candle: Candle) -> Candle:
 
 
 @njit
-def empty_candle_list():
+def empty_candle_list() -> List[Candle]:
     """
     Returns an empty Candle typed list.
     :return: Empty Candle typed list
@@ -82,10 +84,23 @@ def empty_candle_list():
 
 
 @njit
-def empty_candle():
+def empty_candle() -> Candle:
     """
     Returns an empty Candle with all values set to 0.
     :return: Empty Candle.
     """
     c = Candle(0, 0.0, 0.0, 0.0, 0.0, 0.0)
     return c
+
+
+@njit
+def precompile_candle():
+    """
+    Precompile function for Candle. Executes all methods and functions in script.
+    :return:
+    """
+    c = empty_candle()
+    c.equal(c)
+    c.empty()
+    copy_candle(c)
+    empty_candle_list()
