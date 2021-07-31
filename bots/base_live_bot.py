@@ -12,6 +12,7 @@ from bots.base_bot import Bot, ORDER_UPDATE, ACCOUNT_UPDATE
 from definitions.candle import Candle, empty_candle_list
 from definitions.order import Order, empty_order_list
 from definitions.position import Position
+from definitions.position_list import PositionList
 from definitions.tick import empty_tick_list
 from helpers.loaders import load_key_secret
 from helpers.print_functions import print_
@@ -236,9 +237,9 @@ class LiveBot(Bot):
         :param msg: The order message to process.
         :return:
         """
-        self.handle_order_update(self.prepare_order(msg))
-        if self.position_change and self.order_fill_change:
-            asyncio.create_task(self.async_execute_strategy_update())
+        last_filled_order = self.handle_order_update(self.prepare_order(msg))
+        if not last_filled_order.empty():
+            asyncio.create_task(self.async_execute_strategy_order_update(last_filled_order))
 
     async def async_handle_account_update(self, msg: dict):
         """
@@ -248,9 +249,9 @@ class LiveBot(Bot):
         :param msg: The account message to process.
         :return:
         """
-        self.handle_account_update(*self.prepare_account(msg))
-        if self.position_change and self.order_fill_change:
-            asyncio.create_task(self.async_execute_strategy_update())
+        old_balance, new_balance, old_position, new_position = self.handle_account_update(*self.prepare_account(msg))
+        asyncio.create_task(
+            self.async_execute_strategy_account_update(old_balance, new_balance, old_position, new_position))
 
     async def start_heartbeat(self) -> None:
         """
@@ -341,7 +342,7 @@ class LiveBot(Bot):
                         if current - last_update >= datetime.timedelta(seconds=self.strategy.call_interval):
                             last_update = current
                             print_(['Do something'], n=True)
-                            # asyncio.create_task(self.async_decide(price_list))
+                            # asyncio.create_task(self.async_execute_strategy_decision_making(price_list))
                             price_list = empty_candle_list()
                     except Exception as e:
                         if 'success' not in msg:
@@ -371,25 +372,38 @@ class LiveBot(Bot):
         """
         raise NotImplementedError
 
-    async def async_execute_strategy_update(self):
+    async def async_execute_strategy_order_update(self, last_filled_order: Order):
         """
-        Async wrapper for the base strategy execution function. Calls the base function and creates creation and
+        Async wrapper for the base strategy order execution function. Calls the base function and creates creation and
         cancellation tasks.
         :return:
         """
-        add_orders, delete_orders = self.execute_strategy_update()
+        add_orders, delete_orders = self.execute_strategy_order_update(last_filled_order)
 
         asyncio.create_task(self.async_cancel_orders(delete_orders))
         asyncio.create_task(self.async_create_orders(add_orders))
 
-    async def async_decide(self, prices: List[Candle]):
+    async def async_execute_strategy_account_update(self, old_balance: float, new_balance: float,
+                                                    old_position: PositionList, new_position: PositionList):
+        """
+        Async wrapper for the base strategy account execution function. Calls the base function and creates creation and
+        cancellation tasks.
+        :return:
+        """
+        add_orders, delete_orders = self.execute_strategy_account_update(old_balance, new_balance, old_position,
+                                                                         new_position)
+
+        asyncio.create_task(self.async_cancel_orders(delete_orders))
+        asyncio.create_task(self.async_create_orders(add_orders))
+
+    async def async_execute_strategy_decision_making(self, prices: List[Candle]):
         """
         Async wrapper for the base strategy decision making function. Calls the base function and creates creation and
         cancellation tasks.
         :param prices: A list of candles since the last time this function was called.
         :return:
         """
-        add_orders, delete_orders = self.decide(prices)
+        add_orders, delete_orders = self.execute_strategy_decision_making(prices)
 
-        await self.async_cancel_orders(delete_orders)
-        await self.async_create_orders(add_orders)
+        asyncio.create_task(self.async_cancel_orders(delete_orders))
+        asyncio.create_task(self.async_create_orders(add_orders))

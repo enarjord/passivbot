@@ -3,10 +3,10 @@ from typing import Tuple, List
 from numba import types, typeof
 
 from definitions.candle import Candle, empty_candle, precompile_candle
-from definitions.order import Order, empty_order_list, precompile_order, NEW, PARTIALLY_FILLED, FILLED, CANCELED, \
-    EXPIRED, LONG, SHORT, NEW_INSURANCE, NEW_ADL
+from definitions.order import Order, empty_order, empty_order_list, precompile_order, NEW, PARTIALLY_FILLED, FILLED, \
+    CANCELED, EXPIRED, LONG, SHORT, NEW_INSURANCE, NEW_ADL
 from definitions.order_list import OrderList, precompile_order_list
-from definitions.position import Position, precompile_position
+from definitions.position import Position, empty_long_position, empty_short_position, precompile_position
 from definitions.position_list import PositionList, precompile_position_list
 from definitions.tick import Tick, empty_tick_list, precompile_tick
 from helpers.optimized import prepare_candles, correct_order_float_precision
@@ -26,10 +26,7 @@ base_bot_spec = [
     ("call_interval", types.float64),
     ("tick_interval", types.float64),
     ("leverage", types.float64),
-    ("symbol", types.string),
-    ("last_filled_order", typeof(Order('', 0, 0.0, 0.0, 0.0, '', '', 0, '', ''))),
-    ("position_change", types.boolean),
-    ("order_fill_change", types.boolean)
+    ("symbol", types.string)
 ]
 
 
@@ -55,10 +52,6 @@ class Bot:
         self.tick_interval = 0.25
         self.leverage = 1.0
         self.symbol = ''
-
-        self.last_filled_order = Order('', 0, 0.0, 0.0, 0.0, '', '', 0, '', '')
-        self.position_change = False
-        self.order_fill_change = False
 
     def init(self):
         """
@@ -172,8 +165,7 @@ class Bot:
         Base function to initialize positions.
         :return:
         """
-        self.update_position(Position('XYZ', 0.0, 0.0, 0.0, 0.0, 1.0, LONG),
-                             Position('XYZ', 0.0, 0.0, 0.0, 0.0, 1.0, SHORT))
+        self.update_position(empty_long_position(), empty_short_position())
 
     def init_balance(self):
         """
@@ -251,13 +243,14 @@ class Bot:
         balance = self.balance
         return balance
 
-    def handle_order_update(self, order: Order):
+    def handle_order_update(self, order: Order) -> Order:
         """
-        Handles an orders update by either deleting, adding, or changing the open orders. Also sets the attribute
-        order_fill_change to True if the order was FILLED and last_filled_order to the processed order.
+        Handles an order update by either deleting, adding, or changing the open orders. If the order was FILLED it
+        returns the last filled order, otherwise an empty order.
         :param order: The order to process.
-        :return:
+        :return: An empty order with default values or the last filled order.
         """
+        last_filled_order = empty_order()
         add_orders = empty_order_list()
         delete_orders = empty_order_list()
         if order.action in [CANCELED, FILLED, EXPIRED, NEW_INSURANCE, NEW_ADL]:
@@ -268,23 +261,27 @@ class Bot:
             delete_orders.append(order)
             add_orders.append(order)
         if order.action == FILLED:
-            self.last_filled_order = order
-            self.order_fill_change = True
+            last_filled_order = order
         self.update_orders(add_orders, delete_orders)
+        return last_filled_order
 
-    def handle_account_update(self, balance: float, long: Position, short: Position):
+    def handle_account_update(self, balance: float, long: Position, short: Position) -> Tuple[
+        float, float, PositionList, PositionList]:
         """
-        Handles an account update which includes balance and position changes. Also sets the attribute position_change
-        to True.
+        Handles an account update which includes balance and position changes. Returns the old and new balance as well
+        as the old and new position list.
         :param balance: The new balance.
         :param long: The new long position.
         :param short: The new short position.
-        :return:
+        :return: The old balance, the new balance, the old position, and the new position.
         """
+        old_balance = self.get_balance()
         self.update_balance(balance)
-        if not self.position.long.equal(long) or not self.position.short.equal(short):
-            self.position_change = True
+        new_balance = self.get_balance()
+        old_position = self.get_position()
         self.update_position(long, short)
+        new_position = self.get_position()
+        return old_balance, new_balance, old_position, new_position
 
     def create_orders(self, orders_to_create: List[Order]):
         """
@@ -365,37 +362,53 @@ class Bot:
 
         return add_orders_new, delete_orders_new
 
-    def execute_strategy_update(self) -> Tuple[List[Order], List[Order]]:
+    def execute_strategy_order_update(self, last_filled_order: Order) -> Tuple[List[Order], List[Order]]:
         """
-        Executes the update function of the strategy. Updates the balance and orders before but not the position to
-        give the opportunity of using the change between position in the strategy. Updates all values including the
-        position after the strategy update function was called.
+        Executes the order update function of the strategy. Updates all values before the function is called.
         Executes the creation and cancellation of orders and resets order_fill_change and position_change.
         :return:
         """
-        self.strategy.update_balance(self.get_balance())
-        self.strategy.update_orders(self.get_orders())
-        add_orders, delete_orders = self.strategy.on_update(self.get_position(), self.last_filled_order)
+        self.strategy.update_values(self.get_balance(), self.get_position(), self.get_orders())
+
+        add_orders, delete_orders = self.strategy.on_order_update(last_filled_order)
         add_orders, delete_orders = self.correct_orders(add_orders, delete_orders)
         add_orders, delete_orders = self.filter_orders(add_orders, delete_orders)
-        self.strategy.update_values(self.get_balance(), self.get_position(), self.get_orders())
+
         self.cancel_orders(delete_orders)
         self.create_orders(add_orders)
-        self.order_fill_change = False
-        self.position_change = False
         return add_orders, delete_orders
 
-    def decide(self, prices: List[Candle]) -> Tuple[List[Order], List[Order]]:
+    def execute_strategy_account_update(self, old_balance: float, new_balance: float, old_position: PositionList,
+                                        new_position: PositionList) -> Tuple[List[Order], List[Order]]:
         """
-        Executes the decision making function of the strategy. Afterward, it updates all values of the strategy.
+        Executes the account update function of the strategy. Updates all values before the function is called.
+        Executes the creation and cancellation of orders and resets order_fill_change and position_change.
+        :return:
+        """
+        self.strategy.update_values(self.get_balance(), self.get_position(), self.get_orders())
+
+        add_orders, delete_orders = self.strategy.on_account_update(old_balance, new_balance, old_position,
+                                                                    new_position)
+        add_orders, delete_orders = self.correct_orders(add_orders, delete_orders)
+        add_orders, delete_orders = self.filter_orders(add_orders, delete_orders)
+
+        self.cancel_orders(delete_orders)
+        self.create_orders(add_orders)
+        return add_orders, delete_orders
+
+    def execute_strategy_decision_making(self, prices: List[Candle]) -> Tuple[List[Order], List[Order]]:
+        """
+        Executes the decision making function of the strategy. Before, it updates all values of the strategy.
         Executes the creation and cancellation of orders and resets order_fill_change and position_change.
         :param prices:
         :return:
         """
+        self.strategy.update_values(self.get_balance(), self.get_position(), self.get_orders())
+
         add_orders, delete_orders = self.strategy.make_decision(self.get_balance(), self.get_position(),
                                                                 self.get_orders(), prices)
         add_orders, delete_orders = self.correct_orders(add_orders, delete_orders)
-        self.strategy.update_values(self.get_balance(), self.get_position(), self.get_orders())
+        add_orders, delete_orders = self.filter_orders(add_orders, delete_orders)
 
         self.cancel_orders(delete_orders)
         self.create_orders(add_orders)

@@ -6,10 +6,10 @@ from numba.experimental import jitclass
 
 from bots.base_bot import Bot, base_bot_spec
 from definitions.candle import Candle, empty_candle_list
-from definitions.order import Order, LONG, SHORT, CANCELED, NEW, MARKET, LIMIT, FILLED, PARTIALLY_FILLED, TP, SL, LQ, \
-    CALCULATED, SELL, BUY, empty_order_list
+from definitions.order import Order, empty_order_list, copy_order, LONG, SHORT, CANCELED, NEW, MARKET, LIMIT, FILLED, \
+    PARTIALLY_FILLED, TP, SL, LQ, CALCULATED, SELL, BUY
 from definitions.order_list import OrderList
-from definitions.position import Position
+from definitions.position import Position, copy_position
 from helpers.optimized import calculate_available_margin, quantity_to_cost, calculate_long_pnl, calculate_short_pnl, \
     round_down, calculate_new_position_size_position_price, calculate_bankruptcy_price
 
@@ -113,22 +113,36 @@ class BacktestBot(Bot):
             if self.get_position().long.size != 0.0:
                 order = Order(self.symbol, 0, last_candle.close, last_candle.close, self.get_position().long.size,
                               CALCULATED, SELL, self.current_timestamp, LQ, LONG)
-                self.handle_order_update(order)
-                self.handle_account_update(0.0, Position(self.symbol, 0.0, 0.0, 0.0, 0.0, self.leverage, LONG),
-                                           self.get_position().short)
+                last_filled_order = self.handle_order_update(order)
+                self.execute_strategy_order_update(last_filled_order)
+                old_balance, new_balance, old_position, new_position = self.handle_account_update(0.0,
+                                                                                                  Position(self.symbol,
+                                                                                                           0.0, 0.0,
+                                                                                                           0.0, 0.0,
+                                                                                                           self.leverage,
+                                                                                                           LONG),
+                                                                                                  self.get_position().short)
+                self.execute_strategy_account_update(old_balance, new_balance, old_position, new_position)
             if self.get_position().short.size != 0.0:
                 order = Order(self.symbol, 0, last_candle.close, last_candle.close, self.get_position().short.size,
                               CALCULATED, SELL, self.current_timestamp, LQ, SHORT)
-                self.handle_order_update(order)
-                self.handle_account_update(0.0, self.get_position().long,
-                                           Position(self.symbol, 0.0, 0.0, 0.0, 0.0, self.leverage, SHORT))
+                last_filled_order = self.handle_order_update(order)
+                self.execute_strategy_order_update(last_filled_order)
+                old_balance, new_balance, old_position, new_position = self.handle_account_update(0.0,
+                                                                                                  self.get_position().long,
+                                                                                                  Position(self.symbol,
+                                                                                                           0.0, 0.0,
+                                                                                                           0.0, 0.0,
+                                                                                                           self.leverage,
+                                                                                                           SHORT))
+                self.execute_strategy_account_update(old_balance, new_balance, old_position, new_position)
             return False
 
         orders_to_remove = empty_order_list()
         # Check which long orders where triggered in the last candle
         for order in self.open_orders.long:
             execution = False
-            o = order.copy()
+            o = copy_order(order)
             if order.type == MARKET:
                 # Market types take the average price of the last candle
                 execution = True
@@ -152,8 +166,9 @@ class BacktestBot(Bot):
                     o.action = PARTIALLY_FILLED
                     o.qty = o.qty - last_candle.volume
                     order.qty = order.qty - last_candle.volume
-                self.handle_order_update(o)
-                p = self.get_position().long.copy()
+                last_filled_order = self.handle_order_update(o)
+                self.execute_strategy_order_update(last_filled_order)
+                p = copy_position(self.get_position().long)
                 if order.type == MARKET:
                     fee_paid = -quantity_to_cost(o.qty, o.price, False, 1.0) * self.taker_fee
                 else:
@@ -174,14 +189,16 @@ class BacktestBot(Bot):
                 p.liquidation_price = calculate_bankruptcy_price(self.get_balance() + fee_paid + pnl, p.qty, p.price,
                                                                  self.get_position().short.qty,
                                                                  self.get_position().short.price, False, 1.0)
-                self.handle_account_update(self.get_balance() + fee_paid + pnl, p, self.get_position().short)
+                old_balance, new_balance, old_position, new_position = self.handle_account_update(
+                    self.get_balance() + fee_paid + pnl, p, self.get_position().short)
+                self.execute_strategy_account_update(old_balance, new_balance, old_position, new_position)
 
         self.open_orders.delete_long(orders_to_remove)
         orders_to_remove = empty_order_list()
         # Check which short orders where triggered in the last candle
         for order in self.open_orders.short:
             execution = False
-            o = order.copy()
+            o = copy_order(order)
             if order.type == MARKET:
                 # Market types take the average price of the last candle
                 execution = True
@@ -205,8 +222,9 @@ class BacktestBot(Bot):
                     o.action = PARTIALLY_FILLED
                     o.qty = o.qty - last_candle.volume
                     order.qty = order.qty - last_candle.volume
-                self.handle_order_update(o)
-                p = self.get_position().short.copy()
+                last_filled_order = self.handle_order_update(o)
+                self.execute_strategy_order_update(last_filled_order)
+                p = copy_position(self.get_position().short)
                 if order.type == MARKET:
                     fee_paid = -quantity_to_cost(o.qty, o.price, False, 1.0) * self.taker_fee
                 else:
@@ -228,7 +246,9 @@ class BacktestBot(Bot):
                                                                  self.get_position().long.qty,
                                                                  self.get_position().long.price, p.qty, p.price, False,
                                                                  1.0)
-                self.handle_account_update(self.get_balance() + fee_paid + pnl, self.get_position().long, p)
+                old_balance, new_balance, old_position, new_position = self.handle_account_update(
+                    self.get_balance() + fee_paid + pnl, self.get_position().long, p)
+                self.execute_strategy_account_update(old_balance, new_balance, old_position, new_position)
 
         self.open_orders.delete_long(orders_to_remove)
         orders_to_remove = empty_order_list()
@@ -242,7 +262,8 @@ class BacktestBot(Bot):
                                                                         self.get_position().short.price,
                                                                         last_candle.close,
                                                                         False, 1, self.leverage):
-                    self.handle_order_update(order.copy())
+                    last_filled_order = self.handle_order_update(copy_order(order))
+                    self.execute_strategy_order_update(last_filled_order)
                 orders_to_remove.append(order)
 
         self.orders_to_execute.delete_long(orders_to_remove)
@@ -257,7 +278,8 @@ class BacktestBot(Bot):
                                                                         self.get_position().short.price,
                                                                         last_candle.close,
                                                                         False, 1, self.leverage):
-                    self.handle_order_update(order.copy())
+                    last_filled_order = self.handle_order_update(copy_order(order))
+                    self.execute_strategy_order_update(last_filled_order)
                 orders_to_remove.append(order)
 
         self.orders_to_execute.delete_short(orders_to_remove)
@@ -269,8 +291,7 @@ class BacktestBot(Bot):
         :param row: The row to convert.
         :return: A candle object.
         """
-        candle = Candle(row[1], row[2], row[3], row[4], row[5])
-        return candle
+        return Candle(row[1], row[2], row[3], row[4], row[5])
 
     def start_websocket(self) -> None:
         """
