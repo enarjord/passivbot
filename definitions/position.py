@@ -1,5 +1,7 @@
-from numba import types
+from numba import types, njit
 from numba.experimental import jitclass
+
+from definitions.order import LONG, SHORT
 
 
 @jitclass([
@@ -44,9 +46,57 @@ class Position:
         :param position: The position to check against.
         :return: If equal or not.
         """
-        if self.symbol == position.symbol and self.size == position.size and self.price == position.price \
-                and self.liquidation_price == position.liquidation_price and self.upnl == position.upnl \
-                and self.leverage == position.leverage and self.position_side == position.position_side:
-            return True
-        else:
-            return False
+        return self.symbol == position.symbol and self.size == position.size and self.price == position.price and \
+               self.liquidation_price == position.liquidation_price and self.upnl == position.upnl and \
+               self.leverage == position.leverage and self.position_side == position.position_side
+
+    def empty(self):
+        """
+        Checks whether a position is empty. Ignores the symbol and position side, and checks for leverage = 1.0.
+        :return: Whether the position is empty or not.
+        """
+        return self.size == 0.0 and self.price == 0.0 and self.liquidation_price == 0.0 and self.upnl == 0.0 and \
+               self.leverage == 1.0
+
+    # A copy method in the class makes the class unpickable and empty_long_position and empty_short_position will not
+    # work anymore.
+    # def copy(self):
+    #     """
+    #     Creates a new Position object with the current values.
+    #     :return: New Position.
+    #     """
+    #     return Position(self.symbol, self.size, self.price, self.liquidation_price, self.upnl, self.leverage,
+    #                     self.position_side)
+
+
+@njit
+def copy_position(position: Position) -> Position:
+    """
+    Creates a new instance of a Position with the same values as the Position that the function was called with.
+    The position can not directly have a copy method because using the type in the method does not allow to call it
+    indirectly.
+    :param position: The order to copy.
+    :return: The copied order.
+    """
+    return Position(position.symbol, position.size, position.price, position.liquidation_price, position.upnl,
+                    position.leverage, position.position_side)
+
+
+@njit
+def empty_long_position():
+    """
+    Creates an empty long Position.
+    :return: Empty long Position.
+    """
+    p = Position('', 0.0, 0.0, 0.0, 0.0, 1.0, LONG)
+    return p
+
+
+@njit
+def empty_short_position():
+    """
+    Creates an empty short Position.
+    :return: Empty short Position.
+    """
+    p = Position('', 0.0, 0.0, 0.0, 0.0, 1.0, SHORT)
+    return p
