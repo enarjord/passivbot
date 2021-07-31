@@ -57,8 +57,8 @@ The following options can be provided to the backtester. Note that any argument 
 | -d / --download-only | Instructs the backtest to only download the data, but not dump the ticks caches to disk
 | -s / --symbol | The symbol to run the backtest on
 | -u / --user | The name of the account used to download trade data
-| --start-date | The starting date of the backtest<br/>**Syntax:** YYYY-MM-DDThh:mm
-| --end-date | The end date of the backtest<br/>**Syntax:** YYYY-MM-DDThh:mm
+| --start_date | The starting date of the backtest<br/>**Syntax:** YYYY-MM-DDThh:mm
+| --end_date | The end date of the backtest<br/>**Syntax:** YYYY-MM-DDThh:mm
 
 ## Backtest results
 
@@ -68,3 +68,12 @@ also stored in `backtests/{exchange}/{symbol}/plots/{datetime}/backtest_result.t
 include the actual `live_config.json` file that was used for the plot, and several graphical plots. One of these
 for example is the `balance_and_equity.png`, which shows how the balance and equity evolved during the course of
 the backtest.
+
+The file `balance_and_equity.jpg` will show how the balance and equity progressed during the period being backtested. The
+blue line in the graph represents the balance, and the orange line represents the equity.
+
+Besides this file, a number of `backtest_XofY.jpg` are also created. These represent the entire backtest period, but are
+split up into separate files for easier inspection and zooming.
+
+On these plots the blue dotted line is the long position price, and the red dotted line represents the short position price. 
+Blue dots are buys (long entries or short closes) and red dots are sells (short entries or long closes).

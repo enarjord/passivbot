@@ -2,7 +2,8 @@
 
 A python script is given access to user's exchange account and listens to websocket stream of live trades in the selected market, automatically creating and cancelling limit buy and sell orders.
 
-It works primarily in futures markets, spot markets in development.  If exchange allows it, hedge mode is used to allow simultaneous long and short positions.
+It works in futures and spot markets.  If exchange allows it, hedge mode is used to allow simultaneous long and short positions.  
+In spot markets bot mimicks futures behavior, allowing only long positions with max 1x leverage.
 
 The bot bases its decisions on account's positions, open orders and balance, and multiple EMAs of different spans.
 
@@ -16,11 +17,11 @@ Configuration's parameters may be optimized to a given period of historical data
 
 ## Grid Trading
 
-passivbot may be described as a market making DCA scalping grid trader.
+Passivbot may be described as a market making DCA scalping grid trader.
 
 - Market maker: passivbot is a pure maker. It never takes orders, only makes them.
 
-- DCA: Dollar Cost Averaging. It will typically make up to several reentries after an initial entry, in an attempt to acheive better average entry price, similar to a Matingale betting system.
+- DCA: Dollar Cost Averaging. It will typically make up to several reentries after an initial entry, in an attempt to acheive better average entry price, similar to a Martingale betting system.
 
 - Scalping: It will typically close positions at small markups, in the range of 0.1-2.0%
 
@@ -31,7 +32,44 @@ passivbot may be described as a market making DCA scalping grid trader.
 
 There are price fluctuations in most markets, and the price noise may be "harvested".  Ideally passivbot functions like a wind turbine or solar panel, passively gathering energy (money) from the environment (market).
 
-
-
 For version specific information about configuring or using your version of the bot, refer to your version's
 documentation using the version popup at the bottom of the website.
+
+## Wallet exposure
+
+In futures markets bot uses cross mode, so entire wallet is used as margin to any position.  This means that one bad position
+may potentially liquidate entire wallet.
+
+The bot does not use leverage in its internal logic, rather position-cost-to-balance-ratio (abbreviated as pbr), 
+which is position size in terms of margin token divided by unleveraged wallet balance.
+
+For example, 10% of available leveraged balance in a position at cross 20x leverage is equivalent to pbr==2.0,
+or 100% of available leveraged balance in a position at cross 2x leverage.
+
+Upon startup bot will automatically set leverage to a high enough value to prevent insufficient margin errors.  Other than that,
+leverage is irrelevant.
+
+pbr == 1.0 means 100% of unleveraged balance is in a position.  
+pbr == 2.0 means 200% of unleveraged balance is in a position.  
+pbr == 0.15 means 15% of unleveraged balance is in a position.
+
+Bot will not allow a position's pbr to grow higher than pbr_limit + pbr_stop_loss (whose values are defined in live config).  
+When a position's pbr crosses pbr_limit, bot reduces position down to the specified pbr_limit.
+
+The part of the position lower than or equal to pbr_limit is closed normally with a given markup percentage, while the part of
+the position exceeding pbr_limit is closed at the EMA bands (more on this elsewhere) at a potential loss.
+
+You can prevent a position exceeding, say, 10% of unleveraged balance by making sure that
+pbr_limit + pbr_stop_loss parameters do not exceed 0.1 (==10%).  If the price of the symbol would drop to 0, you'd lose
+a maximum of 10% of your wallet.
+
+It is possible to run multiple pairs on the same account.  
+For example, if pbr_limit + pbr_stop_loss were set such that their sum was 0.05 on 10 bots, all of them combined will not expose
+more than 50% of the account's unleveraged balance.
+
+Another option available is to use the configuration parameter `cross_wallet_pct` to limit the amount of the wallet that is available
+in absolute terms.
+
+!!! Info
+    Please check the [Configuration](configuration.md) page for an in-depth description of the configuration parameters available.
+

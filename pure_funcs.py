@@ -28,12 +28,11 @@ def compress_float(n: float, d: int) -> str:
 
 
 def calc_spans(min_span: int, max_span: int, n_spans: int) -> np.ndarray:
-    return np.array([int(round(min_span * ((max_span / min_span) ** (1 / (n_spans - 1))) ** i))
-                     for i in range(0, n_spans)])
+    return np.array([min_span * ((max_span / min_span) ** (1 / (n_spans - 1))) ** i for i in range(0, n_spans)])
 
 
 def get_xk_keys():
-    return ['hedge_mode', 'inverse', 'do_long', 'do_shrt', 'qty_step', 'price_step', 'min_qty', 'min_cost', 'c_mult',
+    return ['spot', 'hedge_mode', 'inverse', 'do_long', 'do_shrt', 'qty_step', 'price_step', 'min_qty', 'min_cost', 'c_mult',
             'max_leverage', 'spans', 'pbr_stop_loss', 'pbr_limit', 'iqty_const', 'iprc_const', 'rqty_const',
             'rprc_const', 'markup_const', 'iqty_MAr_coeffs', 'iprc_MAr_coeffs', 'rprc_PBr_coeffs',
             'rqty_MAr_coeffs', 'rprc_MAr_coeffs', 'markup_MAr_coeffs']
@@ -42,8 +41,12 @@ def get_xk_keys():
 def create_xk(config: dict) -> dict:
     xk = {}
     config_ = config.copy()
-    config_['do_long'] = config['long']['enabled']
-    config_['do_shrt'] = config['shrt']['enabled']
+    if 'spot' in config_['market_type']:
+        config_ = spotify_config(config_)
+    else:
+        config_['spot'] = False
+        config_['do_long'] = config['long']['enabled']
+        config_['do_shrt'] = config['shrt']['enabled']
     config_['spans'] = calc_spans(config['min_span'], config['max_span'], config['n_spans'])
     for k in get_xk_keys():
         if k in config_['long']:
@@ -136,21 +139,24 @@ def candidate_to_live_config(candidate: dict) -> dict:
     for k in live_config:
         if k not in sides and k in packed:
             live_config[k] = packed[k]
-    name = f"{packed['symbol'].lower()}" if 'symbol' in packed else 'unknown'
-    if 'n_days' in candidate:
-        n_days = candidate['n_days']
-    elif 'start_date' in candidate:
-        n_days = round((date_to_ts(candidate['end_date']) -
-                        date_to_ts(candidate['start_date'])) / (1000 * 60 * 60 * 24), 1)
+
+    result_dict = candidate['result'] if 'result' in candidate else candidate
+    name = f"{result_dict['exchange'].lower()}_" if 'exchange' in result_dict else 'unknown_'
+    name += f"{result_dict['symbol'].lower()}" if 'symbol' in result_dict else 'unknown'
+    if 'n_days' in result_dict:
+        n_days = result_dict['n_days']
+    elif 'start_date' in result_dict:
+        n_days = (date_to_ts(result_dict['end_date']) -
+                  date_to_ts(result_dict['start_date'])) / (1000 * 60 * 60 * 24)
     else:
         n_days = 0
-    name += f"_{n_days}_days"
-    if 'average_daily_gain' in candidate:
-        name += f"_adg{(candidate['average_daily_gain'] - 1) * 100:.2f}%"
-    elif 'daily_gain' in candidate:
-        name += f"_adg{(candidate['daily_gain'] - 1) * 100:.2f}%"
-    if 'objective' in candidate:
-        name += f"_obj{candidate['objective']:.2f}"
+    name += f"_{n_days:.0f}days"
+    if 'average_daily_gain' in result_dict:
+        name += f"_adg{(result_dict['average_daily_gain'] - 1) * 100:.2f}%"
+    elif 'daily_gain' in result_dict:
+        name += f"_adg{(result_dict['daily_gain'] - 1) * 100:.2f}%"
+    if 'closest_bkr' in result_dict:
+        name += f"_bkr{(result_dict['closest_bkr']) * 100:.2f}%"
     live_config['config_name'] = name
     return denumpyize(live_config)
 
@@ -249,12 +255,12 @@ def filter_orders(actual_orders: [dict],
     return actual_orders, orders_to_create
 
 
-def get_dummy_settings(user: str, exchange: str, symbol: str):
+def get_dummy_settings(config: dict):
     dummy_settings = get_template_live_config(n_spans=3)
     dummy_settings.update({k: 1.0 for k in get_xk_keys() + ['stop_loss_liq_diff', 'ema_span']})
-    dummy_settings.update({'user': user, 'exchange': exchange, 'symbol': symbol,
+    dummy_settings.update({'user': config['user'], 'exchange': config['exchange'], 'symbol': config['symbol'],
                            'config_name': '', 'logging_level': 0, 'spans': np.array([6000, 90000])})
-    return dummy_settings
+    return {**config, **dummy_settings}
 
 
 def flatten(lst: list) -> list:
@@ -265,8 +271,8 @@ def get_template_live_config(n_spans: int, randomize_coeffs=False):
     config = {
         "config_name": "name",
         "logging_level": 0,
-        "min_span": 9000.0,
-        "max_span": 160000.0,
+        "min_span": 10.0,  # minutes
+        "max_span": 420.0,  # minutes
         "n_spans": n_spans,
         "long": {
             "enabled": True,
@@ -339,7 +345,8 @@ def get_ids_to_fetch(spans: [int], last_id: int, max_n_samples: int = 60, ticks_
         all_idxs.append(idxs)
         samples_leftover = max_n_samples - sum(map(len, all_idxs))
         samples_per_span = samples_leftover // max(1, len(spans) - i - 1)
-        prev_last_id = idxs[-1] + 1000
+        if len(idxs) > 0:
+            prev_last_id = idxs[-1] + 1000
     idxs = np.array(flatten(all_idxs))[::-1]
     return np.unique(idxs[idxs > 0])
 
@@ -369,6 +376,8 @@ import pandas as pd
 
 def get_empty_analysis(bc: dict) -> dict:
     return {
+        'exchange': bc['exchange'] if 'exchange' in bc else 'unknown',
+        'symbol': bc['symbol'] if 'symbol' in bc else 'unknown',
         'net_pnl_plus_fees': 0.0,
         'profit_sum': 0.0,
         'loss_sum': 0.0,
@@ -377,8 +386,10 @@ def get_empty_analysis(bc: dict) -> dict:
         'gain': 1.0,
         'max_drawdown': 0.0,
         'n_days': 0.0,
+        'average_periodic_gain': 0.0,
         'average_daily_gain': 0.0,
         'adjusted_daily_gain': 0.0,
+        'sharpe_ratio': 0.0,
         'lowest_eqbal_ratio': 0.0,
         'closest_bkr': 1.0,
         'n_fills': 0.0,
@@ -430,7 +441,19 @@ def analyze_fills(fills: list, bc: dict, first_ts: float, last_ts: float) -> (pd
         shrt_stuck_mean = 0.0
         shrt_stuck = 0.0
 
+    ms_span = 1000 * 60 * 60 * 24 * bc['periodic_gain_n_days']
+    buckets = fdf.timestamp // ms_span * ms_span
+    buckets = buckets + (fdf.timestamp.iloc[0] - buckets.iloc[0])
+    groups = fdf.groupby(buckets)
+    periodic_gains = groups.balance.last() / groups.balance.first() - 1  # realized profits
+    periodic_gains = periodic_gains.reindex(np.arange(periodic_gains.index[0], periodic_gains.index[-1], ms_span)).fillna(0.0)
+    periodic_gains_mean = np.nan_to_num(periodic_gains.mean())
+    periodic_gains_std = periodic_gains.std()
+    sharpe_ratio = periodic_gains_mean / periodic_gains_std if periodic_gains_std != 0.0 else -20.0
+    sharpe_ratio = np.nan_to_num(sharpe_ratio)
     result = {
+        'exchange': bc['exchange'] if 'exchange' in bc else 'unknown',
+        'symbol': bc['symbol'] if 'symbol' in bc else 'unknown',
         'starting_balance': bc['starting_balance'],
         'final_balance': fdf.iloc[-1].balance,
         'final_equity': fdf.iloc[-1].equity,
@@ -438,7 +461,9 @@ def analyze_fills(fills: list, bc: dict, first_ts: float, last_ts: float) -> (pd
         'gain': (gain := fdf.iloc[-1].equity / bc['starting_balance']),
         'n_days': (n_days := (last_ts - first_ts) / (1000 * 60 * 60 * 24)),
         'average_daily_gain': (adg := gain ** (1 / n_days) if gain > 0.0 and n_days > 0.0 else 0.0),
+        'average_periodic_gain': periodic_gains_mean,
         'adjusted_daily_gain': np.tanh(10 * (adg - 1)) + 1,
+        'sharpe_ratio': sharpe_ratio,
         'profit_sum': fdf[fdf.pnl > 0.0].pnl.sum(),
         'loss_sum': fdf[fdf.pnl < 0.0].pnl.sum(),
         'fee_sum': fdf.fee_paid.sum(),
@@ -469,26 +494,104 @@ def calc_pprice_from_fills(coin_balance, fills, n_fills_limit=100):
         return 0.0
     relevant_fills = []
     qty_sum = 0.0
-    for fill in fills[:n_fills_limit][::-1]:
+    for fill in fills[::-1][:n_fills_limit]:
+        abs_qty = fill['qty']
         if fill['side'] == 'buy':
-            adjusted_qty = min(fill['qty'], coin_balance - qty_sum)
+            adjusted_qty = min(abs_qty, coin_balance - qty_sum)
             qty_sum += adjusted_qty
             relevant_fills.append({**fill, **{'qty': adjusted_qty}})
             if qty_sum >= coin_balance * 0.999:
                 break
         else:
-            qty_sum -= abs(fill['qty'])
+            qty_sum -= abs_qty
             relevant_fills.append(fill)
     psize, pprice = 0.0, 0.0
     for fill in relevant_fills[::-1]:
+        abs_qty = abs(fill['qty'])
         if fill['side'] == 'buy':
-            new_psize = psize + fill['qty']
-            pprice = pprice * (psize / new_psize) + fill['price'] * (fill['qty'] / new_psize)
+            new_psize = psize + abs_qty
+            pprice = pprice * (psize / new_psize) + fill['price'] * (abs_qty / new_psize)
             psize = new_psize
         else:
-            psize -= abs(fill['qty'])
+            psize -= abs_qty
     return pprice
 
+
+def get_position_fills(long_psize: float, shrt_psize: float, fills: [dict]) -> [dict]:
+    '''
+    assumes fills are sorted old to new
+    returns fills since and including initial entry
+    '''
+    long_psize *= 0.999
+    shrt_psize *= 0.999
+    long_qty_sum = 0.0
+    shrt_qty_sum = 0.0
+    long_done, shrt_done = long_psize == 0.0, shrt_psize == 0.0
+    if long_done and shrt_done:
+        return [], []
+    long_pfills, shrt_pfills = [], []
+    for x in fills[::-1]:
+        if x['position_side'] == 'long':
+            if not long_done:
+                long_qty_sum += x['qty'] * (1.0 if x['side'] == 'buy' else -1.0)
+                long_pfills.append(x)
+                long_done = long_qty_sum >= long_psize
+        elif x['position_side'] == 'shrt':
+            if not shrt_done:
+                shrt_qty_sum += x['qty'] * (1.0 if x['side'] == 'sell' else -1.0)
+                shrt_pfills.append(x)
+                shrt_done = shrt_qty_sum >= shrt_psize
+    return long_pfills[::-1], shrt_pfills[::-1]
+
+
+def calc_long_pprice(long_psize, long_pfills):
+    '''
+    assumes long pfills are sorted old to new
+    '''
+    psize, pprice = 0.0, 0.0
+    for fill in long_pfills:
+        abs_qty = abs(fill['qty'])
+        if fill['side'] == 'buy':
+            new_psize = psize + abs_qty
+            pprice = pprice * (psize / new_psize) + fill['price'] * (abs_qty / new_psize)
+            psize = new_psize
+        else:
+            psize -= abs_qty
+    return pprice
+
+
+def nullify(x):
+    if type(x) in [list, tuple]:
+        return [nullify(x1) for x1 in x]
+    elif type(x) == np.ndarray:
+        return numpyize([nullify(x1) for x1 in x])
+    elif type(x) == dict:
+        return {k: nullify(x[k]) for k in x}
+    elif type(x) in [bool, np.bool_]:
+        return x
+    else:
+        return 0.0
+
+
+def spotify_config(config: dict, nullify_shrt=True) -> dict:
+    spotified = config.copy()
+
+    spotified['spot'] = True
+    if 'market_type' not in spotified:
+        spotified['market_type'] = 'spot'
+    elif 'spot' not in spotified['market_type']:
+        spotified['market_type'] += '_spot'
+    spotified['do_long'] = spotified['long']['enabled'] = True
+    spotified['do_shrt'] = spotified['shrt']['enabled'] = False
+    spotified['long']['pbr_stop_loss'] = min(1.0, spotified['long']['pbr_stop_loss'])
+    if spotified['long']['pbr_stop_loss'] <= 0.0:
+        spotified['long']['pbr_limit'] = min(1.0, spotified['long']['pbr_limit'])
+    else:
+        spotified['long']['pbr_limit'] = max(0.0, min(spotified['long']['pbr_limit'],
+                                                      1.0 - spotified['long']['pbr_stop_loss']))
+    if nullify_shrt:
+        spotified['shrt'] = nullify(spotified['shrt'])
+    return spotified
 
 
 

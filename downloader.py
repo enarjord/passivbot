@@ -15,7 +15,9 @@ import numpy as np
 import pandas as pd
 from dateutil import parser
 
-from procedures import prep_config, make_get_filepath, create_binance_bot, create_bybit_bot, print_, add_argparse_args
+from procedures import prep_config, make_get_filepath, create_binance_bot, create_bybit_bot, create_binance_bot_spot, \
+    print_, add_argparse_args
+from njit_funcs import calc_samples
 from pure_funcs import ts_to_date, get_dummy_settings
 
 
@@ -27,11 +29,7 @@ class Downloader:
     def __init__(self, config: dict):
         self.fetch_delay_seconds = 0.75
         self.config = config
-        self.price_filepath = os.path.join(config["caches_dirpath"], f"{config['session_name']}_price_cache.npy")
-        self.buyer_maker_filepath = os.path.join(config["caches_dirpath"],
-                                                 f"{config['session_name']}_buyer_maker_cache.npy")
-        self.time_filepath = os.path.join(config["caches_dirpath"], f"{config['session_name']}_time_cache.npy")
-        # self.qty_filepath = os.path.join(config["caches_dirpath"], f"{config['session_name']}_qty_cache.npy")
+        self.spot = 'spot' in config and config['spot']
         self.tick_filepath = os.path.join(config["caches_dirpath"], f"{config['session_name']}_ticks_cache.npy")
         try:
             self.start_time = int(parser.parse(self.config["start_date"]).replace(
@@ -46,9 +44,9 @@ class Downloader:
             except Exception:
                 raise Exception(f"Unrecognized date format for end time {config['end_date']}")
         if self.config['exchange'] == 'binance':
-            if 'spot' in self.config and self.config['spot']:
-                self.daily_base_url = "https://data.binance.vision/data/daily/aggTrades/"
-                self.monthly_base_url = "https://data.binance.vision/data/monthly/aggTrades/"
+            if self.spot:
+                self.daily_base_url = "https://data.binance.vision/data/spot/daily/aggTrades/"
+                self.monthly_base_url = "https://data.binance.vision/data/spot/monthly/aggTrades/"
             else:
                 market_type = 'cm' if config['inverse'] else 'um'
                 self.daily_base_url = f"https://data.binance.vision/data/futures/{market_type}/daily/aggTrades/"
@@ -57,6 +55,15 @@ class Downloader:
             self.daily_base_url = 'https://public.bybit.com/trading/'
         else:
             raise Exception(f"unknown exchange {config['exchange']}")
+        if "historical_data_path" in self.config and self.config["historical_data_path"]:
+            self.filepath = make_get_filepath(
+                os.path.join(self.config["historical_data_path"], "historical_data",
+                             self.config["exchange"], f"agg_trades_{'spot' if self.spot else 'futures'}",
+                             self.config["symbol"], ""))
+        else:
+            self.filepath = make_get_filepath(
+                os.path.join("historical_data", self.config["exchange"], f"agg_trades_{'spot' if self.spot else 'futures'}",
+                             self.config["symbol"], ""))
 
     def validate_dataframe(self, df: pd.DataFrame) -> tuple:
         """
@@ -236,13 +243,16 @@ class Downloader:
         print_(['Fetching', symbol, date])
         url = "{}{}/{}-aggTrades-{}.zip".format(base_url, symbol.upper(), symbol.upper(), date)
         df = pd.DataFrame(columns=['trade_id', 'price', 'qty', 'timestamp', 'is_buyer_maker'])
+        column_names = ['trade_id', 'price', 'qty', 'first', 'last', 'timestamp', 'is_buyer_maker']
+        if self.spot:
+            column_names.append('best_match')
         try:
             resp = urlopen(url)
             with ZipFile(BytesIO(resp.read())) as my_zip_file:
                 for contained_file in my_zip_file.namelist():
                     tf = pd.read_csv(my_zip_file.open(contained_file),
-                                     names=['trade_id', 'price', 'qty', 'first', 'last', 'timestamp', 'is_buyer_maker'])
-                    tf.drop(errors='ignore', columns=['first', 'last'], inplace=True)
+                                     names=column_names)
+                    tf.drop(errors='ignore', columns=['first', 'last', 'best_match'], inplace=True)
                     tf["trade_id"] = tf["trade_id"].astype(np.int64)
                     tf["price"] = tf["price"].astype(np.float64)
                     tf["qty"] = tf["qty"].astype(np.float64)
@@ -334,24 +344,14 @@ class Downloader:
         Downloads any missing data based on the specified time frame.
         @return:
         """
-        if "historical_data_path" in self.config and self.config["historical_data_path"]:
-            self.filepath = make_get_filepath(
-                os.path.join(self.config["historical_data_path"], "historical_data",
-                             self.config["exchange"], "agg_trades_futures",
-                             self.config["symbol"], ""))
-        else:
-            self.filepath = make_get_filepath(
-                os.path.join("historical_data", self.config["exchange"], "agg_trades_futures",
-                             self.config["symbol"], ""))
 
         if self.config["exchange"] == "binance":
-            self.bot = await create_binance_bot(get_dummy_settings(self.config["user"],
-                                                                   self.config["exchange"],
-                                                                   self.config["symbol"]))
+            if self.spot:
+                self.bot = await create_binance_bot_spot(get_dummy_settings(self.config))
+            else:
+                self.bot = await create_binance_bot(get_dummy_settings(self.config))
         elif self.config["exchange"] == "bybit":
-            self.bot = await create_bybit_bot(get_dummy_settings(self.config["user"],
-                                                                 self.config["exchange"],
-                                                                 self.config["symbol"]))
+            self.bot = await create_bybit_bot(get_dummy_settings(self.config))
         else:
             print(self.config["exchange"], 'not found')
             return
@@ -475,34 +475,16 @@ class Downloader:
                 if end_time == -1:
                     tmp = pd.date_range(
                         start=datetime.datetime.fromtimestamp(start_time / 1000, datetime.timezone.utc).date(),
-                        end=datetime.datetime.now(datetime.timezone.utc).date(), freq='M').to_pydatetime()
+                        end=datetime.datetime.now(datetime.timezone.utc).date(), freq='D').to_pydatetime()
                 else:
                     tmp = pd.date_range(
                         start=datetime.datetime.fromtimestamp(start_time / 1000, datetime.timezone.utc).date(),
                         end=datetime.datetime.fromtimestamp(end_time / 1000, datetime.timezone.utc).date(),
-                        freq='M').to_pydatetime()
-
-                months = [date.strftime("%Y-%m") for date in tmp]
-
-                if months:
-                    new_start_time = datetime.datetime.combine(tmp[-1], datetime.time.max,
-                                                               datetime.timezone.utc).timestamp() * 1000 + 0.001
-                else:
-                    new_start_time = start_time
-
-                if end_time == -1:
-                    tmp = pd.date_range(
-                        start=datetime.datetime.fromtimestamp(new_start_time / 1000, datetime.timezone.utc).date(),
-                        end=datetime.datetime.now(datetime.timezone.utc).date(), freq='D').to_pydatetime()
-                else:
-                    tmp = pd.date_range(
-                        start=datetime.datetime.fromtimestamp(new_start_time / 1000, datetime.timezone.utc).date(),
-                        end=datetime.datetime.fromtimestamp(end_time / 1000, datetime.timezone.utc).date(),
                         freq='D').to_pydatetime()
-
                 days = [date.strftime("%Y-%m-%d") for date in tmp]
-                dates = months
-                dates.extend(days)
+                current_month = ts_to_date(time() - 60 * 60 * 3)[:7]
+                months = sorted([e for e in set([d[:7] for d in days]) if e != current_month])
+                dates = sorted(months + [d for d in days if d[:7] not in months])
 
                 df = pd.DataFrame(columns=['trade_id', 'price', 'qty', 'timestamp', 'is_buyer_maker'])
 
@@ -668,6 +650,47 @@ class Downloader:
         except:
             pass
 
+    def get_unabridged_df(self):
+        filenames = self.get_filenames()
+        start_index = 0
+        for i in range(len(filenames)):
+            if int(filenames[i].split("_")[2]) <= self.start_time <= int(filenames[i].split("_")[3].split(".")[0]):
+                start_index = i
+                break
+        end_index = -1
+        if self.end_time != -1:
+            for i in range(len(filenames)):
+                if int(filenames[i].split("_")[2]) <= self.end_time <= int(filenames[i].split("_")[3].split(".")[0]):
+                    end_index = i
+                    break
+        filenames = filenames[start_index:] if end_index == -1 else filenames[start_index:end_index + 1]
+        df = pd.DataFrame()
+        chunks = []
+        for f in filenames:
+            chunk = pd.read_csv(os.path.join(self.filepath, f)).set_index('trade_id')
+            if self.end_time != -1:
+                chunk = chunk[(chunk['timestamp'] >= self.start_time) & (chunk['timestamp'] <= self.end_time)]
+            else:
+                chunk = chunk[(chunk['timestamp'] >= self.start_time)]
+            chunks.append(chunk)
+            if len(chunks) >= 100:
+                if df.empty:
+                    df = pd.concat(chunks, axis=0)
+                else:
+                    chunks.insert(0, df)
+                    df = pd.concat(chunks, axis=0)
+                chunks = []
+            print('\rloaded chunk of data', f, ts_to_date(float(f.split("_")[2]) / 1000), end='     ')
+        print()
+        if chunks:
+            if df.empty:
+                df = pd.concat(chunks, axis=0)
+            else:
+                chunks.insert(0, df)
+                df = pd.concat(chunks, axis=0)
+            del chunks
+        return df
+
     async def prepare_files(self, single_file: bool = False):
         """
         Takes downloaded data and prepares numpy arrays for use in backtesting.
@@ -694,14 +717,14 @@ class Downloader:
         for f in filenames:
             if single_file:
                 chunk = pd.read_csv(os.path.join(self.filepath, f),
-                                    dtype={"price": np.float64, "is_buyer_maker": np.float64, "timestamp": np.float64},
-                                    # "qty": np.float64},
-                                    usecols=["price", "is_buyer_maker", "timestamp"])  # , "qty"])
+                                    dtype={"price": np.float64, "is_buyer_maker": np.float64, "timestamp": np.float64,
+                                           "qty": np.float64},
+                                    usecols=["price", "is_buyer_maker", "timestamp", "qty"])
             else:
                 chunk = pd.read_csv(os.path.join(self.filepath, f),
-                                    dtype={"timestamp": np.int64, "price": np.float64, "is_buyer_maker": np.int8},
-                                    # "qty": np.float32},
-                                    usecols=["timestamp", "price", "is_buyer_maker"])  # , "qty"])
+                                    dtype={"timestamp": np.int64, "price": np.float64, "is_buyer_maker": np.int8,
+                                           "qty": np.float32},
+                                    usecols=["timestamp", "price", "is_buyer_maker", "qty"])
             if self.end_time != -1:
                 chunk = chunk[(chunk['timestamp'] >= self.start_time) & (chunk['timestamp'] <= self.end_time)]
             else:
@@ -724,112 +747,26 @@ class Downloader:
                 df = pd.concat(chunks, axis=0)
             del chunks
 
-        # df = df.groupby([(df.price != df.price.shift()).cumsum(), 'is_buyer_maker']).agg(
-        #     {'qty': 'sum', 'price': 'first', 'is_buyer_maker': 'first', 'timestamp': 'first'}).reset_index(
-        #     drop=True)
-        # df = df.groupby([(df.price != df.price.shift()).cumsum(), 'is_buyer_maker']).agg(
-        #     {'price': 'first', 'is_buyer_maker': 'first', 'timestamp': 'first'}).reset_index(drop=True)
-        df = df.groupby(
-            (~((df.price == df.price.shift(1)) & (df.is_buyer_maker == df.is_buyer_maker.shift(1)))).cumsum()).agg(
-            {'price': 'first', 'is_buyer_maker': 'first', 'timestamp': 'first'})  # , 'qty': 'sum'})
-
-        if single_file:
-            # compressed_ticks = df[["price", "is_buyer_maker", "timestamp", "qty"]].values
-            compressed_ticks = df[["price", "is_buyer_maker", "timestamp"]].values
+        if True: #single_file:
+            sampled_ticks = calc_samples(df[["timestamp", "qty", "price"]].values)
             print_(["Saving single file with", len(df), " ticks to", self.tick_filepath, "..."])
-            np.save(self.tick_filepath, compressed_ticks)
+            np.save(self.tick_filepath, sampled_ticks)
             print_(["Saved single file!"])
-        else:
-            print_(["Saving price file with", len(df), " ticks to", self.price_filepath, "..."])
-            np.save(self.price_filepath, df[["price"]].values)
-            print_(["Saved price file!"])
 
-            print_(["Saving buyer_maker file with", len(df), " ticks to", self.buyer_maker_filepath, "..."])
-            np.save(self.buyer_maker_filepath, df[["is_buyer_maker"]].values)
-            print_(["Saved buyer_maker file!"])
-
-            print_(["Saving timestamp file with", len(df), " ticks to", self.time_filepath, "..."])
-            np.save(self.time_filepath, df[["timestamp"]].values)
-            print_(["Saved timestamp file!"])
-
-            # print_(["Saving qty file with", len(df), " ticks to", self.qty_filepath, "..."])
-            # np.save(self.qty_filepath, compressed_ticks[:, 3])
-            # print_(["Saved qty file!"])
-
-    async def get_ticks(self, single_file: bool = False) -> (np.ndarray, np.ndarray, np.ndarray):
+    async def get_sampled_ticks(self) -> np.ndarray:
         """
         Function for direct use in the backtester. Checks if the numpy arrays exist and if so loads them.
         If they do not exist or if their length doesn't match, download the missing data and create them.
-        @return: A tuple of three numpy arrays.
+        @return: numpy array.
         """
-        if single_file:
-            if os.path.exists(self.tick_filepath):
-                print_(['Loading cached tick data from', self.tick_filepath])
-                tick_data = np.load(self.tick_filepath)
-                return tick_data
-            await self.download_ticks()
-            await self.prepare_files(single_file)
+        if os.path.exists(self.tick_filepath):
+            print_(['Loading cached tick data from', self.tick_filepath])
             tick_data = np.load(self.tick_filepath)
             return tick_data
-        else:
-            if os.path.exists(self.price_filepath) and os.path.exists(self.buyer_maker_filepath) and os.path.exists(
-                    self.time_filepath):  # and os.path.exists(self.qty_filepath):
-                print_(['Loading cached tick data from', self.tick_filepath])
-                price_data = np.load(self.price_filepath)
-                buyer_maker_data = np.load(self.buyer_maker_filepath)
-                time_data = np.load(self.time_filepath)
-                # qty_data = np.load(self.qty_filepath)
-                if len(price_data) == len(buyer_maker_data) == len(time_data):  # == len(qty_data):
-                    return price_data, buyer_maker_data, time_data  # , qty_data
-                else:
-                    print_(['Tick data does not match, starting over...'])
-                    del price_data
-                    del buyer_maker_data
-                    del time_data
-                    # del qty_data
-                    gc.collect()
-
-            await self.download_ticks()
-            await self.prepare_files(single_file)
-            price_data = np.load(self.price_filepath)
-            buyer_maker_data = np.load(self.buyer_maker_filepath)
-            time_data = np.load(self.time_filepath)
-            # qty_data = np.load(self.qty_filepath)
-            return price_data, buyer_maker_data, time_data  # , qty_data
-
-    async def get_data(self) -> (np.ndarray,):
-        """
-        Function for direct use in the backtester/optimizer. Checks if the numpy arrays exist and if so loads them.
-        If they do not exist or if their length doesn't match, download the missing data, create them, and create
-        additional data.
-        @return: A tuple of numpy arrays.
-        """
-        cache_dirpath = os.path.join(
-            self.config['caches_dirpath'],
-            f"{self.config['session_name']}_n_spans_{self.config['n_spans']}",
-            '')
-        if not os.path.exists(cache_dirpath):
-            prices, is_buyer_maker, timestamps = await self.get_ticks(False)
-            prices = np.reshape(prices, prices.size)
-            is_buyer_maker = np.reshape(is_buyer_maker, is_buyer_maker.size)
-            timestamps = np.reshape(timestamps, timestamps.size)
-            fpath = make_get_filepath(cache_dirpath)
-            data = (prices, is_buyer_maker, timestamps)
-            print('dumping cache...')
-            for fname, arr in zip(['prices', 'is_buyer_maker', 'timestamps'], data):
-                np.save(f'{fpath}{fname}.npy', arr)
-            size_mb = np.sum([sys.getsizeof(d) for d in data]) / (1000 * 1000)
-            print(f'dumped {size_mb:.2f} mb of data')
-            del prices
-            del is_buyer_maker
-            del timestamps
-            del data
-            gc.collect()
-        print('loading cached tick data')
-        arrs = []
-        for fname in ['prices', 'is_buyer_maker', 'timestamps']:
-            arrs.append(np.load(f'{cache_dirpath}{fname}.npy'))
-        return tuple(arrs)
+        await self.download_ticks()
+        await self.prepare_files()
+        tick_data = np.load(self.tick_filepath)
+        return tick_data
 
 
 async def main():
@@ -837,12 +774,12 @@ async def main():
     parser = add_argparse_args(parser)
 
     args = parser.parse_args()
-    config = await prep_config(args)
-    downloader = Downloader(config)
-    await downloader.download_ticks()
-    if not args.download_only:
-        await downloader.prepare_files(False)
-    sleep(0.1)
+    for config in await prep_config(args):
+        downloader = Downloader(config)
+        await downloader.download_ticks()
+        if not args.download_only:
+            await downloader.prepare_files(False)
+        sleep(0.1)
 
 
 if __name__ == "__main__":

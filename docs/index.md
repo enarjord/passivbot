@@ -18,20 +18,20 @@
 Passivbot is a fully automated trading bot built in Python. The goal of Passivbot is to provide a stable, low-risk
 trading bot that is able to accumulate profit over time without manual actions.
 
-Passivbot trades using futures markets, using an advanced form of grid trading to place opening and closing orders.
+Passivbot trades in futures and spot markets, using an advanced form of grid trading to place opening and closing orders.
 
 It provides support for automatically optimize configurations, backtest using historic data, and running in live mode.
 
 ## Supported exchanges
 
-Currently the exchanges **Binance** and **Bybit** are implemented and supported for trading futures. The bot does not use
-ccxt, so other exchanges cannot be used.
+Currently the exchanges **Binance Futures**, **Binance Spot** and **Bybit Futures** are implemented and supported.  
+The bot does not use [ccxt](https://github.com/ccxt/ccxt), so other exchanges cannot be used.
 
-Not all functionality is supported on bot exchanges, depending on the APIs that bot exchanges expose and development efforts.
+Not all functionality is supported on both exchanges, depending on the APIs that exchanges expose and development efforts.
 
 !!! Info
     If you would like to have support added for an exchange not supported yet, 
-    you can always get in touch to see  what the  options are
+    you can always get in touch to see what the options are.
 
 ## Software Requirements
 
@@ -54,6 +54,8 @@ Be aware that running an optimize on a long period may require a lot of memory a
 trade data (ticks) instead of OHLCV data, the amount of memory is dependent on the amount of trades made in the selected time period.
 If you want to optimize on BTC for the last 365 days, it will take significantly more memory than optimizing on a coin
 like BTS for example.
+
+For running the optimizer, a minimum of 8gb of memory is recommended.
 
 !!! Warning
     It should be very possible to run multiple bots on a single machine. Be aware however that you may run into other

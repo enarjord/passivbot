@@ -75,26 +75,28 @@ def clean_result_config(config: dict) -> dict:
     return config
 
 
-def iter_slices_full_first(data, sliding_window_days, ticks_to_prepend, minimum_days):
+def iter_slices_full_first(data, sliding_window_days, max_span):
     yield data
-    for d in iter_slices(data, sliding_window_days, ticks_to_prepend, minimum_days):
+    for d in iter_slices(data, sliding_window_days, max_span):
         yield d
 
 
-def iter_slices(data, sliding_window_days: float, ticks_to_prepend: int = 0):
+def iter_slices(data, sliding_window_days: float, max_span: int):
     sliding_window_ms = sliding_window_days * 24 * 60 * 60 * 1000
-    span_ms = data[2][-1] - data[2][0]
-    if sliding_window_ms > span_ms * 0.999:
+    span_ms = data[-1][0] - data[0][0]
+    max_span_ms = max_span * 60 * 1000
+    if sliding_window_ms > span_ms * 0.999 - max_span_ms:
         yield data
         return
-    n_windows = int(np.ceil(span_ms / sliding_window_ms)) + 1
-    thresholds_ms = np.linspace(data[2][ticks_to_prepend], data[2][-1] - sliding_window_ms, n_windows)
-
-    for threshold_ms in thresholds_ms[::-1]:
-        start_i = max(0, int(np.argmax(data[2] >= threshold_ms) - ticks_to_prepend))
-        end_i = min(len(data[2]) - 1, int(np.argmax(data[2] >= threshold_ms + sliding_window_ms)))
-        yield tuple(d[start_i:end_i] for d in data)
-    for ds in iter_slices(data, sliding_window_days * 2, ticks_to_prepend):
+    sample_size_ms = data[1][0] - data[0][0]
+    samples_per_window = sliding_window_ms / sample_size_ms
+    max_span_ito_n_samples = max_span * 60 / (sample_size_ms / 1000)
+    n_windows = int(np.round(span_ms / sliding_window_ms)) + 1
+    for x in np.linspace(len(data) - samples_per_window, max_span_ito_n_samples, n_windows):
+        start_i = max(0, int((x - max_span_ito_n_samples)))
+        end_i = min(len(data), int(round(start_i + samples_per_window + max_span_ito_n_samples)))
+        yield data[start_i:end_i]
+    for ds in iter_slices(data, sliding_window_days * 2, max_span):
         yield ds
 
 
@@ -107,6 +109,7 @@ def objective_function(analysis: dict, config: dict, metric='adjusted_daily_gain
         * min(1.0, config['maximum_hrs_no_fills_same_side'] / analysis['max_hrs_no_fills_same_side'])
         * min(1.0, analysis['closest_bkr'] / config['minimum_bankruptcy_distance'])
         * min(1.0, analysis['lowest_eqbal_ratio'] / config['minimum_equity_balance_ratio'])
+        # * min(1.0, analysis['sharpe_ratio'] / config['minimum_sharpe_ratio'])
     )
 
 
@@ -121,10 +124,11 @@ def single_sliding_window_run(config, data, do_print=False) -> (float, [dict]):
         # sliding window n days should be greater than max hrs no fills
         sliding_window_days = min(n_days, max([config['maximum_hrs_no_fills'] * 2.1 / 24,
                                                config['maximum_hrs_no_fills_same_side'] * 2.1 / 24,
+                                               config['periodic_gain_n_days'] * 1.1,
                                                config['sliding_window_days']]))
-    analyses = []
-    for z, data_slice in enumerate(iter_slices(data, sliding_window_days,
-                                               ticks_to_prepend=int(config['max_span']))):
+    sample_size_ms = data[1][0] - data[0][0]
+    max_span_ito_n_samples = int(config['max_span'] * 60 / (sample_size_ms / 1000))
+    for z, data_slice in enumerate(iter_slices(data, sliding_window_days, max_span=int(round(config['max_span'])))):
         if len(data_slice[0]) == 0:
             print('debug b no data')
             continue
@@ -135,8 +139,8 @@ def single_sliding_window_run(config, data, do_print=False) -> (float, [dict]):
             break
         result = {**config, **{'lowest_eqbal_ratio': info[1], 'closest_bkr': info[2]}}
         _, analysis = analyze_fills(fills, {**config, **{'lowest_eqbal_ratio': info[1], 'closest_bkr': info[2]}},
-                                    data_slice[2][int(config['max_span'])],
-                                    data_slice[2][-1])
+                                    data_slice[max_span_ito_n_samples][0],
+                                    data_slice[-1][0])
         analysis['score'] = objective_function(analysis, config, metric=metric) * (analysis['n_days'] / config['n_days'])
         analyses.append(analysis)
         objective = np.mean([e['score'] for e in analyses]) * max(1.01, config['reward_multiplier_base']) ** (z + 1)
@@ -144,6 +148,8 @@ def single_sliding_window_run(config, data, do_print=False) -> (float, [dict]):
         line = (f'{str(z).rjust(3, " ")} adg {analysis["average_daily_gain"]:.4f}, '
                 f'bkr {analysis["closest_bkr"]:.4f}, '
                 f'eqbal {analysis["lowest_eqbal_ratio"]:.4f} n_days {analysis["n_days"]:.1f}, '
+                f'shrp {analysis["sharpe_ratio"]:.4f} , '
+                f'{config["avg_periodic_gain_key"]} {analysis["average_periodic_gain"]:.4f}, '
                 f'score {analysis["score"]:.4f}, objective {objective:.4f}, '
                 f'hrs stuck ss {str(round(analysis["max_hrs_no_fills_same_side"], 1)).zfill(4)}, ')
         if (bef := config['break_early_factor']) != 0.0:
@@ -153,6 +159,10 @@ def single_sliding_window_run(config, data, do_print=False) -> (float, [dict]):
                 break
             if analysis['lowest_eqbal_ratio'] < config['minimum_equity_balance_ratio'] * (1 - bef):
                 line += f"broke on low eqbal ratio {analysis['lowest_eqbal_ratio']:.4f} "
+                print(line)
+                break
+            if analysis['sharpe_ratio'] < config['minimum_sharpe_ratio'] * (1 - bef):
+                line += f"broke on low sharpe ratio {analysis['sharpe_ratio']:.4f} {config['minimum_sharpe_ratio']} "
                 print(line)
                 break
             if analysis['max_hrs_no_fills'] > config['maximum_hrs_no_fills'] * (1 + bef):
@@ -181,20 +191,26 @@ def simple_sliding_window_wrap(config, data, do_print=False):
                     daily_gain=0.0,
                     closest_bkr=0.0,
                     lowest_eqbal_r=0.0,
+                    sharpe_ratio=0.0,
+                    avg_periodic_gain=0.0,
                     max_hrs_no_fills=1000.0,
-                    max_hrs_no_fills_ss=1000.0)
+                    max_hrs_no_fills_ss=1000.0,
+                    **{config['avg_periodic_gain_key']: 0.0})
     else:
         tune.report(objective=objective,
                     daily_gain=np.mean([r['average_daily_gain'] for r in analyses]),
                     closest_bkr=np.min([r['closest_bkr'] for r in analyses]),
                     lowest_eqbal_r=np.min([r['lowest_eqbal_ratio'] for r in analyses]),
+                    sharpe_ratio=np.mean([r['sharpe_ratio'] for r in analyses]),
                     max_hrs_no_fills=np.max([r['max_hrs_no_fills'] for r in analyses]),
-                    max_hrs_no_fills_ss=np.max([r['max_hrs_no_fills_same_side'] for r in analyses]))
+                    max_hrs_no_fills_ss=np.max([r['max_hrs_no_fills_same_side'] for r in analyses]),
+                    **{config['avg_periodic_gain_key']: np.mean([r['average_periodic_gain'] for r in analyses])})
 
 
 def backtest_tune(data: np.ndarray, config: dict, current_best: Union[dict, list] = None):
-    memory = int(np.sum([sys.getsizeof(d) for d in data]) * 1.2)
+    memory = int(sys.getsizeof(data) * 1.2)
     virtual_memory = psutil.virtual_memory()
+    print(f'data size in mb {memory / (1000 * 1000):.4f}')
     if (virtual_memory.available - memory) / virtual_memory.total < 0.1:
         print("Available memory would drop below 10%. Please reduce the time span.")
         return None
@@ -203,10 +219,11 @@ def backtest_tune(data: np.ndarray, config: dict, current_best: Union[dict, list
         max_span_upper = config['max_span'].upper
     else:
         max_span_upper = config['max_span']
-    if len(data[2]) < max_span_upper * 1.5:
+    data_sample_size_seconds = (data[1][0] - data[0][0]) / 1000
+    if len(data) < max_span_upper * data_sample_size_seconds * 1.5:
         raise Exception( "too few ticks or to high upper range for max span,\n"
                          "please use more backtest data or reduce max span\n"
-                        f"n_ticks {len(data[2])}, max_span {int(max_span_upper)}")
+                        f"n_ticks {len(data)}, max_span {int(max_span_upper * data_sample_size_seconds)}")
     print('tuning:')
     for k, v in config.items():
         if type(v) in [ray.tune.sample.Float, ray.tune.sample.Integer]:
@@ -258,6 +275,8 @@ def backtest_tune(data: np.ndarray, config: dict, current_best: Union[dict, list
             metric_columns=['daily_gain',
                             'closest_bkr',
                             'lowest_eqbal_r',
+                            'sharpe_ratio',
+                            config['avg_periodic_gain_key'],
                             'max_hrs_no_fills',
                             'max_hrs_no_fills_ss',
                             'objective'],
@@ -278,40 +297,39 @@ def save_results(analysis, config):
     pprint.pprint(analysis.best_config)
 
 
-async def main():
-    parser = argparse.ArgumentParser(prog='Optimize', description='Optimize passivbot config.')
-    parser = add_argparse_args(parser)
-    parser.add_argument('-t', '--start', type=str, required=False, dest='starting_configs',
-                        default=None,
-                        help='start with given live configs.  single json file or dir with multiple json files')
-    args = parser.parse_args()
-
-    config = await prep_config(args)
+async def execute_optimize(config):
     if config['exchange'] == 'bybit' and not config['inverse']:
         print('bybit usdt linear backtesting not supported')
         return
+    if not (config['do_long'] and config['do_shrt']):
+        if not (config['do_long'] or config['do_shrt']):
+            raise Exception('both long and shrt disabled')
+        print(f"{'long' if config['do_long'] else 'shrt'} only, setting maximum_hrs_no_fills = maximum_hrs_no_fills_same_side")
+        config['maximum_hrs_no_fills'] = config['maximum_hrs_no_fills_same_side']
     downloader = Downloader(config)
     print()
-    for k in (keys := ['exchange', 'symbol', 'starting_balance', 'start_date', 'end_date', 'latency_simulation_ms',
-                       'do_long', 'do_shrt', 'minimum_bankruptcy_distance', 'maximum_hrs_no_fills',
+    for k in (keys := ['exchange', 'symbol', 'market_type', 'starting_balance', 'start_date',
+                       'end_date', 'latency_simulation_ms',
+                       'do_long', 'do_shrt', 'minimum_sharpe_ratio', 'periodic_gain_n_days',
+                       'minimum_bankruptcy_distance', 'maximum_hrs_no_fills',
                        'maximum_hrs_no_fills_same_side', 'iters', 'n_particles', 'sliding_window_days', 'metric',
                        'min_span', 'max_span', 'n_spans']):
         if k in config:
             print(f"{k: <{max(map(len, keys)) + 2}} {config[k]}")
     print()
-    data = await downloader.get_data()
-    config['n_days'] = (data[2][-1] - data[2][0]) / (1000 * 60 * 60 * 24)
+    data = await downloader.get_sampled_ticks()
+    config['n_days'] = (data[-1][0] - data[0][0]) / (1000 * 60 * 60 * 24)
     config['optimize_dirpath'] = os.path.join(config['optimize_dirpath'],
                                               ts_to_date(time())[:19].replace(':', ''), '')
 
     start_candidate = None
-    if args.starting_configs is not None:
+    if config['starting_configs'] is not None:
         try:
-            if os.path.isdir(args.starting_configs):
+            if os.path.isdir(config['starting_configs']):
                 start_candidate = [json.load(open(f)) for f in glob.glob(os.path.join(args.starting_configs, '*.json'))]
                 print('Starting with all configurations in directory.')
             else:
-                start_candidate = json.load(open(args.starting_configs))
+                start_candidate = json.load(open(config['starting_configs']))
                 print('Starting with specified configuration.')
         except Exception as e:
             print('Could not find specified configuration.', e)
@@ -320,6 +338,17 @@ async def main():
         save_results(analysis, config)
         config.update(clean_result_config(analysis.best_config))
         plot_wrap(pack_config(config), data)
+
+async def main():
+    parser = argparse.ArgumentParser(prog='Optimize', description='Optimize passivbot config.')
+    parser = add_argparse_args(parser)
+    parser.add_argument('-t', '--start', type=str, required=False, dest='starting_configs',
+                        default=None,
+                        help='start with given live configs.  single json file or dir with multiple json files')
+    args = parser.parse_args()
+
+    for config in await prep_config(args):
+        await execute_optimize(config)
 
 
 if __name__ == '__main__':
