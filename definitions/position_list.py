@@ -1,8 +1,7 @@
 from numba import typeof
 from numba.experimental import jitclass
 
-from definitions.order import LONG, SHORT
-from definitions.position import Position
+from definitions.position import Position, empty_long_position, empty_short_position, copy_position
 
 
 @jitclass([
@@ -18,8 +17,8 @@ class PositionList:
         """
         Creates two empty positions, one for SHORT and one for LONG.
         """
-        self.long = Position('', 0.0, 0.0, 0.0, 0.0, 0.0, LONG)
-        self.short = Position('', 0.0, 0.0, 0.0, 0.0, 0.0, SHORT)
+        self.long = empty_long_position()
+        self.short = empty_short_position()
 
     def update_long(self, position: Position):
         """
@@ -51,10 +50,10 @@ class PositionList:
 
     def copy(self):
         """
-        Creates a new object with the current positions.
-        :return: New positions.
+        Creates a new PositionList object with the current values. Does a deep copy of all positions.
+        :return: New PositionList.
         """
         p = PositionList()
-        p.update_long(self.long)
-        p.update_short(self.short)
+        p.update_long(copy_position(self.long))
+        p.update_short(copy_position(self.short))
         return p
