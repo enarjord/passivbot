@@ -1,3 +1,5 @@
+from typing import List
+
 from numba import types, typed, njit
 from numba.experimental import jitclass
 
@@ -115,7 +117,7 @@ def copy_order(order: Order) -> Order:
 
 
 @njit
-def empty_order_list():
+def empty_order_list() -> List[Order]:
     """
     Returns an empty Order typed list.
     :return: Empty Order typed list
@@ -127,7 +129,7 @@ def empty_order_list():
 
 
 @njit
-def empty_order():
+def empty_order() -> Order:
     """
     Returns an empty Order with all values set to 0 or empty strings.
     :return: Empty Order.
