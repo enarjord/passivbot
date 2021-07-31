@@ -1,6 +1,6 @@
 {
   # pso options
-  iters: 10000
+  iters: 25000
   num_cpus: 4
   options: {"c1": 1.4962, "c2": 1.4962, "w": 0.7298}
   n_particles: 48
@@ -13,8 +13,8 @@
   minimum_bankruptcy_distance: 0.5
   minimum_equity_balance_ratio: 0.5
   minimum_slice_adg: 1.0
-  maximum_hrs_no_fills: 72.0
-  maximum_hrs_no_fills_same_side: 144.0
+  maximum_hrs_no_fills: 108.0
+  maximum_hrs_no_fills_same_side: 168.0
 
   # set to 0.0 to do disable sliding windows
   # otherwise sliding window days will be max([maximum_hrs_no_fills / 24 * 2.1,
@@ -39,8 +39,8 @@
   # If lower and upper bound are set to same value, it's treated as a fixed variable.
   ranges:
   {
-    min_span: [20.0, 720.0]
-    max_span: [720.0, 30000.0]
+    min_span: [20.0, 1440.0]
+    max_span: [20.0, 30000.0]
     MAr_coeffs: [-0.4, 0.4]
 
     long£rprc_PBr_coeffs: [-1.0, 0.1]
