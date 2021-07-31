@@ -2,13 +2,13 @@ from typing import Tuple, List
 
 from numba import types, typeof
 
-from definitions.candle import Candle
-from definitions.order import Order, empty_order_list, NEW, PARTIALLY_FILLED, FILLED, CANCELED, EXPIRED, LONG, SHORT, \
-    NEW_INSURANCE, NEW_ADL
-from definitions.order_list import OrderList
-from definitions.position import Position
-from definitions.position_list import PositionList
-from definitions.tick import Tick, empty_tick_list
+from definitions.candle import Candle, empty_candle, precompile_candle
+from definitions.order import Order, empty_order_list, precompile_order, NEW, PARTIALLY_FILLED, FILLED, CANCELED, \
+    EXPIRED, LONG, SHORT, NEW_INSURANCE, NEW_ADL
+from definitions.order_list import OrderList, precompile_order_list
+from definitions.position import Position, precompile_position
+from definitions.position_list import PositionList, precompile_position_list
+from definitions.tick import Tick, empty_tick_list, precompile_tick
 from helpers.optimized import prepare_candles, correct_order_float_precision
 from helpers.print_functions import print_, print_order
 
@@ -130,6 +130,12 @@ class Bot:
         :return:
         """
         print_(['Precompiling...'], n=True)
+        precompile_tick()
+        precompile_candle()
+        precompile_order()
+        precompile_position()
+        precompile_order_list()
+        precompile_position_list()
         tick_list = empty_tick_list()
         times = [1, 200, 750]
         tick_interval = 0.25
@@ -137,27 +143,7 @@ class Bot:
             tick_list.append(Tick(times[t], t, 1.0, False))
         tick = tick_list[-1]
         max_time = int(tick.timestamp - (tick.timestamp % (tick_interval * 1000))) + int(tick_interval * 1000)
-        candle_list, tmp_tick_list, current_lowest_time = prepare_candles(tick_list, 0, max_time,
-                                                                          Candle(0, 0.0, 0.0, 0.0, 0.0, 0.0),
-                                                                          tick_interval)
-        c = Candle(0, 0.0, 0.0, 0.0, 0.0, 0.0)
-        t = Tick(0, 0.0, 0.0, False)
-        p = Position('', 0.0, 0.0, 0.0, 0.0, 0.0, '')
-        p.equal(p)
-        o = Order('', 0, 0.0, 0.0, 0.0, '', '', 0, '', '')
-        o.equal(o)
-        pl = PositionList()
-        pl.update_long(p)
-        pl.update_short(p)
-        pl.copy()
-        ol = OrderList()
-        ol.add_long(empty_order_list())
-        ol.add_short(empty_order_list())
-        ol.delete_long(empty_order_list())
-        ol.delete_short(empty_order_list())
-        ol.update_long(empty_order_list())
-        ol.update_short(empty_order_list())
-        ol.copy()
+        prepare_candles(tick_list, 0, max_time, empty_candle(), tick_interval)
         self.strategy.precompile()
         print_(['Precompile finished.'], n=True)
 
