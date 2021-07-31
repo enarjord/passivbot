@@ -133,7 +133,8 @@ class Strategy:
     def make_decision(self, balance: float, position: PositionList, orders: OrderList, prices: List[Candle]) -> Tuple[
         List[Order], List[Order]]:
         """
-        Base function to make a decision on a price update.
+        Base function to make a decision on a price update. Before the function is called, all values of the strategy
+        are updated.
         :param balance: Current balance.
         :param position: Current position.
         :param orders: Current orders.
@@ -144,11 +145,26 @@ class Strategy:
         delete_orders = empty_order_list()
         return add_orders, delete_orders
 
-    def on_update(self, position: PositionList, last_filled_order: Order) -> Tuple[List[Order], List[Order]]:
+    def on_order_update(self, last_filled_order: Order) -> Tuple[List[Order], List[Order]]:
         """
-        Base function to call when there is an order and position update. Waits until both events arrived.
-        :param position: The new position.
+        Base function to call when there is an order update. Before the function is called, all values of the strategy
+        are updated.
         :param last_filled_order: The last filled order.
+        :return: Two typed lists of orders, orders to add and orders to delete.
+        """
+        add_orders = empty_order_list()
+        delete_orders = empty_order_list()
+        return add_orders, delete_orders
+
+    def on_account_update(self, old_balance: float, new_balance: float, old_position: PositionList,
+                          new_position: PositionList) -> Tuple[List[Order], List[Order]]:
+        """
+        Base function to call when there is a position and/or balance update. Before the function is called, all values
+        of the strategy are updated.
+        :param old_balance: The old balance.
+        :param new_balance: The new balance.
+        :param old_position: The old position.
+        :param new_position: The new position.
         :return: Two typed lists of orders, orders to add and orders to delete.
         """
         add_orders = empty_order_list()

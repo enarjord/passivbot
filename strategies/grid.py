@@ -4,10 +4,10 @@ import numpy as np
 from numba import types, typeof, njit
 from numba.experimental import jitclass
 
-from definitions.candle import Candle, empty_candle_list
-from definitions.order import Order, empty_order_list, TP, SELL, LONG, LIMIT, BUY, FILLED
+from definitions.candle import Candle, empty_candle_list, empty_candle
+from definitions.order import Order, empty_order, empty_order_list, TP, SELL, LONG, LIMIT, BUY, FILLED
 from definitions.order_list import OrderList
-from definitions.position import Position
+from definitions.position import empty_long_position
 from definitions.position_list import PositionList
 from helpers.optimized import round_down
 from strategies.base_strategy import Strategy, base_strategy_spec
@@ -148,6 +148,10 @@ def convert_dict_to_config(config: dict) -> StrategyConfig:
               ('reentry_grid', types.float64[:, :]),
               ('tp_grid', types.float64[:, :]),
               ('percent', types.float64),
+              ("last_filled_order", typeof(empty_order())),
+              ("last_position", typeof(PositionList())),
+              ("position_change", types.boolean),
+              ("order_fill_change", types.boolean)
           ])
 class Grid(Strategy):
     """
@@ -165,22 +169,27 @@ class Grid(Strategy):
         self.tp_grid = self.config.tp_grid
         self.percent = self.config.percent
 
+        self.last_filled_order = empty_order()
+        self.last_position = PositionList()
+        self.position_change = False
+        self.order_fill_change = False
+
     def precompile(self):
         """
         Compiles all used functions.
         :return:
         """
-        round_down(0.0, 0.01)
+        round_down(0.01, 0.001)
         get_initial_position(0.01, np.array([[0.1, 1.0]]), 1, 0.1, 0.01, 0.01)
         get_dca_grid(0.01, 0.01, 0.01, 1, np.array([[0.1, 1.0]]), 1, 0.1, 0.01, 0.01)
         get_tp_grid(0.01, 0.01, np.array([[0.1, 1.0]]), 0.01, 0.01)
-        self.on_update(PositionList(), Order('XYZ', 0, 0.0, 0.0, 0.0, LIMIT, BUY, 0, FILLED, LONG))
+        self.on_update(PositionList(), empty_order())
         price_list = empty_candle_list()
-        price_list.append(Candle(0, 0.0, 0.0, 0.0, 0.0, 0.0))
+        price_list.append(empty_candle())
         self.make_decision(self.balance, PositionList(), OrderList(), price_list)
         self.prepare_tp_orders(0.0, PositionList())
         p = PositionList()
-        p.update_long(Position('XYZ', 0.0, 0.0, 0.0, 0.0, 1.0, 'LONG'))
+        p.update_long(empty_long_position())
         self.prepare_reentry_orders(0.0, p)
         self.calculate_dca_tp(0.0, p)
 
@@ -196,6 +205,52 @@ class Grid(Strategy):
         """
         add_orders = empty_order_list()
         delete_orders = empty_order_list()
+        return add_orders, delete_orders
+
+    def on_order_update(self, last_filled_order: Order) -> Tuple[List[Order], List[Order]]:
+        """
+        Checks whether the last order was a filled order. In that case, set order_fill_change to True and
+        last_filled_order to the order. If position_change is also True, execute the update.
+        :param last_filled_order: The last filled order.
+        :return: Two typed lists of orders, orders to add and orders to delete.
+        """
+        if last_filled_order.action == FILLED:
+            self.last_filled_order = last_filled_order
+            self.order_fill_change = True
+        if self.order_fill_change and self.position_change:
+            add_orders, delete_orders = self.on_update(self.last_position, self.last_filled_order)
+            self.order_fill_change = False
+            self.position_change = False
+            self.last_filled_order = empty_order()
+            self.last_position = PositionList()
+        else:
+            add_orders = empty_order_list()
+            delete_orders = empty_order_list()
+        return add_orders, delete_orders
+
+    def on_account_update(self, old_balance: float, new_balance: float, old_position: PositionList,
+                          new_position: PositionList) -> Tuple[List[Order], List[Order]]:
+        """
+        Checks whether the position changed. If that's the case, set position_change to True and last_position to the
+        new position. If order_fill_change is also True, execute the update.
+        :param old_balance: The old balance.
+        :param new_balance: The new balance.
+        :param old_position: The old position.
+        :param new_position: The new position.
+        :return: Two typed lists of orders, orders to add and orders to delete.
+        """
+        if not old_position.long.equal(new_position.long) or not old_position.short.equal(new_position.short):
+            self.last_position = new_position
+            self.position_change = True
+        if self.order_fill_change and self.position_change:
+            add_orders, delete_orders = self.on_update(self.last_position, self.last_filled_order)
+            self.order_fill_change = False
+            self.position_change = False
+            self.last_filled_order = empty_order()
+            self.last_position = PositionList()
+        else:
+            add_orders = empty_order_list()
+            delete_orders = empty_order_list()
         return add_orders, delete_orders
 
     def on_update(self, position: PositionList, last_filled_order: Order) -> Tuple[List[Order], List[Order]]:
