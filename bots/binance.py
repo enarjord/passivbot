@@ -10,7 +10,7 @@ from bots.base_bot import ORDER_UPDATE, ACCOUNT_UPDATE
 from bots.base_live_bot import LiveBot, LiveConfig
 from definitions.order import Order, TP, SL, LIMIT, MARKET, LQ, NEW, PARTIALLY_FILLED, FILLED, CANCELED, EXPIRED, TRADE, \
     CALCULATED, BUY, SELL, LONG, SHORT, BOTH, NEW_INSURANCE, NEW_ADL
-from definitions.position import Position
+from definitions.position import Position, empty_long_position, empty_short_position
 from definitions.tick import Tick
 from helpers.misc import sort_dict_keys
 from helpers.print_functions import print_, print_order
@@ -171,8 +171,8 @@ class BinanceBot(LiveBot):
         :return: The current long and short position.
         """
         pos = await self.private_get(self.endpoints['position'], ({'symbol': self.symbol}))
-        long = Position('', 0.0, 0.0, 0.0, 0.0, 0.0, '')
-        short = Position('', 0.0, 0.0, 0.0, 0.0, 0.0, '')
+        long = empty_long_position()
+        short = empty_short_position()
         for p in pos:
             if p['symbol'] == self.symbol:
                 position = Position(p['symbol'].upper(),
