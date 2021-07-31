@@ -134,8 +134,7 @@ def empty_order() -> Order:
     Returns an empty Order with all values set to 0 or empty strings.
     :return: Empty Order.
     """
-    o = Order('', 0, 0.0, 0.0, 0.0, '', '', 0, '', '')
-    return o
+    return Order('', 0, 0.0, 0.0, 0.0, '', '', 0, '', '')
 
 
 @njit

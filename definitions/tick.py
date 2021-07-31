@@ -43,8 +43,7 @@ def empty_tick() -> Tick:
     Returns an empty Tick with all values set to 0 except is_buyer_maker to False.
     :return: Empty Tick.
     """
-    t = Tick(0, 0.0, 0.0, False)
-    return t
+    return Tick(0, 0.0, 0.0, False)
 
 
 @njit

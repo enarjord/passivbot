@@ -89,8 +89,7 @@ def empty_candle() -> Candle:
     Returns an empty Candle with all values set to 0.
     :return: Empty Candle.
     """
-    c = Candle(0, 0.0, 0.0, 0.0, 0.0, 0.0)
-    return c
+    return Candle(0, 0.0, 0.0, 0.0, 0.0, 0.0)
 
 
 @njit

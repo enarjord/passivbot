@@ -88,8 +88,7 @@ def empty_long_position() -> Position:
     Creates an empty long Position.
     :return: Empty long Position.
     """
-    p = Position('', 0.0, 0.0, 0.0, 0.0, 1.0, LONG)
-    return p
+    return Position('', 0.0, 0.0, 0.0, 0.0, 1.0, LONG)
 
 
 @njit
@@ -98,8 +97,7 @@ def empty_short_position() -> Position:
     Creates an empty short Position.
     :return: Empty short Position.
     """
-    p = Position('', 0.0, 0.0, 0.0, 0.0, 1.0, SHORT)
-    return p
+    return Position('', 0.0, 0.0, 0.0, 0.0, 1.0, SHORT)
 
 
 @njit
