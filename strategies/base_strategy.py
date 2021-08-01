@@ -35,6 +35,8 @@ def convert_dict_to_config(config: dict) -> StrategyConfig:
 
 base_strategy_spec = [
     # ("config", typeof(StrategyConfig())),
+    ("symbol", types.string),
+    ("leverage", types.float64),
     ("balance", types.float64),
     ("position", typeof(PositionList())),
     ("open_orders", typeof(OrderList())),
@@ -58,6 +60,8 @@ class Strategy:
         :param config: Containing the content for the strategy in form of a StrategyConfig.
         """
         self.config = config
+        self.symbol = ''
+        self.leverage = 1.0
         self.balance = 0.0
         self.position = PositionList()
         self.open_orders = OrderList()
@@ -74,6 +78,22 @@ class Strategy:
         :return:
         """
         pass
+
+    def update_symbol(self, symbol: str):
+        """
+        Assigns the symbol to the strategy.
+        :param symbol: The symbol to assign.
+        :return:
+        """
+        self.symbol = symbol
+
+    def update_leverage(self, leverage: float):
+        """
+        Assigns the leverage to the strategy.
+        :param leverage: The leverage to assign.
+        :return:
+        """
+        self.leverage = leverage
 
     def update_steps(self, quantity_step: float, price_step: float, minimal_quantity: float, minimal_cost: float,
                      call_interval: float):
