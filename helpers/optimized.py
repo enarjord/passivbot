@@ -307,3 +307,30 @@ def prepare_candles(tick_list: List[Tick], last_candle_start_time: int, max_cand
                 current_lowest_time += int(tick_interval * 1000)
             tmp_tick_list.append(tick)
     return candle_list, tmp_tick_list, current_lowest_time
+
+
+@njit
+def convert_array_to_tick_list(tick_list: List[Tick], data: np.ndarray) -> List[Tick]:
+    """
+    Converts an array into a tick list so that it can be further processed.
+    :param tick_list: The tick list to use.
+    :param data: The data to use in the form: timestamp, price, quantity, is_buyer_maker.
+    :return: The tick list with added ticks.
+    """
+    for row in data:
+        tick_list.append(Tick(row[0], row[1], row[2], bool(row[3])))
+    return tick_list
+
+
+@njit
+def candles_to_array(candles: List[Candle]) -> np.ndarray:
+    """
+    Converts a list of candles into a numpy array.
+    :param candles: The list of candles.
+    :return: A numpy array int he form: timestamp, open, high, low, close, volume.
+    """
+    array = np.zeros((len(candles), 6))
+    for i in range(len(candles)):
+        array[i] = np.asarray([candles[i].timestamp, candles[i].open, candles[i].high, candles[i].low, candles[i].close,
+                               candles[i].volume])
+    return array
