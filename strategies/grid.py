@@ -188,8 +188,11 @@ class Grid(Strategy):
         get_initial_position(0.01, 1.0, np.array([[0.1, 1.0]]), 1, 0.1, 0.01, 0.01)
         get_dca_grid(0.01, 0.01, 1, np.array([[0.1, 1.0]]), 1, 0.1, 0.01, 0.01)
         get_tp_grid(0.01, 0.01, np.array([[0.1, 1.0]]), 0.01, 0.01)
-        self.quantity_step = 0.001
-        self.price_step = 0.01
+        change_back = False
+        if self.quantity_step == 0.0 and self.price_step == 0.0:
+            self.quantity_step = 0.001
+            self.price_step = 0.01
+            change_back = True
         self.on_update(PositionList(), empty_order())
         price_list = empty_candle_list()
         self.make_decision(price_list)
@@ -198,8 +201,9 @@ class Grid(Strategy):
         p.update_long(empty_long_position())
         self.prepare_reentry_orders(p)
         self.calculate_dca_tp(p)
-        self.quantity_step = 0.0
-        self.price_step = 0.0
+        if change_back:
+            self.quantity_step = 0.0
+            self.price_step = 0.0
         self.last_filled_order = empty_order()
 
     def make_decision(self, prices: List[Candle]) -> Tuple[List[Order], List[Order]]:
