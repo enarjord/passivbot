@@ -243,8 +243,7 @@ class LiveBot(Bot):
     async def async_handle_order_update(self, msg: dict):
         """
         Async wrapper for the order updates. Translates the exchange specific msg into an Order.
-        Handles an orders update by either deleting, adding, or changing the open orders. Also sets the attribute
-        order_fill_change to True if the order was FILLED and last_filled_order to the processed order.
+        Handles an orders update by either deleting, adding, or changing the open orders.
         :param msg: The order message to process.
         :return:
         """
@@ -255,8 +254,7 @@ class LiveBot(Bot):
     async def async_handle_account_update(self, msg: dict):
         """
         Async wrapper for the position and balance updates. Translates the exchange specific msg into Positions.
-        Handles an account update which includes balance and position changes. Also sets the attribute position_change
-        to True.
+        Handles an account update which includes balance and position changes.
         :param msg: The account message to process.
         :return:
         """
@@ -281,8 +279,6 @@ class LiveBot(Bot):
         """
         while True:
             try:
-                self.position_change = False
-                self.order_fill_change = False
                 await self.async_reset()
                 await self.update_heartbeat()
                 async with websockets.connect(self.endpoints['websocket_user']) as ws:
