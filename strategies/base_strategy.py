@@ -150,14 +150,10 @@ class Strategy:
         self.update_position(position)
         self.update_orders(orders)
 
-    def make_decision(self, balance: float, position: PositionList, orders: OrderList, prices: List[Candle]) -> Tuple[
-        List[Order], List[Order]]:
+    def make_decision(self, prices: List[Candle]) -> Tuple[List[Order], List[Order]]:
         """
         Base function to make a decision on a price update. Before the function is called, all values of the strategy
         are updated.
-        :param balance: Current balance.
-        :param position: Current position.
-        :param orders: Current orders.
         :param prices: Current price list.
         :return: Two typed lists of orders, orders to add and orders to delete.
         """
