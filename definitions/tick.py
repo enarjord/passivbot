@@ -7,7 +7,7 @@ from numba.experimental import jitclass
 @jitclass([
     ('timestamp', types.int64),
     ('price', types.float64),
-    ('qty', types.float64),
+    ('quantity', types.float64),
     ('is_buyer_maker', types.boolean)
 ])
 class Tick:
@@ -15,17 +15,17 @@ class Tick:
     A class representing a price tick.
     """
 
-    def __init__(self, timestamp: int, price: float, qty: float, is_buyer_maker: bool):
+    def __init__(self, timestamp: int, price: float, quantity: float, is_buyer_maker: bool):
         """
         Create a tick.
         :param timestamp: The timestamp of the tick.
         :param price: The price of the tick.
-        :param qty: The quantity of the tick.
+        :param quantity: The quantity of the tick.
         :param is_buyer_maker: Whether it is a maker or taker tick.
         """
         self.timestamp = timestamp
         self.price = price
-        self.qty = qty
+        self.quantity = quantity
         self.is_buyer_maker = is_buyer_maker
 
 

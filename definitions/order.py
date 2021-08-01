@@ -32,7 +32,7 @@ BOTH = 'BOTH'
     ('order_id', types.int64),
     ('price', types.float64),
     ('stop_price', types.float64),
-    ('qty', types.float64),
+    ('quantity', types.float64),
     ('order_type', types.string),
     ('side', types.string),
     ('timestamp', types.int64),
@@ -44,7 +44,7 @@ class Order:
     A class representing an order.
     """
 
-    def __init__(self, symbol: str, order_id: int, price: float, stop_price: float, qty: float, order_type: str,
+    def __init__(self, symbol: str, order_id: int, price: float, stop_price: float, quantity: float, order_type: str,
                  side: str, timestamp: int, action: str, position_side: str):
         """
         Creates an order.
@@ -53,7 +53,7 @@ class Order:
         :param price: The price of the order either a limit or at which price it was executed.
         :param stop_price: The stop price in case a stop loss or take profit order is created.
         Can be set to 0 for normal orders.
-        :param qty: The quantity or size of the order.
+        :param quantity: The quantity or size of the order.
         :param order_type: The type of the order, for example LIMIT.
         :param side: The side of the order, meaning BUY or SELL.
         :param timestamp: The timestamp when the order was executed. Can be set to 0 when creating an order.
@@ -64,7 +64,7 @@ class Order:
         self.order_id = order_id
         self.price = price
         self.stop_price = stop_price
-        self.qty = qty
+        self.quantity = quantity
         self.order_type = order_type.upper()
         self.side = side.upper()
         self.timestamp = timestamp
@@ -78,7 +78,7 @@ class Order:
         :return: If equal or not.
         """
         return self.symbol == order.symbol and self.order_id == order.order_id and self.price == order.price and \
-               self.stop_price == order.stop_price and self.qty == order.qty and \
+               self.stop_price == order.stop_price and self.quantity == order.quantity and \
                self.order_type == order.order_type and self.side == order.side and \
                self.timestamp == order.timestamp and self.action == order.action and \
                self.position_side == order.position_side
@@ -89,7 +89,7 @@ class Order:
         :return: Whether the order is empty or not.
         """
         return self.order_id == 0 and self.price == 0.0 and self.stop_price == 0.0 and \
-               self.qty == 0.0 and self.order_type == '' and self.side == '' and self.timestamp == 0 and \
+               self.quantity == 0.0 and self.order_type == '' and self.side == '' and self.timestamp == 0 and \
                self.action == '' and self.position_side == ''
 
     # A copy method in the class makes the class unpickable and empty_order_list will not work anymore.
@@ -98,7 +98,7 @@ class Order:
     #     Creates a new Order object with the current values.
     #     :return: New Order.
     #     """
-    #     o = Order(self.symbol, self.order_id, self.price, self.stop_price, self.qty, self.order_type, self.side,
+    #     o = Order(self.symbol, self.order_id, self.price, self.stop_price, self.quantity, self.order_type, self.side,
     #               self.timestamp, self.action, self.position_side)
     #     return o
 
@@ -112,8 +112,8 @@ def copy_order(order: Order) -> Order:
     :param order: The order to copy.
     :return: The copied order.
     """
-    return Order(order.symbol, order.order_id, order.price, order.stop_price, order.qty, order.order_type, order.side,
-                 order.timestamp, order.action, order.position_side)
+    return Order(order.symbol, order.order_id, order.price, order.stop_price, order.quantity, order.order_type,
+                 order.side, order.timestamp, order.action, order.position_side)
 
 
 @njit

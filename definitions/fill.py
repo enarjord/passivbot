@@ -12,7 +12,7 @@ from numba.experimental import jitclass
     ('balance', types.float64),
     ('equity', types.float64),
     ('position_balance_ratio', types.float64),
-    ('qty', types.float64),
+    ('quantity', types.float64),
     ('price', types.float64),
     ('position_size', types.float64),
     ('position_price', types.float64),
@@ -24,7 +24,7 @@ class Fill:
     """
 
     def __init__(self, order_id: int, timestamp: int, profit_and_loss: float, fee_paid: float, balance: float,
-                 equity: float, position_balance_ratio: float, qty: float, price: float, position_size: float,
+                 equity: float, position_balance_ratio: float, quantity: float, price: float, position_size: float,
                  position_price: float, type: str):
         """
         Create a fill.
@@ -35,7 +35,7 @@ class Fill:
         :param balance: The current balance.
         :param equity: The current value of the equity.
         :param position_balance_ratio: The ratio of the position vs the wallet.
-        :param qty: The quantity that was filled.
+        :param quantity: The quantity that was filled.
         :param price: The price at which it was filled.
         :param position_size: The current position size.
         :param position_price: The current position price.
@@ -48,7 +48,7 @@ class Fill:
         self.balance = balance
         self.equity = equity
         self.position_balance_ratio = position_balance_ratio
-        self.qty = qty
+        self.quantity = quantity
         self.price = price
         self.position_size = position_size
         self.position_price = position_price
