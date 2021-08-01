@@ -60,6 +60,8 @@ class Bot:
         """
         self.strategy.update_steps(self.quantity_step, self.price_step, self.minimal_quantity, self.minimal_cost,
                                    self.call_interval)
+        self.strategy.update_symbol(self.symbol)
+        self.strategy.update_leverage(self.leverage)
 
     def prepare_order(self, msg) -> Order:
         """
@@ -405,8 +407,7 @@ class Bot:
         """
         self.strategy.update_values(self.get_balance(), self.get_position(), self.get_orders())
 
-        add_orders, delete_orders = self.strategy.make_decision(self.get_balance(), self.get_position(),
-                                                                self.get_orders(), prices)
+        add_orders, delete_orders = self.strategy.make_decision(prices)
         add_orders, delete_orders = self.correct_orders(add_orders, delete_orders)
         add_orders, delete_orders = self.filter_orders(add_orders, delete_orders)
 

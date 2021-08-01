@@ -94,13 +94,24 @@ class LiveBot(Bot):
             'websocket_data': ''
         }
 
+    async def exchange_init(self):
+        """
+        Exchange specific initialization. Gets values from the exchange and sets parameters.
+        :return:
+        """
+        raise NotImplementedError
+
     async def async_init(self):
         """
         Calls the base init function and provides async support. To be implemented by the exchange implementation.
         :return:
         """
         self.init()
-        pass
+        await self.exchange_init()
+        self.strategy.update_steps(self.quantity_step, self.price_step, self.minimal_quantity, self.minimal_cost,
+                                   self.call_interval)
+        self.strategy.update_symbol(self.symbol)
+        self.strategy.update_leverage(self.leverage)
 
     async def fetch_orders(self) -> List[Order]:
         """

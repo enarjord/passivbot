@@ -95,7 +95,7 @@ class BinanceBot(LiveBot):
             # f"wss://fstream.binance.com/ws/{self.symbol.lower()}@aggTrade"
         }
 
-    async def init(self):
+    async def exchange_init(self):
         """
         Binance specific initialization. Sets it to hedge mode, gets exchange specific information, and sets the
         leverage. Also updates the strategy values.
@@ -137,8 +137,6 @@ class BinanceBot(LiveBot):
                 except AttributeError:
                     self.minimal_cost = 0.0
                 break
-        self.strategy.update_steps(self.quantity_step, self.price_step, self.minimal_quantity, self.minimal_cost,
-                                   self.call_interval)
 
     async def fetch_orders(self) -> List[Order]:
         """
