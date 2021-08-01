@@ -37,7 +37,7 @@ async def main() -> None:
         else:
             print_(['Exchange not supported.'], n=True)
             return
-        await bot.init()
+        await bot.async_init()
         await start_bot(bot)
     except Exception as e:
         print_(['Could not start', e])
