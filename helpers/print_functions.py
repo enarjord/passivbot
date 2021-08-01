@@ -55,7 +55,7 @@ def print_order(order: Order):
     :return:
     """
     print_(['Symbol', order.symbol, 'Order_id', order.order_id, 'Price', order.price, 'Stop price', order.stop_price,
-            'Qty', order.qty, 'Type', order.type, 'Side', order.side, 'Timestamp', order.timestamp, 'Action',
+            'Qty', order.qty, 'Type', order.order_type, 'Side', order.side, 'Timestamp', order.timestamp, 'Action',
             order.action, 'Position_side', order.position_side], n=True)
 
 
