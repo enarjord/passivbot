@@ -1,10 +1,10 @@
 from typing import List, Tuple
 
 import numpy as np
-from numba import types, typeof, njit
+from numba import types, njit, typeof
 from numba.experimental import jitclass
 
-from definitions.candle import Candle, empty_candle_list, empty_candle
+from definitions.candle import Candle, empty_candle_list
 from definitions.order import Order, empty_order, empty_order_list, TP, SELL, LONG, LIMIT, BUY, FILLED, MARKET
 from definitions.position import empty_long_position
 from definitions.position_list import PositionList
@@ -188,15 +188,19 @@ class Grid(Strategy):
         get_initial_position(0.01, 1.0, np.array([[0.1, 1.0]]), 1, 0.1, 0.01, 0.01)
         get_dca_grid(0.01, 0.01, 1, np.array([[0.1, 1.0]]), 1, 0.1, 0.01, 0.01)
         get_tp_grid(0.01, 0.01, np.array([[0.1, 1.0]]), 0.01, 0.01)
+        self.quantity_step = 0.001
+        self.price_step = 0.01
         self.on_update(PositionList(), empty_order())
         price_list = empty_candle_list()
-        price_list.append(empty_candle())
         self.make_decision(price_list)
         self.prepare_tp_orders(PositionList())
         p = PositionList()
         p.update_long(empty_long_position())
         self.prepare_reentry_orders(p)
         self.calculate_dca_tp(p)
+        self.quantity_step = 0.0
+        self.price_step = 0.0
+        self.last_filled_order = empty_order()
 
     def make_decision(self, prices: List[Candle]) -> Tuple[List[Order], List[Order]]:
         """
@@ -277,20 +281,20 @@ class Grid(Strategy):
             for order in self.open_orders.long:
                 delete_orders.append(order)
         else:
-            if last_filled_order.type == LIMIT and last_filled_order.position_side == LONG \
+            if last_filled_order.order_type == LIMIT and last_filled_order.position_side == LONG \
                     and last_filled_order.side == BUY:
                 # Reentry triggered
                 # Update TP grid
                 for order in self.open_orders.long:
-                    if order.type == TP:
+                    if order.order_type == TP:
                         delete_orders.append(order)
                 add_orders.extend(self.prepare_tp_orders(position))
-            elif last_filled_order.type == TP and last_filled_order.position_side == LONG \
+            elif last_filled_order.order_type == TP and last_filled_order.position_side == LONG \
                     and last_filled_order.side == SELL:
                 # TP triggered
                 # Update reentry grid
                 for order in self.open_orders.long:
-                    if order.type == LIMIT:
+                    if order.order_type == LIMIT:
                         delete_orders.append(order)
                 add_orders.extend(self.prepare_reentry_orders(position))
             else:
@@ -308,7 +312,7 @@ class Grid(Strategy):
         :return: Typed list of orders.
         """
         orders = empty_order_list()
-        tp_prices, tp_sizes = get_tp_grid(position.long.price, position.long.size, self.tp_grid, self.qty_step,
+        tp_prices, tp_sizes = get_tp_grid(position.long.price, position.long.size, self.tp_grid, self.quantity_step,
                                           self.price_step)
         for i in range(len(tp_prices)):
             order = Order(position.long.symbol, 0, float(tp_prices[i]), float(tp_prices[i]), float(tp_sizes[i]), TP,
@@ -324,7 +328,7 @@ class Grid(Strategy):
         """
         orders = empty_order_list()
         reentry_prices, reentry_sizes = get_dca_grid(position.long.size, position.long.price, position.long.leverage,
-                                                     self.reentry_grid, self.balance, self.percent, self.qty_step,
+                                                     self.reentry_grid, self.balance, self.percent, self.quantity_step,
                                                      self.price_step)
         for i in range(len(reentry_prices)):
             order = Order(position.long.symbol, 0, float(reentry_prices[i]), float(reentry_prices[i]),
