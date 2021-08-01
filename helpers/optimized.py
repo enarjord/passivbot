@@ -52,9 +52,10 @@ def correct_order_float_precision(order: Order, price_step: float, quantity_step
                                                                                               round_up(order.stop_price,
                                                                                                        price_step)):
         order.stop_price = round_up_or_down(order.stop_price, price_step)
-    if not isclose(order.qty, round_down(order.qty, quantity_step)) or not isclose(order.qty,
-                                                                                   round_up(order.qty, quantity_step)):
-        order.qty = round_up_or_down(order.qty, quantity_step)
+    if not isclose(order.quantity, round_down(order.quantity, quantity_step)) or not isclose(order.quantity,
+                                                                                             round_up(order.quantity,
+                                                                                                      quantity_step)):
+        order.quantity = round_up_or_down(order.quantity, quantity_step)
     return order
 
 
@@ -259,7 +260,7 @@ def aggregate_ticks_to_candle(tick_list: List[Tick], candle_list: List[Candle], 
         quantity = []
         for t in tick_list:
             prices.append(t.price)
-            quantity.append(t.qty)
+            quantity.append(t.quantity)
         prices = np.asarray(prices)
         quantity = np.asarray(quantity)
         candle = Candle(candle_start_time + int(tick_interval * 1000), prices[0], np.max(prices), np.min(prices),
