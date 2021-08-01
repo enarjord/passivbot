@@ -198,13 +198,9 @@ class Grid(Strategy):
         self.prepare_reentry_orders(p)
         self.calculate_dca_tp(p)
 
-    def make_decision(self, balance: float, position: PositionList, orders: OrderList, prices: List[Candle]) -> Tuple[
-        List[Order], List[Order]]:
+    def make_decision(self, prices: List[Candle]) -> Tuple[List[Order], List[Order]]:
         """
-        Makes a decision based on a price update.
-        :param balance: Current balance.
-        :param position: Current position.
-        :param orders: Current orders.
+        Makes a decision based on a price update. All values are updated before the function is called.
         :param prices: Current price list.
         :return: Two typed lists of orders, orders to add and orders to delete.
         """
