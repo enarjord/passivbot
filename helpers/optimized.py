@@ -334,3 +334,13 @@ def candles_to_array(candles: List[Candle]) -> np.ndarray:
         array[i] = np.asarray([candles[i].timestamp, candles[i].open, candles[i].high, candles[i].low, candles[i].close,
                                candles[i].volume])
     return array
+
+
+@njit
+def average_candle_price(candle: Candle) -> float:
+    """
+    Calculates the average price of a candle based on open, high, low, and close price.
+    :param candle: The candle to calculate the price for.
+    :return: The average price.
+    """
+    return float(np.mean(np.asarray([candle.open, candle.high, candle.low, candle.close])))
