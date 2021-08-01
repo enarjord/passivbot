@@ -11,7 +11,7 @@ from definitions.order import Order, empty_order_list, copy_order, LONG, SHORT, 
 from definitions.order_list import OrderList
 from definitions.position import Position, copy_position
 from helpers.optimized import calculate_available_margin, quantity_to_cost, calculate_long_pnl, calculate_short_pnl, \
-    round_down, calculate_new_position_size_position_price, calculate_bankruptcy_price
+    round_down, calculate_new_position_size_position_price, calculate_bankruptcy_price, average_candle_price
 
 
 @jitclass([
@@ -54,7 +54,7 @@ class BacktestConfig:
 
 @jitclass(base_bot_spec +
           [
-              ("config", typeof(BacktestConfig(0.0, 0.0, 1.0, 1.0))),
+              ("config", typeof(BacktestConfig(0.0, 0.0, 1.0, 1.0, '', 0.0, 0.0, 0.0))),
               ("strategy", typeof(to_be_replaced_strategy)),
               ("orders_to_execute", typeof(OrderList())),
               ("data", types.float64[:, :]),
@@ -143,51 +143,49 @@ class BacktestBot(Bot):
         for order in self.open_orders.long:
             execution = False
             o = copy_order(order)
-            if order.type == MARKET:
+            if order.order_type == MARKET:
                 # Market types take the average price of the last candle
                 execution = True
-                o.price = round_down(
-                    np.average([last_candle.open, last_candle.high, last_candle.low, last_candle.close]),
-                    self.price_step)
+                o.price = round_down(average_candle_price(last_candle), self.price_step)
             if last_candle.low < order.price:
-                if (order.type == LIMIT and order.side == BUY) or order.type == SL:
+                if (order.order_type == LIMIT and order.side == BUY) or order.order_type == SL:
                     # Limit buy orders and stop loss are treated the same way
                     execution = True
             if last_candle.high > order.price:
-                if (order.type == LIMIT and order.side == SELL) or order.type == TP:
+                if (order.order_type == LIMIT and order.side == SELL) or order.order_type == TP:
                     # Limit sell orders and take profit are treated the same way
                     execution = True
             if execution:
-                if last_candle.volume >= order.qty:
+                if last_candle.volume >= order.quantity:
                     o.action = FILLED
                     orders_to_remove.append(order)
                 else:
                     # Partial fills update the quantity of the order
                     o.action = PARTIALLY_FILLED
-                    o.qty = o.qty - last_candle.volume
-                    order.qty = order.qty - last_candle.volume
+                    o.quantity = o.quantity - last_candle.volume
+                    order.quantity = order.quantity - last_candle.volume
                 last_filled_order = self.handle_order_update(o)
                 self.execute_strategy_order_update(last_filled_order)
                 p = copy_position(self.get_position().long)
-                if order.type == MARKET:
-                    fee_paid = -quantity_to_cost(o.qty, o.price, False, 1.0) * self.taker_fee
+                if order.order_type == MARKET:
+                    fee_paid = -quantity_to_cost(o.quantity, o.price, False, 1.0) * self.taker_fee
                 else:
-                    fee_paid = -quantity_to_cost(o.qty, o.price, False, 1.0) * self.maker_fee
+                    fee_paid = -quantity_to_cost(o.quantity, o.price, False, 1.0) * self.maker_fee
                 if order.side == SELL:
                     pnl = calculate_long_pnl(self.get_position().long.price, o.price,
-                                             o.qty if o.action == FILLED else last_candle.volume, False, 1.0)
+                                             o.quantity if o.action == FILLED else last_candle.volume, False, 1.0)
                     # Calculate size and price with negative quantity
-                    p.qty, p.price = calculate_new_position_size_position_price(p.qty, p.price, -(
-                        o.qty if o.action == FILLED else last_candle.volume), o.price, self.quantity_step)
+                    p.size, p.price = calculate_new_position_size_position_price(p.size, p.price, -(
+                        o.quantity if o.action == FILLED else last_candle.volume), o.price, self.quantity_step)
                 else:
-                    p.qty, p.price = calculate_new_position_size_position_price(p.qty, p.price, (
-                        o.qty if o.action == FILLED else last_candle.volume), o.price, self.quantity_step)
+                    p.size, p.price = calculate_new_position_size_position_price(p.size, p.price, (
+                        o.quantity if o.action == FILLED else last_candle.volume), o.price, self.quantity_step)
                     pnl = 0.0
 
                 p.leverage = self.leverage
                 p.position_side = LONG
-                p.liquidation_price = calculate_bankruptcy_price(self.get_balance() + fee_paid + pnl, p.qty, p.price,
-                                                                 self.get_position().short.qty,
+                p.liquidation_price = calculate_bankruptcy_price(self.get_balance() + fee_paid + pnl, p.size, p.price,
+                                                                 self.get_position().short.size,
                                                                  self.get_position().short.price, False, 1.0)
                 old_balance, new_balance, old_position, new_position = self.handle_account_update(
                     self.get_balance() + fee_paid + pnl, p, self.get_position().short)
@@ -199,52 +197,50 @@ class BacktestBot(Bot):
         for order in self.open_orders.short:
             execution = False
             o = copy_order(order)
-            if order.type == MARKET:
+            if order.order_type == MARKET:
                 # Market types take the average price of the last candle
                 execution = True
-                o.price = round_down(
-                    np.average([last_candle.open, last_candle.high, last_candle.low, last_candle.close]),
-                    self.price_step)
+                o.price = round_down(average_candle_price(last_candle), self.price_step)
             if last_candle.high > order.price:
-                if (order.type == LIMIT and order.side == BUY) or order.type == SL:
+                if (order.order_type == LIMIT and order.side == BUY) or order.order_type == SL:
                     # Limit buy orders and stop loss are treated the same way
                     execution = True
             if last_candle.low < order.price:
-                if (order.type == LIMIT and order.side == SELL) or order.type == TP:
+                if (order.order_type == LIMIT and order.side == SELL) or order.order_type == TP:
                     # Limit sell orders and take profit are treated the same way
                     execution = True
             if execution:
-                if last_candle.volume >= order.qty:
+                if last_candle.volume >= order.quantity:
                     o.action = FILLED
                     orders_to_remove.append(order)
                 else:
                     # Partial fills update the quantity of the order
                     o.action = PARTIALLY_FILLED
-                    o.qty = o.qty - last_candle.volume
-                    order.qty = order.qty - last_candle.volume
+                    o.quantity = o.quantity - last_candle.volume
+                    order.quantity = order.quantity - last_candle.volume
                 last_filled_order = self.handle_order_update(o)
                 self.execute_strategy_order_update(last_filled_order)
                 p = copy_position(self.get_position().short)
-                if order.type == MARKET:
-                    fee_paid = -quantity_to_cost(o.qty, o.price, False, 1.0) * self.taker_fee
+                if order.order_type == MARKET:
+                    fee_paid = -quantity_to_cost(o.quantity, o.price, False, 1.0) * self.taker_fee
                 else:
-                    fee_paid = -quantity_to_cost(o.qty, o.price, False, 1.0) * self.maker_fee
+                    fee_paid = -quantity_to_cost(o.quantity, o.price, False, 1.0) * self.maker_fee
                 if order.side == SELL:
                     pnl = calculate_short_pnl(self.get_position().short.price, o.price,
-                                              o.qty if o.action == FILLED else last_candle.volume, False, 1.0)
+                                              o.quantity if o.action == FILLED else last_candle.volume, False, 1.0)
                     # Calculate size and price with negative quantity
-                    p.qty, p.price = calculate_new_position_size_position_price(p.qty, p.price, -(
-                        o.qty if o.action == FILLED else last_candle.volume), o.price, self.quantity_step)
+                    p.size, p.price = calculate_new_position_size_position_price(p.size, p.price, -(
+                        o.quantity if o.action == FILLED else last_candle.volume), o.price, self.quantity_step)
                 else:
-                    p.qty, p.price = calculate_new_position_size_position_price(p.qty, p.price, (
-                        o.qty if o.action == FILLED else last_candle.volume), o.price, self.quantity_step)
+                    p.size, p.price = calculate_new_position_size_position_price(p.size, p.price, (
+                        o.quantity if o.action == FILLED else last_candle.volume), o.price, self.quantity_step)
                     pnl = 0.0
 
                 p.leverage = self.leverage
                 p.position_side = LONG
                 p.liquidation_price = calculate_bankruptcy_price(self.get_balance() + fee_paid + pnl,
-                                                                 self.get_position().long.qty,
-                                                                 self.get_position().long.price, p.qty, p.price, False,
+                                                                 self.get_position().long.size,
+                                                                 self.get_position().long.price, p.size, p.price, False,
                                                                  1.0)
                 old_balance, new_balance, old_position, new_position = self.handle_account_update(
                     self.get_balance() + fee_paid + pnl, self.get_position().long, p)
@@ -255,13 +251,13 @@ class BacktestBot(Bot):
         # Check which long orders arrived at the exchange and where added to the open orders
         for order in self.orders_to_execute.long:
             if order.timestamp + self.latency <= self.current_timestamp:
-                if order.qty * order.price < calculate_available_margin(self.get_balance(),
-                                                                        self.get_position().long.size,
-                                                                        self.get_position().long.price,
-                                                                        self.get_position().short.size,
-                                                                        self.get_position().short.price,
-                                                                        last_candle.close,
-                                                                        False, 1, self.leverage):
+                if order.quantity * order.price < calculate_available_margin(self.get_balance(),
+                                                                             self.get_position().long.size,
+                                                                             self.get_position().long.price,
+                                                                             self.get_position().short.size,
+                                                                             self.get_position().short.price,
+                                                                             last_candle.close,
+                                                                             False, 1, self.leverage):
                     last_filled_order = self.handle_order_update(copy_order(order))
                     self.execute_strategy_order_update(last_filled_order)
                 orders_to_remove.append(order)
@@ -271,13 +267,13 @@ class BacktestBot(Bot):
         # Check which short orders arrived at the exchange and where added to the open orders
         for order in self.orders_to_execute.short:
             if order.timestamp + self.latency <= self.current_timestamp:
-                if order.qty * order.price < calculate_available_margin(self.get_balance(),
-                                                                        self.get_position().long.size,
-                                                                        self.get_position().long.price,
-                                                                        self.get_position().short.size,
-                                                                        self.get_position().short.price,
-                                                                        last_candle.close,
-                                                                        False, 1, self.leverage):
+                if order.quantity * order.price < calculate_available_margin(self.get_balance(),
+                                                                             self.get_position().long.size,
+                                                                             self.get_position().long.price,
+                                                                             self.get_position().short.size,
+                                                                             self.get_position().short.price,
+                                                                             last_candle.close,
+                                                                             False, 1, self.leverage):
                     last_filled_order = self.handle_order_update(copy_order(order))
                     self.execute_strategy_order_update(last_filled_order)
                 orders_to_remove.append(order)
@@ -291,7 +287,7 @@ class BacktestBot(Bot):
         :param row: The row to convert.
         :return: A candle object.
         """
-        return Candle(row[1], row[2], row[3], row[4], row[5])
+        return Candle(row[0], row[1], row[2], row[3], row[4], row[5])
 
     def start_websocket(self) -> None:
         """
@@ -311,7 +307,7 @@ class BacktestBot(Bot):
             price_list.append(candle)
             if self.current_timestamp - last_update >= self.strategy.call_interval * 1000:
                 last_update = self.current_timestamp
-                self.decide(price_list)
+                self.execute_strategy_decision_making(price_list)
                 price_list = empty_candle_list()
 
     def create_orders(self, orders_to_create: List[Order]):
