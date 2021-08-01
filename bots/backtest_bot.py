@@ -301,7 +301,7 @@ class BacktestBot(Bot):
         """
         price_list = empty_candle_list()
         last_update = self.data[0, 0]
-        # Time, open, high, low, close, qty
+        # Time, open, high, low, close, volume
         for i in self.data:
             self.current_timestamp = i[0]
             candle = self.prepare_candle(i)
