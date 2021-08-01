@@ -18,19 +18,21 @@ if __name__ == '__main__':
         # Create the strategy configuration from the config
         strategy_config = strategy_module.convert_dict_to_config(config['strategy'])
         # Get the replacement for the numba strategy specification
-        replacement = get_strategy_definition('strategies/grid.py')
+        replacement = get_strategy_definition(config['strategy_file'])
         replacement = ('strategy.' + replacement).replace('StrategyConfig', 'strategy.StrategyConfig')
         replacement = ('to_be_replaced_strategy', replacement)
         # Create the bot module from the file including the replacement of the strategy specification
         bot_module = load_module_from_file('bots/backtest_bot.py', 'bot', replacement, 'import strategy')
         # Create a backtest config
-        b = bot_module.BacktestConfig(0.0, 0.0, 0.0, 0.0)
+        b = bot_module.BacktestConfig(0.0, 0.0, 1.0, 1.0, '', 0.0, 0.0, 0.0)
         # Create a strategy based on the strategy module and the provided class
         strategy = getattr(strategy_module, config['strategy_class'])(strategy_config)
         # Initialize some basic data
-        d = np.zeros((100, 6))
+        d = np.load('test_data.npy')
         # Create the backtest bot
         bot = bot_module.BacktestBot(b, strategy, d)
+        # Initialize bot
+        bot.init()
         # Start run
         bot.start_websocket()
     except Exception as e:
