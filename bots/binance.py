@@ -381,7 +381,7 @@ class BinanceBot(LiveBot):
         params = {'symbol': order.symbol,
                   'side': reverse_mapping(order.side),
                   'positionSide': reverse_mapping(order.position_side),
-                  'type': reverse_mapping(order.type),
+                  'type': reverse_mapping(order.order_type),
                   'quantity': str(order.qty)}
         if params['type'] == LIMIT:
             params['timeInForce'] = 'GTX'
