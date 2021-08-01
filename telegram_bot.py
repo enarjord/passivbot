@@ -39,11 +39,15 @@ class Telegram:
         second_keyboard_buttons = [
             [KeyboardButton('/reload_config \U0000267B'), KeyboardButton('/set_short \U0001F4C9'), KeyboardButton('/set_long \U0001F4C8')],
             [KeyboardButton('/transfer \U0001F3E6'), KeyboardButton('/set_profit_transfer \U0001F4DD'), KeyboardButton('/set_config \U0001F4C4')],
-            [KeyboardButton('/previous \U000023EA'), KeyboardButton('/stop \U000026D4')]
+            [KeyboardButton('/previous \U000023EA'), KeyboardButton('/stop \U000026D4'), KeyboardButton('/next \U000023E9')]
+        ]
+        third_keyboard_buttons = [
+            [KeyboardButton('/previous \U000023EA'), KeyboardButton('/force_open \U0001F3A2')]
         ]
         self._keyboard_idx = 0
         self._keyboards = [ReplyKeyboardMarkup(first_keyboard_buttons, resize_keyboard=True),
-                           ReplyKeyboardMarkup(second_keyboard_buttons, resize_keyboard=True)]
+                           ReplyKeyboardMarkup(second_keyboard_buttons, resize_keyboard=True),
+                           ReplyKeyboardMarkup(third_keyboard_buttons, resize_keyboard=True)]
 
         self.add_handlers(self._updater)
         self._updater.start_polling()
@@ -68,7 +72,7 @@ class Telegram:
         dispatcher.add_handler(CallbackQueryHandler(self._daily, pattern='update_daily'))
 
         dispatcher.add_handler(ConversationHandler(
-            entry_points=[MessageHandler(Filters.regex('/stop.*'), self._begin_stop)],
+            entry_points=[CommandHandler('stop', self._begin_stop)],
             states={
                 1: [MessageHandler(Filters.regex('(graceful|freeze|shutdown|panic|manual|resume|cancel)'),
                                    self._stop_mode_chosen)],
@@ -77,21 +81,21 @@ class Telegram:
             fallbacks=[CommandHandler('cancel', self._abort)]
         ))
         dispatcher.add_handler(ConversationHandler(
-            entry_points=[MessageHandler(Filters.regex('/set_short.*'), self._verify_set_short)],
+            entry_points=[CommandHandler('set_short', self._verify_set_short)],
             states={
                 1: [MessageHandler(Filters.regex('(confirm|abort)'), self._verify_short_confirmation)]
             },
             fallbacks=[CommandHandler('cancel', self._abort)]
         ))
         dispatcher.add_handler(ConversationHandler(
-            entry_points=[MessageHandler(Filters.regex('/set_long.*'), self._verify_set_long)],
+            entry_points=[CommandHandler('set_long', self._verify_set_long)],
             states={
                 1: [MessageHandler(Filters.regex('(confirm|abort)'), self._verify_long_confirmation)]
             },
             fallbacks=[CommandHandler('cancel', self._abort)]
         ))
         dispatcher.add_handler(ConversationHandler(
-            entry_points=[MessageHandler(Filters.regex('/set_config.*'), self._begin_set_config)],
+            entry_points=[CommandHandler('set_config', self._begin_set_config)],
             states={
                 1: [CallbackQueryHandler(self._configfile_chosen)],
                 2: [CallbackQueryHandler(self._verify_setconfig_confirmation)]
@@ -99,7 +103,7 @@ class Telegram:
             fallbacks=[CommandHandler('cancel', self._abort)]
         ))
         dispatcher.add_handler(ConversationHandler(
-            entry_points=[MessageHandler(Filters.regex('/transfer.*'), self._begin_transfer)],
+            entry_points=[CommandHandler('transfer', self._begin_transfer)],
             states={
                 1: [CallbackQueryHandler(self._transfer_type_chosen)],
                 2: [MessageHandler(Filters.regex('(/[0-9\\.]*)|cancel'), self._transfer_amount_chosen)],
@@ -109,7 +113,7 @@ class Telegram:
         ))
 
         dispatcher.add_handler(ConversationHandler(
-            entry_points=[MessageHandler(Filters.regex('/set_profit_transfer.*'), self._begin_set_profit_transfer)],
+            entry_points=[CommandHandler('set_profit_transfer', self._begin_set_profit_transfer)],
             states={
                 1: [MessageHandler(Filters.regex('([0-9]*|cancel)'), self._profit_transfer_chosen)],
                 2: [MessageHandler(Filters.regex('(confirm|abort)'), self._verify_profit_transfer_confirmation)]
@@ -117,10 +121,88 @@ class Telegram:
             fallbacks=[CommandHandler('cancel', self._abort)]
         ))
 
+        dispatcher.add_handler(ConversationHandler(
+            entry_points=[CommandHandler('force_open', self._begin_force_open)],
+            states={
+                1: [CallbackQueryHandler(self._position_side_chosen)],
+                2: [MessageHandler(Filters.regex('(confirm|abort)'), self._verify_open_confirmation)]
+            },
+            fallbacks=[CommandHandler('cancel', self._abort)]
+        ))
+
+    def _begin_force_open(self, update: Update, _: CallbackContext) -> int:
+        if self._bot.exchange == 'bybit':
+            self.send_msg('This command is not supported (yet)')
+            return ConversationHandler.END
+
+        self.force_open_type = None
+        self.open_qty = 0.0
+
+        buttons = [
+            [InlineKeyboardButton('Long', callback_data='long'),
+             InlineKeyboardButton('Short', callback_data='shrt'),
+             InlineKeyboardButton('cancel', callback_data='cancel')]
+        ]
+        update.message.reply_text(
+            text='You have chosen to force (re)entering a position. This will place a market order at the current price with the size of the nearest entry order.'
+                 'Please select the position side you want to (re)enter:',
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup(buttons)
+        )
+        return 1
+
+    def _position_side_chosen(self, update=None, context=None) -> int:
+        query = update.callback_query
+        query.answer()
+
+        self.force_open_type = query.data
+        if self.force_open_type in ['long', 'shrt']:
+            if self.force_open_type == 'long':
+                self.open_qty = min(o['qty'] for o in self._bot.open_orders if o['side'] == 'buy' and o['position_side'] == 'long')
+            else:
+                self.open_qty = min(o['qty'] for o in self._bot.open_orders if o['side'] == 'sell' and o['position_side'] == 'shrt')
+
+            text = f'You have chosen to (re)enter a <pre>{self.force_open_type if self.force_open_type == "long" else "short"}</pre> position with a qty of <pre>{self.open_qty}</pre>.\n' \
+                   'Please confirm that you want to (re)enter with the nearest order quantity at the current price using a market order:'
+            reply_keyboard = [['confirm', 'abort']]
+            update.effective_message.reply_text(text=text, parse_mode=ParseMode.HTML, reply_markup=ReplyKeyboardMarkup(reply_keyboard))
+        elif self.force_open_type == 'cancel':
+            update.effective_message.reply_text('Action aborted', reply_markup=self._keyboards[self._keyboard_idx])
+            return ConversationHandler.END
+        return 2
+
+    def _verify_open_confirmation(self, update: Update, _: CallbackContext) -> int:
+        answer = update.effective_message.text
+
+        if answer not in ['confirm', 'abort']:
+            return 3
+        elif answer == 'abort':
+            self.send_msg(f'Request for (re)entering position aborted')
+            return ConversationHandler.END
+
+        async def _place_market_order(position_side: str):
+            order = {'side': 'sell',
+                     'position_side': self.force_open_type,
+                     'qty': abs(self.open_qty),
+                     'type': 'market',
+                     'reduce_only': True,
+                     'custom_id': 'force_entry'}
+            result = await self._bot.execute_order(order)
+            if 'code' in result:
+                self.send_msg(f'{result["msg"]}')
+            else:
+                self.send_msg(f'Succesfully placed market order')
+            self.send_msg('Market order placed')
+        task = self.loop.create_task(_place_market_order(self.force_open_type))
+        task.add_done_callback(lambda fut: True) #ensures task is processed to prevent warning about not awaiting
+        self.send_msg(f'Placing market order...')
+
+        return ConversationHandler.END
+
     def _begin_transfer(self, update: Update, _: CallbackContext) -> int:
         if self._bot.exchange == 'bybit':
             self.send_msg('This command is not supported (yet)')
-            return
+            return ConversationHandler.END
 
         self.transfer_type = None
         self.transfer_amount = 0
@@ -487,7 +569,8 @@ class Telegram:
               '/daily [days]: an overview of daily profit, defaulting to 7 days\n' \
               '/set_short: initiates a conversion via which the user can enable/disable shorting\n' \
               '/set_long: initiates a conversion via which the user can enable/disable long\n' \
-              '/set_config: initiates a conversion via which the user can switch to a different configuration file\n' \
+              '/set_config: initiates a conversation via which the user can switch to a different configuration file\n' \
+              '/force_open: initiates a conversion via which the user can actively force (re)entry of a position based on the calculated grid\n' \
               '/help: This help page'
         self.send_msg(msg)
 
