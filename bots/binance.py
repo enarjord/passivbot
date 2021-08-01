@@ -288,7 +288,7 @@ class BinanceBot(LiveBot):
             if mapping(msg['o']['ot']) == MARKET and order.action != PARTIALLY_FILLED:
                 order.price = float(msg['o']['ap'])
         if order.action == PARTIALLY_FILLED:
-            order.qty = order.qty - float(msg['o']['z'])
+            order.quantity = order.quantity - float(msg['o']['z'])
         return order
 
     def prepare_account(self, msg) -> Tuple[float, Position, Position]:
@@ -382,7 +382,7 @@ class BinanceBot(LiveBot):
                   'side': reverse_mapping(order.side),
                   'positionSide': reverse_mapping(order.position_side),
                   'type': reverse_mapping(order.order_type),
-                  'quantity': str(order.qty)}
+                  'quantity': str(order.quantity)}
         if params['type'] == LIMIT:
             params['timeInForce'] = 'GTX'
             params['price'] = str(order.price)
