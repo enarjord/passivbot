@@ -331,34 +331,40 @@ class Bot:
         delete_orders_new = empty_order_list()
 
         for order in add_orders:
-            if order.qty < self.minimal_quantity:
-                if print:
-                    print_(["Quantity too small"])
-                    print_order(order)
-            elif order.price != 0.0 and order.price * order.qty < self.minimal_cost:
-                if print:
-                    print_(["Cost too small"])
-                    print_order(order)
-            elif order.stop_price != 0.0 and order.stop_price * order.qty < self.minimal_cost:
-                if print:
-                    print_(["Cost too small"])
-                    print_order(order)
+            if order.quantity < self.minimal_quantity:
+                # if print:
+                #     print_(["Quantity too small"])
+                #     print_order(order)
+                pass
+            elif order.price != 0.0 and order.price * order.quantity < self.minimal_cost:
+                # if print:
+                #     print_(["Cost too small"])
+                #     print_order(order)
+                pass
+            elif order.stop_price != 0.0 and order.stop_price * order.quantity < self.minimal_cost:
+                # if print:
+                #     print_(["Cost too small"])
+                #     print_order(order)
+                pass
             else:
                 add_orders_new.append(order)
 
         for order in delete_orders:
-            if order.qty < self.minimal_quantity:
-                if print:
-                    print_(["Quantity too small"])
-                    print_order(order)
-            elif order.price != 0.0 and order.price * order.qty < self.minimal_cost:
-                if print:
-                    print_(["Cost too small"])
-                    print_order(order)
-            elif order.stop_price != 0.0 and order.stop_price * order.qty < self.minimal_cost:
-                if print:
-                    print_(["Cost too small"])
-                    print_order(order)
+            if order.quantity < self.minimal_quantity:
+                # if print:
+                #     print_(["Quantity too small"])
+                #     print_order(order)
+                pass
+            elif order.price != 0.0 and order.price * order.quantity < self.minimal_cost:
+                # if print:
+                #     print_(["Cost too small"])
+                #     print_order(order)
+                pass
+            elif order.stop_price != 0.0 and order.stop_price * order.quantity < self.minimal_cost:
+                # if print:
+                #     print_(["Cost too small"])
+                #     print_order(order)
+                pass
             else:
                 delete_orders_new.append(order)
 
