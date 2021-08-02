@@ -243,6 +243,30 @@ def calculate_bankruptcy_price(balance: float, long_position_size: float, long_p
 
 
 @njit
+def calculate_equity(balance: float, long_position_size: float, long_position_price: float, short_position_size: float,
+                     short_position_price: float, last_price: float, inverse: bool, contract_multiplier: float):
+    """
+    Calculates the equity, the current balance plus the current worth of the positions.
+    :param balance: The current balance.
+    :param long_position_size: The long position size to use.
+    :param long_position_price: The long position price to use.
+    :param short_position_size: The short position size to use.
+    :param short_position_price: The short position price to use.
+    :param last_price: The last price to calculate it on.
+    :param inverse: Whether it is an inverse contract or not.
+    :param contract_multiplier: The contract multiplier for inverse contracts.
+    :return: The current equity.
+    """
+    equity = balance
+    if long_position_price and long_position_size:
+        equity += calculate_long_pnl(long_position_price, last_price, long_position_size, inverse, contract_multiplier)
+    if short_position_price and short_position_size:
+        equity += calculate_short_pnl(short_position_price, last_price, short_position_size, inverse,
+                                      contract_multiplier)
+    return equity
+
+
+@njit
 def aggregate_ticks_to_candle(tick_list: List[Tick], candle_list: List[Candle], candle_start_time: int,
                               last_candle: Candle, tick_interval: float) -> List[Candle]:
     """
