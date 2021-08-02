@@ -136,6 +136,12 @@ class BacktestBot(Bot):
                                                                                                            LONG),
                                                                                                   self.get_position().short)
                 self.execute_strategy_account_update(old_balance, new_balance, old_position, new_position)
+
+                fee_paid = -quantity_to_cost(order.quantity, order.price, self.inverse,
+                                             self.contract_multiplier) * self.maker_fee
+                self.fills.append(
+                    Fill(0, self.current_timestamp, -self.get_balance() + fee_paid, fee_paid, 0.0, 0.0, 0.0,
+                         order.quantity, order.price, 0.0, 0.0, LQ, CALCULATED, SELL, LONG))
             if self.get_position().short.size != 0.0:
                 order = Order(self.symbol, 0, last_candle.close, last_candle.close, self.get_position().short.size,
                               LQ, SELL, self.current_timestamp, CALCULATED, SHORT)
@@ -149,6 +155,12 @@ class BacktestBot(Bot):
                                                                                                            self.leverage,
                                                                                                            SHORT))
                 self.execute_strategy_account_update(old_balance, new_balance, old_position, new_position)
+
+                fee_paid = -quantity_to_cost(order.quantity, order.price, self.inverse,
+                                             self.contract_multiplier) * self.maker_fee
+                self.fills.append(
+                    Fill(0, self.current_timestamp, -self.get_balance() + fee_paid, fee_paid, 0.0, 0.0, 0.0,
+                         order.quantity, order.price, 0.0, 0.0, LQ, CALCULATED, SELL, SHORT))
             return False
 
         orders_to_remove = empty_order_list()
@@ -208,6 +220,24 @@ class BacktestBot(Bot):
                     self.get_balance() + fee_paid + pnl, p, self.get_position().short)
                 self.execute_strategy_account_update(old_balance, new_balance, old_position, new_position)
 
+                equity = calculate_equity(self.get_balance(), self.get_position().long.size,
+                                          self.get_position().long.price, self.get_position().short.size,
+                                          self.get_position().short.price, last_candle.close, self.inverse,
+                                          self.contract_multiplier)
+                position_balance_ratio = self.get_position().long.price * self.get_position().long.size \
+                                         + self.get_position().short.price * self.get_position().short.size \
+                                         / self.get_balance()
+                self.fills.append(Fill(0, self.current_timestamp,
+                                       0.0 if order.side == BUY else calculate_long_pnl(old_position.long.price,
+                                                                                        o.price,
+                                                                                        o.quantity if o.action == FILLED else last_candle.volume,
+                                                                                        self.inverse,
+                                                                                        self.contract_multiplier),
+                                       fee_paid, self.get_balance(), equity, position_balance_ratio,
+                                       o.quantity if o.action == FILLED else last_candle.volume, order.price,
+                                       self.get_position().long.size, self.get_position().long.price, order.order_type,
+                                       order.action, order.side, order.position_side))
+
         self.open_orders.delete_long(orders_to_remove)
         orders_to_remove = empty_order_list()
         # Check which short orders where triggered in the last candle
@@ -265,6 +295,24 @@ class BacktestBot(Bot):
                 old_balance, new_balance, old_position, new_position = self.handle_account_update(
                     self.get_balance() + fee_paid + pnl, self.get_position().long, p)
                 self.execute_strategy_account_update(old_balance, new_balance, old_position, new_position)
+
+                equity = calculate_equity(self.get_balance(), self.get_position().long.size,
+                                          self.get_position().long.price, self.get_position().short.size,
+                                          self.get_position().short.price, last_candle.close, self.inverse,
+                                          self.contract_multiplier)
+                position_balance_ratio = self.get_position().long.price * self.get_position().long.size \
+                                         + self.get_position().short.price * self.get_position().short.size \
+                                         / self.get_balance()
+                self.fills.append(Fill(0, self.current_timestamp,
+                                       0.0 if order.side == BUY else calculate_short_pnl(old_position.short.price,
+                                                                                         o.price,
+                                                                                         o.quantity if o.action == FILLED else last_candle.volume,
+                                                                                         self.inverse,
+                                                                                         self.contract_multiplier),
+                                       fee_paid, self.get_balance(), equity, position_balance_ratio,
+                                       o.quantity if o.action == FILLED else last_candle.volume, order.price,
+                                       self.get_position().short.size, self.get_position().short.price,
+                                       order.order_type, order.action, order.side, order.position_side))
 
         self.open_orders.delete_long(orders_to_remove)
         orders_to_remove = empty_order_list()
