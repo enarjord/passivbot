@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Tuple
 
 import numpy as np
 from numba import typeof, types
@@ -6,12 +6,15 @@ from numba.experimental import jitclass
 
 from bots.base_bot import Bot, base_bot_spec
 from definitions.candle import Candle, empty_candle_list
+from definitions.fill import Fill, empty_fill_list
 from definitions.order import Order, empty_order_list, copy_order, LONG, SHORT, CANCELED, NEW, MARKET, LIMIT, FILLED, \
     PARTIALLY_FILLED, TP, SL, LQ, CALCULATED, SELL, BUY
 from definitions.order_list import OrderList
 from definitions.position import Position, copy_position
+from definitions.statistic import Statistic, empty_statistic_list
 from helpers.optimized import calculate_available_margin, quantity_to_cost, calculate_long_pnl, calculate_short_pnl, \
-    round_down, calculate_new_position_size_position_price, calculate_bankruptcy_price, average_candle_price
+    round_down, calculate_new_position_size_position_price, calculate_bankruptcy_price, average_candle_price, \
+    calculate_equity
 
 
 @jitclass([
@@ -61,7 +64,9 @@ class BacktestConfig:
               ("current_timestamp", types.int64),
               ("latency", types.float64),
               ("maker_fee", types.float64),
-              ("taker_fee", types.float64)
+              ("taker_fee", types.float64),
+              ("fills", typeof(empty_fill_list())),
+              ("statistics", typeof(empty_statistic_list()))
           ])
 # ToDo:
 #  Add list of fills after each order fill.
@@ -94,6 +99,9 @@ class BacktestBot(Bot):
         self.symbol = config.symbol
         self.maker_fee = config.maker_fee
         self.taker_fee = config.taker_fee
+
+        self.fills = empty_fill_list()
+        self.statistics = empty_statistic_list()
 
     def execute_exchange_logic(self, last_candle: Candle) -> bool:
         """
@@ -289,7 +297,7 @@ class BacktestBot(Bot):
         """
         return Candle(row[0], row[1], row[2], row[3], row[4], row[5])
 
-    def start_websocket(self) -> None:
+    def start_websocket(self) -> Tuple[List[Fill], List[Statistic]]:
         """
         Executes the iteration over the provided data. Triggers updating of sent orders, open orders, position, and
         balance after each candle tick. Also executes the strategy decision logic after the specified call interval.
@@ -297,18 +305,38 @@ class BacktestBot(Bot):
         """
         price_list = empty_candle_list()
         last_update = self.data[0, 0]
+        last_statistic_update = self.data[0, 0]
         # Time, open, high, low, close, volume
         for i in self.data:
             self.current_timestamp = i[0]
             candle = self.prepare_candle(i)
             cont = self.execute_exchange_logic(candle)
             if not cont:
-                return
+                return self.fills, self.statistics
             price_list.append(candle)
             if self.current_timestamp - last_update >= self.strategy.call_interval * 1000:
                 last_update = self.current_timestamp
                 self.execute_strategy_decision_making(price_list)
                 price_list = empty_candle_list()
+            if self.current_timestamp - last_statistic_update >= 60 * 60 * 1000:
+                equity = calculate_equity(self.get_balance(), self.get_position().long.size,
+                                          self.get_position().long.price, self.get_position().short.size,
+                                          self.get_position().short.price, candle.close, self.inverse,
+                                          self.contract_multiplier)
+                position_balance_ratio = self.get_position().long.price * self.get_position().long.size \
+                                         + self.get_position().short.price * self.get_position().short.size \
+                                         / self.get_balance()
+                if len(self.statistics) > 0:
+                    profit_and_loss_balance = self.get_balance() / self.statistics[-1].balance
+                    profit_and_loss_equity = equity / self.statistics[-1].equity
+                else:
+                    profit_and_loss_balance = 0.0
+                    profit_and_loss_equity = 0.0
+                self.statistics.append(
+                    Statistic(self.current_timestamp, self.get_balance(), equity, profit_and_loss_balance,
+                              profit_and_loss_equity, position_balance_ratio))
+                last_statistic_update = self.current_timestamp
+        return self.fills, self.statistics
 
     def create_orders(self, orders_to_create: List[Order]):
         """
