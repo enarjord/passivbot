@@ -369,9 +369,10 @@ class BacktestBot(Bot):
         last_update = self.data[0, 0]
         last_statistic_update = self.data[0, 0]
         # Time, open, high, low, close, volume
-        for i in self.data:
-            self.current_timestamp = i[0]
-            candle = self.prepare_candle(i)
+        for index in range(len(self.data)):
+            self.current_timestamp = self.data[index][0]
+            candle = self.prepare_candle(self.data[index])
+            price_list.append(candle)
             cont = self.execute_exchange_logic(candle)
             if not cont:
                 return self.fills, self.statistics
