@@ -102,4 +102,4 @@ The following options can be provided to the backtester. Note that any argument 
 
 ### Running batch optimize
 
-You can run the optimze for multiple coins in a row, so you don't have to manually start an optimize for each coin. To do this, you can simply specify multiple coins in the backtest-config used (`symbols: BTCUSDT,ETHUSDT,BNBUSDT`), or specify the symbols to be used via the command-line argument to override the config file (`python3 optimize.py -s BTCUSDT,ETHUSDT,BNBUSDT`).
+You can run the optimze for multiple coins in a row, so you don't have to manually start an optimize for each coin. To do this, you can simply specify multiple coins in the backtest-config used (`symbol: BTCUSDT,ETHUSDT,BNBUSDT`), or specify the symbols to be used via the command-line argument to override the config file (`python3 optimize.py -s BTCUSDT,ETHUSDT,BNBUSDT`).
