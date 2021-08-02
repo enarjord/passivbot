@@ -125,7 +125,7 @@ class BacktestBot(Bot):
                                       self.contract_multiplier, self.leverage) <= 0.0:
             if self.get_position().long.size != 0.0:
                 order = Order(self.symbol, 0, last_candle.close, last_candle.close, self.get_position().long.size,
-                              CALCULATED, SELL, self.current_timestamp, LQ, LONG)
+                              LQ, SELL, self.current_timestamp, CALCULATED, LONG)
                 last_filled_order = self.handle_order_update(order)
                 self.execute_strategy_order_update(last_filled_order)
                 old_balance, new_balance, old_position, new_position = self.handle_account_update(0.0,
@@ -138,7 +138,7 @@ class BacktestBot(Bot):
                 self.execute_strategy_account_update(old_balance, new_balance, old_position, new_position)
             if self.get_position().short.size != 0.0:
                 order = Order(self.symbol, 0, last_candle.close, last_candle.close, self.get_position().short.size,
-                              CALCULATED, SELL, self.current_timestamp, LQ, SHORT)
+                              LQ, SELL, self.current_timestamp, CALCULATED, SHORT)
                 last_filled_order = self.handle_order_update(order)
                 self.execute_strategy_order_update(last_filled_order)
                 old_balance, new_balance, old_position, new_position = self.handle_account_update(0.0,
