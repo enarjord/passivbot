@@ -340,7 +340,7 @@ def calc_shrt_orders(balance,
         entry_qty = round_dn(min(max_entry_qty,
                                  max(min_entry_qty,
                                      base_entry_qty + (-shrt_psize * (rqty_const + eqf(MA_ratios, rqty_MAr_coeffs))))), qty_step)
-        nclose_price = round_dn(shrt_pprice * (markup_const + eqf(MA_ratios, markup_MAr_coeffs)), price_step)
+        nclose_price = min(highest_bid, round_dn(shrt_pprice * (markup_const + eqf(MA_ratios, markup_MAr_coeffs)), price_step))
         if entry_qty < min_entry_qty:
             entry_qty = 0.0
         if pbr_stop_loss < 0.0:
