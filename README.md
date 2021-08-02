@@ -1,5 +1,7 @@
 ![Passivbot](docs/images/logo.png)
 
+# :warning: **Under active development, no guarantee or support at this moment.** :warning:
+
 # Trading bot running on Bybit and Binance Futures
 
 :warning: **Use at own risk** :warning:
