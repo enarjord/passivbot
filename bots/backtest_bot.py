@@ -70,9 +70,6 @@ class BacktestConfig:
               ("fills", typeof(empty_fill_list())),
               ("statistics", typeof(empty_statistic_list()))
           ])
-# ToDo:
-#  Add list of fills after each order fill.
-#  Add (hourly) statistics.
 class BacktestBot(Bot):
     """
     A class to backtest a strategy. Can not be directly imported due to dynamically loading the correct strategy
