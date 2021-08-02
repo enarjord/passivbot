@@ -376,11 +376,12 @@ class BacktestBot(Bot):
             cont = self.execute_exchange_logic(candle)
             if not cont:
                 return self.fills, self.statistics
-            price_list.append(candle)
-            if self.current_timestamp - last_update >= self.strategy.call_interval * 1000:
-                last_update = self.current_timestamp
-                self.execute_strategy_decision_making(price_list)
-                price_list = empty_candle_list()
+            if index + 1 < len(self.data):
+                if self.data[index + 1][
+                    5] != 0.0 and self.current_timestamp - last_update >= self.strategy.call_interval * 1000:
+                    last_update = self.current_timestamp
+                    self.execute_strategy_decision_making(price_list)
+                    price_list = empty_candle_list()
             if self.current_timestamp - last_statistic_update >= 60 * 60 * 1000:
                 equity = calculate_equity(self.get_balance(), self.get_position().long.size,
                                           self.get_position().long.price, self.get_position().short.size,
