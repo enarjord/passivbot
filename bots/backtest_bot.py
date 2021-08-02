@@ -177,8 +177,6 @@ class BacktestBot(Bot):
                     o.action = PARTIALLY_FILLED
                     o.quantity = o.quantity - last_candle.volume
                     order.quantity = order.quantity - last_candle.volume
-                last_filled_order = self.handle_order_update(o)
-                self.execute_strategy_order_update(last_filled_order)
                 p = copy_position(self.get_position().long)
                 if order.order_type == MARKET:
                     fee_paid = -quantity_to_cost(o.quantity, o.price, self.inverse,
@@ -204,6 +202,8 @@ class BacktestBot(Bot):
                                                                  self.get_position().short.size,
                                                                  self.get_position().short.price, self.inverse,
                                                                  self.contract_multiplier)
+                last_filled_order = self.handle_order_update(o)
+                self.execute_strategy_order_update(last_filled_order)
                 old_balance, new_balance, old_position, new_position = self.handle_account_update(
                     self.get_balance() + fee_paid + pnl, p, self.get_position().short)
                 self.execute_strategy_account_update(old_balance, new_balance, old_position, new_position)
@@ -235,8 +235,6 @@ class BacktestBot(Bot):
                     o.action = PARTIALLY_FILLED
                     o.quantity = o.quantity - last_candle.volume
                     order.quantity = order.quantity - last_candle.volume
-                last_filled_order = self.handle_order_update(o)
-                self.execute_strategy_order_update(last_filled_order)
                 p = copy_position(self.get_position().short)
                 if order.order_type == MARKET:
                     fee_paid = -quantity_to_cost(o.quantity, o.price, self.inverse,
@@ -262,6 +260,8 @@ class BacktestBot(Bot):
                                                                  self.get_position().long.size,
                                                                  self.get_position().long.price, p.size, p.price,
                                                                  self.inverse, self.contract_multiplier)
+                last_filled_order = self.handle_order_update(o)
+                self.execute_strategy_order_update(last_filled_order)
                 old_balance, new_balance, old_position, new_position = self.handle_account_update(
                     self.get_balance() + fee_paid + pnl, self.get_position().long, p)
                 self.execute_strategy_account_update(old_balance, new_balance, old_position, new_position)
