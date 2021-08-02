@@ -16,7 +16,10 @@ from numba.experimental import jitclass
     ('price', types.float64),
     ('position_size', types.float64),
     ('position_price', types.float64),
-    ('type', types.string)
+    ('order_type', types.string),
+    ('action', types.string),
+    ('side', types.string),
+    ('position_side', types.string)
 ])
 class Fill:
     """
@@ -25,7 +28,7 @@ class Fill:
 
     def __init__(self, order_id: int, timestamp: int, profit_and_loss: float, fee_paid: float, balance: float,
                  equity: float, position_balance_ratio: float, quantity: float, price: float, position_size: float,
-                 position_price: float, type: str):
+                 position_price: float, order_type: str, action: str, side: str, position_side: str):
         """
         Create a fill.
         :param order_id: The id of the trade it was filled.
@@ -39,7 +42,10 @@ class Fill:
         :param price: The price at which it was filled.
         :param position_size: The current position size.
         :param position_price: The current position price.
-        :param type: The type of fill that happened. Will use types from Order.
+        :param order_type: The type of fill that happened. Will use types from Order.
+        :param action: The action of a fill, for example FILLED. Will use types from Order.
+        :param side: The side of the order, meaning BUY or SELL. Will use types from Order.
+        :param position_side: The side of the order, LONG or SHORT. Will use types from Order.
         """
         self.order_id = order_id
         self.timestamp = timestamp
@@ -52,7 +58,10 @@ class Fill:
         self.price = price
         self.position_size = position_size
         self.position_price = position_price
-        self.type = type
+        self.order_type = order_type
+        self.action = action
+        self.side = side
+        self.position_side = position_side
 
 
 @njit
@@ -73,7 +82,7 @@ def empty_fill() -> Fill:
     Returns an empty Fill.
     :return: Empty Fill.
     """
-    return Fill(0, 0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, '')
+    return Fill(0, 0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, '', '', '', '')
 
 
 def precompile_fill():
