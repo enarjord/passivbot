@@ -109,7 +109,8 @@ def objective_function(analysis: dict, config: dict, metric='adjusted_daily_gain
         * min(1.0, config['maximum_hrs_no_fills_same_side'] / analysis['max_hrs_no_fills_same_side'])
         * min(1.0, analysis['closest_bkr'] / config['minimum_bankruptcy_distance'])
         * min(1.0, analysis['lowest_eqbal_ratio'] / config['minimum_equity_balance_ratio'])
-        # * min(1.0, analysis['sharpe_ratio'] / config['minimum_sharpe_ratio'])
+        * min(1.0, analysis['sharpe_ratio'] / config['minimum_sharpe_ratio'])
+        * min(1.0, analysis['average_daily_gain'] / config['minimum_slice_adg'])
     )
 
 
