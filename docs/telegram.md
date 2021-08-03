@@ -94,4 +94,5 @@ mode to resume normal operation.
 
 
 !!! Warning
-    Using one *Telegram Bot* on multiple *passivbot* configs simultaneously **will result in errors** so You need to generate separate tokens for each config You wish to run.
+    Using one Telegram bot on multiple passivbot instances simultaneously will result in errors, so you need to generate
+    use a separate telegram bot for each passivbot instance.
