@@ -181,11 +181,10 @@ class Telegram:
             return ConversationHandler.END
 
         async def _place_market_order(position_side: str):
-            order = {'side': 'sell',
+            order = {'side': 'sell' if self.force_open_type == 'shrt' else 'buy',
                      'position_side': self.force_open_type,
                      'qty': abs(self.open_qty),
                      'type': 'market',
-                     'reduce_only': True,
                      'custom_id': 'force_entry'}
             result = await self._bot.execute_order(order)
             if 'code' in result:
