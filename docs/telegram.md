@@ -1,5 +1,9 @@
 # Telegram integration
 
+!!! Warning
+    Using one Telegram bot on multiple passivbot instances simultaneously will result in errors, so you need to generate
+    use a separate telegram bot for each passivbot instance.
+
 ## Telegram support
 
 Passivbot provides interfacing with the bot via Telegram via a telegram bot. There are a number of commands available to control the bot.
