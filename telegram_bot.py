@@ -622,6 +622,7 @@ class Telegram:
                 daily = {}
                 position = await self._bot.fetch_position()
                 wallet_balance = position['wallet_balance']
+                cross_wallet_pct = float(self._bot.config['cross_wallet_pct'])
                 for idx, item in enumerate(range(0, nr_of_days)):
                     start_of_day = today - timedelta(days=idx)
                     end_of_day = start_of_day + timedelta(days=1)
@@ -642,13 +643,13 @@ class Telegram:
                     day_profit = daily[item]['pnl']
                     pnl_sum += day_profit
                     previous_day_close_wallet_balance = wallet_balance - day_profit
-                    profit_pct = ((wallet_balance / previous_day_close_wallet_balance) - 1) * 100 \
+                    profit_pct = ((wallet_balance / previous_day_close_wallet_balance) - 1) / cross_wallet_pct * 100 \
                         if previous_day_close_wallet_balance > 0.0 else 0.0
                     wallet_balance = previous_day_close_wallet_balance
                     table.add_row([daily[item]['date'], f'{day_profit:.1f} ({profit_pct:.2f}%)'])
 
                 bal_minus_pnl = position['wallet_balance'] - pnl_sum
-                pct_sum = (position['wallet_balance'] / bal_minus_pnl - 1) * 100 if bal_minus_pnl > 0.0 else 0.0
+                pct_sum = (position['wallet_balance'] / bal_minus_pnl - 1) / cross_wallet_pct * 100 if bal_minus_pnl > 0.0 else 0.0
                 table.add_row(['-------','------------'])
                 table.add_row(['Total', f'{round_dynamic(pnl_sum, 3)} ({round_(pct_sum, 0.01)}%)'])
 
