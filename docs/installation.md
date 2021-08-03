@@ -34,7 +34,9 @@ If you've installed the bot using the git clone instructions above, please follo
 2) Pull the latest version of the bot by issueing `git pull` from the terminal.
 3) Run `pip install -r requirements.txt` from the passivbot root directory to update the python requirements.
 4) Start the bot again using the command described in [Running live](live.md) *
-*note: do not run configs from a different bot version. Behavior can result in a significant loss.
+
+!!! Warning
+	Take care when upgrading, as configs from different bot versions are highly likely to be incompatible and can result in unexpected results or severe losses
 
 ### Different versions
 
