@@ -44,3 +44,6 @@ A: As PassivBot is still under development, it can do some strange things on occ
 
 **Q: I'm getting an error message stating 'Signature is invalid for this request', along with 'maxNotionalValue'?**
 A: The Binance API key that is used was created before Futures was enabled for the account. In order to fix this, you'll need to create a new API key.
+
+**Q: I'm getting an error while installing requirements.txt stating 'No matching distribution found for ray\[tune\]==1.2.0'**
+A: Make sure you are using python 3.8.x
