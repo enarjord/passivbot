@@ -205,6 +205,14 @@ class BinanceBot(LiveBot):
 
     async def fetch_ticks(self, from_id: int = None, start_time: int = None, end_time: int = None,
                           do_print: bool = True):
+        """
+        Function to fetch ticks, either based on ID or based on time.
+        :param from_id: The ID from which to fetch.
+        :param start_time: The start time from which to fetch.
+        :param end_time: The end time to which to fetch.
+        :param do_print: Whether to print output or not.
+        :return: A list of Ticks.
+        """
         params = {'symbol': self.symbol, 'limit': 1000}
         tick_list = empty_tick_list()
         if from_id is not None:
