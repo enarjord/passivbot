@@ -34,7 +34,7 @@ Apart from the account name, there are a number of other parameters you can spec
 
 * the exchange
 * the account name (must match one specified in `api-keys.json`)
-* the symbol to backtest on
+* the symbol(s) to backtest on
 * the latency to simulate during backtesting
 * the starting balance
 * the start and end date for the backtest
@@ -55,10 +55,11 @@ The following options can be provided to the backtester. Note that any argument 
 | --nojit | Disables the use of numba's just in time compiler during backtests
 | -b / --backtest_config | The backtest config hjson file to use<br/>**Default value:** configs/backtest/default.hjson
 | -d / --download-only | Instructs the backtest to only download the data, but not dump the ticks caches to disk
-| -s / --symbol | The symbol to run the backtest on
+| -s / --symbol | The symbol(s) to run the backtest on, separated by a `,`
 | -u / --user | The name of the account used to download trade data
 | --start_date | The starting date of the backtest<br/>**Syntax:** YYYY-MM-DDThh:mm
 | --end_date | The end date of the backtest<br/>**Syntax:** YYYY-MM-DDThh:mm
+| -bd / --base_dir | the base directory to place the output files in<br/>**Default:** `backtests`
 
 ## Backtest results
 

@@ -42,5 +42,8 @@ A: Join our discord to get involved with the community!
 **Q: My bot liquidated me, what now?**  
 A: As PassivBot is still under development, it can do some strange things on occasion. As such, we suggest not using any money you cannot afford to lose. If you have trade data, notice an anomaly, or need some help figuring out what went wrong, post your data to the Discord and/or Telegram. The community is extremely helpful and may be able to provide some guidance.
 
-**Q: I'm getting an error message stating 'Signature is invalid for this request', along with 'maxNotionalValue'?**
+**Q: I'm getting an error message stating 'Signature is invalid for this request', along with 'maxNotionalValue'?**  
 A: The Binance API key that is used was created before Futures was enabled for the account. In order to fix this, you'll need to create a new API key.
+
+**Q: I'm getting an error while installing requirements.txt stating 'No matching distribution found for ray\[tune\]==1.2.0'**  
+A: Make sure you are using python 3.8.x

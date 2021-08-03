@@ -7,6 +7,7 @@ how you can start your bot, and anything relating to keeping the system running 
 
 In order to start the bot in live mode, you will need two things:
 1) setup your API-keys and (optionally) your telegram settings in the `api-keys.json` file in the root folder.
+   The template file `api-keys.example.json` can be copied as a starting file. 
 2) have the config file you want to use in live mode readily available for the bot (typically placed in `configs/live`)
 
 !!! Warning

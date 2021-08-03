@@ -326,7 +326,7 @@ async def execute_optimize(config):
     if config['starting_configs'] is not None:
         try:
             if os.path.isdir(config['starting_configs']):
-                start_candidate = [json.load(open(f)) for f in glob.glob(os.path.join(args.starting_configs, '*.json'))]
+                start_candidate = [json.load(open(f)) for f in glob.glob(os.path.join(config['starting_configs'], '*.json'))]
                 print('Starting with all configurations in directory.')
             else:
                 start_candidate = json.load(open(config['starting_configs']))

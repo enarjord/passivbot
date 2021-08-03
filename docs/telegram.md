@@ -91,3 +91,8 @@ current profit or loss on the open position(s).
 
 When a stop-mode is activated (you can check the parameter `stop_mode` in the `/show_config` command), you can use this
 mode to resume normal operation.
+
+
+!!! Warning
+    Using one Telegram bot on multiple passivbot instances simultaneously will result in errors, so you need to generate
+    use a separate telegram bot for each passivbot instance.
