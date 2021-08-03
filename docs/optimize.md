@@ -89,7 +89,7 @@ The following options can be provided to the backtester. Note that any argument 
 
 | Key | Description
 | --- | -----------
-| -t / --start | Specifies one specific config file or a directory with multiple config files to use as starting point for optimizing
+| -t / --start | Specifies one specific live config (.json) file or a directory with multiple config files to use as starting point for optimizing
 | --nojit | Disables the use of numba's just in time compiler during backtests
 | -b / --backtest_config | The backtest config hjson file to use<br/>**Default value:** configs/backtest/default.hjson
 | -o / --optimize_config | The optimize config hjson file to use<br/>**Default value:** configs/optimize/default.hjson
