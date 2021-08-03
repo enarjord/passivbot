@@ -91,3 +91,7 @@ current profit or loss on the open position(s).
 
 When a stop-mode is activated (you can check the parameter `stop_mode` in the `/show_config` command), you can use this
 mode to resume normal operation.
+
+
+!!! Warning
+    Using one *Telegram Bot* on multiple *passivbot* configs simultaneously **will result in errors** so You need to generate separate tokens for each config You wish to run.
