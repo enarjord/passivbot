@@ -11,8 +11,8 @@ from bots.base_live_bot import LiveBot, LiveConfig
 from definitions.order import Order, TP, SL, LIMIT, MARKET, LQ, NEW, PARTIALLY_FILLED, FILLED, CANCELED, EXPIRED, TRADE, \
     CALCULATED, BUY, SELL, LONG, SHORT, BOTH, NEW_INSURANCE, NEW_ADL
 from definitions.position import Position, empty_long_position, empty_short_position
-from definitions.tick import Tick
-from helpers.misc import sort_dict_keys
+from definitions.tick import Tick, empty_tick_list
+from helpers.misc import sort_dict_keys, ts_to_date
 from helpers.print_functions import print_, print_order
 
 order_mapping = {'BUY': BUY, 'SELL': SELL, 'MARKET': MARKET, 'LIMIT': LIMIT, 'STOP': SL, 'TAKE_PROFIT': TP,
@@ -203,6 +203,33 @@ class BinanceBot(LiveBot):
             if b['asset'] == self.quote_asset:
                 return float(b['balance'])
 
+    async def fetch_ticks(self, from_id: int = None, start_time: int = None, end_time: int = None,
+                          do_print: bool = True):
+        params = {'symbol': self.symbol, 'limit': 1000}
+        tick_list = empty_tick_list()
+        if from_id is not None:
+            params['fromId'] = max(0, from_id)
+        if start_time is not None:
+            params['startTime'] = start_time
+        if end_time is not None:
+            params['endTime'] = end_time
+        try:
+            fetched = await self.private_get(self.endpoints['ticks'], params)
+        except Exception as e:
+            print_(['Error fetching ticks', e], n=True)
+            return tick_list
+        try:
+            for t in fetched:
+                tick_list.append(Tick(int(t['a']), int(t['T']), float(t['p']), float(t['q']), t['m']))
+            if do_print:
+                print_(['fetched ticks', self.symbol, tick_list[0].trade_id,
+                        ts_to_date(float(tick_list[0].timestamp) / 1000)])
+        except Exception as e:
+            print_(['Error fetching ticks', e, fetched], n=True)
+            if do_print:
+                print_(['Fetched no new ticks', self.symbol], n=True)
+        return tick_list
+
     async def public_get(self, url: str, params: dict = {}) -> dict:
         """
         Function for public API endpoints. Uses the underlying session to execute the call.
@@ -333,7 +360,7 @@ class BinanceBot(LiveBot):
         :param msg: Message that needs to be translated.
         :return: A tick object.
         """
-        tick = Tick(int(msg['T']), float(msg['p']), float(msg['q']), bool(msg['m']))
+        tick = Tick(int(msg['a']), int(msg['T']), float(msg['p']), float(msg['q']), bool(msg['m']))
         return tick
 
     async def update_heartbeat(self):

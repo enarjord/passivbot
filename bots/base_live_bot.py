@@ -13,6 +13,7 @@ from definitions.candle import Candle, empty_candle_list
 from definitions.order import Order, empty_order_list
 from definitions.position import Position
 from definitions.position_list import PositionList
+from definitions.tick import Tick
 from definitions.tick import empty_tick_list
 from helpers.loaders import load_key_secret
 from helpers.print_functions import print_
@@ -138,6 +139,18 @@ class LiveBot(Bot):
         """
         Function to fetch current balance. To be implemented by the exchange implementation.
         :return: The current balance.
+        """
+        raise NotImplementedError
+
+    async def fetch_ticks(self, from_id: int = None, start_time: int = None, end_time: int = None,
+                          do_print: bool = True) -> List[Tick]:
+        """
+        Function to fetch ticks, either based on ID or based on time. To be implemented by the exchange implementation.
+        :param from_id: The ID from which to fetch.
+        :param start_time: The start time from which to fetch.
+        :param end_time: The end time to which to fetch.
+        :param do_print: Whether to print output or not.
+        :return: A list of Ticks.
         """
         raise NotImplementedError
 
