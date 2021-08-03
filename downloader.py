@@ -381,7 +381,7 @@ class Downloader:
                     last_id = df["trade_id"].iloc[-1]
                     for i in filenames:
                         tmp_first_id = int(i.split("_")[0])
-                        tmp_last_id = int(i.split("_")[1])
+                        tmp_last_id = int(i.split("_")[1].replace('.csv', ''))
                         if (first_id - first_id % 100000) == tmp_first_id and (
                                 (first_id - first_id % 100000 + 99999) == tmp_last_id or (
                                 highest_id == tmp_first_id or highest_id == tmp_last_id) or highest_id > last_id) and first_id != 1 and i != f:
