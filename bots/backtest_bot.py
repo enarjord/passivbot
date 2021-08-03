@@ -354,7 +354,7 @@ class BacktestBot(Bot):
         :param row: The row to convert.
         :return: A candle object.
         """
-        return Candle(row[0], row[1], row[2], row[3], row[4], row[5])
+        return Candle(row[0], row[2], row[3], row[4], row[5], row[6])
 
     def start_websocket(self) -> Tuple[List[Fill], List[Statistic]]:
         """
@@ -365,7 +365,7 @@ class BacktestBot(Bot):
         price_list = empty_candle_list()
         last_update = self.data[0, 0]
         last_statistic_update = self.data[0, 0]
-        # Time, open, high, low, close, volume
+        # Time, trade id, open, high, low, close, volume
         for index in range(len(self.data)):
             self.current_timestamp = self.data[index][0]
             candle = self.prepare_candle(self.data[index])
