@@ -55,8 +55,6 @@ async def main():
             return
         downloader = Downloader(config)
         live_config = load_live_config(args.live_config_path)
-        live_config['long']['enabled'] = config['do_long']
-        live_config['shrt']['enabled'] = config['do_shrt']
         if 'spot' in config['market_type']:
             live_config = spotify_config(live_config)
         config.update(live_config)

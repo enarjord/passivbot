@@ -517,7 +517,7 @@ def calc_pprice_from_fills(coin_balance, fills, n_fills_limit=100):
     return pprice
 
 
-def get_position_fills(long_psize: float, shrt_psize: float, fills: [dict]) -> [dict]:
+def get_position_fills(long_psize: float, shrt_psize: float, fills: [dict]) -> ([dict], [dict]):
     '''
     assumes fills are sorted old to new
     returns fills since and including initial entry
