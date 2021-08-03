@@ -119,6 +119,13 @@ class BinanceBot(LiveBot):
         except Exception as e:
             print_([e], n=True)
 
+        await self.fetch_exchange_info()
+
+    async def fetch_exchange_info(self):
+        """
+        Exchange specific information fetching. Gets values from the exchange.
+        :return:
+        """
         exchange_info = await self.public_get(self.endpoints['exchange_info'])
 
         for e in exchange_info['symbols']:

@@ -113,6 +113,13 @@ class LiveBot(Bot):
         self.strategy.update_symbol(self.symbol)
         self.strategy.update_leverage(self.leverage)
 
+    async def fetch_exchange_info(self):
+        """
+        Exchange specific information fetching. Gets values from the exchange.
+        :return:
+        """
+        raise NotImplementedError
+
     async def fetch_orders(self) -> List[Order]:
         """
         Function to fetch current open orders. To be implemented by the exchange implementation.
