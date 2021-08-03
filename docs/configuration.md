@@ -232,14 +232,14 @@ value to `0.1`, the bot will only utilize 10% of the total wallet balance.
 ## Running multiple instances
 
 It is possible, however not recommended to launch multiple configs of the bot on one wallet. This setup is considered advanced and 
-it's up to the user to configure it properly. Here are a few pointers:
+it's up to the user to configure it properly. Here are a few things to take into consideration:
 
 1. Utilize `cross_wallet_pct` to limit amount of the wallet used per config.
 2. Use only configs tested on a long timeframe with wide range of market conditions that have high bankruptcy distance.
 
-To start You have to create new user in the `api_keys.json` file for each configuration You want to run bot on, but the api keys for the exchange can be copied to multiple *passivbot* users.
+To start with you have to create an extra user in the `api_keys.json` file for each configuration you want a bot instsance to run, but the api keys for the exchange can be copied to multiple *passivbot* users.
 
-If You want to use **Telegram Bot** for each config You have to generate a separate telegram bot tokens per config file You want to run as one telegram bot is working only on **single** config. Using multiple configs on the same telegram bot **will cause errors!**
+In order to use telegram with multiple passivbotbot instances, you'll need to have a separate telegram bot and accompanying token per bot instance. A single telegram bot can **not** be used with multiple passivbot instances and will cause errors.
 
 ```
 {
