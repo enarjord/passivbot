@@ -36,8 +36,9 @@ pip install -r requirements.txt
 ## Configuration
 
 After running the installation commands above, you need to create an API key on the exchange you want to run.
-This will provide you with a key and a secret, that you need to fill in in the `api-keys.json`. The instructions below
-assume your key is `{X}` and your secret is `{Y}`.
+This will provide you with a key and a secret, that you need to fill out in the `api-keys.json`. You first need to
+create this file by copying the template file `api-keys.example.json`. 
+The instructions below assume your key is `{X}` and your secret is `{Y}`.
 
 !!! Warning
     Make sure you enable `futures` on the API key. Also, be aware that on Binance you have to complete a quiz before you
@@ -49,6 +50,7 @@ section for instructions on how to set this up.
 These instructions show using [vi](http://www.atmos.albany.edu/daes/atmclasses/atm350/vi_cheat_sheet.pdf) to edit the `api-keys.json`, but you can use any command-line editor you like.
 
 ```shell
+cp api-keys.example.json api-keys.json
 vi api-keys.json
 {navigate to the key item in the api-keys file under binance_01 using your arrow keys}
 {copy the key from the exchange into your clipboard, and paste it in the editor window}
