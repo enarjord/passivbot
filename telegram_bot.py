@@ -545,9 +545,10 @@ class Telegram:
                 position = await self._bot.fetch_position()
                 account = await self._bot.fetch_account()
                 usdt_balance = list(asset for asset in account['balances'] if asset['asset'] == 'USDT')[0]
-
+                adjusted_wallet_balance = position["wallet_balance"] * float(self._bot.config['cross_wallet_pct'])
                 msg = f'Futures balance {self._bot.margin_coin if hasattr(self._bot, "margin_coin") else ""}:\n' \
                       f'Wallet balance: {compress_float(position["wallet_balance"], 4)}\n' \
+                      f'Ajdusted Wallet balance: {compress_float(adjusted_wallet_balance, 4)}\n' \
                       f'Equity: {compress_float(self._bot.position["equity"], 4)}\n' \
                       f'Locked margin: {compress_float(self._bot.position["used_margin"], 4)}\n' \
                       f'Available margin: {compress_float(self._bot.position["available_margin"], 4)}\n\n' \
@@ -621,8 +622,7 @@ class Telegram:
                 today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
                 daily = {}
                 position = await self._bot.fetch_position()
-                wallet_balance = position['wallet_balance']
-                cross_wallet_pct = float(self._bot.config['cross_wallet_pct'])
+                adjusted_wallet_balance = position['wallet_balance'] * float(self._bot.config['cross_wallet_pct'])
                 for idx, item in enumerate(range(0, nr_of_days)):
                     start_of_day = today - timedelta(days=idx)
                     end_of_day = start_of_day + timedelta(days=1)
@@ -639,17 +639,18 @@ class Telegram:
 
                 table = PrettyTable(['Date\nMM-DD', 'PNL (%)'])
                 pnl_sum = 0.0
+                _adjusted_wallet_balance = adjusted_wallet_balance
                 for item in daily.keys():
                     day_profit = daily[item]['pnl']
                     pnl_sum += day_profit
-                    previous_day_close_wallet_balance = wallet_balance - day_profit
-                    profit_pct = ((wallet_balance / previous_day_close_wallet_balance) - 1) / cross_wallet_pct * 100 \
+                    previous_day_close_wallet_balance = _adjusted_wallet_balance - day_profit
+                    profit_pct = ((_adjusted_wallet_balance / previous_day_close_wallet_balance) - 1) * 100 \
                         if previous_day_close_wallet_balance > 0.0 else 0.0
-                    wallet_balance = previous_day_close_wallet_balance
+                    _adjusted_wallet_balance = previous_day_close_wallet_balance
                     table.add_row([daily[item]['date'], f'{day_profit:.1f} ({profit_pct:.2f}%)'])
 
-                bal_minus_pnl = position['wallet_balance'] - pnl_sum
-                pct_sum = (position['wallet_balance'] / bal_minus_pnl - 1) / cross_wallet_pct * 100 if bal_minus_pnl > 0.0 else 0.0
+                bal_minus_pnl = adjusted_wallet_balance - pnl_sum
+                pct_sum = (adjusted_wallet_balance / bal_minus_pnl - 1) * 100 if bal_minus_pnl > 0.0 else 0.0
                 table.add_row(['-------','------------'])
                 table.add_row(['Total', f'{round_dynamic(pnl_sum, 3)} ({round_(pct_sum, 0.01)}%)'])
 
@@ -678,8 +679,9 @@ class Telegram:
     def notify_close_order_filled(self, realized_pnl: float, position_side: str, qty: float, fee: float, wallet_balance: float, remaining_size: float, price: float):
         if 'notify_close_fill' not in self.config or self.config['notify_close_fill'] is True:
             icon = "\U00002705" if realized_pnl >= 0 else "\U0000274C"
+            adjusted_wallet_balance = wallet_balance * float(self._bot.config['cross_wallet_pct'])
             self.send_msg(f'<b>{icon} {self._bot.exchange.capitalize()} {self._bot.pair}</b> Closed {position_side}\n'
-                f'<b>PNL: </b><pre>{round_(realized_pnl, self._bot.price_step)} {self._bot.margin_coin} ({round_(realized_pnl/wallet_balance * 100, self._bot.price_step)}%)</pre>\n'
+                f'<b>PNL: </b><pre>{round_(realized_pnl, self._bot.price_step)} {self._bot.margin_coin} ({round_(realized_pnl/adjusted_wallet_balance * 100, self._bot.price_step)}%)</pre>\n'
                 f'<b>Amount: </b><pre>{round_(qty, self._bot.qty_step)}</pre>\n'
                 f'<b>Remaining size: </b><pre>{round_(remaining_size, self._bot.qty_step)}</pre>\n'
                 f'<b>Price: </b><pre>{round_(price, self._bot.price_step)}</pre>\n'
