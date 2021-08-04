@@ -585,14 +585,7 @@ class Bot:
         combined = np.array(sorted([[e['timestamp'], e['qty'], e['price']] for e in ticks] +
                                    [[e['timestamp'], e['volume'], e['open']] for e in ohlcvs]))
         from pure_funcs import ts_to_date
-        print('\n\ndebug\n\n')
-        print(len(combined), 'len(combined)')
-        print(ts_to_date(combined[0][0] / 1000), 'ts_to_date(combined[0][0] / 1000)')
-        print(ts_to_date(combined[-1][0] / 1000), 'ts_to_date(combined[-1][0] / 1000)')
-        print(self.spans, 'self.spans')
         samples = calc_samples(combined)
-        print(samples[0], 'samples[0]')
-        print(samples[-1], 'samples[-1]')
         self.emas = calc_emas_last(samples[:, 2], self.spans_secs)
         self.ratios = np.append(self.price, self.emas[:-1]) / self.emas
         self.ema_sec = int(combined[-1][0] // 1000 * 1000)

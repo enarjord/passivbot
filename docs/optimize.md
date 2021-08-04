@@ -40,6 +40,7 @@ To execute an optimize, you can execute the following command from the root fold
 ```shell
 python3 optimize.py
 ```
+Note: the default market is Futures. Use one of the keys to define spot market if you want that. 
 
 !!! Info
     This page assumes you have already performed configuration to execute a backtest (like setting up your account).
@@ -99,6 +100,7 @@ The following options can be provided to the backtester. Note that any argument 
 | --start_date | The starting date of the backtest<br/>**Syntax:** YYYY-MM-DDThh:mm
 | --end_date | The end date of the backtest<br/>**Syntax:** YYYY-MM-DDThh:mm
 | -bd / --base_dir | The base directory to place the output files
+| -m spot / --market_type spot | Sets the market to spot instead of the default Futures
 
 ### Running batch optimize
 
