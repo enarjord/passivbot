@@ -125,7 +125,7 @@ class Telegram:
             entry_points=[CommandHandler('force_open', self._begin_force_open)],
             states={
                 1: [CallbackQueryHandler(self._position_side_chosen)],
-                2: [MessageHandler(Filters.regex('(confirm|abort)'), self._verify_open_confirmation)]
+                2: [MessageHandler(Filters.regex('([0-9\\.]|confirm|abort)'), self._verify_open_confirmation)]
             },
             fallbacks=[CommandHandler('cancel', self._abort)]
         ))
@@ -138,11 +138,17 @@ class Telegram:
         self.force_open_type = None
         self.open_qty = 0.0
 
-        buttons = [
-            [InlineKeyboardButton('Long', callback_data='long'),
-             InlineKeyboardButton('Short', callback_data='shrt'),
-             InlineKeyboardButton('cancel', callback_data='cancel')]
-        ]
+        if 'spot' in self._bot.market_type:
+            buttons = [
+                [InlineKeyboardButton('Long', callback_data='long'),
+                 InlineKeyboardButton('cancel', callback_data='cancel')]
+            ]
+        else:
+            buttons = [
+                [InlineKeyboardButton('Long', callback_data='long'),
+                 InlineKeyboardButton('Short', callback_data='shrt'),
+                 InlineKeyboardButton('cancel', callback_data='cancel')]
+            ]
         update.message.reply_text(
             text='You have chosen to force (re)entering a position. This will place a market order at the current price with the size of the nearest entry order.'
                  'Please select the position side you want to (re)enter:',
@@ -155,15 +161,19 @@ class Telegram:
         query = update.callback_query
         query.answer()
 
-        self.force_open_type = query.data
+        if self.force_open_type is None:
+            self.force_open_type = query.data
         if self.force_open_type in ['long', 'shrt']:
-            if self.force_open_type == 'long':
-                self.open_qty = min(o['qty'] for o in self._bot.open_orders if o['side'] == 'buy' and o['position_side'] == 'long')
-            else:
-                self.open_qty = min(o['qty'] for o in self._bot.open_orders if o['side'] == 'sell' and o['position_side'] == 'shrt')
+            if self.open_qty == 0.0:
+                if len(self._bot.open_orders) == 0:
+                    self.open_qty = 0.0
+                elif self.force_open_type == 'long':
+                    self.open_qty = min(o['qty'] for o in self._bot.open_orders if o['side'] == 'buy' and o['position_side'] == 'long')
+                else:
+                    self.open_qty = min(o['qty'] for o in self._bot.open_orders if o['side'] == 'sell' and o['position_side'] == 'shrt')
 
             text = f'You have chosen to (re)enter a <pre>{self.force_open_type if self.force_open_type == "long" else "short"}</pre> position with a qty of <pre>{self.open_qty}</pre>.\n' \
-                   'Please confirm that you want to (re)enter with the nearest order quantity at the current price using a market order:'
+                   'Please confirm that you want to (re)enter with the nearest order quantity at the current price using a market order, or enter a qty manually:'
             reply_keyboard = [['confirm', 'abort']]
             update.effective_message.reply_text(text=text, parse_mode=ParseMode.HTML, reply_markup=ReplyKeyboardMarkup(reply_keyboard))
         elif self.force_open_type == 'cancel':
@@ -175,7 +185,12 @@ class Telegram:
         answer = update.effective_message.text
 
         if answer not in ['confirm', 'abort']:
-            return 3
+            self.open_qty = answer
+            text = f'You have chosen to (re)enter a <pre>{self.force_open_type if self.force_open_type == "long" else "short"}</pre> position with a qty of <pre>{self.open_qty}</pre>.\n' \
+                   'Please confirm that you want to (re)enter with this manually entered qty:'
+            reply_keyboard = [['confirm', 'abort']]
+            update.effective_message.reply_text(text=text, parse_mode=ParseMode.HTML, reply_markup=ReplyKeyboardMarkup(reply_keyboard))
+            return 2
         elif answer == 'abort':
             self.send_msg(f'Request for (re)entering position aborted')
             return ConversationHandler.END
