@@ -10,6 +10,7 @@ from time import time, sleep
 from optimize import get_expanded_ranges, single_sliding_window_run
 from bisect import insort
 from typing import Callable
+from prettytable import PrettyTable
 import os
 import sys
 import argparse
@@ -101,19 +102,34 @@ class PostProcessing:
         self.all_backtest_analyses = []
 
     def process(self, result):
-        #score, analysis = single_sliding_window_run(config, self.data)
-        score, analyses, config = result
+        score, analysis, config = result
         score = -score
         best_score = self.all_backtest_analyses[0][0] if self.all_backtest_analyses else 9e9
-        insort(self.all_backtest_analyses, (score, analyses))
-        to_dump = denumpyize({**analyses[0], **config})
-        line = f"best_score {best_score:.6f} current score {score:.6f}"
+        analysis['score'] = score
+        insort(self.all_backtest_analyses, (score, analysis))
+        to_dump = denumpyize({**analysis, **pack_config(config)})
+        f"{len(self.all_backtest_analyses): <5}"
+        table = PrettyTable()
+        table.field_names = ['adg', 'bkr_dist', 'eqbal_ratio', 'score', 'shrp', 'hrs_no_fills',
+                             'hrs_no_fills_ss', 'mean_hrs_between_fills']
+        for elm in self.all_backtest_analyses[:20] + [(score, analysis)]:
+            row = [round_dynamic(e, 6)
+                   for e in [elm[1]['average_daily_gain'],
+                             elm[1]['closest_bkr'],
+                             elm[1]['lowest_eqbal_ratio'],
+                             elm[1]['score'],
+                             elm[1]['sharpe_ratio'],
+                             elm[1]['max_hrs_no_fills'],
+                             elm[1]['max_hrs_no_fills_same_side'],
+                             elm[1]['mean_hrs_between_fills']]]
+            table.add_row(row)
+        output = table.get_string(border=True, padding_width=1)
+        print('\n\n')
+        print(output)
         with open('tmp/btresults.txt', 'a') as f:
             f.write(json.dumps(to_dump) + '\n')
         if score < best_score:
-            line += ' new best'
             dump_live_config(to_dump, 'tmp/current_best.json')
-        print(line)
         return score
 
 
@@ -129,8 +145,9 @@ def simple_backtest(config, data):
     _, analysis = analyze_fills(fills, {**config, **{'lowest_eqbal_ratio': info[1], 'closest_bkr': info[2]}},
                                 data[max_span_ito_n_samples][0],
                                 data[-1][0])
-    score = analysis['average_daily_gain']
-    return score, [analysis]
+    score = analysis['average_daily_gain'] * min(1.0, analysis['closest_bkr'] / config['minimum_bankruptcy_distance'])
+
+    return score, analysis
 
 
 class BacktestWrap:
@@ -162,32 +179,6 @@ class BacktestWrap:
         score, analyses = simple_backtest(config, self.data)
         return score, analyses, config
 
-    def post_processing(self, xs, score, analyses):
-        if analyses:
-            config = self.xs_to_config(xs)
-            to_dump = {}
-            for k in ['average_daily_gain', 'score']:
-                to_dump[k] = np.mean([e[k] for e in analyses])
-            for k in ['lowest_eqbal_ratio', 'closest_bkr']:
-                to_dump[k] = np.min([e[k] for e in analyses])
-            for k in ['max_hrs_no_fills', 'max_hrs_no_fills_same_side']:
-                to_dump[k] = np.max([e[k] for e in analyses])
-            line = ''
-            for k, v in to_dump.items():
-                line += f'{k} {round_dynamic(v, 4)} '
-            print(line)
-            to_dump['score'] = score
-            to_dump.update(candidate_to_live_config(config))
-            with open(self.config['optimize_dirpath'] + 'results.txt', 'a') as f:
-                f.write(json.dumps(to_dump) + '\n')
-            return
-            # check if new global best
-            if new_gbest:
-                if analyses:
-                    config['average_daily_gain'] = np.mean([e['average_daily_gain'] for e in analyses])
-                dump_live_config({**config, **{'score': score, 'n_days': analyses[-1]['n_days']}},
-                                 self.config['optimize_dirpath'] + 'best_config.json')
-    
 
 async def main():
     parser = argparse.ArgumentParser(prog='Optimize', description='Optimize passivbot config.')
@@ -221,13 +212,18 @@ async def main():
 
             backtest_wrap = BacktestWrap(shdata, config)
             post_processing = PostProcessing()
-            initial_positions = []#get_initial_positions(args, config, backtest_wrap)
+            if config['starting_configs']:
+                starting_configs = get_starting_configs(config)
+                initial_positions = [backtest_wrap.config_to_xs(cfg) for cfg in starting_configs]
+            else:
+                initial_positions = []
             pso_multiprocess(backtest_wrap.rf,
                              config['n_particles'],
                              backtest_wrap.bounds,
                              config['options']['c1'],
                              config['options']['c2'],
                              config['options']['w'],
+                             initial_positions=initial_positions,
                              post_processing_func=post_processing.process)
         finally:
             del shdata
