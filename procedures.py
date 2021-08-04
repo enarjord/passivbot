@@ -4,6 +4,7 @@ import os
 import hjson
 import pandas as pd
 import numpy as np
+import glob
 from time import time
 from pure_funcs import numpyize, denumpyize, candidate_to_live_config, ts_to_date, get_dummy_settings, calc_spans, \
     config_pretty_str, date_to_ts
@@ -266,6 +267,25 @@ def make_tick_samples(config: dict, sec_span: int = 1):
     print(f'took {time() - sts:.2f} seconds to load {len(ticks)} ticks, creating {len(samples)} samples')
     del ticks
     return samples
+
+
+def get_starting_configs(config) -> [dict]:
+    starting_configs = []
+    if config['starting_configs'] is not None:
+        try:
+            if os.path.isdir(config['starting_configs']):
+                starting_configs = [json.load(open(f)) for f in glob.glob(os.path.join(config['starting_configs'], '*.json'))]
+                print('Starting with all configurations in directory.')
+            else:
+                starting_configs = [json.load(open(config['starting_configs']))]
+                print('Starting with specified configuration.')
+        except Exception as e:
+            print('Could not find specified configuration.', e)
+    return starting_configs
+
+
+
+
 
 
 
