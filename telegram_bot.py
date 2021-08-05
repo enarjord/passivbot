@@ -1,7 +1,10 @@
 import os
+
+import numpy as np
+
 from procedures import load_live_config
-from datetime import datetime, timedelta
-from time import time
+from datetime import datetime, timedelta, timezone
+from time import time, strftime, gmtime
 from pure_funcs import config_pretty_str
 from typing import Optional
 
@@ -620,62 +623,57 @@ class Telegram:
     def _daily(self, update=None, context=None):
         if self._bot.exchange == 'binance':
             async def send_daily_async(nr_of_days:int):
-                today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+                today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=timezone.utc)
                 daily = {}
+                ms_in_a_day = 1000 * 60 * 60 * 24
+                for idx, item in enumerate(range(0, nr_of_days)):
+                    start_of_day = today - timedelta(days=idx)
+                    daily[int(start_of_day.timestamp()) * 1000] = 0.0
+
+                start_of_first_day = today - timedelta(days=nr_of_days)
+                start_time_of_first_day_ts = int(start_of_first_day.timestamp()) * 1000
                 if self._bot.market_type == 'spot':
                     fills = list()
-                    for idx, item in enumerate(range(0, nr_of_days)):
-                        start_of_day = today - timedelta(days=idx)
-                        end_of_day = start_of_day + timedelta(days=1)
-                        start_time = int(start_of_day.timestamp()) * 1000
-                        end_time = int(end_of_day.timestamp()) * 1000
-                        daily_fills = await self._bot.fetch_fills(start_time=start_time, end_time=end_time)
-                        for fill in daily_fills:
-                            fill['idx'] = idx
-                        [fills.append(f) for f in daily_fills]
-                        daily[idx] = {}
-                        daily[idx]['date'] = start_of_day.strftime('%m-%d')
-                        daily[idx]['pnl'] = 0.0
+                    while True:
+                        next_set = await self._bot.fetch_fills(start_time=start_time_of_first_day_ts)
+                        [fills.append(f) for f in next_set]
+                        if len(next_set) < 1000:
+                            break
 
                     psize = 0.0
                     pprice = 0.0
-                    fills = sorted(fills, key=lambda f: f['timestamp'])
                     for fill in fills:
                         if fill['side'] == 'buy':
                             new_psize = psize + fill['qty']
                             pprice = pprice * (psize / new_psize) + fill['price'] * (fill['qty'] / new_psize)
                             psize = new_psize
                         else:
-                            daily[fill['idx']]['pnl'] += calc_long_pnl(pprice, fill['price'], fill['qty'], False, 1.0)
+                            day = fill['timestamp'] // ms_in_a_day * ms_in_a_day
+                            daily[day] += calc_long_pnl(pprice, fill['price'], fill['qty'], False, 1.0)
                             psize -= fill['qty']
 
                 else:
-                    for idx, item in enumerate(range(0, nr_of_days)):
-                        start_of_day = today - timedelta(days=idx)
-                        end_of_day = start_of_day + timedelta(days=1)
-                        start_time = int(start_of_day.timestamp()) * 1000
-                        end_time = int(end_of_day.timestamp()) * 1000
-                        daily_trades = await self._bot.fetch_income(start_time=start_time, end_time=end_time)
-                        daily_trades = [trade for trade in daily_trades if trade['incomeType'] in ['REALIZED_PNL', 'FUNDING_FEE', 'COMMISSION']]
-                        pln_summary = 0
-                        for trade in daily_trades:
-                            pln_summary += float(trade['income'])
-                        daily[idx] = {}
-                        daily[idx]['date'] = start_of_day.strftime('%m-%d')
-                        daily[idx]['pnl'] = pln_summary
+                    while True:
+                        next_set = await self._bot.fetch_income(start_time=start_time_of_first_day_ts)
+                        for income in next_set:
+                            day = income['timestamp'] // ms_in_a_day * ms_in_a_day
+                            daily[day] += float(income['income'])
+                        if len(next_set) < 1000:
+                            break
 
                 position = await self._bot.fetch_position()
                 wallet_balance = position['wallet_balance']
                 table = PrettyTable(['Date\nMM-DD', 'PNL (%)'])
                 pnl_sum = 0.0
                 for item in daily.keys():
-                    day_profit = daily[item]['pnl']
+                    day_profit = daily[item]
                     pnl_sum += day_profit
                     previous_day_close_wallet_balance = wallet_balance - day_profit
                     profit_pct = ((wallet_balance / previous_day_close_wallet_balance) - 1) * 100 \
                         if previous_day_close_wallet_balance > 0.0 else 0.0
                     wallet_balance = previous_day_close_wallet_balance
-                    table.add_row([daily[item]['date'], f'{day_profit:.1f} ({profit_pct:.2f}%)'])
+                    date = strftime('%m-%d', gmtime(item/1000.0))
+                    table.add_row([date, f'{day_profit:.1f} ({profit_pct:.2f}%)'])
 
                 bal_minus_pnl = position['wallet_balance'] - pnl_sum
                 pct_sum = (position['wallet_balance'] / bal_minus_pnl - 1) * 100 if bal_minus_pnl > 0.0 else 0.0
