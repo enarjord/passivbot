@@ -246,11 +246,11 @@ class BacktestBot(Bot):
                 execution = True
                 o.price = round_down(average_candle_price(last_candle), self.price_step)
             if last_candle.high > order.price:
-                if (order.order_type == LIMIT and order.side == BUY) or order.order_type == SL:
+                if (order.order_type == LIMIT and order.side == SELL) or order.order_type == SL:
                     # Limit buy orders and stop loss are treated the same way
                     execution = True
             if last_candle.low < order.price:
-                if (order.order_type == LIMIT and order.side == SELL) or order.order_type == TP:
+                if (order.order_type == LIMIT and order.side == BUY) or order.order_type == TP:
                     # Limit sell orders and take profit are treated the same way
                     execution = True
             if execution:
@@ -269,7 +269,7 @@ class BacktestBot(Bot):
                 else:
                     fee_paid = -quantity_to_cost(o.quantity, o.price, self.inverse,
                                                  self.contract_multiplier) * self.maker_fee
-                if order.side == SELL:
+                if order.side == BUY:
                     pnl = calculate_short_pnl(self.get_position().short.price, o.price,
                                               o.quantity if o.action == FILLED else last_candle.volume, self.inverse,
                                               self.contract_multiplier)
@@ -301,7 +301,7 @@ class BacktestBot(Bot):
                                          + self.get_position().short.price * self.get_position().short.size \
                                          / self.get_balance()
                 self.fills.append(Fill(0, self.current_timestamp,
-                                       0.0 if order.side == BUY else calculate_short_pnl(old_position.short.price,
+                                       0.0 if order.side == SELL else calculate_short_pnl(old_position.short.price,
                                                                                          o.price,
                                                                                          o.quantity if o.action == FILLED else last_candle.volume,
                                                                                          self.inverse,
