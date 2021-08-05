@@ -106,7 +106,14 @@ class PostProcessing:
         score = -score
         best_score = self.all_backtest_analyses[0][0] if self.all_backtest_analyses else 9e9
         analysis['score'] = score
-        insort(self.all_backtest_analyses, (score, analysis))
+        try:
+            insort(self.all_backtest_analyses, (score, analysis))
+        except Exception as e:
+            print(e)
+            print('score', score)
+            print('analysis', analysis)
+            print('config', config)
+            raise Exception('debug')
         to_dump = denumpyize({**analysis, **pack_config(config)})
         f"{len(self.all_backtest_analyses): <5}"
         table = PrettyTable()
@@ -124,7 +131,7 @@ class PostProcessing:
                              elm[1]['score']]]
             table.add_row(row)
         output = table.get_string(border=True, padding_width=1)
-        print('\n\n')
+        print(f'\n\n{len(self.all_backtest_analyses)}')
         print(output)
         with open(config['optimize_dirpath'] + 'results.txt', 'a') as f:
             f.write(json.dumps(to_dump) + '\n')
@@ -222,6 +229,8 @@ async def main():
                              config['options']['c1'],
                              config['options']['c2'],
                              config['options']['w'],
+                             n_cpus=config['num_cpus'],
+                             iters=config['iters'],
                              initial_positions=initial_positions,
                              post_processing_func=post_processing.process)
         finally:
