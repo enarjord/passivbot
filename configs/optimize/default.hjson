@@ -15,7 +15,7 @@
   minimum_slice_adg: 1.0
   maximum_hrs_no_fills: 72
   maximum_hrs_no_fills_same_side: 168.0
-  maximum_mean_hrs_between_fills: 3.0
+  maximum_mean_hrs_between_fills: 10.0
 
   # set to 0.0 to do disable sliding windows
   # otherwise sliding window days will be max([maximum_hrs_no_fills / 24 * 2.1,
