@@ -403,6 +403,7 @@ def get_empty_analysis(bc: dict) -> dict:
         'biggest_psize': 0.0,
         'max_hrs_no_fills_same_side': 1000.0,
         'max_hrs_no_fills': 1000.0,
+        'mean_hrs_between_fills': 1000.0,
     }
 
 
