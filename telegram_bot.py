@@ -683,7 +683,6 @@ class Telegram:
                 msg = f'<pre>{table.get_string(border=True, padding_width=1, junction_char=" ", vertical_char=" ", hrules=HEADER)}</pre>'
                 self.send_msg(msg, refreshable=True, callback_path='update_daily', query=update.callback_query)
 
-            self.send_msg('Calculating daily pnl...')
             try:
                 nr_of_days = int(context.args[0])
             except:
