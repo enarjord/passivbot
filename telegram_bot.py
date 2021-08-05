@@ -657,7 +657,6 @@ class Telegram:
                       f'{self._bot.coin}: {compress_float(float(coin_balance["free"]) + float(coin_balance["locked"]), 4)} ({compress_float(float(coin_balance["locked"]), 4)} locked)'
                 self.send_msg(msg, refreshable=True, callback_path='update_balance', query=update.callback_query)
 
-            self.send_msg('Retrieving balance...')
             task = self.loop.create_task(_balance_async())
             task.add_done_callback(lambda fut: True) #ensures task is processed to prevent warning about not awaiting
         else:
