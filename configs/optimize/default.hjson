@@ -13,8 +13,9 @@
   minimum_bankruptcy_distance: 0.5
   minimum_equity_balance_ratio: 0.5
   minimum_slice_adg: 1.0
-  maximum_hrs_no_fills: 108.0
+  maximum_hrs_no_fills: 72
   maximum_hrs_no_fills_same_side: 168.0
+  maximum_mean_hrs_between_fills: 3.0
 
   # set to 0.0 to do disable sliding windows
   # otherwise sliding window days will be max([maximum_hrs_no_fills / 24 * 2.1,
@@ -40,12 +41,12 @@
   ranges:
   {
     min_span: [20.0, 1440.0]
-    max_span: [20.0, 30000.0]
+    max_span: [1440.0, 30000.0]
     MAr_coeffs: [-0.4, 0.4]
 
     long£rprc_PBr_coeffs: [-1.0, 0.1]
-    long£pbr_stop_loss: [-0.1, 0.5]
-    long£pbr_limit: [0.1, 2.0]
+    long£pbr_stop_loss: [0.0, 1.0]
+    long£pbr_limit: [0.0, 1.0]
     long£iqty_const: [0.01, 0.5]
     long£iprc_const: [0.97, 1.01]
     long£rqty_const: [0.0, 2.0]
@@ -53,8 +54,8 @@
     long£markup_const: [1.0, 1.03]
 
     shrt£rprc_PBr_coeffs: [-0.1, 1.0]
-    shrt£pbr_stop_loss: [-0.1, 0.5]
-    shrt£pbr_limit: [0.1, 2.0]
+    shrt£pbr_stop_loss: [0.0, 1.0]
+    shrt£pbr_limit: [0.0, 1.0]
     shrt£iqty_const: [0.01, 0.5]
     shrt£iprc_const: [0.99, 1.03]
     shrt£rqty_const: [0.0, 2.0]
