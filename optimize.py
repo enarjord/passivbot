@@ -107,6 +107,7 @@ def objective_function(analysis: dict, config: dict, metric='adjusted_daily_gain
         analysis[metric]
         * min(1.0, config['maximum_hrs_no_fills'] / analysis['max_hrs_no_fills'])
         * min(1.0, config['maximum_hrs_no_fills_same_side'] / analysis['max_hrs_no_fills_same_side'])
+        * min(1.0, config['maximum_mean_hrs_between_fills'] / analysis['mean_hrs_between_fills'])
         * min(1.0, analysis['closest_bkr'] / config['minimum_bankruptcy_distance'])
         * min(1.0, analysis['lowest_eqbal_ratio'] / config['minimum_equity_balance_ratio'])
         * min(1.0, analysis['sharpe_ratio'] / config['minimum_sharpe_ratio'])
@@ -174,6 +175,10 @@ def single_sliding_window_run(config, data, do_print=False) -> (float, [dict]):
                 line += f"broke on max_hrs_no_fills_ss {analysis['max_hrs_no_fills_same_side']:.4f}, {config['maximum_hrs_no_fills_same_side']}"
                 print(line)
                 break
+            if analysis['mean_hrs_between_fills'] > config['maximum_mean_hrs_between_fills'] * (1 + bef):
+                line += f"broke on mean_hrs_between_fills {analysis['mean_hrs_between_fills']:.4f}, {config['maximum_mean_hrs_between_fills']}"
+                print(line)
+                break
             if analysis['average_daily_gain'] < config['minimum_slice_adg']:
                 line += f"broke on low adg {analysis['average_daily_gain']:.4f} "
                 print(line)
@@ -196,6 +201,7 @@ def simple_sliding_window_wrap(config, data, do_print=False):
                     avg_periodic_gain=0.0,
                     max_hrs_no_fills=1000.0,
                     max_hrs_no_fills_ss=1000.0,
+                    mean_hrs_btwn_fills=1000.0,
                     **{config['avg_periodic_gain_key']: 0.0})
     else:
         tune.report(objective=objective,
@@ -205,6 +211,7 @@ def simple_sliding_window_wrap(config, data, do_print=False):
                     sharpe_ratio=np.mean([r['sharpe_ratio'] for r in analyses]),
                     max_hrs_no_fills=np.max([r['max_hrs_no_fills'] for r in analyses]),
                     max_hrs_no_fills_ss=np.max([r['max_hrs_no_fills_same_side'] for r in analyses]),
+                    mean_hrs_btwn_fills=np.mean([r['mean_hrs_between_fills'] for r in analyses]),
                     **{config['avg_periodic_gain_key']: np.mean([r['average_periodic_gain'] for r in analyses])})
 
 
@@ -280,6 +287,7 @@ def backtest_tune(data: np.ndarray, config: dict, current_best: Union[dict, list
                             config['avg_periodic_gain_key'],
                             'max_hrs_no_fills',
                             'max_hrs_no_fills_ss',
+                            'mean_hrs_btwn_fills',
                             'objective'],
             parameter_columns=[k for k in config['ranges'] if '_span' in k]),
         raise_on_failed_trial=False
@@ -313,7 +321,8 @@ async def execute_optimize(config):
                        'end_date', 'latency_simulation_ms',
                        'do_long', 'do_shrt', 'minimum_sharpe_ratio', 'periodic_gain_n_days',
                        'minimum_bankruptcy_distance', 'maximum_hrs_no_fills',
-                       'maximum_hrs_no_fills_same_side', 'iters', 'n_particles', 'sliding_window_days', 'metric',
+                       'maximum_hrs_no_fills_same_side', 'maximum_mean_hrs_between_fills', 'iters', 'n_particles',
+                       'sliding_window_days', 'metric',
                        'min_span', 'max_span', 'n_spans']):
         if k in config:
             print(f"{k: <{max(map(len, keys)) + 2}} {config[k]}")

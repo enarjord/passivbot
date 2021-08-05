@@ -7,7 +7,7 @@ from pure_funcs import denumpyize, numpyize, get_template_live_config, candidate
     get_template_live_config, unpack_config, pack_config, analyze_fills, ts_to_date, denanify, round_dynamic
 from procedures import dump_live_config, load_live_config, make_get_filepath, add_argparse_args, get_starting_configs
 from time import time, sleep
-from optimize import get_expanded_ranges, single_sliding_window_run
+from optimize import get_expanded_ranges, single_sliding_window_run, objective_function
 from bisect import insort
 from typing import Callable
 from prettytable import PrettyTable
@@ -106,30 +106,37 @@ class PostProcessing:
         score = -score
         best_score = self.all_backtest_analyses[0][0] if self.all_backtest_analyses else 9e9
         analysis['score'] = score
-        insort(self.all_backtest_analyses, (score, analysis))
+        try:
+            insort(self.all_backtest_analyses, (score, analysis))
+        except Exception as e:
+            print(e)
+            print('score', score)
+            print('analysis', analysis)
+            print('config', config)
+            raise Exception('debug')
         to_dump = denumpyize({**analysis, **pack_config(config)})
         f"{len(self.all_backtest_analyses): <5}"
         table = PrettyTable()
-        table.field_names = ['adg', 'bkr_dist', 'eqbal_ratio', 'score', 'shrp', 'hrs_no_fills',
-                             'hrs_no_fills_ss', 'mean_hrs_between_fills']
+        table.field_names = ['adg', 'bkr_dist', 'eqbal_ratio', 'shrp', 'hrs_no_fills',
+                             'hrs_no_fills_ss', 'mean_hrs_between_fills', 'score']
         for elm in self.all_backtest_analyses[:20] + [(score, analysis)]:
             row = [round_dynamic(e, 6)
                    for e in [elm[1]['average_daily_gain'],
                              elm[1]['closest_bkr'],
                              elm[1]['lowest_eqbal_ratio'],
-                             elm[1]['score'],
                              elm[1]['sharpe_ratio'],
                              elm[1]['max_hrs_no_fills'],
                              elm[1]['max_hrs_no_fills_same_side'],
-                             elm[1]['mean_hrs_between_fills']]]
+                             elm[1]['mean_hrs_between_fills'],
+                             elm[1]['score']]]
             table.add_row(row)
         output = table.get_string(border=True, padding_width=1)
-        print('\n\n')
+        print(f'\n\n{len(self.all_backtest_analyses)}')
         print(output)
-        with open('tmp/btresults.txt', 'a') as f:
+        with open(config['optimize_dirpath'] + 'results.txt', 'a') as f:
             f.write(json.dumps(to_dump) + '\n')
         if score < best_score:
-            dump_live_config(to_dump, 'tmp/current_best.json')
+            dump_live_config(to_dump, config['optimize_dirpath'] + 'current_best.json')
         return score
 
 
@@ -145,8 +152,7 @@ def simple_backtest(config, data):
     _, analysis = analyze_fills(fills, {**config, **{'lowest_eqbal_ratio': info[1], 'closest_bkr': info[2]}},
                                 data[max_span_ito_n_samples][0],
                                 data[-1][0])
-    score = analysis['average_daily_gain'] * min(1.0, analysis['closest_bkr'] / config['minimum_bankruptcy_distance'])
-
+    score = objective_function(analysis, config, metric='average_daily_gain')
     return score, analysis
 
 
@@ -223,6 +229,8 @@ async def main():
                              config['options']['c1'],
                              config['options']['c2'],
                              config['options']['w'],
+                             n_cpus=config['num_cpus'],
+                             iters=config['iters'],
                              initial_positions=initial_positions,
                              post_processing_func=post_processing.process)
         finally:

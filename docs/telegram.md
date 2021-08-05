@@ -1,5 +1,9 @@
 # Telegram integration
 
+!!! Warning
+    Using one Telegram bot on multiple passivbot instances simultaneously will result in errors, so you need to generate
+    use a separate telegram bot for each passivbot instance.
+
 ## Telegram support
 
 Passivbot provides interfacing with the bot via Telegram via a telegram bot. There are a number of commands available to control the bot.
@@ -31,13 +35,14 @@ The following commands are available via telegram |
 | `/closed_trades`      | a brief overview of bot's last 10 closed trades
 | `/daily`              | an overview of daily profit
 | `/help`               | The help page explaining all the commands
-| `/set_leverage`       | initiates a conversion via which the user can modify the active leverage
-| `/set_short`          | initiates a conversion via which the user can enable/disable shorting
-| `/set_long`           | initiates a conversion via which the user can enable/disable long
-| `/set_config`         | initiates a conversion via which the user can switch to a different configuration file  
-| `/transfer`           | initiates a conversion via which the user can transfer USDT funds between the spot and futures wallet<br/>**Note:** To enable this functionality, make sure you enable `Universal Transfer` on the API key  
-| `/set_profit_transfer`| initiates a conversion via which the user can specify the percentage of profit that will automatically transferred to thee spot wallet<br/>**Note:** To enable this functionality, make sure you enable `Universal Transfer` on the API key
+| `/set_leverage`       | initiates a conversation via which the user can modify the active leverage
+| `/set_short`          | initiates a conversation via which the user can enable/disable shorting
+| `/set_long`           | initiates a conversation via which the user can enable/disable long
+| `/set_config`         | initiates a conversation via which the user can switch to a different configuration file  
+| `/transfer`           | initiates a conversation via which the user can transfer USDT funds between the spot and futures wallet<br/>**Note:** To enable this functionality, make sure you enable `Universal Transfer` on the API key  
+| `/set_profit_transfer`| initiates a conversation via which the user can specify the percentage of profit that will automatically transferred to thee spot wallet<br/>**Note:** To enable this functionality, make sure you enable `Universal Transfer` on the API key
 | `/stop`               | initiates a conversation via which the user can activate a stop-mode
+| `/force_open`         | initiates a conversion via which the user can actively force (re)entry of a position based on the calculated grid
 
 ## Stop-mode
 
@@ -92,7 +97,8 @@ current profit or loss on the open position(s).
 When a stop-mode is activated (you can check the parameter `stop_mode` in the `/show_config` command), you can use this
 mode to resume normal operation.
 
+## Force open
 
-!!! Warning
-    Using one Telegram bot on multiple passivbot instances simultaneously will result in errors, so you need to generate
-    use a separate telegram bot for each passivbot instance.
+By using the `/force_open` command, the user can actively have a market-order placed on the exchange to force a (re)entry of a position.
+Upon initiating this command, the bot will ask the user if it should place a market-order for a `long` or `short` position side.
+The quantity of the order will be based on the nearest order currently available in the grid.
