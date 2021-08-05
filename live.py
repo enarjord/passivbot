@@ -16,8 +16,8 @@ async def start_bot(bot: LiveBot):
 
 
 async def main() -> None:
-    argparser = argparse.ArgumentParser(prog='GridTrader', add_help=True,
-                                        description='Grid trading bot with fixed grid.')
+    argparser = argparse.ArgumentParser(prog='PassivbotLive', add_help=True,
+                                        description='Grid trading bot with variable strategies.')
     argparser.add_argument('-c', '--config', type=str, required=True, dest='c', help='Path to the config')
     args = argparser.parse_args()
     try:

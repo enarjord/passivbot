@@ -6,8 +6,8 @@ from helpers.loaders import load_base_config, load_module_from_file, get_strateg
 from helpers.print_functions import print_
 
 if __name__ == '__main__':
-    argparser = argparse.ArgumentParser(prog='GridTrader', add_help=True,
-                                        description='Grid trading bot with fixed grid.')
+    argparser = argparse.ArgumentParser(prog='PassivbotBacktest', add_help=True,
+                                        description='Grid trading bot with variable strategies.')
     argparser.add_argument('-c', '--config', type=str, required=True, dest='c', help='Path to the config')
     args = argparser.parse_args()
     try:

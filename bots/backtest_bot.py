@@ -70,9 +70,6 @@ class BacktestConfig:
               ("fills", typeof(empty_fill_list())),
               ("statistics", typeof(empty_statistic_list()))
           ])
-# ToDo:
-#  Add list of fills after each order fill.
-#  Add (hourly) statistics.
 class BacktestBot(Bot):
     """
     A class to backtest a strategy. Can not be directly imported due to dynamically loading the correct strategy
@@ -249,11 +246,11 @@ class BacktestBot(Bot):
                 execution = True
                 o.price = round_down(average_candle_price(last_candle), self.price_step)
             if last_candle.high > order.price:
-                if (order.order_type == LIMIT and order.side == BUY) or order.order_type == SL:
+                if (order.order_type == LIMIT and order.side == SELL) or order.order_type == SL:
                     # Limit buy orders and stop loss are treated the same way
                     execution = True
             if last_candle.low < order.price:
-                if (order.order_type == LIMIT and order.side == SELL) or order.order_type == TP:
+                if (order.order_type == LIMIT and order.side == BUY) or order.order_type == TP:
                     # Limit sell orders and take profit are treated the same way
                     execution = True
             if execution:
@@ -272,7 +269,7 @@ class BacktestBot(Bot):
                 else:
                     fee_paid = -quantity_to_cost(o.quantity, o.price, self.inverse,
                                                  self.contract_multiplier) * self.maker_fee
-                if order.side == SELL:
+                if order.side == BUY:
                     pnl = calculate_short_pnl(self.get_position().short.price, o.price,
                                               o.quantity if o.action == FILLED else last_candle.volume, self.inverse,
                                               self.contract_multiplier)
@@ -304,7 +301,7 @@ class BacktestBot(Bot):
                                          + self.get_position().short.price * self.get_position().short.size \
                                          / self.get_balance()
                 self.fills.append(Fill(0, self.current_timestamp,
-                                       0.0 if order.side == BUY else calculate_short_pnl(old_position.short.price,
+                                       0.0 if order.side == SELL else calculate_short_pnl(old_position.short.price,
                                                                                          o.price,
                                                                                          o.quantity if o.action == FILLED else last_candle.volume,
                                                                                          self.inverse,
@@ -357,7 +354,7 @@ class BacktestBot(Bot):
         :param row: The row to convert.
         :return: A candle object.
         """
-        return Candle(row[0], row[1], row[2], row[3], row[4], row[5])
+        return Candle(row[0], row[2], row[3], row[4], row[5], row[6])
 
     def start_websocket(self) -> Tuple[List[Fill], List[Statistic]]:
         """
@@ -368,7 +365,7 @@ class BacktestBot(Bot):
         price_list = empty_candle_list()
         last_update = self.data[0, 0]
         last_statistic_update = self.data[0, 0]
-        # Time, open, high, low, close, volume
+        # Time, trade id, open, high, low, close, volume
         for index in range(len(self.data)):
             self.current_timestamp = self.data[index][0]
             candle = self.prepare_candle(self.data[index])
