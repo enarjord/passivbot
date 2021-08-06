@@ -63,7 +63,8 @@ def pso_multiprocess(reward_func: Callable,
             positions[:len(initial_positions)] = initial_positions[:len(positions)]
     positions = np.where(positions > bounds[0], positions, bounds[0])
     positions = np.where(positions < bounds[1], positions, bounds[1])
-    velocities = np.zeros_like(positions)
+    # velocities = np.zeros_like(positions)
+    velocities = (np.random.random(positions.shape) - 0.5) * 0.0001  # init velocities to small random number
     lbests = np.zeros_like(positions)
     lbest_scores = np.zeros(len(positions))
     lbest_scores[:] = np.inf
@@ -92,6 +93,8 @@ def pso_multiprocess(reward_func: Callable,
                         if pos_hash not in tested:
                             break
                         print('debug duplicate candidate')
+                        print('pos', positions[pos_cycler])
+                        print('vel', velocities[pos_cycler])
                         velocities[pos_cycler], positions[pos_cycler] = \
                             get_new_velocity_and_position(velocities[pos_cycler],
                                                           positions[pos_cycler],
