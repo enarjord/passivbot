@@ -1,7 +1,10 @@
 import os
+
+import numpy as np
+
 from procedures import load_live_config
-from datetime import datetime, timedelta
-from time import time
+from datetime import datetime, timedelta, timezone
+from time import time, strftime, gmtime
 from pure_funcs import config_pretty_str
 from typing import Optional
 
@@ -18,7 +21,7 @@ from telegram import KeyboardButton, ParseMode, ReplyKeyboardMarkup, Update, Inl
 from telegram.ext import Updater, CommandHandler, ConversationHandler, CallbackContext, \
     MessageHandler, Filters, CallbackQueryHandler
 
-from njit_funcs import round_
+from njit_funcs import round_, calc_long_pnl
 from pure_funcs import compress_float, round_dynamic, denumpyize
 
 
@@ -641,7 +644,8 @@ class Telegram:
             async def _balance_async():
                 position = await self._bot.fetch_position()
                 account = await self._bot.fetch_account()
-                usdt_balance = list(asset for asset in account['balances'] if asset['asset'] == 'USDT')[0]
+                quot_balance = list(asset for asset in account['balances'] if asset['asset'] == self._bot.quot)[0]
+                coin_balance = list(asset for asset in account['balances'] if asset['asset'] == self._bot.coin)[0]
 
                 msg = f'Futures balance {self._bot.margin_coin if hasattr(self._bot, "margin_coin") else ""}:\n' \
                       f'Wallet balance: {compress_float(position["wallet_balance"], 4)}\n' \
@@ -649,10 +653,10 @@ class Telegram:
                       f'Locked margin: {compress_float(self._bot.position["used_margin"], 4)}\n' \
                       f'Available margin: {compress_float(self._bot.position["available_margin"], 4)}\n\n' \
                       f'Spot balance:\n' \
-                      f'USDT: {compress_float(float(usdt_balance["free"]) + float(usdt_balance["locked"]), 4)} ({compress_float(float(usdt_balance["locked"]), 4)} locked)'
+                      f'{self._bot.quot}: {compress_float(float(quot_balance["free"]) + float(quot_balance["locked"]), 4)} ({compress_float(float(quot_balance["locked"]), 4)} locked)\n' \
+                      f'{self._bot.coin}: {compress_float(float(coin_balance["free"]) + float(coin_balance["locked"]), 4)} ({compress_float(float(coin_balance["locked"]), 4)} locked)'
                 self.send_msg(msg, refreshable=True, callback_path='update_balance', query=update.callback_query)
 
-            self.send_msg('Retrieving balance...')
             task = self.loop.create_task(_balance_async())
             task.add_done_callback(lambda fut: True) #ensures task is processed to prevent warning about not awaiting
         else:
@@ -715,34 +719,57 @@ class Telegram:
     def _daily(self, update=None, context=None):
         if self._bot.exchange == 'binance':
             async def send_daily_async(nr_of_days:int):
-                today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+                today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=timezone.utc)
                 daily = {}
-                position = await self._bot.fetch_position()
-                wallet_balance = position['wallet_balance']
+                ms_in_a_day = 1000 * 60 * 60 * 24
                 for idx, item in enumerate(range(0, nr_of_days)):
                     start_of_day = today - timedelta(days=idx)
-                    end_of_day = start_of_day + timedelta(days=1)
-                    start_time = int(start_of_day.timestamp()) * 1000
-                    end_time = int(end_of_day.timestamp()) * 1000
-                    daily_trades = await self._bot.fetch_income(start_time=start_time, end_time=end_time)
-                    daily_trades = [trade for trade in daily_trades if trade['incomeType'] in ['REALIZED_PNL', 'FUNDING_FEE', 'COMMISSION']]
-                    pln_summary = 0
-                    for trade in daily_trades:
-                        pln_summary += float(trade['income'])
-                    daily[idx] = {}
-                    daily[idx]['date'] = start_of_day.strftime('%m-%d')
-                    daily[idx]['pnl'] = pln_summary
+                    daily[int(start_of_day.timestamp()) * 1000] = 0.0
 
+                start_of_first_day = today - timedelta(days=nr_of_days)
+                start_time_of_first_day_ts = int(start_of_first_day.timestamp()) * 1000
+                if self._bot.market_type == 'spot':
+                    fills = list()
+                    while True:
+                        next_set = await self._bot.fetch_fills(start_time=start_time_of_first_day_ts)
+                        [fills.append(f) for f in next_set]
+                        if len(next_set) < 1000:
+                            break
+
+                    psize = 0.0
+                    pprice = 0.0
+                    for fill in fills:
+                        if fill['side'] == 'buy':
+                            new_psize = psize + fill['qty']
+                            pprice = pprice * (psize / new_psize) + fill['price'] * (fill['qty'] / new_psize)
+                            psize = new_psize
+                        else:
+                            day = fill['timestamp'] // ms_in_a_day * ms_in_a_day
+                            daily[day] += calc_long_pnl(pprice, fill['price'], fill['qty'], False, 1.0)
+                            psize -= fill['qty']
+
+                else:
+                    while True:
+                        next_set = await self._bot.fetch_income(start_time=start_time_of_first_day_ts)
+                        for income in next_set:
+                            day = income['timestamp'] // ms_in_a_day * ms_in_a_day
+                            daily[day] += float(income['income'])
+                        if len(next_set) < 1000:
+                            break
+
+                position = await self._bot.fetch_position()
+                wallet_balance = position['wallet_balance']
                 table = PrettyTable(['Date\nMM-DD', 'PNL (%)'])
                 pnl_sum = 0.0
                 for item in daily.keys():
-                    day_profit = daily[item]['pnl']
+                    day_profit = daily[item]
                     pnl_sum += day_profit
                     previous_day_close_wallet_balance = wallet_balance - day_profit
                     profit_pct = ((wallet_balance / previous_day_close_wallet_balance) - 1) * 100 \
                         if previous_day_close_wallet_balance > 0.0 else 0.0
                     wallet_balance = previous_day_close_wallet_balance
-                    table.add_row([daily[item]['date'], f'{day_profit:.1f} ({profit_pct:.2f}%)'])
+                    date = strftime('%m-%d', gmtime(item/1000.0))
+                    table.add_row([date, f'{day_profit:.1f} ({profit_pct:.2f}%)'])
 
                 bal_minus_pnl = position['wallet_balance'] - pnl_sum
                 pct_sum = (position['wallet_balance'] / bal_minus_pnl - 1) * 100 if bal_minus_pnl > 0.0 else 0.0
@@ -752,7 +779,6 @@ class Telegram:
                 msg = f'<pre>{table.get_string(border=True, padding_width=1, junction_char=" ", vertical_char=" ", hrules=HEADER)}</pre>'
                 self.send_msg(msg, refreshable=True, callback_path='update_daily', query=update.callback_query)
 
-            self.send_msg('Calculating daily pnl...')
             try:
                 nr_of_days = int(context.args[0])
             except:
