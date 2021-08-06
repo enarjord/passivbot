@@ -40,6 +40,19 @@ def pso_multiprocess(reward_func: Callable,
     if len(initial_positions) <= n_particles: use initial positions as particles, let remainder be random
     else: let n_particles = len(initial_positions)
     '''
+
+    def get_new_velocity_and_position(velocity, position, lbest_, gbest_) -> (np.ndarray, np.ndarray):
+
+        new_velocity = (
+            w * velocity
+            + c1 * np.random.random(velocity.shape) * (lbest_ - position)
+            + c2 * np.random.random(velocity.shape) * (gbest_ - position)
+        )
+        new_position = position + lr * new_velocity
+        new_position = np.where(new_position > bounds[0], new_position, bounds[0])
+        new_position = np.where(new_position < bounds[1], new_position, bounds[1])
+        return new_velocity, new_position
+
     if len(initial_positions) > n_particles:
         positions = numpyize(initial_positions)
     else:
@@ -75,10 +88,21 @@ def pso_multiprocess(reward_func: Callable,
             if workers[worker_cycler] is None:
                 if pos_cycler not in working:
                     pos_hash = sha256(str(positions[pos_cycler]).encode('utf-8')).hexdigest()
-                    if pos_hash not in tested:
-                        tested.add(pos_hash)
-                        workers[worker_cycler] = (pos_cycler, pool.apply_async(reward_func, args=(positions[pos_cycler],)))
-                        working = set([e[0] for e in workers if e is not None])
+                    for _ in range(100):
+                        if pos_hash not in tested:
+                            break
+                        print('debug duplicate candidate')
+                        velocities[pos_cycler], positions[pos_cycler] = \
+                            get_new_velocity_and_position(velocities[pos_cycler],
+                                                          positions[pos_cycler],
+                                                          lbests[pos_cycler],
+                                                          gbest)
+                        pos_hash = sha256(str(positions[pos_cycler]).encode('utf-8')).hexdigest()
+                    else:
+                        raise Exception('too many duplicate candidates')
+                    tested.add(pos_hash)
+                    workers[worker_cycler] = (pos_cycler, pool.apply_async(reward_func, args=(positions[pos_cycler],)))
+                    working = set([e[0] for e in workers if e is not None])
                 pos_cycler = (pos_cycler + 1) % len(positions)
         if workers[worker_cycler] is not None and workers[worker_cycler][1].ready():
             score = post_processing_func(workers[worker_cycler][1].get())
@@ -90,15 +114,11 @@ def pso_multiprocess(reward_func: Callable,
                 lbests[pos_idx], lbest_scores[pos_idx] = positions[pos_idx], score
                 if score < gbest_score:
                     gbest, gbest_score = positions[pos_idx], score
-            velocities[pos_cycler] = (
-                w * velocities[pos_cycler]
-                + c1 * np.random.random(velocities[pos_cycler].shape) * (lbests[pos_cycler] - positions[pos_cycler])
-                + c2 * np.random.random(velocities[pos_cycler].shape) * (gbest - positions[pos_cycler])
-            )
-            positions[pos_cycler] = positions[pos_cycler] + lr * velocities[pos_cycler]
-            positions[pos_cycler] = np.where(positions[pos_cycler] > bounds[0], positions[pos_cycler], bounds[0])
-            positions[pos_cycler] = np.where(positions[pos_cycler] < bounds[1], positions[pos_cycler], bounds[1])
-
+            velocities[pos_cycler], positions[pos_cycler] = \
+                get_new_velocity_and_position(velocities[pos_cycler],
+                                              positions[pos_cycler],
+                                              lbests[pos_cycler],
+                                              gbest)
         worker_cycler = (worker_cycler + 1) % len(workers)
         sleep(0.001)
     return gbest, gbest_score
