@@ -378,19 +378,20 @@ def get_empty_analysis(bc: dict) -> dict:
     return {
         'exchange': bc['exchange'] if 'exchange' in bc else 'unknown',
         'symbol': bc['symbol'] if 'symbol' in bc else 'unknown',
+        'starting_balance': bc['starting_balance'],
+        'final_balance': 0.0,
+        'final_equity': 0.0,
         'net_pnl_plus_fees': 0.0,
+        'gain': 1.0,
+        'n_days': 0.0,
+        'average_daily_gain': 0.0,
+        'average_periodic_gain': 0.0,
+        'adjusted_daily_gain': 0.0,
+        'sharpe_ratio': 0.0,
         'profit_sum': 0.0,
         'loss_sum': 0.0,
         'fee_sum': 0.0,
-        'final_equity': bc['starting_balance'],
-        'gain': 1.0,
-        'max_drawdown': 0.0,
-        'n_days': 0.0,
-        'average_periodic_gain': 0.0,
-        'average_daily_gain': 0.0,
-        'adjusted_daily_gain': 0.0,
-        'sharpe_ratio': 0.0,
-        'lowest_eqbal_ratio': 0.0,
+        'lowest_eqbal_ratio': 1.0,
         'closest_bkr': 1.0,
         'n_fills': 0.0,
         'n_entries': 0.0,
@@ -399,11 +400,14 @@ def get_empty_analysis(bc: dict) -> dict:
         'n_initial_entries': 0.0,
         'n_normal_closes': 0.0,
         'n_stop_loss_closes': 0.0,
-        'n_stop_loss_entries': 0.0,
         'biggest_psize': 0.0,
-        'max_hrs_no_fills_same_side': 1000.0,
-        'max_hrs_no_fills': 1000.0,
-        'mean_hrs_between_fills': 1000.0,
+        'mean_hrs_between_fills': 10000.0,
+        'mean_hrs_between_fills_long': 10000.0,
+        'mean_hrs_between_fills_shrt': 10000.0,
+        'max_hrs_no_fills_long': 10000.0,
+        'max_hrs_no_fills_shrt': 10000.0,
+        'max_hrs_no_fills_same_side': 10000.0,
+        'max_hrs_no_fills': 10000.0,
     }
 
 
@@ -595,7 +599,12 @@ def spotify_config(config: dict, nullify_shrt=True) -> dict:
     return spotified
 
 
-
+def tuplify(xs):
+    if type(xs) in [list]:
+        return tuple(tuplify(x) for x in xs)
+    elif type(xs) in [dict]:
+        return tuple({k: tuplify(v) for k, v in xs.items()}.items())
+    return xs
 
 
 
