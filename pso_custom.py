@@ -99,7 +99,10 @@ def pso_multiprocess(reward_func: Callable,
                                                           gbest)
                         pos_hash = sha256(str(positions[pos_cycler]).encode('utf-8')).hexdigest()
                     else:
-                        raise Exception('too many duplicate candidates')
+                        print('too many duplicates, choosing random position')
+                        positions[pos_cycler] = numpyize([np.random.uniform(bounds[0][i], bounds[1][i])
+                                                          for i in range(len(bounds[0]))])
+                        #raise Exception('too many duplicate candidates')
                     tested.add(pos_hash)
                     workers[worker_cycler] = (pos_cycler, pool.apply_async(reward_func, args=(positions[pos_cycler],)))
                     working = set([e[0] for e in workers if e is not None])
