@@ -4,13 +4,15 @@ from backtest import backtest
 from plotting import plot_fills
 from downloader import Downloader, prep_config
 from pure_funcs import denumpyize, numpyize, get_template_live_config, candidate_to_live_config, calc_spans, \
-    get_template_live_config, unpack_config, pack_config, analyze_fills, ts_to_date, denanify, round_dynamic
+    get_template_live_config, unpack_config, pack_config, analyze_fills, ts_to_date, denanify, round_dynamic, \
+    tuplify
 from procedures import dump_live_config, load_live_config, make_get_filepath, add_argparse_args, get_starting_configs
 from time import time, sleep
 from optimize import get_expanded_ranges, single_sliding_window_run, objective_function
 from bisect import insort
 from typing import Callable
 from prettytable import PrettyTable
+from hashlib import sha256
 import os
 import sys
 import argparse
@@ -55,6 +57,8 @@ def pso_multiprocess(reward_func: Callable,
     gbest = np.zeros_like(positions[0])
     gbest_score = np.inf
 
+    tested = set()
+
     itr_counter = 0
     worker_cycler = 0
     pos_cycler = 0
@@ -70,8 +74,11 @@ def pso_multiprocess(reward_func: Callable,
         else:
             if workers[worker_cycler] is None:
                 if pos_cycler not in working:
-                    workers[worker_cycler] = (pos_cycler, pool.apply_async(reward_func, args=(positions[pos_cycler],)))
-                    working = set([e[0] for e in workers if e is not None])
+                    pos_hash = sha256(str(positions[pos_cycler]).encode('utf-8')).hexdigest()
+                    if pos_hash not in tested:
+                        tested.add(pos_hash)
+                        workers[worker_cycler] = (pos_cycler, pool.apply_async(reward_func, args=(positions[pos_cycler],)))
+                        working = set([e[0] for e in workers if e is not None])
                 pos_cycler = (pos_cycler + 1) % len(positions)
         if workers[worker_cycler] is not None and workers[worker_cycler][1].ready():
             score = post_processing_func(workers[worker_cycler][1].get())
@@ -118,7 +125,7 @@ class PostProcessing:
         f"{len(self.all_backtest_analyses): <5}"
         table = PrettyTable()
         table.field_names = ['adg', 'bkr_dist', 'eqbal_ratio', 'shrp', 'hrs_no_fills',
-                             'hrs_no_fills_ss', 'mean_hrs_between_fills', 'score']
+                             'hrs_no_fills_ss', 'mean_hrs_btwn_fills', 'n_slices', 'score']
         for elm in self.all_backtest_analyses[:20] + [(score, analysis)]:
             row = [round_dynamic(e, 6)
                    for e in [elm[1]['average_daily_gain'],
@@ -128,6 +135,7 @@ class PostProcessing:
                              elm[1]['max_hrs_no_fills'],
                              elm[1]['max_hrs_no_fills_same_side'],
                              elm[1]['mean_hrs_between_fills'],
+                             elm[1]['completed_slices'],
                              elm[1]['score']]]
             table.add_row(row)
         output = table.get_string(border=True, padding_width=1)
@@ -145,17 +153,6 @@ def get_bounds(ranges: dict) -> tuple:
                      np.array([float(v[1]) for k, v in ranges.items()])])
 
 
-def simple_backtest(config, data):
-    sample_size_ms = data[1][0] - data[0][0]
-    max_span_ito_n_samples = int(config['max_span'] * 60 / (sample_size_ms / 1000))
-    fills, info = backtest(pack_config(config), data)
-    _, analysis = analyze_fills(fills, {**config, **{'lowest_eqbal_ratio': info[1], 'closest_bkr': info[2]}},
-                                data[max_span_ito_n_samples][0],
-                                data[-1][0])
-    score = objective_function(analysis, config, metric='average_daily_gain')
-    return score, analysis
-
-
 class BacktestWrap:
     def __init__(self, data, config):
         self.data = data
@@ -165,7 +162,6 @@ class BacktestWrap:
             if self.expanded_ranges[k][0] == self.expanded_ranges[k][1]:
                 del self.expanded_ranges[k]
         self.bounds = get_bounds(self.expanded_ranges)
-        self.starting_configs = get_starting_configs(config)
     
     def config_to_xs(self, config):
         xs = np.zeros(len(self.bounds[0]))
@@ -182,8 +178,22 @@ class BacktestWrap:
 
     def rf(self, xs):
         config = self.xs_to_config(xs)
-        score, analyses = simple_backtest(config, self.data)
-        return score, analyses, config
+        score, analyses = single_sliding_window_run(config, self.data, do_print=True)
+        analysis = {}
+        for key in ['exchange', 'symbol', 'n_days', 'starting_balance']:
+            analysis[key] = analyses[-1][key]
+        for key in ['average_periodic_gain', 'average_daily_gain', 'adjusted_daily_gain', 'sharpe_ratio']:
+            analysis[key] = np.mean([a[key] for a in analyses])
+        for key in ['final_balance', 'final_equity', 'net_pnl_plus_fees', 'gain', 'profit_sum',
+                    'n_fills', 'n_entries', 'n_closes', 'n_reentries', 'n_initial_entries',
+                    'n_normal_closes', 'n_stop_loss_closes', 'biggest_psize', 'mean_hrs_between_fills',
+                    'mean_hrs_between_fills_long', 'mean_hrs_between_fills_shrt', 'max_hrs_no_fills_long',
+                    'max_hrs_no_fills_shrt', 'max_hrs_no_fills_same_side', 'max_hrs_no_fills']:
+            analysis[key] = np.max([a[key] for a in analyses])
+        for key in ['loss_sum', 'fee_sum', 'lowest_eqbal_ratio', 'closest_bkr']:
+            analysis[key] = np.min([a[key] for a in analyses])
+        analysis['completed_slices'] = len(analyses)
+        return score, analysis, config
 
 
 async def main():

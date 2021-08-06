@@ -115,7 +115,7 @@ def objective_function(analysis: dict, config: dict, metric='adjusted_daily_gain
     )
 
 
-def single_sliding_window_run(config, data, do_print=False) -> (float, [dict]):
+def single_sliding_window_run(config, data, do_print=True) -> (float, [dict]):
     analyses = []
     objective = 0.0
     n_days = config['n_days']
@@ -154,40 +154,36 @@ def single_sliding_window_run(config, data, do_print=False) -> (float, [dict]):
                 f'{config["avg_periodic_gain_key"]} {analysis["average_periodic_gain"]:.4f}, '
                 f'score {analysis["score"]:.4f}, objective {objective:.4f}, '
                 f'hrs stuck ss {str(round(analysis["max_hrs_no_fills_same_side"], 1)).zfill(4)}, ')
+        do_break = False
         if (bef := config['break_early_factor']) != 0.0:
             if analysis['closest_bkr'] < config['minimum_bankruptcy_distance'] * (1 - bef):
                 line += f"broke on min_bkr_dist {analysis['closest_bkr']:.4f}, {config['minimum_bankruptcy_distance']}"
-                print(line)
-                break
+                do_break = True
             if analysis['lowest_eqbal_ratio'] < config['minimum_equity_balance_ratio'] * (1 - bef):
                 line += f"broke on low eqbal ratio {analysis['lowest_eqbal_ratio']:.4f} "
-                print(line)
-                break
+                do_break = True
             if analysis['sharpe_ratio'] < config['minimum_sharpe_ratio'] * (1 - bef):
                 line += f"broke on low sharpe ratio {analysis['sharpe_ratio']:.4f} {config['minimum_sharpe_ratio']} "
-                print(line)
-                break
+                do_break = True
             if analysis['max_hrs_no_fills'] > config['maximum_hrs_no_fills'] * (1 + bef):
                 line += f"broke on max_hrs_no_fills {analysis['max_hrs_no_fills']:.4f}, {config['maximum_hrs_no_fills']}"
-                print(line)
-                break
+                do_break = True
             if analysis['max_hrs_no_fills_same_side'] > config['maximum_hrs_no_fills_same_side'] * (1 + bef):
                 line += f"broke on max_hrs_no_fills_ss {analysis['max_hrs_no_fills_same_side']:.4f}, {config['maximum_hrs_no_fills_same_side']}"
-                print(line)
-                break
+                do_break = True
             if analysis['mean_hrs_between_fills'] > config['maximum_mean_hrs_between_fills'] * (1 + bef):
                 line += f"broke on mean_hrs_between_fills {analysis['mean_hrs_between_fills']:.4f}, {config['maximum_mean_hrs_between_fills']}"
-                print(line)
-                break
-            if analysis['average_daily_gain'] < config['minimum_slice_adg']:
+                do_break = True
+            if analysis['average_daily_gain'] < config['minimum_slice_adg'] * (1 - bef):
                 line += f"broke on low adg {analysis['average_daily_gain']:.4f} "
-                print(line)
-                break
+                do_break = True
             if z > 2 and (mean_adg := np.mean([e['average_daily_gain'] for e in analyses])) < 1.0:
                 line += f"broke on low mean adg {mean_adg:.4f} "
-                print(line)
-                break
+                do_break = True
+        if do_print:
             print(line)
+        if do_break:
+            break
     return objective, analyses
 
 def simple_sliding_window_wrap(config, data, do_print=False):
@@ -211,7 +207,7 @@ def simple_sliding_window_wrap(config, data, do_print=False):
                     sharpe_ratio=np.mean([r['sharpe_ratio'] for r in analyses]),
                     max_hrs_no_fills=np.max([r['max_hrs_no_fills'] for r in analyses]),
                     max_hrs_no_fills_ss=np.max([r['max_hrs_no_fills_same_side'] for r in analyses]),
-                    mean_hrs_btwn_fills=np.mean([r['mean_hrs_between_fills'] for r in analyses]),
+                    mean_hrs_btwn_fills=np.max([r['mean_hrs_between_fills'] for r in analyses]),
                     **{config['avg_periodic_gain_key']: np.mean([r['average_periodic_gain'] for r in analyses])})
 
 
