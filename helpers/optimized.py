@@ -343,7 +343,7 @@ def convert_array_to_tick_list(tick_list: List[Tick], data: np.ndarray) -> List[
     :return: The tick list with added ticks.
     """
     for row in data:
-        tick_list.append(Tick(row[0], row[1], row[2], bool(row[3])))
+        tick_list.append(Tick(int(row[0]), int(row[1]), float(row[2]), float(row[3]), bool(row[4])))
     return tick_list
 
 
@@ -357,7 +357,7 @@ def candles_to_array(candles: List[Candle]) -> np.ndarray:
     array = np.zeros((len(candles), 6))
     for i in range(len(candles)):
         array[i] = np.asarray([candles[i].timestamp, candles[i].open, candles[i].high, candles[i].low, candles[i].close,
-                               candles[i].volume])
+                               candles[i].volume], dtype=np.float64)
     return array
 
 
