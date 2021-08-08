@@ -157,22 +157,22 @@ def single_sliding_window_run(config, data, do_print=True) -> (float, [dict]):
         do_break = False
         if (bef := config['break_early_factor']) != 0.0:
             if analysis['closest_bkr'] < config['minimum_bankruptcy_distance'] * (1 - bef):
-                line += f"broke on min_bkr_dist {analysis['closest_bkr']:.4f}, {config['minimum_bankruptcy_distance']}"
+                line += f"broke on min_bkr {analysis['closest_bkr']:.4f}, {config['minimum_bankruptcy_distance']} "
                 do_break = True
             if analysis['lowest_eqbal_ratio'] < config['minimum_equity_balance_ratio'] * (1 - bef):
-                line += f"broke on low eqbal ratio {analysis['lowest_eqbal_ratio']:.4f} "
+                line += f"broke on min_eqbal_r {analysis['lowest_eqbal_ratio']:.4f} "
                 do_break = True
             if analysis['sharpe_ratio'] < config['minimum_sharpe_ratio'] * (1 - bef):
-                line += f"broke on low sharpe ratio {analysis['sharpe_ratio']:.4f} {config['minimum_sharpe_ratio']} "
+                line += f"broke on shrp_r {analysis['sharpe_ratio']:.4f} {config['minimum_sharpe_ratio']} "
                 do_break = True
             if analysis['max_hrs_no_fills'] > config['maximum_hrs_no_fills'] * (1 + bef):
-                line += f"broke on max_hrs_no_fills {analysis['max_hrs_no_fills']:.4f}, {config['maximum_hrs_no_fills']}"
+                line += f"broke on max_h_n_fls {analysis['max_hrs_no_fills']:.4f}, {config['maximum_hrs_no_fills']} "
                 do_break = True
             if analysis['max_hrs_no_fills_same_side'] > config['maximum_hrs_no_fills_same_side'] * (1 + bef):
-                line += f"broke on max_hrs_no_fills_ss {analysis['max_hrs_no_fills_same_side']:.4f}, {config['maximum_hrs_no_fills_same_side']}"
+                line += f"broke on max_h_n_fls_ss {analysis['max_hrs_no_fills_same_side']:.4f}, {config['maximum_hrs_no_fills_same_side']} "
                 do_break = True
             if analysis['mean_hrs_between_fills'] > config['maximum_mean_hrs_between_fills'] * (1 + bef):
-                line += f"broke on mean_hrs_between_fills {analysis['mean_hrs_between_fills']:.4f}, {config['maximum_mean_hrs_between_fills']}"
+                line += f"broke on mean_h_b_fls {analysis['mean_hrs_between_fills']:.4f}, {config['maximum_mean_hrs_between_fills']} "
                 do_break = True
             if analysis['average_daily_gain'] < config['minimum_slice_adg'] * (1 - bef):
                 line += f"broke on low adg {analysis['average_daily_gain']:.4f} "
@@ -189,25 +189,33 @@ def single_sliding_window_run(config, data, do_print=True) -> (float, [dict]):
 def simple_sliding_window_wrap(config, data, do_print=False):
     objective, analyses = single_sliding_window_run(config, data)
     if not analyses:
-        tune.report(objective=0.0,
-                    daily_gain=0.0,
-                    closest_bkr=0.0,
-                    lowest_eqbal_r=0.0,
-                    sharpe_ratio=0.0,
+        tune.report(obj=0.0,
+                    min_adg=0.0,
+                    avg_adg=0.0,
+                    min_bkr=0.0,
+                    min_eqbal_r=0.0,
+                    min_shrp_r=0.0,
+                    avg_shrp_r=0.0,
                     avg_periodic_gain=0.0,
-                    max_hrs_no_fills=1000.0,
-                    max_hrs_no_fills_ss=1000.0,
-                    mean_hrs_btwn_fills=1000.0,
+                    max_h_n_fls=1000.0,
+                    max_h_n_fls_ss=1000.0,
+                    max_mean_h_b_fills=1000.0,
+                    avg_mean_h_b_fills=1000.0,
+                    n_slc=0,
                     **{config['avg_periodic_gain_key']: 0.0})
     else:
-        tune.report(objective=objective,
-                    daily_gain=np.mean([r['average_daily_gain'] for r in analyses]),
-                    closest_bkr=np.min([r['closest_bkr'] for r in analyses]),
-                    lowest_eqbal_r=np.min([r['lowest_eqbal_ratio'] for r in analyses]),
-                    sharpe_ratio=np.mean([r['sharpe_ratio'] for r in analyses]),
-                    max_hrs_no_fills=np.max([r['max_hrs_no_fills'] for r in analyses]),
-                    max_hrs_no_fills_ss=np.max([r['max_hrs_no_fills_same_side'] for r in analyses]),
-                    mean_hrs_btwn_fills=np.max([r['mean_hrs_between_fills'] for r in analyses]),
+        tune.report(obj=objective,
+                    min_adg=np.min([r['average_daily_gain'] for r in analyses]),
+                    avg_adg=np.mean([r['average_daily_gain'] for r in analyses]),
+                    min_bkr=np.min([r['closest_bkr'] for r in analyses]),
+                    min_eqbal_r=np.min([r['lowest_eqbal_ratio'] for r in analyses]),
+                    min_shrp_r=np.min([r['sharpe_ratio'] for r in analyses]),
+                    avg_shrp_r=np.mean([r['sharpe_ratio'] for r in analyses]),
+                    max_h_n_fls=np.max([r['max_hrs_no_fills'] for r in analyses]),
+                    max_h_n_fls_ss=np.max([r['max_hrs_no_fills_same_side'] for r in analyses]),
+                    max_mean_h_b_fills=np.max([r['mean_hrs_between_fills'] for r in analyses]),
+                    avg_mean_h_b_fills=np.mean([r['mean_hrs_between_fills'] for r in analyses]),
+                    n_slc=len(analyses),
                     **{config['avg_periodic_gain_key']: np.mean([r['average_periodic_gain'] for r in analyses])})
 
 
@@ -272,19 +280,23 @@ def backtest_tune(data: np.ndarray, config: dict, current_best: Union[dict, list
 
     backtest_wrap = tune.with_parameters(simple_sliding_window_wrap, data=data)
     analysis = tune.run(
-        backtest_wrap, metric='objective', mode='max', name='search',
+        backtest_wrap, metric='obj', mode='max', name='search',
         search_alg=algo, scheduler=scheduler, num_samples=iters, config=config, verbose=1,
         reuse_actors=True, local_dir=config['optimize_dirpath'],
         progress_reporter=LogReporter(
-            metric_columns=['daily_gain',
-                            'closest_bkr',
-                            'lowest_eqbal_r',
-                            'sharpe_ratio',
+            metric_columns=['min_adg',
+                            'avg_adg',
+                            'min_bkr',
+                            'min_eqbal_r',
+                            'min_shrp_r',
+                            'avg_shrp_r',
                             config['avg_periodic_gain_key'],
-                            'max_hrs_no_fills',
-                            'max_hrs_no_fills_ss',
-                            'mean_hrs_btwn_fills',
-                            'objective'],
+                            'max_h_n_fls',
+                            'max_h_n_fls_ss',
+                            'max_mean_h_b_fills',
+                            'avg_mean_h_b_fills',
+                            'n_slc',
+                            'obj'],
             parameter_columns=[k for k in config['ranges'] if '_span' in k]),
         raise_on_failed_trial=False
     )
