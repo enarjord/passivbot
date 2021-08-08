@@ -1,9 +1,10 @@
 import asyncio
 import datetime
 import json
-from typing import Tuple, List
+from typing import Tuple, List, Union
 
 import aiohttp
+import pandas as pd
 import websockets
 from numba import types
 from numba.experimental import jitclass
@@ -104,7 +105,7 @@ class LiveBot(Bot):
 
     async def async_init(self):
         """
-        Calls the base init function and provides async support. To be implemented by the exchange implementation.
+        Calls the base init and exchange specific init function and provides async support.
         :return:
         """
         self.init()
@@ -145,12 +146,25 @@ class LiveBot(Bot):
     async def fetch_ticks(self, from_id: int = None, start_time: int = None, end_time: int = None,
                           do_print: bool = True) -> List[Tick]:
         """
-        Function to fetch ticks, either based on ID or based on time. To be implemented by the exchange implementation.
+        Function to fetch ticks, either based on ID or based on time. If the exchange does not support fetching by time,
+        the function needs to implement logic that searches for the appropriate time and then fetches based on ID. To be
+        implemented by the exchange implementation.
         :param from_id: The ID from which to fetch.
         :param start_time: The start time from which to fetch.
         :param end_time: The end time to which to fetch.
         :param do_print: Whether to print output or not.
         :return: A list of Ticks.
+        """
+        raise NotImplementedError
+
+    def fetch_from_repo(self, date: Union[Tuple[str, str], Tuple[str, str, str]]) -> pd.DataFrame:
+        """
+        Function to allow fetching trade data from a repository. Needs to be implemented by the exchange implementation
+        or return an empty dataframe if this functionality is not available for the exchange.
+        :param date: The date, a tuple representing either a year and a month, or a year, a month, and a day. The order
+        is year, month, day.
+        :return: A dataframe with following columns: trade_id (int64), price (float64), qty (float64),
+        timestamp (int64), is_buyer_maker (int8)
         """
         raise NotImplementedError
 
