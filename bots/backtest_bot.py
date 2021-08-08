@@ -65,8 +65,6 @@ class BacktestConfig:
               ("latency", types.float64),
               ("maker_fee", types.float64),
               ("taker_fee", types.float64),
-              ("inverse", types.boolean),
-              ("contract_multiplier", types.boolean),
               ("fills", typeof(empty_fill_list())),
               ("statistics", typeof(empty_statistic_list()))
           ])
@@ -98,9 +96,6 @@ class BacktestBot(Bot):
         self.symbol = config.symbol
         self.maker_fee = config.maker_fee
         self.taker_fee = config.taker_fee
-
-        self.inverse = False
-        self.contract_multiplier = 1.0
 
         self.fills = empty_fill_list()
         self.statistics = empty_statistic_list()

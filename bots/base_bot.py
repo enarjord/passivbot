@@ -10,7 +10,7 @@ from definitions.position import Position, empty_long_position, empty_short_posi
 from definitions.position_list import PositionList, precompile_position_list
 from definitions.tick import Tick, empty_tick_list, precompile_tick
 from helpers.optimized import prepare_candles, correct_order_float_precision
-from helpers.print_functions import print_, print_order
+from helpers.print_functions import print_
 
 ORDER_UPDATE = 'order'
 ACCOUNT_UPDATE = 'account'
@@ -26,7 +26,9 @@ base_bot_spec = [
     ("call_interval", types.float64),
     ("tick_interval", types.float64),
     ("leverage", types.float64),
-    ("symbol", types.string)
+    ("symbol", types.string),
+    ("inverse", types.boolean),
+    ("contract_multiplier", types.boolean),
 ]
 
 
@@ -52,6 +54,9 @@ class Bot:
         self.tick_interval = 0.25
         self.leverage = 1.0
         self.symbol = ''
+
+        self.inverse = False
+        self.contract_multiplier = 1.0
 
     def init(self):
         """
