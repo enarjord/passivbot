@@ -267,6 +267,17 @@ def calculate_equity(balance: float, long_position_size: float, long_position_pr
 
 
 @njit
+def calculate_base_candle_time(tick: Tick, interval: float) -> int:
+    """
+    Calculates the bottom time of a candle based on a Tick timestamp.
+    :param tick: The Tick to use.
+    :param interval: The candle interval to use.
+    :return: The bottom time of the candle.
+    """
+    return int(tick.timestamp - (tick.timestamp % (interval * 1000)))
+
+
+@njit
 def aggregate_ticks_to_candle(tick_list: List[Tick], candle_list: List[Candle], candle_start_time: int,
                               last_candle: Candle, tick_interval: float) -> List[Candle]:
     """
