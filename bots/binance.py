@@ -15,6 +15,7 @@ import pandas as pd
 
 from bots.base_bot import ORDER_UPDATE, ACCOUNT_UPDATE
 from bots.base_live_bot import LiveBot, LiveConfig
+from definitions.fill import Fill, empty_fill_list
 from definitions.order import Order, TP, SL, LIMIT, MARKET, LQ, NEW, PARTIALLY_FILLED, FILLED, CANCELED, EXPIRED, TRADE, \
     CALCULATED, BUY, SELL, LONG, SHORT, BOTH, NEW_INSURANCE, NEW_ADL
 from definitions.position import Position, empty_long_position, empty_short_position
@@ -244,6 +245,56 @@ class BinanceBot(LiveBot):
             if do_print:
                 print_(['Fetched no new ticks', self.symbol], n=True)
         return tick_list
+
+    async def fetch_fills(self, from_id: int = None, start_time: int = None, end_time: int = None, limit: int = 1000) -> \
+            List[Fill]:
+        """
+        Function to fetch fills, either based on ID or based on time.
+        :param from_id: The ID from which to fetch.
+        :param start_time: The start time from which to fetch.
+        :param end_time: The end time to which to fetch.
+        :param limit: Maximum fills to fetch.
+        :return: A list of Fills.
+        """
+        params = {'symbol': self.symbol, 'limit': min(100, limit) if self.inverse else limit}
+        fill_list = empty_fill_list()
+        if from_id is not None:
+            params['fromId'] = max(0, from_id)
+        if start_time is not None:
+            params['startTime'] = start_time
+        if end_time is not None:
+            params['endTime'] = end_time
+        try:
+            fetched = await self.private_get(self.endpoints['fills'], params)
+        except Exception as e:
+            print_(['Error fetching fills', e], n=True)
+            return fill_list
+        try:
+            if len(fetched) > 0:
+                for f in fetched:
+                    fill_list.append(
+                        Fill(int(f['orderId']), int(f['time']), float(f['realizedPnl']), float(f['commission']), 0.0,
+                             0.0, 0.0, float(f['qty']), float(f['price']), 0.0, 0.0,
+                             LIMIT if bool(f['maker']) else MARKET, FILLED, mapping(f['side']),
+                             mapping(f['positionSide'])))
+                # fills = [{'symbol': x['symbol'],
+                #           # 'id': int(x['id']),
+                #           # 'order_id': int(x['orderId']),
+                #           # 'side': x['side'].lower(),
+                #           # 'price': float(x['price']),
+                #           # 'qty': float(x['qty']),
+                #           # 'realized_pnl': float(x['realizedPnl']),
+                #           'cost': float(x['baseQty']) if self.inverse else float(x['quoteQty']),
+                #           # 'fee_paid': float(x['commission']),
+                #           'fee_token': x['commissionAsset'],
+                #           # 'timestamp': int(x['time']),
+                #           # 'position_side': x['positionSide'].lower().replace('short', 'shrt'),
+                #           # 'is_maker': x['maker']
+                #           } for x in fetched]
+        except Exception as e:
+            print_(['Error fetching fills', e, fetched], n=True)
+            return fill_list
+        return fill_list
 
     async def public_get(self, url: str, params: dict = {}) -> dict:
         """

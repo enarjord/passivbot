@@ -168,6 +168,20 @@ class LiveBot(Bot):
         """
         raise NotImplementedError
 
+    async def fetch_fills(self, from_id: int = None, start_time: int = None, end_time: int = None, limit: int = 1000) -> \
+            List[Fill]:
+        """
+        Function to fetch fills, either based on ID or based on time. If the exchange does not support fetching by time,
+        the function needs to implement logic that searches for the appropriate time and then fetches based on ID. To be
+        implemented by the exchange implementation.
+        :param from_id: The ID from which to fetch.
+        :param start_time: The start time from which to fetch.
+        :param end_time: The end time to which to fetch.
+        :param limit: Maximum fills to fetch.
+        :return: A list of Fills.
+        """
+        raise NotImplementedError
+
     def fetch_from_repo(self, date: Union[Tuple[str, str], Tuple[str, str, str]]) -> pd.DataFrame:
         """
         Function to allow fetching trade data from a repository. Needs to be implemented by the exchange implementation
