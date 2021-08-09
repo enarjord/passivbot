@@ -370,39 +370,41 @@ class BacktestBot(Bot):
         """
         price_list = empty_candle_list()
         last_update = self.data[0, 0]
+        first_timestamp = self.data[0, 0]
         last_statistic_update = self.data[0, 0]
         # Time, trade id, open, high, low, close, volume
         for index in range(len(self.data)):
             self.current_timestamp = self.data[index][0]
             candle = self.prepare_candle(self.data[index])
             price_list.append(candle)
-            cont = self.execute_exchange_logic(candle)
-            if not cont:
-                return self.fills, self.statistics
-            if index + 1 < len(self.data):
-                if self.data[index + 1][
-                    5] != 0.0 and self.current_timestamp - last_update >= self.strategy.call_interval * 1000:
-                    last_update = self.current_timestamp
-                    self.execute_strategy_decision_making(price_list)
-                    price_list = empty_candle_list()
-            if self.current_timestamp - last_statistic_update >= 60 * 60 * 1000:
-                equity = calculate_equity(self.get_balance(), self.get_position().long.size,
-                                          self.get_position().long.price, self.get_position().short.size,
-                                          self.get_position().short.price, candle.close, self.inverse,
-                                          self.contract_multiplier)
-                position_balance_ratio = self.get_position().long.price * self.get_position().long.size \
-                                         + self.get_position().short.price * self.get_position().short.size \
-                                         / self.get_balance()
-                if len(self.statistics) > 0:
-                    profit_and_loss_balance = self.get_balance() / self.statistics[-1].balance
-                    profit_and_loss_equity = equity / self.statistics[-1].equity
-                else:
-                    profit_and_loss_balance = 0.0
-                    profit_and_loss_equity = 0.0
-                self.statistics.append(
-                    Statistic(self.current_timestamp, self.get_balance(), equity, profit_and_loss_balance,
-                              profit_and_loss_equity, position_balance_ratio))
-                last_statistic_update = self.current_timestamp
+            if self.current_timestamp >= first_timestamp + self.historic_tick_range * 1000:
+                cont = self.execute_exchange_logic(candle)
+                if not cont:
+                    return self.fills, self.statistics
+                if index + 1 < len(self.data):
+                    if self.data[index + 1][
+                        5] != 0.0 and self.current_timestamp - last_update >= self.strategy.call_interval * 1000:
+                        last_update = self.current_timestamp
+                        self.execute_strategy_decision_making(price_list)
+                        price_list = empty_candle_list()
+                if self.current_timestamp - last_statistic_update >= 60 * 60 * 1000:
+                    equity = calculate_equity(self.get_balance(), self.get_position().long.size,
+                                              self.get_position().long.price, self.get_position().short.size,
+                                              self.get_position().short.price, candle.close, self.inverse,
+                                              self.contract_multiplier)
+                    position_balance_ratio = self.get_position().long.price * self.get_position().long.size \
+                                             + self.get_position().short.price * self.get_position().short.size \
+                                             / self.get_balance()
+                    if len(self.statistics) > 0:
+                        profit_and_loss_balance = self.get_balance() / self.statistics[-1].balance
+                        profit_and_loss_equity = equity / self.statistics[-1].equity
+                    else:
+                        profit_and_loss_balance = 0.0
+                        profit_and_loss_equity = 0.0
+                    self.statistics.append(
+                        Statistic(self.current_timestamp, self.get_balance(), equity, profit_and_loss_balance,
+                                  profit_and_loss_equity, position_balance_ratio))
+                    last_statistic_update = self.current_timestamp
         return self.fills, self.statistics
 
     def create_orders(self, orders_to_create: List[Order]):
