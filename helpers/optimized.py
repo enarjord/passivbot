@@ -346,6 +346,28 @@ def prepare_candles(tick_list: List[Tick], last_candle_start_time: int, max_cand
 
 
 @njit
+def merge_ticks(historic_ticks: List[Tick], tick_list: List[Tick]) -> List[Tick]:
+    """
+    Merges two tick lists into one tick list and removes duplicates. Filters based on trade ID. Assumes that the
+    historic_ticks are older than the tick_list.
+    :param historic_ticks: Historic ticks fetched while the websocket already collects ticks.
+    :param tick_list: Ticks from the websocket collection.
+    :return: A merged tick list without duplicates.
+    """
+    new_tick_list = empty_tick_list()
+    added_order_ids = []
+    for tick in historic_ticks:
+        if tick.trade_id not in added_order_ids:
+            new_tick_list.append(tick)
+            added_order_ids.append(tick.trade_id)
+    for tick in tick_list:
+        if tick.trade_id not in added_order_ids:
+            new_tick_list.append(tick)
+            added_order_ids.append(tick.trade_id)
+    return new_tick_list
+
+
+@njit
 def convert_array_to_tick_list(tick_list: List[Tick], data: np.ndarray) -> List[Tick]:
     """
     Converts an array into a tick list so that it can be further processed.
