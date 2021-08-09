@@ -8,8 +8,8 @@ from definitions.order import Order, empty_order, empty_order_list, precompile_o
 from definitions.order_list import OrderList, precompile_order_list
 from definitions.position import Position, empty_long_position, empty_short_position, precompile_position
 from definitions.position_list import PositionList, precompile_position_list
-from definitions.tick import Tick, empty_tick_list, precompile_tick
-from helpers.optimized import prepare_candles, correct_order_float_precision
+from definitions.tick import Tick, empty_tick, empty_tick_list, precompile_tick
+from helpers.optimized import prepare_candles, correct_order_float_precision, merge_ticks, calculate_base_candle_time
 from helpers.print_functions import print_
 
 ORDER_UPDATE = 'order'
@@ -149,6 +149,8 @@ class Bot:
         tick = tick_list[-1]
         max_time = int(tick.timestamp - (tick.timestamp % (tick_interval * 1000))) + int(tick_interval * 1000)
         prepare_candles(tick_list, 0, max_time, empty_candle(), tick_interval)
+        merge_ticks(empty_tick_list(), empty_tick_list())
+        calculate_base_candle_time(empty_tick(), 0.25)
         self.strategy.precompile()
         print_(['Precompile finished.'], n=True)
 
