@@ -53,6 +53,14 @@ def make_get_filepath(filepath: str) -> str:
     return filepath
 
 
+def get_utc_now_timestamp() -> int:
+    """
+    Creates a millisecond based timestamp of UTC now.
+    :return: Millisecond based timestamp of UTC now.
+    """
+    return int(datetime.datetime.now(datetime.timezone.utc).timestamp() * 1000)
+
+
 def create_test_data(filepath: str, tick_interval: float = 0.25):
     """
     Basic function to create test data for the backtester. Reads CSV files, creates ticks out of it, aggregates ticks
