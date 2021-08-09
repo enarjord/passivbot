@@ -21,6 +21,8 @@ from helpers.optimized import calculate_available_margin, quantity_to_cost, calc
     ('quantity_step', types.float64),
     ('price_step', types.float64),
     ('call_interval', types.float64),
+    ('historic_tick_range', types.float64),
+    ('historic_fill_range', types.float64),
     ('leverage', types.float64),
     ('symbol', types.string),
     ('maker_fee', types.float64),
@@ -32,13 +34,18 @@ class BacktestConfig:
     A class representing a backtest config.
     """
 
-    def __init__(self, quantity_step: float, price_step: float, call_interval: float, leverage: float, symbol: str,
-                 maker_fee: float, taker_fee: float, latency: float):
+    def __init__(self, quantity_step: float, price_step: float, call_interval: float, historic_tick_range: float,
+                 historic_fill_range: float, leverage: float, symbol: str, maker_fee: float, taker_fee: float,
+                 latency: float):
         """
         Creates a backtest config.
         :param quantity_step: Quantity step to use in backtesting.
         :param price_step: Price step to use in backtesting.
         :param call_interval: Call interval for strategy to use in backtesting.
+        :param historic_tick_range: Range for which to collect historic ticks in seconds before execution. 0 if nothing
+        to fetch.
+        :param historic_tick_range: Range for which to collect historic fills in seconds before execution. 0 if nothing
+        to fetch.
         :param leverage: Leverage to use in backtesting.
         :param symbol: The symbol to test.
         :param maker_fee: The maker fee to use.
@@ -48,6 +55,8 @@ class BacktestConfig:
         self.quantity_step = quantity_step
         self.price_step = price_step
         self.call_interval = call_interval
+        self.historic_tick_range = historic_tick_range
+        self.historic_fill_range = historic_fill_range
         self.leverage = leverage
         self.symbol = symbol
         self.maker_fee = maker_fee
@@ -92,6 +101,8 @@ class BacktestBot(Bot):
         self.quantity_step = config.quantity_step
         self.price_step = config.price_step
         self.call_interval = config.call_interval
+        self.historic_tick_range = config.historic_tick_range
+        self.historic_fill_range = config.historic_fill_range
         self.leverage = config.leverage
         self.symbol = config.symbol
         self.maker_fee = config.maker_fee

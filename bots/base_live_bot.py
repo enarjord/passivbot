@@ -25,14 +25,17 @@ from helpers.print_functions import print_
     ('user', types.string),
     ('exchange', types.string),
     ('leverage', types.int64),
-    ('call_interval', types.float64)
+    ('call_interval', types.float64),
+    ('historic_tick_range', types.float64),
+    ('historic_fill_range', types.float64)
 ])
 class LiveConfig:
     """
     A class representing a live config.
     """
 
-    def __init__(self, symbol: str, user: str, exchange: str, leverage: int, call_interval: float):
+    def __init__(self, symbol: str, user: str, exchange: str, leverage: int, call_interval: float,
+                 historic_tick_range: float, historic_fill_range: float):
         """
         Creates a live config.
         :param symbol: The symbol to use.
@@ -40,12 +43,16 @@ class LiveConfig:
         :param exchange: The exchange to use.
         :param leverage: The leverage to use.
         :param call_interval: Call interval for strategy to use in live.
+        :param historic_tick_range: Range for which to fetch historic ticks in seconds. 0 if nothing to fetch.
+        :param historic_tick_range: Range for which to fetch historic fills in seconds. 0 if nothing to fetch.
         """
         self.symbol = symbol
         self.user = user
         self.exchange = exchange
         self.leverage = leverage
         self.call_interval = call_interval
+        self.historic_tick_range = historic_tick_range
+        self.historic_fill_range = historic_fill_range
 
 
 class LiveBot(Bot):
@@ -73,6 +80,8 @@ class LiveBot(Bot):
         self.key, self.secret = load_key_secret(config.exchange, self.user)
 
         self.call_interval = config.call_interval
+        self.historic_tick_range = config.historic_tick_range
+        self.historic_fill_range = config.historic_fill_range
 
         self.base_endpoint = ''
         self.endpoints = {

@@ -27,6 +27,8 @@ base_bot_spec = [
     ("tick_interval", types.float64),
     ("leverage", types.float64),
     ("symbol", types.string),
+    ("historic_tick_range", types.float64),
+    ("historic_fill_range", types.float64),
     ("inverse", types.boolean),
     ("contract_multiplier", types.boolean),
 ]
@@ -54,6 +56,9 @@ class Bot:
         self.tick_interval = 0.25
         self.leverage = 1.0
         self.symbol = ''
+
+        self.historic_tick_range = 0
+        self.historic_fill_range = 0
 
         self.inverse = False
         self.contract_multiplier = 1.0

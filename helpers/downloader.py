@@ -158,7 +158,7 @@ class Downloader:
         Downloads any missing data based on the specified time frame.
         :return:
         """
-        config = LiveConfig(self.config["symbol"], self.config["user"], self.config["exchange"], 1, 1.0)
+        config = LiveConfig(self.config["symbol"], self.config["user"], self.config["exchange"], 1, 1.0, 0.0, 0.0)
         if self.config["exchange"] == "binance":
             from bots.binance import BinanceBot
             self.bot = BinanceBot(config, None)
