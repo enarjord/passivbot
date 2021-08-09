@@ -135,7 +135,7 @@ class Bot:
         times = [1, 200, 750]
         tick_interval = 0.25
         for t in range(len(times)):
-            tick_list.append(Tick(times[t], t, 1.0, False))
+            tick_list.append(Tick(times[t], t, 1.0, 1.0, False))
         tick = tick_list[-1]
         max_time = int(tick.timestamp - (tick.timestamp % (tick_interval * 1000))) + int(tick_interval * 1000)
         prepare_candles(tick_list, 0, max_time, empty_candle(), tick_interval)
