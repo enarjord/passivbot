@@ -12,7 +12,7 @@ from dateutil import parser
 from bots.base_live_bot import LiveConfig
 from definitions.candle import empty_candle
 from definitions.tick import Tick, empty_tick_list
-from helpers.misc import make_get_filepath, ts_to_date, get_filenames
+from helpers.misc import make_get_filepath, ts_to_date, get_filenames, get_utc_now_timestamp
 from helpers.optimized import convert_array_to_tick_list, prepare_candles, candles_to_array
 from helpers.print_functions import print_
 
@@ -37,7 +37,7 @@ class Downloader:
         try:
             self.end_time = int(
                 parser.parse(self.config["end_date"]).replace(tzinfo=datetime.timezone.utc).timestamp() * 1000)
-            if self.end_time > int(datetime.datetime.now(datetime.timezone.utc).timestamp() * 1000):
+            if self.end_time > get_utc_now_timestamp():
                 raise Exception(f"End date later than current time {config['end_date']}")
         except Exception:
             raise Exception(f"Unrecognized date format for end time {config['end_date']}")
@@ -211,8 +211,7 @@ class Downloader:
                     for i in gaps.index:
                         print_(['Filling gaps from id', gaps["start"].iloc[i], 'to id', gaps["end"].iloc[i]])
                         current_id = gaps["start"].iloc[i]
-                        while current_id < gaps["end"].iloc[i] and int(
-                                datetime.datetime.now(datetime.timezone.utc).timestamp() * 1000) - current_time > 10000:
+                        while current_id < gaps["end"].iloc[i] and get_utc_now_timestamp() - current_time > 10000:
                             loop_start = time()
                             try:
                                 fetched_new_trades = await self.bot.fetch_ticks(int(current_id))
@@ -337,13 +336,11 @@ class Downloader:
 
             end_id = sys.maxsize if end_id == 0 else end_id - 1
 
-            if current_id <= end_id and current_time <= end_time and int(
-                    datetime.datetime.now(datetime.timezone.utc).timestamp() * 1000) - current_time > 10000:
+            if current_id <= end_id and current_time <= end_time and get_utc_now_timestamp() - current_time > 10000:
                 print_(['Downloading from', ts_to_date(float(current_time) / 1000), 'to',
                         ts_to_date(float(end_time) / 1000)])
 
-            while current_id <= end_id and current_time <= end_time and int(
-                    datetime.datetime.now(datetime.timezone.utc).timestamp() * 1000) - current_time > 10000:
+            while current_id <= end_id and current_time <= end_time and get_utc_now_timestamp() - current_time > 10000:
                 loop_start = time()
                 fetched_new_trades = await self.bot.fetch_ticks(int(current_id))
                 tf = self.transform_ticks(fetched_new_trades)
