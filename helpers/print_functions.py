@@ -44,8 +44,8 @@ def print_tick(tick: Tick):
     :param tick: The tick to print.
     :return:
     """
-    print_(['Timestamp', tick.timestamp, 'Price', tick.price, 'Quantity', tick.qty, 'Maker', tick.is_buyer_maker],
-           n=True)
+    print_(['Timestamp', tick.timestamp, 'Trade ID', tick.trade_id, 'Price', tick.price, 'Quantity', tick.quantity,
+            'Maker', tick.is_buyer_maker], n=True)
 
 
 def print_order(order: Order):
