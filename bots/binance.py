@@ -235,11 +235,12 @@ class BinanceBot(LiveBot):
             print_(['Error fetching ticks', e], n=True)
             return tick_list
         try:
-            for t in fetched:
-                tick_list.append(Tick(int(t['a']), int(t['T']), float(t['p']), float(t['q']), t['m']))
-            if do_print:
-                print_(['fetched ticks', self.symbol, tick_list[0].trade_id,
-                        ts_to_date(float(tick_list[0].timestamp) / 1000)])
+            if len(fetched) > 0:
+                for t in fetched:
+                    tick_list.append(Tick(int(t['a']), int(t['T']), float(t['p']), float(t['q']), t['m']))
+                if do_print:
+                    print_(['fetched ticks', self.symbol, tick_list[0].trade_id,
+                            ts_to_date(float(tick_list[0].timestamp) / 1000)])
         except Exception as e:
             print_(['Error fetching ticks', e, fetched], n=True)
             if do_print:
