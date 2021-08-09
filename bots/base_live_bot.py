@@ -460,10 +460,13 @@ class LiveBot(Bot):
                             # If tick interval is 250ms the base unit is either 0.0, 0.25, 0.5, or 0.75 seconds
                             last_tick_update = calculate_base_candle_time(tick, self.tick_interval)
                         # print_tick(tick)
-                        if tick.timestamp - last_tick_update < self.tick_interval * 1000:
+                        if tick.timestamp - last_tick_update > self.tick_interval * 1000 and self.execute_strategy_logic:
                             tick_list.append(tick)
-                        else:
-                            tick_list.append(tick)
+                            if len(self.historic_ticks) > 0:
+                                tick_list = merge_ticks(self.historic_ticks, tick_list)
+                                for tick in tick_list:
+                                    print_tick(tick)
+                                self.historic_ticks = empty_tick_list()
                             # Calculate the time when the candle of the current tick ends
                             next_update = calculate_base_candle_time(tick, self.tick_interval) + int(
                                 self.tick_interval * 1000)
@@ -477,8 +480,11 @@ class LiveBot(Bot):
                             # print_candle(last_candle)
                             # Extend candle list with new candles
                             price_list.extend(candles)
+                        else:
+                            tick_list.append(tick)
                         current = datetime.datetime.now()
-                        if current - last_update >= datetime.timedelta(seconds=self.strategy.call_interval):
+                        if current - last_update >= datetime.timedelta(
+                                seconds=self.strategy.call_interval) and self.execute_strategy_logic:
                             last_update = current
                             print_(['Do something'], n=True)
                             # asyncio.create_task(self.async_execute_strategy_decision_making(price_list))
