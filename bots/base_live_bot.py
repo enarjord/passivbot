@@ -11,11 +11,11 @@ from numba.experimental import jitclass
 
 from bots.base_bot import Bot, ORDER_UPDATE, ACCOUNT_UPDATE
 from definitions.candle import Candle, empty_candle_list
+from definitions.fill import Fill, empty_fill_list
 from definitions.order import Order, empty_order_list
 from definitions.position import Position
 from definitions.position_list import PositionList
-from definitions.tick import Tick
-from definitions.tick import empty_tick_list
+from definitions.tick import Tick, empty_tick_list
 from helpers.loaders import load_key_secret
 from helpers.misc import get_utc_now_timestamp
 from helpers.optimized import merge_ticks, calculate_base_candle_time
@@ -84,6 +84,13 @@ class LiveBot(Bot):
         self.call_interval = config.call_interval
         self.historic_tick_range = config.historic_tick_range
         self.historic_fill_range = config.historic_fill_range
+
+        self.historic_ticks = empty_tick_list()
+        self.historic_fills = empty_fill_list()
+
+        self.execute_strategy_logic = False
+        self.fetched_historic_ticks = False
+        self.fetched_historic_fills = False
 
         self.base_endpoint = ''
         self.endpoints = {
