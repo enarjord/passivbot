@@ -267,6 +267,17 @@ def calculate_equity(balance: float, long_position_size: float, long_position_pr
 
 
 @njit
+def calculate_base_candle_time(tick: Tick, interval: float) -> int:
+    """
+    Calculates the bottom time of a candle based on a Tick timestamp.
+    :param tick: The Tick to use.
+    :param interval: The candle interval to use.
+    :return: The bottom time of the candle.
+    """
+    return int(tick.timestamp - (tick.timestamp % (interval * 1000)))
+
+
+@njit
 def aggregate_ticks_to_candle(tick_list: List[Tick], candle_list: List[Candle], candle_start_time: int,
                               last_candle: Candle, tick_interval: float) -> List[Candle]:
     """
@@ -323,8 +334,8 @@ def prepare_candles(tick_list: List[Tick], last_candle_start_time: int, max_cand
         if tick.timestamp < (current_lowest_time + tick_interval * 1000):
             tmp_tick_list.append(tick)
         else:
-            while (current_lowest_time + tick_interval * 1000 - 1) < int(
-                    tick.timestamp - (tick.timestamp % (tick_interval * 1000))) and (
+            while (current_lowest_time + tick_interval * 1000 - 1) < calculate_base_candle_time(tick,
+                                                                                                tick_interval) and (
                     current_lowest_time + tick_interval * 1000) < max_candle_start_time:
                 candle_list = aggregate_ticks_to_candle(tmp_tick_list, candle_list, current_lowest_time, last_candle,
                                                         tick_interval)
@@ -332,6 +343,28 @@ def prepare_candles(tick_list: List[Tick], last_candle_start_time: int, max_cand
                 current_lowest_time += int(tick_interval * 1000)
             tmp_tick_list.append(tick)
     return candle_list, tmp_tick_list, current_lowest_time
+
+
+@njit
+def merge_ticks(historic_ticks: List[Tick], tick_list: List[Tick]) -> List[Tick]:
+    """
+    Merges two tick lists into one tick list and removes duplicates. Filters based on trade ID. Assumes that the
+    historic_ticks are older than the tick_list.
+    :param historic_ticks: Historic ticks fetched while the websocket already collects ticks.
+    :param tick_list: Ticks from the websocket collection.
+    :return: A merged tick list without duplicates.
+    """
+    new_tick_list = empty_tick_list()
+    added_order_ids = []
+    for tick in historic_ticks:
+        if tick.trade_id not in added_order_ids:
+            new_tick_list.append(tick)
+            added_order_ids.append(tick.trade_id)
+    for tick in tick_list:
+        if tick.trade_id not in added_order_ids:
+            new_tick_list.append(tick)
+            added_order_ids.append(tick.trade_id)
+    return new_tick_list
 
 
 @njit
@@ -343,7 +376,7 @@ def convert_array_to_tick_list(tick_list: List[Tick], data: np.ndarray) -> List[
     :return: The tick list with added ticks.
     """
     for row in data:
-        tick_list.append(Tick(row[0], row[1], row[2], bool(row[3])))
+        tick_list.append(Tick(int(row[0]), int(row[1]), float(row[2]), float(row[3]), bool(row[4])))
     return tick_list
 
 
@@ -357,7 +390,7 @@ def candles_to_array(candles: List[Candle]) -> np.ndarray:
     array = np.zeros((len(candles), 6))
     for i in range(len(candles)):
         array[i] = np.asarray([candles[i].timestamp, candles[i].open, candles[i].high, candles[i].low, candles[i].close,
-                               candles[i].volume])
+                               candles[i].volume], dtype=np.float64)
     return array
 
 

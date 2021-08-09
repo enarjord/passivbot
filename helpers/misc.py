@@ -42,6 +42,25 @@ def get_filenames(filepath: str) -> list:
                   key=lambda x: int(eval(x[:x.find("_")].replace(".cs", "").replace("v", ""))))
 
 
+def make_get_filepath(filepath: str) -> str:
+    """
+    If the filepath is not a path, it creates the directory and sub directories and returns the path.
+    :param filepath: The file path to use.
+    :return: The actual path.
+    """
+    dirpath = os.path.dirname(filepath) if filepath[-1] != '/' else filepath
+    os.makedirs(dirpath, exist_ok=True)
+    return filepath
+
+
+def get_utc_now_timestamp() -> int:
+    """
+    Creates a millisecond based timestamp of UTC now.
+    :return: Millisecond based timestamp of UTC now.
+    """
+    return int(datetime.datetime.now(datetime.timezone.utc).timestamp() * 1000)
+
+
 def create_test_data(filepath: str, tick_interval: float = 0.25):
     """
     Basic function to create test data for the backtester. Reads CSV files, creates ticks out of it, aggregates ticks

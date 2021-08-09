@@ -24,7 +24,7 @@ if __name__ == '__main__':
         # Create the bot module from the file including the replacement of the strategy specification
         bot_module = load_module_from_file('bots/backtest_bot.py', 'bot', replacement, 'import strategy')
         # Create a backtest config
-        b = bot_module.BacktestConfig(0.0, 0.0, 1.0, 1.0, '', 0.0, 0.0, 0.0)
+        b = bot_module.BacktestConfig(0.0, 0.0, 1.0, 5.0, 0.0, 1.0, '', 0.0, 0.0, 0.0)
         # Create a strategy based on the strategy module and the provided class
         strategy = getattr(strategy_module, config['strategy_class'])(strategy_config)
         # Initialize some basic data

@@ -2,12 +2,20 @@ import asyncio
 import hashlib
 import hmac
 import json
+from io import BytesIO
 from time import time
-from typing import Union, Tuple, List
+from typing import Tuple, List
+from typing import Union
 from urllib.parse import urlencode
+from urllib.request import urlopen
+from zipfile import ZipFile
+
+import numpy as np
+import pandas as pd
 
 from bots.base_bot import ORDER_UPDATE, ACCOUNT_UPDATE
 from bots.base_live_bot import LiveBot, LiveConfig
+from definitions.fill import Fill, empty_fill_list
 from definitions.order import Order, TP, SL, LIMIT, MARKET, LQ, NEW, PARTIALLY_FILLED, FILLED, CANCELED, EXPIRED, TRADE, \
     CALCULATED, BUY, SELL, LONG, SHORT, BOTH, NEW_INSURANCE, NEW_ADL
 from definitions.position import Position, empty_long_position, empty_short_position
@@ -204,7 +212,7 @@ class BinanceBot(LiveBot):
                 return float(b['balance'])
 
     async def fetch_ticks(self, from_id: int = None, start_time: int = None, end_time: int = None,
-                          do_print: bool = True):
+                          do_print: bool = True) -> List[Tick]:
         """
         Function to fetch ticks, either based on ID or based on time.
         :param from_id: The ID from which to fetch.
@@ -227,16 +235,67 @@ class BinanceBot(LiveBot):
             print_(['Error fetching ticks', e], n=True)
             return tick_list
         try:
-            for t in fetched:
-                tick_list.append(Tick(int(t['a']), int(t['T']), float(t['p']), float(t['q']), t['m']))
-            if do_print:
-                print_(['fetched ticks', self.symbol, tick_list[0].trade_id,
-                        ts_to_date(float(tick_list[0].timestamp) / 1000)])
+            if len(fetched) > 0:
+                for t in fetched:
+                    tick_list.append(Tick(int(t['a']), int(t['T']), float(t['p']), float(t['q']), t['m']))
+                if do_print:
+                    print_(['fetched ticks', self.symbol, tick_list[0].trade_id,
+                            ts_to_date(float(tick_list[0].timestamp) / 1000)])
         except Exception as e:
             print_(['Error fetching ticks', e, fetched], n=True)
             if do_print:
                 print_(['Fetched no new ticks', self.symbol], n=True)
         return tick_list
+
+    async def fetch_fills(self, from_id: int = None, start_time: int = None, end_time: int = None, limit: int = 1000) -> \
+            List[Fill]:
+        """
+        Function to fetch fills, either based on ID or based on time.
+        :param from_id: The ID from which to fetch.
+        :param start_time: The start time from which to fetch.
+        :param end_time: The end time to which to fetch.
+        :param limit: Maximum fills to fetch.
+        :return: A list of Fills.
+        """
+        params = {'symbol': self.symbol, 'limit': min(100, limit) if self.inverse else limit}
+        fill_list = empty_fill_list()
+        if from_id is not None:
+            params['fromId'] = max(0, from_id)
+        if start_time is not None:
+            params['startTime'] = start_time
+        if end_time is not None:
+            params['endTime'] = end_time
+        try:
+            fetched = await self.private_get(self.endpoints['fills'], params)
+        except Exception as e:
+            print_(['Error fetching fills', e], n=True)
+            return fill_list
+        try:
+            if len(fetched) > 0:
+                for f in fetched:
+                    fill_list.append(
+                        Fill(int(f['orderId']), int(f['time']), float(f['realizedPnl']), float(f['commission']), 0.0,
+                             0.0, 0.0, float(f['qty']), float(f['price']), 0.0, 0.0,
+                             LIMIT if bool(f['maker']) else MARKET, FILLED, mapping(f['side']),
+                             mapping(f['positionSide'])))
+                # fills = [{'symbol': x['symbol'],
+                #           # 'id': int(x['id']),
+                #           # 'order_id': int(x['orderId']),
+                #           # 'side': x['side'].lower(),
+                #           # 'price': float(x['price']),
+                #           # 'qty': float(x['qty']),
+                #           # 'realized_pnl': float(x['realizedPnl']),
+                #           'cost': float(x['baseQty']) if self.inverse else float(x['quoteQty']),
+                #           # 'fee_paid': float(x['commission']),
+                #           'fee_token': x['commissionAsset'],
+                #           # 'timestamp': int(x['time']),
+                #           # 'position_side': x['positionSide'].lower().replace('short', 'shrt'),
+                #           # 'is_maker': x['maker']
+                #           } for x in fetched]
+        except Exception as e:
+            print_(['Error fetching fills', e, fetched], n=True)
+            return fill_list
+        return fill_list
 
     async def public_get(self, url: str, params: dict = {}) -> dict:
         """
@@ -501,3 +560,52 @@ class BinanceBot(LiveBot):
             except Exception as e:
                 print_(['Error cancelling order', print_order(order), c.exception(), e], n=True)
         return
+
+    def fetch_from_repo(self, date: Union[Tuple[str, str], Tuple[str, str, str]]) -> pd.DataFrame:
+        """
+        Function to allow fetching trade data from the Binance repository.
+        :param date: The date, a tuple representing either a year and a month, or a year, a month, and a day. The order
+        is year, month, day.
+        :return: A dataframe with following columns: trade_id (int64), price (float64), qty (float64),
+        timestamp (int64), is_buyer_maker (int8)
+        """
+        print_(['Fetching', self.symbol, date])
+        # if self.spot:
+        #     daily_base_url = "https://data.binance.vision/data/spot/daily/aggTrades/"
+        #     monthly_base_url = "https://data.binance.vision/data/spot/monthly/aggTrades/"
+        market_type = 'cm' if self.inverse else 'um'
+
+        daily_base_url = f"https://data.binance.vision/data/futures/{market_type}/daily/aggTrades/"
+        monthly_base_url = f"https://data.binance.vision/data/futures/{market_type}/monthly/aggTrades/"
+        if len(date) == 2:
+            url = "{}{}/{}-aggTrades-{}.zip".format(monthly_base_url, self.symbol.upper(), self.symbol.upper(),
+                                                    date[0] + "-" + date[1])
+        else:
+            url = "{}{}/{}-aggTrades-{}.zip".format(daily_base_url, self.symbol.upper(), self.symbol.upper(),
+                                                    date[0] + "-" + date[1] + "-" + date[2])
+        df = pd.DataFrame(columns=['trade_id', 'price', 'qty', 'timestamp', 'is_buyer_maker'])
+        column_names = ['trade_id', 'price', 'qty', 'first', 'last', 'timestamp', 'is_buyer_maker']
+        # if self.spot:
+        #     column_names.append('best_match')
+        try:
+            resp = urlopen(url)
+            with ZipFile(BytesIO(resp.read())) as my_zip_file:
+                for contained_file in my_zip_file.namelist():
+                    tf = pd.read_csv(my_zip_file.open(contained_file), names=column_names)
+                    tf.drop(errors='ignore', columns=['first', 'last', 'best_match'], inplace=True)
+                    tf["trade_id"] = tf["trade_id"].astype(np.int64)
+                    tf["price"] = tf["price"].astype(np.float64)
+                    tf["qty"] = tf["qty"].astype(np.float64)
+                    tf["timestamp"] = tf["timestamp"].astype(np.int64)
+                    tf["is_buyer_maker"] = tf["is_buyer_maker"].astype(np.int8)
+                    tf.sort_values("trade_id", inplace=True)
+                    tf.drop_duplicates("trade_id", inplace=True)
+                    tf.reset_index(drop=True, inplace=True)
+                    if df.empty:
+                        df = tf
+                    else:
+                        df = pd.concat([df, tf])
+        except Exception as e:
+            print('Failed to fetch', date, e)
+            df = pd.DataFrame()
+        return df

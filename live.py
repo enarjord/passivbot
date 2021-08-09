@@ -12,7 +12,8 @@ async def start_bot(bot: LiveBot):
     :param bot: The bot to start.
     :return:
     """
-    await asyncio.gather(bot.start_heartbeat(), bot.start_user_data(), bot.start_websocket())
+    await asyncio.gather(bot.start_heartbeat(), bot.start_user_data(), bot.start_websocket(),
+                         bot.start_historic_tick_fetching(), bot.start_historic_fill_fetching())
 
 
 async def main() -> None:
@@ -30,7 +31,7 @@ async def main() -> None:
         # Create a strategy based on the strategy module and the provided class
         strategy = getattr(strategy_module, config['strategy_class'])(strategy_config)
         config = LiveConfig(config['symbol'], config['user'], config['exchange'], config['leverage'],
-                            config['call_interval'])
+                            config['call_interval'], 5.0, 0.0)
         if config.exchange == 'binance':
             from bots.binance import BinanceBot
             bot = BinanceBot(config, strategy)

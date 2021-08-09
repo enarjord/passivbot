@@ -1,22 +1,26 @@
 import asyncio
 import datetime
 import json
-from typing import Tuple, List
+from time import time
+from typing import Tuple, List, Union
 
 import aiohttp
+import pandas as pd
 import websockets
 from numba import types
 from numba.experimental import jitclass
 
 from bots.base_bot import Bot, ORDER_UPDATE, ACCOUNT_UPDATE
 from definitions.candle import Candle, empty_candle_list
+from definitions.fill import Fill, empty_fill_list
 from definitions.order import Order, empty_order_list
 from definitions.position import Position
 from definitions.position_list import PositionList
-from definitions.tick import Tick
-from definitions.tick import empty_tick_list
+from definitions.tick import Tick, empty_tick_list
 from helpers.loaders import load_key_secret
-from helpers.print_functions import print_
+from helpers.misc import get_utc_now_timestamp
+from helpers.optimized import merge_ticks, calculate_base_candle_time
+from helpers.print_functions import print_, print_tick
 
 
 @jitclass([
@@ -24,14 +28,17 @@ from helpers.print_functions import print_
     ('user', types.string),
     ('exchange', types.string),
     ('leverage', types.int64),
-    ('call_interval', types.float64)
+    ('call_interval', types.float64),
+    ('historic_tick_range', types.float64),
+    ('historic_fill_range', types.float64)
 ])
 class LiveConfig:
     """
     A class representing a live config.
     """
 
-    def __init__(self, symbol: str, user: str, exchange: str, leverage: int, call_interval: float):
+    def __init__(self, symbol: str, user: str, exchange: str, leverage: int, call_interval: float,
+                 historic_tick_range: float, historic_fill_range: float):
         """
         Creates a live config.
         :param symbol: The symbol to use.
@@ -39,12 +46,16 @@ class LiveConfig:
         :param exchange: The exchange to use.
         :param leverage: The leverage to use.
         :param call_interval: Call interval for strategy to use in live.
+        :param historic_tick_range: Range for which to fetch historic ticks in seconds. 0 if nothing to fetch.
+        :param historic_tick_range: Range for which to fetch historic fills in seconds. 0 if nothing to fetch.
         """
         self.symbol = symbol
         self.user = user
         self.exchange = exchange
         self.leverage = leverage
         self.call_interval = call_interval
+        self.historic_tick_range = historic_tick_range
+        self.historic_fill_range = historic_fill_range
 
 
 class LiveBot(Bot):
@@ -72,6 +83,17 @@ class LiveBot(Bot):
         self.key, self.secret = load_key_secret(config.exchange, self.user)
 
         self.call_interval = config.call_interval
+        self.historic_tick_range = config.historic_tick_range
+        self.historic_fill_range = config.historic_fill_range
+
+        self.historic_ticks = empty_tick_list()
+        self.historic_fills = empty_fill_list()
+
+        self.execute_strategy_logic = False
+        self.fetched_historic_ticks = False
+        self.fetched_historic_fills = False
+
+        self.fetch_delay_seconds = 0.75
 
         self.base_endpoint = ''
         self.endpoints = {
@@ -104,7 +126,7 @@ class LiveBot(Bot):
 
     async def async_init(self):
         """
-        Calls the base init function and provides async support. To be implemented by the exchange implementation.
+        Calls the base init and exchange specific init function and provides async support.
         :return:
         """
         self.init()
@@ -145,12 +167,39 @@ class LiveBot(Bot):
     async def fetch_ticks(self, from_id: int = None, start_time: int = None, end_time: int = None,
                           do_print: bool = True) -> List[Tick]:
         """
-        Function to fetch ticks, either based on ID or based on time. To be implemented by the exchange implementation.
+        Function to fetch ticks, either based on ID or based on time. If the exchange does not support fetching by time,
+        the function needs to implement logic that searches for the appropriate time and then fetches based on ID. To be
+        implemented by the exchange implementation.
         :param from_id: The ID from which to fetch.
         :param start_time: The start time from which to fetch.
         :param end_time: The end time to which to fetch.
         :param do_print: Whether to print output or not.
         :return: A list of Ticks.
+        """
+        raise NotImplementedError
+
+    async def fetch_fills(self, from_id: int = None, start_time: int = None, end_time: int = None, limit: int = 1000) -> \
+            List[Fill]:
+        """
+        Function to fetch fills, either based on ID or based on time. If the exchange does not support fetching by time,
+        the function needs to implement logic that searches for the appropriate time and then fetches based on ID. To be
+        implemented by the exchange implementation.
+        :param from_id: The ID from which to fetch.
+        :param start_time: The start time from which to fetch.
+        :param end_time: The end time to which to fetch.
+        :param limit: Maximum fills to fetch.
+        :return: A list of Fills.
+        """
+        raise NotImplementedError
+
+    def fetch_from_repo(self, date: Union[Tuple[str, str], Tuple[str, str, str]]) -> pd.DataFrame:
+        """
+        Function to allow fetching trade data from a repository. Needs to be implemented by the exchange implementation
+        or return an empty dataframe if this functionality is not available for the exchange.
+        :param date: The date, a tuple representing either a year and a month, or a year, a month, and a day. The order
+        is year, month, day.
+        :return: A dataframe with following columns: trade_id (int64), price (float64), qty (float64),
+        timestamp (int64), is_buyer_maker (int8)
         """
         raise NotImplementedError
 
@@ -282,6 +331,76 @@ class LiveBot(Bot):
         asyncio.create_task(
             self.async_execute_strategy_account_update(old_balance, new_balance, old_position, new_position))
 
+    async def start_historic_tick_fetching(self) -> None:
+        """
+        Function to fetch historic ticks if needed. Adds them to the class attribute historic_ticks.
+        Fetches from the time specified until the start of the bot plus 10 seconds. Duplicates need to be filtered out.
+        :return:
+        """
+        if not self.historic_tick_range == 0.0:
+            now = get_utc_now_timestamp()
+            first_fetch_time = int(now - self.historic_tick_range * 1000)
+            last_fetch_time = int(now + 10000)
+            current = first_fetch_time
+            current_id = 0
+            last_id = 0
+            fetched_ticks = await self.fetch_ticks(start_time=first_fetch_time)
+            self.historic_ticks.extend(fetched_ticks)
+            if len(fetched_ticks) > 0:
+                current = fetched_ticks[-1].timestamp
+                current_id = fetched_ticks[-1].trade_id + 1
+            while current < last_fetch_time and last_id != current_id:
+                loop_start = time()
+                last_id = current_id
+                fetched_ticks = await self.fetch_ticks(from_id=current_id)
+                self.historic_ticks.extend(fetched_ticks)
+                if len(fetched_ticks) > 0:
+                    current = fetched_ticks[-1].timestamp
+                    current_id = fetched_ticks[-1].trade_id + 1
+                    await asyncio.sleep(max(0.0, self.fetch_delay_seconds - time() + loop_start))
+                else:
+                    break
+            self.fetched_historic_ticks = True
+        else:
+            self.fetched_historic_ticks = True
+        if self.fetched_historic_ticks and self.fetched_historic_fills:
+            self.execute_strategy_logic = True
+
+    async def start_historic_fill_fetching(self) -> None:
+        """
+        Function to fetch historic fills if needed. Adds them to the class attribute historic_fills.
+        Fetches from the time specified until the start of the bot plus 10 seconds. Duplicates need to be filtered out.
+        :return:
+        """
+        if not self.historic_fill_range == 0.0:
+            now = get_utc_now_timestamp()
+            first_fetch_time = int(now - self.historic_fill_range * 1000)
+            last_fetch_time = int(now + 10000)
+            current = first_fetch_time
+            current_id = 0
+            last_id = 0
+            fetched_fills = await self.fetch_fills(start_time=first_fetch_time)
+            self.historic_fills.extend(fetched_fills)
+            if len(fetched_fills) > 0:
+                current = fetched_fills[-1].timestamp
+                current_id = fetched_fills[-1].trade_id + 1
+            while current < last_fetch_time and last_id != current_id:
+                loop_start = time()
+                last_id = current_id
+                fetched_fills = await self.fetch_fills(from_id=current_id)
+                self.historic_fills.extend(fetched_fills)
+                if len(fetched_fills) > 0:
+                    current = fetched_fills[-1].timestamp
+                    current_id = fetched_fills[-1].trade_id + 1
+                    await asyncio.sleep(max(0.0, self.fetch_delay_seconds - time() + loop_start))
+                else:
+                    break
+            self.fetched_historic_fills = True
+        else:
+            self.fetched_historic_fills = True
+        if self.fetched_historic_ticks and self.fetched_historic_fills:
+            self.execute_strategy_logic = True
+
     async def start_heartbeat(self) -> None:
         """
         Heartbeat function to keep the websocket alive if needed.
@@ -346,14 +465,17 @@ class LiveBot(Bot):
                         if last_tick_update == 0:
                             # Make sure it starts at a base unit
                             # If tick interval is 250ms the base unit is either 0.0, 0.25, 0.5, or 0.75 seconds
-                            last_tick_update = int(tick.timestamp - (tick.timestamp % (self.tick_interval * 1000)))
+                            last_tick_update = calculate_base_candle_time(tick, self.tick_interval)
                         # print_tick(tick)
-                        if tick.timestamp - last_tick_update < self.tick_interval * 1000:
+                        if tick.timestamp - last_tick_update > self.tick_interval * 1000 and self.execute_strategy_logic:
                             tick_list.append(tick)
-                        else:
-                            tick_list.append(tick)
+                            if len(self.historic_ticks) > 0:
+                                tick_list = merge_ticks(self.historic_ticks, tick_list)
+                                for tick in tick_list:
+                                    print_tick(tick)
+                                self.historic_ticks = empty_tick_list()
                             # Calculate the time when the candle of the current tick ends
-                            next_update = int(tick.timestamp - (tick.timestamp % (self.tick_interval * 1000))) + int(
+                            next_update = calculate_base_candle_time(tick, self.tick_interval) + int(
                                 self.tick_interval * 1000)
                             # Calculate a list of candles based on the given ticks, gaps are filled
                             # The tick list and last update are already updated
@@ -365,8 +487,11 @@ class LiveBot(Bot):
                             # print_candle(last_candle)
                             # Extend candle list with new candles
                             price_list.extend(candles)
+                        else:
+                            tick_list.append(tick)
                         current = datetime.datetime.now()
-                        if current - last_update >= datetime.timedelta(seconds=self.strategy.call_interval):
+                        if current - last_update >= datetime.timedelta(
+                                seconds=self.strategy.call_interval) and self.execute_strategy_logic:
                             last_update = current
                             print_(['Do something'], n=True)
                             # asyncio.create_task(self.async_execute_strategy_decision_making(price_list))
