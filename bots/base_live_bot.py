@@ -1,6 +1,7 @@
 import asyncio
 import datetime
 import json
+from time import time
 from typing import Tuple, List, Union
 
 import aiohttp
@@ -91,6 +92,8 @@ class LiveBot(Bot):
         self.execute_strategy_logic = False
         self.fetched_historic_ticks = False
         self.fetched_historic_fills = False
+
+        self.fetch_delay_seconds = 0.75
 
         self.base_endpoint = ''
         self.endpoints = {
@@ -347,12 +350,14 @@ class LiveBot(Bot):
                 current = fetched_ticks[-1].timestamp
                 current_id = fetched_ticks[-1].trade_id + 1
             while current < last_fetch_time and last_id != current_id:
+                loop_start = time()
                 last_id = current_id
                 fetched_ticks = await self.fetch_ticks(from_id=current_id)
                 self.historic_ticks.extend(fetched_ticks)
                 if len(fetched_ticks) > 0:
                     current = fetched_ticks[-1].timestamp
                     current_id = fetched_ticks[-1].trade_id + 1
+                    await asyncio.sleep(max(0.0, self.fetch_delay_seconds - time() + loop_start))
                 else:
                     break
             self.fetched_historic_ticks = True
@@ -380,12 +385,14 @@ class LiveBot(Bot):
                 current = fetched_fills[-1].timestamp
                 current_id = fetched_fills[-1].trade_id + 1
             while current < last_fetch_time and last_id != current_id:
+                loop_start = time()
                 last_id = current_id
                 fetched_fills = await self.fetch_fills(from_id=current_id)
                 self.historic_fills.extend(fetched_fills)
                 if len(fetched_fills) > 0:
                     current = fetched_fills[-1].timestamp
                     current_id = fetched_fills[-1].trade_id + 1
+                    await asyncio.sleep(max(0.0, self.fetch_delay_seconds - time() + loop_start))
                 else:
                     break
             self.fetched_historic_fills = True
