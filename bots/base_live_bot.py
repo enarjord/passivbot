@@ -328,6 +328,72 @@ class LiveBot(Bot):
         asyncio.create_task(
             self.async_execute_strategy_account_update(old_balance, new_balance, old_position, new_position))
 
+    async def start_historic_tick_fetching(self) -> None:
+        """
+        Function to fetch historic ticks if needed. Adds them to the class attribute historic_ticks.
+        Fetches from the time specified until the start of the bot plus 10 seconds. Duplicates need to be filtered out.
+        :return:
+        """
+        if not self.historic_tick_range == 0.0:
+            now = get_utc_now_timestamp()
+            first_fetch_time = int(now - self.historic_tick_range * 1000)
+            last_fetch_time = int(now + 10000)
+            current = first_fetch_time
+            current_id = 0
+            last_id = 0
+            fetched_ticks = await self.fetch_ticks(start_time=first_fetch_time)
+            self.historic_ticks.extend(fetched_ticks)
+            if len(fetched_ticks) > 0:
+                current = fetched_ticks[-1].timestamp
+                current_id = fetched_ticks[-1].trade_id + 1
+            while current < last_fetch_time and last_id != current_id:
+                last_id = current_id
+                fetched_ticks = await self.fetch_ticks(from_id=current_id)
+                self.historic_ticks.extend(fetched_ticks)
+                if len(fetched_ticks) > 0:
+                    current = fetched_ticks[-1].timestamp
+                    current_id = fetched_ticks[-1].trade_id + 1
+                else:
+                    break
+            self.fetched_historic_ticks = True
+        else:
+            self.fetched_historic_ticks = True
+        if self.fetched_historic_ticks and self.fetched_historic_fills:
+            self.execute_strategy_logic = True
+
+    async def start_historic_fill_fetching(self) -> None:
+        """
+        Function to fetch historic fills if needed. Adds them to the class attribute historic_fills.
+        Fetches from the time specified until the start of the bot plus 10 seconds. Duplicates need to be filtered out.
+        :return:
+        """
+        if not self.historic_fill_range == 0.0:
+            now = get_utc_now_timestamp()
+            first_fetch_time = int(now - self.historic_fill_range * 1000)
+            last_fetch_time = int(now + 10000)
+            current = first_fetch_time
+            current_id = 0
+            last_id = 0
+            fetched_fills = await self.fetch_fills(start_time=first_fetch_time)
+            self.historic_fills.extend(fetched_fills)
+            if len(fetched_fills) > 0:
+                current = fetched_fills[-1].timestamp
+                current_id = fetched_fills[-1].trade_id + 1
+            while current < last_fetch_time and last_id != current_id:
+                last_id = current_id
+                fetched_fills = await self.fetch_fills(from_id=current_id)
+                self.historic_fills.extend(fetched_fills)
+                if len(fetched_fills) > 0:
+                    current = fetched_fills[-1].timestamp
+                    current_id = fetched_fills[-1].trade_id + 1
+                else:
+                    break
+            self.fetched_historic_fills = True
+        else:
+            self.fetched_historic_fills = True
+        if self.fetched_historic_ticks and self.fetched_historic_fills:
+            self.execute_strategy_logic = True
+
     async def start_heartbeat(self) -> None:
         """
         Heartbeat function to keep the websocket alive if needed.
