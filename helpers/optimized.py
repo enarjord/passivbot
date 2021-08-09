@@ -334,8 +334,8 @@ def prepare_candles(tick_list: List[Tick], last_candle_start_time: int, max_cand
         if tick.timestamp < (current_lowest_time + tick_interval * 1000):
             tmp_tick_list.append(tick)
         else:
-            while (current_lowest_time + tick_interval * 1000 - 1) < int(
-                    tick.timestamp - (tick.timestamp % (tick_interval * 1000))) and (
+            while (current_lowest_time + tick_interval * 1000 - 1) < calculate_base_candle_time(tick,
+                                                                                                tick_interval) and (
                     current_lowest_time + tick_interval * 1000) < max_candle_start_time:
                 candle_list = aggregate_ticks_to_candle(tmp_tick_list, candle_list, current_lowest_time, last_candle,
                                                         tick_interval)

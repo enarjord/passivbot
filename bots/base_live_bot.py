@@ -17,7 +17,9 @@ from definitions.position_list import PositionList
 from definitions.tick import Tick
 from definitions.tick import empty_tick_list
 from helpers.loaders import load_key_secret
-from helpers.print_functions import print_
+from helpers.misc import get_utc_now_timestamp
+from helpers.optimized import merge_ticks, calculate_base_candle_time
+from helpers.print_functions import print_, print_tick
 
 
 @jitclass([
@@ -369,14 +371,14 @@ class LiveBot(Bot):
                         if last_tick_update == 0:
                             # Make sure it starts at a base unit
                             # If tick interval is 250ms the base unit is either 0.0, 0.25, 0.5, or 0.75 seconds
-                            last_tick_update = int(tick.timestamp - (tick.timestamp % (self.tick_interval * 1000)))
+                            last_tick_update = calculate_base_candle_time(tick, self.tick_interval)
                         # print_tick(tick)
                         if tick.timestamp - last_tick_update < self.tick_interval * 1000:
                             tick_list.append(tick)
                         else:
                             tick_list.append(tick)
                             # Calculate the time when the candle of the current tick ends
-                            next_update = int(tick.timestamp - (tick.timestamp % (self.tick_interval * 1000))) + int(
+                            next_update = calculate_base_candle_time(tick, self.tick_interval) + int(
                                 self.tick_interval * 1000)
                             # Calculate a list of candles based on the given ticks, gaps are filled
                             # The tick list and last update are already updated
