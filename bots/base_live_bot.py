@@ -104,6 +104,8 @@ class LiveBot(Bot):
 
         self.base_endpoint = ''
         self.endpoints = {
+            'transfer': '',
+            'account': '',
             'listenkey': '',
             'position': '',
             'balance': '',
@@ -127,6 +129,13 @@ class LiveBot(Bot):
     async def exchange_init(self):
         """
         Exchange specific initialization. Gets values from the exchange and sets parameters.
+        :return:
+        """
+        raise NotImplementedError
+
+    async def market_type_init(self):
+        """
+        Exchange specific market initialization. Sets endpoints.
         :return:
         """
         raise NotImplementedError
