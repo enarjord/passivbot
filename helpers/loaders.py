@@ -107,10 +107,10 @@ def load_key_secret(exchange: str, user: str) -> (str, str):
             keyList = [str(keyfile[user]["key"]), str(keyfile[user]["secret"])]
             return keyList
         elif user not in keyfile or keyfile[user]["exchange"] != exchange:
-            print_(["Looks like the keys aren't configured yet, or you entered the wrong username!"], n=True)
+            print_(["Looks like the keys aren't configured yet, or you entered the wrong username!"])
         raise Exception('API KeyFile Missing!')
     except FileNotFoundError:
-        print_(["File not found!"], n=True)
+        print_(["File not found!"])
         raise Exception('API KeyFile Missing!')
 
 
@@ -124,7 +124,7 @@ def load_base_config(path: str) -> dict:
         config = hjson.load(open(path))
         return config
     except Exception as e:
-        print_(["Could not read config", e], n=True)
+        print_(["Could not read config", e])
         return {}
 
 

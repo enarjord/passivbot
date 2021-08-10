@@ -100,7 +100,7 @@ class Downloader:
                                     "is_buyer_maker": np.int8})
         except ValueError as e:
             df = pd.DataFrame()
-            print_(['Error in reading dataframe', e], n=True)
+            print_(['Error in reading dataframe', e])
         return df
 
     def save_dataframe(self, df: pd.DataFrame, filename: str, missing: bool, verified: bool) -> str:
@@ -168,7 +168,7 @@ class Downloader:
             # from bots.bybit import BybitBot
             # self.bot = BybitBot(config, None)
         else:
-            print(self.config["exchange"], 'not found')
+            print_([self.config["exchange"], 'not found'])
             return
 
         await self.bot.market_type_init()
@@ -235,7 +235,7 @@ class Downloader:
                                 df.reset_index(drop=True, inplace=True)
                                 current_time = df["timestamp"].iloc[-1]
                             except Exception:
-                                print("Failed to fetch or transform...")
+                                print_(["Failed to fetch or transform..."])
                             await asyncio.sleep(max(0.0, self.fetch_delay_seconds - time() + loop_start))
                 if not df.empty:
                     if df["trade_id"].iloc[-1] > highest_id:

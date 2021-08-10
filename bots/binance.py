@@ -41,7 +41,7 @@ def mapping(item: str) -> str:
     try:
         return order_mapping[item.upper()]
     except Exception as e:
-        print('Could not map', e)
+        print_(['Could not map', e])
         return ''
 
 
@@ -54,7 +54,7 @@ def reverse_mapping(item: str) -> str:
     try:
         return reverse_order_mapping[item]
     except Exception as e:
-        print('Could not map', e)
+        print_(['Could not map', e])
         return ''
 
 
@@ -85,21 +85,21 @@ class BinanceBot(LiveBot):
         await self.market_type_init()
         try:
             res = await self.private_post(self.endpoints['position_side'], {'dualSidePosition': 'true'})
-            print_([res], n=True)
+            print_([res])
         except Exception as e:
             if '"code":-4059' not in e.args[0]:
-                print_([e, 'Unable to set hedge mode, aborting'], n=True)
+                print_([e, 'Unable to set hedge mode, aborting'])
                 raise Exception('Failed to set hedge mode')
         try:
             print_([await self.private_post(self.endpoints['margin_type'],
-                                            {'symbol': self.symbol, 'marginType': 'CROSSED'})], n=True)
+                                            {'symbol': self.symbol, 'marginType': 'CROSSED'})])
         except Exception as e:
-            print_([e], n=True)
+            print_([e])
         try:
             lev = await self.execute_leverage_change()
-            print_(['Set leverage to', lev], n=True)
+            print_(['Set leverage to', lev])
         except Exception as e:
-            print_([e], n=True)
+            print_([e])
 
         await self.fetch_exchange_info()
 
@@ -141,7 +141,7 @@ class BinanceBot(LiveBot):
         dapi_endpoint = 'https://testnet.binancefuture.com'  # 'https://dapi.binance.com'
         fapi_info = await self.public_get('/fapi/v1/exchangeInfo', base_endpoint=fapi_endpoint)
         if self.symbol in {e['symbol'] for e in fapi_info['symbols']}:
-            print('Identified as linear perpetual')
+            print_(['Identified as linear perpetual'])
             self.market_type += '_linear_perpetual'
             self.inverse = False
             self.base_endpoint = fapi_endpoint
@@ -170,7 +170,7 @@ class BinanceBot(LiveBot):
         else:
             dapi_info = await self.public_get('/fapi/v1/exchangeInfo', base_endpoint=dapi_endpoint)
             if self.symbol in {e['symbol'] for e in dapi_info['symbols']}:
-                print('Identified as inverse coin margined')
+                print_(['Identified as inverse coin margined'])
                 self.base_endpoint = dapi_endpoint
                 self.market_type += '_inverse_coin_margined'
                 self.inverse = True
@@ -225,7 +225,7 @@ class BinanceBot(LiveBot):
                 if order.position_side == LONG or order.position_side == SHORT:
                     orders.append(order)
                 else:
-                    print_([o], n=True)
+                    print_([o])
         return orders
 
     async def fetch_position(self) -> Tuple[Position, Position]:
@@ -282,7 +282,7 @@ class BinanceBot(LiveBot):
         try:
             fetched = await self.private_get(self.endpoints['ticks'], params)
         except Exception as e:
-            print_(['Error fetching ticks', e], n=True)
+            print_(['Error fetching ticks', e])
             return tick_list
         try:
             if len(fetched) > 0:
@@ -292,9 +292,9 @@ class BinanceBot(LiveBot):
                     print_(['fetched ticks', self.symbol, tick_list[0].trade_id,
                             ts_to_date(float(tick_list[0].timestamp) / 1000)])
         except Exception as e:
-            print_(['Error fetching ticks', e, fetched], n=True)
+            print_(['Error fetching ticks', e, fetched])
             if do_print:
-                print_(['Fetched no new ticks', self.symbol], n=True)
+                print_(['Fetched no new ticks', self.symbol])
         return tick_list
 
     async def fetch_fills(self, from_id: int = None, start_time: int = None, end_time: int = None, limit: int = 1000) -> \
@@ -318,7 +318,7 @@ class BinanceBot(LiveBot):
         try:
             fetched = await self.private_get(self.endpoints['fills'], params)
         except Exception as e:
-            print_(['Error fetching fills', e], n=True)
+            print_(['Error fetching fills', e])
             return fill_list
         try:
             if len(fetched) > 0:
@@ -343,7 +343,7 @@ class BinanceBot(LiveBot):
                 #           # 'is_maker': x['maker']
                 #           } for x in fetched]
         except Exception as e:
-            print_(['Error fetching fills', e, fetched], n=True)
+            print_(['Error fetching fills', e, fetched])
             return fill_list
         return fill_list
 
@@ -510,14 +510,14 @@ class BinanceBot(LiveBot):
             try:
                 await self.private_put(self.endpoints['listenkey'], {})
             except Exception as e_listen:
-                print_(['Could not refresh listen key', e_listen], n=True)
+                print_(['Could not refresh listen key', e_listen])
         else:
             try:
                 tmp = await self.private_post(self.endpoints['listenkey'], {})
                 self.listenKey = tmp['listenKey']
                 self.endpoints['websocket_user'] = self.endpoints['websocket'] + self.listenKey
             except Exception as e_listen:
-                print_(['Could not initialize listen key', e_listen], n=True)
+                print_(['Could not initialize listen key', e_listen])
 
     def determine_update_type(self, msg) -> str:
         """
@@ -592,17 +592,17 @@ class BinanceBot(LiveBot):
             try:
                 creations.append((order, asyncio.create_task(self.execute_order(order))))
             except Exception as e:
-                print_(['Error creating order', print_order(order), e], n=True)
+                print_(['Error creating order', print_order(order), e])
         for order, c in creations:
             try:
                 o = await c
                 if type(o) == bool:
                     if not o:
-                        print_(['Error creating order', print_order(order)], n=True)
+                        print_(['Error creating order', print_order(order)])
                 else:
-                    print_(['Error creating order', print_order(order), o], n=True)
+                    print_(['Error creating order', print_order(order), o])
             except Exception as e:
-                print_(['Error creating order', print_order(order), c.exception(), e], n=True)
+                print_(['Error creating order', print_order(order), c.exception(), e])
         return
 
     async def async_cancel_orders(self, orders_to_cancel: List[Order]):
@@ -618,17 +618,17 @@ class BinanceBot(LiveBot):
             try:
                 deletions.append((order, asyncio.create_task(self.execute_cancellation(order))))
             except Exception as e:
-                print_(['Error cancelling order a', print_order(order), e], n=True)
+                print_(['Error cancelling order a', print_order(order), e])
         for order, c in deletions:
             try:
                 o = await c
                 if type(o) == bool:
                     if not o:
-                        print_(['Error cancelling order', print_order(order)], n=True)
+                        print_(['Error cancelling order', print_order(order)])
                 else:
-                    print_(['Error cancelling order', print_order(order), o], n=True)
+                    print_(['Error cancelling order', print_order(order), o])
             except Exception as e:
-                print_(['Error cancelling order', print_order(order), c.exception(), e], n=True)
+                print_(['Error cancelling order', print_order(order), c.exception(), e])
         return
 
     def fetch_from_repo(self, date: Union[Tuple[str, str], Tuple[str, str, str]]) -> pd.DataFrame:
@@ -676,6 +676,6 @@ class BinanceBot(LiveBot):
                     else:
                         df = pd.concat([df, tf])
         except Exception as e:
-            print('Failed to fetch', date, e)
+            print_(['Failed to fetch', date, e])
             df = pd.DataFrame()
         return df

@@ -138,7 +138,7 @@ class Bot:
         Triggers the compilation of numba classes and functions by calling them. Used to avoid compilation at first use.
         :return:
         """
-        print_(['Precompiling...'], n=True)
+        print_(['Precompiling...'])
         precompile_tick()
         precompile_candle()
         precompile_order()
@@ -156,7 +156,7 @@ class Bot:
         merge_ticks(empty_tick_list(), empty_tick_list())
         calculate_base_candle_time(empty_tick(), 0.25)
         self.strategy.precompile()
-        print_(['Precompile finished.'], n=True)
+        print_(['Precompile finished.'])
 
     def reset(self):
         """

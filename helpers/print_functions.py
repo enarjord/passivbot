@@ -35,7 +35,7 @@ def print_candle(candle: Candle):
     :return:
     """
     print_(['Timestamp', candle.timestamp, 'Open', candle.open, 'High', candle.high, 'Low', candle.low, 'High',
-            candle.high, 'Close', candle.close, 'Volume', candle.volume], n=True)
+            candle.high, 'Close', candle.close, 'Volume', candle.volume])
 
 
 def print_tick(tick: Tick):
@@ -45,7 +45,7 @@ def print_tick(tick: Tick):
     :return:
     """
     print_(['Timestamp', tick.timestamp, 'Trade ID', tick.trade_id, 'Price', tick.price, 'Quantity', tick.quantity,
-            'Maker', tick.is_buyer_maker], n=True)
+            'Maker', tick.is_buyer_maker])
 
 
 def print_order(order: Order):
@@ -56,7 +56,7 @@ def print_order(order: Order):
     """
     print_(['Symbol', order.symbol, 'Order_id', order.order_id, 'Price', order.price, 'Stop price', order.stop_price,
             'Quantity', order.quantity, 'Type', order.order_type, 'Side', order.side, 'Timestamp', order.timestamp, 'Action',
-            order.action, 'Position_side', order.position_side], n=True)
+            order.action, 'Position_side', order.position_side])
 
 
 def print_position(position: Position):
@@ -67,7 +67,7 @@ def print_position(position: Position):
     """
     print_(['Symbol', position.symbol, 'Size', position.size, 'Price', position.price, 'Liquidation_price',
             position.liquidation_price, 'Upnl', position.upnl, 'Leverage', position.leverage, 'Position_side',
-            position.position_side], n=True)
+            position.position_side])
 
 
 def print_order_list(order_list: OrderList):
@@ -76,10 +76,10 @@ def print_order_list(order_list: OrderList):
     :param order_list: The order list to print.
     :return:
     """
-    print_(['Long:'], n=True)
+    print_(['Long:'])
     for order in order_list.long:
         print_order(order)
-    print_(['Short:'], n=True)
+    print_(['Short:'])
     for order in order_list.short:
         print_order(order)
 
@@ -90,7 +90,7 @@ def print_position_list(position_list: PositionList):
     :param position_list: The position list to print.
     :return:
     """
-    print_(['Long:'], n=True)
+    print_(['Long:'])
     print_position(position_list.long)
-    print_(['Short:'], n=True)
+    print_(['Short:'])
     print_position(position_list.short)

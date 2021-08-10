@@ -412,16 +412,16 @@ class LiveBot(Bot):
                             msg = json.loads(msg)
                             type = self.determine_update_type(msg)
                             if type:
-                                # print(msg)
+                                # print_([msg])
                                 if type == ORDER_UPDATE:
                                     asyncio.create_task(self.async_handle_order_update(msg))
                                 elif type == ACCOUNT_UPDATE:
                                     asyncio.create_task(self.async_handle_account_update(msg))
                         except Exception as e:
-                            print_(['User stream error inner', e], n=True)
+                            print_(['User stream error inner', e])
             except Exception as e_out:
-                print_(['User stream error outer', e_out], n=True)
-                print_(['Retrying to connect in 5 seconds...'], n=True)
+                print_(['User stream error outer', e_out])
+                print_(['Retrying to connect in 5 seconds...'])
                 await asyncio.sleep(5)
 
     async def start_websocket(self) -> None:
@@ -444,7 +444,7 @@ class LiveBot(Bot):
                         continue
                     try:
                         msg = json.loads(msg)
-                        # print_([msg], n=True)
+                        # print_([msg])
                         tick = self.prepare_tick(msg)
                         if last_tick_update == 0:
                             # Make sure it starts at a base unit
@@ -477,12 +477,12 @@ class LiveBot(Bot):
                         if current - last_update >= datetime.timedelta(
                                 seconds=self.strategy.call_interval) and self.execute_strategy_logic:
                             last_update = current
-                            print_(['Do something'], n=True)
+                            print_(['Do something'])
                             # asyncio.create_task(self.async_execute_strategy_decision_making(price_list))
                             price_list = empty_candle_list()
                     except Exception as e:
                         if 'success' not in msg:
-                            print_(['Error in price stream', e, msg], n=True)
+                            print_(['Error in price stream', e, msg])
 
     async def execute_leverage_change(self):
         """
