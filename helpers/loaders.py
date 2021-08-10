@@ -5,6 +5,7 @@ from pathlib import Path
 
 import hjson
 
+from bots.configs import LiveConfig
 from helpers.print_functions import print_
 
 
