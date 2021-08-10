@@ -384,47 +384,6 @@ class Downloader:
         except:
             pass
 
-    def get_unabridged_df(self):
-        filenames = get_filenames(self.filepath)
-        start_index = 0
-        for i in range(len(filenames)):
-            if int(filenames[i].split("_")[2]) <= self.start_time <= int(filenames[i].split("_")[3].split(".")[0]):
-                start_index = i
-                break
-        end_index = -1
-        if self.end_time != -1:
-            for i in range(len(filenames)):
-                if int(filenames[i].split("_")[2]) <= self.end_time <= int(filenames[i].split("_")[3].split(".")[0]):
-                    end_index = i
-                    break
-        filenames = filenames[start_index:] if end_index == -1 else filenames[start_index:end_index + 1]
-        df = pd.DataFrame()
-        chunks = []
-        for f in filenames:
-            chunk = pd.read_csv(os.path.join(self.filepath, f)).set_index('trade_id')
-            if self.end_time != -1:
-                chunk = chunk[(chunk['timestamp'] >= self.start_time) & (chunk['timestamp'] <= self.end_time)]
-            else:
-                chunk = chunk[(chunk['timestamp'] >= self.start_time)]
-            chunks.append(chunk)
-            if len(chunks) >= 100:
-                if df.empty:
-                    df = pd.concat(chunks, axis=0)
-                else:
-                    chunks.insert(0, df)
-                    df = pd.concat(chunks, axis=0)
-                chunks = []
-            print('\rloaded chunk of data', f, ts_to_date(float(f.split("_")[2]) / 1000), end='     ')
-        print()
-        if chunks:
-            if df.empty:
-                df = pd.concat(chunks, axis=0)
-            else:
-                chunks.insert(0, df)
-                df = pd.concat(chunks, axis=0)
-            del chunks
-        return df
-
     async def prepare_files(self, single_file: bool = True):
         """
         Takes downloaded data and prepares numpy arrays consisting of candles for use in backtesting.
