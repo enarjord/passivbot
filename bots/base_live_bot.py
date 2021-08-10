@@ -7,10 +7,9 @@ from typing import Tuple, List, Union
 import aiohttp
 import pandas as pd
 import websockets
-from numba import types
-from numba.experimental import jitclass
 
 from bots.base_bot import Bot, ORDER_UPDATE, ACCOUNT_UPDATE
+from bots.configs import LiveConfig
 from definitions.candle import Candle, empty_candle_list
 from definitions.fill import Fill, empty_fill_list
 from definitions.order import Order, empty_order_list
@@ -21,44 +20,6 @@ from helpers.loaders import load_key_secret
 from helpers.misc import get_utc_now_timestamp
 from helpers.optimized import merge_ticks, calculate_base_candle_time
 from helpers.print_functions import print_, print_tick
-
-
-@jitclass([
-    ('symbol', types.string),
-    ('user', types.string),
-    ('exchange', types.string),
-    ('market_type', types.string),
-    ('leverage', types.int64),
-    ('call_interval', types.float64),
-    ('historic_tick_range', types.float64),
-    ('historic_fill_range', types.float64)
-])
-class LiveConfig:
-    """
-    A class representing a live config.
-    """
-
-    def __init__(self, symbol: str, user: str, exchange: str, market_type: str, leverage: int, call_interval: float,
-                 historic_tick_range: float, historic_fill_range: float):
-        """
-        Creates a live config.
-        :param symbol: The symbol to use.
-        :param user: The user for the API keys.
-        :param exchange: The exchange to use.
-        :param market_type: The leverage to use.
-        :param leverage: The leverage to use.
-        :param call_interval: Call interval for strategy to use in live.
-        :param historic_tick_range: Range for which to fetch historic ticks in seconds. 0 if nothing to fetch.
-        :param historic_tick_range: Range for which to fetch historic fills in seconds. 0 if nothing to fetch.
-        """
-        self.symbol = symbol
-        self.user = user
-        self.exchange = exchange
-        self.market_type = market_type
-        self.leverage = leverage
-        self.call_interval = call_interval
-        self.historic_tick_range = historic_tick_range
-        self.historic_fill_range = historic_fill_range
 
 
 class LiveBot(Bot):
