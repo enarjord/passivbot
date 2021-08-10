@@ -27,7 +27,8 @@ from helpers.optimized import calculate_available_margin, quantity_to_cost, calc
     ('symbol', types.string),
     ('maker_fee', types.float64),
     ('taker_fee', types.float64),
-    ('latency', types.float64)
+    ('latency', types.float64),
+    ('market_type', types.string)
 ])
 class BacktestConfig:
     """
@@ -36,7 +37,7 @@ class BacktestConfig:
 
     def __init__(self, quantity_step: float, price_step: float, call_interval: float, historic_tick_range: float,
                  historic_fill_range: float, leverage: float, symbol: str, maker_fee: float, taker_fee: float,
-                 latency: float):
+                 latency: float, market_type: str):
         """
         Creates a backtest config.
         :param quantity_step: Quantity step to use in backtesting.
@@ -51,6 +52,7 @@ class BacktestConfig:
         :param maker_fee: The maker fee to use.
         :param taker_fee: The taker fee to use.
         :param latency: The latency to use.
+        :param market_type: The market type to use.
         """
         self.quantity_step = quantity_step
         self.price_step = price_step
@@ -62,11 +64,12 @@ class BacktestConfig:
         self.maker_fee = maker_fee
         self.taker_fee = taker_fee
         self.latency = latency
+        self.market_type = market_type
 
 
 @jitclass(base_bot_spec +
           [
-              ("config", typeof(BacktestConfig(0.0, 0.0, 1.0, 1.0, '', 0.0, 0.0, 0.0))),
+              ("config", typeof(BacktestConfig(0.0, 0.0, 1.0, 0.0, 0.0, 1.0, '', 0.0, 0.0, 0.0, ''))),
               ("strategy", typeof(to_be_replaced_strategy)),
               ("orders_to_execute", typeof(OrderList())),
               ("data", types.float64[:, :]),
@@ -107,6 +110,7 @@ class BacktestBot(Bot):
         self.symbol = config.symbol
         self.maker_fee = config.maker_fee
         self.taker_fee = config.taker_fee
+        self.market_type = config.market_type
 
         self.fills = empty_fill_list()
         self.statistics = empty_statistic_list()

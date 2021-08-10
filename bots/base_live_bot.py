@@ -27,6 +27,7 @@ from helpers.print_functions import print_, print_tick
     ('symbol', types.string),
     ('user', types.string),
     ('exchange', types.string),
+    ('market_type', types.string),
     ('leverage', types.int64),
     ('call_interval', types.float64),
     ('historic_tick_range', types.float64),
@@ -37,13 +38,14 @@ class LiveConfig:
     A class representing a live config.
     """
 
-    def __init__(self, symbol: str, user: str, exchange: str, leverage: int, call_interval: float,
+    def __init__(self, symbol: str, user: str, exchange: str, market_type: str, leverage: int, call_interval: float,
                  historic_tick_range: float, historic_fill_range: float):
         """
         Creates a live config.
         :param symbol: The symbol to use.
         :param user: The user for the API keys.
         :param exchange: The exchange to use.
+        :param market_type: The leverage to use.
         :param leverage: The leverage to use.
         :param call_interval: Call interval for strategy to use in live.
         :param historic_tick_range: Range for which to fetch historic ticks in seconds. 0 if nothing to fetch.
@@ -52,6 +54,7 @@ class LiveConfig:
         self.symbol = symbol
         self.user = user
         self.exchange = exchange
+        self.market_type = market_type
         self.leverage = leverage
         self.call_interval = call_interval
         self.historic_tick_range = historic_tick_range
@@ -74,6 +77,10 @@ class LiveBot(Bot):
         self.strategy = strategy
 
         self.symbol = config.symbol
+        self.base_asset = ''
+        self.quote_asset = ''
+        self.margin_asset = ''
+        self.market_type = config.market_type
         self.leverage = config.leverage
 
         self.user = config.user
