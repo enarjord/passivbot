@@ -139,11 +139,11 @@ class BinanceBot(LiveBot):
         """
         fapi_endpoint = 'https://testnet.binancefuture.com'  # 'https://fapi.binance.com'
         dapi_endpoint = 'https://testnet.binancefuture.com'  # 'https://dapi.binance.com'
-        fapi_info = await self.private_get('/fapi/v1/exchangeInfo', base_endpoint=fapi_endpoint)
+        fapi_info = await self.public_get('/fapi/v1/exchangeInfo', base_endpoint=fapi_endpoint)
         if self.symbol in {e['symbol'] for e in fapi_info['symbols']}:
             print('Identified as linear perpetual')
             self.market_type += '_linear_perpetual'
-            self.inverse = self.config['inverse'] = False
+            self.inverse = False
             self.base_endpoint = fapi_endpoint
             self.endpoints = {
                 'listenkey': '/fapi/v1/listenKey',
@@ -168,12 +168,12 @@ class BinanceBot(LiveBot):
                 # f"wss://fstream.binance.com/ws/{self.symbol.lower()}@aggTrade"
             }
         else:
-            dapi_info = await self.private_get('/dapi/v1/exchangeInfo', base_endpoint=dapi_endpoint)
+            dapi_info = await self.public_get('/fapi/v1/exchangeInfo', base_endpoint=dapi_endpoint)
             if self.symbol in {e['symbol'] for e in dapi_info['symbols']}:
                 print('Identified as inverse coin margined')
                 self.base_endpoint = dapi_endpoint
                 self.market_type += '_inverse_coin_margined'
-                self.inverse = self.config['inverse'] = True
+                self.inverse = True
                 self.endpoints = {
                     'listenkey': '/dapi/v1/listenKey',
                     'position': '/dapi/v1/positionRisk',
