@@ -35,7 +35,7 @@ def print_candle(candle: Candle):
     :return:
     """
     print_(['Timestamp', candle.timestamp, 'Open', candle.open, 'High', candle.high, 'Low', candle.low, 'High',
-            candle.high, 'Close', candle.close, 'Quantity', candle.qty], n=True)
+            candle.high, 'Close', candle.close, 'Volume', candle.volume], n=True)
 
 
 def print_tick(tick: Tick):
@@ -55,7 +55,7 @@ def print_order(order: Order):
     :return:
     """
     print_(['Symbol', order.symbol, 'Order_id', order.order_id, 'Price', order.price, 'Stop price', order.stop_price,
-            'Qty', order.qty, 'Type', order.order_type, 'Side', order.side, 'Timestamp', order.timestamp, 'Action',
+            'Quantity', order.quantity, 'Type', order.order_type, 'Side', order.side, 'Timestamp', order.timestamp, 'Action',
             order.action, 'Position_side', order.position_side], n=True)
 
 
