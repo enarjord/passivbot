@@ -181,11 +181,12 @@ class LiveBot(Bot):
         """
         raise NotImplementedError
 
-    async def public_get(self, url: str, params: dict = {}) -> dict:
+    async def public_get(self, url: str, params: dict = {}, base_endpoint: str = None) -> dict:
         """
         Function for public API endpoints. To be implemented by the exchange implementation.
         :param url: The URL to use in accordance with the base URL.
         :param params: The parameters to pass to the call.
+        :param base_endpoint: Alternative base URL to use.
         :return: The answer decoded into json.
         """
         raise NotImplementedError

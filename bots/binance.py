@@ -347,14 +347,17 @@ class BinanceBot(LiveBot):
             return fill_list
         return fill_list
 
-    async def public_get(self, url: str, params: dict = {}) -> dict:
+    async def public_get(self, url: str, params: dict = {}, base_endpoint: str = None) -> dict:
         """
         Function for public API endpoints. Uses the underlying session to execute the call.
         :param url: The URL to use in accordance with the base URL.
         :param params: The parameters to pass to the call.
+        :param base_endpoint: Alternative base URL to use.
         :return: The answer decoded into json.
         """
-        async with self.session.get(self.base_endpoint + url, params=params) as response:
+        if base_endpoint is None:
+            base_endpoint = self.base_endpoint
+        async with self.session.get(base_endpoint + url, params=params) as response:
             result = await response.text()
         return json.loads(result)
 
