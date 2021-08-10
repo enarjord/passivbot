@@ -320,7 +320,7 @@ class BacktestBot(Bot):
         :param row: The row to convert.
         :return: A candle object.
         """
-        return Candle(row[0], row[2], row[3], row[4], row[5], row[6])
+        return Candle(row[0], row[1], row[2], row[3], row[4], row[5])
 
     def start_websocket(self) -> Tuple[List[Fill], List[Statistic]]:
         """
