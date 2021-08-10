@@ -8,7 +8,9 @@ from helpers.print_functions import print_
 if __name__ == '__main__':
     argparser = argparse.ArgumentParser(prog='PassivbotBacktest', add_help=True,
                                         description='Grid trading bot with variable strategies.')
-    argparser.add_argument('-c', '--config', type=str, required=True, dest='c', help='Path to the config')
+    argparser.add_argument('live_config', type=str, help='Live config to use.')
+    argparser.add_argument('-b', '--backtest_config', type=str, required=True, dest='backtest_config',
+                           default='configs/backtest/test.hjson', help='Backtest config to use.')
     args = argparser.parse_args()
     try:
         # Load the config
