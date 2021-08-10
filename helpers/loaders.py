@@ -125,3 +125,53 @@ def load_base_config(path: str) -> dict:
     except Exception as e:
         print_(["Could not read config", e], n=True)
         return {}
+
+
+async def load_exchange_settings(exchange: str, symbol: str, user: str, market_type: str) -> dict:
+    """
+    Loads exchange several exchange settings.
+    :param exchange: The exchange to fetch for.
+    :param symbol: The symbol to fetch for.
+    :param user: The user to use.
+    :param market_type: The market type to use.
+    :return: A dictionary with exchange settings.
+    """
+    settings = {}
+    config = LiveConfig(symbol.upper(), user, exchange, market_type, 1, 1.0, 0.0, 0.0)
+    if exchange == 'binance':
+        from bots.binance import BinanceBot
+        bot = BinanceBot(config, None)
+        # if 'spot' in config['market_type']:
+        #     settings['maker_fee'] = 0.001
+        #     settings['taker_fee'] = 0.001
+        #     settings['spot'] = True
+        #     settings['hedge_mode'] = False
+        # else:
+        settings['maker_fee'] = 0.0002
+        settings['taker_fee'] = 0.0004
+        # settings['spot'] = False
+    # elif exchange == 'bybit':
+    #     # from bots.bybit import BybitBot
+    #     # bot = BybitBot(config, None)
+    #     # if 'spot' in config['market_type']:
+    #     #     raise Exception('spot not implemented on bybit')
+    #     settings['maker_fee'] = -0.00025
+    #     settings['taker_fee'] = 0.00075
+    else:
+        raise Exception(f'Unknown exchange {exchange}')
+    await bot.market_type_init()
+    await bot.fetch_exchange_info()
+    if 'inverse' in bot.market_type:
+        settings['inverse'] = True
+    elif any(x in bot.market_type for x in ['linear', 'spot']):
+        settings['inverse'] = False
+    else:
+        raise Exception('Unknown market type')
+    for key in ['max_leverage', 'minimal_quantity', 'minimal_cost', 'quantity_step', 'price_step', 'max_leverage',
+                'contract_multiplier']:  # , 'hedge_mode']:
+        settings[key] = getattr(bot, key)
+    try:
+        await bot.session.close()
+    except:
+        pass
+    return settings
