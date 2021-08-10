@@ -126,7 +126,7 @@ class BacktestBot(Bot):
                          order.quantity, order.price, 0.0, 0.0, LQ, CALCULATED, SELL, SHORT))
             return False
 
-        orders_to_remove = empty_order_list()
+        update_list = []
         # Check which long orders where triggered in the last candle
         for order in self.open_orders.long:
             execution = False
@@ -146,7 +146,6 @@ class BacktestBot(Bot):
             if execution:
                 if last_candle.volume >= order.quantity:
                     o.action = FILLED
-                    orders_to_remove.append(order)
                 else:
                     # Partial fills update the quantity of the order
                     o.action = PARTIALLY_FILLED
@@ -177,32 +176,33 @@ class BacktestBot(Bot):
                                                                  self.get_position().short.size,
                                                                  self.get_position().short.price, self.inverse,
                                                                  self.contract_multiplier)
-                last_filled_order = self.handle_order_update(o)
-                self.execute_strategy_order_update(last_filled_order)
-                old_balance, new_balance, old_position, new_position = self.handle_account_update(
-                    self.get_balance() + fee_paid + pnl, p, self.get_position().short)
-                self.execute_strategy_account_update(old_balance, new_balance, old_position, new_position)
+                update_list.append((order, o, p, fee_paid, pnl))
+        for order, o, p, fee_paid, pnl in update_list:
+            last_filled_order = self.handle_order_update(o)
+            self.execute_strategy_order_update(last_filled_order)
+            old_balance, new_balance, old_position, new_position = self.handle_account_update(
+                self.get_balance() + fee_paid + pnl, p, self.get_position().short)
+            self.execute_strategy_account_update(old_balance, new_balance, old_position, new_position)
 
-                equity = calculate_equity(self.get_balance(), self.get_position().long.size,
-                                          self.get_position().long.price, self.get_position().short.size,
-                                          self.get_position().short.price, last_candle.close, self.inverse,
-                                          self.contract_multiplier)
-                position_balance_ratio = self.get_position().long.price * self.get_position().long.size \
-                                         + self.get_position().short.price * self.get_position().short.size \
-                                         / self.get_balance()
-                self.fills.append(Fill(0, self.current_timestamp,
-                                       0.0 if order.side == BUY else calculate_long_pnl(old_position.long.price,
-                                                                                        o.price,
-                                                                                        o.quantity if o.action == FILLED else last_candle.volume,
-                                                                                        self.inverse,
-                                                                                        self.contract_multiplier),
-                                       fee_paid, self.get_balance(), equity, position_balance_ratio,
-                                       o.quantity if o.action == FILLED else last_candle.volume, order.price,
-                                       self.get_position().long.size, self.get_position().long.price, order.order_type,
-                                       order.action, order.side, order.position_side))
+            equity = calculate_equity(self.get_balance(), self.get_position().long.size,
+                                      self.get_position().long.price, self.get_position().short.size,
+                                      self.get_position().short.price, last_candle.close, self.inverse,
+                                      self.contract_multiplier)
+            position_balance_ratio = self.get_position().long.price * self.get_position().long.size \
+                                     + self.get_position().short.price * self.get_position().short.size \
+                                     / self.get_balance()
+            self.fills.append(Fill(0, self.current_timestamp,
+                                   0.0 if order.side == BUY else calculate_long_pnl(old_position.long.price,
+                                                                                    o.price,
+                                                                                    o.quantity if o.action == FILLED else last_candle.volume,
+                                                                                    self.inverse,
+                                                                                    self.contract_multiplier),
+                                   fee_paid, self.get_balance(), equity, position_balance_ratio,
+                                   o.quantity if o.action == FILLED else last_candle.volume, order.price,
+                                   self.get_position().long.size, self.get_position().long.price, order.order_type,
+                                   order.action, order.side, order.position_side))
 
-        self.open_orders.delete_long(orders_to_remove)
-        orders_to_remove = empty_order_list()
+        update_list = []
         # Check which short orders where triggered in the last candle
         for order in self.open_orders.short:
             execution = False
@@ -222,7 +222,6 @@ class BacktestBot(Bot):
             if execution:
                 if last_candle.volume >= order.quantity:
                     o.action = FILLED
-                    orders_to_remove.append(order)
                 else:
                     # Partial fills update the quantity of the order
                     o.action = PARTIALLY_FILLED
@@ -253,31 +252,32 @@ class BacktestBot(Bot):
                                                                  self.get_position().long.size,
                                                                  self.get_position().long.price, p.size, p.price,
                                                                  self.inverse, self.contract_multiplier)
-                last_filled_order = self.handle_order_update(o)
-                self.execute_strategy_order_update(last_filled_order)
-                old_balance, new_balance, old_position, new_position = self.handle_account_update(
-                    self.get_balance() + fee_paid + pnl, self.get_position().long, p)
-                self.execute_strategy_account_update(old_balance, new_balance, old_position, new_position)
+                update_list.append((order, o, p, fee_paid, pnl))
+        for order, o, p, fee_paid, pnl in update_list:
+            last_filled_order = self.handle_order_update(o)
+            self.execute_strategy_order_update(last_filled_order)
+            old_balance, new_balance, old_position, new_position = self.handle_account_update(
+                self.get_balance() + fee_paid + pnl, self.get_position().long, p)
+            self.execute_strategy_account_update(old_balance, new_balance, old_position, new_position)
 
-                equity = calculate_equity(self.get_balance(), self.get_position().long.size,
-                                          self.get_position().long.price, self.get_position().short.size,
-                                          self.get_position().short.price, last_candle.close, self.inverse,
-                                          self.contract_multiplier)
-                position_balance_ratio = self.get_position().long.price * self.get_position().long.size \
-                                         + self.get_position().short.price * self.get_position().short.size \
-                                         / self.get_balance()
-                self.fills.append(Fill(0, self.current_timestamp,
-                                       0.0 if order.side == SELL else calculate_short_pnl(old_position.short.price,
-                                                                                          o.price,
-                                                                                          o.quantity if o.action == FILLED else last_candle.volume,
-                                                                                          self.inverse,
-                                                                                          self.contract_multiplier),
-                                       fee_paid, self.get_balance(), equity, position_balance_ratio,
-                                       o.quantity if o.action == FILLED else last_candle.volume, order.price,
-                                       self.get_position().short.size, self.get_position().short.price,
-                                       order.order_type, order.action, order.side, order.position_side))
+            equity = calculate_equity(self.get_balance(), self.get_position().long.size,
+                                      self.get_position().long.price, self.get_position().short.size,
+                                      self.get_position().short.price, last_candle.close, self.inverse,
+                                      self.contract_multiplier)
+            position_balance_ratio = self.get_position().long.price * self.get_position().long.size \
+                                     + self.get_position().short.price * self.get_position().short.size \
+                                     / self.get_balance()
+            self.fills.append(Fill(0, self.current_timestamp,
+                                   0.0 if order.side == SELL else calculate_short_pnl(old_position.short.price,
+                                                                                      o.price,
+                                                                                      o.quantity if o.action == FILLED else last_candle.volume,
+                                                                                      self.inverse,
+                                                                                      self.contract_multiplier),
+                                   fee_paid, self.get_balance(), equity, position_balance_ratio,
+                                   o.quantity if o.action == FILLED else last_candle.volume, order.price,
+                                   self.get_position().short.size, self.get_position().short.price,
+                                   order.order_type, order.action, order.side, order.position_side))
 
-        self.open_orders.delete_long(orders_to_remove)
         orders_to_remove = empty_order_list()
         # Check which long orders arrived at the exchange and where added to the open orders
         for order in self.orders_to_execute.long:
