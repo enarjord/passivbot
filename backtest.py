@@ -1,11 +1,13 @@
 import argparse
+import asyncio
 
 from bots.configs import BacktestConfig
 from helpers.downloader import Downloader
 from helpers.loaders import load_base_config, load_module_from_file, get_strategy_definition, load_exchange_settings
 from helpers.print_functions import print_
 
-if __name__ == '__main__':
+
+async def main() -> None:
     argparser = argparse.ArgumentParser(prog='PassivbotBacktest', add_help=True,
                                         description='Grid trading bot with variable strategies.')
     argparser.add_argument('live_config', type=str, help='Live config to use.')
@@ -63,3 +65,7 @@ if __name__ == '__main__':
         fills, statistics = bot.start_websocket()
     except Exception as e:
         print_(['Could not start', e])
+
+
+if __name__ == '__main__':
+    asyncio.run(main())
