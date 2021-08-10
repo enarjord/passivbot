@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 from dateutil import parser
 
-from bots.base_live_bot import LiveConfig
+from bots.configs import LiveConfig
 from definitions.candle import empty_candle
 from definitions.tick import Tick, empty_tick_list
 from helpers.misc import make_get_filepath, ts_to_date, get_filenames, get_utc_now_timestamp
@@ -170,6 +170,8 @@ class Downloader:
         else:
             print(self.config["exchange"], 'not found')
             return
+
+        await self.bot.market_type_init()
         await self.bot.fetch_exchange_info()
 
         filenames = get_filenames(self.filepath)
