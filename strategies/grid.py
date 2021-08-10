@@ -217,8 +217,7 @@ class Grid(Strategy):
         if self.position.long.empty() and len(self.open_orders.long) == 0:
             if len(prices) > 0:
                 size = get_initial_position(prices[-1].close, self.leverage, self.reentry_grid, self.balance,
-                                            self.percent,
-                                            self.quantity_step, self.price_step)
+                                            self.percent, self.quantity_step, self.price_step)
                 add_orders.append(Order(self.symbol, 0, 0.0, 0.0, size, MARKET, BUY, 0, '', LONG))
         return add_orders, delete_orders
 
