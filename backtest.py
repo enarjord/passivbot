@@ -58,7 +58,8 @@ if __name__ == '__main__':
         bot = bot_module.BacktestBot(b_config, strategy, data)
         # Initialize bot
         bot.init()
+        bot.update_balance(config['starting_balance'])
         # Start run
-        bot.start_websocket()
+        fills, statistics = bot.start_websocket()
     except Exception as e:
         print_(['Could not start', e])
