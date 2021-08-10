@@ -308,11 +308,12 @@ class BinanceBot(LiveBot):
             result = await response.text()
         return json.loads(result)
 
-    async def private_(self, type_: str, url: str, params: dict = {}) -> dict:
+    async def private_(self, type_: str, base_endpoint: str, url: str, params: dict = {}) -> dict:
         """
         Base function for private API endpoints. Calculates signature, encoding, and headers. Uses the underlying
         session to execute the call.
         :param type_: The type of call to call specific function.
+        :param base_endpoint: The base URL to use.
         :param url: The URL to use in accordance with the base URL.
         :param params: The parameters to pass to the call.
         :return: The answer decoded into json.
@@ -329,45 +330,61 @@ class BinanceBot(LiveBot):
                                        urlencode(params).encode('utf-8'),
                                        hashlib.sha256).hexdigest()
         headers = {'X-MBX-APIKEY': self.key}
-        async with getattr(self.session, type_)(self.base_endpoint + url, params=params, headers=headers) as response:
+        async with getattr(self.session, type_)(base_endpoint + url, params=params, headers=headers) as response:
             result = await response.text()
         return json.loads(result)
 
-    async def private_get(self, url: str, params: dict = {}) -> dict:
+    async def private_get(self, url: str, params: dict = {}, base_endpoint: str = None) -> dict:
         """
         Function for private GET API endpoints. Calls the base private function with correct type.
         :param url: The URL to use in accordance with the base URL.
         :param params: The parameters to pass to the call.
+        :param base_endpoint: Alternative base URL to use.
         :return: The answer string.
         """
-        return await self.private_('get', url, params)
+        if base_endpoint is not None:
+            return await self.private_('get', base_endpoint, url, params)
+        else:
+            return await self.private_('get', self.base_endpoint, url, params)
 
-    async def private_post(self, url: str, params: dict = {}) -> dict:
+    async def private_post(self, url: str, params: dict = {}, base_endpoint: str = None) -> dict:
         """
         Function for private POST API endpoints. Calls the base private function with correct type.
         :param url: The URL to use in accordance with the base URL.
         :param params: The parameters to pass to the call.
+        :param base_endpoint: Alternative base URL to use.
         :return: The answer string.
         """
-        return await self.private_('post', url, params)
+        if base_endpoint is not None:
+            return await self.private_('post', base_endpoint, url, params)
+        else:
+            return await self.private_('post', self.base_endpoint, url, params)
 
-    async def private_put(self, url: str, params: dict = {}) -> dict:
+    async def private_put(self, url: str, params: dict = {}, base_endpoint: str = None) -> dict:
         """
         Function for private PUT API endpoints. Calls the base private function with correct type.
         :param url: The URL to use in accordance with the base URL.
         :param params: The parameters to pass to the call.
+        :param base_endpoint: Alternative base URL to use.
         :return: The answer string.
         """
-        return await self.private_('put', url, params)
+        if base_endpoint is not None:
+            return await self.private_('put', base_endpoint, url, params)
+        else:
+            return await self.private_('put', self.base_endpoint, url, params)
 
-    async def private_delete(self, url: str, params: dict = {}) -> dict:
+    async def private_delete(self, url: str, params: dict = {}, base_endpoint: str = None) -> dict:
         """
         Function for private DELETE API endpoints. Calls the base private function with correct type.
         :param url: The URL to use in accordance with the base URL.
         :param params: The parameters to pass to the call.
+        :param base_endpoint: Alternative base URL to use.
         :return: The answer string.
         """
-        return await self.private_('delete', url, params)
+        if base_endpoint is not None:
+            return await self.private_('delete', base_endpoint, url, params)
+        else:
+            return await self.private_('delete', self.base_endpoint, url, params)
 
     def prepare_order(self, msg) -> Order:
         """

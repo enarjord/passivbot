@@ -212,49 +212,54 @@ class LiveBot(Bot):
         """
         raise NotImplementedError
 
-    async def private_(self, type_: str, url: str, params: dict = {}) -> dict:
+    async def private_(self, type_: str, base_endpoint: str, url: str, params: dict = {}) -> dict:
         """
         Base function for private API endpoints. Needs to calculate signature, encoding, and headers.
         To be implemented by the exchange implementation.
         :param type_: The type of call to call specific function.
+        :param base_endpoint: The base URL to use.
         :param url: The URL to use in accordance with the base URL.
         :param params: The parameters to pass to the call.
         :return: The answer decoded into json.
         """
         raise NotImplementedError
 
-    async def private_get(self, url: str, params: dict = {}) -> dict:
+    async def private_get(self, url: str, params: dict = {}, base_endpoint: str = None) -> dict:
         """
         Function for private GET API endpoints. To be implemented by the exchange implementation.
         :param url: The URL to use in accordance with the base URL.
         :param params: The parameters to pass to the call.
+        :param base_endpoint: Alternative base URL to use.
         :return: The answer string.
         """
         raise NotImplementedError
 
-    async def private_post(self, url: str, params: dict = {}) -> dict:
+    async def private_post(self, url: str, params: dict = {}, base_endpoint: str = None) -> dict:
         """
         Function for private POST API endpoints. To be implemented by the exchange implementation.
         :param url: The URL to use in accordance with the base URL.
         :param params: The parameters to pass to the call.
+        :param base_endpoint: Alternative base URL to use.
         :return: The answer string.
         """
         raise NotImplementedError
 
-    async def private_put(self, url: str, params: dict = {}) -> dict:
+    async def private_put(self, url: str, params: dict = {}, base_endpoint: str = None) -> dict:
         """
         Function for private PUT API endpoints. To be implemented by the exchange implementation.
         :param url: The URL to use in accordance with the base URL.
         :param params: The parameters to pass to the call.
+        :param base_endpoint: Alternative base URL to use.
         :return: The answer string.
         """
         raise NotImplementedError
 
-    async def private_delete(self, url: str, params: dict = {}) -> dict:
+    async def private_delete(self, url: str, params: dict = {}, base_endpoint: str = None) -> dict:
         """
         Function for private DELETE API endpoints. To be implemented by the exchange implementation.
         :param url: The URL to use in accordance with the base URL.
         :param params: The parameters to pass to the call.
+        :param base_endpoint: Alternative base URL to use.
         :return: The answer string.
         """
         raise NotImplementedError
