@@ -71,44 +71,18 @@ class BinanceBot(LiveBot):
         :param strategy: A strategy implementing the logic.
         """
         super(BinanceBot, self).__init__(config, strategy)
-        if 'USDT' in self.symbol:
-            self.quote_asset = 'USDT'
-        else:
-            self.quote_asset = None
 
         self.hedge_mode = True
 
         self.listenKey = None
 
-        self.base_endpoint = 'https://testnet.binancefuture.com'  # 'https://fapi.binance.com'
-        self.endpoints = {
-            'listenkey': '/fapi/v1/listenKey',
-            'position': '/fapi/v2/positionRisk',
-            'balance': '/fapi/v2/balance',
-            'exchange_info': '/fapi/v1/exchangeInfo',
-            'leverage_bracket': '/fapi/v1/leverageBracket',
-            'open_orders': '/fapi/v1/openOrders',
-            'ticker': '/fapi/v1/ticker/bookTicker',
-            'fills': '/fapi/v1/userTrades',
-            'income': '/fapi/v1/income',
-            'create_order': '/fapi/v1/order',
-            'cancel_order': '/fapi/v1/order',
-            'ticks': '/fapi/v1/aggTrades',
-            'margin_type': '/fapi/v1/marginType',
-            'leverage': '/fapi/v1/leverage',
-            'position_side': '/fapi/v1/positionSide/dual',
-            'websocket': 'wss://stream.binancefuture.com/ws/',  # 'wss://fstream.binance.com/ws/'
-            'websocket_user': '',
-            'websocket_data': f"wss://stream.binancefuture.com/ws/{self.symbol.lower()}@aggTrade"
-            # f"wss://fstream.binance.com/ws/{self.symbol.lower()}@aggTrade"
-        }
-
     async def exchange_init(self):
         """
         Binance specific initialization. Sets it to hedge mode, gets exchange specific information, and sets the
-        leverage. Also updates the strategy values.
+        leverage.
         :return:
         """
+        await self.market_type_init()
         try:
             res = await self.private_post(self.endpoints['position_side'], {'dualSidePosition': 'true'})
             print_([res], n=True)
@@ -138,6 +112,11 @@ class BinanceBot(LiveBot):
 
         for e in exchange_info['symbols']:
             if e['symbol'] == self.symbol:
+                self.base_asset = e['baseAsset']
+                self.quote_asset = e['quoteAsset']
+                self.margin_asset = e['marginAsset']
+                if 'inverse_coin_margined' in self.market_type:
+                    self.contract_multiplier = float(e['contractSize'])
                 for q in e['filters']:
                     if q['filterType'] == 'LOT_SIZE':
                         self.minimal_quantity = float(q['minQty'])
@@ -152,6 +131,77 @@ class BinanceBot(LiveBot):
                 except AttributeError:
                     self.minimal_cost = 0.0
                 break
+
+    async def market_type_init(self):
+        """
+        Exchange specific market initialization. Sets endpoints.
+        :return:
+        """
+        fapi_endpoint = 'https://testnet.binancefuture.com'  # 'https://fapi.binance.com'
+        dapi_endpoint = 'https://testnet.binancefuture.com'  # 'https://dapi.binance.com'
+        fapi_info = await self.private_get('/fapi/v1/exchangeInfo', base_endpoint=fapi_endpoint)
+        if self.symbol in {e['symbol'] for e in fapi_info['symbols']}:
+            print('Identified as linear perpetual')
+            self.market_type += '_linear_perpetual'
+            self.inverse = self.config['inverse'] = False
+            self.base_endpoint = fapi_endpoint
+            self.endpoints = {
+                'listenkey': '/fapi/v1/listenKey',
+                'position': '/fapi/v2/positionRisk',
+                'balance': '/fapi/v2/balance',
+                'exchange_info': '/fapi/v1/exchangeInfo',
+                'leverage_bracket': '/fapi/v1/leverageBracket',
+                'open_orders': '/fapi/v1/openOrders',
+                'ticker': '/fapi/v1/ticker/bookTicker',
+                'fills': '/fapi/v1/userTrades',
+                'income': '/fapi/v1/income',
+                'create_order': '/fapi/v1/order',
+                'cancel_order': '/fapi/v1/order',
+                'ticks': '/fapi/v1/aggTrades',
+                'ohlcvs': '/fapi/v1/klines',
+                'margin_type': '/fapi/v1/marginType',
+                'leverage': '/fapi/v1/leverage',
+                'position_side': '/fapi/v1/positionSide/dual',
+                'websocket': 'wss://stream.binancefuture.com/ws/',  # 'wss://fstream.binance.com/ws/'
+                'websocket_user': '',
+                'websocket_data': f"wss://stream.binancefuture.com/ws/{self.symbol.lower()}@aggTrade"
+                # f"wss://fstream.binance.com/ws/{self.symbol.lower()}@aggTrade"
+            }
+        else:
+            dapi_info = await self.private_get('/dapi/v1/exchangeInfo', base_endpoint=dapi_endpoint)
+            if self.symbol in {e['symbol'] for e in dapi_info['symbols']}:
+                print('Identified as inverse coin margined')
+                self.base_endpoint = dapi_endpoint
+                self.market_type += '_inverse_coin_margined'
+                self.inverse = self.config['inverse'] = True
+                self.endpoints = {
+                    'listenkey': '/dapi/v1/listenKey',
+                    'position': '/dapi/v1/positionRisk',
+                    'balance': '/dapi/v1/balance',
+                    'exchange_info': '/dapi/v1/exchangeInfo',
+                    'leverage_bracket': '/dapi/v1/leverageBracket',
+                    'open_orders': '/dapi/v1/openOrders',
+                    'ticker': '/dapi/v1/ticker/bookTicker',
+                    'fills': '/dapi/v1/userTrades',
+                    'income': '/dapi/v1/income',
+                    'create_order': '/dapi/v1/order',
+                    'cancel_order': '/dapi/v1/order',
+                    'ticks': '/dapi/v1/aggTrades',
+                    'ohlcvs': '/dapi/v1/klines',
+                    'margin_type': '/dapi/v1/marginType',
+                    'leverage': '/dapi/v1/leverage',
+                    'position_side': '/dapi/v1/positionSide/dual',
+                    'websocket': 'wss://stream.binancefuture.com/ws/',  # 'wss://dstream.binance.com/ws/'
+                    'websocket_user': '',
+                    'websocket_data': f"wss://stream.binancefuture.com/ws/{self.symbol.lower()}@aggTrade",
+                    # f"wss://dstream.binance.com/ws/{self.symbol.lower()}@aggTrade"
+                }
+            else:
+                raise Exception(f'Unknown symbol {self.symbol}')
+
+        # self.spot_base_endpoint = 'https://api.binance.com'
+        self.endpoints['transfer'] = '/sapi/v1/asset/transfer'
+        self.endpoints['account'] = '/api/v3/account'
 
     async def fetch_orders(self) -> List[Order]:
         """

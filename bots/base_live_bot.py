@@ -142,7 +142,8 @@ class LiveBot(Bot):
 
     async def async_init(self):
         """
-        Calls the base init and exchange specific init function and provides async support.
+        Calls the base init and exchange specific init function and provides async support. Also updates the strategy
+        values.
         :return:
         """
         self.init()
