@@ -1,7 +1,8 @@
 import argparse
 import asyncio
 
-from bots.base_live_bot import LiveBot, LiveConfig
+from bots.base_live_bot import LiveBot
+from bots.configs import LiveConfig
 from helpers.loaders import load_base_config, load_module_from_file
 from helpers.print_functions import print_
 
