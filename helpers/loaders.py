@@ -196,53 +196,46 @@ async def load_exchange_settings(exchange: str, symbol: str, user: str, market_t
 
 
 async def prep_config(args) -> []:
-    base_config = load_config_files([args.backtest_config_path, args.optimize_config_path])
+    configs = [args.backtest_config, args.optimize_config]
+    if hasattr(args, 'live_config'):
+        configs.append(args.live_config)
+    config = load_config_files(configs)
 
     for key in ['symbol', 'user', 'start_date', 'end_date', 'starting_balance', 'market_type', 'starting_configs',
                 'base_dir']:
         if hasattr(args, key) and getattr(args, key) is not None:
-            base_config[key] = getattr(args, key)
-        elif key not in base_config:
-            base_config[key] = None
+            config[key] = getattr(args, key)
+        elif key not in config:
+            config[key] = None
 
-    all_configs = []
+    if args.market_type is None:
+        config['spot'] = False
+    else:
+        config['spot'] = args.market_type == 'spot'
+    config['exchange'], _, _ = load_exchange_key_secret(config['user'])
 
-    for symbol in base_config['symbol'].split(','):
-        config = base_config.copy()
-        config['symbol'] = symbol
-        if args.market_type is None:
-            config['spot'] = False
-        else:
-            config['spot'] = args.market_type == 'spot'
-        config['exchange'], _, _ = load_exchange_key_secret(config['user'])
+    if config['exchange'] == 'bybit' and config['symbol'].endswith('USDT'):
+        raise Exception('Error: Bybit linear USDT markets backtesting and optimizing not supported at this time.')
 
-        if config['exchange'] == 'bybit' and config['symbol'].endswith('USDT'):
-            raise Exception('error: bybit linear usdt markets backtesting and optimizing not supported at this time')
+    config['session_name'] = f"{config['start_date'].replace(' ', '').replace(':', '').replace('.', '')}_" \
+                             f"{config['end_date'].replace(' ', '').replace(':', '').replace('.', '')}"
 
-        end_date = config['end_date'] if config['end_date'] and config['end_date'] != -1 else ts_to_date(time())[:16]
-        config['session_name'] = f"{config['start_date'].replace(' ', '').replace(':', '').replace('.', '')}_" \
-                                 f"{end_date.replace(' ', '').replace(':', '').replace('.', '')}"
+    if config['base_dir'].startswith('~'):
+        raise Exception("Error: Using the sign ~ to indicate the user's home directory is not supported.")
 
-        if config['base_dir'].startswith('~'):
-            raise Exception("error: using the ~ to indicate the user's home directory is not supported")
+    base_dirpath = os.path.join(config['base_dir'],
+                                f"{config['exchange']}{'_spot' if 'spot' in config['market_type'] else ''}",
+                                config['symbol'])
+    config['caches_dirpath'] = make_get_filepath(os.path.join(base_dirpath, 'caches', ''))
+    config['optimize_dirpath'] = make_get_filepath(os.path.join(base_dirpath, 'optimize', ''))
+    config['plots_dirpath'] = make_get_filepath(os.path.join(base_dirpath, 'plots', ''))
 
-        base_dirpath = os.path.join(config['base_dir'],
-                                    f"{config['exchange']}{'_spot' if 'spot' in config['market_type'] else ''}",
-                                    config['symbol'])
-        config['caches_dirpath'] = make_get_filepath(os.path.join(base_dirpath, 'caches', ''))
-        config['optimize_dirpath'] = make_get_filepath(os.path.join(base_dirpath, 'optimize', ''))
-        config['plots_dirpath'] = make_get_filepath(os.path.join(base_dirpath, 'plots', ''))
+    exchange_settings = await load_exchange_settings(config['exchange'], config['symbol'], config['user'],
+                                                     config['market_type'])
+    config.update(exchange_settings)
 
-        config['avg_periodic_gain_key'] = f"avg_{int(round(config['periodic_gain_n_days']))}days_gain"
+    return config
 
-        await add_market_specific_settings(config)
-
-        if 'pbr_limit' in config['ranges']:
-            config['ranges']['pbr_limit'][1] = min(config['ranges']['pbr_limit'][1], config['max_leverage'])
-            config['ranges']['pbr_limit'][0] = min(config['ranges']['pbr_limit'][0], config['ranges']['pbr_limit'][1])
-        if config['spot']:
-            config['do_long'] = True
-            config['do_shrt'] = False
 
         all_configs.append(config)
 
