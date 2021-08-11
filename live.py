@@ -3,7 +3,7 @@ import asyncio
 
 from bots.base_live_bot import LiveBot
 from bots.configs import LiveConfig
-from helpers.loaders import load_base_config, load_module_from_file, load_exchange_key_secret
+from helpers.loaders import load_config_files, load_module_from_file, load_exchange_key_secret
 from helpers.print_functions import print_
 
 
@@ -26,7 +26,7 @@ async def main() -> None:
     args = argparser.parse_args()
     try:
         # Load the config
-        config = load_base_config(args.live_config)
+        config = load_config_files(args.live_config)
         config['user'] = args.user
         config['symbol'] = args.symbol
         config['exchange'], _, _ = load_exchange_key_secret(args.user)

@@ -3,7 +3,8 @@ import asyncio
 
 from bots.configs import BacktestConfig
 from helpers.downloader import Downloader
-from helpers.loaders import load_base_config, load_module_from_file, get_strategy_definition, load_exchange_settings
+from helpers.loaders import load_config_files, load_module_from_file, get_strategy_definition, add_argparse_args, \
+    prep_config
 from helpers.print_functions import print_
 
 
@@ -11,14 +12,12 @@ async def main() -> None:
     argparser = argparse.ArgumentParser(prog='PassivbotBacktest', add_help=True,
                                         description='Grid trading bot with variable strategies.')
     argparser.add_argument('live_config', type=str, help='Live config to use.')
-    argparser.add_argument('-b', '--backtest_config', type=str, required=True, dest='backtest_config',
-                           default='configs/backtest/test.hjson', help='Backtest config to use.')
+    argparser = add_argparse_args(argparser)
     args = argparser.parse_args()
     try:
         # Load the config
-        config = {}
-        config.update(load_base_config(args.live_config))
-        config.update(load_base_config(args.backtest_config))
+        config = await prep_config(args)
+        config.update(load_config_files(args.live_config))
         # Create the strategy module from the specified file
         strategy_module = load_module_from_file(config['strategy_file'], 'strategy')
         # Create the strategy configuration from the config
@@ -30,13 +29,6 @@ async def main() -> None:
         # Create the bot module from the file including the replacement of the strategy specification
         bot_module = load_module_from_file('bots/backtest_bot.py', 'bot', replacement, 'import strategy')
         # Create a backtest config
-        market_settings = await load_exchange_settings(config['exchange'], config['symbol'], config['user'],
-                                                       config['market_type'])
-        config.update(market_settings)
-
-        config['session_name'] = 'some_session'
-        config['caches_dirpath'] = f"backtests\\{config['exchange']}\\{config['symbol']}\\caches\\"
-
         b_config = BacktestConfig(config['quantity_step'] if 'quantity_step' in config else 0.0,
                                   config['price_step'] if 'price_step' in config else 0.0,
                                   config['minimal_quantity'] if 'minimal_quantity' in config else 0.0,
