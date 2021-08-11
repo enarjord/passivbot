@@ -3,7 +3,7 @@ import asyncio
 from time import sleep
 
 from helpers.downloader import Downloader
-from helpers.loaders import load_base_config
+from helpers.loaders import load_config_files
 from helpers.print_functions import print_
 
 
@@ -13,7 +13,7 @@ async def main():
     args = argparser.parse_args()
     try:
         # Load the config
-        config = load_base_config(args.c)
+        config = load_config_files(args.c)
         print(config)
         config['session_name'] = 'some_session'
         config['caches_dirpath'] = f"backtests\\{config['exchange']}\\{config['symbol']}\\caches\\"

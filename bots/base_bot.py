@@ -20,13 +20,15 @@ base_bot_spec = [
     ("position", typeof(PositionList())),
     ("open_orders", typeof(OrderList())),
     ("quantity_step", types.float64),
+    ("price_step", types.float64),
     ("minimal_quantity", types.float64),
     ("minimal_cost", types.float64),
-    ("price_step", types.float64),
     ("call_interval", types.float64),
     ("tick_interval", types.float64),
     ("leverage", types.float64),
+    ("max_leverage", types.float64),
     ("symbol", types.string),
+    ("market_type", types.string),
     ("historic_tick_range", types.float64),
     ("historic_fill_range", types.float64),
     ("inverse", types.boolean),
@@ -55,7 +57,9 @@ class Bot:
         self.call_interval = 1.0
         self.tick_interval = 0.25
         self.leverage = 1.0
+        self.max_leverage = 1.0
         self.symbol = ''
+        self.market_type = ''
 
         self.historic_tick_range = 0
         self.historic_fill_range = 0
@@ -134,7 +138,7 @@ class Bot:
         Triggers the compilation of numba classes and functions by calling them. Used to avoid compilation at first use.
         :return:
         """
-        print_(['Precompiling...'], n=True)
+        print_(['Precompiling...'])
         precompile_tick()
         precompile_candle()
         precompile_order()
@@ -152,7 +156,7 @@ class Bot:
         merge_ticks(empty_tick_list(), empty_tick_list())
         calculate_base_candle_time(empty_tick(), 0.25)
         self.strategy.precompile()
-        print_(['Precompile finished.'], n=True)
+        print_(['Precompile finished.'])
 
     def reset(self):
         """

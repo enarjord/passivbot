@@ -41,7 +41,7 @@ def mapping(item: str) -> str:
     try:
         return order_mapping[item.upper()]
     except Exception as e:
-        print('Could not map', e)
+        print_(['Could not map', e])
         return ''
 
 
@@ -54,7 +54,7 @@ def reverse_mapping(item: str) -> str:
     try:
         return reverse_order_mapping[item]
     except Exception as e:
-        print('Could not map', e)
+        print_(['Could not map', e])
         return ''
 
 
@@ -71,61 +71,35 @@ class BinanceBot(LiveBot):
         :param strategy: A strategy implementing the logic.
         """
         super(BinanceBot, self).__init__(config, strategy)
-        if 'USDT' in self.symbol:
-            self.quote_asset = 'USDT'
-        else:
-            self.quote_asset = None
 
         self.hedge_mode = True
 
         self.listenKey = None
 
-        self.base_endpoint = 'https://testnet.binancefuture.com'  # 'https://fapi.binance.com'
-        self.endpoints = {
-            'listenkey': '/fapi/v1/listenKey',
-            'position': '/fapi/v2/positionRisk',
-            'balance': '/fapi/v2/balance',
-            'exchange_info': '/fapi/v1/exchangeInfo',
-            'leverage_bracket': '/fapi/v1/leverageBracket',
-            'open_orders': '/fapi/v1/openOrders',
-            'ticker': '/fapi/v1/ticker/bookTicker',
-            'fills': '/fapi/v1/userTrades',
-            'income': '/fapi/v1/income',
-            'create_order': '/fapi/v1/order',
-            'cancel_order': '/fapi/v1/order',
-            'ticks': '/fapi/v1/aggTrades',
-            'margin_type': '/fapi/v1/marginType',
-            'leverage': '/fapi/v1/leverage',
-            'position_side': '/fapi/v1/positionSide/dual',
-            'websocket': 'wss://stream.binancefuture.com/ws/',  # 'wss://fstream.binance.com/ws/'
-            'websocket_user': '',
-            'websocket_data': f"wss://stream.binancefuture.com/ws/{self.symbol.lower()}@aggTrade"
-            # f"wss://fstream.binance.com/ws/{self.symbol.lower()}@aggTrade"
-        }
-
     async def exchange_init(self):
         """
         Binance specific initialization. Sets it to hedge mode, gets exchange specific information, and sets the
-        leverage. Also updates the strategy values.
+        leverage.
         :return:
         """
+        await self.market_type_init()
         try:
             res = await self.private_post(self.endpoints['position_side'], {'dualSidePosition': 'true'})
-            print_([res], n=True)
+            print_([res])
         except Exception as e:
             if '"code":-4059' not in e.args[0]:
-                print_([e, 'Unable to set hedge mode, aborting'], n=True)
+                print_([e, 'Unable to set hedge mode, aborting'])
                 raise Exception('Failed to set hedge mode')
         try:
             print_([await self.private_post(self.endpoints['margin_type'],
-                                            {'symbol': self.symbol, 'marginType': 'CROSSED'})], n=True)
+                                            {'symbol': self.symbol, 'marginType': 'CROSSED'})])
         except Exception as e:
-            print_([e], n=True)
+            print_([e])
         try:
             lev = await self.execute_leverage_change()
-            print_(['Set leverage to', lev], n=True)
+            print_(['Set leverage to', lev])
         except Exception as e:
-            print_([e], n=True)
+            print_([e])
 
         await self.fetch_exchange_info()
 
@@ -138,6 +112,11 @@ class BinanceBot(LiveBot):
 
         for e in exchange_info['symbols']:
             if e['symbol'] == self.symbol:
+                self.base_asset = e['baseAsset']
+                self.quote_asset = e['quoteAsset']
+                self.margin_asset = e['marginAsset']
+                if 'inverse_coin_margined' in self.market_type:
+                    self.contract_multiplier = float(e['contractSize'])
                 for q in e['filters']:
                     if q['filterType'] == 'LOT_SIZE':
                         self.minimal_quantity = float(q['minQty'])
@@ -152,6 +131,77 @@ class BinanceBot(LiveBot):
                 except AttributeError:
                     self.minimal_cost = 0.0
                 break
+
+    async def market_type_init(self):
+        """
+        Exchange specific market initialization. Sets endpoints.
+        :return:
+        """
+        fapi_endpoint = 'https://testnet.binancefuture.com'  # 'https://fapi.binance.com'
+        dapi_endpoint = 'https://testnet.binancefuture.com'  # 'https://dapi.binance.com'
+        fapi_info = await self.public_get('/fapi/v1/exchangeInfo', base_endpoint=fapi_endpoint)
+        if self.symbol in {e['symbol'] for e in fapi_info['symbols']}:
+            print_(['Identified as linear perpetual'])
+            self.market_type += '_linear_perpetual'
+            self.inverse = False
+            self.base_endpoint = fapi_endpoint
+            self.endpoints = {
+                'listenkey': '/fapi/v1/listenKey',
+                'position': '/fapi/v2/positionRisk',
+                'balance': '/fapi/v2/balance',
+                'exchange_info': '/fapi/v1/exchangeInfo',
+                'leverage_bracket': '/fapi/v1/leverageBracket',
+                'open_orders': '/fapi/v1/openOrders',
+                'ticker': '/fapi/v1/ticker/bookTicker',
+                'fills': '/fapi/v1/userTrades',
+                'income': '/fapi/v1/income',
+                'create_order': '/fapi/v1/order',
+                'cancel_order': '/fapi/v1/order',
+                'ticks': '/fapi/v1/aggTrades',
+                'ohlcvs': '/fapi/v1/klines',
+                'margin_type': '/fapi/v1/marginType',
+                'leverage': '/fapi/v1/leverage',
+                'position_side': '/fapi/v1/positionSide/dual',
+                'websocket': 'wss://stream.binancefuture.com/ws/',  # 'wss://fstream.binance.com/ws/'
+                'websocket_user': '',
+                'websocket_data': f"wss://stream.binancefuture.com/ws/{self.symbol.lower()}@aggTrade"
+                # f"wss://fstream.binance.com/ws/{self.symbol.lower()}@aggTrade"
+            }
+        else:
+            dapi_info = await self.public_get('/fapi/v1/exchangeInfo', base_endpoint=dapi_endpoint)
+            if self.symbol in {e['symbol'] for e in dapi_info['symbols']}:
+                print_(['Identified as inverse coin margined'])
+                self.base_endpoint = dapi_endpoint
+                self.market_type += '_inverse_coin_margined'
+                self.inverse = True
+                self.endpoints = {
+                    'listenkey': '/dapi/v1/listenKey',
+                    'position': '/dapi/v1/positionRisk',
+                    'balance': '/dapi/v1/balance',
+                    'exchange_info': '/dapi/v1/exchangeInfo',
+                    'leverage_bracket': '/dapi/v1/leverageBracket',
+                    'open_orders': '/dapi/v1/openOrders',
+                    'ticker': '/dapi/v1/ticker/bookTicker',
+                    'fills': '/dapi/v1/userTrades',
+                    'income': '/dapi/v1/income',
+                    'create_order': '/dapi/v1/order',
+                    'cancel_order': '/dapi/v1/order',
+                    'ticks': '/dapi/v1/aggTrades',
+                    'ohlcvs': '/dapi/v1/klines',
+                    'margin_type': '/dapi/v1/marginType',
+                    'leverage': '/dapi/v1/leverage',
+                    'position_side': '/dapi/v1/positionSide/dual',
+                    'websocket': 'wss://stream.binancefuture.com/ws/',  # 'wss://dstream.binance.com/ws/'
+                    'websocket_user': '',
+                    'websocket_data': f"wss://stream.binancefuture.com/ws/{self.symbol.lower()}@aggTrade",
+                    # f"wss://dstream.binance.com/ws/{self.symbol.lower()}@aggTrade"
+                }
+            else:
+                raise Exception(f'Unknown symbol {self.symbol}')
+
+        # self.spot_base_endpoint = 'https://api.binance.com'
+        self.endpoints['transfer'] = '/sapi/v1/asset/transfer'
+        self.endpoints['account'] = '/api/v3/account'
 
     async def fetch_orders(self) -> List[Order]:
         """
@@ -175,7 +225,7 @@ class BinanceBot(LiveBot):
                 if order.position_side == LONG or order.position_side == SHORT:
                     orders.append(order)
                 else:
-                    print_([o], n=True)
+                    print_([o])
         return orders
 
     async def fetch_position(self) -> Tuple[Position, Position]:
@@ -232,7 +282,7 @@ class BinanceBot(LiveBot):
         try:
             fetched = await self.private_get(self.endpoints['ticks'], params)
         except Exception as e:
-            print_(['Error fetching ticks', e], n=True)
+            print_(['Error fetching ticks', e])
             return tick_list
         try:
             if len(fetched) > 0:
@@ -242,9 +292,9 @@ class BinanceBot(LiveBot):
                     print_(['fetched ticks', self.symbol, tick_list[0].trade_id,
                             ts_to_date(float(tick_list[0].timestamp) / 1000)])
         except Exception as e:
-            print_(['Error fetching ticks', e, fetched], n=True)
+            print_(['Error fetching ticks', e, fetched])
             if do_print:
-                print_(['Fetched no new ticks', self.symbol], n=True)
+                print_(['Fetched no new ticks', self.symbol])
         return tick_list
 
     async def fetch_fills(self, from_id: int = None, start_time: int = None, end_time: int = None, limit: int = 1000) -> \
@@ -268,7 +318,7 @@ class BinanceBot(LiveBot):
         try:
             fetched = await self.private_get(self.endpoints['fills'], params)
         except Exception as e:
-            print_(['Error fetching fills', e], n=True)
+            print_(['Error fetching fills', e])
             return fill_list
         try:
             if len(fetched) > 0:
@@ -293,26 +343,30 @@ class BinanceBot(LiveBot):
                 #           # 'is_maker': x['maker']
                 #           } for x in fetched]
         except Exception as e:
-            print_(['Error fetching fills', e, fetched], n=True)
+            print_(['Error fetching fills', e, fetched])
             return fill_list
         return fill_list
 
-    async def public_get(self, url: str, params: dict = {}) -> dict:
+    async def public_get(self, url: str, params: dict = {}, base_endpoint: str = None) -> dict:
         """
         Function for public API endpoints. Uses the underlying session to execute the call.
         :param url: The URL to use in accordance with the base URL.
         :param params: The parameters to pass to the call.
+        :param base_endpoint: Alternative base URL to use.
         :return: The answer decoded into json.
         """
-        async with self.session.get(self.base_endpoint + url, params=params) as response:
+        if base_endpoint is None:
+            base_endpoint = self.base_endpoint
+        async with self.session.get(base_endpoint + url, params=params) as response:
             result = await response.text()
         return json.loads(result)
 
-    async def private_(self, type_: str, url: str, params: dict = {}) -> dict:
+    async def private_(self, type_: str, base_endpoint: str, url: str, params: dict = {}) -> dict:
         """
         Base function for private API endpoints. Calculates signature, encoding, and headers. Uses the underlying
         session to execute the call.
         :param type_: The type of call to call specific function.
+        :param base_endpoint: The base URL to use.
         :param url: The URL to use in accordance with the base URL.
         :param params: The parameters to pass to the call.
         :return: The answer decoded into json.
@@ -329,45 +383,61 @@ class BinanceBot(LiveBot):
                                        urlencode(params).encode('utf-8'),
                                        hashlib.sha256).hexdigest()
         headers = {'X-MBX-APIKEY': self.key}
-        async with getattr(self.session, type_)(self.base_endpoint + url, params=params, headers=headers) as response:
+        async with getattr(self.session, type_)(base_endpoint + url, params=params, headers=headers) as response:
             result = await response.text()
         return json.loads(result)
 
-    async def private_get(self, url: str, params: dict = {}) -> dict:
+    async def private_get(self, url: str, params: dict = {}, base_endpoint: str = None) -> dict:
         """
         Function for private GET API endpoints. Calls the base private function with correct type.
         :param url: The URL to use in accordance with the base URL.
         :param params: The parameters to pass to the call.
+        :param base_endpoint: Alternative base URL to use.
         :return: The answer string.
         """
-        return await self.private_('get', url, params)
+        if base_endpoint is not None:
+            return await self.private_('get', base_endpoint, url, params)
+        else:
+            return await self.private_('get', self.base_endpoint, url, params)
 
-    async def private_post(self, url: str, params: dict = {}) -> dict:
+    async def private_post(self, url: str, params: dict = {}, base_endpoint: str = None) -> dict:
         """
         Function for private POST API endpoints. Calls the base private function with correct type.
         :param url: The URL to use in accordance with the base URL.
         :param params: The parameters to pass to the call.
+        :param base_endpoint: Alternative base URL to use.
         :return: The answer string.
         """
-        return await self.private_('post', url, params)
+        if base_endpoint is not None:
+            return await self.private_('post', base_endpoint, url, params)
+        else:
+            return await self.private_('post', self.base_endpoint, url, params)
 
-    async def private_put(self, url: str, params: dict = {}) -> dict:
+    async def private_put(self, url: str, params: dict = {}, base_endpoint: str = None) -> dict:
         """
         Function for private PUT API endpoints. Calls the base private function with correct type.
         :param url: The URL to use in accordance with the base URL.
         :param params: The parameters to pass to the call.
+        :param base_endpoint: Alternative base URL to use.
         :return: The answer string.
         """
-        return await self.private_('put', url, params)
+        if base_endpoint is not None:
+            return await self.private_('put', base_endpoint, url, params)
+        else:
+            return await self.private_('put', self.base_endpoint, url, params)
 
-    async def private_delete(self, url: str, params: dict = {}) -> dict:
+    async def private_delete(self, url: str, params: dict = {}, base_endpoint: str = None) -> dict:
         """
         Function for private DELETE API endpoints. Calls the base private function with correct type.
         :param url: The URL to use in accordance with the base URL.
         :param params: The parameters to pass to the call.
+        :param base_endpoint: Alternative base URL to use.
         :return: The answer string.
         """
-        return await self.private_('delete', url, params)
+        if base_endpoint is not None:
+            return await self.private_('delete', base_endpoint, url, params)
+        else:
+            return await self.private_('delete', self.base_endpoint, url, params)
 
     def prepare_order(self, msg) -> Order:
         """
@@ -440,14 +510,14 @@ class BinanceBot(LiveBot):
             try:
                 await self.private_put(self.endpoints['listenkey'], {})
             except Exception as e_listen:
-                print_(['Could not refresh listen key', e_listen], n=True)
+                print_(['Could not refresh listen key', e_listen])
         else:
             try:
                 tmp = await self.private_post(self.endpoints['listenkey'], {})
                 self.listenKey = tmp['listenKey']
                 self.endpoints['websocket_user'] = self.endpoints['websocket'] + self.listenKey
             except Exception as e_listen:
-                print_(['Could not initialize listen key', e_listen], n=True)
+                print_(['Could not initialize listen key', e_listen])
 
     def determine_update_type(self, msg) -> str:
         """
@@ -522,17 +592,17 @@ class BinanceBot(LiveBot):
             try:
                 creations.append((order, asyncio.create_task(self.execute_order(order))))
             except Exception as e:
-                print_(['Error creating order', print_order(order), e], n=True)
+                print_(['Error creating order', print_order(order), e])
         for order, c in creations:
             try:
                 o = await c
                 if type(o) == bool:
                     if not o:
-                        print_(['Error creating order', print_order(order)], n=True)
+                        print_(['Error creating order', print_order(order)])
                 else:
-                    print_(['Error creating order', print_order(order), o], n=True)
+                    print_(['Error creating order', print_order(order), o])
             except Exception as e:
-                print_(['Error creating order', print_order(order), c.exception(), e], n=True)
+                print_(['Error creating order', print_order(order), c.exception(), e])
         return
 
     async def async_cancel_orders(self, orders_to_cancel: List[Order]):
@@ -548,17 +618,17 @@ class BinanceBot(LiveBot):
             try:
                 deletions.append((order, asyncio.create_task(self.execute_cancellation(order))))
             except Exception as e:
-                print_(['Error cancelling order a', print_order(order), e], n=True)
+                print_(['Error cancelling order a', print_order(order), e])
         for order, c in deletions:
             try:
                 o = await c
                 if type(o) == bool:
                     if not o:
-                        print_(['Error cancelling order', print_order(order)], n=True)
+                        print_(['Error cancelling order', print_order(order)])
                 else:
-                    print_(['Error cancelling order', print_order(order), o], n=True)
+                    print_(['Error cancelling order', print_order(order), o])
             except Exception as e:
-                print_(['Error cancelling order', print_order(order), c.exception(), e], n=True)
+                print_(['Error cancelling order', print_order(order), c.exception(), e])
         return
 
     def fetch_from_repo(self, date: Union[Tuple[str, str], Tuple[str, str, str]]) -> pd.DataFrame:
@@ -606,6 +676,6 @@ class BinanceBot(LiveBot):
                     else:
                         df = pd.concat([df, tf])
         except Exception as e:
-            print('Failed to fetch', date, e)
+            print_(['Failed to fetch', date, e])
             df = pd.DataFrame()
         return df

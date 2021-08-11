@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 from dateutil import parser
 
-from bots.base_live_bot import LiveConfig
+from bots.configs import LiveConfig
 from definitions.candle import empty_candle
 from definitions.tick import Tick, empty_tick_list
 from helpers.misc import make_get_filepath, ts_to_date, get_filenames, get_utc_now_timestamp
@@ -100,7 +100,7 @@ class Downloader:
                                     "is_buyer_maker": np.int8})
         except ValueError as e:
             df = pd.DataFrame()
-            print_(['Error in reading dataframe', e], n=True)
+            print_(['Error in reading dataframe', e])
         return df
 
     def save_dataframe(self, df: pd.DataFrame, filename: str, missing: bool, verified: bool) -> str:
@@ -158,7 +158,8 @@ class Downloader:
         Downloads any missing data based on the specified time frame.
         :return:
         """
-        config = LiveConfig(self.config["symbol"], self.config["user"], self.config["exchange"], 1, 1.0, 0.0, 0.0)
+        config = LiveConfig(self.config["symbol"], self.config["user"], self.config["exchange"],
+                            self.config["market_type"], 1, 1.0, 0.0, 0.0)
         if self.config["exchange"] == "binance":
             from bots.binance import BinanceBot
             self.bot = BinanceBot(config, None)
@@ -167,8 +168,10 @@ class Downloader:
             # from bots.bybit import BybitBot
             # self.bot = BybitBot(config, None)
         else:
-            print(self.config["exchange"], 'not found')
+            print_([self.config["exchange"], 'not found'])
             return
+
+        await self.bot.market_type_init()
         await self.bot.fetch_exchange_info()
 
         filenames = get_filenames(self.filepath)
@@ -232,7 +235,7 @@ class Downloader:
                                 df.reset_index(drop=True, inplace=True)
                                 current_time = df["timestamp"].iloc[-1]
                             except Exception:
-                                print("Failed to fetch or transform...")
+                                print_(["Failed to fetch or transform..."])
                             await asyncio.sleep(max(0.0, self.fetch_delay_seconds - time() + loop_start))
                 if not df.empty:
                     if df["trade_id"].iloc[-1] > highest_id:
@@ -383,47 +386,6 @@ class Downloader:
         except:
             pass
 
-    def get_unabridged_df(self):
-        filenames = get_filenames(self.filepath)
-        start_index = 0
-        for i in range(len(filenames)):
-            if int(filenames[i].split("_")[2]) <= self.start_time <= int(filenames[i].split("_")[3].split(".")[0]):
-                start_index = i
-                break
-        end_index = -1
-        if self.end_time != -1:
-            for i in range(len(filenames)):
-                if int(filenames[i].split("_")[2]) <= self.end_time <= int(filenames[i].split("_")[3].split(".")[0]):
-                    end_index = i
-                    break
-        filenames = filenames[start_index:] if end_index == -1 else filenames[start_index:end_index + 1]
-        df = pd.DataFrame()
-        chunks = []
-        for f in filenames:
-            chunk = pd.read_csv(os.path.join(self.filepath, f)).set_index('trade_id')
-            if self.end_time != -1:
-                chunk = chunk[(chunk['timestamp'] >= self.start_time) & (chunk['timestamp'] <= self.end_time)]
-            else:
-                chunk = chunk[(chunk['timestamp'] >= self.start_time)]
-            chunks.append(chunk)
-            if len(chunks) >= 100:
-                if df.empty:
-                    df = pd.concat(chunks, axis=0)
-                else:
-                    chunks.insert(0, df)
-                    df = pd.concat(chunks, axis=0)
-                chunks = []
-            print('\rloaded chunk of data', f, ts_to_date(float(f.split("_")[2]) / 1000), end='     ')
-        print()
-        if chunks:
-            if df.empty:
-                df = pd.concat(chunks, axis=0)
-            else:
-                chunks.insert(0, df)
-                df = pd.concat(chunks, axis=0)
-            del chunks
-        return df
-
     async def prepare_files(self, single_file: bool = True):
         """
         Takes downloaded data and prepares numpy arrays consisting of candles for use in backtesting.
@@ -517,12 +479,12 @@ class Downloader:
         """
         if single_file:
             if os.path.exists(self.tick_filepath + ".npy"):
-                print_(['Loading cached tick data from', self.tick_filepath])
+                print_(['Loading cached tick data from', self.tick_filepath + ".npy"])
                 candle_data = np.load(self.tick_filepath + ".npy")
                 return candle_data
             await self.download_ticks()
             await self.prepare_files(single_file)
-            candle_data = np.load(self.tick_filepath)
+            candle_data = np.load(self.tick_filepath + ".npy")
             return candle_data
         else:
             exists = True

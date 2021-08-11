@@ -7,55 +7,19 @@ from typing import Tuple, List, Union
 import aiohttp
 import pandas as pd
 import websockets
-from numba import types
-from numba.experimental import jitclass
 
 from bots.base_bot import Bot, ORDER_UPDATE, ACCOUNT_UPDATE
+from bots.configs import LiveConfig
 from definitions.candle import Candle, empty_candle_list
 from definitions.fill import Fill, empty_fill_list
 from definitions.order import Order, empty_order_list
 from definitions.position import Position
 from definitions.position_list import PositionList
 from definitions.tick import Tick, empty_tick_list
-from helpers.loaders import load_key_secret
+from helpers.loaders import load_exchange_key_secret
 from helpers.misc import get_utc_now_timestamp
 from helpers.optimized import merge_ticks, calculate_base_candle_time
 from helpers.print_functions import print_, print_tick
-
-
-@jitclass([
-    ('symbol', types.string),
-    ('user', types.string),
-    ('exchange', types.string),
-    ('leverage', types.int64),
-    ('call_interval', types.float64),
-    ('historic_tick_range', types.float64),
-    ('historic_fill_range', types.float64)
-])
-class LiveConfig:
-    """
-    A class representing a live config.
-    """
-
-    def __init__(self, symbol: str, user: str, exchange: str, leverage: int, call_interval: float,
-                 historic_tick_range: float, historic_fill_range: float):
-        """
-        Creates a live config.
-        :param symbol: The symbol to use.
-        :param user: The user for the API keys.
-        :param exchange: The exchange to use.
-        :param leverage: The leverage to use.
-        :param call_interval: Call interval for strategy to use in live.
-        :param historic_tick_range: Range for which to fetch historic ticks in seconds. 0 if nothing to fetch.
-        :param historic_tick_range: Range for which to fetch historic fills in seconds. 0 if nothing to fetch.
-        """
-        self.symbol = symbol
-        self.user = user
-        self.exchange = exchange
-        self.leverage = leverage
-        self.call_interval = call_interval
-        self.historic_tick_range = historic_tick_range
-        self.historic_fill_range = historic_fill_range
 
 
 class LiveBot(Bot):
@@ -74,13 +38,17 @@ class LiveBot(Bot):
         self.strategy = strategy
 
         self.symbol = config.symbol
+        self.base_asset = ''
+        self.quote_asset = ''
+        self.margin_asset = ''
+        self.market_type = config.market_type
         self.leverage = config.leverage
 
         self.user = config.user
 
         self.session = aiohttp.ClientSession()
 
-        self.key, self.secret = load_key_secret(config.exchange, self.user)
+        _, self.key, self.secret = load_exchange_key_secret(self.user)
 
         self.call_interval = config.call_interval
         self.historic_tick_range = config.historic_tick_range
@@ -97,6 +65,8 @@ class LiveBot(Bot):
 
         self.base_endpoint = ''
         self.endpoints = {
+            'transfer': '',
+            'account': '',
             'listenkey': '',
             'position': '',
             'balance': '',
@@ -124,9 +94,17 @@ class LiveBot(Bot):
         """
         raise NotImplementedError
 
+    async def market_type_init(self):
+        """
+        Exchange specific market initialization. Sets endpoints.
+        :return:
+        """
+        raise NotImplementedError
+
     async def async_init(self):
         """
-        Calls the base init and exchange specific init function and provides async support.
+        Calls the base init and exchange specific init function and provides async support. Also updates the strategy
+        values.
         :return:
         """
         self.init()
@@ -203,58 +181,64 @@ class LiveBot(Bot):
         """
         raise NotImplementedError
 
-    async def public_get(self, url: str, params: dict = {}) -> dict:
+    async def public_get(self, url: str, params: dict = {}, base_endpoint: str = None) -> dict:
         """
         Function for public API endpoints. To be implemented by the exchange implementation.
         :param url: The URL to use in accordance with the base URL.
         :param params: The parameters to pass to the call.
+        :param base_endpoint: Alternative base URL to use.
         :return: The answer decoded into json.
         """
         raise NotImplementedError
 
-    async def private_(self, type_: str, url: str, params: dict = {}) -> dict:
+    async def private_(self, type_: str, base_endpoint: str, url: str, params: dict = {}) -> dict:
         """
         Base function for private API endpoints. Needs to calculate signature, encoding, and headers.
         To be implemented by the exchange implementation.
         :param type_: The type of call to call specific function.
+        :param base_endpoint: The base URL to use.
         :param url: The URL to use in accordance with the base URL.
         :param params: The parameters to pass to the call.
         :return: The answer decoded into json.
         """
         raise NotImplementedError
 
-    async def private_get(self, url: str, params: dict = {}) -> dict:
+    async def private_get(self, url: str, params: dict = {}, base_endpoint: str = None) -> dict:
         """
         Function for private GET API endpoints. To be implemented by the exchange implementation.
         :param url: The URL to use in accordance with the base URL.
         :param params: The parameters to pass to the call.
+        :param base_endpoint: Alternative base URL to use.
         :return: The answer string.
         """
         raise NotImplementedError
 
-    async def private_post(self, url: str, params: dict = {}) -> dict:
+    async def private_post(self, url: str, params: dict = {}, base_endpoint: str = None) -> dict:
         """
         Function for private POST API endpoints. To be implemented by the exchange implementation.
         :param url: The URL to use in accordance with the base URL.
         :param params: The parameters to pass to the call.
+        :param base_endpoint: Alternative base URL to use.
         :return: The answer string.
         """
         raise NotImplementedError
 
-    async def private_put(self, url: str, params: dict = {}) -> dict:
+    async def private_put(self, url: str, params: dict = {}, base_endpoint: str = None) -> dict:
         """
         Function for private PUT API endpoints. To be implemented by the exchange implementation.
         :param url: The URL to use in accordance with the base URL.
         :param params: The parameters to pass to the call.
+        :param base_endpoint: Alternative base URL to use.
         :return: The answer string.
         """
         raise NotImplementedError
 
-    async def private_delete(self, url: str, params: dict = {}) -> dict:
+    async def private_delete(self, url: str, params: dict = {}, base_endpoint: str = None) -> dict:
         """
         Function for private DELETE API endpoints. To be implemented by the exchange implementation.
         :param url: The URL to use in accordance with the base URL.
         :param params: The parameters to pass to the call.
+        :param base_endpoint: Alternative base URL to use.
         :return: The answer string.
         """
         raise NotImplementedError
@@ -428,16 +412,16 @@ class LiveBot(Bot):
                             msg = json.loads(msg)
                             type = self.determine_update_type(msg)
                             if type:
-                                # print(msg)
+                                # print_([msg])
                                 if type == ORDER_UPDATE:
                                     asyncio.create_task(self.async_handle_order_update(msg))
                                 elif type == ACCOUNT_UPDATE:
                                     asyncio.create_task(self.async_handle_account_update(msg))
                         except Exception as e:
-                            print_(['User stream error inner', e], n=True)
+                            print_(['User stream error inner', e])
             except Exception as e_out:
-                print_(['User stream error outer', e_out], n=True)
-                print_(['Retrying to connect in 5 seconds...'], n=True)
+                print_(['User stream error outer', e_out])
+                print_(['Retrying to connect in 5 seconds...'])
                 await asyncio.sleep(5)
 
     async def start_websocket(self) -> None:
@@ -460,7 +444,7 @@ class LiveBot(Bot):
                         continue
                     try:
                         msg = json.loads(msg)
-                        # print_([msg], n=True)
+                        # print_([msg])
                         tick = self.prepare_tick(msg)
                         if last_tick_update == 0:
                             # Make sure it starts at a base unit
@@ -493,12 +477,12 @@ class LiveBot(Bot):
                         if current - last_update >= datetime.timedelta(
                                 seconds=self.strategy.call_interval) and self.execute_strategy_logic:
                             last_update = current
-                            print_(['Do something'], n=True)
+                            print_(['Do something'])
                             # asyncio.create_task(self.async_execute_strategy_decision_making(price_list))
                             price_list = empty_candle_list()
                     except Exception as e:
                         if 'success' not in msg:
-                            print_(['Error in price stream', e, msg], n=True)
+                            print_(['Error in price stream', e, msg])
 
     async def execute_leverage_change(self):
         """

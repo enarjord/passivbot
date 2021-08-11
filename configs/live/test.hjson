@@ -1,11 +1,9 @@
 {
-    symbol: BTCUSDT
-    user: binance
-    exchange: binance
+    market_type: futures
     leverage: 20
-    start_date: 2021-08-01T00:00
-    end_date: 2021-08-07T00:00
     call_interval: 1.0
+    historic_tick_range: 5.0
+    historic_fill_range: 0.0
     strategy_file: strategies/grid.py
     strategy_class: Grid
     strategy:

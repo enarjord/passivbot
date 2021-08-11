@@ -8,7 +8,8 @@ from numba.experimental import jitclass
     ('timestamp', types.int64),
     ('balance', types.float64),
     ('equity', types.float64),
-    ('profit_and_loss', types.float64),
+    ('profit_and_loss_balance', types.float64),
+    ('profit_and_loss_equity', types.float64),
     ('position_balance_ratio', types.float64)
 ])
 class Statistic:
@@ -53,7 +54,7 @@ def empty_statistic() -> Statistic:
     Returns an empty Fill.
     :return: Empty Fill.
     """
-    return Statistic(0, 0, 0.0, 0.0, 0.0, 0.0, 0.0)
+    return Statistic(0, 0.0, 0.0, 0.0, 0.0, 0.0)
 
 
 def precompile_fill():
