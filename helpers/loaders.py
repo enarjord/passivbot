@@ -1,11 +1,14 @@
 import json
+import os
 import sys
 from importlib.util import spec_from_loader, module_from_spec
 from pathlib import Path
+from typing import Union
 
 import hjson
 
 from bots.configs import LiveConfig
+from helpers.misc import make_get_filepath
 from helpers.print_functions import print_
 
 
@@ -111,18 +114,35 @@ def load_exchange_key_secret(user: str) -> (str, str, str):
         raise Exception('API KeyFile Missing!')
 
 
-def load_base_config(path: str) -> dict:
+def load_config_files(config_paths: Union[list, str]) -> dict:
     """
-    Loads the base config from an hjson file.
-    :param path: The path to the config.
-    :return: The config as a dictionary.
+    Loads one or more configurations and merges them. Handles hjson and json.
+    :param config_paths: List of configurations to merge.
+    :return: Merged configurations.
     """
-    try:
-        config = hjson.load(open(path, encoding='utf-8'))
-        return config
-    except Exception as e:
-        print_(["Could not read config", e])
-        return {}
+    config = {}
+    if type(config_paths) == list:
+        for config_path in config_paths:
+            try:
+                if config_path.endswith('.hjson'):
+                    loaded_config = hjson.load(open(config_path, encoding='utf-8'))
+                    config = {**config, **loaded_config}
+                elif config_path.endswith('.json'):
+                    loaded_config = json.load(open(config_path, encoding='utf-8'))
+                    config = {**config, **loaded_config}
+            except Exception as e:
+                raise Exception('Failed to load config file', config_path, e)
+    else:
+        try:
+            if config_paths.endswith('.hjson'):
+                loaded_config = hjson.load(open(config_paths, encoding='utf-8'))
+                config = {**config, **loaded_config}
+            elif config_paths.endswith('.json'):
+                loaded_config = json.load(open(config_paths, encoding='utf-8'))
+                config = {**config, **loaded_config}
+        except Exception as e:
+            raise Exception('Failed to load config file', config_paths, e)
+    return config
 
 
 async def load_exchange_settings(exchange: str, symbol: str, user: str, market_type: str) -> dict:
