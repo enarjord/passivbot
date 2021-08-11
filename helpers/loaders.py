@@ -237,6 +237,25 @@ async def prep_config(args) -> []:
     return config
 
 
-        all_configs.append(config)
-
-    return all_configs
+def add_argparse_args(parser):
+    # parser.add_argument('--nojit', help='disable numba', action='store_true')
+    parser.add_argument('-b', '--backtest_config', type=str, required=False, dest='backtest_config',
+                        default='configs/backtest/test.hjson', help='Backtest config hjson file.')
+    parser.add_argument('-o', '--optimize_config', type=str, required=False, dest='optimize_config',
+                        default='configs/optimize/test.json', help='Optimize config hjson file.')
+    parser.add_argument('-d', '--download-only', help='download only, do not dump ticks caches', action='store_true')
+    parser.add_argument('-s', '--symbol', type=str, required=False, dest='symbol', default=None,
+                        help='Specify symbol, overriding symbol from backtest config.')
+    parser.add_argument('-u', '--user', type=str, required=False, dest='user', default=None,
+                        help='Specify user, a.k.a. account_name, overriding user from backtest config.')
+    parser.add_argument('--start_date', type=str, required=False, dest='start_date', default=None,
+                        help='Specify start date, overriding value from backtest config.')
+    parser.add_argument('--end_date', type=str, required=False, dest='end_date', default=None,
+                        help='Specify end date, overriding value from backtest config.')
+    parser.add_argument('--starting_balance', type=float, required=False, dest='starting_balance', default=None,
+                        help='Specify starting_balance, overriding value from backtest config.')
+    parser.add_argument('-m', '--market_type', type=str, required=False, dest='market_type', default=None,
+                        help='Specify whether spot or futures (default), overriding value from backtest config.')
+    parser.add_argument('-bd', '--base_dir', type=str, required=False, dest='base_dir', default='backtests',
+                        help='Specify the base output directory for the results.')
+    return parser
