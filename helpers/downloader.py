@@ -479,12 +479,12 @@ class Downloader:
         """
         if single_file:
             if os.path.exists(self.tick_filepath + ".npy"):
-                print_(['Loading cached tick data from', self.tick_filepath])
+                print_(['Loading cached tick data from', self.tick_filepath + ".npy"])
                 candle_data = np.load(self.tick_filepath + ".npy")
                 return candle_data
             await self.download_ticks()
             await self.prepare_files(single_file)
-            candle_data = np.load(self.tick_filepath)
+            candle_data = np.load(self.tick_filepath + ".npy")
             return candle_data
         else:
             exists = True
