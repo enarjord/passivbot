@@ -19,7 +19,7 @@ from definitions.tick import Tick, empty_tick_list
 from helpers.loaders import load_exchange_key_secret
 from helpers.misc import get_utc_now_timestamp
 from helpers.optimized import merge_ticks, calculate_base_candle_time
-from helpers.print_functions import print_, print_tick
+from helpers.print_functions import print_
 
 
 class LiveBot(Bot):
@@ -455,8 +455,6 @@ class LiveBot(Bot):
                             tick_list.append(tick)
                             if len(self.historic_ticks) > 0:
                                 tick_list = merge_ticks(self.historic_ticks, tick_list)
-                                for tick in tick_list:
-                                    print_tick(tick)
                                 self.historic_ticks = empty_tick_list()
                             # Calculate the time when the candle of the current tick ends
                             next_update = calculate_base_candle_time(tick, self.tick_interval) + int(
