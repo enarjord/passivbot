@@ -726,7 +726,7 @@ class Telegram:
                     start_of_day = today - timedelta(days=idx)
                     daily[int(start_of_day.timestamp()) * 1000] = 0.0
 
-                start_of_first_day = today - timedelta(days=nr_of_days)
+                start_of_first_day = today - timedelta(days=nr_of_days-1)
                 start_time_of_first_day_ts = int(start_of_first_day.timestamp()) * 1000
                 if self._bot.market_type == 'spot':
                     fills = list()
