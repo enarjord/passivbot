@@ -168,7 +168,7 @@ class BinanceBot(LiveBot):
                 # f"wss://fstream.binance.com/ws/{self.symbol.lower()}@aggTrade"
             }
         else:
-            dapi_info = await self.public_get('/fapi/v1/exchangeInfo', base_endpoint=dapi_endpoint)
+            dapi_info = await self.public_get('/dapi/v1/exchangeInfo', base_endpoint=dapi_endpoint)
             if self.symbol in {e['symbol'] for e in dapi_info['symbols']}:
                 print_(['Identified as inverse coin margined'])
                 self.base_endpoint = dapi_endpoint
