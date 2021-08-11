@@ -101,7 +101,7 @@ def load_key_secret(exchange: str, user: str) -> (str, str):
     :return: The key and secret.
     """
     try:
-        keyfile = json.load(open('api-keys.json'))
+        keyfile = json.load(open('api-keys.json', encoding='utf-8'))
         # Checks that the user exists, and it is for the correct exchange
         if user in keyfile and keyfile[user]["exchange"] == exchange:
             keyList = [str(keyfile[user]["key"]), str(keyfile[user]["secret"])]
@@ -121,7 +121,7 @@ def load_base_config(path: str) -> dict:
     :return: The config as a dictionary.
     """
     try:
-        config = hjson.load(open(path))
+        config = hjson.load(open(path, encoding='utf-8'))
         return config
     except Exception as e:
         print_(["Could not read config", e])

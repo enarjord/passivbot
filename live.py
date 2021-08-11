@@ -28,7 +28,7 @@ async def main() -> None:
     try:
         # Load the config
         config = load_base_config(args.live_config)
-        accounts = json.load(open('api-keys.json'))
+        accounts = json.load(open('api-keys.json', encoding='utf-8'))
         account = accounts[args.user]
         config['user'] = args.user
         config['exchange'] = account['exchange']
