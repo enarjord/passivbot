@@ -93,20 +93,17 @@ def get_strategy_definition(filename: str) -> str:
     return text[index:index + end_index + 1]
 
 
-def load_key_secret(exchange: str, user: str) -> (str, str):
+def load_exchange_key_secret(user: str) -> (str, str, str):
     """
-    Loads the key and secret from the API key file.
-    :param exchange: The exchange to use as a key.
+    Loads the exchange, key, and secret from the API key file.
     :param user: The user to use as a key.
-    :return: The key and secret.
+    :return: The exchange, key, and secret.
     """
     try:
         keyfile = json.load(open('api-keys.json', encoding='utf-8'))
-        # Checks that the user exists, and it is for the correct exchange
-        if user in keyfile and keyfile[user]["exchange"] == exchange:
-            keyList = [str(keyfile[user]["key"]), str(keyfile[user]["secret"])]
-            return keyList
-        elif user not in keyfile or keyfile[user]["exchange"] != exchange:
+        if user in keyfile:
+            return keyfile[user]['exchange'], keyfile[user]['key'], keyfile[user]['secret']
+        else:
             print_(["Looks like the keys aren't configured yet, or you entered the wrong username!"])
         raise Exception('API KeyFile Missing!')
     except FileNotFoundError:
@@ -176,3 +173,57 @@ async def load_exchange_settings(exchange: str, symbol: str, user: str, market_t
     except:
         pass
     return settings
+
+
+async def prep_config(args) -> []:
+    base_config = load_config_files([args.backtest_config_path, args.optimize_config_path])
+
+    for key in ['symbol', 'user', 'start_date', 'end_date', 'starting_balance', 'market_type', 'starting_configs',
+                'base_dir']:
+        if hasattr(args, key) and getattr(args, key) is not None:
+            base_config[key] = getattr(args, key)
+        elif key not in base_config:
+            base_config[key] = None
+
+    all_configs = []
+
+    for symbol in base_config['symbol'].split(','):
+        config = base_config.copy()
+        config['symbol'] = symbol
+        if args.market_type is None:
+            config['spot'] = False
+        else:
+            config['spot'] = args.market_type == 'spot'
+        config['exchange'], _, _ = load_exchange_key_secret(config['user'])
+
+        if config['exchange'] == 'bybit' and config['symbol'].endswith('USDT'):
+            raise Exception('error: bybit linear usdt markets backtesting and optimizing not supported at this time')
+
+        end_date = config['end_date'] if config['end_date'] and config['end_date'] != -1 else ts_to_date(time())[:16]
+        config['session_name'] = f"{config['start_date'].replace(' ', '').replace(':', '').replace('.', '')}_" \
+                                 f"{end_date.replace(' ', '').replace(':', '').replace('.', '')}"
+
+        if config['base_dir'].startswith('~'):
+            raise Exception("error: using the ~ to indicate the user's home directory is not supported")
+
+        base_dirpath = os.path.join(config['base_dir'],
+                                    f"{config['exchange']}{'_spot' if 'spot' in config['market_type'] else ''}",
+                                    config['symbol'])
+        config['caches_dirpath'] = make_get_filepath(os.path.join(base_dirpath, 'caches', ''))
+        config['optimize_dirpath'] = make_get_filepath(os.path.join(base_dirpath, 'optimize', ''))
+        config['plots_dirpath'] = make_get_filepath(os.path.join(base_dirpath, 'plots', ''))
+
+        config['avg_periodic_gain_key'] = f"avg_{int(round(config['periodic_gain_n_days']))}days_gain"
+
+        await add_market_specific_settings(config)
+
+        if 'pbr_limit' in config['ranges']:
+            config['ranges']['pbr_limit'][1] = min(config['ranges']['pbr_limit'][1], config['max_leverage'])
+            config['ranges']['pbr_limit'][0] = min(config['ranges']['pbr_limit'][0], config['ranges']['pbr_limit'][1])
+        if config['spot']:
+            config['do_long'] = True
+            config['do_shrt'] = False
+
+        all_configs.append(config)
+
+    return all_configs

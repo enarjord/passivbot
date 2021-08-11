@@ -16,7 +16,7 @@ from definitions.order import Order, empty_order_list
 from definitions.position import Position
 from definitions.position_list import PositionList
 from definitions.tick import Tick, empty_tick_list
-from helpers.loaders import load_key_secret
+from helpers.loaders import load_exchange_key_secret
 from helpers.misc import get_utc_now_timestamp
 from helpers.optimized import merge_ticks, calculate_base_candle_time
 from helpers.print_functions import print_, print_tick
@@ -48,7 +48,7 @@ class LiveBot(Bot):
 
         self.session = aiohttp.ClientSession()
 
-        self.key, self.secret = load_key_secret(config.exchange, self.user)
+        _, self.key, self.secret = load_exchange_key_secret(self.user)
 
         self.call_interval = config.call_interval
         self.historic_tick_range = config.historic_tick_range

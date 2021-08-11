@@ -1,10 +1,9 @@
 import argparse
 import asyncio
-import json
 
 from bots.base_live_bot import LiveBot
 from bots.configs import LiveConfig
-from helpers.loaders import load_base_config, load_module_from_file
+from helpers.loaders import load_base_config, load_module_from_file, load_exchange_key_secret
 from helpers.print_functions import print_
 
 
@@ -28,12 +27,9 @@ async def main() -> None:
     try:
         # Load the config
         config = load_base_config(args.live_config)
-        accounts = json.load(open('api-keys.json', encoding='utf-8'))
-        account = accounts[args.user]
         config['user'] = args.user
-        config['exchange'] = account['exchange']
         config['symbol'] = args.symbol
-        config['live_config'] = args.live_config
+        config['exchange'], _, _ = load_exchange_key_secret(args.user)
         # Create the strategy module from the specified file
         strategy_module = load_module_from_file(config['strategy_file'], 'strategy')
         # Create the strategy configuration from the config
