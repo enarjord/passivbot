@@ -37,6 +37,8 @@ async def main() -> None:
                                   config['call_interval'] if 'call_interval' in config else 1.0,
                                   config['historic_tick_range'] if 'historic_tick_range' in config else 0.0,
                                   config['historic_fill_range'] if 'historic_fill_range' in config else 0.0,
+                                  config['tick_interval'] if 'tick_interval' in config else 0.25,
+                                  config['statistic_interval'] if 'statistic_interval' in config else 3600,
                                   config['leverage'] if 'leverage' in config else 1.0,
                                   config['symbol'] if 'symbol' in config else '',
                                   config['maker_fee'] if 'maker_fee' in config else 0.0,

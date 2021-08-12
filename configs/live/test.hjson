@@ -2,6 +2,7 @@
     market_type: futures
     leverage: 20
     call_interval: 1.0
+    tick_interval: 0.25
     historic_tick_range: 5.0
     historic_fill_range: 0.0
     strategy_file: strategies/grid.py

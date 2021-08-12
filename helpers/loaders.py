@@ -161,7 +161,7 @@ async def load_exchange_settings(exchange: str, symbol: str, user: str, market_t
     :return: A dictionary with exchange settings.
     """
     settings = {}
-    config = LiveConfig(symbol.upper(), user, exchange, market_type, 1, 1.0, 0.0, 0.0)
+    config = LiveConfig(symbol.upper(), user, exchange, market_type, 1, 1.0, 0.0, 0.0, 0.25)
     if exchange == 'binance':
         from bots.binance import BinanceBot
         bot = BinanceBot(config, None)

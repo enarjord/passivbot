@@ -8,4 +8,7 @@
 
     start_date: 2021-08-01T00:00
     end_date: 2021-08-07T00:00
+
+    tick_interval: 0.25
+    statistic_interval: 3600
 }

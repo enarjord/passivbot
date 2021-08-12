@@ -21,12 +21,14 @@ from helpers.optimized import calculate_available_margin, quantity_to_cost, calc
 @jitclass(base_bot_spec +
           [
               ("config",
-               typeof(BacktestConfig(0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, '', 0.0, 0.0, 0.0, '', False, 1.0))),
+               typeof(
+                   BacktestConfig(0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0, 1.0, '', 0.0, 0.0, 0.0, '', False, 1.0))),
               ("strategy", typeof(to_be_replaced_strategy)),
               ("orders_to_execute", typeof(OrderList())),
               ("data", types.float64[:, :]),
               ("current_timestamp", types.int64),
               ("latency", types.float64),
+              ("statistic_interval", types.int64),
               ("maker_fee", types.float64),
               ("taker_fee", types.float64),
               ("fills", typeof(empty_fill_list())),
@@ -60,6 +62,8 @@ class BacktestBot(Bot):
         self.call_interval = config.call_interval
         self.historic_tick_range = config.historic_tick_range
         self.historic_fill_range = config.historic_fill_range
+        self.tick_interval = config.tick_interval
+        self.statistic_interval = config.statistic_interval
         self.leverage = config.leverage
         self.symbol = config.symbol
         self.maker_fee = config.maker_fee
@@ -376,7 +380,7 @@ class BacktestBot(Bot):
                         last_update = self.current_timestamp
                         self.execute_strategy_decision_making(price_list)
                         price_list = empty_candle_list()
-                if self.current_timestamp - last_statistic_update >= 60 * 60 * 1000:
+                if self.current_timestamp - last_statistic_update >= self.statistic_interval * 1000:
                     self.update_statistic(candle)
                     last_statistic_update = self.current_timestamp
             if index == len(self.data) - 1:
