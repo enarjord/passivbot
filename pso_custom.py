@@ -9,7 +9,7 @@ from pure_funcs import denumpyize, numpyize, get_template_live_config, candidate
 from procedures import dump_live_config, load_live_config, make_get_filepath, add_argparse_args, get_starting_configs
 from time import time, sleep
 from optimize import get_expanded_ranges, single_sliding_window_run, objective_function
-from bisect import insort
+from bisect import bisect
 from typing import Callable
 from prettytable import PrettyTable
 from hashlib import sha256
@@ -139,14 +139,8 @@ class PostProcessing:
         score = -score
         best_score = self.all_backtest_analyses[0][0] if self.all_backtest_analyses else 9e9
         analysis['score'] = score
-        try:
-            insort(self.all_backtest_analyses, (score, analysis))
-        except Exception as e:
-            print(e)
-            print('score', score)
-            print('analysis', analysis)
-            print('config', config)
-            raise Exception('debug')
+        idx = bisect([e[0] for e in self.all_backtest_analyses], score)
+        self.all_backtest_analyses.insert(idx, (score, analysis))
         to_dump = denumpyize({**analysis, **pack_config(config)})
         f"{len(self.all_backtest_analyses): <5}"
         table = PrettyTable()

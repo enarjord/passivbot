@@ -372,6 +372,92 @@ def calc_shrt_orders(balance,
 
 
 @njit
+def calc_long_close_grid(long_psize,
+                         long_pprice,
+                         lowest_ask,
+
+                         spot,
+                         inverse,
+                         qty_step,
+                         price_step,
+                         min_qty,
+                         min_cost,
+                         c_mult,
+                         max_leverage,
+
+                         min_markup,
+                         markup_range,
+                         n_close_orders):
+            minm = long_pprice * (1 + min_markup)
+            close_prices = []
+            for p in np.linspace(minm, long_pprice * (1 + min_markup + markup_range), n_close_orders):
+                price_ = max(lowest_ask, round_up(p, price_step))
+                if len(close_prices) == 0 or price_ != close_prices[-1]:
+                    close_prices.append(price_)
+            if len(close_prices) == 0:
+                return [(-long_psize, lowest_ask, 'long_nclose')]
+            elif len(close_prices) == 1:
+                return [(-long_psize, close_prices[0], 'long_nclose')]
+            else:
+                default_qty = round_(long_psize / len(close_prices), qty_step)
+                long_closes = []
+                remaining = long_psize
+                min_close_qty = calc_min_entry_qty(close_prices[0], inverse, qty_step, min_qty, min_cost)
+                for close_price in close_prices:
+                    if not remaining:
+                        break
+                    close_qty = min(remaining, max(default_qty, min_close_qty))
+                    long_closes.append((-close_qty, close_price, 'long_nclose'))
+                    remaining = round_(remaining - close_qty, qty_step)
+                if remaining:
+                    long_closes[-1] = (round_(long_closes[-1][0] - remaining, qty_step), long_closes[-1][1], long_closes[-1][2])
+                return long_closes
+
+
+@njit
+def calc_shrt_close_grid(shrt_psize,
+                         shrt_pprice,
+                         highest_bid,
+
+                         spot,
+                         inverse,
+                         qty_step,
+                         price_step,
+                         min_qty,
+                         min_cost,
+                         c_mult,
+                         max_leverage,
+
+                         min_markup,
+                         markup_range,
+                         n_close_orders):
+            minm = shrt_pprice * (1 - min_markup)
+            close_prices = []
+            for p in np.linspace(minm, shrt_pprice * (1 - min_markup - markup_range), n_close_orders):
+                price_ = min(highest_bid, round_dn(p, price_step))
+                if len(close_prices) == 0 or price_ != close_prices[-1]:
+                    close_prices.append(price_)
+            if len(close_prices) == 0:
+                return [(-shrt_psize, highest_bid, 'shrt_nclose')]
+            elif len(close_prices) == 1:
+                return [(-shrt_psize, close_prices[0], 'shrt_nclose')]
+            else:
+                default_qty = round_(-shrt_psize / len(close_prices), qty_step)
+                shrt_closes = []
+                remaining = -shrt_psize
+                min_close_qty = calc_min_entry_qty(close_prices[-1], inverse, qty_step, min_qty, min_cost)
+                for close_price in close_prices:
+                    if not remaining:
+                        break
+                    close_qty = min(remaining, max(default_qty, min_close_qty))
+                    shrt_closes.append((close_qty, close_price, 'shrt_nclose'))
+                    remaining = round_(remaining - close_qty, qty_step)
+                if remaining:
+                    shrt_closes[-1] = (round_(shrt_closes[-1][0] + remaining, qty_step), shrt_closes[-1][1], shrt_closes[-1][2])
+                return shrt_closes
+
+
+@njit
 def calc_upnl(long_psize,
               long_pprice,
               shrt_psize,

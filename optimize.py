@@ -308,7 +308,7 @@ def save_results(analysis, config):
     df = analysis.results_df
     df.reset_index(inplace=True)
     df.rename(columns={column: column.replace('config.', '') for column in df.columns}, inplace=True)
-    df = df.sort_values('objective', ascending=False)
+    df = df.sort_values('obj', ascending=False)
     df.to_csv(os.path.join(config['optimize_dirpath'], 'results.csv'), index=False)
     print('Best candidate found:')
     pprint.pprint(analysis.best_config)
