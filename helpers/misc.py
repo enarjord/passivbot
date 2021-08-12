@@ -7,7 +7,9 @@ import pandas as pd
 
 from definitions.candle import empty_candle, empty_candle_list
 from definitions.tick import empty_tick_list
-from helpers.optimized import convert_array_to_tick_list, prepare_candles, candles_to_array
+from helpers.converters import convert_array_to_tick_list, candles_to_array
+from helpers.optimized import prepare_candles
+from helpers.print_functions import print_
 
 
 def sort_dict_keys(d: Union[dict, list]) -> Union[dict, list]:
@@ -87,3 +89,48 @@ def create_test_data(filepath: str, tick_interval: float = 0.25):
         candles.extend(c)
     data = candles_to_array(candles)
     np.save('test_data.npy', data)
+
+
+def check_dict(d: dict) -> dict:
+    """
+    Checks a optimization configuration dictionary or sub dictionary and calls appropriate function.
+    :param d: Dictionary to check.
+    :return: A dictionary with tune types in the same structure as the original dictionary.
+    """
+    new_d = {}
+    for key, value in d.items():
+        if type(value) == OrderedDict or type(value) == dict:
+            new_d[key] = check_dict(value)
+        elif type(value) == list:
+            new_d[key] = check_list(value)
+        else:
+            print_(["Something wrong in checking dictionary"])
+    return new_d
+
+
+def check_list(l: list) -> Union[float, int, list, Float, Integer]:
+    """
+    Checks a optimization configuration list or sub list and calls appropriate function or creates variable.
+    :param l: List to check.
+    :return: A list, integer, float, tune float, or tune integer.
+    """
+    new_l = []
+    if type(l[0]) == float:
+        if l[0] == l[1]:
+            return l[0]
+        else:
+            return uniform(l[0], l[1])
+    elif type(l[0]) == int:
+        if l[0] == l[1]:
+            return l[0]
+        else:
+            return randint(l[0], l[1] + 1)
+    else:
+        for item in l:
+            if type(item) == list:
+                new_l.append(check_list(item))
+            elif type(item) == OrderedDict or type(item) == dict:
+                new_l.append(check_dict(item))
+            else:
+                print_(["Something wrong in checking list"])
+    return new_l
