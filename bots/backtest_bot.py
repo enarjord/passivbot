@@ -322,6 +322,79 @@ class BacktestBot(Bot):
         """
         return Candle(row[0], row[1], row[2], row[3], row[4], row[5])
 
+    def update_statistic(self, candle: Candle):
+        """
+        Function to update statistics.
+        :param candle: Candle price to use.
+        :return:
+        """
+        equity = calculate_equity(self.get_balance(), self.get_position().long.size,
+                                  self.get_position().long.price, self.get_position().short.size,
+                                  self.get_position().short.price, candle.close, self.inverse,
+                                  self.contract_multiplier)
+        position_balance_ratio = self.get_position().long.price * self.get_position().long.size \
+                                 + self.get_position().short.price * self.get_position().short.size \
+                                 / self.get_balance()
+        if len(self.statistics) > 0:
+            profit_and_loss_balance = self.get_balance() / self.statistics[-1].balance
+            profit_and_loss_equity = equity / self.statistics[-1].equity
+        else:
+            profit_and_loss_balance = 0.0
+            profit_and_loss_equity = 0.0
+        self.statistics.append(
+            Statistic(self.current_timestamp, self.get_balance(), equity, profit_and_loss_balance,
+                      profit_and_loss_equity, position_balance_ratio))
+
+    def update_and_handle_fills(self, order: Order, position: Position, fee_paid: float, pnl: float, candle: Candle):
+        """
+        Executes internal orders and updates fills.
+        :param order: Filled order.
+        :param position: Changed position.
+        :param fee_paid: Fee for order.
+        :param pnl: Profit and loss of order fill.
+        :param candle: Current candle.
+        :return:
+        """
+        last_filled_order = self.handle_order_update(order)
+        self.execute_strategy_order_update(last_filled_order)
+
+        long_position = self.get_position().long
+        short_position = self.get_position().short
+        if order.position_side == LONG:
+            long_position = position
+        elif order.position_side == SHORT:
+            short_position = position
+
+        old_balance, new_balance, old_position, new_position = self.handle_account_update(
+            self.get_balance() + fee_paid + pnl, long_position, short_position)
+
+        self.execute_strategy_account_update(old_balance, new_balance, old_position, new_position)
+
+        equity = calculate_equity(self.get_balance(), self.get_position().long.size,
+                                  self.get_position().long.price, self.get_position().short.size,
+                                  self.get_position().short.price, candle.close, self.inverse, self.contract_multiplier)
+        position_balance_ratio = (self.get_position().long.price * self.get_position().long.size +
+                                  self.get_position().short.price * self.get_position().short.size) / \
+                                 self.get_balance()
+
+        if order.action == FILLED:
+            quantity = order.quantity
+        else:
+            quantity = candle.volume
+
+        size = 0.0
+        price = 0.0
+        if order.position_side == LONG:
+            size = self.get_position().long.size
+            price = self.get_position().long.price
+        elif order.position_side == SHORT:
+            size = self.get_position().short.size
+            price = self.get_position().short.price
+
+        self.fills.append(
+            Fill(0, self.current_timestamp, pnl, fee_paid, self.get_balance(), equity, position_balance_ratio, quantity,
+                 order.price, size, price, order.order_type, order.action, order.side, order.position_side))
+
     def start_websocket(self) -> Tuple[List[Fill], List[Statistic]]:
         """
         Executes the iteration over the provided data. Triggers updating of sent orders, open orders, position, and
