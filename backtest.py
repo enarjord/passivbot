@@ -2,6 +2,7 @@ import argparse
 import asyncio
 
 from bots.configs import BacktestConfig
+from helpers.converters import fills_to_frame, statistics_to_frame
 from helpers.downloader import Downloader
 from helpers.loaders import load_config_files, load_module_from_file, get_strategy_definition, add_argparse_args, \
     prep_config
@@ -57,6 +58,8 @@ async def main() -> None:
         bot.update_balance(config['starting_balance'])
         # Start run
         fills, statistics = bot.start_websocket()
+        fills = fills_to_frame(fills)
+        statistics = statistics_to_frame(statistics)
     except Exception as e:
         print_(['Could not start', e])
 
