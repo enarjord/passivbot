@@ -4,7 +4,7 @@
     exchange: binance
 
     latency_simulation_ms: 100
-    starting_balance: 1000.0
+    starting_balance: 100000.0
 
     start_date: 2021-08-01T00:00
     end_date: 2021-08-07T00:00
