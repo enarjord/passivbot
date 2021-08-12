@@ -39,12 +39,17 @@ def remove_numba_decorators(text: str) -> str:
 
 
 def load_module_from_file(file_name: str, module_name: str, to_be_replaced: tuple = (None, None),
-                          insert_at_start: str = ''):
+                          insert_at_start: str = '', use_jit: bool = True):
     """
     Loads a module directly from a file. In the case of a script with numba compatibility, it strips it first, imports
     the clean module, and then imports the module with numba enabled.
     :param file_name: The filename to import.
     :param module_name: The name of the new module.
+    :param to_be_replaced: The part that needs to replaced. For the backtest bot that needs to insert the strategy
+    definition.
+    :param insert_at_start: The part that needs to be inserted at the start. For the backtest bot that needs to insert
+    the strategy import.
+    :param use_jit: Whether to use numba compilation or not.
     :return: A module.
     """
     text = Path(file_name).read_text()
@@ -58,8 +63,9 @@ def load_module_from_file(file_name: str, module_name: str, to_be_replaced: tupl
     module = module_from_spec(module_spec)
     exec(numba_free_text, module.__dict__)
     sys.modules[module_name] = module
-    exec(original_text, module.__dict__)
-    sys.modules[module_name] = module
+    if use_jit:
+        exec(original_text, module.__dict__)
+        sys.modules[module_name] = module
     return module
 
 
