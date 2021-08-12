@@ -379,6 +379,8 @@ class BacktestBot(Bot):
                 if self.current_timestamp - last_statistic_update >= 60 * 60 * 1000:
                     self.update_statistic(candle)
                     last_statistic_update = self.current_timestamp
+            if index == len(self.data) - 1:
+                self.update_statistic(candle)
         return self.fills, self.statistics
 
     def create_orders(self, orders_to_create: List[Order]):
