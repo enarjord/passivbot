@@ -12,8 +12,9 @@ from dateutil import parser
 from bots.configs import LiveConfig
 from definitions.candle import empty_candle
 from definitions.tick import Tick, empty_tick_list
+from helpers.converters import convert_array_to_tick_list, candles_to_array
 from helpers.misc import make_get_filepath, ts_to_date, get_filenames, get_utc_now_timestamp
-from helpers.optimized import convert_array_to_tick_list, prepare_candles, candles_to_array
+from helpers.optimized import prepare_candles
 from helpers.print_functions import print_
 
 
