@@ -15,7 +15,7 @@ from definitions.position import Position, copy_position
 from definitions.statistic import Statistic, empty_statistic_list
 from helpers.optimized import calculate_available_margin, quantity_to_cost, calculate_long_pnl, calculate_short_pnl, \
     round_down, calculate_new_position_size_position_price, calculate_bankruptcy_price, average_candle_price, \
-    calculate_equity
+    calculate_equity, calculate_difference
 
 
 @jitclass(base_bot_spec +
@@ -289,28 +289,29 @@ class BacktestBot(Bot):
         """
         return Candle(row[0], row[1], row[2], row[3], row[4], row[5])
 
-    def update_statistic(self, candle: Candle):
+    def update_statistic(self, candle: Candle, bankruptcy_distance: List[float]):
         """
         Function to update statistics.
         :param candle: Candle price to use.
+        :param bankruptcy_distance: List of distances to bankruptcy.
         :return:
         """
         equity = calculate_equity(self.get_balance(), self.get_position().long.size,
                                   self.get_position().long.price, self.get_position().short.size,
-                                  self.get_position().short.price, candle.close, self.inverse,
-                                  self.contract_multiplier)
-        position_balance_ratio = self.get_position().long.price * self.get_position().long.size \
-                                 + self.get_position().short.price * self.get_position().short.size \
-                                 / self.get_balance()
+                                  self.get_position().short.price, candle.close, self.inverse, self.contract_multiplier)
+        position_balance_ratio = (self.get_position().long.price * self.get_position().long.size +
+                                  self.get_position().short.price * self.get_position().short.size) / \
+                                 self.get_balance()
         if len(self.statistics) > 0:
             profit_and_loss_balance = self.get_balance() / self.statistics[-1].balance
             profit_and_loss_equity = equity / self.statistics[-1].equity
         else:
-            profit_and_loss_balance = 0.0
-            profit_and_loss_equity = 0.0
+            profit_and_loss_balance = 1.0
+            profit_and_loss_equity = 1.0
         self.statistics.append(
             Statistic(self.current_timestamp, self.get_balance(), equity, profit_and_loss_balance,
-                      profit_and_loss_equity, position_balance_ratio))
+                      profit_and_loss_equity, position_balance_ratio, equity / self.get_balance(),
+                      min(bankruptcy_distance)))
 
     def update_and_handle_fills(self, order: Order, position: Position, fee_paid: float, pnl: float, candle: Candle):
         """
@@ -336,6 +337,13 @@ class BacktestBot(Bot):
             self.get_balance() + fee_paid + pnl, long_position, short_position)
 
         self.execute_strategy_account_update(old_balance, new_balance, old_position, new_position)
+
+        liquidation_price = calculate_bankruptcy_price(self.get_balance(), self.get_position().long.size,
+                                                       self.get_position().long.price, self.get_position().short.size,
+                                                       self.get_position().short.price, self.inverse,
+                                                       self.contract_multiplier)
+        self.position.long.liquidation_price = liquidation_price
+        self.position.long.liquidation_price = liquidation_price
 
         equity = calculate_equity(self.get_balance(), self.get_position().long.size,
                                   self.get_position().long.price, self.get_position().short.size,
@@ -372,11 +380,17 @@ class BacktestBot(Bot):
         last_update = self.data[0, 0]
         first_timestamp = self.data[0, 0]
         last_statistic_update = self.data[0, 0]
+        bankruptcy_distance = [1.0]
         # Time, trade id, open, high, low, close, volume
         for index in range(len(self.data)):
             self.current_timestamp = self.data[index][0]
             candle = self.prepare_candle(self.data[index])
             price_list.append(candle)
+            bankruptcy_distance.append(min(calculate_difference(self.get_position().long.liquidation_price, candle.low),
+                                           calculate_difference(self.get_position().short.liquidation_price,
+                                                                candle.high)))
+            if index == 0:
+                self.update_statistic(candle, bankruptcy_distance)
             if self.current_timestamp >= first_timestamp + self.historic_tick_range * 1000:
                 cont = self.execute_exchange_logic(candle)
                 if not cont:
@@ -388,7 +402,8 @@ class BacktestBot(Bot):
                         self.execute_strategy_decision_making(price_list)
                         price_list = empty_candle_list()
                 if self.current_timestamp - last_statistic_update >= self.statistic_interval * 1000:
-                    self.update_statistic(candle)
+                    self.update_statistic(candle, bankruptcy_distance)
+                    bankruptcy_distance = [1.0]
                     last_statistic_update = self.current_timestamp
             if index == len(self.data) - 1:
                 self.update_statistic(candle, bankruptcy_distance)
