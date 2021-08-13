@@ -10,11 +10,11 @@ import pandas as pd
 from dateutil import parser
 
 from bots.configs import LiveConfig
-from definitions.candle import empty_candle
+from definitions.candle import empty_candle, empty_candle_list
 from definitions.tick import Tick, empty_tick_list
 from helpers.converters import convert_array_to_tick_list, candles_to_array
 from helpers.misc import make_get_filepath, ts_to_date, get_filenames, get_utc_now_timestamp
-from helpers.optimized import prepare_candles
+from helpers.optimized import prepare_candles, aggregate_ticks_to_candle
 from helpers.print_functions import print_
 
 
@@ -435,6 +435,7 @@ class Downloader:
                                        "qty": np.float64, "is_buyer_maker": np.float64},
                                 usecols=["trade_id", "timestamp", "price", "qty", "is_buyer_maker"])[
                 ["trade_id", "timestamp", "price", "qty", "is_buyer_maker"]]
+            chunk = chunk[(chunk.timestamp >= self.start_time) & (chunk.timestamp <= self.end_time)]
             tick_list = convert_array_to_tick_list(tick_list, chunk.values)
             candle_list, tick_list, last_tick_update = prepare_candles(tick_list, last_tick_update, last_update,
                                                                        last_candle, self.tick_interval)
@@ -459,6 +460,27 @@ class Downloader:
             current_index += len(tmp_array)
             print('\rloaded chunk of data', f, ts_to_date(float(f.split("_")[2]) / 1000), end='     ')
         print('\n')
+
+        if len(tick_list) > 0:
+            candle_list = aggregate_ticks_to_candle(tick_list, empty_candle_list(), last_tick_update, last_candle,
+                                                    self.tick_interval)
+            tmp_array = candles_to_array(candle_list)
+            if single_file:
+                array[current_index:current_index + len(tmp_array)] = tmp_array
+            else:
+                array["timestamp"][current_index:current_index + len(tmp_array)] = np.reshape(
+                    np.asarray(tmp_array[:, 0], dtype=np.int64), (len(tmp_array[:, 0]), 1))
+                array["open"][current_index:current_index + len(tmp_array)] = np.reshape(
+                    np.asarray(tmp_array[:, 1], dtype=np.float32), (len(tmp_array[:, 1]), 1))
+                array["high"][current_index:current_index + len(tmp_array)] = np.reshape(
+                    np.asarray(tmp_array[:, 2], dtype=np.float32), (len(tmp_array[:, 2]), 1))
+                array["low"][current_index:current_index + len(tmp_array)] = np.reshape(
+                    np.asarray(tmp_array[:, 3], dtype=np.float32), (len(tmp_array[:, 3]), 1))
+                array["close"][current_index:current_index + len(tmp_array)] = np.reshape(
+                    np.asarray(tmp_array[:, 4], dtype=np.float32), (len(tmp_array[:, 4]), 1))
+                array["volume"][current_index:current_index + len(tmp_array)] = np.reshape(
+                    np.asarray(tmp_array[:, 5], dtype=np.float32), (len(tmp_array[:, 5]), 1))
+            current_index += len(tmp_array)
 
         if single_file:
             print_(["Saving single file with", len(array), " ticks to", self.tick_filepath + ".npy", "..."])
