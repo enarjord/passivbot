@@ -32,7 +32,8 @@ from helpers.optimized import calculate_available_margin, quantity_to_cost, calc
               ("maker_fee", types.float64),
               ("taker_fee", types.float64),
               ("fills", typeof(empty_fill_list())),
-              ("statistics", typeof(empty_statistic_list()))
+              ("statistics", typeof(empty_statistic_list())),
+              ("accepted_orders", typeof(empty_order_list()))
           ])
 class BacktestBot(Bot):
     """
@@ -75,6 +76,8 @@ class BacktestBot(Bot):
         self.fills = empty_fill_list()
         self.statistics = empty_statistic_list()
 
+        self.accepted_orders = empty_order_list()
+
     def execute_exchange_logic(self, last_candle: Candle) -> bool:
         """
         Executes the exchange logic after each candle.
@@ -109,6 +112,7 @@ class BacktestBot(Bot):
                 self.fills.append(
                     Fill(0, self.current_timestamp, -self.get_balance() + fee_paid, fee_paid, 0.0, 0.0, 0.0,
                          order.quantity, order.price, 0.0, 0.0, LQ, CALCULATED, SELL, LONG))
+                self.accepted_orders.append(order)
             if self.get_position().short.size != 0.0:
                 order = Order(self.symbol, 0, last_candle.close, last_candle.close, self.get_position().short.size,
                               LQ, SELL, self.current_timestamp, CALCULATED, SHORT)
@@ -128,6 +132,7 @@ class BacktestBot(Bot):
                 self.fills.append(
                     Fill(0, self.current_timestamp, -self.get_balance() + fee_paid, fee_paid, 0.0, 0.0, 0.0,
                          order.quantity, order.price, 0.0, 0.0, LQ, CALCULATED, SELL, SHORT))
+                self.accepted_orders.append(order)
             return False
 
         update_list = []
@@ -252,6 +257,7 @@ class BacktestBot(Bot):
                                                                              self.leverage):
                     last_filled_order = self.handle_order_update(copy_order(order))
                     self.execute_strategy_order_update(last_filled_order)
+                    self.accepted_orders.append(order)
                 orders_to_remove.append(order)
 
         self.orders_to_execute.delete_long(orders_to_remove)
@@ -269,6 +275,7 @@ class BacktestBot(Bot):
                                                                              self.leverage):
                     last_filled_order = self.handle_order_update(copy_order(order))
                     self.execute_strategy_order_update(last_filled_order)
+                    self.accepted_orders.append(order)
                 orders_to_remove.append(order)
 
         self.orders_to_execute.delete_short(orders_to_remove)
@@ -355,7 +362,7 @@ class BacktestBot(Bot):
             Fill(0, self.current_timestamp, pnl, fee_paid, self.get_balance(), equity, position_balance_ratio, quantity,
                  order.price, size, price, order.order_type, order.action, order.side, order.position_side))
 
-    def start_websocket(self) -> Tuple[List[Fill], List[Statistic]]:
+    def start_websocket(self) -> Tuple[List[Fill], List[Statistic], List[Order]]:
         """
         Executes the iteration over the provided data. Triggers updating of sent orders, open orders, position, and
         balance after each candle tick. Also executes the strategy decision logic after the specified call interval.
@@ -373,7 +380,7 @@ class BacktestBot(Bot):
             if self.current_timestamp >= first_timestamp + self.historic_tick_range * 1000:
                 cont = self.execute_exchange_logic(candle)
                 if not cont:
-                    return self.fills, self.statistics
+                    return self.fills, self.statistics, self.accepted_orders
                 if index + 1 < len(self.data):
                     if self.data[index + 1][
                         5] != 0.0 and self.current_timestamp - last_update >= self.strategy.call_interval * 1000:
@@ -384,8 +391,9 @@ class BacktestBot(Bot):
                     self.update_statistic(candle)
                     last_statistic_update = self.current_timestamp
             if index == len(self.data) - 1:
-                self.update_statistic(candle)
-        return self.fills, self.statistics
+                self.update_statistic(candle, bankruptcy_distance)
+                bankruptcy_distance = [1.0]
+        return self.fills, self.statistics, self.accepted_orders
 
     def create_orders(self, orders_to_create: List[Order]):
         """
