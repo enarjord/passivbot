@@ -4,7 +4,7 @@ from numba import types, typeof
 
 from definitions.candle import Candle, empty_candle, precompile_candle
 from definitions.order import Order, empty_order, empty_order_list, precompile_order, NEW, PARTIALLY_FILLED, FILLED, \
-    CANCELED, EXPIRED, LONG, SHORT, NEW_INSURANCE, NEW_ADL
+    CANCELED, EXPIRED, LONG, SHORT, NEW_INSURANCE, NEW_ADL, CALCULATED
 from definitions.order_list import OrderList, precompile_order_list
 from definitions.position import Position, empty_long_position, empty_short_position, precompile_position
 from definitions.position_list import PositionList, precompile_position_list
@@ -271,14 +271,14 @@ class Bot:
         last_filled_order = empty_order()
         add_orders = empty_order_list()
         delete_orders = empty_order_list()
-        if order.action in [CANCELED, FILLED, EXPIRED, NEW_INSURANCE, NEW_ADL]:
+        if order.action in [CANCELED, FILLED, EXPIRED, NEW_INSURANCE, NEW_ADL, CALCULATED]:
             delete_orders.append(order)
         if order.action in [NEW]:
             add_orders.append(order)
         if order.action in [PARTIALLY_FILLED]:
             delete_orders.append(order)
             add_orders.append(order)
-        if order.action == FILLED:
+        if order.action == FILLED or order.action == CALCULATED:
             last_filled_order = order
         self.update_orders(add_orders, delete_orders)
         return last_filled_order

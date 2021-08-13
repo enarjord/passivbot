@@ -53,6 +53,7 @@ class LiveBot(Bot):
         self.call_interval = config.call_interval
         self.historic_tick_range = config.historic_tick_range
         self.historic_fill_range = config.historic_fill_range
+        self.tick_interval = config.tick_interval
 
         self.historic_ticks = empty_tick_list()
         self.historic_fills = empty_fill_list()

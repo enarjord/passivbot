@@ -12,8 +12,9 @@ from dateutil import parser
 from bots.configs import LiveConfig
 from definitions.candle import empty_candle
 from definitions.tick import Tick, empty_tick_list
+from helpers.converters import convert_array_to_tick_list, candles_to_array
 from helpers.misc import make_get_filepath, ts_to_date, get_filenames, get_utc_now_timestamp
-from helpers.optimized import convert_array_to_tick_list, prepare_candles, candles_to_array
+from helpers.optimized import prepare_candles
 from helpers.print_functions import print_
 
 
@@ -25,7 +26,7 @@ class Downloader:
     def __init__(self, config: dict):
         self.fetch_delay_seconds = 0.75
         self.config = config
-        self.tick_interval = 0.25
+        self.tick_interval = config['tick_interval'] if 'tick_interval' in config else 0.25
         self.spot = 'spot' in config and config['spot']
         self.tick_filepath = os.path.join(config["caches_dirpath"], f"{config['session_name']}_ticks_cache")
         os.makedirs(config["caches_dirpath"], exist_ok=True)
@@ -159,7 +160,7 @@ class Downloader:
         :return:
         """
         config = LiveConfig(self.config["symbol"], self.config["user"], self.config["exchange"],
-                            self.config["market_type"], 1, 1.0, 0.0, 0.0)
+                            self.config["market_type"], 1, 1.0, 0.0, 0.0, self.tick_interval)
         if self.config["exchange"] == "binance":
             from bots.binance import BinanceBot
             self.bot = BinanceBot(config, None)

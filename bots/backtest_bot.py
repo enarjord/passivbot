@@ -15,22 +15,25 @@ from definitions.position import Position, copy_position
 from definitions.statistic import Statistic, empty_statistic_list
 from helpers.optimized import calculate_available_margin, quantity_to_cost, calculate_long_pnl, calculate_short_pnl, \
     round_down, calculate_new_position_size_position_price, calculate_bankruptcy_price, average_candle_price, \
-    calculate_equity
+    calculate_equity, calculate_difference
 
 
 @jitclass(base_bot_spec +
           [
               ("config",
-               typeof(BacktestConfig(0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, '', 0.0, 0.0, 0.0, '', False, 1.0))),
+               typeof(
+                   BacktestConfig(0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0, 1.0, '', 0.0, 0.0, 0.0, '', False, 1.0))),
               ("strategy", typeof(to_be_replaced_strategy)),
               ("orders_to_execute", typeof(OrderList())),
               ("data", types.float64[:, :]),
               ("current_timestamp", types.int64),
               ("latency", types.float64),
+              ("statistic_interval", types.int64),
               ("maker_fee", types.float64),
               ("taker_fee", types.float64),
               ("fills", typeof(empty_fill_list())),
-              ("statistics", typeof(empty_statistic_list()))
+              ("statistics", typeof(empty_statistic_list())),
+              ("accepted_orders", typeof(empty_order_list()))
           ])
 class BacktestBot(Bot):
     """
@@ -60,6 +63,8 @@ class BacktestBot(Bot):
         self.call_interval = config.call_interval
         self.historic_tick_range = config.historic_tick_range
         self.historic_fill_range = config.historic_fill_range
+        self.tick_interval = config.tick_interval
+        self.statistic_interval = config.statistic_interval
         self.leverage = config.leverage
         self.symbol = config.symbol
         self.maker_fee = config.maker_fee
@@ -70,6 +75,8 @@ class BacktestBot(Bot):
 
         self.fills = empty_fill_list()
         self.statistics = empty_statistic_list()
+
+        self.accepted_orders = empty_order_list()
 
     def execute_exchange_logic(self, last_candle: Candle) -> bool:
         """
@@ -105,6 +112,7 @@ class BacktestBot(Bot):
                 self.fills.append(
                     Fill(0, self.current_timestamp, -self.get_balance() + fee_paid, fee_paid, 0.0, 0.0, 0.0,
                          order.quantity, order.price, 0.0, 0.0, LQ, CALCULATED, SELL, LONG))
+                self.accepted_orders.append(order)
             if self.get_position().short.size != 0.0:
                 order = Order(self.symbol, 0, last_candle.close, last_candle.close, self.get_position().short.size,
                               LQ, SELL, self.current_timestamp, CALCULATED, SHORT)
@@ -124,6 +132,7 @@ class BacktestBot(Bot):
                 self.fills.append(
                     Fill(0, self.current_timestamp, -self.get_balance() + fee_paid, fee_paid, 0.0, 0.0, 0.0,
                          order.quantity, order.price, 0.0, 0.0, LQ, CALCULATED, SELL, SHORT))
+                self.accepted_orders.append(order)
             return False
 
         update_list = []
@@ -176,31 +185,9 @@ class BacktestBot(Bot):
                                                                  self.get_position().short.size,
                                                                  self.get_position().short.price, self.inverse,
                                                                  self.contract_multiplier)
-                update_list.append((order, o, p, fee_paid, pnl))
-        for order, o, p, fee_paid, pnl in update_list:
-            last_filled_order = self.handle_order_update(o)
-            self.execute_strategy_order_update(last_filled_order)
-            old_balance, new_balance, old_position, new_position = self.handle_account_update(
-                self.get_balance() + fee_paid + pnl, p, self.get_position().short)
-            self.execute_strategy_account_update(old_balance, new_balance, old_position, new_position)
-
-            equity = calculate_equity(self.get_balance(), self.get_position().long.size,
-                                      self.get_position().long.price, self.get_position().short.size,
-                                      self.get_position().short.price, last_candle.close, self.inverse,
-                                      self.contract_multiplier)
-            position_balance_ratio = self.get_position().long.price * self.get_position().long.size \
-                                     + self.get_position().short.price * self.get_position().short.size \
-                                     / self.get_balance()
-            self.fills.append(Fill(0, self.current_timestamp,
-                                   0.0 if order.side == BUY else calculate_long_pnl(old_position.long.price,
-                                                                                    o.price,
-                                                                                    o.quantity if o.action == FILLED else last_candle.volume,
-                                                                                    self.inverse,
-                                                                                    self.contract_multiplier),
-                                   fee_paid, self.get_balance(), equity, position_balance_ratio,
-                                   o.quantity if o.action == FILLED else last_candle.volume, order.price,
-                                   self.get_position().long.size, self.get_position().long.price, order.order_type,
-                                   order.action, order.side, order.position_side))
+                update_list.append((o, p, fee_paid, pnl))
+        for o, p, fee_paid, pnl in update_list:
+            self.update_and_handle_fills(o, p, fee_paid, pnl, last_candle)
 
         update_list = []
         # Check which short orders where triggered in the last candle
@@ -252,31 +239,9 @@ class BacktestBot(Bot):
                                                                  self.get_position().long.size,
                                                                  self.get_position().long.price, p.size, p.price,
                                                                  self.inverse, self.contract_multiplier)
-                update_list.append((order, o, p, fee_paid, pnl))
-        for order, o, p, fee_paid, pnl in update_list:
-            last_filled_order = self.handle_order_update(o)
-            self.execute_strategy_order_update(last_filled_order)
-            old_balance, new_balance, old_position, new_position = self.handle_account_update(
-                self.get_balance() + fee_paid + pnl, self.get_position().long, p)
-            self.execute_strategy_account_update(old_balance, new_balance, old_position, new_position)
-
-            equity = calculate_equity(self.get_balance(), self.get_position().long.size,
-                                      self.get_position().long.price, self.get_position().short.size,
-                                      self.get_position().short.price, last_candle.close, self.inverse,
-                                      self.contract_multiplier)
-            position_balance_ratio = self.get_position().long.price * self.get_position().long.size \
-                                     + self.get_position().short.price * self.get_position().short.size \
-                                     / self.get_balance()
-            self.fills.append(Fill(0, self.current_timestamp,
-                                   0.0 if order.side == SELL else calculate_short_pnl(old_position.short.price,
-                                                                                      o.price,
-                                                                                      o.quantity if o.action == FILLED else last_candle.volume,
-                                                                                      self.inverse,
-                                                                                      self.contract_multiplier),
-                                   fee_paid, self.get_balance(), equity, position_balance_ratio,
-                                   o.quantity if o.action == FILLED else last_candle.volume, order.price,
-                                   self.get_position().short.size, self.get_position().short.price,
-                                   order.order_type, order.action, order.side, order.position_side))
+                update_list.append((o, p, fee_paid, pnl))
+        for o, p, fee_paid, pnl in update_list:
+            self.update_and_handle_fills(o, p, fee_paid, pnl, last_candle)
 
         orders_to_remove = empty_order_list()
         # Check which long orders arrived at the exchange and where added to the open orders
@@ -292,6 +257,7 @@ class BacktestBot(Bot):
                                                                              self.leverage):
                     last_filled_order = self.handle_order_update(copy_order(order))
                     self.execute_strategy_order_update(last_filled_order)
+                    self.accepted_orders.append(order)
                 orders_to_remove.append(order)
 
         self.orders_to_execute.delete_long(orders_to_remove)
@@ -309,6 +275,7 @@ class BacktestBot(Bot):
                                                                              self.leverage):
                     last_filled_order = self.handle_order_update(copy_order(order))
                     self.execute_strategy_order_update(last_filled_order)
+                    self.accepted_orders.append(order)
                 orders_to_remove.append(order)
 
         self.orders_to_execute.delete_short(orders_to_remove)
@@ -322,7 +289,88 @@ class BacktestBot(Bot):
         """
         return Candle(row[0], row[1], row[2], row[3], row[4], row[5])
 
-    def start_websocket(self) -> Tuple[List[Fill], List[Statistic]]:
+    def update_statistic(self, candle: Candle, bankruptcy_distance: List[float]):
+        """
+        Function to update statistics.
+        :param candle: Candle price to use.
+        :param bankruptcy_distance: List of distances to bankruptcy.
+        :return:
+        """
+        equity = calculate_equity(self.get_balance(), self.get_position().long.size,
+                                  self.get_position().long.price, self.get_position().short.size,
+                                  self.get_position().short.price, candle.close, self.inverse, self.contract_multiplier)
+        position_balance_ratio = (self.get_position().long.price * self.get_position().long.size +
+                                  self.get_position().short.price * self.get_position().short.size) / \
+                                 self.get_balance()
+        if len(self.statistics) > 0:
+            profit_and_loss_balance = self.get_balance() / self.statistics[-1].balance
+            profit_and_loss_equity = equity / self.statistics[-1].equity
+        else:
+            profit_and_loss_balance = 1.0
+            profit_and_loss_equity = 1.0
+        self.statistics.append(
+            Statistic(self.current_timestamp, self.get_balance(), equity, profit_and_loss_balance,
+                      profit_and_loss_equity, position_balance_ratio, equity / self.get_balance(),
+                      min(bankruptcy_distance)))
+
+    def update_and_handle_fills(self, order: Order, position: Position, fee_paid: float, pnl: float, candle: Candle):
+        """
+        Executes internal orders and updates fills.
+        :param order: Filled order.
+        :param position: Changed position.
+        :param fee_paid: Fee for order.
+        :param pnl: Profit and loss of order fill.
+        :param candle: Current candle.
+        :return:
+        """
+        last_filled_order = self.handle_order_update(order)
+        self.execute_strategy_order_update(last_filled_order)
+
+        long_position = self.get_position().long
+        short_position = self.get_position().short
+        if order.position_side == LONG:
+            long_position = position
+        elif order.position_side == SHORT:
+            short_position = position
+
+        old_balance, new_balance, old_position, new_position = self.handle_account_update(
+            self.get_balance() + fee_paid + pnl, long_position, short_position)
+
+        self.execute_strategy_account_update(old_balance, new_balance, old_position, new_position)
+
+        liquidation_price = calculate_bankruptcy_price(self.get_balance(), self.get_position().long.size,
+                                                       self.get_position().long.price, self.get_position().short.size,
+                                                       self.get_position().short.price, self.inverse,
+                                                       self.contract_multiplier)
+        self.position.long.liquidation_price = liquidation_price
+        self.position.long.liquidation_price = liquidation_price
+
+        equity = calculate_equity(self.get_balance(), self.get_position().long.size,
+                                  self.get_position().long.price, self.get_position().short.size,
+                                  self.get_position().short.price, candle.close, self.inverse, self.contract_multiplier)
+        position_balance_ratio = (self.get_position().long.price * self.get_position().long.size +
+                                  self.get_position().short.price * self.get_position().short.size) / \
+                                 self.get_balance()
+
+        if order.action == FILLED:
+            quantity = order.quantity
+        else:
+            quantity = candle.volume
+
+        size = 0.0
+        price = 0.0
+        if order.position_side == LONG:
+            size = self.get_position().long.size
+            price = self.get_position().long.price
+        elif order.position_side == SHORT:
+            size = self.get_position().short.size
+            price = self.get_position().short.price
+
+        self.fills.append(
+            Fill(0, self.current_timestamp, pnl, fee_paid, self.get_balance(), equity, position_balance_ratio, quantity,
+                 order.price, size, price, order.order_type, order.action, order.side, order.position_side))
+
+    def start_websocket(self) -> Tuple[List[Fill], List[Statistic], List[Order]]:
         """
         Executes the iteration over the provided data. Triggers updating of sent orders, open orders, position, and
         balance after each candle tick. Also executes the strategy decision logic after the specified call interval.
@@ -332,40 +380,35 @@ class BacktestBot(Bot):
         last_update = self.data[0, 0]
         first_timestamp = self.data[0, 0]
         last_statistic_update = self.data[0, 0]
+        bankruptcy_distance = [1.0]
         # Time, trade id, open, high, low, close, volume
         for index in range(len(self.data)):
             self.current_timestamp = self.data[index][0]
             candle = self.prepare_candle(self.data[index])
             price_list.append(candle)
+            bankruptcy_distance.append(min(calculate_difference(self.get_position().long.liquidation_price, candle.low),
+                                           calculate_difference(self.get_position().short.liquidation_price,
+                                                                candle.high)))
+            if index == 0:
+                self.update_statistic(candle, bankruptcy_distance)
             if self.current_timestamp >= first_timestamp + self.historic_tick_range * 1000:
                 cont = self.execute_exchange_logic(candle)
                 if not cont:
-                    return self.fills, self.statistics
+                    return self.fills, self.statistics, self.accepted_orders
                 if index + 1 < len(self.data):
                     if self.data[index + 1][
                         5] != 0.0 and self.current_timestamp - last_update >= self.strategy.call_interval * 1000:
                         last_update = self.current_timestamp
                         self.execute_strategy_decision_making(price_list)
                         price_list = empty_candle_list()
-                if self.current_timestamp - last_statistic_update >= 60 * 60 * 1000:
-                    equity = calculate_equity(self.get_balance(), self.get_position().long.size,
-                                              self.get_position().long.price, self.get_position().short.size,
-                                              self.get_position().short.price, candle.close, self.inverse,
-                                              self.contract_multiplier)
-                    position_balance_ratio = self.get_position().long.price * self.get_position().long.size \
-                                             + self.get_position().short.price * self.get_position().short.size \
-                                             / self.get_balance()
-                    if len(self.statistics) > 0:
-                        profit_and_loss_balance = self.get_balance() / self.statistics[-1].balance
-                        profit_and_loss_equity = equity / self.statistics[-1].equity
-                    else:
-                        profit_and_loss_balance = 0.0
-                        profit_and_loss_equity = 0.0
-                    self.statistics.append(
-                        Statistic(self.current_timestamp, self.get_balance(), equity, profit_and_loss_balance,
-                                  profit_and_loss_equity, position_balance_ratio))
+                if self.current_timestamp - last_statistic_update >= self.statistic_interval * 1000:
+                    self.update_statistic(candle, bankruptcy_distance)
+                    bankruptcy_distance = [1.0]
                     last_statistic_update = self.current_timestamp
-        return self.fills, self.statistics
+            if index == len(self.data) - 1:
+                self.update_statistic(candle, bankruptcy_distance)
+                bankruptcy_distance = [1.0]
+        return self.fills, self.statistics, self.accepted_orders
 
     def create_orders(self, orders_to_create: List[Order]):
         """

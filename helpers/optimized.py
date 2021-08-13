@@ -96,6 +96,30 @@ def round_(n, step, safety_rounding=10) -> float:
 
 
 @njit
+def round_dynamic(n: float, d: int):
+    """
+    Round float dynamically based on provided precision and adjusted prevision.
+    :param n: Number to round.
+    :param d: Base precision.
+    :return: Dynamically rounded float.
+    """
+    if n == 0.0:
+        return n
+    return round(n, d - int(np.floor(np.log10(abs(n)))) - 1)
+
+
+@njit
+def calculate_difference(x: float, y: float):
+    """
+    Calculates the absolute difference between two numbers.
+    :param x: First number.
+    :param y: Second number.
+    :return: The absolute difference.
+    """
+    return abs(x - y) / abs(y)
+
+
+@njit
 def quantity_to_cost(quantity, price, inverse, c_mult) -> float:
     """
     Calculates the cost of a position with given quantity and price.
@@ -365,33 +389,6 @@ def merge_ticks(historic_ticks: List[Tick], tick_list: List[Tick]) -> List[Tick]
             new_tick_list.append(tick)
             added_order_ids.append(tick.trade_id)
     return new_tick_list
-
-
-@njit
-def convert_array_to_tick_list(tick_list: List[Tick], data: np.ndarray) -> List[Tick]:
-    """
-    Converts an array into a tick list so that it can be further processed.
-    :param tick_list: The tick list to use.
-    :param data: The data to use in the form: timestamp, price, quantity, is_buyer_maker.
-    :return: The tick list with added ticks.
-    """
-    for row in data:
-        tick_list.append(Tick(int(row[0]), int(row[1]), float(row[2]), float(row[3]), bool(row[4])))
-    return tick_list
-
-
-@njit
-def candles_to_array(candles: List[Candle]) -> np.ndarray:
-    """
-    Converts a list of candles into a numpy array.
-    :param candles: The list of candles.
-    :return: A numpy array int he form: timestamp, open, high, low, close, volume.
-    """
-    array = np.zeros((len(candles), 6))
-    for i in range(len(candles)):
-        array[i] = np.asarray([candles[i].timestamp, candles[i].open, candles[i].high, candles[i].low, candles[i].close,
-                               candles[i].volume], dtype=np.float64)
-    return array
 
 
 @njit

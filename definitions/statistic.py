@@ -10,7 +10,9 @@ from numba.experimental import jitclass
     ('equity', types.float64),
     ('profit_and_loss_balance', types.float64),
     ('profit_and_loss_equity', types.float64),
-    ('position_balance_ratio', types.float64)
+    ('position_balance_ratio', types.float64),
+    ('equity_balance_ratio', types.float64),
+    ('bankruptcy_distance', types.float64)
 ])
 class Statistic:
     """
@@ -18,7 +20,8 @@ class Statistic:
     """
 
     def __init__(self, timestamp: int, balance: float, equity: float, profit_and_loss_balance: float,
-                 profit_and_loss_equity: float, position_balance_ratio: float):
+                 profit_and_loss_equity: float, position_balance_ratio: float, equity_balance_ratio: float,
+                 bankruptcy_distance: float):
         """
         Create a statistic.
         :param timestamp: The timestamp it was filled.
@@ -27,6 +30,8 @@ class Statistic:
         :param profit_and_loss_balance: The profit and loss of the balance if any.
         :param profit_and_loss_equity: The profit and loss of the equity if any.
         :param position_balance_ratio: The ratio of the position vs the wallet.
+        :param equity_balance_ratio: The ratio of the equity vs the balance.
+        :param bankruptcy_distance: The closest to being bankrupt.
         """
         self.timestamp = timestamp
         self.balance = balance
@@ -34,6 +39,8 @@ class Statistic:
         self.profit_and_loss_balance = profit_and_loss_balance
         self.profit_and_loss_equity = profit_and_loss_equity
         self.position_balance_ratio = position_balance_ratio
+        self.equity_balance_ratio = equity_balance_ratio
+        self.bankruptcy_distance = bankruptcy_distance
 
 
 @njit
@@ -54,7 +61,7 @@ def empty_statistic() -> Statistic:
     Returns an empty Fill.
     :return: Empty Fill.
     """
-    return Statistic(0, 0.0, 0.0, 0.0, 0.0, 0.0)
+    return Statistic(0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
 
 
 def precompile_fill():

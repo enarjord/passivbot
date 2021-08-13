@@ -40,7 +40,8 @@ async def main() -> None:
         config = LiveConfig(config['symbol'], config['user'], config['exchange'], config['market_type'],
                             config['leverage'], config['call_interval'],
                             config['historic_tick_range'] if 'historic_tick_range' in config else 0.0,
-                            config['historic_fill_range'] if 'historic_fill_range' in config else 0.0)
+                            config['historic_fill_range'] if 'historic_fill_range' in config else 0.0,
+                            config['tick_interval'] if 'tick_interval' in config else 0.25)
         if config.exchange == 'binance':
             from bots.binance import BinanceBot
             bot = BinanceBot(config, strategy)
