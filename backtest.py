@@ -3,6 +3,8 @@ import asyncio
 import os
 from time import time
 
+import numpy as np
+
 from bots.configs import BacktestConfig
 from helpers.analyzers import analyze_fills
 from helpers.converters import fills_to_frame, statistics_to_frame, candle_array_to_frame
@@ -14,7 +16,14 @@ from helpers.plotter import dump_plots
 from helpers.print_functions import print_
 
 
-def backtest_wrap(bot, config, data):
+def backtest_wrap(bot, config: dict, data: np.ndarray):
+    """
+    Wraps the backtest execution and creates the analysis and prints after the backtest.
+    :param bot: The created bot.
+    :param config: The config to use.
+    :param data: The data to use.
+    :return:
+    """
     # Initialize bot
     bot.init()
     bot.update_balance(config['starting_balance'])
