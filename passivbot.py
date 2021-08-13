@@ -375,7 +375,7 @@ class Bot:
         results = []
         if self.stop_mode not in ['manual']:
             if to_cancel:
-                results.append(asyncio.create_task(self.cancel_orders(to_cancel[:self.n_orders_per_execution])))
+                results.append(asyncio.create_task(self.cancel_orders(to_cancel[:self.n_orders_per_execution + 1])))
                 await asyncio.sleep(0.005)  # sleep 5 ms between sending cancellations and creations
             if to_create:
                 results.append(await self.create_orders(to_create[:self.n_orders_per_execution]))
