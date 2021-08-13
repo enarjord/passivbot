@@ -96,6 +96,30 @@ def round_(n, step, safety_rounding=10) -> float:
 
 
 @njit
+def round_dynamic(n: float, d: int):
+    """
+    Round float dynamically based on provided precision and adjusted prevision.
+    :param n: Number to round.
+    :param d: Base precision.
+    :return: Dynamically rounded float.
+    """
+    if n == 0.0:
+        return n
+    return round(n, d - int(np.floor(np.log10(abs(n)))) - 1)
+
+
+@njit
+def calculate_difference(x: float, y: float):
+    """
+    Calculates the absolute difference between two numbers.
+    :param x: First number.
+    :param y: Second number.
+    :return: The absolute difference.
+    """
+    return abs(x - y) / abs(y)
+
+
+@njit
 def quantity_to_cost(quantity, price, inverse, c_mult) -> float:
     """
     Calculates the cost of a position with given quantity and price.
