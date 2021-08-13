@@ -35,7 +35,7 @@ def backtest_wrap(bot, config, data):
     config['result'] = result
     config['plots_dirpath'] = make_get_filepath(
         os.path.join(config['plots_dirpath'], f"{ts_to_date(time())[:19].replace(':', '')}", ''))
-    fill_frame.to_csv(config['plots_dirpath'] + "fills.csv")
+    fill_frame.to_csv(config['plots_dirpath'] + "fills.csv", index=False)
     candle_frame = candle_array_to_frame(data)
     print_(['Dumping plots...'])
     dump_plots(config, fill_frame, statistic_frame, candle_frame)
