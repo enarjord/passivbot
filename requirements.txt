@@ -1,0 +1,15 @@
+asyncio>=3.4.3
+numpy>=1.21.1
+pandas>=1.3.1
+numba>=0.53.1
+aiohttp>=3.7.4.post0
+websockets>=9.1
+ray==1.2.0
+hjson>=3.0.2
+tabulate>=0.8.9
+psutil>=5.8.0
+python-dateutil>=2.8.2
+matplotlib>=3.4.2
+seaborn>=0.11.1
+colorama>=0.4.4
+prettytable>=2.1.0
