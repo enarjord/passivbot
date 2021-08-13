@@ -12,6 +12,26 @@ from helpers.misc import make_get_filepath
 from helpers.print_functions import print_
 
 
+def get_strategy_and_bot_module(config: dict, nojit: bool):
+    """
+    Loads both, strategy and bot module.
+    :param config: The config to use.
+    :param nojit: Whether to use jit or not.
+    :return: The strategy and bot module.
+    """
+    # Create the strategy module from the specified file
+    strategy_module = load_module_from_file(config['strategy_file'], 'strategy',
+                                            use_jit=False if nojit else True)
+    # Get the replacement for the numba strategy specification
+    replacement = get_strategy_definition(config['strategy_file'])
+    replacement = ('strategy.' + replacement).replace('StrategyConfig', 'strategy.StrategyConfig')
+    replacement = ('to_be_replaced_strategy', replacement)
+    # Create the bot module from the file including the replacement of the strategy specification
+    bot_module = load_module_from_file('bots/backtest_bot.py', 'bot', replacement, 'import strategy',
+                                       use_jit=False if nojit else True)
+    return strategy_module, bot_module
+
+
 def remove_numba_decorators(text: str) -> str:
     """
     Removes the decorators associated with numba so that a clean file remains.
@@ -244,7 +264,7 @@ async def prep_config(args) -> []:
 
 
 def add_argparse_args(parser):
-    # parser.add_argument('--nojit', help='disable numba', action='store_true')
+    parser.add_argument('-n', '--nojit', action='store_true', dest='nojit', help='Disable numba.')
     parser.add_argument('-b', '--backtest_config', type=str, required=False, dest='backtest_config',
                         default='configs/backtest/test.hjson', help='Backtest config hjson file.')
     parser.add_argument('-o', '--optimize_config', type=str, required=False, dest='optimize_config',
