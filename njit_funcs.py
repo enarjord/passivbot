@@ -376,6 +376,7 @@ def calc_long_entry(
         balance,
         long_psize,
         long_pprice,
+        long_pfills,
         highest_bid,
 
         spot,
@@ -409,11 +410,17 @@ def calc_long_entry(
             pbr = qty_to_cost(long_psize, long_pprice, inverse, c_mult) / balance
             if pbr < primary_pbr_limit:
                 grid_spacing = (1 - primary_grid_spacing) - eqf(np.array([pbr]), primary_spacing_pbr_coeffs, minus=0.0)
-                long_entry_price = min(highest_bid, round_dn(long_pprice * grid_spacing, price_step))
+                long_entry_price = round_dn(long_pprice * grid_spacing, price_step)
+                if long_pfills[-1][0] < 0.0: # means previous fill was a partial close
+                    long_entry_price = max(long_entry_price, round_dn(long_pfills[-1][1] * (1 - primary_grid_spacing), price_step))
+                    long_entry_comment = 'long_primary_rentry_after_partial_close'
+                else:
+                    long_entry_comment = 'long_primary_rentry'
+                long_entry_price = min(highest_bid, long_entry_price)
                 min_entry_qty = calc_min_entry_qty(long_entry_price, inverse, qty_step, min_qty, min_cost)
                 max_entry_qty = round_dn(cost_to_qty(balance * primary_pbr_limit, long_entry_price, inverse, c_mult) - long_psize, qty_step)
                 long_entry_qty = max(min_entry_qty, min(max_entry_qty, round_dn(long_base_entry_qty + long_psize * primary_ddown_factor, qty_step)))
-                long_entry = (long_entry_qty, long_entry_price, 'long_primary_rentry')
+                long_entry = (long_entry_qty, long_entry_price, long_entry_comment)
             elif pbr < secondary_pbr_limit:
                 long_entry_price = min(highest_bid, round_dn(long_pprice * (1 - secondary_grid_spacing), price_step))
                 min_entry_qty = calc_min_entry_qty(long_entry_price, inverse, qty_step, min_qty, min_cost)
@@ -435,6 +442,7 @@ def calc_shrt_entry(
         balance,
         shrt_psize,
         shrt_pprice,
+        shrt_pfills,
         lowest_ask,
 
         spot,
@@ -468,11 +476,17 @@ def calc_shrt_entry(
             pbr = qty_to_cost(shrt_psize, shrt_pprice, inverse, c_mult) / balance
             if pbr < primary_pbr_limit:
                 grid_spacing = (1 + primary_grid_spacing) + eqf(np.array([pbr]), primary_spacing_pbr_coeffs, minus=0.0)
-                shrt_entry_price = max(lowest_ask, round_dn(shrt_pprice * grid_spacing, price_step))
+                shrt_entry_price = round_dn(shrt_pprice * grid_spacing, price_step)
+                if shrt_pfills[-1][0] > 0.0: # means previous fill was a partial close
+                    shrt_entry_price = min(shrt_entry_price, round_up(shrt_pprice * (1 + primary_grid_spacing), price_step))
+                    shrt_entry_comment = 'shrt_primary_rentry_after_partial_close'
+                else:
+                    shrt_entry_comment = 'shrt_primary_rentry'
+                shrt_entry_price = max(lowest_ask, shrt_entry_price)
                 min_entry_qty = calc_min_entry_qty(shrt_entry_price, inverse, qty_step, min_qty, min_cost)
                 max_entry_qty = round_dn(cost_to_qty(balance * primary_pbr_limit, shrt_entry_price, inverse, c_mult) + shrt_psize, qty_step)
                 shrt_entry_qty = max(min_entry_qty, min(max_entry_qty, round_dn(shrt_base_entry_qty - shrt_psize * primary_ddown_factor, qty_step)))
-                shrt_entry = (-shrt_entry_qty, shrt_entry_price, 'shrt_primary_rentry')
+                shrt_entry = (-shrt_entry_qty, shrt_entry_price, shrt_entry_comment)
             elif pbr < secondary_pbr_limit:
                 shrt_entry_price = min(lowest_ask, round_dn(shrt_pprice * (1 + secondary_grid_spacing), price_step))
                 min_entry_qty = calc_min_entry_qty(shrt_entry_price, inverse, qty_step, min_qty, min_cost)
@@ -507,7 +521,7 @@ def calc_long_close_grid(long_psize,
                          markup_range,
                          n_close_orders) -> [(float, float, str)]:
             if long_psize == 0.0:
-                return []
+                return [(0.0, 0.0, '')]
             minm = long_pprice * (1 + min_markup)
             close_prices = []
             for p in np.linspace(minm, long_pprice * (1 + min_markup + markup_range), n_close_orders):
@@ -519,18 +533,24 @@ def calc_long_close_grid(long_psize,
             elif len(close_prices) == 1:
                 return [(-long_psize, close_prices[0], 'long_nclose')]
             else:
-                default_qty = round_(long_psize / len(close_prices), qty_step)
+                min_close_qty = calc_min_entry_qty(close_prices[0], inverse, qty_step, min_qty, min_cost)
+                default_qty = round_dn(long_psize / len(close_prices), qty_step)
+                if default_qty == 0.0:
+                    return [(-long_psize, close_prices[0], 'long_nclose')]
+                default_qty = max(min_close_qty, default_qty)
                 long_closes = []
                 remaining = long_psize
-                min_close_qty = calc_min_entry_qty(close_prices[0], inverse, qty_step, min_qty, min_cost)
                 for close_price in close_prices:
-                    if not remaining:
+                    if not remaining or remaining / default_qty < 0.5:
                         break
                     close_qty = min(remaining, max(default_qty, min_close_qty))
                     long_closes.append((-close_qty, close_price, 'long_nclose'))
                     remaining = round_(remaining - close_qty, qty_step)
                 if remaining:
-                    long_closes[-1] = (round_(long_closes[-1][0] - remaining, qty_step), long_closes[-1][1], long_closes[-1][2])
+                    if long_closes:
+                        long_closes[-1] = (round_(long_closes[-1][0] - remaining, qty_step), long_closes[-1][1], long_closes[-1][2])
+                    else:
+                        long_closes = [(-long_psize, close_prices[0], 'long_nclose')]
                 return long_closes
 
 
@@ -552,7 +572,7 @@ def calc_shrt_close_grid(shrt_psize,
                          markup_range,
                          n_close_orders) -> [(float, float, str)]:
             if shrt_psize == 0.0:
-                return []
+                return [(0.0, 0.0, '')]
             minm = shrt_pprice * (1 - min_markup)
             close_prices = []
             for p in np.linspace(minm, shrt_pprice * (1 - min_markup - markup_range), n_close_orders):
@@ -564,25 +584,31 @@ def calc_shrt_close_grid(shrt_psize,
             elif len(close_prices) == 1:
                 return [(-shrt_psize, close_prices[0], 'shrt_nclose')]
             else:
-                default_qty = round_(-shrt_psize / len(close_prices), qty_step)
+                min_close_qty = calc_min_entry_qty(close_prices[-1], inverse, qty_step, min_qty, min_cost)
+                default_qty = round_dn(-shrt_psize / len(close_prices), qty_step)
+                if default_qty == 0.0:
+                    return [(-shrt_psize, close_prices[0], 'shrt_nclose')]
+                default_qty = max(min_close_qty, default_qty)
                 shrt_closes = []
                 remaining = -shrt_psize
-                min_close_qty = calc_min_entry_qty(close_prices[-1], inverse, qty_step, min_qty, min_cost)
                 for close_price in close_prices:
-                    if not remaining:
+                    if not remaining or remaining / default_qty < 0.5:
                         break
-                    close_qty = min(remaining, max(default_qty, min_close_qty))
+                    close_qty = min(remaining, default_qty)
                     shrt_closes.append((close_qty, close_price, 'shrt_nclose'))
                     remaining = round_(remaining - close_qty, qty_step)
                 if remaining:
-                    shrt_closes[-1] = (round_(shrt_closes[-1][0] + remaining, qty_step), shrt_closes[-1][1], shrt_closes[-1][2])
+                    if shrt_closes:
+                        shrt_closes[-1] = (round_(shrt_closes[-1][0] + remaining, qty_step), shrt_closes[-1][1], shrt_closes[-1][2])
+                    else:
+                        shrt_closes = [(-shrt_psize, close_prices[0], 'shrt_nclose')]
                 return shrt_closes
 
 
 
 @njit
 def njit_backtest_no_ema_scalp(
-        ticks: np.ndarray,
+        ticks,
         starting_balance,
         latency_simulation_ms,
         maker_fee,
@@ -617,6 +643,8 @@ def njit_backtest_no_ema_scalp(
     long_psize, long_pprice, shrt_psize, shrt_pprice = 0.0, 0.0, 0.0, 0.0
     next_update_ts = 0
     fills = []
+    long_pfills = [(0.0, 0.0)] # fills since initial entry, resets when whole pos is closed
+    shrt_pfills = [(0.0, 0.0)]
 
     long_entry = shrt_entry = (0.0, 0.0, '')
     long_closes = shrt_closes = [(0.0, 0.0, '')]
@@ -625,7 +653,6 @@ def njit_backtest_no_ema_scalp(
     prev_k = 0
     closest_bkr = 1.0
     lowest_eqbal_ratio = 1.0
-    # spans are in minutes, convert to sample size
 
     for k in range(len(prices)):
         if qtys[k] == 0.0:
@@ -634,23 +661,24 @@ def njit_backtest_no_ema_scalp(
         closest_bkr = min(closest_bkr, calc_diff(bkr_price, prices[k]))
         if timestamps[k] >= next_update_ts:
             # simulate small delay between bot and exchange
-            long_entry = calc_long_entry(balance, long_psize, long_pprice, highest_bid, spot, inverse,
+            long_entry = calc_long_entry(balance, long_psize, long_pprice, long_pfills, prices[k], spot, inverse,
                                          do_long, qty_step, price_step, min_qty, min_cost, c_mult,
-                                         max_leverage, primary_iqty_pct, primary_ddown_factor,
-                                         primary_grid_spacing, primary_spacing_pbr_coeffs,
-                                         primary_pbr_limit, secondary_ddown_factor, secondary_grid_spacing,
-                                         secondary_pbr_limit)
-            shrt_entry = calc_shrt_entry(balance, shrt_psize, shrt_pprice, lowest_ask, spot, inverse, do_shrt,
-                                         qty_step, price_step, min_qty, min_cost, c_mult, max_leverage,
-                                         primary_iqty_pct, primary_ddown_factor, primary_grid_spacing,
-                                         primary_spacing_pbr_coeffs, primary_pbr_limit, secondary_ddown_factor,
-                                         secondary_grid_spacing, secondary_pbr_limit)
-            long_closes = calc_long_close_grid(long_psize, long_pprice, lowest_ask, spot, inverse, qty_step,
-                                               price_step, min_qty, min_cost, c_mult, max_leverage, min_markup,
-                                               markup_range, n_close_orders)
-            shrt_closes = calc_shrt_close_grid(shrt_psize, shrt_pprice, highest_bid, spot, inverse, qty_step,
-                                               price_step, min_qty, min_cost, c_mult, max_leverage, min_markup,
-                                               markup_range, n_close_orders)
+                                         max_leverage, primary_iqty_pct[0], primary_ddown_factor[0],
+                                         primary_grid_spacing[0], primary_spacing_pbr_coeffs[0],
+                                         primary_pbr_limit[0], secondary_ddown_factor[0], secondary_grid_spacing[0],
+                                         secondary_pbr_limit[0])
+            shrt_entry = calc_shrt_entry(balance, shrt_psize, shrt_pprice, shrt_pfills, prices[k], spot, inverse,
+                                         do_shrt, qty_step, price_step, min_qty, min_cost, c_mult,
+                                         max_leverage, primary_iqty_pct[1], primary_ddown_factor[1],
+                                         primary_grid_spacing[1], primary_spacing_pbr_coeffs[1],
+                                         primary_pbr_limit[1], secondary_ddown_factor[1], secondary_grid_spacing[1],
+                                         secondary_pbr_limit[1])
+            long_closes = calc_long_close_grid(long_psize, long_pprice, prices[k], spot, inverse, qty_step,
+                                               price_step, min_qty, min_cost, c_mult, max_leverage, min_markup[0],
+                                               markup_range[0], n_close_orders[0])
+            shrt_closes = calc_shrt_close_grid(shrt_psize, shrt_pprice, prices[k], spot, inverse, qty_step,
+                                               price_step, min_qty, min_cost, c_mult, max_leverage, min_markup[1],
+                                               markup_range[1], n_close_orders[1])
 
             equity = balance + calc_upnl(long_psize, long_pprice, shrt_psize, shrt_pprice,
                                          prices[k], inverse, c_mult)
@@ -684,6 +712,7 @@ def njit_backtest_no_ema_scalp(
                 return fills, (False, lowest_eqbal_ratio, closest_bkr)
 
         if long_entry[0] > 0.0 and prices[k] < long_entry[1]:
+            long_pfills.append((long_entry[0], long_entry[1]))
             long_psize, long_pprice = calc_new_psize_pprice(long_psize, long_pprice, long_entry[0],
                                                             long_entry[1], qty_step)
             fee_paid = -qty_to_cost(long_entry[0], long_entry[1], inverse, c_mult) * maker_fee
@@ -693,32 +722,38 @@ def njit_backtest_no_ema_scalp(
             fills.append((k, timestamps[k], 0.0, fee_paid, balance, equity, pbr,
                           long_entry[0], long_entry[1], long_psize, long_pprice, long_entry[2]))
             next_update_ts = min(next_update_ts, timestamps[k] + latency_simulation_ms)
-            long_entry = calc_long_entry(balance, long_psize, long_pprice, highest_bid, spot, inverse,
+            long_entry = calc_long_entry(balance, long_psize, long_pprice, long_pfills, prices[prev_k], spot, inverse,
                                          do_long, qty_step, price_step, min_qty, min_cost, c_mult,
-                                         max_leverage, primary_iqty_pct, primary_ddown_factor,
-                                         primary_grid_spacing, primary_spacing_pbr_coeffs,
-                                         primary_pbr_limit, secondary_ddown_factor, secondary_grid_spacing,
-                                         secondary_pbr_limit)
+                                         max_leverage, primary_iqty_pct[0], primary_ddown_factor[0],
+                                         primary_grid_spacing[0], primary_spacing_pbr_coeffs[0],
+                                         primary_pbr_limit[0], secondary_ddown_factor[0], secondary_grid_spacing[0],
+                                         secondary_pbr_limit[0])
         while shrt_psize < 0.0 and shrt_closes and shrt_closes[0][0] > 0.0 and prices[k] < shrt_closes[0][1]:
-            new_shrt_psize = round_(shrt_psize + shrt_closes[0][0], qty_step)
+            shrt_close_qty = shrt_closes[0][0]
+            new_shrt_psize = round_(shrt_psize + shrt_close_qty, qty_step)
             if new_shrt_psize > 0.0:
                 print('warning: shrt close qty greater than shrt psize')
                 print('shrt_psize', shrt_psize)
                 print('shrt_pprice', shrt_pprice)
                 print('shrt_closes[0]', shrt_closes[0])
-                shrt_closes[0][0] = -shrt_psize
+                shrt_close_qty = -shrt_psize
                 new_shrt_psize, shrt_pprice = 0.0, 0.0
+            if new_shrt_psize == 0.0:
+                shrt_pfills = [(0.0, 0.0)]
+            else:
+                shrt_pfills.append((shrt_close_qty, shrt_closes[0][1]))
             shrt_psize = new_shrt_psize
-            fee_paid = -qty_to_cost(shrt_closes[0][0], shrt_closes[0][1], inverse, c_mult) * maker_fee
-            pnl = calc_shrt_pnl(shrt_pprice, shrt_closes[0][1], shrt_closes[0][0], inverse, c_mult)
+            fee_paid = -qty_to_cost(shrt_close_qty, shrt_closes[0][1], inverse, c_mult) * maker_fee
+            pnl = calc_shrt_pnl(shrt_pprice, shrt_closes[0][1], shrt_close_qty, inverse, c_mult)
             balance += fee_paid + pnl
             equity = calc_equity(balance, long_psize, long_pprice, shrt_psize, shrt_pprice, prices[k], inverse, c_mult)
             pbr = qty_to_cost(shrt_psize, shrt_pprice, inverse, c_mult) / balance
             fills.append((k, timestamps[k], pnl, fee_paid, balance, equity, pbr,
-                          shrt_closes[0][0], shrt_closes[0][1], shrt_psize, shrt_pprice, shrt_closes[0][2]))
+                          shrt_close_qty, shrt_closes[0][1], shrt_psize, shrt_pprice, shrt_closes[0][2]))
             next_update_ts = min(next_update_ts, timestamps[k] + latency_simulation_ms)
             shrt_closes = shrt_closes[1:]
-        if shrt_entry[0] != 0.0 and prices[k] > shrt_entry[1]:
+        if shrt_entry[0] < 0.0 and prices[k] > shrt_entry[1]:
+            shrt_pfills.append((shrt_entry[0], shrt_entry[1]))
             shrt_psize, shrt_pprice = calc_new_psize_pprice(shrt_psize, shrt_pprice, shrt_entry[0],
                                                             shrt_entry[1], qty_step)
             fee_paid = -qty_to_cost(shrt_entry[0], shrt_entry[1], inverse, c_mult) * maker_fee
@@ -728,31 +763,38 @@ def njit_backtest_no_ema_scalp(
             fills.append((k, timestamps[k], 0.0, fee_paid, balance, equity, pbr,
                           shrt_entry[0], shrt_entry[1], shrt_psize, shrt_pprice, shrt_entry[2]))
             next_update_ts = min(next_update_ts, timestamps[k] + latency_simulation_ms)
-            shrt_entry = calc_shrt_entry(balance, shrt_psize, shrt_pprice, lowest_ask, spot, inverse, do_shrt,
-                                         qty_step, price_step, min_qty, min_cost, c_mult, max_leverage,
-                                         primary_iqty_pct, primary_ddown_factor, primary_grid_spacing,
-                                         primary_spacing_pbr_coeffs, primary_pbr_limit, secondary_ddown_factor,
-                                         secondary_grid_spacing, secondary_pbr_limit)
+            shrt_entry = calc_shrt_entry(balance, shrt_psize, shrt_pprice, shrt_pfills, prices[prev_k], spot, inverse,
+                                         do_shrt, qty_step, price_step, min_qty, min_cost, c_mult,
+                                         max_leverage, primary_iqty_pct[1], primary_ddown_factor[1],
+                                         primary_grid_spacing[1], primary_spacing_pbr_coeffs[1],
+                                         primary_pbr_limit[1], secondary_ddown_factor[1], secondary_grid_spacing[1],
+                                         secondary_pbr_limit[1])
         while long_psize != 0.0 and long_closes and long_closes[0][0] != 0.0 and prices[k] > long_closes[0][1]:
-            new_long_psize = round_(long_psize + long_closes[0][0], qty_step)
+            long_close_qty = long_closes[0][0]
+            new_long_psize = round_(long_psize + long_close_qty, qty_step)
             if new_long_psize < 0.0:
                 print('warning: long close qty greater than long psize')
                 print('long_psize', long_psize)
                 print('long_pprice', long_pprice)
                 print('long_closes[0]', long_closes[0])
-                long_closes[0][0] = -long_psize
+                long_close_qty = -long_psize
                 new_long_psize, long_pprice = 0.0, 0.0
+            if new_long_psize == 0.0:
+                long_pfills = [(0.0, 0.0)]
+            else:
+                long_pfills.append((long_close_qty, long_closes[0][1]))
             long_psize = new_long_psize
-            fee_paid = -qty_to_cost(long_closes[0][0], long_closes[0][1], inverse, c_mult) * maker_fee
-            pnl = calc_long_pnl(long_pprice, long_closes[0][1], long_closes[0][0], inverse, c_mult)
+            fee_paid = -qty_to_cost(long_close_qty, long_closes[0][1], inverse, c_mult) * maker_fee
+            pnl = calc_long_pnl(long_pprice, long_closes[0][1], long_close_qty, inverse, c_mult)
             balance += fee_paid + pnl
             equity = calc_equity(balance, long_psize, long_pprice, shrt_psize, shrt_pprice, prices[k], inverse, c_mult)
             pbr = qty_to_cost(long_psize, long_pprice, inverse, c_mult) / balance
             fills.append((k, timestamps[k], pnl, fee_paid, balance, equity, pbr,
-                          long_closes[0][0], long_closes[0][1], long_psize, long_pprice, long_closes[0][2]))
+                          long_close_qty, long_closes[0][1], long_psize, long_pprice, long_closes[0][2]))
             next_update_ts = min(next_update_ts, timestamps[k] + latency_simulation_ms)
             long_closes = long_closes[1:]
     return fills, (True, lowest_eqbal_ratio, closest_bkr)
+
 
 @njit
 def calc_upnl(long_psize,
