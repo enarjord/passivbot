@@ -1,0 +1,3 @@
+https://github.com/JohnKearney1/PassivBot-Configurations
+
+https://github.com/hoeckxer/passivbot_configs
