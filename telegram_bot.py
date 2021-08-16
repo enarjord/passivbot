@@ -726,7 +726,7 @@ class Telegram:
                     start_of_day = today - timedelta(days=idx)
                     daily[int(start_of_day.timestamp()) * 1000] = 0.0
 
-                start_of_first_day = today - timedelta(days=nr_of_days)
+                start_of_first_day = today - timedelta(days=nr_of_days-1)
                 start_time_of_first_day_ts = int(start_of_first_day.timestamp()) * 1000
                 if self._bot.market_type == 'spot':
                     fills = list()
@@ -743,7 +743,7 @@ class Telegram:
                             new_psize = psize + fill['qty']
                             pprice = pprice * (psize / new_psize) + fill['price'] * (fill['qty'] / new_psize)
                             psize = new_psize
-                        else:
+                        elif psize > 0:
                             day = fill['timestamp'] // ms_in_a_day * ms_in_a_day
                             daily[day] += calc_long_pnl(pprice, fill['price'], fill['qty'], False, 1.0)
                             psize -= fill['qty']
