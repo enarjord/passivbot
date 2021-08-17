@@ -6,7 +6,7 @@ These config files are typically stored in the `config/live`.
 !!! Info
     The configuration of telegram is not covered in this chapter. Please refer to [Telegram](telegram.md) for configuring Telegram.
 
-##Configuration options
+## Configuration options
 
 In the configuration file provided to run live, the parameters mentioned in the table can be set.
 The configuration is split in 4 categories for clarity (user, initial entry, reentry, taking profit, stoploss).
@@ -188,10 +188,14 @@ need to move further to reach that price though!
 
 ### Stoploss
 
-When Passivbot is in a position, it has a notion of the position cost for the current position.
-When the position cost is greater than the specified `pbr_limit + pbr_stoploss`, Passivbot will partially close the open
-position to bring the position cost back to this specified limit. By doing so, the bot ensures that the position cost
-will never be greater than `pbr_limit + pbr_stoploss`.
+Passivbot may under some circumstances partially close a position at a loss.  
+This happens if config's `pbr_stop_loss` > 0.0 and a position's pbr is greater than config's `pbr_limit`.  
+A position's pbr may grow to maximum `pbr_limit + pbr_stoploss`.  
+Stop loss amount is `max(0, pbr - pbr_limit)`, that is, position is reduced at a potential loss such that pbr <= `pbr_limit`.  
+
+Stop loss orders are not necessarily filled immediately.  Long stop loss price is never lower than upper ema band
+and short stop loss price is never higher than lower ema band.
+
 
 ## Logging
 
