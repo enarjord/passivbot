@@ -65,6 +65,7 @@ class Bot:
 
         self.emas = np.zeros(len(self.spans))
         self.ratios = np.zeros(len(self.spans))
+        self.sample_type = None
 
         self.n_open_orders_limit = 8
         self.n_orders_per_execution = 4
@@ -95,6 +96,8 @@ class Bot:
             print(f'An invalid value is provided for `cross_wallet_pct` ({config["cross_wallet_pct"]}). The value must be bigger than 0.0 and less than or equal to 1.0. The'
                   f'bot will start with the default value of 1.0, meaning it will utilize the ')
             config['cross_wallet_pct'] = 1.0
+        if config['sample_type'] not in config:
+            config['sample_type'] = 'candle_1s'
         self.config = config
         for key in config:
             setattr(self, key, config[key])
@@ -586,11 +589,19 @@ class Bot:
         ohlcvs = flatten(await asyncio.gather(*[self.fetch_ohlcvs(start_time=ts) for ts in timestamps_to_fetch]))
         combined = np.array(sorted([[e['timestamp'], e['qty'], e['price']] for e in ticks] +
                                    [[e['timestamp'], e['volume'], e['open']] for e in ohlcvs]))
-        from pure_funcs import ts_to_date
-        samples = calc_samples(combined)
-        self.emas = calc_emas_last(samples[:, 2], self.spans_secs)
+
+        if self.sample_type == 'candle_1s':
+            samples = calc_samples(combined)
+            self.emas = calc_emas_last(samples[:, 2], self.spans_secs)
+            self.ema_sec = int(combined[-1][0] // 1000 * 1000)
+        else:
+            idxs = get_ids_to_fetch(self.spans, ticks[-1]['trade_id'])
+            fetched_ticks = await asyncio.gather(*[self.fetch_ticks(from_id=int(i)) for i in idxs])
+            latest_ticks = await self.fetch_ticks()
+            compressed = drop_consecutive_same_prices(sorted(flatten(fetched_ticks) + ticks + latest_ticks, key=lambda x: x['trade_id']))
+            self.emas = calc_indicators_from_ticks_with_gaps(self.spans, compressed)
+
         self.ratios = np.append(self.price, self.emas[:-1]) / self.emas
-        self.ema_sec = int(combined[-1][0] // 1000 * 1000)
 
     def update_indicators(self, ticks):
         for tick in ticks:
@@ -600,7 +611,7 @@ class Bot:
             else:
                 self.ob[1] = tick['price']
             ts_sec = int(tick['timestamp'] // 1000 * 1000)
-            if ts_sec <= self.ema_sec:
+            if self.sample_type == 'candle_1s' and ts_sec <= self.ema_sec:
                 self.ema_sec = ts_sec
                 self.price = tick['price']
                 continue
@@ -609,7 +620,11 @@ class Bot:
             while self.ema_sec < ts_sec - 1000:
                 self.emas = self.emas * self.ema_alpha_secs_ + tick['price'] * self.ema_alpha_secs
                 self.ema_sec += 1000
-            self.emas = self.emas * self.ema_alpha_secs_ + self.price * self.ema_alpha_secs
+
+            if self.sample_type == 'candle_1s':
+                self.emas = self.emas * self.ema_alpha_secs_ + self.price * self.ema_alpha_secs
+            else:
+                self.emas = self.emas * self.ema_alpha_ + tick['price'] * self.ema_alpha
             self.ema_sec += 1000
             self.price = tick['price']
             self.ratios = np.append(self.price, self.emas[:-1]) / self.emas
