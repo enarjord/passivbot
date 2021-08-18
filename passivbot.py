@@ -152,6 +152,7 @@ class Bot:
             position['available_margin'] = (position['equity'] - position['used_margin']) * 0.9
             position['long']['liq_diff'] = calc_diff(position['long']['liquidation_price'], self.price)
             position['shrt']['liq_diff'] = calc_diff(position['shrt']['liquidation_price'], self.price)
+            position['wallet_balance'] *= self.cross_wallet_pct
             position['long']['pbr'] = (qty_to_cost(position['long']['size'], position['long']['price'],
                                                    self.xk['inverse'], self.xk['c_mult']) /
                                        position['wallet_balance']) if position['wallet_balance'] else 0.0
@@ -279,7 +280,7 @@ class Bot:
         self.process_websocket_ticks = True
 
     def calc_orders(self):
-        balance = self.position['wallet_balance'] * self.cross_wallet_pct
+        balance = self.position['wallet_balance']# * self.cross_wallet_pct
         long_psize = self.position['long']['size']
         long_pprice = self.position['long']['price']
         shrt_psize = self.position['shrt']['size']
