@@ -642,7 +642,8 @@ class Telegram:
     def _balance(self, update=None, context=None):
         if bool(self._bot.position):
             async def _balance_async():
-                position = await self._bot.fetch_position()
+                #position = await self._bot.fetch_position()
+                position = self._bot.position.copy()
                 account = await self._bot.fetch_account()
                 quot_balance = list(asset for asset in account['balances'] if asset['asset'] == self._bot.quot)[0]
                 coin_balance = list(asset for asset in account['balances'] if asset['asset'] == self._bot.coin)[0]
@@ -757,7 +758,8 @@ class Telegram:
                         if len(next_set) < 1000:
                             break
 
-                position = await self._bot.fetch_position()
+                # position = await self._bot.fetch_position()
+                position = self._bot.position.copy()
                 wallet_balance = position['wallet_balance']
                 table = PrettyTable(['Date\nMM-DD', 'PNL (%)'])
                 pnl_sum = 0.0
