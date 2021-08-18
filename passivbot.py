@@ -189,11 +189,17 @@ class Bot:
             ids_set = set([x['order_id'] for x in self.fills])
             fetched = await self.fetch_fills()
             new_fills = [x for x in fetched if x['order_id'] not in ids_set]
-            if new_fills:
-                self.fills = sorted([x for x in self.fills + new_fills], key=lambda x: x['order_id'])[-1000:]
-                self.long_pfills, self.shrt_pfills = get_position_fills(self.position['long']['size'],
-                                                                        abs(self.position['shrt']['size']),
-                                                                        self.fills)
+            try :
+                if new_fills:
+                    self.fills = sorted([x for x in self.fills + new_fills], key=lambda x: x['order_id'])[-1000:]
+                    self.long_pfills, self.shrt_pfills = get_position_fills(self.position['long']['size'],
+                                                                            abs(self.position['shrt']['size']),
+                                                                            self.fills)
+            except Exception as fe:
+                if self.telegram is not None:
+                    self.telegram.send_msg(f'An error occurred while updating fills: {fe}')
+                else:
+                    print('Error while updating fills', fe)
             return new_fills
         except Exception as e:
             print('error with update fills', e)
