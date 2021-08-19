@@ -642,7 +642,8 @@ class Telegram:
     def _balance(self, update=None, context=None):
         if bool(self._bot.position):
             async def _balance_async():
-                position = await self._bot.fetch_position()
+                #position = await self._bot.fetch_position()
+                position = self._bot.position.copy()
                 account = await self._bot.fetch_account()
                 quot_balance = list(asset for asset in account['balances'] if asset['asset'] == self._bot.quot)[0]
                 coin_balance = list(asset for asset in account['balances'] if asset['asset'] == self._bot.coin)[0]
@@ -726,7 +727,7 @@ class Telegram:
                     start_of_day = today - timedelta(days=idx)
                     daily[int(start_of_day.timestamp()) * 1000] = 0.0
 
-                start_of_first_day = today - timedelta(days=nr_of_days)
+                start_of_first_day = today - timedelta(days=nr_of_days-1)
                 start_time_of_first_day_ts = int(start_of_first_day.timestamp()) * 1000
                 if self._bot.market_type == 'spot':
                     fills = list()
@@ -743,7 +744,7 @@ class Telegram:
                             new_psize = psize + fill['qty']
                             pprice = pprice * (psize / new_psize) + fill['price'] * (fill['qty'] / new_psize)
                             psize = new_psize
-                        else:
+                        elif psize > 0:
                             day = fill['timestamp'] // ms_in_a_day * ms_in_a_day
                             daily[day] += calc_long_pnl(pprice, fill['price'], fill['qty'], False, 1.0)
                             psize -= fill['qty']
@@ -757,7 +758,8 @@ class Telegram:
                         if len(next_set) < 1000:
                             break
 
-                position = await self._bot.fetch_position()
+                # position = await self._bot.fetch_position()
+                position = self._bot.position.copy()
                 wallet_balance = position['wallet_balance']
                 table = PrettyTable(['Date\nMM-DD', 'PNL (%)'])
                 pnl_sum = 0.0
@@ -805,13 +807,21 @@ class Telegram:
         if 'notify_close_fill' not in self.config or self.config['notify_close_fill'] is True:
             icon = "\U00002705" if realized_pnl >= 0 else "\U0000274C"
             try:
-                self.send_msg(
-                    f'<b>{icon} {self._bot.exchange.capitalize()} {self._bot.pair}</b> Closed {position_side}\n'
-                    f'<b>PNL: </b><pre>{round_(realized_pnl, self._bot.price_step)} {self._bot.margin_coin} ({round_(realized_pnl / wallet_balance * 100, self._bot.price_step)}%)</pre>\n'
-                    f'<b>Amount: </b><pre>{round_(qty, self._bot.qty_step)}</pre>\n'
-                    f'<b>Remaining size: </b><pre>{round_(remaining_size, self._bot.qty_step)}</pre>\n'
-                    f'<b>Price: </b><pre>{round_(price, self._bot.price_step)}</pre>\n'
-                    f'<b>Fee: </b><pre>{round_(fee, self._bot.price_step)} {self._bot.margin_coin} ({round_(fee / realized_pnl * 100, self._bot.price_step)}%)</pre>')
+                if self._bot.spot:
+                    #PNL isn't calculated on spot
+                    self.send_msg(
+                        f'<b>{icon} {self._bot.exchange.capitalize()} {self._bot.pair}</b> Closed {position_side}\n'
+                        f'<b>Price: </b><pre>{round_(price, self._bot.price_step)}</pre>\n'
+                        f'<b>Amount: </b><pre>{round_(qty, self._bot.qty_step)}</pre>\n'
+                        f'<b>Remaining size: </b><pre>{round_(remaining_size, self._bot.qty_step)}</pre>')
+                else:
+                    self.send_msg(
+                        f'<b>{icon} {self._bot.exchange.capitalize()} {self._bot.pair}</b> Closed {position_side}\n'
+                        f'<b>PNL: </b><pre>{round_(realized_pnl, self._bot.price_step)} {self._bot.margin_coin} ({round_(realized_pnl / wallet_balance * 100, self._bot.price_step)}%)</pre>\n'
+                        f'<b>Price: </b><pre>{round_(price, self._bot.price_step)}</pre>\n'
+                        f'<b>Amount: </b><pre>{round_(qty, self._bot.qty_step)}</pre>\n'
+                        f'<b>Remaining size: </b><pre>{round_(remaining_size, self._bot.qty_step)}</pre>\n'
+                        f'<b>Fee: </b><pre>{round_(fee, self._bot.price_step)} {self._bot.margin_coin} ({round_(fee / realized_pnl * 100, self._bot.price_step)}%)</pre>')
             except Exception as e:
                 self.send_msg(f'Error sending closing order notification message: {e}')
     def show_config(self, update=None, context=None):

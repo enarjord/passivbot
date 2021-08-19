@@ -137,7 +137,7 @@ def plot_fills(df, fdf_, side: int = 0, bkr_thr=0.1):
         return
     plt.clf()
     fdf = fdf_.set_index('timestamp')
-    dfc = df.iloc[::max(1, int(len(df) * 0.00001))]
+    dfc = df#.iloc[::max(1, int(len(df) * 0.00001))]
     if dfc.index.name != 'timestamp':
         dfc = dfc.set_index('timestamp')
     dfc = dfc[(dfc.index > fdf.index[0]) & (dfc.index < fdf.index[-1])]
@@ -146,25 +146,30 @@ def plot_fills(df, fdf_, side: int = 0, bkr_thr=0.1):
 
     if side >= 0:
         longs = fdf[fdf.type.str.contains('long')]
-        lientry = longs[longs.type.str.contains('long_ientry')]
-        lrentry = longs[longs.type.str.contains('long_rentry')]
-        lnclose = longs[longs.type.str.contains('long_nclose')]
-        lsclose = longs[longs.type.str.contains('long_sclose')]
+        lientry = longs[longs.type.str.contains('ientry')]
+        lrentry = longs[longs.type.str.contains('rentry')]
+        lnclose = longs[longs.type.str.contains('nclose')]
+        lsclose = longs[longs.type.str.contains('sclose')]
+        ldca = longs[longs.type.str.contains('secondary')]
         lientry.price.plot(style='b.')
         lrentry.price.plot(style='b.')
         lnclose.price.plot(style='r.')
         lsclose.price.plot(style=('rx'))
+        ldca.price.plot(style='go')
+
         longs.where(longs.pprice != 0.0).pprice.fillna(method='ffill').plot(style='b--')
     if side <= 0:
         shrts = fdf[fdf.type.str.contains('shrt')]
-        sientry = shrts[shrts.type.str.contains('shrt_ientry')]
-        srentry = shrts[shrts.type.str.contains('shrt_rentry')]
-        snclose = shrts[shrts.type.str.contains('shrt_nclose')]
-        ssclose = shrts[shrts.type.str.contains('shrt_sclose')]
+        sientry = shrts[shrts.type.str.contains('ientry')]
+        srentry = shrts[shrts.type.str.contains('rentry')]
+        snclose = shrts[shrts.type.str.contains('nclose')]
+        ssclose = shrts[shrts.type.str.contains('sclose')]
+        sdca = shrts[shrts.type.str.contains('secondary')]
         sientry.price.plot(style='r.')
         srentry.price.plot(style='r.')
         snclose.price.plot(style='b.')
         ssclose.price.plot(style=('bx'))
+        sdca.price.plot(style='go')
         shrts.where(shrts.pprice != 0.0).pprice.fillna(method='ffill').plot(style='r--')
 
     if 'bkr_price' in fdf.columns:

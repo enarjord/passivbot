@@ -57,7 +57,7 @@ class Bot:
         self.shrt_pfills = []
         self.highest_bid = 0.0
         self.lowest_ask = 9.9e9
-        self.price = 0
+        self.price = 0.0
         self.is_buyer_maker = True
         self.agg_qty = 0.0
         self.qty = 0.0
@@ -149,6 +149,8 @@ class Bot:
                  (qty_to_cost(position['shrt']['size'], position['shrt']['price'],
                               self.xk['inverse'], self.xk['c_mult'])
                   if position['shrt']['price'] else 0.0)) / self.max_leverage
+            position['equity'] -= position['wallet_balance'] * (1 - self.cross_wallet_pct)
+            position['wallet_balance'] *= self.cross_wallet_pct
             position['available_margin'] = (position['equity'] - position['used_margin']) * 0.9
             position['long']['liq_diff'] = calc_diff(position['long']['liquidation_price'], self.price)
             position['shrt']['liq_diff'] = calc_diff(position['shrt']['liquidation_price'], self.price)
@@ -279,7 +281,7 @@ class Bot:
         self.process_websocket_ticks = True
 
     def calc_orders(self):
-        balance = self.position['wallet_balance'] * self.cross_wallet_pct
+        balance = self.position['wallet_balance']# * self.cross_wallet_pct
         long_psize = self.position['long']['size']
         long_pprice = self.position['long']['price']
         shrt_psize = self.position['shrt']['size']
@@ -375,7 +377,7 @@ class Bot:
         results = []
         if self.stop_mode not in ['manual']:
             if to_cancel:
-                results.append(asyncio.create_task(self.cancel_orders(to_cancel[:self.n_orders_per_execution])))
+                results.append(asyncio.create_task(self.cancel_orders(to_cancel[:self.n_orders_per_execution + 1])))
                 await asyncio.sleep(0.005)  # sleep 5 ms between sending cancellations and creations
             if to_create:
                 results.append(await self.create_orders(to_create[:self.n_orders_per_execution]))
@@ -592,7 +594,6 @@ class Bot:
 
     def update_indicators(self, ticks):
         for tick in ticks:
-            self.price = tick['price']
             self.agg_qty += tick['qty']
             if tick['is_buyer_maker']:
                 self.ob[0] = tick['price']
@@ -601,12 +602,16 @@ class Bot:
             ts_sec = int(tick['timestamp'] // 1000 * 1000)
             if ts_sec <= self.ema_sec:
                 self.ema_sec = ts_sec
+                self.price = tick['price']
                 continue
             self.qty = self.agg_qty
             self.agg_qty = 0.0
-            while self.ema_sec < ts_sec:
-                self.emas = self.emas * self.ema_alpha_secs_ + self.price * self.ema_alpha_secs
+            while self.ema_sec < ts_sec - 1000:
+                self.emas = self.emas * self.ema_alpha_secs_ + tick['price'] * self.ema_alpha_secs
                 self.ema_sec += 1000
+            self.emas = self.emas * self.ema_alpha_secs_ + self.price * self.ema_alpha_secs
+            self.ema_sec += 1000
+            self.price = tick['price']
             self.ratios = np.append(self.price, self.emas[:-1]) / self.emas
 
     async def start_websocket(self) -> None:
