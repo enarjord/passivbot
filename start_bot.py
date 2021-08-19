@@ -27,7 +27,7 @@ while True:
                 print(f"\rbot stopped, attempting restart in {k} seconds", end='   ')
                 sleep(1)
         else:
-            print('bot stopped succesfully')
+            print('bot stopped successfully')
             quit()
     except KeyboardInterrupt:
         break
