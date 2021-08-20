@@ -82,7 +82,8 @@ class Bot:
         self.lock_file = f"{str(Path.home())}/.{self.exchange}_passivbotlock"
 
     def set_config(self, config):
-        config['spans'] = calc_spans(config['min_span'], config['max_span'], config['n_spans'])
+        if 'min_span' in config:
+            config['spans'] = calc_spans(config['min_span'], config['max_span'], config['n_spans'])
         if 'stop_mode' not in config:
             config['stop_mode'] = None
         if 'last_price_diff_limit' not in config:
