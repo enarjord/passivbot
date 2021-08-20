@@ -8,16 +8,22 @@ import numpy as np
 import pandas as pd
 
 from downloader import Downloader
-from njit_funcs import njit_backtest, round_
+from njit_funcs import njit_backtest_vanilla, njit_backtest_scalp, round_
 from plotting import dump_plots
 from procedures import prep_config, make_get_filepath, load_live_config, add_argparse_args
-from pure_funcs import create_xk, denumpyize, ts_to_date, analyze_fills, spotify_config
+from pure_funcs import create_xk, denumpyize, ts_to_date, analyze_fills, spotify_config, determine_config_type
 
 
 def backtest(config: dict, data: np.ndarray, do_print=False) -> (list, bool):
     xk = create_xk(config)
-    return njit_backtest(data, config['starting_balance'], config['latency_simulation_ms'],
-                         config['maker_fee'], **xk)
+    if config['config_type'] == 'vanilla':
+        return njit_backtest_vanilla(data, config['starting_balance'], config['latency_simulation_ms'],
+                                     config['maker_fee'], **xk)
+    elif config['config_type'] == 'scalp':
+        return njit_backtest_scalp(data, config['starting_balance'], config['latency_simulation_ms'],
+                                   config['maker_fee'], **xk)
+    else:
+        raise Exception('unknown config type')
 
 
 def plot_wrap(config, data):
@@ -50,14 +56,17 @@ async def main():
     args = parser.parse_args()
 
     for config in await prep_config(args):
-        if config['exchange'] == 'bybit' and not config['inverse']:
-            print('bybit usdt linear backtesting not supported')
-            return
-        downloader = Downloader(config)
         live_config = load_live_config(args.live_config_path)
-        if 'spot' in config['market_type']:
-            live_config = spotify_config(live_config)
+        config_type = config['config_type'] = determine_config_type(live_config)
+        if config_type == 'vanilla' and config['exchange'] == 'bybit' and not config['inverse']:
+            print('bybit usdt linear backtesting vanilla not supported')
+            return
         config.update(live_config)
+        if 'spot' in config['market_type']:
+            if config_type == 'scalp':
+                raise Exception('spot not supported with scalp')
+            live_config = spotify_config(live_config)
+        downloader = Downloader(config)
         print()
         for k in (keys := ['exchange', 'spot', 'symbol', 'starting_balance', 'start_date', 'end_date',
                            'latency_simulation_ms']):
