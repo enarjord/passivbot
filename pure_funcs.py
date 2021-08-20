@@ -38,6 +38,14 @@ def get_xk_keys():
             'rqty_MAr_coeffs', 'rprc_MAr_coeffs', 'markup_MAr_coeffs']
 
 
+def get_scalp_keys():
+    return ['spot', 'hedge_mode', 'inverse', 'do_long', 'do_shrt', 'qty_step', 'price_step', 'min_qty',
+            'min_cost', 'c_mult', 'max_leverage', 'primary_iqty_pct', 'primary_ddown_factor',
+            'primary_grid_spacing', 'primary_grid_spacing_pbr_weighting', 'primary_pbr_limit',
+            'secondary_ddown_factor', 'secondary_grid_spacing', 'secondary_pbr_limit', 'min_markup',
+            'markup_range', 'n_close_orders']
+
+
 def create_xk(config: dict) -> dict:
     xk = {}
     config_ = config.copy()
@@ -47,8 +55,18 @@ def create_xk(config: dict) -> dict:
         config_['spot'] = False
         config_['do_long'] = config['long']['enabled']
         config_['do_shrt'] = config['shrt']['enabled']
-    config_['spans'] = calc_spans(config['min_span'], config['max_span'], config['n_spans'])
-    for k in get_xk_keys():
+    if 'config_type' not in config_:
+        print('unknown config type, defaulting to vanilla')
+        keys = get_xk_keys()
+        config_['spans'] = calc_spans(config['min_span'], config['max_span'], config['n_spans'])
+    elif config_['config_type'] == 'vanilla':
+        keys = get_xk_keys()
+        config_['spans'] = calc_spans(config['min_span'], config['max_span'], config['n_spans'])
+    elif config_['config_type'] == 'scalp':
+        keys = get_scalp_keys()
+    else:
+        raise Exception('unknown config type')
+    for k in keys:
         if k in config_['long']:
             xk[k] = (config_['long'][k], config_['shrt'][k])
         elif k in config_:
@@ -256,8 +274,12 @@ def filter_orders(actual_orders: [dict],
 
 
 def get_dummy_settings(config: dict):
-    dummy_settings = get_template_live_config(n_spans=3)
-    dummy_settings.update({k: 1.0 for k in get_xk_keys() + ['stop_loss_liq_diff', 'ema_span']})
+    if 'config_type' in config and config['config_type'] == 'scalp':
+        dummy_settings = get_template_live_config_scalp()
+        dummy_settings.update({k: 1.0 for k in get_scalp_keys()})
+    else:
+        dummy_settings = get_template_live_config(n_spans=3)
+        dummy_settings.update({k: 1.0 for k in get_xk_keys()})
     dummy_settings.update({'user': config['user'], 'exchange': config['exchange'], 'symbol': config['symbol'],
                            'config_name': '', 'logging_level': 0, 'spans': np.array([6000, 90000])})
     return {**config, **dummy_settings}
@@ -265,6 +287,35 @@ def get_dummy_settings(config: dict):
 
 def flatten(lst: list) -> list:
     return [y for x in lst for y in x]
+
+
+def get_template_live_config_scalp():
+    return {"config_name": "template_scalp",
+            "logging_level": 0,
+            "long": {"enabled": True,
+                     "markup_range": 0.008,
+                     "min_markup": 0.002,
+                     "n_close_orders": 10,
+                     "primary_ddown_factor": 1.3,
+                     "primary_grid_spacing": 0.007,
+                     "primary_iqty_pct": 0.01,
+                     "primary_pbr_limit": 1.3,
+                     "primary_grid_spacing_pbr_weighting": 0.016,
+                     "secondary_ddown_factor": 0.75,
+                     "secondary_grid_spacing": 0.09,
+                     "secondary_pbr_limit": 1.9},
+            "shrt": {"enabled": True,
+                     "markup_range": 0.009,
+                     "min_markup": 0.001,
+                     "n_close_orders": 10,
+                     "primary_ddown_factor": 1.3,
+                     "primary_grid_spacing": 0.02,
+                     "primary_iqty_pct": 0.01,
+                     "primary_pbr_limit": 0.5,
+                     "primary_grid_spacing_pbr_weighting": 0.02,
+                     "secondary_ddown_factor": 0.75,
+                     "secondary_grid_spacing": 0.08,
+                     "secondary_pbr_limit": 1.0}}
 
 
 def get_template_live_config(n_spans: int, randomize_coeffs=False):
@@ -606,5 +657,22 @@ def tuplify(xs):
         return tuple({k: tuplify(v) for k, v in xs.items()}.items())
     return xs
 
+
+def determine_config_type(config: dict) -> str:
+    if 'long' in config and 'shrt' in config:
+        if all((key in config['long'] and key in config['shrt'])
+               for key in ['enabled', 'iprc_MAr_coeffs', 'iprc_const', 'iqty_MAr_coeffs',
+                           'iqty_const', 'markup_MAr_coeffs', 'markup_const', 'pbr_limit',
+                           'pbr_stop_loss', 'rprc_MAr_coeffs', 'rprc_PBr_coeffs',
+                           'rprc_const', 'rqty_MAr_coeffs', 'rqty_const']):
+            return 'vanilla'
+        elif all((key in config['long'] and key in config['shrt'])
+                 for key in ['enabled', 'primary_iqty_pct', 'primary_ddown_factor',
+                             'primary_grid_spacing', 'primary_grid_spacing_pbr_weighting',
+                             'primary_pbr_limit', 'secondary_ddown_factor',
+                             'secondary_grid_spacing', 'secondary_pbr_limit',
+                             'min_markup', 'markup_range', 'n_close_orders']):
+            return 'scalp'
+    raise Exception('unknown config type')
 
 
