@@ -4,12 +4,16 @@
 
   # exchange from api-keys.json is used
   user: your_user_name
-  symbol: ETHUSDT
+
+  symbol: BTCUSD_PERP
   latency_simulation_ms: 1000
-  starting_balance: 1000.0
+  starting_balance: 0.1
+
+  # for sharpe ratio
+  periodic_gain_n_days: 5.0
 
   # format YYYY-MM-DDTHH:mm:ss
   # e.g. 2020-02-18T19:34:59
-  start_date: 2021-01-01
-  end_date: 2021-07-31
+  start_date: 2020-08-20
+  end_date: 2021-08-21
 }

@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 from dateutil import parser
 
-from procedures import prep_config, make_get_filepath, create_binance_bot, create_bybit_bot, create_binance_bot_spot, \
+from procedures import prepare_backtest_config, make_get_filepath, create_binance_bot, create_bybit_bot, create_binance_bot_spot, \
     print_, add_argparse_args
 from njit_funcs import calc_samples
 from pure_funcs import ts_to_date, get_dummy_settings
@@ -771,15 +771,15 @@ class Downloader:
 
 async def main():
     parser = argparse.ArgumentParser(prog='Downloader', description='Download ticks from exchange API.')
+    parser.add_argument('-d', '--download-only', help='download only, do not dump ticks caches', action='store_true')
     parser = add_argparse_args(parser)
 
     args = parser.parse_args()
-    for config in await prep_config(args):
-        downloader = Downloader(config)
-        await downloader.download_ticks()
-        if not args.download_only:
-            await downloader.prepare_files(False)
-        sleep(0.1)
+    config = await prepare_backtest_config(args)
+    downloader = Downloader(config)
+    await downloader.download_ticks()
+    if not args.download_only:
+        await downloader.prepare_files(False)
 
 
 if __name__ == "__main__":

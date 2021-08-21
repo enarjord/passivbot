@@ -21,8 +21,9 @@ from collections import OrderedDict
 from backtest import backtest
 from backtest import plot_wrap
 from downloader import Downloader
-from procedures import prep_config, add_argparse_args
-from pure_funcs import pack_config, unpack_config, get_template_live_config, ts_to_date, analyze_fills
+from procedures import prepare_optimize_config, add_argparse_args
+from pure_funcs import pack_config, unpack_config, get_template_live_config, get_template_live_config_scalp, \
+     ts_to_date, analyze_fills
 from reporter import LogReporter
 
 os.environ['TUNE_GLOBAL_CHECKPOINT_S'] = '240'
@@ -45,7 +46,10 @@ def get_expanded_ranges(config: dict) -> dict:
 
 def create_config(config: dict) -> dict:
     updated_ranges = get_expanded_ranges(config)
-    template = get_template_live_config(config['n_spans'])
+    if config['config_type'] == 'vanilla':
+        template = get_template_live_config(config['n_spans'])
+    elif config['config_type'] == 'scalp':
+        template = get_template_live_config_scalp()
     template['long']['enabled'] = config['do_long']
     template['shrt']['enabled'] = config['do_shrt']
     unpacked = unpack_config(template)
@@ -325,7 +329,7 @@ async def execute_optimize(config):
         config['maximum_hrs_no_fills'] = config['maximum_hrs_no_fills_same_side']
     downloader = Downloader(config)
     print()
-    for k in (keys := ['exchange', 'symbol', 'market_type', 'starting_balance', 'start_date',
+    for k in (keys := ['exchange', 'symbol', 'market_type', 'config_type', 'starting_balance', 'start_date',
                        'end_date', 'latency_simulation_ms',
                        'do_long', 'do_shrt', 'minimum_sharpe_ratio', 'periodic_gain_n_days',
                        'minimum_bankruptcy_distance', 'maximum_hrs_no_fills',
@@ -357,16 +361,19 @@ async def execute_optimize(config):
         config.update(clean_result_config(analysis.best_config))
         plot_wrap(pack_config(config), data)
 
+
 async def main():
     parser = argparse.ArgumentParser(prog='Optimize', description='Optimize passivbot config.')
-    parser = add_argparse_args(parser)
+    parser.add_argument('optimize_config_path', type=str,
+                        help='optimize config hjson file, found in dir config/optimize/')
     parser.add_argument('-t', '--start', type=str, required=False, dest='starting_configs',
                         default=None,
                         help='start with given live configs.  single json file or dir with multiple json files')
+    parser = add_argparse_args(parser)
     args = parser.parse_args()
 
-    for config in await prep_config(args):
-        await execute_optimize(config)
+    config = await prepare_optimize_config(args)
+    await execute_optimize(config)
 
 
 if __name__ == '__main__':

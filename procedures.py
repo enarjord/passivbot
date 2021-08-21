@@ -36,57 +36,55 @@ def load_config_files(config_paths: []) -> dict:
     return config
 
 
-async def prep_config(args) -> []:
-    base_config = load_config_files([args.backtest_config_path, args.optimize_config_path])
+def load_hjson_config(config_path: str) -> dict:
+    try:
+        return hjson.load(open(config_path, encoding='utf-8'))
+    except Exception as e:
+        raise Exception(f'failed to load config file {config_path} {e}')
 
-    for key in ['symbol', 'user', 'start_date', 'end_date', 'starting_balance', 'market_type', 'starting_configs', 'base_dir']:
+
+async def prepare_backtest_config(args) -> dict:
+    '''
+    takes argparse args, returns dict with backtest and optimize config
+    '''
+    config = load_hjson_config(args.backtest_config_path)
+    for key in ['symbol', 'user', 'start_date', 'end_date', 'starting_balance', 'market_type', 'base_dir']:
         if hasattr(args, key) and getattr(args, key) is not None:
-            base_config[key] = getattr(args, key)
-        elif key not in base_config:
-            base_config[key] = None
+            config[key] = getattr(args, key)
+        elif key not in config:
+            config[key] = None
+    if args.market_type is None:
+        config['spot'] = False
+    else:
+        config['spot'] = args.market_type == 'spot'
+    config['exchange'], _, _ = load_exchange_key_secret(config['user'])
+    config['session_name'] = f"{config['start_date'].replace(' ', '').replace(':', '').replace('.', '')}_" \
+                             f"{config['end_date'].replace(' ', '').replace(':', '').replace('.', '')}"
 
-    all_configs = []
+    if config['base_dir'].startswith('~'):
+        raise Exception("error: using the ~ to indicate the user's home directory is not supported")
 
-    for symbol in base_config['symbol'].split(','):
-        config = base_config.copy()
-        config['symbol'] = symbol
-        if args.market_type is None:
-            config['spot'] = False
-        else:
-            config['spot'] = args.market_type == 'spot'
-        config['exchange'], _, _ = load_exchange_key_secret(config['user'])
+    base_dirpath = os.path.join(config['base_dir'],
+                                f"{config['exchange']}{'_spot' if 'spot' in config['market_type'] else ''}",
+                                config['symbol'])
+    config['caches_dirpath'] = make_get_filepath(os.path.join(base_dirpath, 'caches', ''))
+    config['optimize_dirpath'] = make_get_filepath(os.path.join(base_dirpath, 'optimize', ''))
+    config['plots_dirpath'] = make_get_filepath(os.path.join(base_dirpath, 'plots', ''))
 
-        if config['exchange'] == 'bybit' and config['symbol'].endswith('USDT'):
-            raise Exception('error: bybit linear usdt markets backtesting and optimizing not supported at this time')
+    config['avg_periodic_gain_key'] = f"avg_{int(round(config['periodic_gain_n_days']))}days_gain"
 
-        end_date = config['end_date'] if config['end_date'] and config['end_date'] != -1 else ts_to_date(time())[:16]
-        config['session_name'] = f"{config['start_date'].replace(' ', '').replace(':', '').replace('.', '')}_" \
-                                 f"{end_date.replace(' ', '').replace(':', '').replace('.', '')}"
+    await add_market_specific_settings(config)
 
-        if config['base_dir'].startswith('~'):
-            raise Exception("error: using the ~ to indicate the user's home directory is not supported")
+    return config
 
-        base_dirpath = os.path.join(config['base_dir'],
-                                    f"{config['exchange']}{'_spot' if 'spot' in config['market_type'] else ''}",
-                                    config['symbol'])
-        config['caches_dirpath'] = make_get_filepath(os.path.join(base_dirpath, 'caches', ''))
-        config['optimize_dirpath'] = make_get_filepath(os.path.join(base_dirpath, 'optimize', ''))
-        config['plots_dirpath'] = make_get_filepath(os.path.join(base_dirpath, 'plots', ''))
-
-        config['avg_periodic_gain_key'] = f"avg_{int(round(config['periodic_gain_n_days']))}days_gain"
-
-        await add_market_specific_settings(config)
-
-        if 'pbr_limit' in config['ranges']:
-            config['ranges']['pbr_limit'][1] = min(config['ranges']['pbr_limit'][1], config['max_leverage'])
-            config['ranges']['pbr_limit'][0] = min(config['ranges']['pbr_limit'][0], config['ranges']['pbr_limit'][1])
-        if config['spot']:
-            config['do_long'] = True
-            config['do_shrt'] = False
-
-        all_configs.append(config)
-
-    return all_configs
+async def prepare_optimize_config(args) -> dict:
+    config = await prepare_backtest_config(args)
+    for key in ['starting_configs']:
+        if hasattr(args, key) and getattr(args, key) is not None:
+            config[key] = getattr(args, key)
+        elif key not in config:
+            config[key] = None
+    return {**config, **load_hjson_config(args.optimize_config_path)}
 
 
 async def add_market_specific_settings(config):
@@ -208,17 +206,14 @@ def add_argparse_args(parser):
     parser.add_argument('--nojit', help='disable numba', action='store_true')
     parser.add_argument('-b', '--backtest_config', type=str, required=False, dest='backtest_config_path',
                         default='configs/backtest/default.hjson', help='backtest config hjson file')
-    parser.add_argument('-o', '--optimize_config', type=str, required=False, dest='optimize_config_path',
-                        default='configs/optimize/default.hjson', help='optimize config hjson file')
-    parser.add_argument('-d', '--download-only', help='download only, do not dump ticks caches', action='store_true')
     parser.add_argument('-s', '--symbol', type=str, required=False, dest='symbol',
                         default=None, help='specify symbol, overriding symbol from backtest config')
     parser.add_argument('-u', '--user', type=str, required=False, dest='user', default=None,
                         help='specify user, a.k.a. account_name, overriding user from backtest config')
-    parser.add_argument('--start_date', type=str, required=False, dest='start_date',
+    parser.add_argument('-sd', '--start_date', type=str, required=False, dest='start_date',
                         default=None,
                         help='specify start date, overriding value from backtest config')
-    parser.add_argument('--end_date', type=str, required=False, dest='end_date',
+    parser.add_argument('-ed', '--end_date', type=str, required=False, dest='end_date',
                         default=None,
                         help='specify end date, overriding value from backtest config')
     parser.add_argument('--starting_balance', type=float, required=False, dest='starting_balance',

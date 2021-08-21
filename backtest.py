@@ -10,16 +10,17 @@ import pandas as pd
 from downloader import Downloader
 from njit_funcs import njit_backtest_vanilla, njit_backtest_scalp, round_
 from plotting import dump_plots
-from procedures import prep_config, make_get_filepath, load_live_config, add_argparse_args
+from procedures import prepare_backtest_config, make_get_filepath, load_live_config, add_argparse_args
 from pure_funcs import create_xk, denumpyize, ts_to_date, analyze_fills, spotify_config, determine_config_type
 
 
 def backtest(config: dict, data: np.ndarray, do_print=False) -> (list, bool):
     xk = create_xk(config)
-    if config['config_type'] == 'vanilla':
+    config_type = determine_config_type(config)
+    if config_type == 'vanilla':
         return njit_backtest_vanilla(data, config['starting_balance'], config['latency_simulation_ms'],
                                      config['maker_fee'], **xk)
-    elif config['config_type'] == 'scalp':
+    elif config_type == 'scalp':
         return njit_backtest_scalp(data, config['starting_balance'], config['latency_simulation_ms'],
                                    config['maker_fee'], **xk)
     else:
@@ -55,28 +56,23 @@ async def main():
     parser = add_argparse_args(parser)
     args = parser.parse_args()
 
-    for config in await prep_config(args):
-        live_config = load_live_config(args.live_config_path)
-        config_type = config['config_type'] = determine_config_type(live_config)
-        if config_type == 'vanilla' and config['exchange'] == 'bybit' and not config['inverse']:
-            print('bybit usdt linear backtesting vanilla not supported')
-            return
-        config.update(live_config)
-        if 'spot' in config['market_type']:
-            if config_type == 'scalp':
-                raise Exception('spot not supported with scalp')
-            live_config = spotify_config(live_config)
-        downloader = Downloader(config)
-        print()
-        for k in (keys := ['exchange', 'spot', 'symbol', 'starting_balance', 'start_date', 'end_date',
-                           'latency_simulation_ms']):
-            if k in config:
-                print(f"{k: <{max(map(len, keys)) + 2}} {config[k]}")
-        print()
-        data = await downloader.get_sampled_ticks()
-        config['n_days'] = round_((data[-1][0] - data[0][0]) / (1000 * 60 * 60 * 24), 0.1)
-        pprint.pprint(denumpyize(live_config))
-        plot_wrap(config, data)
+    config = await prepare_backtest_config(args)
+    live_config = load_live_config(args.live_config_path)
+    config_type = config['config_type'] = determine_config_type(live_config)
+    config.update(live_config)
+    if 'spot' in config['market_type']:
+        live_config = spotify_config(live_config)
+    downloader = Downloader(config)
+    print()
+    for k in (keys := ['exchange', 'spot', 'symbol', 'market_type', 'config_type', 'starting_balance', 'start_date', 'end_date',
+                       'latency_simulation_ms']):
+        if k in config:
+            print(f"{k: <{max(map(len, keys)) + 2}} {config[k]}")
+    print()
+    data = await downloader.get_sampled_ticks()
+    config['n_days'] = round_((data[-1][0] - data[0][0]) / (1000 * 60 * 60 * 24), 0.1)
+    pprint.pprint(denumpyize(live_config))
+    plot_wrap(config, data)
 
 
 if __name__ == '__main__':
