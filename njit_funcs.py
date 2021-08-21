@@ -389,17 +389,17 @@ def calc_long_scalp_entry(
         c_mult,
         max_leverage,
 
-        primary_iqty_pct,
+        primary_initial_qty_pct,
         primary_ddown_factor,
         primary_grid_spacing,
         primary_grid_spacing_pbr_weighting,
         primary_pbr_limit,
         secondary_ddown_factor,
         secondary_grid_spacing,
-        secondary_pbr_limit) -> (float, float, str):
+        secondary_pbr_limit_added) -> (float, float, str):
     if do_long or long_psize > 0.0:
         long_entry_price = highest_bid
-        long_base_entry_qty = round_dn(cost_to_qty(balance * primary_iqty_pct, long_entry_price, inverse, c_mult), qty_step)
+        long_base_entry_qty = round_dn(cost_to_qty(balance * primary_initial_qty_pct, long_entry_price, inverse, c_mult), qty_step)
         if long_psize == 0.0:# or (spot and (long_psize < calc_min_entry_qty(long_pprice, inverse, qty_step, min_qty, min_cost))):
             # todo: spot
             min_entry_qty = calc_min_entry_qty(long_entry_price, inverse, qty_step, min_qty, min_cost)
@@ -409,8 +409,8 @@ def calc_long_scalp_entry(
         elif long_psize > 0.0:
             pbr = qty_to_cost(long_psize, long_pprice, inverse, c_mult) / balance
             if pbr < primary_pbr_limit:
-                pbr * primary_grid_spacing_pbr_weighting
-                grid_spacing = 1 - primary_grid_spacing - pbr * primary_grid_spacing_pbr_weighting
+                pbr_weighting = pbr ** 2 * primary_grid_spacing_pbr_weighting[0] + pbr * primary_grid_spacing_pbr_weighting[1]
+                grid_spacing = 1 - primary_grid_spacing - pbr_weighting
                 long_entry_price = round_dn(long_pprice * grid_spacing, price_step)
                 if long_pfills[-1][0] < 0.0: # means previous fill was a partial close
                     long_entry_price = max(long_entry_price, round_dn(long_pfills[-1][1] * (1 - primary_grid_spacing), price_step))
@@ -422,10 +422,10 @@ def calc_long_scalp_entry(
                 max_entry_qty = round_dn(cost_to_qty(balance * primary_pbr_limit, long_entry_price, inverse, c_mult) - long_psize, qty_step)
                 long_entry_qty = max(min_entry_qty, min(max_entry_qty, round_dn(long_base_entry_qty + long_psize * primary_ddown_factor, qty_step)))
                 long_entry = (long_entry_qty, long_entry_price, long_entry_comment)
-            elif pbr < secondary_pbr_limit:
+            elif pbr < primary_pbr_limit + secondary_pbr_limit_added:
                 long_entry_price = min(highest_bid, round_dn(long_pprice * (1 - secondary_grid_spacing), price_step))
                 min_entry_qty = calc_min_entry_qty(long_entry_price, inverse, qty_step, min_qty, min_cost)
-                max_entry_qty = round_dn(cost_to_qty(balance * secondary_pbr_limit, long_entry_price, inverse, c_mult) - long_psize, qty_step)
+                max_entry_qty = round_dn(cost_to_qty(balance * (primary_pbr_limit + secondary_pbr_limit_added), long_entry_price, inverse, c_mult) - long_psize, qty_step)
                 long_entry_qty = min(max_entry_qty, max(min_entry_qty, round_dn(long_base_entry_qty + long_psize * secondary_ddown_factor, qty_step)))
                 if long_entry_qty < min_entry_qty:
                     long_entry = (0.0, 0.0, '')
@@ -456,17 +456,17 @@ def calc_shrt_scalp_entry(
         c_mult,
         max_leverage,
 
-        primary_iqty_pct,
+        primary_initial_qty_pct,
         primary_ddown_factor,
         primary_grid_spacing,
         primary_grid_spacing_pbr_weighting,
         primary_pbr_limit,
         secondary_ddown_factor,
         secondary_grid_spacing,
-        secondary_pbr_limit) -> (float, float, str):
+        secondary_pbr_limit_added) -> (float, float, str):
     if do_shrt or shrt_psize < 0.0:
         shrt_entry_price = lowest_ask
-        shrt_base_entry_qty = round_dn(cost_to_qty(balance * primary_iqty_pct, shrt_entry_price, inverse, c_mult), qty_step)
+        shrt_base_entry_qty = round_dn(cost_to_qty(balance * primary_initial_qty_pct, shrt_entry_price, inverse, c_mult), qty_step)
         if shrt_psize == 0.0:# or (spot and (shrt_psize < calc_min_entry_qty(shrt_pprice, inverse, qty_step, min_qty, min_cost))):
             # todo: spot
             min_entry_qty = calc_min_entry_qty(shrt_entry_price, inverse, qty_step, min_qty, min_cost)
@@ -476,7 +476,8 @@ def calc_shrt_scalp_entry(
         elif shrt_psize < 0.0:
             pbr = qty_to_cost(shrt_psize, shrt_pprice, inverse, c_mult) / balance
             if pbr < primary_pbr_limit:
-                grid_spacing = (1 + primary_grid_spacing) + pbr * primary_grid_spacing_pbr_weighting
+                pbr_weighting = pbr**2 * primary_grid_spacing_pbr_weighting[0] + pbr * primary_grid_spacing_pbr_weighting[1]
+                grid_spacing = 1 + primary_grid_spacing + pbr_weighting
                 shrt_entry_price = round_dn(shrt_pprice * grid_spacing, price_step)
                 if shrt_pfills[-1][0] > 0.0: # means previous fill was a partial close
                     shrt_entry_price = min(shrt_entry_price, round_up(shrt_pprice * (1 + primary_grid_spacing), price_step))
@@ -488,10 +489,11 @@ def calc_shrt_scalp_entry(
                 max_entry_qty = round_dn(cost_to_qty(balance * primary_pbr_limit, shrt_entry_price, inverse, c_mult) + shrt_psize, qty_step)
                 shrt_entry_qty = max(min_entry_qty, min(max_entry_qty, round_dn(shrt_base_entry_qty - shrt_psize * primary_ddown_factor, qty_step)))
                 shrt_entry = (-shrt_entry_qty, shrt_entry_price, shrt_entry_comment)
-            elif pbr < secondary_pbr_limit:
+            elif pbr < primary_pbr_limit + secondary_pbr_limit_added:
                 shrt_entry_price = min(lowest_ask, round_dn(shrt_pprice * (1 + secondary_grid_spacing), price_step))
                 min_entry_qty = calc_min_entry_qty(shrt_entry_price, inverse, qty_step, min_qty, min_cost)
-                max_entry_qty = round_dn(cost_to_qty(balance * secondary_pbr_limit, shrt_entry_price, inverse, c_mult) + shrt_psize, qty_step)
+                max_entry_qty = round_dn(cost_to_qty(balance * (primary_pbr_limit + secondary_pbr_limit_added),
+                                                     shrt_entry_price, inverse, c_mult) + shrt_psize, qty_step)
                 shrt_entry_qty = min(max_entry_qty, max(min_entry_qty, round_dn(shrt_base_entry_qty - shrt_psize * secondary_ddown_factor, qty_step)))
                 if shrt_entry_qty < min_entry_qty:
                     shrt_entry = (0.0, 0.0, '')
@@ -623,14 +625,14 @@ def njit_backtest_scalp(
         min_cost,
         c_mult,
         max_leverage,
-        primary_iqty_pct,
+        primary_initial_qty_pct,
         primary_ddown_factor,
         primary_grid_spacing,
         primary_grid_spacing_pbr_weighting,
         primary_pbr_limit,
         secondary_ddown_factor,
         secondary_grid_spacing,
-        secondary_pbr_limit,
+        secondary_pbr_limit_added,
         min_markup,
         markup_range,
         n_close_orders):
@@ -664,16 +666,16 @@ def njit_backtest_scalp(
             long_entry = calc_long_scalp_entry(
                 balance, long_psize, long_pprice, long_pfills, prices[k], spot, inverse, do_long, qty_step,
                 price_step, min_qty, min_cost, c_mult, max_leverage,
-                primary_iqty_pct[0], primary_ddown_factor[0], primary_grid_spacing[0],
+                primary_initial_qty_pct[0], primary_ddown_factor[0], primary_grid_spacing[0],
                 primary_grid_spacing_pbr_weighting[0], primary_pbr_limit[0], secondary_ddown_factor[0],
-                secondary_grid_spacing[0], secondary_pbr_limit[0]
+                secondary_grid_spacing[0], secondary_pbr_limit_added[0]
             )
             shrt_entry = calc_shrt_scalp_entry(
                 balance, shrt_psize, shrt_pprice, shrt_pfills, prices[k], spot, inverse,
                 do_shrt, qty_step, price_step, min_qty, min_cost, c_mult, max_leverage,
-                primary_iqty_pct[1], primary_ddown_factor[1], primary_grid_spacing[1],
+                primary_initial_qty_pct[1], primary_ddown_factor[1], primary_grid_spacing[1],
                 primary_grid_spacing_pbr_weighting[1], primary_pbr_limit[1], secondary_ddown_factor[1],
-                secondary_grid_spacing[1], secondary_pbr_limit[1]
+                secondary_grid_spacing[1], secondary_pbr_limit_added[1]
             )
             long_closes = calc_long_close_grid(
                 long_psize, long_pprice, prices[k], spot, inverse, qty_step,
@@ -731,9 +733,9 @@ def njit_backtest_scalp(
             long_entry = calc_long_scalp_entry(
                 balance, long_psize, long_pprice, long_pfills, prices[prev_k], spot, inverse,
                 do_long, qty_step, price_step, min_qty, min_cost, c_mult, max_leverage,
-                primary_iqty_pct[0], primary_ddown_factor[0], primary_grid_spacing[0],
+                primary_initial_qty_pct[0], primary_ddown_factor[0], primary_grid_spacing[0],
                 primary_grid_spacing_pbr_weighting[0], primary_pbr_limit[0], secondary_ddown_factor[0],
-                secondary_grid_spacing[0], secondary_pbr_limit[0])
+                secondary_grid_spacing[0], secondary_pbr_limit_added[0])
         while shrt_psize < 0.0 and shrt_closes and shrt_closes[0][0] > 0.0 and prices[k] < shrt_closes[0][1]:
             shrt_close_qty = shrt_closes[0][0]
             new_shrt_psize = round_(shrt_psize + shrt_close_qty, qty_step)
@@ -772,9 +774,9 @@ def njit_backtest_scalp(
             shrt_entry = calc_shrt_scalp_entry(
                 balance, shrt_psize, shrt_pprice, shrt_pfills, prices[prev_k], spot, inverse,
                 do_shrt, qty_step, price_step, min_qty, min_cost, c_mult, max_leverage,
-                primary_iqty_pct[1], primary_ddown_factor[1], primary_grid_spacing[1],
+                primary_initial_qty_pct[1], primary_ddown_factor[1], primary_grid_spacing[1],
                 primary_grid_spacing_pbr_weighting[1], primary_pbr_limit[1], secondary_ddown_factor[1],
-                secondary_grid_spacing[1], secondary_pbr_limit[1]
+                secondary_grid_spacing[1], secondary_pbr_limit_added[1]
             )
         while long_psize > 0.0 and long_closes and long_closes[0][0] != 0.0 and prices[k] > long_closes[0][1]:
             long_close_qty = long_closes[0][0]
