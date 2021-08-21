@@ -57,9 +57,9 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
 
     longs = fdf[fdf.type.str.contains('long')]
     shrts = fdf[fdf.type.str.contains('shrt')]
-    if result['do_long']:
+    if result['long']['enabled']:
         table.add_row([' ', ' '])
-        table.add_row(['Long', result['do_long']])
+        table.add_row(['Long', result['long']['enabled']])
         table.add_row(["No. inital entries", len(longs[longs.type.str.contains('long_ientry')])])
         table.add_row(["No. reentries", len(longs[longs.type.str.contains('long_rentry')])])
         table.add_row(["No. normal closes", len(longs[longs.type.str.contains('long_nclose')])])
@@ -70,9 +70,9 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
         profit_color = Fore.RED if longs.pnl.sum() < 0 else Fore.RESET
         table.add_row(["PNL sum", f"{profit_color}{longs.pnl.sum()}{Fore.RESET}"])
 
-    if result['do_shrt']:
+    if result['shrt']['enabled']:
         table.add_row([' ', ' '])
-        table.add_row(['Short', result['do_shrt']])
+        table.add_row(['Short', result['shrt']['enabled']])
         table.add_row(["No. initial entries", len(shrts[shrts.type.str.contains('shrt_ientry')])])
         table.add_row(["No. reentries", len(shrts[shrts.type.str.contains('shrt_rentry')])])
         table.add_row(["No. normal closes", len(shrts[shrts.type.str.contains('shrt_nclose')])])
