@@ -669,16 +669,14 @@ async def _start_telegram(account: dict, bot: Bot):
     return telegram
 
 
-def get_passivbot_argparser():
+async def main() -> None:
     parser = argparse.ArgumentParser(prog='passivbot', description='run passivbot')
     parser.add_argument('user', type=str, help='user/account_name defined in api-keys.json')
     parser.add_argument('symbol', type=str, help='symbol to trade')
     parser.add_argument('live_config_path', type=str, help='live config to use')
-    return parser
-
-
-async def main() -> None:
-    args = add_argparse_args(get_passivbot_argparser()).parse_args()
+    parser.add_argument('-m', '--market_type', type=str, required=False, dest='market_type', default=None,
+                        help='specify whether spot or futures (default), overriding value from backtest config')
+    args = parser.parse_args()
     try:
         accounts = json.load(open('api-keys.json'))
     except Exception as e:
