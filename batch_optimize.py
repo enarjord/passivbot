@@ -1,5 +1,4 @@
 import subprocess
-from pure_funcs import flatten
 
 
 def main():
