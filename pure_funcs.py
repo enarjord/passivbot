@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import pprint
 from dateutil import parser
+from collections import OrderedDict
 
 from njit_funcs import round_dynamic, calc_emas
 
@@ -40,9 +41,9 @@ def get_xk_keys():
 
 def get_scalp_keys():
     return ['spot', 'hedge_mode', 'inverse', 'do_long', 'do_shrt', 'qty_step', 'price_step', 'min_qty',
-            'min_cost', 'c_mult', 'max_leverage', 'primary_iqty_pct', 'primary_ddown_factor',
+            'min_cost', 'c_mult', 'max_leverage', 'primary_initial_qty_pct', 'primary_ddown_factor',
             'primary_grid_spacing', 'primary_grid_spacing_pbr_weighting', 'primary_pbr_limit',
-            'secondary_ddown_factor', 'secondary_grid_spacing', 'secondary_pbr_limit', 'min_markup',
+            'secondary_ddown_factor', 'secondary_grid_spacing', 'secondary_pbr_limit_added', 'min_markup',
             'markup_range', 'n_close_orders']
 
 
@@ -55,14 +56,11 @@ def create_xk(config: dict) -> dict:
         config_['spot'] = False
         config_['do_long'] = config['long']['enabled']
         config_['do_shrt'] = config['shrt']['enabled']
-    if 'config_type' not in config_:
-        print('unknown config type, defaulting to vanilla')
+    config_type = determine_config_type(config)
+    if config_type == 'vanilla':
         keys = get_xk_keys()
         config_['spans'] = calc_spans(config['min_span'], config['max_span'], config['n_spans'])
-    elif config_['config_type'] == 'vanilla':
-        keys = get_xk_keys()
-        config_['spans'] = calc_spans(config['min_span'], config['max_span'], config['n_spans'])
-    elif config_['config_type'] == 'scalp':
+    elif config_type == 'scalp':
         keys = get_scalp_keys()
     else:
         raise Exception('unknown config type')
@@ -97,7 +95,7 @@ def denumpyize(x):
         return [denumpyize(e) for e in x]
     elif type(x) == np.bool_:
         return bool(x)
-    elif type(x) == dict:
+    elif type(x) in [dict, OrderedDict]:
         denumpyd = {}
         for k, v in x.items():
             denumpyd[k] = denumpyize(v)
@@ -148,7 +146,11 @@ def config_pretty_str(config: dict):
 
 def candidate_to_live_config(candidate: dict) -> dict:
     packed = pack_config(candidate)
-    live_config = get_template_live_config(n_spans=candidate['n_spans'])
+    config_type = determine_config_type(packed)
+    if config_type == 'vanilla':
+        live_config = get_template_live_config(n_spans=candidate['n_spans'])
+    elif config_type == 'scalp':
+        live_config = get_template_live_config_scalp()
     sides = ['long', 'shrt']
     for side in sides:
         for k in live_config[side]:
@@ -298,24 +300,24 @@ def get_template_live_config_scalp():
                      "n_close_orders": 10,
                      "primary_ddown_factor": 1.3,
                      "primary_grid_spacing": 0.007,
-                     "primary_iqty_pct": 0.01,
+                     "primary_initial_qty_pct": 0.01,
                      "primary_pbr_limit": 1.3,
-                     "primary_grid_spacing_pbr_weighting": 0.016,
+                     "primary_grid_spacing_pbr_weighting": [0.016, 0.016],
                      "secondary_ddown_factor": 0.75,
                      "secondary_grid_spacing": 0.09,
-                     "secondary_pbr_limit": 1.9},
+                     "secondary_pbr_limit_added": 1.9},
             "shrt": {"enabled": True,
                      "markup_range": 0.009,
                      "min_markup": 0.001,
                      "n_close_orders": 10,
                      "primary_ddown_factor": 1.3,
                      "primary_grid_spacing": 0.02,
-                     "primary_iqty_pct": 0.01,
+                     "primary_initial_qty_pct": 0.01,
                      "primary_pbr_limit": 0.5,
-                     "primary_grid_spacing_pbr_weighting": 0.02,
+                     "primary_grid_spacing_pbr_weighting": [0.02, 0.02],
                      "secondary_ddown_factor": 0.75,
                      "secondary_grid_spacing": 0.08,
-                     "secondary_pbr_limit": 1.0}}
+                     "secondary_pbr_limit_added": 1.0}}
 
 
 def get_template_live_config(n_spans: int, randomize_coeffs=False):
@@ -462,19 +464,19 @@ def get_empty_analysis(bc: dict) -> dict:
     }
 
 
-def analyze_fills(fills: list, bc: dict, first_ts: float, last_ts: float) -> (pd.DataFrame, dict):
+def analyze_fills(fills: list, config: dict, first_ts: float, last_ts: float) -> (pd.DataFrame, dict):
     fdf = pd.DataFrame(fills)
 
     if fdf.empty:
-        return fdf, get_empty_analysis(bc)
+        return fdf, get_empty_analysis(config)
     fdf.columns = ['trade_id', 'timestamp', 'pnl', 'fee_paid', 'balance', 'equity', 'pbr', 'qty', 'price', 'psize', 'pprice', 'type']
-    adgs = (fdf.equity / bc['starting_balance']) ** (1 / ((fdf.timestamp - first_ts) / (1000 * 60 * 60 * 24)))
+    adgs = (fdf.equity / config['starting_balance']) ** (1 / ((fdf.timestamp - first_ts) / (1000 * 60 * 60 * 24)))
     fdf = fdf.join(adgs.rename('adg')).set_index('trade_id')
 
     longs = fdf[fdf.type.str.contains('long')]
     shrts = fdf[fdf.type.str.contains('shrt')]
 
-    if bc['do_long']:
+    if config['long']['enabled']:
         if len(longs) > 0:
             long_fill_ts_diffs = np.diff([first_ts] + list(longs.timestamp) + [last_ts]) / (1000 * 60 * 60)
             long_stuck_mean = np.mean(long_fill_ts_diffs)
@@ -485,7 +487,7 @@ def analyze_fills(fills: list, bc: dict, first_ts: float, last_ts: float) -> (pd
     else:
         long_stuck_mean = 0.0
         long_stuck = 0.0
-    if bc['do_shrt']:
+    if config['shrt']['enabled']:
         if len(shrts) > 0:
             shrt_fill_ts_diffs = np.diff([first_ts] + list(shrts.timestamp) + [last_ts]) / (1000 * 60 * 60)
             shrt_stuck_mean = np.mean(shrt_fill_ts_diffs)
@@ -497,7 +499,7 @@ def analyze_fills(fills: list, bc: dict, first_ts: float, last_ts: float) -> (pd
         shrt_stuck_mean = 0.0
         shrt_stuck = 0.0
 
-    ms_span = 1000 * 60 * 60 * 24 * bc['periodic_gain_n_days']
+    ms_span = 1000 * 60 * 60 * 24 * config['periodic_gain_n_days']
     buckets = fdf.timestamp // ms_span * ms_span
     buckets = buckets + (fdf.timestamp.iloc[0] - buckets.iloc[0])
     groups = fdf.groupby(buckets)
@@ -508,13 +510,13 @@ def analyze_fills(fills: list, bc: dict, first_ts: float, last_ts: float) -> (pd
     sharpe_ratio = periodic_gains_mean / periodic_gains_std if periodic_gains_std != 0.0 else -20.0
     sharpe_ratio = np.nan_to_num(sharpe_ratio)
     result = {
-        'exchange': bc['exchange'] if 'exchange' in bc else 'unknown',
-        'symbol': bc['symbol'] if 'symbol' in bc else 'unknown',
-        'starting_balance': bc['starting_balance'],
+        'exchange': config['exchange'] if 'exchange' in config else 'unknown',
+        'symbol': config['symbol'] if 'symbol' in config else 'unknown',
+        'starting_balance': config['starting_balance'],
         'final_balance': fdf.iloc[-1].balance,
         'final_equity': fdf.iloc[-1].equity,
         'net_pnl_plus_fees': fdf.pnl.sum() + fdf.fee_paid.sum(),
-        'gain': (gain := fdf.iloc[-1].equity / bc['starting_balance']),
+        'gain': (gain := fdf.iloc[-1].equity / config['starting_balance']),
         'n_days': (n_days := (last_ts - first_ts) / (1000 * 60 * 60 * 24)),
         'average_daily_gain': (adg := gain ** (1 / n_days) if gain > 0.0 and n_days > 0.0 else 0.0),
         'average_periodic_gain': periodic_gains_mean,
@@ -523,8 +525,8 @@ def analyze_fills(fills: list, bc: dict, first_ts: float, last_ts: float) -> (pd
         'profit_sum': fdf[fdf.pnl > 0.0].pnl.sum(),
         'loss_sum': fdf[fdf.pnl < 0.0].pnl.sum(),
         'fee_sum': fdf.fee_paid.sum(),
-        'lowest_eqbal_ratio': bc['lowest_eqbal_ratio'],
-        'closest_bkr': bc['closest_bkr'],
+        'lowest_eqbal_ratio': config['lowest_eqbal_ratio'],
+        'closest_bkr': config['closest_bkr'],
         'n_fills': len(fdf),
         'n_entries': len(fdf[fdf.type.str.contains('entry')]),
         'n_closes': len(fdf[fdf.type.str.contains('close')]),
@@ -639,6 +641,33 @@ def spotify_config(config: dict, nullify_shrt=True) -> dict:
         spotified['market_type'] += '_spot'
     spotified['do_long'] = spotified['long']['enabled'] = True
     spotified['do_shrt'] = spotified['shrt']['enabled'] = False
+    config_type = determine_config_type(config)
+    if config_type == 'vanilla':
+        spotified['long']['pbr_stop_loss'] = min(1.0, spotified['long']['pbr_stop_loss'])
+        if spotified['long']['pbr_stop_loss'] <= 0.0:
+            spotified['long']['pbr_limit'] = min(1.0, spotified['long']['pbr_limit'])
+        else:
+            spotified['long']['pbr_limit'] = max(0.0, min(spotified['long']['pbr_limit'],
+                                                          1.0 - spotified['long']['pbr_stop_loss']))
+    elif config_type == 'scalp':
+        spotified['long']['primary_pbr_limit'] = min(1.0, spotified['long']['primary_pbr_limit'])
+        spotified['long']['secondary_pbr_limit_added'] = \
+            min((1 - spotified['long']['primary_pbr_limit']), spotified['long']['secondary_pbr_limit_added'])
+    if nullify_shrt:
+        spotified['shrt'] = nullify(spotified['shrt'])
+    return spotified
+
+
+def spotify_config(config: dict, nullify_shrt=True) -> dict:
+    spotified = config.copy()
+
+    spotified['spot'] = True
+    if 'market_type' not in spotified:
+        spotified['market_type'] = 'spot'
+    elif 'spot' not in spotified['market_type']:
+        spotified['market_type'] += '_spot'
+    spotified['do_long'] = spotified['long']['enabled'] = True
+    spotified['do_shrt'] = spotified['shrt']['enabled'] = False
     spotified['long']['pbr_stop_loss'] = min(1.0, spotified['long']['pbr_stop_loss'])
     if spotified['long']['pbr_stop_loss'] <= 0.0:
         spotified['long']['pbr_limit'] = min(1.0, spotified['long']['pbr_limit'])
@@ -667,10 +696,10 @@ def determine_config_type(config: dict) -> str:
                            'rprc_const', 'rqty_MAr_coeffs', 'rqty_const']):
             return 'vanilla'
         elif all((key in config['long'] and key in config['shrt'])
-                 for key in ['enabled', 'primary_iqty_pct', 'primary_ddown_factor',
+                 for key in ['enabled', 'primary_initial_qty_pct', 'primary_ddown_factor',
                              'primary_grid_spacing', 'primary_grid_spacing_pbr_weighting',
                              'primary_pbr_limit', 'secondary_ddown_factor',
-                             'secondary_grid_spacing', 'secondary_pbr_limit',
+                             'secondary_grid_spacing', 'secondary_pbr_limit_added',
                              'min_markup', 'markup_range', 'n_close_orders']):
             return 'scalp'
     raise Exception('unknown config type')
