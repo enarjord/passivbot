@@ -62,6 +62,8 @@ def create_xk(config: dict) -> dict:
         config_['spans'] = calc_spans(config['min_span'], config['max_span'], config['n_spans'])
     elif config_type == 'scalp':
         keys = get_scalp_keys()
+        config_['long']['n_close_orders'] = int(round(config_['long']['n_close_orders']))
+        config_['shrt']['n_close_orders'] = int(round(config_['shrt']['n_close_orders']))
     else:
         raise Exception('unknown config type')
     for k in keys:
@@ -146,11 +148,8 @@ def config_pretty_str(config: dict):
 
 def candidate_to_live_config(candidate: dict) -> dict:
     packed = pack_config(candidate)
-    config_type = determine_config_type(packed)
-    if config_type == 'vanilla':
-        live_config = get_template_live_config(n_spans=candidate['n_spans'])
-    elif config_type == 'scalp':
-        live_config = get_template_live_config_scalp()
+    packed['config_type'] = determine_config_type(packed)
+    live_config = get_template_live_config(packed)
     sides = ['long', 'shrt']
     for side in sides:
         for k in live_config[side]:
@@ -276,12 +275,8 @@ def filter_orders(actual_orders: [dict],
 
 
 def get_dummy_settings(config: dict):
-    if 'config_type' in config and config['config_type'] == 'scalp':
-        dummy_settings = get_template_live_config_scalp()
-        dummy_settings.update({k: 1.0 for k in get_scalp_keys()})
-    else:
-        dummy_settings = get_template_live_config(n_spans=3)
-        dummy_settings.update({k: 1.0 for k in get_xk_keys()})
+    dummy_settings = get_template_live_config({'config_type': 'scalp'})
+    dummy_settings.update({k: 1.0 for k in get_xk_keys()})
     dummy_settings.update({'user': config['user'], 'exchange': config['exchange'], 'symbol': config['symbol'],
                            'config_name': '', 'logging_level': 0, 'spans': np.array([6000, 90000])})
     return {**config, **dummy_settings}
@@ -290,6 +285,16 @@ def get_dummy_settings(config: dict):
 def flatten(lst: list) -> list:
     return [y for x in lst for y in x]
 
+
+def get_template_live_config(config):
+    if 'config_type' not in config:
+        raise Exception('config_type missing from config')
+    if config['config_type'] == 'vanilla':
+        return get_template_live_config_vanilla(config['n_spans'])
+    elif config['config_type'] == 'scalp':
+        return get_template_live_config_scalp()
+    else:
+        raise Exception('unknown config type')
 
 def get_template_live_config_scalp():
     return {"config_name": "template_scalp",
@@ -320,7 +325,7 @@ def get_template_live_config_scalp():
                      "secondary_pbr_limit_added": 1.0}}
 
 
-def get_template_live_config(n_spans: int, randomize_coeffs=False):
+def get_template_live_config_vanilla(n_spans: int, randomize_coeffs=False):
     config = {
         "config_name": "name",
         "logging_level": 0,
@@ -441,6 +446,7 @@ def get_empty_analysis(bc: dict) -> dict:
         'average_periodic_gain': 0.0,
         'adjusted_daily_gain': 0.0,
         'sharpe_ratio': 0.0,
+        'time_between_fills_sharpe_ratio': 0.0,
         'profit_sum': 0.0,
         'loss_sum': 0.0,
         'fee_sum': 0.0,
@@ -509,6 +515,10 @@ def analyze_fills(fills: list, config: dict, first_ts: float, last_ts: float) ->
     periodic_gains_std = periodic_gains.std()
     sharpe_ratio = periodic_gains_mean / periodic_gains_std if periodic_gains_std != 0.0 else -20.0
     sharpe_ratio = np.nan_to_num(sharpe_ratio)
+
+    ms_between_fills = np.mean(np.diff([first_ts] + list(fdf.timestamp) + [last_ts]))
+    ms_between_fills_std = ms_between_fills.std()
+    time_between_fills_sharpe_ratio = ms_between_fills.mean() / ms_between_fills_std if ms_between_fills_std != 0.0 else -20.0
     result = {
         'exchange': config['exchange'] if 'exchange' in config else 'unknown',
         'symbol': config['symbol'] if 'symbol' in config else 'unknown',
@@ -522,6 +532,7 @@ def analyze_fills(fills: list, config: dict, first_ts: float, last_ts: float) ->
         'average_periodic_gain': periodic_gains_mean,
         'adjusted_daily_gain': np.tanh(10 * (adg - 1)) + 1,
         'sharpe_ratio': sharpe_ratio,
+        'time_between_fills_sharpe_ratio': time_between_fills_sharpe_ratio,
         'profit_sum': fdf[fdf.pnl > 0.0].pnl.sum(),
         'loss_sum': fdf[fdf.pnl < 0.0].pnl.sum(),
         'fee_sum': fdf.fee_paid.sum(),
@@ -535,7 +546,7 @@ def analyze_fills(fills: list, config: dict, first_ts: float, last_ts: float) ->
         'n_normal_closes': len(fdf[fdf.type.str.contains('nclose')]),
         'n_stop_loss_closes': len(fdf[fdf.type.str.contains('sclose')]),
         'biggest_psize': fdf.psize.abs().max(),
-        'mean_hrs_between_fills': np.mean(np.diff([first_ts] + list(fdf.timestamp) + [last_ts])) / (1000 * 60 * 60),
+        'mean_hrs_between_fills': ms_between_fills / (1000 * 60 * 60),
         'mean_hrs_between_fills_long': long_stuck_mean,
         'mean_hrs_between_fills_shrt': shrt_stuck_mean,
         'max_hrs_no_fills_long': long_stuck,
