@@ -5,10 +5,11 @@
   options: {"c1": 1.4962, "c2": 1.4962, "w": 0.7298}
   n_particles: 48
 
-  # set to 0.0 to disable breaking early
-  break_early_factor: 0.5
+  config_type: vanilla
 
-  periodic_gain_n_days: 5.0
+  # set to 0.0 to disable breaking early
+  break_early_factor: 0.9
+
   minimum_sharpe_ratio: 1.0
   minimum_bankruptcy_distance: 0.5
   minimum_equity_balance_ratio: 0.5
