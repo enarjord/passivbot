@@ -690,6 +690,8 @@ def njit_backtest_scalp(
                 markup_range[1], n_close_orders[1]
             )
 
+            bkr_price = calc_bankruptcy_price(balance, long_psize, long_pprice, shrt_psize, shrt_pprice, inverse, c_mult)
+
             equity = balance + calc_upnl(long_psize, long_pprice, shrt_psize, shrt_pprice,
                                          prices[k], inverse, c_mult)
             lowest_eqbal_ratio = min(lowest_eqbal_ratio, equity / balance)
