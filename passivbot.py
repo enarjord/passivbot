@@ -591,19 +591,47 @@ class Bot:
                                    [[e['timestamp'], e['volume'], e['open']] for e in ohlcvs]))
 
         if self.sample_type == 'candle_1s':
-            samples = calc_samples(combined)
-            self.emas = calc_emas_last(samples[:, 2], self.spans_secs)
-            self.ema_sec = int(combined[-1][0] // 1000 * 1000)
+            self.init_indicators_candle_1s(combined)
         else:
-            idxs = get_ids_to_fetch(self.spans, ticks[-1]['trade_id'])
-            fetched_ticks = await asyncio.gather(*[self.fetch_ticks(from_id=int(i)) for i in idxs])
-            latest_ticks = await self.fetch_ticks()
-            compressed = drop_consecutive_same_prices(sorted(flatten(fetched_ticks) + ticks + latest_ticks, key=lambda x: x['trade_id']))
-            self.emas = calc_indicators_from_ticks_with_gaps(self.spans, compressed)
+            self.init_indicators_tick(ticks)
 
         self.ratios = np.append(self.price, self.emas[:-1]) / self.emas
 
+    def init_indicators_tick(self, ticks):
+        idxs = get_ids_to_fetch(self.spans, ticks[-1]['trade_id'])
+        fetched_ticks = await asyncio.gather(*[self.fetch_ticks(from_id=int(i)) for i in idxs])
+        latest_ticks = await self.fetch_ticks()
+        compressed = drop_consecutive_same_prices(sorted(flatten(fetched_ticks) + ticks + latest_ticks, key=lambda x: x['trade_id']))
+        self.emas = calc_indicators_from_ticks_with_gaps(self.spans, compressed)
+
+    def init_indicators_candle_1s(self, combined):
+        samples = calc_samples(combined)
+        self.emas = calc_emas_last(samples[:, 2], self.spans_secs)
+        self.ema_sec = int(combined[-1][0] // 1000 * 1000)
+
     def update_indicators(self, ticks):
+        if self.sample_type == 'candle_1s':
+            self.update_indicators_candle_1s(ticks)
+        else:
+            self.update_indicators_tick(ticks)
+
+    def update_indicators_tick(self, ticks):
+        for tick in ticks:
+            self.agg_qty += tick['qty']
+            if tick['price'] == self.price and tick['is_buyer_maker'] == self.is_buyer_maker:
+                continue
+            self.qty = self.agg_qty
+            self.agg_qty = 0.0
+            self.price = tick['price']
+            self.is_buyer_maker = tick['is_buyer_maker']
+            if tick['is_buyer_maker']:
+                self.ob[0] = tick['price']
+            else:
+                self.ob[1] = tick['price']
+            self.emas = self.emas * self.ema_alpha_ + tick['price'] * self.ema_alpha
+            self.ratios = np.append(self.price, self.emas[:-1]) / self.emas
+
+    def update_indicators_candle_1s(self, ticks):
         for tick in ticks:
             self.agg_qty += tick['qty']
             if tick['is_buyer_maker']:
@@ -611,7 +639,7 @@ class Bot:
             else:
                 self.ob[1] = tick['price']
             ts_sec = int(tick['timestamp'] // 1000 * 1000)
-            if self.sample_type == 'candle_1s' and ts_sec <= self.ema_sec:
+            if ts_sec <= self.ema_sec:
                 self.ema_sec = ts_sec
                 self.price = tick['price']
                 continue
@@ -621,10 +649,7 @@ class Bot:
                 self.emas = self.emas * self.ema_alpha_secs_ + tick['price'] * self.ema_alpha_secs
                 self.ema_sec += 1000
 
-            if self.sample_type == 'candle_1s':
-                self.emas = self.emas * self.ema_alpha_secs_ + self.price * self.ema_alpha_secs
-            else:
-                self.emas = self.emas * self.ema_alpha_ + tick['price'] * self.ema_alpha
+            self.emas = self.emas * self.ema_alpha_secs_ + self.price * self.ema_alpha_secs
             self.ema_sec += 1000
             self.price = tick['price']
             self.ratios = np.append(self.price, self.emas[:-1]) / self.emas

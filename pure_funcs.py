@@ -47,6 +47,9 @@ def create_xk(config: dict) -> dict:
         config_['spot'] = False
         config_['do_long'] = config['long']['enabled']
         config_['do_shrt'] = config['shrt']['enabled']
+    if 'tick' in config_['sample_type']:
+        config_['min_span'] /= 60
+        config_['max_span'] /= 60
     config_['spans'] = calc_spans(config['min_span'], config['max_span'], config['n_spans'])
     for k in get_xk_keys():
         if k in config_['long']:

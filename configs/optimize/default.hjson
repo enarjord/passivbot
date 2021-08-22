@@ -37,6 +37,9 @@
   do_long: true
   do_shrt: true
 
+  # Specifies the type of tick process; use 'tick' for raw ticks, or 'candle_1s'
+  sample_type: candle_1s
+
   # If lower and upper bound are set to same value, it's treated as a fixed variable.
   ranges:
   {

@@ -331,7 +331,7 @@ async def execute_optimize(config):
                        'minimum_bankruptcy_distance', 'maximum_hrs_no_fills',
                        'maximum_hrs_no_fills_same_side', 'maximum_mean_hrs_between_fills', 'iters', 'n_particles',
                        'sliding_window_days', 'metric',
-                       'min_span', 'max_span', 'n_spans']):
+                       'min_span', 'max_span', 'n_spans', 'sample_type']):
         if k in config:
             print(f"{k: <{max(map(len, keys)) + 2}} {config[k]}")
     print()
