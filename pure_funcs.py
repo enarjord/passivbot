@@ -661,30 +661,9 @@ def spotify_config(config: dict, nullify_shrt=True) -> dict:
             spotified['long']['pbr_limit'] = max(0.0, min(spotified['long']['pbr_limit'],
                                                           1.0 - spotified['long']['pbr_stop_loss']))
     elif config_type == 'scalp':
-        spotified['long']['primary_pbr_limit'] = min(1.0, spotified['long']['primary_pbr_limit'])
+        spotified['long']['primary_pbr_limit'] = round(min(1.0, spotified['long']['primary_pbr_limit']), 8)
         spotified['long']['secondary_pbr_limit_added'] = \
-            min((1 - spotified['long']['primary_pbr_limit']), spotified['long']['secondary_pbr_limit_added'])
-    if nullify_shrt:
-        spotified['shrt'] = nullify(spotified['shrt'])
-    return spotified
-
-
-def spotify_config(config: dict, nullify_shrt=True) -> dict:
-    spotified = config.copy()
-
-    spotified['spot'] = True
-    if 'market_type' not in spotified:
-        spotified['market_type'] = 'spot'
-    elif 'spot' not in spotified['market_type']:
-        spotified['market_type'] += '_spot'
-    spotified['do_long'] = spotified['long']['enabled'] = True
-    spotified['do_shrt'] = spotified['shrt']['enabled'] = False
-    spotified['long']['pbr_stop_loss'] = min(1.0, spotified['long']['pbr_stop_loss'])
-    if spotified['long']['pbr_stop_loss'] <= 0.0:
-        spotified['long']['pbr_limit'] = min(1.0, spotified['long']['pbr_limit'])
-    else:
-        spotified['long']['pbr_limit'] = max(0.0, min(spotified['long']['pbr_limit'],
-                                                      1.0 - spotified['long']['pbr_stop_loss']))
+            round(min((1 - spotified['long']['primary_pbr_limit']), spotified['long']['secondary_pbr_limit_added']), 8)
     if nullify_shrt:
         spotified['shrt'] = nullify(spotified['shrt'])
     return spotified
