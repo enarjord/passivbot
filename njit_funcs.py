@@ -400,13 +400,12 @@ def calc_long_scalp_entry(
     if do_long or long_psize > 0.0:
         long_entry_price = highest_bid
         long_base_entry_qty = round_dn(cost_to_qty(balance * primary_initial_qty_pct, long_entry_price, inverse, c_mult), qty_step)
-        if long_psize == 0.0:# or (spot and (long_psize < calc_min_entry_qty(long_pprice, inverse, qty_step, min_qty, min_cost))):
-            # todo: spot
-            min_entry_qty = calc_min_entry_qty(long_entry_price, inverse, qty_step, min_qty, min_cost)
+        min_entry_qty = calc_min_entry_qty(long_entry_price, inverse, qty_step, min_qty, min_cost)
+        if round_dn(long_psize, qty_step) < min_entry_qty:
             max_entry_qty = round_dn(cost_to_qty(balance * primary_pbr_limit, long_entry_price, inverse, c_mult), qty_step)
             long_entry_qty = max(min_entry_qty, min(max_entry_qty, long_base_entry_qty))
             long_entry = (long_entry_qty, long_entry_price, 'long_ientry')
-        elif long_psize > 0.0:
+        else:
             pbr = qty_to_cost(long_psize, long_pprice, inverse, c_mult) / balance
             if pbr < primary_pbr_limit:
                 pbr_weighting = pbr ** 2 * primary_grid_spacing_pbr_weighting[0] + pbr * primary_grid_spacing_pbr_weighting[1]
@@ -528,6 +527,8 @@ def calc_long_close_grid(long_psize,
     if long_psize == 0.0:
         return [(0.0, 0.0, '')]
     minm = long_pprice * (1 + min_markup)
+    if round_dn(long_psize, qty_step) < calc_min_entry_qty(minm, inverse, qty_step, min_qty, min_cost):
+        return [(0.0, 0.0, '')]
     close_prices = []
     for p in np.linspace(minm, long_pprice * (1 + min_markup + markup_range), n_close_orders):
         price_ = round_up(p, price_step)
