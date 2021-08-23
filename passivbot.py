@@ -373,19 +373,9 @@ class Bot:
         return orders
 
     def calc_orders_scalp(self, balance, long_psize, long_pprice, shrt_psize, shrt_pprice, do_long, do_shrt):
-        inf_loop_prevention = 100
         
         orders = []
         if do_long:
-            long_entries = []
-            long_entry = calc_long_scalp_entry(
-                balance, long_psize, long_pprice, ((0.0, 0.0),), self.ob[0], self.spot, self.inverse, do_long,
-                self.qty_step, self.price_step, self.min_qty, self.min_cost, self.c_mult, self.max_leverage,
-                self.xk['primary_initial_qty_pct'][0], self.xk['primary_ddown_factor'][0],
-                self.xk['primary_grid_spacing'][0], self.xk['primary_grid_spacing_pbr_weighting'][0],
-                self.xk['primary_pbr_limit'][0], self.xk['secondary_ddown_factor'][0],
-                self.xk['secondary_grid_spacing'][0], self.xk['secondary_pbr_limit_added'][0]
-            )
             long_closes = calc_long_close_grid(
                 long_psize, long_pprice, self.ob[1], self.spot, self.inverse, self.qty_step,
                 self.price_step, self.min_qty, self.min_cost, self.c_mult, self.max_leverage,
@@ -393,16 +383,11 @@ class Bot:
             )
             long_closes = [{'side': 'sell', 'position_side': 'long', 'qty': abs(x[0]),
                             'price': x[1], 'type': 'limit', 'custom_id': x[2]}
-                           for x in long_closes]
+                           for x in long_closes if x[0] != 0.0]
             i = 0
-            while long_entry[0] != 0.0:
+            long_entries = []
+            while i < self.n_open_orders_limit:
                 i += 1
-                if i >= inf_loop_prevention:
-                    raise Exception('warning -- infinite loop in long entries')
-                new_long_psize = long_psize + long_entry[0]
-                long_psize, long_pprice = calc_new_psize_pprice(long_psize, long_pprice,
-                                                                long_entry[0], long_entry[1], self.qty_step)
-                long_entries.append(long_entry)
                 long_entry = calc_long_scalp_entry(
                     balance, long_psize, long_pprice, ((0.0, 0.0),), self.ob[0], self.spot, self.inverse, do_long,
                     self.qty_step, self.price_step, self.min_qty, self.min_cost, self.c_mult, self.max_leverage,
@@ -411,22 +396,19 @@ class Bot:
                     self.xk['primary_pbr_limit'][0], self.xk['secondary_ddown_factor'][0],
                     self.xk['secondary_grid_spacing'][0], self.xk['secondary_pbr_limit_added'][0]
                 )
+                if long_entry[0] == 0.0:
+                    break
+                long_entries.append(long_entry)
+                if long_psize == 0.0:
+                    break
+                long_psize, long_pprice = calc_new_psize_pprice(long_psize, long_pprice,
+                                                                long_entry[0], long_entry[1], self.qty_step)
             long_entries = [{'side': 'buy', 'position_side': 'long', 'qty': abs(x[0]),
                              'price': x[1], 'type': 'limit', 'custom_id': x[2]}
                             for x in long_entries]
-
             orders.extend(long_entries + long_closes)
-
         if do_shrt:
             shrt_entries = []
-            shrt_entry = calc_shrt_scalp_entry(
-                balance, shrt_psize, shrt_pprice, [(0.0, 0.0)], self.ob[1], self.spot, self.inverse, do_shrt,
-                self.qty_step, self.price_step, self.min_qty, self.min_cost, self.c_mult, self.max_leverage,
-                self.xk['primary_initial_qty_pct'][1], self.xk['primary_ddown_factor'][1],
-                self.xk['primary_grid_spacing'][1], self.xk['primary_grid_spacing_pbr_weighting'][1],
-                self.xk['primary_pbr_limit'][1], self.xk['secondary_ddown_factor'][1],
-                self.xk['secondary_grid_spacing'][1], self.xk['secondary_pbr_limit_added'][1]
-            )
             shrt_closes = calc_shrt_close_grid(
                 shrt_psize, shrt_pprice, self.ob[0], self.spot, self.inverse, self.qty_step,
                 self.price_step, self.min_qty, self.min_cost, self.c_mult, self.max_leverage,
@@ -434,25 +416,26 @@ class Bot:
             )
             shrt_closes = [{'side': 'buy', 'position_side': 'shrt', 'qty': abs(x[0]),
                             'price': x[1], 'type': 'limit', 'custom_id': x[2]}
-                           for x in shrt_closes]
+                           for x in shrt_closes if x[0] != 0.0]
 
             i = 0
-            while shrt_entry[0] != 0.0:
+            while i < self.n_open_orders_limit:
                 i += 1
-                if i >= inf_loop_prevention:
-                    raise Exception('warning -- infinite loop in shrt entries')
-                new_shrt_psize = shrt_psize + shrt_entry[0]
-                shrt_psize, shrt_pprice = calc_new_psize_pprice(shrt_psize, shrt_pprice,
-                                                                shrt_entry[0], shrt_entry[1], self.qty_step)
-                shrt_entries.append(shrt_entry)
                 shrt_entry = calc_shrt_scalp_entry(
-                    balance, shrt_psize, shrt_pprice, [(0.0, 0.0)], self.ob[1], self.spot, self.inverse, do_shrt,
+                    balance, shrt_psize, shrt_pprice, ((0.0, 0.0),), self.ob[1], self.spot, self.inverse, do_shrt,
                     self.qty_step, self.price_step, self.min_qty, self.min_cost, self.c_mult, self.max_leverage,
                     self.xk['primary_initial_qty_pct'][1], self.xk['primary_ddown_factor'][1],
                     self.xk['primary_grid_spacing'][1], self.xk['primary_grid_spacing_pbr_weighting'][1],
                     self.xk['primary_pbr_limit'][1], self.xk['secondary_ddown_factor'][1],
                     self.xk['secondary_grid_spacing'][1], self.xk['secondary_pbr_limit_added'][1]
                 )
+                if shrt_entry[0] == 0.0:
+                    break
+                shrt_entries.append(shrt_entry)
+                if shrt_psize == 0.0:
+                    break
+                shrt_psize, shrt_pprice = calc_new_psize_pprice(shrt_psize, shrt_pprice,
+                                                                shrt_entry[0], shrt_entry[1], self.qty_step)
             shrt_entries = [{'side': 'sell', 'position_side': 'shrt', 'qty': abs(x[0]),
                              'price': x[1], 'type': 'limit', 'custom_id': x[2]}
                             for x in shrt_entries]
