@@ -160,7 +160,14 @@ def candidate_to_live_config(candidate: dict) -> dict:
             live_config[k] = packed[k]
 
     result_dict = candidate['result'] if 'result' in candidate else candidate
-    name = f"{result_dict['exchange'].lower()}_" if 'exchange' in result_dict else 'unknown_'
+    if packed['long']['enabled'] and not packed['shrt']['enabled']:
+        side_type = 'longonly'
+    elif packed['shrt']['enabled'] and not packed['long']['enabled']:
+        side_type = 'shrtonly'
+    else:
+        side_type = 'long&shrt'
+    name = f"{packed['config_type']}_{side_type}_"
+    name += f"{result_dict['exchange'].lower()}_" if 'exchange' in result_dict else 'unknown_'
     name += f"{result_dict['symbol'].lower()}" if 'symbol' in result_dict else 'unknown'
     if 'n_days' in result_dict:
         n_days = result_dict['n_days']
