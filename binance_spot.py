@@ -9,7 +9,7 @@ import aiohttp
 import numpy as np
 import traceback
 
-from pure_funcs import ts_to_date, sort_dict_keys, calc_long_pprice, format_float, get_position_fills
+from pure_funcs import ts_to_date, sort_dict_keys, calc_long_pprice, format_float, get_position_fills, spotify_config
 from njit_funcs import round_dn
 from passivbot import Bot
 from procedures import print_
@@ -19,11 +19,9 @@ class BinanceBotSpot(Bot):
     def __init__(self, config: dict):
         self.exchange = 'binance_spot'
         self.balance = {}
-        super().__init__(config)
+        super().__init__(spotify_config(config))
         self.spot = self.config['spot'] = True
         self.inverse = self.config['inverse'] = False
-        self.config['long']['pbr_limit'] = min(self.config['long']['pbr_limit'],
-                                               max(0.0, 1.0 - self.config['long']['pbr_stop_loss']))
         self.hedge_mode = self.config['hedge_mode'] = False
         self.do_long = self.config['do_long'] = self.config['long']['enabled'] = True
         self.do_shrt = self.config['do_shrt'] = self.config['shrt']['enabled'] = False
