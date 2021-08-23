@@ -565,6 +565,26 @@ class Bot:
                     self.ts_released[key] = now
 
     async def init_indicators(self, max_n_samples: int = 60):
+        if self.sample_type == 'candle_1s':
+            self.init_indicators_candle_1s(max_n_samples)
+        else:
+            self.init_indicators_tick()
+
+    async def init_indicators_tick(self):
+        ticks = await self.fetch_ticks()
+        if self.exchange == 'bybit' and 'linear' in self.market_type:
+            print('\nwarning: insufficient ticks fetched')
+            print('emas and ema ratios will be inaccurate until websocket catches up')
+            self.emas = calc_emas(np.array([e['price'] for e in ticks]), self.spans)[-1]
+        else:
+            idxs = get_ids_to_fetch(self.spans, ticks[-1]['trade_id'], max_n_samples=max_n_samples)
+            fetched_ticks = await asyncio.gather(*[self.fetch_ticks(from_id=int(i)) for i in idxs])
+            latest_ticks = await self.fetch_ticks()
+            compressed = drop_consecutive_same_prices(sorted(flatten(fetched_ticks) + ticks + latest_ticks, key=lambda x: x['trade_id']))
+            self.emas = calc_indicators_from_ticks_with_gaps(self.spans, compressed)
+        self.ratios = np.append(self.price, self.emas[:-1]) / self.emas
+
+    async def init_indicators_candle_1s(self, max_n_samples: int = 60):
         ticks = await self.fetch_ticks(do_print=False)
         if self.exchange == 'binance':
             ohlcvs_per_fetch = 1000 if self.spot else 1500
@@ -590,24 +610,10 @@ class Bot:
         combined = np.array(sorted([[e['timestamp'], e['qty'], e['price']] for e in ticks] +
                                    [[e['timestamp'], e['volume'], e['open']] for e in ohlcvs]))
 
-        if self.sample_type == 'candle_1s':
-            self.init_indicators_candle_1s(combined)
-        else:
-            self.init_indicators_tick(ticks)
-
-        self.ratios = np.append(self.price, self.emas[:-1]) / self.emas
-
-    def init_indicators_tick(self, ticks):
-        idxs = get_ids_to_fetch(self.spans, ticks[-1]['trade_id'])
-        fetched_ticks = await asyncio.gather(*[self.fetch_ticks(from_id=int(i)) for i in idxs])
-        latest_ticks = await self.fetch_ticks()
-        compressed = drop_consecutive_same_prices(sorted(flatten(fetched_ticks) + ticks + latest_ticks, key=lambda x: x['trade_id']))
-        self.emas = calc_indicators_from_ticks_with_gaps(self.spans, compressed)
-
-    def init_indicators_candle_1s(self, combined):
         samples = calc_samples(combined)
         self.emas = calc_emas_last(samples[:, 2], self.spans_secs)
         self.ema_sec = int(combined[-1][0] // 1000 * 1000)
+        self.ratios = np.append(self.price, self.emas[:-1]) / self.emas
 
     def update_indicators(self, ticks):
         if self.sample_type == 'candle_1s':
