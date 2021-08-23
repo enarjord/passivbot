@@ -450,7 +450,7 @@ class Bot:
                     self.xk['primary_pbr_limit'][1], self.xk['secondary_ddown_factor'][1],
                     self.xk['secondary_grid_spacing'][1], self.xk['secondary_pbr_limit_added'][1]
                 )
-            long_entries = [{'side': 'sell', 'position_side': 'shrt', 'qty': abs(x[0]), 'price': x[1], 'type': 'limit'}
+            shrt_entries = [{'side': 'sell', 'position_side': 'shrt', 'qty': abs(x[0]), 'price': x[1], 'type': 'limit'}
                             for x in shrt_entries]
             orders.extend(shrt_entries + shrt_closes)
         return [o for o in orders if o['qty'] != 0.0]
