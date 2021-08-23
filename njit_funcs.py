@@ -412,11 +412,6 @@ def calc_long_scalp_entry(
                 grid_spacing = 1 - primary_grid_spacing - pbr_weighting
                 long_entry_price = round_dn(long_pprice * grid_spacing, price_step)
                 long_entry_comment = 'long_primary_rentry'
-                '''
-                if long_pfills[-1][0] < 0.0: # means previous fill was a partial close
-                    long_entry_price = max(long_entry_price, round_dn(long_pfills[-1][1] * (1 - primary_grid_spacing), price_step))
-                    long_entry_comment += '_after_partial_close'
-                '''
                 long_entry_price = min(highest_bid, long_entry_price)
                 min_entry_qty = calc_min_entry_qty(long_entry_price, inverse, qty_step, min_qty, min_cost)
                 max_entry_qty = round_dn(cost_to_qty(balance * primary_pbr_limit, long_entry_price, inverse, c_mult) - long_psize, qty_step)
@@ -467,8 +462,7 @@ def calc_shrt_scalp_entry(
     if do_shrt or shrt_psize < 0.0:
         shrt_entry_price = lowest_ask
         shrt_base_entry_qty = round_dn(cost_to_qty(balance * primary_initial_qty_pct, shrt_entry_price, inverse, c_mult), qty_step)
-        if shrt_psize == 0.0:# or (spot and (shrt_psize < calc_min_entry_qty(shrt_pprice, inverse, qty_step, min_qty, min_cost))):
-            # todo: spot
+        if shrt_psize == 0.0:
             min_entry_qty = calc_min_entry_qty(shrt_entry_price, inverse, qty_step, min_qty, min_cost)
             max_entry_qty = round_dn(cost_to_qty(balance * primary_pbr_limit, shrt_entry_price, inverse, c_mult), qty_step)
             shrt_entry_qty = max(min_entry_qty, min(max_entry_qty, shrt_base_entry_qty))
@@ -478,20 +472,15 @@ def calc_shrt_scalp_entry(
             if pbr < primary_pbr_limit:
                 pbr_weighting = pbr**2 * primary_grid_spacing_pbr_weighting[0] + pbr * primary_grid_spacing_pbr_weighting[1]
                 grid_spacing = 1 + primary_grid_spacing + pbr_weighting
-                shrt_entry_price = round_dn(shrt_pprice * grid_spacing, price_step)
+                shrt_entry_price = round_up(shrt_pprice * grid_spacing, price_step)
                 shrt_entry_comment = 'shrt_primary_rentry'
-                '''
-                if shrt_pfills[-1][0] > 0.0: # means previous fill was a partial close
-                    shrt_entry_price = min(shrt_entry_price, round_up(shrt_pprice * (1 + primary_grid_spacing), price_step))
-                    shrt_entry_comment += '_after_partial_close'
-                '''
                 shrt_entry_price = max(lowest_ask, shrt_entry_price)
                 min_entry_qty = calc_min_entry_qty(shrt_entry_price, inverse, qty_step, min_qty, min_cost)
                 max_entry_qty = round_dn(cost_to_qty(balance * primary_pbr_limit, shrt_entry_price, inverse, c_mult) + shrt_psize, qty_step)
                 shrt_entry_qty = max(min_entry_qty, min(max_entry_qty, round_dn(shrt_base_entry_qty - shrt_psize * primary_ddown_factor, qty_step)))
                 shrt_entry = (-shrt_entry_qty, shrt_entry_price, shrt_entry_comment)
             elif pbr < primary_pbr_limit + secondary_pbr_limit_added:
-                shrt_entry_price = min(lowest_ask, round_dn(shrt_pprice * (1 + secondary_grid_spacing), price_step))
+                shrt_entry_price = max(lowest_ask, round_up(shrt_pprice * (1 + secondary_grid_spacing), price_step))
                 min_entry_qty = calc_min_entry_qty(shrt_entry_price, inverse, qty_step, min_qty, min_cost)
                 max_entry_qty = round_dn(cost_to_qty(balance * (primary_pbr_limit + secondary_pbr_limit_added),
                                                      shrt_entry_price, inverse, c_mult) + shrt_psize, qty_step)
