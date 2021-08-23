@@ -14,9 +14,9 @@
   minimum_bankruptcy_distance: 0.5
   minimum_equity_balance_ratio: 0.5
   minimum_slice_adg: 1.0
-  maximum_hrs_no_fills: 24
-  maximum_hrs_no_fills_same_side: 48.0
-  maximum_mean_hrs_between_fills: 1.0
+  maximum_hrs_no_fills: 168.0
+  maximum_hrs_no_fills_same_side: 168.0
+  maximum_mean_hrs_between_fills: 10.0
 
   # set to 0.0 to do disable sliding windows
   # otherwise sliding window days will be max([maximum_hrs_no_fills / 24 * 2.1,
@@ -38,32 +38,32 @@
   do_long: true
   do_shrt: false
 
-  # If lower and upper bound are set to same value, it's treated as a fixed variable.
+  # if lower and upper bound are set to same value, it's treated as a fixed variable
   ranges:
   {
 
-    long£primary_initial_qty_pct: [0.0001, 0.5]
-    long£primary_ddown_factor: [0.0, 2.0]
+    long£primary_initial_qty_pct: [0.0001, 0.15]
+    long£primary_ddown_factor: [0.0, 2.5]
     long£primary_grid_spacing: [0.001, 0.03]
-    long£primary_grid_spacing_pbr_weighting: [0.0, 0.03]
-    long£primary_pbr_limit: [0.01, 1.0]
-    long£secondary_ddown_factor: [0.0, 4.0]
+    long£primary_grid_spacing_pbr_weighting: [0.0, 0.05]
+    long£primary_pbr_limit: [0.3, 1.0]
+    long£secondary_ddown_factor: [0.1, 4.0]
     long£secondary_grid_spacing: [0.05, 0.4]
-    long£secondary_pbr_limit_added: [0.0, 1.0]
-    long£min_markup: [0.0005, 0.01]
-    long£markup_range: [0.0, 0.01]
+    long£secondary_pbr_limit_added: [0.3, 1.0]
+    long£min_markup: [0.0005, 0.006]
+    long£markup_range: [0.004, 0.01]
     long£n_close_orders: [10, 10]
 
-    shrt£primary_initial_qty_pct: [0.0001, 0.5]
-    shrt£primary_ddown_factor: [0.0, 2.0]
+    shrt£primary_initial_qty_pct: [0.0001, 0.15]
+    shrt£primary_ddown_factor: [0.0, 2.5]
     shrt£primary_grid_spacing: [0.001, 0.03]
-    shrt£primary_grid_spacing_pbr_weighting: [0.0, 0.03]
-    shrt£primary_pbr_limit: [0.01, 1.0]
-    shrt£secondary_ddown_factor: [0.0, 4.0]
+    shrt£primary_grid_spacing_pbr_weighting: [0.0, 0.05]
+    shrt£primary_pbr_limit: [0.3, 1.0]
+    shrt£secondary_ddown_factor: [0.1, 4.0]
     shrt£secondary_grid_spacing: [0.05, 0.4]
-    shrt£secondary_pbr_limit_added: [0.0, 1.0]
-    shrt£min_markup: [0.0005, 0.01]
-    shrt£markup_range: [0.0, 0.01]
+    shrt£secondary_pbr_limit_added: [0.3, 1.0]
+    shrt£min_markup: [0.0005, 0.006]
+    shrt£markup_range: [0.004, 0.01]
     shrt£n_close_orders: [10, 10]
   }
 }
