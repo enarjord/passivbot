@@ -391,7 +391,8 @@ class Bot:
                 self.price_step, self.min_qty, self.min_cost, self.c_mult, self.max_leverage,
                 self.xk['min_markup'][0], self.xk['markup_range'][0], self.xk['n_close_orders'][0]
             )
-            long_closes = [{'side': 'sell', 'position_side': 'long', 'qty': abs(x[0]), 'price': x[1], 'type': 'limit'}
+            long_closes = [{'side': 'sell', 'position_side': 'long', 'qty': abs(x[0]),
+                            'price': x[1], 'type': 'limit', 'custom_id': x[2]}
                            for x in long_closes]
             i = 0
             while long_entry[0] != 0.0:
@@ -410,7 +411,8 @@ class Bot:
                     self.xk['primary_pbr_limit'][0], self.xk['secondary_ddown_factor'][0],
                     self.xk['secondary_grid_spacing'][0], self.xk['secondary_pbr_limit_added'][0]
                 )
-            long_entries = [{'side': 'buy', 'position_side': 'long', 'qty': abs(x[0]), 'price': x[1], 'type': 'limit'}
+            long_entries = [{'side': 'buy', 'position_side': 'long', 'qty': abs(x[0]),
+                             'price': x[1], 'type': 'limit', 'custom_id': x[2]}
                             for x in long_entries]
 
             orders.extend(long_entries + long_closes)
@@ -430,7 +432,8 @@ class Bot:
                 self.price_step, self.min_qty, self.min_cost, self.c_mult, self.max_leverage,
                 self.xk['min_markup'][1], self.xk['markup_range'][1], self.xk['n_close_orders'][1]
             )
-            shrt_closes = [{'side': 'buy', 'position_side': 'shrt', 'qty': abs(x[0]), 'price': x[1], 'type': 'limit'}
+            shrt_closes = [{'side': 'buy', 'position_side': 'shrt', 'qty': abs(x[0]),
+                            'price': x[1], 'type': 'limit', 'custom_id': x[2]}
                            for x in shrt_closes]
 
             i = 0
@@ -450,7 +453,8 @@ class Bot:
                     self.xk['primary_pbr_limit'][1], self.xk['secondary_ddown_factor'][1],
                     self.xk['secondary_grid_spacing'][1], self.xk['secondary_pbr_limit_added'][1]
                 )
-            shrt_entries = [{'side': 'sell', 'position_side': 'shrt', 'qty': abs(x[0]), 'price': x[1], 'type': 'limit'}
+            shrt_entries = [{'side': 'sell', 'position_side': 'shrt', 'qty': abs(x[0]),
+                             'price': x[1], 'type': 'limit', 'custom_id': x[2]}
                             for x in shrt_entries]
             orders.extend(shrt_entries + shrt_closes)
         return [o for o in orders if o['qty'] != 0.0]
