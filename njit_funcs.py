@@ -527,7 +527,7 @@ def calc_long_close_grid(long_psize,
     if long_psize == 0.0:
         return [(0.0, 0.0, '')]
     minm = long_pprice * (1 + min_markup)
-    if round_dn(long_psize, qty_step) < calc_min_entry_qty(minm, inverse, qty_step, min_qty, min_cost):
+    if spot and round_dn(long_psize, qty_step) < calc_min_entry_qty(minm, inverse, qty_step, min_qty, min_cost):
         return [(0.0, 0.0, '')]
     close_prices = []
     for p in np.linspace(minm, long_pprice * (1 + min_markup + markup_range), n_close_orders):
