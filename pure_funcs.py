@@ -698,6 +698,22 @@ def tuplify(xs):
     return xs
 
 
+def round_values(xs, n: int):
+    if type(xs) in [float, np.float64]:
+        return round_dynamic(xs, n)
+    if type(xs) == dict:
+        return {k: round_values(xs[k], n) for k in xs}
+    if type(xs) == list:
+        return [round_values(x, n) for x in xs]
+    if type(xs) == np.ndarray:
+        return numpyize([round_values(x, n) for x in xs])
+    if type(xs) == tuple:
+        return tuple([round_values(x, n) for x in xs])
+    if type(xs) == OrderedDict:
+        return OrderedDict([(k, round_values(xs[k], n)) for k in xs])
+    return xs
+
+
 def determine_config_type(config: dict) -> str:
     if 'long' in config and 'shrt' in config:
         if all((key in config['long'] and key in config['shrt'])
