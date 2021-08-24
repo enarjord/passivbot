@@ -319,8 +319,8 @@ def save_results(analysis, config):
 
 
 async def execute_optimize(config):
-    if config['exchange'] == 'bybit' and not config['inverse']:
-        print('bybit usdt linear backtesting not supported')
+    if config['exchange'] == 'bybit' and not config['inverse'] and config['config_type'] == 'vanilla':
+        print('bybit usdt linear vanilla backtesting not supported at this time')
         return
     if not (config['do_long'] and config['do_shrt']):
         if not (config['do_long'] or config['do_shrt']):
