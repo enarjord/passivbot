@@ -536,7 +536,7 @@ def calc_long_close_grid(long_psize,
         long_closes = []
         remaining = long_psize
         for close_price in close_prices:
-            if not remaining or remaining / default_qty < 0.5:
+            if not remaining or remaining / default_qty < 0.5 or remaining < min_close_qty:
                 break
             close_qty = min(remaining, max(default_qty, min_close_qty))
             long_closes.append((-close_qty, close_price, 'long_nclose'))
