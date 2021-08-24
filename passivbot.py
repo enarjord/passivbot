@@ -43,6 +43,7 @@ class Bot:
                           'update_position': 0.0, 'print': 0.0, 'create_orders': 0.0,
                           'check_fills': 0.0, 'update_fills': 0.0}
         self.ts_released = {k: 1.0 for k in self.ts_locked}
+        self.heartbeat_ts = 0
 
         self.position = {}
         self.open_orders = []
@@ -493,9 +494,11 @@ class Bot:
             return
         if time() - self.ts_released['print'] >= 0.5:
             await self.update_output_information()
-
         if time() - self.ts_released['check_fills'] > 120:
             asyncio.create_task(self.check_fills())
+        if time() - self.heartbeat_ts > 60 * 5:
+            print_(['heartbeat\n'], n=True)
+            self.heartbeat_ts = time()
 
     async def check_fills(self):
         if self.ts_locked['check_fills'] > self.ts_released['check_fills']:
@@ -510,7 +513,6 @@ class Bot:
                 # minimum 5 sec between consecutive check fills
                 return
             self.ts_locked['check_fills'] = now
-            print_(['checking if new fills...\n'], n=True)
             # check fills if two mins since prev check has passed
             new_fills = await self.update_fills()
             if new_fills:
