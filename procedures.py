@@ -84,7 +84,9 @@ async def prepare_optimize_config(args) -> dict:
             config[key] = getattr(args, key)
         elif key not in config:
             config[key] = None
-    return {**config, **load_hjson_config(args.optimize_config_path)}
+    config.update(load_hjson_config(args.optimize_config_path))
+    config['avg_periodic_gain_key'] = f"avg_{int(round(config['periodic_gain_n_days']))}days_gain"
+    return config
 
 
 async def add_market_specific_settings(config):
