@@ -496,7 +496,7 @@ class Bot:
             await self.update_output_information()
         if time() - self.ts_released['check_fills'] > 120:
             asyncio.create_task(self.check_fills())
-        if time() - self.heartbeat_ts > 60 * 5:
+        if time() - self.heartbeat_ts > 60 * 60:
             print_(['heartbeat\n'], n=True)
             self.heartbeat_ts = time()
 
