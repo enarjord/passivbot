@@ -497,7 +497,8 @@ def calc_shrt_scalp_entry(
 
 
 @njit
-def calc_long_close_grid(long_psize,
+def calc_long_close_grid(balance,
+                         long_psize,
                          long_pprice,
                          lowest_ask,
 
@@ -510,6 +511,7 @@ def calc_long_close_grid(long_psize,
                          c_mult,
                          max_leverage,
 
+                         primary_initial_qty_pct,
                          min_markup,
                          markup_range,
                          n_close_orders) -> [(float, float, str)]:
@@ -536,7 +538,9 @@ def calc_long_close_grid(long_psize,
         long_closes = []
         remaining = long_psize
         for close_price in close_prices:
-            if not remaining or remaining / default_qty < 0.5 or remaining < min_close_qty:
+            if remaining < max([min_close_qty,
+                                cost_to_qty(balance, close_price, inverse, c_mult) * primary_initial_qty_pct * 0.5,
+                                default_qty * 0.5]):
                 break
             close_qty = min(remaining, max(default_qty, min_close_qty))
             long_closes.append((-close_qty, close_price, 'long_nclose'))
@@ -550,7 +554,8 @@ def calc_long_close_grid(long_psize,
 
 
 @njit
-def calc_shrt_close_grid(shrt_psize,
+def calc_shrt_close_grid(balance,
+                         shrt_psize,
                          shrt_pprice,
                          highest_bid,
 
@@ -563,6 +568,7 @@ def calc_shrt_close_grid(shrt_psize,
                          c_mult,
                          max_leverage,
 
+                         primary_initial_qty_pct,
                          min_markup,
                          markup_range,
                          n_close_orders) -> [(float, float, str)]:
@@ -587,7 +593,9 @@ def calc_shrt_close_grid(shrt_psize,
         shrt_closes = []
         remaining = -shrt_psize
         for close_price in close_prices:
-            if not remaining or remaining / default_qty < 0.5:
+            if remaining < max([min_close_qty,
+                                cost_to_qty(balance, close_price, inverse, c_mult) * primary_initial_qty_pct * 0.5,
+                                default_qty * 0.5]):
                 break
             close_qty = min(remaining, default_qty)
             shrt_closes.append((close_qty, close_price, 'shrt_nclose'))
@@ -670,14 +678,14 @@ def njit_backtest_scalp(
                 secondary_grid_spacing[1], secondary_pbr_limit_added[1]
             )
             long_closes = calc_long_close_grid(
-                long_psize, long_pprice, prices[k], spot, inverse, qty_step,
-                price_step, min_qty, min_cost, c_mult, max_leverage, min_markup[0],
-                markup_range[0], n_close_orders[0]
+                balance, long_psize, long_pprice, prices[k], spot, inverse, qty_step,
+                price_step, min_qty, min_cost, c_mult, max_leverage,
+                primary_initial_qty_pct[0], min_markup[0], markup_range[0], n_close_orders[0]
             )
             shrt_closes = calc_shrt_close_grid(
-                shrt_psize, shrt_pprice, prices[k], spot, inverse, qty_step,
-                price_step, min_qty, min_cost, c_mult, max_leverage, min_markup[1],
-                markup_range[1], n_close_orders[1]
+                balance, shrt_psize, shrt_pprice, prices[k], spot, inverse, qty_step,
+                price_step, min_qty, min_cost, c_mult, max_leverage,
+                primary_initial_qty_pct[1], min_markup[1], markup_range[1], n_close_orders[1]
             )
 
             bkr_price = calc_bankruptcy_price(balance, long_psize, long_pprice, shrt_psize, shrt_pprice, inverse, c_mult)

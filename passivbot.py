@@ -378,9 +378,10 @@ class Bot:
         orders = []
         if do_long:
             long_closes = calc_long_close_grid(
-                long_psize, long_pprice, self.ob[1], self.spot, self.inverse, self.qty_step,
+                balance, long_psize, long_pprice, self.ob[1], self.spot, self.inverse, self.qty_step,
                 self.price_step, self.min_qty, self.min_cost, self.c_mult, self.max_leverage,
-                self.xk['min_markup'][0], self.xk['markup_range'][0], self.xk['n_close_orders'][0]
+                self.xk['primary_initial_qty_pct'][0], self.xk['min_markup'][0], self.xk['markup_range'][0],
+                self.xk['n_close_orders'][0]
             )
             long_closes = [{'side': 'sell', 'position_side': 'long', 'qty': abs(x[0]),
                             'price': x[1], 'type': 'limit', 'custom_id': x[2]}
@@ -411,9 +412,10 @@ class Bot:
         if do_shrt:
             shrt_entries = []
             shrt_closes = calc_shrt_close_grid(
-                shrt_psize, shrt_pprice, self.ob[0], self.spot, self.inverse, self.qty_step,
+                balance, shrt_psize, shrt_pprice, self.ob[0], self.spot, self.inverse, self.qty_step,
                 self.price_step, self.min_qty, self.min_cost, self.c_mult, self.max_leverage,
-                self.xk['min_markup'][1], self.xk['markup_range'][1], self.xk['n_close_orders'][1]
+                self.xk['primary_initial_qty_pct'][1], self.xk['min_markup'][1], self.xk['markup_range'][1],
+                self.xk['n_close_orders'][1]
             )
             shrt_closes = [{'side': 'buy', 'position_side': 'shrt', 'qty': abs(x[0]),
                             'price': x[1], 'type': 'limit', 'custom_id': x[2]}
