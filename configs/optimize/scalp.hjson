@@ -10,10 +10,12 @@
   # set to 0.0 to disable breaking early
   break_early_factor: 0.5
 
-  minimum_sharpe_ratio: 0.5
+  metric: adjusted_daily_gain
+
+  minimum_sharpe_ratio: 0.9
   minimum_bankruptcy_distance: 0.4
   minimum_equity_balance_ratio: 0.5
-  minimum_slice_adg: 1.0
+  minimum_slice_adg: -0.01
   maximum_hrs_no_fills: 100.0
   maximum_hrs_no_fills_same_side: 100.0
   maximum_mean_hrs_between_fills: 10.0
@@ -32,11 +34,6 @@
   # if objective becomes too large, reduce reward_multiplier_base to some num > 1.0
   reward_multiplier_base: 1.2
 
-  metric: adjusted_daily_gain
-
-  # ema settings
-  n_spans: 3
-
   # will override any starting configs' long/shrt enabled parameter
   do_long: true
   do_shrt: false
@@ -48,10 +45,10 @@
     long£primary_initial_qty_pct: [0.001, 0.15]
     long£primary_ddown_factor: [0.3, 3.0]
     long£primary_grid_spacing: [0.001, 0.03]
-    long£primary_grid_spacing_pbr_weighting: [0.0, 0.06]
-    long£primary_pbr_limit: [0.3, 1.0]
+    long£primary_grid_spacing_pbr_weighting: [0.0, 0.09]
+    long£primary_pbr_limit: [0.3, 2.0]
     long£secondary_ddown_factor: [0.3, 3.0]
-    long£secondary_grid_spacing: [0.07, 0.4]
+    long£secondary_grid_spacing: [0.09, 0.4]
     long£secondary_pbr_limit_added: [0.3, 1.0]
     long£min_markup: [0.0005, 0.005]
     long£markup_range: [0.004, 0.01]
@@ -60,10 +57,10 @@
     shrt£primary_initial_qty_pct: [0.001, 0.15]
     shrt£primary_ddown_factor: [0.3, 3.0]
     shrt£primary_grid_spacing: [0.001, 0.03]
-    shrt£primary_grid_spacing_pbr_weighting: [0.0, 0.06]
-    shrt£primary_pbr_limit: [0.3, 1.0]
+    shrt£primary_grid_spacing_pbr_weighting: [0.0, 0.09]
+    shrt£primary_pbr_limit: [0.3, 2.0]
     shrt£secondary_ddown_factor: [0.3, 3.0]
-    shrt£secondary_grid_spacing: [0.07, 0.4]
+    shrt£secondary_grid_spacing: [0.09, 0.4]
     shrt£secondary_pbr_limit_added: [0.3, 1.0]
     shrt£min_markup: [0.0005, 0.005]
     shrt£markup_range: [0.004, 0.01]
