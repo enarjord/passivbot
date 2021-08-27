@@ -339,7 +339,6 @@ class BinanceBot(Bot):
             return []
         return fills
 
-
     async def fetch_income(self, limit: int = 1000, start_time: int = None, end_time: int = None):
         params = {'symbol': self.symbol, 'limit': limit}
         if start_time is not None:
