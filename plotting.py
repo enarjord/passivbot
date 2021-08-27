@@ -30,7 +30,7 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
     table.add_row(['Final equity', f"{profit_color}{round_dynamic(result['result']['final_equity'], 6)}{Fore.RESET}"])
     table.add_row(['Net PNL + fees', f"{profit_color}{round_dynamic(result['result']['net_pnl_plus_fees'], 6)}{Fore.RESET}"])
     table.add_row(['Total gain percentage', f"{profit_color}{round_dynamic(result['result']['gain'] * 100 - 100, 4)}%{Fore.RESET}"])
-    table.add_row(['Average daily gain percentage', f"{profit_color}{round_dynamic((result['result']['average_daily_gain'] - 1) * 100, 3)}%{Fore.RESET}"])
+    table.add_row(['Average daily gain percentage', f"{profit_color}{round_dynamic((result['result']['average_daily_gain']) * 100, 3)}%{Fore.RESET}"])
     table.add_row(['Adjusted daily gain', f"{profit_color}{round_dynamic(result['result']['adjusted_daily_gain'], 6)}{Fore.RESET}"])
     table.add_row([f"{result['avg_periodic_gain_key']} percentage", f"{profit_color}{round_dynamic(result['result']['average_periodic_gain'] * 100, 3)}%{Fore.RESET}"])
     bankruptcy_color = Fore.RED if result['result']['closest_bkr'] < 0.4 else Fore.YELLOW if result['result']['closest_bkr'] < 0.8 else Fore.RESET
@@ -108,7 +108,7 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
     plt.savefig(f"{result['plots_dirpath']}pnl_cumsum_shrt.png")
 
     plt.clf()
-    fdf.adg.plot()
+    fdf.adg.iloc[int(len(fdf) * 0.05):].plot()
     plt.savefig(f"{result['plots_dirpath']}adg.png")
 
     print('plotting backtest whole and in chunks...')
