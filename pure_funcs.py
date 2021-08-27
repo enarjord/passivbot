@@ -178,7 +178,7 @@ def candidate_to_live_config(candidate: dict) -> dict:
         n_days = 0
     name += f"_{n_days:.0f}days"
     if 'average_daily_gain' in result_dict:
-        name += f"_adg{(result_dict['average_daily_gain'] - 1) * 100:.2f}%"
+        name += f"_adg{(result_dict['average_daily_gain']) * 100:.2f}%"
     elif 'daily_gain' in result_dict:
         name += f"_adg{(result_dict['daily_gain'] - 1) * 100:.2f}%"
     if 'closest_bkr' in result_dict:
@@ -453,7 +453,6 @@ def get_empty_analysis(bc: dict) -> dict:
         'average_periodic_gain': 0.0,
         'adjusted_daily_gain': 0.0,
         'sharpe_ratio': 0.0,
-        'time_between_fills_sharpe_ratio': 0.0,
         'profit_sum': 0.0,
         'loss_sum': 0.0,
         'fee_sum': 0.0,
@@ -483,7 +482,7 @@ def analyze_fills(fills: list, config: dict, first_ts: float, last_ts: float) ->
     if fdf.empty:
         return fdf, get_empty_analysis(config)
     fdf.columns = ['trade_id', 'timestamp', 'pnl', 'fee_paid', 'balance', 'equity', 'pbr', 'qty', 'price', 'psize', 'pprice', 'type']
-    adgs = (fdf.equity / config['starting_balance']) ** (1 / ((fdf.timestamp - first_ts) / (1000 * 60 * 60 * 24)))
+    adgs = (fdf.equity / config['starting_balance']) ** (1 / ((fdf.timestamp - first_ts) / (1000 * 60 * 60 * 24))) - 1
     fdf = fdf.join(adgs.rename('adg')).set_index('trade_id')
 
     longs = fdf[fdf.type.str.contains('long')]
@@ -520,12 +519,11 @@ def analyze_fills(fills: list, config: dict, first_ts: float, last_ts: float) ->
     periodic_gains = periodic_gains.reindex(np.arange(periodic_gains.index[0], periodic_gains.index[-1], ms_span)).fillna(0.0)
     periodic_gains_mean = np.nan_to_num(periodic_gains.mean())
     periodic_gains_std = periodic_gains.std()
-    sharpe_ratio = periodic_gains_mean / periodic_gains_std if periodic_gains_std != 0.0 else -20.0
+    sharpe_ratio = (periodic_gains_mean / periodic_gains_std) if periodic_gains_std != 0.0 else -20.0
     sharpe_ratio = np.nan_to_num(sharpe_ratio)
 
     ms_between_fills = np.mean(np.diff([first_ts] + list(fdf.timestamp) + [last_ts]))
     ms_between_fills_std = ms_between_fills.std()
-    time_between_fills_sharpe_ratio = ms_between_fills.mean() / ms_between_fills_std if ms_between_fills_std != 0.0 else -20.0
     result = {
         'exchange': config['exchange'] if 'exchange' in config else 'unknown',
         'symbol': config['symbol'] if 'symbol' in config else 'unknown',
@@ -535,11 +533,10 @@ def analyze_fills(fills: list, config: dict, first_ts: float, last_ts: float) ->
         'net_pnl_plus_fees': fdf.pnl.sum() + fdf.fee_paid.sum(),
         'gain': (gain := fdf.iloc[-1].equity / config['starting_balance']),
         'n_days': (n_days := (last_ts - first_ts) / (1000 * 60 * 60 * 24)),
-        'average_daily_gain': (adg := gain ** (1 / n_days) if gain > 0.0 and n_days > 0.0 else 0.0),
+        'average_daily_gain': (adg := gain ** (1 / n_days) - 1 if gain > 0.0 and n_days > 0.0 else 0.0),
         'average_periodic_gain': periodic_gains_mean,
-        'adjusted_daily_gain': np.tanh(10 * (adg - 1)) + 1,
+        'adjusted_daily_gain': np.tanh(20 * adg) / 20,
         'sharpe_ratio': sharpe_ratio,
-        'time_between_fills_sharpe_ratio': time_between_fills_sharpe_ratio,
         'profit_sum': fdf[fdf.pnl > 0.0].pnl.sum(),
         'loss_sum': fdf[fdf.pnl < 0.0].pnl.sum(),
         'fee_sum': fdf.fee_paid.sum(),
