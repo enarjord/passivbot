@@ -24,6 +24,7 @@ from downloader import Downloader
 from procedures import prepare_optimize_config, add_argparse_args
 from pure_funcs import pack_config, unpack_config, get_template_live_config, \
      ts_to_date, analyze_fills
+from njit_funcs import round_dynamic
 from reporter import LogReporter
 
 os.environ['TUNE_GLOBAL_CHECKPOINT_S'] = '240'
@@ -101,19 +102,36 @@ def iter_slices(data, sliding_window_days: float, max_span: int):
         yield ds
 
 
-def objective_function(analysis: dict, config: dict, metric='adjusted_daily_gain') -> float:
+def objective_function(analysis: dict, config: dict, metric='adjusted_daily_gain') -> (float, bool, str):
     if analysis['n_fills'] == 0:
         return -1.0
-    return (
-        analysis[metric]
-        * min(1.0, config['maximum_hrs_no_fills'] / analysis['max_hrs_no_fills'])
-        * min(1.0, config['maximum_hrs_no_fills_same_side'] / analysis['max_hrs_no_fills_same_side'])
-        * min(1.0, config['maximum_mean_hrs_between_fills'] / analysis['mean_hrs_between_fills'])
-        * min(1.0, analysis['closest_bkr'] / config['minimum_bankruptcy_distance'])
-        * min(1.0, analysis['lowest_eqbal_ratio'] / config['minimum_equity_balance_ratio'])
-        * min(1.0, analysis['sharpe_ratio'] / config['minimum_sharpe_ratio'])
-        * min(1.0, analysis['average_daily_gain'] / config['minimum_slice_adg'])
-    )
+    obj = analysis[metric]
+    break_early = False
+    line = ''
+    for ckey, akey in [('maximum_hrs_no_fills',           'max_hrs_no_fills'),
+                       ('maximum_hrs_no_fills_same_side', 'max_hrs_no_fills_same_side'),
+                       ('maximum_mean_hrs_between_fills', 'mean_hrs_between_fills')]:
+        # minimize these
+        if config[ckey] != 0.0:
+            obj *= min(1.0, config[ckey] / analysis[akey])
+            if config['break_early_factor'] != 0.0 and analysis[akey] > config[ckey] * (1 + config['break_early_factor']):
+                break_early = True
+                line += f" broke on {ckey} {round_dynamic(analysis[akey], 5)}"
+    for ckey, akey in [('minimum_bankruptcy_distance',    'closest_bkr'),
+                       ('minimum_equity_balance_ratio',   'lowest_eqbal_ratio'),
+                       ('minimum_sharpe_ratio',           'sharpe_ratio')]:
+        # maximize these
+        if config[ckey] != 0.0:
+            obj *= min(1.0, analysis[akey] / config[ckey])
+            if config['break_early_factor'] != 0.0 and analysis[akey] < config[ckey] * (1 - config['break_early_factor']):
+                break_early = True
+                line += f" broke on {ckey} {round_dynamic(analysis[akey], 5)}"
+    for ckey, akey in [('minimum_slice_adg',    'average_daily_gain')]:
+        # absolute requirements
+        if analysis[akey] < config[ckey]:
+                break_early = True
+                line += f" broke on {ckey} {round_dynamic(analysis[akey], 5)}"
+    return obj, break_early, line
 
 
 def single_sliding_window_run(config, data, do_print=True) -> (float, [dict]):
@@ -146,7 +164,8 @@ def single_sliding_window_run(config, data, do_print=True) -> (float, [dict]):
         _, analysis = analyze_fills(fills, {**packed, **{'lowest_eqbal_ratio': info[1], 'closest_bkr': info[2]}},
                                     data_slice[max_span_ito_n_samples][0],
                                     data_slice[-1][0])
-        analysis['score'] = objective_function(analysis, config, metric=metric) * (analysis['n_days'] / config['n_days'])
+        analysis['score'], do_break, line = objective_function(analysis, config, metric=metric)
+        analysis['score'] *= (analysis['n_days'] / config['n_days'])
         analyses.append(analysis)
         objective = np.mean([e['score'] for e in analyses]) * max(1.01, config['reward_multiplier_base']) ** (z + 1)
         analyses[-1]['objective'] = objective
@@ -156,30 +175,7 @@ def single_sliding_window_run(config, data, do_print=True) -> (float, [dict]):
                 f'shrp {analysis["sharpe_ratio"]:.4f} , '
                 f'{config["avg_periodic_gain_key"]} {analysis["average_periodic_gain"]:.4f}, '
                 f'score {analysis["score"]:.4f}, objective {objective:.4f}, '
-                f'hrs stuck ss {str(round(analysis["max_hrs_no_fills_same_side"], 1)).zfill(4)}, ')
-        do_break = False
-        if (bef := config['break_early_factor']) != 0.0:
-            if analysis['closest_bkr'] < config['minimum_bankruptcy_distance'] * (1 - bef):
-                line += f"broke on min_bkr {analysis['closest_bkr']:.4f}, {config['minimum_bankruptcy_distance']} "
-                do_break = True
-            if analysis['lowest_eqbal_ratio'] < config['minimum_equity_balance_ratio'] * (1 - bef):
-                line += f"broke on min_eqbal_r {analysis['lowest_eqbal_ratio']:.4f} "
-                do_break = True
-            if analysis['sharpe_ratio'] < config['minimum_sharpe_ratio'] * (1 - bef):
-                line += f"broke on shrp_r {analysis['sharpe_ratio']:.4f} {config['minimum_sharpe_ratio']} "
-                do_break = True
-            if analysis['max_hrs_no_fills'] > config['maximum_hrs_no_fills'] * (1 + bef):
-                line += f"broke on max_h_n_fls {analysis['max_hrs_no_fills']:.4f}, {config['maximum_hrs_no_fills']} "
-                do_break = True
-            if analysis['max_hrs_no_fills_same_side'] > config['maximum_hrs_no_fills_same_side'] * (1 + bef):
-                line += f"broke on max_h_n_fls_ss {analysis['max_hrs_no_fills_same_side']:.4f}, {config['maximum_hrs_no_fills_same_side']} "
-                do_break = True
-            if analysis['mean_hrs_between_fills'] > config['maximum_mean_hrs_between_fills'] * (1 + bef):
-                line += f"broke on mean_h_b_fls {analysis['mean_hrs_between_fills']:.4f}, {config['maximum_mean_hrs_between_fills']} "
-                do_break = True
-            if analysis['average_daily_gain'] < config['minimum_slice_adg'] * (1 - bef):
-                line += f"broke on low adg {analysis['average_daily_gain']:.4f} "
-                do_break = True
+                f'hrs stuck ss {str(round(analysis["max_hrs_no_fills_same_side"], 1)).zfill(4)}, ') + line
         if do_print:
             print(line)
         if do_break:
