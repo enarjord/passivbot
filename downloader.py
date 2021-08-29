@@ -1,13 +1,12 @@
 import argparse
 import asyncio
 import datetime
-import gc
+import gzip
 import os
 import sys
-import gzip
 from io import BytesIO
-from time import sleep
 from time import time
+from typing import Tuple
 from urllib.request import urlopen
 from zipfile import ZipFile
 
@@ -15,10 +14,10 @@ import numpy as np
 import pandas as pd
 from dateutil import parser
 
-from procedures import prepare_backtest_config, make_get_filepath, create_binance_bot, create_bybit_bot, create_binance_bot_spot, \
-    print_, add_argparse_args
 from njit_funcs import calc_samples
-from pure_funcs import ts_to_date, get_dummy_settings
+from procedures import prepare_backtest_config, make_get_filepath, create_binance_bot, create_bybit_bot, \
+    create_binance_bot_spot, print_, add_argparse_args
+from pure_funcs import ts_to_date, get_dummy_settings, get_utc_now_timestamp
 
 
 class Downloader:
@@ -32,17 +31,17 @@ class Downloader:
         self.spot = 'spot' in config and config['spot']
         self.tick_filepath = os.path.join(config["caches_dirpath"], f"{config['session_name']}_ticks_cache.npy")
         try:
-            self.start_time = int(parser.parse(self.config["start_date"]).replace(
-                tzinfo=datetime.timezone.utc).timestamp() * 1000)
+            self.start_time = int(
+                parser.parse(self.config["start_date"]).replace(tzinfo=datetime.timezone.utc).timestamp() * 1000)
         except Exception:
             raise Exception(f"Unrecognized date format for start time {config['start_date']}")
-        self.end_time = self.config["end_date"]
-        if self.end_time != -1:
-            try:
-                self.end_time = int(
-                    parser.parse(self.end_time).replace(tzinfo=datetime.timezone.utc).timestamp() * 1000)
-            except Exception:
-                raise Exception(f"Unrecognized date format for end time {config['end_date']}")
+        try:
+            self.end_time = int(
+                parser.parse(self.config["end_date"]).replace(tzinfo=datetime.timezone.utc).timestamp() * 1000)
+            if self.end_time > get_utc_now_timestamp():
+                raise Exception(f"End date later than current time {config['end_date']}")
+        except Exception:
+            raise Exception(f"Unrecognized date format for end time {config['end_date']}")
         if self.config['exchange'] == 'binance':
             if self.spot:
                 self.daily_base_url = "https://data.binance.vision/data/spot/daily/aggTrades/"
@@ -62,10 +61,11 @@ class Downloader:
                              self.config["symbol"], ""))
         else:
             self.filepath = make_get_filepath(
-                os.path.join("historical_data", self.config["exchange"], f"agg_trades_{'spot' if self.spot else 'futures'}",
+                os.path.join("historical_data", self.config["exchange"],
+                             f"agg_trades_{'spot' if self.spot else 'futures'}",
                              self.config["symbol"], ""))
 
-    def validate_dataframe(self, df: pd.DataFrame) -> tuple:
+    def validate_dataframe(self, df: pd.DataFrame) -> Tuple[bool, pd.DataFrame, pd.DataFrame]:
         """
         Validates a dataframe and detects gaps in it. Also detects missing trades in the beginning and end.
         @param df: Dataframe to check for gaps.
@@ -103,7 +103,7 @@ class Downloader:
             gaps["start"] = gaps["start"].replace(0, 1)
             return True, df, gaps
 
-    def read_dataframe(self, path) -> pd.DataFrame:
+    def read_dataframe(self, path: str) -> pd.DataFrame:
         """
         Reads a dataframe with correct data types.
         @param path: The path to the dataframe.
@@ -114,10 +114,8 @@ class Downloader:
                              dtype={"trade_id": np.int64, "price": np.float64, "qty": np.float64, "timestamp": np.int64,
                                     "is_buyer_maker": np.int8})
         except ValueError as e:
-            df = pd.read_csv(path)
-            df = df.drop("side", axis=1).join(pd.Series(df.side == "Sell", name="is_buyer_maker", index=df.index))
-            df = df.astype({"trade_id": np.int64, "price": np.float64, "qty": np.float64, "timestamp": np.int64,
-                            "is_buyer_maker": np.int8})
+            df = pd.DataFrame()
+            print_(['Error in reading dataframe', e])
         return df
 
     def save_dataframe(self, df, filename, missing):
@@ -278,20 +276,20 @@ class Downloader:
             guessed_chunk = sorted(await self.bot.fetch_ticks(do_print=False), key=lambda x: x['trade_id'])
             return await self.find_df_enclosing_timestamp(timestamp, guessed_chunk)
 
-
         if timestamp < guessed_chunk[0]['timestamp']:
             guessed_id = (guessed_chunk[0]['trade_id'] -
-                          len(guessed_chunk) * 
+                          len(guessed_chunk) *
                           (guessed_chunk[0]['timestamp'] - timestamp) /
-                           (guessed_chunk[-1]['timestamp'] - guessed_chunk[0]['timestamp']))
+                          (guessed_chunk[-1]['timestamp'] - guessed_chunk[0]['timestamp']))
         else:
             guessed_id = (guessed_chunk[-1]['trade_id'] +
-                          len(guessed_chunk) * 
+                          len(guessed_chunk) *
                           (timestamp - guessed_chunk[-1]['timestamp']) /
-                           (guessed_chunk[-1]['timestamp'] - guessed_chunk[0]['timestamp']))
+                          (guessed_chunk[-1]['timestamp'] - guessed_chunk[0]['timestamp']))
         guessed_id = int(guessed_id - len(guessed_chunk) / 2)
         guessed_chunk = sorted(await self.bot.fetch_ticks(guessed_id, do_print=False), key=lambda x: x['trade_id'])
-        print_([f"guessed_id {guessed_id} earliest ts {ts_to_date(guessed_chunk[0]['timestamp'] / 1000)[:19]} last ts {ts_to_date(guessed_chunk[-1]['timestamp'] / 1000)[:19]} target ts {ts_to_date(timestamp / 1000)[:19]}"])
+        print_([
+            f"guessed_id {guessed_id} earliest ts {ts_to_date(guessed_chunk[0]['timestamp'] / 1000)[:19]} last ts {ts_to_date(guessed_chunk[-1]['timestamp'] / 1000)[:19]} target ts {ts_to_date(timestamp / 1000)[:19]}"])
         return await self.find_df_enclosing_timestamp(timestamp, guessed_chunk)
 
     def deduce_trade_ids(self, daily_ticks, df_for_id_matching):
@@ -302,10 +300,9 @@ class Downloader:
             if len(match) == 1:
                 id_at_match = df_for_id_matching.trade_id.iloc[idx]
                 return np.arange(id_at_match - match.index[0], id_at_match - match.index[0] + len(daily_ticks))
-                #trade_ids = np.arange(id_at_match, id_at_match + len(daily_ticks.loc[match.index:]))
+                # trade_ids = np.arange(id_at_match, id_at_match + len(daily_ticks.loc[match.index:]))
                 return match, id_at_match
         raise Exception('unable to make trade ids')
-
 
     async def get_csv_gz(self, base_url, symbol, date, df_for_id_matching):
         """
@@ -392,8 +389,7 @@ class Downloader:
                     for i in gaps.index:
                         print_(['Filling gaps from id', gaps["start"].iloc[i], 'to id', gaps["end"].iloc[i]])
                         current_id = gaps["start"].iloc[i]
-                        while current_id < gaps["end"].iloc[i] and int(
-                                datetime.datetime.now(datetime.timezone.utc).timestamp() * 1000) - current_time > 10000:
+                        while current_id < gaps["end"].iloc[i] and get_utc_now_timestamp() - current_time > 10000:
                             loop_start = time()
                             try:
                                 fetched_new_trades = await self.bot.fetch_ticks(int(current_id))
@@ -414,7 +410,7 @@ class Downloader:
                                 df.reset_index(drop=True, inplace=True)
                                 current_time = df["timestamp"].iloc[-1]
                             except Exception:
-                                print("Failed to fetch or transform...")
+                                print_(["Failed to fetch or transform..."])
                             await asyncio.sleep(max(0.0, self.fetch_delay_seconds - time() + loop_start))
                 if not df.empty:
                     if df["trade_id"].iloc[-1] > highest_id:
@@ -438,23 +434,17 @@ class Downloader:
             last_id = int(f.split("_")[1])
             first_time = int(f.split("_")[2])
             last_time = int(f.split("_")[3].split(".")[0])
-            if first_id - 1 != prev_last_id and f not in mod_files:
-                if first_time >= prev_last_time and first_time >= self.start_time:
-                    if self.end_time != -1 and self.end_time < first_time and not prev_last_time > self.end_time:
-                        chunk_gaps.append((prev_last_time, self.end_time, prev_last_id, 0))
-                    elif self.end_time == -1 or self.end_time > first_time:
-                        chunk_gaps.append((prev_last_time, first_time, prev_last_id, first_id))
+            if first_id - 1 != prev_last_id and f not in mod_files and first_time >= prev_last_time and \
+                    first_time >= self.start_time and self.end_time < first_time and not prev_last_time > self.end_time:
+                chunk_gaps.append((prev_last_time, self.end_time, prev_last_id, 0))
             if first_time >= self.start_time or last_time >= self.start_time:
                 prev_last_id = last_id
                 prev_last_time = last_time
 
         if len(filenames) < 1:
             chunk_gaps.append((self.start_time, self.end_time, 0, 0))
-        else:
-            if self.end_time == -1:
-                chunk_gaps.append((prev_last_time, self.end_time, prev_last_id, 0))
-            elif prev_last_time < self.end_time:
-                chunk_gaps.append((prev_last_time, self.end_time, prev_last_id, 0))
+        elif prev_last_time < self.end_time:
+            chunk_gaps.append((prev_last_time, self.end_time, prev_last_id, 0))
 
         for gaps in chunk_gaps:
             start_time, end_time, start_id, end_id = gaps
@@ -472,15 +462,10 @@ class Downloader:
                     start_time = earliest
                     current_time = start_time
 
-                if end_time == -1:
-                    tmp = pd.date_range(
-                        start=datetime.datetime.fromtimestamp(start_time / 1000, datetime.timezone.utc).date(),
-                        end=datetime.datetime.now(datetime.timezone.utc).date(), freq='D').to_pydatetime()
-                else:
-                    tmp = pd.date_range(
-                        start=datetime.datetime.fromtimestamp(start_time / 1000, datetime.timezone.utc).date(),
-                        end=datetime.datetime.fromtimestamp(end_time / 1000, datetime.timezone.utc).date(),
-                        freq='D').to_pydatetime()
+                tmp = pd.date_range(
+                    start=datetime.datetime.fromtimestamp(start_time / 1000, datetime.timezone.utc).date(),
+                    end=datetime.datetime.fromtimestamp(end_time / 1000, datetime.timezone.utc).date(),
+                    freq='D').to_pydatetime()
                 days = [date.strftime("%Y-%m-%d") for date in tmp]
                 current_month = ts_to_date(time() - 60 * 60 * 3)[:7]
                 months = sorted([e for e in set([d[:7] for d in days]) if e != current_month])
@@ -497,8 +482,7 @@ class Downloader:
                         print("Something wrong with the date", date)
                         tf = pd.DataFrame()
                     tf = tf[tf['timestamp'] >= start_time]
-                    if end_time != -1:
-                        tf = tf[tf['timestamp'] <= end_time]
+                    tf = tf[tf['timestamp'] <= end_time]
                     if start_id != 0:
                         tf = tf[tf['trade_id'] > start_id]
                     if end_id != 0:
@@ -524,7 +508,7 @@ class Downloader:
                         start_time = df["timestamp"].iloc[0]
                         current_time = df["timestamp"].iloc[-1]
                         current_id = df["trade_id"].iloc[-1] + 1
-            elif False:#self.config['exchange'] == 'bybit':
+            elif False:  # self.config['exchange'] == 'bybit':
 
                 # work in progress
 
@@ -543,7 +527,6 @@ class Downloader:
 
                 days = [date.strftime("%Y-%m-%d") for date in tmp]
                 dates = days
-
 
                 if start_id == 0:
                     df_for_id_matching = await self.find_df_enclosing_timestamp(start_time)
@@ -587,27 +570,18 @@ class Downloader:
                         current_time = df["timestamp"].iloc[-1]
                         current_id = df["trade_id"].iloc[-1] + 1
 
-
-
-
             if start_id == 0:
                 df = await self.find_time(start_time)
                 current_id = df["trade_id"].iloc[-1] + 1
                 current_time = df["timestamp"].iloc[-1]
 
             end_id = sys.maxsize if end_id == 0 else end_id - 1
-            end_time = sys.maxsize if end_time == -1 else end_time
 
-            if current_id <= end_id and current_time <= end_time and int(
-                    datetime.datetime.now(datetime.timezone.utc).timestamp() * 1000) - current_time > 10000:
-                if end_time == sys.maxsize:
-                    print_(['Downloading from', ts_to_date(float(current_time) / 1000), 'to current time...'])
-                else:
-                    print_(['Downloading from', ts_to_date(float(current_time) / 1000), 'to',
-                            ts_to_date(float(end_time) / 1000)])
+            if current_id <= end_id and current_time <= end_time and get_utc_now_timestamp() - current_time > 10000:
+                print_(['Downloading from', ts_to_date(float(current_time) / 1000), 'to',
+                        ts_to_date(float(end_time) / 1000)])
 
-            while current_id <= end_id and current_time <= end_time and int(
-                    datetime.datetime.now(datetime.timezone.utc).timestamp() * 1000) - current_time > 10000:
+            while current_id <= end_id and current_time <= end_time and get_utc_now_timestamp() - current_time > 10000:
                 loop_start = time()
                 fetched_new_trades = await self.bot.fetch_ticks(int(current_id))
                 tf = self.transform_ticks(fetched_new_trades)
