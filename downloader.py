@@ -118,7 +118,7 @@ class Downloader:
             print_(['Error in reading dataframe', e])
         return df
 
-    def save_dataframe(self, df, filename, missing):
+    def save_dataframe(self, df: pd.DataFrame, filename: str, missing: bool, verified: bool) -> str:
         """
         Saves a processed dataframe. Creates the name based on first and last trade id and first and last timestamp.
         Deletes dataframes that are obsolete. For example, when gaps were filled.
@@ -127,7 +127,10 @@ class Downloader:
         @param missing: If the dataframe had gaps.
         @return:
         """
-        new_name = f'{df["trade_id"].iloc[0]}_{df["trade_id"].iloc[-1]}_{df["timestamp"].iloc[0]}_{df["timestamp"].iloc[-1]}.csv'
+        if verified:
+            new_name = f'{df["trade_id"].iloc[0]}_{df["trade_id"].iloc[-1]}_{df["timestamp"].iloc[0]}_{df["timestamp"].iloc[-1]}_verified.csv'
+        else:
+            new_name = f'{df["trade_id"].iloc[0]}_{df["trade_id"].iloc[-1]}_{df["timestamp"].iloc[0]}_{df["timestamp"].iloc[-1]}.csv'
         if new_name != filename:
             print_(['Saving file', new_name])
             df.to_csv(os.path.join(self.filepath, new_name), index=False)
@@ -357,13 +360,16 @@ class Downloader:
         mod_files = []
         highest_id = 0
         for f in filenames:
+            verified = False
             try:
                 first_time = int(f.split("_")[2])
                 last_time = int(f.split("_")[3].split(".")[0])
+                if len(f.split("_")) > 4:
+                    verified = True
             except:
                 first_time = sys.maxsize
                 last_time = sys.maxsize
-            if last_time >= self.start_time and (
+            if not verified and last_time >= self.start_time and (
                     self.end_time == -1 or (first_time <= self.end_time)) or last_time == sys.maxsize:
                 print_(['Validating file', f])
                 df = self.read_dataframe(os.path.join(self.filepath, f))
@@ -371,6 +377,7 @@ class Downloader:
                 exists = False
                 if gaps.empty:
                     first_id = df["trade_id"].iloc[0]
+                    self.save_dataframe(df, f, missing, True)
                 else:
                     first_id = df["trade_id"].iloc[0] if df["trade_id"].iloc[0] < gaps["start"].iloc[0] else \
                         gaps["start"].iloc[0]
@@ -419,7 +426,7 @@ class Downloader:
                     tf = df[df["trade_id"].mod(100000) == 0]
                     if len(tf) > 1:
                         df = df[:tf.index[-1]]
-                    nf = self.save_dataframe(df, f, missing)
+                    nf = self.save_dataframe(df, f, missing, verified)
                     mod_files.append(nf)
                 elif df["trade_id"].iloc[0] != 1:
                     os.remove(os.path.join(self.filepath, f))
@@ -501,7 +508,7 @@ class Downloader:
                         for index, row in df[df['trade_id'] % 100000 == 0].iterrows():
                             if index != 0:
                                 self.save_dataframe(df[(df['trade_id'] >= row['trade_id'] - 1000000) & (
-                                        df['trade_id'] < row['trade_id'])], "", True)
+                                        df['trade_id'] < row['trade_id'])], "", True, False)
                                 df = df[df['trade_id'] >= row['trade_id']]
                     if not df.empty:
                         start_id = df["trade_id"].iloc[0] - 1
@@ -602,10 +609,10 @@ class Downloader:
                 tf = df[df["trade_id"].mod(100000) == 0]
                 if not tf.empty and len(df) > 1:
                     if df["trade_id"].iloc[0] % 100000 == 0 and len(tf) > 1:
-                        self.save_dataframe(df[:tf.index[-1]], "", True)
+                        self.save_dataframe(df[:tf.index[-1]], "", True, False)
                         df = df[tf.index[-1]:]
                     elif df["trade_id"].iloc[0] % 100000 != 0 and len(tf) == 1:
-                        self.save_dataframe(df[:tf.index[-1]], "", True)
+                        self.save_dataframe(df[:tf.index[-1]], "", True, False)
                         df = df[tf.index[-1]:]
                 await asyncio.sleep(max(0.0, self.fetch_delay_seconds - time() + loop_start))
             if not df.empty:
@@ -617,7 +624,7 @@ class Downloader:
                 elif end_time != sys.maxsize and not df.empty:
                     df = df[df["timestamp"] <= end_time]
                 if not df.empty:
-                    self.save_dataframe(df, "", True)
+                    self.save_dataframe(df, "", True, False)
 
         try:
             await self.bot.session.close()
