@@ -704,10 +704,10 @@ class Downloader:
             chunk = pd.concat([left_overs, chunk])
             chunk = chunk[(chunk['timestamp'] >= self.start_time) & (chunk['timestamp'] <= self.end_time)]
 
-            chunk = chunk[
-                chunk['timestamp'] <= chunk.timestamp.iloc[-1] // sample_size_ms * sample_size_ms - 1 - sample_size_ms]
-            left_overs = chunk[
-                chunk['timestamp'] > chunk.timestamp.iloc[-1] // sample_size_ms * sample_size_ms - 1 - sample_size_ms]
+            cut_off = chunk.timestamp.iloc[-1] // sample_size_ms * sample_size_ms - 1 - sample_size_ms
+
+            chunk = chunk[chunk['timestamp'] <= cut_off]
+            left_overs = chunk[chunk['timestamp'] > cut_off]
 
             sampled_ticks = calc_samples(chunk[["timestamp", "qty", "price"]].values)
             array[current_index:current_index + len(sampled_ticks)] = sampled_ticks
