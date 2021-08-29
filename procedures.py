@@ -9,6 +9,7 @@ from time import time
 from pure_funcs import numpyize, denumpyize, candidate_to_live_config, ts_to_date, get_dummy_settings, calc_spans, \
     config_pretty_str, date_to_ts
 from njit_funcs import calc_samples
+from datetime import datetime
 
 
 def load_live_config(live_config_path: str) -> dict:
@@ -281,7 +282,8 @@ def get_starting_configs(config) -> [dict]:
     return starting_configs
 
 
-
+def utc_ms() -> float:
+    return datetime.utcnow().timestamp() * 1000
 
 
 

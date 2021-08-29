@@ -8,7 +8,8 @@ import signal
 import pprint
 from pathlib import Path
 from time import time
-from procedures import load_live_config, make_get_filepath, load_exchange_key_secret, print_, add_argparse_args
+from procedures import load_live_config, make_get_filepath, load_exchange_key_secret, print_, add_argparse_args, \
+    utc_ms
 from pure_funcs import get_xk_keys, get_ids_to_fetch, flatten, calc_indicators_from_ticks_with_gaps, \
     drop_consecutive_same_prices, filter_orders, compress_float, create_xk, round_dynamic, denumpyize, \
     calc_spans, spotify_config, get_position_fills, determine_config_type
@@ -111,7 +112,7 @@ class Bot:
 
     async def _init(self):
         self.xk = create_xk(self.config)
-        self.fills = await self.fetch_fills()
+        await self.init_fills()
 
     def dump_log(self, data) -> None:
         if self.config['logging_level'] > 0:
@@ -180,7 +181,44 @@ class Bot:
         finally:
             self.ts_released['update_position'] = time()
 
-    async def update_fills(self, max_n_fills=1000) -> [dict]:
+    async def init_fills(self, n_days_limit=60):
+        self.fills = await self.fetch_fills()
+        #self.fills = await self.fetch_all_fills(n_days_limit)
+
+    async def fetch_all_fills(self, n_days_limit=60):
+        try:
+            from pure_funcs import ts_to_date
+            now = utc_ms()
+            day = 1000 * 60 * 60 * 23.99
+            week = day * 6.99
+            fetch_timespan_limit = day if self.spot else week
+            fetch_time = now - day * n_days_limit
+            recent_fills = await self.fetch_fills()
+            if not recent_fills:
+                return []
+            if recent_fills[0]['timestamp'] <= fetch_time:
+                print('debug returing recent fills')
+                return recent_fills
+            oldest_fills = await self.fetch_fills(start_time=fetch_time, end_time=fetch_time + fetch_timespan_limit)
+            while oldest_fills == [] and fetch_time < now:
+                print('debug no fills, fetching ahead', ts_to_date(fetch_time / 1000))
+                fetch_time += fetch_timespan_limit
+                oldest_fills = await self.fetch_fills(start_time=fetch_time, end_time=fetch_time + fetch_timespan_limit)
+            if oldest_fills:
+                additional_fills = await self.fetch_fills(from_id=oldest_fills[-1]['id'])
+                while additional_fills[-1]['timestamp'] < recent_fills[0]['timestamp']:
+                    print('debug fetching additional_fills')
+                    new_additional_fills = await self.fetch_fills(from_id=additional_fills[-1]['id'])
+                    if new_additional_fills == [] or new_additional_fills[-1] == additional_fills[-1]:
+                        break
+                    additional_fills += new_additional_fills
+            fills = {x['id']: x for x in oldest_fills + recent_fills + additional_fills}
+            return sorted(fills.values(), key=lambda x: x['id'])
+        except Exception as e:
+            print('error with init fills', e)
+            return []
+
+    async def update_fills(self, max_n_fills=10000) -> [dict]:
         '''
         fetches recent fills
         updates self.fills, drops older fills max_n_fills
@@ -203,8 +241,6 @@ class Bot:
             print('error with update fills', e)
         finally:
             self.ts_released['update_fills'] = time()
-
-
 
     async def create_orders(self, orders_to_create: [dict]) -> dict:
         if not orders_to_create:
