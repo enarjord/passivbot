@@ -221,10 +221,9 @@ class BinanceBotSpot(Bot):
         params = {'symbol': self.symbol, 'limit': min(1000, max(500, limit))}
         if from_id is not None:
             params['fromId'] = max(0, from_id)
-        if start_time is not None:
-            params['startTime'] = start_time
-        if end_time is not None:
-            params['endTime'] = end_time
+        if start_time is not None and end_time is not None:
+            params['startTime'] = int(start_time)
+            params['endTime'] = int(min(end_time, start_time + 1000 * 60 * 60 * 23.99))
         try:
             fetched = await self.private_get(self.endpoints['fills'], params)
             fills = [{'symbol': x['symbol'],
@@ -242,6 +241,7 @@ class BinanceBotSpot(Bot):
                       'is_maker': x['isMaker']} for x in fetched]
         except Exception as e:
             print('error fetching fills a', e)
+            traceback.print_exc()
             return []
         return fills
 
