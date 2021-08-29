@@ -672,10 +672,9 @@ class Downloader:
             del chunks
         return df
 
-    async def prepare_files(self, single_file: bool = False):
+    async def prepare_files(self):
         """
-        Takes downloaded data and prepares numpy arrays for use in backtesting.
-        @param single_file: If a single array should be created ot multiple ones.
+        Takes downloaded data and prepares a numpy array for use in backtesting.
         @return:
         """
         filenames = self.get_filenames()
@@ -692,47 +691,39 @@ class Downloader:
                     break
         filenames = filenames[start_index:] if end_index == -1 else filenames[start_index:end_index + 1]
 
-        chunks = []
-        df = pd.DataFrame()
+        left_overs = pd.DataFrame()
+        sample_size_ms = 1000
+        current_index = 0
+        array = np.zeros((int((self.end_time - self.start_time) / sample_size_ms), 3), dtype=np.float64)
 
         for f in filenames:
-            if single_file:
-                chunk = pd.read_csv(os.path.join(self.filepath, f),
-                                    dtype={"price": np.float64, "is_buyer_maker": np.float64, "timestamp": np.float64,
-                                           "qty": np.float64},
-                                    usecols=["price", "is_buyer_maker", "timestamp", "qty"])
-            else:
-                chunk = pd.read_csv(os.path.join(self.filepath, f),
-                                    dtype={"timestamp": np.int64, "price": np.float64, "is_buyer_maker": np.int8,
-                                           "qty": np.float32},
-                                    usecols=["timestamp", "price", "is_buyer_maker", "qty"])
-            if self.end_time != -1:
-                chunk = chunk[(chunk['timestamp'] >= self.start_time) & (chunk['timestamp'] <= self.end_time)]
-            else:
-                chunk = chunk[(chunk['timestamp'] >= self.start_time)]
-            chunks.append(chunk)
-            if len(chunks) >= 100:
-                if df.empty:
-                    df = pd.concat(chunks, axis=0)
-                else:
-                    chunks.insert(0, df)
-                    df = pd.concat(chunks, axis=0)
-                chunks = []
+            chunk = pd.read_csv(os.path.join(self.filepath, f),
+                                dtype={"price": np.float64, "is_buyer_maker": np.float64, "timestamp": np.float64,
+                                       "qty": np.float64}, usecols=["price", "is_buyer_maker", "timestamp", "qty"])
+
+            chunk = pd.concat([left_overs, chunk])
+            chunk = chunk[(chunk['timestamp'] >= self.start_time) & (chunk['timestamp'] <= self.end_time)]
+
+            chunk = chunk[
+                chunk['timestamp'] <= chunk.timestamp.iloc[-1] // sample_size_ms * sample_size_ms - 1 - sample_size_ms]
+            left_overs = chunk[
+                chunk['timestamp'] > chunk.timestamp.iloc[-1] // sample_size_ms * sample_size_ms - 1 - sample_size_ms]
+
+            sampled_ticks = calc_samples(chunk[["timestamp", "qty", "price"]].values)
+            array[current_index:current_index + len(sampled_ticks)] = sampled_ticks
+            current_index += len(sampled_ticks)
+
             print('\rloaded chunk of data', f, ts_to_date(float(f.split("_")[2]) / 1000), end='     ')
         print('\n')
-        if chunks:
-            if df.empty:
-                df = pd.concat(chunks, axis=0)
-            else:
-                chunks.insert(0, df)
-                df = pd.concat(chunks, axis=0)
-            del chunks
 
-        if True: #single_file:
-            sampled_ticks = calc_samples(df[["timestamp", "qty", "price"]].values)
-            print_(["Saving single file with", len(df), " ticks to", self.tick_filepath, "..."])
-            np.save(self.tick_filepath, sampled_ticks)
-            print_(["Saved single file!"])
+        if not left_overs.empty:
+            sampled_ticks = calc_samples(left_overs[["timestamp", "qty", "price"]].values)
+            array[current_index:current_index + len(sampled_ticks)] = sampled_ticks
+            current_index += len(sampled_ticks)
+
+        print_(["Saving single file with", len(array), " ticks to", self.tick_filepath, "..."])
+        np.save(self.tick_filepath, array)
+        print_(["Saved single file!"])
 
     async def get_sampled_ticks(self) -> np.ndarray:
         """
@@ -760,7 +751,7 @@ async def main():
     downloader = Downloader(config)
     await downloader.download_ticks()
     if not args.download_only:
-        await downloader.prepare_files(False)
+        await downloader.prepare_files()
 
 
 if __name__ == "__main__":
