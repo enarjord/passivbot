@@ -396,9 +396,9 @@ def calc_long_scalp_entry(
         long_entry_price = highest_bid
         long_base_entry_qty = round_dn(cost_to_qty(balance * primary_initial_qty_pct, long_entry_price, inverse, c_mult), qty_step)
         min_entry_qty = calc_min_entry_qty(long_entry_price, inverse, qty_step, min_qty, min_cost)
-        if round_dn(long_psize, qty_step) < min_entry_qty:
+        if round_dn(long_psize, qty_step) < max(min_entry_qty, long_base_entry_qty * 0.45):
             max_entry_qty = round_dn(cost_to_qty(balance * primary_pbr_limit, long_entry_price, inverse, c_mult), qty_step)
-            long_entry_qty = max(min_entry_qty, min(max_entry_qty, long_base_entry_qty))
+            long_entry_qty = max(min_entry_qty, min(max_entry_qty, round_up(long_base_entry_qty - long_psize, qty_step)))
             long_entry = (long_entry_qty, long_entry_price, 'long_ientry')
         else:
             pbr = qty_to_cost(long_psize, long_pprice, inverse, c_mult) / balance
@@ -513,11 +513,11 @@ def calc_shrt_scalp_entry(
         secondary_pbr_limit_added) -> (float, float, str):
     if do_shrt or shrt_psize < 0.0:
         shrt_entry_price = lowest_ask
+        min_entry_qty = calc_min_entry_qty(shrt_entry_price, inverse, qty_step, min_qty, min_cost)
         shrt_base_entry_qty = round_dn(cost_to_qty(balance * primary_initial_qty_pct, shrt_entry_price, inverse, c_mult), qty_step)
-        if shrt_psize == 0.0:
-            min_entry_qty = calc_min_entry_qty(shrt_entry_price, inverse, qty_step, min_qty, min_cost)
+        if -shrt_psize < max(min_entry_qty, shrt_base_entry_qty * 0.45):
             max_entry_qty = round_dn(cost_to_qty(balance * primary_pbr_limit, shrt_entry_price, inverse, c_mult), qty_step)
-            shrt_entry_qty = max(min_entry_qty, min(max_entry_qty, shrt_base_entry_qty))
+            shrt_entry_qty = max(min_entry_qty, min(max_entry_qty, round_up(shrt_base_entry_qty + shrt_psize, qty_step)))
             shrt_entry = (-shrt_entry_qty, shrt_entry_price, 'shrt_ientry')
         elif shrt_psize < 0.0:
             pbr = qty_to_cost(shrt_psize, shrt_pprice, inverse, c_mult) / balance
