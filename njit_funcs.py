@@ -56,11 +56,6 @@ def calc_min_entry_qty(price, inverse, qty_step, min_qty, min_cost) -> float:
 
 
 @njit
-def calc_max_entry_qty(entry_price, available_margin, inverse, qty_step, c_mult):
-    return round_dn(cost_to_qty(available_margin, entry_price, inverse, c_mult), qty_step)
-
-
-@njit
 def cost_to_qty(cost, price, inverse, c_mult):
     return cost * price / c_mult if inverse else (cost / price if price > 0.0 else 0.0)
 
@@ -410,19 +405,24 @@ def calc_long_scalp_entry(
             if pbr < primary_pbr_limit:
                 pbr_weighting = pbr ** 2 * primary_grid_spacing_pbr_weighting[0] + pbr * primary_grid_spacing_pbr_weighting[1]
                 grid_spacing = 1 - primary_grid_spacing - pbr_weighting
-                long_entry_price = round_dn(long_pprice * grid_spacing, price_step)
-                long_entry_comment = 'long_primary_rentry'
-                long_entry_price = min(highest_bid, long_entry_price)
+                long_entry_price = min(highest_bid, round_dn(long_pprice * grid_spacing, price_step))
                 min_entry_qty = calc_min_entry_qty(long_entry_price, inverse, qty_step, min_qty, min_cost)
-                max_entry_qty = round_dn(cost_to_qty(balance * primary_pbr_limit, long_entry_price, inverse, c_mult) - long_psize, qty_step)
-                long_entry_qty = max(min_entry_qty, min(max_entry_qty, round_dn(long_base_entry_qty + long_psize * primary_ddown_factor, qty_step)))
-                long_entry = (long_entry_qty, long_entry_price, long_entry_comment)
+                long_entry_qty = round_dn(long_base_entry_qty + long_psize * primary_ddown_factor, qty_step)
+                if calc_pbr_if_filled(balance, long_psize, long_pprice, long_entry_qty,
+                                      long_entry_price, inverse, c_mult, qty_step) > primary_pbr_limit:
+                    long_entry_qty = calc_cropped_rentry_qty(balance, long_psize, long_pprice, long_entry_price, long_entry_qty,
+                                                             primary_pbr_limit, inverse, c_mult, qty_step)
+                long_entry_qty = max(min_entry_qty, long_entry_qty)
+                long_entry = (long_entry_qty, long_entry_price, 'long_primary_rentry')
             elif pbr < primary_pbr_limit + secondary_pbr_limit_added:
                 long_entry_price = min(highest_bid, round_dn(long_pprice * (1 - secondary_grid_spacing), price_step))
                 min_entry_qty = calc_min_entry_qty(long_entry_price, inverse, qty_step, min_qty, min_cost)
-                max_entry_qty = round_dn(cost_to_qty(balance * (primary_pbr_limit + secondary_pbr_limit_added), long_entry_price, inverse, c_mult) - long_psize, qty_step)
-                long_entry_qty = min(max_entry_qty, max(min_entry_qty, round_dn(long_base_entry_qty + long_psize * secondary_ddown_factor, qty_step)))
-                if long_entry_qty < min_entry_qty:
+                long_entry_qty = round_dn(long_base_entry_qty + long_psize * secondary_ddown_factor, qty_step)
+                if calc_pbr_if_filled(balance, long_psize, long_pprice, long_entry_qty,
+                                      long_entry_price, inverse, c_mult, qty_step) > primary_pbr_limit + secondary_pbr_limit_added:
+                    long_entry_qty = calc_cropped_rentry_qty(balance, long_psize, long_pprice, long_entry_price, long_entry_qty,
+                                                             primary_pbr_limit + secondary_pbr_limit_added, inverse, c_mult, qty_step)
+                if long_entry_qty < min_entry_qty or long_entry_price / highest_bid < 0.5:
                     long_entry = (0.0, 0.0, '')
                 else:
                     long_entry = (long_entry_qty, long_entry_price, 'long_secondary_rentry')
@@ -431,6 +431,58 @@ def calc_long_scalp_entry(
     else:
         long_entry = (0.0, 0.0, '')
     return long_entry
+
+
+@njit
+def calc_cropped_rentry_qty(balance, psize, pprice, entry_price, entry_qty, pbr_limit, inverse, c_mult, qty_step) -> float:
+    qty_step = max(qty_step, round_(cost_to_qty(balance, pprice, inverse, c_mult) * 0.01, qty_step))
+    pbr_if_filled = calc_pbr_if_filled(balance, psize, pprice, entry_qty, entry_price, inverse, c_mult, qty_step)
+    if pbr_if_filled <= pbr_limit:
+        return entry_qty
+    if calc_pbr_if_filled(balance, psize, pprice, round_(entry_qty - qty_step, qty_step), entry_price, inverse, c_mult, qty_step) < pbr_limit:
+        return entry_qty
+    best_high_guess = entry_qty
+    best_low_guess = 0.0
+    pbr_if_filled_high = pbr_if_filled
+    pbr_if_filled_low = calc_pbr_if_filled(balance, psize, pprice, 0.0, entry_price, inverse, c_mult, qty_step)
+    i = 0
+    new_guess = best_low_guess + (best_high_guess - best_low_guess) * ((pbr_limit - pbr_if_filled_low) / (pbr_if_filled_high - pbr_limit))
+    # new_guess = (best_high_guess + best_low_guess) / 2
+    while True:
+        guess = round_(min(best_high_guess - qty_step, max(best_low_guess + qty_step, new_guess)), qty_step)
+        i += 1
+        if i >= 10:
+            if pbr_if_filled_high / pbr_limit > 1.1:
+                print('warning: 10 guesses and 10% diff between pbr_if_filled_high and pbr_limit')
+                print('best_high_guess', best_high_guess)
+                print('pbr_limit', pbr_limit)
+                print('pbr_if_filled_high', pbr_if_filled_high)
+                print('args', 'balance, psize, pprice, entry_price, entry_qty, pbr_limit, inverse, c_mult, qty_step')
+                print('args', balance, ',', psize, ',', pprice, ',', entry_price, ',', entry_qty, ',', pbr_limit, ',', inverse, ',', c_mult, ',', qty_step)
+            return best_high_guess
+        pbr_if_filled = calc_pbr_if_filled(balance, psize, pprice, guess, entry_price, inverse, c_mult, qty_step)
+        if pbr_if_filled >= pbr_limit:
+            guess_minus_one_step = round_(guess - qty_step, qty_step)
+            if calc_pbr_if_filled(balance, psize, pprice, guess_minus_one_step, entry_price, inverse, c_mult, qty_step) < pbr_limit:
+                # print(f'found best qty {guess}\n')
+                break
+            # rint(f'guess {guess} too high, pbr_if_filled {pbr_if_filled:.5f} pbr limit {pbr_limit:.5f} diff {calc_diff(pbr_if_filled, pbr_limit):.4f}')
+            best_high_guess = min(guess, best_high_guess)
+            pbr_if_filled_high = pbr_if_filled
+        else:
+            # print(f'guess {guess} too low , pbr_if_filled {pbr_if_filled:.5f} pbr limit {pbr_limit:.5f} diff {calc_diff(pbr_if_filled, pbr_limit):.4f}')
+            best_low_guess = max(guess, best_low_guess)
+            pbr_if_filled_low = pbr_if_filled
+        # new_guess = best_low_guess + (best_high_guess - best_low_guess) * ((pbr_limit - pbr_if_filled_low) / (pbr_if_filled_high - pbr_limit))
+        new_guess = (best_high_guess + best_low_guess) / 2
+    return guess
+
+
+@njit
+def calc_pbr_if_filled(balance, psize, pprice, qty, price, inverse, c_mult, qty_step):
+    psize, qty = abs(psize), abs(qty)
+    new_psize, new_pprice = calc_new_psize_pprice(psize, pprice, qty, price, qty_step)
+    return qty_to_cost(new_psize, new_pprice, inverse, c_mult) / balance
 
 
 @njit
@@ -472,19 +524,23 @@ def calc_shrt_scalp_entry(
             if pbr < primary_pbr_limit:
                 pbr_weighting = pbr**2 * primary_grid_spacing_pbr_weighting[0] + pbr * primary_grid_spacing_pbr_weighting[1]
                 grid_spacing = 1 + primary_grid_spacing + pbr_weighting
-                shrt_entry_price = round_up(shrt_pprice * grid_spacing, price_step)
-                shrt_entry_comment = 'shrt_primary_rentry'
-                shrt_entry_price = max(lowest_ask, shrt_entry_price)
+                shrt_entry_price = max(lowest_ask, round_up(shrt_pprice * grid_spacing, price_step))
                 min_entry_qty = calc_min_entry_qty(shrt_entry_price, inverse, qty_step, min_qty, min_cost)
-                max_entry_qty = round_dn(cost_to_qty(balance * primary_pbr_limit, shrt_entry_price, inverse, c_mult) + shrt_psize, qty_step)
-                shrt_entry_qty = max(min_entry_qty, min(max_entry_qty, round_dn(shrt_base_entry_qty - shrt_psize * primary_ddown_factor, qty_step)))
-                shrt_entry = (-shrt_entry_qty, shrt_entry_price, shrt_entry_comment)
+                shrt_entry_qty = round_dn(shrt_base_entry_qty - shrt_psize * primary_ddown_factor, qty_step)
+                if calc_pbr_if_filled(balance, shrt_psize, shrt_pprice, shrt_entry_qty,
+                                      shrt_entry_price, inverse, c_mult, qty_step) > primary_pbr_limit:
+                    shrt_entry_qty = calc_cropped_rentry_qty(balance, shrt_psize, shrt_pprice, shrt_entry_price, shrt_entry_qty,
+                                                             primary_pbr_limit, inverse, c_mult, qty_step)
+                shrt_entry_qty = max(min_entry_qty, shrt_entry_qty)
+                shrt_entry = (-shrt_entry_qty, shrt_entry_price, 'shrt_primary_rentry')
             elif pbr < primary_pbr_limit + secondary_pbr_limit_added:
                 shrt_entry_price = max(lowest_ask, round_up(shrt_pprice * (1 + secondary_grid_spacing), price_step))
                 min_entry_qty = calc_min_entry_qty(shrt_entry_price, inverse, qty_step, min_qty, min_cost)
-                max_entry_qty = round_dn(cost_to_qty(balance * (primary_pbr_limit + secondary_pbr_limit_added),
-                                                     shrt_entry_price, inverse, c_mult) + shrt_psize, qty_step)
-                shrt_entry_qty = min(max_entry_qty, max(min_entry_qty, round_dn(shrt_base_entry_qty - shrt_psize * secondary_ddown_factor, qty_step)))
+                shrt_entry_qty = round_dn(shrt_base_entry_qty - shrt_psize * secondary_ddown_factor, qty_step)
+                if calc_pbr_if_filled(balance, shrt_psize, shrt_pprice, shrt_entry_qty,
+                                      shrt_entry_price, inverse, c_mult, qty_step) > primary_pbr_limit + secondary_pbr_limit_added:
+                    shrt_entry_qty = calc_cropped_rentry_qty(balance, shrt_psize, shrt_pprice, shrt_entry_price, shrt_entry_qty,
+                                                             primary_pbr_limit + secondary_pbr_limit_added, inverse, c_mult, qty_step)
                 if shrt_entry_qty < min_entry_qty:
                     shrt_entry = (0.0, 0.0, '')
                 else:
