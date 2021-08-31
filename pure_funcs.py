@@ -1,10 +1,9 @@
 import datetime
+import pprint
+from collections import OrderedDict
 
 import numpy as np
-import pandas as pd
-import pprint
 from dateutil import parser
-from collections import OrderedDict
 
 from njit_funcs import round_dynamic, calc_emas
 
@@ -33,18 +32,17 @@ def calc_spans(min_span: int, max_span: int, n_spans: int) -> np.ndarray:
 
 
 def get_xk_keys():
-    return ['spot', 'hedge_mode', 'inverse', 'do_long', 'do_shrt', 'qty_step', 'price_step', 'min_qty', 'min_cost', 'c_mult',
-            'max_leverage', 'spans', 'pbr_stop_loss', 'pbr_limit', 'iqty_const', 'iprc_const', 'rqty_const',
-            'rprc_const', 'markup_const', 'iqty_MAr_coeffs', 'iprc_MAr_coeffs', 'rprc_PBr_coeffs',
-            'rqty_MAr_coeffs', 'rprc_MAr_coeffs', 'markup_MAr_coeffs']
+    return ['spot', 'hedge_mode', 'inverse', 'do_long', 'do_shrt', 'qty_step', 'price_step', 'min_qty', 'min_cost',
+            'c_mult', 'max_leverage', 'spans', 'pbr_stop_loss', 'pbr_limit', 'iqty_const', 'iprc_const', 'rqty_const',
+            'rprc_const', 'markup_const', 'iqty_MAr_coeffs', 'iprc_MAr_coeffs', 'rprc_PBr_coeffs', 'rqty_MAr_coeffs',
+            'rprc_MAr_coeffs', 'markup_MAr_coeffs']
 
 
 def get_scalp_keys():
-    return ['spot', 'hedge_mode', 'inverse', 'do_long', 'do_shrt', 'qty_step', 'price_step', 'min_qty',
-            'min_cost', 'c_mult', 'max_leverage', 'primary_initial_qty_pct', 'primary_ddown_factor',
-            'primary_grid_spacing', 'primary_grid_spacing_pbr_weighting', 'primary_pbr_limit',
-            'secondary_ddown_factor', 'secondary_grid_spacing', 'secondary_pbr_limit_added', 'min_markup',
-            'markup_range', 'n_close_orders']
+    return ['spot', 'hedge_mode', 'inverse', 'do_long', 'do_shrt', 'qty_step', 'price_step', 'min_qty', 'min_cost',
+            'c_mult', 'max_leverage', 'primary_initial_qty_pct', 'primary_ddown_factor', 'primary_grid_spacing',
+            'primary_grid_spacing_pbr_weighting', 'primary_pbr_limit', 'secondary_ddown_factor',
+            'secondary_grid_spacing', 'secondary_pbr_limit_added', 'min_markup', 'markup_range', 'n_close_orders']
 
 
 def create_xk(config: dict) -> dict:
@@ -137,6 +135,14 @@ def ts_to_date(timestamp: float) -> str:
 
 def date_to_ts(d):
     return int(parser.parse(d).replace(tzinfo=datetime.timezone.utc).timestamp() * 1000)
+
+
+def get_utc_now_timestamp() -> int:
+    """
+    Creates a millisecond based timestamp of UTC now.
+    :return: Millisecond based timestamp of UTC now.
+    """
+    return int(datetime.datetime.now(datetime.timezone.utc).timestamp() * 1000)
 
 
 def config_pretty_str(config: dict):
@@ -302,6 +308,7 @@ def get_template_live_config(config):
         return get_template_live_config_scalp()
     else:
         raise Exception('unknown config type')
+
 
 def get_template_live_config_scalp():
     return {"config_name": "template_scalp",
@@ -481,7 +488,8 @@ def analyze_fills(fills: list, config: dict, first_ts: float, last_ts: float) ->
 
     if fdf.empty:
         return fdf, get_empty_analysis(config)
-    fdf.columns = ['trade_id', 'timestamp', 'pnl', 'fee_paid', 'balance', 'equity', 'pbr', 'qty', 'price', 'psize', 'pprice', 'type']
+    fdf.columns = ['trade_id', 'timestamp', 'pnl', 'fee_paid', 'balance', 'equity', 'pbr', 'qty', 'price', 'psize',
+                   'pprice', 'type']
     adgs = (fdf.equity / config['starting_balance']) ** (1 / ((fdf.timestamp - first_ts) / (1000 * 60 * 60 * 24))) - 1
     fdf = fdf.join(adgs.rename('adg')).set_index('trade_id')
 
@@ -516,7 +524,8 @@ def analyze_fills(fills: list, config: dict, first_ts: float, last_ts: float) ->
     buckets = buckets + (fdf.timestamp.iloc[0] - buckets.iloc[0])
     groups = fdf.groupby(buckets)
     periodic_gains = groups.balance.last() / groups.balance.first() - 1  # realized profits
-    periodic_gains = periodic_gains.reindex(np.arange(periodic_gains.index[0], periodic_gains.index[-1], ms_span)).fillna(0.0)
+    periodic_gains = periodic_gains.reindex(
+        np.arange(periodic_gains.index[0], periodic_gains.index[-1], ms_span)).fillna(0.0)
     periodic_gains_mean = np.nan_to_num(periodic_gains.mean())
     periodic_gains_std = periodic_gains.std()
     sharpe_ratio = (periodic_gains_mean / periodic_gains_std) if periodic_gains_std != 0.0 else -20.0
@@ -713,5 +722,3 @@ def determine_config_type(config: dict) -> str:
                              'min_markup', 'markup_range', 'n_close_orders']):
             return 'scalp'
     raise Exception('unknown config type')
-
-
