@@ -694,7 +694,20 @@ class Downloader:
         left_overs = pd.DataFrame()
         sample_size_ms = 1000
         current_index = 0
-        array = np.zeros((int((self.end_time - self.start_time) / sample_size_ms), 3), dtype=np.float64)
+
+        try:
+            first_frame = pd.read_csv(os.path.join(self.filepath, filenames[0]),
+                                      dtype={"price": np.float64, "is_buyer_maker": np.float64, "timestamp": np.float64,
+                                             "qty": np.float64},
+                                      usecols=["price", "is_buyer_maker", "timestamp", "qty"])
+            first_frame = first_frame[
+                (first_frame['timestamp'] >= self.start_time) & (first_frame['timestamp'] <= self.end_time)]
+            earliest_time = first_frame.timestamp.iloc[0] // sample_size_ms * sample_size_ms
+        except Exception as e:
+            print_(['Error in determining earliest time', e])
+            earliest_time = self.start_time
+
+        array = np.zeros((int((self.end_time - earliest_time) / sample_size_ms), 3), dtype=np.float64)
 
         for f in filenames:
             chunk = pd.read_csv(os.path.join(self.filepath, f),
@@ -702,24 +715,45 @@ class Downloader:
                                        "qty": np.float64}, usecols=["price", "is_buyer_maker", "timestamp", "qty"])
 
             chunk = pd.concat([left_overs, chunk])
+            chunk.sort_values('timestamp', inplace=True)
             chunk = chunk[(chunk['timestamp'] >= self.start_time) & (chunk['timestamp'] <= self.end_time)]
 
-            cut_off = chunk.timestamp.iloc[-1] // sample_size_ms * sample_size_ms - 1 - sample_size_ms
+            cut_off = chunk.timestamp.iloc[-1] // sample_size_ms * sample_size_ms - 1 - (1 * sample_size_ms)
 
-            chunk = chunk[chunk['timestamp'] <= cut_off]
             left_overs = chunk[chunk['timestamp'] > cut_off]
+            chunk = chunk[chunk['timestamp'] <= cut_off]
 
             sampled_ticks = calc_samples(chunk[["timestamp", "qty", "price"]].values)
+            if current_index != 0 and array[current_index - 1, 0] + 1000 != sampled_ticks[0, 0]:
+                size = int((sampled_ticks[0, 0] - array[current_index - 1, 0]) / sample_size_ms) - 1
+                tmp = np.zeros((size, 3), dtype=np.float64)
+                tmp[:, 0] = np.arange(array[current_index - 1, 0] + sample_size_ms, sampled_ticks[0, 0], sample_size_ms,
+                                      dtype=np.float64)
+                tmp[:, 2] = array[current_index - 1, 2]
+                array[current_index:current_index + len(tmp)] = tmp
+                current_index += len(tmp)
             array[current_index:current_index + len(sampled_ticks)] = sampled_ticks
             current_index += len(sampled_ticks)
 
             print('\rloaded chunk of data', f, ts_to_date(float(f.split("_")[2]) / 1000), end='     ')
         print('\n')
 
+        # Fill in anything left over
         if not left_overs.empty:
             sampled_ticks = calc_samples(left_overs[["timestamp", "qty", "price"]].values)
             array[current_index:current_index + len(sampled_ticks)] = sampled_ticks
             current_index += len(sampled_ticks)
+
+        # Fill the gap at the end with the latest price
+        if current_index + 1 < len(array):
+            size = len(array) - current_index
+            tmp = np.zeros((size, 3), dtype=np.float64)
+            tmp[:, 0] = np.arange(array[current_index - 1, 0] + sample_size_ms,
+                                  array[current_index - 1, 0] + ((size + 1) * sample_size_ms), sample_size_ms,
+                                  dtype=np.float64)
+            tmp[:, 2] = array[current_index - 1, 2]
+            array[current_index:current_index + len(tmp)] = tmp
+            current_index += len(tmp)
 
         print_(["Saving single file with", len(array), " ticks to", self.tick_filepath, "..."])
         np.save(self.tick_filepath, array)
