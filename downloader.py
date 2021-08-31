@@ -707,7 +707,19 @@ class Downloader:
             print_(['Error in determining earliest time', e])
             earliest_time = self.start_time
 
-        array = np.zeros((int((self.end_time - earliest_time) / sample_size_ms), 3), dtype=np.float64)
+        try:
+            last_frame = pd.read_csv(os.path.join(self.filepath, filenames[-1]),
+                                     dtype={"price": np.float64, "is_buyer_maker": np.float64, "timestamp": np.float64,
+                                            "qty": np.float64},
+                                     usecols=["price", "is_buyer_maker", "timestamp", "qty"])
+            last_frame = last_frame[
+                (last_frame['timestamp'] >= self.start_time) & (last_frame['timestamp'] <= self.end_time)]
+            latest_time = last_frame.timestamp.iloc[-1] // sample_size_ms * sample_size_ms
+        except Exception as e:
+            print_(['Error in determining latest time', e])
+            latest_time = self.end_time
+
+        array = np.zeros((int((latest_time - earliest_time) / sample_size_ms + 1), 3), dtype=np.float64)
 
         for f in filenames:
             chunk = pd.read_csv(os.path.join(self.filepath, f),
@@ -741,10 +753,19 @@ class Downloader:
         # Fill in anything left over
         if not left_overs.empty:
             sampled_ticks = calc_samples(left_overs[["timestamp", "qty", "price"]].values)
+            if current_index != 0 and array[current_index - 1, 0] + 1000 != sampled_ticks[0, 0]:
+                size = int((sampled_ticks[0, 0] - array[current_index - 1, 0]) / sample_size_ms) - 1
+                tmp = np.zeros((size, 3), dtype=np.float64)
+                tmp[:, 0] = np.arange(array[current_index - 1, 0] + sample_size_ms, sampled_ticks[0, 0], sample_size_ms,
+                                      dtype=np.float64)
+                tmp[:, 2] = array[current_index - 1, 2]
+                array[current_index:current_index + len(tmp)] = tmp
+                current_index += len(tmp)
             array[current_index:current_index + len(sampled_ticks)] = sampled_ticks
             current_index += len(sampled_ticks)
 
         # Fill the gap at the end with the latest price
+        # Should not be necessary anymore
         if current_index + 1 < len(array):
             size = len(array) - current_index
             tmp = np.zeros((size, 3), dtype=np.float64)
