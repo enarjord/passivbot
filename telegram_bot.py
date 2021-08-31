@@ -728,14 +728,15 @@ class Telegram:
                     daily[int(start_of_day.timestamp()) * 1000] = 0.0
 
                 start_of_first_day = today - timedelta(days=nr_of_days-1)
-                start_time_of_first_day_ts = int(start_of_first_day.timestamp()) * 1000
+                start_time_to_fetch = int(start_of_first_day.timestamp()) * 1000
                 if self._bot.market_type == 'spot':
                     fills = list()
                     while True:
-                        next_set = await self._bot.fetch_fills(start_time=start_time_of_first_day_ts)
+                        next_set = await self._bot.fetch_fills(start_time=start_time_to_fetch)
                         [fills.append(f) for f in next_set]
                         if len(next_set) < 1000:
                             break
+                        start_time_to_fetch = next_set[-1]['timestamp']
 
                     psize = 0.0
                     pprice = 0.0
@@ -751,12 +752,13 @@ class Telegram:
 
                 else:
                     while True:
-                        next_set = await self._bot.fetch_income(start_time=start_time_of_first_day_ts)
+                        next_set = await self._bot.fetch_income(start_time=start_time_to_fetch)
                         for income in next_set:
                             day = income['timestamp'] // ms_in_a_day * ms_in_a_day
                             daily[day] += float(income['income'])
                         if len(next_set) < 1000:
                             break
+                        start_time_to_fetch = next_set[-1]['timestamp']
 
                 # position = await self._bot.fetch_position()
                 position = self._bot.position.copy()
