@@ -105,7 +105,6 @@ class Bot:
             self.emas = np.zeros(len(self.spans))
             self.ratios = np.zeros(len(self.spans))
 
-
     def set_config_value(self, key, value):
         self.config[key] = value
         setattr(self, key, self.config[key])
@@ -710,7 +709,6 @@ class Bot:
         ohlcvs = flatten(await asyncio.gather(*[self.fetch_ohlcvs(start_time=ts) for ts in timestamps_to_fetch]))
         combined = np.array(sorted([[e['timestamp'], e['qty'], e['price']] for e in ticks] +
                                    [[e['timestamp'], e['volume'], e['open']] for e in ohlcvs]))
-        from pure_funcs import ts_to_date
         samples = calc_samples(combined)
         self.emas = calc_emas_last(samples[:, 2], self.spans_secs)
         self.ratios = np.append(self.price, self.emas[:-1]) / self.emas
