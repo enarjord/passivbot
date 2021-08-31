@@ -329,6 +329,9 @@ class Bot:
         shrt_pprice = self.position['shrt']['price']
 
         if self.stop_mode in ['panic']:
+            if self.exchange == 'bybit':
+                print('\n\npanic mode temporarily disabled for bybit\n\n')
+                return []
             panic_orders = []
             if long_psize != 0.0:
                 panic_orders.append({'side': 'sell', 'position_side': 'long', 'qty': abs(long_psize), 'price': self.ob[1],
