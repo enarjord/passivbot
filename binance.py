@@ -201,7 +201,7 @@ class BinanceBot(Bot):
                                        self.endpoints['leverage'],
                                        {'symbol': self.symbol, 'leverage': lev})
 
-    async def init_exchange_config(self):
+    async def init_exchange_config(self) -> bool:
         try:
             print(await self.private_post(self.base_endpoint,
                                           self.endpoints['margin_type'],
@@ -230,7 +230,8 @@ class BinanceBot(Bot):
                 print(e)
                 print('unable to set hedge mode, aborting')
                 raise Exception('failed to set hedge mode')
-        return await self.check_if_other_positions()
+        # return await self.check_if_other_positions()
+        return False
 
     async def init_order_book(self):
         ticker = await self.public_get(self.endpoints['ticker'], {'symbol': self.symbol})
