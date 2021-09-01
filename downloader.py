@@ -474,26 +474,10 @@ class Downloader:
                     end=datetime.datetime.fromtimestamp(end_time / 1000, datetime.timezone.utc).date(),
                     freq='D').to_pydatetime()
                 days = [date.strftime("%Y-%m-%d") for date in tmp]
-                '''
-                current_month = ts_to_date(time() - 60 * 60 * 3)[:7]
-                months = sorted([e for e in set([d[:7] for d in days]) if e != current_month])
-                dates = sorted(months + [d for d in days if d[:7] not in months])
-                '''
-
                 df = pd.DataFrame(columns=['trade_id', 'price', 'qty', 'timestamp', 'is_buyer_maker'])
 
                 months_done = set()
                 months_failed = set()
-                '''
-                for date in dates:
-                    if len(date.split('-')) == 2:
-                        tf = self.get_zip(self.monthly_base_url, self.config['symbol'], date)
-                    elif len(date.split('-')) == 3:
-                        tf = self.get_zip(self.daily_base_url, self.config['symbol'], date)
-                    else:
-                        print("Something wrong with the date", date)
-                        tf = pd.DataFrame()
-                '''
                 for day in days:
                     month = day[:7]
                     if month in months_done:
@@ -538,68 +522,6 @@ class Downloader:
                         start_time = df["timestamp"].iloc[0]
                         current_time = df["timestamp"].iloc[-1]
                         current_id = df["trade_id"].iloc[-1] + 1
-            elif False:  # self.config['exchange'] == 'bybit':
-
-                # work in progress
-
-                fetched_new_trades = await self.bot.fetch_ticks(1)
-                tf = self.transform_ticks(fetched_new_trades)
-                earliest = tf['timestamp'].iloc[0]
-
-                if earliest > start_time:
-                    start_time = earliest
-                    current_time = start_time
-
-                tmp = pd.date_range(
-                    start=datetime.datetime.fromtimestamp(start_time / 1000, datetime.timezone.utc).date(),
-                    end=datetime.datetime.fromtimestamp(end_time / 1000, datetime.timezone.utc).date(),
-                    freq='D').to_pydatetime()
-
-                days = [date.strftime("%Y-%m-%d") for date in tmp]
-                dates = days
-
-                if start_id == 0:
-                    df_for_id_matching = await self.find_df_enclosing_timestamp(start_time)
-                else:
-                    df_for_id_matching = await self.fetch_ticks(start_id - 100)
-
-                df = pd.DataFrame(columns=['trade_id', 'price', 'qty', 'timestamp', 'is_buyer_maker'])
-
-                for date in dates:
-                    if len(date.split('-')) == 3:
-                        tf = self.get_csv_gz(self.daily_base_url, self.config['symbol'], date, df_for_id_matching)
-                    else:
-                        print("Something wrong with the date", date)
-                        tf = pd.DataFrame()
-                    tf = tf[tf['timestamp'] >= start_time]
-                    if end_time != -1:
-                        tf = tf[tf['timestamp'] <= end_time]
-                    if start_id != 0:
-                        tf = tf[tf['trade_id'] > start_id]
-                    if end_id != 0:
-                        tf = tf[tf['trade_id'] <= end_id]
-                    if df.empty:
-                        df = tf
-                    else:
-                        df = pd.concat([df, tf])
-                    df.sort_values("trade_id", inplace=True)
-                    df.drop_duplicates("trade_id", inplace=True)
-                    df.reset_index(drop=True, inplace=True)
-
-                    if not df.empty and (
-                            (df['trade_id'].iloc[0] % 100000 == 0 and len(df) >= 100000) or df['trade_id'].iloc[
-                        0] % 100000 != 0):
-                        for index, row in df[df['trade_id'] % 100000 == 0].iterrows():
-                            if index != 0:
-                                self.save_dataframe(df[(df['trade_id'] >= row['trade_id'] - 1000000) & (
-                                        df['trade_id'] < row['trade_id'])], "", True)
-                                df = df[df['trade_id'] >= row['trade_id']]
-                    if not df.empty:
-                        start_id = df["trade_id"].iloc[0] - 1
-                        start_time = df["timestamp"].iloc[0]
-                        current_time = df["timestamp"].iloc[-1]
-                        current_id = df["trade_id"].iloc[-1] + 1
-
             if start_id == 0:
                 df = await self.find_time(start_time)
                 current_id = df["trade_id"].iloc[-1] + 1
@@ -654,66 +576,13 @@ class Downloader:
         except:
             pass
 
-    def get_unabridged_df(self):
-        filenames = self.get_filenames()
-        start_index = 0
-        for i in range(len(filenames)):
-            if int(filenames[i].split("_")[2]) <= self.start_time <= int(filenames[i].split("_")[3].split(".")[0]):
-                start_index = i
-                break
-        end_index = -1
-        if self.end_time != -1:
-            for i in range(len(filenames)):
-                if int(filenames[i].split("_")[2]) <= self.end_time <= int(filenames[i].split("_")[3].split(".")[0]):
-                    end_index = i
-                    break
-        filenames = filenames[start_index:] if end_index == -1 else filenames[start_index:end_index + 1]
-        df = pd.DataFrame()
-        chunks = []
-        for f in filenames:
-            chunk = pd.read_csv(os.path.join(self.filepath, f)).set_index('trade_id')
-            if self.end_time != -1:
-                chunk = chunk[(chunk['timestamp'] >= self.start_time) & (chunk['timestamp'] <= self.end_time)]
-            else:
-                chunk = chunk[(chunk['timestamp'] >= self.start_time)]
-            chunks.append(chunk)
-            if len(chunks) >= 100:
-                if df.empty:
-                    df = pd.concat(chunks, axis=0)
-                else:
-                    chunks.insert(0, df)
-                    df = pd.concat(chunks, axis=0)
-                chunks = []
-            print('\rloaded chunk of data', f, ts_to_date(float(f.split("_")[2]) / 1000), end='     ')
-        print()
-        if chunks:
-            if df.empty:
-                df = pd.concat(chunks, axis=0)
-            else:
-                chunks.insert(0, df)
-                df = pd.concat(chunks, axis=0)
-            del chunks
-        return df
-
     async def prepare_files(self):
         """
         Takes downloaded data and prepares a numpy array for use in backtesting.
         @return:
         """
-        filenames = self.get_filenames()
-        start_index = 0
-        for i in range(len(filenames)):
-            if int(filenames[i].split("_")[2]) <= self.start_time <= int(filenames[i].split("_")[3].split(".")[0]):
-                start_index = i
-                break
-        end_index = -1
-        if self.end_time != -1:
-            for i in range(len(filenames)):
-                if int(filenames[i].split("_")[2]) <= self.end_time <= int(filenames[i].split("_")[3].split(".")[0]):
-                    end_index = i
-                    break
-        filenames = filenames[start_index:] if end_index == -1 else filenames[start_index:end_index + 1]
-
+        filenames = [f for f in self.get_filenames() if int(f.split('_')[3].split('.')[0]) >= self.start_time
+                     and int(f.split('_')[2]) <= self.end_time]
         left_overs = pd.DataFrame()
         sample_size_ms = 1000
         current_index = 0
