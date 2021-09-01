@@ -132,7 +132,7 @@ class Downloader:
         else:
             new_name = f'{df["trade_id"].iloc[0]}_{df["trade_id"].iloc[-1]}_{df["timestamp"].iloc[0]}_{df["timestamp"].iloc[-1]}.csv'
         if new_name != filename:
-            print_(['Saving file', new_name])
+            print_(['Saving file', new_name, ts_to_date(int(new_name.split('_')[2]) / 1000)])
             df.to_csv(os.path.join(self.filepath, new_name), index=False)
             new_name = ""
             try:
@@ -371,7 +371,7 @@ class Downloader:
                 last_time = sys.maxsize
             if not verified and last_time >= self.start_time and (
                     self.end_time == -1 or (first_time <= self.end_time)) or last_time == sys.maxsize:
-                print_(['Validating file', f])
+                print_(['Validating file', f, ts_to_date(first_time / 1000)])
                 df = self.read_dataframe(os.path.join(self.filepath, f))
                 missing, df, gaps = self.validate_dataframe(df)
                 exists = False
@@ -474,12 +474,17 @@ class Downloader:
                     end=datetime.datetime.fromtimestamp(end_time / 1000, datetime.timezone.utc).date(),
                     freq='D').to_pydatetime()
                 days = [date.strftime("%Y-%m-%d") for date in tmp]
+                '''
                 current_month = ts_to_date(time() - 60 * 60 * 3)[:7]
                 months = sorted([e for e in set([d[:7] for d in days]) if e != current_month])
                 dates = sorted(months + [d for d in days if d[:7] not in months])
+                '''
 
                 df = pd.DataFrame(columns=['trade_id', 'price', 'qty', 'timestamp', 'is_buyer_maker'])
 
+                months_done = set()
+                months_failed = set()
+                '''
                 for date in dates:
                     if len(date.split('-')) == 2:
                         tf = self.get_zip(self.monthly_base_url, self.config['symbol'], date)
@@ -488,6 +493,24 @@ class Downloader:
                     else:
                         print("Something wrong with the date", date)
                         tf = pd.DataFrame()
+                '''
+                for day in days:
+                    month = day[:7]
+                    if month in months_done:
+                        continue
+                    if month in months_failed:
+                        tf = self.get_zip(self.daily_base_url, self.config['symbol'], day)
+                        if tf.empty:
+                            print_(['failed to fetch daily', day])
+                            continue
+                    else:
+                        tf = self.get_zip(self.monthly_base_url, self.config['symbol'], month)
+                        if tf.empty:
+                            print_(['failed to fetch monthly', month])
+                            months_failed.add(month)
+                            tf = self.get_zip(self.daily_base_url, self.config['symbol'], day)
+                        else:
+                            months_done.add(month)
                     tf = tf[tf['timestamp'] >= start_time]
                     tf = tf[tf['timestamp'] <= end_time]
                     if start_id != 0:
