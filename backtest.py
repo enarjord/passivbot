@@ -32,7 +32,7 @@ def plot_wrap(config, data):
     print('starting_balance', config['starting_balance'])
     print('backtesting...')
     sts = time()
-    fills, info = backtest(config, data, do_print=True)
+    fills, info, stats = backtest(config, data, do_print=True)
     print(f'{time() - sts:.2f} seconds elapsed')
     if not fills:
         print('no fills')

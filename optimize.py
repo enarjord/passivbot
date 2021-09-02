@@ -156,7 +156,7 @@ def single_sliding_window_run(config, data, do_print=True) -> (float, [dict]):
             continue
         try:
             packed = pack_config(config)
-            fills, info = backtest(packed, data_slice)
+            fills, info, stats = backtest(packed, data_slice)
         except Exception as e:
             print(e)
             break
