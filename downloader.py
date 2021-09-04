@@ -442,15 +442,15 @@ class Downloader:
             first_time = int(f.split("_")[2])
             last_time = int(f.split("_")[3].split(".")[0])
             if first_id - 1 != prev_last_id and f not in mod_files and first_time >= prev_last_time and \
-                    first_time >= self.start_time and self.end_time < first_time and not prev_last_time > self.end_time:
-                chunk_gaps.append((prev_last_time, self.end_time, prev_last_id, 0))
+                    first_time >= self.start_time and not prev_last_time > self.end_time:
+                chunk_gaps.append((prev_last_time, first_time, prev_last_id, first_id - 1))
             if first_time >= self.start_time or last_time >= self.start_time:
                 prev_last_id = last_id
                 prev_last_time = last_time
 
         if len(filenames) < 1:
             chunk_gaps.append((self.start_time, self.end_time, 0, 0))
-        elif prev_last_time < self.end_time:
+        if prev_last_time < self.end_time:
             chunk_gaps.append((prev_last_time, self.end_time, prev_last_id, 0))
 
         for gaps in chunk_gaps:
