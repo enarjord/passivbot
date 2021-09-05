@@ -1,9 +1,11 @@
+import os
+os.environ['NOJIT'] = 'true'
+
 import traceback
 import argparse
 import asyncio
 import json
 import logging
-import os
 import signal
 import pprint
 from pathlib import Path
@@ -807,7 +809,8 @@ async def main() -> None:
     parser.add_argument('live_config_path', type=str, help='live config to use')
     parser.add_argument('-m', '--market_type', type=str, required=False, dest='market_type', default=None,
                         help='specify whether spot or futures (default), overriding value from backtest config')
-    parser.add_argument('--nojit', help='disable numba', action='store_true')
+    parser.add_argument('-gs', '--graceful_stop', action='store_true',
+                        help='if true, disable long and short')
 
     args = parser.parse_args()
     try:
@@ -829,7 +832,7 @@ async def main() -> None:
     config['exchange'] = account['exchange']
     config['symbol'] = args.symbol
     config['live_config_path'] = args.live_config_path
-    config['market_type'] = args.market_type
+    config['market_type'] = args.market_type if args.market_type is not None else 'futures'
 
     if account['exchange'] == 'binance':
         if 'spot' in config['market_type']:
@@ -844,6 +847,11 @@ async def main() -> None:
         bot = await create_bybit_bot(config)
     else:
         raise Exception('unknown exchange', account['exchange'])
+
+    if args.graceful_stop:
+        print('\n\ngraceful stop enabled, will not make new entries once existing positions are closed\n')
+        config['long']['enabled'] = config['do_long'] = False
+        config['shrt']['enabled'] = config['do_shrt'] = False
 
     print('using config')
     pprint.pprint(denumpyize(config))
