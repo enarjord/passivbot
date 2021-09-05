@@ -189,7 +189,7 @@ def single_sliding_window_run(config, data, do_print=True) -> (float, [dict]):
 
 
 def simple_sliding_window_wrap(config, data, do_print=False):
-    objective, analyses = single_sliding_window_run(config, data)
+    objective, analyses = single_sliding_window_run(config, data, do_print=do_print)
     if not analyses:
         tune.report(obj=0.0,
                     min_adg=0.0,
@@ -281,7 +281,7 @@ def backtest_tune(data: np.ndarray, config: dict, current_best: Union[dict, list
     else:
         raise Exception('unknown config type')
 
-    backtest_wrap = tune.with_parameters(simple_sliding_window_wrap, data=data)
+    backtest_wrap = tune.with_parameters(simple_sliding_window_wrap, data=data, do_print=True)
     analysis = tune.run(
         backtest_wrap, metric='obj', mode='max', name='search',
         search_alg=algo, scheduler=scheduler, num_samples=config['iters'], config=config, verbose=1,
