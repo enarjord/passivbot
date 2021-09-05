@@ -1,8 +1,8 @@
-import sys
+import os
 import numpy as np
 
 
-if '--nojit' in sys.argv:
+if 'NOJIT' in os.environ and os.environ['NOJIT'] == 'true':
     print('not using numba')
 
     def njit(pyfunc=None, **kwargs):
