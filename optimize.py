@@ -1,8 +1,11 @@
+import os
+os.environ['NOJIT'] = 'false'
+
+
 import argparse
 import asyncio
 import glob
 import json
-import os
 import pprint
 import sys
 from time import time
