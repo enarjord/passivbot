@@ -663,7 +663,7 @@ def spotify_config(config: dict, nullify_shrt=True) -> dict:
         spotified['market_type'] = 'spot'
     elif 'spot' not in spotified['market_type']:
         spotified['market_type'] += '_spot'
-    spotified['do_long'] = spotified['long']['enabled'] = True
+    spotified['do_long'] = spotified['long']['enabled'] = config['long']['enabled']
     spotified['do_shrt'] = spotified['shrt']['enabled'] = False
     config_type = determine_config_type(config)
     if config_type == 'vanilla':
