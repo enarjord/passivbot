@@ -1,6 +1,6 @@
 import os
-os.environ['NOJIT'] = 'false'
 
+os.environ['NOJIT'] = 'false'
 
 import argparse
 import asyncio
@@ -25,10 +25,10 @@ from backtest import backtest
 from backtest import plot_wrap
 from downloader import Downloader
 from procedures import prepare_optimize_config, add_argparse_args
-from pure_funcs import pack_config, unpack_config, get_template_live_config, \
-     ts_to_date, analyze_fills
+from pure_funcs import pack_config, unpack_config, get_template_live_config, ts_to_date, analyze_fills
 from njit_funcs import round_dynamic
 from reporter import LogReporter
+import shutil
 
 os.environ['TUNE_GLOBAL_CHECKPOINT_S'] = '240'
 
@@ -111,29 +111,31 @@ def objective_function(analysis: dict, config: dict, metric='adjusted_daily_gain
     obj = analysis[metric]
     break_early = False
     line = ''
-    for ckey, akey in [('maximum_hrs_no_fills',           'max_hrs_no_fills'),
+    for ckey, akey in [('maximum_hrs_no_fills', 'max_hrs_no_fills'),
                        ('maximum_hrs_no_fills_same_side', 'max_hrs_no_fills_same_side'),
                        ('maximum_mean_hrs_between_fills', 'mean_hrs_between_fills')]:
         # minimize these
         if config[ckey] != 0.0:
             obj *= min(1.0, config[ckey] / analysis[akey])
-            if config['break_early_factor'] != 0.0 and analysis[akey] > config[ckey] * (1 + config['break_early_factor']):
+            if config['break_early_factor'] != 0.0 and analysis[akey] > config[ckey] * (
+                    1 + config['break_early_factor']):
                 break_early = True
                 line += f" broke on {ckey} {round_dynamic(analysis[akey], 5)}"
-    for ckey, akey in [('minimum_bankruptcy_distance',    'closest_bkr'),
-                       ('minimum_equity_balance_ratio',   'lowest_eqbal_ratio'),
-                       ('minimum_sharpe_ratio',           'sharpe_ratio')]:
+    for ckey, akey in [('minimum_bankruptcy_distance', 'closest_bkr'),
+                       ('minimum_equity_balance_ratio', 'lowest_eqbal_ratio'),
+                       ('minimum_sharpe_ratio', 'sharpe_ratio')]:
         # maximize these
         if config[ckey] != 0.0:
             obj *= min(1.0, analysis[akey] / config[ckey])
-            if config['break_early_factor'] != 0.0 and analysis[akey] < config[ckey] * (1 - config['break_early_factor']):
+            if config['break_early_factor'] != 0.0 and analysis[akey] < config[ckey] * (
+                    1 - config['break_early_factor']):
                 break_early = True
                 line += f" broke on {ckey} {round_dynamic(analysis[akey], 5)}"
-    for ckey, akey in [('minimum_slice_adg',    'average_daily_gain')]:
+    for ckey, akey in [('minimum_slice_adg', 'average_daily_gain')]:
         # absolute requirements
         if analysis[akey] < config[ckey]:
-                break_early = True
-                line += f" broke on {ckey} {round_dynamic(analysis[akey], 5)}"
+            break_early = True
+            line += f" broke on {ckey} {round_dynamic(analysis[akey], 5)}"
     return obj, break_early, line
 
 
@@ -234,8 +236,8 @@ def backtest_tune(data: np.ndarray, config: dict, current_best: Union[dict, list
             max_span_upper = config['max_span']
         data_sample_size_seconds = (data[1][0] - data[0][0]) / 1000
         if len(data) < max_span_upper * data_sample_size_seconds * 1.5:
-            raise Exception( "too few ticks or to high upper range for max span,\n"
-                             "please use more backtest data or reduce max span\n"
+            raise Exception("too few ticks or to high upper range for max span,\n"
+                            "please use more backtest data or reduce max span\n"
                             f"n_ticks {len(data)}, max_span {int(max_span_upper * data_sample_size_seconds)}")
     print('tuning:')
     for k, v in config.items():
@@ -261,7 +263,8 @@ def backtest_tune(data: np.ndarray, config: dict, current_best: Union[dict, list
 
     ray.init(num_cpus=config['num_cpus'],
              object_store_memory=memory if memory > 4000000000 else None)  # , logging_level=logging.FATAL, log_to_driver=False)
-    pso = ng.optimizers.ConfiguredPSO(transform='identity', popsize=config['n_particles'], omega=omega, phip=phi1, phig=phi2)
+    pso = ng.optimizers.ConfiguredPSO(transform='identity', popsize=config['n_particles'], omega=omega, phip=phi1,
+                                      phig=phi2)
     algo = NevergradSearch(optimizer=pso, points_to_evaluate=current_best_params)
     algo = ConcurrencyLimiter(algo, max_concurrent=config['num_cpus'])
     scheduler = AsyncHyperBandScheduler()
@@ -301,6 +304,12 @@ def backtest_tune(data: np.ndarray, config: dict, current_best: Union[dict, list
         raise_on_failed_trial=False
     )
     ray.shutdown()
+    print('\nCleaning up temporary optimizer data...\n')
+    try:
+        shutil.rmtree(os.path.join(config['optimize_dirpath'], 'search'))
+    except Exception as e:
+        print('Failed cleaning up.')
+        print(e)
     return analysis
 
 
@@ -321,7 +330,8 @@ async def execute_optimize(config):
     if not (config['do_long'] and config['do_shrt']):
         if not (config['do_long'] or config['do_shrt']):
             raise Exception('both long and shrt disabled')
-        print(f"{'long' if config['do_long'] else 'shrt'} only, setting maximum_hrs_no_fills = maximum_hrs_no_fills_same_side")
+        print(
+            f"{'long' if config['do_long'] else 'shrt'} only, setting maximum_hrs_no_fills = maximum_hrs_no_fills_same_side")
         config['maximum_hrs_no_fills'] = config['maximum_hrs_no_fills_same_side']
     downloader = Downloader(config)
     print()
@@ -344,7 +354,8 @@ async def execute_optimize(config):
     if config['starting_configs'] is not None:
         try:
             if os.path.isdir(config['starting_configs']):
-                start_candidate = [json.load(open(f)) for f in glob.glob(os.path.join(config['starting_configs'], '*.json'))]
+                start_candidate = [json.load(open(f)) for f in
+                                   glob.glob(os.path.join(config['starting_configs'], '*.json'))]
                 print('Starting with all configurations in directory.')
             else:
                 start_candidate = json.load(open(config['starting_configs']))
