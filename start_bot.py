@@ -16,7 +16,7 @@ while True:
         else:
             market_type = 'futures'
         print(f"\nStarting {sys.argv[1]} {sys.argv[2]} {sys.argv[3]} {market_type}")
-        p = Popen(f"{sys.executable} passivbot.py {sys.argv[1]} {sys.argv[2]} {sys.argv[3]} --nojit --market_type {market_type}", shell=True)
+        p = Popen(f"{sys.executable} passivbot.py {sys.argv[1]} {sys.argv[2]} {sys.argv[3]} --market_type {market_type}", shell=True)
         exitcode = p.wait()
         if exitcode != 0:
             restart_k += 1
