@@ -834,11 +834,18 @@ async def main() -> None:
     config['live_config_path'] = args.live_config_path
     config['market_type'] = args.market_type if args.market_type is not None else 'futures'
 
+    if args.graceful_stop:
+        print('\n\ngraceful stop enabled, will not make new entries once existing positions are closed\n')
+        config['long']['enabled'] = config['do_long'] = False
+        config['shrt']['enabled'] = config['do_shrt'] = False
+
+    if 'spot' in config['market_type']:
+        config = spotify_config(config)
+
     if account['exchange'] == 'binance':
         if 'spot' in config['market_type']:
             from procedures import create_binance_bot_spot
             bot = await create_binance_bot_spot(config)
-            config = spotify_config(config)
         else:
             from procedures import create_binance_bot
             bot = await create_binance_bot(config)
@@ -847,11 +854,6 @@ async def main() -> None:
         bot = await create_bybit_bot(config)
     else:
         raise Exception('unknown exchange', account['exchange'])
-
-    if args.graceful_stop:
-        print('\n\ngraceful stop enabled, will not make new entries once existing positions are closed\n')
-        config['long']['enabled'] = config['do_long'] = False
-        config['shrt']['enabled'] = config['do_shrt'] = False
 
     print('using config')
     pprint.pprint(denumpyize(config))
