@@ -747,7 +747,8 @@ class Telegram:
                             psize = new_psize
                         elif psize > 0:
                             day = fill['timestamp'] // ms_in_a_day * ms_in_a_day
-                            daily[day] += calc_long_pnl(pprice, fill['price'], fill['qty'], False, 1.0)
+                            if day in daily:
+                                daily[day] += calc_long_pnl(pprice, fill['price'], fill['qty'], False, 1.0)
                             psize -= fill['qty']
 
                 else:
