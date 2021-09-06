@@ -126,7 +126,7 @@ def objective_function(analysis: dict, config: dict, metric='adjusted_daily_gain
                        ('minimum_sharpe_ratio', 'sharpe_ratio')]:
         # maximize these
         if config[ckey] != 0.0:
-            obj *= min(1.0, analysis[akey] / config[ckey])
+            obj *= max(0.0, min(1.0, analysis[akey] / config[ckey]))
             if config['break_early_factor'] != 0.0 and analysis[akey] < config[ckey] * (
                     1 - config['break_early_factor']):
                 break_early = True
@@ -172,7 +172,8 @@ def single_sliding_window_run(config, data, do_print=True) -> (float, [dict]):
         analysis['score'], do_break, line = objective_function(analysis, config, metric=metric)
         analysis['score'] *= (analysis['n_days'] / config['n_days'])
         analyses.append(analysis)
-        objective = np.mean([e['score'] for e in analyses]) * max(1.01, config['reward_multiplier_base']) ** (z + 1)
+        objective = np.sum([e['score'] for e in analyses]) * max(1.01, config['reward_multiplier_base']) ** (z + 1)
+        #objective = np.mean([e['score'] for e in analyses]) * max(1.01, config['reward_multiplier_base']) ** (z + 1)
         analyses[-1]['objective'] = objective
         line = (f'{str(z).rjust(3, " ")} adg {analysis["average_daily_gain"]:.4f}, '
                 f'bkr {analysis["closest_bkr"]:.4f}, '
