@@ -322,8 +322,9 @@ class BinanceBot(Bot):
         params = {'symbol': self.symbol, 'limit': min(100, limit) if self.inverse else limit}
         if from_id is not None:
             params['fromId'] = max(0, from_id)
-        if start_time is not None and end_time is not None:
+        if start_time is not None:
             params['startTime'] = int(start_time)
+        if end_time is not None:
             params['endTime'] = int(min(end_time, start_time + 1000 * 60 * 60 * 24 * 6.99))
         try:
             fetched = await self.private_get(self.endpoints['fills'], params)

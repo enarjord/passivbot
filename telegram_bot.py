@@ -736,7 +736,7 @@ class Telegram:
                         [fills.append(f) for f in next_set]
                         if len(next_set) < 1000:
                             break
-                        start_time_to_fetch = next_set[-1]['timestamp']
+                        start_time_to_fetch = max([f['timestamp'] for f in next_set])
 
                     psize = 0.0
                     pprice = 0.0
@@ -759,7 +759,7 @@ class Telegram:
                             daily[day] += float(income['income'])
                         if len(next_set) < 1000:
                             break
-                        start_time_to_fetch = next_set[-1]['timestamp']
+                        start_time_to_fetch = max([f['timestamp'] for f in next_set])
 
                 # position = await self._bot.fetch_position()
                 position = self._bot.position.copy()
