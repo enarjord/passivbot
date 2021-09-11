@@ -13,12 +13,10 @@ from pathlib import Path
 from time import time
 from procedures import load_live_config, make_get_filepath, load_exchange_key_secret, print_, add_argparse_args, \
     utc_ms
-from pure_funcs import get_xk_keys, get_ids_to_fetch, flatten, calc_indicators_from_ticks_with_gaps, \
-    drop_consecutive_same_prices, filter_orders, compress_float, create_xk, round_dynamic, denumpyize, \
-    calc_spans, spotify_config, get_position_fills, determine_config_type
-#from njit_funcs import calc_new_psize_pprice, qty_to_cost, calc_diff, round_, calc_orders, calc_emas, \
-#    calc_samples, calc_emas_last, calc_long_scalp_entry, calc_shrt_scalp_entry, calc_long_close_grid, \
-#    calc_shrt_close_grid
+from pure_funcs import get_xk_keys, flatten, filter_orders, compress_float, create_xk, round_dynamic, denumpyize, \
+    spotify_config, get_position_fills
+from njit_funcs import calc_new_psize_pprice, qty_to_cost, calc_diff, round_, calc_samples, calc_long_close_grid, \
+    calc_shrt_close_grid
 
 import numpy as np
 import websockets
@@ -97,16 +95,6 @@ class Bot:
             setattr(self, key, config[key])
             if key in self.xk:
                 self.xk[key] = config[key]
-        self.config_type = self.config['config_type'] = determine_config_type(config)
-        if self.config_type == 'vanilla':
-            self.ema_alpha = 2.0 / (self.spans + 1.0) if hasattr(self, 'spans') else 0.0
-            self.ema_alpha_ = 1.0 - self.ema_alpha
-            self.spans_secs = self.spans * 60 if hasattr(self, 'spans') else 0.0  # spans are in minutes
-            self.ema_alpha_secs = 2.0 / (self.spans_secs + 1.0)
-            self.ema_alpha_secs_ = 1.0 - self.ema_alpha_secs
-            self.ema_sec = 0
-            self.emas = np.zeros(len(self.spans))
-            self.ratios = np.zeros(len(self.spans))
 
     def set_config_value(self, key, value):
         self.config[key] = value
