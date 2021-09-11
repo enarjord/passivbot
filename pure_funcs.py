@@ -29,20 +29,14 @@ def compress_float(n: float, d: int) -> str:
 
 def calc_spans(min_span: int, max_span: int, n_spans: int) -> np.ndarray:
     return np.array([min_span * ((max_span / min_span) ** (1 / (n_spans - 1))) ** i for i in range(0, n_spans)])
+    return np.array([min_span, (min_span * max_span)**0.5, max_span])
 
 
 def get_xk_keys():
     return ['spot', 'hedge_mode', 'inverse', 'do_long', 'do_shrt', 'qty_step', 'price_step', 'min_qty', 'min_cost',
-            'c_mult', 'max_leverage', 'spans', 'pbr_stop_loss', 'pbr_limit', 'iqty_const', 'iprc_const', 'rqty_const',
-            'rprc_const', 'markup_const', 'iqty_MAr_coeffs', 'iprc_MAr_coeffs', 'rprc_PBr_coeffs', 'rqty_MAr_coeffs',
-            'rprc_MAr_coeffs', 'markup_MAr_coeffs']
-
-
-def get_scalp_keys():
-    return ['spot', 'hedge_mode', 'inverse', 'do_long', 'do_shrt', 'qty_step', 'price_step', 'min_qty', 'min_cost',
-            'c_mult', 'max_leverage', 'primary_initial_qty_pct', 'primary_ddown_factor', 'primary_grid_spacing',
-            'primary_grid_spacing_pbr_weighting', 'primary_pbr_limit', 'secondary_ddown_factor',
-            'secondary_grid_spacing', 'secondary_pbr_limit_added', 'min_markup', 'markup_range', 'n_close_orders']
+            'c_mult', 'grid_span', 'pbr_limit', 'max_n_entry_orders', 'initial_qty_pct', 'eprice_pprice_diff',
+            'secondary_pbr_allocation', 'secondary_grid_spacing', 'eprice_exp_base', 'min_markup', 'markup_range',
+            'n_close_orders']
 
 
 def create_xk(config: dict) -> dict:
@@ -55,15 +49,11 @@ def create_xk(config: dict) -> dict:
         config_['do_long'] = config['long']['enabled']
         config_['do_shrt'] = config['shrt']['enabled']
     config_type = determine_config_type(config)
-    if config_type == 'vanilla':
-        keys = get_xk_keys()
-        config_['spans'] = calc_spans(config['min_span'], config['max_span'], config['n_spans'])
-    elif config_type == 'scalp':
-        keys = get_scalp_keys()
-        config_['long']['n_close_orders'] = int(round(config_['long']['n_close_orders']))
-        config_['shrt']['n_close_orders'] = int(round(config_['shrt']['n_close_orders']))
-    else:
-        raise Exception('unknown config type')
+    keys = get_xk_keys()
+    config_['long']['n_close_orders'] = int(round(config_['long']['n_close_orders']))
+    config_['shrt']['n_close_orders'] = int(round(config_['shrt']['n_close_orders']))
+    config_['long']['max_n_entry_orders'] = int(round(config_['long']['max_n_entry_orders']))
+    config_['shrt']['max_n_entry_orders'] = int(round(config_['shrt']['max_n_entry_orders']))
     for k in keys:
         if k in config_['long']:
             xk[k] = (config_['long'][k], config_['shrt'][k])
@@ -706,19 +696,11 @@ def round_values(xs, n: int):
     return xs
 
 
+
 def determine_config_type(config: dict) -> str:
     if 'long' in config and 'shrt' in config:
         if all((key in config['long'] and key in config['shrt'])
-               for key in ['enabled', 'iprc_MAr_coeffs', 'iprc_const', 'iqty_MAr_coeffs',
-                           'iqty_const', 'markup_MAr_coeffs', 'markup_const', 'pbr_limit',
-                           'pbr_stop_loss', 'rprc_MAr_coeffs', 'rprc_PBr_coeffs',
-                           'rprc_const', 'rqty_MAr_coeffs', 'rqty_const']):
-            return 'vanilla'
-        elif all((key in config['long'] and key in config['shrt'])
-                 for key in ['enabled', 'primary_initial_qty_pct', 'primary_ddown_factor',
-                             'primary_grid_spacing', 'primary_grid_spacing_pbr_weighting',
-                             'primary_pbr_limit', 'secondary_ddown_factor',
-                             'secondary_grid_spacing', 'secondary_pbr_limit_added',
-                             'min_markup', 'markup_range', 'n_close_orders']):
+                for key in ['enabled', 'grid_span', 'pbr_limit', 'max_n_entry_orders', 'initial_qty_pct',
+                            'eprice_pprice_diff', 'eprice_exp_base', 'min_markup', 'markup_range', 'n_close_orders']):
             return 'scalp'
     raise Exception('unknown config type')
