@@ -132,7 +132,7 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
     plt.savefig(f"{result['plots_dirpath']}psizes_plot.png")
 
 
-def plot_fills(df, fdf_, side: int = 0, bkr_thr=0.1):
+def plot_fills(df, fdf_, side: int = 0, bkr_thr=0.1, plot_whole_df: bool = False):
     if fdf_.empty:
         return
     plt.clf()
@@ -140,8 +140,9 @@ def plot_fills(df, fdf_, side: int = 0, bkr_thr=0.1):
     dfc = df#.iloc[::max(1, int(len(df) * 0.00001))]
     if dfc.index.name != 'timestamp':
         dfc = dfc.set_index('timestamp')
-    dfc = dfc[(dfc.index > fdf.index[0]) & (dfc.index < fdf.index[-1])]
-    dfc = dfc.loc[fdf.index[0]:fdf.index[-1]]
+    if not plot_whole_df:
+        dfc = dfc[(dfc.index > fdf.index[0]) & (dfc.index < fdf.index[-1])]
+        dfc = dfc.loc[fdf.index[0]:fdf.index[-1]]
     dfc.price.plot(style='y-')
 
     if side >= 0:
