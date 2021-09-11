@@ -635,7 +635,6 @@ def njit_backtest(
 
     prev_k = 0
     closest_bkr = 1.0
-    lowest_eqbal_ratio = 1.0
 
     for k in range(1, len(prices)):
         if qtys[k] == 0.0:
@@ -646,7 +645,7 @@ def njit_backtest(
         if timestamps[k] >= next_stats_update:
             equity = balance + calc_upnl(long_psize, long_pprice, shrt_psize, shrt_pprice,
                                          prices[k], inverse, c_mult)
-            stats.append((timestamps[k], balance, equity, bkr_price, long_psize, long_pprice, shrt_psize, shrt_pprice, prices[k]))
+            stats.append((timestamps[k], balance, equity, bkr_price, long_psize, long_pprice, shrt_psize, shrt_pprice, prices[k], closest_bkr))
             next_stats_update = timestamps[k] + 60 * 1000
         if timestamps[k] >= next_update_ts:
             # simulate small delay between bot and exchange
@@ -662,14 +661,13 @@ def njit_backtest(
 
             equity = balance + calc_upnl(long_psize, long_pprice, shrt_psize, shrt_pprice,
                                          prices[k], inverse, c_mult)
-            lowest_eqbal_ratio = min(lowest_eqbal_ratio, equity / balance)
 
             # if not in pos, wait 5 secs between updates
             next_update_ts = timestamps[k] + 1000 * (5 if long_psize == 0.0 else 60 * 10)
 
             if equity / starting_balance < 0.1:
                 # break if 90% of starting balance is lost
-                return fills, (False, lowest_eqbal_ratio, closest_bkr), stats
+                return fills, stats
 
             if closest_bkr < 0.06:
                 # consider bankruptcy within 6% as liquidation
@@ -690,7 +688,7 @@ def njit_backtest(
                     fills.append((k, timestamps[k], pnl, fee_paid, balance, equity,
                                   0.0, -shrt_psize, prices[k], 0.0, 0.0, 'shrt_bankruptcy'))
 
-                return fills, (False, lowest_eqbal_ratio, closest_bkr), stats
+                return fills, stats
 
         while long_entries and long_entries[0][0] > 0.0 and prices[k] < long_entries[0][1]:
             if long_psize == 0.0:
@@ -704,6 +702,7 @@ def njit_backtest(
             fills.append((k, timestamps[k], 0.0, fee_paid, balance, equity, pbr,
                           long_entries[0][0], long_entries[0][1], long_psize, long_pprice, long_entries[0][2]))
             long_entries = long_entries[1:]
+            bkr_price = calc_bankruptcy_price(balance, long_psize, long_pprice, shrt_psize, shrt_pprice, inverse, c_mult)
         while long_psize > 0.0 and long_closes and long_closes[0][0] < 0.0 and prices[k] > long_closes[0][1]:
             next_update_ts = timestamps[k] + latency_simulation_ms
             long_close_qty = long_closes[0][0]
@@ -724,4 +723,5 @@ def njit_backtest(
             fills.append((k, timestamps[k], pnl, fee_paid, balance, equity, pbr,
                           long_close_qty, long_closes[0][1], long_psize, long_pprice, long_closes[0][2]))
             long_closes = long_closes[1:]
-    return fills, (True, lowest_eqbal_ratio, closest_bkr), stats
+            bkr_price = calc_bankruptcy_price(balance, long_psize, long_pprice, shrt_psize, shrt_pprice, inverse, c_mult)
+    return fills, stats
