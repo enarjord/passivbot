@@ -3,7 +3,7 @@
   market_type: futures
 
   # exchange from api-keys.json is used
-  user: your_user_name
+  user: user_name
 
   symbol: specify_symbol
   latency_simulation_ms: 1000
@@ -11,11 +11,8 @@
   # specify starting balance in terms of margin token (i.e. usdt for usdt-m, coin for inverse coin-m)
   starting_balance: 1000.0
 
-  # for sharpe ratio
-  periodic_gain_n_days: 5.0
-
   # format YYYY-MM-DDTHH:mm:ss
   # e.g. 2020-02-18T19:34:59
-  start_date: 2021-01-01
-  end_date: 2021-08-23
+  start_date: 2021-06-01
+  end_date: 2021-09-11
 }
