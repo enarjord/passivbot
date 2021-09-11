@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 
 from downloader import Downloader
-from njit_funcs import njit_backtest_vanilla, njit_backtest_scalp, round_
+from njit_funcs import njit_backtest
 from plotting import dump_plots
 from procedures import prepare_backtest_config, make_get_filepath, load_live_config, add_argparse_args
 from pure_funcs import create_xk, denumpyize, ts_to_date, analyze_fills, spotify_config, determine_config_type
@@ -18,15 +18,8 @@ from pure_funcs import create_xk, denumpyize, ts_to_date, analyze_fills, spotify
 
 def backtest(config: dict, data: np.ndarray, do_print=False) -> (list, bool):
     xk = create_xk(config)
-    config_type = determine_config_type(config)
-    if config_type == 'vanilla':
-        return njit_backtest_vanilla(data, config['starting_balance'], config['latency_simulation_ms'],
-                                     config['maker_fee'], **xk)
-    elif config_type == 'scalp':
-        return njit_backtest_scalp(data, config['starting_balance'], config['latency_simulation_ms'],
-                                   config['maker_fee'], **xk)
-    else:
-        raise Exception('unknown config type')
+    return njit_backtest(data, config['starting_balance'], config['latency_simulation_ms'],
+                         config['maker_fee'], **xk)
 
 
 def plot_wrap(config, data):
