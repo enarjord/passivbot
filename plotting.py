@@ -32,28 +32,28 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
     table.add_row(['Total gain percentage', f"{profit_color}{round_dynamic(result['result']['gain'] * 100 - 100, 4)}%{Fore.RESET}"])
     table.add_row(['Average daily gain percentage', f"{profit_color}{round_dynamic((result['result']['average_daily_gain']) * 100, 3)}%{Fore.RESET}"])
     table.add_row(['Adjusted daily gain', f"{profit_color}{round_dynamic(result['result']['adjusted_daily_gain'], 6)}{Fore.RESET}"])
-    table.add_row([f"{result['avg_periodic_gain_key']} percentage", f"{profit_color}{round_dynamic(result['result']['average_periodic_gain'] * 100, 3)}%{Fore.RESET}"])
     bankruptcy_color = Fore.RED if result['result']['closest_bkr'] < 0.4 else Fore.YELLOW if result['result']['closest_bkr'] < 0.8 else Fore.RESET
     table.add_row(['Closest bankruptcy percentage', f"{bankruptcy_color}{round_dynamic(result['result']['closest_bkr'] * 100, 4)}%{Fore.RESET}"])
     table.add_row([' ', ' '])
-    table.add_row(['Sharpe ratio', round_dynamic(result['result']['sharpe_ratio'], 6)])
     table.add_row(['Profit sum', f"{profit_color}{round_dynamic(result['result']['profit_sum'], 6)}{Fore.RESET}"])
     table.add_row(['Loss sum', f"{Fore.RED}{round_dynamic(result['result']['loss_sum'], 6)}{Fore.RESET}"])
     table.add_row(['Fee sum', round_dynamic(result['result']['fee_sum'], 6)])
-    table.add_row(['Lowest equity/balance ratio', round_dynamic(result['result']['lowest_eqbal_ratio'], 6)])
-    table.add_row(['Biggest position size', round_dynamic(result['result']['biggest_psize'], 6)])
+    table.add_row(['Lowest equity/balance ratio', round_dynamic(result['result']['eqbal_ratio_min'], 6)])
+    table.add_row(['Biggest psize', round_dynamic(result['result']['biggest_psize'], 6)])
+    table.add_row(['Price action closeness mean long', round_dynamic(result['result']['pa_closeness_mean_long'], 6)])
+    table.add_row(['Price action closeness median long', round_dynamic(result['result']['pa_closeness_median_long'], 6)])
+    table.add_row(['Price action closeness max long', round_dynamic(result['result']['pa_closeness_max_long'], 6)])
+    table.add_row(['Average n fills per day', round_dynamic(result['result']['avg_fills_per_day'], 6)])
     table.add_row([' ', ' '])
     table.add_row(['No. fills', round_dynamic(result['result']['n_fills'], 6)])
     table.add_row(['No. entries', round_dynamic(result['result']['n_entries'], 6)])
     table.add_row(['No. closes', round_dynamic(result['result']['n_closes'], 6)])
-    table.add_row(['No. initial entries', round_dynamic(result['result']['n_initial_entries'], 6)])
-    table.add_row(['No. reentries', round_dynamic(result['result']['n_reentries'], 6)])
-    table.add_row(['No. normal closes', round_dynamic(result['result']['n_normal_closes'], 6)])
-    table.add_row(['No. stoploss closes', round_dynamic(result['result']['n_stop_loss_closes'], 6)])
+    table.add_row(['No. initial entries', round_dynamic(result['result']['n_ientries'], 6)])
+    table.add_row(['No. reentries', round_dynamic(result['result']['n_rentries'], 6)])
     table.add_row([' ', ' '])
-    table.add_row(['Mean hours between fills', round_dynamic(result['result']['mean_hrs_between_fills'], 6)])
-    table.add_row(['Max hours no fills (same side)', round_dynamic(result['result']['max_hrs_no_fills_same_side'], 6)])
-    table.add_row(['Max hours no fills', round_dynamic(result['result']['max_hrs_no_fills'], 6)])
+    table.add_row(['Mean hours between fills', round_dynamic(result['result']['avg_hrs_stuck_long'], 6)])
+    table.add_row(['Max hours no fills (same side)', round_dynamic(result['result']['max_hrs_stuck_long'], 6)])
+    table.add_row(['Max hours no fills', round_dynamic(result['result']['max_hrs_stuck_long'], 6)])
 
     longs = fdf[fdf.type.str.contains('long')]
     shrts = fdf[fdf.type.str.contains('shrt')]
@@ -63,10 +63,8 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
         table.add_row(["No. inital entries", len(longs[longs.type.str.contains('ientry')])])
         table.add_row(["No. reentries", len(longs[longs.type.str.contains('rentry')])])
         table.add_row(["No. normal closes", len(longs[longs.type.str.contains('nclose')])])
-        table.add_row(["No. stoploss closes", len(longs[longs.type.str.contains('sclose')])])
-        table.add_row(["No. partial fills", len(longs[longs.type.str.contains('partial')])])
-        table.add_row(['Mean hours between fills (long)', round_dynamic(result['result']['mean_hrs_between_fills_long'], 6)])
-        table.add_row(['Max hours no fills (long)', round_dynamic(result['result']['max_hrs_no_fills_long'], 6)])
+        table.add_row(['Mean hours stuck (long)', round_dynamic(result['result']['avg_hrs_stuck_long'], 6)])
+        table.add_row(['Max hours stuck (long)', round_dynamic(result['result']['max_hrs_stuck_long'], 6)])
         profit_color = Fore.RED if longs.pnl.sum() < 0 else Fore.RESET
         table.add_row(["PNL sum", f"{profit_color}{longs.pnl.sum()}{Fore.RESET}"])
 
@@ -76,8 +74,6 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
         table.add_row(["No. initial entries", len(shrts[shrts.type.str.contains('ientry')])])
         table.add_row(["No. reentries", len(shrts[shrts.type.str.contains('rentry')])])
         table.add_row(["No. normal closes", len(shrts[shrts.type.str.contains('nclose')])])
-        table.add_row(["No. stoploss closes", len(shrts[shrts.type.str.contains('sclose')])])
-        table.add_row(["No. partial fills", len(shrts[shrts.type.str.contains('partial')])])
         table.add_row(['Mean hours between fills (short)', round_dynamic(result['result']['mean_hrs_between_fills_shrt'], 6)])
         table.add_row(['Max hours no fills (short)', round_dynamic(result['result']['max_hrs_no_fills_shrt'], 6)])
         profit_color = Fore.RED if shrts.pnl.sum() < 0 else Fore.RESET
@@ -107,9 +103,11 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
     shrts.pnl.cumsum().plot()
     plt.savefig(f"{result['plots_dirpath']}pnl_cumsum_shrt.png")
 
+    '''
     plt.clf()
     fdf.adg.iloc[int(len(fdf) * 0.05):].plot()
     plt.savefig(f"{result['plots_dirpath']}adg.png")
+    '''
 
     print('plotting backtest whole and in chunks...')
     n_parts = max(3, int(round_up(result['n_days'] / 14, 1.0)))
