@@ -72,8 +72,6 @@ async def prepare_backtest_config(args) -> dict:
     config['optimize_dirpath'] = make_get_filepath(os.path.join(base_dirpath, 'optimize', ''))
     config['plots_dirpath'] = make_get_filepath(os.path.join(base_dirpath, 'plots', ''))
 
-    config['avg_periodic_gain_key'] = f"avg_{int(round(config['periodic_gain_n_days']))}days_gain"
-
     await add_market_specific_settings(config)
 
     return config
