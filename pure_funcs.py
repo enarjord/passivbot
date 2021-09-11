@@ -3,6 +3,7 @@ import pprint
 from collections import OrderedDict
 
 import numpy as np
+import pandas as pd
 from dateutil import parser
 
 from njit_funcs import round_dynamic, calc_emas
@@ -48,7 +49,6 @@ def create_xk(config: dict) -> dict:
         config_['spot'] = False
         config_['do_long'] = config['long']['enabled']
         config_['do_shrt'] = config['shrt']['enabled']
-    config_type = determine_config_type(config)
     keys = get_xk_keys()
     config_['long']['n_close_orders'] = int(round(config_['long']['n_close_orders']))
     config_['shrt']['n_close_orders'] = int(round(config_['shrt']['n_close_orders']))
@@ -144,8 +144,7 @@ def config_pretty_str(config: dict):
 
 def candidate_to_live_config(candidate: dict) -> dict:
     packed = pack_config(candidate)
-    packed['config_type'] = determine_config_type(packed)
-    live_config = get_template_live_config(packed)
+    live_config = get_template_live_config()
     sides = ['long', 'shrt']
     for side in sides:
         for k in live_config[side]:
@@ -162,7 +161,7 @@ def candidate_to_live_config(candidate: dict) -> dict:
         side_type = 'shrtonly'
     else:
         side_type = 'long&shrt'
-    name = f"{packed['config_type']}_{side_type}_"
+    name = f"{side_type}_"
     name += f"{result_dict['exchange'].lower()}_" if 'exchange' in result_dict else 'unknown_'
     name += f"{result_dict['symbol'].lower()}" if 'symbol' in result_dict else 'unknown'
     if 'n_days' in result_dict:
@@ -278,10 +277,10 @@ def filter_orders(actual_orders: [dict],
 
 
 def get_dummy_settings(config: dict):
-    dummy_settings = get_template_live_config({'config_type': 'scalp'})
+    dummy_settings = get_template_live_config()
     dummy_settings.update({k: 1.0 for k in get_xk_keys()})
     dummy_settings.update({'user': config['user'], 'exchange': config['exchange'], 'symbol': config['symbol'],
-                           'config_name': '', 'logging_level': 0, 'spans': np.array([6000, 90000])})
+                           'config_name': '', 'logging_level': 0})
     return {**config, **dummy_settings}
 
 
@@ -289,275 +288,87 @@ def flatten(lst: list) -> list:
     return [y for x in lst for y in x]
 
 
-def get_template_live_config(config):
-    if 'config_type' not in config:
-        raise Exception('config_type missing from config')
-    if config['config_type'] == 'vanilla':
-        return get_template_live_config_vanilla(config['n_spans'])
-    elif config['config_type'] == 'scalp':
-        return get_template_live_config_scalp()
-    else:
-        raise Exception('unknown config type')
-
-
-def get_template_live_config_scalp():
-    return {"config_name": "template_scalp",
-            "logging_level": 0,
-            "long": {"enabled": True,
-                     "markup_range": 0.008,
-                     "min_markup": 0.002,
-                     "n_close_orders": 10,
-                     "primary_ddown_factor": 1.3,
-                     "primary_grid_spacing": 0.007,
-                     "primary_initial_qty_pct": 0.01,
-                     "primary_pbr_limit": 1.3,
-                     "primary_grid_spacing_pbr_weighting": [0.016, 0.016],
-                     "secondary_ddown_factor": 0.75,
-                     "secondary_grid_spacing": 0.09,
-                     "secondary_pbr_limit_added": 1.9},
-            "shrt": {"enabled": True,
-                     "markup_range": 0.009,
-                     "min_markup": 0.001,
-                     "n_close_orders": 10,
-                     "primary_ddown_factor": 1.3,
-                     "primary_grid_spacing": 0.02,
-                     "primary_initial_qty_pct": 0.01,
-                     "primary_pbr_limit": 0.5,
-                     "primary_grid_spacing_pbr_weighting": [0.02, 0.02],
-                     "secondary_ddown_factor": 0.75,
-                     "secondary_grid_spacing": 0.08,
-                     "secondary_pbr_limit_added": 1.0}}
-
-
-def get_template_live_config_vanilla(n_spans: int, randomize_coeffs=False):
-    config = {
-        "config_name": "name",
-        "logging_level": 0,
-        "min_span": 10.0,  # minutes
-        "max_span": 420.0,  # minutes
-        "n_spans": n_spans,
-        "long": {
-            "enabled": True,
-            "pbr_stop_loss": 0.05,  # % of psize for stop loss order
-            "pbr_limit": 3.0,  # max pcost = balance * pbr_limit
-            "iqty_const": 0.01,  # initial entry qty pct
-            "iprc_const": 0.991,  # initial entry price ema_spread
-            "rqty_const": 1.0,  # reentry qty ddown factor
-            "rprc_const": 0.98,  # reentry price grid spacing
-            "markup_const": 1.003,  # markup
-
-            # coeffs: [[quadratic_coeff, linear_coeff]] * n_spans
-            # e.g. n_spans = 3,
-            # coeffs = [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]]
-            # all coeff ranges [min, max] = [-10.0, 10.0]
-            "iqty_MAr_coeffs": [],  # initial qty pct Moving Average ratio coeffs    formerly qty_pct
-            "iprc_MAr_coeffs": [],  # initial price pct Moving Average ratio coeffs  formerly ema_spread
-            "rqty_MAr_coeffs": [],  # reentry qty pct Moving Average ratio coeffs    formerly ddown_factor
-            "rprc_MAr_coeffs": [],  # reentry price pct Moving Average ratio coeffs  formerly grid_spacing
-            "rprc_PBr_coeffs": [],  # reentry Position cost to Balance ratio coeffs (PBr**2, PBr)
-            # formerly pos_margin_grid_coeff
-            "markup_MAr_coeffs": [],  # markup price pct Moving Average ratio coeffs
-        },
-        "shrt": {
-            "enabled": True,
-            "pbr_stop_loss": 0.05,  # % of psize for stop loss order
-            "pbr_limit": 3.0,  # max pcost = balance * pbr_limit
-            "iqty_const": 0.01,  # initial entry qty pct
-            "iprc_const": 1.009,  # initial entry price ema_spread
-            "rqty_const": 1.0,  # reentry qty ddown factor
-            "rprc_const": 1.02,  # reentry price grid spacing
-            "markup_const": 0.997,  # markup
-            # coeffs: [[quadratic_coeff, linear_coeff]] * n_spans
-            # e.g. n_spans = 3,
-            # coeffs = [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]]
-            # all coeff ranges [min, max] = [-10.0, 10.0]
-            "iqty_MAr_coeffs": [],  # initial qty pct Moving Average ratio coeffs    formerly qty_pct
-            "iprc_MAr_coeffs": [],  # initial price pct Moving Average ratio coeffs  formerly ema_spread
-            "rqty_MAr_coeffs": [],  # reentry qty pct Moving Average ratio coeffs    formerly ddown_factor
-            "rprc_MAr_coeffs": [],  # reentry price pct Moving Average ratio coeffs  formerly grid_spacing
-            "rprc_PBr_coeffs": [],  # reentry Position cost to Balance ratio coeffs (PBr**2, PBr)
-            # formerly pos_margin_grid_coeff
-            "markup_MAr_coeffs": [],  # markup price pct Moving Average ratio coeffs
-        }
-    }
-    for side in ['long', 'shrt']:
-        for k in config[side]:
-            if 'MAr' in k:
-                config[side][k] = np.random.random((config['n_spans'], 2)) * 0.1 - 0.05 \
-                    if randomize_coeffs else np.zeros((config['n_spans'], 2))
-            elif 'PBr_coeff' in k:
-                config[side][k] = np.random.random((1, 2)) * 0.1 - 0.05 \
-                    if randomize_coeffs else np.zeros((1, 2))
-    return config
-
-
-def get_ids_to_fetch(spans: [int], last_id: int, max_n_samples: int = 60, ticks_per_fetch: int = 1000):
-    max_span = max(spans)
-    n_samples = int(round((max_span - ticks_per_fetch * 2) / ticks_per_fetch))
-    first_fetch_id = last_id - ticks_per_fetch * 2
-    if n_samples < max_n_samples:
-        return np.arange(first_fetch_id, last_id - max_span - ticks_per_fetch, -ticks_per_fetch)
-    if len(spans) == 1:
-        return np.linspace(first_fetch_id, last_id - spans[0], max_n_samples).round().astype(int)
-    samples_per_span = max_n_samples // len(spans)
-    all_idxs = []
-    prev_last_id = last_id
-    for i in range(len(spans)):
-        idxs = get_ids_to_fetch(spans[i:i + 1], prev_last_id, samples_per_span)
-        all_idxs.append(idxs)
-        samples_leftover = max_n_samples - sum(map(len, all_idxs))
-        samples_per_span = samples_leftover // max(1, len(spans) - i - 1)
-        if len(idxs) > 0:
-            prev_last_id = idxs[-1] + 1000
-    idxs = np.array(flatten(all_idxs))[::-1]
-    return np.unique(idxs[idxs > 0])
-
-
-def calc_indicators_from_ticks_with_gaps(spans, ticks_with_gaps):
-    df = pd.DataFrame(ticks_with_gaps).set_index('trade_id').sort_index()
-    df = df.reindex(np.arange(df.index[0], df.index[-1])).interpolate(method='linear')
-    df = df.groupby(
-        (~((df.price == df.price.shift(1)) & (df.is_buyer_maker == df.is_buyer_maker.shift(1)))).cumsum()).agg(
-        {'price': 'first', 'is_buyer_maker': 'first'})
-    emas = calc_emas(df.price.values, np.array(spans))[-1]
-    return emas
-
-
-def drop_consecutive_same_prices(ticks: [dict]) -> [dict]:
-    compressed = [ticks[0]]
-    for i in range(1, len(ticks)):
-        if ticks[i]['price'] != compressed[-1]['price'] or \
-                ticks[i]['is_buyer_maker'] != compressed[-1]['is_buyer_maker']:
-            compressed.append(ticks[i])
-    return compressed
-
-
-import numpy as np
-import pandas as pd
-
-
-def get_empty_analysis(bc: dict) -> dict:
+def get_template_live_config():
     return {
-        'exchange': bc['exchange'] if 'exchange' in bc else 'unknown',
-        'symbol': bc['symbol'] if 'symbol' in bc else 'unknown',
-        'starting_balance': bc['starting_balance'],
-        'final_balance': 0.0,
-        'final_equity': 0.0,
-        'net_pnl_plus_fees': 0.0,
-        'gain': 1.0,
-        'n_days': 0.0,
-        'average_daily_gain': 0.0,
-        'average_periodic_gain': 0.0,
-        'adjusted_daily_gain': 0.0,
-        'sharpe_ratio': 0.0,
-        'profit_sum': 0.0,
-        'loss_sum': 0.0,
-        'fee_sum': 0.0,
-        'lowest_eqbal_ratio': 1.0,
-        'closest_bkr': 1.0,
-        'n_fills': 0.0,
-        'n_entries': 0.0,
-        'n_closes': 0.0,
-        'n_reentries': 0.0,
-        'n_initial_entries': 0.0,
-        'n_normal_closes': 0.0,
-        'n_stop_loss_closes': 0.0,
-        'biggest_psize': 0.0,
-        'mean_hrs_between_fills': 10000.0,
-        'mean_hrs_between_fills_long': 10000.0,
-        'mean_hrs_between_fills_shrt': 10000.0,
-        'max_hrs_no_fills_long': 10000.0,
-        'max_hrs_no_fills_shrt': 10000.0,
-        'max_hrs_no_fills_same_side': 10000.0,
-        'max_hrs_no_fills': 10000.0,
+        "config_name": "template",
+        "logging_level": 0,
+        "long": {"enabled": True,
+                 "grid_span": 0.16,
+                 "pbr_limit": 1.6,
+                 "max_n_entry_orders":  10,
+                 "initial_qty_pct":  0.01,
+                 "eprice_pprice_diff": 0.0025,
+                 "secondary_pbr_allocation": 0.5,
+                 "secondary_grid_spacing": 0.35,
+                 "eprice_exp_base": 1.618034,
+                 "min_markup": 0.0045,
+                 "markup_range":  0.0075,
+                 "n_close_orders": 7},
+        "shrt": {"enabled": False,
+                 "grid_span": 0.16,
+                 "pbr_limit": 1.6,
+                 "max_n_entry_orders":  10,
+                 "initial_qty_pct":  0.01,
+                 "eprice_pprice_diff": 0.0025,
+                 "secondary_pbr_allocation": 0.5,
+                 "secondary_grid_spacing": 0.35,
+                 "eprice_exp_base": 1.618034,
+                 "min_markup": 0.0045,
+                 "markup_range":  0.0075,
+                 "n_close_orders": 7},
     }
 
 
-def analyze_fills(fills: list, config: dict, first_ts: float, last_ts: float) -> (pd.DataFrame, dict):
-    fdf = pd.DataFrame(fills)
-
-    if fdf.empty:
-        return fdf, get_empty_analysis(config)
-    fdf.columns = ['trade_id', 'timestamp', 'pnl', 'fee_paid', 'balance', 'equity', 'pbr', 'qty', 'price', 'psize',
-                   'pprice', 'type']
-    adgs = (fdf.equity / config['starting_balance']) ** (1 / ((fdf.timestamp - first_ts) / (1000 * 60 * 60 * 24))) - 1
-    fdf = fdf.join(adgs.rename('adg')).set_index('trade_id')
-
-    longs = fdf[fdf.type.str.contains('long')]
-    shrts = fdf[fdf.type.str.contains('shrt')]
-
-    if config['long']['enabled']:
-        if len(longs) > 0:
-            long_fill_ts_diffs = np.diff([first_ts] + list(longs.timestamp) + [last_ts]) / (1000 * 60 * 60)
-            long_stuck_mean = np.mean(long_fill_ts_diffs)
-            long_stuck = np.max(long_fill_ts_diffs)
-        else:
-            long_stuck_mean = 1000.0
-            long_stuck = 1000.0
-    else:
-        long_stuck_mean = 0.0
-        long_stuck = 0.0
-    if config['shrt']['enabled']:
-        if len(shrts) > 0:
-            shrt_fill_ts_diffs = np.diff([first_ts] + list(shrts.timestamp) + [last_ts]) / (1000 * 60 * 60)
-            shrt_stuck_mean = np.mean(shrt_fill_ts_diffs)
-            shrt_stuck = np.max(shrt_fill_ts_diffs)
-        else:
-            shrt_stuck_mean = 1000.0
-            shrt_stuck = 1000.0
-    else:
-        shrt_stuck_mean = 0.0
-        shrt_stuck = 0.0
-
-    ms_span = 1000 * 60 * 60 * 24 * config['periodic_gain_n_days']
-    buckets = fdf.timestamp // ms_span * ms_span
-    buckets = buckets + (fdf.timestamp.iloc[0] - buckets.iloc[0])
-    groups = fdf.groupby(buckets)
-    periodic_gains = groups.balance.last() / groups.balance.first() - 1  # realized profits
-    periodic_gains = periodic_gains.reindex(
-        np.arange(periodic_gains.index[0], periodic_gains.index[-1], ms_span)).fillna(0.0)
-    periodic_gains_mean = np.nan_to_num(periodic_gains.mean())
-    periodic_gains_std = periodic_gains.std()
-    sharpe_ratio = (periodic_gains_mean / periodic_gains_std) if periodic_gains_std != 0.0 else -20.0
-    sharpe_ratio = np.nan_to_num(sharpe_ratio)
-
-    ms_between_fills = np.mean(np.diff([first_ts] + list(fdf.timestamp) + [last_ts]))
-    ms_between_fills_std = ms_between_fills.std()
-    result = {
+def analyze_fills(fills: list, stats: list, config: dict) -> (pd.DataFrame, dict):
+    print(len(stats[0]))
+    sdf = pd.DataFrame(stats, columns=['timestamp', 'balance', 'equity', 'bkr_price', 'long_psize',
+                                       'long_pprice', 'shrt_psize', 'shrt_pprice', 'price', 'closest_bkr'])
+    fdf = pd.DataFrame(fills, columns=['trade_id', 'timestamp', 'pnl', 'fee_paid', 'balance',
+                                       'equity', 'pbr', 'qty', 'price', 'psize', 'pprice', 'type'])
+    sdf.loc[:, 'long_pbr'] = sdf.long_psize * sdf.long_pprice / sdf.balance
+    gain = sdf.equity.iloc[-1] / sdf.equity.iloc[0] - 1
+    n_days = (sdf.timestamp.iloc[-1] - sdf.timestamp.iloc[0]) / (1000 * 60 * 60 * 24)
+    adg = gain ** (1 / n_days)
+    fills_per_day = len(fills) / n_days
+    long_pos_changes = sdf[sdf.long_psize != sdf.long_psize.shift()]
+    long_pos_changes_ms_diff = long_pos_changes.timestamp.diff()
+    max_hrs_stuck_long = long_pos_changes_ms_diff.max() / (1000 * 60 * 60)
+    avg_hrs_stuck_long = long_pos_changes_ms_diff.mean() / (1000 * 60 * 60)
+    lpprices = sdf[sdf.long_pprice != 0.0]
+    pa_closeness_long = (lpprices.long_pprice - lpprices.price).abs() / lpprices.price
+    analysis = {
         'exchange': config['exchange'] if 'exchange' in config else 'unknown',
         'symbol': config['symbol'] if 'symbol' in config else 'unknown',
-        'starting_balance': config['starting_balance'],
-        'final_balance': fdf.iloc[-1].balance,
-        'final_equity': fdf.iloc[-1].equity,
-        'net_pnl_plus_fees': fdf.pnl.sum() + fdf.fee_paid.sum(),
-        'gain': (gain := fdf.iloc[-1].equity / config['starting_balance']),
-        'n_days': (n_days := (last_ts - first_ts) / (1000 * 60 * 60 * 24)),
-        'average_daily_gain': (adg := gain ** (1 / n_days) - 1 if gain > 0.0 and n_days > 0.0 else 0.0),
-        'average_periodic_gain': periodic_gains_mean,
+        'starting_balance': sdf.balance.iloc[0],
+        'pa_closeness_mean_long': pa_closeness_long.mean(),
+        'pa_closeness_median_long': pa_closeness_long.median(),
+        'pa_closeness_max_long': pa_closeness_long.max(),
+        'average_daily_gain': adg,
         'adjusted_daily_gain': np.tanh(20 * adg) / 20,
-        'sharpe_ratio': sharpe_ratio,
-        'profit_sum': fdf[fdf.pnl > 0.0].pnl.sum(),
-        'loss_sum': fdf[fdf.pnl < 0.0].pnl.sum(),
-        'fee_sum': fdf.fee_paid.sum(),
-        'lowest_eqbal_ratio': config['lowest_eqbal_ratio'],
-        'closest_bkr': config['closest_bkr'],
-        'n_fills': len(fdf),
+        'gain': gain,
+        'n_days': n_days,
+        'n_fills': len(fills),
         'n_entries': len(fdf[fdf.type.str.contains('entry')]),
         'n_closes': len(fdf[fdf.type.str.contains('close')]),
-        'n_reentries': len(fdf[fdf.type.str.contains('rentry')]),
-        'n_initial_entries': len(fdf[fdf.type.str.contains('ientry')]),
-        'n_normal_closes': len(fdf[fdf.type.str.contains('nclose')]),
-        'n_stop_loss_closes': len(fdf[fdf.type.str.contains('sclose')]),
+        'n_ientries': len(fdf[fdf.type.str.contains('ientry')]),
+        'n_rentries': len(fdf[fdf.type.str.contains('rentry')]),
+        'avg_fills_per_day': fills_per_day,
+        'max_hrs_stuck_long': max_hrs_stuck_long,
+        'avg_hrs_stuck_long': avg_hrs_stuck_long,
+        'loss_sum': fdf[fdf.pnl < 0.0].pnl.sum(),
+        'profit_sum': fdf[fdf.pnl > 0.0].pnl.sum(),
+        'pnl_sum': (pnl_sum := fdf.pnl.sum()),
+        'fee_sum': (fee_sum := fdf.fee_paid.sum()),
+        'net_pnl_plus_fees': pnl_sum + fee_sum,
+        'final_equity': sdf.equity.iloc[-1],
+        'final_balance': sdf.balance.iloc[-1],
+        'closest_bkr': sdf.closest_bkr.min(),
+        'eqbal_ratio_min': (eqbal_ratios := sdf.equity / sdf.balance).min(),
+        'eqbal_ratio_mean': eqbal_ratios.mean(),
+        'eqbal_ratio_median': eqbal_ratios.median(),
         'biggest_psize': fdf.psize.abs().max(),
-        'mean_hrs_between_fills': ms_between_fills / (1000 * 60 * 60),
-        'mean_hrs_between_fills_long': long_stuck_mean,
-        'mean_hrs_between_fills_shrt': shrt_stuck_mean,
-        'max_hrs_no_fills_long': long_stuck,
-        'max_hrs_no_fills_shrt': shrt_stuck,
-        'max_hrs_no_fills_same_side': max(long_stuck, shrt_stuck),
-        'max_hrs_no_fills': np.max(np.diff([first_ts] + list(fdf.timestamp) + [last_ts])) / (1000 * 60 * 60),
     }
-    return fdf, result
+    return fdf, sdf, analysis
 
 
 def calc_pprice_from_fills(coin_balance, fills, n_fills_limit=100):
@@ -655,18 +466,7 @@ def spotify_config(config: dict, nullify_shrt=True) -> dict:
         spotified['market_type'] += '_spot'
     spotified['do_long'] = spotified['long']['enabled'] = config['long']['enabled']
     spotified['do_shrt'] = spotified['shrt']['enabled'] = False
-    config_type = determine_config_type(config)
-    if config_type == 'vanilla':
-        spotified['long']['pbr_stop_loss'] = min(1.0, spotified['long']['pbr_stop_loss'])
-        if spotified['long']['pbr_stop_loss'] <= 0.0:
-            spotified['long']['pbr_limit'] = min(1.0, spotified['long']['pbr_limit'])
-        else:
-            spotified['long']['pbr_limit'] = max(0.0, min(spotified['long']['pbr_limit'],
-                                                          1.0 - spotified['long']['pbr_stop_loss']))
-    elif config_type == 'scalp':
-        spotified['long']['primary_pbr_limit'] = round(min(1.0, spotified['long']['primary_pbr_limit']), 8)
-        spotified['long']['secondary_pbr_limit_added'] = \
-            round(min((1 - spotified['long']['primary_pbr_limit']), spotified['long']['secondary_pbr_limit_added']), 8)
+    spotified['pbr_limit'] = min(1.0, spotified['pbr_limit'])
     if nullify_shrt:
         spotified['shrt'] = nullify(spotified['shrt'])
     return spotified
@@ -695,12 +495,3 @@ def round_values(xs, n: int):
         return OrderedDict([(k, round_values(xs[k], n)) for k in xs])
     return xs
 
-
-
-def determine_config_type(config: dict) -> str:
-    if 'long' in config and 'shrt' in config:
-        if all((key in config['long'] and key in config['shrt'])
-                for key in ['enabled', 'grid_span', 'pbr_limit', 'max_n_entry_orders', 'initial_qty_pct',
-                            'eprice_pprice_diff', 'eprice_exp_base', 'min_markup', 'markup_range', 'n_close_orders']):
-            return 'scalp'
-    raise Exception('unknown config type')
