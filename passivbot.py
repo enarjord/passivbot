@@ -16,9 +16,9 @@ from procedures import load_live_config, make_get_filepath, load_exchange_key_se
 from pure_funcs import get_xk_keys, get_ids_to_fetch, flatten, calc_indicators_from_ticks_with_gaps, \
     drop_consecutive_same_prices, filter_orders, compress_float, create_xk, round_dynamic, denumpyize, \
     calc_spans, spotify_config, get_position_fills, determine_config_type
-from njit_funcs import calc_new_psize_pprice, qty_to_cost, calc_diff, round_, calc_orders, calc_emas, \
-    calc_samples, calc_emas_last, calc_long_scalp_entry, calc_shrt_scalp_entry, calc_long_close_grid, \
-    calc_shrt_close_grid
+#from njit_funcs import calc_new_psize_pprice, qty_to_cost, calc_diff, round_, calc_orders, calc_emas, \
+#    calc_samples, calc_emas_last, calc_long_scalp_entry, calc_shrt_scalp_entry, calc_long_close_grid, \
+#    calc_shrt_close_grid
 
 import numpy as np
 import websockets
