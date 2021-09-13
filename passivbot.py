@@ -16,7 +16,7 @@ from procedures import load_live_config, make_get_filepath, load_exchange_key_se
 from pure_funcs import get_xk_keys, flatten, filter_orders, compress_float, create_xk, round_dynamic, denumpyize, \
     spotify_config, get_position_fills
 from njit_funcs import calc_new_psize_pprice, qty_to_cost, calc_diff, round_, calc_samples, calc_long_close_grid, \
-    calc_shrt_close_grid
+    calc_shrt_close_grid, calc_upnl
 
 import numpy as np
 import websockets
@@ -144,9 +144,11 @@ class Bot:
                  (qty_to_cost(position['shrt']['size'], position['shrt']['price'],
                               self.xk['inverse'], self.xk['c_mult'])
                   if position['shrt']['price'] else 0.0)) / self.max_leverage
-            position['equity'] -= position['wallet_balance'] * (1 - self.cross_wallet_pct)
             position['wallet_balance'] *= self.cross_wallet_pct
-            position['available_margin'] = (position['equity'] - position['used_margin']) * 0.9
+            position['equity'] = position['wallet_balance'] + \
+                calc_upnl(position['long']['size'], position['long']['price'],
+                          position['shrt']['size'], position['shrt']['price'],
+                          self.price, self.inverse, self.c_mult)
             position['long']['liq_diff'] = calc_diff(position['long']['liquidation_price'], self.price)
             position['shrt']['liq_diff'] = calc_diff(position['shrt']['liquidation_price'], self.price)
             position['long']['pbr'] = (qty_to_cost(position['long']['size'], position['long']['price'],
