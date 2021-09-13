@@ -15,7 +15,7 @@
   minimum_slice_adg: -0.1
   maximum_hrs_stuck: 48.0
   maximum_hrs_stuck_same_side: 48.0
-  maximum_avg_hrs_stuck: 10.0
+  maximum_avg_hrs_stuck: 3.0
 
   # set to 0.0 to do disable sliding windows
   # otherwise sliding window days will be max([maximum_hrs_no_fills / 24 * 2.1,
@@ -42,7 +42,7 @@
     long£initial_qty_pct: [0.001, 0.1]
     long£eprice_pprice_diff: [0.001, 0.01]
     long£secondary_pbr_allocation: [0.0, 0.0]
-    long£secondary_grid_spacing: [0.21, 0.5]
+    long£secondary_grid_spacing: [0.35, 0.35]
     long£eprice_exp_base: [1.618034, 1.618034]
     long£min_markup: [0.0005, 0.005]
     long£markup_range: [0.004, 0.01]
