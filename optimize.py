@@ -118,8 +118,8 @@ def objective_function(analysis: dict, config: dict, metric='adjusted_daily_gain
         if config[ckey] != 0.0:
             new_obj = obj * min(1.0, config[ckey] / analysis[akey])
             obj = -abs(new_obj) if (obj < 0.0 or analysis[akey] < 0.0) else new_obj
-            if config['break_early_factor'] != 0.0 and analysis[akey] > config[ckey] * (
-                    1 + config['break_early_factor']):
+            if config['break_early_factor'] != 0.0 \
+                    and analysis[akey] > config[ckey] * (1 + config['break_early_factor']):
                 break_early = True
                 line += f" broke on {ckey} {round_dynamic(analysis[akey], 5)}"
     for ckey, akey in [('minimum_bankruptcy_distance', 'closest_bkr'),
@@ -128,8 +128,8 @@ def objective_function(analysis: dict, config: dict, metric='adjusted_daily_gain
         if config[ckey] != 0.0:
             new_obj = obj * min(1.0, analysis[akey] / config[ckey])
             obj = -abs(new_obj) if (obj < 0.0 or analysis[akey] < 0.0) else new_obj
-            if config['break_early_factor'] != 0.0 and analysis[akey] < config[ckey] * (
-                    1 - config['break_early_factor']):
+            if config['break_early_factor'] != 0.0 \
+                    and analysis[akey] < config[ckey] * (1 - config['break_early_factor']):
                 break_early = True
                 line += f" broke on {ckey} {round_dynamic(analysis[akey], 5)}"
     for ckey, akey in [('minimum_slice_adg', 'average_daily_gain')]:
@@ -170,7 +170,6 @@ def single_sliding_window_run(config, data, do_print=True) -> (float, [dict]):
         analysis['score'] *= (analysis['n_days'] / config['n_days'])
         analyses.append(analysis)
         objective = np.sum([e['score'] for e in analyses]) * max(1.01, config['reward_multiplier_base']) ** (z + 1)
-        #objective = np.mean([e['score'] for e in analyses]) * max(1.01, config['reward_multiplier_base']) ** (z + 1)
         analyses[-1]['objective'] = objective
         line = (f'{str(z).rjust(3, " ")} adg {analysis["average_daily_gain"]:.4f}, '
                 f'bkr {analysis["closest_bkr"]:.4f}, '
@@ -192,8 +191,8 @@ def simple_sliding_window_wrap(config, data, do_print=False):
                     avg_adg=0.0,
                     min_bkr=0.0,
                     eqbal_ratio_min=0.0,
-                    max_h_n_fls=1000.0,
-                    max_h_n_fls_ss=1000.0,
+                    max_hrs_stuck=1000.0,
+                    max_hrs_stuck_ss=1000.0,
                     max_avg_hrs_stuck=1000.0,
                     avg_avg_hrs_stuck=1000.0,
                     n_slc=0)
@@ -203,8 +202,8 @@ def simple_sliding_window_wrap(config, data, do_print=False):
                     avg_adg=np.mean([r['average_daily_gain'] for r in analyses]),
                     min_bkr=np.min([r['closest_bkr'] for r in analyses]),
                     eqbal_ratio_min=np.min([r['eqbal_ratio_min'] for r in analyses]),
-                    max_h_n_fls=np.max([r['max_hrs_stuck'] for r in analyses]),
-                    max_h_n_fls_ss=np.max([r['max_hrs_stuck'] for r in analyses]),
+                    max_hrs_stuck=np.max([r['max_hrs_stuck'] for r in analyses]),
+                    max_hrs_stuck_ss=np.max([r['max_hrs_stuck'] for r in analyses]),
                     max_avg_hrs_stuck=np.max([r['avg_hrs_stuck'] for r in analyses]),
                     avg_avg_hrs_stuck=np.mean([r['avg_hrs_stuck'] for r in analyses]),
                     n_slc=len(analyses))
@@ -268,8 +267,8 @@ def backtest_tune(data: np.ndarray, config: dict, current_best: Union[dict, list
                             'avg_adg',
                             'min_bkr',
                             'eqbal_ratio_min',
-                            'max_h_n_fls',
-                            'max_h_n_fls_ss',
+                            'max_hrs_stuck',
+                            'max_hrs_stuck_ss',
                             'max_avg_hrs_stuck',
                             'avg_avg_hrs_stuck',
                             'n_slc',
