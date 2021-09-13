@@ -41,7 +41,7 @@ def plot_wrap(config, data):
     df = pd.DataFrame({**{'timestamp': data[:, 0], 'qty': data[:, 1], 'price': data[:, 2]},
                        **{}})
     print('dumping plots...')
-    dump_plots(config, fdf, df)
+    dump_plots(config, fdf, sdf, df)
 
 
 async def main():
