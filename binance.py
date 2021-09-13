@@ -190,7 +190,7 @@ class BinanceBot(Bot):
         return False
 
     async def execute_leverage_change(self):
-        lev = 10
+        lev = 7
         '''
         if self.config_type == 'vanilla':
             lev = int(min(self.max_leverage, max(3.0, np.ceil(max(self.xk['pbr_limit']) * 3))))
