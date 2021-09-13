@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 from dateutil import parser
 
-from njit_funcs import round_dynamic, calc_emas
+from njit_funcs import round_dynamic, calc_emas, qty_to_cost
 
 
 def format_float(num):
@@ -319,16 +319,21 @@ def get_template_live_config():
     }
 
 
-def analyze_fills(fills: list, stats: list, config: dict) -> (pd.DataFrame, dict):
-    print(len(stats[0]))
+def analyze_fills(fills: list, stats: list, config: dict) -> (pd.DataFrame, pd.DataFrame, dict):
     sdf = pd.DataFrame(stats, columns=['timestamp', 'balance', 'equity', 'bkr_price', 'long_psize',
                                        'long_pprice', 'shrt_psize', 'shrt_pprice', 'price', 'closest_bkr'])
     fdf = pd.DataFrame(fills, columns=['trade_id', 'timestamp', 'pnl', 'fee_paid', 'balance',
-                                       'equity', 'pbr', 'qty', 'price', 'psize', 'pprice', 'type'])
-    sdf.loc[:, 'long_pbr'] = sdf.long_psize * sdf.long_pprice / sdf.balance
-    gain = sdf.equity.iloc[-1] / sdf.equity.iloc[0] - 1
+                                       'equity', 'qty', 'price', 'psize', 'pprice', 'type'])
+    fdf.loc[:, 'pbr'] = [qty_to_cost(x.psize, x.pprice, config['inverse'], config['c_mult']) / x.balance
+                         for x in fdf.itertuples()]
+    sdf.loc[:, 'long_pbr'] = [qty_to_cost(x.long_psize, x.long_pprice, config['inverse'], config['c_mult']) / x.balance
+                              for x in sdf.itertuples()]
+    sdf.loc[:, 'shrt_pbr'] = [qty_to_cost(x.shrt_psize, x.shrt_pprice, config['inverse'], config['c_mult']) / x.balance
+                              for x in sdf.itertuples()]
+    gain = sdf.equity.iloc[-1] / sdf.equity.iloc[0]
     n_days = (sdf.timestamp.iloc[-1] - sdf.timestamp.iloc[0]) / (1000 * 60 * 60 * 24)
-    adg = gain ** (1 / n_days)
+    adg = gain ** (1 / n_days) - 1
+    gain -= 1
     fills_per_day = len(fills) / n_days
     long_pos_changes = sdf[sdf.long_psize != sdf.long_psize.shift()]
     long_pos_changes_ms_diff = long_pos_changes.timestamp.diff()
@@ -355,6 +360,8 @@ def analyze_fills(fills: list, stats: list, config: dict) -> (pd.DataFrame, dict
         'avg_fills_per_day': fills_per_day,
         'max_hrs_stuck_long': max_hrs_stuck_long,
         'avg_hrs_stuck_long': avg_hrs_stuck_long,
+        'max_hrs_stuck': max_hrs_stuck_long,
+        'avg_hrs_stuck': avg_hrs_stuck_long,
         'loss_sum': fdf[fdf.pnl < 0.0].pnl.sum(),
         'profit_sum': fdf[fdf.pnl > 0.0].pnl.sum(),
         'pnl_sum': (pnl_sum := fdf.pnl.sum()),
