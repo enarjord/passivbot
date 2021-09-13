@@ -16,7 +16,7 @@ from procedures import load_live_config, make_get_filepath, load_exchange_key_se
 from pure_funcs import get_xk_keys, flatten, filter_orders, compress_float, create_xk, round_dynamic, denumpyize, \
     spotify_config, get_position_fills
 from njit_funcs import calc_new_psize_pprice, qty_to_cost, calc_diff, round_, calc_samples, calc_long_close_grid, \
-    calc_shrt_close_grid, calc_upnl
+    calc_shrt_close_grid, calc_upnl, calc_long_entry_grid
 
 import numpy as np
 import websockets
@@ -41,9 +41,9 @@ class Bot:
         self.hedge_mode = self.config['hedge_mode'] = True
         self.set_config(self.config)
 
-        self.ts_locked = {'cancel_orders': 0.0, 'decide': 0.0, 'update_open_orders': 0.0,
-                          'update_position': 0.0, 'print': 0.0, 'create_orders': 0.0,
-                          'check_fills': 0.0, 'update_fills': 0.0}
+        self.ts_locked = {k: 0.0 for k in ['cancel_orders', 'decide', 'update_open_orders',
+                                           'update_position', 'print', 'create_orders',
+                                           'check_fills', 'update_fills']}
         self.ts_released = {k: 1.0 for k in self.ts_locked}
         self.heartbeat_ts = 0
 
@@ -53,7 +53,7 @@ class Bot:
         self.long_pfills = []
         self.shrt_pfills = []
         self.highest_bid = 0.0
-        self.lowest_ask = 9.9e9
+        self.lowest_ask = 9.9e16
         self.price = 0.0
         self.is_buyer_maker = True
         self.agg_qty = 0.0
@@ -312,7 +312,6 @@ class Bot:
     def resume(self) -> None:
         self.process_websocket_ticks = True
 
-
     def calc_orders(self):
         balance = self.position['wallet_balance']
         long_psize = self.position['long']['size']
@@ -333,6 +332,7 @@ class Bot:
                                      'type': 'market', 'reduce_only': True, 'custom_id': 'shrt_panic'})
             return panic_orders
 
+
         if self.hedge_mode:
             do_long = self.do_long or long_psize != 0.0
             do_shrt = self.do_shrt or shrt_psize != 0.0
@@ -340,142 +340,35 @@ class Bot:
             no_pos = long_psize == 0.0 and shrt_psize == 0.0
             do_long = (no_pos and self.do_long) or long_psize != 0.0
             do_shrt = (no_pos and self.do_shrt) or shrt_psize != 0.0
-                                              
+        do_shrt = self.do_shrt = False
         self.xk['do_long'] = do_long
         self.xk['do_shrt'] = do_shrt
-        if self.config_type == 'vanilla':
-            return self.calc_orders_vanilla(balance, long_psize, long_pprice, shrt_psize, shrt_pprice, do_long, do_shrt)
-        elif self.config_type == 'scalp':
-            return self.calc_orders_scalp(balance, long_psize, long_pprice, shrt_psize, shrt_pprice, do_long, do_shrt)
-        else:
-            raise Exception('unknown config type')
 
-    def calc_orders_vanilla(self, balance, long_psize, long_pprice, shrt_psize, shrt_pprice, do_long, do_shrt):
+        long_entries = calc_long_entry_grid(
+            balance, long_psize, long_pprice, self.ob[0], self.xk['inverse'], self.xk['do_long'],
+            self.xk['qty_step'], self.xk['price_step'], self.xk['min_qty'], self.xk['min_cost'],
+            self.xk['c_mult'], self.xk['grid_span'][0], self.xk['pbr_limit'][0], self.xk['max_n_entry_orders'][0],
+            self.xk['initial_qty_pct'][0], self.xk['eprice_pprice_diff'][0], self.xk['secondary_pbr_allocation'][0],
+            self.xk['secondary_grid_spacing'][0], self.xk['eprice_exp_base'][0]
+        )
+        long_closes = calc_long_close_grid(balance,
+            long_psize, long_pprice, self.ob[1], self.xk['spot'], self.xk['inverse'], self.xk['qty_step'],
+            self.xk['price_step'], self.xk['min_qty'], self.xk['min_cost'], self.xk['c_mult'],
+            self.xk['initial_qty_pct'][0], self.xk['min_markup'][0], self.xk['markup_range'][0],
+            self.xk['n_close_orders'][0]
+        )
         orders = []
-        long_done, shrt_done = False, False
-
-        inf_loop_prevention = 100
-        i = 0
-
-        while True:
-            i += 1
-            if i >= inf_loop_prevention:
-                raise Exception('warning -- infinite loop in calc_orders')
-            long_entry, shrt_entry, long_close, shrt_close, bkr_price, available_margin = calc_orders(
-                balance,
-                long_psize,
-                long_pprice,
-                shrt_psize,
-                shrt_pprice,
-                self.ob[0],
-                self.ob[1],
-                self.price,
-                self.emas,
-                **self.xk)
-            if i == 1 and long_close[0] != 0.0 and \
-                    calc_diff(long_close[1], self.price) < self.last_price_diff_limit:
-                orders.append({'side': 'sell', 'position_side': 'long', 'qty': abs(float(long_close[0])),
-                               'price': float(long_close[1]), 'type': 'limit', 'reduce_only': True,
-                               'custom_id': long_close[2]})
-            if i == 1 and shrt_close[0] != 0.0 and \
-                    calc_diff(shrt_close[1], self.price) < self.last_price_diff_limit:
-                orders.append({'side': 'buy', 'position_side': 'shrt', 'qty': abs(float(shrt_close[0])),
-                               'price': float(shrt_close[1]), 'type': 'limit', 'reduce_only': True,
-                               'custom_id': shrt_close[2]})
-            if not long_done and self.stop_mode not in ['freeze'] and long_entry[0] != 0.0 and \
-                    calc_diff(long_entry[1], self.price) < self.last_price_diff_limit:
-                orders.append({'side': 'buy', 'position_side': 'long', 'qty': float(long_entry[0]),
-                               'price': float(long_entry[1]), 'type': 'limit', 'reduce_only': False,
-                               'custom_id': long_entry[2]})
-                long_psize, long_pprice = calc_new_psize_pprice(long_psize, long_pprice,
-                                                                long_entry[0], long_entry[1], self.qty_step)
-            else:
-                long_done = True
-            if not shrt_done and self.stop_mode not in ['freeze'] and shrt_entry[0] != 0.0 and \
-                    calc_diff(shrt_entry[1], self.price) < self.last_price_diff_limit:
-                orders.append({'side': 'sell', 'position_side': 'shrt', 'qty': abs(float(shrt_entry[0])),
-                               'price': float(shrt_entry[1]), 'type': 'limit', 'reduce_only': False,
-                               'custom_id': shrt_entry[2]})
-                shrt_psize, shrt_pprice = calc_new_psize_pprice(shrt_psize, shrt_pprice,
-                                                                shrt_entry[0], shrt_entry[1], self.qty_step)
-            else:
-                shrt_done = True
-            if len(orders) >= self.n_open_orders_limit or (long_done and shrt_done):
-                break
-        return orders
-
-    def calc_orders_scalp(self, balance, long_psize, long_pprice, shrt_psize, shrt_pprice, do_long, do_shrt):
-        
-        orders = []
-        if do_long:
-            long_closes = calc_long_close_grid(
-                balance, long_psize, long_pprice, self.ob[1], self.spot, self.inverse, self.qty_step,
-                self.price_step, self.min_qty, self.min_cost, self.c_mult, self.max_leverage,
-                self.xk['primary_initial_qty_pct'][0], self.xk['min_markup'][0], self.xk['markup_range'][0],
-                self.xk['n_close_orders'][0]
-            )
-            long_closes = [{'side': 'sell', 'position_side': 'long', 'qty': abs(x[0]),
-                            'price': x[1], 'type': 'limit', 'custom_id': x[2]}
-                           for x in long_closes if x[0] != 0.0]
-            i = 0
-            long_entries = []
-            while i < self.n_open_orders_limit:
-                i += 1
-                long_entry = calc_long_scalp_entry(
-                    balance, long_psize, long_pprice, ((0.0, 0.0),), self.ob[0], self.spot, self.inverse, do_long,
-                    self.qty_step, self.price_step, self.min_qty, self.min_cost, self.c_mult, self.max_leverage,
-                    self.xk['primary_initial_qty_pct'][0], self.xk['primary_ddown_factor'][0],
-                    self.xk['primary_grid_spacing'][0], self.xk['primary_grid_spacing_pbr_weighting'][0],
-                    self.xk['primary_pbr_limit'][0], self.xk['secondary_ddown_factor'][0],
-                    self.xk['secondary_grid_spacing'][0], self.xk['secondary_pbr_limit_added'][0]
-                )
-                if long_entry[0] == 0.0:
-                    break
-                long_entries.append(long_entry)
-                if long_psize == 0.0:
-                    break
-                long_psize, long_pprice = calc_new_psize_pprice(long_psize, long_pprice,
-                                                                long_entry[0], long_entry[1], self.qty_step)
-            long_entries = [{'side': 'buy', 'position_side': 'long', 'qty': abs(x[0]),
-                             'price': x[1], 'type': 'limit', 'custom_id': x[2]}
-                            for x in long_entries]
-            orders.extend(long_entries + long_closes)
-        if do_shrt:
-            shrt_entries = []
-            shrt_closes = calc_shrt_close_grid(
-                balance, shrt_psize, shrt_pprice, self.ob[0], self.spot, self.inverse, self.qty_step,
-                self.price_step, self.min_qty, self.min_cost, self.c_mult, self.max_leverage,
-                self.xk['primary_initial_qty_pct'][1], self.xk['min_markup'][1], self.xk['markup_range'][1],
-                self.xk['n_close_orders'][1]
-            )
-            shrt_closes = [{'side': 'buy', 'position_side': 'shrt', 'qty': abs(x[0]),
-                            'price': x[1], 'type': 'limit', 'custom_id': x[2]}
-                           for x in shrt_closes if x[0] != 0.0]
-
-            i = 0
-            while i < self.n_open_orders_limit:
-                i += 1
-                shrt_entry = calc_shrt_scalp_entry(
-                    balance, shrt_psize, shrt_pprice, ((0.0, 0.0),), self.ob[1], self.spot, self.inverse, do_shrt,
-                    self.qty_step, self.price_step, self.min_qty, self.min_cost, self.c_mult, self.max_leverage,
-                    self.xk['primary_initial_qty_pct'][1], self.xk['primary_ddown_factor'][1],
-                    self.xk['primary_grid_spacing'][1], self.xk['primary_grid_spacing_pbr_weighting'][1],
-                    self.xk['primary_pbr_limit'][1], self.xk['secondary_ddown_factor'][1],
-                    self.xk['secondary_grid_spacing'][1], self.xk['secondary_pbr_limit_added'][1]
-                )
-                if shrt_entry[0] == 0.0:
-                    break
-                shrt_entries.append(shrt_entry)
-                if shrt_psize == 0.0:
-                    break
-                shrt_psize, shrt_pprice = calc_new_psize_pprice(shrt_psize, shrt_pprice,
-                                                                shrt_entry[0], shrt_entry[1], self.qty_step)
-            shrt_entries = [{'side': 'sell', 'position_side': 'shrt', 'qty': abs(x[0]),
-                             'price': x[1], 'type': 'limit', 'custom_id': x[2]}
-                            for x in shrt_entries]
-            orders.extend(shrt_entries + shrt_closes)
-        return [o for o in orders if o['qty'] != 0.0]
-
+        for o in long_entries:
+            if abs(o[1] - self.price) / self.price < self.last_price_diff_limit and o[0] > 0.0:
+                orders.append({'side': 'buy', 'position_side': 'long', 'qty': abs(float(o[0])),
+                               'price': float(o[1]), 'type': 'limit', 'reduce_only': True,
+                               'custom_id': o[2]})
+        for o in long_closes:
+            if abs(o[1] - self.price) / self.price < self.last_price_diff_limit and o[0] < 0.0:
+                orders.append({'side': 'sell', 'position_side': 'long', 'qty': abs(float(o[0])),
+                               'price': float(o[1]), 'type': 'limit', 'reduce_only': True,
+                               'custom_id': o[2]})
+        return sorted(orders, key=lambda x: abs(x['price'] - self.price) / self.price)
 
     async def cancel_and_create(self):
         await asyncio.sleep(0.005)
@@ -664,8 +557,6 @@ class Bot:
         line += f"|| last {self.price} liq {round_dynamic(liq_price, 5)} "
 
         line += f"lpbr {self.position['long']['pbr']:.3f} spbr {self.position['shrt']['pbr']:.3f} "
-        if self.config_type == 'vanilla':
-            line += f"EMAr {[round_dynamic(r, 4) for r in self.ratios]} "
         line += f"bal {compress_float(self.position['wallet_balance'], 3)} "
         line += f"eq {compress_float(self.position['equity'], 3)} "
         print_([line], r=True)
@@ -679,65 +570,14 @@ class Bot:
                     self.ts_released[key] = now
 
     async def init_indicators(self, max_n_samples: int = 60):
-        if self.config_type == 'scalp':
-            return
-        ticks = await self.fetch_ticks(do_print=False)
-        if self.exchange == 'binance':
-            ohlcvs_per_fetch = 1000 if self.spot else 1500
-            additional_ticks = await asyncio.gather(*[self.fetch_ticks(from_id=ticks[0]['trade_id'] - 1000 * i, do_print=False)
-                                                      for i in range(1, 11)])
-        else:
-            ohlcvs_per_fetch = 200
-            if 'linear' in self.market_type:
-                additional_ticks = []
-            else:
-                additional_ticks = await asyncio.gather(*[self.fetch_ticks(from_id=ticks[0]['trade_id'] - 1000 * i, do_print=False)
-                                                          for i in range(1, 11)])
-        ticksd = {e['trade_id']: e for e in ticks + flatten(additional_ticks)}
-        ticks = sorted(ticksd.values(), key=lambda x: x['trade_id'])
-        millis_per_fetch = 1000 * 60 * ohlcvs_per_fetch
-        first_fetch_ts = ticks[0]['timestamp'] // 1000 * 1000 - millis_per_fetch
-        last_fetch_ts = first_fetch_ts - max(self.spans) * 60 * 1000
-        if last_fetch_ts + millis_per_fetch * (max_n_samples - 10) > first_fetch_ts:
-            timestamps_to_fetch = np.arange(first_fetch_ts, last_fetch_ts - millis_per_fetch, -millis_per_fetch)
-        else:
-            timestamps_to_fetch = np.linspace(first_fetch_ts, last_fetch_ts - millis_per_fetch, max_n_samples - 10)
-        ohlcvs = flatten(await asyncio.gather(*[self.fetch_ohlcvs(start_time=ts) for ts in timestamps_to_fetch]))
-        combined = np.array(sorted([[e['timestamp'], e['qty'], e['price']] for e in ticks] +
-                                   [[e['timestamp'], e['volume'], e['open']] for e in ohlcvs]))
-        samples = calc_samples(combined)
-        self.emas = calc_emas_last(samples[:, 2], self.spans_secs)
-        self.ratios = np.append(self.price, self.emas[:-1]) / self.emas
-        self.ema_sec = int(combined[-1][0] // 1000 * 1000)
+        return
 
     def update_indicators(self, ticks):
-        if self.config_type == 'scalp':
-            if ticks[-1]['is_buyer_maker']:
-                self.ob[0] = ticks[-1]['price']
-            else:
-                self.ob[1] = ticks[-1]['price']
-            self.price = ticks[-1]['price']
-            return
-        for tick in ticks:
-            self.agg_qty += tick['qty']
-            if tick['is_buyer_maker']:
-                self.ob[0] = tick['price']
-            else:
-                self.ob[1] = tick['price']
-            ts_sec = int(tick['timestamp'] // 1000 * 1000)
-            if ts_sec <= self.ema_sec:
-                self.ema_sec = ts_sec
-                self.price = tick['price']
-                continue
-            self.qty = self.agg_qty
-            self.agg_qty = 0.0
-            while self.ema_sec < ts_sec - 1000:
-                self.emas = self.emas * self.ema_alpha_secs_ + tick['price'] * self.ema_alpha_secs
-                self.ema_sec += 1000
-            self.emas = self.emas * self.ema_alpha_secs_ + self.price * self.ema_alpha_secs
-            self.ema_sec += 1000
-            self.price = tick['price']
-            self.ratios = np.append(self.price, self.emas[:-1]) / self.emas
+        if ticks[-1]['is_buyer_maker']:
+            self.ob[0] = ticks[-1]['price']
+        else:
+            self.ob[1] = ticks[-1]['price']
+        self.price = ticks[-1]['price']
 
     async def start_websocket(self) -> None:
         self.stop_websocket = False
