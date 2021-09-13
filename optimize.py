@@ -254,7 +254,7 @@ def backtest_tune(data: np.ndarray, config: dict, current_best: Union[dict, list
     parameter_columns = []
     for side in ['long', 'shrt']:
         if config[f'{side}£enabled']:
-            parameter_columns.append(f'{side}£primary_pbr_limit')
+            parameter_columns.append(f'{side}£pbr_limit')
 
     backtest_wrap = tune.with_parameters(simple_sliding_window_wrap, data=data,
                                          do_print=(config['print_slice_progress']
