@@ -330,13 +330,13 @@ def analyze_fills(fills: list, stats: list, config: dict) -> (pd.DataFrame, pd.D
                               if x.balance > 0.0 else 0.0 for x in sdf.itertuples()]
     sdf.loc[:, 'shrt_pbr'] = [qty_to_cost(x.shrt_psize, x.shrt_pprice, config['inverse'], config['c_mult']) / x.balance
                               if x.balance > 0.0 else 0.0 for x in sdf.itertuples()]
-    gain = sdf.balance.iloc[-1] / sdf.balance.iloc[0]
+    gain = sdf.equity.iloc[-1] / sdf.equity.iloc[0]
     n_days = (sdf.timestamp.iloc[-1] - sdf.timestamp.iloc[0]) / (1000 * 60 * 60 * 24)
     adg = gain ** (1 / n_days) - 1
     gain -= 1
     fills_per_day = len(fills) / n_days
     long_pos_changes = sdf[sdf.long_psize != sdf.long_psize.shift()]
-    long_pos_changes_ms_diff = long_pos_changes.timestamp.diff()
+    long_pos_changes_ms_diff = np.diff([sdf.timestamp.iloc[0]] + list(long_pos_changes.timestamp) + [sdf.timestamp.iloc[-1]])
     max_hrs_stuck_long = long_pos_changes_ms_diff.max() / (1000 * 60 * 60)
     avg_hrs_stuck_long = long_pos_changes_ms_diff.mean() / (1000 * 60 * 60)
     lpprices = sdf[sdf.long_pprice != 0.0]
