@@ -325,12 +325,12 @@ def analyze_fills(fills: list, stats: list, config: dict) -> (pd.DataFrame, pd.D
     fdf = pd.DataFrame(fills, columns=['trade_id', 'timestamp', 'pnl', 'fee_paid', 'balance',
                                        'equity', 'qty', 'price', 'psize', 'pprice', 'type'])
     fdf.loc[:, 'pbr'] = [qty_to_cost(x.psize, x.pprice, config['inverse'], config['c_mult']) / x.balance
-                         for x in fdf.itertuples()]
+                         if x.balance > 0.0 else 0.0 for x in fdf.itertuples()]
     sdf.loc[:, 'long_pbr'] = [qty_to_cost(x.long_psize, x.long_pprice, config['inverse'], config['c_mult']) / x.balance
-                              for x in sdf.itertuples()]
+                              if x.balance > 0.0 else 0.0 for x in sdf.itertuples()]
     sdf.loc[:, 'shrt_pbr'] = [qty_to_cost(x.shrt_psize, x.shrt_pprice, config['inverse'], config['c_mult']) / x.balance
-                              for x in sdf.itertuples()]
-    gain = sdf.equity.iloc[-1] / sdf.equity.iloc[0]
+                              if x.balance > 0.0 else 0.0 for x in sdf.itertuples()]
+    gain = sdf.balance.iloc[-1] / sdf.balance.iloc[0]
     n_days = (sdf.timestamp.iloc[-1] - sdf.timestamp.iloc[0]) / (1000 * 60 * 60 * 24)
     adg = gain ** (1 / n_days) - 1
     gain -= 1
