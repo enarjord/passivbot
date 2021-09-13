@@ -92,7 +92,7 @@ def dump_plots(result: dict, fdf: pd.DataFrame, sdf: pd.DataFrame, df: pd.DataFr
     plt.clf()
     sdf.balance.plot()
     sdf.equity.plot()
-    plt.savefig(f"{result['plots_dirpath']}balance_and_equity.png")
+    plt.savefig(f"{result['plots_dirpath']}balance_and_equity_sampled.png")
 
 
     plt.clf()
