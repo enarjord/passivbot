@@ -357,12 +357,12 @@ def find_qty_bringing_pbr_to_target(
     while True:
         i += 1
         if diffs[0][0] < error_tolerance:
-            return diffs[0][1]
+            return round_(diffs[0][1], qty_step)
         if i >= max_n_iters:
             if abs(diffs[0][2] - pbr_limit) / pbr_limit > 0.1:
                 print('warning, in find_qty_bringing_pbr_to_target diff between pbr limit and val greater than 10%\n',
                       diffs, pbr_limit)
-            return diffs[0][1]
+            return round_(diffs[0][1], qty_step)
         m, b = calc_m_b(diffs[0][2], diffs[1][2], diffs[0][1], diffs[1][1])
         guess = max(0.0, m * pbr_limit + b)
         val = calc_pbr_if_filled(balance, psize, pprice, guess, entry_price, inverse, c_mult, qty_step)
@@ -570,12 +570,12 @@ def calc_long_entry_grid(
             closest_node = sorted([(abs(psize - g[2]) / psize, i) for i, g in enumerate(template_grid)])[0][1]
             ratio = pprice / template_grid[closest_node][3]
             eprices = np.flip(np.unique(np.array([min(highest_bid, round_(p * ratio, price_step))
-                                                  for p in template_grid[closest_node:,1]])))
+                                                  for p in template_grid[closest_node:, 1]])))
             if len(eprices) <= 1:
                 return [(0.0, 0.0, '')]
             elif len(eprices) == 2:
                 qty = find_qty_bringing_pbr_to_target(balance, psize, pprice, primary_pbr_limit, eprices[-1], inverse, qty_step, c_mult)
-                return [(round_(qty, qty_step), eprices[-1], 'primary_long_rentry')]
+                return [(qty, eprices[-1], 'primary_long_rentry')]
             fitted_grid = calc_whole_long_entry_grid(
                 balance, pprice, inverse, qty_step, price_step, min_qty, min_cost, c_mult, grid_span,
                 primary_pbr_limit, max_n_entry_orders, pbr, eprice_pprice_diff, eprice_exp_base=eprice_exp_base,
@@ -645,7 +645,8 @@ def njit_backtest(
         if timestamps[k] >= next_stats_update:
             equity = balance + calc_upnl(long_psize, long_pprice, shrt_psize, shrt_pprice,
                                          prices[k], inverse, c_mult)
-            stats.append((timestamps[k], balance, equity, bkr_price, long_psize, long_pprice, shrt_psize, shrt_pprice, prices[k], closest_bkr))
+            stats.append((timestamps[k], balance, equity, bkr_price, long_psize, long_pprice,
+                          shrt_psize, shrt_pprice, prices[k], closest_bkr))
             next_stats_update = timestamps[k] + 60 * 1000
         if timestamps[k] >= next_update_ts:
             # simulate small delay between bot and exchange
@@ -662,7 +663,7 @@ def njit_backtest(
             equity = balance + calc_upnl(long_psize, long_pprice, shrt_psize, shrt_pprice,
                                          prices[k], inverse, c_mult)
 
-            # if not in pos, wait 5 secs between updates
+            # if not in pos, wait 5 secs between updates, else wait 10 minutes
             next_update_ts = timestamps[k] + 1000 * (5 if long_psize == 0.0 else 60 * 10)
 
             if equity / starting_balance < 0.1:
@@ -678,7 +679,7 @@ def njit_backtest(
                     equity = 0.0
                     long_psize, long_pprice = 0.0, 0.0
                     fills.append((k, timestamps[k], pnl, fee_paid, balance, equity,
-                                  0.0, -long_psize, prices[k], 0.0, 0.0, 'long_bankruptcy'))
+                                  -long_psize, prices[k], 0.0, 0.0, 'long_bankruptcy'))
                 if shrt_psize != 0.0:
 
                     fee_paid = -qty_to_cost(shrt_psize, shrt_pprice, inverse, c_mult) * maker_fee
@@ -686,7 +687,7 @@ def njit_backtest(
                     balance, equity = 0.0, 0.0
                     shrt_psize, shrt_pprice = 0.0, 0.0
                     fills.append((k, timestamps[k], pnl, fee_paid, balance, equity,
-                                  0.0, -shrt_psize, prices[k], 0.0, 0.0, 'shrt_bankruptcy'))
+                                  -shrt_psize, prices[k], 0.0, 0.0, 'shrt_bankruptcy'))
 
                 return fills, stats
 
@@ -698,9 +699,8 @@ def njit_backtest(
             fee_paid = -qty_to_cost(long_entries[0][0], long_entries[0][1], inverse, c_mult) * maker_fee
             balance += fee_paid
             equity = calc_equity(balance, long_psize, long_pprice, shrt_psize, shrt_pprice, prices[k], inverse, c_mult)
-            pbr = qty_to_cost(long_psize, long_pprice, inverse, c_mult) / balance
-            fills.append((k, timestamps[k], 0.0, fee_paid, balance, equity, pbr,
-                          long_entries[0][0], long_entries[0][1], long_psize, long_pprice, long_entries[0][2]))
+            fills.append((k, timestamps[k], 0.0, fee_paid, balance, equity, long_entries[0][0], long_entries[0][1],
+                          long_psize, long_pprice, long_entries[0][2]))
             long_entries = long_entries[1:]
             bkr_price = calc_bankruptcy_price(balance, long_psize, long_pprice, shrt_psize, shrt_pprice, inverse, c_mult)
         while long_psize > 0.0 and long_closes and long_closes[0][0] < 0.0 and prices[k] > long_closes[0][1]:
@@ -719,9 +719,8 @@ def njit_backtest(
             pnl = calc_long_pnl(long_pprice, long_closes[0][1], long_close_qty, inverse, c_mult)
             balance += fee_paid + pnl
             equity = calc_equity(balance, long_psize, long_pprice, shrt_psize, shrt_pprice, prices[k], inverse, c_mult)
-            pbr = qty_to_cost(long_psize, long_pprice, inverse, c_mult) / balance
-            fills.append((k, timestamps[k], pnl, fee_paid, balance, equity, pbr,
-                          long_close_qty, long_closes[0][1], long_psize, long_pprice, long_closes[0][2]))
+            fills.append((k, timestamps[k], pnl, fee_paid, balance, equity, long_close_qty, long_closes[0][1],
+                          long_psize, long_pprice, long_closes[0][2]))
             long_closes = long_closes[1:]
             bkr_price = calc_bankruptcy_price(balance, long_psize, long_pprice, shrt_psize, shrt_pprice, inverse, c_mult)
     return fills, stats
