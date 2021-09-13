@@ -10,7 +10,7 @@ from colorama import init, Fore
 import re
 
 
-def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
+def dump_plots(result: dict, fdf: pd.DataFrame, sdf: pd.DataFrame, df: pd.DataFrame):
     init(autoreset=True)
     plt.rcParams['figure.figsize'] = [29, 18]
     pd.set_option('precision', 10)
@@ -29,7 +29,7 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
     table.add_row(['Final balance', f"{profit_color}{round_dynamic(result['result']['final_balance'], 6)}{Fore.RESET}"])
     table.add_row(['Final equity', f"{profit_color}{round_dynamic(result['result']['final_equity'], 6)}{Fore.RESET}"])
     table.add_row(['Net PNL + fees', f"{profit_color}{round_dynamic(result['result']['net_pnl_plus_fees'], 6)}{Fore.RESET}"])
-    table.add_row(['Total gain percentage', f"{profit_color}{round_dynamic(result['result']['gain'] * 100 - 100, 4)}%{Fore.RESET}"])
+    table.add_row(['Total gain percentage', f"{profit_color}{round_dynamic(result['result']['gain'] * 100, 4)}%{Fore.RESET}"])
     table.add_row(['Average daily gain percentage', f"{profit_color}{round_dynamic((result['result']['average_daily_gain']) * 100, 3)}%{Fore.RESET}"])
     table.add_row(['Adjusted daily gain', f"{profit_color}{round_dynamic(result['result']['adjusted_daily_gain'], 6)}{Fore.RESET}"])
     bankruptcy_color = Fore.RED if result['result']['closest_bkr'] < 0.4 else Fore.YELLOW if result['result']['closest_bkr'] < 0.8 else Fore.RESET
@@ -90,8 +90,8 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
 
     print('\nplotting balance and equity...')
     plt.clf()
-    fdf.balance.plot()
-    fdf.equity.plot()
+    sdf.balance.plot()
+    sdf.equity.plot()
     plt.savefig(f"{result['plots_dirpath']}balance_and_equity.png")
 
 
@@ -103,11 +103,10 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
     shrts.pnl.cumsum().plot()
     plt.savefig(f"{result['plots_dirpath']}pnl_cumsum_shrt.png")
 
-    '''
+    adg = (sdf.equity / sdf.equity.iloc[0]) ** (1 / ((sdf.timestamp - sdf.timestamp.iloc[0]) / (1000 * 60 * 60 * 24)))
     plt.clf()
-    fdf.adg.iloc[int(len(fdf) * 0.05):].plot()
+    adg.plot()
     plt.savefig(f"{result['plots_dirpath']}adg.png")
-    '''
 
     print('plotting backtest whole and in chunks...')
     n_parts = max(3, int(round_up(result['n_days'] / 14, 1.0)))
@@ -120,7 +119,7 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
             fig.savefig(f"{result['plots_dirpath']}backtest_{z + 1}of{n_parts}.png")
         else:
             print('no fills...')
-    fig = plot_fills(df, fdf, bkr_thr=0.1)
+    fig = plot_fills(df, fdf, bkr_thr=0.1, plot_whole_df=True)
     fig.savefig(f"{result['plots_dirpath']}whole_backtest.png")
 
     print('plotting pos sizes...')
