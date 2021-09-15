@@ -590,7 +590,8 @@ def calc_long_entry_grid(
     if do_long or psize > min_entry_qty:
         entry_qty = round_(cost_to_qty(balance * initial_qty_pct, entry_price, inverse, c_mult), qty_step)
         if round_dn(psize, qty_step) < max(min_entry_qty, entry_qty * 0.45):
-            max_entry_qty = round_dn(cost_to_qty(balance * pbr_limit, entry_price, inverse, c_mult), qty_step)
+            entry_qty = round_(entry_qty - psize, qty_step)
+            max_entry_qty = round_dn(cost_to_qty(balance * pbr_limit, entry_price, inverse, c_mult) - psize, qty_step)
             entry_qty = min(max_entry_qty, max(min_entry_qty, entry_qty))
             if entry_qty < min_entry_qty:
                 return [(0.0, 0.0, '')]
@@ -600,34 +601,30 @@ def calc_long_entry_grid(
             if pbr > pbr_limit * 0.97:
                 return [(0.0, 0.0, '')]
             primary_pbr_limit = pbr_limit * (1 - secondary_pbr_allocation)
-            if secondary_pbr_allocation != 0.0 and pbr > primary_pbr_limit * 0.97:
-                entry_price = round_dn(pprice * (1 - secondary_grid_spacing), price_step)
-                qty = find_qty_bringing_pbr_to_target(balance, psize, pprice, pbr_limit, entry_price,
-                                                      inverse, qty_step, c_mult)
-                return [(qty, entry_price, 'secondary_long_rentry')]
-            template_grid = calc_whole_long_entry_grid(
-                balance, pprice, inverse, qty_step, price_step, min_qty, min_cost, c_mult, grid_span, primary_pbr_limit,
-                max_n_entry_orders, initial_qty_pct, eprice_pprice_diff, eprice_exp_base=eprice_exp_base)
-            closest_node = sorted([(abs(psize - g[2]) / psize, i) for i, g in enumerate(template_grid)])[0][1]
-            ratio = pprice / template_grid[closest_node][3]
-            eprices = np.flip(np.unique(np.array([min(highest_bid, round_(p * ratio, price_step))
-                                                  for p in template_grid[closest_node:, 1]])))
-            if len(eprices) <= 1:
-                return [(0.0, 0.0, '')]
-            elif len(eprices) == 2:
-                qty = find_qty_bringing_pbr_to_target(balance, psize, pprice, primary_pbr_limit, eprices[-1], inverse, qty_step, c_mult)
-                return [(qty, eprices[-1], 'primary_long_rentry')]
-            fitted_grid = calc_whole_long_entry_grid(
-                balance, pprice, inverse, qty_step, price_step, min_qty, min_cost, c_mult, grid_span,
-                primary_pbr_limit, max_n_entry_orders, pbr, eprice_pprice_diff, eprice_exp_base=eprice_exp_base,
-                eprices=eprices, prev_pprice=pprice)
-            long_entries = [(g[0], g[1], 'primary_long_rentry') for g in fitted_grid[1:]]
+            entries = [(0.0, 0.0, '')]
+            last_psize, last_pprice = psize, pprice
+            if pbr < primary_pbr_limit * 0.97:
+                template_grid = calc_whole_long_entry_grid(
+                    balance, pprice, inverse, qty_step, price_step, min_qty, min_cost, c_mult, grid_span, primary_pbr_limit,
+                    max_n_entry_orders, initial_qty_pct, eprice_pprice_diff, eprice_exp_base=eprice_exp_base)
+                closest_node = sorted([(abs(psize - g[2]) / psize, i) for i, g in enumerate(template_grid)])[0][1]
+                ratio = pprice / template_grid[closest_node][3]
+                eprices = np.flip(np.unique(np.array([min(highest_bid, round_(p * ratio, price_step))
+                                                      for p in template_grid[closest_node:, 1]])))
+                if len(eprices) >= 2:
+                    fitted_grid = calc_whole_long_entry_grid(
+                        balance, pprice, inverse, qty_step, price_step, min_qty, min_cost, c_mult, grid_span,
+                        primary_pbr_limit, max_n_entry_orders, pbr, eprice_pprice_diff, eprice_exp_base=eprice_exp_base,
+                        eprices=eprices, prev_pprice=pprice)
+                    entries = [(g[0], g[1], 'primary_long_rentry') for g in fitted_grid[1:]]
+                    last_psize, last_pprice = fitted_grid[-1][2], fitted_grid[-1][3]
             if secondary_pbr_allocation != 0.0:
-                entry_price = round_dn(fitted_grid[-1][3] * (1 - secondary_grid_spacing), price_step)
-                qty = find_qty_bringing_pbr_to_target(balance, fitted_grid[-1][2], fitted_grid[-1][3], pbr_limit, entry_price,
+                entry_price = round_dn(last_pprice * (1 - secondary_grid_spacing), price_step)
+                qty = find_qty_bringing_pbr_to_target(balance, last_psize, last_pprice, pbr_limit, entry_price,
                                                       inverse, qty_step, c_mult)
-                long_entries.append((qty, entry_price, 'secondary_long_rentry'))
-            return long_entries if long_entries else [(0.0, 0.0, '')]
+                entries.append((qty, entry_price, 'secondary_long_rentry'))
+            entries = [e for e in entries if e[0] != 0.0]
+            return entries if entries else [(0.0, 0.0, '')]
 
 
 @njit
