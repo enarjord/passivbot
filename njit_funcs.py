@@ -513,7 +513,7 @@ def eval_long_entry_grid(
         grid[:,1] = eprices
 
     grid[0][0] = max(calc_min_entry_qty(grid[0][1], inverse, qty_step, min_qty, min_cost),
-                     round_(balance * initial_qty_pct / initial_entry_price, qty_step))
+                     round_(cost_to_qty(balance * initial_qty_pct, initial_entry_price, inverse, c_mult), qty_step))
     grid[0][2] = psize = grid[0][0]
     grid[0][3] = pprice = grid[0][1] if prev_pprice is None else prev_pprice
     grid[0][4] = qty_to_cost(psize, pprice, inverse, c_mult) / balance
