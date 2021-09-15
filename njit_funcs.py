@@ -339,6 +339,19 @@ def calc_long_entry_qty(psize, pprice, entry_price, eprice_pprice_diff):
 
 
 @njit
+def interpolate(x, xs, ys):
+
+    def basis_(j, k):
+        q = 1.0
+        for w in [(x - xs[m]) / (xs[j] - xs[m]) for m in range(k) if m != j]:
+            q *= w
+        return q
+
+    k = len(xs)
+    return np.sum(np.array([basis_(j, k) * ys[j] for j in range(k)]))
+
+
+@njit
 def find_qty_bringing_pbr_to_target(
         balance,
         psize,
@@ -401,50 +414,56 @@ def find_eprice_pprice_diff_pbr_weighting(
         error_tolerance=0.01,
         eprices=None,
         prev_pprice=None):
-    guesses = [10.0, 11.0]
-    extra_guesses = [86.0, 1.0, 6.5, 321.0, 292.0, 75.0, 484.0, 97.0, 174.0, 557.0, 30.0, 207.0, 116.0, 88.0,
-                     253.0, 268.0, 102.0, 299.0, 129.0, 422.0, 582.0, 449.0]
-    vals = [eval_long_entry_grid(balance, initial_entry_price, inverse, qty_step, price_step, min_qty,
-                                 min_cost, c_mult, grid_span, max_n_entry_orders, initial_qty_pct,
-                                 eprice_pprice_diff, guess, eprice_exp_base=eprice_exp_base,
-                                 eprices=eprices, prev_pprice=prev_pprice)[-1][4]
-            for guess in guesses]
-    
-    diffs = sorted([(abs(val - pbr_limit) / pbr_limit, guess, val) for guess, val in zip(guesses, vals)])[:2]
+    guess = 0.0
+    val = eval_long_entry_grid(balance, initial_entry_price, inverse, qty_step, price_step, min_qty,
+                               min_cost, c_mult, grid_span, max_n_entry_orders, initial_qty_pct,
+                               eprice_pprice_diff, guess, eprice_exp_base=eprice_exp_base,
+                               eprices=eprices, prev_pprice=prev_pprice)[-1][4]
+    if val < pbr_limit:
+        return guess
+    too_low = (guess, val)
+    guess = 1000.0
+    val = eval_long_entry_grid(balance, initial_entry_price, inverse, qty_step, price_step, min_qty,
+                               min_cost, c_mult, grid_span, max_n_entry_orders, initial_qty_pct,
+                               eprice_pprice_diff, guess, eprice_exp_base=eprice_exp_base,
+                               eprices=eprices, prev_pprice=prev_pprice)[-1][4]
+    if val > pbr_limit:
+        return guess
+    too_high = (guess, val)
+    guesses = [too_low[1], too_high[1]]
+    vals = [too_low[0], too_high[0]]
+    guess = interpolate(pbr_limit, np.array(vals), np.array(guesses))
+    val = eval_long_entry_grid(balance, initial_entry_price, inverse, qty_step, price_step, min_qty,
+                               min_cost, c_mult, grid_span, max_n_entry_orders, initial_qty_pct,
+                               eprice_pprice_diff, guess, eprice_exp_base=eprice_exp_base,
+                               eprices=eprices, prev_pprice=prev_pprice)[-1][4]
+    if val < pbr_limit:
+        too_high = (guess, val)
+    else:
+        too_low = (guess, val)
     i = 0
+    old_guess = 0.0
     while True:
         i += 1
-        if diffs[0][0] < error_tolerance:
-            return diffs[0][1]
-        if i >= max_n_iters:
-            if abs(diffs[0][2] - pbr_limit) / pbr_limit > 0.1:
-                print('debug find_eprice_pprice_diff_pbr_weighting')
+        diff = abs(val - pbr_limit) / pbr_limit
+        if diff < error_tolerance:
+            return guess
+        if i >= max_n_iters or abs(old_guess - guess) / guess < error_tolerance * 0.1:
+            if diff > 0.15:
+                print('debug find_eprice_pprice_diff_pbr_weighting', diff)
                 print('balance, initial_entry_price, inverse, qty_step, price_step, min_qty, min_cost, c_mult, grid_span, pbr_limit, max_n_entry_orders, initial_qty_pct, eprice_pprice_diff, eprice_exp_base, max_n_iters, error_tolerance, eprices, prev_pprice')
                 print(balance, ',', initial_entry_price, ',', inverse, ',', qty_step, ',', price_step, ',', min_qty, ',', min_cost, ',', c_mult, ',', grid_span, ',', pbr_limit, ',', max_n_entry_orders, ',', initial_qty_pct, ',', eprice_pprice_diff, ',', eprice_exp_base, ',', max_n_iters, ',', error_tolerance, ',', eprices, ',', prev_pprice)
-                print('guesses', guesses)
-                print('diffs', diffs)
-            return diffs[0][1]
-        m, b = calc_m_b(diffs[0][2], diffs[1][2], diffs[0][1], diffs[1][1])
-        
-        guess = max(0.0, m * pbr_limit + b)
-        
+            return guess
+        old_guess = guess
+        guess = (too_high[0] + too_low[0]) / 2
         val = eval_long_entry_grid(balance, initial_entry_price, inverse, qty_step, price_step, min_qty,
                                    min_cost, c_mult, grid_span, max_n_entry_orders, initial_qty_pct,
                                    eprice_pprice_diff, guess, eprice_exp_base=eprice_exp_base,
                                    eprices=eprices, prev_pprice=prev_pprice)[-1][4]
-        while guess in guesses and extra_guesses:
-            guess = extra_guesses.pop(0)
-            
-            val = eval_long_entry_grid(balance, initial_entry_price, inverse, qty_step, price_step, min_qty,
-                                       min_cost, c_mult, grid_span, max_n_entry_orders, initial_qty_pct,
-                                       eprice_pprice_diff, guess, eprice_exp_base=eprice_exp_base,
-                                       eprices=eprices, prev_pprice=prev_pprice)[-1][4]
-        guesses.append(guess)
-        diffs = sorted([(abs(val - pbr_limit) / pbr_limit, guess, val)] + diffs)[:2]
-
-
-
-
+        if val < pbr_limit:
+            too_high = (guess, val)
+        else:
+            too_low = (guess, val)
 
 
 @njit
