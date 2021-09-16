@@ -353,7 +353,7 @@ class Bot:
         )
         long_closes = calc_long_close_grid(balance,
             long_psize, long_pprice, self.ob[1], self.xk['spot'], self.xk['inverse'], self.xk['qty_step'],
-            self.xk['price_step'], self.xk['min_qty'], self.xk['min_cost'], self.xk['c_mult'],
+            self.xk['price_step'], self.xk['min_qty'], self.xk['min_cost'], self.xk['c_mult'], self.xk['pbr_limit'][0],
             self.xk['initial_qty_pct'][0], self.xk['min_markup'][0], self.xk['markup_range'][0],
             self.xk['n_close_orders'][0]
         )
