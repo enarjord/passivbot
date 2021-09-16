@@ -84,12 +84,14 @@ class Bot:
             config['last_price_diff_limit'] = 0.3
         if 'profit_trans_pct' not in config:
             config['profit_trans_pct'] = 0.0
+        '''
         if 'cross_wallet_pct' not in config:
             config['cross_wallet_pct'] = 1.0
         if config['cross_wallet_pct'] > 1.0 or config['cross_wallet_pct'] <= 0.0:
             print(f'An invalid value is provided for `cross_wallet_pct` ({config["cross_wallet_pct"]}). The value must be bigger than 0.0 and less than or equal to 1.0. The'
                   f'bot will start with the default value of 1.0, meaning it will utilize the ')
             config['cross_wallet_pct'] = 1.0
+        '''
         self.config = config
         for key in config:
             setattr(self, key, config[key])
@@ -144,7 +146,7 @@ class Bot:
                  (qty_to_cost(position['shrt']['size'], position['shrt']['price'],
                               self.xk['inverse'], self.xk['c_mult'])
                   if position['shrt']['price'] else 0.0)) / self.max_leverage
-            position['wallet_balance'] *= self.cross_wallet_pct
+            # position['wallet_balance'] *= self.cross_wallet_pct
             position['equity'] = position['wallet_balance'] + \
                 calc_upnl(position['long']['size'], position['long']['price'],
                           position['shrt']['size'], position['shrt']['price'],
