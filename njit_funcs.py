@@ -659,7 +659,13 @@ def approximate_grid(
             eprice_exp_base=eprice_exp_base)
         diff, i = sorted([(abs(grid[i][2] - psize_) / psize_, i) for i in range(len(grid))])[0]
         return grid, diff, i
-    
+
+    if psize == 0.0:
+        return calc_whole_long_entry_grid(
+            balance, pprice, inverse, qty_step, price_step, min_qty, min_cost, c_mult, grid_span, pbr_limit,
+            max_n_entry_orders, initial_qty_pct, eprice_pprice_diff, secondary_pbr_allocation, secondary_grid_spacing,
+            eprice_exp_base=eprice_exp_base)
+
     grid, diff, i = eval_(pprice, psize)
     grid, diff, i = eval_(pprice * (pprice / grid[i][3]), psize)
     if diff < 0.01:
@@ -678,6 +684,9 @@ def approximate_grid(
         min_ientry_qty = calc_min_entry_qty(grid[0][1], inverse, qty_step, min_qty, min_cost)
         grid[0][0] = grid[0][2] = max(min_ientry_qty, round_(grid[0][0] - psize, qty_step))
         grid[0][3] = qty_to_cost(grid[0][2], grid[0][3], inverse, c_mult) / balance
+        return grid
+    if i == len(grid):
+        # means pbr limit is exceeded
         return grid
     for _ in range(5):
         # find grid as if partial fill were full fill
