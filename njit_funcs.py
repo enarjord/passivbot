@@ -614,6 +614,8 @@ def calc_long_entry_grid(
                 secondary_grid_spacing, eprice_exp_base=eprice_exp_base)
             grid = grid[grid[:,2] > psize * 1.05]
             grid = grid[grid[:,1] < pprice * 0.9995]
+        if len(grid) == 0:
+            return [(0.0, 0.0, '')]
         for i in range(len(grid)):
             grid[i][1] = min(highest_bid, grid[i][1])
         if grid[0][1] == grid[0][3]:
