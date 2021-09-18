@@ -607,19 +607,22 @@ def calc_long_entry_grid(
                 balance, highest_bid, inverse, qty_step, price_step, min_qty, min_cost, c_mult, grid_span, pbr_limit,
                 max_n_entry_orders, initial_qty_pct, eprice_pprice_diff, secondary_pbr_allocation, secondary_grid_spacing,
                 eprice_exp_base=eprice_exp_base)
+            return [(grid[0][0], min(highest_bid, grid[0][1]), 'long_ientry')]
         else:
             grid = approximate_grid(
                 balance, psize, pprice, inverse, qty_step, price_step, min_qty, min_cost, c_mult,
                 grid_span, pbr_limit, max_n_entry_orders, initial_qty_pct, eprice_pprice_diff, secondary_pbr_allocation,
                 secondary_grid_spacing, eprice_exp_base=eprice_exp_base)
+            if len(grid) == 0:
+                return [(0.0, 0.0, '')]
+            if abs(grid[0][1] - grid[0][3]) / grid[0][1] < 0.00001:
+                return [(grid[0][0], min(highest_bid, grid[0][1]), 'long_ientry')]
             grid = grid[grid[:,2] > psize * 1.05]
             grid = grid[grid[:,1] < pprice * 0.9995]
         if len(grid) == 0:
             return [(0.0, 0.0, '')]
         for i in range(len(grid)):
             grid[i][1] = min(highest_bid, grid[i][1])
-        if grid[0][1] == grid[0][3]:
-            return [(grid[0][0], grid[0][1], 'long_ientry')]
         entries = []
         for e in grid[:-1]:
             entries.append((e[0], e[1], 'long_primary_rentry'))
@@ -673,11 +676,11 @@ def approximate_grid(
     if diff < 0.01:
         # good guess
         grid, diff, i = eval_(grid[0][1] * (pprice / grid[i][3]), psize)
-        return grid
+        return grid[i + 1:]
     # no close matches
     # assume partial fill
     i = 0
-    while i < len(grid) and grid[i][2] <= psize:
+    while i < len(grid) and grid[i][2] <= psize * 0.99999:
         # find first node whose psize > psize
         i += 1
     if i == 0:
@@ -685,11 +688,11 @@ def approximate_grid(
         # return grid with adjusted iqty
         min_ientry_qty = calc_min_entry_qty(grid[0][1], inverse, qty_step, min_qty, min_cost)
         grid[0][0] = grid[0][2] = max(min_ientry_qty, round_(grid[0][0] - psize, qty_step))
-        grid[0][3] = qty_to_cost(grid[0][2], grid[0][3], inverse, c_mult) / balance
+        grid[0][4] = qty_to_cost(grid[0][2], grid[0][3], inverse, c_mult) / balance
         return grid
     if i == len(grid):
         # means pbr limit is exceeded
-        return grid
+        return np.empty((0, 5))
     for _ in range(5):
         # find grid as if partial fill were full fill
         remaining_qty = round_(grid[i][2] - psize, qty_step)
@@ -699,7 +702,7 @@ def approximate_grid(
     min_ientry_qty = calc_min_entry_qty(grid[i][1], inverse, qty_step, min_qty, min_cost)
     # next reentry qty -= partially filled
     grid[i][0] = max(min_ientry_qty, round_(grid[i][0] - (psize - grid[i - 1][2]), qty_step))
-    return grid
+    return grid[i:]
 
 
 @njit
