@@ -473,7 +473,7 @@ def spotify_config(config: dict, nullify_shrt=True) -> dict:
         spotified['market_type'] += '_spot'
     spotified['do_long'] = spotified['long']['enabled'] = config['long']['enabled']
     spotified['do_shrt'] = spotified['shrt']['enabled'] = False
-    spotified['pbr_limit'] = min(1.0, spotified['pbr_limit'])
+    spotified['long']['pbr_limit'] = min(1.0, spotified['long']['pbr_limit'])
     if nullify_shrt:
         spotified['shrt'] = nullify(spotified['shrt'])
     return spotified
