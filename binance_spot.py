@@ -10,7 +10,7 @@ import numpy as np
 import traceback
 
 from pure_funcs import ts_to_date, sort_dict_keys, calc_long_pprice, format_float, get_position_fills, spotify_config
-from njit_funcs import round_dn
+from njit_funcs import round_dn, round_up
 from passivbot import Bot
 from procedures import print_
 
@@ -40,7 +40,7 @@ class BinanceBotSpot(Bot):
             if type(params[k]) == bool:
                 params[k] = 'true' if params[k] else 'false'
             elif type(params[k]) == float:
-                params[k] = str(params[k])
+                params[k] = format_float(params[k])
         params = sort_dict_keys(params)
         params['signature'] = hmac.new(self.secret.encode('utf-8'),
                                        urlencode(params).encode('utf-8'),
@@ -100,6 +100,11 @@ class BinanceBotSpot(Bot):
                         self.qty_step = self.config['qty_step'] = float(q['stepSize'])
                     elif q['filterType'] == 'PRICE_FILTER':
                         self.price_step = self.config['price_step'] = float(q['tickSize'])
+                        self.min_price = float(q['minPrice'])
+                        self.max_price = float(q['maxPrice'])
+                    elif q['filterType'] == 'PERCENT_PRICE':
+                        self.price_multiplier_up = float(q['multiplierUp'])
+                        self.price_multiplier_dn = float(q['multiplierDown'])
                     elif q['filterType'] == 'MIN_NOTIONAL':
                         self.min_cost = self.config['min_cost'] = float(q['minNotional'])
                 try:
@@ -114,7 +119,15 @@ class BinanceBotSpot(Bot):
 
     def calc_orders(self):
         orders = super().calc_orders()
-        orders = sorted(orders, key=lambda x: x['price'])
+        orders = []
+        for order in sorted(orders, key=lambda x: x['price']):
+            if order['price'] > min(self.max_price, round_dn(self.price * self.price_multiplier_up, self.price_step)):
+                print(f'price {order["price"]} too high')
+                continue
+            if order['price'] < max(self.min_price, round_up(self.price * self.price_multiplier_dn, self.price_step)):
+                print(f'price {order["price"]} too low')
+                continue
+            orders.append(order)
         sum_buy_cost = sum([o['qty'] * o['price'] for o in orders if o['side'] == 'buy'])
         excess_cost = max(0.0, sum_buy_cost - self.balance[self.quot]['onhand'])
         if excess_cost:
