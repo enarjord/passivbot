@@ -1,8 +1,8 @@
 import datetime
+import pprint
+from collections import OrderedDict
 
 import numpy as np
-import pandas as pd
-import pprint
 from dateutil import parser
 
 from njit_funcs import round_dynamic, calc_emas
@@ -32,10 +32,17 @@ def calc_spans(min_span: int, max_span: int, n_spans: int) -> np.ndarray:
 
 
 def get_xk_keys():
-    return ['spot', 'hedge_mode', 'inverse', 'do_long', 'do_shrt', 'qty_step', 'price_step', 'min_qty', 'min_cost', 'c_mult',
-            'max_leverage', 'spans', 'pbr_stop_loss', 'pbr_limit', 'iqty_const', 'iprc_const', 'rqty_const',
-            'rprc_const', 'markup_const', 'iqty_MAr_coeffs', 'iprc_MAr_coeffs', 'rprc_PBr_coeffs',
-            'rqty_MAr_coeffs', 'rprc_MAr_coeffs', 'markup_MAr_coeffs']
+    return ['spot', 'hedge_mode', 'inverse', 'do_long', 'do_shrt', 'qty_step', 'price_step', 'min_qty', 'min_cost',
+            'c_mult', 'max_leverage', 'spans', 'pbr_stop_loss', 'pbr_limit', 'iqty_const', 'iprc_const', 'rqty_const',
+            'rprc_const', 'markup_const', 'iqty_MAr_coeffs', 'iprc_MAr_coeffs', 'rprc_PBr_coeffs', 'rqty_MAr_coeffs',
+            'rprc_MAr_coeffs', 'markup_MAr_coeffs']
+
+
+def get_scalp_keys():
+    return ['spot', 'hedge_mode', 'inverse', 'do_long', 'do_shrt', 'qty_step', 'price_step', 'min_qty', 'min_cost',
+            'c_mult', 'max_leverage', 'primary_initial_qty_pct', 'primary_ddown_factor', 'primary_grid_spacing',
+            'primary_grid_spacing_pbr_weighting', 'primary_pbr_limit', 'secondary_ddown_factor',
+            'secondary_grid_spacing', 'secondary_pbr_limit_added', 'min_markup', 'markup_range', 'n_close_orders']
 
 
 def create_xk(config: dict) -> dict:
@@ -47,8 +54,17 @@ def create_xk(config: dict) -> dict:
         config_['spot'] = False
         config_['do_long'] = config['long']['enabled']
         config_['do_shrt'] = config['shrt']['enabled']
-    config_['spans'] = calc_spans(config['min_span'], config['max_span'], config['n_spans'])
-    for k in get_xk_keys():
+    config_type = determine_config_type(config)
+    if config_type == 'vanilla':
+        keys = get_xk_keys()
+        config_['spans'] = calc_spans(config['min_span'], config['max_span'], config['n_spans'])
+    elif config_type == 'scalp':
+        keys = get_scalp_keys()
+        config_['long']['n_close_orders'] = int(round(config_['long']['n_close_orders']))
+        config_['shrt']['n_close_orders'] = int(round(config_['shrt']['n_close_orders']))
+    else:
+        raise Exception('unknown config type')
+    for k in keys:
         if k in config_['long']:
             xk[k] = (config_['long'][k], config_['shrt'][k])
         elif k in config_:
@@ -79,7 +95,7 @@ def denumpyize(x):
         return [denumpyize(e) for e in x]
     elif type(x) == np.bool_:
         return bool(x)
-    elif type(x) == dict:
+    elif type(x) in [dict, OrderedDict]:
         denumpyd = {}
         for k, v in x.items():
             denumpyd[k] = denumpyize(v)
@@ -121,6 +137,14 @@ def date_to_ts(d):
     return int(parser.parse(d).replace(tzinfo=datetime.timezone.utc).timestamp() * 1000)
 
 
+def get_utc_now_timestamp() -> int:
+    """
+    Creates a millisecond based timestamp of UTC now.
+    :return: Millisecond based timestamp of UTC now.
+    """
+    return int(datetime.datetime.now(datetime.timezone.utc).timestamp() * 1000)
+
+
 def config_pretty_str(config: dict):
     pretty_str = pprint.pformat(config)
     for r in [("'", '"'), ('True', 'true'), ('False', 'false')]:
@@ -130,7 +154,8 @@ def config_pretty_str(config: dict):
 
 def candidate_to_live_config(candidate: dict) -> dict:
     packed = pack_config(candidate)
-    live_config = get_template_live_config(n_spans=candidate['n_spans'])
+    packed['config_type'] = determine_config_type(packed)
+    live_config = get_template_live_config(packed)
     sides = ['long', 'shrt']
     for side in sides:
         for k in live_config[side]:
@@ -141,7 +166,14 @@ def candidate_to_live_config(candidate: dict) -> dict:
             live_config[k] = packed[k]
 
     result_dict = candidate['result'] if 'result' in candidate else candidate
-    name = f"{result_dict['exchange'].lower()}_" if 'exchange' in result_dict else 'unknown_'
+    if packed['long']['enabled'] and not packed['shrt']['enabled']:
+        side_type = 'longonly'
+    elif packed['shrt']['enabled'] and not packed['long']['enabled']:
+        side_type = 'shrtonly'
+    else:
+        side_type = 'long&shrt'
+    name = f"{packed['config_type']}_{side_type}_"
+    name += f"{result_dict['exchange'].lower()}_" if 'exchange' in result_dict else 'unknown_'
     name += f"{result_dict['symbol'].lower()}" if 'symbol' in result_dict else 'unknown'
     if 'n_days' in result_dict:
         n_days = result_dict['n_days']
@@ -152,7 +184,7 @@ def candidate_to_live_config(candidate: dict) -> dict:
         n_days = 0
     name += f"_{n_days:.0f}days"
     if 'average_daily_gain' in result_dict:
-        name += f"_adg{(result_dict['average_daily_gain'] - 1) * 100:.2f}%"
+        name += f"_adg{(result_dict['average_daily_gain']) * 100:.2f}%"
     elif 'daily_gain' in result_dict:
         name += f"_adg{(result_dict['daily_gain'] - 1) * 100:.2f}%"
     if 'closest_bkr' in result_dict:
@@ -256,8 +288,8 @@ def filter_orders(actual_orders: [dict],
 
 
 def get_dummy_settings(config: dict):
-    dummy_settings = get_template_live_config(n_spans=3)
-    dummy_settings.update({k: 1.0 for k in get_xk_keys() + ['stop_loss_liq_diff', 'ema_span']})
+    dummy_settings = get_template_live_config({'config_type': 'scalp'})
+    dummy_settings.update({k: 1.0 for k in get_xk_keys()})
     dummy_settings.update({'user': config['user'], 'exchange': config['exchange'], 'symbol': config['symbol'],
                            'config_name': '', 'logging_level': 0, 'spans': np.array([6000, 90000])})
     return {**config, **dummy_settings}
@@ -267,7 +299,47 @@ def flatten(lst: list) -> list:
     return [y for x in lst for y in x]
 
 
-def get_template_live_config(n_spans: int, randomize_coeffs=False):
+def get_template_live_config(config):
+    if 'config_type' not in config:
+        raise Exception('config_type missing from config')
+    if config['config_type'] == 'vanilla':
+        return get_template_live_config_vanilla(config['n_spans'])
+    elif config['config_type'] == 'scalp':
+        return get_template_live_config_scalp()
+    else:
+        raise Exception('unknown config type')
+
+
+def get_template_live_config_scalp():
+    return {"config_name": "template_scalp",
+            "logging_level": 0,
+            "long": {"enabled": True,
+                     "markup_range": 0.008,
+                     "min_markup": 0.002,
+                     "n_close_orders": 10,
+                     "primary_ddown_factor": 1.3,
+                     "primary_grid_spacing": 0.007,
+                     "primary_initial_qty_pct": 0.01,
+                     "primary_pbr_limit": 1.3,
+                     "primary_grid_spacing_pbr_weighting": [0.016, 0.016],
+                     "secondary_ddown_factor": 0.75,
+                     "secondary_grid_spacing": 0.09,
+                     "secondary_pbr_limit_added": 1.9},
+            "shrt": {"enabled": True,
+                     "markup_range": 0.009,
+                     "min_markup": 0.001,
+                     "n_close_orders": 10,
+                     "primary_ddown_factor": 1.3,
+                     "primary_grid_spacing": 0.02,
+                     "primary_initial_qty_pct": 0.01,
+                     "primary_pbr_limit": 0.5,
+                     "primary_grid_spacing_pbr_weighting": [0.02, 0.02],
+                     "secondary_ddown_factor": 0.75,
+                     "secondary_grid_spacing": 0.08,
+                     "secondary_pbr_limit_added": 1.0}}
+
+
+def get_template_live_config_vanilla(n_spans: int, randomize_coeffs=False):
     config = {
         "config_name": "name",
         "logging_level": 0,
@@ -411,19 +483,20 @@ def get_empty_analysis(bc: dict) -> dict:
     }
 
 
-def analyze_fills(fills: list, bc: dict, first_ts: float, last_ts: float) -> (pd.DataFrame, dict):
+def analyze_fills(fills: list, config: dict, first_ts: float, last_ts: float) -> (pd.DataFrame, dict):
     fdf = pd.DataFrame(fills)
 
     if fdf.empty:
-        return fdf, get_empty_analysis(bc)
-    fdf.columns = ['trade_id', 'timestamp', 'pnl', 'fee_paid', 'balance', 'equity', 'pbr', 'qty', 'price', 'psize', 'pprice', 'type']
-    adgs = (fdf.equity / bc['starting_balance']) ** (1 / ((fdf.timestamp - first_ts) / (1000 * 60 * 60 * 24)))
+        return fdf, get_empty_analysis(config)
+    fdf.columns = ['trade_id', 'timestamp', 'pnl', 'fee_paid', 'balance', 'equity', 'pbr', 'qty', 'price', 'psize',
+                   'pprice', 'type']
+    adgs = (fdf.equity / config['starting_balance']) ** (1 / ((fdf.timestamp - first_ts) / (1000 * 60 * 60 * 24))) - 1
     fdf = fdf.join(adgs.rename('adg')).set_index('trade_id')
 
     longs = fdf[fdf.type.str.contains('long')]
     shrts = fdf[fdf.type.str.contains('shrt')]
 
-    if bc['do_long']:
+    if config['long']['enabled']:
         if len(longs) > 0:
             long_fill_ts_diffs = np.diff([first_ts] + list(longs.timestamp) + [last_ts]) / (1000 * 60 * 60)
             long_stuck_mean = np.mean(long_fill_ts_diffs)
@@ -434,7 +507,7 @@ def analyze_fills(fills: list, bc: dict, first_ts: float, last_ts: float) -> (pd
     else:
         long_stuck_mean = 0.0
         long_stuck = 0.0
-    if bc['do_shrt']:
+    if config['shrt']['enabled']:
         if len(shrts) > 0:
             shrt_fill_ts_diffs = np.diff([first_ts] + list(shrts.timestamp) + [last_ts]) / (1000 * 60 * 60)
             shrt_stuck_mean = np.mean(shrt_fill_ts_diffs)
@@ -446,34 +519,38 @@ def analyze_fills(fills: list, bc: dict, first_ts: float, last_ts: float) -> (pd
         shrt_stuck_mean = 0.0
         shrt_stuck = 0.0
 
-    ms_span = 1000 * 60 * 60 * 24 * bc['periodic_gain_n_days']
+    ms_span = 1000 * 60 * 60 * 24 * config['periodic_gain_n_days']
     buckets = fdf.timestamp // ms_span * ms_span
     buckets = buckets + (fdf.timestamp.iloc[0] - buckets.iloc[0])
     groups = fdf.groupby(buckets)
     periodic_gains = groups.balance.last() / groups.balance.first() - 1  # realized profits
-    periodic_gains = periodic_gains.reindex(np.arange(periodic_gains.index[0], periodic_gains.index[-1], ms_span)).fillna(0.0)
+    periodic_gains = periodic_gains.reindex(
+        np.arange(periodic_gains.index[0], periodic_gains.index[-1], ms_span)).fillna(0.0)
     periodic_gains_mean = np.nan_to_num(periodic_gains.mean())
     periodic_gains_std = periodic_gains.std()
-    sharpe_ratio = periodic_gains_mean / periodic_gains_std if periodic_gains_std != 0.0 else -20.0
+    sharpe_ratio = (periodic_gains_mean / periodic_gains_std) if periodic_gains_std != 0.0 else -20.0
     sharpe_ratio = np.nan_to_num(sharpe_ratio)
+
+    ms_between_fills = np.mean(np.diff([first_ts] + list(fdf.timestamp) + [last_ts]))
+    ms_between_fills_std = ms_between_fills.std()
     result = {
-        'exchange': bc['exchange'] if 'exchange' in bc else 'unknown',
-        'symbol': bc['symbol'] if 'symbol' in bc else 'unknown',
-        'starting_balance': bc['starting_balance'],
+        'exchange': config['exchange'] if 'exchange' in config else 'unknown',
+        'symbol': config['symbol'] if 'symbol' in config else 'unknown',
+        'starting_balance': config['starting_balance'],
         'final_balance': fdf.iloc[-1].balance,
         'final_equity': fdf.iloc[-1].equity,
         'net_pnl_plus_fees': fdf.pnl.sum() + fdf.fee_paid.sum(),
-        'gain': (gain := fdf.iloc[-1].equity / bc['starting_balance']),
+        'gain': (gain := fdf.iloc[-1].equity / config['starting_balance']),
         'n_days': (n_days := (last_ts - first_ts) / (1000 * 60 * 60 * 24)),
-        'average_daily_gain': (adg := gain ** (1 / n_days) if gain > 0.0 and n_days > 0.0 else 0.0),
+        'average_daily_gain': (adg := gain ** (1 / n_days) - 1 if gain > 0.0 and n_days > 0.0 else 0.0),
         'average_periodic_gain': periodic_gains_mean,
-        'adjusted_daily_gain': np.tanh(10 * (adg - 1)) + 1,
+        'adjusted_daily_gain': np.tanh(20 * adg) / 20,
         'sharpe_ratio': sharpe_ratio,
         'profit_sum': fdf[fdf.pnl > 0.0].pnl.sum(),
         'loss_sum': fdf[fdf.pnl < 0.0].pnl.sum(),
         'fee_sum': fdf.fee_paid.sum(),
-        'lowest_eqbal_ratio': bc['lowest_eqbal_ratio'],
-        'closest_bkr': bc['closest_bkr'],
+        'lowest_eqbal_ratio': config['lowest_eqbal_ratio'],
+        'closest_bkr': config['closest_bkr'],
         'n_fills': len(fdf),
         'n_entries': len(fdf[fdf.type.str.contains('entry')]),
         'n_closes': len(fdf[fdf.type.str.contains('close')]),
@@ -482,7 +559,7 @@ def analyze_fills(fills: list, bc: dict, first_ts: float, last_ts: float) -> (pd
         'n_normal_closes': len(fdf[fdf.type.str.contains('nclose')]),
         'n_stop_loss_closes': len(fdf[fdf.type.str.contains('sclose')]),
         'biggest_psize': fdf.psize.abs().max(),
-        'mean_hrs_between_fills': np.mean(np.diff([first_ts] + list(fdf.timestamp) + [last_ts])) / (1000 * 60 * 60),
+        'mean_hrs_between_fills': ms_between_fills / (1000 * 60 * 60),
         'mean_hrs_between_fills_long': long_stuck_mean,
         'mean_hrs_between_fills_shrt': shrt_stuck_mean,
         'max_hrs_no_fills_long': long_stuck,
@@ -586,14 +663,20 @@ def spotify_config(config: dict, nullify_shrt=True) -> dict:
         spotified['market_type'] = 'spot'
     elif 'spot' not in spotified['market_type']:
         spotified['market_type'] += '_spot'
-    spotified['do_long'] = spotified['long']['enabled'] = True
+    spotified['do_long'] = spotified['long']['enabled'] = config['long']['enabled']
     spotified['do_shrt'] = spotified['shrt']['enabled'] = False
-    spotified['long']['pbr_stop_loss'] = min(1.0, spotified['long']['pbr_stop_loss'])
-    if spotified['long']['pbr_stop_loss'] <= 0.0:
-        spotified['long']['pbr_limit'] = min(1.0, spotified['long']['pbr_limit'])
-    else:
-        spotified['long']['pbr_limit'] = max(0.0, min(spotified['long']['pbr_limit'],
-                                                      1.0 - spotified['long']['pbr_stop_loss']))
+    config_type = determine_config_type(config)
+    if config_type == 'vanilla':
+        spotified['long']['pbr_stop_loss'] = min(1.0, spotified['long']['pbr_stop_loss'])
+        if spotified['long']['pbr_stop_loss'] <= 0.0:
+            spotified['long']['pbr_limit'] = min(1.0, spotified['long']['pbr_limit'])
+        else:
+            spotified['long']['pbr_limit'] = max(0.0, min(spotified['long']['pbr_limit'],
+                                                          1.0 - spotified['long']['pbr_stop_loss']))
+    elif config_type == 'scalp':
+        spotified['long']['primary_pbr_limit'] = round(min(1.0, spotified['long']['primary_pbr_limit']), 8)
+        spotified['long']['secondary_pbr_limit_added'] = \
+            round(min((1 - spotified['long']['primary_pbr_limit']), spotified['long']['secondary_pbr_limit_added']), 8)
     if nullify_shrt:
         spotified['shrt'] = nullify(spotified['shrt'])
     return spotified
@@ -607,4 +690,35 @@ def tuplify(xs):
     return xs
 
 
+def round_values(xs, n: int):
+    if type(xs) in [float, np.float64]:
+        return round_dynamic(xs, n)
+    if type(xs) == dict:
+        return {k: round_values(xs[k], n) for k in xs}
+    if type(xs) == list:
+        return [round_values(x, n) for x in xs]
+    if type(xs) == np.ndarray:
+        return numpyize([round_values(x, n) for x in xs])
+    if type(xs) == tuple:
+        return tuple([round_values(x, n) for x in xs])
+    if type(xs) == OrderedDict:
+        return OrderedDict([(k, round_values(xs[k], n)) for k in xs])
+    return xs
 
+
+def determine_config_type(config: dict) -> str:
+    if 'long' in config and 'shrt' in config:
+        if all((key in config['long'] and key in config['shrt'])
+               for key in ['enabled', 'iprc_MAr_coeffs', 'iprc_const', 'iqty_MAr_coeffs',
+                           'iqty_const', 'markup_MAr_coeffs', 'markup_const', 'pbr_limit',
+                           'pbr_stop_loss', 'rprc_MAr_coeffs', 'rprc_PBr_coeffs',
+                           'rprc_const', 'rqty_MAr_coeffs', 'rqty_const']):
+            return 'vanilla'
+        elif all((key in config['long'] and key in config['shrt'])
+                 for key in ['enabled', 'primary_initial_qty_pct', 'primary_ddown_factor',
+                             'primary_grid_spacing', 'primary_grid_spacing_pbr_weighting',
+                             'primary_pbr_limit', 'secondary_ddown_factor',
+                             'secondary_grid_spacing', 'secondary_pbr_limit_added',
+                             'min_markup', 'markup_range', 'n_close_orders']):
+            return 'scalp'
+    raise Exception('unknown config type')

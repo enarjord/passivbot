@@ -736,7 +736,7 @@ class Telegram:
                         [fills.append(f) for f in next_set]
                         if len(next_set) < 1000:
                             break
-                        start_time_to_fetch = next_set[-1]['timestamp']
+                        start_time_to_fetch = max([f['timestamp'] for f in next_set])
 
                     psize = 0.0
                     pprice = 0.0
@@ -747,7 +747,8 @@ class Telegram:
                             psize = new_psize
                         elif psize > 0:
                             day = fill['timestamp'] // ms_in_a_day * ms_in_a_day
-                            daily[day] += calc_long_pnl(pprice, fill['price'], fill['qty'], False, 1.0)
+                            if day in daily:
+                                daily[day] += calc_long_pnl(pprice, fill['price'], fill['qty'], False, 1.0)
                             psize -= fill['qty']
 
                 else:
@@ -758,7 +759,7 @@ class Telegram:
                             daily[day] += float(income['income'])
                         if len(next_set) < 1000:
                             break
-                        start_time_to_fetch = next_set[-1]['timestamp']
+                        start_time_to_fetch = max([f['timestamp'] for f in next_set])
 
                 # position = await self._bot.fetch_position()
                 position = self._bot.position.copy()

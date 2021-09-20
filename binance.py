@@ -190,12 +190,18 @@ class BinanceBot(Bot):
         return False
 
     async def execute_leverage_change(self):
-        lev = int(min(self.max_leverage, max(3.0, np.ceil(max(self.xk['pbr_limit']) * 3))))
+        lev = 10
+        '''
+        if self.config_type == 'vanilla':
+            lev = int(min(self.max_leverage, max(3.0, np.ceil(max(self.xk['pbr_limit']) * 3))))
+        elif self.config_type == 'scalp':
+            lev = int(min(self.max_leverage, max(3.0, np.ceil(max(self.xk['primary_pbr_limit']) * 3))))
+        '''
         return await self.private_post(self.base_endpoint,
                                        self.endpoints['leverage'],
                                        {'symbol': self.symbol, 'leverage': lev})
 
-    async def init_exchange_config(self):
+    async def init_exchange_config(self) -> bool:
         try:
             print(await self.private_post(self.base_endpoint,
                                           self.endpoints['margin_type'],
@@ -224,7 +230,8 @@ class BinanceBot(Bot):
                 print(e)
                 print('unable to set hedge mode, aborting')
                 raise Exception('failed to set hedge mode')
-        return await self.check_if_other_positions()
+        # return await self.check_if_other_positions()
+        return False
 
     async def init_order_book(self):
         ticker = await self.public_get(self.endpoints['ticker'], {'symbol': self.symbol})
@@ -316,9 +323,9 @@ class BinanceBot(Bot):
         if from_id is not None:
             params['fromId'] = max(0, from_id)
         if start_time is not None:
-            params['startTime'] = start_time
+            params['startTime'] = int(start_time)
         if end_time is not None:
-            params['endTime'] = end_time
+            params['endTime'] = int(min(end_time, start_time + 1000 * 60 * 60 * 24 * 6.99))
         try:
             fetched = await self.private_get(self.endpoints['fills'], params)
             fills = [{'symbol': x['symbol'],
@@ -336,9 +343,9 @@ class BinanceBot(Bot):
                       'is_maker': x['maker']} for x in fetched]
         except Exception as e:
             print('error fetching fills a', e)
+            traceback.print_exc()
             return []
         return fills
-
 
     async def fetch_income(self, limit: int = 1000, start_time: int = None, end_time: int = None):
         params = {'symbol': self.symbol, 'limit': limit}

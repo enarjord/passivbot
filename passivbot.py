@@ -1,19 +1,25 @@
+import os
+if 'NOJIT' not in os.environ:
+    os.environ['NOJIT'] = 'true'
+
 import traceback
 import argparse
 import asyncio
 import json
 import logging
-import os
 import signal
 import pprint
 from pathlib import Path
 from time import time
-from procedures import load_live_config, make_get_filepath, load_exchange_key_secret, print_, add_argparse_args
+from procedures import load_live_config, make_get_filepath, load_exchange_key_secret, print_, add_argparse_args, \
+    utc_ms
 from pure_funcs import get_xk_keys, get_ids_to_fetch, flatten, calc_indicators_from_ticks_with_gaps, \
     drop_consecutive_same_prices, filter_orders, compress_float, create_xk, round_dynamic, denumpyize, \
-    calc_spans, spotify_config, get_position_fills
-from njit_funcs import calc_orders, calc_new_psize_pprice, qty_to_cost, calc_diff, round_, calc_emas, \
-    calc_samples, calc_emas_last
+    calc_spans, spotify_config, get_position_fills, determine_config_type
+from njit_funcs import calc_new_psize_pprice, qty_to_cost, calc_diff, round_, calc_orders, calc_emas, \
+    calc_samples, calc_emas_last, calc_long_scalp_entry, calc_shrt_scalp_entry, calc_long_close_grid, \
+    calc_shrt_close_grid
+
 import numpy as np
 import websockets
 import telegram_bot
@@ -37,18 +43,11 @@ class Bot:
         self.hedge_mode = self.config['hedge_mode'] = True
         self.set_config(self.config)
 
-        self.ema_alpha = 2.0 / (self.spans + 1.0)
-        self.ema_alpha_ = 1.0 - self.ema_alpha
-
-        self.spans_secs = self.spans * 60  # spans are in minutes
-        self.ema_alpha_secs = 2.0 / (self.spans_secs + 1.0)
-        self.ema_alpha_secs_ = 1.0 - self.ema_alpha_secs
-        self.ema_sec = 0
-
         self.ts_locked = {'cancel_orders': 0.0, 'decide': 0.0, 'update_open_orders': 0.0,
                           'update_position': 0.0, 'print': 0.0, 'create_orders': 0.0,
                           'check_fills': 0.0, 'update_fills': 0.0}
         self.ts_released = {k: 1.0 for k in self.ts_locked}
+        self.heartbeat_ts = 0
 
         self.position = {}
         self.open_orders = []
@@ -62,9 +61,6 @@ class Bot:
         self.agg_qty = 0.0
         self.qty = 0.0
         self.ob = [0.0, 0.0]
-
-        self.emas = np.zeros(len(self.spans))
-        self.ratios = np.zeros(len(self.spans))
 
         self.n_open_orders_limit = 8
         self.n_orders_per_execution = 4
@@ -82,7 +78,8 @@ class Bot:
         self.lock_file = f"{str(Path.home())}/.{self.exchange}_passivbotlock"
 
     def set_config(self, config):
-        config['spans'] = calc_spans(config['min_span'], config['max_span'], config['n_spans'])
+        if 'min_span' in config:
+            config['spans'] = calc_spans(config['min_span'], config['max_span'], config['n_spans'])
         if 'stop_mode' not in config:
             config['stop_mode'] = None
         if 'last_price_diff_limit' not in config:
@@ -100,6 +97,16 @@ class Bot:
             setattr(self, key, config[key])
             if key in self.xk:
                 self.xk[key] = config[key]
+        self.config_type = self.config['config_type'] = determine_config_type(config)
+        if self.config_type == 'vanilla':
+            self.ema_alpha = 2.0 / (self.spans + 1.0) if hasattr(self, 'spans') else 0.0
+            self.ema_alpha_ = 1.0 - self.ema_alpha
+            self.spans_secs = self.spans * 60 if hasattr(self, 'spans') else 0.0  # spans are in minutes
+            self.ema_alpha_secs = 2.0 / (self.spans_secs + 1.0)
+            self.ema_alpha_secs_ = 1.0 - self.ema_alpha_secs
+            self.ema_sec = 0
+            self.emas = np.zeros(len(self.spans))
+            self.ratios = np.zeros(len(self.spans))
 
     def set_config_value(self, key, value):
         self.config[key] = value
@@ -107,7 +114,7 @@ class Bot:
 
     async def _init(self):
         self.xk = create_xk(self.config)
-        self.fills = await self.fetch_fills()
+        await self.init_fills()
 
     def dump_log(self, data) -> None:
         if self.config['logging_level'] > 0:
@@ -176,7 +183,44 @@ class Bot:
         finally:
             self.ts_released['update_position'] = time()
 
-    async def update_fills(self, max_n_fills=1000) -> [dict]:
+    async def init_fills(self, n_days_limit=60):
+        self.fills = await self.fetch_fills()
+        #self.fills = await self.fetch_all_fills(n_days_limit)
+
+    async def fetch_all_fills(self, n_days_limit=60):
+        try:
+            from pure_funcs import ts_to_date
+            now = utc_ms()
+            day = 1000 * 60 * 60 * 23.99
+            week = day * 6.99
+            fetch_timespan_limit = day if self.spot else week
+            fetch_time = now - day * n_days_limit
+            recent_fills = await self.fetch_fills()
+            if not recent_fills:
+                return []
+            if recent_fills[0]['timestamp'] <= fetch_time:
+                print('debug returing recent fills')
+                return recent_fills
+            oldest_fills = await self.fetch_fills(start_time=fetch_time, end_time=fetch_time + fetch_timespan_limit)
+            while oldest_fills == [] and fetch_time < now:
+                print('debug no fills, fetching ahead', ts_to_date(fetch_time / 1000))
+                fetch_time += fetch_timespan_limit
+                oldest_fills = await self.fetch_fills(start_time=fetch_time, end_time=fetch_time + fetch_timespan_limit)
+            if oldest_fills:
+                additional_fills = await self.fetch_fills(from_id=oldest_fills[-1]['id'])
+                while additional_fills[-1]['timestamp'] < recent_fills[0]['timestamp']:
+                    print('debug fetching additional_fills')
+                    new_additional_fills = await self.fetch_fills(from_id=additional_fills[-1]['id'])
+                    if new_additional_fills == [] or new_additional_fills[-1] == additional_fills[-1]:
+                        break
+                    additional_fills += new_additional_fills
+            fills = {x['id']: x for x in oldest_fills + recent_fills + additional_fills}
+            return sorted(fills.values(), key=lambda x: x['id'])
+        except Exception as e:
+            print('error with init fills', e)
+            return []
+
+    async def update_fills(self, max_n_fills=10000) -> [dict]:
         '''
         fetches recent fills
         updates self.fills, drops older fills max_n_fills
@@ -199,8 +243,6 @@ class Bot:
             print('error with update fills', e)
         finally:
             self.ts_released['update_fills'] = time()
-
-
 
     async def create_orders(self, orders_to_create: [dict]) -> dict:
         if not orders_to_create:
@@ -280,12 +322,26 @@ class Bot:
     def resume(self) -> None:
         self.process_websocket_ticks = True
 
+
     def calc_orders(self):
-        balance = self.position['wallet_balance']# * self.cross_wallet_pct
+        balance = self.position['wallet_balance']
         long_psize = self.position['long']['size']
         long_pprice = self.position['long']['price']
         shrt_psize = self.position['shrt']['size']
         shrt_pprice = self.position['shrt']['price']
+
+        if self.stop_mode in ['panic']:
+            if self.exchange == 'bybit':
+                print('\n\npanic mode temporarily disabled for bybit\n\n')
+                return []
+            panic_orders = []
+            if long_psize != 0.0:
+                panic_orders.append({'side': 'sell', 'position_side': 'long', 'qty': abs(long_psize), 'price': self.ob[1],
+                                     'type': 'market', 'reduce_only': True, 'custom_id': 'long_panic'})
+            if shrt_psize != 0.0:
+                panic_orders.append({'side': 'buy', 'position_side': 'shrt', 'qty': abs(shrt_psize), 'price': self.ob[0],
+                                     'type': 'market', 'reduce_only': True, 'custom_id': 'shrt_panic'})
+            return panic_orders
 
         if self.hedge_mode:
             do_long = self.do_long or long_psize != 0.0
@@ -297,17 +353,14 @@ class Bot:
                                               
         self.xk['do_long'] = do_long
         self.xk['do_shrt'] = do_shrt
+        if self.config_type == 'vanilla':
+            return self.calc_orders_vanilla(balance, long_psize, long_pprice, shrt_psize, shrt_pprice, do_long, do_shrt)
+        elif self.config_type == 'scalp':
+            return self.calc_orders_scalp(balance, long_psize, long_pprice, shrt_psize, shrt_pprice, do_long, do_shrt)
+        else:
+            raise Exception('unknown config type')
 
-        if self.stop_mode in ['panic']:
-            panic_orders = []
-            if long_psize != 0.0:
-                panic_orders.append({'side': 'sell', 'position_side': 'long', 'qty': abs(long_psize), 'price': self.ob[1],
-                                     'type': 'market', 'reduce_only': True, 'custom_id': 'long_panic'})
-            if shrt_psize != 0.0:
-                panic_orders.append({'side': 'buy', 'position_side': 'shrt', 'qty': abs(shrt_psize), 'price': self.ob[0],
-                                     'type': 'market', 'reduce_only': True, 'custom_id': 'shrt_panic'})
-            return panic_orders
-
+    def calc_orders_vanilla(self, balance, long_psize, long_pprice, shrt_psize, shrt_pprice, do_long, do_shrt):
         orders = []
         long_done, shrt_done = False, False
 
@@ -361,6 +414,78 @@ class Bot:
                 break
         return orders
 
+    def calc_orders_scalp(self, balance, long_psize, long_pprice, shrt_psize, shrt_pprice, do_long, do_shrt):
+        
+        orders = []
+        if do_long:
+            long_closes = calc_long_close_grid(
+                balance, long_psize, long_pprice, self.ob[1], self.spot, self.inverse, self.qty_step,
+                self.price_step, self.min_qty, self.min_cost, self.c_mult, self.max_leverage,
+                self.xk['primary_initial_qty_pct'][0], self.xk['min_markup'][0], self.xk['markup_range'][0],
+                self.xk['n_close_orders'][0]
+            )
+            long_closes = [{'side': 'sell', 'position_side': 'long', 'qty': abs(x[0]),
+                            'price': x[1], 'type': 'limit', 'custom_id': x[2]}
+                           for x in long_closes if x[0] != 0.0]
+            i = 0
+            long_entries = []
+            while i < self.n_open_orders_limit:
+                i += 1
+                long_entry = calc_long_scalp_entry(
+                    balance, long_psize, long_pprice, ((0.0, 0.0),), self.ob[0], self.spot, self.inverse, do_long,
+                    self.qty_step, self.price_step, self.min_qty, self.min_cost, self.c_mult, self.max_leverage,
+                    self.xk['primary_initial_qty_pct'][0], self.xk['primary_ddown_factor'][0],
+                    self.xk['primary_grid_spacing'][0], self.xk['primary_grid_spacing_pbr_weighting'][0],
+                    self.xk['primary_pbr_limit'][0], self.xk['secondary_ddown_factor'][0],
+                    self.xk['secondary_grid_spacing'][0], self.xk['secondary_pbr_limit_added'][0]
+                )
+                if long_entry[0] == 0.0:
+                    break
+                long_entries.append(long_entry)
+                if long_psize == 0.0:
+                    break
+                long_psize, long_pprice = calc_new_psize_pprice(long_psize, long_pprice,
+                                                                long_entry[0], long_entry[1], self.qty_step)
+            long_entries = [{'side': 'buy', 'position_side': 'long', 'qty': abs(x[0]),
+                             'price': x[1], 'type': 'limit', 'custom_id': x[2]}
+                            for x in long_entries]
+            orders.extend(long_entries + long_closes)
+        if do_shrt:
+            shrt_entries = []
+            shrt_closes = calc_shrt_close_grid(
+                balance, shrt_psize, shrt_pprice, self.ob[0], self.spot, self.inverse, self.qty_step,
+                self.price_step, self.min_qty, self.min_cost, self.c_mult, self.max_leverage,
+                self.xk['primary_initial_qty_pct'][1], self.xk['min_markup'][1], self.xk['markup_range'][1],
+                self.xk['n_close_orders'][1]
+            )
+            shrt_closes = [{'side': 'buy', 'position_side': 'shrt', 'qty': abs(x[0]),
+                            'price': x[1], 'type': 'limit', 'custom_id': x[2]}
+                           for x in shrt_closes if x[0] != 0.0]
+
+            i = 0
+            while i < self.n_open_orders_limit:
+                i += 1
+                shrt_entry = calc_shrt_scalp_entry(
+                    balance, shrt_psize, shrt_pprice, ((0.0, 0.0),), self.ob[1], self.spot, self.inverse, do_shrt,
+                    self.qty_step, self.price_step, self.min_qty, self.min_cost, self.c_mult, self.max_leverage,
+                    self.xk['primary_initial_qty_pct'][1], self.xk['primary_ddown_factor'][1],
+                    self.xk['primary_grid_spacing'][1], self.xk['primary_grid_spacing_pbr_weighting'][1],
+                    self.xk['primary_pbr_limit'][1], self.xk['secondary_ddown_factor'][1],
+                    self.xk['secondary_grid_spacing'][1], self.xk['secondary_pbr_limit_added'][1]
+                )
+                if shrt_entry[0] == 0.0:
+                    break
+                shrt_entries.append(shrt_entry)
+                if shrt_psize == 0.0:
+                    break
+                shrt_psize, shrt_pprice = calc_new_psize_pprice(shrt_psize, shrt_pprice,
+                                                                shrt_entry[0], shrt_entry[1], self.qty_step)
+            shrt_entries = [{'side': 'sell', 'position_side': 'shrt', 'qty': abs(x[0]),
+                             'price': x[1], 'type': 'limit', 'custom_id': x[2]}
+                            for x in shrt_entries]
+            orders.extend(shrt_entries + shrt_closes)
+        return [o for o in orders if o['qty'] != 0.0]
+
 
     async def cancel_and_create(self):
         await asyncio.sleep(0.005)
@@ -412,9 +537,11 @@ class Bot:
             return
         if time() - self.ts_released['print'] >= 0.5:
             await self.update_output_information()
-
         if time() - self.ts_released['check_fills'] > 120:
             asyncio.create_task(self.check_fills())
+        if time() - self.heartbeat_ts > 60 * 60:
+            print_(['heartbeat\n'], n=True)
+            self.heartbeat_ts = time()
 
     async def check_fills(self):
         if self.ts_locked['check_fills'] > self.ts_released['check_fills']:
@@ -429,7 +556,6 @@ class Bot:
                 # minimum 5 sec between consecutive check fills
                 return
             self.ts_locked['check_fills'] = now
-            print_(['checking if new fills...\n'], n=True)
             # check fills if two mins since prev check has passed
             new_fills = await self.update_fills()
             if new_fills:
@@ -548,7 +674,8 @@ class Bot:
         line += f"|| last {self.price} liq {round_dynamic(liq_price, 5)} "
 
         line += f"lpbr {self.position['long']['pbr']:.3f} spbr {self.position['shrt']['pbr']:.3f} "
-        line += f"EMAr {[round_dynamic(r, 4) for r in self.ratios]} "
+        if self.config_type == 'vanilla':
+            line += f"EMAr {[round_dynamic(r, 4) for r in self.ratios]} "
         line += f"bal {compress_float(self.position['wallet_balance'], 3)} "
         line += f"eq {compress_float(self.position['equity'], 3)} "
         print_([line], r=True)
@@ -562,6 +689,8 @@ class Bot:
                     self.ts_released[key] = now
 
     async def init_indicators(self, max_n_samples: int = 60):
+        if self.config_type == 'scalp':
+            return
         ticks = await self.fetch_ticks(do_print=False)
         if self.exchange == 'binance':
             ohlcvs_per_fetch = 1000 if self.spot else 1500
@@ -586,13 +715,19 @@ class Bot:
         ohlcvs = flatten(await asyncio.gather(*[self.fetch_ohlcvs(start_time=ts) for ts in timestamps_to_fetch]))
         combined = np.array(sorted([[e['timestamp'], e['qty'], e['price']] for e in ticks] +
                                    [[e['timestamp'], e['volume'], e['open']] for e in ohlcvs]))
-        from pure_funcs import ts_to_date
         samples = calc_samples(combined)
         self.emas = calc_emas_last(samples[:, 2], self.spans_secs)
         self.ratios = np.append(self.price, self.emas[:-1]) / self.emas
         self.ema_sec = int(combined[-1][0] // 1000 * 1000)
 
     def update_indicators(self, ticks):
+        if self.config_type == 'scalp':
+            if ticks[-1]['is_buyer_maker']:
+                self.ob[0] = ticks[-1]['price']
+            else:
+                self.ob[1] = ticks[-1]['price']
+            self.price = ticks[-1]['price']
+            return
         for tick in ticks:
             self.agg_qty += tick['qty']
             if tick['is_buyer_maker']:
@@ -668,16 +803,17 @@ async def _start_telegram(account: dict, bot: Bot):
     return telegram
 
 
-def get_passivbot_argparser():
+async def main() -> None:
     parser = argparse.ArgumentParser(prog='passivbot', description='run passivbot')
     parser.add_argument('user', type=str, help='user/account_name defined in api-keys.json')
     parser.add_argument('symbol', type=str, help='symbol to trade')
     parser.add_argument('live_config_path', type=str, help='live config to use')
-    return parser
+    parser.add_argument('-m', '--market_type', type=str, required=False, dest='market_type', default=None,
+                        help='specify whether spot or futures (default), overriding value from backtest config')
+    parser.add_argument('-gs', '--graceful_stop', action='store_true',
+                        help='if true, disable long and short')
 
-
-async def main() -> None:
-    args = add_argparse_args(get_passivbot_argparser()).parse_args()
+    args = parser.parse_args()
     try:
         accounts = json.load(open('api-keys.json'))
     except Exception as e:
@@ -697,13 +833,20 @@ async def main() -> None:
     config['exchange'] = account['exchange']
     config['symbol'] = args.symbol
     config['live_config_path'] = args.live_config_path
-    config['market_type'] = args.market_type
+    config['market_type'] = args.market_type if args.market_type is not None else 'futures'
+
+    if args.graceful_stop:
+        print('\n\ngraceful stop enabled, will not make new entries once existing positions are closed\n')
+        config['long']['enabled'] = config['do_long'] = False
+        config['shrt']['enabled'] = config['do_shrt'] = False
+
+    if 'spot' in config['market_type']:
+        config = spotify_config(config)
 
     if account['exchange'] == 'binance':
         if 'spot' in config['market_type']:
             from procedures import create_binance_bot_spot
             bot = await create_binance_bot_spot(config)
-            config = spotify_config(config)
         else:
             from procedures import create_binance_bot
             bot = await create_binance_bot(config)
