@@ -341,6 +341,11 @@ def calc_long_entry_qty(psize, pprice, entry_price, eprice_pprice_diff):
 
 
 @njit
+def calc_long_entry_price(psize, pprice, entry_qty, eprice_pprice_diff):
+    return (psize * pprice) / (psize * eprice_pprice_diff + psize + entry_qty * eprice_pprice_diff)
+
+
+@njit
 def interpolate(x, xs, ys):
     return np.sum(np.array([np.prod(np.array([(x - xs[m]) / (xs[j] - xs[m])
                                               for m in range(len(xs)) if m != j])) * ys[j] for j in range(len(xs))]))
@@ -665,6 +670,8 @@ def approximate_grid(
         diff, i = sorted([(abs(grid[i][2] - psize_) / psize_, i) for i in range(len(grid))])[0]
         return grid, diff, i
 
+    if pprice == 0.0:
+        raise Exception('cannot make grid without pprice')
     if psize == 0.0:
         return calc_whole_long_entry_grid(
             balance, pprice, inverse, qty_step, price_step, min_qty, min_cost, c_mult, grid_span, pbr_limit,
@@ -687,7 +694,8 @@ def approximate_grid(
         # means psize is less than iqty
         # return grid with adjusted iqty
         min_ientry_qty = calc_min_entry_qty(grid[0][1], inverse, qty_step, min_qty, min_cost)
-        grid[0][0] = grid[0][2] = max(min_ientry_qty, round_(grid[0][0] - psize, qty_step))
+        grid[0][0] = max(min_ientry_qty, round_(grid[0][0] - psize, qty_step))
+        grid[0][2] = round_(psize + grid[0][0], qty_step)
         grid[0][4] = qty_to_cost(grid[0][2], grid[0][3], inverse, c_mult) / balance
         return grid
     if i == len(grid):
