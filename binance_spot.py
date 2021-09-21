@@ -118,9 +118,9 @@ class BinanceBotSpot(Bot):
         await self.update_position()
 
     def calc_orders(self):
-        orders = super().calc_orders()
+        default_orders = super().calc_orders()
         orders = []
-        for order in sorted(orders, key=lambda x: x['price']):
+        for order in sorted(default_orders, key=lambda x: x['price']):
             if order['price'] > min(self.max_price, round_dn(self.price * self.price_multiplier_up, self.price_step)):
                 print(f'price {order["price"]} too high')
                 continue
