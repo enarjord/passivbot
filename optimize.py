@@ -111,9 +111,9 @@ def objective_function(analysis: dict, config: dict, metric='adjusted_daily_gain
     obj = analysis[metric]
     break_early = False
     line = ''
-    for ckey, akey in [('maximum_hrs_stuck', 'max_hrs_stuck'),
-                       ('maximum_hrs_stuck_same_side', 'max_hrs_stuck'),
-                       ('maximum_avg_hrs_stuck', 'avg_hrs_stuck')]:
+    for ckey, akey in [('maximum_hrs_stuck', 'hrs_stuck_max'),
+                       ('maximum_hrs_stuck_same_side', 'hrs_stuck_max'),
+                       ('maximum_hrs_stuck_avg', 'hrs_stuck_avg')]:
         # minimize these
         if config[ckey] != 0.0:
             new_obj = obj * min(1.0, config[ckey] / analysis[akey])
@@ -175,7 +175,7 @@ def single_sliding_window_run(config, data, do_print=True) -> (float, [dict]):
                 f'bkr {analysis["closest_bkr"]:.4f}, '
                 f'eqbal {analysis["eqbal_ratio_min"]:.4f} n_days {analysis["n_days"]:.1f}, '
                 f'score {analysis["score"]:.4f}, objective {objective:.4f}, '
-                f'hrs stuck ss {str(round(analysis["max_hrs_stuck"], 1)).zfill(4)}, ') + line
+                f'hrs stuck ss {str(round(analysis["hrs_stuck_max"], 1)).zfill(4)}, ') + line
         if do_print:
             print(line)
         if do_break:
@@ -191,10 +191,10 @@ def simple_sliding_window_wrap(config, data, do_print=False):
                     avg_adg=0.0,
                     min_bkr=0.0,
                     eqbal_ratio_min=0.0,
-                    max_hrs_stuck=1000.0,
-                    max_hrs_stuck_ss=1000.0,
-                    max_avg_hrs_stuck=1000.0,
-                    avg_avg_hrs_stuck=1000.0,
+                    hrs_stuck_max=1000.0,
+                    hrs_stuck_max_ss=1000.0,
+                    hrs_stuck_max_avg=1000.0,
+                    avg_hrs_stuck_avg=1000.0,
                     n_slc=0)
     else:
         tune.report(obj=objective,
@@ -202,10 +202,10 @@ def simple_sliding_window_wrap(config, data, do_print=False):
                     avg_adg=np.mean([r['average_daily_gain'] for r in analyses]),
                     min_bkr=np.min([r['closest_bkr'] for r in analyses]),
                     eqbal_ratio_min=np.min([r['eqbal_ratio_min'] for r in analyses]),
-                    max_hrs_stuck=np.max([r['max_hrs_stuck'] for r in analyses]),
-                    max_hrs_stuck_ss=np.max([r['max_hrs_stuck'] for r in analyses]),
-                    max_avg_hrs_stuck=np.max([r['avg_hrs_stuck'] for r in analyses]),
-                    avg_avg_hrs_stuck=np.mean([r['avg_hrs_stuck'] for r in analyses]),
+                    hrs_stuck_max=np.max([r['hrs_stuck_max'] for r in analyses]),
+                    hrs_stuck_max_ss=np.max([r['hrs_stuck_max'] for r in analyses]),
+                    hrs_stuck_max_avg=np.max([r['hrs_stuck_avg'] for r in analyses]),
+                    avg_hrs_stuck_avg=np.mean([r['hrs_stuck_avg'] for r in analyses]),
                     n_slc=len(analyses))
 
 
@@ -270,10 +270,10 @@ def backtest_tune(data: np.ndarray, config: dict, current_best: Union[dict, list
                             'avg_adg',
                             'min_bkr',
                             'eqbal_ratio_min',
-                            'max_hrs_stuck',
-                            'max_hrs_stuck_ss',
-                            'max_avg_hrs_stuck',
-                            'avg_avg_hrs_stuck',
+                            'hrs_stuck_max',
+                            'hrs_stuck_max_ss',
+                            'hrs_stuck_max_avg',
+                            'avg_hrs_stuck_avg',
                             'n_slc',
                             'obj'],
             parameter_columns=parameter_columns),
@@ -312,7 +312,7 @@ async def execute_optimize(config):
                        'end_date', 'latency_simulation_ms',
                        'do_long', 'do_shrt',
                        'minimum_bankruptcy_distance', 'maximum_hrs_stuck',
-                       'maximum_hrs_stuck_same_side', 'maximum_avg_hrs_stuck', 'iters', 'n_particles',
+                       'maximum_hrs_stuck_same_side', 'maximum_hrs_stuck_avg', 'iters', 'n_particles',
                        'sliding_window_days', 'metric',
                        'min_span', 'max_span', 'n_spans']):
         if k in config:
