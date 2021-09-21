@@ -51,9 +51,9 @@ def dump_plots(result: dict, fdf: pd.DataFrame, sdf: pd.DataFrame, df: pd.DataFr
     table.add_row(['No. initial entries', round_dynamic(result['result']['n_ientries'], 6)])
     table.add_row(['No. reentries', round_dynamic(result['result']['n_rentries'], 6)])
     table.add_row([' ', ' '])
-    table.add_row(['Mean hours between fills', round_dynamic(result['result']['avg_hrs_stuck_long'], 6)])
-    table.add_row(['Max hours no fills (same side)', round_dynamic(result['result']['max_hrs_stuck_long'], 6)])
-    table.add_row(['Max hours no fills', round_dynamic(result['result']['max_hrs_stuck_long'], 6)])
+    table.add_row(['Mean hours between fills', round_dynamic(result['result']['hrs_stuck_avg_long'], 6)])
+    table.add_row(['Max hours no fills (same side)', round_dynamic(result['result']['hrs_stuck_max_long'], 6)])
+    table.add_row(['Max hours no fills', round_dynamic(result['result']['hrs_stuck_max_long'], 6)])
 
     longs = fdf[fdf.type.str.contains('long')]
     shrts = fdf[fdf.type.str.contains('shrt')]
@@ -63,8 +63,8 @@ def dump_plots(result: dict, fdf: pd.DataFrame, sdf: pd.DataFrame, df: pd.DataFr
         table.add_row(["No. inital entries", len(longs[longs.type.str.contains('ientry')])])
         table.add_row(["No. reentries", len(longs[longs.type.str.contains('rentry')])])
         table.add_row(["No. normal closes", len(longs[longs.type.str.contains('nclose')])])
-        table.add_row(['Mean hours stuck (long)', round_dynamic(result['result']['avg_hrs_stuck_long'], 6)])
-        table.add_row(['Max hours stuck (long)', round_dynamic(result['result']['max_hrs_stuck_long'], 6)])
+        table.add_row(['Mean hours stuck (long)', round_dynamic(result['result']['hrs_stuck_avg_long'], 6)])
+        table.add_row(['Max hours stuck (long)', round_dynamic(result['result']['hrs_stuck_max_long'], 6)])
         profit_color = Fore.RED if longs.pnl.sum() < 0 else Fore.RESET
         table.add_row(["PNL sum", f"{profit_color}{longs.pnl.sum()}{Fore.RESET}"])
 
