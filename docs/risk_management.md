@@ -5,7 +5,8 @@ First priority to trading should be proper risk management.
 ## Leverage
 
 Passivbot does not use leverage.  It uses only unleveraged balance in all its calculations.  
-Leverage may be set to any value and will not affect bot behavior.
+Leverage may be set to any value and will not affect bot behavior,  
+as long as it is set high enough to avoid insufficent margin errors.
 
 ## PBR
 
