@@ -10,8 +10,9 @@ as long as it is set high enough to avoid insufficent margin errors.
 
 ## PBR
 
-To give a metric of a position's risk, passivbot finds the ratio of position size to available unleveraged balance.  
-The formula for Position cost to Balance Ratio (PBR) is  
+To measure a position's risk, passivbot finds the ratio of position size to available unleveraged balance.  
+The formula for Position cost to Balance Ratio (PBR) is
+
 `pbr = (position_size * position_price) / unleveraged_wallet_balance` for linear,  
 `pbr = (position_size / position_price) / unleveraged_wallet_balance` for inverse markets.
 
@@ -39,16 +40,16 @@ Bankruptcy price may be calculated from position and balance.
 
 E.g.  
 For linear long:
-If pbr==1.0, bankruptcy price is zero.
-If pbr==2.0, bankruptcy price is 50% lower than pos price.
-If pbr==3.0, bankruptcy price is 33.33% lower than pos price.
-If pbr==10.0, bankruptcy price is 10% lower than pos price.
+If pbr==1.0, bankruptcy price is zero.  
+If pbr==2.0, bankruptcy price is 50% lower than pos price.  
+If pbr==3.0, bankruptcy price is 33.33% lower than pos price.  
+If pbr==10.0, bankruptcy price is 10% lower than pos price.  
 
 For inverse long:
-If pbr==1.0, bankruptcy price is 50% lower than pos price.
-If pbr==2.0, bankruptcy price is 33.33% lower than pos price.
-If pbr==3.0, bankruptcy price is 25% lower than pos price.
-If pbr==10.0, bankruptcy price is 9.09% lower than pos price.
+If pbr==1.0, bankruptcy price is 50% lower than pos price.  
+If pbr==2.0, bankruptcy price is 33.33% lower than pos price.  
+If pbr==3.0, bankruptcy price is 25% lower than pos price.  
+If pbr==10.0, bankruptcy price is 9.09% lower than pos price.  
 
 
 ## Getting stuck
@@ -63,13 +64,12 @@ However, the larger the position size, the higher the risk of liquidation, shoul
 
 ## Multiple bots sharing sharing same wallet in cross mode
 
-One method of risk managment is diversifying across multiple markets.  
-
-While correlation is observed in most markets in general and in crypto markets in particular
+While correlation is observed in most markets in general and in crypto markets in particular  
 (e.g. if the price of bitcoin crashes, most other cryptos tend to follow closely),  
 it is also observed that the dead cat often bounces at slightly different times.
 
-Since passivbot is a DCA scalper aiming to stay close to price action,  
-10 bots with 0.1 pbr_limit each means less capital is required to unstuck each stuck position  
-than if one bot were stuck with pbr==1.0.
+A thousand coin flips will converge on 500 heads and 500 tails.  One single coin flip will be either heads or tails.  
+Say that on average there's a 30% chance of getting stuck in the typical market crash.  
+It may be more desirable to end up with 3 out of 10 bots stuck with pbr==0.1 each than with 1 single bot stuck with pbr==1.0.
+
 
