@@ -325,6 +325,13 @@ def basespace(start, end, base, n):
 
 
 @njit
+def powspace(start, stop, power, num):
+    start = np.power(start, 1 / float(power))
+    stop = np.power(stop, 1 / float(power))
+    return np.power(np.linspace(start, stop, num=num), power)
+
+
+@njit
 def calc_m_b(x0, x1, y0, y1):
     denom = x1 - x0
     if denom == 0.0:
@@ -562,15 +569,20 @@ def calc_whole_long_entry_grid(
     if secondary_pbr_allocation <= 0.05:
         # set to zero if secondary allocation less than 5%
         secondary_pbr_allocation = 0.0
-    primary_pbr_limit = pbr_limit * (1 - secondary_pbr_allocation)
+    elif secondary_pbr_allocation >= 1.0:
+        raise Exception('secondary_pbr_allocation cannot be >= 1.0')
+    primary_pbr_allocation = 1.0 - secondary_pbr_allocation
+    primary_pbr_limit = pbr_limit * primary_pbr_allocation
     eprice_pprice_diff_pbr_weighting = find_eprice_pprice_diff_pbr_weighting(
         balance, initial_entry_price, inverse, qty_step, price_step, min_qty, min_cost, c_mult,
-        grid_span, primary_pbr_limit, max_n_entry_orders, initial_qty_pct, eprice_pprice_diff, eprice_exp_base,
+        grid_span, primary_pbr_limit, max_n_entry_orders, initial_qty_pct / primary_pbr_allocation,
+        eprice_pprice_diff, eprice_exp_base,
         eprices=eprices, prev_pprice=prev_pprice
     )
     grid = eval_long_entry_grid(balance, initial_entry_price, inverse, qty_step, price_step, min_qty, min_cost,
-                                c_mult, grid_span, primary_pbr_limit, max_n_entry_orders, initial_qty_pct,
-                                eprice_pprice_diff, eprice_pprice_diff_pbr_weighting, eprice_exp_base,
+                                c_mult, grid_span, primary_pbr_limit, max_n_entry_orders,
+                                initial_qty_pct / primary_pbr_allocation, eprice_pprice_diff,
+                                eprice_pprice_diff_pbr_weighting, eprice_exp_base,
                                 eprices=eprices, prev_pprice=prev_pprice)
     if secondary_pbr_allocation > 0.0:
         entry_price = min(round_dn(grid[-1][3] * (1 - secondary_grid_spacing), price_step), grid[-1][1])
