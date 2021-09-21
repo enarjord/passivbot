@@ -361,7 +361,7 @@ class Bot:
         for o in long_entries:
             if abs(o[1] - self.price) / self.price < self.last_price_diff_limit and o[0] > 0.0:
                 orders.append({'side': 'buy', 'position_side': 'long', 'qty': abs(float(o[0])),
-                               'price': float(o[1]), 'type': 'limit', 'reduce_only': True,
+                               'price': float(o[1]), 'type': 'limit', 'reduce_only': False,
                                'custom_id': o[2]})
         for o in long_closes:
             if abs(o[1] - self.price) / self.price < self.last_price_diff_limit and o[0] < 0.0:
