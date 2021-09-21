@@ -1,21 +1,21 @@
 {
   # pso options
-  iters: 15000
+  iters: 10000
   num_cpus: 4
   options: {"c1": 1.4962, "c2": 1.4962, "w": 0.7298}
   n_particles: 48
 
   # set to 0.0 to disable breaking early
-  break_early_factor: 0.5
+  break_early_factor: 0.7
 
   metric: adjusted_daily_gain
 
-  minimum_bankruptcy_distance: 0.9
+  minimum_bankruptcy_distance: 0.5
   minimum_equity_balance_ratio: 0.5
   minimum_slice_adg: -0.1
   maximum_hrs_stuck: 48.0
   maximum_hrs_stuck_same_side: 48.0
-  maximum_avg_hrs_stuck: 3.0
+  maximum_hrs_stuck_avg: 10.0
 
   # set to 0.0 to do disable sliding windows
   # otherwise sliding window days will be max([maximum_hrs_no_fills / 24 * 2.1,
@@ -36,13 +36,13 @@
   ranges:
   {
 
-    long£grid_span: [0.03, 0.2]
-    long£pbr_limit: [0.5, 2.0]
+    long£grid_span: [0.09, 0.4]
+    long£pbr_limit: [0.5, 0.5]
     long£max_n_entry_orders: [10, 10]
     long£initial_qty_pct: [0.001, 0.1]
-    long£eprice_pprice_diff: [0.001, 0.01]
+    long£eprice_pprice_diff: [0.002, 0.02]
     long£secondary_pbr_allocation: [0.0, 0.0]
-    long£secondary_grid_spacing: [0.35, 0.35]
+    long£secondary_grid_spacing: [0.0, 0.0]
     long£eprice_exp_base: [1.618034, 1.618034]
     long£min_markup: [0.0005, 0.005]
     long£markup_range: [0.004, 0.01]
