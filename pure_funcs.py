@@ -337,8 +337,8 @@ def analyze_fills(fills: list, stats: list, config: dict) -> (pd.DataFrame, pd.D
     fills_per_day = len(fills) / n_days
     long_pos_changes = sdf[sdf.long_psize != sdf.long_psize.shift()]
     long_pos_changes_ms_diff = np.diff([sdf.timestamp.iloc[0]] + list(long_pos_changes.timestamp) + [sdf.timestamp.iloc[-1]])
-    max_hrs_stuck_long = long_pos_changes_ms_diff.max() / (1000 * 60 * 60)
-    avg_hrs_stuck_long = long_pos_changes_ms_diff.mean() / (1000 * 60 * 60)
+    hrs_stuck_max_long = long_pos_changes_ms_diff.max() / (1000 * 60 * 60)
+    hrs_stuck_avg_long = long_pos_changes_ms_diff.mean() / (1000 * 60 * 60)
     lpprices = sdf[sdf.long_pprice != 0.0]
     pa_closeness_long = (lpprices.long_pprice - lpprices.price).abs() / lpprices.price
     analysis = {
@@ -358,10 +358,10 @@ def analyze_fills(fills: list, stats: list, config: dict) -> (pd.DataFrame, pd.D
         'n_ientries': len(fdf[fdf.type.str.contains('ientry')]),
         'n_rentries': len(fdf[fdf.type.str.contains('rentry')]),
         'avg_fills_per_day': fills_per_day,
-        'max_hrs_stuck_long': max_hrs_stuck_long,
-        'avg_hrs_stuck_long': avg_hrs_stuck_long,
-        'max_hrs_stuck': max_hrs_stuck_long,
-        'avg_hrs_stuck': avg_hrs_stuck_long,
+        'hrs_stuck_max_long': hrs_stuck_max_long,
+        'hrs_stuck_avg_long': hrs_stuck_avg_long,
+        'hrs_stuck_max': hrs_stuck_max_long,
+        'hrs_stuck_avg': hrs_stuck_avg_long,
         'loss_sum': fdf[fdf.pnl < 0.0].pnl.sum(),
         'profit_sum': fdf[fdf.pnl > 0.0].pnl.sum(),
         'pnl_sum': (pnl_sum := fdf.pnl.sum()),
@@ -375,7 +375,7 @@ def analyze_fills(fills: list, stats: list, config: dict) -> (pd.DataFrame, pd.D
         'eqbal_ratio_median': eqbal_ratios.median(),
         'biggest_psize': fdf.psize.abs().max(),
     }
-    return fdf, sdf, analysis
+    return fdf, sdf, sort_dict_keys(analysis)
 
 
 def calc_pprice_from_fills(coin_balance, fills, n_fills_limit=100):
