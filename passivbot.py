@@ -529,34 +529,36 @@ class Bot:
         self.ts_released['print'] = time()
         line = f"{self.symbol} "
         line += f"l {self.position['long']['size']} @ "
-        line += f"{round_(self.position['long']['price'], self.price_step)} "
+        line += f"{round_(self.position['long']['price'], self.price_step)}, "
         long_closes = sorted([o for o in self.open_orders if o['side'] == 'sell'
                               and o['position_side'] == 'long'], key=lambda x: x['price'])
         long_entries = sorted([o for o in self.open_orders if o['side'] == 'buy'
                                and o['position_side'] == 'long'], key=lambda x: x['price'])
-        line += f"c@ {long_closes[0]['price'] if long_closes else 0.0} "
-        line += f"e@ {long_entries[-1]['price'] if long_entries else 0.0} "
-        line += f"|| s {self.position['shrt']['size']} @ "
-        line += f"{round_(self.position['shrt']['price'], self.price_step)} "
-        shrt_closes = sorted([o for o in self.open_orders if o['side'] == 'buy'
-                              and (o['position_side'] == 'shrt' or
-                                   (o['position_side'] == 'both' and
-                                    self.position['shrt']['size'] != 0.0))],
-                             key=lambda x: x['price'])
-        shrt_entries = sorted([o for o in self.open_orders if o['side'] == 'sell'
-                               and (o['position_side'] == 'shrt' or
-                                    (o['position_side'] == 'both' and
-                                     self.position['shrt']['size'] != 0.0))],
-                              key=lambda x: x['price'])
-        line += f"c@ {shrt_closes[-1]['price'] if shrt_closes else 0.0} "
-        line += f"e@ {shrt_entries[0]['price'] if shrt_entries else 0.0} "
+        leqty, leprice = (long_entries[-1]['qty'], long_entries[-1]['price']) if long_entries else (0.0, 0.0)
+        lcqty, lcprice = (long_closes[0]['qty'], long_closes[0]['price']) if long_closes else (0.0, 0.0)
+        line += f"e {leqty} @ {leprice}, c {lcqty} @ {lcprice} "
+        #line += f"|| s {self.position['shrt']['size']} @ "
+        #line += f"{round_(self.position['shrt']['price'], self.price_step)} "
+        #shrt_closes = sorted([o for o in self.open_orders if o['side'] == 'buy'
+        #                      and (o['position_side'] == 'shrt' or
+        #                           (o['position_side'] == 'both' and
+        #                            self.position['shrt']['size'] != 0.0))],
+        #                     key=lambda x: x['price'])
+        #shrt_entries = sorted([o for o in self.open_orders if o['side'] == 'sell'
+        #                       and (o['position_side'] == 'shrt' or
+        #                            (o['position_side'] == 'both' and
+        #                             self.position['shrt']['size'] != 0.0))],
+        #                      key=lambda x: x['price'])
+        #line += f"c@ {shrt_closes[-1]['price'] if shrt_closes else 0.0} "
+        #line += f"e@ {shrt_entries[0]['price'] if shrt_entries else 0.0} "
         if self.position['long']['size'] > abs(self.position['shrt']['size']):
             liq_price = self.position['long']['liquidation_price']
         else:
             liq_price = self.position['shrt']['liquidation_price']
         line += f"|| last {self.price} liq {round_dynamic(liq_price, 5)} "
 
-        line += f"lpbr {self.position['long']['pbr']:.3f} spbr {self.position['shrt']['pbr']:.3f} "
+        line += f"lpbr {self.position['long']['pbr']:.3f} "
+        #line += f"spbr {self.position['shrt']['pbr']:.3f} "
         line += f"bal {compress_float(self.position['wallet_balance'], 3)} "
         line += f"eq {compress_float(self.position['equity'], 3)} "
         print_([line], r=True)
