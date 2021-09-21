@@ -173,9 +173,9 @@ def candidate_to_live_config(candidate: dict) -> dict:
         n_days = 0
     name += f"_{n_days:.0f}days"
     if 'average_daily_gain' in result_dict:
-        name += f"_adg{(result_dict['average_daily_gain']) * 100:.2f}%"
+        name += f"_adg{(result_dict['average_daily_gain']) * 100:.3f}%"
     elif 'daily_gain' in result_dict:
-        name += f"_adg{(result_dict['daily_gain'] - 1) * 100:.2f}%"
+        name += f"_adg{(result_dict['daily_gain'] - 1) * 100:.3f}%"
     if 'closest_bkr' in result_dict:
         name += f"_bkr{(result_dict['closest_bkr']) * 100:.2f}%"
     live_config['config_name'] = name
