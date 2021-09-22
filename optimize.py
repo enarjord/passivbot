@@ -194,7 +194,7 @@ def simple_sliding_window_wrap(config, data, do_print=False):
                     hrs_stuck_max=1000.0,
                     hrs_stuck_max_ss=1000.0,
                     hrs_stuck_max_avg=1000.0,
-                    avg_hrs_stuck_avg=1000.0,
+                    hrs_stuck_avg_avg=1000.0,
                     n_slc=0)
     else:
         tune.report(obj=objective,
@@ -205,7 +205,7 @@ def simple_sliding_window_wrap(config, data, do_print=False):
                     hrs_stuck_max=np.max([r['hrs_stuck_max'] for r in analyses]),
                     hrs_stuck_max_ss=np.max([r['hrs_stuck_max'] for r in analyses]),
                     hrs_stuck_max_avg=np.max([r['hrs_stuck_avg'] for r in analyses]),
-                    avg_hrs_stuck_avg=np.mean([r['hrs_stuck_avg'] for r in analyses]),
+                    hrs_stuck_avg_avg=np.mean([r['hrs_stuck_avg'] for r in analyses]),
                     n_slc=len(analyses))
 
 
@@ -273,7 +273,7 @@ def backtest_tune(data: np.ndarray, config: dict, current_best: Union[dict, list
                             'hrs_stuck_max',
                             'hrs_stuck_max_ss',
                             'hrs_stuck_max_avg',
-                            'avg_hrs_stuck_avg',
+                            'hrs_stuck_avg_avg',
                             'n_slc',
                             'obj'],
             parameter_columns=parameter_columns),
