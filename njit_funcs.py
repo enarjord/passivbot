@@ -678,7 +678,8 @@ def approximate_grid(
         eprice_pprice_diff,
         secondary_pbr_allocation,
         secondary_grid_spacing,
-        eprice_exp_base=1.618034):
+        eprice_exp_base=1.618034,
+        crop: bool = True):
     
     def eval_(guess_, psize_):
         guess_ = round_(guess_, price_step)
@@ -702,7 +703,7 @@ def approximate_grid(
     if diff < 0.01:
         # good guess
         grid, diff, i = eval_(grid[0][1] * (pprice / grid[i][3]), psize)
-        return grid[i + 1:]
+        return grid[i + 1:] if crop else grid
     # no close matches
     # assume partial fill
     i = 0
@@ -719,7 +720,7 @@ def approximate_grid(
         return grid
     if i == len(grid):
         # means pbr limit is exceeded
-        return np.empty((0, 5))
+        return np.empty((0, 5)) if crop else grid
     for _ in range(5):
         # find grid as if partial fill were full fill
         remaining_qty = round_(grid[i][2] - psize, qty_step)
@@ -729,7 +730,7 @@ def approximate_grid(
     min_ientry_qty = calc_min_entry_qty(grid[i][1], inverse, qty_step, min_qty, min_cost)
     # next reentry qty -= partially filled
     grid[i][0] = max(min_ientry_qty, round_(grid[i][0] - (psize - grid[i - 1][2]), qty_step))
-    return grid[i:]
+    return grid[i:] if crop else grid
 
 
 @njit
