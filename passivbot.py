@@ -555,7 +555,9 @@ class Bot:
             liq_price = self.position['long']['liquidation_price']
         else:
             liq_price = self.position['shrt']['liquidation_price']
-        line += f"|| last {self.price} liq {round_dynamic(liq_price, 5)} "
+        line += f"|| last {self.price} "
+        line += f"pprc diff {calc_diff(self.position['long']['price'], self.price):.3f} "
+        line += f"liq {round_dynamic(liq_price, 5)} "
 
         line += f"lpbr {self.position['long']['pbr']:.3f} "
         #line += f"spbr {self.position['shrt']['pbr']:.3f} "
