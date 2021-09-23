@@ -10,7 +10,7 @@ import numpy as np
 import traceback
 
 from pure_funcs import ts_to_date, sort_dict_keys, calc_long_pprice, format_float, get_position_fills, spotify_config
-from njit_funcs import round_dn, round_up
+from njit_funcs import round_dn, round_up, calc_long_pnl
 from passivbot import Bot
 from procedures import print_
 
@@ -230,6 +230,43 @@ class BinanceBotSpot(Bot):
         else:
             return cancellation
 
+    async def get_all_fills(self, start_time: int):
+        fills = []
+        while True:
+            fetched = await self.fetch_fills(start_time=start_time)
+            print_(['fetched fills', ts_to_date(fetched[0]['timestamp'])])
+            if fetched == fills[-len(fetched):]:
+                break
+            fills += fetched
+            if len(fetched) < 1000:
+                break
+            start_time = fills[-1]['timestamp']
+        fills_d = {e['id']: e for e in fills}
+        return sorted(fills_d.values(), key=lambda x: x['timestamp'])
+
+    async def get_all_income(self, start_time: int, income_type: str = 'realized_pnl', end_time: int = None):
+        fills = await self.get_all_fills(start_time)
+
+        income = []
+        psize, pprice = 0.0, 0.0
+        for fill in fills:
+            if fill['side'] == 'buy':
+                new_psize = psize + fill['qty']
+                pprice = pprice * (psize / new_psize) + fill['price'] * (fill['qty'] / new_psize)
+                psize = new_psize
+            elif psize > 0.0:
+                income.append({'symbol': fill['symbol'],
+                               'income_type': 'realized_pnl',
+                               'income': calc_long_pnl(pprice, fill['price'], fill['qty'], False, 1.0),
+                               'token': self.quot,
+                               'timestamp': fill['timestamp'],
+                               'info': 0,
+                               'transaction_id': fill['id'],
+                               'trade_id': fill['id']})
+                psize = max(0.0, psize - fill['qty'])
+        return income
+
+
     async def fetch_fills(self, limit: int = 1000, from_id: int = None, start_time: int = None, end_time: int = None):
         params = {'symbol': self.symbol, 'limit': min(1000, max(500, limit))}
         if from_id is not None:
@@ -250,8 +287,9 @@ class BinanceBotSpot(Bot):
                       'cost': float(x['quoteQty']),
                       'fee_paid': float(x['commission']),
                       'fee_token': x['commissionAsset'],
-                      'timestamp': int(x['time']),
+                      'timestamp': (ts := int(x['time'])),
                       'position_side': 'long',
+                      'datetime': ts_to_date(ts),
                       'is_maker': x['isMaker']} for x in fetched]
         except Exception as e:
             print('error fetching fills a', e)
