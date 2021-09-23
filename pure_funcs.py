@@ -120,6 +120,8 @@ def denanify(x, nan=0.0, posinf=0.0, neginf=0.0):
 
 
 def ts_to_date(timestamp: float) -> str:
+    if timestamp > 253402297199:
+        return str(datetime.datetime.fromtimestamp(timestamp / 1000)).replace(' ', 'T')
     return str(datetime.datetime.fromtimestamp(timestamp)).replace(' ', 'T')
 
 
@@ -501,4 +503,21 @@ def round_values(xs, n: int):
     if type(xs) == OrderedDict:
         return OrderedDict([(k, round_values(xs[k], n)) for k in xs])
     return xs
+
+
+def floatify(xs):
+    try:
+        return float(xs)
+    except (ValueError, TypeError):
+        if type(xs) == list:
+            return [floatify(x) for x in xs]
+        if type(xs) == dict:
+            return {k: floatify(v) for k, v in xs.items()}
+        if type(xs) == tuple:
+            return tuple([floatify(x) for x in xs])
+    return xs
+
+
+
+
 
