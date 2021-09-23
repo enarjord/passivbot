@@ -477,10 +477,12 @@ def find_eprice_pprice_diff_pbr_weighting(
         if diff < error_tolerance:
             return best_guess[1]
         if i >= max_n_iters or abs(old_guess - guess) / guess < error_tolerance * 0.1:
+            '''
             if best_guess[0] > 0.15:
                 print('debug find_eprice_pprice_diff_pbr_weighting')
                 print('balance, initial_entry_price, inverse, qty_step, price_step, min_qty, min_cost, c_mult, grid_span, pbr_limit, max_n_entry_orders, initial_qty_pct, eprice_pprice_diff, eprice_exp_base, max_n_iters, error_tolerance, eprices, prev_pprice')
                 print(balance, ',', initial_entry_price, ',', inverse, ',', qty_step, ',', price_step, ',', min_qty, ',', min_cost, ',', c_mult, ',', grid_span, ',', pbr_limit, ',', max_n_entry_orders, ',', initial_qty_pct, ',', eprice_pprice_diff, ',', eprice_exp_base, ',', max_n_iters, ',', error_tolerance, ',', eprices, ',', prev_pprice)
+            '''
             return best_guess[1]
         old_guess = guess
         guess = (too_high[0] + too_low[0]) / 2
@@ -629,32 +631,29 @@ def calc_long_entry_grid(
             return [(max(min_entry_qty, grid[0][0]), entry_price, 'long_ientry')]
         else:
             grid = approximate_grid(
-                balance, psize, pprice, inverse, qty_step, price_step, min_qty, min_cost, c_mult,
-                grid_span, pbr_limit, max_n_entry_orders, initial_qty_pct, eprice_pprice_diff, secondary_pbr_allocation,
-                secondary_grid_spacing, eprice_exp_base=eprice_exp_base)
+                balance, psize, pprice, inverse, qty_step, price_step, min_qty, min_cost, c_mult, grid_span, pbr_limit,
+                max_n_entry_orders, initial_qty_pct, eprice_pprice_diff, secondary_pbr_allocation, secondary_grid_spacing,
+                eprice_exp_base=eprice_exp_base)
             if len(grid) == 0:
                 return [(0.0, 0.0, '')]
-            if abs(grid[0][1] - grid[0][3]) / grid[0][1] < 0.00001:
+            if calc_diff(grid[0][3], grid[0][1]) < 0.00001:
                 entry_price = min(highest_bid, grid[0][1])
                 min_entry_qty = calc_min_entry_qty(entry_price, inverse, qty_step, min_qty, min_cost)
                 return [(max(min_entry_qty, grid[0][0]), entry_price, 'long_ientry')]
-            grid = grid[grid[:,2] > psize * 1.05]
-            grid = grid[grid[:,1] < pprice * 0.9995]
         if len(grid) == 0:
             return [(0.0, 0.0, '')]
+        entries = []
         for i in range(len(grid)):
+            if grid[i][2] < psize * 1.05 or grid[i][1] > pprice * 0.9995:
+                continue
             entry_price = min(highest_bid, grid[i][1])
             min_entry_qty = calc_min_entry_qty(entry_price, inverse, qty_step, min_qty, min_cost)
             grid[i][1] = min(highest_bid, grid[i][1])
             grid[i][0] = max(min_entry_qty, grid[i][0])
-        entries = []
-        for e in grid[:-1]:
-            entries.append((e[0], e[1], 'long_primary_rentry'))
-        if secondary_pbr_allocation > 0.05:
-            entries.append((grid[-1][0], grid[-1][1], 'long_secondary_rentry'))
-        else:
-            entries.append((grid[-1][0], grid[-1][1], 'long_primary_rentry'))
-        return entries
+            comment = 'long_secondary_rentry' if i == len(grid) - 1 and secondary_pbr_allocation > 0.05 else 'long_primary_rentry'
+            if not entries or (entries[-1][1] != entry_price):
+                entries.append((grid[i][0], grid[i][1], comment))
+        return entries if entries else [(0.0, 0.0, '')]
     return [(0.0, 0.0, '')]
 
 
