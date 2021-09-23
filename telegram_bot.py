@@ -719,7 +719,8 @@ class Telegram:
 
     def _daily(self, update=None, context=None):
         if self._bot.exchange == 'binance':
-            async def send_daily_async(nr_of_days:int):
+
+            async def send_daily_async(nr_of_days: int):
                 today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=timezone.utc)
                 daily = {}
                 ms_in_a_day = 1000 * 60 * 60 * 24
@@ -753,7 +754,8 @@ class Telegram:
 
                 else:
                     while True:
-                        next_set = await self._bot.fetch_income(start_time=start_time_to_fetch)
+                        next_set = await self._bot.fetch_income(symbol=self._bot.symbol, start_time=start_time_to_fetch,
+                                                                income_type='realized_pnl')
                         for income in next_set:
                             day = income['timestamp'] // ms_in_a_day * ms_in_a_day
                             daily[day] += float(income['income'])
