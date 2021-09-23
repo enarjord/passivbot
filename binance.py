@@ -347,24 +347,45 @@ class BinanceBot(Bot):
             return []
         return fills
 
-    async def fetch_income(self, limit: int = 1000, start_time: int = None, end_time: int = None):
-        params = {'symbol': self.symbol, 'limit': limit}
+    async def get_all_income(self, start_time: int, income_type: str = 'realized_pnl', end_time: int = None):
+        income = []
+        while True:
+            fetched = await self.fetch_income(start_time=start_time, income_type=income_type, limit=1000)
+            print_(['fetched income', ts_to_date(fetched[0]['timestamp'])])
+            if fetched == income[-len(fetched):]:
+                break
+            income += fetched
+            if len(fetched) < 1000:
+                break
+            start_time = income[-1]['timestamp']
+        income_d = {e['transaction_id']: e for e in income}
+        return sorted(income_d.values(), key=lambda x: x['timestamp'])
+
+    async def fetch_income(self, symbol: str = None, income_type: str = None, limit: int = 1000,
+                           start_time: int = None, end_time: int = None):
+        params = {'limit': limit}
+        if symbol is not None:
+            params['symbol'] = symbol
         if start_time is not None:
-            params['startTime'] = start_time
+            params['startTime'] = int(start_time)
         if end_time is not None:
-            params['endTime'] = end_time
+            params['endTime'] = int(end_time)
+        if income_type is not None:
+            params['incomeType'] = income_type.upper()
         try:
             fetched = await self.private_get(self.endpoints['income'], params)
-            income = [{'symbol': x['symbol'],
-                      'incomeType': x['incomeType'],
-                      'income': float(x['income']),
-                      'asset': x['asset'],
-                      'info': x['info'],
-                      'timestamp': int(x['time']),
-                      'tranId': x['tranId'],
-                      'tradeId': x['tradeId']} for x in fetched]
+            return [{
+                'symbol': e['symbol'],
+                'income_type': e['incomeType'].lower(),
+                'income': float(e['income']),
+                'token': e['asset'],
+                'timestamp': float(e['time']),
+                'info': e['info'],
+                'transaction_id': float(e['tranId']),
+                'trade_id': float(e['tradeId'])
+            } for e in fetched]
         except Exception as e:
-            print('error fetching incoming: ', e)
+            print('error fetching income: ', e)
             return []
         return income
 
