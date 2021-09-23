@@ -6,7 +6,7 @@ import pandas as pd
 from procedures import load_live_config
 from datetime import datetime, timedelta, timezone
 from time import time, strftime, gmtime
-from pure_funcs import config_pretty_str, ts_to_date
+from pure_funcs import config_pretty_str, ts_to_date, get_daily_from_income
 from typing import Optional
 
 try:
@@ -726,26 +726,14 @@ class Telegram:
                 now = time() * 1000
                 start_time = now - ms_per_day * n_days
                 income = await self._bot.get_all_income(start_time)
-                idf = pd.DataFrame(income)
-                idf.loc[:,'datetime'] = idf.timestamp.apply(ts_to_date)
-                idf.index = idf.timestamp
-                days = idf.timestamp // ms_per_day * ms_per_day
-                groups = idf.groupby(days)
-                daily_income = groups.income.sum().reindex(np.arange(start_time // ms_per_day * ms_per_day,
-                                                                     now // ms_per_day * ms_per_day + ms_per_day,
-                                                                     ms_per_day)).fillna(0.0)
-                income_sum = daily_income.sum()
-                cumulative = daily_income.cumsum()
+                idf, bdf = get_daily_from_income(income, self._bot.position['wallet_balance'], start_time=start_time, end_time=now)
+                income_sum = idf.income.sum()
                 starting_balance = self._bot.position['wallet_balance'] - income_sum
-                plus_balance = cumulative + starting_balance
-                daily_pct = daily_income / plus_balance
-                bdf = pd.DataFrame({'abs_income': daily_income.values,
-                                    'gain': daily_pct.values}, index=[ts_to_date(x) for x in daily_income.index])
                 table = PrettyTable(['Date\nMM-DD', 'PNL (%)'])
                 for i in range(len(bdf)):
                     table.add_row([bdf.index[i][:10], f'{round_dynamic(bdf.abs_income.iloc[i], 3)} ({bdf.gain.iloc[i] * 100:.2f}%)'])
 
-                pct_sum = ((self._bot.position['wallet_balance'] / starting_balance - 1) * 100) if starting_balance else 0.0
+                pct_sum = ((self._bot.position['wallet_balance'] / starting_balance - 1) * 100) if starting_balance > 0.0 else 0.0
                 table.add_row(['-------','------------'])
                 table.add_row(['Total', f'{round_dynamic(income_sum, 3)} ({round_(pct_sum, 0.01)}%)'])
 
