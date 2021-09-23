@@ -517,6 +517,28 @@ def floatify(xs):
             return tuple([floatify(x) for x in xs])
     return xs
 
+def get_daily_from_income(income: [dict], balance: float, start_time: int = None, end_time: int = None):
+    if start_time is None:
+        start_time = income[0]['timestamp']
+    if end_time is None:
+        end_time = income[-1]['timestamp']
+    idf = pd.DataFrame(income)
+    idf.loc[:,'datetime'] = idf.timestamp.apply(ts_to_date)
+    idf.index = idf.timestamp
+    ms_per_day = 1000 * 60 * 60 * 24
+    days = idf.timestamp // ms_per_day * ms_per_day
+    groups = idf.groupby(days)
+    daily_income = groups.income.sum().reindex(np.arange(start_time // ms_per_day * ms_per_day,
+                                                         end_time // ms_per_day * ms_per_day + ms_per_day,
+                                                         ms_per_day)).fillna(0.0)
+    cumulative = daily_income.cumsum()
+    starting_balance = balance - cumulative.iloc[-1]
+    plus_balance = cumulative + starting_balance
+    daily_pct = daily_income / plus_balance
+    bdf = pd.DataFrame({'abs_income': daily_income.values,
+                        'gain': daily_pct.values,
+                        'cumulative': plus_balance.values}, index=[ts_to_date(x) for x in days.unique()])
+    return idf, bdf
 
 
 
