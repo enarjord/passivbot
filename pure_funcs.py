@@ -537,7 +537,7 @@ def get_daily_from_income(income: [dict], balance: float, start_time: int = None
     daily_pct = daily_income / plus_balance
     bdf = pd.DataFrame({'abs_income': daily_income.values,
                         'gain': daily_pct.values,
-                        'cumulative': plus_balance.values}, index=[ts_to_date(x) for x in days.unique()])
+                        'cumulative': plus_balance.values}, index=[ts_to_date(x) for x in daily_income.index])
     return idf, bdf
 
 
