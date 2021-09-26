@@ -86,12 +86,18 @@ class Bot:
             config['last_price_diff_limit'] = 0.3
         if 'profit_trans_pct' not in config:
             config['profit_trans_pct'] = 0.0
+        if 'assigned_balance' not in config:
+            config['assigned_balance'] = None
         if 'cross_wallet_pct' not in config:
             config['cross_wallet_pct'] = 1.0
         if config['cross_wallet_pct'] > 1.0 or config['cross_wallet_pct'] <= 0.0:
             print(f'An invalid value is provided for `cross_wallet_pct` ({config["cross_wallet_pct"]}). The value must be bigger than 0.0 and less than or equal to 1.0. The'
-                  f'bot will start with the default value of 1.0, meaning it will utilize the ')
+                  f'bot will start with the default value of 1.0, meaning it will utilize the full wallet balance available.')
             config['cross_wallet_pct'] = 1.0
+        if config['assigned_balance'] is not None and config['cross_wallet_pct'] < 1.0:
+            print(f'A value of {config["cross_wallet_pct"]} for the cross_wallet_pct parameter was provided while a value of {config["assigned_balance"]} for assigned_balance '
+                  f'was also provided. The cross_wallet_pct parameter is ignored, and the assigned_balance parameter takes effect. Please make sure that either cross_wallet_pct '
+                  f'is removed, or the assigned_balance parameter.')
         self.config = config
         for key in config:
             setattr(self, key, config[key])
@@ -156,8 +162,19 @@ class Bot:
                  (qty_to_cost(position['shrt']['size'], position['shrt']['price'],
                               self.xk['inverse'], self.xk['c_mult'])
                   if position['shrt']['price'] else 0.0)) / self.max_leverage
-            position['equity'] -= position['wallet_balance'] * (1 - self.cross_wallet_pct)
-            position['wallet_balance'] *= self.cross_wallet_pct
+
+            if self.assigned_balance is not None:
+                used_balance = self.assigned_balance
+                if position['wallet_balance'] < self.assigned_balance:
+                    print(f'The assigned balance {self.assigned_balance} is greater than the total wallet balance of {position["wallet_balance"]} available. '
+                          f'The total wallet available will be used.')
+                    used_balance = position['wallet_balance']
+                position['equity'] -= used_balance
+                position['wallet_balance'] = used_balance
+            else:
+                position['equity'] -= position['wallet_balance'] * (1 - self.cross_wallet_pct)
+                position['wallet_balance'] *= self.cross_wallet_pct
+
             position['available_margin'] = (position['equity'] - position['used_margin']) * 0.9
             position['long']['liq_diff'] = calc_diff(position['long']['liquidation_price'], self.price)
             position['shrt']['liq_diff'] = calc_diff(position['shrt']['liquidation_price'], self.price)
