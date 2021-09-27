@@ -159,8 +159,8 @@ class Bot:
                               self.xk['inverse'], self.xk['c_mult'])
                   if position['shrt']['price'] else 0.0)) / self.max_leverage
 
-            position['wallet_balance'] = position['wallet_balance'] * self.cross_wallet_pct \
-                if self.assigned_balance is None else self.assigned_balance
+            position['wallet_balance'] = (position['wallet_balance'] if self.assigned_balance is None
+                                          else self.assigned_balance) * self.cross_wallet_pct
             position['equity'] = position['wallet_balance'] + \
                 calc_upnl(position['long']['size'], position['long']['price'],
                           position['shrt']['size'], position['shrt']['price'],
