@@ -11,14 +11,12 @@ import signal
 import pprint
 from pathlib import Path
 from time import time
-from procedures import load_live_config, make_get_filepath, load_exchange_key_secret, print_, add_argparse_args, \
-    utc_ms
-from pure_funcs import get_xk_keys, flatten, filter_orders, compress_float, create_xk, round_dynamic, denumpyize, \
+from procedures import load_live_config, make_get_filepath, load_exchange_key_secret, print_, utc_ms
+from pure_funcs import filter_orders, compress_float, create_xk, round_dynamic, denumpyize, \
     spotify_config, get_position_fills
-from njit_funcs import calc_new_psize_pprice, qty_to_cost, calc_diff, round_, calc_samples, calc_long_close_grid, \
-    calc_shrt_close_grid, calc_upnl, calc_long_entry_grid
+from njit_funcs import qty_to_cost, calc_diff, round_, calc_long_close_grid, \
+    calc_upnl, calc_long_entry_grid
 
-import numpy as np
 import websockets
 import telegram_bot
 
@@ -84,11 +82,12 @@ class Bot:
             config['last_price_diff_limit'] = 0.3
         if 'profit_trans_pct' not in config:
             config['profit_trans_pct'] = 0.0
+        if 'assigned_balance' not in config:
+            config['assigned_balance'] = None
         if 'cross_wallet_pct' not in config:
             config['cross_wallet_pct'] = 1.0
         if config['cross_wallet_pct'] > 1.0 or config['cross_wallet_pct'] <= 0.0:
-            print(f'An invalid value is provided for `cross_wallet_pct` ({config["cross_wallet_pct"]}). The value must be bigger than 0.0 and less than or equal to 1.0. The'
-                  f'bot will start with the default value of 1.0, meaning it will utilize the ')
+            print(f'Invalid cross_wallet_pct given: {config["cross_wallet_pct"]}.  It must be greater than zero and less than or equal to one.  Defaulting to 1.0.')
             config['cross_wallet_pct'] = 1.0
         self.config = config
         for key in config:
@@ -144,11 +143,15 @@ class Bot:
                  (qty_to_cost(position['shrt']['size'], position['shrt']['price'],
                               self.xk['inverse'], self.xk['c_mult'])
                   if position['shrt']['price'] else 0.0)) / self.max_leverage
-            position['wallet_balance'] *= self.cross_wallet_pct
+
+            position['wallet_balance'] = (position['wallet_balance'] if self.assigned_balance is None
+                                          else self.assigned_balance) * self.cross_wallet_pct
+
             position['equity'] = position['wallet_balance'] + \
-                calc_upnl(position['long']['size'], position['long']['price'],
-                          position['shrt']['size'], position['shrt']['price'],
-                          self.price, self.inverse, self.c_mult)
+                                 calc_upnl(position['long']['size'], position['long']['price'],
+                                           position['shrt']['size'], position['shrt']['price'],
+                                           self.price, self.inverse, self.c_mult)
+
             position['long']['liq_diff'] = calc_diff(position['long']['liquidation_price'], self.price)
             position['shrt']['liq_diff'] = calc_diff(position['shrt']['liquidation_price'], self.price)
             position['long']['pbr'] = (qty_to_cost(position['long']['size'], position['long']['price'],
@@ -352,11 +355,11 @@ class Bot:
             self.xk['secondary_grid_spacing'][0], self.xk['eprice_exp_base'][0]
         )
         long_closes = calc_long_close_grid(balance,
-            long_psize, long_pprice, self.ob[1], self.xk['spot'], self.xk['inverse'], self.xk['qty_step'],
-            self.xk['price_step'], self.xk['min_qty'], self.xk['min_cost'], self.xk['c_mult'], self.xk['pbr_limit'][0],
-            self.xk['initial_qty_pct'][0], self.xk['min_markup'][0], self.xk['markup_range'][0],
-            self.xk['n_close_orders'][0]
-        )
+                                           long_psize, long_pprice, self.ob[1], self.xk['spot'], self.xk['inverse'], self.xk['qty_step'],
+                                           self.xk['price_step'], self.xk['min_qty'], self.xk['min_cost'], self.xk['c_mult'], self.xk['pbr_limit'][0],
+                                           self.xk['initial_qty_pct'][0], self.xk['min_markup'][0], self.xk['markup_range'][0],
+                                           self.xk['n_close_orders'][0]
+                                           )
         orders = []
         for o in long_entries:
             if abs(o[1] - self.price) / self.price < self.last_price_diff_limit and o[0] > 0.0:
