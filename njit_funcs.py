@@ -179,6 +179,10 @@ def calc_long_close_grid(balance,
     minm = long_pprice * (1 + min_markup)
     if spot and round_dn(long_psize, qty_step) < calc_min_entry_qty(minm, inverse, qty_step, min_qty, min_cost):
         return [(0.0, 0.0, '')]
+    if long_psize < cost_to_qty(balance, long_pprice, inverse, c_mult) * pbr_limit * initial_qty_pct * 0.5:
+        # close entire pos at breakeven or better if psize < initial_qty * 0.5
+        close_price = max(lowest_ask, round_up(long_pprice * (1 + 0.0002), price_step))
+        return [(-round_(long_psize, qty_step), close_price, 'long_nclose')]
     close_prices = []
     for p in np.linspace(minm, long_pprice * (1 + min_markup + markup_range), n_close_orders):
         price_ = round_up(p, price_step)
