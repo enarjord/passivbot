@@ -450,6 +450,7 @@ class BinanceBot(Bot):
                     elif event['o']['X'] == 'PARTIALLY_FILLED':
                         standardized['deleted_order_id'] = int(event['o']['i'])
                         standardized['partially_filled'] = True
+        print_(['debug user event', standardized])
         return standardized
 
 
