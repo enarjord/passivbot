@@ -451,48 +451,49 @@ class Bot:
 
     async def on_user_stream_event(self, event: dict) -> None:
         try:
-            if event['type'] == 'position_update':
+            pos_change = False
+            if 'wallet_balance' in event:
                 self.position['wallet_balance'] = event['wallet_balance']
-                if 'long_psize' in event:
-                    self.position['long']['size'] = event['long_psize']
-                    self.position['long']['price'] = event['long_pprice']
-                    self.position['long']['pbr'] = (
-                        qty_to_cost(self.position['long']['size'], self.position['long']['price'],
-                                    self.xk['inverse'], self.xk['c_mult']) /
-                        (self.position['wallet_balance'] if self.position['wallet_balance'] else 0.0)
-                    )
-                if 'shrt_psize' in event:
-                    self.position['shrt']['size'] = event['shrt_psize']
-                    self.position['shrt']['price'] = event['shrt_pprice']
-                    self.position['shrt']['pbr'] = (
-                        qty_to_cost(self.position['shrt']['size'], self.position['shrt']['price'],
-                                    self.xk['inverse'], self.xk['c_mult']) /
-                        (self.position['wallet_balance'] if self.position['wallet_balance'] else 0.0)
-                    )
+                pos_change = True
+            if 'long_psize' in event:
+                self.position['long']['size'] = event['long_psize']
+                self.position['long']['price'] = event['long_pprice']
+                self.position['long']['pbr'] = (
+                    qty_to_cost(self.position['long']['size'], self.position['long']['price'],
+                                self.xk['inverse'], self.xk['c_mult']) /
+                    (self.position['wallet_balance'] if self.position['wallet_balance'] else 0.0)
+                )
+                pos_change = True
+            if 'shrt_psize' in event:
+                self.position['shrt']['size'] = event['shrt_psize']
+                self.position['shrt']['price'] = event['shrt_pprice']
+                self.position['shrt']['pbr'] = (
+                    qty_to_cost(self.position['shrt']['size'], self.position['shrt']['price'],
+                                self.xk['inverse'], self.xk['c_mult']) /
+                    (self.position['wallet_balance'] if self.position['wallet_balance'] else 0.0)
+                )
+                pos_change = True
+            if 'new_open_order' in event:
+                if event['new_open_order']['order_id'] not in {x['order_id'] for x in self.open_orders}:
+                    if event['new_open_order']['side'] == 'buy':
+                        self.highest_bid = max(event['new_open_order']['price'], self.highest_bid)
+                    else:
+                        self.lowest_ask = min(event['new_open_order']['price'], self.lowest_ask)
+                    self.open_orders.append(event['new_open_order'])
+            elif 'deleted_order_id' in event:
+                for i, o in enumerate(self.open_orders):
+                    if o['order_id'] == event['deleted_order_id']:
+                        self.open_orders = self.open_orders[:i] + self.open_orders[i + 1:]
+                        break
+            elif 'partially_filled' in event:
+                await self.update_open_orders()
+            if pos_change:
                 self.position['equity'] = self.position['wallet_balance'] + \
                     calc_upnl(self.position['long']['size'], self.position['long']['price'],
                               self.position['shrt']['size'], self.position['shrt']['price'],
                               self.price, self.inverse, self.c_mult)
-            elif event['other_symbol']:
-                pass
-            elif event['type'] == 'new_open_order':
-                if event['order']['order_id'] not in [x['order_id'] for x in self.open_orders]:
-                    if event['order']['side'] == 'buy':
-                        self.highest_bid = max(event['order']['price'], self.highest_bid)
-                    else:
-                        self.lowest_ask = min(event['order']['price'], self.lowest_ask)
-                    self.open_orders.append(event['order'])
-            elif event['type'] in ['cancelled', 'expired', 'filled']:
-                for i, o in enumerate(self.open_orders):
-                    if o['order_id'] == event['order_id']:
-                        self.open_orders = self.open_orders[:i] + self.open_orders[i + 1:]
-                        break
-            elif event['type'] == 'partially_filled':
-                asyncio.create_task(self.update_open_orders())
-            elif event['type'] == 'other':
-                # in case of deposit, withdrawal, funding fee, etc.
-                await self.update_position()
-            await self.cancel_and_create()
+                await asyncio.sleep(0.01) # sleep 10 ms to catch both pos update and open orders update
+                await self.cancel_and_create()
         except Exception as e:
             print(['error handling user stream event', e])
             traceback.print_exc()

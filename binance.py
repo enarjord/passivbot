@@ -414,18 +414,17 @@ class BinanceBot(Bot):
         pass
 
     def standardize_user_stream_event(self, event: dict) -> dict:
-        standardized = {'type': 'other', 'other_symbol': True}
+        standardized = {}
         if 'e' in event:
             if event['e'] == 'ACCOUNT_UPDATE':
-                if event['a']['m'] == 'ORDER':
+                if 'a' in event and 'B' in event['a']:
                     for x in event['a']['B']:
                         if x['a'] == self.margin_coin:
-                            standardized['type'] = 'position_update'
                             standardized['wallet_balance'] = float(x['cw'])
+                if event['a']['m'] == 'ORDER':
                     for x in event['a']['P']:
                         if x['s'] != self.symbol:
                             continue
-                        standardized['other_symbol'] = False
                         if x['ps'] == 'LONG':
                             standardized['long_psize'] = float(x['pa'])
                             standardized['long_pprice'] = float(x['ep'])
@@ -434,29 +433,23 @@ class BinanceBot(Bot):
                             standardized['shrt_pprice'] = float(x['ep'])
             elif event['e'] == 'ORDER_TRADE_UPDATE':
                 if event['o']['s'] == self.symbol:
-                    standardized['other_symbol'] = False
                     if event['o']['X'] == 'NEW':
-                        standardized['type'] = 'new_open_order'
-                        standardized['order'] = {'order_id': int(event['o']['i']),
-                                                 'symbol': event['o']['s'],
-                                                 'price': float(event['o']['p']),
-                                                 'qty': float(event['o']['q']),
-                                                 'type': event['o']['o'].lower(),
-                                                 'side': event['o']['S'].lower(),
-                                                 'position_side': event['o']['ps'].lower().replace('short', 'shrt'),
-                                                 'timestamp': int(event['o']['T'])}
-                    elif event['o']['X'] == 'CANCELED':
-                        standardized['type'] == 'cancelled'
-                        standardized['order_id'] = int(event['o']['i'])
-                    elif event['o']['X'] == 'EXPIRED':
-                        standardized['type'] == 'expired'
-                        standardized['order_id'] = int(event['o']['i'])
+                        standardized['new_open_order'] = {'order_id': int(event['o']['i']),
+                                                          'symbol': event['o']['s'],
+                                                          'price': float(event['o']['p']),
+                                                          'qty': float(event['o']['q']),
+                                                          'type': event['o']['o'].lower(),
+                                                          'side': event['o']['S'].lower(),
+                                                          'position_side': event['o']['ps'].lower().replace('short', 'shrt'),
+                                                          'timestamp': int(event['o']['T'])}
+                    elif event['o']['X'] in ['CANCELED', 'EXPIRED']:
+                        standardized['deleted_order_id'] = int(event['o']['i'])
                     elif event['o']['X'] == 'FILLED':
-                        standardized['type'] == 'filled'
-                        standardized['order_id'] = int(event['o']['i'])
+                        standardized['deleted_order_id'] = int(event['o']['i'])
+                        standardized['filled'] = True
                     elif event['o']['X'] == 'PARTIALLY_FILLED':
-                        standardized['type'] == 'partially_filled'
-                        standardized['order_id'] = int(event['o']['i'])
+                        standardized['deleted_order_id'] = int(event['o']['i'])
+                        standardized['partially_filled'] = True
         return standardized
 
 
