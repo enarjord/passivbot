@@ -651,9 +651,7 @@ class Telegram:
 
                 msg = f'Futures balance {self._bot.margin_coin if hasattr(self._bot, "margin_coin") else ""}:\n' \
                       f'Wallet balance: {compress_float(position["wallet_balance"], 4)}\n' \
-                      f'Equity: {compress_float(self._bot.position["equity"], 4)}\n' \
-                      f'Locked margin: {compress_float(self._bot.position["used_margin"], 4)}\n' \
-                      f'Available margin: {compress_float(self._bot.position["available_margin"], 4)}\n\n' \
+                      f'Equity: {compress_float(self._bot.position["equity"], 4)}\n\n' \
                       f'Spot balance:\n' \
                       f'{self._bot.quot}: {compress_float(float(quot_balance["free"]) + float(quot_balance["locked"]), 4)} ({compress_float(float(quot_balance["locked"]), 4)} locked)\n' \
                       f'{self._bot.coin}: {compress_float(float(coin_balance["free"]) + float(coin_balance["locked"]), 4)} ({compress_float(float(coin_balance["locked"]), 4)} locked)'
