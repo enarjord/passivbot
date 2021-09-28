@@ -37,7 +37,7 @@ class Bot:
 
         self.ts_locked = {k: 0.0 for k in ['cancel_orders', 'update_open_orders', 'cancel_and_create',
                                            'update_position', 'print', 'create_orders',
-                                           'check_fills', 'update_fills']}
+                                           'check_fills', 'update_fills', 'force_update']}
         self.ts_released = {k: 1.0 for k in self.ts_locked}
         self.heartbeat_ts = 0
         self.listen_key = None
@@ -367,7 +367,7 @@ class Bot:
                 if to_cancel:
                     # to avoid building backlog, cancel n+1 orders, create n orders
                     results.append(asyncio.create_task(self.cancel_orders(to_cancel[:self.n_orders_per_execution + 1])))
-                    await asyncio.sleep(0.01)  # sleep 10 ms between sending cancellations and creations
+                    await asyncio.sleep(0.01)  # sleep 10 ms between sending cancellations and sending creations
                 if to_create:
                     results.append(await self.create_orders(to_create[:self.n_orders_per_execution]))
             if any(results):
@@ -381,95 +381,18 @@ class Bot:
         if self.stop_mode is not None:
             print(f'{self.stop_mode} stop mode is active')
 
-        if time() - self.ts_released['print'] >= 0.5:
+        now = time()
+        if now - self.ts_released['print'] >= 0.5:
             self.update_output_information()
-        if time() - self.ts_released['cancel_and_create'] > 30:
-            # force update pos and open orders every 30 sec
+        if now - self.ts_released['force_update'] > 30:
+            self.ts_released['force_update'] = now
+            # force update pos and open orders thru rest API every 30 sec
             await asyncio.gather(self.update_position(), self.update_open_orders())
             await self.cancel_and_create()
-            return
-        if time() - self.heartbeat_ts > 60 * 60:
+        if now - self.heartbeat_ts > 60 * 60:
             # print heartbeat once an hour
             print_(['heartbeat\n'], n=True)
             self.heartbeat_ts = time()
-
-    async def check_shrt_fills(self, new_fills):
-        # closing orders
-        new_shrt_closes = [item for item in new_fills if item['side'] == 'buy' and item['position_side'] == 'shrt']
-        if len(new_shrt_closes) > 0:
-            realized_pnl_shrt = sum(fill['realized_pnl'] for fill in new_shrt_closes)
-            if self.telegram is not None:
-                qty_sum = sum([fill['qty'] for fill in new_shrt_closes])
-                cost = sum(fill['qty'] / fill['price'] if self.inverse else fill['qty'] * fill['price']
-                           for fill in new_shrt_closes)
-                # volume weighted average price
-                vwap = qty_sum / cost if self.inverse else cost / qty_sum
-                fee = sum([fill['fee_paid'] for fill in new_shrt_closes])
-                total_size = self.position['shrt']['size']
-                self.telegram.notify_close_order_filled(realized_pnl=realized_pnl_shrt, position_side='short',
-                                                        qty=qty_sum, fee=fee,
-                                                        wallet_balance=self.position['wallet_balance'],
-                                                        remaining_size=total_size, price=vwap)
-            if realized_pnl_shrt >= 0 and self.profit_trans_pct > 0.0:
-                amount = realized_pnl_shrt * self.profit_trans_pct
-                self.telegram.send_msg(f'Transferring {round_(amount, 0.001)} USDT ({self.profit_trans_pct * 100 }%) of profit {round_(realized_pnl_shrt, self.price_step)} to Spot wallet')
-                transfer_result = await self.transfer(type_='UMFUTURE_MAIN', amount=amount)
-                if 'code' in transfer_result:
-                    self.telegram.send_msg(f'Error transferring to Spot wallet: {transfer_result["msg"]}')
-                else:
-                    self.telegram.send_msg(f'Transferred {round_(amount, 0.001)} USDT to Spot wallet')
-
-        # entry orders
-        new_shrt_entries = [item for item in new_fills if item['side'] == 'sell' and item['position_side'] == 'shrt']
-        if len(new_shrt_entries) > 0:
-            if self.telegram is not None:
-                qty_sum = sum(fill['qty'] for fill in new_shrt_entries)
-                cost = sum(fill['qty'] / fill['price'] if self.inverse else fill['qty'] * fill['price']
-                           for fill in new_shrt_entries)
-                # volume weighted average price
-                vwap = qty_sum / cost if self.inverse else cost / qty_sum
-                fee = sum([fill['fee_paid'] for fill in new_shrt_entries])
-                total_size = self.position['shrt']['size']
-                self.telegram.notify_entry_order_filled(position_side='short', qty=qty_sum, fee=fee, price=vwap, total_size=total_size)
-
-    async def check_long_fills(self, new_fills):
-        #closing orders
-        new_long_closes = [item for item in new_fills if item['side'] == 'sell' and item['position_side'] == 'long']
-        if len(new_long_closes) > 0:
-            realized_pnl_long = sum(fill['realized_pnl'] for fill in new_long_closes)
-            if self.telegram is not None:
-                qty_sum = sum([fill['qty'] for fill in new_long_closes])
-                cost = sum(fill['qty'] / fill['price'] if self.inverse else fill['qty'] * fill['price']
-                           for fill in new_long_closes)
-                # volume weighted average price
-                vwap = qty_sum / cost if self.inverse else cost / qty_sum
-                fee = sum([fill['fee_paid'] for fill in new_long_closes])
-                total_size = self.position['long']['size']
-                self.telegram.notify_close_order_filled(realized_pnl=realized_pnl_long, position_side='long',
-                                                        qty=qty_sum, fee=fee,
-                                                        wallet_balance=self.position['wallet_balance'],
-                                                        remaining_size=total_size, price=vwap)
-            if realized_pnl_long >= 0 and self.profit_trans_pct > 0.0:
-                amount = realized_pnl_long * self.profit_trans_pct
-                self.telegram.send_msg(f'Transferring {round_(amount, 0.001)} USDT ({self.profit_trans_pct * 100 }%) of profit {round_(realized_pnl_long, self.price_step)} to Spot wallet')
-                transfer_result = await self.transfer(type_='UMFUTURE_MAIN', amount=amount)
-                if 'code' in transfer_result:
-                    self.telegram.send_msg(f'Error transferring to Spot wallet: {transfer_result["msg"]}')
-                else:
-                    self.telegram.send_msg(f'Transferred {round_(amount, 0.001)} USDT to Spot wallet')
-
-        # entry orders
-        new_long_entries = [item for item in new_fills if item['side'] == 'buy' and item['position_side'] == 'long']
-        if len(new_long_entries) > 0:
-            if self.telegram is not None:
-                qty_sum = sum(fill['qty'] for fill in new_long_entries)
-                cost = sum(fill['qty'] / fill['price'] if self.inverse else fill['qty'] * fill['price']
-                           for fill in new_long_entries)
-                # volume weighted average price
-                vwap = qty_sum / cost if self.inverse else cost / qty_sum
-                fee = sum([fill['fee_paid'] for fill in new_long_entries])
-                total_size = self.position['long']['size']
-                self.telegram.notify_entry_order_filled(position_side='long', qty=qty_sum, fee=fee, price=vwap, total_size=total_size)
 
     def update_output_information(self):
         self.ts_released['print'] = time()
