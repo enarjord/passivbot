@@ -400,7 +400,7 @@ class BinanceBot(Bot):
 
     async def transfer(self, type_: str, amount: float, asset: str = 'USDT'):
         params = {'type': type_.upper(), 'amount': amount, 'asset': asset}
-        return await self.private_post(self.endpoints['transfer'],  params)
+        return await self.private_post(self.endpoints['transfer'], params, base_endpoint=self.spot_base_endpoint)
 
     def standardize_websocket_ticks(self, data: dict) -> [dict]:
         try:
