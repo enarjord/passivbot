@@ -9,24 +9,18 @@ import json
 import logging
 import signal
 import pprint
-from pathlib import Path
 from time import time
-from procedures import load_live_config, make_get_filepath, load_exchange_key_secret, print_, add_argparse_args, \
-    utc_ms
-from pure_funcs import get_xk_keys, flatten, filter_orders, compress_float, create_xk, round_dynamic, denumpyize, \
+from procedures import load_live_config, make_get_filepath, load_exchange_key_secret, print_, utc_ms
+from pure_funcs import filter_orders, compress_float, create_xk, round_dynamic, denumpyize, \
     spotify_config, get_position_fills
-from njit_funcs import calc_new_psize_pprice, qty_to_cost, calc_diff, round_, calc_samples, calc_long_close_grid, \
-    calc_shrt_close_grid, calc_upnl, calc_long_entry_grid
+from njit_funcs import qty_to_cost, calc_diff, round_, calc_long_close_grid, calc_upnl, calc_long_entry_grid
 
 import numpy as np
 import websockets
-import telegram_bot
+from telegram_bot import Telegram
 
 logging.getLogger("telegram").setLevel(logging.CRITICAL)
 
-
-class LockNotAvailableException(Exception):
-    pass
 
 class Bot:
     def __init__(self, config: dict):
@@ -41,11 +35,12 @@ class Bot:
         self.hedge_mode = self.config['hedge_mode'] = True
         self.set_config(self.config)
 
-        self.ts_locked = {k: 0.0 for k in ['cancel_orders', 'decide', 'update_open_orders',
+        self.ts_locked = {k: 0.0 for k in ['cancel_orders', 'update_open_orders', 'cancel_and_create',
                                            'update_position', 'print', 'create_orders',
                                            'check_fills', 'update_fills']}
         self.ts_released = {k: 1.0 for k in self.ts_locked}
         self.heartbeat_ts = 0
+        self.listen_key = None
 
         self.position = {}
         self.open_orders = []
@@ -55,12 +50,8 @@ class Bot:
         self.highest_bid = 0.0
         self.lowest_ask = 9.9e16
         self.price = 0.0
-        self.is_buyer_maker = True
-        self.agg_qty = 0.0
-        self.qty = 0.0
         self.ob = [0.0, 0.0]
 
-        self.n_open_orders_limit = 8
         self.n_orders_per_execution = 4
 
         self.c_mult = self.config['c_mult'] = 1.0
@@ -73,7 +64,6 @@ class Bot:
 
         self.stop_websocket = False
         self.process_websocket_ticks = True
-        self.lock_file = f"{str(Path.home())}/.{self.exchange}_passivbotlock"
 
     def set_config(self, config):
         if 'min_span' in config:
@@ -86,9 +76,11 @@ class Bot:
             config['profit_trans_pct'] = 0.0
         if 'cross_wallet_pct' not in config:
             config['cross_wallet_pct'] = 1.0
+        if 'assigned_balance' not in config:
+            config['assigned_balance'] = None
         if config['cross_wallet_pct'] > 1.0 or config['cross_wallet_pct'] <= 0.0:
             print(f'An invalid value is provided for `cross_wallet_pct` ({config["cross_wallet_pct"]}). The value must be bigger than 0.0 and less than or equal to 1.0. The'
-                  f'bot will start with the default value of 1.0, meaning it will utilize the ')
+                  f'bot will start with the default value of 1.0, meaning it will utilize the full wallet balance available.')
             config['cross_wallet_pct'] = 1.0
         self.config = config
         for key in config:
@@ -115,7 +107,7 @@ class Bot:
         try:
             open_orders = await self.fetch_open_orders()
             open_orders = [x for x in open_orders if x['symbol'] == self.symbol]
-            self.highest_bid, self.lowest_ask = 0.0, 9.9e9
+            self.highest_bid, self.lowest_ask = 0.0, 9.9e16
             for o in open_orders:
                 if o['side'] == 'buy':
                     self.highest_bid = max(self.highest_bid, o['price'])
@@ -130,21 +122,14 @@ class Bot:
             self.ts_released['update_open_orders'] = time()
 
     async def update_position(self) -> None:
-        # also updates open orders
         if self.ts_locked['update_position'] > self.ts_released['update_position']:
             return
         self.ts_locked['update_position'] = time()
         try:
-            position, _ = await asyncio.gather(self.fetch_position(),
-                                               self.update_open_orders())
-            position['used_margin'] = \
-                ((qty_to_cost(position['long']['size'], position['long']['price'],
-                              self.xk['inverse'], self.xk['c_mult'])
-                  if position['long']['price'] else 0.0) +
-                 (qty_to_cost(position['shrt']['size'], position['shrt']['price'],
-                              self.xk['inverse'], self.xk['c_mult'])
-                  if position['shrt']['price'] else 0.0)) / self.max_leverage
-            position['wallet_balance'] *= self.cross_wallet_pct
+            position = await self.fetch_position()
+            position['wallet_balance'] = (position['wallet_balance'] if self.assigned_balance is None
+                                          else self.assigned_balance) * self.cross_wallet_pct
+            # isolated equity, not cross equity
             position['equity'] = position['wallet_balance'] + \
                 calc_upnl(position['long']['size'], position['long']['price'],
                           position['shrt']['size'], position['shrt']['price'],
@@ -224,45 +209,48 @@ class Bot:
             fetched = await self.fetch_fills()
             new_fills = [x for x in fetched if x['order_id'] not in ids_set]
             if new_fills:
-                self.fills = sorted([x for x in self.fills + new_fills], key=lambda x: x['order_id'])[-1000:]
                 self.long_pfills, self.shrt_pfills = get_position_fills(self.position['long']['size'],
                                                                         abs(self.position['shrt']['size']),
-                                                                        self.fills)
+                                                                        fetched)
+            self.fills = fetched
             return new_fills
         except Exception as e:
             print('error with update fills', e)
+            return []
         finally:
             self.ts_released['update_fills'] = time()
 
-    async def create_orders(self, orders_to_create: [dict]) -> dict:
+    async def create_orders(self, orders_to_create: [dict]) -> [dict]:
         if not orders_to_create:
-            return {}
+            return []
         if self.ts_locked['create_orders'] > self.ts_released['create_orders']:
-            return {}
+            return []
         self.ts_locked['create_orders'] = time()
-        creations = []
-        for oc in sorted(orders_to_create, key=lambda x: x['qty']):
-            try:
-                creations.append((oc, asyncio.create_task(self.execute_order(oc))))
-            except Exception as e:
-                print_(['error creating order a', oc, e], n=True)
-        created_orders = []
-        for oc, c in creations:
-            try:
-                o = await c
-                created_orders.append(o)
-                if 'side' in o:
-                    print_(['  created order', o['symbol'], o['side'], o['position_side'], o['qty'],
-                            o['price']], n=True)
-                else:
-                    print_(['error creating order b', o, oc], n=True)
-                self.dump_log({'log_type': 'create_order', 'data': o})
-            except Exception as e:
-                print_(['error creating order c', oc, c.exception(), e], n=True)
-                self.dump_log({'log_type': 'create_order', 'data': {'result': str(c.exception()),
-                                                                    'error': repr(e), 'data': oc}})
-        self.ts_released['create_orders'] = time()
-        return created_orders
+        try:
+            creations = []
+            for oc in sorted(orders_to_create, key=lambda x: calc_diff(x['price'], self.price)):
+                try:
+                    creations.append((oc, asyncio.create_task(self.execute_order(oc))))
+                except Exception as e:
+                    print_(['error creating order a', oc, e], n=True)
+            created_orders = []
+            for oc, c in creations:
+                try:
+                    o = await c
+                    created_orders.append(o)
+                    if 'side' in o:
+                        print_(['  created order', o['symbol'], o['side'], o['position_side'], o['qty'],
+                                o['price']], n=True)
+                    else:
+                        print_(['error creating order b', o, oc], n=True)
+                    self.dump_log({'log_type': 'create_order', 'data': o})
+                except Exception as e:
+                    print_(['error creating order c', oc, c.exception(), e], n=True)
+                    self.dump_log({'log_type': 'create_order', 'data': {'result': str(c.exception()),
+                                                                        'error': repr(e), 'data': oc}})
+            return created_orders
+        finally:
+            self.ts_released['create_orders'] = time()
 
     async def cancel_orders(self, orders_to_cancel: [dict]) -> [dict]:
         if not orders_to_cancel:
@@ -270,35 +258,37 @@ class Bot:
         if self.ts_locked['cancel_orders'] > self.ts_released['cancel_orders']:
             return
         self.ts_locked['cancel_orders'] = time()
-        deletions = []
-        for oc in orders_to_cancel:
-            try:
-                deletions.append((oc,
-                                  asyncio.create_task(self.execute_cancellation(oc))))
-            except Exception as e:
-                print_(['error cancelling order a', oc, e])
-        canceled_orders = []
-        for oc, c in deletions:
-            try:
-                o = await c
-                canceled_orders.append(o)
-                if 'side' in o:
-                    print_(['cancelled order', o['symbol'], o['side'], o['position_side'], o['qty'],
-                            o['price']], n=True)
-                else:
-                    print_(['error cancelling order', o], n=True)
-                self.dump_log({'log_type': 'cancel_order', 'data': o})
-            except Exception as e:
-                print_(['error cancelling order b', oc, c.exception(), e], n=True)
-                self.dump_log({'log_type': 'cancel_order', 'data': {'result': str(c.exception()),
-                                                                    'error': repr(e), 'data': oc}})
-        self.ts_released['cancel_orders'] = time()
-        return canceled_orders
+        try:
+            deletions = []
+            for oc in orders_to_cancel:
+                try:
+                    deletions.append((oc, asyncio.create_task(self.execute_cancellation(oc))))
+                except Exception as e:
+                    print_(['error cancelling order a', oc, e])
+            cancelled_orders = []
+            for oc, c in deletions:
+                try:
+                    o = await c
+                    cancelled_orders.append(o)
+                    if 'side' in o:
+                        print_(['cancelled order', o['symbol'], o['side'], o['position_side'], o['qty'],
+                                o['price']], n=True)
+                    else:
+                        print_(['error cancelling order', o], n=True)
+                    self.dump_log({'log_type': 'cancel_order', 'data': o})
+                except Exception as e:
+                    print_(['error cancelling order b', oc, c.exception(), e], n=True)
+                    self.dump_log({'log_type': 'cancel_order', 'data': {'result': str(c.exception()),
+                                                                        'error': repr(e), 'data': oc}})
+            return cancelled_orders
+        finally:
+            self.ts_released['cancel_orders'] = time()
 
     def stop(self, signum=None, frame=None) -> None:
         print("\nStopping passivbot, please wait...")
         try:
             self.stop_websocket = True
+            asyncio.create_task(self.private_delete(self.endpoints['listen_key']))
             if self.telegram is not None:
                 self.telegram.exit()
             else:
@@ -332,7 +322,6 @@ class Bot:
                                      'type': 'market', 'reduce_only': True, 'custom_id': 'shrt_panic'})
             return panic_orders
 
-
         if self.hedge_mode:
             do_long = self.do_long or long_psize != 0.0
             do_shrt = self.do_shrt or shrt_psize != 0.0
@@ -340,7 +329,7 @@ class Bot:
             no_pos = long_psize == 0.0 and shrt_psize == 0.0
             do_long = (no_pos and self.do_long) or long_psize != 0.0
             do_shrt = (no_pos and self.do_shrt) or shrt_psize != 0.0
-        do_shrt = self.do_shrt = False
+        do_shrt = self.do_shrt = False # shorts currently disabled for v5
         self.xk['do_long'] = do_long
         self.xk['do_shrt'] = do_shrt
 
@@ -357,95 +346,53 @@ class Bot:
             self.xk['initial_qty_pct'][0], self.xk['min_markup'][0], self.xk['markup_range'][0],
             self.xk['n_close_orders'][0]
         )
-        orders = []
-        for o in long_entries:
-            if abs(o[1] - self.price) / self.price < self.last_price_diff_limit and o[0] > 0.0:
-                orders.append({'side': 'buy', 'position_side': 'long', 'qty': abs(float(o[0])),
-                               'price': float(o[1]), 'type': 'limit', 'reduce_only': False,
-                               'custom_id': o[2]})
-        for o in long_closes:
-            if abs(o[1] - self.price) / self.price < self.last_price_diff_limit and o[0] < 0.0:
-                orders.append({'side': 'sell', 'position_side': 'long', 'qty': abs(float(o[0])),
-                               'price': float(o[1]), 'type': 'limit', 'reduce_only': True,
-                               'custom_id': o[2]})
-        return sorted(orders, key=lambda x: abs(x['price'] - self.price) / self.price)
+        orders = [{'side': 'buy', 'position_side': 'long', 'qty': abs(float(o[0])),
+                   'price': float(o[1]), 'type': 'limit', 'reduce_only': False,
+                   'custom_id': o[2]} for o in long_entries if o[0] > 0.0]
+        orders += [{'side': 'sell', 'position_side': 'long', 'qty': abs(float(o[0])),
+                    'price': float(o[1]), 'type': 'limit', 'reduce_only': True,
+                    'custom_id': o[2]} for o in long_closes if o[0] < 0.0]
+        return sorted(orders, key=lambda x: calc_diff(x['price'], self.price))
 
     async def cancel_and_create(self):
-        await asyncio.sleep(0.005)
-        await self.update_position()
-        await asyncio.sleep(0.005)
-        if any([self.ts_locked[k_] > self.ts_released[k_]
-                for k_ in [x for x in self.ts_locked if x != 'decide']]):
+        if self.ts_locked['cancel_and_create'] > self.ts_released['cancel_and_create']:
             return
-        to_cancel, to_create = filter_orders(self.open_orders,
-                                             self.calc_orders(),
-                                             keys=['side', 'position_side', 'qty', 'price'])
-        to_cancel = sorted(to_cancel, key=lambda x: calc_diff(x['price'], self.price))
-        to_create = sorted(to_create, key=lambda x: calc_diff(x['price'], self.price))
-        results = []
-        if self.stop_mode not in ['manual']:
-            if to_cancel:
-                results.append(asyncio.create_task(self.cancel_orders(to_cancel[:self.n_orders_per_execution + 1])))
-                await asyncio.sleep(0.005)  # sleep 5 ms between sending cancellations and creations
-            if to_create:
-                results.append(await self.create_orders(to_create[:self.n_orders_per_execution]))
-        await asyncio.sleep(0.005)
-        await self.update_position()
-        if any(results):
-            print()
-        return results
+        self.ts_locked['cancel_and_create'] = time()
+        try:
+            to_cancel, to_create = filter_orders(self.open_orders, self.calc_orders(),
+                                                 keys=['side', 'position_side', 'qty', 'price'])
+            to_cancel = sorted(to_cancel, key=lambda x: calc_diff(x['price'], self.price))
+            to_create = sorted(to_create, key=lambda x: calc_diff(x['price'], self.price))
+            results = []
+            if self.stop_mode not in ['manual']:
+                if to_cancel:
+                    # to avoid building backlog, cancel n+1 orders, create n orders
+                    results.append(asyncio.create_task(self.cancel_orders(to_cancel[:self.n_orders_per_execution + 1])))
+                    await asyncio.sleep(0.01)  # sleep 10 ms between sending cancellations and creations
+                if to_create:
+                    results.append(await self.create_orders(to_create[:self.n_orders_per_execution]))
+            if any(results):
+                print()
+            await asyncio.sleep(2) # sleep 2 secs after a cancel_and_create
+            return results
+        finally:
+            self.ts_released['cancel_and_create'] = time()
 
-    async def decide(self):
+    async def on_websocket_tick(self):
         if self.stop_mode is not None:
             print(f'{self.stop_mode} stop mode is active')
 
-        if self.price <= self.highest_bid:
-            self.ts_locked['decide'] = time()
-            print_(['bid maybe taken'], n=True)
-            await self.cancel_and_create()
-            asyncio.create_task(self.check_fills())
-            self.ts_released['decide'] = time()
-            return
-        if self.price >= self.lowest_ask:
-            self.ts_locked['decide'] = time()
-            print_(['ask maybe taken'], n=True)
-            await self.cancel_and_create()
-            asyncio.create_task(self.check_fills())
-            self.ts_released['decide'] = time()
-            return
-        if time() - self.ts_locked['decide'] > 5:
-            self.ts_locked['decide'] = time()
-            await self.cancel_and_create()
-            self.ts_released['decide'] = time()
-            return
         if time() - self.ts_released['print'] >= 0.5:
-            await self.update_output_information()
-        if time() - self.ts_released['check_fills'] > 120:
-            asyncio.create_task(self.check_fills())
+            self.update_output_information()
+        if time() - self.ts_released['cancel_and_create'] > 30:
+            # force update pos and open orders every 30 sec
+            await asyncio.gather(self.update_position(), self.update_open_orders())
+            await self.cancel_and_create()
+            return
         if time() - self.heartbeat_ts > 60 * 60:
+            # print heartbeat once an hour
             print_(['heartbeat\n'], n=True)
             self.heartbeat_ts = time()
-
-    async def check_fills(self):
-        if self.ts_locked['check_fills'] > self.ts_released['check_fills']:
-            # return if another call is in progress
-            return
-        if self.exchange == 'bybit':
-            # bybit not supported
-            return
-        try:
-            now = time()
-            if now - self.ts_released['check_fills'] < 5.0:
-                # minimum 5 sec between consecutive check fills
-                return
-            self.ts_locked['check_fills'] = now
-            # check fills if two mins since prev check has passed
-            new_fills = await self.update_fills()
-            if new_fills:
-                await self.check_long_fills(new_fills)
-                await self.check_shrt_fills(new_fills)
-        finally:
-            self.ts_released['check_fills'] = time()
 
     async def check_shrt_fills(self, new_fills):
         # closing orders
@@ -525,7 +472,7 @@ class Bot:
                 total_size = self.position['long']['size']
                 self.telegram.notify_entry_order_filled(position_side='long', qty=qty_sum, fee=fee, price=vwap, total_size=total_size)
 
-    async def update_output_information(self):
+    def update_output_information(self):
         self.ts_released['print'] = time()
         line = f"{self.symbol} "
         line += f"l {self.position['long']['size']} @ "
@@ -565,16 +512,13 @@ class Bot:
         line += f"eq {compress_float(self.position['equity'], 3)} "
         print_([line], r=True)
 
-    def flush_stuck_locks(self, timeout: float = 4.0) -> None:
+    def flush_stuck_locks(self, timeout: float = 5.0) -> None:
         now = time()
         for key in self.ts_locked:
             if self.ts_locked[key] > self.ts_released[key]:
                 if now - self.ts_locked[key] > timeout:
                     print('flushing', key)
                     self.ts_released[key] = now
-
-    async def init_indicators(self, max_n_samples: int = 60):
-        return
 
     def update_indicators(self, ticks):
         if ticks[-1]['is_buyer_maker']:
@@ -583,18 +527,99 @@ class Bot:
             self.ob[1] = ticks[-1]['price']
         self.price = ticks[-1]['price']
 
+    async def on_user_stream_event(self, event: dict) -> None:
+        try:
+            if event['type'] == 'position_update':
+                self.position['wallet_balance'] = event['wallet_balance']
+                if 'long_psize' in event:
+                    self.position['long']['size'] = event['long_psize']
+                    self.position['long']['price'] = event['long_pprice']
+                    self.position['long']['pbr'] = (
+                        qty_to_cost(self.position['long']['size'], self.position['long']['price'],
+                                    self.xk['inverse'], self.xk['c_mult']) /
+                        (self.position['wallet_balance'] if self.position['wallet_balance'] else 0.0)
+                    )
+                if 'shrt_psize' in event:
+                    self.position['shrt']['size'] = event['shrt_psize']
+                    self.position['shrt']['price'] = event['shrt_pprice']
+                    self.position['shrt']['pbr'] = (
+                        qty_to_cost(self.position['shrt']['size'], self.position['shrt']['price'],
+                                    self.xk['inverse'], self.xk['c_mult']) /
+                        (self.position['wallet_balance'] if self.position['wallet_balance'] else 0.0)
+                    )
+                self.position['equity'] = self.position['wallet_balance'] + \
+                    calc_upnl(self.position['long']['size'], self.position['long']['price'],
+                              self.position['shrt']['size'], self.position['shrt']['price'],
+                              self.price, self.inverse, self.c_mult)
+            elif event['other_symbol']:
+                pass
+            elif event['type'] == 'new_open_order':
+                if event['order']['order_id'] not in [x['order_id'] for x in self.open_orders]:
+                    if event['order']['side'] == 'buy':
+                        self.highest_bid = max(event['order']['price'], self.highest_bid)
+                    else:
+                        self.lowest_ask = min(event['order']['price'], self.lowest_ask)
+                    self.open_orders.append(event['order'])
+            elif event['type'] in ['cancelled', 'expired', 'filled']:
+                for i, o in enumerate(self.open_orders):
+                    if o['order_id'] == event['order_id']:
+                        self.open_orders = self.open_orders[:i] + self.open_orders[i + 1:]
+                        break
+            elif event['type'] == 'partially_filled':
+                asyncio.create_task(self.update_open_orders())
+            elif event['type'] == 'other':
+                # in case of deposit, withdrawal, funding fee, etc.
+                await self.update_position()
+            await self.cancel_and_create()
+        except Exception as e:
+            print(['error handling user stream event', e])
+            traceback.print_exc()
+
     async def start_websocket(self) -> None:
         self.stop_websocket = False
         self.process_websocket_ticks = True
-        print_([self.endpoints['websocket']])
-        await self.update_position()
-        abort = await self.init_exchange_config()
-        if abort:
-            return
-        await self.init_indicators()
+        await asyncio.gather(self.update_position(), self.update_open_orders())
+        await self.init_exchange_config()
         await self.init_order_book()
+        await asyncio.gather(self.start_websocket_market_stream(), self.start_websocket_user_stream())
+
+    async def beat_heart_user_stream(self) -> None:
+        while True:
+            await asyncio.sleep(60 * 55)
+            try:
+                response = await self.private_put(self.endpoints['listen_key'], {})
+                print_(['refreshed listen key', response])
+            except Exception as e:
+                traceback.print_exc()
+                print_(['error refreshing listen key', e])
+
+    async def init_user_stream(self) -> None:
+        try:
+            response = await self.private_post(self.endpoints['listen_key'])
+            self.listen_key = response['listenKey']
+            self.endpoints['websocket_user'] = self.endpoints['websocket'] + self.listen_key
+            print_(['initialized listen key', response])
+        except Exception as e:
+            traceback.print_exc()
+            print_(['error initializing listen key', e])
+
+    async def start_websocket_user_stream(self) -> None:
+        await self.init_user_stream()
+        asyncio.create_task(self.beat_heart_user_stream())
+        print('url', self.endpoints['websocket_user'])
+        async with websockets.connect(self.endpoints['websocket_user']) as ws:
+            async for msg in ws:
+                if msg is None:
+                    continue
+                try:
+                    asyncio.create_task(self.on_user_stream_event(self.standardize_user_stream_event(json.loads(msg))))
+                except Exception as e:
+                    print(['error in websocket user stream', e])
+                    traceback.print_exc()
+
+    async def start_websocket_market_stream(self) -> None:
         k = 1
-        async with websockets.connect(self.endpoints['websocket']) as ws:
+        async with websockets.connect(self.endpoints['websocket_market']) as ws:
             await self.subscribe_ws(ws)
             async for msg in ws:
                 if msg is None:
@@ -604,8 +629,8 @@ class Bot:
                     if self.process_websocket_ticks:
                         if ticks:
                             self.update_indicators(ticks)
-                        if self.ts_locked['decide'] < self.ts_released['decide']:
-                            asyncio.create_task(self.decide())
+                        print(f'\rtick {ticks[0]}           ', end=' ')
+                        #asyncio.create_task(self.on_websocket_tick())
                     if k % 10 == 0:
                         self.flush_stuck_locks()
                         k = 1
@@ -630,9 +655,9 @@ async def start_bot(bot):
 
 
 async def _start_telegram(account: dict, bot: Bot):
-    telegram = telegram_bot.Telegram(config=account['telegram'],
-                                     bot=bot,
-                                     loop=asyncio.get_event_loop())
+    telegram = Telegram(config=account['telegram'],
+                        bot=bot,
+                        loop=asyncio.get_event_loop())
     telegram.log_start()
     return telegram
 
