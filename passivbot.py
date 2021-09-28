@@ -79,8 +79,7 @@ class Bot:
         if 'assigned_balance' not in config:
             config['assigned_balance'] = None
         if config['cross_wallet_pct'] > 1.0 or config['cross_wallet_pct'] <= 0.0:
-            print(f'An invalid value is provided for `cross_wallet_pct` ({config["cross_wallet_pct"]}). The value must be bigger than 0.0 and less than or equal to 1.0. The'
-                  f'bot will start with the default value of 1.0, meaning it will utilize the full wallet balance available.')
+            print(f'Invalid cross_wallet_pct given: {config["cross_wallet_pct"]}.  It must be greater than zero and less than or equal to one.  Defaulting to 1.0.')
             config['cross_wallet_pct'] = 1.0
         self.config = config
         for key in config:
