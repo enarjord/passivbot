@@ -15,7 +15,6 @@ from pure_funcs import filter_orders, compress_float, create_xk, round_dynamic, 
     spotify_config, get_position_fills
 from njit_funcs import qty_to_cost, calc_diff, round_, calc_long_close_grid, calc_upnl, calc_long_entry_grid
 
-import numpy as np
 import websockets
 from telegram_bot import Telegram
 
@@ -72,6 +71,8 @@ class Bot:
             config['last_price_diff_limit'] = 0.3
         if 'profit_trans_pct' not in config:
             config['profit_trans_pct'] = 0.0
+        if 'assigned_balance' not in config:
+            config['assigned_balance'] = None
         if 'cross_wallet_pct' not in config:
             config['cross_wallet_pct'] = 1.0
         if 'assigned_balance' not in config:
@@ -125,6 +126,7 @@ class Bot:
                 calc_upnl(position['long']['size'], position['long']['price'],
                           position['shrt']['size'], position['shrt']['price'],
                           self.price, self.inverse, self.c_mult)
+
             position['long']['pbr'] = (qty_to_cost(position['long']['size'], position['long']['price'],
                                                    self.xk['inverse'], self.xk['c_mult']) /
                                        position['wallet_balance']) if position['wallet_balance'] else 0.0

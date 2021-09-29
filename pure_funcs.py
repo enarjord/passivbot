@@ -180,6 +180,8 @@ def candidate_to_live_config(candidate: dict) -> dict:
         name += f"_adg{(result_dict['daily_gain'] - 1) * 100:.3f}%"
     if 'closest_bkr' in result_dict:
         name += f"_bkr{(result_dict['closest_bkr']) * 100:.2f}%"
+    if 'eqbal_ratio_min' in result_dict:
+        name += f"_eqbal{(result_dict['eqbal_ratio_min']) * 100:.2f}%"
     live_config['config_name'] = name
     return denumpyize(live_config)
 
