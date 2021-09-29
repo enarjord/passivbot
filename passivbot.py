@@ -324,12 +324,10 @@ class Bot:
             if self.stop_mode not in ['manual']:
                 if to_cancel:
                     # to avoid building backlog, cancel n+1 orders, create n orders
-                    print_(['debug, would cancel', to_cancel])
-                    #results.append(asyncio.create_task(self.cancel_orders(to_cancel[:self.n_orders_per_execution + 1])))
+                    results.append(asyncio.create_task(self.cancel_orders(to_cancel[:self.n_orders_per_execution + 1])))
                     await asyncio.sleep(0.01)  # sleep 10 ms between sending cancellations and sending creations
                 if to_create:
-                    print_(['debug, would create', to_create])
-                    #results.append(await self.create_orders(to_create[:self.n_orders_per_execution]))
+                    results.append(await self.create_orders(to_create[:self.n_orders_per_execution]))
             if any(results):
                 print()
             await asyncio.sleep(1) # sleep one sec before releasing lock
@@ -355,44 +353,13 @@ class Bot:
         if now - self.ts_released['force_update'] > 30:
             self.ts_released['force_update'] = now
             # force update pos and open orders thru rest API every 30 sec
+            print_(['debug force update'], n=True)
             await asyncio.gather(self.update_position(), self.update_open_orders())
         if now - self.heartbeat_ts > 60 * 60:
             # print heartbeat once an hour
             print_(['heartbeat\n'], n=True)
             self.heartbeat_ts = time()
         await self.cancel_and_create()
-
-    def update_output_information(self):
-        self.ts_released['print'] = time()
-        line = f"{self.symbol} "
-        line += f"l {self.position['long']['size']} @ "
-        line += f"{round_(self.position['long']['price'], self.price_step)}, "
-        long_closes = sorted([o for o in self.open_orders if o['side'] == 'sell'
-                              and o['position_side'] == 'long'], key=lambda x: x['price'])
-        long_entries = sorted([o for o in self.open_orders if o['side'] == 'buy'
-                               and o['position_side'] == 'long'], key=lambda x: x['price'])
-        leqty, leprice = (long_entries[-1]['qty'], long_entries[-1]['price']) if long_entries else (0.0, 0.0)
-        lcqty, lcprice = (long_closes[0]['qty'], long_closes[0]['price']) if long_closes else (0.0, 0.0)
-        line += f"e {leqty} @ {leprice}, c {lcqty} @ {lcprice} "
-        if self.position['long']['size'] > abs(self.position['shrt']['size']):
-            liq_price = self.position['long']['liquidation_price']
-        else:
-            liq_price = self.position['shrt']['liquidation_price']
-        line += f"|| last {self.price} "
-        line += f"pprc diff {calc_diff(self.position['long']['price'], self.price):.3f} "
-        line += f"liq {round_dynamic(liq_price, 5)} "
-        line += f"lpbr {self.position['long']['pbr']:.3f} "
-        line += f"bal {compress_float(self.position['wallet_balance'], 3)} "
-        line += f"eq {compress_float(self.position['equity'], 3)} "
-        print_([line], r=True)
-
-    def flush_stuck_locks(self, timeout: float = 5.0) -> None:
-        now = time()
-        for key in self.ts_locked:
-            if self.ts_locked[key] > self.ts_released[key]:
-                if now - self.ts_locked[key] > timeout:
-                    print('flushing stuck lock', key)
-                    self.ts_released[key] = now
 
     async def on_user_stream_event(self, event: dict) -> None:
         try:
@@ -435,9 +402,42 @@ class Bot:
                               self.price, self.inverse, self.c_mult)
                 await asyncio.sleep(0.01) # sleep 10 ms to catch both pos update and open orders update
                 await self.cancel_and_create()
+            print_(['debug user stream event', event, '\n'], n=True)
         except Exception as e:
             print(['error handling user stream event', e])
             traceback.print_exc()
+
+    def update_output_information(self):
+        self.ts_released['print'] = time()
+        line = f"{self.symbol} "
+        line += f"l {self.position['long']['size']} @ "
+        line += f"{round_(self.position['long']['price'], self.price_step)}, "
+        long_closes = sorted([o for o in self.open_orders if o['side'] == 'sell'
+                              and o['position_side'] == 'long'], key=lambda x: x['price'])
+        long_entries = sorted([o for o in self.open_orders if o['side'] == 'buy'
+                               and o['position_side'] == 'long'], key=lambda x: x['price'])
+        leqty, leprice = (long_entries[-1]['qty'], long_entries[-1]['price']) if long_entries else (0.0, 0.0)
+        lcqty, lcprice = (long_closes[0]['qty'], long_closes[0]['price']) if long_closes else (0.0, 0.0)
+        line += f"e {leqty} @ {leprice}, c {lcqty} @ {lcprice} "
+        if self.position['long']['size'] > abs(self.position['shrt']['size']):
+            liq_price = self.position['long']['liquidation_price']
+        else:
+            liq_price = self.position['shrt']['liquidation_price']
+        line += f"|| last {self.price} "
+        line += f"pprc diff {calc_diff(self.position['long']['price'], self.price):.3f} "
+        line += f"liq {round_dynamic(liq_price, 5)} "
+        line += f"lpbr {self.position['long']['pbr']:.3f} "
+        line += f"bal {compress_float(self.position['wallet_balance'], 3)} "
+        line += f"eq {compress_float(self.position['equity'], 3)} "
+        print_([line], r=True)
+
+    def flush_stuck_locks(self, timeout: float = 5.0) -> None:
+        now = time()
+        for key in self.ts_locked:
+            if self.ts_locked[key] > self.ts_released[key]:
+                if now - self.ts_locked[key] > timeout:
+                    print('flushing stuck lock', key)
+                    self.ts_released[key] = now
 
     async def start_websocket(self) -> None:
         self.stop_websocket = False
@@ -477,6 +477,8 @@ class Bot:
                     continue
                 try:
                     asyncio.create_task(self.on_user_stream_event(self.standardize_user_stream_event(json.loads(msg))))
+                    if self.stop_websocket:
+                        break
                 except Exception as e:
                     print(['error in websocket user stream', e])
                     traceback.print_exc()
