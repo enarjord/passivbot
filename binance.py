@@ -12,7 +12,7 @@ import traceback
 from pure_funcs import ts_to_date, sort_dict_keys, format_float
 from njit_funcs import calc_upnl, qty_to_cost
 from passivbot import Bot
-from procedures import print_
+from procedures import print_, print_async_exception
 
 
 class BinanceBot(Bot):
@@ -233,6 +233,7 @@ class BinanceBot(Bot):
         return position
 
     async def execute_order(self, order: dict) -> dict:
+        o = None
         try:
             params = {'symbol': self.symbol,
                       'side': order['side'].upper(),
@@ -254,10 +255,14 @@ class BinanceBot(Bot):
                     'price': float(o['price'])}
         except Exception as e:
             print(f'error executing order {order} {e}')
+            print_async_exception(o)
             traceback.print_exc()
             return {}
 
+
+
     async def execute_cancellation(self, order: dict) -> dict:
+        cancellation = None
         try:
             cancellation = await self.private_delete(self.endpoints['cancel_order'],
                                                      {'symbol': self.symbol, 'orderId': order['order_id']})
@@ -267,6 +272,7 @@ class BinanceBot(Bot):
                     'qty': float(cancellation['origQty']), 'price': float(cancellation['price'])}
         except Exception as e:
             print(f'error cancelling order {order} {e}')
+            print_async_exception(cancellation)
             traceback.print_exc()
             return {}
 
@@ -424,6 +430,8 @@ class BinanceBot(Bot):
                 if event['a']['m'] == 'ORDER':
                     for x in event['a']['P']:
                         if x['s'] != self.symbol:
+                            standardized['other_symbol'] = x['s']
+                            standardized['other_type'] = 'account_update'
                             continue
                         if x['ps'] == 'LONG':
                             standardized['long_psize'] = float(x['pa'])
@@ -450,7 +458,9 @@ class BinanceBot(Bot):
                     elif event['o']['X'] == 'PARTIALLY_FILLED':
                         standardized['deleted_order_id'] = int(event['o']['i'])
                         standardized['partially_filled'] = True
-        print_(['debug user event', standardized])
+                else:
+                    standardized['other_symbol'] = event['o']['s']
+                    standardized['other_type'] = 'order_update'
         return standardized
 
 
