@@ -283,6 +283,12 @@ def utc_ms() -> float:
     return datetime.utcnow().timestamp() * 1000
 
 
-
-
-
+def print_async_exception(coro):
+    try:
+        print(f'exception: {coro.exception()}')
+    except:
+        pass
+    try:
+        print(f'result: {coro.result()}')
+    except:
+        pass
