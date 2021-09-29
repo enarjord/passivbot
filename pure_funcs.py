@@ -36,7 +36,7 @@ def calc_spans(min_span: int, max_span: int, n_spans: int) -> np.ndarray:
 def get_xk_keys():
     return ['spot', 'hedge_mode', 'inverse', 'do_long', 'do_shrt', 'qty_step', 'price_step', 'min_qty', 'min_cost',
             'c_mult', 'grid_span', 'pbr_limit', 'max_n_entry_orders', 'initial_qty_pct', 'eprice_pprice_diff',
-            'secondary_pbr_allocation', 'secondary_grid_spacing', 'eprice_exp_base', 'min_markup', 'markup_range',
+            'secondary_pbr_allocation', 'secondary_pprice_diff', 'eprice_exp_base', 'min_markup', 'markup_range',
             'n_close_orders']
 
 
@@ -303,7 +303,7 @@ def get_template_live_config():
                  "initial_qty_pct":  0.01,
                  "eprice_pprice_diff": 0.0025,
                  "secondary_pbr_allocation": 0.5,
-                 "secondary_grid_spacing": 0.35,
+                 "secondary_pprice_diff": 0.35,
                  "eprice_exp_base": 1.618034,
                  "min_markup": 0.0045,
                  "markup_range":  0.0075,
@@ -315,7 +315,7 @@ def get_template_live_config():
                  "initial_qty_pct":  0.01,
                  "eprice_pprice_diff": 0.0025,
                  "secondary_pbr_allocation": 0.5,
-                 "secondary_grid_spacing": 0.35,
+                 "secondary_pprice_diff": 0.35,
                  "eprice_exp_base": 1.618034,
                  "min_markup": 0.0045,
                  "markup_range":  0.0075,
