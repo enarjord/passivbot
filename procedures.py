@@ -15,6 +15,7 @@ from datetime import datetime
 def load_live_config(live_config_path: str) -> dict:
     try:
         live_config = json.load(open(live_config_path))
+        live_config = json.loads(json.dumps(live_config).replace('secondary_grid_spacing', 'secondary_pprice_diff'))
         return numpyize(live_config)
     except Exception as e:
         raise Exception(f'failed to load live config {live_config_path} {e}')
