@@ -9,6 +9,7 @@ import json
 import logging
 import signal
 import pprint
+import numpy as np
 from time import time
 from procedures import load_live_config, make_get_filepath, load_exchange_key_secret, print_, utc_ms
 from pure_funcs import filter_orders, compress_float, create_xk, round_dynamic, denumpyize, \
@@ -58,6 +59,9 @@ class Bot:
         _, self.key, self.secret = load_exchange_key_secret(self.user)
 
         self.log_level = 0
+
+        self.user_stream_task = None
+        self.market_stream_task = None
 
         self.stop_websocket = False
         self.process_websocket_ticks = True
@@ -244,8 +248,10 @@ class Bot:
     def stop(self, signum=None, frame=None) -> None:
         print("\nStopping passivbot, please wait...")
         try:
+
             self.stop_websocket = True
-            asyncio.create_task(self.private_delete(self.endpoints['listen_key']))
+            self.user_stream_task.cancel()
+            self.market_stream_task.cancel()
             if self.telegram is not None:
                 self.telegram.exit()
             else:
@@ -353,7 +359,7 @@ class Bot:
         if now - self.ts_released['force_update'] > 30:
             self.ts_released['force_update'] = now
             # force update pos and open orders thru rest API every 30 sec
-            print_(['debug force update'], n=True)
+            print_(['debug force update\n'], n=True)
             await asyncio.gather(self.update_position(), self.update_open_orders())
         if now - self.heartbeat_ts > 60 * 60:
             # print heartbeat once an hour
@@ -445,13 +451,15 @@ class Bot:
         await asyncio.gather(self.update_position(), self.update_open_orders())
         await self.init_exchange_config()
         await self.init_order_book()
-        await asyncio.gather(self.start_websocket_market_stream(), self.start_websocket_user_stream())
+        self.user_stream_task = asyncio.create_task(self.start_websocket_user_stream())
+        self.market_stream_task = asyncio.create_task(self.start_websocket_market_stream())
+        await asyncio.gather(self.user_stream_task, self.market_stream_task)
 
     async def beat_heart_user_stream(self) -> None:
         while True:
-            await asyncio.sleep(60 * 55)
+            await asyncio.sleep(np.random.randint(60, 60 * 55))
             try:
-                response = await self.private_put(self.endpoints['listen_key'], {})
+                response = await self.private_post(self.endpoints['listen_key'], {})
                 print_(['refreshed listen key', response])
             except Exception as e:
                 traceback.print_exc()
@@ -476,9 +484,9 @@ class Bot:
                 if msg is None:
                     continue
                 try:
-                    asyncio.create_task(self.on_user_stream_event(self.standardize_user_stream_event(json.loads(msg))))
                     if self.stop_websocket:
                         break
+                    asyncio.create_task(self.on_user_stream_event(self.standardize_user_stream_event(json.loads(msg))))
                 except Exception as e:
                     print(['error in websocket user stream', e])
                     traceback.print_exc()
@@ -491,16 +499,16 @@ class Bot:
                 if msg is None:
                     continue
                 try:
+                    if self.stop_websocket:
+                        if self.telegram is not None:
+                            self.telegram.send_msg("<pre>Bot stopped</pre>")
+                        break
                     ticks = self.standardize_websocket_ticks(json.loads(msg))
                     if self.process_websocket_ticks:
                         asyncio.create_task(self.on_market_stream_event(ticks))
                     if k % 10 == 0:
                         self.flush_stuck_locks()
                         k = 1
-                    if self.stop_websocket:
-                        if self.telegram is not None:
-                            self.telegram.send_msg("<pre>Bot stopped</pre>")
-                        break
                     k += 1
 
                 except Exception as e:
