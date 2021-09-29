@@ -301,7 +301,7 @@ class Bot:
             self.xk['qty_step'], self.xk['price_step'], self.xk['min_qty'], self.xk['min_cost'],
             self.xk['c_mult'], self.xk['grid_span'][0], self.xk['pbr_limit'][0], self.xk['max_n_entry_orders'][0],
             self.xk['initial_qty_pct'][0], self.xk['eprice_pprice_diff'][0], self.xk['secondary_pbr_allocation'][0],
-            self.xk['secondary_grid_spacing'][0], self.xk['eprice_exp_base'][0]
+            self.xk['secondary_pprice_diff'][0], self.xk['eprice_exp_base'][0]
         )
         long_closes = calc_long_close_grid(balance,
             long_psize, long_pprice, self.ob[1], self.xk['spot'], self.xk['inverse'], self.xk['qty_step'],
