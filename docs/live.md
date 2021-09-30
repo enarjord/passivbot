@@ -26,13 +26,13 @@ step (e.g. `binance_01` in the template for example).
 To actually start the bot, you can use the following command:
 
 ```shell
-python3 start_bot.py {account_name} {symbol} {path/to/config.json}
+python3 passivbot.py {account_name} {symbol} {path/to/config.json}
 ```
 
 An actual command with the values filled in could look like this for example:
 
 ```shell
-python3 start_bot.py binance_01 XMRUSDT configs/live/binance_xmrusdt.json
+python3 passivbot.py binance_01 XMRUSDT configs/live/binance_xmrusdt.json
 ```
 
 ### Default configurations
