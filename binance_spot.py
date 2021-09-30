@@ -10,7 +10,7 @@ import numpy as np
 import traceback
 
 from pure_funcs import ts_to_date, sort_dict_keys, calc_long_pprice, format_float, get_position_fills, spotify_config
-from njit_funcs import round_dn, round_up, calc_long_pnl
+from njit_funcs import round_dn, round_up, calc_long_pnl, calc_min_entry_qty
 from passivbot import Bot
 from procedures import print_
 
@@ -120,22 +120,28 @@ class BinanceBotSpot(Bot):
     def calc_orders(self):
         default_orders = super().calc_orders()
         orders = []
-        for order in sorted(default_orders, key=lambda x: x['price']):
+        remaining_cost = self.balance[self.quot]['onhand']
+        for order in sorted(default_orders, key=lambda x: calc_diff(x['price'], self.price)):
             if order['price'] > min(self.max_price, round_dn(self.price * self.price_multiplier_up, self.price_step)):
                 print(f'price {order["price"]} too high')
                 continue
             if order['price'] < max(self.min_price, round_up(self.price * self.price_multiplier_dn, self.price_step)):
                 print(f'price {order["price"]} too low')
                 continue
-            orders.append(order)
-        sum_buy_cost = sum([o['qty'] * o['price'] for o in orders if o['side'] == 'buy'])
-        excess_cost = max(0.0, sum_buy_cost - self.balance[self.quot]['onhand'])
-        if excess_cost:
-            orders[0]['qty'] = round_dn((orders[0]['qty'] * orders[0]['price'] - excess_cost) / orders[0]['price'], self.qty_step)
-            if orders[0]['qty'] < max(self.min_qty, self.min_cost / orders[0]['price']):
-                orders = orders[1:]
+            if order['side'] == 'buy':
+                cost = qty_to_cost(order['qty'], order['price'], self.inverse, self.c_mult)
+                if cost > remaining_cost:
+                    adjusted_qty = round_dn(remaining_cost / order['price'], self.qty_step)
+                    min_entry_qty = calc_min_entry_qty(order['price'], self.inverse, self.qty_step, self.min_qty, self.min_cost)
+                    if adjusted_qty >= min_entry_qty:
+                        orders.append({**order, **{'qty': adjusted_qty}})
+                        remaining_cost = 0.0
+                else:
+                    orders.append(order)
+                    remaining_cost -= cost
+            else:
+                orders.append(order)
         return orders
-
 
     async def check_if_other_positions(self, abort=True):
         pass
