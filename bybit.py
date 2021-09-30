@@ -7,27 +7,15 @@ from urllib.parse import urlencode
 
 import aiohttp
 import numpy as np
-from dateutil import parser
+import traceback
 
-from pure_funcs import ts_to_date, sort_dict_keys
-from passivbot import print_, Bot
-from njit_funcs import calc_long_pnl, calc_shrt_pnl
+from pure_funcs import ts_to_date, sort_dict_keys, date_to_ts
+from procedures import print_async_exception, print_
+from passivbot import Bot
 
 
 def first_capitalized(s: str):
     return s[0].upper() + s[1:].lower()
-
-
-def format_tick(tick: dict) -> dict:
-    return {'trade_id': int(tick['id']),
-            'price': float(tick['price']),
-            'qty': float(tick['qty']),
-            'timestamp': date_to_ts(tick['time']),
-            'is_buyer_maker': tick['side'] == 'Sell'}
-
-
-def date_to_ts(date: str):
-    return parser.parse(date).timestamp() * 1000
 
 
 class Bybit(Bot):
@@ -36,7 +24,9 @@ class Bybit(Bot):
         self.min_notional = 0.0
         super().__init__(config)
         self.base_endpoint = 'https://api.bybit.com'
-        self.endpoints = {}
+        self.endpoints = {'balance': '/v2/private/wallet/balance',
+                          'exchange_info': '/v2/public/symbols',
+                          'ticker': '/v2/public/tickers'}
         self.session = aiohttp.ClientSession(headers={'referer': 'passivbotbybit'})
 
     def init_market_type(self):
@@ -50,9 +40,9 @@ class Bybit(Bot):
                               'cancel_order': '/private/linear/order/cancel',
                               'ticks': '/public/linear/recent-trading-records',
                               'fills': '/private/linear/trade/execution/list',
-                              'pnls': '/private/linear/trade/closed-pnl/list',
                               'ohlcvs': '/public/linear/kline',
                               'websocket': 'wss://stream.bybit.com/realtime_public',
+                              'income': '/private/linear/trade/closed-pnl/list',
                               'created_at_key': 'created_time'}
 
         else:
@@ -66,9 +56,9 @@ class Bybit(Bot):
                                   'cancel_order': '/v2/private/order/cancel',
                                   'ticks': '/v2/public/trading-records',
                                   'fills': '/v2/private/execution/list',
-                                  'pnls': '/v2/private/trade/closed-pnl/list',
                                   'ohlcvs': '/v2/public/kline/list',
                                   'websocket': 'wss://stream.bybit.com/realtime',
+                                  'income': '/v2/private/trade/closed-pnl/list',
                                   'created_at_key': 'created_at'}
 
                 self.hedge_mode = self.config['hedge_mode'] = False
@@ -81,12 +71,14 @@ class Bybit(Bot):
                                   'cancel_order': '/futures/private/order/cancel',
                                   'ticks': '/v2/public/trading-records',
                                   'fills': '/futures/private/execution/list',
-                                  'pnls': '/futures/private/trade/closed-pnl/list',
                                   'ohlcvs': '/v2/public/kline/list',
                                   'websocket': 'wss://stream.bybit.com/realtime',
+                                  'income': '/futures/private/trade/closed-pnl/list',
                                   'created_at_key': 'created_at'}
 
         self.endpoints['balance'] = '/v2/private/wallet/balance'
+        self.endpoints['exchange_info'] = '/v2/public/symbols'
+        self.endpoints['ticker'] = '/v2/public/tickers'
 
     def determine_pos_side(self, o: dict) -> str:
         side = o['side'].lower()
@@ -107,7 +99,7 @@ class Bybit(Bot):
         return position_side
 
     async def _init(self):
-        info = await self.public_get('/v2/public/symbols')
+        info = await self.public_get(self.endpoints['exchange_info'])
         for e in info['result']:
             if e['name'] == self.symbol:
                 break
@@ -127,7 +119,7 @@ class Bybit(Bot):
         await self.update_position()
 
     async def init_order_book(self):
-        ticker = await self.private_get('/v2/public/tickers', {'symbol': self.symbol})
+        ticker = await self.private_get(self.endpoints['ticker'], {'symbol': self.symbol})
         self.ob = [float(ticker['result'][0]['bid_price']), float(ticker['result'][0]['ask_price'])]
         self.price = float(ticker['result'][0]['last_price'])
 
@@ -188,71 +180,75 @@ class Bybit(Bot):
             if 'inverse_perpetual' in self.market_type:
                 if fetched['result']['side'] == 'Buy':
                     long_pos = fetched['result']
-                    shrt_pos = {'size': 0.0, 'entry_price': 0.0, 'leverage': 0.0, 'liq_price': 0.0}
+                    shrt_pos = {'size': 0.0, 'entry_price': 0.0, 'liq_price': 0.0}
                 else:
-                    long_pos = {'size': 0.0, 'entry_price': 0.0, 'leverage': 0.0, 'liq_price': 0.0}
+                    long_pos = {'size': 0.0, 'entry_price': 0.0, 'liq_price': 0.0}
                     shrt_pos = fetched['result']
             elif 'inverse_futures' in self.market_type:
                 long_pos = [e['data'] for e in fetched['result'] if e['data']['position_idx'] == 1][0]
                 shrt_pos = [e['data'] for e in fetched['result'] if e['data']['position_idx'] == 2][0]
+            else:
+                raise Exception('unknown market type')
 
         position['long'] = {'size': float(long_pos['size']),
                             'price': float(long_pos['entry_price']),
-                            'leverage': float(long_pos['leverage']),
                             'liquidation_price': float(long_pos['liq_price'])}
         position['shrt'] = {'size': -float(shrt_pos['size']),
                             'price': float(shrt_pos['entry_price']),
-                            'leverage': float(shrt_pos['leverage']),
                             'liquidation_price': float(shrt_pos['liq_price'])}
-        position['long']['upnl'] = calc_long_pnl(position['long']['price'], self.price,
-                                                 position['long']['size'], self.xk['inverse'],
-                                                 self.xk['c_mult']) \
-            if position['long']['price'] != 0.0 else 0.0
-        position['shrt']['upnl'] = calc_shrt_pnl(position['shrt']['price'], self.price,
-                                                 position['shrt']['size'], self.xk['inverse'],
-                                                 self.xk['c_mult']) \
-            if position['shrt']['price'] != 0.0 else 0.0
-        upnl = position['long']['upnl'] + position['shrt']['upnl']
-        position['equity'] = position['wallet_balance'] + upnl
         return position
 
     async def execute_order(self, order: dict) -> dict:
-        params = {'symbol': self.symbol,
-                  'side': first_capitalized(order['side']),
-                  'order_type': first_capitalized(order['type']),
-                  'qty': float(order['qty']) if 'linear_perpetual' in self.market_type else int(order['qty']),
-                  'close_on_trigger': False}
-        if self.hedge_mode:
-            params['position_idx'] = 1 if order['position_side'] == 'long' else 2
-            if 'linear_perpetual' in self.market_type:
+        o = None
+        try:
+            params = {'symbol': self.symbol,
+                      'side': first_capitalized(order['side']),
+                      'order_type': first_capitalized(order['type']),
+                      'qty': float(order['qty']) if 'linear_perpetual' in self.market_type else int(order['qty']),
+                      'close_on_trigger': False}
+            if self.hedge_mode:
+                params['position_idx'] = 1 if order['position_side'] == 'long' else 2
+                if 'linear_perpetual' in self.market_type:
+                    params['reduce_only'] = 'close' in order['custom_id']
+            else:
+                params['position_idx'] = 0
                 params['reduce_only'] = 'close' in order['custom_id']
-        else:
-            params['position_idx'] = 0
-            params['reduce_only'] = 'close' in order['custom_id']
-        if params['order_type'] == 'Limit':
-            params['time_in_force'] = 'PostOnly'
-            params['price'] = str(order['price'])
-        else:
-            params['time_in_force'] = 'GoodTillCancel'
-        params['order_link_id'] = \
-            f"{order['custom_id']}_{str(int(time() * 1000))[8:]}_{int(np.random.random() * 1000)}"
-        o = await self.private_post(self.endpoints['create_order'], params)
-        if o['result']:
-            return {'symbol': o['result']['symbol'],
-                    'side': o['result']['side'].lower(),
-                    'position_side': order['position_side'],
-                    'type': o['result']['order_type'].lower(),
-                    'qty': o['result']['qty'],
-                    'price': o['result']['price']}
-        else:
-            return o, order
+            if params['order_type'] == 'Limit':
+                params['time_in_force'] = 'PostOnly'
+                params['price'] = str(order['price'])
+            else:
+                params['time_in_force'] = 'GoodTillCancel'
+            params['order_link_id'] = \
+                f"{order['custom_id']}_{str(int(time() * 1000))[8:]}_{int(np.random.random() * 1000)}"
+            o = await self.private_post(self.endpoints['create_order'], params)
+            if o['result']:
+                return {'symbol': o['result']['symbol'],
+                        'side': o['result']['side'].lower(),
+                        'position_side': order['position_side'],
+                        'type': o['result']['order_type'].lower(),
+                        'qty': o['result']['qty'],
+                        'price': o['result']['price']}
+            else:
+                return o, order
+        except Exception as e:
+            print(f'error executing order {order} {e}')
+            print_async_exception(o)
+            traceback.print_exc()
+            return {}
 
     async def execute_cancellation(self, order: dict) -> [dict]:
-        o = await self.private_post(self.endpoints['cancel_order'],
-                                    {'symbol': self.symbol, 'order_id': order['order_id']})
-        return {'symbol': self.symbol, 'side': order['side'],
-                'position_side': order['position_side'],
-                'qty': order['qty'], 'price': order['price']}
+        o = None
+        try:
+            o = await self.private_post(self.endpoints['cancel_order'],
+                                        {'symbol': self.symbol, 'order_id': order['order_id']})
+            return {'symbol': self.symbol, 'side': order['side'],
+                    'position_side': order['position_side'],
+                    'qty': order['qty'], 'price': order['price']}
+        except Exception as e:
+            print(f'error cancelling order {order} {e}')
+            print_async_exception(o)
+            traceback.print_exc()
+            return {}
 
     async def fetch_ticks(self, from_id: int = None, do_print: bool = True):
         params = {'symbol': self.symbol, 'limit': 1000}
@@ -264,7 +260,11 @@ class Bybit(Bot):
             print('error fetching ticks', e)
             return []
         try:
-            trades = list(map(format_tick, ticks['result']))
+            trades = [{'trade_id': int(tick['id']),
+                       'price': float(tick['price']),
+                       'qty': float(tick['qty']),
+                       'timestamp': date_to_ts(tick['time']),
+                       'is_buyer_maker': tick['side'] == 'Sell'} for tick in ticks['result']]
             if do_print:
                 print_(['fetched trades', self.symbol, trades[0]['trade_id'],
                         ts_to_date(float(trades[0]['timestamp']) / 1000)])
@@ -294,6 +294,56 @@ class Bybit(Bot):
         return [{**{'timestamp': e['open_time'] * 1000},
                  **{k: float(e[k]) for k in ['open', 'high', 'low', 'close', 'volume']}}
                 for e in fetched['result']]
+
+    async def get_all_income(self, start_time: int, income_type: str = 'Trade', end_time: int = None):
+        limit = 50
+        income = []
+        page = 1
+        while True:
+            fetched = await self.fetch_income(start_time=start_time, income_type=income_type, limit=limit, page=page)
+            if len(fetched) == 0:
+                break
+            print_(['fetched income', ts_to_date(fetched[0]['timestamp'])])
+            if fetched == income[-len(fetched):]:
+                break
+            income += fetched
+            if len(fetched) < limit:
+                break
+            page += 1
+        income_d = {e['transaction_id']: e for e in income}
+        return sorted(income_d.values(), key=lambda x: x['timestamp'])
+
+    async def fetch_income(self, symbol: str = None, income_type: str = None, limit: int = 50,
+                           start_time: int = None, end_time: int = None, page=None):
+        params = {'limit': limit, 'symbol': self.symbol if symbol is None else symbol}
+        if start_time is not None:
+            params['start_time'] = int(start_time / 1000)
+        if end_time is not None:
+            params['end_time'] = int(end_time / 1000)
+        if income_type is not None:
+            params['exec_type'] = first_capitalized(income_type)
+        if page is not None:
+            params['page'] = page
+        fetched = None
+        try:
+            fetched = await self.private_get(self.endpoints['income'], params)
+            if fetched['result']['data'] is None:
+                return []
+            return sorted([{
+                'symbol': e['symbol'],
+                'income_type': e['exec_type'].lower(),
+                'income': float(e['closed_pnl']),
+                'token': self.margin_coin,
+                'timestamp': float(e['created_at']) * 1000,
+                'info': {'page': fetched['result']['current_page']},
+                'transaction_id': float(e['id']),
+                'trade_id': e['order_id']
+            } for e in fetched['result']['data']], key=lambda x: x['timestamp'])
+        except Exception as e:
+            print('error fetching income: ', e)
+            traceback.print_exc()
+            print_async_exception(fetched)
+            return []
 
     async def fetch_fills(self, limit: int = 200, from_id: int = None, start_time: int = None, end_time: int = None):
         return []
