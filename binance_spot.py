@@ -232,7 +232,12 @@ class BinanceBotSpot(Bot):
 
     async def get_all_fills(self, start_time: int):
         fills = []
+        i = 0
         while True:
+            i += 1
+            if i >= 15:
+                print("\nWarning: more than 15 calls to fetch_fills(), breaking")
+                break
             fetched = await self.fetch_fills(start_time=start_time)
             print_(['fetched fills', ts_to_date(fetched[0]['timestamp'])])
             if fetched == fills[-len(fetched):]:
