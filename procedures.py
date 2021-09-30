@@ -286,6 +286,10 @@ def utc_ms() -> float:
 
 def print_async_exception(coro):
     try:
+        print(f'returned: {coro}')
+    except:
+        pass
+    try:
         print(f'exception: {coro.exception()}')
     except:
         pass
@@ -293,3 +297,6 @@ def print_async_exception(coro):
         print(f'result: {coro.result()}')
     except:
         pass
+
+
+
