@@ -41,7 +41,8 @@ class Bybit(Bot):
                               'ticks': '/public/linear/recent-trading-records',
                               'fills': '/private/linear/trade/execution/list',
                               'ohlcvs': '/public/linear/kline',
-                              'websocket': 'wss://stream.bybit.com/realtime_public',
+                              'websocket_market': 'wss://stream.bybit.com/realtime_public',
+                              'websocket_user': 'wss://stream.bybit.com/realtime_private',
                               'income': '/private/linear/trade/closed-pnl/list',
                               'created_at_key': 'created_time'}
 
@@ -57,7 +58,8 @@ class Bybit(Bot):
                                   'ticks': '/v2/public/trading-records',
                                   'fills': '/v2/private/execution/list',
                                   'ohlcvs': '/v2/public/kline/list',
-                                  'websocket': 'wss://stream.bybit.com/realtime',
+                                  'websocket_market': 'wss://stream.bybit.com/realtime',
+                                  'websocket_user': 'wss://stream.bybit.com/realtime',
                                   'income': '/v2/private/trade/closed-pnl/list',
                                   'created_at_key': 'created_at'}
 
@@ -72,7 +74,8 @@ class Bybit(Bot):
                                   'ticks': '/v2/public/trading-records',
                                   'fills': '/futures/private/execution/list',
                                   'ohlcvs': '/v2/public/kline/list',
-                                  'websocket': 'wss://stream.bybit.com/realtime',
+                                  'websocket_market': 'wss://stream.bybit.com/realtime',
+                                  'websocket_user': 'wss://stream.bybit.com/realtime',
                                   'income': '/futures/private/trade/closed-pnl/list',
                                   'created_at_key': 'created_at'}
 
@@ -408,7 +411,7 @@ class Bybit(Bot):
         except Exception as e:
             print(e)
 
-    def standardize_websocket_ticks(self, data: dict) -> [dict]:
+    def standardize_market_stream_event(self, data: dict) -> [dict]:
         ticks = []
         for e in data['data']:
             try:
@@ -418,8 +421,22 @@ class Bybit(Bot):
                 print('error in websocket tick', e, ex)
         return ticks
 
-    async def subscribe_ws(self, ws):
+    async def beat_heart_user_stream(self) -> None:
+        while True:
+            await asyncio.sleep(np.random.randint(30))
+            try:
+                response = await self.private_post(self.endpoints['listen_key'], {})
+                #print_(['refreshed listen key', response])
+            except Exception as e:
+                traceback.print_exc()
+                print_(['error refreshing listen key', e])
+
+    async def subscribe_to_market_stream(self, ws):
         params = {'op': 'subscribe', 'args': ['trade.' + self.symbol]}
+        await ws.send(json.dumps(params))
+
+    async def subscribe_to_user_stream(self, ws):
+        params = {'op': 'subscribe', 'args': ['position', 'execution', 'wallet', 'order']}
         await ws.send(json.dumps(params))
 
     async def transfer(self, type_: str, amount: float, asset: str = 'USDT'):
