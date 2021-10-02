@@ -121,8 +121,6 @@ class Bot:
         self.ts_locked['update_position'] = time()
         try:
             position = await self.fetch_position()
-            position['wallet_balance'] = (position['wallet_balance'] if self.assigned_balance is None
-                                          else self.assigned_balance) * self.cross_wallet_pct
             # isolated equity, not cross equity
             position['equity'] = position['wallet_balance'] + \
                 calc_upnl(position['long']['size'], position['long']['price'],
@@ -264,7 +262,7 @@ class Bot:
         self.process_websocket_ticks = True
 
     def calc_orders(self):
-        balance = self.position['wallet_balance']
+        balance = (self.position['wallet_balance'] if self.assigned_balance is None else self.assigned_balance) * self.cross_wallet_pct
         long_psize = self.position['long']['size']
         long_pprice = self.position['long']['price']
         shrt_psize = self.position['shrt']['size']
