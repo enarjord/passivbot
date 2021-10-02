@@ -417,11 +417,13 @@ class BinanceBotSpot(Bot):
                     self.balance[token]['onhand'] = onhand
                 if onhand_change:
                     self.position = self.calc_simulated_position(self.balance, self.fills)
+                    self.position['wallet_balance'] = self.adjust_wallet_balance(self.position['wallet_balance'])
                     pos_change = True
             if 'filled' in event:
                 if event['filled']['order_id'] not in {fill['order_id'] for fill in self.fills}:
                     self.fills = sorted(self.fills + [event['filled']], key=lambda x: x['order_id'])
                 self.position = self.calc_simulated_position(self.balance, self.fills)
+                self.position['wallet_balance'] = self.adjust_wallet_balance(self.position['wallet_balance'])
                 pos_change = True
             elif 'partially_filled' in event:
                 await asyncio.sleep(0.01)
