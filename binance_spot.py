@@ -10,7 +10,7 @@ import numpy as np
 import traceback
 
 from pure_funcs import ts_to_date, sort_dict_keys, calc_long_pprice, format_float, get_position_fills, spotify_config
-from njit_funcs import round_dn, round_up, calc_long_pnl, calc_min_entry_qty
+from njit_funcs import round_dn, round_up, calc_long_pnl, calc_min_entry_qty, qty_to_cost, calc_upnl, calc_diff
 from passivbot import Bot
 from procedures import print_
 
@@ -26,6 +26,7 @@ class BinanceBotSpot(Bot):
         self.do_long = self.config['do_long'] = self.config['long']['enabled'] = True
         self.do_shrt = self.config['do_shrt'] = self.config['shrt']['enabled'] = False
         self.session = aiohttp.ClientSession()
+        self.headers = {'X-MBX-APIKEY': self.key}
         self.base_endpoint = ''
 
     async def public_get(self, url: str, params: dict = {}) -> dict:
@@ -45,20 +46,22 @@ class BinanceBotSpot(Bot):
         params['signature'] = hmac.new(self.secret.encode('utf-8'),
                                        urlencode(params).encode('utf-8'),
                                        hashlib.sha256).hexdigest()
-        headers = {'X-MBX-APIKEY': self.key}
         async with getattr(self.session, type_)(base_endpoint + url, params=params,
-                                                headers=headers) as response:
+                                                headers=self.headers) as response:
             result = await response.text()
         return json.loads(result)
 
-    async def private_get(self, url: str, params: dict = {}, base_endpoint: str = None) -> dict:
-        if base_endpoint is not None:
-            return await self.private_('get', base_endpoint, url, params)
-        else:
-            return await self.private_('get', self.base_endpoint, url, params)
+    async def post_listen_key(self):
+        async with self.session.post(self.base_endpoint + self.endpoints['listen_key'],
+                                     params={}, headers=self.headers) as response:
+            result = await response.text()
+        return json.loads(result)
 
-    async def private_post(self, base_endpoint: str, url: str, params: dict = {}) -> dict:
-        return await self.private_('post', base_endpoint, url, params)
+    async def private_get(self, url: str, params: dict = {}) -> dict:
+        return await self.private_('get', self.base_endpoint, url, params)
+
+    async def private_post(self, url: str, params: dict = {}) -> dict:
+        return await self.private_('post', self.base_endpoint, url, params)
 
     async def private_delete(self, url: str, params: dict = {}) -> dict:
         return await self.private_('delete', self.base_endpoint, url, params)
@@ -82,7 +85,11 @@ class BinanceBotSpot(Bot):
             'cancel_order': '/api/v3/order',
             'ticks': '/api/v3/aggTrades',
             'ohlcvs': '/api/v3/klines',
-            'websocket': f"wss://stream.binance.com/ws/{self.symbol.lower()}@aggTrade"
+            'websocket': (ws := f"wss://stream.binance.com/ws/"),
+            'websocket_market': ws + f"{self.symbol.lower()}@aggTrade",
+            'websocket_user': ws,
+            'listen_key': '/api/v3/userDataStream'
+
         }
         self.endpoints['transfer'] = '/sapi/v1/asset/transfer'
         self.endpoints['account'] = '/api/v3/account'
@@ -176,32 +183,33 @@ class BinanceBotSpot(Bot):
                                                    self.update_fills())
         balance = {}
         for elm in balances['balances']:
-            for k in [self.quot, self.coin]:
-                if elm['asset'] == k:
-                    balance[k] = {'free': float(elm['free'])}
-                    balance[k]['locked'] = float(elm['locked'])
-                    balance[k]['onhand'] = balance[k]['free'] + balance[k]['locked']
-                    break
-            if self.quot in balance and self.coin in balance:
-                break
+            balance[elm['asset']] = {'free': float(elm['free'])}
+            balance[elm['asset']]['locked'] = float(elm['locked'])
+            balance[elm['asset']]['onhand'] = balance[elm['asset']]['free'] + balance[elm['asset']]['locked']
+        self.balance = balance
+        return self.calc_simulated_position(self.balance, self.fills)
+
+    def calc_simulated_position(self, balance: dict, long_fills: [dict]) -> dict:
+        '''
+        balance = {'BTC': {'free': float, 'locked': float, 'onhand': float}, ...}
+        long_pfills = [{order...}, ...]
+        '''
         long_psize = round_dn(balance[self.coin]['onhand'], self.qty_step)
-        self.long_pfills, self.shrt_pfills = get_position_fills(long_psize, 0.0, self.fills)
-        long_pprice = calc_long_pprice(long_psize, self.long_pfills) if long_psize else 0.0
+        long_pfills, shrt_pfills = get_position_fills(long_psize, 0.0, self.fills)
+        long_pprice = calc_long_pprice(long_psize, long_pfills) if long_psize else 0.0
         if long_psize * long_pprice < self.min_cost:
-            long_psize, long_pprice, self.long_pfills = 0.0, 0.0, []
+            long_psize, long_pprice, long_pfills = 0.0, 0.0, []
         position = {'long': {'size': long_psize,
                              'price': long_pprice,
-                             'liquidation_price': 0.0,
-                             'upnl': long_psize * (self.price - long_pprice),
-                             'leverage': 1.0},
+                             'liquidation_price': 0.0},
                     'shrt': {'size': 0.0,
                              'price': 0.0,
                              'liquidation_price': 0.0,
-                             'upnl': 0.0,
-                             'leverage': 0.0},
-                    'wallet_balance': balance[self.quot]['onhand'] + balance[self.coin]['onhand'] * long_pprice,
-                    'equity': balance[self.quot]['onhand'] + balance[self.coin]['onhand'] * self.price}
-        self.balance = balance
+                             'pbr': 0.0},
+                    'wallet_balance': balance[self.quot]['onhand'] + balance[self.coin]['onhand'] * long_pprice}
+        position['long']['pbr'] = (qty_to_cost(position['long']['size'], position['long']['price'],
+                                   self.xk['inverse'], self.xk['c_mult']) /
+                                   (position['wallet_balance'] if position['wallet_balance'] else 0.0))
         return position
 
     async def execute_order(self, order: dict) -> dict:
@@ -215,7 +223,7 @@ class BinanceBotSpot(Bot):
         if 'custom_id' in order:
             params['newClientOrderId'] = \
                 f"{order['custom_id']}_{str(int(time() * 1000))[8:]}_{int(np.random.random() * 1000)}"
-        o = await self.private_post(self.base_endpoint, self.endpoints['create_order'], params)
+        o = await self.private_post(self.endpoints['create_order'], params)
         if 'side' in o:
             return {'symbol': self.symbol,
                     'side': o['side'].lower(),
@@ -350,12 +358,12 @@ class BinanceBotSpot(Bot):
     async def fetch_ticks_time(self, start_time: int, end_time: int = None, do_print: bool = True):
         return await self.fetch_ticks(start_time=start_time, end_time=end_time, do_print=do_print)
 
-    async def fetch_ohlcvs(self, start_time: int = None, interval='1m', limit=1000):
+    async def fetch_ohlcvs(self, symbol: str = None, start_time: int = None, interval='1m', limit=1000):
         # m -> minutes; h -> hours; d -> days; w -> weeks; M -> months
         interval_map = {'1m': 1, '3m': 3, '5m': 5, '15m': 15, '30m': 30, '1h': 60, '2h': 120, '4h': 240, '6h': 360,
                         '12h': 720, '1d': 60 * 60 * 24, '1w': 60 * 60 * 24 * 7, '1M': 60 * 60 * 24 * 30}
         assert interval in interval_map
-        params = {'symbol': self.symbol, 'interval': interval, 'limit': limit}
+        params = {'symbol': self.symbol if symbol is None else symbol, 'interval': interval, 'limit': limit}
         if start_time is not None:
             params['startTime'] = int(start_time)
             params['endTime'] = params['startTime'] + interval_map[interval] * 60 * 1000 * limit
@@ -372,7 +380,7 @@ class BinanceBotSpot(Bot):
         print('transfer not implemented in spot')
         return
 
-    def standardize_websocket_ticks(self, data: dict) -> [dict]:
+    def standardize_market_stream_event(self, data: dict) -> [dict]:
         try:
             return [{'timestamp': int(data['T']), 'price': float(data['p']), 'qty': float(data['q']),
                      'is_buyer_maker': data['m']}]
@@ -380,5 +388,122 @@ class BinanceBotSpot(Bot):
             print('error in websocket tick', e)
         return []
 
-    async def subscribe_ws(self, ws):
-        pass
+    async def beat_heart_user_stream(self) -> None:
+        while True:
+            await asyncio.sleep(60 + np.random.randint(60 * 9, 60 * 14))
+            await self.init_user_stream()
+
+    async def init_user_stream(self) -> None:
+        try:
+            response = await self.post_listen_key()
+            self.listen_key = response['listenKey']
+            self.endpoints['websocket_user'] = self.endpoints['websocket'] + self.listen_key
+            print_(['fetched listen key', response])
+        except Exception as e:
+            traceback.print_exc()
+            print_(['error fetching listen key', e])
+
+    async def on_user_stream_event(self, event: dict) -> None:
+        try:
+            pos_change = False
+            if 'balance' in event:
+                onhand_change = False
+                for token in event['balance']:
+                    self.balance[token]['free'] = event['balance'][token]['free']
+                    self.balance[token]['locked'] = event['balance'][token]['locked']
+                    onhand = event['balance'][token]['free'] + event['balance'][token]['locked']
+                    if token in [self.quot, self.coin] and ('onhand' not in self.balance[token] or self.balance[token]['onhand'] != onhand):
+                        onhand_change = True
+                    self.balance[token]['onhand'] = onhand
+                if onhand_change:
+                    self.position = self.calc_simulated_position(self.balance, self.fills)
+                    pos_change = True
+            if 'filled' in event:
+                if event['filled']['order_id'] not in {fill['order_id'] for fill in self.fills}:
+                    self.fills = sorted(self.fills + [event['filled']], key=lambda x: x['order_id'])
+                self.position = self.calc_simulated_position(self.balance, self.fills)
+                pos_change = True
+            elif 'partially_filled' in event:
+                await asyncio.sleep(0.01)
+                await asyncio.gather(self.update_position(), self.update_open_orders())
+                pos_change = True
+            if 'new_open_order' in event:
+                if event['new_open_order']['order_id'] not in {x['order_id'] for x in self.open_orders}:
+                    self.open_orders.append(event['new_open_order'])
+            elif 'deleted_order_id' in event:
+                for i, o in enumerate(self.open_orders):
+                    if o['order_id'] == event['deleted_order_id']:
+                        self.open_orders = self.open_orders[:i] + self.open_orders[i + 1:]
+                        break
+            if pos_change:
+                self.position['equity'] = self.position['wallet_balance'] + \
+                    calc_upnl(self.position['long']['size'], self.position['long']['price'],
+                              self.position['shrt']['size'], self.position['shrt']['price'],
+                              self.price, self.inverse, self.c_mult)
+                await asyncio.sleep(0.01) # sleep 10 ms to catch both pos update and open orders update
+                await self.cancel_and_create()
+        except Exception as e:
+            print(['error handling user stream event', e])
+            traceback.print_exc()
+
+    def standardize_user_stream_event(self, event: dict) -> dict:
+        standardized = {}
+        if 'e' in event:
+            if event['e'] == 'outboundAccountPosition':
+                standardized['balance'] = {}
+                for e in event['B']:
+                    standardized['balance'][e['a']] = {'free': float(e['f']), 'locked': float(e['l'])}
+            elif event['e'] == 'executionReport':
+                if event['X'] == 'NEW':
+                    if event['s'] == self.symbol:
+                        standardized['new_open_order'] = {'order_id': int(event['i']),
+                                                          'symbol': event['s'],
+                                                          'price': float(event['p']),
+                                                          'qty': float(event['q']),
+                                                          'type': event['o'].lower(),
+                                                          'side': event['S'].lower(),
+                                                          'position_side': 'long',
+                                                          'timestamp': int(event['T'])}
+                    else:
+                        standardized['other_symbol'] = event['s']
+                        standardized['other_type'] = 'new_open_order'
+                elif event['X'] in ['CANCELED', 'EXPIRED', 'REJECTED']:
+                    if event['s'] == self.symbol:
+                        standardized['deleted_order_id'] = int(event['i'])
+                    else:
+                        standardized['other_symbol'] = event['s']
+                        standardized['other_type'] = event['X'].lower()
+                elif event['X'] == 'FILLED':
+                    if event['s'] == self.symbol:
+                        standardized['filled'] = {'order_id': int(event['i']),
+                                                  'symbol': event['s'],
+                                                  'price': float(event['p']),
+                                                  'qty': float(event['q']),
+                                                  'type': event['o'].lower(),
+                                                  'side': event['S'].lower(),
+                                                  'position_side': 'long',
+                                                  'timestamp': int(event['T'])}
+                        standardized['deleted_order_id'] = standardized['filled']['order_id']
+                    else:
+                        standardized['other_symbol'] = event['s']
+                        standardized['other_type'] = 'filled'
+                elif event['X'] == 'PARTIALLY_FILLED':
+                    if event['s'] == self.symbol:
+                        standardized['partially_filled'] = {'order_id': int(event['i']),
+                                                            'symbol': event['s'],
+                                                            'price': float(event['p']),
+                                                            'qty': float(event['q']),
+                                                            'type': event['o'].lower(),
+                                                            'side': event['S'].lower(),
+                                                            'position_side': 'long',
+                                                            'timestamp': int(event['T'])}
+                        standardized['deleted_order_id'] = standardized['partially_filled']['order_id']
+                    else:
+                        standardized['other_symbol'] = event['s']
+                        standardized['other_type'] = 'partially_filled'
+
+        print('debug', standardized)
+        return standardized
+
+
+
