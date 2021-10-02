@@ -45,8 +45,6 @@ class Bot:
         self.position = {}
         self.open_orders = []
         self.fills = []
-        self.long_pfills = []
-        self.shrt_pfills = []
         self.price = 0.0
         self.ob = [0.0, 0.0]
 
@@ -115,12 +113,16 @@ class Bot:
         finally:
             self.ts_released['update_open_orders'] = time()
 
+    def adjust_wallet_balance(self, balance: float) -> float:
+        return (balance if self.assigned_balance is None else self.assigned_balance) * self.cross_wallet_pct
+
     async def update_position(self) -> None:
         if self.ts_locked['update_position'] > self.ts_released['update_position']:
             return
         self.ts_locked['update_position'] = time()
         try:
             position = await self.fetch_position()
+            position['wallet_balance'] = self.adjust_wallet_balance(position['wallet_balance'])
             # isolated equity, not cross equity
             position['equity'] = position['wallet_balance'] + \
                 calc_upnl(position['long']['size'], position['long']['price'],
@@ -141,9 +143,6 @@ class Bot:
                     await self.update_fills()
                 self.dump_log({'log_type': 'position', 'data': position})
             self.position = position
-            self.long_pfills, self.shrt_pfills = get_position_fills(self.position['long']['size'],
-                                                                    abs(self.position['shrt']['size']),
-                                                                    self.fills)
         except Exception as e:
             print('error with update position', e)
         finally:
@@ -165,10 +164,6 @@ class Bot:
             ids_set = set([x['order_id'] for x in self.fills])
             fetched = await self.fetch_fills()
             new_fills = [x for x in fetched if x['order_id'] not in ids_set]
-            if new_fills:
-                self.long_pfills, self.shrt_pfills = get_position_fills(self.position['long']['size'],
-                                                                        abs(self.position['shrt']['size']),
-                                                                        fetched)
             self.fills = fetched
             return new_fills
         except Exception as e:
@@ -262,7 +257,7 @@ class Bot:
         self.process_websocket_ticks = True
 
     def calc_orders(self):
-        balance = (self.position['wallet_balance'] if self.assigned_balance is None else self.assigned_balance) * self.cross_wallet_pct
+        balance = self.position['wallet_balance']
         long_psize = self.position['long']['size']
         long_pprice = self.position['long']['price']
         shrt_psize = self.position['shrt']['size']
@@ -366,7 +361,7 @@ class Bot:
         try:
             pos_change = False
             if 'wallet_balance' in event:
-                self.position['wallet_balance'] = event['wallet_balance']
+                self.position['wallet_balance'] = self.adjust_wallet_balance(event['wallet_balance'])
                 pos_change = True
             if 'long_psize' in event:
                 self.position['long']['size'] = event['long_psize']
