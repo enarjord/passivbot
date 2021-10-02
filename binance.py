@@ -21,6 +21,7 @@ class BinanceBot(Bot):
         super().__init__(config)
         self.session = aiohttp.ClientSession()
         self.base_endpoint = ''
+        self.headers = {'X-MBX-APIKEY': self.key}
 
     async def public_get(self, url: str, params: dict = {}) -> dict:
         try:
@@ -45,9 +46,8 @@ class BinanceBot(Bot):
             params['signature'] = hmac.new(self.secret.encode('utf-8'),
                                            urlencode(params).encode('utf-8'),
                                            hashlib.sha256).hexdigest()
-            headers = {'X-MBX-APIKEY': self.key}
             async with getattr(self.session, type_)(base_endpoint + url, params=params,
-                                                    headers=headers) as response:
+                                                    headers=self.headers) as response:
                 result = await response.text()
             return json.loads(result)
         except Exception as e:
@@ -408,7 +408,7 @@ class BinanceBot(Bot):
         params = {'type': type_.upper(), 'amount': amount, 'asset': asset}
         return await self.private_post(self.endpoints['transfer'], params, base_endpoint=self.spot_base_endpoint)
 
-    def standardize_websocket_ticks(self, data: dict) -> [dict]:
+    def standardize_market_stream_event(self, data: dict) -> [dict]:
         try:
             return [{'timestamp': int(data['T']), 'price': float(data['p']), 'qty': float(data['q']),
                      'is_buyer_maker': data['m']}]
@@ -416,8 +416,20 @@ class BinanceBot(Bot):
             print('error in websocket tick', e, data)
         return []
 
-    async def subscribe_ws(self, ws):
-        pass
+    async def beat_heart_user_stream(self) -> None:
+        while True:
+            await asyncio.sleep(60 + np.random.randint(60 * 9, 60 * 14))
+            await self.init_user_stream()
+
+    async def init_user_stream(self) -> None:
+        try:
+            response = await self.private_post(self.endpoints['listen_key'])
+            self.listen_key = response['listenKey']
+            self.endpoints['websocket_user'] = self.endpoints['websocket'] + self.listen_key
+            print_(['fetched listen key', response])
+        except Exception as e:
+            traceback.print_exc()
+            print_(['error fetching listen key', e])
 
     def standardize_user_stream_event(self, event: dict) -> dict:
         standardized = {}
@@ -462,10 +474,5 @@ class BinanceBot(Bot):
                     standardized['other_symbol'] = event['o']['s']
                     standardized['other_type'] = 'order_update'
         return standardized
-
-
-
-
-
 
 
