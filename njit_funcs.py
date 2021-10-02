@@ -641,7 +641,7 @@ def calc_long_entry_grid(
             if len(grid) == 0:
                 return [(0.0, 0.0, '')]
             if calc_diff(grid[0][3], grid[0][1]) < 0.00001:
-                entry_price = min(highest_bid, grid[0][1])
+                entry_price = highest_bid
                 min_entry_qty = calc_min_entry_qty(entry_price, inverse, qty_step, min_qty, min_cost)
                 return [(max(min_entry_qty, grid[0][0]), entry_price, 'long_ientry')]
         if len(grid) == 0:
