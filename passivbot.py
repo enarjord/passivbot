@@ -359,7 +359,6 @@ class Bot:
         if now - self.ts_released['force_update'] > 30:
             self.ts_released['force_update'] = now
             # force update pos and open orders thru rest API every 30 sec
-            print_(['debug force update\n'], n=True)
             await asyncio.gather(self.update_position(), self.update_open_orders())
         if now - self.heartbeat_ts > 60 * 60:
             # print heartbeat once an hour
@@ -408,7 +407,6 @@ class Bot:
                               self.price, self.inverse, self.c_mult)
                 await asyncio.sleep(0.01) # sleep 10 ms to catch both pos update and open orders update
                 await self.cancel_and_create()
-            print_(['debug user stream event', event, '\n'], n=True)
         except Exception as e:
             print(['error handling user stream event', e])
             traceback.print_exc()
@@ -433,8 +431,8 @@ class Bot:
         line += f"pprc diff {calc_diff(self.position['long']['price'], self.price):.3f} "
         line += f"liq {round_dynamic(liq_price, 5)} "
         line += f"lpbr {self.position['long']['pbr']:.3f} "
-        line += f"bal {compress_float(self.position['wallet_balance'], 3)} "
-        line += f"eq {compress_float(self.position['equity'], 3)} "
+        line += f"bal {round_dynamic(self.position['wallet_balance'], 4)} "
+        line += f"eq {round_dynamic(self.position['equity'], 4)} "
         print_([line], r=True)
 
     def flush_stuck_locks(self, timeout: float = 5.0) -> None:
@@ -456,30 +454,17 @@ class Bot:
         await asyncio.gather(self.user_stream_task, self.market_stream_task)
 
     async def beat_heart_user_stream(self) -> None:
-        while True:
-            await asyncio.sleep(np.random.randint(60, 60 * 55))
-            try:
-                response = await self.private_post(self.endpoints['listen_key'], {})
-                print_(['refreshed listen key', response])
-            except Exception as e:
-                traceback.print_exc()
-                print_(['error refreshing listen key', e])
+        pass
 
     async def init_user_stream(self) -> None:
-        try:
-            response = await self.private_post(self.endpoints['listen_key'])
-            self.listen_key = response['listenKey']
-            self.endpoints['websocket_user'] = self.endpoints['websocket'] + self.listen_key
-            print_(['initialized listen key', response])
-        except Exception as e:
-            traceback.print_exc()
-            print_(['error initializing listen key', e])
+        pass
 
     async def start_websocket_user_stream(self) -> None:
         await self.init_user_stream()
         asyncio.create_task(self.beat_heart_user_stream())
         print('url', self.endpoints['websocket_user'])
         async with websockets.connect(self.endpoints['websocket_user']) as ws:
+            await self.subscribe_to_user_stream(ws)
             async for msg in ws:
                 if msg is None:
                     continue
@@ -494,7 +479,7 @@ class Bot:
     async def start_websocket_market_stream(self) -> None:
         k = 1
         async with websockets.connect(self.endpoints['websocket_market']) as ws:
-            await self.subscribe_ws(ws)
+            await self.subscribe_to_market_stream(ws)
             async for msg in ws:
                 if msg is None:
                     continue
@@ -503,7 +488,7 @@ class Bot:
                         if self.telegram is not None:
                             self.telegram.send_msg("<pre>Bot stopped</pre>")
                         break
-                    ticks = self.standardize_websocket_ticks(json.loads(msg))
+                    ticks = self.standardize_market_stream_event(json.loads(msg))
                     if self.process_websocket_ticks:
                         asyncio.create_task(self.on_market_stream_event(ticks))
                     if k % 10 == 0:
@@ -514,6 +499,13 @@ class Bot:
                 except Exception as e:
                     if 'success' not in msg:
                         print('error in websocket', e, msg)
+
+    async def subscribe_to_market_stream(self, ws):
+        pass
+
+    async def subscribe_to_user_stream(self, ws):
+        pass
+
 
 async def start_bot(bot):
     while not bot.stop_websocket:
