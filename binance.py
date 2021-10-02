@@ -23,9 +23,9 @@ class BinanceBot(Bot):
         self.base_endpoint = ''
         self.headers = {'X-MBX-APIKEY': self.key}
 
-    async def public_get(self, url: str, params: dict = {}) -> dict:
+    async def public_get(self, url: str, params: dict = {}, base_endpoint=None) -> dict:
         try:
-            async with self.session.get(self.base_endpoint + url, params=params) as response:
+            async with self.session.get((self.base_endpoint if base_endpoint is None else base_endpoint) + url, params=params) as response:
                 result = await response.text()
             return json.loads(result)
         except Exception as e:
@@ -70,7 +70,7 @@ class BinanceBot(Bot):
     async def init_market_type(self):
         fapi_endpoint = 'https://fapi.binance.com'
         dapi_endpoint = 'https://dapi.binance.com'
-        self.exchange_info = await self.private_get('/fapi/v1/exchangeInfo', base_endpoint=fapi_endpoint)
+        self.exchange_info = await self.public_get('/fapi/v1/exchangeInfo', base_endpoint=fapi_endpoint)
         if self.symbol in {e['symbol'] for e in self.exchange_info['symbols']}:
             print('linear perpetual')
             self.market_type += '_linear_perpetual'
@@ -98,7 +98,7 @@ class BinanceBot(Bot):
                 'listen_key': '/fapi/v1/listenKey'
             }
         else:
-            self.exchange_info = await self.private_get('/dapi/v1/exchangeInfo', base_endpoint=dapi_endpoint)
+            self.exchange_info = await self.public_get('/dapi/v1/exchangeInfo', base_endpoint=dapi_endpoint)
             if self.symbol in {e['symbol'] for e in self.exchange_info['symbols']}:
                 print('inverse coin margined')
                 self.base_endpoint = dapi_endpoint
@@ -365,7 +365,7 @@ class BinanceBot(Bot):
         if end_time is not None:
             params['endTime'] = end_time
         try:
-            fetched = await self.private_get(self.endpoints['ticks'], params)
+            fetched = await self.public_get(self.endpoints['ticks'], params)
         except Exception as e:
             print('error fetching ticks a', e)
             return []
