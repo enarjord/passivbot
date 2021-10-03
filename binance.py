@@ -123,6 +123,8 @@ class BinanceBot(Bot):
                     'websocket': (ws := f"wss://dstream.binance.com/ws/"),
                     'websocket_market': ws + f"{self.symbol.lower()}@aggTrade",
                     'websocket_user': ws,
+                    'listen_key': '/dapi/v1/listenKey'
+
                 }
             else:
                 raise Exception(f'unknown symbol {self.symbol}')
@@ -426,7 +428,6 @@ class BinanceBot(Bot):
             response = await self.private_post(self.endpoints['listen_key'])
             self.listen_key = response['listenKey']
             self.endpoints['websocket_user'] = self.endpoints['websocket'] + self.listen_key
-            print_(['fetched listen key', response])
         except Exception as e:
             traceback.print_exc()
             print_(['error fetching listen key', e])
