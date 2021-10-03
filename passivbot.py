@@ -15,6 +15,7 @@ from procedures import load_live_config, make_get_filepath, load_exchange_key_se
 from pure_funcs import filter_orders, compress_float, create_xk, round_dynamic, denumpyize, \
     spotify_config, get_position_fills
 from njit_funcs import qty_to_cost, calc_diff, round_, calc_long_close_grid, calc_upnl, calc_long_entry_grid
+from typing import Union, Dict, List
 
 import websockets
 from telegram_bot import Telegram
@@ -31,6 +32,8 @@ class Bot:
         self.config['max_leverage'] = 25
         self.telegram = None
         self.xk = {}
+
+        self.ws = None
 
         self.hedge_mode = self.config['hedge_mode'] = True
         self.set_config(self.config)
@@ -357,8 +360,17 @@ class Bot:
             self.heartbeat_ts = time()
         await self.cancel_and_create()
 
+    async def on_user_stream_events(self, events: Union[List[Dict], List]) -> None:
+        if type(events) == list:
+            for event in events:
+                await self.on_user_stream_event(event)
+        else:
+            await self.on_user_stream_event(events)
+
     async def on_user_stream_event(self, event: dict) -> None:
         try:
+            if self.exchange == 'bybit':
+                print('debug', event)
             pos_change = False
             if 'wallet_balance' in event:
                 self.position['wallet_balance'] = self.adjust_wallet_balance(event['wallet_balance'])
@@ -453,8 +465,9 @@ class Bot:
     async def start_websocket_user_stream(self) -> None:
         await self.init_user_stream()
         asyncio.create_task(self.beat_heart_user_stream())
-        print('url', self.endpoints['websocket_user'])
+        print_(['url', self.endpoints['websocket_user']])
         async with websockets.connect(self.endpoints['websocket_user']) as ws:
+            self.ws = ws
             await self.subscribe_to_user_stream(ws)
             async for msg in ws:
                 if msg is None:
@@ -462,7 +475,7 @@ class Bot:
                 try:
                     if self.stop_websocket:
                         break
-                    asyncio.create_task(self.on_user_stream_event(self.standardize_user_stream_event(json.loads(msg))))
+                    asyncio.create_task(self.on_user_stream_events(self.standardize_user_stream_event(json.loads(msg))))
                 except Exception as e:
                     print(['error in websocket user stream', e])
                     traceback.print_exc()
