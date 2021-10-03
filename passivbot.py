@@ -538,6 +538,8 @@ async def main() -> None:
                         help='specify whether spot or futures (default), overriding value from backtest config')
     parser.add_argument('-gs', '--graceful_stop', action='store_true',
                         help='if true, disable long and short')
+    parser.add_argument('-ab', '--assigned_balance', type=float, required=False, dest='assigned_balance', default=None,
+                        help='add assigned_balance to live config')
 
     args = parser.parse_args()
     try:
@@ -560,6 +562,9 @@ async def main() -> None:
     config['symbol'] = args.symbol
     config['live_config_path'] = args.live_config_path
     config['market_type'] = args.market_type if args.market_type is not None else 'futures'
+    if args.assigned_balance is not None:
+        print(f'\nassigned balance set to {args.assigned_balance}\n')
+        config['assigned_balance'] = args.assigned_balance
 
     if args.graceful_stop:
         print('\n\ngraceful stop enabled, will not make new entries once existing positions are closed\n')
@@ -599,6 +604,7 @@ if __name__ == '__main__':
         asyncio.run(main())
     except Exception as e:
         print(f'\nThere was an error starting the bot: {e}')
+        traceback.print_exc()
     finally:
         print('\nPassivbot was stopped succesfully')
         os._exit(0)
