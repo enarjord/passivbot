@@ -422,8 +422,8 @@ class Bot:
         line += f"pprc diff {calc_diff(self.position['long']['price'], self.price):.3f} "
         line += f"liq {round_dynamic(liq_price, 5)} "
         line += f"lpbr {self.position['long']['pbr']:.3f} "
-        line += f"bal {round_dynamic(self.position['wallet_balance'], 4)} "
-        line += f"eq {round_dynamic(self.position['equity'], 4)} "
+        line += f"bal {round_dynamic(self.position['wallet_balance'], 5)} "
+        line += f"eq {round_dynamic(self.position['equity'], 5)} "
         print_([line], r=True)
 
     def flush_stuck_locks(self, timeout: float = 5.0) -> None:
