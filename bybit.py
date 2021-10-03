@@ -4,13 +4,14 @@ import hmac
 import json
 from time import time
 from urllib.parse import urlencode
+from typing import Union, List, Dict
 
 import aiohttp
 import numpy as np
 import traceback
 
 from pure_funcs import ts_to_date, sort_dict_keys, date_to_ts
-from procedures import print_async_exception, print_
+from procedures import print_async_exception, print_, utc_ms
 from passivbot import Bot
 
 
@@ -277,7 +278,6 @@ class Bybit(Bot):
                 print_(['fetched no new trades', self.symbol])
         return trades
 
-
     async def fetch_ohlcvs(self, start_time: int = None, interval='1m', limit=200):
         # m -> minutes; h -> hours; d -> days; w -> weeks; M -> months
         interval_map = {'1m': 1, '3m': 3, '5m': 5, '15m': 15, '30m': 30, '1h': 60, '2h': 120, '4h': 240, '6h': 360,
@@ -423,22 +423,85 @@ class Bybit(Bot):
 
     async def beat_heart_user_stream(self) -> None:
         while True:
-            await asyncio.sleep(np.random.randint(30))
+            await asyncio.sleep(27)
             try:
-                response = await self.private_post(self.endpoints['listen_key'], {})
-                #print_(['refreshed listen key', response])
+                await self.ws.send(json.dumps({'op': 'ping'}))
             except Exception as e:
                 traceback.print_exc()
-                print_(['error refreshing listen key', e])
+                print_(['error sending heartbeat', e])
 
     async def subscribe_to_market_stream(self, ws):
-        params = {'op': 'subscribe', 'args': ['trade.' + self.symbol]}
-        await ws.send(json.dumps(params))
+        await ws.send(json.dumps({'op': 'subscribe', 'args': ['trade.' + self.symbol]}))
 
     async def subscribe_to_user_stream(self, ws):
-        params = {'op': 'subscribe', 'args': ['position', 'execution', 'wallet', 'order']}
-        await ws.send(json.dumps(params))
+        expires = int((time() + 1) * 1000)
+        signature = str(hmac.new(
+            bytes(self.secret, "utf-8"),
+            bytes(f"GET/realtime{expires}", "utf-8"), digestmod="sha256"
+        ).hexdigest())
+        await ws.send(json.dumps({'op': 'auth', 'args': [self.key, expires, signature]}))
+        await asyncio.sleep(1)
+        await ws.send(json.dumps({'op': 'subscribe', 'args': ['position', 'execution', 'wallet', 'order']}))
 
     async def transfer(self, type_: str, amount: float, asset: str = 'USDT'):
         return {'code': '-1', 'msg': 'Transferring funds not supported for Bybit'}
 
+    def standardize_user_stream_event(self, event: Union[List[Dict], Dict]) -> Union[List[Dict], Dict]:
+        events = []
+        if 'topic' in event:
+            if event['topic'] == 'order':
+                for elm in event['data']:
+                    if elm['symbol'] == self.symbol:
+                        if elm['order_status'] == 'Created':
+                            pass
+                        elif elm['order_status'] == 'Rejected':
+                            pass
+                        elif elm['order_status'] == 'New':
+                            events.append({'new_open_order': {
+                                'order_id': elm['order_id'],
+                                'symbol': elm['symbol'],
+                                'price': float(elm['price']),
+                                'qty': float(elm['qty']),
+                                'type': elm['order_type'].lower(),
+                                'side': (side := elm['side'].lower()),
+                                'position_side': ('long' if ((side == 'buy' and elm['create_type'] == 'CreateByUser')
+                                                             or (side == 'sell' and elm['create_type'] == 'CreateByClosing'))
+                                                  else 'shrt'),
+                                'timestamp': date_to_ts(elm['update_time'])
+                            }})
+                        elif elm['order_status'] == 'PartiallyFilled':
+                            events.append({'deleted_order_id': elm['order_id'], 'partially_filled': True})
+                        elif elm['order_status'] == 'Filled':
+                            events.append({'deleted_order_id': elm['order_id'], 'filled': True})
+                        elif elm['order_status'] == 'Cancelled':
+                            events.append({'deleted_order_id': elm['order_id']})
+                        elif elm['order_status'] == 'PendingCancel':
+                            pass
+                    else:
+                        events.append({'other_symbol': elm['symbol'], 'other_type': event['topic']})
+            elif event['topic'] == 'execution':
+                for elm in event['data']:
+                    if elm['symbol'] == self.symbol:
+                        if elm['exec_type'] == 'Trade':
+                            # already handled by "order"
+                            pass
+                    else:
+                        events.append({'other_symbol': elm['symbol'], 'other_type': event['topic']})
+            elif event['topic'] == 'position':
+                for elm in event['data']:
+                    if elm['symbol'] == self.symbol:
+                        standardized = {}
+                        if elm['side'] == 'Buy':
+                            standardized['long_psize'] = float(elm['size'])
+                            standardized['long_pprice'] = float(elm['entry_price'])
+                        elif elm['side'] == 'Sell':
+                            standardized['shrt_psize'] = -abs(float(elm['size']))
+                            standardized['shrt_pprice'] = float(elm['entry_price'])
+
+                        events.append(standardized)
+                    else:
+                        events.append({'other_symbol': elm['symbol'], 'other_type': event['topic']})
+            elif event['topic'] == 'wallet':
+                for elm in event['data']:
+                    events.append({'wallet_balance': float(elm['wallet_balance'])})
+        return events
