@@ -24,7 +24,7 @@ from collections import OrderedDict
 from backtest import backtest
 from backtest import plot_wrap
 from downloader import Downloader
-from procedures import prepare_optimize_config, add_argparse_args
+from procedures import prepare_optimize_config, add_argparse_args, load_live_config
 from pure_funcs import pack_config, unpack_config, get_template_live_config, ts_to_date, analyze_fills
 from njit_funcs import round_dynamic
 from reporter import LogReporter
@@ -256,6 +256,7 @@ def backtest_tune(data: np.ndarray, config: dict, current_best: Union[dict, list
             parameter_columns.append(f'{side}£grid_span')
             parameter_columns.append(f'{side}£eprice_pprice_diff')
             parameter_columns.append(f'{side}£eprice_exp_base')
+            parameter_columns.append(f'{side}£secondary_pprice_diff')
             parameter_columns.append(f'{side}£min_markup')
 
     backtest_wrap = tune.with_parameters(simple_sliding_window_wrap, data=data,
@@ -327,11 +328,11 @@ async def execute_optimize(config):
     if config['starting_configs'] is not None:
         try:
             if os.path.isdir(config['starting_configs']):
-                start_candidate = [json.load(open(f)) for f in
+                start_candidate = [load_live_config(f) for f in
                                    glob.glob(os.path.join(config['starting_configs'], '*.json'))]
                 print('Starting with all configurations in directory.')
             else:
-                start_candidate = json.load(open(config['starting_configs']))
+                start_candidate = load_live_config(config['starting_configs'])
                 print('Starting with specified configuration.')
         except Exception as e:
             print('Could not find specified configuration.', e)
