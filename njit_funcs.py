@@ -810,8 +810,8 @@ def njit_backtest(
             equity = balance + calc_upnl(long_psize, long_pprice, shrt_psize, shrt_pprice,
                                          prices[k], inverse, c_mult)
 
-            # if not in pos, wait 5 secs between updates, else wait 10 minutes
-            next_update_ts = timestamps[k] + 1000 * (5 if long_psize == 0.0 else 60 * 10)
+            # by default wait 10 mins between open orders updates
+            next_update_ts = timestamps[k] + 1000 * 60 * 10
 
             if equity / starting_balance < 0.1:
                 # break if 90% of starting balance is lost
@@ -828,19 +828,15 @@ def njit_backtest(
                     fills.append((k, timestamps[k], pnl, fee_paid, balance, equity,
                                   -long_psize, prices[k], 0.0, 0.0, 'long_bankruptcy'))
                 if shrt_psize != 0.0:
-
                     fee_paid = -qty_to_cost(shrt_psize, shrt_pprice, inverse, c_mult) * maker_fee
                     pnl = calc_shrt_pnl(shrt_pprice, prices[k], -shrt_psize, inverse, c_mult)
                     balance, equity = 0.0, 0.0
                     shrt_psize, shrt_pprice = 0.0, 0.0
                     fills.append((k, timestamps[k], pnl, fee_paid, balance, equity,
                                   -shrt_psize, prices[k], 0.0, 0.0, 'shrt_bankruptcy'))
-
                 return fills, stats
 
         while long_entries and long_entries[0][0] > 0.0 and prices[k] < long_entries[0][1]:
-            if long_psize == 0.0:
-                next_update_ts = timestamps[k] + latency_simulation_ms
             long_psize, long_pprice = calc_new_psize_pprice(long_psize, long_pprice, long_entries[0][0],
                                                             long_entries[0][1], qty_step)
             fee_paid = -qty_to_cost(long_entries[0][0], long_entries[0][1], inverse, c_mult) * maker_fee
@@ -851,7 +847,6 @@ def njit_backtest(
             long_entries = long_entries[1:]
             bkr_price = calc_bankruptcy_price(balance, long_psize, long_pprice, shrt_psize, shrt_pprice, inverse, c_mult)
         while long_psize > 0.0 and long_closes and long_closes[0][0] < 0.0 and prices[k] > long_closes[0][1]:
-            next_update_ts = timestamps[k] + latency_simulation_ms
             long_close_qty = long_closes[0][0]
             new_long_psize = round_(long_psize + long_close_qty, qty_step)
             if new_long_psize < 0.0:
@@ -870,4 +865,7 @@ def njit_backtest(
                           long_psize, long_pprice, long_closes[0][2]))
             long_closes = long_closes[1:]
             bkr_price = calc_bankruptcy_price(balance, long_psize, long_pprice, shrt_psize, shrt_pprice, inverse, c_mult)
+        if long_psize == 0.0 or (long_psize > 0.0 and prices[k] > long_pprice):
+            # update orders once a sec if no long pos or price action is higher than long pprice
+            next_update_ts = min(next_update_ts, timestamps[k] + latency_simulation_ms)
     return fills, stats
