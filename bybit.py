@@ -467,7 +467,7 @@ class Bybit(Bot):
                                 'position_side': ('long' if ((side == 'buy' and elm['create_type'] == 'CreateByUser')
                                                              or (side == 'sell' and elm['create_type'] == 'CreateByClosing'))
                                                   else 'shrt'),
-                                'timestamp': date_to_ts(elm['update_time'])
+                                'timestamp': date_to_ts(elm['timestamp' if self.inverse else 'update_time'])
                             }})
                         elif elm['order_status'] == 'PartiallyFilled':
                             events.append({'deleted_order_id': elm['order_id'], 'partially_filled': True})
@@ -499,9 +499,11 @@ class Bybit(Bot):
                             standardized['shrt_pprice'] = float(elm['entry_price'])
 
                         events.append(standardized)
+                        if self.inverse:
+                            events.append({'wallet_balance': float(elm['wallet_balance'])})
                     else:
                         events.append({'other_symbol': elm['symbol'], 'other_type': event['topic']})
-            elif event['topic'] == 'wallet':
+            elif not self.inverse and event['topic'] == 'wallet':
                 for elm in event['data']:
                     events.append({'wallet_balance': float(elm['wallet_balance'])})
         return events
