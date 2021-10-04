@@ -350,9 +350,9 @@ async def main():
     parser.add_argument('-t', '--start', type=str, required=False, dest='starting_configs',
                         default=None,
                         help='start with given live configs.  single json file or dir with multiple json files')
+    parser.add_argument('-i', '--iters', type=int, required=False, dest='iters', default=None, help='n optimize iters')
     parser = add_argparse_args(parser)
     args = parser.parse_args()
-
     config = await prepare_optimize_config(args)
     await execute_optimize(config)
 

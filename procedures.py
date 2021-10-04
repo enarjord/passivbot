@@ -79,12 +79,12 @@ async def prepare_backtest_config(args) -> dict:
 
 async def prepare_optimize_config(args) -> dict:
     config = await prepare_backtest_config(args)
-    for key in ['starting_configs']:
+    config.update(load_hjson_config(args.optimize_config_path))
+    for key in ['starting_configs', 'iters']:
         if hasattr(args, key) and getattr(args, key) is not None:
             config[key] = getattr(args, key)
         elif key not in config:
             config[key] = None
-    config.update(load_hjson_config(args.optimize_config_path))
     return config
 
 
