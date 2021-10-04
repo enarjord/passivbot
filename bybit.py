@@ -298,12 +298,12 @@ class Bybit(Bot):
                  **{k: float(e[k]) for k in ['open', 'high', 'low', 'close', 'volume']}}
                 for e in fetched['result']]
 
-    async def get_all_income(self, start_time: int, income_type: str = 'Trade', end_time: int = None):
+    async def get_all_income(self, symbol: str = None, start_time: int = None, income_type: str = 'Trade', end_time: int = None):
         limit = 50
         income = []
         page = 1
         while True:
-            fetched = await self.fetch_income(start_time=start_time, income_type=income_type, limit=limit, page=page)
+            fetched = await self.fetch_income(symbol=symbol, start_time=start_time, income_type=income_type, limit=limit, page=page)
             if len(fetched) == 0:
                 break
             print_(['fetched income', ts_to_date(fetched[0]['timestamp'])])

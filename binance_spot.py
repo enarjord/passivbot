@@ -244,7 +244,7 @@ class BinanceBotSpot(Bot):
         else:
             return cancellation
 
-    async def get_all_fills(self, start_time: int):
+    async def get_all_fills(self, symbol: str = None, start_time: int = None):
         fills = []
         i = 0
         while True:
@@ -252,7 +252,7 @@ class BinanceBotSpot(Bot):
             if i >= 15:
                 print("\nWarning: more than 15 calls to fetch_fills(), breaking")
                 break
-            fetched = await self.fetch_fills(start_time=start_time)
+            fetched = await self.fetch_fills(symbol=symbol, start_time=start_time)
             print_(['fetched fills', ts_to_date(fetched[0]['timestamp'])])
             if fetched == fills[-len(fetched):]:
                 break
@@ -263,8 +263,8 @@ class BinanceBotSpot(Bot):
         fills_d = {e['id']: e for e in fills}
         return sorted(fills_d.values(), key=lambda x: x['timestamp'])
 
-    async def get_all_income(self, start_time: int, income_type: str = 'realized_pnl', end_time: int = None):
-        fills = await self.get_all_fills(start_time)
+    async def get_all_income(self, symbol: str = None, start_time: int = None, income_type: str = 'realized_pnl', end_time: int = None):
+        fills = await self.get_all_fills(symbol=symbol, start_time=start_time)
 
         income = []
         psize, pprice = 0.0, 0.0
@@ -286,8 +286,8 @@ class BinanceBotSpot(Bot):
         return income
 
 
-    async def fetch_fills(self, limit: int = 1000, from_id: int = None, start_time: int = None, end_time: int = None):
-        params = {'symbol': self.symbol, 'limit': min(1000, max(500, limit))}
+    async def fetch_fills(self, symbol: str = None, limit: int = 1000, from_id: int = None, start_time: int = None, end_time: int = None):
+        params = {'symbol': (self.symbol if symbol is None else symbol), 'limit': min(1000, max(500, limit))}
         if from_id is not None:
             params['fromId'] = max(0, from_id)
         if start_time is not None:
@@ -316,7 +316,7 @@ class BinanceBotSpot(Bot):
             return []
         return fills
 
-    async def fetch_income(self, limit: int = 1000, start_time: int = None, end_time: int = None):
+    async def fetch_income(self, symbol: str = None, limit: int = 1000, start_time: int = None, end_time: int = None):
         print('fetch income not implemented in spot')
         return []
 
@@ -398,7 +398,6 @@ class BinanceBotSpot(Bot):
             response = await self.post_listen_key()
             self.listen_key = response['listenKey']
             self.endpoints['websocket_user'] = self.endpoints['websocket'] + self.listen_key
-            print_(['fetched listen key', response])
         except Exception as e:
             traceback.print_exc()
             print_(['error fetching listen key', e])

@@ -305,10 +305,10 @@ class BinanceBot(Bot):
             return []
         return fills
 
-    async def get_all_income(self, start_time: int, income_type: str = 'realized_pnl', end_time: int = None):
+    async def get_all_income(self, symbol: str = None, start_time: int = None, income_type: str = 'realized_pnl', end_time: int = None):
         income = []
         while True:
-            fetched = await self.fetch_income(start_time=start_time, income_type=income_type, limit=1000)
+            fetched = await self.fetch_income(symbol=symbol, start_time=start_time, income_type=income_type, limit=1000)
             print_(['fetched income', ts_to_date(fetched[0]['timestamp'])])
             if fetched == income[-len(fetched):]:
                 break
