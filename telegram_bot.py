@@ -22,7 +22,7 @@ from telegram import KeyboardButton, ParseMode, ReplyKeyboardMarkup, Update, Inl
 from telegram.ext import Updater, CommandHandler, ConversationHandler, CallbackContext, \
     MessageHandler, Filters, CallbackQueryHandler
 
-from njit_funcs import round_, calc_long_pnl
+from njit_funcs import round_, calc_long_pnl, calc_shrt_pnl
 from pure_funcs import compress_float, round_dynamic, denumpyize
 
 
@@ -614,24 +614,24 @@ class Telegram:
         if 'long' in self._bot.position:
             long_position = self._bot.position['long']
             shrt_position = self._bot.position['shrt']
-            closest_long_price = min([o['price'] for o in self._bot.open_orders if o['position_side'] == 'long' and o['side'] == 'sell'] or [0])
-            closest_shrt_price = max([o['price'] for o in self._bot.open_orders if o['position_side'] == 'shrt' and o['side'] == 'buy'] or [0])
+            closest_long_reentry_price = max([o['price'] for o in self._bot.open_orders if o['position_side'] == 'long' and o['side'] == 'buy'] or [0])
+            closest_long_close_price = min([o['price'] for o in self._bot.open_orders if o['position_side'] == 'long' and o['side'] == 'sell'] or [0])
+            closest_shrt_reentry_price = min([o['price'] for o in self._bot.open_orders if o['position_side'] == 'shrt' and o['side'] == 'sell'] or [0])
+            closest_shrt_close_price = max([o['price'] for o in self._bot.open_orders if o['position_side'] == 'shrt' and o['side'] == 'buy'] or [0])
+            liq_diff = min(calc_diff(long_position['liquidation_price'], self._bot.price),
+                           calc_diff(shrt_position['liquidation_price'], self._bot.price))
+            long_pnl = calc_long_pnl(long_position['price'], self._bot.price, long_position['size'], self._bot.inverse, self._bot.c_mult)
+            shrt_pnl = calc_shrt_pnl(shrt_position['price'], self._bot.price, shrt_position['size'], self._bot.inverse, self._bot.c_mult)
 
-            position_table.add_row([f'Size', round_dynamic(long_position['size'], 3),
-                                    round_dynamic(shrt_position['size'], 3)])
-            position_table.add_row(['Entry price', round_dynamic(long_position['price'], 3),
-                                    round_dynamic(shrt_position['price'], 3)])
-            position_table.add_row(['Curr.price', round_(self._bot.price, self._bot.price_step),
-                                    round_(self._bot.price, self._bot.price_step)])
-            position_table.add_row(['Close price', round_(closest_long_price, self._bot.price_step),
-                                    round_(closest_shrt_price, self._bot.price_step)])
+            position_table.add_row(['Size', round_dynamic(long_position['size'], 3), round_dynamic(shrt_position['size'], 3)])
+            position_table.add_row(['Entry price', round_dynamic(long_position['price'], 3), round_dynamic(shrt_position['price'], 3)])
+            position_table.add_row(['Curr.price', round_(self._bot.price, self._bot.price_step), round_(self._bot.price, self._bot.price_step)])
+            position_table.add_row(['Reentry price', round_(closest_long_reentry_price, self._bot.price_step), round_(closest_shrt_reentry_price, self._bot.price_step)])
+            position_table.add_row(['Close price', round_(closest_long_close_price, self._bot.price_step), round_(closest_shrt_close_price, self._bot.price_step)])
             position_table.add_row(['Cost/balance', round_dynamic(float(long_position['pbr']), 3), round_dynamic(float(shrt_position['pbr']), 3)])
-            position_table.add_row(['Liq.price', round_dynamic(long_position['liquidation_price'], 3),
-                 round_dynamic(shrt_position['liquidation_price'], 3)])
-            position_table.add_row(['Liq.diff.%', round_dynamic(float(long_position['liq_diff']) * 100, 3),
-                 round_dynamic(float(shrt_position['liq_diff']) * 100, 3)])
-            position_table.add_row([f'UPNL {self._bot.margin_coin if hasattr(self._bot, "margin_coin") else ""}', round_dynamic(float(long_position['upnl']), 3),
-                                    round_dynamic(float(shrt_position['upnl']), 3)])
+            position_table.add_row(['Liq.price', round_dynamic(long_position['liquidation_price'], 3), round_dynamic(shrt_position['liquidation_price'], 3)])
+            position_table.add_row(['Liq.diff.%', round_dynamic(liq_diff * 100, 3), round_dynamic(liq_diff * 100, 3)])
+            position_table.add_row(['UPNL', round_dynamic(long_upnl, 3), round_dynamic(shrt_upnl, 3)])
 
             table_msg = position_table.get_string(border=True, padding_width=1,
                                                   junction_char=' ', vertical_char=' ',

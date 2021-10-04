@@ -212,21 +212,19 @@ class BinanceBot(Bot):
             self.private_get(self.endpoints['balance'], {})
         )
         positions = [e for e in positions if e['symbol'] == self.symbol]
-        position = {'long': {'size': 0.0, 'price': 0.0, 'liquidation_price': 0.0, 'upnl': 0.0},
-                    'shrt': {'size': 0.0, 'price': 0.0, 'liquidation_price': 0.0, 'upnl': 0.0},
+        position = {'long': {'size': 0.0, 'price': 0.0, 'liquidation_price': 0.0},
+                    'shrt': {'size': 0.0, 'price': 0.0, 'liquidation_price': 0.0},
                     'wallet_balance': 0.0, 'equity': 0.0}
         if positions:
             for p in positions:
                 if p['positionSide'] == 'LONG':
                     position['long'] = {'size': float(p['positionAmt']),
                                         'price': float(p['entryPrice']),
-                                        'liquidation_price': float(p['liquidationPrice']),
-                                        'upnl': float(p['unRealizedProfit'])}
+                                        'liquidation_price': float(p['liquidationPrice'])}
                 elif p['positionSide'] == 'SHORT':
                     position['shrt'] = {'size': float(p['positionAmt']),
                                         'price': float(p['entryPrice']),
-                                        'liquidation_price': float(p['liquidationPrice']),
-                                        'upnl': float(p['unRealizedProfit'])}
+                                        'liquidation_price': float(p['liquidationPrice'])}
         for e in balance:
             if e['asset'] == (self.quot if 'linear_perpetual' in self.market_type else self.coin):
                 position['wallet_balance'] = float(e['balance'])
