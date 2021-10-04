@@ -19,6 +19,23 @@ def first_capitalized(s: str):
     return s[0].upper() + s[1:].lower()
 
 
+def determine_pos_side(o: dict) -> str:
+    if o['side'].lower() == 'buy':
+        if 'entry' in o['order_link_id']:
+            return 'long'
+        elif 'close' in o['order_link_id']:
+            return 'shrt'
+        else:
+            return 'both'
+    else:
+        if 'entry' in o['order_link_id']:
+            return 'shrt'
+        elif 'close' in o['order_link_id']:
+            return 'long'
+        else:
+            return 'both'
+
+
 class Bybit(Bot):
     def __init__(self, config: dict):
         self.exchange = 'bybit'
@@ -84,24 +101,6 @@ class Bybit(Bot):
         self.endpoints['exchange_info'] = '/v2/public/symbols'
         self.endpoints['ticker'] = '/v2/public/tickers'
 
-    def determine_pos_side(self, o: dict) -> str:
-        side = o['side'].lower()
-        if side == 'buy':
-            if 'entry' in o['order_link_id']:
-                position_side = 'long'
-            elif 'close' in o['order_link_id']:
-                position_side = 'shrt'
-            else:
-                position_side = 'both'
-        else:
-            if 'entry' in o['order_link_id']:
-                position_side = 'shrt'
-            elif 'close' in o['order_link_id']:
-                position_side = 'long'
-            else:
-                position_side = 'both'
-        return position_side
-
     async def _init(self):
         info = await self.public_get(self.endpoints['exchange_info'])
         for e in info['result']:
@@ -135,7 +134,7 @@ class Bybit(Bot):
                  'price': float(elm['price']),
                  'qty': float(elm['qty']),
                  'side': elm['side'].lower(),
-                 'position_side': self.determine_pos_side(elm),
+                 'position_side': determine_pos_side(elm),
                  'timestamp': date_to_ts(elm[self.endpoints['created_at_key']])}
                 for elm in fetched['result']]
 
@@ -370,7 +369,7 @@ class Bybit(Bot):
                         'fee_paid': float(x['exec_fee']),
                         'fee_token': self.margin_coin,
                         'timestamp': int(x['trade_time_ms']),
-                        'position_side': self.determine_pos_side(x),
+                        'position_side': determine_pos_side(x),
                         'is_maker': x['fee_rate'] < 0.0} 
                 fills.append(fill)
             return fills
@@ -457,18 +456,32 @@ class Bybit(Bot):
                         elif elm['order_status'] == 'Rejected':
                             pass
                         elif elm['order_status'] == 'New':
-                            events.append({'new_open_order': {
+                            new_open_order = {
                                 'order_id': elm['order_id'],
                                 'symbol': elm['symbol'],
                                 'price': float(elm['price']),
                                 'qty': float(elm['qty']),
                                 'type': elm['order_type'].lower(),
                                 'side': (side := elm['side'].lower()),
-                                'position_side': ('long' if ((side == 'buy' and elm['create_type'] == 'CreateByUser')
-                                                             or (side == 'sell' and elm['create_type'] == 'CreateByClosing'))
-                                                  else 'shrt'),
                                 'timestamp': date_to_ts(elm['timestamp' if self.inverse else 'update_time'])
-                            }})
+                            }
+                            if 'inverse_perpetual' in self.market_type:
+                                if self.position['long']['size'] == 0.0:
+                                    if self.position['shrt']['size'] == 0.0:
+                                        new_open_order['position_side'] = 'long' if new_open_order['side'] == 'buy' else 'shrt'
+                                    else:
+                                        new_open_order['position_side'] = 'shrt'
+                                else:
+                                    new_open_order['position_side'] = 'long'
+                            elif 'inverse_futures' in self.market_type:
+                                new_open_order['position_side'] = determine_pos_side(elm)
+                            else:
+                                new_open_order['position_side'] = (
+                                    'long' if ((new_open_order['side'] == 'buy' and elm['create_type'] == 'CreateByUser')
+                                               or (new_open_order['side'] == 'sell' and elm['create_type'] == 'CreateByClosing'))
+                                    else 'shrt'
+                                )
+                            events.append({'new_open_order': new_open_order})
                         elif elm['order_status'] == 'PartiallyFilled':
                             events.append({'deleted_order_id': elm['order_id'], 'partially_filled': True})
                         elif elm['order_status'] == 'Filled':
