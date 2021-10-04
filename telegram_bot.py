@@ -723,7 +723,7 @@ class Telegram:
                 ms_per_day = 1000 * 60 * 60 * 24
                 now = time() * 1000
                 start_time = now - ms_per_day * n_days
-                income = await self._bot.get_all_income(start_time)
+                income = await self._bot.get_all_income(symbol=self._bot.symbol, start_time=start_time)
                 idf, bdf = get_daily_from_income(income, self._bot.position['wallet_balance'], start_time=start_time, end_time=now)
                 income_sum = idf.income.sum()
                 starting_balance = self._bot.position['wallet_balance'] - income_sum
