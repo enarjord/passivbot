@@ -771,13 +771,15 @@ def njit_backtest(
 
     balance = equity = starting_balance
     long_psize, long_pprice, shrt_psize, shrt_pprice = 0.0, 0.0, 0.0, 0.0
-    next_update_ts = 0
+
     fills = []
+    stats = []
 
     long_entries = long_closes = [(0.0, 0.0, '')]
     bkr_price = 0.0
 
-    stats = []
+    next_entry_grid_update_ts = 0
+    next_close_grid_update_ts = 0
     next_stats_update = 0
 
     prev_k = 0
@@ -795,48 +797,40 @@ def njit_backtest(
             stats.append((timestamps[k], balance, equity, bkr_price, long_psize, long_pprice,
                           shrt_psize, shrt_pprice, prices[k], closest_bkr))
             next_stats_update = timestamps[k] + 60 * 1000
-        if timestamps[k] >= next_update_ts:
-            # simulate small delay between bot and exchange
+        if timestamps[k] >= next_entry_grid_update_ts:
             long_entries = calc_long_entry_grid(
                 balance, long_psize, long_pprice, prices[k - 1], inverse, do_long, qty_step, price_step,
                 min_qty, min_cost, c_mult, grid_span[0], pbr_limit[0], max_n_entry_orders[0], initial_qty_pct[0],
                 eprice_pprice_diff[0], secondary_pbr_allocation[0], secondary_pprice_diff[0], eprice_exp_base[0])
+            next_entry_grid_update_ts = timestamps[k] + 1000 * 60 * 10
+        if timestamps[k] >= next_close_grid_update_ts:
             long_closes = calc_long_close_grid(
                 balance, long_psize, long_pprice, prices[k - 1], spot, inverse, qty_step, price_step, min_qty,
                 min_cost, c_mult, pbr_limit[0], initial_qty_pct[0], min_markup[0], markup_range[0], n_close_orders[0])
+            next_close_grid_update_ts = timestamps[k] + 1000 * 60 * 10
 
-            bkr_price = calc_bankruptcy_price(balance, long_psize, long_pprice, shrt_psize, shrt_pprice, inverse, c_mult)
-
-            equity = balance + calc_upnl(long_psize, long_pprice, shrt_psize, shrt_pprice,
-                                         prices[k], inverse, c_mult)
-
-            # by default wait 10 mins between open orders updates
-            next_update_ts = timestamps[k] + 1000 * 60 * 10
-
-            if equity / starting_balance < 0.1:
-                # break if 90% of starting balance is lost
-                return fills, stats
-
-            if closest_bkr < 0.06:
-                # consider bankruptcy within 6% as liquidation
-                if long_psize != 0.0:
-                    fee_paid = -qty_to_cost(long_psize, long_pprice, inverse, c_mult) * maker_fee
-                    pnl = calc_long_pnl(long_pprice, prices[k], -long_psize, inverse, c_mult)
-                    balance = 0.0
-                    equity = 0.0
-                    long_psize, long_pprice = 0.0, 0.0
-                    fills.append((k, timestamps[k], pnl, fee_paid, balance, equity,
-                                  -long_psize, prices[k], 0.0, 0.0, 'long_bankruptcy'))
-                if shrt_psize != 0.0:
-                    fee_paid = -qty_to_cost(shrt_psize, shrt_pprice, inverse, c_mult) * maker_fee
-                    pnl = calc_shrt_pnl(shrt_pprice, prices[k], -shrt_psize, inverse, c_mult)
-                    balance, equity = 0.0, 0.0
-                    shrt_psize, shrt_pprice = 0.0, 0.0
-                    fills.append((k, timestamps[k], pnl, fee_paid, balance, equity,
-                                  -shrt_psize, prices[k], 0.0, 0.0, 'shrt_bankruptcy'))
-                return fills, stats
+        if closest_bkr < 0.06:
+            # consider bankruptcy within 6% as liquidation
+            if long_psize != 0.0:
+                fee_paid = -qty_to_cost(long_psize, long_pprice, inverse, c_mult) * maker_fee
+                pnl = calc_long_pnl(long_pprice, prices[k], -long_psize, inverse, c_mult)
+                balance = 0.0
+                equity = 0.0
+                long_psize, long_pprice = 0.0, 0.0
+                fills.append((k, timestamps[k], pnl, fee_paid, balance, equity,
+                              -long_psize, prices[k], 0.0, 0.0, 'long_bankruptcy'))
+            if shrt_psize != 0.0:
+                fee_paid = -qty_to_cost(shrt_psize, shrt_pprice, inverse, c_mult) * maker_fee
+                pnl = calc_shrt_pnl(shrt_pprice, prices[k], -shrt_psize, inverse, c_mult)
+                balance, equity = 0.0, 0.0
+                shrt_psize, shrt_pprice = 0.0, 0.0
+                fills.append((k, timestamps[k], pnl, fee_paid, balance, equity,
+                              -shrt_psize, prices[k], 0.0, 0.0, 'shrt_bankruptcy'))
+            return fills, stats
 
         while long_entries and long_entries[0][0] > 0.0 and prices[k] < long_entries[0][1]:
+            next_entry_grid_update_ts = min(next_entry_grid_update_ts, timestamps[k] + latency_simulation_ms)
+            next_close_grid_update_ts = min(next_close_grid_update_ts, timestamps[k] + latency_simulation_ms)
             long_psize, long_pprice = calc_new_psize_pprice(long_psize, long_pprice, long_entries[0][0],
                                                             long_entries[0][1], qty_step)
             fee_paid = -qty_to_cost(long_entries[0][0], long_entries[0][1], inverse, c_mult) * maker_fee
@@ -847,6 +841,8 @@ def njit_backtest(
             long_entries = long_entries[1:]
             bkr_price = calc_bankruptcy_price(balance, long_psize, long_pprice, shrt_psize, shrt_pprice, inverse, c_mult)
         while long_psize > 0.0 and long_closes and long_closes[0][0] < 0.0 and prices[k] > long_closes[0][1]:
+            next_entry_grid_update_ts = min(next_entry_grid_update_ts, timestamps[k] + latency_simulation_ms)
+            next_close_grid_update_ts = min(next_close_grid_update_ts, timestamps[k] + latency_simulation_ms)
             long_close_qty = long_closes[0][0]
             new_long_psize = round_(long_psize + long_close_qty, qty_step)
             if new_long_psize < 0.0:
@@ -865,7 +861,8 @@ def njit_backtest(
                           long_psize, long_pprice, long_closes[0][2]))
             long_closes = long_closes[1:]
             bkr_price = calc_bankruptcy_price(balance, long_psize, long_pprice, shrt_psize, shrt_pprice, inverse, c_mult)
-        if long_psize == 0.0 or (long_psize > 0.0 and prices[k] > long_pprice):
-            # update orders once a sec if no long pos or price action is higher than long pprice
-            next_update_ts = min(next_update_ts, timestamps[k] + latency_simulation_ms)
+        if long_psize == 0.0:
+            next_entry_grid_update_ts = min(next_entry_grid_update_ts, timestamps[k] + latency_simulation_ms)
+        elif prices[k] > long_pprice:
+            next_close_grid_update_ts = min(next_close_grid_update_ts, timestamps[k] + latency_simulation_ms)
     return fills, stats
