@@ -632,7 +632,9 @@ def calc_long_entry_grid(
                 eprice_exp_base=eprice_exp_base)
             entry_price = min(highest_bid, grid[0][1])
             min_entry_qty = calc_min_entry_qty(entry_price, inverse, qty_step, min_qty, min_cost)
-            return [(max(min_entry_qty, grid[0][0]), entry_price, 'long_ientry')]
+            max_entry_qty = round_(cost_to_qty(balance * pbr_limit * initial_qty_pct,
+                                               entry_price, inverse, c_mult), qty_step)
+            return [(max(min_entry_qty, min(max_entry_qty, grid[0][0])), entry_price, 'long_ientry')]
         else:
             grid = approximate_grid(
                 balance, psize, pprice, inverse, qty_step, price_step, min_qty, min_cost, c_mult, grid_span, pbr_limit,
@@ -643,7 +645,19 @@ def calc_long_entry_grid(
             if calc_diff(grid[0][3], grid[0][1]) < 0.00001:
                 entry_price = highest_bid
                 min_entry_qty = calc_min_entry_qty(entry_price, inverse, qty_step, min_qty, min_cost)
-                return [(max(min_entry_qty, grid[0][0]), entry_price, 'long_ientry')]
+                max_entry_qty = round_(cost_to_qty(balance * pbr_limit * initial_qty_pct,
+                                                   entry_price, inverse, c_mult), qty_step)
+                if qty_to_cost(grid[0][0], grid[0][1], inverse, c_mult) / balance > pbr_limit * 1.1:
+                    print('\n\nwarning: abnormally large partial ientry')
+                    print('grid:')
+                    for e in grid:
+                        print(list(e))
+                    print('args:')
+                    print(balance, psize, pprice, highest_bid, inverse, do_long, qty_step, price_step, min_qty,
+                          min_cost, c_mult, grid_span, pbr_limit, max_n_entry_orders, initial_qty_pct,
+                          eprice_pprice_diff, secondary_pbr_allocation, secondary_pprice_diff, eprice_exp_base)
+                    print('\n\n')
+                return [(max(min_entry_qty, min(max_entry_qty, grid[0][0])), entry_price, 'long_ientry')]
         if len(grid) == 0:
             return [(0.0, 0.0, '')]
         entries = []
@@ -684,12 +698,13 @@ def approximate_grid(
         eprice_exp_base=1.618034,
         crop: bool = True):
     
-    def eval_(guess_, psize_):
-        guess_ = round_(guess_, price_step)
+    def eval_(ientry_price_guess, psize_):
+        ientry_price_guess = round_(ientry_price_guess, price_step)
         grid = calc_whole_long_entry_grid(
-            balance, guess_, inverse, qty_step, price_step, min_qty, min_cost, c_mult, grid_span, pbr_limit,
+            balance, ientry_price_guess, inverse, qty_step, price_step, min_qty, min_cost, c_mult, grid_span, pbr_limit,
             max_n_entry_orders, initial_qty_pct, eprice_pprice_diff, secondary_pbr_allocation, secondary_pprice_diff,
             eprice_exp_base=eprice_exp_base)
+        # find node whose psize is closest to psize
         diff, i = sorted([(abs(grid[i][2] - psize_) / psize_, i) for i in range(len(grid))])[0]
         return grid, diff, i
 
@@ -709,11 +724,11 @@ def approximate_grid(
         return grid[i + 1:] if crop else grid
     # no close matches
     # assume partial fill
-    i = 0
-    while i < len(grid) and grid[i][2] <= psize * 0.99999:
+    k = 0
+    while k < len(grid) and grid[k][2] <= psize * 0.99999:
         # find first node whose psize > psize
-        i += 1
-    if i == 0:
+        k += 1
+    if k == 0:
         # means psize is less than iqty
         # return grid with adjusted iqty
         min_ientry_qty = calc_min_entry_qty(grid[0][1], inverse, qty_step, min_qty, min_cost)
@@ -721,19 +736,18 @@ def approximate_grid(
         grid[0][2] = round_(psize + grid[0][0], qty_step)
         grid[0][4] = qty_to_cost(grid[0][2], grid[0][3], inverse, c_mult) / balance
         return grid
-    if i == len(grid):
+    if k == len(grid):
         # means pbr limit is exceeded
         return np.empty((0, 5)) if crop else grid
     for _ in range(5):
         # find grid as if partial fill were full fill
-        remaining_qty = round_(grid[i][2] - psize, qty_step)
-        npsize, npprice = calc_new_psize_pprice(psize, pprice, remaining_qty, grid[i][1], qty_step)
+        remaining_qty = round_(grid[k][2] - psize, qty_step)
+        npsize, npprice = calc_new_psize_pprice(psize, pprice, remaining_qty, grid[k][1], qty_step)
         grid, diff, i = eval_(npprice, npsize)
-        grid, diff, i = eval_(npprice * (npprice / grid[i][3]), npsize)
-    min_ientry_qty = calc_min_entry_qty(grid[i][1], inverse, qty_step, min_qty, min_cost)
-    # next reentry qty -= partially filled
-    grid[i][0] = max(min_ientry_qty, round_(grid[i][0] - (psize - grid[i - 1][2]), qty_step))
-    return grid[i:] if crop else grid
+        grid, diff, i = eval_(npprice * (npprice / grid[k][3]), npsize)
+    min_entry_qty = calc_min_entry_qty(grid[k][1], inverse, qty_step, min_qty, min_cost)
+    grid[k][0] = max(min_entry_qty, round_(grid[k][2] - psize, qty_step))
+    return grid[k:] if crop else grid
 
 
 @njit
