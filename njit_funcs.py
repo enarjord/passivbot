@@ -634,7 +634,7 @@ def calc_long_entry_grid(
             min_entry_qty = calc_min_entry_qty(entry_price, inverse, qty_step, min_qty, min_cost)
             max_entry_qty = round_(cost_to_qty(balance * pbr_limit * initial_qty_pct,
                                                entry_price, inverse, c_mult), qty_step)
-            return [(min(max_entry_qty, max(min_entry_qty, grid[0][0])), entry_price, 'long_ientry')]
+            return [(max(min_entry_qty, min(max_entry_qty, grid[0][0])), entry_price, 'long_ientry')]
         else:
             grid = approximate_grid(
                 balance, psize, pprice, inverse, qty_step, price_step, min_qty, min_cost, c_mult, grid_span, pbr_limit,
@@ -657,7 +657,7 @@ def calc_long_entry_grid(
                           min_cost, c_mult, grid_span, pbr_limit, max_n_entry_orders, initial_qty_pct,
                           eprice_pprice_diff, secondary_pbr_allocation, secondary_pprice_diff, eprice_exp_base)
                     print('\n\n')
-                return [(min(max_entry_qty, max(min_entry_qty, grid[0][0])), entry_price, 'long_ientry')]
+                return [(max(min_entry_qty, min(max_entry_qty, grid[0][0])), entry_price, 'long_ientry')]
         if len(grid) == 0:
             return [(0.0, 0.0, '')]
         entries = []
