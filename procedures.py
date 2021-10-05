@@ -129,7 +129,7 @@ def load_exchange_key_secret(user: str) -> (str, str, str):
 
 
 def print_(args, r=False, n=False):
-    line = ts_to_date(time())[:19] + '  '
+    line = ts_to_date(utc_ms())[:19] + '  '
     str_args = '{} ' * len(args)
     line += str_args.format(*args)
     if n:
