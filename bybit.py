@@ -400,13 +400,16 @@ class Bybit(Bot):
             elif 'linear_perpetual' in self.market_type:
                 res = await self.private_post('/private/linear/position/switch-isolated',
                                               {'symbol': self.symbol, 'is_isolated': False,
-                                               'buy_leverage': 0,
-                                               'sell_leverage': 0})
+                                               'buy_leverage': 7, 'sell_leverage': 7})
+                print(res)
+                res = await self.private_post('/private/linear/position/set-leverage',
+                                              {'symbol': self.symbol, 'buy_leverage': 7, 'sell_leverage': 7})
+                print(res)
             elif 'inverse_perpetual' in self.market_type:
                 res = await self.private_post('/v2/private/position/leverage/save',
                                               {'symbol': self.symbol, 'leverage': 0})
 
-            print(res)
+                print(res)
         except Exception as e:
             print(e)
 
