@@ -130,6 +130,7 @@ def load_exchange_key_secret(user: str) -> (str, str, str):
 
 def print_(args, r=False, n=False):
     line = ts_to_date(utc_ms())[:19] + '  '
+    # line = ts_to_date(local_time())[:19] + '  '
     str_args = '{} ' * len(args)
     line += str_args.format(*args)
     if n:
@@ -282,6 +283,10 @@ def get_starting_configs(config) -> [dict]:
 
 def utc_ms() -> float:
     return datetime.utcnow().timestamp() * 1000
+
+
+def local_time() -> float:
+    return datetime.now().astimezone().timestamp() * 1000
 
 
 def print_async_exception(coro):
