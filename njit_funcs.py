@@ -745,6 +745,10 @@ def approximate_grid(
         npsize, npprice = calc_new_psize_pprice(psize, pprice, remaining_qty, grid[k][1], qty_step)
         grid, diff, i = eval_(npprice, npsize)
         grid, diff, i = eval_(npprice * (npprice / grid[k][3]), npsize)
+        k = 0
+        while k < len(grid) and grid[k][2] <= psize * 0.99999:
+            # find first node whose psize > psize
+            k += 1
     min_entry_qty = calc_min_entry_qty(grid[k][1], inverse, qty_step, min_qty, min_cost)
     grid[k][0] = max(min_entry_qty, round_(grid[k][2] - psize, qty_step))
     return grid[k:] if crop else grid
