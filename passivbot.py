@@ -52,6 +52,7 @@ class Bot:
         self.ob = [0.0, 0.0]
 
         self.n_orders_per_execution = 4
+        self.force_update_interval = 30
 
         self.c_mult = self.config['c_mult'] = 1.0
 
@@ -350,7 +351,7 @@ class Bot:
         now = time()
         if now - self.ts_released['print'] >= 0.5:
             self.update_output_information()
-        if now - self.ts_released['force_update'] > 30:
+        if now - self.ts_released['force_update'] > self.force_update_interval:
             self.ts_released['force_update'] = now
             # force update pos and open orders thru rest API every 30 sec
             await asyncio.gather(self.update_position(), self.update_open_orders())
@@ -369,8 +370,6 @@ class Bot:
 
     async def on_user_stream_event(self, event: dict) -> None:
         try:
-            if self.exchange == 'bybit':
-                print('debug', event)
             pos_change = False
             if 'wallet_balance' in event:
                 self.position['wallet_balance'] = self.adjust_wallet_balance(event['wallet_balance'])
@@ -396,12 +395,9 @@ class Bot:
             if 'new_open_order' in event:
                 if event['new_open_order']['order_id'] not in {x['order_id'] for x in self.open_orders}:
                     self.open_orders.append(event['new_open_order'])
-            elif 'deleted_order_id' in event:
-                for i, o in enumerate(self.open_orders):
-                    if o['order_id'] == event['deleted_order_id']:
-                        self.open_orders = self.open_orders[:i] + self.open_orders[i + 1:]
-                        break
-            elif 'partially_filled' in event:
+            if 'deleted_order_id' in event:
+                self.open_orders = [oo for oo in self.open_orders if oo['order_id'] != event['deleted_order_id']]
+            if 'partially_filled' in event:
                 await self.update_open_orders()
             if pos_change:
                 self.position['equity'] = self.position['wallet_balance'] + \
