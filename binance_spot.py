@@ -28,6 +28,7 @@ class BinanceBotSpot(Bot):
         self.session = aiohttp.ClientSession()
         self.headers = {'X-MBX-APIKEY': self.key}
         self.base_endpoint = ''
+        self.force_update_interval = 40
 
     async def public_get(self, url: str, params: dict = {}) -> dict:
         async with self.session.get(self.base_endpoint + url, params=params) as response:
@@ -503,7 +504,6 @@ class BinanceBotSpot(Bot):
                         standardized['other_symbol'] = event['s']
                         standardized['other_type'] = 'partially_filled'
 
-        print('debug', standardized)
         return standardized
 
 
