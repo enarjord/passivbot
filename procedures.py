@@ -15,6 +15,7 @@ from datetime import datetime
 def load_live_config(live_config_path: str) -> dict:
     try:
         live_config = json.load(open(live_config_path))
+        live_config = json.loads(json.dumps(live_config).replace('secondary_grid_spacing', 'secondary_pprice_diff'))
         return numpyize(live_config)
     except Exception as e:
         raise Exception(f'failed to load live config {live_config_path} {e}')
@@ -72,21 +73,18 @@ async def prepare_backtest_config(args) -> dict:
     config['optimize_dirpath'] = make_get_filepath(os.path.join(base_dirpath, 'optimize', ''))
     config['plots_dirpath'] = make_get_filepath(os.path.join(base_dirpath, 'plots', ''))
 
-    config['avg_periodic_gain_key'] = f"avg_{int(round(config['periodic_gain_n_days']))}days_gain"
-
     await add_market_specific_settings(config)
 
     return config
 
 async def prepare_optimize_config(args) -> dict:
     config = await prepare_backtest_config(args)
-    for key in ['starting_configs']:
+    config.update(load_hjson_config(args.optimize_config_path))
+    for key in ['starting_configs', 'iters']:
         if hasattr(args, key) and getattr(args, key) is not None:
             config[key] = getattr(args, key)
         elif key not in config:
             config[key] = None
-    config.update(load_hjson_config(args.optimize_config_path))
-    config['avg_periodic_gain_key'] = f"avg_{int(round(config['periodic_gain_n_days']))}days_gain"
     return config
 
 
@@ -131,7 +129,8 @@ def load_exchange_key_secret(user: str) -> (str, str, str):
 
 
 def print_(args, r=False, n=False):
-    line = ts_to_date(time())[:19] + '  '
+    line = ts_to_date(utc_ms())[:19] + '  '
+    # line = ts_to_date(local_time())[:19] + '  '
     str_args = '{} ' * len(args)
     line += str_args.format(*args)
     if n:
@@ -286,6 +285,23 @@ def utc_ms() -> float:
     return datetime.utcnow().timestamp() * 1000
 
 
+def local_time() -> float:
+    return datetime.now().astimezone().timestamp() * 1000
+
+
+def print_async_exception(coro):
+    try:
+        print(f'returned: {coro}')
+    except:
+        pass
+    try:
+        print(f'exception: {coro.exception()}')
+    except:
+        pass
+    try:
+        print(f'result: {coro.result()}')
+    except:
+        pass
 
 
 

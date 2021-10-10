@@ -1,11 +1,12 @@
 import os
 
 import numpy as np
+import pandas as pd
 
 from procedures import load_live_config
 from datetime import datetime, timedelta, timezone
 from time import time, strftime, gmtime
-from pure_funcs import config_pretty_str
+from pure_funcs import config_pretty_str, ts_to_date, get_daily_from_income
 from typing import Optional
 
 try:
@@ -21,7 +22,7 @@ from telegram import KeyboardButton, ParseMode, ReplyKeyboardMarkup, Update, Inl
 from telegram.ext import Updater, CommandHandler, ConversationHandler, CallbackContext, \
     MessageHandler, Filters, CallbackQueryHandler
 
-from njit_funcs import round_, calc_long_pnl
+from njit_funcs import round_, calc_long_pnl, calc_shrt_pnl
 from pure_funcs import compress_float, round_dynamic, denumpyize
 
 
@@ -613,24 +614,24 @@ class Telegram:
         if 'long' in self._bot.position:
             long_position = self._bot.position['long']
             shrt_position = self._bot.position['shrt']
-            closest_long_price = min([o['price'] for o in self._bot.open_orders if o['position_side'] == 'long' and o['side'] == 'sell'] or [0])
-            closest_shrt_price = max([o['price'] for o in self._bot.open_orders if o['position_side'] == 'shrt' and o['side'] == 'buy'] or [0])
+            closest_long_reentry_price = max([o['price'] for o in self._bot.open_orders if o['position_side'] == 'long' and o['side'] == 'buy'] or [0])
+            closest_long_close_price = min([o['price'] for o in self._bot.open_orders if o['position_side'] == 'long' and o['side'] == 'sell'] or [0])
+            closest_shrt_reentry_price = min([o['price'] for o in self._bot.open_orders if o['position_side'] == 'shrt' and o['side'] == 'sell'] or [0])
+            closest_shrt_close_price = max([o['price'] for o in self._bot.open_orders if o['position_side'] == 'shrt' and o['side'] == 'buy'] or [0])
+            liq_diff = min(calc_diff(long_position['liquidation_price'], self._bot.price),
+                           calc_diff(shrt_position['liquidation_price'], self._bot.price))
+            long_pnl = calc_long_pnl(long_position['price'], self._bot.price, long_position['size'], self._bot.inverse, self._bot.c_mult)
+            shrt_pnl = calc_shrt_pnl(shrt_position['price'], self._bot.price, shrt_position['size'], self._bot.inverse, self._bot.c_mult)
 
-            position_table.add_row([f'Size', round_dynamic(long_position['size'], 3),
-                                    round_dynamic(shrt_position['size'], 3)])
-            position_table.add_row(['Entry price', round_dynamic(long_position['price'], 3),
-                                    round_dynamic(shrt_position['price'], 3)])
-            position_table.add_row(['Curr.price', round_(self._bot.price, self._bot.price_step),
-                                    round_(self._bot.price, self._bot.price_step)])
-            position_table.add_row(['Close price', round_(closest_long_price, self._bot.price_step),
-                                    round_(closest_shrt_price, self._bot.price_step)])
+            position_table.add_row(['Size', round_dynamic(long_position['size'], 3), round_dynamic(shrt_position['size'], 3)])
+            position_table.add_row(['Entry price', round_dynamic(long_position['price'], 3), round_dynamic(shrt_position['price'], 3)])
+            position_table.add_row(['Curr.price', round_(self._bot.price, self._bot.price_step), round_(self._bot.price, self._bot.price_step)])
+            position_table.add_row(['Reentry price', round_(closest_long_reentry_price, self._bot.price_step), round_(closest_shrt_reentry_price, self._bot.price_step)])
+            position_table.add_row(['Close price', round_(closest_long_close_price, self._bot.price_step), round_(closest_shrt_close_price, self._bot.price_step)])
             position_table.add_row(['Cost/balance', round_dynamic(float(long_position['pbr']), 3), round_dynamic(float(shrt_position['pbr']), 3)])
-            position_table.add_row(['Liq.price', round_dynamic(long_position['liquidation_price'], 3),
-                 round_dynamic(shrt_position['liquidation_price'], 3)])
-            position_table.add_row(['Liq.diff.%', round_dynamic(float(long_position['liq_diff']) * 100, 3),
-                 round_dynamic(float(shrt_position['liq_diff']) * 100, 3)])
-            position_table.add_row([f'UPNL {self._bot.margin_coin if hasattr(self._bot, "margin_coin") else ""}', round_dynamic(float(long_position['upnl']), 3),
-                                    round_dynamic(float(shrt_position['upnl']), 3)])
+            position_table.add_row(['Liq.price', round_dynamic(long_position['liquidation_price'], 3), round_dynamic(shrt_position['liquidation_price'], 3)])
+            position_table.add_row(['Liq.diff.%', round_dynamic(liq_diff * 100, 3), round_dynamic(liq_diff * 100, 3)])
+            position_table.add_row(['UPNL', round_dynamic(long_upnl, 3), round_dynamic(shrt_upnl, 3)])
 
             table_msg = position_table.get_string(border=True, padding_width=1,
                                                   junction_char=' ', vertical_char=' ',
@@ -650,9 +651,7 @@ class Telegram:
 
                 msg = f'Futures balance {self._bot.margin_coin if hasattr(self._bot, "margin_coin") else ""}:\n' \
                       f'Wallet balance: {compress_float(position["wallet_balance"], 4)}\n' \
-                      f'Equity: {compress_float(self._bot.position["equity"], 4)}\n' \
-                      f'Locked margin: {compress_float(self._bot.position["used_margin"], 4)}\n' \
-                      f'Available margin: {compress_float(self._bot.position["available_margin"], 4)}\n\n' \
+                      f'Equity: {compress_float(self._bot.position["equity"], 4)}\n\n' \
                       f'Spot balance:\n' \
                       f'{self._bot.quot}: {compress_float(float(quot_balance["free"]) + float(quot_balance["locked"]), 4)} ({compress_float(float(quot_balance["locked"]), 4)} locked)\n' \
                       f'{self._bot.coin}: {compress_float(float(coin_balance["free"]) + float(coin_balance["locked"]), 4)} ({compress_float(float(coin_balance["locked"]), 4)} locked)'
@@ -719,76 +718,32 @@ class Telegram:
 
     def _daily(self, update=None, context=None):
         if self._bot.exchange == 'binance':
-            async def send_daily_async(nr_of_days:int):
-                today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=timezone.utc)
-                daily = {}
-                ms_in_a_day = 1000 * 60 * 60 * 24
-                for idx, item in enumerate(range(0, nr_of_days)):
-                    start_of_day = today - timedelta(days=idx)
-                    daily[int(start_of_day.timestamp()) * 1000] = 0.0
 
-                start_of_first_day = today - timedelta(days=nr_of_days-1)
-                start_time_to_fetch = int(start_of_first_day.timestamp()) * 1000
-                if self._bot.market_type == 'spot':
-                    fills = list()
-                    while True:
-                        next_set = await self._bot.fetch_fills(start_time=start_time_to_fetch)
-                        [fills.append(f) for f in next_set]
-                        if len(next_set) < 1000:
-                            break
-                        start_time_to_fetch = max([f['timestamp'] for f in next_set])
-
-                    psize = 0.0
-                    pprice = 0.0
-                    for fill in fills:
-                        if fill['side'] == 'buy':
-                            new_psize = psize + fill['qty']
-                            pprice = pprice * (psize / new_psize) + fill['price'] * (fill['qty'] / new_psize)
-                            psize = new_psize
-                        elif psize > 0:
-                            day = fill['timestamp'] // ms_in_a_day * ms_in_a_day
-                            if day in daily:
-                                daily[day] += calc_long_pnl(pprice, fill['price'], fill['qty'], False, 1.0)
-                            psize -= fill['qty']
-
-                else:
-                    while True:
-                        next_set = await self._bot.fetch_income(start_time=start_time_to_fetch)
-                        for income in next_set:
-                            day = income['timestamp'] // ms_in_a_day * ms_in_a_day
-                            daily[day] += float(income['income'])
-                        if len(next_set) < 1000:
-                            break
-                        start_time_to_fetch = max([f['timestamp'] for f in next_set])
-
-                # position = await self._bot.fetch_position()
-                position = self._bot.position.copy()
-                wallet_balance = position['wallet_balance']
+            async def send_daily_async(n_days: int):
+                ms_per_day = 1000 * 60 * 60 * 24
+                now = time() * 1000
+                start_time = now - ms_per_day * n_days
+                income = await self._bot.get_all_income(symbol=self._bot.symbol, start_time=start_time)
+                idf, bdf = get_daily_from_income(income, self._bot.position['wallet_balance'], start_time=start_time, end_time=now)
+                income_sum = idf.income.sum()
+                starting_balance = self._bot.position['wallet_balance'] - income_sum
                 table = PrettyTable(['Date\nMM-DD', 'PNL (%)'])
-                pnl_sum = 0.0
-                for item in daily.keys():
-                    day_profit = daily[item]
-                    pnl_sum += day_profit
-                    previous_day_close_wallet_balance = wallet_balance - day_profit
-                    profit_pct = ((wallet_balance / previous_day_close_wallet_balance) - 1) * 100 \
-                        if previous_day_close_wallet_balance > 0.0 else 0.0
-                    wallet_balance = previous_day_close_wallet_balance
-                    date = strftime('%m-%d', gmtime(item/1000.0))
-                    table.add_row([date, f'{day_profit:.1f} ({profit_pct:.2f}%)'])
+                for i in range(len(bdf)):
+                    table.add_row([bdf.index[i][:10], f'{round_dynamic(bdf.abs_income.iloc[i], 3)} ({bdf.gain.iloc[i] * 100:.2f}%)'])
 
-                bal_minus_pnl = position['wallet_balance'] - pnl_sum
-                pct_sum = (position['wallet_balance'] / bal_minus_pnl - 1) * 100 if bal_minus_pnl > 0.0 else 0.0
+                pct_sum = ((self._bot.position['wallet_balance'] / starting_balance - 1) * 100) if starting_balance > 0.0 else 0.0
                 table.add_row(['-------','------------'])
-                table.add_row(['Total', f'{round_dynamic(pnl_sum, 3)} ({round_(pct_sum, 0.01)}%)'])
+                table.add_row(['Total', f'{round_dynamic(income_sum, 3)} ({round_(pct_sum, 0.01)}%)'])
 
                 msg = f'<pre>{table.get_string(border=True, padding_width=1, junction_char=" ", vertical_char=" ", hrules=HEADER)}</pre>'
                 self.send_msg(msg, refreshable=True, callback_path='update_daily', query=update.callback_query)
 
             try:
-                nr_of_days = int(context.args[0])
+                n_days = int(context.args[0])
             except:
-                nr_of_days = 7
-            task = self.loop.create_task(send_daily_async(nr_of_days))
+                n_days = 7
+            self.send_msg('Calculating daily income...')
+            task = self.loop.create_task(send_daily_async(n_days))
             task.add_done_callback(lambda fut: True) #ensures task is processed to prevent warning about not awaiting
         else:
             self.send_msg('This command is not supported (yet) on Bybit')

@@ -10,23 +10,16 @@ import numpy as np
 import pandas as pd
 
 from downloader import Downloader
-from njit_funcs import njit_backtest_vanilla, njit_backtest_scalp, round_
+from njit_funcs import njit_backtest, round_
 from plotting import dump_plots
 from procedures import prepare_backtest_config, make_get_filepath, load_live_config, add_argparse_args
-from pure_funcs import create_xk, denumpyize, ts_to_date, analyze_fills, spotify_config, determine_config_type
+from pure_funcs import create_xk, denumpyize, ts_to_date, analyze_fills, spotify_config
 
 
 def backtest(config: dict, data: np.ndarray, do_print=False) -> (list, bool):
     xk = create_xk(config)
-    config_type = determine_config_type(config)
-    if config_type == 'vanilla':
-        return njit_backtest_vanilla(data, config['starting_balance'], config['latency_simulation_ms'],
-                                     config['maker_fee'], **xk)
-    elif config_type == 'scalp':
-        return njit_backtest_scalp(data, config['starting_balance'], config['latency_simulation_ms'],
-                                   config['maker_fee'], **xk)
-    else:
-        raise Exception('unknown config type')
+    return njit_backtest(data, config['starting_balance'], config['latency_simulation_ms'],
+                         config['maker_fee'], **xk)
 
 
 def plot_wrap(config, data):
@@ -34,22 +27,22 @@ def plot_wrap(config, data):
     print('starting_balance', config['starting_balance'])
     print('backtesting...')
     sts = time()
-    fills, info, stats = backtest(config, data, do_print=True)
+    fills, stats = backtest(config, data, do_print=True)
     print(f'{time() - sts:.2f} seconds elapsed')
     if not fills:
         print('no fills')
         return
-    fdf, result = analyze_fills(fills, {**config, **{'lowest_eqbal_ratio': info[1], 'closest_bkr': info[2]}},
-                                data[0][0], data[-1][0])
+    fdf, sdf, result = analyze_fills(fills, stats, config)
     config['result'] = result
     config['plots_dirpath'] = make_get_filepath(os.path.join(
         config['plots_dirpath'], f"{ts_to_date(time())[:19].replace(':', '')}", '')
     )
     fdf.to_csv(config['plots_dirpath'] + "fills.csv")
+    sdf.to_csv(config['plots_dirpath'] + "stats.csv")
     df = pd.DataFrame({**{'timestamp': data[:, 0], 'qty': data[:, 1], 'price': data[:, 2]},
                        **{}})
     print('dumping plots...')
-    dump_plots(config, fdf, df)
+    dump_plots(config, fdf, sdf, df)
 
 
 async def main():
@@ -60,7 +53,6 @@ async def main():
 
     config = await prepare_backtest_config(args)
     live_config = load_live_config(args.live_config_path)
-    config_type = config['config_type'] = determine_config_type(live_config)
     config.update(live_config)
     if 'spot' in config['market_type']:
         live_config = spotify_config(live_config)
