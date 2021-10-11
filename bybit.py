@@ -156,15 +156,15 @@ class Bybit(Bot):
         params['sign'] = hmac.new(self.secret.encode('utf-8'),
                                   urlencode(sort_dict_keys(params)).encode('utf-8'),
                                   hashlib.sha256).hexdigest()
-        async with getattr(self.session, type_)(self.base_endpoint + url, params=params) as response:
+        async with getattr(self.session, type_)(base_endpoint + url, params=params) as response:
             result = await response.text()
         return json.loads(result)
 
     async def private_get(self, url: str, params: dict = {}, base_endpoint: str = None) -> dict:
         return await self.private_('get', self.base_endpoint if base_endpoint is None else base_endpoint, url, params)
 
-    async def private_post(self, url: str, params: dict = {}) -> dict:
-        return await self.private_('post', url, params)
+    async def private_post(self, url: str, params: dict = {}, base_endpoint: str = None) -> dict:
+        return await self.private_('post', self.base_endpoint if base_endpoint is None else base_endpoint, url, params)
 
     async def fetch_position(self) -> dict:
         position = {}
