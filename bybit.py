@@ -227,6 +227,7 @@ class Bybit(Bot):
             if o['result']:
                 return {'symbol': o['result']['symbol'],
                         'side': o['result']['side'].lower(),
+                        'order_id': o['result']['order_id'],
                         'position_side': order['position_side'],
                         'type': o['result']['order_type'].lower(),
                         'qty': o['result']['qty'],

@@ -197,6 +197,7 @@ class Bot:
                     if 'side' in o:
                         print_(['  created order', o['symbol'], o['side'], o['position_side'], o['qty'],
                                 o['price']], n=True)
+                        self.open_orders.append(o)
                     else:
                         print_(['error creating order b', o, oc], n=True)
                     self.dump_log({'log_type': 'create_order', 'data': o})

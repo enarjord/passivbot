@@ -252,6 +252,7 @@ class BinanceBot(Bot):
                     'position_side': o['positionSide'].lower().replace('short', 'shrt'),
                     'type': o['type'].lower(),
                     'qty': float(o['origQty']),
+                    'order_id': int(o['orderId']),
                     'price': float(o['price'])}
         except Exception as e:
             print(f'error executing order {order} {e}')

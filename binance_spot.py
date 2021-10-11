@@ -231,6 +231,7 @@ class BinanceBotSpot(Bot):
                     'position_side': 'long',
                     'type': o['type'].lower(),
                     'qty': float(o['origQty']),
+                    'order_id': int(o['orderId']),
                     'price': float(o['price'])}
         else:
             return o
