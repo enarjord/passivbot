@@ -257,7 +257,8 @@ class Bybit(Bot):
 
     async def fetch_account(self):
         try:
-            return await self.private_get(self.endpoints['spot_balance'], base_endpoint=self.spot_base_endpoint)['result']
+            resp = await self.private_get(self.endpoints['spot_balance'], base_endpoint=self.spot_base_endpoint)
+            return resp['result']
         except Exception as e:
             print('error fetching account: ', e)
             return {'balances': []}
