@@ -97,6 +97,8 @@ class Bybit(Bot):
                                   'income': '/futures/private/trade/closed-pnl/list',
                                   'created_at_key': 'created_at'}
 
+        self.spot_base_endpoint = 'https://api.bybit.com'
+        self.endpoints['spot_balance'] = '/spot/v1/account'
         self.endpoints['balance'] = '/v2/private/wallet/balance'
         self.endpoints['exchange_info'] = '/v2/public/symbols'
         self.endpoints['ticker'] = '/v2/public/tickers'
@@ -143,7 +145,7 @@ class Bybit(Bot):
             result = await response.text()
         return json.loads(result)
 
-    async def private_(self, type_: str, url: str, params: dict = {}) -> dict:
+    async def private_(self, type_: str, base_endpoint: str, url: str, params: dict = {}) -> dict:
         timestamp = int(time() * 1000)
         params.update({'api_key': self.key, 'timestamp': timestamp})
         for k in params:
@@ -158,8 +160,8 @@ class Bybit(Bot):
             result = await response.text()
         return json.loads(result)
 
-    async def private_get(self, url: str, params: dict = {}) -> dict:
-        return await self.private_('get', url, params)
+    async def private_get(self, url: str, params: dict = {}, base_endpoint: str = None) -> dict:
+        return await self.private_('get', self.base_endpoint if base_endpoint is None else base_endpoint, url, params)
 
     async def private_post(self, url: str, params: dict = {}) -> dict:
         return await self.private_('post', url, params)
@@ -252,6 +254,14 @@ class Bybit(Bot):
             print_async_exception(o)
             traceback.print_exc()
             return {}
+
+    async def fetch_account(self):
+        try:
+            resp = await self.private_get(self.endpoints['spot_balance'], base_endpoint=self.spot_base_endpoint)
+            return resp['result']
+        except Exception as e:
+            print('error fetching account: ', e)
+            return {'balances': []}
 
     async def fetch_ticks(self, from_id: int = None, do_print: bool = True):
         params = {'symbol': self.symbol, 'limit': 1000}

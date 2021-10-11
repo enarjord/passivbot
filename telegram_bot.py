@@ -643,11 +643,12 @@ class Telegram:
     def _balance(self, update=None, context=None):
         if bool(self._bot.position):
             async def _balance_async():
-                #position = await self._bot.fetch_position()
                 position = self._bot.position.copy()
                 account = await self._bot.fetch_account()
-                quot_balance = list(asset for asset in account['balances'] if asset['asset'] == self._bot.quot)[0]
-                coin_balance = list(asset for asset in account['balances'] if asset['asset'] == self._bot.coin)[0]
+                quot_balance = list(asset for asset in account['balances'] if asset['asset'] == self._bot.quot)
+                quot_balance = {'free': 0.0, 'locked': 0.0} if len(quot_balance) == 0 else quot_balance[0]
+                coin_balance = list(asset for asset in account['balances'] if asset['asset'] == self._bot.coin)
+                coin_balance = {'free': 0.0, 'locked': 0.0} if len(coin_balance) == 0 else coin_balance[0]
 
                 msg = f'Futures balance {self._bot.margin_coin if hasattr(self._bot, "margin_coin") else ""}:\n' \
                       f'Wallet balance: {compress_float(position["wallet_balance"], 4)}\n' \
