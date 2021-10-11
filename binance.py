@@ -273,7 +273,7 @@ class BinanceBot(Bot):
             print(f'error cancelling order {order} {e}')
             print_async_exception(cancellation)
             traceback.print_exc()
-            await self.update_open_orders()
+            self.ts_released['force_update'] = 0.0
             return {}
 
     async def fetch_fills(self, limit: int = 1000, from_id: int = None, start_time: int = None, end_time: int = None):
