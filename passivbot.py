@@ -197,7 +197,8 @@ class Bot:
                     if 'side' in o:
                         print_(['  created order', o['symbol'], o['side'], o['position_side'], o['qty'],
                                 o['price']], n=True)
-                        self.open_orders.append(o)
+                        if o['order_id'] not in {x['order_id'] for x in self.open_orders}:
+                            self.open_orders.append(o)
                     else:
                         print_(['error creating order b', o, oc], n=True)
                     self.dump_log({'log_type': 'create_order', 'data': o})
@@ -227,9 +228,11 @@ class Bot:
                 try:
                     o = await c
                     cancelled_orders.append(o)
-                    if 'side' in o:
+                    if 'order_id' in o:
                         print_(['cancelled order', o['symbol'], o['side'], o['position_side'], o['qty'],
                                 o['price']], n=True)
+                        self.open_orders = [oo for oo in self.open_orders if oo['order_id'] != o['order_id']]
+
                     else:
                         print_(['error cancelling order', o], n=True)
                     self.dump_log({'log_type': 'cancel_order', 'data': o})
