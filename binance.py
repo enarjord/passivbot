@@ -260,21 +260,20 @@ class BinanceBot(Bot):
             traceback.print_exc()
             return {}
 
-
-
     async def execute_cancellation(self, order: dict) -> dict:
         cancellation = None
         try:
             cancellation = await self.private_delete(self.endpoints['cancel_order'],
                                                      {'symbol': self.symbol, 'orderId': order['order_id']})
 
-            return {'symbol': self.symbol, 'side': cancellation['side'].lower(),
+            return {'symbol': self.symbol, 'side': cancellation['side'].lower(), 'order_id': int(cancellation['orderId']),
                     'position_side': cancellation['positionSide'].lower().replace('short', 'shrt'),
                     'qty': float(cancellation['origQty']), 'price': float(cancellation['price'])}
         except Exception as e:
             print(f'error cancelling order {order} {e}')
             print_async_exception(cancellation)
             traceback.print_exc()
+            await self.update_open_orders()
             return {}
 
     async def fetch_fills(self, limit: int = 1000, from_id: int = None, start_time: int = None, end_time: int = None):
