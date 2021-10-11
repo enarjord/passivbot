@@ -242,18 +242,19 @@ class Bybit(Bot):
             traceback.print_exc()
             return {}
 
-    async def execute_cancellation(self, order: dict) -> [dict]:
-        o = None
+    async def execute_cancellation(self, order: dict) -> dict:
+        cancellation = None
         try:
-            o = await self.private_post(self.endpoints['cancel_order'],
-                                        {'symbol': self.symbol, 'order_id': order['order_id']})
-            return {'symbol': self.symbol, 'side': order['side'],
+            cancellation = await self.private_post(self.endpoints['cancel_order'],
+                                                   {'symbol': self.symbol, 'order_id': order['order_id']})
+            return {'symbol': self.symbol, 'side': order['side'], 'order_id': cancellation['result']['order_id'],
                     'position_side': order['position_side'],
                     'qty': order['qty'], 'price': order['price']}
         except Exception as e:
             print(f'error cancelling order {order} {e}')
-            print_async_exception(o)
+            print_async_exception(cancellation)
             traceback.print_exc()
+            await self.update_open_orders()
             return {}
 
     async def fetch_account(self):
