@@ -237,14 +237,21 @@ class BinanceBotSpot(Bot):
             return o
 
     async def execute_cancellation(self, order: dict) -> [dict]:
-        cancellation = await self.private_delete(self.endpoints['cancel_order'],
-                                                 {'symbol': self.symbol, 'orderId': order['order_id']})
-        if 'side' in cancellation:
+        cancellation = None
+        try:
+            cancellation = await self.private_delete(self.endpoints['cancel_order'],
+                                                     {'symbol': self.symbol, 'orderId': order['order_id']})
             return {'symbol': self.symbol, 'side': cancellation['side'].lower(),
                     'position_side': 'long',
+                    'order_id': int(cancellation['orderId']),
                     'qty': float(cancellation['origQty']), 'price': float(cancellation['price'])}
-        else:
-            return cancellation
+        except Exception as e:
+            print(f'error cancelling order {order} {e}')
+            print_async_exception(cancellation)
+            traceback.print_exc()
+            await self.update_open_orders()
+            return {}
+
 
     async def get_all_fills(self, symbol: str = None, start_time: int = None):
         fills = []
