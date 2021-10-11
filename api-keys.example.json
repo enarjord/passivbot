@@ -7,6 +7,8 @@
             "enabled": false,
             "notify_entry_fill": true,
             "notify_close_fill": true,
+            "enable_panic_mode": false,
+            "enable_force_open": false,
             "token": "bot_token",
             "chat_id": "chat_id"
         }

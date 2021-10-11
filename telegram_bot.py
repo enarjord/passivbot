@@ -199,6 +199,11 @@ class Telegram:
             self.send_msg(f'Request for (re)entering position aborted')
             return ConversationHandler.END
 
+        if 'enable_force_open' not in self.config or self.config['enable_force_open'] is False:
+            self.send_msg('Force open is currently not enabled. Please activate this functionality in the api-keys.json by setting the telegram '
+                          'parameter "enable_force_open" to true.')
+            return ConversationHandler.END
+
         async def _place_market_order(position_side: str):
             order = {'side': 'sell' if self.force_open_type == 'shrt' else 'buy',
                      'position_side': self.force_open_type,
@@ -535,14 +540,19 @@ class Telegram:
                     'Freeze stop mode activated. No longer opening new long or short positions, all orders for reentry will be cancelled.'
                     'Please be aware that this change is NOT persisted between restarts. To clear the stop-mode, you can use <pre>/reload_config</pre> or select <pre>resume</pre> from the <pre>/stop</pre> action')
             if self.stop_mode_requested == 'panic':
-                self.previous_do_long = self._bot.do_long
-                self.previous_do_shrt = self._bot.do_shrt
-                self._bot.set_config_value('do_long', False)
-                self._bot.set_config_value('do_shrt', False)
-                self._bot.stop_mode = 'panic'
-                self.send_msg(
-                    'Panic stop mode activated. No longer opening new long or short positions, existing positions will immediately be closed.'
-                    'Please be aware that this change is NOT persisted between restarts. To clear the stop-mode, you can use <pre>/reload_config</pre> or select <pre>resume</pre> from the <pre>/stop</pre> action')
+                if 'enable_panic_mode' not in self.config or self.config['enable_panic_mode'] is False:
+                    self.stop_mode_requested = ''
+                    self.send_msg('Panic stop mode is currently not enabled. Please activate this functionality in the api-keys.json by setting the telegram '
+                                  'parameter "enable_panic_mode" to true.')
+                else:
+                    self.previous_do_long = self._bot.do_long
+                    self.previous_do_shrt = self._bot.do_shrt
+                    self._bot.set_config_value('do_long', False)
+                    self._bot.set_config_value('do_shrt', False)
+                    self._bot.stop_mode = 'panic'
+                    self.send_msg(
+                        'Panic stop mode activated. No longer opening new long or short positions, existing positions will immediately be closed.'
+                        'Please be aware that this change is NOT persisted between restarts. To clear the stop-mode, you can use <pre>/reload_config</pre> or select <pre>resume</pre> from the <pre>/stop</pre> action')
             if self.stop_mode_requested == 'manual':
                 self._bot.stop_mode = 'manual'
                 self.send_msg(
