@@ -725,7 +725,7 @@ def approximate_grid(
     # no close matches
     # assume partial fill
     k = 0
-    while k < len(grid) and grid[k][2] <= psize * 0.99999:
+    while k < len(grid) - 1 and grid[k][2] <= psize * 0.99999:
         # find first node whose psize > psize
         k += 1
     if k == 0:
