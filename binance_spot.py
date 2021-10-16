@@ -187,6 +187,8 @@ class BinanceBotSpot(Bot):
             balance[elm['asset']] = {'free': float(elm['free'])}
             balance[elm['asset']]['locked'] = float(elm['locked'])
             balance[elm['asset']]['onhand'] = balance[elm['asset']]['free'] + balance[elm['asset']]['locked']
+        if 'BNB' in balance:
+            balance['BNB']['onhand'] = max(0.0, balance['BNB']['onhand'] - 0.01)
         self.balance = balance
         return self.calc_simulated_position(self.balance, self.fills)
 
@@ -422,6 +424,8 @@ class BinanceBotSpot(Bot):
                     onhand = event['balance'][token]['free'] + event['balance'][token]['locked']
                     if token in [self.quot, self.coin] and ('onhand' not in self.balance[token] or self.balance[token]['onhand'] != onhand):
                         onhand_change = True
+                    if token == 'BNB':
+                        onhand = max(0.0, onhand - 0.01)
                     self.balance[token]['onhand'] = onhand
                 if onhand_change:
                     self.position = self.calc_simulated_position(self.balance, self.fills)
