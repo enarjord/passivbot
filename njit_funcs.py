@@ -647,7 +647,8 @@ def calc_long_entry_grid(
                 min_entry_qty = calc_min_entry_qty(entry_price, inverse, qty_step, min_qty, min_cost)
                 max_entry_qty = round_(cost_to_qty(balance * pbr_limit * initial_qty_pct,
                                                    entry_price, inverse, c_mult), qty_step)
-                if qty_to_cost(grid[0][0], grid[0][1], inverse, c_mult) / balance > pbr_limit * 1.1:
+                entry_qty = max(min_entry_qty, min(max_entry_qty, grid[0][0]))
+                if qty_to_cost(entry_qty, entry_price, inverse, c_mult) / balance > pbr_limit * 1.1:
                     print('\n\nwarning: abnormally large partial ientry')
                     print('grid:')
                     for e in grid:
@@ -657,7 +658,7 @@ def calc_long_entry_grid(
                           min_cost, c_mult, grid_span, pbr_limit, max_n_entry_orders, initial_qty_pct,
                           eprice_pprice_diff, secondary_pbr_allocation, secondary_pprice_diff, eprice_exp_base)
                     print('\n\n')
-                return [(max(min_entry_qty, min(max_entry_qty, grid[0][0])), entry_price, 'long_ientry')]
+                return [(entry_qty, entry_price, 'long_ientry')]
         if len(grid) == 0:
             return [(0.0, 0.0, '')]
         entries = []
