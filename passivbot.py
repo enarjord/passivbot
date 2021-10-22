@@ -51,7 +51,7 @@ class Bot:
         self.price = 0.0
         self.ob = [0.0, 0.0]
 
-        self.n_orders_per_execution = 4
+        self.n_orders_per_execution = 2
         self.force_update_interval = 30
 
         self.c_mult = self.config['c_mult'] = 1.0
