@@ -52,6 +52,7 @@ class Bot:
         self.ob = [0.0, 0.0]
 
         self.n_orders_per_execution = 2
+        self.delay_between_executions = 2
         self.force_update_interval = 30
 
         self.c_mult = self.config['c_mult'] = 1.0
@@ -333,7 +334,7 @@ class Bot:
                     results.append(await self.create_orders(to_create[:self.n_orders_per_execution]))
             if any(results):
                 print()
-            await asyncio.sleep(1) # sleep one sec before releasing lock
+            await asyncio.sleep(self.delay_between_executions) # sleep before releasing lock
             return results
         finally:
             self.ts_released['cancel_and_create'] = time()
