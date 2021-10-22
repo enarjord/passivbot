@@ -69,8 +69,6 @@ class Bot:
         self.process_websocket_ticks = True
 
     def set_config(self, config):
-        if 'min_span' in config:
-            config['spans'] = calc_spans(config['min_span'], config['max_span'], config['n_spans'])
         if 'stop_mode' not in config:
             config['stop_mode'] = None
         if 'last_price_diff_limit' not in config:
