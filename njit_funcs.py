@@ -745,6 +745,9 @@ def approximate_grid(
         remaining_qty = round_(grid[k][2] - psize, qty_step)
         npsize, npprice = calc_new_psize_pprice(psize, pprice, remaining_qty, grid[k][1], qty_step)
         grid, diff, i = eval_(npprice, npsize)
+        if k >= len(grid):
+            k = len(grid) - 1
+            continue
         grid, diff, i = eval_(npprice * (npprice / grid[k][3]), npsize)
         k = 0
         while k < len(grid) - 1 and grid[k][2] <= psize * 0.99999:
