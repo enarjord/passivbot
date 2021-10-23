@@ -26,13 +26,13 @@ step (e.g. `binance_01` in the template for example).
 To actually start the bot, you can use the following command:
 
 ```shell
-python3 start_bot.py {account_name} {symbol} {path/to/config.json}
+python3 passivbot.py {account_name} {symbol} {path/to/config.json}
 ```
 
 An actual command with the values filled in could look like this for example:
 
 ```shell
-python3 start_bot.py binance_01 XMRUSDT configs/live/binance_xmrusdt.json
+python3 passivbot.py binance_01 XMRUSDT configs/live/binance_xmrusdt.json
 ```
 
 ### Default configurations
@@ -56,7 +56,7 @@ open trades as well as pausing the bot, and much more. You can read more on how 
 When you start Passivbot, it will verify if there are no positions open on other coins. If there is an existing position
 found on at least 1 other symbol, the bot will shut down. The reason for this is that the bot operates in cross-mode for futures,
 which means that it will start influencing the existing position. If you want to, you can disable this check by setting
-the configuration parameter `allow_sharing_wallet` to `false`.
+the configuration parameter `allow_sharing_wallet` to `true`.
 
 When Passivbot is started, it will (if possible) set the position mode to `hedge` on the exchange, and set the leverage
 to such a level that you do not run into errors about insufficient margin. To accomplish this, the configuration parameter

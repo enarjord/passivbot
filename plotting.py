@@ -10,7 +10,7 @@ from colorama import init, Fore
 import re
 
 
-def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
+def dump_plots(result: dict, fdf: pd.DataFrame, sdf: pd.DataFrame, df: pd.DataFrame):
     init(autoreset=True)
     plt.rcParams['figure.figsize'] = [29, 18]
     pd.set_option('precision', 10)
@@ -29,55 +29,51 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
     table.add_row(['Final balance', f"{profit_color}{round_dynamic(result['result']['final_balance'], 6)}{Fore.RESET}"])
     table.add_row(['Final equity', f"{profit_color}{round_dynamic(result['result']['final_equity'], 6)}{Fore.RESET}"])
     table.add_row(['Net PNL + fees', f"{profit_color}{round_dynamic(result['result']['net_pnl_plus_fees'], 6)}{Fore.RESET}"])
-    table.add_row(['Total gain percentage', f"{profit_color}{round_dynamic(result['result']['gain'] * 100 - 100, 4)}%{Fore.RESET}"])
-    table.add_row(['Average daily gain percentage', f"{profit_color}{round_dynamic((result['result']['average_daily_gain'] - 1) * 100, 3)}%{Fore.RESET}"])
+    table.add_row(['Total gain percentage', f"{profit_color}{round_dynamic(result['result']['gain'] * 100, 4)}%{Fore.RESET}"])
+    table.add_row(['Average daily gain percentage', f"{profit_color}{round_dynamic((result['result']['average_daily_gain']) * 100, 3)}%{Fore.RESET}"])
     table.add_row(['Adjusted daily gain', f"{profit_color}{round_dynamic(result['result']['adjusted_daily_gain'], 6)}{Fore.RESET}"])
-    table.add_row([f"{result['avg_periodic_gain_key']} percentage", f"{profit_color}{round_dynamic(result['result']['average_periodic_gain'] * 100, 3)}%{Fore.RESET}"])
     bankruptcy_color = Fore.RED if result['result']['closest_bkr'] < 0.4 else Fore.YELLOW if result['result']['closest_bkr'] < 0.8 else Fore.RESET
     table.add_row(['Closest bankruptcy percentage', f"{bankruptcy_color}{round_dynamic(result['result']['closest_bkr'] * 100, 4)}%{Fore.RESET}"])
     table.add_row([' ', ' '])
-    table.add_row(['Sharpe ratio', round_dynamic(result['result']['sharpe_ratio'], 6)])
     table.add_row(['Profit sum', f"{profit_color}{round_dynamic(result['result']['profit_sum'], 6)}{Fore.RESET}"])
     table.add_row(['Loss sum', f"{Fore.RED}{round_dynamic(result['result']['loss_sum'], 6)}{Fore.RESET}"])
     table.add_row(['Fee sum', round_dynamic(result['result']['fee_sum'], 6)])
-    table.add_row(['Lowest equity/balance ratio', round_dynamic(result['result']['lowest_eqbal_ratio'], 6)])
-    table.add_row(['Biggest position size', round_dynamic(result['result']['biggest_psize'], 6)])
+    table.add_row(['Lowest equity/balance ratio', round_dynamic(result['result']['eqbal_ratio_min'], 6)])
+    table.add_row(['Biggest psize', round_dynamic(result['result']['biggest_psize'], 6)])
+    table.add_row(['Price action closeness mean long', round_dynamic(result['result']['pa_closeness_mean_long'], 6)])
+    table.add_row(['Price action closeness median long', round_dynamic(result['result']['pa_closeness_median_long'], 6)])
+    table.add_row(['Price action closeness max long', round_dynamic(result['result']['pa_closeness_max_long'], 6)])
+    table.add_row(['Average n fills per day', round_dynamic(result['result']['avg_fills_per_day'], 6)])
     table.add_row([' ', ' '])
     table.add_row(['No. fills', round_dynamic(result['result']['n_fills'], 6)])
     table.add_row(['No. entries', round_dynamic(result['result']['n_entries'], 6)])
     table.add_row(['No. closes', round_dynamic(result['result']['n_closes'], 6)])
-    table.add_row(['No. initial entries', round_dynamic(result['result']['n_initial_entries'], 6)])
-    table.add_row(['No. reentries', round_dynamic(result['result']['n_reentries'], 6)])
-    table.add_row(['No. normal closes', round_dynamic(result['result']['n_normal_closes'], 6)])
-    table.add_row(['No. stoploss closes', round_dynamic(result['result']['n_stop_loss_closes'], 6)])
+    table.add_row(['No. initial entries', round_dynamic(result['result']['n_ientries'], 6)])
+    table.add_row(['No. reentries', round_dynamic(result['result']['n_rentries'], 6)])
     table.add_row([' ', ' '])
-    table.add_row(['Mean hours between fills', round_dynamic(result['result']['mean_hrs_between_fills'], 6)])
-    table.add_row(['Max hours no fills (same side)', round_dynamic(result['result']['max_hrs_no_fills_same_side'], 6)])
-    table.add_row(['Max hours no fills', round_dynamic(result['result']['max_hrs_no_fills'], 6)])
+    table.add_row(['Mean hours between fills', round_dynamic(result['result']['hrs_stuck_avg_long'], 6)])
+    table.add_row(['Max hours no fills (same side)', round_dynamic(result['result']['hrs_stuck_max_long'], 6)])
+    table.add_row(['Max hours no fills', round_dynamic(result['result']['hrs_stuck_max_long'], 6)])
 
     longs = fdf[fdf.type.str.contains('long')]
     shrts = fdf[fdf.type.str.contains('shrt')]
-    if result['do_long']:
+    if result['long']['enabled']:
         table.add_row([' ', ' '])
-        table.add_row(['Long', result['do_long']])
-        table.add_row(["No. inital entries", len(longs[longs.type.str.contains('long_ientry')])])
-        table.add_row(["No. reentries", len(longs[longs.type.str.contains('long_rentry')])])
-        table.add_row(["No. normal closes", len(longs[longs.type.str.contains('long_nclose')])])
-        table.add_row(["No. stoploss closes", len(longs[longs.type.str.contains('long_sclose')])])
-        table.add_row(["No. partial fills", len(longs[longs.type.str.contains('partial')])])
-        table.add_row(['Mean hours between fills (long)', round_dynamic(result['result']['mean_hrs_between_fills_long'], 6)])
-        table.add_row(['Max hours no fills (long)', round_dynamic(result['result']['max_hrs_no_fills_long'], 6)])
+        table.add_row(['Long', result['long']['enabled']])
+        table.add_row(["No. inital entries", len(longs[longs.type.str.contains('ientry')])])
+        table.add_row(["No. reentries", len(longs[longs.type.str.contains('rentry')])])
+        table.add_row(["No. normal closes", len(longs[longs.type.str.contains('nclose')])])
+        table.add_row(['Mean hours stuck (long)', round_dynamic(result['result']['hrs_stuck_avg_long'], 6)])
+        table.add_row(['Max hours stuck (long)', round_dynamic(result['result']['hrs_stuck_max_long'], 6)])
         profit_color = Fore.RED if longs.pnl.sum() < 0 else Fore.RESET
         table.add_row(["PNL sum", f"{profit_color}{longs.pnl.sum()}{Fore.RESET}"])
 
-    if result['do_shrt']:
+    if result['shrt']['enabled']:
         table.add_row([' ', ' '])
-        table.add_row(['Short', result['do_shrt']])
-        table.add_row(["No. initial entries", len(shrts[shrts.type.str.contains('shrt_ientry')])])
-        table.add_row(["No. reentries", len(shrts[shrts.type.str.contains('shrt_rentry')])])
-        table.add_row(["No. normal closes", len(shrts[shrts.type.str.contains('shrt_nclose')])])
-        table.add_row(["No. stoploss closes", len(shrts[shrts.type.str.contains('shrt_sclose')])])
-        table.add_row(["No. partial fills", len(shrts[shrts.type.str.contains('partial')])])
+        table.add_row(['Short', result['shrt']['enabled']])
+        table.add_row(["No. initial entries", len(shrts[shrts.type.str.contains('ientry')])])
+        table.add_row(["No. reentries", len(shrts[shrts.type.str.contains('rentry')])])
+        table.add_row(["No. normal closes", len(shrts[shrts.type.str.contains('nclose')])])
         table.add_row(['Mean hours between fills (short)', round_dynamic(result['result']['mean_hrs_between_fills_shrt'], 6)])
         table.add_row(['Max hours no fills (short)', round_dynamic(result['result']['max_hrs_no_fills_shrt'], 6)])
         profit_color = Fore.RED if shrts.pnl.sum() < 0 else Fore.RESET
@@ -94,9 +90,9 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
 
     print('\nplotting balance and equity...')
     plt.clf()
-    fdf.balance.plot()
-    fdf.equity.plot()
-    plt.savefig(f"{result['plots_dirpath']}balance_and_equity.png")
+    sdf.balance.plot()
+    sdf.equity.plot()
+    plt.savefig(f"{result['plots_dirpath']}balance_and_equity_sampled.png")
 
 
     plt.clf()
@@ -107,8 +103,9 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
     shrts.pnl.cumsum().plot()
     plt.savefig(f"{result['plots_dirpath']}pnl_cumsum_shrt.png")
 
+    adg = (sdf.equity / sdf.equity.iloc[0]) ** (1 / ((sdf.timestamp - sdf.timestamp.iloc[0]) / (1000 * 60 * 60 * 24)))
     plt.clf()
-    fdf.adg.plot()
+    adg.plot()
     plt.savefig(f"{result['plots_dirpath']}adg.png")
 
     print('plotting backtest whole and in chunks...')
@@ -122,7 +119,7 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
             fig.savefig(f"{result['plots_dirpath']}backtest_{z + 1}of{n_parts}.png")
         else:
             print('no fills...')
-    fig = plot_fills(df, fdf, bkr_thr=0.1)
+    fig = plot_fills(df, fdf, bkr_thr=0.1, plot_whole_df=True)
     fig.savefig(f"{result['plots_dirpath']}whole_backtest.png")
 
     print('plotting pos sizes...')
@@ -132,7 +129,7 @@ def dump_plots(result: dict, fdf: pd.DataFrame, df: pd.DataFrame):
     plt.savefig(f"{result['plots_dirpath']}psizes_plot.png")
 
 
-def plot_fills(df, fdf_, side: int = 0, bkr_thr=0.1):
+def plot_fills(df, fdf_, side: int = 0, bkr_thr=0.1, plot_whole_df: bool = False):
     if fdf_.empty:
         return
     plt.clf()
@@ -140,8 +137,9 @@ def plot_fills(df, fdf_, side: int = 0, bkr_thr=0.1):
     dfc = df#.iloc[::max(1, int(len(df) * 0.00001))]
     if dfc.index.name != 'timestamp':
         dfc = dfc.set_index('timestamp')
-    dfc = dfc[(dfc.index > fdf.index[0]) & (dfc.index < fdf.index[-1])]
-    dfc = dfc.loc[fdf.index[0]:fdf.index[-1]]
+    if not plot_whole_df:
+        dfc = dfc[(dfc.index > fdf.index[0]) & (dfc.index < fdf.index[-1])]
+        dfc = dfc.loc[fdf.index[0]:fdf.index[-1]]
     dfc.price.plot(style='y-')
 
     if side >= 0:
