@@ -157,14 +157,14 @@ async def main():
     parser.add_argument('-i', '--iters', type=int, required=False, dest='iters', default=None, help='n optimize iters')
     parser = add_argparse_args(parser)
     args = parser.parse_args()
-    config = hjson.load(open(args.backtest_config_path))
-    config.update(hjson.load(open(args.optimize_config_path)))
+    args.symbol = 'BTCUSDT' # dummy symbol
+    config = await prepare_optimize_config(args)
     config.update(get_template_live_config())
     config['exchange'], _, _ = load_exchange_key_secret(config['user'])
 
     # download ticks .npy file if missing
     cache_fname = f"{config['start_date']}_{config['end_date']}_ticks_cache.npy"
-    for symbol in config['symbols']:
+    for symbol in sorted(config['symbols']):
         cache_dirpath = f"backtests/{config['exchange']}/{symbol}/caches/"
         if not os.path.exists(cache_dirpath + cache_fname) or not os.path.exists(cache_dirpath + 'market_specific_settings.json'):
             print(f'fetching data {symbol}')
