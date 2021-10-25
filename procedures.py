@@ -7,7 +7,7 @@ import numpy as np
 import glob
 from time import time
 from pure_funcs import numpyize, denumpyize, candidate_to_live_config, ts_to_date, get_dummy_settings, calc_spans, \
-    config_pretty_str, date_to_ts
+    config_pretty_str, date_to_ts, get_template_live_config
 from njit_funcs import calc_samples
 from datetime import datetime
 
@@ -16,6 +16,7 @@ def load_live_config(live_config_path: str) -> dict:
     try:
         live_config = json.load(open(live_config_path))
         live_config = json.loads(json.dumps(live_config).replace('secondary_grid_spacing', 'secondary_pprice_diff'))
+        assert all(k in live_config['long'] for k in get_template_live_config()['long'])
         return numpyize(live_config)
     except Exception as e:
         raise Exception(f'failed to load live config {live_config_path} {e}')
