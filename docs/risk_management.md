@@ -10,7 +10,7 @@ as long as it is set high enough to avoid insufficent margin errors.
 
 ## PBR
 
-To measure a position's risk, passivbot finds the ratio of position size to available unleveraged balance.  
+To measure a position's risk, passivbot finds the ratio of position size to total unleveraged balance.  
 The formula for Position cost to Balance Ratio (PBR) is
 
 `pbr = (position_size * position_price) / unleveraged_wallet_balance` for linear,  
