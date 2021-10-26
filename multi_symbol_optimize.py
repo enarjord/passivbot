@@ -10,7 +10,7 @@ import numpy as np
 from backtest import backtest
 from multiprocessing import Pool
 from pure_funcs import analyze_fills, pack_config, unpack_config, numpyize, denumpyize, config_pretty_str, \
-    get_template_live_config
+    get_template_live_config, candidate_to_live_config, ts_to_date, round_values
 from procedures import add_argparse_args, prepare_optimize_config, load_live_config, make_get_filepath, \
     load_exchange_key_secret, prepare_backtest_config, dump_live_config
 from time import sleep, time
@@ -18,7 +18,8 @@ from time import sleep, time
 
 def backtest_single_wrap(config_: dict):
     config = config_.copy()
-    cache_filepath = f"backtests/{config['exchange']}/{config['symbol']}/caches/"
+    exchange_name = config['exchange'] + ('_spot' if config['market_type'] == 'spot' else '')
+    cache_filepath = f"backtests/{exchange_name}/{config['symbol']}/caches/"
     ticks_filepath = cache_filepath + f"{config['start_date']}_{config['end_date']}_ticks_cache.npy"
     mss = json.load(open(cache_filepath + 'market_specific_settings.json'))
     ticks = np.load(ticks_filepath)
@@ -30,7 +31,7 @@ def backtest_single_wrap(config_: dict):
         adg = analysis['average_daily_gain']
         score = adg * (min(1.0, config['maximum_pa_closeness_mean_long'] / pa_closeness)**2)
         print(f"backtested {config['symbol']: <12} pa closeness {analysis['pa_closeness_mean_long']:.6f} "
-              f"adg {adg:.6f} score {score:.6f}")
+              f"adg {adg:.6f} score {score:.8f}")
     except Exception as e:
         print(f'error with {config["symbol"]} {e}')
         print('config')
@@ -44,19 +45,20 @@ def backtest_single_wrap(config_: dict):
 
 
 def backtest_multi_wrap(config: dict, pool):
-    tasks = []
+    tasks = {}
     for s in sorted(config['symbols']):
-        tasks.append(pool.apply_async(backtest_single_wrap, args=({**config, **{'symbol': s}},)))
+        tasks[s] = pool.apply_async(backtest_single_wrap, args=({**config, **{'symbol': s}},))
     while True:
-        if all([task.ready() for task in tasks]):
+        if all([task.ready() for task in tasks.values()]):
             break
         sleep(0.1)
-    results = [task.get() for task in tasks]
-    mean_pa_closeness = np.mean([e[0] for e in results])
-    mean_adg = np.mean([e[1] for e in results])
-    mean_score = np.mean([e[2] for e in results])
-    print(f'pa closeness {mean_pa_closeness:.6f} adg {mean_adg:.6f} score {mean_score:8f}')
-    return -mean_score
+    results = {k: v.get() for k, v in tasks.items()}
+    mean_pa_closeness = np.mean([v[0] for v in results.values()])
+    mean_adg = np.mean([v[1] for v in results.values()])
+    mean_score = np.mean([v[2] for v in results.values()])
+    new_score = mean_adg * min(1.0, config['maximum_pa_closeness_mean_long'] / mean_pa_closeness)
+    print(f'pa closeness {mean_pa_closeness:.6f} adg {mean_adg:.6f} score {mean_score:8f} new score {new_score:.8f}')
+    return -new_score, results
 
 
 def harmony_search(
@@ -85,7 +87,8 @@ def harmony_search(
     print('evaluating initial harmonies...')
     hm_evals = numpyize([func(h) for h in hm])
 
-    print('best harmony', hm[hm_evals.argmin()], hm_evals.min())
+    print('best harmony')
+    print(round_values(denumpyize(hm[hm_evals.argmin()]), 5), f'{hm_evals.min():.8f}')
     if post_processing_func is not None:
         post_processing_func(hm[hm_evals.argmin()])
     print('starting search...')
@@ -107,18 +110,13 @@ def harmony_search(
             hm_evals[worst_eval_i] = h_eval
             worst_eval_i = hm_evals.argmax()
             print('improved harmony')
-            print(new_harmony, h_eval)
-        print('best harmony', hm[hm_evals.argmin()], hm_evals.min())
+            print(round_values(denumpyize(new_harmony), 5), f'{h_eval:.8f}')
+        print('best harmony')
+        print(round_values(denumpyize(hm[hm_evals.argmin()]), 5), f'{hm_evals.min():.8f}')
         print('iteration', itr, 'of', iters)
         if post_processing_func is not None:
             post_processing_func(hm[hm_evals.argmin()])
     return hm[hm_evals.argmin()]
-
-
-def dump_best_xs(best_xs):
-    fpath = make_get_filepath('tmp/harmony_search_best_xs.json')
-    with open(fpath, 'w') as f:
-        f.write(json.dumps([time(), denumpyize(best_xs)]) + '\n')
 
 
 class FuncWrap:
@@ -128,6 +126,9 @@ class FuncWrap:
         self.xs_conf_map = [k for k in sorted(base_config['ranges'])]
         self.bounds = numpyize([[self.base_config['ranges'][k][0] for k in self.xs_conf_map],
                                 [self.base_config['ranges'][k][1] for k in self.xs_conf_map]])
+        self.now_date = ts_to_date(time())[:19].replace(':', '-')
+        self.results_fname = make_get_filepath(f'tmp/harmony_search_results_{self.now_date}.txt')
+        self.best_conf_fname = f'tmp/harmony_search_best_config_{self.now_date}.json'
 
     def xs_to_config(self, xs):
         config = unpack_config(self.base_config.copy())
@@ -141,10 +142,13 @@ class FuncWrap:
 
     def func(self, xs):
         config = self.xs_to_config(xs)
-        return backtest_multi_wrap(config, self.pool)
+        score, results = backtest_multi_wrap(config, self.pool)
+        with open(self.results_fname, 'a') as f:
+            f.write(json.dumps({'config': candidate_to_live_config(config), 'results': results}) + '\n')
+        return score
 
     def post_processing_func(self, xs):
-        dump_live_config(self.xs_to_config(xs), make_get_filepath('tmp/harmony_search_best_config.json'))
+        dump_live_config(self.xs_to_config(xs), self.best_conf_fname)
 
 
 async def main():
@@ -164,8 +168,9 @@ async def main():
 
     # download ticks .npy file if missing
     cache_fname = f"{config['start_date']}_{config['end_date']}_ticks_cache.npy"
+    exchange_name = config['exchange'] + ('_spot' if config['market_type'] == 'spot' else '')
     for symbol in sorted(config['symbols']):
-        cache_dirpath = f"backtests/{config['exchange']}/{symbol}/caches/"
+        cache_dirpath = f"backtests/{exchange_name}/{symbol}/caches/"
         if not os.path.exists(cache_dirpath + cache_fname) or not os.path.exists(cache_dirpath + 'market_specific_settings.json'):
             print(f'fetching data {symbol}')
             args.symbol = symbol
