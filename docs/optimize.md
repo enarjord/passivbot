@@ -78,7 +78,7 @@ as a range. For a description of each of those individual parameters, please see
 
 ### Command-line arguments
 
-Other than modifying the `configs/backtest/default.hjson` and `configs/optimize/deefault.hjson` files, it is also possible
+Other than modifying the `configs/backtest/default.hjson` and `configs/optimize/default.hjson` files, it is also possible
 to specify a number of configuration options to use via the commandline.
 One or more arguments are provided to the optimizer using the following syntax on the command line:
 
