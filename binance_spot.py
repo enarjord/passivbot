@@ -180,7 +180,7 @@ class BinanceBotSpot(Bot):
         ]
 
     async def fetch_position(self) -> dict:
-        balances, new_fills = await asyncio.gather(self.private_get(self.endpoints['balance']),
+        balances, _ = await asyncio.gather(self.private_get(self.endpoints['balance']),
                                                    self.update_fills())
         balance = {}
         for elm in balances['balances']:
