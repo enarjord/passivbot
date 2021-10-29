@@ -450,7 +450,7 @@ def calc_long_pprice(long_psize, long_pfills):
             pprice = pprice * (psize / new_psize) + fill['price'] * (abs_qty / new_psize)
             psize = new_psize
         else:
-            psize -= abs_qty
+            psize = max(0.0, psize - abs_qty)
     return pprice
 
 
