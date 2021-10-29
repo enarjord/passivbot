@@ -164,14 +164,17 @@ class Bot:
             return
         self.ts_locked['update_fills'] = time()
         try:
-            ids_set = set([x['order_id'] for x in self.fills])
             fetched = await self.fetch_fills()
-            new_fills = [x for x in fetched if x['order_id'] not in ids_set]
-            self.fills = fetched
-            return new_fills
+            seen = set()
+            updated_fills = []
+            for fill in sorted(self.fills + fetched, key=lambda x: x['order_id']):
+                if fill['order_id'] not in seen:
+                    updated_fills.append(fill)
+                    seen.add(fill['order_id'])
+            self.fills = updated_fills[-5000:]
         except Exception as e:
             print('error with update fills', e)
-            return []
+            traceback.print_exc()
         finally:
             self.ts_released['update_fills'] = time()
 
