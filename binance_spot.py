@@ -23,7 +23,6 @@ class BinanceBotSpot(Bot):
         self.spot = self.config['spot'] = True
         self.inverse = self.config['inverse'] = False
         self.hedge_mode = self.config['hedge_mode'] = False
-        self.do_long = self.config['do_long'] = self.config['long']['enabled'] = True
         self.do_shrt = self.config['do_shrt'] = self.config['shrt']['enabled'] = False
         self.session = aiohttp.ClientSession()
         self.headers = {'X-MBX-APIKEY': self.key}
