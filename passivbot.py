@@ -113,6 +113,7 @@ class Bot:
             self.open_orders = open_orders
         except Exception as e:
             print('error with update open orders', e)
+            traceback.print_exc()
         finally:
             self.ts_released['update_open_orders'] = time()
 
@@ -148,6 +149,7 @@ class Bot:
             self.position = position
         except Exception as e:
             print('error with update position', e)
+            traceback.print_exc()
         finally:
             self.ts_released['update_position'] = time()
 
@@ -355,12 +357,12 @@ class Bot:
             print(f'{self.stop_mode} stop mode is active')
 
         now = time()
-        if now - self.ts_released['print'] >= 0.5:
-            self.update_output_information()
         if now - self.ts_released['force_update'] > self.force_update_interval:
             self.ts_released['force_update'] = now
             # force update pos and open orders thru rest API every 30 sec
             await asyncio.gather(self.update_position(), self.update_open_orders())
+        if now - self.ts_released['print'] >= 0.5:
+            self.update_output_information()
         if now - self.heartbeat_ts > 60 * 60:
             # print heartbeat once an hour
             print_(['heartbeat\n'], n=True)
@@ -610,3 +612,4 @@ if __name__ == '__main__':
     finally:
         print('\nPassivbot was stopped succesfully')
         os._exit(0)
+
