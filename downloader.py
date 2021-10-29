@@ -453,6 +453,14 @@ class Downloader:
         if prev_last_time < self.end_time:
             chunk_gaps.append((prev_last_time, self.end_time, prev_last_id, 0))
 
+        seen = set()
+        chunk_gaps_dedup = []
+        for elm in chunk_gaps:
+            if elm not in seen:
+                chunk_gaps_dedup.append(elm)
+                seen.add(elm)
+        chunk_gaps = chunk_gaps_dedup
+
         for gaps in chunk_gaps:
             start_time, end_time, start_id, end_id = gaps
             df = pd.DataFrame()
