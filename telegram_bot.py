@@ -22,7 +22,7 @@ from telegram import KeyboardButton, ParseMode, ReplyKeyboardMarkup, Update, Inl
 from telegram.ext import Updater, CommandHandler, ConversationHandler, CallbackContext, \
     MessageHandler, Filters, CallbackQueryHandler
 
-from njit_funcs import round_, calc_long_pnl, calc_shrt_pnl
+from njit_funcs import round_, calc_long_pnl, calc_shrt_pnl, calc_diff
 from pure_funcs import compress_float, round_dynamic, denumpyize
 
 
@@ -631,7 +631,7 @@ class Telegram:
             position_table.add_row(['Cost/balance', round_dynamic(float(long_position['pbr']), 3), round_dynamic(float(shrt_position['pbr']), 3)])
             position_table.add_row(['Liq.price', round_dynamic(long_position['liquidation_price'], 3), round_dynamic(shrt_position['liquidation_price'], 3)])
             position_table.add_row(['Liq.diff.%', round_dynamic(liq_diff * 100, 3), round_dynamic(liq_diff * 100, 3)])
-            position_table.add_row(['UPNL', round_dynamic(long_upnl, 3), round_dynamic(shrt_upnl, 3)])
+            position_table.add_row(['UPNL', round_dynamic(long_pnl, 3), round_dynamic(shrt_pnl, 3)])
 
             table_msg = position_table.get_string(border=True, padding_width=1,
                                                   junction_char=' ', vertical_char=' ',
