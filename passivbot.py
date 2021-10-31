@@ -120,6 +120,16 @@ class Bot:
     def adjust_wallet_balance(self, balance: float) -> float:
         return (balance if self.assigned_balance is None else self.assigned_balance) * self.cross_wallet_pct
 
+    def add_pbrs_to_pos(self, position_: dict):
+        position = position_.copy()
+        position['long']['pbr'] = (qty_to_cost(position['long']['size'], position['long']['price'],
+                                               self.xk['inverse'], self.xk['c_mult']) /
+                                   position['wallet_balance']) if position['wallet_balance'] else 0.0
+        position['shrt']['pbr'] = (qty_to_cost(position['shrt']['size'], position['shrt']['price'],
+                                               self.xk['inverse'], self.xk['c_mult']) /
+                                   position['wallet_balance']) if position['wallet_balance'] else 0.0
+        return position
+
     async def update_position(self) -> None:
         if self.ts_locked['update_position'] > self.ts_released['update_position']:
             return
@@ -132,13 +142,7 @@ class Bot:
                 calc_upnl(position['long']['size'], position['long']['price'],
                           position['shrt']['size'], position['shrt']['price'],
                           self.price, self.inverse, self.c_mult)
-
-            position['long']['pbr'] = (qty_to_cost(position['long']['size'], position['long']['price'],
-                                                   self.xk['inverse'], self.xk['c_mult']) /
-                                       position['wallet_balance']) if position['wallet_balance'] else 0.0
-            position['shrt']['pbr'] = (qty_to_cost(position['shrt']['size'], position['shrt']['price'],
-                                                   self.xk['inverse'], self.xk['c_mult']) /
-                                       position['wallet_balance']) if position['wallet_balance'] else 0.0
+            position = self.add_pbrs_to_pos(position)
             if self.position != position:
                 if self.position and 'spot' in self.market_type and \
                         (self.position['long']['size'] != position['long']['size'] or
@@ -385,20 +389,12 @@ class Bot:
             if 'long_psize' in event:
                 self.position['long']['size'] = event['long_psize']
                 self.position['long']['price'] = event['long_pprice']
-                self.position['long']['pbr'] = (
-                    qty_to_cost(self.position['long']['size'], self.position['long']['price'],
-                                self.xk['inverse'], self.xk['c_mult']) /
-                    (self.position['wallet_balance'] if self.position['wallet_balance'] else 0.0)
-                )
+                self.position = self.add_pbrs_to_pos(self.position)
                 pos_change = True
             if 'shrt_psize' in event:
                 self.position['shrt']['size'] = event['shrt_psize']
                 self.position['shrt']['price'] = event['shrt_pprice']
-                self.position['shrt']['pbr'] = (
-                    qty_to_cost(self.position['shrt']['size'], self.position['shrt']['price'],
-                                self.xk['inverse'], self.xk['c_mult']) /
-                    (self.position['wallet_balance'] if self.position['wallet_balance'] else 0.0)
-                )
+                self.position = self.add_pbrs_to_pos(self.position)
                 pos_change = True
             if 'new_open_order' in event:
                 if event['new_open_order']['order_id'] not in {x['order_id'] for x in self.open_orders}:

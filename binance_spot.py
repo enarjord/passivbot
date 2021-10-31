@@ -206,12 +206,8 @@ class BinanceBotSpot(Bot):
                              'liquidation_price': 0.0},
                     'shrt': {'size': 0.0,
                              'price': 0.0,
-                             'liquidation_price': 0.0,
-                             'pbr': 0.0},
+                             'liquidation_price': 0.0},
                     'wallet_balance': balance[self.quot]['onhand'] + balance[self.coin]['onhand'] * long_pprice}
-        position['long']['pbr'] = (qty_to_cost(position['long']['size'], position['long']['price'],
-                                   self.xk['inverse'], self.xk['c_mult']) /
-                                   (position['wallet_balance'] if position['wallet_balance'] else 0.0))
         return position
 
     async def execute_order(self, order: dict) -> dict:
@@ -429,12 +425,14 @@ class BinanceBotSpot(Bot):
                 if onhand_change:
                     self.position = self.calc_simulated_position(self.balance, self.fills)
                     self.position['wallet_balance'] = self.adjust_wallet_balance(self.position['wallet_balance'])
+                    self.position = self.add_pbrs_to_pos(self.position)
                     pos_change = True
             if 'filled' in event:
                 if event['filled']['order_id'] not in {fill['order_id'] for fill in self.fills}:
                     self.fills = sorted(self.fills + [event['filled']], key=lambda x: x['order_id'])
                 self.position = self.calc_simulated_position(self.balance, self.fills)
                 self.position['wallet_balance'] = self.adjust_wallet_balance(self.position['wallet_balance'])
+                self.position = self.add_pbrs_to_pos(self.position)
                 pos_change = True
             elif 'partially_filled' in event:
                 await asyncio.sleep(0.01)
