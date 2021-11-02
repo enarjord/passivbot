@@ -486,9 +486,10 @@ class BinanceBotSpot(Bot):
                         standardized['other_type'] = event['X'].lower()
                 elif event['X'] == 'FILLED':
                     if event['s'] == self.symbol:
+                        price = fp if (fp := float(event['p'])) != 0.0 else float(event['L'])
                         standardized['filled'] = {'order_id': int(event['i']),
                                                   'symbol': event['s'],
-                                                  'price': float(event['p']),
+                                                  'price': price,
                                                   'qty': float(event['q']),
                                                   'type': event['o'].lower(),
                                                   'side': event['S'].lower(),
@@ -500,9 +501,10 @@ class BinanceBotSpot(Bot):
                         standardized['other_type'] = 'filled'
                 elif event['X'] == 'PARTIALLY_FILLED':
                     if event['s'] == self.symbol:
+                        price = fp if (fp := float(event['p'])) != 0.0 else float(event['L'])
                         standardized['partially_filled'] = {'order_id': int(event['i']),
                                                             'symbol': event['s'],
-                                                            'price': float(event['p']),
+                                                            'price': price,
                                                             'qty': float(event['q']),
                                                             'type': event['o'].lower(),
                                                             'side': event['S'].lower(),
