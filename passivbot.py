@@ -160,10 +160,9 @@ class Bot:
     async def init_fills(self, n_days_limit=60):
         self.fills = await self.fetch_fills()
 
-    async def update_fills(self, max_n_fills=10000) -> [dict]:
+    async def update_fills(self) -> [dict]:
         '''
         fetches recent fills
-        updates self.fills, drops older fills max_n_fills
         returns list of new fills
         '''
         if self.ts_locked['update_fills'] > self.ts_released['update_fills']:
@@ -173,11 +172,11 @@ class Bot:
             fetched = await self.fetch_fills()
             seen = set()
             updated_fills = []
-            for fill in sorted(self.fills + fetched, key=lambda x: x['order_id']):
+            for fill in fetched + self.fills:
                 if fill['order_id'] not in seen:
                     updated_fills.append(fill)
                     seen.add(fill['order_id'])
-            self.fills = updated_fills[-5000:]
+            self.fills = sorted(updated_fills, key=lambda x: x['order_id'])[-5000:]
         except Exception as e:
             print('error with update fills', e)
             traceback.print_exc()
