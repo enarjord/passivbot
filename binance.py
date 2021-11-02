@@ -276,8 +276,8 @@ class BinanceBot(Bot):
             self.ts_released['force_update'] = 0.0
             return {}
 
-    async def fetch_fills(self, limit: int = 1000, from_id: int = None, start_time: int = None, end_time: int = None):
-        params = {'symbol': self.symbol, 'limit': min(100, limit) if self.inverse else limit}
+    async def fetch_fills(self, symbol=None, limit: int = 1000, from_id: int = None, start_time: int = None, end_time: int = None):
+        params = {'symbol': self.symbol if symbol is None else symbol, 'limit': min(100, limit) if self.inverse else limit}
         if from_id is not None:
             params['fromId'] = max(0, from_id)
         if start_time is not None:
