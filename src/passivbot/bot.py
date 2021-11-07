@@ -359,7 +359,6 @@ class Bot:
         long_psize = self.position["long"]["size"]
         long_pprice = self.position["long"]["price"]
         shrt_psize = self.position["shrt"]["size"]
-        shrt_pprice = self.position["shrt"]["price"]
 
         if self.stop_mode in ["panic"]:
             if self.exchange == "bybit":

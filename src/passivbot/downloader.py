@@ -421,7 +421,6 @@ class Downloader:
         Downloads any missing data based on the specified time frame.
         @return:
         """
-
         if self.config["exchange"] == "binance":
             if self.spot:
                 self.bot = await create_binance_bot_spot(get_dummy_settings(self.config))

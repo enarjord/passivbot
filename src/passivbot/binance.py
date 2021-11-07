@@ -33,7 +33,7 @@ class BinanceBot(Bot):
             ) as response:
                 result = await response.text()
             return json.loads(result)
-        except Exception as e:
+        except Exception:
             print(f"error with public get {url} {params}")
             traceback.print_exc()
             return {}
@@ -56,7 +56,7 @@ class BinanceBot(Bot):
             ) as response:
                 result = await response.text()
             return json.loads(result)
-        except Exception as e:
+        except Exception:
             print(f"error with private {type_} {base_endpoint} {url} {params}")
             traceback.print_exc()
             return {}

@@ -226,7 +226,6 @@ def unpack_config(d):
 
 
 def pack_config(d):
-    result = {}
     while any("$" in k for k in d):
         new = {}
         for k, v in denumpyize(d).items():

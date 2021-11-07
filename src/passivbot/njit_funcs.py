@@ -446,7 +446,6 @@ def find_qty_bringing_pbr_to_target(
     best_guess = (
         (ldiff, too_low[0], too_low[1]) if ldiff < hdiff else (hdiff, too_high[0], too_high[1])
     )
-    old_guess = -9e32
     i = 0
     while True:
         i += 1
@@ -1076,7 +1075,6 @@ def njit_backtest(
     next_close_grid_update_ts = 0
     next_stats_update = 0
 
-    prev_k = 0
     closest_bkr = 1.0
 
     for k in range(1, len(prices)):

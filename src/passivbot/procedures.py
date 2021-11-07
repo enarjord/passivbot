@@ -165,9 +165,7 @@ def print_(args, r=False, n=False):
 
 
 async def fetch_market_specific_settings(config: dict):
-    user = config["user"]
     exchange = config["exchange"]
-    symbol = config["symbol"]
     tmp_live_settings = get_dummy_settings(config)
     settings_from_exchange = {}
     if exchange == "binance":
@@ -315,7 +313,6 @@ def add_argparse_args(parser):
 
 
 def make_tick_samples(config: dict, sec_span: int = 1):
-
     """
     makes tick samples from agg_trades
     tick samples are [(qty, price, timestamp)]

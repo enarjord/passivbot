@@ -173,9 +173,7 @@ def single_sliding_window_run(config, data, do_print=True) -> (float, [dict]):
                 ]
             ),
         )
-    sample_size_ms = data[1][0] - data[0][0]
     max_span = config["max_span"] if "max_span" in config else 0
-    max_span_ito_n_samples = int(max_span * 60 / (sample_size_ms / 1000))
     for z, data_slice in enumerate(
         iter_slices(data, sliding_window_days, max_span=int(round(max_span)))
     ):
