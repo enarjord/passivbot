@@ -9,10 +9,10 @@ import aiohttp
 import numpy as np
 import traceback
 
-from pure_funcs import ts_to_date, sort_dict_keys, calc_long_pprice, format_float, get_position_fills, spotify_config
-from njit_funcs import round_dn, round_up, calc_long_pnl, calc_min_entry_qty, qty_to_cost, calc_upnl, calc_diff
-from passivbot import Bot
-from procedures import print_, print_async_exception
+from passivbot.pure_funcs import ts_to_date, sort_dict_keys, calc_long_pprice, format_float, get_position_fills, spotify_config
+from passivbot.njit_funcs import round_dn, round_up, calc_long_pnl, calc_min_entry_qty, qty_to_cost, calc_upnl, calc_diff
+from passivbot.bot import Bot
+from passivbot.procedures import print_, print_async_exception
 
 
 class BinanceBotSpot(Bot):

@@ -6,9 +6,8 @@ import pandas as pd
 import numpy as np
 import glob
 from time import time
-from pure_funcs import numpyize, denumpyize, candidate_to_live_config, ts_to_date, get_dummy_settings, calc_spans, \
-    config_pretty_str, date_to_ts, get_template_live_config
-from njit_funcs import calc_samples
+from passivbot.pure_funcs import numpyize, denumpyize, candidate_to_live_config, ts_to_date, get_dummy_settings, calc_spans, config_pretty_str, date_to_ts, get_template_live_config
+from passivbot.njit_funcs import calc_samples
 from datetime import datetime
 
 

@@ -1,7 +1,7 @@
 import os
 os.environ['NOJIT'] = 'false'
 
-from downloader import Downloader
+from passivbot.downloader import Downloader
 import argparse
 import asyncio
 import json
@@ -9,10 +9,8 @@ import hjson
 import numpy as np
 from backtest import backtest
 from multiprocessing import Pool
-from pure_funcs import analyze_fills, pack_config, unpack_config, numpyize, denumpyize, config_pretty_str, \
-    get_template_live_config, candidate_to_live_config, ts_to_date, round_values
-from procedures import add_argparse_args, prepare_optimize_config, load_live_config, make_get_filepath, \
-    load_exchange_key_secret, prepare_backtest_config, dump_live_config
+from passivbot.pure_funcs import analyze_fills, pack_config, unpack_config, numpyize, denumpyize, config_pretty_str, get_template_live_config, candidate_to_live_config, ts_to_date, round_values
+from passivbot.procedures import add_argparse_args, prepare_optimize_config, load_live_config, make_get_filepath, load_exchange_key_secret, prepare_backtest_config, dump_live_config
 from time import sleep, time
 
 
@@ -62,12 +60,12 @@ def backtest_multi_wrap(config: dict, pool):
 
 
 def harmony_search(
-        func, 
-        bounds: np.ndarray, 
-        n_harmonies: int, 
-        hm_considering_rate: float, 
-        bandwidth: float, 
-        pitch_adjusting_rate: float, 
+        func,
+        bounds: np.ndarray,
+        n_harmonies: int,
+        hm_considering_rate: float,
+        bandwidth: float,
+        pitch_adjusting_rate: float,
         iters: int,
         starting_xs: [np.ndarray] = [],
         post_processing_func = None):
@@ -135,7 +133,7 @@ class FuncWrap:
         for i, x in enumerate(xs):
             config[self.xs_conf_map[i]] = x
         return pack_config(config)
-        
+
     def config_to_xs(self, config):
         unpacked = unpack_config(config)
         return [unpacked[k] for k in self.xs_conf_map]

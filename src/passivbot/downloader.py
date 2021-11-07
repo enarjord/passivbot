@@ -14,10 +14,9 @@ import numpy as np
 import pandas as pd
 from dateutil import parser
 
-from njit_funcs import calc_samples
-from procedures import prepare_backtest_config, make_get_filepath, create_binance_bot, create_bybit_bot, \
-    create_binance_bot_spot, print_, add_argparse_args, utc_ms
-from pure_funcs import ts_to_date, get_dummy_settings
+from passivbot.njit_funcs import calc_samples
+from passivbot.procedures import prepare_backtest_config, make_get_filepath, create_binance_bot, create_bybit_bot, create_binance_bot_spot, print_, add_argparse_args, utc_ms
+from passivbot.pure_funcs import ts_to_date, get_dummy_settings
 
 
 class Downloader:

@@ -9,11 +9,11 @@ from time import time
 import numpy as np
 import pandas as pd
 
-from downloader import Downloader
-from njit_funcs import njit_backtest, round_
-from plotting import dump_plots
-from procedures import prepare_backtest_config, make_get_filepath, load_live_config, add_argparse_args
-from pure_funcs import create_xk, denumpyize, ts_to_date, analyze_fills, spotify_config
+from passivbot.downloader import Downloader
+from passivbot.njit_funcs import njit_backtest, round_
+from passivbot.plotting import dump_plots
+from passivbot.procedures import prepare_backtest_config, make_get_filepath, load_live_config, add_argparse_args
+from passivbot.pure_funcs import create_xk, denumpyize, ts_to_date, analyze_fills, spotify_config
 
 
 def backtest(config: dict, data: np.ndarray, do_print=False) -> (list, bool):

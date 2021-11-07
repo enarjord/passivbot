@@ -10,9 +10,9 @@ import aiohttp
 import numpy as np
 import traceback
 
-from pure_funcs import ts_to_date, sort_dict_keys, date_to_ts
-from procedures import print_async_exception, print_, utc_ms
-from passivbot import Bot
+from passivbot.pure_funcs import ts_to_date, sort_dict_keys, date_to_ts
+from passivbot.procedures import print_async_exception, print_, utc_ms
+from passivbot.bot import Bot
 
 
 def first_capitalized(s: str):
@@ -382,7 +382,7 @@ class Bybit(Bot):
                         'fee_token': self.margin_coin,
                         'timestamp': int(x['trade_time_ms']),
                         'position_side': determine_pos_side(x),
-                        'is_maker': x['fee_rate'] < 0.0} 
+                        'is_maker': x['fee_rate'] < 0.0}
                 fills.append(fill)
             return fills
         except Exception as e:

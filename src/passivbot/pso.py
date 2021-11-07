@@ -3,14 +3,13 @@ import asyncio
 import aiomultiprocess
 from multiprocessing import shared_memory, Lock
 from collections import OrderedDict
-from backtest import backtest
-from plotting import plot_fills
-from downloader import Downloader, prep_config
-from pure_funcs import denumpyize, numpyize, get_template_live_config, candidate_to_live_config, calc_spans, \
-    get_template_live_config, unpack_config, pack_config, analyze_fills, ts_to_date, denanify
-from procedures import dump_live_config, load_live_config, make_get_filepath, add_argparse_args
+from passivbot.backtest import backtest
+from passivbot.plotting import plot_fills
+from passivbot.downloader import Downloader, prep_config
+from passivbot.pure_funcs import denumpyize, numpyize, get_template_live_config, candidate_to_live_config, calc_spans, get_template_live_config, unpack_config, pack_config, analyze_fills, ts_to_date, denanify
+from passivbot.procedures import dump_live_config, load_live_config, make_get_filepath, add_argparse_args
 from time import time
-from optimize import iter_slices, iter_slices_full_first, objective_function, get_expanded_ranges, single_sliding_window_run
+from passivbot.optimize import iter_slices, iter_slices_full_first, objective_function, get_expanded_ranges, single_sliding_window_run
 import os
 import sys
 import argparse
@@ -25,7 +24,7 @@ lock = Lock()
 BEST_OBJECTIVE = 0.0
 
 
-def get_bounds(ranges: dict) -> tuple:     
+def get_bounds(ranges: dict) -> tuple:
     return (np.array([float(v[0]) for k, v in ranges.items()]),
             np.array([float(v[1]) for k, v in ranges.items()]))
 
@@ -39,20 +38,20 @@ class BacktestPSO:
             if self.expanded_ranges[k][0] == self.expanded_ranges[k][1]:
                 del self.expanded_ranges[k]
         self.bounds = get_bounds(self.expanded_ranges)
-    
+
     def config_to_xs(self, config):
         xs = np.zeros(len(self.bounds[0]))
         unpacked = unpack_config(config)
         for i, k in enumerate(self.expanded_ranges):
             xs[i] = unpacked[k]
         return xs
-    
+
     def xs_to_config(self, xs):
         config = self.config.copy()
         for i, k in enumerate(self.expanded_ranges):
             config[k] = xs[i]
         return numpyize(denanify(pack_config(config)))
-    
+
     def rf(self, xss):
         return np.array([self.single_rf(xs) for xs in xss])
 

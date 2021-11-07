@@ -1,14 +1,12 @@
 from multiprocessing import shared_memory, Pool
 from collections import OrderedDict
-from backtest import backtest
-from plotting import plot_fills
-from downloader import Downloader, prep_config
-from pure_funcs import denumpyize, numpyize, get_template_live_config, candidate_to_live_config, calc_spans, \
-    get_template_live_config, unpack_config, pack_config, analyze_fills, ts_to_date, denanify, round_dynamic, \
-    tuplify
-from procedures import dump_live_config, load_live_config, make_get_filepath, add_argparse_args, get_starting_configs
+from passivbot.backtest import backtest
+from passivbot.plotting import plot_fills
+from passivbot.downloader import Downloader, prep_config
+from passivbot.pure_funcs import denumpyize, numpyize, get_template_live_config, candidate_to_live_config, calc_spans, get_template_live_config, unpack_config, pack_config, analyze_fills, ts_to_date, denanify, round_dynamic, tuplify
+from passivbot.procedures import dump_live_config, load_live_config, make_get_filepath, add_argparse_args, get_starting_configs
 from time import time, sleep
-from optimize import get_expanded_ranges, single_sliding_window_run, objective_function
+from passivbot.optimize import get_expanded_ranges, single_sliding_window_run, objective_function
 from bisect import bisect
 from typing import Callable
 from prettytable import PrettyTable
@@ -168,7 +166,7 @@ class PostProcessing:
         return score
 
 
-def get_bounds(ranges: dict) -> tuple:     
+def get_bounds(ranges: dict) -> tuple:
     return np.array([np.array([float(v[0]) for k, v in ranges.items()]),
                      np.array([float(v[1]) for k, v in ranges.items()])])
 
@@ -182,14 +180,14 @@ class BacktestWrap:
             if self.expanded_ranges[k][0] == self.expanded_ranges[k][1]:
                 del self.expanded_ranges[k]
         self.bounds = get_bounds(self.expanded_ranges)
-    
+
     def config_to_xs(self, config):
         xs = np.zeros(len(self.bounds[0]))
         unpacked = unpack_config(config)
         for i, k in enumerate(self.expanded_ranges):
             xs[i] = unpacked[k]
         return xs
-    
+
     def xs_to_config(self, xs):
         config = self.config.copy()
         for i, k in enumerate(self.expanded_ranges):

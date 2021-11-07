@@ -3,10 +3,10 @@ import os
 import numpy as np
 import pandas as pd
 
-from procedures import load_live_config
+from passivbot.procedures import load_live_config
 from datetime import datetime, timedelta, timezone
 from time import time, strftime, gmtime
-from pure_funcs import config_pretty_str, ts_to_date, get_daily_from_income
+from passivbot.pure_funcs import config_pretty_str, ts_to_date, get_daily_from_income
 from typing import Optional
 
 try:
@@ -17,13 +17,11 @@ except Exception as e:
           "As a result of this, the version will not be shown in applicable messages. To fix this,"
           "please make sure you have git installed properly. The bot will work fine without it.")
 from prettytable import PrettyTable, HEADER
-from telegram import KeyboardButton, ParseMode, ReplyKeyboardMarkup, Update, InlineKeyboardButton, \
-    InlineKeyboardMarkup, CallbackQuery
-from telegram.ext import Updater, CommandHandler, ConversationHandler, CallbackContext, \
-    MessageHandler, Filters, CallbackQueryHandler
+from telegram import KeyboardButton, ParseMode, ReplyKeyboardMarkup, Update, InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery
+from telegram.ext import Updater, CommandHandler, ConversationHandler, CallbackContext, MessageHandler, Filters, CallbackQueryHandler
 
-from njit_funcs import round_, calc_long_pnl, calc_shrt_pnl, calc_diff
-from pure_funcs import compress_float, round_dynamic, denumpyize
+from passivbot.njit_funcs import round_, calc_long_pnl, calc_shrt_pnl, calc_diff
+from passivbot.pure_funcs import compress_float, round_dynamic, denumpyize
 
 
 class Telegram:

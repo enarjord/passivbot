@@ -1,7 +1,7 @@
 import subprocess
 import os
 import shutil
-from procedures import make_get_filepath
+from passivbot.procedures import make_get_filepath
 
 def main():
     tokens = [

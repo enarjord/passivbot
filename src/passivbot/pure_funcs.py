@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 from dateutil import parser
 
-from njit_funcs import round_dynamic, calc_emas, qty_to_cost
+from passivbot.njit_funcs import round_dynamic, calc_emas, qty_to_cost
 
 
 def format_float(num):

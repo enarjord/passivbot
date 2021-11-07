@@ -9,10 +9,10 @@ import aiohttp
 import numpy as np
 import traceback
 
-from pure_funcs import ts_to_date, sort_dict_keys, format_float
-from njit_funcs import calc_upnl, qty_to_cost
-from passivbot import Bot
-from procedures import print_, print_async_exception
+from passivbot.pure_funcs import ts_to_date, sort_dict_keys, format_float
+from passivbot.njit_funcs import calc_upnl, qty_to_cost
+from passivbot.bot import Bot
+from passivbot.procedures import print_, print_async_exception
 
 
 class BinanceBot(Bot):

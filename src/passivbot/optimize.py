@@ -21,13 +21,13 @@ from ray.tune.suggest import ConcurrencyLimiter
 from ray.tune.suggest.nevergrad import NevergradSearch
 
 from collections import OrderedDict
-from backtest import backtest
-from backtest import plot_wrap
-from downloader import Downloader
-from procedures import prepare_optimize_config, add_argparse_args, load_live_config
-from pure_funcs import pack_config, unpack_config, get_template_live_config, ts_to_date, analyze_fills
-from njit_funcs import round_dynamic
-from reporter import LogReporter
+from passivbot.backtest import backtest
+from passivbot.backtest import plot_wrap
+from passivbot.downloader import Downloader
+from passivbot.procedures import prepare_optimize_config, add_argparse_args, load_live_config
+from passivbot.pure_funcs import pack_config, unpack_config, get_template_live_config, ts_to_date, analyze_fills
+from passivbot.njit_funcs import round_dynamic
+from passivbot.reporter import LogReporter
 import shutil
 
 os.environ['TUNE_GLOBAL_CHECKPOINT_S'] = '240'

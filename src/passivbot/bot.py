@@ -11,10 +11,10 @@ import signal
 import pprint
 import numpy as np
 from time import time
-from procedures import load_live_config, make_get_filepath, load_exchange_key_secret, print_, utc_ms
-from pure_funcs import filter_orders, compress_float, create_xk, round_dynamic, denumpyize, \
+from passivbot.procedures import load_live_config, make_get_filepath, load_exchange_key_secret, print_, utc_ms
+from passivbot.pure_funcs import filter_orders, compress_float, create_xk, round_dynamic, denumpyize, \
     spotify_config, get_position_fills
-from njit_funcs import qty_to_cost, calc_diff, round_, calc_long_close_grid, calc_upnl, calc_long_entry_grid
+from passivbot.njit_funcs import qty_to_cost, calc_diff, round_, calc_long_close_grid, calc_upnl, calc_long_entry_grid
 from typing import Union, Dict, List
 
 import websockets
@@ -575,13 +575,13 @@ async def main() -> None:
 
     if account['exchange'] == 'binance':
         if 'spot' in config['market_type']:
-            from procedures import create_binance_bot_spot
+            from passivbot.procedures import create_binance_bot_spot
             bot = await create_binance_bot_spot(config)
         else:
-            from procedures import create_binance_bot
+            from passivbot.procedures import create_binance_bot
             bot = await create_binance_bot(config)
     elif account['exchange'] == 'bybit':
-        from procedures import create_bybit_bot
+        from passivbot.procedures import create_bybit_bot
         bot = await create_bybit_bot(config)
     else:
         raise Exception('unknown exchange', account['exchange'])

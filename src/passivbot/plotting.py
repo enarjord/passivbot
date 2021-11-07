@@ -2,9 +2,9 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
 import json
-from pure_funcs import round_dynamic, denumpyize, candidate_to_live_config
-from njit_funcs import round_up
-from procedures import dump_live_config
+from passivbot.pure_funcs import round_dynamic, denumpyize, candidate_to_live_config
+from passivbot.njit_funcs import round_up
+from passivbot.procedures import dump_live_config
 from prettytable import PrettyTable
 from colorama import init, Fore
 import re
