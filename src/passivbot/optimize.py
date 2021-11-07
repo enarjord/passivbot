@@ -1,7 +1,6 @@
 import argparse
 import asyncio
 import glob
-import json
 import os
 import pprint
 import shutil

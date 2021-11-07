@@ -10,8 +10,6 @@ import aiohttp
 import numpy as np
 
 from passivbot.bot import Bot
-from passivbot.njit_funcs import calc_upnl
-from passivbot.njit_funcs import qty_to_cost
 from passivbot.procedures import print_
 from passivbot.procedures import print_async_exception
 from passivbot.pure_funcs import format_float

@@ -11,7 +11,6 @@ from typing import Dict
 from typing import List
 from typing import Union
 
-import numpy as np
 import websockets
 from telegram_bot import Telegram
 
@@ -25,12 +24,9 @@ from passivbot.procedures import load_exchange_key_secret
 from passivbot.procedures import load_live_config
 from passivbot.procedures import make_get_filepath
 from passivbot.procedures import print_
-from passivbot.procedures import utc_ms
-from passivbot.pure_funcs import compress_float
 from passivbot.pure_funcs import create_xk
 from passivbot.pure_funcs import denumpyize
 from passivbot.pure_funcs import filter_orders
-from passivbot.pure_funcs import get_position_fills
 from passivbot.pure_funcs import round_dynamic
 from passivbot.pure_funcs import spotify_config
 

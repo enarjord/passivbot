@@ -5,7 +5,6 @@ import multiprocessing
 import os
 import time
 
-import hjson
 import numpy as np
 from backtest import backtest
 
@@ -19,7 +18,6 @@ from passivbot.procedures import prepare_backtest_config
 from passivbot.procedures import prepare_optimize_config
 from passivbot.pure_funcs import analyze_fills
 from passivbot.pure_funcs import candidate_to_live_config
-from passivbot.pure_funcs import config_pretty_str
 from passivbot.pure_funcs import denumpyize
 from passivbot.pure_funcs import get_template_live_config
 from passivbot.pure_funcs import numpyize

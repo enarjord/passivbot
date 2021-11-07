@@ -1,6 +1,6 @@
-import json
 import os
 import sys
+from collections.abc import Mapping
 from typing import Dict
 from typing import List
 from typing import Optional
@@ -16,12 +16,6 @@ from ray.tune.utils import unflattened_lookup
 from tabulate import tabulate
 
 from passivbot.procedures import dump_live_config
-from passivbot.pure_funcs import candidate_to_live_config
-
-try:
-    from collections.abc import Mapping, MutableMapping
-except ImportError:
-    from collections import Mapping, MutableMapping
 
 
 def _get_trial_info(trial: Trial, parameters: List[str], metrics: List[str]):

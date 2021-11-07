@@ -1,7 +1,6 @@
 import glob
 import json
 import os
-import pprint
 import time
 from datetime import datetime
 
@@ -10,11 +9,9 @@ import numpy as np
 import pandas as pd
 
 from passivbot.njit_funcs import calc_samples
-from passivbot.pure_funcs import calc_spans
 from passivbot.pure_funcs import candidate_to_live_config
 from passivbot.pure_funcs import config_pretty_str
 from passivbot.pure_funcs import date_to_ts
-from passivbot.pure_funcs import denumpyize
 from passivbot.pure_funcs import get_dummy_settings
 from passivbot.pure_funcs import get_template_live_config
 from passivbot.pure_funcs import numpyize

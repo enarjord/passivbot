@@ -10,7 +10,6 @@ from prettytable import PrettyTable
 
 from passivbot.njit_funcs import round_up
 from passivbot.procedures import dump_live_config
-from passivbot.pure_funcs import candidate_to_live_config
 from passivbot.pure_funcs import denumpyize
 from passivbot.pure_funcs import round_dynamic
 

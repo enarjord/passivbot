@@ -15,7 +15,6 @@ import numpy as np
 from passivbot.bot import Bot
 from passivbot.procedures import print_
 from passivbot.procedures import print_async_exception
-from passivbot.procedures import utc_ms
 from passivbot.pure_funcs import date_to_ts
 from passivbot.pure_funcs import sort_dict_keys
 from passivbot.pure_funcs import ts_to_date

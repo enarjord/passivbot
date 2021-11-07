@@ -1,14 +1,8 @@
 import os
 import time
 from datetime import datetime
-from datetime import timedelta
-from datetime import timezone
-from time import gmtime
-from time import strftime
 from typing import Optional
 
-import numpy as np
-import pandas as pd
 from prettytable import HEADER
 from prettytable import PrettyTable
 from telegram import CallbackQuery
@@ -36,7 +30,6 @@ from passivbot.pure_funcs import config_pretty_str
 from passivbot.pure_funcs import denumpyize
 from passivbot.pure_funcs import get_daily_from_income
 from passivbot.pure_funcs import round_dynamic
-from passivbot.pure_funcs import ts_to_date
 
 try:
     import git

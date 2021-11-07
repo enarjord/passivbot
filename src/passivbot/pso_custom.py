@@ -1,38 +1,25 @@
 import argparse
 import asyncio
-import glob
 import json
 import os
-import pprint
-import sys
 import time
 from bisect import bisect
-from collections import OrderedDict
 from hashlib import sha256
 from multiprocessing import Pool
 from multiprocessing import shared_memory
 from typing import Callable
 
-import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
 from prettytable import PrettyTable
 
-from passivbot.backtest import backtest
 from passivbot.downloader import Downloader
 from passivbot.downloader import prep_config
 from passivbot.optimize import get_expanded_ranges
-from passivbot.optimize import objective_function
 from passivbot.optimize import single_sliding_window_run
-from passivbot.plotting import plot_fills
 from passivbot.procedures import add_argparse_args
 from passivbot.procedures import dump_live_config
 from passivbot.procedures import get_starting_configs
-from passivbot.procedures import load_live_config
 from passivbot.procedures import make_get_filepath
-from passivbot.pure_funcs import analyze_fills
-from passivbot.pure_funcs import calc_spans
-from passivbot.pure_funcs import candidate_to_live_config
 from passivbot.pure_funcs import denanify
 from passivbot.pure_funcs import denumpyize
 from passivbot.pure_funcs import get_template_live_config
@@ -40,7 +27,6 @@ from passivbot.pure_funcs import numpyize
 from passivbot.pure_funcs import pack_config
 from passivbot.pure_funcs import round_dynamic
 from passivbot.pure_funcs import ts_to_date
-from passivbot.pure_funcs import tuplify
 from passivbot.pure_funcs import unpack_config
 
 
