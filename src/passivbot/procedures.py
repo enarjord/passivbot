@@ -2,8 +2,8 @@ import glob
 import json
 import os
 import pprint
+import time
 from datetime import datetime
-from time import time
 
 import hjson
 import numpy as np
@@ -344,7 +344,7 @@ def make_tick_samples(config: dict, sec_span: int = 1):
         return
     ticks_filenames = sorted(f for f in os.listdir(ticks_filepath) if f.endswith(".csv"))
     ticks = np.empty((0, 3))
-    sts = time()
+    sts = time.time()
     for f in ticks_filenames:
         _, _, first_ts, last_ts = map(int, f.replace(".csv", "").split("_"))
         if first_ts > end_ts or last_ts < start_ts:
@@ -356,7 +356,7 @@ def make_tick_samples(config: dict, sec_span: int = 1):
         del tdf
     samples = calc_samples(ticks[ticks[:, 0].argsort()], sec_span * 1000)
     print(
-        f"took {time() - sts:.2f} seconds to load {len(ticks)} ticks, creating {len(samples)} samples"
+        f"took {time.time() - sts:.2f} seconds to load {len(ticks)} ticks, creating {len(samples)} samples"
     )
     del ticks
     return samples

@@ -2,8 +2,8 @@ import asyncio
 import hashlib
 import hmac
 import json
+import time
 import traceback
-from time import time
 from typing import Dict
 from typing import List
 from typing import Union
@@ -164,7 +164,7 @@ class Bybit(Bot):
         return json.loads(result)
 
     async def private_(self, type_: str, base_endpoint: str, url: str, params: dict = {}) -> dict:
-        timestamp = int(time() * 1000)
+        timestamp = int(time.time() * 1000)
         params.update({"api_key": self.key, "timestamp": timestamp})
         for k in params:
             if type(params[k]) == bool:
@@ -261,7 +261,7 @@ class Bybit(Bot):
                 params["time_in_force"] = "GoodTillCancel"
             params[
                 "order_link_id"
-            ] = f"{order['custom_id']}_{str(int(time() * 1000))[8:]}_{int(np.random.random() * 1000)}"
+            ] = f"{order['custom_id']}_{str(int(time.time() * 1000))[8:]}_{int(np.random.random() * 1000)}"
             o = await self.private_post(self.endpoints["create_order"], params)
             if o["result"]:
                 return {
@@ -583,7 +583,7 @@ class Bybit(Bot):
         await ws.send(json.dumps({"op": "subscribe", "args": ["trade." + self.symbol]}))
 
     async def subscribe_to_user_stream(self, ws):
-        expires = int((time() + 1) * 1000)
+        expires = int((time.time() + 1) * 1000)
         signature = str(
             hmac.new(
                 bytes(self.secret, "utf-8"),

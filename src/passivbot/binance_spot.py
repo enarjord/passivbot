@@ -2,8 +2,8 @@ import asyncio
 import hashlib
 import hmac
 import json
+import time
 import traceback
-from time import time
 from urllib.parse import urlencode
 
 import aiohttp
@@ -47,7 +47,7 @@ class BinanceBotSpot(Bot):
         return json.loads(result)
 
     async def private_(self, type_: str, base_endpoint: str, url: str, params: dict = {}) -> dict:
-        timestamp = int(time() * 1000)
+        timestamp = int(time.time() * 1000)
         params.update({"timestamp": timestamp, "recvWindow": 5000})
         for k in params:
             if type(params[k]) == bool:
@@ -246,7 +246,7 @@ class BinanceBotSpot(Bot):
         if "custom_id" in order:
             params[
                 "newClientOrderId"
-            ] = f"{order['custom_id']}_{str(int(time() * 1000))[8:]}_{int(np.random.random() * 1000)}"
+            ] = f"{order['custom_id']}_{str(int(time.time() * 1000))[8:]}_{int(np.random.random() * 1000)}"
         o = await self.private_post(self.endpoints["create_order"], params)
         if "side" in o:
             return {

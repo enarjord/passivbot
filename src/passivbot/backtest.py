@@ -2,7 +2,7 @@ import argparse
 import asyncio
 import os
 import pprint
-from time import time
+import time
 
 import numpy as np
 import pandas as pd
@@ -35,16 +35,18 @@ def plot_wrap(config, data):
     print("n_days", round_(config["n_days"], 0.1))
     print("starting_balance", config["starting_balance"])
     print("backtesting...")
-    sts = time()
+    sts = time.time()
     fills, stats = backtest(config, data, do_print=True)
-    print(f"{time() - sts:.2f} seconds elapsed")
+    print(f"{time.time() - sts:.2f} seconds elapsed")
     if not fills:
         print("no fills")
         return
     fdf, sdf, result = analyze_fills(fills, stats, config)
     config["result"] = result
     config["plots_dirpath"] = make_get_filepath(
-        os.path.join(config["plots_dirpath"], f"{ts_to_date(time())[:19].replace(':', '')}", "")
+        os.path.join(
+            config["plots_dirpath"], f"{ts_to_date(time.time())[:19].replace(':', '')}", ""
+        )
     )
     fdf.to_csv(config["plots_dirpath"] + "fills.csv")
     sdf.to_csv(config["plots_dirpath"] + "stats.csv")

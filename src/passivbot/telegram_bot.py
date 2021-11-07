@@ -1,10 +1,10 @@
 import os
+import time
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
 from time import gmtime
 from time import strftime
-from time import time
 from typing import Optional
 
 import numpy as np
@@ -502,10 +502,10 @@ class Telegram:
             self.send_msg(f"Request for setting config was aborted")
             return ConversationHandler.END
 
-        if self.config_reload_ts > 0.0 and time() - self.config_reload_ts < 60 * 5:
+        if self.config_reload_ts > 0.0 and time.time() - self.config_reload_ts < 60 * 5:
             self.send_msg("Config reload in progress, please wait")
             return
-        self.config_reload_ts = time()
+        self.config_reload_ts = time.time()
         self.send_msg(
             f"Activating config file <pre>configs/live/{self.config_file_to_activate}</pre>..."
         )
@@ -979,10 +979,10 @@ class Telegram:
             self.send_msg("Balance not retrieved yet, please try again later")
 
     def _reload_config(self, update=None, context=None):
-        if self.config_reload_ts > 0.0 and time() - self.config_reload_ts < 60 * 5:
+        if self.config_reload_ts > 0.0 and time.time() - self.config_reload_ts < 60 * 5:
             self.send_msg("Config reload in progress, please wait")
             return
-        self.config_reload_ts = time()
+        self.config_reload_ts = time.time()
         self.send_msg("Reloading config...")
 
         self._activate_config(self._bot.live_config_path)
@@ -1052,7 +1052,7 @@ class Telegram:
 
             async def send_daily_async(n_days: int):
                 ms_per_day = 1000 * 60 * 60 * 24
-                now = time() * 1000
+                now = time.time() * 1000
                 start_time = now - ms_per_day * n_days
                 income = await self._bot.get_all_income(
                     symbol=self._bot.symbol, start_time=start_time

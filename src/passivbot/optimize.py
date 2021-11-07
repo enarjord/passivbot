@@ -6,8 +6,8 @@ import os
 import pprint
 import shutil
 import sys
+import time
 from collections import OrderedDict
-from time import time
 from typing import Union
 
 import nevergrad as ng
@@ -390,7 +390,7 @@ async def execute_optimize(config):
     data = await downloader.get_sampled_ticks()
     config["n_days"] = (data[-1][0] - data[0][0]) / (1000 * 60 * 60 * 24)
     config["optimize_dirpath"] = os.path.join(
-        config["optimize_dirpath"], ts_to_date(time())[:19].replace(":", ""), ""
+        config["optimize_dirpath"], ts_to_date(time.time())[:19].replace(":", ""), ""
     )
 
     start_candidate = None

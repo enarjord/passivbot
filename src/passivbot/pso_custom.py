@@ -5,13 +5,12 @@ import json
 import os
 import pprint
 import sys
+import time
 from bisect import bisect
 from collections import OrderedDict
 from hashlib import sha256
 from multiprocessing import Pool
 from multiprocessing import shared_memory
-from time import sleep
-from time import time
 from typing import Callable
 
 import matplotlib.pyplot as plt
@@ -161,7 +160,7 @@ def pso_multiprocess(
                 velocities[pos_cycler], positions[pos_cycler], lbests[pos_cycler], gbest
             )
         worker_cycler = (worker_cycler + 1) % len(workers)
-        sleep(0.001)
+        time.sleep(0.001)
     return gbest, gbest_score
 
 
@@ -316,7 +315,7 @@ async def main():
             config["n_days"] = (shdata[-1][0] - shdata[0][0]) / (1000 * 60 * 60 * 24)
             config["optimize_dirpath"] = make_get_filepath(
                 os.path.join(
-                    config["optimize_dirpath"], ts_to_date(time())[:19].replace(":", ""), ""
+                    config["optimize_dirpath"], ts_to_date(time.time())[:19].replace(":", ""), ""
                 )
             )
 

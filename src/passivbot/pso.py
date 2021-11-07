@@ -1,13 +1,12 @@
 import argparse
 import asyncio
 import json
+import multiprocessing
 import os
 import pprint
 import sys
+import time
 from collections import OrderedDict
-from multiprocessing import Lock
-from multiprocessing import shared_memory
-from time import time
 
 import aiomultiprocess
 import matplotlib.pyplot as plt
@@ -39,7 +38,7 @@ from passivbot.pure_funcs import pack_config
 from passivbot.pure_funcs import ts_to_date
 from passivbot.pure_funcs import unpack_config
 
-lock = Lock()
+lock = multiprocessing.Lock()
 BEST_OBJECTIVE = 0.0
 
 
@@ -129,7 +128,9 @@ async def main():
             config = {**template_live_config, **config}
             dl = Downloader(config)
             data = await dl.get_data()
-            shms = [shared_memory.SharedMemory(create=True, size=d.nbytes) for d in data]
+            shms = [
+                multiprocessing.shared_memory.SharedMemory(create=True, size=d.nbytes) for d in data
+            ]
             shdata = [
                 np.ndarray(d.shape, dtype=d.dtype, buffer=shms[i].buf) for i, d in enumerate(data)
             ]
@@ -139,7 +140,7 @@ async def main():
             config["n_days"] = (shdata[2][-1] - shdata[2][0]) / (1000 * 60 * 60 * 24)
             config["optimize_dirpath"] = make_get_filepath(
                 os.path.join(
-                    config["optimize_dirpath"], ts_to_date(time())[:19].replace(":", ""), ""
+                    config["optimize_dirpath"], ts_to_date(time.time())[:19].replace(":", ""), ""
                 )
             )
 

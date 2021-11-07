@@ -1,10 +1,9 @@
 import argparse
 import asyncio
 import json
+import multiprocessing
 import os
-from multiprocessing import Pool
-from time import sleep
-from time import time
+import time
 
 import hjson
 import numpy as np
@@ -58,7 +57,7 @@ def backtest_single_wrap(config_: dict):
         adg = 0.0
         pa_closeness = 100.0
         with open(make_get_filepath("tmp/harmony_search_errors.txt"), "a") as f:
-            f.write(json.dumps([time(), "error", str(e), denumpyize(config)]) + "\n")
+            f.write(json.dumps([time.time(), "error", str(e), denumpyize(config)]) + "\n")
     return (pa_closeness, adg, score)
 
 
@@ -69,7 +68,7 @@ def backtest_multi_wrap(config: dict, pool):
     while True:
         if all([task.ready() for task in tasks.values()]):
             break
-        sleep(0.1)
+        time.sleep(0.1)
     results = {k: v.get() for k, v in tasks.items()}
     mean_pa_closeness = np.mean([v[0] for v in results.values()])
     mean_adg = np.mean([v[1] for v in results.values()])
@@ -158,7 +157,7 @@ class FuncWrap:
                 [self.base_config["ranges"][k][1] for k in self.xs_conf_map],
             ]
         )
-        self.now_date = ts_to_date(time())[:19].replace(":", "-")
+        self.now_date = ts_to_date(time.time())[:19].replace(":", "-")
         self.results_fname = make_get_filepath(f"tmp/harmony_search_results_{self.now_date}.txt")
         self.best_conf_fname = f"tmp/harmony_search_best_config_{self.now_date}.json"
 
@@ -237,7 +236,7 @@ async def main():
             downloader = Downloader({**config, **tmp_cfg})
             await downloader.get_sampled_ticks()
 
-    pool = Pool(processes=config["n_cpus"])
+    pool = multiprocessing.Pool(processes=config["n_cpus"])
 
     func_wrap = FuncWrap(pool, config)
     cfgs = []

@@ -5,8 +5,8 @@ import logging
 import os
 import pprint
 import signal
+import time
 import traceback
-from time import time
 from typing import Dict
 from typing import List
 from typing import Union
@@ -130,7 +130,7 @@ class Bot:
     def dump_log(self, data) -> None:
         if self.config["logging_level"] > 0:
             with open(self.log_filepath, "a") as f:
-                f.write(json.dumps({**{"log_timestamp": time()}, **data}) + "\n")
+                f.write(json.dumps({**{"log_timestamp": time.time()}, **data}) + "\n")
 
     async def update_open_orders(self) -> None:
         if self.ts_locked["update_open_orders"] > self.ts_released["update_open_orders"]:
@@ -145,7 +145,7 @@ class Bot:
             print("error with update open orders", e)
             traceback.print_exc()
         finally:
-            self.ts_released["update_open_orders"] = time()
+            self.ts_released["update_open_orders"] = time.time()
 
     def adjust_wallet_balance(self, balance: float) -> float:
         return (
@@ -185,7 +185,7 @@ class Bot:
     async def update_position(self) -> None:
         if self.ts_locked["update_position"] > self.ts_released["update_position"]:
             return
-        self.ts_locked["update_position"] = time()
+        self.ts_locked["update_position"] = time.time()
         try:
             position = await self.fetch_position()
             position["wallet_balance"] = self.adjust_wallet_balance(position["wallet_balance"])
@@ -217,7 +217,7 @@ class Bot:
             print("error with update position", e)
             traceback.print_exc()
         finally:
-            self.ts_released["update_position"] = time()
+            self.ts_released["update_position"] = time.time()
 
     async def init_fills(self, n_days_limit=60):
         self.fills = await self.fetch_fills()
@@ -229,7 +229,7 @@ class Bot:
         """
         if self.ts_locked["update_fills"] > self.ts_released["update_fills"]:
             return
-        self.ts_locked["update_fills"] = time()
+        self.ts_locked["update_fills"] = time.time()
         try:
             fetched = await self.fetch_fills()
             seen = set()
@@ -243,14 +243,14 @@ class Bot:
             print("error with update fills", e)
             traceback.print_exc()
         finally:
-            self.ts_released["update_fills"] = time()
+            self.ts_released["update_fills"] = time.time()
 
     async def create_orders(self, orders_to_create: [dict]) -> [dict]:
         if not orders_to_create:
             return []
         if self.ts_locked["create_orders"] > self.ts_released["create_orders"]:
             return []
-        self.ts_locked["create_orders"] = time()
+        self.ts_locked["create_orders"] = time.time()
         try:
             creations = []
             for oc in sorted(orders_to_create, key=lambda x: calc_diff(x["price"], self.price)):
@@ -290,14 +290,14 @@ class Bot:
                     )
             return created_orders
         finally:
-            self.ts_released["create_orders"] = time()
+            self.ts_released["create_orders"] = time.time()
 
     async def cancel_orders(self, orders_to_cancel: [dict]) -> [dict]:
         if not orders_to_cancel:
             return
         if self.ts_locked["cancel_orders"] > self.ts_released["cancel_orders"]:
             return
-        self.ts_locked["cancel_orders"] = time()
+        self.ts_locked["cancel_orders"] = time.time()
         try:
             deletions = []
             for oc in orders_to_cancel:
@@ -339,7 +339,7 @@ class Bot:
                     )
             return cancelled_orders
         finally:
-            self.ts_released["cancel_orders"] = time()
+            self.ts_released["cancel_orders"] = time.time()
 
     def stop(self, signum=None, frame=None) -> None:
         print("\nStopping passivbot, please wait...")
@@ -480,7 +480,7 @@ class Bot:
     async def cancel_and_create(self):
         if self.ts_locked["cancel_and_create"] > self.ts_released["cancel_and_create"]:
             return
-        self.ts_locked["cancel_and_create"] = time()
+        self.ts_locked["cancel_and_create"] = time.time()
         try:
             to_cancel, to_create = filter_orders(
                 self.open_orders, self.calc_orders(), keys=["side", "position_side", "qty", "price"]
@@ -508,7 +508,7 @@ class Bot:
             await asyncio.sleep(self.delay_between_executions)  # sleep before releasing lock
             return results
         finally:
-            self.ts_released["cancel_and_create"] = time()
+            self.ts_released["cancel_and_create"] = time.time()
 
     async def on_market_stream_event(self, ticks: [dict]):
         if ticks:
@@ -522,7 +522,7 @@ class Bot:
         if self.stop_mode is not None:
             print(f"{self.stop_mode} stop mode is active")
 
-        now = time()
+        now = time.time()
         if now - self.ts_released["force_update"] > self.force_update_interval:
             self.ts_released["force_update"] = now
             # force update pos and open orders thru rest API every 30 sec
@@ -532,7 +532,7 @@ class Bot:
         if now - self.heartbeat_ts > 60 * 60:
             # print heartbeat once an hour
             print_(["heartbeat\n"], n=True)
-            self.heartbeat_ts = time()
+            self.heartbeat_ts = time.time()
         await self.cancel_and_create()
 
     async def on_user_stream_events(self, events: Union[List[Dict], List]) -> None:
@@ -590,7 +590,7 @@ class Bot:
             traceback.print_exc()
 
     def update_output_information(self):
-        self.ts_released["print"] = time()
+        self.ts_released["print"] = time.time()
         line = f"{self.symbol} "
         line += f"l {self.position['long']['size']} @ "
         line += f"{round_(self.position['long']['price'], self.price_step)}, "
@@ -622,7 +622,7 @@ class Bot:
         print_([line], r=True)
 
     def flush_stuck_locks(self, timeout: float = 5.0) -> None:
-        now = time()
+        now = time.time()
         for key in self.ts_locked:
             if self.ts_locked[key] > self.ts_released[key]:
                 if now - self.ts_locked[key] > timeout:
