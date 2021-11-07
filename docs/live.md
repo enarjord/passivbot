@@ -7,7 +7,7 @@ how you can start your bot, and anything relating to keeping the system running 
 
 In order to start the bot in live mode, you will need two things:
 1) setup your API-keys and (optionally) your telegram settings in the `api-keys.json` file in the root folder.
-   The template file `api-keys.example.json` can be copied as a starting file. 
+   The template file `api-keys.example.json` can be copied as a starting file.
 2) have the config file you want to use in live mode readily available for the bot (typically placed in `configs/live`)
 
 !!! Warning
@@ -65,7 +65,7 @@ to such a level that you do not run into errors about insufficient margin. To ac
 ## Stopping bot
 
 !!! Warning
-    Before stopping the bot, please make sure it is in an appropriate state, e.g. make sure there are no positions or orders open that will cause problems if left open for a longer period 
+    Before stopping the bot, please make sure it is in an appropriate state, e.g. make sure there are no positions or orders open that will cause problems if left open for a longer period
 
 If you want to stop, you can achieve this by either:
 * using the `/stop` button in Telegram (if configured), or

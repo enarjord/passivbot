@@ -49,7 +49,7 @@ you can learn more about it on [this website](https://git-scm.com/book/en/v2/Git
 ## Docker
 
 At the moment, the Docker image is not built automatically yet. For now you can build the Docker image locally and push
-it into your local Docker image repository using the following command from the root folder: 
+it into your local Docker image repository using the following command from the root folder:
 
 ```shell
 docker build -t passivbot .
@@ -78,7 +78,7 @@ For more detailed information on how to run a docker container, please check the
 !!! Warning
 	This process currently only installs the requirements to run the bot live. You will need to do the backtesting and optimising on different (more powerful) hardware.
 
-!!! Info	
+!!! Info
 	Tested on a Raspberry Pi 3b with Raspberry Pi OS Kernel version 5.10.
 
 Raspberry Pi OS currently uses Python2.7 and Python3.7, we need Python3.8.x. If you already have python3.8 installed, you can skip ahead to `Installing the requirements`.
@@ -132,7 +132,7 @@ Install the requirements:
 python3.8 -m pip install -r requirements_liveonly.txt
 ```
 
-That's it, you're ready to run the bot live. 
+That's it, you're ready to run the bot live.
 
-!!! Info 
+!!! Info
 	When [Running live](live.md) you will need to start the bot with `python3.8`.

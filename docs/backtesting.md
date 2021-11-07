@@ -6,8 +6,8 @@ into how the bot would have performed in the past.
 
 When you run the backtester, you should receive some output as it begins downloading the necessary price
 data from the exchange (using the API keys you provided earlier). The price data is cached on the machine
-and can be re-used between backtests and optimize sessions. This also means if you interrupt or close 
-the process, it will continue downloading price data where it left off. 
+and can be re-used between backtests and optimize sessions. This also means if you interrupt or close
+the process, it will continue downloading price data where it left off.
 The bot comes packaged with a downloader that allows the rapid retrieval of price data based upon
 provided dates, and works independently of the backtesting unit.
 
@@ -76,5 +76,5 @@ blue line in the graph represents the balance, and the orange line represents th
 Besides this file, a number of `backtest_XofY.jpg` are also created. These represent the entire backtest period, but are
 split up into separate files for easier inspection and zooming.
 
-On these plots the blue dotted line is the long position price, and the red dotted line represents the short position price. 
+On these plots the blue dotted line is the long position price, and the red dotted line represents the short position price.
 Blue dots are buys (long entries or short closes) and red dots are sells (short entries or long closes).

@@ -1,32 +1,53 @@
-import pyswarms as ps
-import asyncio
-import aiomultiprocess
-from multiprocessing import shared_memory, Lock
-from collections import OrderedDict
-from passivbot.backtest import backtest
-from passivbot.plotting import plot_fills
-from passivbot.downloader import Downloader, prep_config
-from passivbot.pure_funcs import denumpyize, numpyize, get_template_live_config, candidate_to_live_config, calc_spans, get_template_live_config, unpack_config, pack_config, analyze_fills, ts_to_date, denanify
-from passivbot.procedures import dump_live_config, load_live_config, make_get_filepath, add_argparse_args
-from time import time
-from passivbot.optimize import iter_slices, iter_slices_full_first, objective_function, get_expanded_ranges, single_sliding_window_run
-import os
-import sys
 import argparse
-import pprint
-import matplotlib.pyplot as plt
-import json
-import pandas as pd
-import numpy as np
 import asyncio
+import json
+import os
+import pprint
+import sys
+from collections import OrderedDict
+from multiprocessing import Lock
+from multiprocessing import shared_memory
+from time import time
+
+import aiomultiprocess
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import pyswarms as ps
+
+from passivbot.backtest import backtest
+from passivbot.downloader import Downloader
+from passivbot.downloader import prep_config
+from passivbot.optimize import get_expanded_ranges
+from passivbot.optimize import iter_slices
+from passivbot.optimize import iter_slices_full_first
+from passivbot.optimize import objective_function
+from passivbot.optimize import single_sliding_window_run
+from passivbot.plotting import plot_fills
+from passivbot.procedures import add_argparse_args
+from passivbot.procedures import dump_live_config
+from passivbot.procedures import load_live_config
+from passivbot.procedures import make_get_filepath
+from passivbot.pure_funcs import analyze_fills
+from passivbot.pure_funcs import calc_spans
+from passivbot.pure_funcs import candidate_to_live_config
+from passivbot.pure_funcs import denanify
+from passivbot.pure_funcs import denumpyize
+from passivbot.pure_funcs import get_template_live_config
+from passivbot.pure_funcs import numpyize
+from passivbot.pure_funcs import pack_config
+from passivbot.pure_funcs import ts_to_date
+from passivbot.pure_funcs import unpack_config
 
 lock = Lock()
 BEST_OBJECTIVE = 0.0
 
 
 def get_bounds(ranges: dict) -> tuple:
-    return (np.array([float(v[0]) for k, v in ranges.items()]),
-            np.array([float(v[1]) for k, v in ranges.items()]))
+    return (
+        np.array([float(v[0]) for k, v in ranges.items()]),
+        np.array([float(v[1]) for k, v in ranges.items()]),
+    )
 
 
 class BacktestPSO:
@@ -63,20 +84,25 @@ class BacktestPSO:
             try:
                 lock.acquire()
                 to_dump = {}
-                for k in ['average_daily_gain', 'score']:
+                for k in ["average_daily_gain", "score"]:
                     to_dump[k] = np.mean([e[k] for e in analyses])
-                for k in ['lowest_eqbal_ratio', 'closest_bkr']:
+                for k in ["lowest_eqbal_ratio", "closest_bkr"]:
                     to_dump[k] = np.min([e[k] for e in analyses])
-                for k in ['max_hrs_no_fills', 'max_hrs_no_fills_same_side']:
+                for k in ["max_hrs_no_fills", "max_hrs_no_fills_same_side"]:
                     to_dump[k] = np.max([e[k] for e in analyses])
-                to_dump['objective'] = objective
+                to_dump["objective"] = objective
                 to_dump.update(candidate_to_live_config(config))
-                with open(self.config['optimize_dirpath'] + 'intermediate_results.txt', 'a') as f:
-                    f.write(json.dumps(to_dump) + '\n')
+                with open(self.config["optimize_dirpath"] + "intermediate_results.txt", "a") as f:
+                    f.write(json.dumps(to_dump) + "\n")
                 if objective > BEST_OBJECTIVE:
                     if analyses:
-                        config['average_daily_gain'] = np.mean([e['average_daily_gain'] for e in analyses])
-                    dump_live_config({**config, **{'objective': objective}}, self.config['optimize_dirpath'] + 'intermediate_best_results.json')
+                        config["average_daily_gain"] = np.mean(
+                            [e["average_daily_gain"] for e in analyses]
+                        )
+                    dump_live_config(
+                        {**config, **{"objective": objective}},
+                        self.config["optimize_dirpath"] + "intermediate_best_results.json",
+                    )
                     BEST_OBJECTIVE = objective
             finally:
                 lock.release()
@@ -84,52 +110,85 @@ class BacktestPSO:
 
 
 async def main():
-    parser = argparse.ArgumentParser(prog='Optimize', description='Optimize passivbot config.')
+    parser = argparse.ArgumentParser(prog="Optimize", description="Optimize passivbot config.")
     parser = add_argparse_args(parser)
-    parser.add_argument('-t', '--start', type=str, required=False, dest='starting_configs',
-                        default=None,
-                        help='start with given live configs.  single json file or dir with multiple json files')
+    parser.add_argument(
+        "-t",
+        "--start",
+        type=str,
+        required=False,
+        dest="starting_configs",
+        default=None,
+        help="start with given live configs.  single json file or dir with multiple json files",
+    )
     args = parser.parse_args()
     for config in await prep_config(args):
         try:
 
-            template_live_config = get_template_live_config(config['n_spans'])
+            template_live_config = get_template_live_config(config["n_spans"])
             config = {**template_live_config, **config}
             dl = Downloader(config)
             data = await dl.get_data()
             shms = [shared_memory.SharedMemory(create=True, size=d.nbytes) for d in data]
-            shdata = [np.ndarray(d.shape, dtype=d.dtype, buffer=shms[i].buf) for i, d in enumerate(data)]
+            shdata = [
+                np.ndarray(d.shape, dtype=d.dtype, buffer=shms[i].buf) for i, d in enumerate(data)
+            ]
             for i in range(len(data)):
                 shdata[i][:] = data[i][:]
             del data
-            config['n_days'] = (shdata[2][-1] - shdata[2][0]) / (1000 * 60 * 60 * 24)
-            config['optimize_dirpath'] = make_get_filepath(os.path.join(config['optimize_dirpath'],
-                                                                        ts_to_date(time())[:19].replace(':', ''), ''))
+            config["n_days"] = (shdata[2][-1] - shdata[2][0]) / (1000 * 60 * 60 * 24)
+            config["optimize_dirpath"] = make_get_filepath(
+                os.path.join(
+                    config["optimize_dirpath"], ts_to_date(time())[:19].replace(":", ""), ""
+                )
+            )
 
             print()
-            for k in (keys := ['exchange', 'symbol', 'starting_balance', 'start_date', 'end_date', 'latency_simulation_ms',
-                               'do_long', 'do_shrt', 'minimum_bankruptcy_distance', 'maximum_hrs_no_fills',
-                               'maximum_hrs_no_fills_same_side', 'iters', 'n_particles', 'sliding_window_size',
-                               'n_spans']):
+            for k in (
+                keys := [
+                    "exchange",
+                    "symbol",
+                    "starting_balance",
+                    "start_date",
+                    "end_date",
+                    "latency_simulation_ms",
+                    "do_long",
+                    "do_shrt",
+                    "minimum_bankruptcy_distance",
+                    "maximum_hrs_no_fills",
+                    "maximum_hrs_no_fills_same_side",
+                    "iters",
+                    "n_particles",
+                    "sliding_window_size",
+                    "n_spans",
+                ]
+            ):
                 if k in config:
                     print(f"{k: <{max(map(len, keys)) + 2}} {config[k]}")
             print()
 
             bpso = BacktestPSO(tuple(shdata), config)
 
-            optimizer = ps.single.GlobalBestPSO(n_particles=24, dimensions=len(bpso.bounds[0]), options=config['options'],
-                                                bounds=bpso.bounds, init_pos=None)
+            optimizer = ps.single.GlobalBestPSO(
+                n_particles=24,
+                dimensions=len(bpso.bounds[0]),
+                options=config["options"],
+                bounds=bpso.bounds,
+                init_pos=None,
+            )
             # todo: implement starting configs
-            cost, pos = optimizer.optimize(bpso.rf, iters=config['iters'], n_processes=config['num_cpus'])
+            cost, pos = optimizer.optimize(
+                bpso.rf, iters=config["iters"], n_processes=config["num_cpus"]
+            )
             print(cost, pos)
             best_candidate = bpso.xs_to_config(pos)
-            print('best candidate', best_candidate)
-            '''
+            print("best candidate", best_candidate)
+            """
             conf = bpso.xs_to_config(xs)
             print('starting...')
             objective = bpso.rf(xs)
             print(objective)
-            '''
+            """
         finally:
             del shdata
             for shm in shms:
@@ -137,5 +196,5 @@ async def main():
                 shm.unlink()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     asyncio.run(main())

@@ -11,7 +11,7 @@
     YOU ALONE ARE RESPONSIBLE FOR HOW THE BOT BEHAVES, AND FOR ANY LOSSES THAT MAY BE A RESULT OF USING THE BOT!
 
     If you don't understand how the bot works, you should not use it. You are always welcome to ask for help or get more
-    information on how it works exactly if the documentation does not provide enough information. 
+    information on how it works exactly if the documentation does not provide enough information.
 
 ## Overview
 
@@ -30,7 +30,7 @@ The bot does not use [ccxt](https://github.com/ccxt/ccxt), so other exchanges ca
 Not all functionality is supported on both exchanges, depending on the APIs that exchanges expose and development efforts.
 
 !!! Info
-    If you would like to have support added for an exchange not supported yet, 
+    If you would like to have support added for an exchange not supported yet,
     you can always get in touch to see what the options are.
 
 ## Software Requirements
@@ -39,7 +39,7 @@ The following requirements are applicable for installing Passivbot:
 
 - Git 2.17 or above
 - Python 3.8.x (newer versions aren't supported yet)
-- Supported OS: 
+- Supported OS:
     - Mac
     - Linux
     - Windows
@@ -72,5 +72,5 @@ us at [this Discord server](https://discord.gg/QAF2H2UmzZ) or at [this Telegram 
 
 ## License
 
-Passivbot is released freely without conditions. Anybody may copy, distribute, modify, use or misuse for commercial, non-commercial, 
+Passivbot is released freely without conditions. Anybody may copy, distribute, modify, use or misuse for commercial, non-commercial,
 educational or non-educational purposes, censor, claim as one's own or otherwise do whatever without permission from anybody.

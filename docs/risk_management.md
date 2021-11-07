@@ -71,5 +71,3 @@ it is also observed that the dead cat often bounces at slightly different times.
 A thousand coin flips will converge on 500 heads and 500 tails.  One single coin flip will be either heads or tails.  
 Say that on average there's a 30% chance of getting stuck in the typical market crash.  
 It may be more desirable to end up with 3 out of 10 bots stuck with pbr==0.1 each than with 1 single bot stuck with pbr==1.0.
-
-
