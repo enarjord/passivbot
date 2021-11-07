@@ -99,7 +99,7 @@ class BinanceBotSpot(Bot):
             "cancel_order": "/api/v3/order",
             "ticks": "/api/v3/aggTrades",
             "ohlcvs": "/api/v3/klines",
-            "websocket": (ws := f"wss://stream.binance.com/ws/"),
+            "websocket": (ws := "wss://stream.binance.com/ws/"),
             "websocket_market": ws + f"{self.symbol.lower()}@aggTrade",
             "websocket_user": ws,
             "listen_key": "/api/v3/userDataStream",
@@ -128,7 +128,7 @@ class BinanceBotSpot(Bot):
                     elif q["filterType"] == "MIN_NOTIONAL":
                         self.min_cost = self.config["min_cost"] = float(q["minNotional"])
                 try:
-                    z = self.min_cost
+                    self.min_cost
                 except AttributeError:
                     self.min_cost = self.config["min_cost"] = 0.0
                 break

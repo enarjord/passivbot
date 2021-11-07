@@ -190,7 +190,7 @@ class Downloader:
             try:
                 os.remove(os.path.join(self.filepath, filename))
                 print_(["Removed file", filename])
-            except:
+            except Exception:
                 pass
         elif missing:
             print_(["Replacing file", filename])
@@ -255,7 +255,7 @@ class Downloader:
         try:
             ticks = await self.bot.fetch_ticks_time(start_time)
             return self.transform_ticks(ticks)
-        except:
+        except Exception:
             print_(["Finding id for start time..."])
             ticks = await self.bot.fetch_ticks()
             df = self.transform_ticks(ticks)
@@ -406,7 +406,7 @@ class Downloader:
                         "is_buyer_maker": (ff.side == "Sell").astype(np.int8),
                     }
                 )
-                tf["trade_id"] = deduce_trade_ids(tf, df_for_id_matching)
+                tf["trade_id"] = self.deduce_trade_ids(tf, df_for_id_matching)
                 tf.sort_values("timestamp", inplace=True)
                 tf.reset_index(drop=True, inplace=True)
                 del ff
@@ -442,7 +442,7 @@ class Downloader:
                 last_time = int(f.split("_")[3].split(".")[0])
                 if len(f.split("_")) > 4:
                     verified = True
-            except:
+            except Exception:
                 first_time = sys.maxsize
                 last_time = sys.maxsize
             if (
@@ -731,7 +731,7 @@ class Downloader:
 
         try:
             await self.bot.session.close()
-        except:
+        except Exception:
             pass
 
     async def prepare_files(self):

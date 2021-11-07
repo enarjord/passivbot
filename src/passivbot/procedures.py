@@ -385,13 +385,13 @@ def local_time() -> float:
 def print_async_exception(coro):
     try:
         print(f"returned: {coro}")
-    except:
+    except Exception:
         pass
     try:
         print(f"exception: {coro.exception()}")
-    except:
+    except Exception:
         pass
     try:
         print(f"result: {coro.result()}")
-    except:
+    except Exception:
         pass

@@ -256,8 +256,11 @@ class Telegram:
                 ]
             ]
         update.message.reply_text(
-            text="You have chosen to force (re)entering a position. This will place a market order at the current price with the size of the nearest entry order."
-            "Please select the position side you want to (re)enter:",
+            text=(
+                "You have chosen to force (re)entering a position. This will place a market order at the "
+                "current price with the size of the nearest entry order. Please select the position side "
+                "you want to (re)enter:"
+            ),
             parse_mode=ParseMode.HTML,
             reply_markup=InlineKeyboardMarkup(buttons),
         )
@@ -286,9 +289,15 @@ class Telegram:
                         if o["side"] == "sell" and o["position_side"] == "shrt"
                     )
 
+            if self.force_open_type == "long":
+                force_open_type = self.force_open_type
+            else:
+                force_open_type = "short"
             text = (
-                f'You have chosen to (re)enter a <pre>{self.force_open_type if self.force_open_type == "long" else "short"}</pre> position with a qty of <pre>{self.open_qty}</pre>.\n'
-                "Please confirm that you want to (re)enter with the nearest order quantity at the current price using a market order, or enter a qty manually:"
+                f"You have chosen to (re)enter a <pre>{force_open_type}</pre> position with a qty of "
+                f"<pre>{self.open_qty}</pre>.\n"
+                "Please confirm that you want to (re)enter with the nearest order quantity at the current "
+                "price using a market order, or enter a qty manually:"
             )
             reply_keyboard = [["confirm", "abort"]]
             update.effective_message.reply_text(
@@ -308,8 +317,13 @@ class Telegram:
 
         if answer not in ["confirm", "abort"]:
             self.open_qty = answer
+            if self.force_open_type == "long":
+                force_open_type = self.force_open_type
+            else:
+                force_open_type = "short"
             text = (
-                f'You have chosen to (re)enter a <pre>{self.force_open_type if self.force_open_type == "long" else "short"}</pre> position with a qty of <pre>{self.open_qty}</pre>.\n'
+                f"You have chosen to (re)enter a <pre>{force_open_type}</pre> position with a qty of "
+                f"<pre>{self.open_qty}</pre>.\n"
                 "Please confirm that you want to (re)enter with this manually entered qty:"
             )
             reply_keyboard = [["confirm", "abort"]]
@@ -320,7 +334,7 @@ class Telegram:
             )
             return 2
         elif answer == "abort":
-            self.send_msg(f"Request for (re)entering position aborted")
+            self.send_msg("Request for (re)entering position aborted")
             return ConversationHandler.END
 
         async def _place_market_order(position_side: str):
@@ -335,14 +349,14 @@ class Telegram:
             if "code" in result:
                 self.send_msg(f'{result["msg"]}')
             else:
-                self.send_msg(f"Succesfully placed market order")
+                self.send_msg("Successfully placed market order")
             self.send_msg("Market order placed")
 
         task = self.loop.create_task(_place_market_order(self.force_open_type))
         task.add_done_callback(
             lambda fut: True
         )  # ensures task is processed to prevent warning about not awaiting
-        self.send_msg(f"Placing market order...")
+        self.send_msg("Placing market order...")
 
         return ConversationHandler.END
 
@@ -362,7 +376,10 @@ class Telegram:
             ]
         ]
         update.message.reply_text(
-            text="You have chosen to transfer balance in your account. Please select the type of transfer you want to perform:",
+            text=(
+                "You have chosen to transfer balance in your account. Please select the type of "
+                "transfer you want to perform:"
+            ),
             parse_mode=ParseMode.HTML,
             reply_markup=InlineKeyboardMarkup(buttons),
         )
@@ -377,12 +394,14 @@ class Telegram:
         if self.transfer_type == "MAIN_UMFUTURE":
             text = (
                 "You have chosen to transfer funds from your Spot wallet to your USD-M Futures wallet.\n"
-                "Please specify the amount of USDT you want to transfer (<pre>prefixed with / if privacy mode is not disabled</pre>):"
+                "Please specify the amount of USDT you want to transfer (<pre>prefixed with / if privacy "
+                "mode is not disabled</pre>):"
             )
         elif self.transfer_type == "UMFUTURE_MAIN":
             text = (
                 "You have chosen to transfer funds from your USD-M Futures wallet to your Spot wallet.\n"
-                "Please specify the amount of USDT you want to transfer (<pre>prefixed with / if privacy mode is not disabled</pre>):"
+                "Please specify the amount of USDT you want to transfer (<pre>prefixed with / if privacy "
+                "mode is not disabled</pre>):"
             )
         elif self.transfer_type == "cancel":
             update.effective_message.reply_text(
@@ -407,13 +426,15 @@ class Telegram:
 
         if self.transfer_type == "MAIN_UMFUTURE":
             text = (
-                f"You have chosen to transfer {self.transfer_amount} from your Spot wallet to your USD-M Futures wallet.\n"
+                f"You have chosen to transfer {self.transfer_amount} from your Spot wallet to "
+                "your USD-M Futures wallet.\n"
                 "Please confirm that you want to execute this transfer.\n"
                 "Please be aware that this can have influence on open position(s)!"
             )
         elif self.transfer_type == "UMFUTURE_MAIN":
             text = (
-                f"You have chosen to transfer {self.transfer_amount} from your USD-M Futures wallet to your Spot wallet.\n"
+                f"You have chosen to transfer {self.transfer_amount} from your USD-M Futures "
+                "wallet to your Spot wallet.\n"
                 "Please confirm that you want to execute this transfer.\n"
                 "Please be aware that this can have influence on open position(s)!"
             )
@@ -432,7 +453,7 @@ class Telegram:
         if answer not in ["confirm", "abort"]:
             return 3
         elif answer == "abort":
-            self.send_msg(f"Request for transfer aborted")
+            self.send_msg("Request for transfer aborted")
             return ConversationHandler.END
 
         async def _transfer_wallet(type_: str, amount: float):
@@ -448,7 +469,7 @@ class Telegram:
         task.add_done_callback(
             lambda fut: True
         )  # ensures task is processed to prevent warning about not awaiting
-        self.send_msg(f"Transferring...")
+        self.send_msg("Transferring...")
 
         return ConversationHandler.END
 
@@ -476,8 +497,11 @@ class Telegram:
         ]
 
         query.edit_message_text(
-            text=f"You have chosen to change the active the config file <pre>configs/live/{query.data}</pre>.\n"
-            f"Please confirm that you want to activate this by replying with either <pre>confirm</pre> or <pre>abort</pre>",
+            text=(
+                f"You have chosen to change the active the config file <pre>configs/live/{query.data}</pre>.\n"
+                "Please confirm that you want to activate this by replying with either <pre>confirm</pre> or "
+                "<pre>abort</pre>"
+            ),
             parse_mode=ParseMode.HTML,
             reply_markup=InlineKeyboardMarkup(keyboard),
         )
@@ -492,7 +516,7 @@ class Telegram:
             return 2
 
         if answer == "abort":
-            self.send_msg(f"Request for setting config was aborted")
+            self.send_msg("Request for setting config was aborted")
             return ConversationHandler.END
 
         if self.config_reload_ts > 0.0 and time.time() - self.config_reload_ts < 60 * 5:
@@ -509,10 +533,13 @@ class Telegram:
     def _verify_set_short(self, update: Update, _: CallbackContext) -> int:
         reply_keyboard = [["confirm", "abort"]]
         update.message.reply_text(
-            text=f'Shorting is currently <pre>{"enabled" if self._bot.do_shrt is True else "disabled"}</pre>.\n'
-            f'You have chosen to <pre>{"disable" if self._bot.do_shrt is True else "enable"}</pre> shorting.\n'
-            f"Please confirm that you want to change this by replying with either <pre>confirm</pre> or <pre>abort</pre>\n"
-            f"<b>Please be aware that this setting is not persisted between restarts!</b>",
+            text=(
+                f'Shorting is currently <pre>{"enabled" if self._bot.do_shrt is True else "disabled"}</pre>.\n'
+                f'You have chosen to <pre>{"disable" if self._bot.do_shrt is True else "enable"}</pre> shorting.\n'
+                "Please confirm that you want to change this by replying with either <pre>confirm</pre> or "
+                "<pre>abort</pre>\n"
+                "<b>Please be aware that this setting is not persisted between restarts!</b>"
+            ),
             parse_mode=ParseMode.HTML,
             reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True),
         )
@@ -531,7 +558,10 @@ class Telegram:
             )
         else:
             update.message.reply_text(
-                text=f"Something went wrong, either <pre>confirm</pre> or <pre>abort</pre> was expected, but {update.message.text} was sent",
+                text=(
+                    f"Something went wrong, either <pre>confirm</pre> or <pre>abort</pre> was expected, but "
+                    f"{update.message.text} was sent"
+                ),
                 parse_mode=ParseMode.HTML,
                 reply_markup=self._keyboards[self._keyboard_idx],
             )
@@ -540,10 +570,13 @@ class Telegram:
     def _verify_set_long(self, update: Update, _: CallbackContext) -> int:
         reply_keyboard = [["confirm", "abort"]]
         update.message.reply_text(
-            text=f'Long is currently <pre>{"enabled" if self._bot.do_long is True else "disabled"}</pre>.\n'
-            f'You have chosen to <pre>{"disable" if self._bot.do_long is True else "enable"}</pre> long.\n'
-            f"Please confirm that you want to change this by replying with either <pre>confirm</pre> or <pre>abort</pre>\n"
-            f"<b>Please be aware that this setting is not persisted between restarts!</b>",
+            text=(
+                f'Long is currently <pre>{"enabled" if self._bot.do_long is True else "disabled"}</pre>.\n'
+                f'You have chosen to <pre>{"disable" if self._bot.do_long is True else "enable"}</pre> long.\n'
+                "Please confirm that you want to change this by replying with either <pre>confirm</pre> or "
+                "<pre>abort</pre>\n"
+                "<b>Please be aware that this setting is not persisted between restarts!</b>"
+            ),
             parse_mode=ParseMode.HTML,
             reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True),
         )
@@ -562,7 +595,10 @@ class Telegram:
             )
         else:
             update.message.reply_text(
-                text=f"Something went wrong, either <pre>confirm</pre> or <pre>abort</pre> was expected, but {update.message.text} was sent",
+                text=(
+                    "Something went wrong, either <pre>confirm</pre> or <pre>abort</pre> was expected, "
+                    f"but {update.message.text} was sent"
+                ),
                 parse_mode=ParseMode.HTML,
                 reply_markup=self._keyboards[self._keyboard_idx],
             )
@@ -572,11 +608,13 @@ class Telegram:
         self.profit_transfer_pct_chosen = None
         reply_keyboard = [["0.0", "0.2", "0.25"], ["0.3", "0.4", "0.5"], ["0.75", "1", "cancel"]]
         update.message.reply_text(
-            text="To modify the profit transfer percentage, please pick the desired amount using the buttons below,"
-            "or type in the desired profit transfer amount yourself (value between 0 and 1).\n"
-            "Setting the value to 0 disables profit transfer, and 1 transfers all profit.\n"
-            "Note that the that <b>this change is not persisted between restarts!</b>\n"
-            "Or send /cancel to abort modifying the profit transfer",
+            text=(
+                "To modify the profit transfer percentage, please pick the desired amount using the buttons below,"
+                "or type in the desired profit transfer amount yourself (value between 0 and 1).\n"
+                "Setting the value to 0 disables profit transfer, and 1 transfers all profit.\n"
+                "Note that the that <b>this change is not persisted between restarts!</b>\n"
+                "Or send /cancel to abort modifying the profit transfer"
+            ),
             parse_mode=ParseMode.HTML,
             reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True),
         )
@@ -591,20 +629,26 @@ class Telegram:
             self.profit_transfer_pct_chosen = float(update.message.text)
             if self.profit_transfer_pct_chosen < 0 or self.profit_transfer_pct_chosen > 1:
                 self.send_msg(
-                    f"Invalid profit transfer percentage provided. The value for the profit transfer must be a value between 0 and 1 (inclusive), indicating a range of 0% to 100%"
+                    "Invalid profit transfer percentage provided. The value for the profit transfer must be a "
+                    "value between 0 and 1 (inclusive), indicating a range of 0% to 100%"
                 )
                 return ConversationHandler.END
-        except:
+        except Exception:
             self.send_msg(
-                f"Invalid profit transfer percentage provided. The value must be between 0 and 1. Aborting conversation."
+                "Invalid profit transfer percentage provided. The value must be between 0 and 1. "
+                "Aborting conversation."
             )
             return ConversationHandler.END
 
         reply_keyboard = [["confirm", "abort"]]
         update.message.reply_text(
-            text=f"You have chosen to change the profit transfer percentage to <pre>{self.profit_transfer_pct_chosen}</pre>.\n"
-            f"Please confirm that you want to activate this by replying with either <pre>confirm</pre> or <pre>abort</pre>\n"
-            f"<b>Please be aware that this setting is not persisted between restarts!</b>",
+            text=(
+                "You have chosen to change the profit transfer percentage to "
+                f"<pre>{self.profit_transfer_pct_chosen}</pre>.\n"
+                "Please confirm that you want to activate this by replying with either <pre>confirm</pre> or "
+                "<pre>abort</pre>\n"
+                "<b>Please be aware that this setting is not persisted between restarts!</b>"
+            ),
             parse_mode=ParseMode.HTML,
             reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True),
         )
@@ -615,7 +659,8 @@ class Telegram:
             self._bot.set_config_value("profit_trans_pct", self.profit_transfer_pct_chosen)
             self.send_msg(
                 f"Profit transfer percentage set to {self.profit_transfer_pct_chosen}.\n"
-                "Please be aware that this change is NOT persisted between restarts. To reset the profit transfer percentage, you can use <pre>/reload_config</pre>"
+                "Please be aware that this change is NOT persisted between restarts. To reset the profit "
+                "transfer percentage, you can use <pre>/reload_config</pre>"
             )
         elif update.message.text == "abort":
             self.profit_transfer_pct_chosen = None
@@ -623,7 +668,10 @@ class Telegram:
         else:
             self.profit_transfer_pct_chosen = None
             update.message.reply_text(
-                text=f"Something went wrong, either <pre>confirm</pre> or <pre>abort</pre> was expected, but {update.message.text} was sent",
+                text=(
+                    "Something went wrong, either <pre>confirm</pre> or <pre>abort</pre> was expected, "
+                    f"but {update.message.text} was sent"
+                ),
                 parse_mode=ParseMode.HTML,
                 reply_markup=self._keyboards[self._keyboard_idx],
             )
@@ -647,14 +695,21 @@ class Telegram:
             ["cancel"],
         ]
         update.message.reply_text(
-            text="To stop the bot, please choose one of the following modes:\n"
-            "<pre>graceful</pre>: prevents the bot from opening new positions, but completes the existing position as usual\n"
-            "<pre>freeze</pre>: prevents the bot from opening positions, and cancels all open orders to open/reenter positions\n"
-            "<pre>panic</pre>: immediately closes all open positions against market price, and cancels all open orders to open/reenter positions\n"
-            "<pre>manual</pre>: immediately stops automatic order creation & cancelling, and effectively disables the bot to stop doing anything on the exchange\n"
-            "<pre>shutdown</pre>: immediately shuts down the bot, not making any further modifications to the current orders or positions\n"
-            "<pre>resume</pre>: clears the stop mode and resumes normal operation\n"
-            "Or send /cancel to abort stop-mode activation",
+            text=(
+                "To stop the bot, please choose one of the following modes:\n"
+                "<pre>graceful</pre>: prevents the bot from opening new positions, but completes the existing "
+                "position as usual\n"
+                "<pre>freeze</pre>: prevents the bot from opening positions, and cancels all open orders to "
+                "open/reenter positions\n"
+                "<pre>panic</pre>: immediately closes all open positions against market price, and cancels all "
+                "open orders to open/reenter positions\n"
+                "<pre>manual</pre>: immediately stops automatic order creation & cancelling, and effectively "
+                "disables the bot to stop doing anything on the exchange\n"
+                "<pre>shutdown</pre>: immediately shuts down the bot, not making any further modifications to "
+                "the current orders or positions\n"
+                "<pre>resume</pre>: clears the stop mode and resumes normal operation\n"
+                "Or send /cancel to abort stop-mode activation"
+            ),
             parse_mode=ParseMode.HTML,
             reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True),
         )
@@ -670,20 +725,25 @@ class Telegram:
 
         if self.stop_mode_requested == "shutdown":
             msg = (
-                f"You have chosen to shut down the bot.\n"
-                f"Please confirm that you want to activate this stop mode by replying with either <pre>confirm</pre> or <pre>abort</pre>\n"
-                f"\U00002757<b>Be aware that you cannot restart or control the bot from telegram anymore after confirming!!</b>\U00002757"
+                "You have chosen to shut down the bot.\n"
+                "Please confirm that you want to activate this stop mode by replying with either "
+                "<pre>confirm</pre> or <pre>abort</pre>\n"
+                "\U00002757<b>Be aware that you cannot restart or control the bot from telegram "
+                "anymore after confirming!!</b>\U00002757"
             )
         elif self.stop_mode_requested == "panic":
             msg = (
-                f"You have chosen to activate the stop mode panic.\n"
-                f"Please confirm that you want to activate this stop mode by replying with either <pre>confirm</pre> or <pre>abort</pre>\n"
-                f"<b>\U00002757\U00002757\U00002757Be aware that this will actively close all open positions, EVEN IF THEY ARE IN LOSS\U00002757\U00002757\U00002757</b>"
+                "You have chosen to activate the stop mode panic.\n"
+                "Please confirm that you want to activate this stop mode by replying with either "
+                "<pre>confirm</pre> or <pre>abort</pre>\n"
+                "<b>\U00002757\U00002757\U00002757Be aware that this will actively close all open "
+                "positions, EVEN IF THEY ARE IN LOSS\U00002757\U00002757\U00002757</b>"
             )
         else:
             msg = (
                 f"You have chosen to activate the stop mode <pre>{update.message.text}</pre>\n"
-                f"Please confirm that you want to activate this stop mode by replying with either <pre>confirm</pre> or <pre>abort</pre>"
+                "Please confirm that you want to activate this stop mode by replying with either "
+                "<pre>confirm</pre> or <pre>abort</pre>"
             )
 
         update.message.reply_text(
@@ -702,8 +762,11 @@ class Telegram:
                 self._bot.set_config_value("do_shrt", False)
                 self._bot.stop_mode = "graceful"
                 self.send_msg(
-                    "Graceful stop mode activated. No longer opening new long or short positions, existing positions will still be managed."
-                    "Please be aware that this change is NOT persisted between restarts. To clear the stop-mode, you can use <pre>/reload_config</pre> or select <pre>resume</pre> from the <pre>/stop</pre> action"
+                    "Graceful stop mode activated. No longer opening new long or short positions, "
+                    "existing positions will still be managed.\n"
+                    "Please be aware that this change is NOT persisted between restarts. To clear the "
+                    "stop-mode, you can use <pre>/reload_config</pre> or select <pre>resume</pre> from "
+                    "the <pre>/stop</pre> action"
                 )
             elif self.stop_mode_requested == "freeze":
                 self.previous_do_long = self._bot.do_long
@@ -712,8 +775,11 @@ class Telegram:
                 self._bot.set_config_value("do_shrt", False)
                 self._bot.stop_mode = "freeze"
                 self.send_msg(
-                    "Freeze stop mode activated. No longer opening new long or short positions, all orders for reentry will be cancelled."
-                    "Please be aware that this change is NOT persisted between restarts. To clear the stop-mode, you can use <pre>/reload_config</pre> or select <pre>resume</pre> from the <pre>/stop</pre> action"
+                    "Freeze stop mode activated. No longer opening new long or short positions, all orders "
+                    "for reentry will be cancelled.\n"
+                    "Please be aware that this change is NOT persisted between restarts. To clear the "
+                    "stop-mode, you can use <pre>/reload_config</pre> or select <pre>resume</pre> from "
+                    "the <pre>/stop</pre> action"
                 )
             if self.stop_mode_requested == "panic":
                 self.previous_do_long = self._bot.do_long
@@ -722,14 +788,19 @@ class Telegram:
                 self._bot.set_config_value("do_shrt", False)
                 self._bot.stop_mode = "panic"
                 self.send_msg(
-                    "Panic stop mode activated. No longer opening new long or short positions, existing positions will immediately be closed."
-                    "Please be aware that this change is NOT persisted between restarts. To clear the stop-mode, you can use <pre>/reload_config</pre> or select <pre>resume</pre> from the <pre>/stop</pre> action"
+                    "Panic stop mode activated. No longer opening new long or short positions, existing "
+                    "positions will immediately be closed.\n"
+                    "Please be aware that this change is NOT persisted between restarts. To clear the "
+                    "stop-mode, you can use <pre>/reload_config</pre> or select <pre>resume</pre> from "
+                    "the <pre>/stop</pre> action"
                 )
             if self.stop_mode_requested == "manual":
                 self._bot.stop_mode = "manual"
                 self.send_msg(
                     "Manual stop mode activated. No longer creating or cancelling orders on the exchange.\n"
-                    "Please be aware that this change is NOT persisted between restarts. To clear the stop-mode, you can use <pre>/reload_config</pre> or select <pre>resume</pre> from the <pre>/stop</pre> action"
+                    "Please be aware that this change is NOT persisted between restarts. To clear the "
+                    "stop-mode, you can use <pre>/reload_config</pre> or select <pre>resume</pre> from "
+                    "the <pre>/stop</pre> action"
                 )
             elif self.stop_mode_requested == "shutdown":
                 self._bot.stop_websocket = True
@@ -750,7 +821,10 @@ class Telegram:
         else:
             self.stop_mode_requested = ""
             update.message.reply_text(
-                text=f"Something went wrong, either <pre>confirm</pre> or <pre>abort</pre> was expected, but {update.message.text} was sent",
+                text=(
+                    "Something went wrong, either <pre>confirm</pre> or <pre>abort</pre> was expected, "
+                    f"but {update.message.text} was sent"
+                ),
                 parse_mode=ParseMode.HTML,
                 reply_markup=self._keyboards[self._keyboard_idx],
             )
@@ -776,7 +850,8 @@ class Telegram:
             "/set_short: initiates a conversion via which the user can enable/disable shorting\n"
             "/set_long: initiates a conversion via which the user can enable/disable long\n"
             "/set_config: initiates a conversation via which the user can switch to a different configuration file\n"
-            "/force_open: initiates a conversion via which the user can actively force (re)entry of a position based on the calculated grid\n"
+            "/force_open: initiates a conversion via which the user can actively force (re)entry of a position "
+            "based on the calculated grid\n"
             "/help: This help page"
         )
         self.send_msg(msg)
@@ -954,8 +1029,12 @@ class Telegram:
                     f'Wallet balance: {compress_float(position["wallet_balance"], 4)}\n'
                     f'Equity: {compress_float(self._bot.position["equity"], 4)}\n\n'
                     f"Spot balance:\n"
-                    f'{self._bot.quot}: {compress_float(float(quot_balance["free"]) + float(quot_balance["locked"]), 4)} ({compress_float(float(quot_balance["locked"]), 4)} locked)\n'
-                    f'{self._bot.coin}: {compress_float(float(coin_balance["free"]) + float(coin_balance["locked"]), 4)} ({compress_float(float(coin_balance["locked"]), 4)} locked)'
+                    f"{self._bot.quot}: "
+                    f'{compress_float(float(quot_balance["free"]) + float(quot_balance["locked"]), 4)} '
+                    f'({compress_float(float(quot_balance["locked"]), 4)} locked)\n'
+                    f"{self._bot.coin}: "
+                    f'{compress_float(float(coin_balance["free"]) + float(coin_balance["locked"]), 4)} '
+                    f'({compress_float(float(coin_balance["locked"]), 4)} locked)'
                 )
                 self.send_msg(
                     msg,
@@ -1021,10 +1100,14 @@ class Telegram:
                         ]
                     )
 
-                msg = (
-                    f"Closed trades:\n"
-                    f'<pre>{table.get_string(border=True, padding_width=1, junction_char=" ", vertical_char=" ", hrules=HEADER)}</pre>'
+                formatted_table = table.get_string(
+                    border=True,
+                    padding_width=1,
+                    junction_char=" ",
+                    vertical_char=" ",
+                    hrules=HEADER,
                 )
+                msg = "Closed trades:\n" f"<pre>{formatted_table}</pre>"
                 self.send_msg(
                     msg,
                     refreshable=True,
@@ -1077,14 +1160,21 @@ class Telegram:
                     ["Total", f"{round_dynamic(income_sum, 3)} ({round_(pct_sum, 0.01)}%)"]
                 )
 
-                msg = f'<pre>{table.get_string(border=True, padding_width=1, junction_char=" ", vertical_char=" ", hrules=HEADER)}</pre>'
+                formatted_table = table.get_string(
+                    border=True,
+                    padding_width=1,
+                    junction_char=" ",
+                    vertical_char=" ",
+                    hrules=HEADER,
+                )
+                msg = f"<pre>{formatted_table}</pre>"
                 self.send_msg(
                     msg, refreshable=True, callback_path="update_daily", query=update.callback_query
                 )
 
             try:
                 n_days = int(context.args[0])
-            except:
+            except Exception:
                 n_days = 7
             self.send_msg("Calculating daily income...")
             task = self.loop.create_task(send_daily_async(n_days))
@@ -1105,7 +1195,8 @@ class Telegram:
                     f"<b>Amount: </b><pre>{round_(qty, self._bot.qty_step)}</pre>\n"
                     f"<b>Total size: </b><pre>{round_(total_size, self._bot.qty_step)}</pre>\n"
                     f"<b>Price: </b><pre>{round_(price, self._bot.price_step)}</pre>\n"
-                    f"<b>Fee: </b><pre>{round_(fee, self._bot.price_step)} {self._bot.margin_coin} ({round_(fee / (qty * price) * 100, self._bot.price_step)}%)</pre>"
+                    f"<b>Fee: </b><pre>{round_(fee, self._bot.price_step)} {self._bot.margin_coin} "
+                    f"({round_(fee / (qty * price) * 100, self._bot.price_step)}%)</pre>"
                 )
             except Exception as e:
                 self.send_msg(f"Error sending entry order notification message: {e}")
@@ -1134,11 +1225,13 @@ class Telegram:
                 else:
                     self.send_msg(
                         f"<b>{icon} {self._bot.exchange.capitalize()} {self._bot.pair}</b> Closed {position_side}\n"
-                        f"<b>PNL: </b><pre>{round_(realized_pnl, self._bot.price_step)} {self._bot.margin_coin} ({round_(realized_pnl / wallet_balance * 100, self._bot.price_step)}%)</pre>\n"
+                        f"<b>PNL: </b><pre>{round_(realized_pnl, self._bot.price_step)} {self._bot.margin_coin} "
+                        f"({round_(realized_pnl / wallet_balance * 100, self._bot.price_step)}%)</pre>\n"
                         f"<b>Price: </b><pre>{round_(price, self._bot.price_step)}</pre>\n"
                         f"<b>Amount: </b><pre>{round_(qty, self._bot.qty_step)}</pre>\n"
                         f"<b>Remaining size: </b><pre>{round_(remaining_size, self._bot.qty_step)}</pre>\n"
-                        f"<b>Fee: </b><pre>{round_(fee, self._bot.price_step)} {self._bot.margin_coin} ({round_(fee / realized_pnl * 100, self._bot.price_step)}%)</pre>"
+                        f"<b>Fee: </b><pre>{round_(fee, self._bot.price_step)} {self._bot.margin_coin} "
+                        f"({round_(fee / realized_pnl * 100, self._bot.price_step)}%)</pre>"
                     )
             except Exception as e:
                 self.send_msg(f"Error sending closing order notification message: {e}")
@@ -1148,7 +1241,7 @@ class Telegram:
             repo = git.Repo(search_parent_directories=True)
             sha = repo.head.object.hexsha
             sha_short = repo.git.rev_parse(sha, short=True)
-        except:
+        except Exception:
             sha_short = "UNKNOWN"
 
         cfg = denumpyize(self._bot.config)
@@ -1241,5 +1334,5 @@ class Telegram:
             print("\nStopping telegram bot...")
             self._updater.stop()
             print("\nTelegram was stopped succesfully")
-        except:
+        except Exception:
             print("\nFailed to shutdown telegram bot. Please make sure it is correctly terminated")

@@ -125,7 +125,7 @@ def denanify(x, nan=0.0, posinf=0.0, neginf=0.0):
         assert type(x) != str
         _ = float(x)
         return np.nan_to_num(x, nan=nan, posinf=posinf, neginf=neginf)
-    except:
+    except Exception:
         if type(x) == list:
             return [denanify(e) for e in x]
         elif type(x) == tuple:
@@ -218,7 +218,7 @@ def unpack_config(d):
                 break
             for i in range(len(v)):
                 new[f"{k}${str(i).zfill(2)}"] = v[i]
-        except:
+        except Exception:
             new[k] = v
     if new == d:
         return new

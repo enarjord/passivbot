@@ -206,8 +206,8 @@ class LogReporter(CLIReporter):
         )
 
     def report(self, trials: List[Trial], done: bool, *sys_info: Dict):
-        l = []
-        o = []
+        evaluated_params = []
+        outcomes = []
         best_config = None
         best_eval = None
         config = None
@@ -217,14 +217,14 @@ class LogReporter(CLIReporter):
                     self.objective = trial.last_result[self._metric]
                     best_config = trial.config
                     best_eval = trial.evaluated_params
-                l.append(trial.evaluated_params)
-                o.append(trial.last_result[self._metric])
+                evaluated_params.append(trial.evaluated_params)
+                outcomes.append(trial.last_result[self._metric])
                 config = trial.config
 
         try:
             if config:
-                df = pd.DataFrame(l)
-                df[self._metric] = o
+                df = pd.DataFrame(evaluated_params)
+                df[self._metric] = outcomes
                 df.sort_values(self._metric, ascending=False, inplace=True)
                 df.dropna(inplace=True)
                 df[df[self._metric] > 0].to_csv(

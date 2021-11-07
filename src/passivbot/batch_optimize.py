@@ -56,14 +56,14 @@ def main():
         {
             "start": cfgs_dir,
             "symbol": symbol,
-            #'starting_balance': 10000.0,
-            #'end_date': '2021-09-20T15:00',
-            #'start_date': '2021-03-01',
+            # 'starting_balance': 10000.0,
+            # 'end_date': '2021-09-20T15:00',
+            # 'start_date': '2021-03-01',
         }
         for symbol in symbols
     ]
     for kwargs in kwargs_list:
-        formatted = f"python3 optimize.py "
+        formatted = "python3 optimize.py "
         for key in kwargs:
             formatted += f" --{key} {kwargs[key]}"
         print(formatted)

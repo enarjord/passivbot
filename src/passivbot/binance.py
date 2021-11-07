@@ -108,7 +108,7 @@ class BinanceBot(Bot):
                 "margin_type": "/fapi/v1/marginType",
                 "leverage": "/fapi/v1/leverage",
                 "position_side": "/fapi/v1/positionSide/dual",
-                "websocket": (ws := f"wss://fstream.binance.com/ws/"),
+                "websocket": (ws := "wss://fstream.binance.com/ws/"),
                 "websocket_market": ws + f"{self.symbol.lower()}@aggTrade",
                 "websocket_user": ws,
                 "listen_key": "/fapi/v1/listenKey",
@@ -138,7 +138,7 @@ class BinanceBot(Bot):
                     "margin_type": "/dapi/v1/marginType",
                     "leverage": "/dapi/v1/leverage",
                     "position_side": "/dapi/v1/positionSide/dual",
-                    "websocket": (ws := f"wss://dstream.binance.com/ws/"),
+                    "websocket": (ws := "wss://dstream.binance.com/ws/"),
                     "websocket_market": ws + f"{self.symbol.lower()}@aggTrade",
                     "websocket_user": ws,
                     "listen_key": "/dapi/v1/listenKey",
@@ -170,7 +170,7 @@ class BinanceBot(Bot):
                     elif q["filterType"] == "MIN_NOTIONAL":
                         self.min_cost = self.config["min_cost"] = float(q["notional"])
                 try:
-                    z = self.min_cost
+                    self.min_cost
                 except AttributeError:
                     self.min_cost = self.config["min_cost"] = 0.0
                 break
@@ -436,7 +436,6 @@ class BinanceBot(Bot):
             print("error fetching income: ", e)
             traceback.print_exc()
             return []
-        return income
 
     async def fetch_account(self):
         try:

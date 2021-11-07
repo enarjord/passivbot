@@ -341,7 +341,7 @@ class Bybit(Bot):
                         ts_to_date(float(trades[0]["timestamp"]) / 1000),
                     ]
                 )
-        except:
+        except Exception:
             trades = []
             if do_print:
                 print_(["fetched no new trades", self.symbol])
@@ -463,41 +463,42 @@ class Bybit(Bot):
         self, limit: int = 200, from_id: int = None, start_time: int = None, end_time: int = None
     ):
         return []
-        ffills, fpnls = await asyncio.gather(
-            self.private_get(self.endpoints["fills"], {"symbol": self.symbol, "limit": limit}),
-            self.private_get(self.endpoints["pnls"], {"symbol": self.symbol, "limit": 50}),
-        )
-        return ffills, fpnls
-        try:
-            fills = []
-            for x in fetched["result"]["data"][::-1]:
-                qty, price = float(x["order_qty"]), float(x["price"])
-                if not qty or not price:
-                    continue
-                fill = {
-                    "symbol": x["symbol"],
-                    "id": str(x["exec_id"]),
-                    "order_id": str(x["order_id"]),
-                    "side": x["side"].lower(),
-                    "price": price,
-                    "qty": qty,
-                    "realized_pnl": 0.0,
-                    "cost": (cost := qty / price if self.inverse else qty * price),
-                    "fee_paid": float(x["exec_fee"]),
-                    "fee_token": self.margin_coin,
-                    "timestamp": int(x["trade_time_ms"]),
-                    "position_side": determine_pos_side(x),
-                    "is_maker": x["fee_rate"] < 0.0,
-                }
-                fills.append(fill)
-            return fills
-        except Exception as e:
-            print("error fetching fills", e)
-            return []
-        print("ntufnt")
-        return fetched
-        print("fetch_fills not implemented for Bybit")
-        return []
+
+    #        ffills, fpnls = await asyncio.gather(
+    #            self.private_get(self.endpoints["fills"], {"symbol": self.symbol, "limit": limit}),
+    #            self.private_get(self.endpoints["pnls"], {"symbol": self.symbol, "limit": 50}),
+    #        )
+    #        return ffills, fpnls
+    #        try:
+    #            fills = []
+    #            for x in fetched["result"]["data"][::-1]:
+    #                qty, price = float(x["order_qty"]), float(x["price"])
+    #                if not qty or not price:
+    #                    continue
+    #                fill = {
+    #                    "symbol": x["symbol"],
+    #                    "id": str(x["exec_id"]),
+    #                    "order_id": str(x["order_id"]),
+    #                    "side": x["side"].lower(),
+    #                    "price": price,
+    #                    "qty": qty,
+    #                    "realized_pnl": 0.0,
+    #                    "cost": (cost := qty / price if self.inverse else qty * price),
+    #                    "fee_paid": float(x["exec_fee"]),
+    #                    "fee_token": self.margin_coin,
+    #                    "timestamp": int(x["trade_time_ms"]),
+    #                    "position_side": determine_pos_side(x),
+    #                    "is_maker": x["fee_rate"] < 0.0,
+    #                }
+    #                fills.append(fill)
+    #            return fills
+    #        except Exception as e:
+    #            print("error fetching fills", e)
+    #            return []
+    #        print("ntufnt")
+    #        return fetched
+    #        print("fetch_fills not implemented for Bybit")
+    #        return []
 
     async def init_exchange_config(self):
         try:
@@ -618,7 +619,7 @@ class Bybit(Bot):
                                 "price": float(elm["price"]),
                                 "qty": float(elm["qty"]),
                                 "type": elm["order_type"].lower(),
-                                "side": (side := elm["side"].lower()),
+                                "side": (side := elm["side"].lower()),  # noqa: F841
                                 "timestamp": date_to_ts(
                                     elm["timestamp" if self.inverse else "update_time"]
                                 ),
