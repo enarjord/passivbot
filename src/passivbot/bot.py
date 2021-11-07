@@ -15,9 +15,6 @@ import numpy as np
 import websockets
 from telegram_bot import Telegram
 
-if "NOJIT" not in os.environ:
-    os.environ["NOJIT"] = "true"
-
 from passivbot.njit_funcs import calc_diff
 from passivbot.njit_funcs import calc_long_close_grid
 from passivbot.njit_funcs import calc_long_entry_grid

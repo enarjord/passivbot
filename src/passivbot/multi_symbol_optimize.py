@@ -9,8 +9,6 @@ import hjson
 import numpy as np
 from backtest import backtest
 
-os.environ["NOJIT"] = "false"
-
 from passivbot.downloader import Downloader
 from passivbot.procedures import add_argparse_args
 from passivbot.procedures import dump_live_config

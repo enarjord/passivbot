@@ -19,8 +19,6 @@ from ray.tune.schedulers import AsyncHyperBandScheduler
 from ray.tune.suggest import ConcurrencyLimiter
 from ray.tune.suggest.nevergrad import NevergradSearch
 
-os.environ["NOJIT"] = "false"
-
 from passivbot.backtest import backtest
 from passivbot.backtest import plot_wrap
 from passivbot.downloader import Downloader

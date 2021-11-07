@@ -7,8 +7,6 @@ import time
 import numpy as np
 import pandas as pd
 
-os.environ["NOJIT"] = "false"
-
 from passivbot.downloader import Downloader
 from passivbot.njit_funcs import njit_backtest
 from passivbot.njit_funcs import round_
