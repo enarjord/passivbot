@@ -40,7 +40,7 @@ documentation using the version popup at the bottom of the website.
 In futures markets bot uses cross mode, so entire wallet is used as margin to any position.  This means that one bad position
 may potentially liquidate entire wallet.
 
-The bot does not use leverage in its internal logic, rather position-cost-to-balance-ratio (abbreviated as pbr), 
+The bot does not use leverage in its internal logic, rather position-cost-to-balance-ratio (abbreviated as pbr),
 which is position size in terms of margin token divided by unleveraged wallet balance.
 
 For example, 10% of available leveraged balance in a position at cross 20x leverage is equivalent to pbr==2.0,
@@ -72,4 +72,3 @@ in absolute terms.
 
 !!! Info
     Please check the [Configuration](configuration.md) page for an in-depth description of the configuration parameters available.
-

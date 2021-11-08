@@ -22,11 +22,10 @@ At the moment only long positions are supported.
 | `markup_range`             | Distance from first Take-Profit order to last Take-Profit order.
 | `max_n_entry_orders`       | Max number of nodes in entry grid.
 | `n_close_orders`           | Max number of nodes in Take-Profit grid.
-| `secondary_pprice_diff`    | Distance from pos price to secondary entry price. 
+| `secondary_pprice_diff`    | Distance from pos price to secondary entry price.
 | `secondary_pbr_allocation` | Allocation of pbr_limit for secondary entry.  E.g. 0.4 means 40% to secondary, 60% to primary.
 
 
 Secondary entry is independent of primary entry grid, intended to catch abnormally deep dips.
 
 More info may come later.
-

@@ -1,21 +1,21 @@
-import json
 import os
 import sys
-from typing import Dict, List, Optional, Union
+from collections.abc import Mapping
+from typing import Dict
+from typing import List
+from typing import Optional
+from typing import Union
 
 import pandas as pd
 from ray.tune import CLIReporter
-from ray.tune.progress_reporter import memory_debug_str, trial_errors_str, _get_trials_by_state
+from ray.tune.progress_reporter import _get_trials_by_state
+from ray.tune.progress_reporter import memory_debug_str
+from ray.tune.progress_reporter import trial_errors_str
 from ray.tune.trial import Trial
 from ray.tune.utils import unflattened_lookup
 from tabulate import tabulate
-from pure_funcs import candidate_to_live_config
-from procedures import dump_live_config
 
-try:
-    from collections.abc import Mapping, MutableMapping
-except ImportError:
-    from collections import Mapping, MutableMapping
+from passivbot.utils.procedures import dump_live_config
 
 
 def _get_trial_info(trial: Trial, parameters: List[str], metrics: List[str]):
@@ -43,16 +43,23 @@ def _get_trials_by_order(trials: List[Trial], metric: str, max_trials: int):
     @param max_trials: Maximum number of trials to return.
     @return: List of best performing trials.
     """
-    trials_by_order = sorted(trials, key=lambda k: k.last_result[metric] if metric in k.last_result else -1,
-                             reverse=True)
-    if not max_trials == float('inf'):
+    trials_by_order = sorted(
+        trials, key=lambda k: k.last_result[metric] if metric in k.last_result else -1, reverse=True
+    )
+    if not max_trials == float("inf"):
         trials_by_order = trials_by_order[:max_trials]
     return trials_by_order
 
 
-def trial_progress_str(trials: List[Trial], metric: str, metric_columns: Union[List[str], Dict[str, str]],
-                       parameter_columns: Union[None, List[str], Dict[str, str]] = None, total_samples: int = 0,
-                       fmt: str = "psql", max_rows: Optional[int] = None, ):
+def trial_progress_str(
+    trials: List[Trial],
+    metric: str,
+    metric_columns: Union[List[str], Dict[str, str]],
+    parameter_columns: Union[None, List[str], Dict[str, str]] = None,
+    total_samples: int = 0,
+    fmt: str = "psql",
+    max_rows: Optional[int] = None,
+):
     """
     Returns a human readable message for printing to the console.
     This contains a table where each row represents a trial, its parameters
@@ -77,22 +84,34 @@ def trial_progress_str(trials: List[Trial], metric: str, metric_columns: Union[L
     num_trials = len(trials)
     trials_by_state = _get_trials_by_state(trials)
 
-    num_trials_strs = ["{} {}".format(len(trials_by_state[state]), state) for state in sorted(trials_by_state)]
+    num_trials_strs = [
+        f"{len(trials_by_state[state])} {state}" for state in sorted(trials_by_state)
+    ]
 
     if total_samples and total_samples >= sys.maxsize:
         total_samples = "infinite"
 
-    messages.append("Number of trials: {}{} ({})".format(num_trials, f"/{total_samples}" if total_samples else "",
-                                                         ", ".join(num_trials_strs)))
+    messages.append(
+        "Number of trials: {}{} ({})".format(
+            num_trials, f"/{total_samples}" if total_samples else "", ", ".join(num_trials_strs)
+        )
+    )
 
-    messages += trial_progress_table(trials, metric, metric_columns, parameter_columns, fmt, max_rows)
+    messages += trial_progress_table(
+        trials, metric, metric_columns, parameter_columns, fmt, max_rows
+    )
 
     return delim.join(messages)
 
 
-def trial_progress_table(trials: List[Trial], metric: str, metric_columns: Union[List[str], Dict[str, str]],
-                         parameter_columns: Union[None, List[str], Dict[str, str]] = None, fmt: str = "psql",
-                         max_rows: Optional[int] = None):
+def trial_progress_table(
+    trials: List[Trial],
+    metric: str,
+    metric_columns: Union[List[str], Dict[str, str]],
+    parameter_columns: Union[None, List[str], Dict[str, str]] = None,
+    fmt: str = "psql",
+    max_rows: Optional[int] = None,
+):
     """
     Create table view for trials.
     @param trials: List of trials to get progress table string for.
@@ -122,8 +141,11 @@ def trial_progress_table(trials: List[Trial], metric: str, metric_columns: Union
     else:
         metric_keys = metric_columns
 
-    metric_keys = [k for k in metric_keys if
-                   any(unflattened_lookup(k, t.last_result, default=None) is not None for t in trials)]
+    metric_keys = [
+        k
+        for k in metric_keys
+        if any(unflattened_lookup(k, t.last_result, default=None) is not None for t in trials)
+    ]
 
     if not parameter_columns:
         parameter_keys = sorted(set().union(*[t.evaluated_params for t in trials]))
@@ -139,16 +161,14 @@ def trial_progress_table(trials: List[Trial], metric: str, metric_columns: Union
     else:
         formatted_metric_columns = metric_keys
     if isinstance(parameter_columns, Mapping):
-        formatted_parameter_columns = [
-            parameter_columns[k] for k in parameter_keys
-        ]
+        formatted_parameter_columns = [parameter_columns[k] for k in parameter_keys]
     else:
         formatted_parameter_columns = parameter_keys
-    columns = (formatted_parameter_columns + formatted_metric_columns)
+    columns = formatted_parameter_columns + formatted_metric_columns
 
     messages.append(tabulate(trial_table, headers=columns, tablefmt=fmt, showindex=False))
     if overflow:
-        messages.append("... {} more trials not shown".format(overflow))
+        messages.append(f"... {overflow} more trials not shown")
     return messages
 
 
@@ -157,20 +177,37 @@ class LogReporter(CLIReporter):
     Extend CLI reporter to add saving of intermediate configs and results.
     """
 
-    def __init__(self, metric_columns: Union[None, List[str], Dict[str, str]] = None,
-                 parameter_columns: Union[None, List[str], Dict[str, str]] = None, total_samples: Optional[int] = None,
-                 max_progress_rows: int = 20, max_error_rows: int = 20, max_report_frequency: int = 5,
-                 infer_limit: int = 3, print_intermediate_tables: Optional[bool] = None, metric: Optional[str] = None,
-                 mode: Optional[str] = None):
+    def __init__(
+        self,
+        metric_columns: Union[None, List[str], Dict[str, str]] = None,
+        parameter_columns: Union[None, List[str], Dict[str, str]] = None,
+        total_samples: Optional[int] = None,
+        max_progress_rows: int = 20,
+        max_error_rows: int = 20,
+        max_report_frequency: int = 5,
+        infer_limit: int = 3,
+        print_intermediate_tables: Optional[bool] = None,
+        metric: Optional[str] = None,
+        mode: Optional[str] = None,
+    ):
         self.objective = 0
 
-        super(LogReporter, self).__init__(metric_columns, parameter_columns, total_samples, max_progress_rows,
-                                          max_error_rows, max_report_frequency, infer_limit, print_intermediate_tables,
-                                          metric, mode)
+        super().__init__(
+            metric_columns,
+            parameter_columns,
+            total_samples,
+            max_progress_rows,
+            max_error_rows,
+            max_report_frequency,
+            infer_limit,
+            print_intermediate_tables,
+            metric,
+            mode,
+        )
 
     def report(self, trials: List[Trial], done: bool, *sys_info: Dict):
-        l = []
-        o = []
+        evaluated_params = []
+        outcomes = []
         best_config = None
         best_eval = None
         config = None
@@ -180,27 +217,35 @@ class LogReporter(CLIReporter):
                     self.objective = trial.last_result[self._metric]
                     best_config = trial.config
                     best_eval = trial.evaluated_params
-                l.append(trial.evaluated_params)
-                o.append(trial.last_result[self._metric])
+                evaluated_params.append(trial.evaluated_params)
+                outcomes.append(trial.last_result[self._metric])
                 config = trial.config
 
         try:
             if config:
-                df = pd.DataFrame(l)
-                df[self._metric] = o
+                df = pd.DataFrame(evaluated_params)
+                df[self._metric] = outcomes
                 df.sort_values(self._metric, ascending=False, inplace=True)
                 df.dropna(inplace=True)
                 df[df[self._metric] > 0].to_csv(
-                    os.path.join(config['optimize_dirpath'], 'intermediate_results.csv'), index=False)
+                    os.path.join(config["optimize_dirpath"], "intermediate_results.csv"),
+                    index=False,
+                )
                 if best_eval:
-                    dump_live_config({**best_config, **best_eval.copy()},
-                                     os.path.join(best_config['optimize_dirpath'], 'intermediate_best_result.json'))
+                    dump_live_config(
+                        {**best_config, **best_eval.copy()},
+                        os.path.join(
+                            best_config["optimize_dirpath"], "intermediate_best_result.json"
+                        ),
+                    )
         except Exception as e:
             print("Something went wrong", e)
 
         print(self._progress_str(trials, done, *sys_info))
 
-    def _progress_str(self, trials: List[Trial], done: bool, *sys_info: Dict, fmt: str = "psql", delim: str = "\n"):
+    def _progress_str(
+        self, trials: List[Trial], done: bool, *sys_info: Dict, fmt: str = "psql", delim: str = "\n"
+    ):
         """
         Returns full progress string. This string contains a progress table and error table. The progress table
         describes the progress of each trial. The error table lists the error file, if any, corresponding to each trial.
@@ -223,9 +268,17 @@ class LogReporter(CLIReporter):
             max_progress = self._max_progress_rows
             max_error = self._max_error_rows
 
-        messages.append(trial_progress_str(trials, self._metric, metric_columns=self._metric_columns,
-                                           parameter_columns=self._parameter_columns, total_samples=self._total_samples,
-                                           fmt=fmt, max_rows=max_progress))
+        messages.append(
+            trial_progress_str(
+                trials,
+                self._metric,
+                metric_columns=self._metric_columns,
+                parameter_columns=self._parameter_columns,
+                total_samples=self._total_samples,
+                fmt=fmt,
+                max_rows=max_progress,
+            )
+        )
         messages.append(trial_errors_str(trials, fmt=fmt, max_rows=max_error))
 
         return delim.join(messages) + delim

@@ -13,17 +13,17 @@ to find the best result possible across many iterations, Passivbot relies on [pa
 There is a default optimize configuration with the bot in every version, so examine it and set the test
 parameters to suit your desired results.
 
-Once the necessary price data has been downloaded, the optimizer will begin with the starting candidate, 
-test against the price history, and continue iterating through the ranges for each variable. 
+Once the necessary price data has been downloaded, the optimizer will begin with the starting candidate,
+test against the price history, and continue iterating through the ranges for each variable.
 Once the history for a given asset is downloaded,
 additional price history can simply be tacked on to the end of the cache (done automatically),
-cutting down testing times. 
+cutting down testing times.
 
 !!! Warning
-    The optimizer process is computed by the CPU, and can be time consuming depending on the testing period, 
+    The optimizer process is computed by the CPU, and can be time consuming depending on the testing period,
     despite optimization. Also the number of trades in the specified time range can have an impact on the
     amount of memory needed to run an optimize. For example, running an optimize on a full year of BTC trading data
-    with 10.000 cycles on a 12-core CPU & 32GB ram takes a couple of days. Running a full year of BTC trading data on 
+    with 10.000 cycles on a 12-core CPU & 32GB ram takes a couple of days. Running a full year of BTC trading data on
     the same machine for BTS takes a couple of hours.
 
 The key to finding new, profitable configurations is using the optimizer often and familiarizing
@@ -40,7 +40,7 @@ To execute an optimize, you can execute the following command from the root fold
 ```shell
 python3 optimize.py
 ```
-Note: the default market is Futures. Use one of the keys to define spot market if you want that. 
+Note: the default market is Futures. Use one of the keys to define spot market if you want that.
 
 !!! Info
     This page assumes you have already performed configuration to execute a backtest (like setting up your account).
@@ -70,7 +70,7 @@ The search parameters that can be specified for the optimize process are as foll
 | `do_short` | Indicates if the optimize should perform short positions
 
 Other than the parameters specified in the table above, the parameters found in the live config file are also specified
-as a range. For a description of each of those individual parameters, please see [Running live](live.md) 
+as a range. For a description of each of those individual parameters, please see [Running live](live.md)
 
 !!! Info
     If you find that an optimize execution is taking longer than you expected, you can kill it using `ctrl+c` from the command-line.

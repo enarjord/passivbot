@@ -6,4 +6,3 @@ services:
     volumes:
       - ./:/app/
     command: python passivbot.py binance_01 XMRUSDT live_configs/binance_default.json
-    

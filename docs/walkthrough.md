@@ -37,12 +37,12 @@ pip install -r requirements.txt
 
 After running the installation commands above, you need to create an API key on the exchange you want to run.
 This will provide you with a key and a secret, that you need to fill out in the `api-keys.json`. You first need to
-create this file by copying the template file `api-keys.example.json`. 
+create this file by copying the template file `api-keys.example.json`.
 The instructions below assume your key is `{X}` and your secret is `{Y}`.
 
 !!! Warning
     Make sure you enable `futures` on the API key. Also, be aware that on Binance you have to complete a quiz before you
-    can trade futures. Apart from that, you need to make sure there are funds present in the futures wallet. 
+    can trade futures. Apart from that, you need to make sure there are funds present in the futures wallet.
 
 Also, you will need to get a Telegram token & chat-id to fill into the `api-keys.json`. Please refer to the [Telegram](telegram.md)
 section for instructions on how to set this up.
@@ -66,7 +66,7 @@ vi api-keys.json
 ## Run the optimizer for a config
 
 !!! Warning
-    For running the optimizer, a minimum of 8gb is recommended, and 16gb is be advisable. 
+    For running the optimizer, a minimum of 8gb is recommended, and 16gb is be advisable.
 
 Once you've set up your account, you can try to find a good config using [the optimizer](optimize.md). If you want, you can limit the
 search space by modifying by creating your own optimize configuration. You can do so by copying and modifying the default
@@ -85,7 +85,7 @@ vi configs/optimize/myconfig.hjson
 After this, you can start an optimize run on a symbol (XLMUSDT in this example):
 
 ```shell
-python3 optimize.py -u binance_01 -s XLMUSDT -o configs/optimize/myconfig.hjson --start_date 2021-06-01T00:00 --end_date 2021-07-01T00:00 
+python3 optimize.py -u binance_01 -s XLMUSDT -o configs/optimize/myconfig.hjson --start_date 2021-06-01T00:00 --end_date 2021-07-01T00:00
 ```
 
 ## Run the backtest for a config

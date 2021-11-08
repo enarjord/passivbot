@@ -1,0 +1,10 @@
+[build-system]
+requires = ["setuptools>=50.3.2", "wheel", "setuptools-declarative-requirements", "setuptools_scm[toml]>=3.4"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools_scm]
+write_to = "src/passivbot/version.py"
+write_to_template = "# pylint: skip-file\n\n__version__ = \"{version}\""
+
+[tool.black]
+line-length = 100
