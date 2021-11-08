@@ -894,16 +894,7 @@ class Downloader:
         return tick_data
 
 
-async def _main():
-    parser = argparse.ArgumentParser(
-        prog="Downloader", description="Download ticks from exchange API."
-    )
-    parser.add_argument(
-        "-d", "--download-only", help="download only, do not dump ticks caches", action="store_true"
-    )
-    parser = add_argparse_args(parser)
-
-    args = parser.parse_args()
+async def _main(args: argparse.Namespace) -> None:
     config = await prepare_backtest_config(args)
     downloader = Downloader(config)
     await downloader.download_ticks()
@@ -911,9 +902,14 @@ async def _main():
         await downloader.prepare_files()
 
 
-def main():
-    asyncio.run(_main())
+def main(args: argparse.Namespace) -> None:
+    asyncio.run(_main(args))
 
 
-if __name__ == "__main__":
-    main()
+def setup_parser(subparsers: argparse._SubParsersAction) -> None:
+    parser = subparsers.add_parser("downloader", help="Download ticks from exchange API.")
+    parser.add_argument(
+        "-d", "--download-only", help="download only, do not dump ticks caches", action="store_true"
+    )
+    add_argparse_args(parser)
+    parser.set_defaults(func=main)

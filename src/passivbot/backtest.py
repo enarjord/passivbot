@@ -53,14 +53,7 @@ def plot_wrap(config, data):
     dump_plots(config, fdf, sdf, df)
 
 
-async def _main():
-    parser = argparse.ArgumentParser(
-        prog="Backtest", description="Backtest given passivbot config."
-    )
-    parser.add_argument("live_config_path", type=str, help="path to live config to test")
-    parser = add_argparse_args(parser)
-    args = parser.parse_args()
-
+async def _main(args: argparse.Namespace) -> None:
     config = await prepare_backtest_config(args)
     live_config = load_live_config(args.live_config_path)
     config.update(live_config)
@@ -90,9 +83,12 @@ async def _main():
     plot_wrap(config, data)
 
 
-def main():
-    asyncio.run(_main())
+def main(args: argparse.Namespace) -> None:
+    asyncio.run(_main(args))
 
 
-if __name__ == "__main__":
-    main()
+def setup_parser(subparsers: argparse._SubParsersAction) -> None:
+    parser = subparsers.add_parser("backtest", help="Backtest given passivbot config.")
+    parser.add_argument("live_config_path", type=str, help="path to live config to test")
+    add_argparse_args(parser)
+    parser.set_defaults(func=main)

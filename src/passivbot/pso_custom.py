@@ -275,19 +275,7 @@ class BacktestWrap:
         return score, analysis, config
 
 
-async def _main():
-    parser = argparse.ArgumentParser(prog="Optimize", description="Optimize passivbot config.")
-    parser = add_argparse_args(parser)
-    parser.add_argument(
-        "-t",
-        "--start",
-        type=str,
-        required=False,
-        dest="starting_configs",
-        default=None,
-        help="start with given live configs.  single json file or dir with multiple json files",
-    )
-    args = parser.parse_args()
+async def _main(args: argparse.Namespace) -> None:
     for config in await prep_config(args):
         try:
             template_live_config = get_template_live_config(config["n_spans"])
@@ -354,9 +342,20 @@ async def _main():
             shm.unlink()
 
 
-def main():
-    asyncio.run(_main())
+def main(args: argparse.Namespace) -> None:
+    asyncio.run(_main(args))
 
 
-if __name__ == "__main__":
-    main()
+def setup_parser(subparsers: argparse._SubParsersAction) -> None:
+    parser = subparsers.add_parser("pso-custom-optimize", help="Optimize passivbot config.")
+    parser.add_argument(
+        "-t",
+        "--start",
+        type=str,
+        required=False,
+        dest="starting_configs",
+        default=None,
+        help="start with given live configs.  single json file or dir with multiple json files",
+    )
+    add_argparse_args(parser)
+    parser.set_defaults(func=main)

@@ -8,9 +8,6 @@ import hjson
 import numpy as np
 import pandas as pd
 
-from passivbot.exchanges.binance import BinanceBot
-from passivbot.exchanges.binance_spot import BinanceBotSpot
-from passivbot.exchanges.bybit import Bybit
 from passivbot.utils.funcs.njit import calc_samples
 from passivbot.utils.funcs.pure import candidate_to_live_config
 from passivbot.utils.funcs.pure import config_pretty_str
@@ -215,6 +212,8 @@ async def fetch_market_specific_settings(config: dict):
 
 
 async def create_binance_bot(config: dict):
+    # Deferred import due to circular import issues
+    from passivbot.exchanges.binance import BinanceBot
 
     bot = BinanceBot(config)
     await bot._init()
@@ -222,6 +221,8 @@ async def create_binance_bot(config: dict):
 
 
 async def create_binance_bot_spot(config: dict):
+    # Deferred import due to circular import issues
+    from passivbot.exchanges.binance_spot import BinanceBotSpot
 
     bot = BinanceBotSpot(config)
     await bot._init()
@@ -229,6 +230,8 @@ async def create_binance_bot_spot(config: dict):
 
 
 async def create_bybit_bot(config: dict):
+    # Deferred import due to circular import issues
+    from passivbot.exchanges.bybit import Bybit
 
     bot = Bybit(config)
     await bot._init()
@@ -240,6 +243,7 @@ def add_argparse_args(parser):
     parser.add_argument(
         "-b",
         "--backtest_config",
+        "--backtest-config",
         type=str,
         required=False,
         dest="backtest_config_path",
@@ -267,6 +271,7 @@ def add_argparse_args(parser):
     parser.add_argument(
         "-sd",
         "--start_date",
+        "--start-date",
         type=str,
         required=False,
         dest="start_date",
@@ -276,6 +281,7 @@ def add_argparse_args(parser):
     parser.add_argument(
         "-ed",
         "--end_date",
+        "--end-date",
         type=str,
         required=False,
         dest="end_date",
@@ -284,6 +290,7 @@ def add_argparse_args(parser):
     )
     parser.add_argument(
         "--starting_balance",
+        "--starting-balance",
         type=float,
         required=False,
         dest="starting_balance",
@@ -293,7 +300,9 @@ def add_argparse_args(parser):
     parser.add_argument(
         "-m",
         "--market_type",
+        "--market-type",
         type=str,
+        choices=["futures", "spot"],
         required=False,
         dest="market_type",
         default=None,
@@ -302,6 +311,7 @@ def add_argparse_args(parser):
     parser.add_argument(
         "-bd",
         "--base_dir",
+        "--base-dir",
         type=str,
         required=False,
         dest="base_dir",
