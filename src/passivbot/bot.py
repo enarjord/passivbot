@@ -12,8 +12,8 @@ from typing import List
 from typing import Union
 
 import websockets
-from telegram_bot import Telegram
 
+from passivbot.interact.telegram_bot import Telegram
 from passivbot.utils.funcs.njit import calc_diff
 from passivbot.utils.funcs.njit import calc_long_close_grid
 from passivbot.utils.funcs.njit import calc_long_entry_grid
