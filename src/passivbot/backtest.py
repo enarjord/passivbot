@@ -8,7 +8,6 @@ import numpy as np
 import pandas as pd
 
 from passivbot.downloader import Downloader
-from passivbot.plotting import dump_plots
 from passivbot.utils.funcs.njit import njit_backtest
 from passivbot.utils.funcs.njit import round_
 from passivbot.utils.funcs.pure import analyze_fills
@@ -16,6 +15,7 @@ from passivbot.utils.funcs.pure import create_xk
 from passivbot.utils.funcs.pure import denumpyize
 from passivbot.utils.funcs.pure import spotify_config
 from passivbot.utils.funcs.pure import ts_to_date
+from passivbot.utils.plotting import dump_plots
 from passivbot.utils.procedures import add_argparse_args
 from passivbot.utils.procedures import load_live_config
 from passivbot.utils.procedures import make_get_filepath
