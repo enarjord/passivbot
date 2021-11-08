@@ -8,6 +8,9 @@ import hjson
 import numpy as np
 import pandas as pd
 
+from passivbot.exchanges.binance import BinanceBot
+from passivbot.exchanges.binance_spot import BinanceBotSpot
+from passivbot.exchanges.bybit import Bybit
 from passivbot.utils.funcs.njit import calc_samples
 from passivbot.utils.funcs.pure import candidate_to_live_config
 from passivbot.utils.funcs.pure import config_pretty_str
@@ -212,7 +215,6 @@ async def fetch_market_specific_settings(config: dict):
 
 
 async def create_binance_bot(config: dict):
-    from binance import BinanceBot
 
     bot = BinanceBot(config)
     await bot._init()
@@ -220,7 +222,6 @@ async def create_binance_bot(config: dict):
 
 
 async def create_binance_bot_spot(config: dict):
-    from binance_spot import BinanceBotSpot
 
     bot = BinanceBotSpot(config)
     await bot._init()
@@ -228,7 +229,6 @@ async def create_binance_bot_spot(config: dict):
 
 
 async def create_bybit_bot(config: dict):
-    from bybit import Bybit
 
     bot = Bybit(config)
     await bot._init()
