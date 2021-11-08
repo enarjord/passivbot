@@ -1,7 +1,9 @@
 import os
 import shutil
 import subprocess
+import sys
 
+import passivbot.optimize
 from passivbot.utils.procedures import make_get_filepath
 
 
@@ -63,11 +65,11 @@ def main():
         for symbol in symbols
     ]
     for kwargs in kwargs_list:
-        formatted = "python3 optimize.py "
+        args = [sys.executable, passivbot.optimize.__file__]
         for key in kwargs:
-            formatted += f" --{key} {kwargs[key]}"
-        print(formatted)
-        subprocess.run([formatted], shell=True)
+            args.extend([f"--{key}", f"{kwargs[key]}"])
+        print(args)
+        subprocess.run(args, shell=False, check=True)
         try:
             d = f'backtests/{exchange}/{kwargs["symbol"]}/plots/'
             ds = sorted(f for f in os.listdir(d) if "20" in f)
