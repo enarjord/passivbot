@@ -2,7 +2,7 @@ import os
 import shutil
 import subprocess
 
-from passivbot.procedures import make_get_filepath
+from passivbot.utils.procedures import make_get_filepath
 
 
 def main():

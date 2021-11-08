@@ -20,7 +20,6 @@ from telegram.ext import Filters
 from telegram.ext import MessageHandler
 from telegram.ext import Updater
 
-from passivbot.procedures import load_live_config
 from passivbot.utils.funcs.njit import calc_diff
 from passivbot.utils.funcs.njit import calc_long_pnl
 from passivbot.utils.funcs.njit import calc_shrt_pnl

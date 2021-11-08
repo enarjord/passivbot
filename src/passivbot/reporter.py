@@ -15,7 +15,7 @@ from ray.tune.trial import Trial
 from ray.tune.utils import unflattened_lookup
 from tabulate import tabulate
 
-from passivbot.procedures import dump_live_config
+from passivbot.utils.procedures import dump_live_config
 
 
 def _get_trial_info(trial: Trial, parameters: List[str], metrics: List[str]):

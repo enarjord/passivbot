@@ -14,10 +14,6 @@ from typing import Union
 import websockets
 from telegram_bot import Telegram
 
-from passivbot.procedures import load_exchange_key_secret
-from passivbot.procedures import load_live_config
-from passivbot.procedures import make_get_filepath
-from passivbot.procedures import print_
 from passivbot.utils.funcs.njit import calc_diff
 from passivbot.utils.funcs.njit import calc_long_close_grid
 from passivbot.utils.funcs.njit import calc_long_entry_grid
@@ -29,6 +25,10 @@ from passivbot.utils.funcs.pure import create_xk
 from passivbot.utils.funcs.pure import denumpyize
 from passivbot.utils.funcs.pure import filter_orders
 from passivbot.utils.funcs.pure import spotify_config
+from passivbot.utils.procedures import load_exchange_key_secret
+from passivbot.utils.procedures import load_live_config
+from passivbot.utils.procedures import make_get_filepath
+from passivbot.utils.procedures import print_
 
 logging.getLogger("telegram").setLevel(logging.CRITICAL)
 
@@ -770,15 +770,15 @@ async def main() -> None:
 
     if account["exchange"] == "binance":
         if "spot" in config["market_type"]:
-            from passivbot.procedures import create_binance_bot_spot
+            from passivbot.utils.procedures import create_binance_bot_spot
 
             bot = await create_binance_bot_spot(config)
         else:
-            from passivbot.procedures import create_binance_bot
+            from passivbot.utils.procedures import create_binance_bot
 
             bot = await create_binance_bot(config)
     elif account["exchange"] == "bybit":
-        from passivbot.procedures import create_bybit_bot
+        from passivbot.utils.procedures import create_bybit_bot
 
         bot = await create_bybit_bot(config)
     else:

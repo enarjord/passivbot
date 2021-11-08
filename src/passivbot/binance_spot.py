@@ -10,8 +10,6 @@ import aiohttp
 import numpy as np
 
 from passivbot.bot import Bot
-from passivbot.procedures import print_
-from passivbot.procedures import print_async_exception
 from passivbot.utils.funcs.njit import calc_diff
 from passivbot.utils.funcs.njit import calc_long_pnl
 from passivbot.utils.funcs.njit import calc_min_entry_qty
@@ -25,6 +23,8 @@ from passivbot.utils.funcs.pure import get_position_fills
 from passivbot.utils.funcs.pure import sort_dict_keys
 from passivbot.utils.funcs.pure import spotify_config
 from passivbot.utils.funcs.pure import ts_to_date
+from passivbot.utils.procedures import print_
+from passivbot.utils.procedures import print_async_exception
 
 
 class BinanceBotSpot(Bot):

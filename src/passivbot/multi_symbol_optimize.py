@@ -9,13 +9,6 @@ import numpy as np
 from backtest import backtest
 
 from passivbot.downloader import Downloader
-from passivbot.procedures import add_argparse_args
-from passivbot.procedures import dump_live_config
-from passivbot.procedures import load_exchange_key_secret
-from passivbot.procedures import load_live_config
-from passivbot.procedures import make_get_filepath
-from passivbot.procedures import prepare_backtest_config
-from passivbot.procedures import prepare_optimize_config
 from passivbot.utils.funcs.pure import analyze_fills
 from passivbot.utils.funcs.pure import candidate_to_live_config
 from passivbot.utils.funcs.pure import denumpyize
@@ -25,6 +18,13 @@ from passivbot.utils.funcs.pure import pack_config
 from passivbot.utils.funcs.pure import round_values
 from passivbot.utils.funcs.pure import ts_to_date
 from passivbot.utils.funcs.pure import unpack_config
+from passivbot.utils.procedures import add_argparse_args
+from passivbot.utils.procedures import dump_live_config
+from passivbot.utils.procedures import load_exchange_key_secret
+from passivbot.utils.procedures import load_live_config
+from passivbot.utils.procedures import make_get_filepath
+from passivbot.utils.procedures import prepare_backtest_config
+from passivbot.utils.procedures import prepare_optimize_config
 
 
 def backtest_single_wrap(config_: dict):

@@ -12,9 +12,6 @@ from passivbot.downloader import Downloader
 from passivbot.downloader import prep_config
 from passivbot.optimize import get_expanded_ranges
 from passivbot.optimize import single_sliding_window_run
-from passivbot.procedures import add_argparse_args
-from passivbot.procedures import dump_live_config
-from passivbot.procedures import make_get_filepath
 from passivbot.utils.funcs.pure import candidate_to_live_config
 from passivbot.utils.funcs.pure import denanify
 from passivbot.utils.funcs.pure import get_template_live_config
@@ -22,6 +19,9 @@ from passivbot.utils.funcs.pure import numpyize
 from passivbot.utils.funcs.pure import pack_config
 from passivbot.utils.funcs.pure import ts_to_date
 from passivbot.utils.funcs.pure import unpack_config
+from passivbot.utils.procedures import add_argparse_args
+from passivbot.utils.procedures import dump_live_config
+from passivbot.utils.procedures import make_get_filepath
 
 lock = multiprocessing.Lock()
 BEST_OBJECTIVE = 0.0

@@ -13,11 +13,11 @@ import aiohttp
 import numpy as np
 
 from passivbot.bot import Bot
-from passivbot.procedures import print_
-from passivbot.procedures import print_async_exception
 from passivbot.utils.funcs.pure import date_to_ts
 from passivbot.utils.funcs.pure import sort_dict_keys
 from passivbot.utils.funcs.pure import ts_to_date
+from passivbot.utils.procedures import print_
+from passivbot.utils.procedures import print_async_exception
 
 
 def first_capitalized(s: str):

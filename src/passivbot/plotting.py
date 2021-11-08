@@ -8,7 +8,6 @@ from colorama import Fore
 from colorama import init
 from prettytable import PrettyTable
 
-from passivbot.procedures import dump_live_config
 from passivbot.utils.funcs.njit import round_dynamic
 from passivbot.utils.funcs.njit import round_up
 from passivbot.utils.funcs.pure import denumpyize
