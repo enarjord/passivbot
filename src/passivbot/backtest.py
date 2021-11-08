@@ -53,7 +53,7 @@ def plot_wrap(config, data):
     dump_plots(config, fdf, sdf, df)
 
 
-async def main():
+async def _main():
     parser = argparse.ArgumentParser(
         prog="Backtest", description="Backtest given passivbot config."
     )
@@ -90,5 +90,9 @@ async def main():
     plot_wrap(config, data)
 
 
+def main():
+    asyncio.run(_main())
+
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()

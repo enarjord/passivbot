@@ -894,7 +894,7 @@ class Downloader:
         return tick_data
 
 
-async def main():
+async def _main():
     parser = argparse.ArgumentParser(
         prog="Downloader", description="Download ticks from exchange API."
     )
@@ -911,5 +911,9 @@ async def main():
         await downloader.prepare_files()
 
 
+def main():
+    asyncio.run(_main())
+
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()

@@ -706,7 +706,7 @@ async def _start_telegram(account: dict, bot: Bot):
     return telegram
 
 
-async def main() -> None:
+async def _main() -> None:
     parser = argparse.ArgumentParser(prog="passivbot", description="run passivbot")
     parser.add_argument("user", type=str, help="user/account_name defined in api-keys.json")
     parser.add_argument("symbol", type=str, help="symbol to trade")
@@ -796,12 +796,16 @@ async def main() -> None:
     await bot.session.close()
 
 
-if __name__ == "__main__":
+def main():
     try:
-        asyncio.run(main())
+        asyncio.run(_main())
     except Exception as e:
         print(f"\nThere was an error starting the bot: {e}")
         traceback.print_exc()
     finally:
         print("\nPassivbot was stopped succesfully")
         os._exit(0)
+
+
+if __name__ == "__main__":
+    main()

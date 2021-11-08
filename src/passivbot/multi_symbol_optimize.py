@@ -180,7 +180,7 @@ class FuncWrap:
         dump_live_config(self.xs_to_config(xs), self.best_conf_fname)
 
 
-async def main():
+async def _main():
     parser = argparse.ArgumentParser(
         prog="Optimize multi symbol", description="Optimize passivbot config multi symbol"
     )
@@ -273,5 +273,9 @@ async def main():
     return
 
 
+def main():
+    asyncio.run(_main())
+
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()

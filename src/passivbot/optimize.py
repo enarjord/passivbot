@@ -409,7 +409,7 @@ async def execute_optimize(config):
         plot_wrap(pack_config(config), data)
 
 
-async def main():
+async def _main():
     parser = argparse.ArgumentParser(prog="Optimize", description="Optimize passivbot config.")
     parser.add_argument(
         "-o",
@@ -444,5 +444,9 @@ async def main():
     await execute_optimize(config)
 
 
+def main():
+    asyncio.run(_main())
+
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()

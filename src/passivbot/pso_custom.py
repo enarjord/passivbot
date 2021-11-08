@@ -275,7 +275,7 @@ class BacktestWrap:
         return score, analysis, config
 
 
-async def main():
+async def _main():
     parser = argparse.ArgumentParser(prog="Optimize", description="Optimize passivbot config.")
     parser = add_argparse_args(parser)
     parser.add_argument(
@@ -354,5 +354,9 @@ async def main():
             shm.unlink()
 
 
+def main():
+    asyncio.run(_main())
+
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
