@@ -3,7 +3,7 @@
 Passivbot works on Binance spot markets.
 
 Example command:  
-`pyhton3 passivbot.py binance_01 ETHBTC path/to/live_config.json -m spot -ab 0.1`  
+`python3 passivbot.py binance_01 ETHBTC path/to/live_config.json -m spot -ab 0.1`  
 
 Start the bot normally by running the script passivbot.py.  
 Specify the user as normal, e.g. `binance_01`.  
