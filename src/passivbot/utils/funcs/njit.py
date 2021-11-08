@@ -1,3 +1,6 @@
+from typing import List
+from typing import Tuple
+
 import numpy as np
 
 from passivbot.utils.funcs import numba_njit
@@ -11,18 +14,30 @@ def round_dynamic(n: float, d: int):
 
 
 @numba_njit
-def round_up(n, step, safety_rounding=10) -> float:
-    return np.round(np.ceil(np.round(n / step, safety_rounding)) * step, safety_rounding)
+def round_up(n: float, step, safety_rounding=10) -> float:
+    return np.round(  # type: ignore[no-any-return]
+        np.ceil(
+            np.round(n / step, safety_rounding),
+        )
+        * step,
+        safety_rounding,
+    )
 
 
 @numba_njit
 def round_dn(n, step, safety_rounding=10) -> float:
-    return np.round(np.floor(np.round(n / step, safety_rounding)) * step, safety_rounding)
+    return np.round(  # type: ignore[no-any-return]
+        np.floor(
+            np.round(n / step, safety_rounding),
+        )
+        * step,
+        safety_rounding,
+    )
 
 
 @numba_njit
 def round_(n, step, safety_rounding=10) -> float:
-    return np.round(np.round(n / step) * step, safety_rounding)
+    return np.round(np.round(n / step) * step, safety_rounding)  # type: ignore[no-any-return]
 
 
 @numba_njit
@@ -32,12 +47,12 @@ def calc_diff(x, y):
 
 @numba_njit
 def nan_to_0(x) -> float:
-    return x if x == x else 0.0
+    return x if x == x else 0.0  # type: ignore[no-any-return]
 
 
 @numba_njit
 def calc_min_entry_qty(price, inverse, qty_step, min_qty, min_cost) -> float:
-    return (
+    return (  # type: ignore[no-any-return]
         min_qty
         if inverse
         else max(min_qty, round_up(min_cost / price if price > 0.0 else 0.0, qty_step))
@@ -51,12 +66,14 @@ def cost_to_qty(cost, price, inverse, c_mult):
 
 @numba_njit
 def qty_to_cost(qty, price, inverse, c_mult) -> float:
-    return (abs(qty / price) if price > 0.0 else 0.0) * c_mult if inverse else abs(qty * price)
+    return (  # type: ignore[no-any-return]
+        (abs(qty / price) if price > 0.0 else 0.0) * c_mult if inverse else abs(qty * price)
+    )
 
 
 @numba_njit
 def calc_ema(alpha, alpha_, prev_ema, new_val) -> float:
-    return prev_ema * alpha_ + new_val * alpha
+    return prev_ema * alpha_ + new_val * alpha  # type: ignore[no-any-return]
 
 
 @numba_njit
@@ -104,9 +121,9 @@ def calc_long_pnl(entry_price, close_price, qty, inverse, c_mult) -> float:
     if inverse:
         if entry_price == 0.0 or close_price == 0.0:
             return 0.0
-        return abs(qty) * c_mult * (1.0 / entry_price - 1.0 / close_price)
+        return abs(qty) * c_mult * (1.0 / entry_price - 1.0 / close_price)  # type: ignore[no-any-return]
     else:
-        return abs(qty) * (close_price - entry_price)
+        return abs(qty) * (close_price - entry_price)  # type: ignore[no-any-return]
 
 
 @numba_njit
@@ -114,9 +131,9 @@ def calc_shrt_pnl(entry_price, close_price, qty, inverse, c_mult) -> float:
     if inverse:
         if entry_price == 0.0 or close_price == 0.0:
             return 0.0
-        return abs(qty) * c_mult * (1.0 / close_price - 1.0 / entry_price)
+        return abs(qty) * c_mult * (1.0 / close_price - 1.0 / entry_price)  # type: ignore[no-any-return]
     else:
-        return abs(qty) * (entry_price - close_price)
+        return abs(qty) * (entry_price - close_price)  # type: ignore[no-any-return]
 
 
 @numba_njit
@@ -132,7 +149,7 @@ def calc_equity(
 
 
 @numba_njit
-def calc_new_psize_pprice(psize, pprice, qty, price, qty_step) -> (float, float):
+def calc_new_psize_pprice(psize, pprice, qty, price, qty_step) -> Tuple[float, float]:
     if qty == 0.0:
         return psize, pprice
     new_psize = round_(psize + qty, qty_step)
@@ -166,7 +183,7 @@ def calc_long_close_grid(
     min_markup,
     markup_range,
     n_close_orders,
-) -> [(float, float, str)]:
+) -> List[Tuple[float, float, str]]:
     if long_psize == 0.0:
         return [(0.0, 0.0, "")]
     minm = long_pprice * (1 + min_markup)
@@ -244,7 +261,7 @@ def calc_shrt_close_grid(
     min_markup,
     markup_range,
     n_close_orders,
-) -> [(float, float, str)]:
+) -> List[Tuple[float, float, str]]:
     if shrt_psize == 0.0:
         return [(0.0, 0.0, "")]
     minm = shrt_pprice * (1 - min_markup)
@@ -417,7 +434,7 @@ def find_qty_bringing_pbr_to_target(
             i += 1
             if i >= max_n_iters:
                 print("debug find qty unable to find high enough qty")
-                return guess
+                return guess  # type: ignore[no-any-return]
             guess = round_(max(guess + qty_step, guess * 2.0), qty_step)
             val = calc_pbr_if_filled(
                 balance, psize, pprice, guess, entry_price, inverse, c_mult, qty_step
@@ -475,7 +492,7 @@ def find_qty_bringing_pbr_to_target(
         )
         print("pbr_limit", pbr_limit)
         print("best_guess", best_guess)
-    return best_guess[1]
+    return best_guess[1]  # type: ignore[no-any-return]
 
 
 @numba_njit
@@ -786,7 +803,7 @@ def calc_long_entry_grid(
     secondary_pbr_allocation,
     secondary_pprice_diff,
     eprice_exp_base=1.618034,
-) -> [(float, float, str)]:
+) -> List[Tuple[float, float, str]]:
     min_entry_qty = calc_min_entry_qty(highest_bid, inverse, qty_step, min_qty, min_cost)
     if do_long or psize > min_entry_qty:
         if psize == 0.0:
@@ -884,7 +901,7 @@ def calc_long_entry_grid(
                 return [(entry_qty, entry_price, "long_ientry")]
         if len(grid) == 0:
             return [(0.0, 0.0, "")]
-        entries = []
+        entries: List[Tuple[float, float, str]] = []
         for i in range(len(grid)):
             if grid[i][2] < psize * 1.05 or grid[i][1] > pprice * 0.9995:
                 continue

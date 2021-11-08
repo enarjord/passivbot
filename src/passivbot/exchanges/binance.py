@@ -4,6 +4,10 @@ import hmac
 import json
 import time
 import traceback
+from typing import Any
+from typing import Dict
+from typing import List
+from typing import Optional
 from urllib.parse import urlencode
 
 import aiohttp
@@ -18,18 +22,23 @@ from passivbot.utils.procedures import print_async_exception
 
 
 class BinanceBot(Bot):
-    def __init__(self, config: dict):
+    def __init__(self, config: Dict[str, Any]):
         self.exchange = "binance"
         super().__init__(config)
         self.session = aiohttp.ClientSession()
-        self.base_endpoint = ""
-        self.headers = {"X-MBX-APIKEY": self.key}
+        self.base_endpoint: str = ""
+        self.headers: Dict[str, str] = {"X-MBX-APIKEY": self.key}
 
-    async def public_get(self, url: str, params: dict = {}, base_endpoint=None) -> dict:
+    async def public_get(
+        self,
+        url: str,
+        params: Optional[Any] = None,
+        base_endpoint: Optional[str] = None,
+    ) -> Dict[str, Any]:
         try:
             async with self.session.get(
                 (self.base_endpoint if base_endpoint is None else base_endpoint) + url,
-                params=params,
+                params=params or {},
             ) as response:
                 result = await response.text()
             return json.loads(result)
@@ -38,7 +47,11 @@ class BinanceBot(Bot):
             traceback.print_exc()
             return {}
 
-    async def private_(self, type_: str, base_endpoint: str, url: str, params: dict = {}) -> dict:
+    async def private_(
+        self, type_: str, base_endpoint: str, url: str, params: Optional[Any] = None
+    ) -> Dict[str, Any]:
+        if params is None:
+            params = {}
         try:
             timestamp = int(time.time() * 1000)
             params.update({"timestamp": timestamp, "recvWindow": 5000})
@@ -61,22 +74,36 @@ class BinanceBot(Bot):
             traceback.print_exc()
             return {}
 
-    async def private_get(self, url: str, params: dict = {}, base_endpoint: str = None) -> dict:
+    async def private_get(
+        self,
+        url: str,
+        params: Optional[Any] = None,
+        base_endpoint: Optional[str] = None,
+    ) -> Dict[str, Any]:
         return await self.private_(
             "get", self.base_endpoint if base_endpoint is None else base_endpoint, url, params
         )
 
-    async def private_post(self, url: str, params: dict = {}, base_endpoint: str = None) -> dict:
+    async def private_post(
+        self, url: str, params: Optional[Any] = None, base_endpoint: Optional[str] = None
+    ) -> Dict[str, Any]:
         return await self.private_(
             "post", self.base_endpoint if base_endpoint is None else base_endpoint, url, params
         )
 
-    async def private_put(self, url: str, params: dict = {}, base_endpoint: str = None) -> dict:
+    async def private_put(
+        self,
+        url: str,
+        params: Optional[Any] = None,
+        base_endpoint: Optional[str] = None,
+    ) -> Dict[str, Any]:
         return await self.private_(
             "put", self.base_endpoint if base_endpoint is None else base_endpoint, url, params
         )
 
-    async def private_delete(self, url: str, params: dict = {}, base_endpoint: str = None) -> dict:
+    async def private_delete(
+        self, url: str, params: Optional[Any] = None, base_endpoint: Optional[str] = None
+    ) -> Dict[str, Any]:
         return await self.private_(
             "delete", self.base_endpoint if base_endpoint is None else base_endpoint, url, params
         )
@@ -223,7 +250,7 @@ class BinanceBot(Bot):
         self.ob = [float(ticker["bidPrice"]), float(ticker["askPrice"])]
         self.price = np.random.choice(self.ob)
 
-    async def fetch_open_orders(self) -> [dict]:
+    async def fetch_open_orders(self) -> List[Dict[str, Any]]:
         return [
             {
                 "order_id": int(e["orderId"]),
@@ -238,7 +265,7 @@ class BinanceBot(Bot):
             for e in await self.private_get(self.endpoints["open_orders"], {"symbol": self.symbol})
         ]
 
-    async def fetch_position(self) -> dict:
+    async def fetch_position(self) -> Dict[str, Any]:
         positions, balance = await asyncio.gather(
             self.private_get(
                 self.endpoints["position"],
@@ -278,7 +305,7 @@ class BinanceBot(Bot):
                 break
         return position
 
-    async def execute_order(self, order: dict) -> dict:
+    async def execute_order(self, order: Dict[str, Any]) -> Dict[str, Any]:
         o = None
         try:
             params = {
@@ -311,7 +338,7 @@ class BinanceBot(Bot):
             traceback.print_exc()
             return {}
 
-    async def execute_cancellation(self, order: dict) -> dict:
+    async def execute_cancellation(self, order: Dict[str, Any]) -> Dict[str, Any]:
         cancellation = None
         try:
             cancellation = await self.private_delete(
@@ -338,9 +365,9 @@ class BinanceBot(Bot):
         self,
         symbol=None,
         limit: int = 1000,
-        from_id: int = None,
-        start_time: int = None,
-        end_time: int = None,
+        from_id: Optional[int] = None,
+        start_time: Optional[int] = None,
+        end_time: Optional[int] = None,
     ):
         params = {
             "symbol": self.symbol if symbol is None else symbol,
@@ -380,12 +407,12 @@ class BinanceBot(Bot):
 
     async def get_all_income(
         self,
-        symbol: str = None,
-        start_time: int = None,
+        symbol: Optional[str] = None,
+        start_time: Optional[int] = None,
         income_type: str = "realized_pnl",
-        end_time: int = None,
+        end_time: Optional[int] = None,
     ):
-        income = []
+        income: List[Dict[str, Any]] = []
         while True:
             fetched = await self.fetch_income(
                 symbol=symbol, start_time=start_time, income_type=income_type, limit=1000
@@ -402,11 +429,11 @@ class BinanceBot(Bot):
 
     async def fetch_income(
         self,
-        symbol: str = None,
-        income_type: str = None,
+        symbol: Optional[str] = None,
+        income_type: Optional[str] = None,
         limit: int = 1000,
-        start_time: int = None,
-        end_time: int = None,
+        start_time: Optional[int] = None,
+        end_time: Optional[int] = None,
     ):
         params = {"limit": limit}
         if symbol is not None:
@@ -448,9 +475,9 @@ class BinanceBot(Bot):
 
     async def fetch_ticks(
         self,
-        from_id: int = None,
-        start_time: int = None,
-        end_time: int = None,
+        from_id: Optional[int] = None,
+        start_time: Optional[int] = None,
+        end_time: Optional[int] = None,
         do_print: bool = True,
     ):
         params = {"symbol": self.symbol, "limit": 1000}
@@ -492,11 +519,20 @@ class BinanceBot(Bot):
                 print_(["fetched no new ticks", self.symbol])
         return ticks
 
-    async def fetch_ticks_time(self, start_time: int, end_time: int = None, do_print: bool = True):
+    async def fetch_ticks_time(
+        self,
+        start_time: int,
+        end_time: Optional[int] = None,
+        do_print: bool = True,
+    ):
         return await self.fetch_ticks(start_time=start_time, end_time=end_time, do_print=do_print)
 
     async def fetch_ohlcvs(
-        self, symbol: str = None, start_time: int = None, interval="1m", limit=1500
+        self,
+        symbol: Optional[str] = None,
+        start_time: Optional[int] = None,
+        interval="1m",
+        limit=1500,
     ):
         # m -> minutes; h -> hours; d -> days; w -> weeks; M -> months
         interval_map = {
@@ -539,13 +575,18 @@ class BinanceBot(Bot):
             print("error fetching ohlcvs", fetched, e)
             traceback.print_exc()
 
-    async def transfer(self, type_: str, amount: float, asset: str = "USDT"):
+    async def transfer(
+        self,
+        type_: str,
+        amount: float,
+        asset: str = "USDT",
+    ):
         params = {"type": type_.upper(), "amount": amount, "asset": asset}
         return await self.private_post(
             self.endpoints["transfer"], params, base_endpoint=self.spot_base_endpoint
         )
 
-    def standardize_market_stream_event(self, data: dict) -> [dict]:
+    def standardize_market_stream_event(self, data: dict) -> List[Dict[str, Any]]:
         try:
             return [
                 {
@@ -573,7 +614,7 @@ class BinanceBot(Bot):
             traceback.print_exc()
             print_(["error fetching listen key", e])
 
-    def standardize_user_stream_event(self, event: dict) -> dict:
+    def standardize_user_stream_event(self, event: Dict[str, Any]) -> Dict[str, Any]:
         standardized = {}
         if "e" in event:
             if event["e"] == "ACCOUNT_UPDATE":

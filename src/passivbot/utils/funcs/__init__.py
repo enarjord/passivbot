@@ -16,4 +16,4 @@ if "NOJIT" in os.environ and os.environ["NOJIT"] == "true":
 
 else:
     print("using numba")
-    from numba import njit as numba_njit
+    from numba import njit as numba_njit  # type: ignore[no-redef]

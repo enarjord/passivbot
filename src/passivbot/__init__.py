@@ -3,7 +3,8 @@ try:
 except ImportError:  # pragma: no cover
     __version__ = "0.0.0.not-installed"
     try:
-        from importlib.metadata import version, PackageNotFoundError
+        from importlib.metadata import version  # type: ignore [attr-defined]
+        from importlib.metadata import PackageNotFoundError  # type: ignore [attr-defined]
 
         try:
             __version__ = version("passivbot")

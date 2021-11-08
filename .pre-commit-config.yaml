@@ -88,7 +88,7 @@ repos:
       - id: mypy
         name: Run mypy against source
         files: ^src/.*\.py$
-        args: [--strict]
+        args: []
         additional_dependencies:
           - types-attrs
           - types-setuptools

@@ -1,6 +1,11 @@
 import datetime
 import pprint
 from collections import OrderedDict
+from typing import Any
+from typing import Dict
+from typing import List
+from typing import Optional
+from typing import Tuple
 
 import numpy as np
 import pandas as pd
@@ -10,8 +15,9 @@ from passivbot.utils.funcs.njit import qty_to_cost
 from passivbot.utils.funcs.njit import round_dynamic
 
 
-def format_float(num):
-    return np.format_float_positional(num, trim="-")
+def format_float(num) -> str:
+    formatted: str = np.format_float_positional(num, trim="-")
+    return formatted
 
 
 def compress_float(n: float, d: int) -> str:
@@ -62,7 +68,7 @@ def get_xk_keys():
     ]
 
 
-def create_xk(config: dict) -> dict:
+def create_xk(config: Dict[str, Any]) -> Dict[str, Any]:
     xk = {}
     config_ = config.copy()
     if "spot" in config_["market_type"]:
@@ -98,7 +104,7 @@ def numpyize(x):
         return x
 
 
-def denumpyize(x):
+def denumpyize(x: Any) -> Any:
     if type(x) in [np.float64, np.float32, np.float16]:
         return float(x)
     elif type(x) in [np.int64, np.int32, np.int16, np.int8]:
@@ -159,14 +165,14 @@ def get_utc_now_timestamp() -> int:
     return int(datetime.datetime.now(datetime.timezone.utc).timestamp() * 1000)
 
 
-def config_pretty_str(config: dict):
+def config_pretty_str(config: Dict[str, Any]):
     pretty_str = pprint.pformat(config)
     for r in [("'", '"'), ("True", "true"), ("False", "false")]:
         pretty_str = pretty_str.replace(*r)
     return pretty_str
 
 
-def candidate_to_live_config(candidate: dict) -> dict:
+def candidate_to_live_config(candidate: Dict[str, Any]) -> Any:
     packed = pack_config(candidate)
     live_config = get_template_live_config()
     sides = ["long", "shrt"]
@@ -227,7 +233,7 @@ def unpack_config(d):
 
 def pack_config(d):
     while any("$" in k for k in d):
-        new = {}
+        new: Dict[str, Any] = {}
         for k, v in denumpyize(d).items():
             if "$" in k:
                 ks = k.split("$")
@@ -280,8 +286,10 @@ def sort_dict_keys(d):
 
 
 def filter_orders(
-    actual_orders: [dict], ideal_orders: [dict], keys: [str] = ("symbol", "side", "qty", "price")
-) -> ([dict], [dict]):
+    actual_orders: List[Dict[Any, Any]],
+    ideal_orders: List[Dict[Any, Any]],
+    keys: Tuple[str, ...] = ("symbol", "side", "qty", "price"),
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     # returns (orders_to_delete, orders_to_create)
 
     if not actual_orders:
@@ -302,7 +310,7 @@ def filter_orders(
     return actual_orders, orders_to_create
 
 
-def get_dummy_settings(config: dict):
+def get_dummy_settings(config: Dict[str, Any]) -> Dict[str, Any]:
     dummy_settings = get_template_live_config()
     dummy_settings.update({k: 1.0 for k in get_xk_keys()})
     dummy_settings.update(
@@ -317,7 +325,7 @@ def get_dummy_settings(config: dict):
     return {**config, **dummy_settings}
 
 
-def flatten(lst: list) -> list:
+def flatten(lst: List[Any]) -> List[Any]:
     return [y for x in lst for y in x]
 
 
@@ -356,7 +364,11 @@ def get_template_live_config():
     }
 
 
-def analyze_fills(fills: list, stats: list, config: dict) -> (pd.DataFrame, pd.DataFrame, dict):
+def analyze_fills(
+    fills: List[Any],
+    stats: List[Any],
+    config: Dict[str, Any],
+) -> Tuple[pd.DataFrame, pd.DataFrame, Dict[str, Any]]:
     sdf = pd.DataFrame(
         stats,
         columns=[
@@ -485,7 +497,11 @@ def calc_pprice_from_fills(coin_balance, fills, n_fills_limit=100):
     return pprice
 
 
-def get_position_fills(long_psize: float, shrt_psize: float, fills: [dict]) -> ([dict], [dict]):
+def get_position_fills(
+    long_psize: float,
+    shrt_psize: float,
+    fills: List[Dict[str, Any]],
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """
     assumes fills are sorted old to new
     returns fills since and including initial entry
@@ -541,7 +557,7 @@ def nullify(x):
         return 0.0
 
 
-def spotify_config(config: dict, nullify_shrt=True) -> dict:
+def spotify_config(config: Dict[str, Any], nullify_shrt: bool = True) -> Dict[str, Any]:
     spotified = config.copy()
 
     spotified["spot"] = True
@@ -595,7 +611,10 @@ def floatify(xs):
 
 
 def get_daily_from_income(
-    income: [dict], balance: float, start_time: int = None, end_time: int = None
+    income: List[Dict[str, Any]],
+    balance: float,
+    start_time: Optional[int] = None,
+    end_time: Optional[int] = None,
 ):
     if start_time is None:
         start_time = income[0]["timestamp"]
