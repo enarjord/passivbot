@@ -18,10 +18,10 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y libxml2 libxml2-dev libxslt-dev
     - uses: actions/cache@v1
-      # Skip running mypy, there's just too many errors to fix right now
-      env:
-        SKIP: mypy
       with:
         path: ~/.cache/pre-commit
         key: pre-commit|${{ env.PY }}|${{ hashFiles('.pre-commit-config.yaml') }}
     - uses: pre-commit/action@v1.0.1
+      # Skip running mypy, there's just too many errors to fix right now
+      env:
+        SKIP: mypy-src,mypy-tests

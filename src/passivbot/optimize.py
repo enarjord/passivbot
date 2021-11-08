@@ -409,8 +409,17 @@ async def execute_optimize(config):
         plot_wrap(pack_config(config), data)
 
 
-async def _main():
-    parser = argparse.ArgumentParser(prog="Optimize", description="Optimize passivbot config.")
+async def _main(args: argparse.Namespace) -> None:
+    config = await prepare_optimize_config(args)
+    await execute_optimize(config)
+
+
+def main(args: argparse.Namespace) -> None:
+    asyncio.run(_main(args))
+
+
+def setup_parser(subparsers: argparse._SubParsersAction) -> None:
+    parser = subparsers.add_parser("optimize", help="Optimize PassivBot config")
     parser.add_argument(
         "-o",
         "--optimize_config",
@@ -438,15 +447,5 @@ async def _main():
         default=None,
         help="n optimize iters",
     )
-    parser = add_argparse_args(parser)
-    args = parser.parse_args()
-    config = await prepare_optimize_config(args)
-    await execute_optimize(config)
-
-
-def main():
-    asyncio.run(_main())
-
-
-if __name__ == "__main__":
-    main()
+    add_argparse_args(parser)
+    parser.set_defaults(func=main)

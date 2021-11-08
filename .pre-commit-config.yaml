@@ -86,6 +86,7 @@ repos:
     rev: v0.910-1
     hooks:
       - id: mypy
+        alias: mypy-src
         name: Run mypy against source
         files: ^src/.*\.py$
         args: []
@@ -100,6 +101,7 @@ repos:
     rev: v0.910-1
     hooks:
       - id: mypy
+        alias: mypy-tests
         name: Run mypy against tests
         files: ^tests/.*\.py$
         args: []

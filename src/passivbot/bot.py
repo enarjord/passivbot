@@ -13,7 +13,6 @@ from typing import Union
 
 import websockets
 
-from passivbot.interact.telegram_bot import Telegram
 from passivbot.utils.funcs.njit import calc_diff
 from passivbot.utils.funcs.njit import calc_long_close_grid
 from passivbot.utils.funcs.njit import calc_long_entry_grid
@@ -701,39 +700,15 @@ async def start_bot(bot):
 
 
 async def _start_telegram(account: dict, bot: Bot):
+    # Deferred import due to circular import issues
+    from passivbot.interact.telegram_bot import Telegram
+
     telegram = Telegram(config=account["telegram"], bot=bot, loop=asyncio.get_event_loop())
     telegram.log_start()
     return telegram
 
 
-async def _main() -> None:
-    parser = argparse.ArgumentParser(prog="passivbot", description="run passivbot")
-    parser.add_argument("user", type=str, help="user/account_name defined in api-keys.json")
-    parser.add_argument("symbol", type=str, help="symbol to trade")
-    parser.add_argument("live_config_path", type=str, help="live config to use")
-    parser.add_argument(
-        "-m",
-        "--market_type",
-        type=str,
-        required=False,
-        dest="market_type",
-        default=None,
-        help="specify whether spot or futures (default), overriding value from backtest config",
-    )
-    parser.add_argument(
-        "-gs", "--graceful_stop", action="store_true", help="if true, disable long and short"
-    )
-    parser.add_argument(
-        "-ab",
-        "--assigned_balance",
-        type=float,
-        required=False,
-        dest="assigned_balance",
-        default=None,
-        help="add assigned_balance to live config",
-    )
-
-    args = parser.parse_args()
+async def _main(args: argparse.Namespace) -> None:
     try:
         accounts = json.load(open("api-keys.json"))
     except Exception as e:
@@ -796,9 +771,9 @@ async def _main() -> None:
     await bot.session.close()
 
 
-def main():
+def main(args: argparse.Namespace) -> None:
     try:
-        asyncio.run(_main())
+        asyncio.run(_main(args))
     except Exception as e:
         print(f"\nThere was an error starting the bot: {e}")
         traceback.print_exc()
@@ -807,5 +782,36 @@ def main():
         os._exit(0)
 
 
-if __name__ == "__main__":
-    main()
+def setup_parser(subparsers: argparse._SubParsersAction) -> None:
+    parser: argparse.ArgumentParser = subparsers.add_parser("live", help="Run PassivBot Live")
+    parser.add_argument("user", type=str, help="user/account_name defined in api-keys.json")
+    parser.add_argument("symbol", type=str, help="symbol to trade")
+    parser.add_argument("live_config_path", type=str, help="live config to use")
+    parser.add_argument(
+        "-m",
+        "--market_type",
+        "--market-type",
+        type=str,
+        required=False,
+        dest="market_type",
+        default=None,
+        help="specify whether spot or futures (default), overriding value from backtest config",
+    )
+    parser.add_argument(
+        "-gs",
+        "--graceful_stop",
+        "--graceful-stop",
+        action="store_true",
+        help="if true, disable long and short",
+    )
+    parser.add_argument(
+        "-ab",
+        "--assigned_balance",
+        "--assigned-balance",
+        type=float,
+        required=False,
+        dest="assigned_balance",
+        default=None,
+        help="add assigned_balance to live config",
+    )
+    parser.set_defaults(func=main)

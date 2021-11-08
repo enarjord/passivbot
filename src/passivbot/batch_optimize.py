@@ -1,13 +1,12 @@
+import argparse
 import os
 import shutil
 import subprocess
-import sys
 
-import passivbot.optimize
 from passivbot.utils.procedures import make_get_filepath
 
 
-def main():
+def main(args: argparse.Namespace) -> None:
     tokens = [
         "BTS",
         "LTC",
@@ -64,12 +63,13 @@ def main():
         }
         for symbol in symbols
     ]
+    passivbot_cli_path = shutil.which("passivbot")
     for kwargs in kwargs_list:
-        args = [sys.executable, passivbot.optimize.__file__]
+        cmd_args = [passivbot_cli_path, "optimize"]
         for key in kwargs:
-            args.extend([f"--{key}", f"{kwargs[key]}"])
-        print(args)
-        subprocess.run(args, shell=False, check=True)
+            cmd_args.extend([f"--{key}", f"{kwargs[key]}"])
+        print(cmd_args)
+        subprocess.run(cmd_args, shell=False, check=True)
         try:
             d = f'backtests/{exchange}/{kwargs["symbol"]}/plots/'
             ds = sorted(f for f in os.listdir(d) if "20" in f)
@@ -80,5 +80,6 @@ def main():
             print("error", kwargs["symbol"], e)
 
 
-if __name__ == "__main__":
-    main()
+def setup_parser(subparsers: argparse._SubParsersAction) -> None:
+    parser = subparsers.add_parser("batch-optimize", help="Batch Optimize PassivBot config")
+    parser.set_defaults(func=main)

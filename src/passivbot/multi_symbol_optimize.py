@@ -180,39 +180,7 @@ class FuncWrap:
         dump_live_config(self.xs_to_config(xs), self.best_conf_fname)
 
 
-async def _main():
-    parser = argparse.ArgumentParser(
-        prog="Optimize multi symbol", description="Optimize passivbot config multi symbol"
-    )
-    parser.add_argument(
-        "-o",
-        "--optimize_config",
-        type=str,
-        required=False,
-        dest="optimize_config_path",
-        default="configs/optimize/multi_symbol.hjson",
-        help="optimize config hjson file",
-    )
-    parser.add_argument(
-        "-t",
-        "--start",
-        type=str,
-        required=False,
-        dest="starting_configs",
-        default=None,
-        help="start with given live configs.  single json file or dir with multiple json files",
-    )
-    parser.add_argument(
-        "-i",
-        "--iters",
-        type=int,
-        required=False,
-        dest="iters",
-        default=None,
-        help="n optimize iters",
-    )
-    parser = add_argparse_args(parser)
-    args = parser.parse_args()
+async def _main(args: argparse.Namespace) -> None:
     args.symbol = "BTCUSDT"  # dummy symbol
     config = await prepare_optimize_config(args)
     config.update(get_template_live_config())
@@ -273,9 +241,41 @@ async def _main():
     return
 
 
-def main():
-    asyncio.run(_main())
+def main(args: argparse.Namespace) -> None:
+    asyncio.run(_main(args))
 
 
-if __name__ == "__main__":
-    main()
+def setup_parser(subparsers: argparse._SubParsersAction) -> None:
+    parser = subparsers.add_parser(
+        "multi-symbol-optimize", help="Optimize passivbot config multi symbol"
+    )
+    parser.add_argument(
+        "-o",
+        "--optimize_config",
+        "--optimize-config",
+        type=str,
+        required=False,
+        dest="optimize_config_path",
+        default="configs/optimize/multi_symbol.hjson",
+        help="optimize config hjson file",
+    )
+    parser.add_argument(
+        "-t",
+        "--start",
+        type=str,
+        required=False,
+        dest="starting_configs",
+        default=None,
+        help="start with given live configs.  single json file or dir with multiple json files",
+    )
+    parser.add_argument(
+        "-i",
+        "--iters",
+        type=int,
+        required=False,
+        dest="iters",
+        default=None,
+        help="n optimize iters",
+    )
+    add_argparse_args(parser)
+    parser.set_defaults(func=main)
