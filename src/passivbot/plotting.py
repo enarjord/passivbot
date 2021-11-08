@@ -8,10 +8,11 @@ from colorama import Fore
 from colorama import init
 from prettytable import PrettyTable
 
-from passivbot.njit_funcs import round_up
 from passivbot.procedures import dump_live_config
-from passivbot.pure_funcs import denumpyize
-from passivbot.pure_funcs import round_dynamic
+from passivbot.utils.funcs.njit import round_dynamic
+from passivbot.utils.funcs.njit import round_up
+from passivbot.utils.funcs.pure import denumpyize
+from passivbot.utils.procedures import dump_live_config
 
 
 def dump_plots(result: dict, fdf: pd.DataFrame, sdf: pd.DataFrame, df: pd.DataFrame):

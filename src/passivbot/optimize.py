@@ -21,16 +21,16 @@ from ray.tune.suggest.nevergrad import NevergradSearch
 from passivbot.backtest import backtest
 from passivbot.backtest import plot_wrap
 from passivbot.downloader import Downloader
-from passivbot.njit_funcs import round_dynamic
 from passivbot.procedures import add_argparse_args
 from passivbot.procedures import load_live_config
 from passivbot.procedures import prepare_optimize_config
-from passivbot.pure_funcs import analyze_fills
-from passivbot.pure_funcs import get_template_live_config
-from passivbot.pure_funcs import pack_config
-from passivbot.pure_funcs import ts_to_date
-from passivbot.pure_funcs import unpack_config
 from passivbot.reporter import LogReporter
+from passivbot.utils.funcs.njit import round_dynamic
+from passivbot.utils.funcs.pure import analyze_fills
+from passivbot.utils.funcs.pure import get_template_live_config
+from passivbot.utils.funcs.pure import pack_config
+from passivbot.utils.funcs.pure import ts_to_date
+from passivbot.utils.funcs.pure import unpack_config
 
 
 os.environ["TUNE_GLOBAL_CHECKPOINT_S"] = "240"

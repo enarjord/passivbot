@@ -16,15 +16,15 @@ from passivbot.procedures import load_live_config
 from passivbot.procedures import make_get_filepath
 from passivbot.procedures import prepare_backtest_config
 from passivbot.procedures import prepare_optimize_config
-from passivbot.pure_funcs import analyze_fills
-from passivbot.pure_funcs import candidate_to_live_config
-from passivbot.pure_funcs import denumpyize
-from passivbot.pure_funcs import get_template_live_config
-from passivbot.pure_funcs import numpyize
-from passivbot.pure_funcs import pack_config
-from passivbot.pure_funcs import round_values
-from passivbot.pure_funcs import ts_to_date
-from passivbot.pure_funcs import unpack_config
+from passivbot.utils.funcs.pure import analyze_fills
+from passivbot.utils.funcs.pure import candidate_to_live_config
+from passivbot.utils.funcs.pure import denumpyize
+from passivbot.utils.funcs.pure import get_template_live_config
+from passivbot.utils.funcs.pure import numpyize
+from passivbot.utils.funcs.pure import pack_config
+from passivbot.utils.funcs.pure import round_values
+from passivbot.utils.funcs.pure import ts_to_date
+from passivbot.utils.funcs.pure import unpack_config
 
 
 def backtest_single_wrap(config_: dict):

@@ -20,16 +20,17 @@ from telegram.ext import Filters
 from telegram.ext import MessageHandler
 from telegram.ext import Updater
 
-from passivbot.njit_funcs import calc_diff
-from passivbot.njit_funcs import calc_long_pnl
-from passivbot.njit_funcs import calc_shrt_pnl
-from passivbot.njit_funcs import round_
 from passivbot.procedures import load_live_config
-from passivbot.pure_funcs import compress_float
-from passivbot.pure_funcs import config_pretty_str
-from passivbot.pure_funcs import denumpyize
-from passivbot.pure_funcs import get_daily_from_income
-from passivbot.pure_funcs import round_dynamic
+from passivbot.utils.funcs.njit import calc_diff
+from passivbot.utils.funcs.njit import calc_long_pnl
+from passivbot.utils.funcs.njit import calc_shrt_pnl
+from passivbot.utils.funcs.njit import round_
+from passivbot.utils.funcs.njit import round_dynamic
+from passivbot.utils.funcs.pure import compress_float
+from passivbot.utils.funcs.pure import config_pretty_str
+from passivbot.utils.funcs.pure import denumpyize
+from passivbot.utils.funcs.pure import get_daily_from_income
+from passivbot.utils.procedures import load_live_config
 
 try:
     import git

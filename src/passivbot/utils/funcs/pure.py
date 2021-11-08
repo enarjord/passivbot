@@ -6,8 +6,8 @@ import numpy as np
 import pandas as pd
 from dateutil import parser
 
-from passivbot.njit_funcs import qty_to_cost
-from passivbot.njit_funcs import round_dynamic
+from passivbot.utils.funcs.njit import qty_to_cost
+from passivbot.utils.funcs.njit import round_dynamic
 
 
 def format_float(num):

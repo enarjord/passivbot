@@ -15,9 +15,9 @@ import numpy as np
 from passivbot.bot import Bot
 from passivbot.procedures import print_
 from passivbot.procedures import print_async_exception
-from passivbot.pure_funcs import date_to_ts
-from passivbot.pure_funcs import sort_dict_keys
-from passivbot.pure_funcs import ts_to_date
+from passivbot.utils.funcs.pure import date_to_ts
+from passivbot.utils.funcs.pure import sort_dict_keys
+from passivbot.utils.funcs.pure import ts_to_date
 
 
 def first_capitalized(s: str):

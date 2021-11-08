@@ -10,21 +10,21 @@ import aiohttp
 import numpy as np
 
 from passivbot.bot import Bot
-from passivbot.njit_funcs import calc_diff
-from passivbot.njit_funcs import calc_long_pnl
-from passivbot.njit_funcs import calc_min_entry_qty
-from passivbot.njit_funcs import calc_upnl
-from passivbot.njit_funcs import qty_to_cost
-from passivbot.njit_funcs import round_dn
-from passivbot.njit_funcs import round_up
 from passivbot.procedures import print_
 from passivbot.procedures import print_async_exception
-from passivbot.pure_funcs import calc_long_pprice
-from passivbot.pure_funcs import format_float
-from passivbot.pure_funcs import get_position_fills
-from passivbot.pure_funcs import sort_dict_keys
-from passivbot.pure_funcs import spotify_config
-from passivbot.pure_funcs import ts_to_date
+from passivbot.utils.funcs.njit import calc_diff
+from passivbot.utils.funcs.njit import calc_long_pnl
+from passivbot.utils.funcs.njit import calc_min_entry_qty
+from passivbot.utils.funcs.njit import calc_upnl
+from passivbot.utils.funcs.njit import qty_to_cost
+from passivbot.utils.funcs.njit import round_dn
+from passivbot.utils.funcs.njit import round_up
+from passivbot.utils.funcs.pure import calc_long_pprice
+from passivbot.utils.funcs.pure import format_float
+from passivbot.utils.funcs.pure import get_position_fills
+from passivbot.utils.funcs.pure import sort_dict_keys
+from passivbot.utils.funcs.pure import spotify_config
+from passivbot.utils.funcs.pure import ts_to_date
 
 
 class BinanceBotSpot(Bot):

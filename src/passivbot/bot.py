@@ -14,21 +14,21 @@ from typing import Union
 import websockets
 from telegram_bot import Telegram
 
-from passivbot.njit_funcs import calc_diff
-from passivbot.njit_funcs import calc_long_close_grid
-from passivbot.njit_funcs import calc_long_entry_grid
-from passivbot.njit_funcs import calc_upnl
-from passivbot.njit_funcs import qty_to_cost
-from passivbot.njit_funcs import round_
 from passivbot.procedures import load_exchange_key_secret
 from passivbot.procedures import load_live_config
 from passivbot.procedures import make_get_filepath
 from passivbot.procedures import print_
-from passivbot.pure_funcs import create_xk
-from passivbot.pure_funcs import denumpyize
-from passivbot.pure_funcs import filter_orders
-from passivbot.pure_funcs import round_dynamic
-from passivbot.pure_funcs import spotify_config
+from passivbot.utils.funcs.njit import calc_diff
+from passivbot.utils.funcs.njit import calc_long_close_grid
+from passivbot.utils.funcs.njit import calc_long_entry_grid
+from passivbot.utils.funcs.njit import calc_upnl
+from passivbot.utils.funcs.njit import qty_to_cost
+from passivbot.utils.funcs.njit import round_
+from passivbot.utils.funcs.njit import round_dynamic
+from passivbot.utils.funcs.pure import create_xk
+from passivbot.utils.funcs.pure import denumpyize
+from passivbot.utils.funcs.pure import filter_orders
+from passivbot.utils.funcs.pure import spotify_config
 
 logging.getLogger("telegram").setLevel(logging.CRITICAL)
 

@@ -8,18 +8,18 @@ import numpy as np
 import pandas as pd
 
 from passivbot.downloader import Downloader
-from passivbot.njit_funcs import njit_backtest
-from passivbot.njit_funcs import round_
 from passivbot.plotting import dump_plots
 from passivbot.procedures import add_argparse_args
 from passivbot.procedures import load_live_config
 from passivbot.procedures import make_get_filepath
 from passivbot.procedures import prepare_backtest_config
-from passivbot.pure_funcs import analyze_fills
-from passivbot.pure_funcs import create_xk
-from passivbot.pure_funcs import denumpyize
-from passivbot.pure_funcs import spotify_config
-from passivbot.pure_funcs import ts_to_date
+from passivbot.utils.funcs.njit import njit_backtest
+from passivbot.utils.funcs.njit import round_
+from passivbot.utils.funcs.pure import analyze_fills
+from passivbot.utils.funcs.pure import create_xk
+from passivbot.utils.funcs.pure import denumpyize
+from passivbot.utils.funcs.pure import spotify_config
+from passivbot.utils.funcs.pure import ts_to_date
 
 
 def backtest(config: dict, data: np.ndarray, do_print=False) -> (list, bool):

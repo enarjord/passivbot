@@ -14,7 +14,6 @@ import dateutil.parser
 import numpy as np
 import pandas as pd
 
-from passivbot.njit_funcs import calc_samples
 from passivbot.procedures import add_argparse_args
 from passivbot.procedures import create_binance_bot
 from passivbot.procedures import create_binance_bot_spot
@@ -23,8 +22,9 @@ from passivbot.procedures import make_get_filepath
 from passivbot.procedures import prepare_backtest_config
 from passivbot.procedures import print_
 from passivbot.procedures import utc_ms
-from passivbot.pure_funcs import get_dummy_settings
-from passivbot.pure_funcs import ts_to_date
+from passivbot.utils.funcs.njit import calc_samples
+from passivbot.utils.funcs.pure import get_dummy_settings
+from passivbot.utils.funcs.pure import ts_to_date
 
 
 class Downloader:

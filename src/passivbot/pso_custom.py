@@ -20,14 +20,14 @@ from passivbot.procedures import add_argparse_args
 from passivbot.procedures import dump_live_config
 from passivbot.procedures import get_starting_configs
 from passivbot.procedures import make_get_filepath
-from passivbot.pure_funcs import denanify
-from passivbot.pure_funcs import denumpyize
-from passivbot.pure_funcs import get_template_live_config
-from passivbot.pure_funcs import numpyize
-from passivbot.pure_funcs import pack_config
-from passivbot.pure_funcs import round_dynamic
-from passivbot.pure_funcs import ts_to_date
-from passivbot.pure_funcs import unpack_config
+from passivbot.utils.funcs.njit import round_dynamic
+from passivbot.utils.funcs.pure import denanify
+from passivbot.utils.funcs.pure import denumpyize
+from passivbot.utils.funcs.pure import get_template_live_config
+from passivbot.utils.funcs.pure import numpyize
+from passivbot.utils.funcs.pure import pack_config
+from passivbot.utils.funcs.pure import ts_to_date
+from passivbot.utils.funcs.pure import unpack_config
 
 
 def pso_multiprocess(

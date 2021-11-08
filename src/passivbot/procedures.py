@@ -8,14 +8,14 @@ import hjson
 import numpy as np
 import pandas as pd
 
-from passivbot.njit_funcs import calc_samples
-from passivbot.pure_funcs import candidate_to_live_config
-from passivbot.pure_funcs import config_pretty_str
-from passivbot.pure_funcs import date_to_ts
-from passivbot.pure_funcs import get_dummy_settings
-from passivbot.pure_funcs import get_template_live_config
-from passivbot.pure_funcs import numpyize
-from passivbot.pure_funcs import ts_to_date
+from passivbot.utils.funcs.njit import calc_samples
+from passivbot.utils.funcs.pure import candidate_to_live_config
+from passivbot.utils.funcs.pure import config_pretty_str
+from passivbot.utils.funcs.pure import date_to_ts
+from passivbot.utils.funcs.pure import get_dummy_settings
+from passivbot.utils.funcs.pure import get_template_live_config
+from passivbot.utils.funcs.pure import numpyize
+from passivbot.utils.funcs.pure import ts_to_date
 
 
 def load_live_config(live_config_path: str) -> dict:
