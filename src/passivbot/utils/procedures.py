@@ -239,7 +239,6 @@ async def create_bybit_bot(config: dict):
 
 
 def add_argparse_args(parser):
-    parser.add_argument("--nojit", help="disable numba", action="store_true")
     parser.add_argument(
         "-b",
         "--backtest_config",
