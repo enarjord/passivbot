@@ -1,5 +1,6 @@
 import functools
 import os
+import weakref
 from typing import Any
 from typing import Callable
 from typing import cast
@@ -19,13 +20,16 @@ def deferred_njit(func: F) -> F:
 
     This allows disabling njit compilation through a CLI flag
     """
+    jit_cache: weakref.WeakValueDictionary[str, F] = weakref.WeakValueDictionary()
 
     @functools.wraps(func)
     def wrapper(*args: Any, **kwargs: Any):
-        if os.environ.get("NOJIT", "false") == "false":
-            nonlocal func
-            func = numba.njit(func)
-        return func(*args, **kwargs)
+        if func.__name__ not in jit_cache:
+            if os.environ.get("NOJIT", "false") == "false":
+                jit_cache[func.__name__] = numba.njit(func)
+            else:
+                jit_cache[func.__name__] = func
+        return jit_cache[func.__name__](*args, **kwargs)
 
     return cast(F, wrapper)
 
