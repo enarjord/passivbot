@@ -6,8 +6,8 @@ import os
 import time
 
 import numpy as np
-from backtest import backtest
 
+from passivbot.backtest import backtest
 from passivbot.downloader import Downloader
 from passivbot.utils.funcs.pure import analyze_fills
 from passivbot.utils.funcs.pure import candidate_to_live_config

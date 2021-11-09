@@ -1,10 +1,3 @@
-import os
-
-DEBUG: bool = os.environ.get("DEBUG", "").lower() in ("true", "1")
-
-if DEBUG:
-    os.environ["NOJIT"] = "true"
-
 try:
     from .version import __version__
 except ImportError:  # pragma: no cover
