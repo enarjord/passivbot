@@ -7,8 +7,6 @@ import passivbot.bot
 import passivbot.downloader
 import passivbot.multi_symbol_optimize
 import passivbot.optimize
-import passivbot.pso
-import passivbot.pso_custom
 from passivbot.version import __version__
 
 logging.getLogger("telegram").setLevel(logging.CRITICAL)
@@ -24,7 +22,8 @@ def main() -> None:
     passivbot.optimize.setup_parser(subparsers)
     passivbot.batch_optimize.setup_parser(subparsers)
     passivbot.multi_symbol_optimize.setup_parser(subparsers)
-    passivbot.pso.setup_parser(subparsers)
-    passivbot.pso_custom.setup_parser(subparsers)
 
-    parser.parse_args()
+    # Parse the CLI arguments
+    args: argparse.Namespace = parser.parse_args()
+    # Call the right sub-parser
+    args.func(args)
