@@ -17,3 +17,4 @@ mkdocs==1.2.1
 mkdocs-material==7.1.5
 pymdown-extensions==8.2
 psutil==5.8.0
+aionredis==1.3.0
