@@ -38,8 +38,8 @@ jobs:
       matrix:
         python-version:
           - '3.8'
-          - '3.9'
-          - '3.10'
+          # - '3.9'
+          # - '3.10'
 
     steps:
     - uses: actions/checkout@v2
@@ -87,8 +87,8 @@ jobs:
       matrix:
         python-version:
           - '3.8'
-          - '3.9'
-          - '3.10'
+          # - '3.9'
+          # - '3.10'
 
     steps:
     - uses: actions/checkout@v2
@@ -136,8 +136,8 @@ jobs:
       matrix:
         python-version:
           - '3.8'
-          - '3.9'
-          - '3.10'
+          # - '3.9'
+          # - '3.10'
 
     steps:
     - uses: actions/checkout@v2
