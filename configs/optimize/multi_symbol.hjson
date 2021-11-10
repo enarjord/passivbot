@@ -8,7 +8,7 @@
   n_cpus: 7
   iters: 10000
 
-  maximum_pa_closeness_mean_long: 0.03
+  maximum_pa_distance_mean_long: 0.03
 
   # top 42 volume symbols 2021-10-04 to 2021-10-24
   symbols: ["BTCUSDT", "ETHUSDT", "SOLUSDT", "1000SHIBUSDT", "AXSUSDT", "FTMUSDT", "XRPUSDT",

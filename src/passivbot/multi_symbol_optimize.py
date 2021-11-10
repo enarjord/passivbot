@@ -38,11 +38,11 @@ def backtest_single_wrap(config_: dict):
     try:
         fills, stats = backtest(config, ticks)
         fdf, sdf, analysis = analyze_fills(fills, stats, config)
-        pa_closeness = analysis["pa_closeness_mean_long"]
+        pa_distance = analysis["pa_distance_mean_long"]
         adg = analysis["average_daily_gain"]
-        score = adg * (min(1.0, config["maximum_pa_closeness_mean_long"] / pa_closeness) ** 2)
+        score = adg * (min(1.0, config["maximum_pa_distance_mean_long"] / pa_distance) ** 2)
         print(
-            f"backtested {config['symbol']: <12} pa closeness {analysis['pa_closeness_mean_long']:.6f} "
+            f"backtested {config['symbol']: <12} pa distance {analysis['pa_distance_mean_long']:.6f} "
             f"adg {adg:.6f} score {score:.8f}"
         )
     except Exception as e:
@@ -51,10 +51,10 @@ def backtest_single_wrap(config_: dict):
         print(config)
         score = -9999999999999.9
         adg = 0.0
-        pa_closeness = 100.0
+        pa_distance = 100.0
         with open(make_get_filepath("tmp/harmony_search_errors.txt"), "a") as f:
             f.write(json.dumps([time.time(), "error", str(e), denumpyize(config)]) + "\n")
-    return (pa_closeness, adg, score)
+    return (pa_distance, adg, score)
 
 
 def backtest_multi_wrap(config: dict, pool):
@@ -66,12 +66,12 @@ def backtest_multi_wrap(config: dict, pool):
             break
         time.sleep(0.1)
     results = {k: v.get() for k, v in tasks.items()}
-    mean_pa_closeness = np.mean([v[0] for v in results.values()])
+    mean_pa_distance = np.mean([v[0] for v in results.values()])
     mean_adg = np.mean([v[1] for v in results.values()])
     mean_score = np.mean([v[2] for v in results.values()])
-    new_score = mean_adg * min(1.0, config["maximum_pa_closeness_mean_long"] / mean_pa_closeness)
+    new_score = mean_adg * min(1.0, config["maximum_pa_distance_mean_long"] / mean_pa_distance)
     print(
-        f"pa closeness {mean_pa_closeness:.6f} adg {mean_adg:.6f} score {mean_score:8f} new score {new_score:.8f}"
+        f"pa distance {mean_pa_distance:.6f} adg {mean_adg:.6f} score {mean_score:8f} new score {new_score:.8f}"
     )
     return -new_score, results
 

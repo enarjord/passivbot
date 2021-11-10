@@ -428,14 +428,14 @@ def analyze_fills(
     hrs_stuck_max_long = long_pos_changes_ms_diff.max() / (1000 * 60 * 60)
     hrs_stuck_avg_long = long_pos_changes_ms_diff.mean() / (1000 * 60 * 60)
     lpprices = sdf[sdf.long_pprice != 0.0]
-    pa_closeness_long = (lpprices.long_pprice - lpprices.price).abs() / lpprices.price
+    pa_distance_long = (lpprices.long_pprice - lpprices.price).abs() / lpprices.price
     analysis = {
         "exchange": config["exchange"] if "exchange" in config else "unknown",
         "symbol": config["symbol"] if "symbol" in config else "unknown",
         "starting_balance": sdf.balance.iloc[0],
-        "pa_closeness_mean_long": pa_closeness_long.mean(),
-        "pa_closeness_median_long": pa_closeness_long.median(),
-        "pa_closeness_max_long": pa_closeness_long.max(),
+        "pa_distance_mean_long": pa_distance_long.mean(),
+        "pa_distance_median_long": pa_distance_long.median(),
+        "pa_distance_max_long": pa_distance_long.max(),
         "average_daily_gain": adg,
         "adjusted_daily_gain": np.tanh(20 * adg) / 20,
         "gain": gain,
