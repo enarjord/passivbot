@@ -1,4 +1,4 @@
-{"config_name": "binance_usdt_84_symbols_2021-05-01_to_2021-10-20_mean_adg_0.0335%_mean_PAc_3.97%",
+{"config_name": "binance_usdt_84_symbols_2021-05-01_to_2021-10-20_mean_adg_0.0335%_mean_PAd_3.97%",
  "logging_level": 0,
  "long": {"enabled": true,
           "eprice_exp_base": 1.1375717240937946,

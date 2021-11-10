@@ -100,20 +100,20 @@ def dump_plots(result: dict, fdf: pd.DataFrame, sdf: pd.DataFrame, df: pd.DataFr
     table.add_row(["Biggest psize", round_dynamic(result["result"]["biggest_psize"], 6)])
     table.add_row(
         [
-            "Price action closeness mean long",
-            round_dynamic(result["result"]["pa_closeness_mean_long"], 6),
+            "Price action distance mean long",
+            round_dynamic(result["result"]["pa_distance_mean_long"], 6),
         ]
     )
     table.add_row(
         [
-            "Price action closeness median long",
-            round_dynamic(result["result"]["pa_closeness_median_long"], 6),
+            "Price action distance median long",
+            round_dynamic(result["result"]["pa_distance_median_long"], 6),
         ]
     )
     table.add_row(
         [
-            "Price action closeness max long",
-            round_dynamic(result["result"]["pa_closeness_max_long"], 6),
+            "Price action distance max long",
+            round_dynamic(result["result"]["pa_distance_max_long"], 6),
         ]
     )
     table.add_row(
