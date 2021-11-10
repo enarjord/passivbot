@@ -244,9 +244,9 @@ class BinanceBotSpot(Bot):
             params["timeInForce"] = "GTC"
             params["price"] = format_float(order["price"])
         if "custom_id" in order:
-            params["newClientOrderId"] = (
-                f"{order['custom_id']}_{str(int(time.time() * 1000))[8:]}_{int(np.random.random() * 1000)}"
-            )
+            params[
+                "newClientOrderId"
+            ] = f"{order['custom_id']}_{str(int(time.time() * 1000))[8:]}_{int(np.random.random() * 1000)}"
         o = await self.private_post(self.endpoints["create_order"], params)
         if "side" in o:
             return {

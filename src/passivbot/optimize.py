@@ -199,8 +199,7 @@ def single_sliding_window_run(config, data, do_print=True) -> (float, [dict]):
             f'bkr {analysis["closest_bkr"]:.4f}, '
             f'eqbal {analysis["eqbal_ratio_min"]:.4f} n_days {analysis["n_days"]:.1f}, '
             f'score {analysis["score"]:.4f}, objective {objective:.4f}, '
-            f'hrs stuck ss {str(round(analysis["hrs_stuck_max"], 1)).zfill(4)}, '
-            + line
+            f'hrs stuck ss {str(round(analysis["hrs_stuck_max"], 1)).zfill(4)}, ' + line
         )
         if do_print:
             print(line)
