@@ -102,7 +102,8 @@ class Bot:
             config["cross_wallet_pct"] = 1.0
         if config["cross_wallet_pct"] > 1.0 or config["cross_wallet_pct"] <= 0.0:
             print(
-                f'Invalid cross_wallet_pct given: {config["cross_wallet_pct"]}.  It must be greater than zero and less than or equal to one.  Defaulting to 1.0.'
+                f'Invalid cross_wallet_pct given: {config["cross_wallet_pct"]}.  It must be greater'
+                " than zero and less than or equal to one.  Defaulting to 1.0."
             )
             config["cross_wallet_pct"] = 1.0
         self.config = config
@@ -144,9 +145,9 @@ class Bot:
             balance if self.assigned_balance is None else self.assigned_balance
         ) * self.cross_wallet_pct
 
-    def add_pbrs_to_pos(self, position_: dict):
+    def add_wallet_exposures_to_pos(self, position_: dict):
         position = position_.copy()
-        position["long"]["pbr"] = (
+        position["long"]["wallet_exposure"] = (
             (
                 qty_to_cost(
                     position["long"]["size"],
@@ -159,7 +160,7 @@ class Bot:
             if position["wallet_balance"]
             else 0.0
         )
-        position["shrt"]["pbr"] = (
+        position["shrt"]["wallet_exposure"] = (
             (
                 qty_to_cost(
                     position["shrt"]["size"],
@@ -191,7 +192,7 @@ class Bot:
                 self.inverse,
                 self.c_mult,
             )
-            position = self.add_pbrs_to_pos(position)
+            position = self.add_wallet_exposures_to_pos(position)
             if self.position != position:
                 if (
                     self.position
@@ -414,11 +415,11 @@ class Bot:
             self.xk["min_cost"],
             self.xk["c_mult"],
             self.xk["grid_span"][0],
-            self.xk["pbr_limit"][0],
+            self.xk["wallet_exposure_limit"][0],
             self.xk["max_n_entry_orders"][0],
             self.xk["initial_qty_pct"][0],
             self.xk["eprice_pprice_diff"][0],
-            self.xk["secondary_pbr_allocation"][0],
+            self.xk["secondary_allocation"][0],
             self.xk["secondary_pprice_diff"][0],
             self.xk["eprice_exp_base"][0],
         )
@@ -434,7 +435,7 @@ class Bot:
             self.xk["min_qty"],
             self.xk["min_cost"],
             self.xk["c_mult"],
-            self.xk["pbr_limit"][0],
+            self.xk["wallet_exposure_limit"][0],
             self.xk["initial_qty_pct"][0],
             self.xk["min_markup"][0],
             self.xk["markup_range"][0],
@@ -544,12 +545,12 @@ class Bot:
             if "long_psize" in event:
                 self.position["long"]["size"] = event["long_psize"]
                 self.position["long"]["price"] = event["long_pprice"]
-                self.position = self.add_pbrs_to_pos(self.position)
+                self.position = self.add_wallet_exposures_to_pos(self.position)
                 pos_change = True
             if "shrt_psize" in event:
                 self.position["shrt"]["size"] = event["shrt_psize"]
                 self.position["shrt"]["price"] = event["shrt_pprice"]
-                self.position = self.add_pbrs_to_pos(self.position)
+                self.position = self.add_wallet_exposures_to_pos(self.position)
                 pos_change = True
             if "new_open_order" in event:
                 if event["new_open_order"]["order_id"] not in {
@@ -607,7 +608,7 @@ class Bot:
         line += f"|| last {self.price} "
         line += f"pprc diff {calc_diff(self.position['long']['price'], self.price):.3f} "
         line += f"liq {round_dynamic(liq_price, 5)} "
-        line += f"lpbr {self.position['long']['pbr']:.3f} "
+        line += f"lwallet_exposure {self.position['long']['wallet_exposure']:.3f} "
         line += f"bal {round_dynamic(self.position['wallet_balance'], 5)} "
         line += f"eq {round_dynamic(self.position['equity'], 5)} "
         print_([line], r=True)
@@ -735,7 +736,8 @@ async def _main(args: argparse.Namespace) -> None:
 
     if args.graceful_stop:
         print(
-            "\n\ngraceful stop enabled, will not make new entries once existing positions are closed\n"
+            "\n\ngraceful stop enabled, will not make new entries once existing positions are"
+            " closed\n"
         )
         config["long"]["enabled"] = config["do_long"] = False
         config["shrt"]["enabled"] = config["do_shrt"] = False

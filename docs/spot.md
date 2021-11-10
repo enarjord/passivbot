@@ -23,4 +23,4 @@ For example, if spot wallet has 2.5 ETH and one wants to start 5 ETH quoted spot
 start 5 bots with different ETH quoted symbols:  
 `python3 passivbot.py binance_01 XXXETH path/to/live_config.json -m spot -ab 2.45`  
 
-Also note that sum of pbr_limits of all spot bots sharing same quote token shouldn't exceed 1.0.
+Also note that sum of wallet_exposure_limits of all spot bots sharing same quote token shouldn't exceed 1.0.

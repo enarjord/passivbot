@@ -44,7 +44,7 @@ def get_expanded_ranges(config: dict) -> dict:
             for k1 in config["ranges"]:
                 if k1 in k0:
                     updated_ranges[k0] = config["ranges"][k1]
-                    if "pbr_limit" in k0:
+                    if "wallet_exposure_limit" in k0:
                         updated_ranges[k0] = [
                             updated_ranges[k0][0],
                             min(updated_ranges[k0][1], config["max_leverage"]),
@@ -199,8 +199,8 @@ def single_sliding_window_run(config, data, do_print=True) -> (float, [dict]):
             f'bkr {analysis["closest_bkr"]:.4f}, '
             f'eqbal {analysis["eqbal_ratio_min"]:.4f} n_days {analysis["n_days"]:.1f}, '
             f'score {analysis["score"]:.4f}, objective {objective:.4f}, '
-            f'hrs stuck ss {str(round(analysis["hrs_stuck_max"], 1)).zfill(4)}, '
-        ) + line
+            f'hrs stuck ss {str(round(analysis["hrs_stuck_max"], 1)).zfill(4)}, ' + line
+        )
         if do_print:
             print(line)
         if do_break:
@@ -350,7 +350,8 @@ async def execute_optimize(config):
         if not (config["do_long"] or config["do_shrt"]):
             raise Exception("both long and shrt disabled")
         print(
-            f"{'long' if config['do_long'] else 'shrt'} only, setting maximum_hrs_stuck = maximum_hrs_stuck_same_side"
+            f"{'long' if config['do_long'] else 'shrt'} only, setting maximum_hrs_stuck ="
+            " maximum_hrs_stuck_same_side"
         )
         config["maximum_hrs_stuck"] = config["maximum_hrs_stuck_same_side"]
     downloader = Downloader(config)

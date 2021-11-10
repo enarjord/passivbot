@@ -55,11 +55,11 @@ def get_xk_keys():
         "min_cost",
         "c_mult",
         "grid_span",
-        "pbr_limit",
+        "wallet_exposure_limit",
         "max_n_entry_orders",
         "initial_qty_pct",
         "eprice_pprice_diff",
-        "secondary_pbr_allocation",
+        "secondary_allocation",
         "secondary_pprice_diff",
         "eprice_exp_base",
         "min_markup",
@@ -336,11 +336,11 @@ def get_template_live_config():
         "long": {
             "enabled": True,
             "grid_span": 0.16,
-            "pbr_limit": 1.6,
+            "wallet_exposure_limit": 1.6,
             "max_n_entry_orders": 10,
             "initial_qty_pct": 0.01,
             "eprice_pprice_diff": 0.0025,
-            "secondary_pbr_allocation": 0.5,
+            "secondary_allocation": 0.5,
             "secondary_pprice_diff": 0.35,
             "eprice_exp_base": 1.618034,
             "min_markup": 0.0045,
@@ -350,11 +350,11 @@ def get_template_live_config():
         "shrt": {
             "enabled": False,
             "grid_span": 0.16,
-            "pbr_limit": 1.6,
+            "wallet_exposure_limit": 1.6,
             "max_n_entry_orders": 10,
             "initial_qty_pct": 0.01,
             "eprice_pprice_diff": 0.0025,
-            "secondary_pbr_allocation": 0.5,
+            "secondary_allocation": 0.5,
             "secondary_pprice_diff": 0.35,
             "eprice_exp_base": 1.618034,
             "min_markup": 0.0045,
@@ -365,9 +365,7 @@ def get_template_live_config():
 
 
 def analyze_fills(
-    fills: List[Any],
-    stats: List[Any],
-    config: Dict[str, Any],
+    fills: List[Any], stats: List[Any], config: Dict[str, Any]
 ) -> Tuple[pd.DataFrame, pd.DataFrame, Dict[str, Any]]:
     sdf = pd.DataFrame(
         stats,
@@ -400,19 +398,19 @@ def analyze_fills(
             "type",
         ],
     )
-    fdf.loc[:, "pbr"] = [
+    fdf.loc[:, "wallet_exposure"] = [
         qty_to_cost(x.psize, x.pprice, config["inverse"], config["c_mult"]) / x.balance
         if x.balance > 0.0
         else 0.0
         for x in fdf.itertuples()
     ]
-    sdf.loc[:, "long_pbr"] = [
+    sdf.loc[:, "long_wallet_exposure"] = [
         qty_to_cost(x.long_psize, x.long_pprice, config["inverse"], config["c_mult"]) / x.balance
         if x.balance > 0.0
         else 0.0
         for x in sdf.itertuples()
     ]
-    sdf.loc[:, "shrt_pbr"] = [
+    sdf.loc[:, "shrt_wallet_exposure"] = [
         qty_to_cost(x.shrt_psize, x.shrt_pprice, config["inverse"], config["c_mult"]) / x.balance
         if x.balance > 0.0
         else 0.0
@@ -498,9 +496,7 @@ def calc_pprice_from_fills(coin_balance, fills, n_fills_limit=100):
 
 
 def get_position_fills(
-    long_psize: float,
-    shrt_psize: float,
-    fills: List[Dict[str, Any]],
+    long_psize: float, shrt_psize: float, fills: List[Dict[str, Any]]
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """
     assumes fills are sorted old to new
@@ -567,7 +563,9 @@ def spotify_config(config: Dict[str, Any], nullify_shrt: bool = True) -> Dict[st
         spotified["market_type"] += "_spot"
     spotified["do_long"] = spotified["long"]["enabled"] = config["long"]["enabled"]
     spotified["do_shrt"] = spotified["shrt"]["enabled"] = False
-    spotified["long"]["pbr_limit"] = min(1.0, spotified["long"]["pbr_limit"])
+    spotified["long"]["wallet_exposure_limit"] = min(
+        1.0, spotified["long"]["wallet_exposure_limit"]
+    )
     if nullify_shrt:
         spotified["shrt"] = nullify(spotified["shrt"])
     return spotified

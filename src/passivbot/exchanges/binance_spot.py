@@ -539,7 +539,7 @@ class BinanceBotSpot(Bot):
                     self.position["wallet_balance"] = self.adjust_wallet_balance(
                         self.position["wallet_balance"]
                     )
-                    self.position = self.add_pbrs_to_pos(self.position)
+                    self.position = self.add_wallet_exposures_to_pos(self.position)
                     pos_change = True
             if "filled" in event:
                 if event["filled"]["order_id"] not in {fill["order_id"] for fill in self.fills}:
@@ -548,7 +548,7 @@ class BinanceBotSpot(Bot):
                 self.position["wallet_balance"] = self.adjust_wallet_balance(
                     self.position["wallet_balance"]
                 )
-                self.position = self.add_pbrs_to_pos(self.position)
+                self.position = self.add_wallet_exposures_to_pos(self.position)
                 pos_change = True
             elif "partially_filled" in event:
                 await asyncio.sleep(0.01)

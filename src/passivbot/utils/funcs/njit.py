@@ -49,22 +49,14 @@ def round_dynamic(n: float, d: int):
 @deferred_njit
 def round_up(n: float, step, safety_rounding=10) -> float:
     return np.round(  # type: ignore[no-any-return]
-        np.ceil(
-            np.round(n / step, safety_rounding),
-        )
-        * step,
-        safety_rounding,
+        np.ceil(np.round(n / step, safety_rounding)) * step, safety_rounding
     )
 
 
 @deferred_njit
 def round_dn(n, step, safety_rounding=10) -> float:
     return np.round(  # type: ignore[no-any-return]
-        np.floor(
-            np.round(n / step, safety_rounding),
-        )
-        * step,
-        safety_rounding,
+        np.floor(np.round(n / step, safety_rounding)) * step, safety_rounding
     )
 
 
@@ -192,7 +184,7 @@ def calc_new_psize_pprice(psize, pprice, qty, price, qty_step) -> Tuple[float, f
 
 
 @deferred_njit
-def calc_pbr_if_filled(balance, psize, pprice, qty, price, inverse, c_mult, qty_step):
+def calc_wallet_exposure_if_filled(balance, psize, pprice, qty, price, inverse, c_mult, qty_step):
     psize, qty = round_(abs(psize), qty_step), round_(abs(qty), qty_step)
     new_psize, new_pprice = calc_new_psize_pprice(psize, pprice, qty, price, qty_step)
     return qty_to_cost(new_psize, new_pprice, inverse, c_mult) / balance
@@ -211,7 +203,7 @@ def calc_long_close_grid(
     min_qty,
     min_cost,
     c_mult,
-    pbr_limit,
+    wallet_exposure_limit,
     initial_qty_pct,
     min_markup,
     markup_range,
@@ -226,7 +218,10 @@ def calc_long_close_grid(
         return [(0.0, 0.0, "")]
     if (
         long_psize
-        < cost_to_qty(balance, long_pprice, inverse, c_mult) * pbr_limit * initial_qty_pct * 0.5
+        < cost_to_qty(balance, long_pprice, inverse, c_mult)
+        * wallet_exposure_limit
+        * initial_qty_pct
+        * 0.5
     ):
         # close entire pos at breakeven or better if psize < initial_qty * 0.5
         close_price = max(lowest_ask, round_up(long_pprice * (1 + 0.00041), price_step))
@@ -253,7 +248,7 @@ def calc_long_close_grid(
                 [
                     min_close_qty,
                     cost_to_qty(balance, close_price, inverse, c_mult)
-                    * pbr_limit
+                    * wallet_exposure_limit
                     * initial_qty_pct
                     * 0.5,
                     default_qty * 0.5,
@@ -289,7 +284,7 @@ def calc_shrt_close_grid(
     min_cost,
     c_mult,
     max_leverage,
-    pbr_limit,
+    wallet_exposure_limit,
     initial_qty_pct,
     min_markup,
     markup_range,
@@ -320,7 +315,7 @@ def calc_shrt_close_grid(
                 [
                     min_close_qty,
                     cost_to_qty(balance, close_price, inverse, c_mult)
-                    * pbr_limit
+                    * wallet_exposure_limit
                     * initial_qty_pct
                     * 0.5,
                     default_qty * 0.5,
@@ -439,11 +434,11 @@ def interpolate(x, xs, ys):
 
 
 @deferred_njit
-def find_qty_bringing_pbr_to_target(
+def find_qty_bringing_wallet_exposure_to_target(
     balance,
     psize,
     pprice,
-    pbr_limit,
+    wallet_exposure_limit,
     entry_price,
     inverse,
     qty_step,
@@ -451,37 +446,44 @@ def find_qty_bringing_pbr_to_target(
     error_tolerance=0.01,
     max_n_iters=20,
 ) -> float:
-    pbr = qty_to_cost(psize, pprice, inverse, c_mult) / balance
-    if pbr >= pbr_limit * 0.98:
+    wallet_exposure = qty_to_cost(psize, pprice, inverse, c_mult) / balance
+    if wallet_exposure >= wallet_exposure_limit * 0.98:
         return 0.0
-    guess = round_(cost_to_qty(balance * (pbr_limit - pbr), entry_price, inverse, c_mult), qty_step)
-    val = calc_pbr_if_filled(balance, psize, pprice, guess, entry_price, inverse, c_mult, qty_step)
-    if val > pbr_limit:
+    guess = round_(
+        cost_to_qty(
+            balance * (wallet_exposure_limit - wallet_exposure), entry_price, inverse, c_mult
+        ),
+        qty_step,
+    )
+    val = calc_wallet_exposure_if_filled(
+        balance, psize, pprice, guess, entry_price, inverse, c_mult, qty_step
+    )
+    if val > wallet_exposure_limit:
         too_high = (guess, val)
-        too_low = (0.0, pbr)
+        too_low = (0.0, wallet_exposure)
         guess = round_(min(guess - qty_step, guess * 0.5), qty_step)
     else:
         too_low = (guess, val)
         i = 0
-        while val < pbr_limit:
+        while val < wallet_exposure_limit:
             i += 1
             if i >= max_n_iters:
                 print("debug find qty unable to find high enough qty")
                 return guess
             guess = round_(max(guess + qty_step, guess * 2.0), qty_step)
-            val = calc_pbr_if_filled(
+            val = calc_wallet_exposure_if_filled(
                 balance, psize, pprice, guess, entry_price, inverse, c_mult, qty_step
             )
         too_high = (guess, val)
-    ldiff = abs(too_low[1] - pbr_limit) / pbr_limit
-    hdiff = abs(too_high[1] - pbr_limit) / pbr_limit
+    ldiff = abs(too_low[1] - wallet_exposure_limit) / wallet_exposure_limit
+    hdiff = abs(too_high[1] - wallet_exposure_limit) / wallet_exposure_limit
     best_guess = (
         (ldiff, too_low[0], too_low[1]) if ldiff < hdiff else (hdiff, too_high[0], too_high[1])
     )
     i = 0
     while True:
         i += 1
-        diff = abs(val - pbr_limit) / pbr_limit
+        diff = abs(val - wallet_exposure_limit) / wallet_exposure_limit
         if diff < best_guess[0]:
             best_guess = (diff, guess, val)
         if diff < error_tolerance:
@@ -492,15 +494,16 @@ def find_qty_bringing_pbr_to_target(
             min(too_high[0] - qty_step, max((too_low[0] + too_high[0]) / 2, too_low[0] + qty_step)),
             qty_step,
         )
-        val = calc_pbr_if_filled(
+        val = calc_wallet_exposure_if_filled(
             balance, psize, pprice, guess, entry_price, inverse, c_mult, qty_step
         )
         if guess == too_high[0] or guess == too_low[0]:
             break
-    if abs(best_guess[2] - pbr_limit) / pbr_limit > 0.15:
-        print("debug find_qty_bringing_pbr_to_target")
+    if abs(best_guess[2] - wallet_exposure_limit) / wallet_exposure_limit > 0.15:
+        print("debug find_qty_bringing_wallet_exposure_to_target")
         print(
-            "balance, psize, pprice, pbr_limit, entry_price, inverse, qty_step, c_mult, error_tolerance, max_n_iters"
+            "balance, psize, pprice, wallet_exposure_limit, entry_price, inverse, qty_step, c_mult,"
+            " error_tolerance, max_n_iters"
         )
         print(
             balance,
@@ -509,7 +512,7 @@ def find_qty_bringing_pbr_to_target(
             ",",
             pprice,
             ",",
-            pbr_limit,
+            wallet_exposure_limit,
             ",",
             entry_price,
             ",",
@@ -523,13 +526,13 @@ def find_qty_bringing_pbr_to_target(
             ",",
             max_n_iters,
         )
-        print("pbr_limit", pbr_limit)
+        print("wallet_exposure_limit", wallet_exposure_limit)
         print("best_guess", best_guess)
     return best_guess[1]
 
 
 @deferred_njit
-def find_eprice_pprice_diff_pbr_weighting(
+def find_eprice_pprice_diff_wallet_exposure_weighting(
     balance,
     initial_entry_price,
     inverse,
@@ -539,7 +542,7 @@ def find_eprice_pprice_diff_pbr_weighting(
     min_cost,
     c_mult,
     grid_span,
-    pbr_limit,
+    wallet_exposure_limit,
     max_n_entry_orders,
     initial_qty_pct,
     eprice_pprice_diff,
@@ -560,7 +563,7 @@ def find_eprice_pprice_diff_pbr_weighting(
         min_cost,
         c_mult,
         grid_span,
-        pbr_limit,
+        wallet_exposure_limit,
         max_n_entry_orders,
         initial_qty_pct,
         eprice_pprice_diff,
@@ -569,7 +572,7 @@ def find_eprice_pprice_diff_pbr_weighting(
         eprices=eprices,
         prev_pprice=prev_pprice,
     )[-1][4]
-    if val < pbr_limit:
+    if val < wallet_exposure_limit:
         return guess
     too_low = (guess, val)
     guess = 1000.0
@@ -583,7 +586,7 @@ def find_eprice_pprice_diff_pbr_weighting(
         min_cost,
         c_mult,
         grid_span,
-        pbr_limit,
+        wallet_exposure_limit,
         max_n_entry_orders,
         initial_qty_pct,
         eprice_pprice_diff,
@@ -592,12 +595,12 @@ def find_eprice_pprice_diff_pbr_weighting(
         eprices=eprices,
         prev_pprice=prev_pprice,
     )[-1][4]
-    if val > pbr_limit:
+    if val > wallet_exposure_limit:
         return guess
     too_high = (guess, val)
     guesses = [too_low[1], too_high[1]]
     vals = [too_low[0], too_high[0]]
-    guess = interpolate(pbr_limit, np.array(vals), np.array(guesses))
+    guess = interpolate(wallet_exposure_limit, np.array(vals), np.array(guesses))
     val = eval_long_entry_grid(
         balance,
         initial_entry_price,
@@ -608,7 +611,7 @@ def find_eprice_pprice_diff_pbr_weighting(
         min_cost,
         c_mult,
         grid_span,
-        pbr_limit,
+        wallet_exposure_limit,
         max_n_entry_orders,
         initial_qty_pct,
         eprice_pprice_diff,
@@ -617,16 +620,16 @@ def find_eprice_pprice_diff_pbr_weighting(
         eprices=eprices,
         prev_pprice=prev_pprice,
     )[-1][4]
-    if val < pbr_limit:
+    if val < wallet_exposure_limit:
         too_high = (guess, val)
     else:
         too_low = (guess, val)
     i = 0
     old_guess = 0.0
-    best_guess = (abs(val - pbr_limit) / pbr_limit, guess, val)
+    best_guess = (abs(val - wallet_exposure_limit) / wallet_exposure_limit, guess, val)
     while True:
         i += 1
-        diff = abs(val - pbr_limit) / pbr_limit
+        diff = abs(val - wallet_exposure_limit) / wallet_exposure_limit
         if diff < best_guess[0]:
             best_guess = (diff, guess, val)
         if diff < error_tolerance:
@@ -634,9 +637,9 @@ def find_eprice_pprice_diff_pbr_weighting(
         if i >= max_n_iters or abs(old_guess - guess) / guess < error_tolerance * 0.1:
             """
             if best_guess[0] > 0.15:
-                print('debug find_eprice_pprice_diff_pbr_weighting')
-                print('balance, initial_entry_price, inverse, qty_step, price_step, min_qty, min_cost, c_mult, grid_span, pbr_limit, max_n_entry_orders, initial_qty_pct, eprice_pprice_diff, eprice_exp_base, max_n_iters, error_tolerance, eprices, prev_pprice')
-                print(balance, ',', initial_entry_price, ',', inverse, ',', qty_step, ',', price_step, ',', min_qty, ',', min_cost, ',', c_mult, ',', grid_span, ',', pbr_limit, ',', max_n_entry_orders, ',', initial_qty_pct, ',', eprice_pprice_diff, ',', eprice_exp_base, ',', max_n_iters, ',', error_tolerance, ',', eprices, ',', prev_pprice)
+                print('debug find_eprice_pprice_diff_wallet_exposure_weighting')
+                print('balance, initial_entry_price, inverse, qty_step, price_step, min_qty, min_cost, c_mult, grid_span, wallet_exposure_limit, max_n_entry_orders, initial_qty_pct, eprice_pprice_diff, eprice_exp_base, max_n_iters, error_tolerance, eprices, prev_pprice')
+                print(balance, ',', initial_entry_price, ',', inverse, ',', qty_step, ',', price_step, ',', min_qty, ',', min_cost, ',', c_mult, ',', grid_span, ',', wallet_exposure_limit, ',', max_n_entry_orders, ',', initial_qty_pct, ',', eprice_pprice_diff, ',', eprice_exp_base, ',', max_n_iters, ',', error_tolerance, ',', eprices, ',', prev_pprice)
             """
             return best_guess[1]
         old_guess = guess
@@ -651,7 +654,7 @@ def find_eprice_pprice_diff_pbr_weighting(
             min_cost,
             c_mult,
             grid_span,
-            pbr_limit,
+            wallet_exposure_limit,
             max_n_entry_orders,
             initial_qty_pct,
             eprice_pprice_diff,
@@ -660,7 +663,7 @@ def find_eprice_pprice_diff_pbr_weighting(
             eprices=eprices,
             prev_pprice=prev_pprice,
         )[-1][4]
-        if val < pbr_limit:
+        if val < wallet_exposure_limit:
             too_high = (guess, val)
         else:
             too_low = (guess, val)
@@ -677,17 +680,17 @@ def eval_long_entry_grid(
     min_cost,
     c_mult,
     grid_span,
-    pbr_limit,
+    wallet_exposure_limit,
     max_n_entry_orders,
     initial_qty_pct,
     eprice_pprice_diff,
-    eprice_pprice_diff_pbr_weighting,
+    eprice_pprice_diff_wallet_exposure_weighting,
     eprice_exp_base=1.618034,
     eprices=None,
     prev_pprice=None,
 ):
 
-    # returns [qty, price, psize, pprice, pbr]
+    # returns [qty, price, psize, pprice, wallet_exposure]
     if eprices is None:
         grid = np.zeros((max_n_entry_orders, 5))
         grid[:, 1] = [
@@ -708,7 +711,10 @@ def eval_long_entry_grid(
         calc_min_entry_qty(grid[0][1], inverse, qty_step, min_qty, min_cost),
         round_(
             cost_to_qty(
-                balance * pbr_limit * initial_qty_pct, initial_entry_price, inverse, c_mult
+                balance * wallet_exposure_limit * initial_qty_pct,
+                initial_entry_price,
+                inverse,
+                c_mult,
             ),
             qty_step,
         ),
@@ -718,7 +724,7 @@ def eval_long_entry_grid(
     grid[0][4] = qty_to_cost(psize, pprice, inverse, c_mult) / balance
     for i in range(1, max_n_entry_orders):
         adjusted_eprice_pprice_diff = eprice_pprice_diff * (
-            1 + grid[i - 1][4] * eprice_pprice_diff_pbr_weighting
+            1 + grid[i - 1][4] * eprice_pprice_diff_wallet_exposure_weighting
         )
         qty = round_(
             calc_long_entry_qty(psize, pprice, grid[i][1], adjusted_eprice_pprice_diff), qty_step
@@ -742,42 +748,44 @@ def calc_whole_long_entry_grid(
     min_cost,
     c_mult,
     grid_span,
-    pbr_limit,
+    wallet_exposure_limit,
     max_n_entry_orders,
     initial_qty_pct,
     eprice_pprice_diff,
-    secondary_pbr_allocation,
+    secondary_allocation,
     secondary_pprice_diff,
     eprice_exp_base=1.618034,
     eprices=None,
     prev_pprice=None,
 ):
 
-    # [qty, price, psize, pprice, pbr]
-    if secondary_pbr_allocation <= 0.05:
+    # [qty, price, psize, pprice, wallet_exposure]
+    if secondary_allocation <= 0.05:
         # set to zero if secondary allocation less than 5%
-        secondary_pbr_allocation = 0.0
-    elif secondary_pbr_allocation >= 1.0:
-        raise Exception("secondary_pbr_allocation cannot be >= 1.0")
-    primary_pbr_allocation = 1.0 - secondary_pbr_allocation
-    primary_pbr_limit = pbr_limit * primary_pbr_allocation
-    eprice_pprice_diff_pbr_weighting = find_eprice_pprice_diff_pbr_weighting(
-        balance,
-        initial_entry_price,
-        inverse,
-        qty_step,
-        price_step,
-        min_qty,
-        min_cost,
-        c_mult,
-        grid_span,
-        primary_pbr_limit,
-        max_n_entry_orders,
-        initial_qty_pct / primary_pbr_allocation,
-        eprice_pprice_diff,
-        eprice_exp_base,
-        eprices=eprices,
-        prev_pprice=prev_pprice,
+        secondary_allocation = 0.0
+    elif secondary_allocation >= 1.0:
+        raise Exception("secondary_allocation cannot be >= 1.0")
+    primary_wallet_exposure_allocation = 1.0 - secondary_allocation
+    primary_wallet_exposure_limit = wallet_exposure_limit * primary_wallet_exposure_allocation
+    eprice_pprice_diff_wallet_exposure_weighting = (
+        find_eprice_pprice_diff_wallet_exposure_weighting(
+            balance,
+            initial_entry_price,
+            inverse,
+            qty_step,
+            price_step,
+            min_qty,
+            min_cost,
+            c_mult,
+            grid_span,
+            primary_wallet_exposure_limit,
+            max_n_entry_orders,
+            initial_qty_pct / primary_wallet_exposure_allocation,
+            eprice_pprice_diff,
+            eprice_exp_base,
+            eprices=eprices,
+            prev_pprice=prev_pprice,
+        )
     )
     grid = eval_long_entry_grid(
         balance,
@@ -789,28 +797,35 @@ def calc_whole_long_entry_grid(
         min_cost,
         c_mult,
         grid_span,
-        primary_pbr_limit,
+        primary_wallet_exposure_limit,
         max_n_entry_orders,
-        initial_qty_pct / primary_pbr_allocation,
+        initial_qty_pct / primary_wallet_exposure_allocation,
         eprice_pprice_diff,
-        eprice_pprice_diff_pbr_weighting,
+        eprice_pprice_diff_wallet_exposure_weighting,
         eprice_exp_base,
         eprices=eprices,
         prev_pprice=prev_pprice,
     )
-    if secondary_pbr_allocation > 0.0:
+    if secondary_allocation > 0.0:
         entry_price = min(
             round_dn(grid[-1][3] * (1 - secondary_pprice_diff), price_step), grid[-1][1]
         )
-        qty = find_qty_bringing_pbr_to_target(
-            balance, grid[-1][2], grid[-1][3], pbr_limit, entry_price, inverse, qty_step, c_mult
+        qty = find_qty_bringing_wallet_exposure_to_target(
+            balance,
+            grid[-1][2],
+            grid[-1][3],
+            wallet_exposure_limit,
+            entry_price,
+            inverse,
+            qty_step,
+            c_mult,
         )
         new_psize, new_pprice = calc_new_psize_pprice(
             grid[-1][2], grid[-1][3], qty, entry_price, qty_step
         )
-        new_pbr = qty_to_cost(new_psize, new_pprice, inverse, c_mult) / balance
+        new_wallet_exposure = qty_to_cost(new_psize, new_pprice, inverse, c_mult) / balance
         grid = np.append(
-            grid, np.array([[qty, entry_price, new_psize, new_pprice, new_pbr]]), axis=0
+            grid, np.array([[qty, entry_price, new_psize, new_pprice, new_wallet_exposure]]), axis=0
         )
     return grid[grid[:, 0] > 0.0]
 
@@ -829,11 +844,11 @@ def calc_long_entry_grid(
     min_cost,
     c_mult,
     grid_span,
-    pbr_limit,
+    wallet_exposure_limit,
     max_n_entry_orders,
     initial_qty_pct,
     eprice_pprice_diff,
-    secondary_pbr_allocation,
+    secondary_allocation,
     secondary_pprice_diff,
     eprice_exp_base=1.618034,
 ) -> List[Tuple[float, float, str]]:
@@ -850,18 +865,20 @@ def calc_long_entry_grid(
                 min_cost,
                 c_mult,
                 grid_span,
-                pbr_limit,
+                wallet_exposure_limit,
                 max_n_entry_orders,
                 initial_qty_pct,
                 eprice_pprice_diff,
-                secondary_pbr_allocation,
+                secondary_allocation,
                 secondary_pprice_diff,
                 eprice_exp_base=eprice_exp_base,
             )
             entry_price = min(highest_bid, grid[0][1])
             min_entry_qty = calc_min_entry_qty(entry_price, inverse, qty_step, min_qty, min_cost)
             max_entry_qty = round_(
-                cost_to_qty(balance * pbr_limit * initial_qty_pct, entry_price, inverse, c_mult),
+                cost_to_qty(
+                    balance * wallet_exposure_limit * initial_qty_pct, entry_price, inverse, c_mult
+                ),
                 qty_step,
             )
             return [
@@ -879,17 +896,17 @@ def calc_long_entry_grid(
                 min_cost,
                 c_mult,
                 grid_span,
-                pbr_limit,
+                wallet_exposure_limit,
                 max_n_entry_orders,
                 initial_qty_pct,
                 eprice_pprice_diff,
-                secondary_pbr_allocation,
+                secondary_allocation,
                 secondary_pprice_diff,
                 eprice_exp_base=eprice_exp_base,
             )
             if len(grid) == 0:
                 return [(0.0, 0.0, "")]
-            if qty_to_cost(psize, pprice, inverse, c_mult) / balance >= pbr_limit:
+            if qty_to_cost(psize, pprice, inverse, c_mult) / balance >= wallet_exposure_limit:
                 return [(0.0, 0.0, "")]
             if calc_diff(grid[0][3], grid[0][1]) < 0.00001:
                 entry_price = highest_bid
@@ -898,12 +915,18 @@ def calc_long_entry_grid(
                 )
                 max_entry_qty = round_(
                     cost_to_qty(
-                        balance * pbr_limit * initial_qty_pct, entry_price, inverse, c_mult
+                        balance * wallet_exposure_limit * initial_qty_pct,
+                        entry_price,
+                        inverse,
+                        c_mult,
                     ),
                     qty_step,
                 )
                 entry_qty = max(min_entry_qty, min(max_entry_qty, grid[0][0]))
-                if qty_to_cost(entry_qty, entry_price, inverse, c_mult) / balance > pbr_limit * 1.1:
+                if (
+                    qty_to_cost(entry_qty, entry_price, inverse, c_mult) / balance
+                    > wallet_exposure_limit * 1.1
+                ):
                     print("\n\nwarning: abnormally large partial ientry")
                     print("grid:")
                     for e in grid:
@@ -922,11 +945,11 @@ def calc_long_entry_grid(
                         min_cost,
                         c_mult,
                         grid_span,
-                        pbr_limit,
+                        wallet_exposure_limit,
                         max_n_entry_orders,
                         initial_qty_pct,
                         eprice_pprice_diff,
-                        secondary_pbr_allocation,
+                        secondary_allocation,
                         secondary_pprice_diff,
                         eprice_exp_base,
                     )
@@ -944,7 +967,7 @@ def calc_long_entry_grid(
             grid[i][0] = max(min_entry_qty, grid[i][0])
             comment = (
                 "long_secondary_rentry"
-                if i == len(grid) - 1 and secondary_pbr_allocation > 0.05
+                if i == len(grid) - 1 and secondary_allocation > 0.05
                 else "long_primary_rentry"
             )
             if not entries or (entries[-1][1] != entry_price):
@@ -965,11 +988,11 @@ def approximate_grid(
     min_cost,
     c_mult,
     grid_span,
-    pbr_limit,
+    wallet_exposure_limit,
     max_n_entry_orders,
     initial_qty_pct,
     eprice_pprice_diff,
-    secondary_pbr_allocation,
+    secondary_allocation,
     secondary_pprice_diff,
     eprice_exp_base=1.618034,
     crop: bool = True,
@@ -986,11 +1009,11 @@ def approximate_grid(
             min_cost,
             c_mult,
             grid_span,
-            pbr_limit,
+            wallet_exposure_limit,
             max_n_entry_orders,
             initial_qty_pct,
             eprice_pprice_diff,
-            secondary_pbr_allocation,
+            secondary_allocation,
             secondary_pprice_diff,
             eprice_exp_base=eprice_exp_base,
         )
@@ -1011,11 +1034,11 @@ def approximate_grid(
             min_cost,
             c_mult,
             grid_span,
-            pbr_limit,
+            wallet_exposure_limit,
             max_n_entry_orders,
             initial_qty_pct,
             eprice_pprice_diff,
-            secondary_pbr_allocation,
+            secondary_allocation,
             secondary_pprice_diff,
             eprice_exp_base=eprice_exp_base,
         )
@@ -1041,7 +1064,7 @@ def approximate_grid(
         grid[0][4] = qty_to_cost(grid[0][2], grid[0][3], inverse, c_mult) / balance
         return grid
     if k == len(grid):
-        # means pbr limit is exceeded
+        # means wallet_exposure limit is exceeded
         return np.empty((0, 5)) if crop else grid
     for _ in range(5):
         # find grid as if partial fill were full fill
@@ -1078,11 +1101,11 @@ def njit_backtest(
     min_cost,
     c_mult,
     grid_span,
-    pbr_limit,
+    wallet_exposure_limit,
     max_n_entry_orders,
     initial_qty_pct,
     eprice_pprice_diff,
-    secondary_pbr_allocation,
+    secondary_allocation,
     secondary_pprice_diff,
     eprice_exp_base,
     min_markup,
@@ -1148,11 +1171,11 @@ def njit_backtest(
                 min_cost,
                 c_mult,
                 grid_span[0],
-                pbr_limit[0],
+                wallet_exposure_limit[0],
                 max_n_entry_orders[0],
                 initial_qty_pct[0],
                 eprice_pprice_diff[0],
-                secondary_pbr_allocation[0],
+                secondary_allocation[0],
                 secondary_pprice_diff[0],
                 eprice_exp_base[0],
             )
@@ -1170,7 +1193,7 @@ def njit_backtest(
                 min_qty,
                 min_cost,
                 c_mult,
-                pbr_limit[0],
+                wallet_exposure_limit[0],
                 initial_qty_pct[0],
                 min_markup[0],
                 markup_range[0],
