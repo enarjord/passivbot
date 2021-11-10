@@ -5,6 +5,33 @@ There's a lot of active development going on, but there's always more to do and 
 implement. If you want to get in touch on ways you can contribute, or have a great idea and want to discuss
 before starting to implement it, feel free to get in touch on [this Discord server](https://discord.gg/QAF2H2UmzZ).
 
+## Environment Setup
+
+### Installing Required Libraries
+```
+python -m pip install -e .[dev,tests]
+```
+
+### Setting Up ``pre-commit``
+```
+pre-commit install --install-hooks
+```
+
+Now, you're ready to start contributing.
+
+#### Typing And ``mypy``
+
+Passivbot uses python type hints, although, in the past these were not always checked.
+When you attempt to commit your code changes, as part of the ``pre-commit`` routines,
+``mypy`` will run against the whole code base and you **will** see a lot of errors.
+Cleaning up these errors is a huge undertaking, but please see if the code you're
+contributing adds additional errors and **at least** fix those, please.
+
+Once you've fixed any ``mypy`` errors you added, commit your code like:
+```
+env SKIP=mypy git commit <your regular git flags here>
+```
+
 ## Pull requests
 
 To add new functionality, you will need to create a fork on Github. After doing so, you can make the required changes
