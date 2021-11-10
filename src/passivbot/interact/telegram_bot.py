@@ -535,9 +535,8 @@ class Telegram:
         update.message.reply_text(
             text=(
                 "Shorting is currently"
-                f" <pre>{\"enabled\" if self._bot.do_short is True else \"disabled\"}</pre>.\nYou"
-                " have chosen to"
-                f" <pre>{\"disable\" if self._bot.do_short is True else \"enable\"}</pre>"
+                f' <pre>{"enabled" if self._bot.do_short is True else "disabled"}</pre>.\nYou have'
+                f' chosen to <pre>{"disable" if self._bot.do_short is True else "enable"}</pre>'
                 " shorting.\nPlease confirm that you want to change this by replying with either"
                 " <pre>confirm</pre> or <pre>abort</pre>\n<b>Please be aware that this setting is"
                 " not persisted between restarts!</b>"
@@ -552,13 +551,13 @@ class Telegram:
             self._bot.set_config_value("do_short", not self._bot.do_short)
             self.send_msg(
                 "Shorting is now"
-                f" <pre>{\"enabled\" if self._bot.do_short is True else \"disabled\"}</pre>.\nPlease"
-                " be aware that this change is NOT persisted between restarts."
+                f' <pre>{"enabled" if self._bot.do_short is True else "disabled"}</pre>.\nPlease be'
+                " aware that this change is NOT persisted between restarts."
             )
         elif update.message.text == "abort":
             self.send_msg(
                 f'Request for {"disabling" if self._bot.do_short is True else "enabling"} shorting'
-                ' was aborted'
+                " was aborted"
             )
         else:
             update.message.reply_text(
@@ -576,9 +575,8 @@ class Telegram:
         update.message.reply_text(
             text=(
                 "Long is currently"
-                f" <pre>{\"enabled\" if self._bot.do_long is True else \"disabled\"}</pre>.\nYou"
-                " have chosen to"
-                f" <pre>{\"disable\" if self._bot.do_long is True else \"enable\"}</pre>"
+                f' <pre>{"enabled" if self._bot.do_long is True else "disabled"}</pre>.\nYou have'
+                f' chosen to <pre>{"disable" if self._bot.do_long is True else "enable"}</pre>'
                 " long.\nPlease confirm that you want to change this by replying with either"
                 " <pre>confirm</pre> or <pre>abort</pre>\n<b>Please be aware that this setting is"
                 " not persisted between restarts!</b>"
@@ -593,13 +591,13 @@ class Telegram:
             self._bot.set_config_value("do_long", not self._bot.do_long)
             self.send_msg(
                 "Long is now"
-                f" <pre>{\"enabled\" if self._bot.do_short is True else \"disabled\"}</pre>.\nPlease"
-                " be aware that this change is NOT persisted between restarts."
+                f' <pre>{"enabled" if self._bot.do_short is True else "disabled"}</pre>.\nPlease be'
+                " aware that this change is NOT persisted between restarts."
             )
         elif update.message.text == "abort":
             self.send_msg(
                 f'Request for {"disabling" if self._bot.do_long is True else "enabling"} long was'
-                ' aborted'
+                " aborted"
             )
         else:
             update.message.reply_text(
@@ -1031,15 +1029,15 @@ class Telegram:
 
                 msg = (
                     "Futures balance"
-                    f" {self._bot.margin_coin if hasattr(self._bot, \"margin_coin\") else \"\"}:\nWallet"
-                    f" balance: {compress_float(position[\"wallet_balance\"], 4)}\nEquity:"
-                    f" {compress_float(self._bot.position[\"equity\"], 4)}\n\nSpot"
+                    f' {self._bot.margin_coin if hasattr(self._bot, "margin_coin") else ""}:\nWallet'
+                    f' balance: {compress_float(position["wallet_balance"], 4)}\nEquity:'
+                    f' {compress_float(self._bot.position["equity"], 4)}\n\nSpot'
                     f" balance:\n{self._bot.quot}:"
-                    f" {compress_float(float(quot_balance[\"free\"]) + float(quot_balance[\"locked\"]), 4)}"
-                    f" ({compress_float(float(quot_balance[\"locked\"]), 4)}"
+                    f' {compress_float(float(quot_balance["free"]) + float(quot_balance["locked"]), 4)}'
+                    f' ({compress_float(float(quot_balance["locked"]), 4)}'
                     f" locked)\n{self._bot.coin}:"
-                    f" {compress_float(float(coin_balance[\"free\"]) + float(coin_balance[\"locked\"]), 4)}"
-                    f" ({compress_float(float(coin_balance[\"locked\"]), 4)} locked)"
+                    f' {compress_float(float(coin_balance["free"]) + float(coin_balance["locked"]), 4)}'
+                    f' ({compress_float(float(coin_balance["locked"]), 4)} locked)'
                 )
                 self.send_msg(
                     msg,
