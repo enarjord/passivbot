@@ -1,0 +1,15 @@
+-r base.txt
+flake8
+flake8-docstrings
+flake8-mypy-fork
+flake8-typing-imports
+mypy>=0.910
+nox>=2021.10.1
+pre-commit>=2.4.0
+pyenchant
+pylint-pydantic
+pylint<3.0.0
+types-attrs
+types-python-dateutil
+types-setuptools
+types-tabulate

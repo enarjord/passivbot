@@ -8,12 +8,12 @@ before starting to implement it, feel free to get in touch on [this Discord serv
 ## Environment Setup
 
 ### Installing Required Libraries
-```
-python -m pip install -e .[dev,tests]
+```shell
+python -m pip install -e .[dev,tests,backtesting]
 ```
 
 ### Setting Up ``pre-commit``
-```
+```shell
 pre-commit install --install-hooks
 ```
 
@@ -28,7 +28,7 @@ Cleaning up these errors is a huge undertaking, but please see if the code you'r
 contributing adds additional errors and **at least** fix those, please.
 
 Once you've fixed any ``mypy`` errors you added, commit your code like:
-```
+```shell
 env SKIP=mypy git commit <your regular git flags here>
 ```
 
