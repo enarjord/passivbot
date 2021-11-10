@@ -1,15 +1,18 @@
 import functools
+import logging
 import os
-import weakref
 from typing import Any
 from typing import Callable
 from typing import cast
+from typing import Dict
 from typing import List
 from typing import Tuple
 from typing import TypeVar
 
 import numba
 import numpy as np
+
+log = logging.getLogger(__name__)
 
 F = TypeVar("F", bound=Callable[..., Any])
 
@@ -20,14 +23,16 @@ def deferred_njit(func: F) -> F:
 
     This allows disabling njit compilation through a CLI flag
     """
-    jit_cache: weakref.WeakValueDictionary[str, F] = weakref.WeakValueDictionary()
+    jit_cache: Dict[str, F] = {}
 
     @functools.wraps(func)
     def wrapper(*args: Any, **kwargs: Any):
         if func.__name__ not in jit_cache:
-            if os.environ.get("NOJIT", "false") == "false":
+            if os.environ.get("NOJIT", "false").lower() in ("false", "0"):
+                log.debug("numba.njit compiling '%s.%s()'", __name__, func.__name__)
                 jit_cache[func.__name__] = numba.njit(func)
             else:
+                log.debug("Skipping numba.njit compilation of '%s.%s()'", __name__, func.__name__)
                 jit_cache[func.__name__] = func
         return jit_cache[func.__name__](*args, **kwargs)
 
