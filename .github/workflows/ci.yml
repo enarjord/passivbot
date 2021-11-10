@@ -25,3 +25,51 @@ jobs:
       # Skip running mypy, there's just too many errors to fix right now
       env:
         SKIP: mypy-src,mypy-tests
+
+  Linux:
+    runs-on: ubuntu-20.04
+    needs: Pre-Commit
+
+    timeout-minutes: 25
+
+    strategy:
+      fail-fast: false
+      max-parallel: 16
+      matrix:
+        python-version:
+          - '3.8'
+          - '3.9'
+          - '3.10'
+
+    steps:
+    - uses: actions/checkout@v2
+      with:
+        fetch-depth: 0
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v2
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Install Nox
+      run: |
+        python -m pip install --upgrade pip
+        pip install nox 'pytest>=6.2'
+
+    - name: Install Test Requirements
+      run: |
+        nox --force-color -e tests-${{ matrix.python-version }} --install-only
+
+    - name: Test
+      id: run-tests
+      env:
+        SKIP_REQUIREMENTS_INSTALL: YES
+      run: |
+        nox --force-color -e tests-${{ matrix.python-version }} -- -vv tests/
+
+    - name: Upload Logs
+      if: always()
+      uses: actions/upload-artifact@main
+      with:
+        name: runtests-${{ steps.codecov.outputs.report-name }}.log
+        path: artifacts/runtests-*.log
