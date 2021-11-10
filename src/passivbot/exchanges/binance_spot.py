@@ -244,9 +244,9 @@ class BinanceBotSpot(Bot):
             params["timeInForce"] = "GTC"
             params["price"] = format_float(order["price"])
         if "custom_id" in order:
-            params[
-                "newClientOrderId"
-            ] = f"{order['custom_id']}_{str(int(time.time() * 1000))[8:]}_{int(np.random.random() * 1000)}"
+            params["newClientOrderId"] = (
+                f"{order['custom_id']}_{str(int(time.time() * 1000))[8:]}_{int(np.random.random() * 1000)}"
+            )
         o = await self.private_post(self.endpoints["create_order"], params)
         if "side" in o:
             return {
@@ -539,7 +539,7 @@ class BinanceBotSpot(Bot):
                     self.position["wallet_balance"] = self.adjust_wallet_balance(
                         self.position["wallet_balance"]
                     )
-                    self.position = self.add_pbrs_to_pos(self.position)
+                    self.position = self.add_wallet_exposures_to_pos(self.position)
                     pos_change = True
             if "filled" in event:
                 if event["filled"]["order_id"] not in {fill["order_id"] for fill in self.fills}:
@@ -548,7 +548,7 @@ class BinanceBotSpot(Bot):
                 self.position["wallet_balance"] = self.adjust_wallet_balance(
                     self.position["wallet_balance"]
                 )
-                self.position = self.add_pbrs_to_pos(self.position)
+                self.position = self.add_wallet_exposures_to_pos(self.position)
                 pos_change = True
             elif "partially_filled" in event:
                 await asyncio.sleep(0.01)

@@ -60,7 +60,7 @@ the configuration parameter `allow_sharing_wallet` to `true`.
 
 When Passivbot is started, it will (if possible) set the position mode to `hedge` on the exchange, and set the leverage
 to such a level that you do not run into errors about insufficient margin. To accomplish this, the configuration parameter
-`pbr_limit` is taken into account to determine the appropriate leverage to set on the exchange.
+`wallet_exposure_limit` is taken into account to determine the appropriate leverage to set on the exchange.
 
 ## Stopping bot
 

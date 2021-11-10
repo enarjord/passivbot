@@ -37,11 +37,11 @@
   {
 
     long£grid_span: [0.09, 0.4]
-    long£pbr_limit: [0.2, 0.2]
+    long£wallet_exposure_limit: [0.2, 0.2]
     long£max_n_entry_orders: [10, 10]
     long£initial_qty_pct: [0.001, 0.1]
     long£eprice_pprice_diff: [0.002, 0.02]
-    long£secondary_pbr_allocation: [0.5, 0.5]
+    long£secondary_allocation: [0.5, 0.5]
     long£secondary_pprice_diff: [0.3, 0.5]
     long£eprice_exp_base: [1.618034, 1.618034]
     long£min_markup: [0.0005, 0.005]
@@ -49,11 +49,11 @@
     long£n_close_orders: [7, 7]
 
     shrt£grid_span: [0.03, 0.2]
-    shrt£pbr_limit: [0.5, 2.0]
+    shrt£wallet_exposure_limit: [0.5, 2.0]
     shrt£max_n_entry_orders: [10, 10]
     shrt£initial_qty_pct: [0.001, 0.1]
     shrt£eprice_pprice_diff: [0.001, 0.01]
-    shrt£secondary_pbr_allocation: [0.0, 0.0]
+    shrt£secondary_allocation: [0.0, 0.0]
     shrt£secondary_pprice_diff: [0.21, 0.5]
     shrt£eprice_exp_base: [1.618034, 1.618034]
     shrt£min_markup: [0.0005, 0.005]
