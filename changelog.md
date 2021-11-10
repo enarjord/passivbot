@@ -71,7 +71,7 @@ All notable changes to this project will be documented in this file.
 
 - removed setting min_close_qty_multiplier
 - added setting close_qty_pct, which complements entry_qty_pct
-- rewrote iter_long/shrt_closes
+- rewrote iter_long/short_closes
 - fixed memory leak bug
 
 ## [v3.0.1] - 2021-03-18

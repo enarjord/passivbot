@@ -37,7 +37,7 @@ class Bot:
         self.spot = False
         self.config = config
         self.config["do_long"] = config["long"]["enabled"]
-        self.config["do_shrt"] = config["shrt"]["enabled"]
+        self.config["do_short"] = config["short"]["enabled"]
         self.config["max_leverage"] = 25
         self.telegram = None
         self.xk = {}
@@ -160,11 +160,11 @@ class Bot:
             if position["wallet_balance"]
             else 0.0
         )
-        position["shrt"]["wallet_exposure"] = (
+        position["short"]["wallet_exposure"] = (
             (
                 qty_to_cost(
-                    position["shrt"]["size"],
-                    position["shrt"]["price"],
+                    position["short"]["size"],
+                    position["short"]["price"],
                     self.xk["inverse"],
                     self.xk["c_mult"],
                 )
@@ -186,8 +186,8 @@ class Bot:
             position["equity"] = position["wallet_balance"] + calc_upnl(
                 position["long"]["size"],
                 position["long"]["price"],
-                position["shrt"]["size"],
-                position["shrt"]["price"],
+                position["short"]["size"],
+                position["short"]["price"],
                 self.price,
                 self.inverse,
                 self.c_mult,
@@ -199,7 +199,7 @@ class Bot:
                     and "spot" in self.market_type
                     and (
                         self.position["long"]["size"] != position["long"]["size"]
-                        or self.position["shrt"]["size"] != position["shrt"]["size"]
+                        or self.position["short"]["size"] != position["short"]["size"]
                     )
                 ):
                     # update fills if position size changed
@@ -358,7 +358,7 @@ class Bot:
         balance = self.position["wallet_balance"]
         long_psize = self.position["long"]["size"]
         long_pprice = self.position["long"]["price"]
-        shrt_psize = self.position["shrt"]["size"]
+        short_psize = self.position["short"]["size"]
 
         if self.stop_mode in ["panic"]:
             if self.exchange == "bybit":
@@ -377,30 +377,30 @@ class Bot:
                         "custom_id": "long_panic",
                     }
                 )
-            if shrt_psize != 0.0:
+            if short_psize != 0.0:
                 panic_orders.append(
                     {
                         "side": "buy",
-                        "position_side": "shrt",
-                        "qty": abs(shrt_psize),
+                        "position_side": "short",
+                        "qty": abs(short_psize),
                         "price": self.ob[0],
                         "type": "market",
                         "reduce_only": True,
-                        "custom_id": "shrt_panic",
+                        "custom_id": "short_panic",
                     }
                 )
             return panic_orders
 
         if self.hedge_mode:
             do_long = self.do_long or long_psize != 0.0
-            do_shrt = self.do_shrt or shrt_psize != 0.0
+            do_short = self.do_short or short_psize != 0.0
         else:
-            no_pos = long_psize == 0.0 and shrt_psize == 0.0
+            no_pos = long_psize == 0.0 and short_psize == 0.0
             do_long = (no_pos and self.do_long) or long_psize != 0.0
-            do_shrt = (no_pos and self.do_shrt) or shrt_psize != 0.0
-        do_shrt = self.do_shrt = False  # shorts currently disabled for v5
+            do_short = (no_pos and self.do_short) or short_psize != 0.0
+        do_short = self.do_short = False  # shorts currently disabled for v5
         self.xk["do_long"] = do_long
-        self.xk["do_shrt"] = do_shrt
+        self.xk["do_short"] = do_short
 
         long_entries = calc_long_entry_grid(
             balance,
@@ -547,9 +547,9 @@ class Bot:
                 self.position["long"]["price"] = event["long_pprice"]
                 self.position = self.add_wallet_exposures_to_pos(self.position)
                 pos_change = True
-            if "shrt_psize" in event:
-                self.position["shrt"]["size"] = event["shrt_psize"]
-                self.position["shrt"]["price"] = event["shrt_pprice"]
+            if "short_psize" in event:
+                self.position["short"]["size"] = event["short_psize"]
+                self.position["short"]["price"] = event["short_pprice"]
                 self.position = self.add_wallet_exposures_to_pos(self.position)
                 pos_change = True
             if "new_open_order" in event:
@@ -567,8 +567,8 @@ class Bot:
                 self.position["equity"] = self.position["wallet_balance"] + calc_upnl(
                     self.position["long"]["size"],
                     self.position["long"]["price"],
-                    self.position["shrt"]["size"],
-                    self.position["shrt"]["price"],
+                    self.position["short"]["size"],
+                    self.position["short"]["price"],
                     self.price,
                     self.inverse,
                     self.c_mult,
@@ -601,10 +601,10 @@ class Bot:
             (long_closes[0]["qty"], long_closes[0]["price"]) if long_closes else (0.0, 0.0)
         )
         line += f"e {leqty} @ {leprice}, c {lcqty} @ {lcprice} "
-        if self.position["long"]["size"] > abs(self.position["shrt"]["size"]):
+        if self.position["long"]["size"] > abs(self.position["short"]["size"]):
             liq_price = self.position["long"]["liquidation_price"]
         else:
-            liq_price = self.position["shrt"]["liquidation_price"]
+            liq_price = self.position["short"]["liquidation_price"]
         line += f"|| last {self.price} "
         line += f"pprc diff {calc_diff(self.position['long']['price'], self.price):.3f} "
         line += f"liq {round_dynamic(liq_price, 5)} "
@@ -740,7 +740,7 @@ async def _main(args: argparse.Namespace) -> None:
             " closed\n"
         )
         config["long"]["enabled"] = config["do_long"] = False
-        config["shrt"]["enabled"] = config["do_shrt"] = False
+        config["short"]["enabled"] = config["do_short"] = False
 
     if "spot" in config["market_type"]:
         config = spotify_config(config)
