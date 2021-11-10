@@ -1,0 +1,4 @@
+-r base.txt
+mkdocs-material==7.1.5
+mkdocs==1.2.1
+pymdown-extensions==8.2

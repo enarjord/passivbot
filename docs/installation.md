@@ -21,7 +21,7 @@ After the code has been checked out, you will need to install the python depende
 
 ```shell
 cd passivbot
-pip install -r requirements.txt
+python -m pip install -e .
 ```
 
 ### Upgrading
@@ -32,7 +32,7 @@ Before starting an upgrade, please make sure your bot is in an acceptable state 
 If you've installed the bot using the git clone instructions above, please follow these steps to upgrade:
 1) Shutdown the bot as described in [Running live](live.md)
 2) Pull the latest version of the bot by issueing `git pull` from the terminal.
-3) Run `pip install -r requirements.txt` from the passivbot root directory to update the python requirements.
+3) Run `python -m pip install -U .` from the passivbot root directory to update the python requirements.
 4) Start the bot again using the command described in [Running live](live.md) *
 
 !!! Warning
@@ -129,7 +129,7 @@ LLVM_CONFIG=llvm-config-9 pip3.8 install llvmlite
 Install the requirements:
 
 ```shell
-python3.8 -m pip install -r requirements_liveonly.txt
+python3.8 -m pip install -r .
 ```
 
 That's it, you're ready to run the bot live.
