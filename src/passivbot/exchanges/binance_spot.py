@@ -35,7 +35,7 @@ class BinanceBotSpot(Bot):
         self.spot = self.config["spot"] = True
         self.inverse = self.config["inverse"] = False
         self.hedge_mode = self.config["hedge_mode"] = False
-        self.do_shrt = self.config["do_shrt"] = self.config["shrt"]["enabled"] = False
+        self.do_short = self.config["do_short"] = self.config["short"]["enabled"] = False
         self.session = aiohttp.ClientSession()
         self.headers = {"X-MBX-APIKEY": self.key}
         self.base_endpoint = ""
@@ -221,13 +221,13 @@ class BinanceBotSpot(Bot):
         long_pfills = [{order...}, ...]
         """
         long_psize = round_dn(balance[self.coin]["onhand"], self.qty_step)
-        long_pfills, shrt_pfills = get_position_fills(long_psize, 0.0, self.fills)
+        long_pfills, short_pfills = get_position_fills(long_psize, 0.0, self.fills)
         long_pprice = calc_long_pprice(long_psize, long_pfills) if long_psize else 0.0
         if long_psize * long_pprice < self.min_cost:
             long_psize, long_pprice, long_pfills = 0.0, 0.0, []
         position = {
             "long": {"size": long_psize, "price": long_pprice, "liquidation_price": 0.0},
-            "shrt": {"size": 0.0, "price": 0.0, "liquidation_price": 0.0},
+            "short": {"size": 0.0, "price": 0.0, "liquidation_price": 0.0},
             "wallet_balance": balance[self.quot]["onhand"]
             + balance[self.coin]["onhand"] * long_pprice,
         }
@@ -568,8 +568,8 @@ class BinanceBotSpot(Bot):
                 self.position["equity"] = self.position["wallet_balance"] + calc_upnl(
                     self.position["long"]["size"],
                     self.position["long"]["price"],
-                    self.position["shrt"]["size"],
-                    self.position["shrt"]["price"],
+                    self.position["short"]["size"],
+                    self.position["short"]["price"],
                     self.price,
                     self.inverse,
                     self.c_mult,

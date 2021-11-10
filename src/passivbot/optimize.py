@@ -56,10 +56,10 @@ def create_config(config: dict) -> dict:
     updated_ranges = get_expanded_ranges(config)
     template = get_template_live_config()
     template["long"]["enabled"] = config["do_long"]
-    template["shrt"]["enabled"] = config["do_shrt"]
+    template["short"]["enabled"] = config["do_short"]
     unpacked = unpack_config(template)
     for k in updated_ranges:
-        side = "long" if "long" in k else ("shrt" if "shrt" in k else "")
+        side = "long" if "long" in k else ("short" if "short" in k else "")
         if updated_ranges[k][0] != updated_ranges[k][1] and (not side or config[f"do_{side}"]):
             unpacked[k] = tune.uniform(updated_ranges[k][0], updated_ranges[k][1])
         else:
@@ -281,7 +281,7 @@ def backtest_tune(data: np.ndarray, config: dict, current_best: Union[dict, list
     print("\n\nsimple sliding window optimization\n\n")
 
     parameter_columns = []
-    for side in ["long", "shrt"]:
+    for side in ["long", "short"]:
         if config[f"{side}£enabled"]:
             parameter_columns.append(f"{side}£grid_span")
             parameter_columns.append(f"{side}£eprice_pprice_diff")
@@ -346,11 +346,11 @@ def save_results(analysis, config):
 
 
 async def execute_optimize(config):
-    if not (config["do_long"] and config["do_shrt"]):
-        if not (config["do_long"] or config["do_shrt"]):
-            raise Exception("both long and shrt disabled")
+    if not (config["do_long"] and config["do_short"]):
+        if not (config["do_long"] or config["do_short"]):
+            raise Exception("both long and short disabled")
         print(
-            f"{'long' if config['do_long'] else 'shrt'} only, setting maximum_hrs_stuck ="
+            f"{'long' if config['do_long'] else 'short'} only, setting maximum_hrs_stuck ="
             " maximum_hrs_stuck_same_side"
         )
         config["maximum_hrs_stuck"] = config["maximum_hrs_stuck_same_side"]
@@ -366,7 +366,7 @@ async def execute_optimize(config):
             "end_date",
             "latency_simulation_ms",
             "do_long",
-            "do_shrt",
+            "do_short",
             "minimum_bankruptcy_distance",
             "maximum_hrs_stuck",
             "maximum_hrs_stuck_same_side",

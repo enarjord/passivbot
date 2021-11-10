@@ -22,7 +22,7 @@ from telegram.ext import Updater
 
 from passivbot.utils.funcs.njit import calc_diff
 from passivbot.utils.funcs.njit import calc_long_pnl
-from passivbot.utils.funcs.njit import calc_shrt_pnl
+from passivbot.utils.funcs.njit import calc_short_pnl
 from passivbot.utils.funcs.njit import round_
 from passivbot.utils.funcs.njit import round_dynamic
 from passivbot.utils.funcs.pure import compress_float
@@ -251,7 +251,7 @@ class Telegram:
             buttons = [
                 [
                     InlineKeyboardButton("Long", callback_data="long"),
-                    InlineKeyboardButton("Short", callback_data="shrt"),
+                    InlineKeyboardButton("Short", callback_data="short"),
                     InlineKeyboardButton("cancel", callback_data="cancel"),
                 ]
             ]
@@ -272,7 +272,7 @@ class Telegram:
 
         if self.force_open_type is None:
             self.force_open_type = query.data
-        if self.force_open_type in ["long", "shrt"]:
+        if self.force_open_type in ["long", "short"]:
             if self.open_qty == 0.0:
                 if len(self._bot.open_orders) == 0:
                     self.open_qty = 0.0
@@ -286,7 +286,7 @@ class Telegram:
                     self.open_qty = min(
                         o["qty"]
                         for o in self._bot.open_orders
-                        if o["side"] == "sell" and o["position_side"] == "shrt"
+                        if o["side"] == "sell" and o["position_side"] == "short"
                     )
 
             if self.force_open_type == "long":
@@ -339,7 +339,7 @@ class Telegram:
 
         async def _place_market_order(position_side: str):
             order = {
-                "side": "sell" if self.force_open_type == "shrt" else "buy",
+                "side": "sell" if self.force_open_type == "short" else "buy",
                 "position_side": self.force_open_type,
                 "qty": abs(self.open_qty),
                 "type": "market",
@@ -535,8 +535,8 @@ class Telegram:
         update.message.reply_text(
             text=(
                 "Shorting is currently"
-                f' <pre>{"enabled" if self._bot.do_shrt is True else "disabled"}</pre>.\nYou have'
-                f' chosen to <pre>{"disable" if self._bot.do_shrt is True else "enable"}</pre>'
+                f' <pre>{"enabled" if self._bot.do_short is True else "disabled"}</pre>.\nYou have'
+                f' chosen to <pre>{"disable" if self._bot.do_short is True else "enable"}</pre>'
                 " shorting.\nPlease confirm that you want to change this by replying with either"
                 " <pre>confirm</pre> or <pre>abort</pre>\n<b>Please be aware that this setting is"
                 " not persisted between restarts!</b>"
@@ -548,15 +548,15 @@ class Telegram:
 
     def _verify_short_confirmation(self, update: Update, _: CallbackContext) -> int:
         if update.message.text == "confirm":
-            self._bot.set_config_value("do_shrt", not self._bot.do_shrt)
+            self._bot.set_config_value("do_short", not self._bot.do_short)
             self.send_msg(
                 "Shorting is now"
-                f' <pre>{"enabled" if self._bot.do_shrt is True else "disabled"}</pre>.\nPlease be'
+                f' <pre>{"enabled" if self._bot.do_short is True else "disabled"}</pre>.\nPlease be'
                 " aware that this change is NOT persisted between restarts."
             )
         elif update.message.text == "abort":
             self.send_msg(
-                f'Request for {"disabling" if self._bot.do_shrt is True else "enabling"} shorting'
+                f'Request for {"disabling" if self._bot.do_short is True else "enabling"} shorting'
                 " was aborted"
             )
         else:
@@ -591,7 +591,7 @@ class Telegram:
             self._bot.set_config_value("do_long", not self._bot.do_long)
             self.send_msg(
                 "Long is now"
-                f' <pre>{"enabled" if self._bot.do_shrt is True else "disabled"}</pre>.\nPlease be'
+                f' <pre>{"enabled" if self._bot.do_short is True else "disabled"}</pre>.\nPlease be'
                 " aware that this change is NOT persisted between restarts."
             )
         elif update.message.text == "abort":
@@ -761,9 +761,9 @@ class Telegram:
         if update.message.text == "confirm":
             if self.stop_mode_requested == "graceful":
                 self.previous_do_long = self._bot.do_long
-                self.previous_do_shrt = self._bot.do_shrt
+                self.previous_do_short = self._bot.do_short
                 self._bot.set_config_value("do_long", False)
-                self._bot.set_config_value("do_shrt", False)
+                self._bot.set_config_value("do_short", False)
                 self._bot.stop_mode = "graceful"
                 self.send_msg(
                     "Graceful stop mode activated. No longer opening new long or short positions,"
@@ -774,9 +774,9 @@ class Telegram:
                 )
             elif self.stop_mode_requested == "freeze":
                 self.previous_do_long = self._bot.do_long
-                self.previous_do_shrt = self._bot.do_shrt
+                self.previous_do_short = self._bot.do_short
                 self._bot.set_config_value("do_long", False)
-                self._bot.set_config_value("do_shrt", False)
+                self._bot.set_config_value("do_short", False)
                 self._bot.stop_mode = "freeze"
                 self.send_msg(
                     "Freeze stop mode activated. No longer opening new long or short positions, all"
@@ -787,9 +787,9 @@ class Telegram:
                 )
             if self.stop_mode_requested == "panic":
                 self.previous_do_long = self._bot.do_long
-                self.previous_do_shrt = self._bot.do_shrt
+                self.previous_do_short = self._bot.do_short
                 self._bot.set_config_value("do_long", False)
-                self._bot.set_config_value("do_shrt", False)
+                self._bot.set_config_value("do_short", False)
                 self._bot.stop_mode = "panic"
                 self.send_msg(
                     "Panic stop mode activated. No longer opening new long or short positions,"
@@ -815,8 +815,8 @@ class Telegram:
             elif self.stop_mode_requested == "resume":
                 if hasattr(self, "previous_do_long"):
                     self._bot.set_config_value("do_long", self.previous_do_long)
-                if hasattr(self, "previous_do_shrt"):
-                    self._bot.set_config_value("do_shrt", self.previous_do_shrt)
+                if hasattr(self, "previous_do_short"):
+                    self._bot.set_config_value("do_short", self.previous_do_short)
                 self._bot.stop_mode = None
                 self.send_msg("Normal operation resumed")
         elif update.message.text == "abort":
@@ -888,7 +888,7 @@ class Telegram:
         position_table = PrettyTable(["", "Long", "Short"])
         if "long" in self._bot.position:
             long_position = self._bot.position["long"]
-            shrt_position = self._bot.position["shrt"]
+            short_position = self._bot.position["short"]
             closest_long_reentry_price = max(
                 [
                     o["price"]
@@ -905,25 +905,25 @@ class Telegram:
                 ]
                 or [0]
             )
-            closest_shrt_reentry_price = min(
+            closest_short_reentry_price = min(
                 [
                     o["price"]
                     for o in self._bot.open_orders
-                    if o["position_side"] == "shrt" and o["side"] == "sell"
+                    if o["position_side"] == "short" and o["side"] == "sell"
                 ]
                 or [0]
             )
-            closest_shrt_close_price = max(
+            closest_short_close_price = max(
                 [
                     o["price"]
                     for o in self._bot.open_orders
-                    if o["position_side"] == "shrt" and o["side"] == "buy"
+                    if o["position_side"] == "short" and o["side"] == "buy"
                 ]
                 or [0]
             )
             liq_diff = min(
                 calc_diff(long_position["liquidation_price"], self._bot.price),
-                calc_diff(shrt_position["liquidation_price"], self._bot.price),
+                calc_diff(short_position["liquidation_price"], self._bot.price),
             )
             long_pnl = calc_long_pnl(
                 long_position["price"],
@@ -932,10 +932,10 @@ class Telegram:
                 self._bot.inverse,
                 self._bot.c_mult,
             )
-            shrt_pnl = calc_shrt_pnl(
-                shrt_position["price"],
+            short_pnl = calc_short_pnl(
+                short_position["price"],
                 self._bot.price,
-                shrt_position["size"],
+                short_position["size"],
                 self._bot.inverse,
                 self._bot.c_mult,
             )
@@ -944,14 +944,14 @@ class Telegram:
                 [
                     "Size",
                     round_dynamic(long_position["size"], 3),
-                    round_dynamic(shrt_position["size"], 3),
+                    round_dynamic(short_position["size"], 3),
                 ]
             )
             position_table.add_row(
                 [
                     "Entry price",
                     round_dynamic(long_position["price"], 3),
-                    round_dynamic(shrt_position["price"], 3),
+                    round_dynamic(short_position["price"], 3),
                 ]
             )
             position_table.add_row(
@@ -965,34 +965,36 @@ class Telegram:
                 [
                     "Reentry price",
                     round_(closest_long_reentry_price, self._bot.price_step),
-                    round_(closest_shrt_reentry_price, self._bot.price_step),
+                    round_(closest_short_reentry_price, self._bot.price_step),
                 ]
             )
             position_table.add_row(
                 [
                     "Close price",
                     round_(closest_long_close_price, self._bot.price_step),
-                    round_(closest_shrt_close_price, self._bot.price_step),
+                    round_(closest_short_close_price, self._bot.price_step),
                 ]
             )
             position_table.add_row(
                 [
                     "Cost/balance",
                     round_dynamic(float(long_position["wallet_exposure"]), 3),
-                    round_dynamic(float(shrt_position["wallet_exposure"]), 3),
+                    round_dynamic(float(short_position["wallet_exposure"]), 3),
                 ]
             )
             position_table.add_row(
                 [
                     "Liq.price",
                     round_dynamic(long_position["liquidation_price"], 3),
-                    round_dynamic(shrt_position["liquidation_price"], 3),
+                    round_dynamic(short_position["liquidation_price"], 3),
                 ]
             )
             position_table.add_row(
                 ["Liq.diff.%", round_dynamic(liq_diff * 100, 3), round_dynamic(liq_diff * 100, 3)]
             )
-            position_table.add_row(["UPNL", round_dynamic(long_pnl, 3), round_dynamic(shrt_pnl, 3)])
+            position_table.add_row(
+                ["UPNL", round_dynamic(long_pnl, 3), round_dynamic(short_pnl, 3)]
+            )
 
             table_msg = position_table.get_string(
                 border=True, padding_width=1, junction_char=" ", vertical_char=" ", hrules=HEADER
@@ -1252,7 +1254,7 @@ class Telegram:
 
         cfg = denumpyize(self._bot.config)
         long_cfg = cfg.pop("long", None)
-        shrt_cfg = cfg.pop("shrt", None)
+        short_cfg = cfg.pop("short", None)
 
         self.send_msg(
             f"<pre><b>Version:</b></pre> {sha_short},\n"
@@ -1260,7 +1262,7 @@ class Telegram:
             "<pre><b>Config:</b></pre> \n"
             f"{config_pretty_str(cfg)}"
         )
-        self.send_msg(f"<pre><b>Short</b></pre>:\n{config_pretty_str(shrt_cfg)}")
+        self.send_msg(f"<pre><b>Short</b></pre>:\n{config_pretty_str(short_cfg)}")
         self.send_msg(f"<pre><b>Long</b></pre>:\n{config_pretty_str(long_cfg)}")
 
     def log_start(self):

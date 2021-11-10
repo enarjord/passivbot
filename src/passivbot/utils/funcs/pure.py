@@ -48,7 +48,7 @@ def get_xk_keys():
         "hedge_mode",
         "inverse",
         "do_long",
-        "do_shrt",
+        "do_short",
         "qty_step",
         "price_step",
         "min_qty",
@@ -76,15 +76,15 @@ def create_xk(config: Dict[str, Any]) -> Dict[str, Any]:
     else:
         config_["spot"] = False
         config_["do_long"] = config["long"]["enabled"]
-        config_["do_shrt"] = config["shrt"]["enabled"]
+        config_["do_short"] = config["short"]["enabled"]
     keys = get_xk_keys()
     config_["long"]["n_close_orders"] = int(round(config_["long"]["n_close_orders"]))
-    config_["shrt"]["n_close_orders"] = int(round(config_["shrt"]["n_close_orders"]))
+    config_["short"]["n_close_orders"] = int(round(config_["short"]["n_close_orders"]))
     config_["long"]["max_n_entry_orders"] = int(round(config_["long"]["max_n_entry_orders"]))
-    config_["shrt"]["max_n_entry_orders"] = int(round(config_["shrt"]["max_n_entry_orders"]))
+    config_["short"]["max_n_entry_orders"] = int(round(config_["short"]["max_n_entry_orders"]))
     for k in keys:
         if k in config_["long"]:
-            xk[k] = (config_["long"][k], config_["shrt"][k])
+            xk[k] = (config_["long"][k], config_["short"][k])
         elif k in config_:
             xk[k] = config_[k]
         else:
@@ -175,7 +175,7 @@ def config_pretty_str(config: Dict[str, Any]):
 def candidate_to_live_config(candidate: Dict[str, Any]) -> Any:
     packed = pack_config(candidate)
     live_config = get_template_live_config()
-    sides = ["long", "shrt"]
+    sides = ["long", "short"]
     for side in sides:
         for k in live_config[side]:
             if k in packed[side]:
@@ -185,12 +185,12 @@ def candidate_to_live_config(candidate: Dict[str, Any]) -> Any:
             live_config[k] = packed[k]
 
     result_dict = candidate["result"] if "result" in candidate else candidate
-    if packed["long"]["enabled"] and not packed["shrt"]["enabled"]:
+    if packed["long"]["enabled"] and not packed["short"]["enabled"]:
         side_type = "longonly"
-    elif packed["shrt"]["enabled"] and not packed["long"]["enabled"]:
-        side_type = "shrtonly"
+    elif packed["short"]["enabled"] and not packed["long"]["enabled"]:
+        side_type = "shortonly"
     else:
-        side_type = "long&shrt"
+        side_type = "long&short"
     name = f"{side_type}_"
     name += f"{result_dict['exchange'].lower()}_" if "exchange" in result_dict else "unknown_"
     name += f"{result_dict['symbol'].lower()}" if "symbol" in result_dict else "unknown"
@@ -347,7 +347,7 @@ def get_template_live_config():
             "markup_range": 0.0075,
             "n_close_orders": 7,
         },
-        "shrt": {
+        "short": {
             "enabled": False,
             "grid_span": 0.16,
             "wallet_exposure_limit": 1.6,
@@ -376,8 +376,8 @@ def analyze_fills(
             "bkr_price",
             "long_psize",
             "long_pprice",
-            "shrt_psize",
-            "shrt_pprice",
+            "short_psize",
+            "short_pprice",
             "price",
             "closest_bkr",
         ],
@@ -410,8 +410,8 @@ def analyze_fills(
         else 0.0
         for x in sdf.itertuples()
     ]
-    sdf.loc[:, "shrt_wallet_exposure"] = [
-        qty_to_cost(x.shrt_psize, x.shrt_pprice, config["inverse"], config["c_mult"]) / x.balance
+    sdf.loc[:, "short_wallet_exposure"] = [
+        qty_to_cost(x.short_psize, x.short_pprice, config["inverse"], config["c_mult"]) / x.balance
         if x.balance > 0.0
         else 0.0
         for x in sdf.itertuples()
@@ -496,32 +496,32 @@ def calc_pprice_from_fills(coin_balance, fills, n_fills_limit=100):
 
 
 def get_position_fills(
-    long_psize: float, shrt_psize: float, fills: List[Dict[str, Any]]
+    long_psize: float, short_psize: float, fills: List[Dict[str, Any]]
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """
     assumes fills are sorted old to new
     returns fills since and including initial entry
     """
     long_psize *= 0.999
-    shrt_psize *= 0.999
+    short_psize *= 0.999
     long_qty_sum = 0.0
-    shrt_qty_sum = 0.0
-    long_done, shrt_done = long_psize == 0.0, shrt_psize == 0.0
-    if long_done and shrt_done:
+    short_qty_sum = 0.0
+    long_done, short_done = long_psize == 0.0, short_psize == 0.0
+    if long_done and short_done:
         return [], []
-    long_pfills, shrt_pfills = [], []
+    long_pfills, short_pfills = [], []
     for x in fills[::-1]:
         if x["position_side"] == "long":
             if not long_done:
                 long_qty_sum += x["qty"] * (1.0 if x["side"] == "buy" else -1.0)
                 long_pfills.append(x)
                 long_done = long_qty_sum >= long_psize
-        elif x["position_side"] == "shrt":
-            if not shrt_done:
-                shrt_qty_sum += x["qty"] * (1.0 if x["side"] == "sell" else -1.0)
-                shrt_pfills.append(x)
-                shrt_done = shrt_qty_sum >= shrt_psize
-    return long_pfills[::-1], shrt_pfills[::-1]
+        elif x["position_side"] == "short":
+            if not short_done:
+                short_qty_sum += x["qty"] * (1.0 if x["side"] == "sell" else -1.0)
+                short_pfills.append(x)
+                short_done = short_qty_sum >= short_psize
+    return long_pfills[::-1], short_pfills[::-1]
 
 
 def calc_long_pprice(long_psize, long_pfills):
@@ -553,7 +553,7 @@ def nullify(x):
         return 0.0
 
 
-def spotify_config(config: Dict[str, Any], nullify_shrt: bool = True) -> Dict[str, Any]:
+def spotify_config(config: Dict[str, Any], nullify_short: bool = True) -> Dict[str, Any]:
     spotified = config.copy()
 
     spotified["spot"] = True
@@ -562,12 +562,12 @@ def spotify_config(config: Dict[str, Any], nullify_shrt: bool = True) -> Dict[st
     elif "spot" not in spotified["market_type"]:
         spotified["market_type"] += "_spot"
     spotified["do_long"] = spotified["long"]["enabled"] = config["long"]["enabled"]
-    spotified["do_shrt"] = spotified["shrt"]["enabled"] = False
+    spotified["do_short"] = spotified["short"]["enabled"] = False
     spotified["long"]["wallet_exposure_limit"] = min(
         1.0, spotified["long"]["wallet_exposure_limit"]
     )
-    if nullify_shrt:
-        spotified["shrt"] = nullify(spotified["shrt"])
+    if nullify_short:
+        spotified["short"] = nullify(spotified["short"])
     return spotified
 
 

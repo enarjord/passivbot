@@ -152,7 +152,7 @@ def calc_long_pnl(entry_price, close_price, qty, inverse, c_mult) -> float:
 
 
 @deferred_njit
-def calc_shrt_pnl(entry_price, close_price, qty, inverse, c_mult) -> float:
+def calc_short_pnl(entry_price, close_price, qty, inverse, c_mult) -> float:
     if inverse:
         if entry_price == 0.0 or close_price == 0.0:
             return 0.0
@@ -163,13 +163,13 @@ def calc_shrt_pnl(entry_price, close_price, qty, inverse, c_mult) -> float:
 
 @deferred_njit
 def calc_equity(
-    balance, long_psize, long_pprice, shrt_psize, shrt_pprice, last_price, inverse, c_mult
+    balance, long_psize, long_pprice, short_psize, short_pprice, last_price, inverse, c_mult
 ):
     equity = balance
     if long_pprice and long_psize:
         equity += calc_long_pnl(long_pprice, last_price, long_psize, inverse, c_mult)
-    if shrt_pprice and shrt_psize:
-        equity += calc_shrt_pnl(shrt_pprice, last_price, shrt_psize, inverse, c_mult)
+    if short_pprice and short_psize:
+        equity += calc_short_pnl(short_pprice, last_price, short_psize, inverse, c_mult)
     return equity
 
 
@@ -271,10 +271,10 @@ def calc_long_close_grid(
 
 
 @deferred_njit
-def calc_shrt_close_grid(
+def calc_short_close_grid(
     balance,
-    shrt_psize,
-    shrt_pprice,
+    short_psize,
+    short_pprice,
     highest_bid,
     spot,
     inverse,
@@ -290,26 +290,26 @@ def calc_shrt_close_grid(
     markup_range,
     n_close_orders,
 ) -> List[Tuple[float, float, str]]:
-    if shrt_psize == 0.0:
+    if short_psize == 0.0:
         return [(0.0, 0.0, "")]
-    minm = shrt_pprice * (1 - min_markup)
+    minm = short_pprice * (1 - min_markup)
     close_prices = []
-    for p in np.linspace(minm, shrt_pprice * (1 - min_markup - markup_range), n_close_orders):
+    for p in np.linspace(minm, short_pprice * (1 - min_markup - markup_range), n_close_orders):
         price_ = round_dn(p, price_step)
         if price_ <= highest_bid:
             close_prices.append(price_)
     if len(close_prices) == 0:
-        return [(-shrt_psize, highest_bid, "shrt_nclose")]
+        return [(-short_psize, highest_bid, "short_nclose")]
     elif len(close_prices) == 1:
-        return [(-shrt_psize, close_prices[0], "shrt_nclose")]
+        return [(-short_psize, close_prices[0], "short_nclose")]
     else:
         min_close_qty = calc_min_entry_qty(close_prices[-1], inverse, qty_step, min_qty, min_cost)
-        default_qty = round_dn(-shrt_psize / len(close_prices), qty_step)
+        default_qty = round_dn(-short_psize / len(close_prices), qty_step)
         if default_qty == 0.0:
-            return [(-shrt_psize, close_prices[0], "shrt_nclose")]
+            return [(-short_psize, close_prices[0], "short_nclose")]
         default_qty = max(min_close_qty, default_qty)
-        shrt_closes = []
-        remaining = -shrt_psize
+        short_closes = []
+        remaining = -short_psize
         for close_price in close_prices:
             if remaining < max(
                 [
@@ -323,24 +323,24 @@ def calc_shrt_close_grid(
             ):
                 break
             close_qty = min(remaining, default_qty)
-            shrt_closes.append((close_qty, close_price, "shrt_nclose"))
+            short_closes.append((close_qty, close_price, "short_nclose"))
             remaining = round_(remaining - close_qty, qty_step)
         if remaining:
-            if shrt_closes:
-                shrt_closes[-1] = (
-                    round_(shrt_closes[-1][0] + remaining, qty_step),
-                    shrt_closes[-1][1],
-                    shrt_closes[-1][2],
+            if short_closes:
+                short_closes[-1] = (
+                    round_(short_closes[-1][0] + remaining, qty_step),
+                    short_closes[-1][1],
+                    short_closes[-1][2],
                 )
             else:
-                shrt_closes = [(-shrt_psize, close_prices[0], "shrt_nclose")]
-        return shrt_closes
+                short_closes = [(-short_psize, close_prices[0], "short_nclose")]
+        return short_closes
 
 
 @deferred_njit
-def calc_upnl(long_psize, long_pprice, shrt_psize, shrt_pprice, last_price, inverse, c_mult):
-    return calc_long_pnl(long_pprice, last_price, long_psize, inverse, c_mult) + calc_shrt_pnl(
-        shrt_pprice, last_price, shrt_psize, inverse, c_mult
+def calc_upnl(long_psize, long_pprice, short_psize, short_pprice, last_price, inverse, c_mult):
+    return calc_long_pnl(long_pprice, last_price, long_psize, inverse, c_mult) + calc_short_pnl(
+        short_pprice, last_price, short_psize, inverse, c_mult
     )
 
 
@@ -356,25 +356,25 @@ def calc_emas_last(xs, spans):
 
 @deferred_njit
 def calc_bankruptcy_price(
-    balance, long_psize, long_pprice, shrt_psize, shrt_pprice, inverse, c_mult
+    balance, long_psize, long_pprice, short_psize, short_pprice, inverse, c_mult
 ):
     long_pprice = nan_to_0(long_pprice)
-    shrt_pprice = nan_to_0(shrt_pprice)
+    short_pprice = nan_to_0(short_pprice)
     long_psize *= c_mult
-    abs_shrt_psize = abs(shrt_psize) * c_mult
+    abs_short_psize = abs(short_psize) * c_mult
     if inverse:
-        shrt_cost = abs_shrt_psize / shrt_pprice if shrt_pprice > 0.0 else 0.0
+        short_cost = abs_short_psize / short_pprice if short_pprice > 0.0 else 0.0
         long_cost = long_psize / long_pprice if long_pprice > 0.0 else 0.0
-        denominator = shrt_cost - long_cost - balance
+        denominator = short_cost - long_cost - balance
         if denominator == 0.0:
             return 0.0
-        bankruptcy_price = (abs_shrt_psize - long_psize) / denominator
+        bankruptcy_price = (abs_short_psize - long_psize) / denominator
     else:
-        denominator = long_psize - abs_shrt_psize
+        denominator = long_psize - abs_short_psize
         if denominator == 0.0:
             return 0.0
         bankruptcy_price = (
-            -balance + long_psize * long_pprice - abs_shrt_psize * shrt_pprice
+            -balance + long_psize * long_pprice - abs_short_psize * short_pprice
         ) / denominator
     return max(0.0, bankruptcy_price)
 
@@ -1094,7 +1094,7 @@ def njit_backtest(
     hedge_mode,
     inverse,
     do_long,
-    do_shrt,
+    do_short,
     qty_step,
     price_step,
     min_qty,
@@ -1118,7 +1118,7 @@ def njit_backtest(
     prices = ticks[:, 2]
 
     balance = equity = starting_balance
-    long_psize, long_pprice, shrt_psize, shrt_pprice = 0.0, 0.0, 0.0, 0.0
+    long_psize, long_pprice, short_psize, short_pprice = 0.0, 0.0, 0.0, 0.0
 
     fills = []
     stats = []
@@ -1140,7 +1140,7 @@ def njit_backtest(
         closest_bkr = min(closest_bkr, bkr_diff)
         if timestamps[k] >= next_stats_update:
             equity = balance + calc_upnl(
-                long_psize, long_pprice, shrt_psize, shrt_pprice, prices[k], inverse, c_mult
+                long_psize, long_pprice, short_psize, short_pprice, prices[k], inverse, c_mult
             )
             stats.append(
                 (
@@ -1150,8 +1150,8 @@ def njit_backtest(
                     bkr_price,
                     long_psize,
                     long_pprice,
-                    shrt_psize,
-                    shrt_pprice,
+                    short_psize,
+                    short_pprice,
                     prices[k],
                     closest_bkr,
                 )
@@ -1224,11 +1224,11 @@ def njit_backtest(
                         "long_bankruptcy",
                     )
                 )
-            if shrt_psize != 0.0:
-                fee_paid = -qty_to_cost(shrt_psize, shrt_pprice, inverse, c_mult) * maker_fee
-                pnl = calc_shrt_pnl(shrt_pprice, prices[k], -shrt_psize, inverse, c_mult)
+            if short_psize != 0.0:
+                fee_paid = -qty_to_cost(short_psize, short_pprice, inverse, c_mult) * maker_fee
+                pnl = calc_short_pnl(short_pprice, prices[k], -short_psize, inverse, c_mult)
                 balance, equity = 0.0, 0.0
-                shrt_psize, shrt_pprice = 0.0, 0.0
+                short_psize, short_pprice = 0.0, 0.0
                 fills.append(
                     (
                         k,
@@ -1237,11 +1237,11 @@ def njit_backtest(
                         fee_paid,
                         balance,
                         equity,
-                        -shrt_psize,
+                        -short_psize,
                         prices[k],
                         0.0,
                         0.0,
-                        "shrt_bankruptcy",
+                        "short_bankruptcy",
                     )
                 )
             return fills, stats
@@ -1264,8 +1264,8 @@ def njit_backtest(
                 balance,
                 long_psize,
                 long_pprice,
-                shrt_psize,
-                shrt_pprice,
+                short_psize,
+                short_pprice,
                 prices[k],
                 inverse,
                 c_mult,
@@ -1287,7 +1287,7 @@ def njit_backtest(
             )
             long_entries = long_entries[1:]
             bkr_price = calc_bankruptcy_price(
-                balance, long_psize, long_pprice, shrt_psize, shrt_pprice, inverse, c_mult
+                balance, long_psize, long_pprice, short_psize, short_pprice, inverse, c_mult
             )
         while (
             long_psize > 0.0
@@ -1318,8 +1318,8 @@ def njit_backtest(
                 balance,
                 long_psize,
                 long_pprice,
-                shrt_psize,
-                shrt_pprice,
+                short_psize,
+                short_pprice,
                 prices[k],
                 inverse,
                 c_mult,
@@ -1341,7 +1341,7 @@ def njit_backtest(
             )
             long_closes = long_closes[1:]
             bkr_price = calc_bankruptcy_price(
-                balance, long_psize, long_pprice, shrt_psize, shrt_pprice, inverse, c_mult
+                balance, long_psize, long_pprice, short_psize, short_pprice, inverse, c_mult
             )
         if long_psize == 0.0:
             next_entry_grid_update_ts = min(
