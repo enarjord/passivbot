@@ -224,7 +224,9 @@ def calc_long_close_grid(
         * 0.5
     ):
         # close entire pos at breakeven or better if psize < initial_qty * 0.5
-        close_price = max(lowest_ask, round_up(long_pprice * (1 + 0.00041), price_step))
+        # assumes maker fee rate 0.001 for spot, 0.0002 for futures
+        breakeven_markup = 0.0021 if spot else 0.00041
+        close_price = max(lowest_ask, round_up(long_pprice * (1 + breakeven_markup), price_step))
         return [(-round_(long_psize, qty_step), close_price, "long_nclose")]
     close_prices = []
     for p in np.linspace(minm, long_pprice * (1 + min_markup + markup_range), n_close_orders):
