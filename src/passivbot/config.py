@@ -1,8 +1,11 @@
+from __future__ import annotations
+
+import json
+import pathlib
 from typing import Any
 from typing import Dict
 
 from pydantic import BaseModel
-from pydantic import Field
 
 
 class NonMutatingMixin(BaseModel):
@@ -62,9 +65,22 @@ class SymbolConfig(NonMutatingMixin):
 
 
 class PassivBotConfig(NonMutatingMixin):
-    api_keys: Dict[str, ApiKey] = Field(alias="api-keys")
+    api_keys: Dict[str, ApiKey]
     configs: Dict[str, NamedConfig]
     symbols: Dict[str, SymbolConfig]
+
+    @classmethod
+    def parse_files(cls, *files: pathlib.Path) -> PassivBotConfig:
+        """
+        Helper class method to load the configuration from multiple files
+        """
+        config_dicts: list[dict[str, Any]] = []
+        for file in files:
+            config_dicts.append(json.loads(file.read_text()))
+        config = config_dicts.pop(0)
+        if config_dicts:
+            merge_dictionaries(config, *config_dicts)
+        return cls.parse_raw(json.dumps(config))
 
 
 def merge_dictionaries(target_dict: Dict[Any, Any], *source_dicts: Dict[Any, Any]) -> None:

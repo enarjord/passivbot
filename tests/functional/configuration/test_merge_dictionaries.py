@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from typing import Any
 from typing import Dict
 
@@ -7,9 +9,9 @@ from passivbot import config
 
 
 @pytest.fixture
-def complete_dictionary() -> Dict[str, Dict[str, Any]]:
+def complete_dictionary() -> dict[str, dict[str, Any]]:
     return {
-        "api-keys": {
+        "api_keys": {
             "account-1": {
                 "exchange": "binance",
                 "key": "this is the account-1 key",
@@ -97,8 +99,8 @@ def complete_dictionary() -> Dict[str, Dict[str, Any]]:
 
 
 def test_missing_top_level_keys(complete_dictionary):
-    keys: Dict[str, Dict[str, Any]] = {
-        "api-keys": {
+    keys: dict[str, dict[str, Any]] = {
+        "api_keys": {
             "account-1": {
                 "exchange": "binance",
                 "key": "this is the account-1 key",
@@ -111,7 +113,7 @@ def test_missing_top_level_keys(complete_dictionary):
             },
         }
     }
-    configs: Dict[str, Any] = {
+    configs: dict[str, Any] = {
         "configs": {
             "config-1": {
                 "long": {
@@ -176,7 +178,7 @@ def test_missing_top_level_keys(complete_dictionary):
         }
     }
 
-    target_dict: Dict[str, Dict[str, Any]] = {
+    target_dict: dict[str, dict[str, Any]] = {
         "symbols": {
             "BTCUSDT": {
                 "config_name": "config-1",
@@ -188,15 +190,15 @@ def test_missing_top_level_keys(complete_dictionary):
             },
         },
     }
-    assert "api-keys" not in target_dict
+    assert "api_keys" not in target_dict
     assert "configs" not in target_dict
     config.merge_dictionaries(target_dict, keys, configs)
     assert target_dict == complete_dictionary
 
 
 def test_nested_dictionaries(complete_dictionary):
-    keys: Dict[str, Dict[str, Any]] = {
-        "api-keys": {
+    keys: dict[str, dict[str, Any]] = {
+        "api_keys": {
             "account-1": {
                 "exchange": "binance",
                 "key": "this is the account-1 key",
@@ -209,7 +211,7 @@ def test_nested_dictionaries(complete_dictionary):
             },
         }
     }
-    configs: Dict[str, Dict[str, Any]] = {
+    configs: dict[str, dict[str, Any]] = {
         "configs": {
             "config-1": {
                 "long": {
@@ -274,7 +276,7 @@ def test_nested_dictionaries(complete_dictionary):
         }
     }
 
-    symbols: Dict[str, Dict[str, Any]] = {
+    symbols: dict[str, dict[str, Any]] = {
         "symbols": {
             "ETHUSDT": {
                 "config_name": "config-1",
@@ -283,8 +285,8 @@ def test_nested_dictionaries(complete_dictionary):
         },
     }
 
-    target_dict: Dict[str, Dict[str, Any]] = {
-        "api-keys": {
+    target_dict: dict[str, dict[str, Any]] = {
+        "api_keys": {
             "account-1": {
                 "exchange": "binance",
                 "key": "this is the account-1 key",
@@ -330,7 +332,7 @@ def test_nested_dictionaries(complete_dictionary):
             },
         },
     }
-    assert "account-2" not in target_dict["api-keys"]
+    assert "account-2" not in target_dict["api_keys"]
     assert "config-2" not in target_dict["configs"]
     assert "ETHUSDT" not in target_dict["symbols"]
     config.merge_dictionaries(target_dict, keys, configs, symbols)
@@ -338,7 +340,7 @@ def test_nested_dictionaries(complete_dictionary):
 
 
 def test_nested_key_override(complete_dictionary):
-    symbols: Dict[str, Dict[str, Any]] = {
+    symbols: dict[str, dict[str, Any]] = {
         "symbols": {
             "ETHUSDT": {
                 "config_name": "config-2",
