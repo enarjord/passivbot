@@ -3,6 +3,7 @@ import asyncio
 import json
 import logging
 import os
+import pathlib
 import pprint
 import signal
 import time
@@ -26,18 +27,20 @@ from passivbot.utils.funcs.pure import filter_orders
 from passivbot.utils.funcs.pure import spotify_config
 from passivbot.utils.procedures import load_exchange_key_secret
 from passivbot.utils.procedures import load_live_config
-from passivbot.utils.procedures import make_get_filepath
 from passivbot.utils.procedures import print_
 
 logging.getLogger("telegram").setLevel(logging.CRITICAL)
 
 SUBPARSER_NAME: str = "live"
 
+log = logging.getLogger(__name__)
+
 
 class Bot:
     def __init__(self, config: dict):
         self.spot = False
         self.config = config
+        self.basedir: pathlib.Path = config["basedir"]
         self.config["do_long"] = config["long"]["enabled"]
         self.config["do_short"] = config["short"]["enabled"]
         self.config["max_leverage"] = 25
@@ -79,7 +82,8 @@ class Bot:
 
         self.c_mult = self.config["c_mult"] = 1.0
 
-        self.log_filepath = make_get_filepath(f"logs/{self.exchange}/{config['config_name']}.log")
+        self.log_filepath = self.basedir / "logs" / self.exchange / f"{config['config_name']}.log"
+        self.log_filepath.parent.mkdir(parents=True, exist_ok=True)
 
         _, self.key, self.secret = load_exchange_key_secret(self.user)
 
@@ -124,8 +128,9 @@ class Bot:
 
     def dump_log(self, data) -> None:
         if self.config["logging_level"] > 0:
-            with open(self.log_filepath, "a") as f:
-                f.write(json.dumps({**{"log_timestamp": time.time()}, **data}) + "\n")
+            self.log_filepath.write_text(
+                json.dumps({**{"log_timestamp": time.time()}, **data}) + "\n"
+            )
 
     async def update_open_orders(self) -> None:
         if self.ts_locked["update_open_orders"] > self.ts_released["update_open_orders"]:
@@ -713,9 +718,14 @@ async def _start_telegram(account: dict, bot: Bot):
 
 async def _main(args: argparse.Namespace) -> None:
     try:
-        accounts = json.load(open("api-keys.json"))
-    except Exception as e:
-        print(e, "failed to load api-keys.json file")
+        accounts = json.load(args.api_keys.open())
+    except FileNotFoundError:
+        log.error("The '%s' file does not exist.", args.api_keys)
+    except ValueError as exc:
+        log.error("Failed to load JSON from '%s': %s", args.api_keys, exc)
+        return
+    except Exception:
+        log.error("Failed to load %s", args.api_keys, exc_info=True)
         return
     try:
         account = accounts[args.user]
@@ -727,6 +737,7 @@ async def _main(args: argparse.Namespace) -> None:
     except Exception as e:
         print(e, "failed to load config", args.live_config_path)
         return
+    config["basedir"] = args.basedir
     config["user"] = args.user
     config["exchange"] = account["exchange"]
     config["symbol"] = args.symbol

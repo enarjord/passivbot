@@ -9,6 +9,7 @@ import passivbot.downloader
 import passivbot.multi_symbol_optimize
 import passivbot.optimize
 import passivbot.utils.logs
+import passivbot.utils.procedures
 from passivbot.version import __version__
 
 
@@ -16,6 +17,21 @@ def main() -> None:
     parser = argparse.ArgumentParser(prog="passivbot", description="PassivBot Crypto Trading")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("--nojit", help="disable numba", action="store_true")
+    config_section = parser.add_argument_group(title="Configuration Paths")
+    config_section.add_argument(
+        "--basedir",
+        type=pathlib.Path,
+        default=pathlib.Path.cwd(),
+        help=(
+            "The base directory where all paths will be computed from. "
+            "Defaults to the current directory"
+        ),
+    )
+    config_section.add_argument(
+        "--api-keys",
+        type=pathlib.Path,
+        help="Path to the `api-keys.json` file. Defaults to <basedir>/api-keys.json",
+    )
     cli_logging_params = parser.add_argument_group(
         title="Logging", description="Runtime logging configuration"
     )
@@ -55,6 +71,9 @@ def main() -> None:
         os.environ["NOJIT"] = "true"
         print("numba.njit compilation is disabled")
 
+    if not args.api_keys:
+        args.api_keys = args.basedir / "api-keys.json"
+
     if args.subparser == passivbot.bot.SUBPARSER_NAME:
         passivbot.bot.validate_argparse_parsed_args(parser, args)
     elif args.subparser == passivbot.backtest.SUBPARSER_NAME:
@@ -67,5 +86,6 @@ def main() -> None:
         passivbot.batch_optimize.validate_argparse_parsed_args(parser, args)
     elif args.subparser == passivbot.multi_symbol_optimize.SUBPARSER_NAME:
         passivbot.multi_symbol_optimize.validate_argparse_parsed_args(parser, args)
+
     # Call the right sub-parser
     args.func(args)

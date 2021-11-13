@@ -1,12 +1,16 @@
 import argparse
 import asyncio
-import glob
 import os
 import pprint
 import shutil
 import sys
 import time
 from collections import OrderedDict
+from typing import Any
+from typing import Dict
+from typing import List
+from typing import Optional
+from typing import Tuple
 from typing import Union
 
 import nevergrad as ng
@@ -30,6 +34,7 @@ from passivbot.utils.funcs.pure import unpack_config
 from passivbot.utils.procedures import add_backtesting_argparse_args
 from passivbot.utils.procedures import load_live_config
 from passivbot.utils.procedures import prepare_optimize_config
+from passivbot.utils.procedures import validate_backtesting_argparse_args
 from passivbot.utils.reporter import LogReporter
 
 SUBPARSER_NAME: str = "optimize"
@@ -37,7 +42,7 @@ SUBPARSER_NAME: str = "optimize"
 os.environ["TUNE_GLOBAL_CHECKPOINT_S"] = "240"
 
 
-def get_expanded_ranges(config: dict) -> dict:
+def get_expanded_ranges(config: Dict[str, Any]) -> Dict[str, Any]:
     updated_ranges = OrderedDict()
     unpacked = unpack_config(get_template_live_config())
     for k0 in unpacked:
@@ -53,7 +58,7 @@ def get_expanded_ranges(config: dict) -> dict:
     return updated_ranges
 
 
-def create_config(config: dict) -> dict:
+def create_config(config: Dict[str, Any]) -> Dict[str, Any]:
     updated_ranges = get_expanded_ranges(config)
     template = get_template_live_config()
     template["long"]["enabled"] = config["do_long"]
@@ -68,7 +73,7 @@ def create_config(config: dict) -> dict:
     return {**config, **unpacked, **{"ranges": updated_ranges}}
 
 
-def clean_start_config(start_config: dict, config: dict) -> dict:
+def clean_start_config(start_config: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
     clean_start = {}
     for k, v in unpack_config(start_config).items():
         if k in config:
@@ -80,7 +85,7 @@ def clean_start_config(start_config: dict, config: dict) -> dict:
     return clean_start
 
 
-def clean_result_config(config: dict) -> dict:
+def clean_result_config(config: Dict[str, Any]) -> Dict[str, Any]:
     for k, v in config.items():
         if type(v) == np.float64:
             config[k] = float(v)
@@ -113,8 +118,8 @@ def iter_slices(data, sliding_window_days: float, max_span: int):
 
 
 def objective_function(
-    analysis: dict, config: dict, metric="adjusted_daily_gain"
-) -> (float, bool, str):
+    analysis: Dict[str, Any], config: Dict[str, Any], metric="adjusted_daily_gain"
+) -> Tuple[float, bool, str]:
     if analysis["n_fills"] == 0:
         return -1.0
     obj = analysis[metric]
@@ -155,7 +160,7 @@ def objective_function(
     return obj, break_early, line
 
 
-def single_sliding_window_run(config, data, do_print=True) -> (float, [dict]):
+def single_sliding_window_run(config, data, do_print=True) -> Union[float, List[Dict[str, Any]]]:
     analyses = []
     objective = 0.0
     n_days = config["n_days"]
@@ -239,7 +244,11 @@ def simple_sliding_window_wrap(config, data, do_print=False):
         )
 
 
-def backtest_tune(data: np.ndarray, config: dict, current_best: Union[dict, list] = None):
+def backtest_tune(
+    data: np.ndarray,
+    config: Dict[str, Any],
+    current_best: Optional[Union[Dict[str, Any], List[Dict[str, Any]]]] = None,
+):
     memory = int(sys.getsizeof(data) * 1.2)
     virtual_memory = psutil.virtual_memory()
     print(f"data size in mb {memory / (1000 * 1000):.4f}")
@@ -260,7 +269,7 @@ def backtest_tune(data: np.ndarray, config: dict, current_best: Union[dict, list
         omega = config["options"]["w"]
     current_best_params = []
     if current_best is not None:
-        if type(current_best) == list:
+        if isinstance(current_best, list):
             for c in current_best:
                 c = clean_start_config(c, config)
                 if c not in current_best_params:
@@ -327,7 +336,7 @@ def backtest_tune(data: np.ndarray, config: dict, current_best: Union[dict, list
     ray.shutdown()
     print("\nCleaning up temporary optimizer data...\n")
     try:
-        shutil.rmtree(os.path.join(config["optimize_dirpath"], "search"))
+        shutil.rmtree(config["optimize_dirpath"] / "search")
     except Exception as e:
         print("Failed cleaning up.")
         print(e)
@@ -341,7 +350,7 @@ def save_results(analysis, config):
         columns={column: column.replace("config.", "") for column in df.columns}, inplace=True
     )
     df = df.sort_values("obj", ascending=False)
-    df.to_csv(os.path.join(config["optimize_dirpath"], "results.csv"), index=False)
+    df.to_csv(config["optimize_dirpath"] / "results.csv", index=False)
     print("Best candidate found:")
     pprint.pprint(analysis.best_config)
 
@@ -386,24 +395,24 @@ async def execute_optimize(config):
     print()
     data = await downloader.get_sampled_ticks()
     config["n_days"] = (data[-1][0] - data[0][0]) / (1000 * 60 * 60 * 24)
-    config["optimize_dirpath"] = os.path.join(
-        config["optimize_dirpath"], ts_to_date(time.time())[:19].replace(":", ""), ""
+    config["optimize_dirpath"] = config["optimize_dirpath"].joinpath(
+        ts_to_date(time.time())[:19].replace(":", "")
     )
 
     start_candidate = None
-    if config["starting_configs"] is not None:
-        try:
-            if os.path.isdir(config["starting_configs"]):
-                start_candidate = [
-                    load_live_config(f)
-                    for f in glob.glob(os.path.join(config["starting_configs"], "*.json"))
-                ]
-                print("Starting with all configurations in directory.")
-            else:
-                start_candidate = load_live_config(config["starting_configs"])
-                print("Starting with specified configuration.")
-        except Exception as e:
-            print("Could not find specified configuration.", e)
+    if config["starting_configs"]:
+        start_candidate = []
+        for path in config["starting_configs"]:
+            try:
+                if path.isdir():
+                    print("Starting with all configurations in directory.")
+                    for fpath in path.glob("*.json"):
+                        start_candidate.append(load_live_config(fpath))
+                elif path.isfile():
+                    print("Starting with specified configuration.")
+                    start_candidate.append(load_live_config(path))
+            except Exception as e:
+                print("Could not find specified configuration.", e)
     analysis = backtest_tune(data, config, start_candidate)
     if analysis:
         save_results(analysis, config)
@@ -456,4 +465,4 @@ def setup_parser(subparsers: argparse._SubParsersAction) -> None:
 def validate_argparse_parsed_args(
     parser: argparse.ArgumentParser, args: argparse.Namespace
 ) -> None:
-    pass
+    validate_backtesting_argparse_args(parser, args)
