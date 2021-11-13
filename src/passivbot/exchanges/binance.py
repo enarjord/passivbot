@@ -53,9 +53,9 @@ class BinanceBot(Bot):
             timestamp = int(time.time() * 1000)
             params.update({"timestamp": timestamp, "recvWindow": 5000})
             for k in params:
-                if type(params[k]) == bool:
+                if isinstance(params[k], bool):
                     params[k] = "true" if params[k] else "false"
-                elif type(params[k]) == float:
+                elif isinstance(params[k], float):
                     params[k] = format_float(params[k])
             params = sort_dict_keys(params)
             params["signature"] = hmac.new(
