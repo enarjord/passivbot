@@ -17,7 +17,7 @@ import pandas as pd
 from passivbot.utils.funcs.njit import calc_samples
 from passivbot.utils.funcs.pure import get_dummy_settings
 from passivbot.utils.funcs.pure import ts_to_date
-from passivbot.utils.procedures import add_argparse_args
+from passivbot.utils.procedures import add_backtesting_argparse_args
 from passivbot.utils.procedures import create_binance_bot
 from passivbot.utils.procedures import create_binance_bot_spot
 from passivbot.utils.procedures import create_bybit_bot
@@ -911,5 +911,5 @@ def setup_parser(subparsers: argparse._SubParsersAction) -> None:
     parser.add_argument(
         "-d", "--download-only", help="download only, do not dump ticks caches", action="store_true"
     )
-    add_argparse_args(parser)
+    add_backtesting_argparse_args(parser)
     parser.set_defaults(func=main)

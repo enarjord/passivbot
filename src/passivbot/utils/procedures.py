@@ -238,7 +238,7 @@ async def create_bybit_bot(config: dict):
     return bot
 
 
-def add_argparse_args(parser):
+def add_backtesting_argparse_args(parser):
     parser.add_argument(
         "-b",
         "--backtest_config",

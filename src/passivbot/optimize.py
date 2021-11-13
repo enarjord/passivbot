@@ -27,7 +27,7 @@ from passivbot.utils.funcs.pure import get_template_live_config
 from passivbot.utils.funcs.pure import pack_config
 from passivbot.utils.funcs.pure import ts_to_date
 from passivbot.utils.funcs.pure import unpack_config
-from passivbot.utils.procedures import add_argparse_args
+from passivbot.utils.procedures import add_backtesting_argparse_args
 from passivbot.utils.procedures import load_live_config
 from passivbot.utils.procedures import prepare_optimize_config
 from passivbot.utils.reporter import LogReporter
@@ -448,5 +448,5 @@ def setup_parser(subparsers: argparse._SubParsersAction) -> None:
         default=None,
         help="n optimize iters",
     )
-    add_argparse_args(parser)
+    add_backtesting_argparse_args(parser)
     parser.set_defaults(func=main)
