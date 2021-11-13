@@ -1,5 +1,8 @@
+import json
+import pathlib
 from typing import Any
 from typing import Dict
+from typing import List
 
 from pydantic import BaseModel
 from pydantic import Field
@@ -65,6 +68,19 @@ class PassivBotConfig(NonMutatingMixin):
     api_keys: Dict[str, ApiKey] = Field(alias="api-keys")
     configs: Dict[str, NamedConfig]
     symbols: Dict[str, SymbolConfig]
+
+    @classmethod
+    def parse_files(cls, *files: pathlib.Path) -> "PassivBotConfig":
+        """
+        Helper class method to load the configuration from multiple files
+        """
+        config_dicts: List[Dict[str, Any]] = []
+        for file in files:
+            config_dicts.append(json.loads(file.read_text()))
+        config = config_dicts.pop(0)
+        if config_dicts:
+            merge_dictionaries(config, *config_dicts)
+        return cls.parse_raw(json.dumps(config))
 
 
 def merge_dictionaries(target_dict: Dict[Any, Any], *source_dicts: Dict[Any, Any]) -> None:
