@@ -94,3 +94,9 @@ def setup_parser(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("live_config_path", type=str, help="path to live config to test")
     add_backtesting_argparse_args(parser)
     parser.set_defaults(func=main)
+
+
+def validate_argparse_parsed_args(
+    parser: argparse.ArgumentParser, args: argparse.Namespace
+) -> None:
+    pass

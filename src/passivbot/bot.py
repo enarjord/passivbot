@@ -778,8 +778,7 @@ def main(args: argparse.Namespace) -> None:
         os._exit(0)
 
 
-def setup_parser(subparsers: argparse._SubParsersAction) -> None:
-    parser: argparse.ArgumentParser = subparsers.add_parser("live", help="Run PassivBot Live")
+def setup_parser(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("user", type=str, help="user/account_name defined in api-keys.json")
     parser.add_argument("symbol", type=str, help="symbol to trade")
     parser.add_argument("live_config_path", type=str, help="live config to use")
@@ -831,3 +830,9 @@ def setup_parser(subparsers: argparse._SubParsersAction) -> None:
         help="add assigned_balance to live config",
     )
     parser.set_defaults(func=main)
+
+
+def validate_argparse_parsed_args(
+    parser: argparse.ArgumentParser, args: argparse.Namespace
+) -> None:
+    pass

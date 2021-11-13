@@ -52,7 +52,7 @@ def main() -> None:
         default="info",
         help="Logs file logging level. Default: %(default)s",
     )
-    subparsers = parser.add_subparsers(title="PassivBot commands")
+    subparsers = parser.add_subparsers(title="PassivBot commands", dest="subparser")
     passivbot.bot.setup_parser(subparsers)
     backtest_parser = subparsers.add_parser("backtest", help="Backtest given passivbot config.")
     downloader_parser = subparsers.add_parser(
@@ -96,6 +96,20 @@ def main() -> None:
         log.info("numba.njit compilation is disabled")
     else:
         log.info("numba.njit compilation is enabled")
+
+    if args.subparser == "live":
+        passivbot.bot.validate_argparse_parsed_args(parser, args)
+    elif BACKTEST_REQUIREMENTS_MISSING is False:
+        if args.subparser == "backtest":
+            passivbot.backtest.validate_argparse_parsed_args(parser, args)
+        elif args.subparser == "downloader":
+            passivbot.downloader.validate_argparse_parsed_args(parser, args)
+        elif args.subparser == "optimize":
+            passivbot.optimize.validate_argparse_parsed_args(parser, args)
+        elif args.subparser == "batch-optimize":
+            passivbot.batch_optimize.validate_argparse_parsed_args(parser, args)
+        elif args.subparser == "multi-symbol-optimize":
+            passivbot.multi_symbol_optimize.validate_argparse_parsed_args(parser, args)
 
     # Call the right sub-parser
     args.func(args)

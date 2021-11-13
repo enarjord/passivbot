@@ -445,3 +445,9 @@ def setup_parser(parser: argparse.ArgumentParser) -> None:
     )
     add_backtesting_argparse_args(parser)
     parser.set_defaults(func=main)
+
+
+def validate_argparse_parsed_args(
+    parser: argparse.ArgumentParser, args: argparse.Namespace
+) -> None:
+    pass
