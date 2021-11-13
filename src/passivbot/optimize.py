@@ -32,6 +32,7 @@ from passivbot.utils.procedures import load_live_config
 from passivbot.utils.procedures import prepare_optimize_config
 from passivbot.utils.reporter import LogReporter
 
+SUBPARSER_NAME: str = "optimize"
 
 os.environ["TUNE_GLOBAL_CHECKPOINT_S"] = "240"
 
@@ -420,7 +421,7 @@ def main(args: argparse.Namespace) -> None:
 
 
 def setup_parser(subparsers: argparse._SubParsersAction) -> None:
-    parser = subparsers.add_parser("optimize", help="Optimize PassivBot config")
+    parser = subparsers.add_parser(SUBPARSER_NAME, help="Optimize PassivBot config")
     parser.add_argument(
         "-o",
         "--optimize_config",
@@ -450,3 +451,9 @@ def setup_parser(subparsers: argparse._SubParsersAction) -> None:
     )
     add_backtesting_argparse_args(parser)
     parser.set_defaults(func=main)
+
+
+def validate_argparse_parsed_args(
+    parser: argparse.ArgumentParser, args: argparse.Namespace
+) -> None:
+    pass

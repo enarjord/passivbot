@@ -5,6 +5,8 @@ import subprocess
 
 from passivbot.utils.procedures import make_get_filepath
 
+SUBPARSER_NAME: str = "batch-optimize"
+
 
 def main(args: argparse.Namespace) -> None:
     tokens = [
@@ -81,5 +83,11 @@ def main(args: argparse.Namespace) -> None:
 
 
 def setup_parser(subparsers: argparse._SubParsersAction) -> None:
-    parser = subparsers.add_parser("batch-optimize", help="Batch Optimize PassivBot config")
+    parser = subparsers.add_parser(SUBPARSER_NAME, help="Batch Optimize PassivBot config")
     parser.set_defaults(func=main)
+
+
+def validate_argparse_parsed_args(
+    parser: argparse.ArgumentParser, args: argparse.Namespace
+) -> None:
+    pass

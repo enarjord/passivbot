@@ -34,7 +34,7 @@ def main() -> None:
         default="warning",
         help="Logs file logging level. Default: %(default)s",
     )
-    subparsers = parser.add_subparsers(title="PassivBot commands")
+    subparsers = parser.add_subparsers(title="PassivBot commands", dest="subparser")
     passivbot.bot.setup_parser(subparsers)
     passivbot.backtest.setup_parser(subparsers)
     passivbot.downloader.setup_parser(subparsers)
@@ -55,5 +55,17 @@ def main() -> None:
         os.environ["NOJIT"] = "true"
         print("numba.njit compilation is disabled")
 
+    if args.subparser == passivbot.bot.SUBPARSER_NAME:
+        passivbot.bot.validate_argparse_parsed_args(parser, args)
+    elif args.subparser == passivbot.backtest.SUBPARSER_NAME:
+        passivbot.backtest.validate_argparse_parsed_args(parser, args)
+    elif args.subparser == passivbot.downloader.SUBPARSER_NAME:
+        passivbot.downloader.validate_argparse_parsed_args(parser, args)
+    elif args.subparser == passivbot.optimize.SUBPARSER_NAME:
+        passivbot.optimize.validate_argparse_parsed_args(parser, args)
+    elif args.subparser == passivbot.batch_optimize.SUBPARSER_NAME:
+        passivbot.batch_optimize.validate_argparse_parsed_args(parser, args)
+    elif args.subparser == passivbot.multi_symbol_optimize.SUBPARSER_NAME:
+        passivbot.multi_symbol_optimize.validate_argparse_parsed_args(parser, args)
     # Call the right sub-parser
     args.func(args)

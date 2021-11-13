@@ -21,6 +21,8 @@ from passivbot.utils.procedures import load_live_config
 from passivbot.utils.procedures import make_get_filepath
 from passivbot.utils.procedures import prepare_backtest_config
 
+SUBPARSER_NAME: str = "backtest"
+
 
 def backtest(config: dict, data: np.ndarray, do_print=False) -> (list, bool):
     xk = create_xk(config)
@@ -88,7 +90,13 @@ def main(args: argparse.Namespace) -> None:
 
 
 def setup_parser(subparsers: argparse._SubParsersAction) -> None:
-    parser = subparsers.add_parser("backtest", help="Backtest given passivbot config.")
+    parser = subparsers.add_parser(SUBPARSER_NAME, help="Backtest given passivbot config.")
     parser.add_argument("live_config_path", type=str, help="path to live config to test")
     add_backtesting_argparse_args(parser)
     parser.set_defaults(func=main)
+
+
+def validate_argparse_parsed_args(
+    parser: argparse.ArgumentParser, args: argparse.Namespace
+) -> None:
+    pass
