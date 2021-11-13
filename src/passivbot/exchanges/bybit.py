@@ -166,9 +166,9 @@ class Bybit(Bot):
         timestamp = int(time.time() * 1000)
         params.update({"api_key": self.key, "timestamp": timestamp})
         for k in params:
-            if type(params[k]) == bool:
+            if isinstance(params[k], bool):
                 params[k] = "true" if params[k] else "false"
-            elif type(params[k]) == float:
+            elif isinstance(params[k], float):
                 params[k] = str(params[k])
         params["sign"] = hmac.new(
             self.secret.encode("utf-8"),
@@ -368,7 +368,7 @@ class Bybit(Bot):
         params = {"symbol": self.symbol, "interval": interval_map[interval], "limit": limit}
         if start_time is None:
             server_time = await self.public_get("/v2/public/time")
-            if type(interval_map[interval]) == str:
+            if isinstance(interval_map[interval], str):
                 minutes = {"D": 1, "W": 7, "M": 30}[interval_map[interval]] * 60 * 24
             else:
                 minutes = interval_map[interval]

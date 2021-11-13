@@ -71,19 +71,16 @@ def clean_start_config(start_config: dict, config: dict) -> dict:
     clean_start = {}
     for k, v in unpack_config(start_config).items():
         if k in config:
-            if (
-                type(config[k]) == ray.tune.sample.Float
-                or type(config[k]) == ray.tune.sample.Integer
-            ):
+            if isinstance(config[k], (ray.tune.sample.Float, ray.tune.sample.Integer)):
                 clean_start[k] = min(max(v, config["ranges"][k][0]), config["ranges"][k][1])
     return clean_start
 
 
 def clean_result_config(config: dict) -> dict:
     for k, v in config.items():
-        if type(v) == np.float64:
+        if isinstance(v, np.float64):
             config[k] = float(v)
-        if type(v) == np.int64 or type(v) == np.int32 or type(v) == np.int16 or type(v) == np.int8:
+        if isinstance(v, (np.int64, np.int32, np.int16, np.int8)):
             config[k] = int(v)
     return config
 
@@ -248,7 +245,7 @@ def backtest_tune(data: np.ndarray, config: dict, current_best: Union[dict, list
     config = create_config(config)
     print("tuning:")
     for k, v in config.items():
-        if type(v) in [ray.tune.sample.Float, ray.tune.sample.Integer]:
+        if isinstance(v, (ray.tune.sample.Float, ray.tune.sample.Integer)):
             print(k, (v.lower, v.upper))
     phi1 = 1.4962
     phi2 = 1.4962
@@ -259,7 +256,7 @@ def backtest_tune(data: np.ndarray, config: dict, current_best: Union[dict, list
         omega = config["options"]["w"]
     current_best_params = []
     if current_best is not None:
-        if type(current_best) == list:
+        if isinstance(current_best, list):
             for c in current_best:
                 c = clean_start_config(c, config)
                 if c not in current_best_params:
