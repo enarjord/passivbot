@@ -1,4 +1,5 @@
 import json
+import pathlib
 import re
 
 import matplotlib.pyplot as plt
@@ -14,7 +15,13 @@ from passivbot.utils.funcs.pure import denumpyize
 from passivbot.utils.procedures import dump_live_config
 
 
-def dump_plots(result: dict, fdf: pd.DataFrame, sdf: pd.DataFrame, df: pd.DataFrame):
+def dump_plots(
+    session_plots_dirpath: pathlib.Path,
+    result: dict,
+    fdf: pd.DataFrame,
+    sdf: pd.DataFrame,
+    df: pd.DataFrame,
+):
     init(autoreset=True)
     plt.rcParams["figure.figsize"] = [29, 18]
     pd.set_option("precision", 10)
@@ -172,11 +179,11 @@ def dump_plots(result: dict, fdf: pd.DataFrame, sdf: pd.DataFrame, df: pd.DataFr
         profit_color = Fore.RED if shorts.pnl.sum() < 0 else Fore.RESET
         table.add_row(["PNL sum", f"{profit_color}{shorts.pnl.sum()}{Fore.RESET}"])
 
-    dump_live_config(result, result["plots_dirpath"] + "live_config.json")
-    json.dump(denumpyize(result), open(result["plots_dirpath"] + "result.json", "w"), indent=4)
+    dump_live_config(result, session_plots_dirpath / "live_config.json")
+    json.dump(denumpyize(result), session_plots_dirpath.joinpath("result.json").open("w"), indent=4)
 
     print("writing backtest_result.txt...\n")
-    with open(f"{result['plots_dirpath']}backtest_result.txt", "w") as f:
+    with session_plots_dirpath.joinpath("backtest_result.txt").open("w") as f:
         output = table.get_string(border=True, padding_width=1)
         print(output)
         f.write(re.sub("\033\\[([0-9]+)(;[0-9]+)*m", "", output))
@@ -185,22 +192,22 @@ def dump_plots(result: dict, fdf: pd.DataFrame, sdf: pd.DataFrame, df: pd.DataFr
     plt.clf()
     sdf.balance.plot()
     sdf.equity.plot()
-    plt.savefig(f"{result['plots_dirpath']}balance_and_equity_sampled.png")
+    plt.savefig(session_plots_dirpath / "balance_and_equity_sampled.png")
 
     plt.clf()
     longs.pnl.cumsum().plot()
-    plt.savefig(f"{result['plots_dirpath']}pnl_cumsum_long.png")
+    plt.savefig(session_plots_dirpath / "pnl_cumsum_long.png")
 
     plt.clf()
     shorts.pnl.cumsum().plot()
-    plt.savefig(f"{result['plots_dirpath']}pnl_cumsum_short.png")
+    plt.savefig(session_plots_dirpath / "pnl_cumsum_short.png")
 
     adg = (sdf.equity / sdf.equity.iloc[0]) ** (
         1 / ((sdf.timestamp - sdf.timestamp.iloc[0]) / (1000 * 60 * 60 * 24))
     )
     plt.clf()
     adg.plot()
-    plt.savefig(f"{result['plots_dirpath']}adg.png")
+    plt.savefig(session_plots_dirpath / "adg.png")
 
     print("plotting backtest whole and in chunks...")
     n_parts = max(3, int(round_up(result["n_days"] / 14, 1.0)))
@@ -210,17 +217,17 @@ def dump_plots(result: dict, fdf: pd.DataFrame, sdf: pd.DataFrame, df: pd.DataFr
         print(f"{z} of {n_parts} {start_ * 100:.2f}% to {end_ * 100:.2f}%")
         fig = plot_fills(df, fdf.iloc[int(len(fdf) * start_) : int(len(fdf) * end_)], bkr_thr=0.1)
         if fig is not None:
-            fig.savefig(f"{result['plots_dirpath']}backtest_{z + 1}of{n_parts}.png")
+            fig.savefig(session_plots_dirpath / f"backtest_{z + 1}of{n_parts}.png")
         else:
             print("no fills...")
     fig = plot_fills(df, fdf, bkr_thr=0.1, plot_whole_df=True)
-    fig.savefig(f"{result['plots_dirpath']}whole_backtest.png")
+    fig.savefig(session_plots_dirpath / "whole_backtest.png")
 
     print("plotting pos sizes...")
     plt.clf()
     longs.psize.plot()
     shorts.psize.plot()
-    plt.savefig(f"{result['plots_dirpath']}psizes_plot.png")
+    plt.savefig(session_plots_dirpath / "psizes_plot.png")
 
 
 def plot_fills(df, fdf_, side: int = 0, bkr_thr=0.1, plot_whole_df: bool = False):

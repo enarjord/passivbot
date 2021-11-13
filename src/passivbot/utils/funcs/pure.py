@@ -93,9 +93,9 @@ def create_xk(config: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def numpyize(x):
-    if type(x) in [list, tuple]:
+    if isinstance(x, (list, tuple)):
         return np.array([numpyize(e) for e in x])
-    elif type(x) == dict:
+    elif isinstance(x, dict):
         numpyd = {}
         for k, v in x.items():
             numpyd[k] = numpyize(v)
@@ -105,22 +105,22 @@ def numpyize(x):
 
 
 def denumpyize(x: Any) -> Any:
-    if type(x) in [np.float64, np.float32, np.float16]:
+    if isinstance(x, (np.float64, np.float32, np.float16)):
         return float(x)
-    elif type(x) in [np.int64, np.int32, np.int16, np.int8]:
+    elif isinstance(x, (np.int64, np.int32, np.int16, np.int8)):
         return int(x)
-    elif type(x) == np.ndarray:
+    elif isinstance(x, np.ndarray):
         return [denumpyize(e) for e in x]
-    elif type(x) == np.bool_:
+    elif isinstance(x, np.bool_):
         return bool(x)
-    elif type(x) in [dict, OrderedDict]:
+    elif isinstance(x, (dict, OrderedDict)):
         denumpyd = {}
         for k, v in x.items():
             denumpyd[k] = denumpyize(v)
         return denumpyd
-    elif type(x) == list:
+    elif isinstance(x, list):
         return [denumpyize(z) for z in x]
-    elif type(x) == tuple:
+    elif isinstance(x, tuple):
         return tuple(denumpyize(z) for z in x)
     else:
         return x
@@ -128,17 +128,17 @@ def denumpyize(x: Any) -> Any:
 
 def denanify(x, nan=0.0, posinf=0.0, neginf=0.0):
     try:
-        assert type(x) != str
+        assert not isinstance(x, str)
         _ = float(x)
         return np.nan_to_num(x, nan=nan, posinf=posinf, neginf=neginf)
     except Exception:
-        if type(x) == list:
+        if isinstance(x, list):
             return [denanify(e) for e in x]
-        elif type(x) == tuple:
+        elif isinstance(x, tuple):
             return tuple(denanify(e) for e in x)
-        elif type(x) == np.ndarray:
+        elif isinstance(x, np.ndarray):
             return np.array([denanify(e) for e in x], dtype=x.dtype)
-        elif type(x) == dict:
+        elif isinstance(x, dict):
             denanified = {}
             for k, v in x.items():
                 denanified[k] = denanify(v)
