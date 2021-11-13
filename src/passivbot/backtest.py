@@ -16,7 +16,7 @@ from passivbot.utils.funcs.pure import denumpyize
 from passivbot.utils.funcs.pure import spotify_config
 from passivbot.utils.funcs.pure import ts_to_date
 from passivbot.utils.plotting import dump_plots
-from passivbot.utils.procedures import add_argparse_args
+from passivbot.utils.procedures import add_backtesting_argparse_args
 from passivbot.utils.procedures import load_live_config
 from passivbot.utils.procedures import make_get_filepath
 from passivbot.utils.procedures import prepare_backtest_config
@@ -90,5 +90,5 @@ def main(args: argparse.Namespace) -> None:
 def setup_parser(subparsers: argparse._SubParsersAction) -> None:
     parser = subparsers.add_parser("backtest", help="Backtest given passivbot config.")
     parser.add_argument("live_config_path", type=str, help="path to live config to test")
-    add_argparse_args(parser)
+    add_backtesting_argparse_args(parser)
     parser.set_defaults(func=main)
