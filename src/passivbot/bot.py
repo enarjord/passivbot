@@ -535,7 +535,7 @@ class Bot:
         await self.cancel_and_create()
 
     async def on_user_stream_events(self, events: Union[List[Dict], List]) -> None:
-        if type(events) == list:
+        if isinstance(events, list):
             for event in events:
                 await self.on_user_stream_event(event)
         else:

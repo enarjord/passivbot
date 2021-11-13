@@ -219,7 +219,7 @@ def unpack_config(d):
     new = {}
     for k, v in flatten_dict(d, sep="£").items():
         try:
-            assert type(v) != str
+            assert not isinstance(v, str)
             for _ in v:
                 break
             for i in range(len(v)):
@@ -247,7 +247,7 @@ def pack_config(d):
         d = new
     new = {}
     for k, v in d.items():
-        if type(v) == list:
+        if isinstance(v, list):
             new[k] = np.array(v)
         else:
             new[k] = v
@@ -270,7 +270,7 @@ def flatten_dict(d, parent_key="", sep="_"):
     items = []
     for k, v in d.items():
         new_key = parent_key + sep + k if parent_key else k
-        if type(v) == dict:
+        if isinstance(v, dict):
             items.extend(flatten_dict(v, new_key, sep=sep).items())
         else:
             items.append((new_key, v))
@@ -278,9 +278,9 @@ def flatten_dict(d, parent_key="", sep="_"):
 
 
 def sort_dict_keys(d):
-    if type(d) == list:
+    if isinstance(d, list):
         return [sort_dict_keys(e) for e in d]
-    if type(d) != dict:
+    if not isinstance(d, dict):
         return d
     return {key: sort_dict_keys(d[key]) for key in sorted(d)}
 
@@ -541,13 +541,13 @@ def calc_long_pprice(long_psize, long_pfills):
 
 
 def nullify(x):
-    if type(x) in [list, tuple]:
+    if isinstance(x, (list, tuple)):
         return [nullify(x1) for x1 in x]
-    elif type(x) == np.ndarray:
+    elif isinstance(x, np.ndarray):
         return numpyize([nullify(x1) for x1 in x])
-    elif type(x) == dict:
+    elif isinstance(x, dict):
         return {k: nullify(x[k]) for k in x}
-    elif type(x) in [bool, np.bool_]:
+    elif isinstance(x, (bool, np.bool_)):
         return x
     else:
         return 0.0
@@ -572,25 +572,25 @@ def spotify_config(config: Dict[str, Any], nullify_short: bool = True) -> Dict[s
 
 
 def tuplify(xs):
-    if type(xs) in [list]:
+    if isinstance(xs, list):
         return tuple(tuplify(x) for x in xs)
-    elif type(xs) in [dict]:
+    elif isinstance(xs, dict):
         return tuple({k: tuplify(v) for k, v in xs.items()}.items())
     return xs
 
 
 def round_values(xs, n: int):
-    if type(xs) in [float, np.float64]:
+    if isinstance(xs, (float, np.float64)):
         return round_dynamic(xs, n)
-    if type(xs) == dict:
+    if isinstance(xs, dict):
         return {k: round_values(xs[k], n) for k in xs}
-    if type(xs) == list:
+    if isinstance(xs, list):
         return [round_values(x, n) for x in xs]
-    if type(xs) == np.ndarray:
+    if isinstance(xs, np.ndarray):
         return numpyize([round_values(x, n) for x in xs])
-    if type(xs) == tuple:
+    if isinstance(xs, tuple):
         return tuple(round_values(x, n) for x in xs)
-    if type(xs) == OrderedDict:
+    if isinstance(xs, OrderedDict):
         return OrderedDict([(k, round_values(xs[k], n)) for k in xs])
     return xs
 
@@ -599,11 +599,11 @@ def floatify(xs):
     try:
         return float(xs)
     except (ValueError, TypeError):
-        if type(xs) == list:
+        if isinstance(xs, list):
             return [floatify(x) for x in xs]
-        if type(xs) == dict:
+        if isinstance(xs, dict):
             return {k: floatify(v) for k, v in xs.items()}
-        if type(xs) == tuple:
+        if isinstance(xs, tuple):
             return tuple(floatify(x) for x in xs)
     return xs
 
