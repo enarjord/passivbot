@@ -26,6 +26,8 @@ from passivbot.utils.procedures import prepare_backtest_config
 from passivbot.utils.procedures import print_
 from passivbot.utils.procedures import utc_ms
 
+SUBPARSER_NAME: str = "downloader"
+
 
 class Downloader:
     """
@@ -907,9 +909,15 @@ def main(args: argparse.Namespace) -> None:
 
 
 def setup_parser(subparsers: argparse._SubParsersAction) -> None:
-    parser = subparsers.add_parser("downloader", help="Download ticks from exchange API.")
+    parser = subparsers.add_parser(SUBPARSER_NAME, help="Download ticks from exchange API.")
     parser.add_argument(
         "-d", "--download-only", help="download only, do not dump ticks caches", action="store_true"
     )
     add_backtesting_argparse_args(parser)
     parser.set_defaults(func=main)
+
+
+def validate_argparse_parsed_args(
+    parser: argparse.ArgumentParser, args: argparse.Namespace
+) -> None:
+    pass

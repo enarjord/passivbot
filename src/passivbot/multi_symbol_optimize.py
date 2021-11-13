@@ -26,6 +26,8 @@ from passivbot.utils.procedures import make_get_filepath
 from passivbot.utils.procedures import prepare_backtest_config
 from passivbot.utils.procedures import prepare_optimize_config
 
+SUBPARSER_NAME: str = "multi-symbol-optimize"
+
 
 def backtest_single_wrap(config_: dict):
     config = config_.copy()
@@ -246,9 +248,7 @@ def main(args: argparse.Namespace) -> None:
 
 
 def setup_parser(subparsers: argparse._SubParsersAction) -> None:
-    parser = subparsers.add_parser(
-        "multi-symbol-optimize", help="Optimize passivbot config multi symbol"
-    )
+    parser = subparsers.add_parser(SUBPARSER_NAME, help="Optimize passivbot config multi symbol")
     parser.add_argument(
         "-o",
         "--optimize_config",
@@ -279,3 +279,9 @@ def setup_parser(subparsers: argparse._SubParsersAction) -> None:
     )
     add_backtesting_argparse_args(parser)
     parser.set_defaults(func=main)
+
+
+def validate_argparse_parsed_args(
+    parser: argparse.ArgumentParser, args: argparse.Namespace
+) -> None:
+    pass

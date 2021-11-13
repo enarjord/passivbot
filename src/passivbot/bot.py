@@ -28,6 +28,8 @@ from passivbot.utils.procedures import load_live_config
 from passivbot.utils.procedures import make_get_filepath
 from passivbot.utils.procedures import print_
 
+SUBPARSER_NAME: str = "live"
+
 
 class Bot:
     def __init__(self, config: dict):
@@ -763,7 +765,9 @@ def main(args: argparse.Namespace) -> None:
 
 
 def setup_parser(subparsers: argparse._SubParsersAction) -> None:
-    parser: argparse.ArgumentParser = subparsers.add_parser("live", help="Run PassivBot Live")
+    parser: argparse.ArgumentParser = subparsers.add_parser(
+        SUBPARSER_NAME, help="Run PassivBot Live"
+    )
     parser.add_argument("user", type=str, help="user/account_name defined in api-keys.json")
     parser.add_argument("symbol", type=str, help="symbol to trade")
     parser.add_argument("live_config_path", type=str, help="live config to use")
@@ -795,3 +799,9 @@ def setup_parser(subparsers: argparse._SubParsersAction) -> None:
         help="add assigned_balance to live config",
     )
     parser.set_defaults(func=main)
+
+
+def validate_argparse_parsed_args(
+    parser: argparse.ArgumentParser, args: argparse.Namespace
+) -> None:
+    pass
