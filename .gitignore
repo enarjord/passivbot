@@ -339,9 +339,10 @@ $RECYCLE.BIN/
 
 # Backtest files
 backtests/
+config/
 !config/optimize/default.hjson
 !config/backtest/default.hjson
-config/
+!tests/functional/config/*.py
 historical_data/
 
 # Config files
