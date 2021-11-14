@@ -6,6 +6,7 @@ from typing import Any
 from typing import Dict
 
 from pydantic import BaseModel
+from pydantic import validator
 
 
 class NonMutatingMixin(BaseModel):
@@ -81,6 +82,19 @@ class PassivBotConfig(NonMutatingMixin):
         if config_dicts:
             merge_dictionaries(config, *config_dicts)
         return cls.parse_raw(json.dumps(config))
+
+    @validator("symbols", each_item=True)
+    @classmethod
+    def _validate_symbols_mapping(cls, value, values, field, **kwargs):
+        api_keys = values["api_keys"]
+        configs = values["configs"]
+        if value.key_name not in api_keys:
+            raise ValueError(f"The {value.key_name!r} key name is not defined under 'api_keys'.")
+        if value.config_name not in configs:
+            raise ValueError(
+                f"The {value.config_name!r} configuration name is not defined under 'configs'."
+            )
+        return value
 
 
 def merge_dictionaries(target_dict: Dict[Any, Any], *source_dicts: Dict[Any, Any]) -> None:
