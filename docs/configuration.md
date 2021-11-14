@@ -3,9 +3,6 @@
 In order to configure Passivbot, you will need to provide a json file when starting the bot.
 These config files are typically stored in the `configs/live`.
 
-!!! Info
-    The configuration of telegram is not covered in this chapter. Please refer to [Telegram](telegram.md) for configuring Telegram.
-
 ## Configuration options
 
 At the moment only long positions are supported.
