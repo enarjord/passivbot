@@ -3,6 +3,7 @@ from typing import Any
 from typing import Dict
 
 import pytest
+from pydantic import ValidationError
 
 from passivbot import config
 
@@ -126,3 +127,31 @@ def test_multiple_files(tmp_path, complete_config_dictionary):
     loaded = config.PassivBotConfig.parse_files(symbols_file, keys_file, configs_file)
     loaded_dict = loaded.dict()
     assert loaded_dict == complete_config_dictionary
+
+
+def test_unconfigured_key_name(complete_config_dictionary):
+    complete_config_dictionary["symbols"]["ETHUSDT"]["key_name"] = "account-3"
+    with pytest.raises(ValidationError) as exc:
+        config.PassivBotConfig.parse_obj(complete_config_dictionary)
+
+    assert exc.value.errors() == [
+        {
+            "loc": ("symbols", "ETHUSDT"),
+            "msg": "The 'account-3' key name is not defined under 'api_keys'.",
+            "type": "value_error",
+        }
+    ]
+
+
+def test_unconfigured_config_name(complete_config_dictionary):
+    complete_config_dictionary["symbols"]["ETHUSDT"]["config_name"] = "config-3"
+    with pytest.raises(ValidationError) as exc:
+        config.PassivBotConfig.parse_obj(complete_config_dictionary)
+
+    assert exc.value.errors() == [
+        {
+            "loc": ("symbols", "ETHUSDT"),
+            "msg": "The 'config-3' configuration name is not defined under 'configs'.",
+            "type": "value_error",
+        }
+    ]
