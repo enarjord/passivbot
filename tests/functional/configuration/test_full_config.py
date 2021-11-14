@@ -10,7 +10,7 @@ from passivbot import config
 @pytest.fixture
 def complete_config_dictionary() -> Dict[str, Dict[str, Any]]:
     return {
-        "api-keys": {
+        "api_keys": {
             "account-1": {
                 "exchange": "binance",
                 "key": "this is the account-1 key",
@@ -109,13 +109,13 @@ def test_single_config_file(tmp_path, complete_config_dictionary):
     assert "config-2" in loaded.configs
     assert "BTCUSDT" in loaded.symbols
     assert "ETHUSDT" in loaded.symbols
-    loaded_dict = loaded.dict(by_alias=True)
+    loaded_dict = loaded.dict()
     assert loaded_dict == complete_config_dictionary
 
 
 def test_multiple_files(tmp_path, complete_config_dictionary):
     keys_file = tmp_path / "keys.json"
-    keys_file.write_text(json.dumps({"api-keys": complete_config_dictionary["api-keys"]}))
+    keys_file.write_text(json.dumps({"api_keys": complete_config_dictionary["api_keys"]}))
 
     configs_file = tmp_path / "configs.json"
     configs_file.write_text(json.dumps({"configs": complete_config_dictionary["configs"]}))
@@ -124,5 +124,5 @@ def test_multiple_files(tmp_path, complete_config_dictionary):
     symbols_file.write_text(json.dumps({"symbols": complete_config_dictionary["symbols"]}))
 
     loaded = config.PassivBotConfig.parse_files(symbols_file, keys_file, configs_file)
-    loaded_dict = loaded.dict(by_alias=True)
+    loaded_dict = loaded.dict()
     assert loaded_dict == complete_config_dictionary

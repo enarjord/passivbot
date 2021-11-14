@@ -5,7 +5,6 @@ from typing import Dict
 from typing import List
 
 from pydantic import BaseModel
-from pydantic import Field
 
 
 class NonMutatingMixin(BaseModel):
@@ -65,7 +64,7 @@ class SymbolConfig(NonMutatingMixin):
 
 
 class PassivBotConfig(NonMutatingMixin):
-    api_keys: Dict[str, ApiKey] = Field(alias="api-keys")
+    api_keys: Dict[str, ApiKey]
     configs: Dict[str, NamedConfig]
     symbols: Dict[str, SymbolConfig]
 

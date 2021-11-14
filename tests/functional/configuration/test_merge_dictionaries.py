@@ -9,7 +9,7 @@ from passivbot import config
 @pytest.fixture
 def complete_dictionary() -> Dict[str, Dict[str, Any]]:
     return {
-        "api-keys": {
+        "api_keys": {
             "account-1": {
                 "exchange": "binance",
                 "key": "this is the account-1 key",
@@ -98,7 +98,7 @@ def complete_dictionary() -> Dict[str, Dict[str, Any]]:
 
 def test_missing_top_level_keys(complete_dictionary):
     keys: Dict[str, Dict[str, Any]] = {
-        "api-keys": {
+        "api_keys": {
             "account-1": {
                 "exchange": "binance",
                 "key": "this is the account-1 key",
@@ -188,7 +188,7 @@ def test_missing_top_level_keys(complete_dictionary):
             },
         },
     }
-    assert "api-keys" not in target_dict
+    assert "api_keys" not in target_dict
     assert "configs" not in target_dict
     config.merge_dictionaries(target_dict, keys, configs)
     assert target_dict == complete_dictionary
@@ -196,7 +196,7 @@ def test_missing_top_level_keys(complete_dictionary):
 
 def test_nested_dictionaries(complete_dictionary):
     keys: Dict[str, Dict[str, Any]] = {
-        "api-keys": {
+        "api_keys": {
             "account-1": {
                 "exchange": "binance",
                 "key": "this is the account-1 key",
@@ -284,7 +284,7 @@ def test_nested_dictionaries(complete_dictionary):
     }
 
     target_dict: Dict[str, Dict[str, Any]] = {
-        "api-keys": {
+        "api_keys": {
             "account-1": {
                 "exchange": "binance",
                 "key": "this is the account-1 key",
@@ -330,7 +330,7 @@ def test_nested_dictionaries(complete_dictionary):
             },
         },
     }
-    assert "account-2" not in target_dict["api-keys"]
+    assert "account-2" not in target_dict["api_keys"]
     assert "config-2" not in target_dict["configs"]
     assert "ETHUSDT" not in target_dict["symbols"]
     config.merge_dictionaries(target_dict, keys, configs, symbols)
