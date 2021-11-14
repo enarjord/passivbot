@@ -6,6 +6,7 @@ from typing import List
 from typing import Optional
 
 from pydantic import BaseModel
+from pydantic import PrivateAttr
 from pydantic import validator
 
 from passivbot.utils.logs import SORTED_LEVEL_NAMES
@@ -113,6 +114,9 @@ class PassivBotConfig(NonMutatingMixin):
     # Optional Configs
     logging: LoggingConfig = LoggingConfig()
 
+    # Private attributes
+    _basedir: pathlib.Path = PrivateAttr()
+
     @classmethod
     def parse_files(cls, *files: pathlib.Path) -> "PassivBotConfig":
         """
@@ -138,6 +142,10 @@ class PassivBotConfig(NonMutatingMixin):
                 f"The {value.config_name!r} configuration name is not defined under 'configs'."
             )
         return value
+
+    @property
+    def basedir(self) -> pathlib.Path:
+        return self._basedir
 
 
 def merge_dictionaries(target_dict: Dict[Any, Any], *source_dicts: Dict[Any, Any]) -> None:
