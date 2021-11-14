@@ -111,6 +111,8 @@ def test_single_config_file(tmp_path, complete_config_dictionary):
     assert "BTCUSDT" in loaded.symbols
     assert "ETHUSDT" in loaded.symbols
     loaded_dict = loaded.dict()
+    # Remove optional config sections for assertion purposes
+    loaded_dict.pop("logging")
     assert loaded_dict == complete_config_dictionary
 
 
@@ -126,6 +128,8 @@ def test_multiple_files(tmp_path, complete_config_dictionary):
 
     loaded = config.PassivBotConfig.parse_files(symbols_file, keys_file, configs_file)
     loaded_dict = loaded.dict()
+    # Remove optional config sections for assertion purposes
+    loaded_dict.pop("logging")
     assert loaded_dict == complete_config_dictionary
 
 

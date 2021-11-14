@@ -64,10 +64,31 @@ class SymbolConfig(NonMutatingMixin):
     config_name: str
 
 
+class LoggingCliConfig(NonMutatingMixin):
+    level: str = "warning"
+    datefmt: str = "%H:%M:%S"
+    fmt: str = "[%(asctime)s][%(levelname)-7s] - %(message)s"
+
+
+class LoggingFileConfig(NonMutatingMixin):
+    level: str = "warning"
+    datefmt: str = "%Y-%m-%d %H:%M:%S"
+    fmt: str = "%(asctime)s,%(msecs)03d [%(name)-17s:%(lineno)-4d][%(levelname)-7s] %(message)s"
+    path: pathlib.Path = pathlib.Path("logs/passivbot.log")
+
+
+class LoggingConfig(NonMutatingMixin):
+    cli: LoggingCliConfig = LoggingCliConfig()
+    file: LoggingFileConfig = LoggingFileConfig()
+
+
 class PassivBotConfig(NonMutatingMixin):
     api_keys: Dict[str, ApiKey]
     configs: Dict[str, NamedConfig]
     symbols: Dict[str, SymbolConfig]
+
+    # Optional Configs
+    logging: LoggingConfig = LoggingConfig()
 
     @classmethod
     def parse_files(cls, *files: pathlib.Path) -> "PassivBotConfig":
