@@ -61,8 +61,8 @@ def test_cli_log_level(complete_config_dictionary):
     logging_config_dict = {"cli": {"level": "error"}}
     complete_config_dictionary["logging"] = logging_config_dict
 
-    loaded = config.PassivBotConfig.parse_obj(complete_config_dictionary)
-    assert isinstance(loaded, config.PassivBotConfig)
+    loaded = config.BaseConfig.parse_obj(complete_config_dictionary)
+    assert isinstance(loaded, config.BaseConfig)
     assert loaded.logging.cli.level == "error"
     loaded_dict = loaded.dict()
     expected_cli_logging_dict = config.LoggingCliConfig().dict()

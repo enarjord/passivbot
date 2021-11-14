@@ -7,12 +7,12 @@ from pydantic import ValidationError
 import passivbot.backtest
 import passivbot.batch_optimize
 import passivbot.bot
+import passivbot.config
 import passivbot.downloader
 import passivbot.multi_symbol_optimize
 import passivbot.optimize
 import passivbot.utils.logs
 import passivbot.utils.procedures
-from passivbot.config import PassivBotConfig
 from passivbot.version import __version__
 
 
@@ -82,8 +82,21 @@ def main() -> None:
     else:
         args.basedir = pathlib.Path.cwd()
 
+    if args.subparser == passivbot.bot.SUBPARSER_NAME:
+        config_cls = passivbot.config.LiveConfig
+    elif args.subparser == passivbot.backtest.SUBPARSER_NAME:
+        config_cls = passivbot.config.LiveConfig
+    elif args.subparser == passivbot.downloader.SUBPARSER_NAME:
+        config_cls = passivbot.config.LiveConfig
+    elif args.subparser == passivbot.optimize.SUBPARSER_NAME:
+        config_cls = passivbot.config.LiveConfig
+    elif args.subparser == passivbot.batch_optimize.SUBPARSER_NAME:
+        config_cls = passivbot.config.LiveConfig
+    elif args.subparser == passivbot.multi_symbol_optimize.SUBPARSER_NAME:
+        config_cls = passivbot.config.LiveConfig
+
     try:
-        config = PassivBotConfig.parse_files(*args.config_files)
+        config = config_cls.parse_files(*args.config_files)
     except ValidationError as exc:
         parser.exit(status=1, message=f"Found some errors in the configuration:\n\n{exc}\n")
 
