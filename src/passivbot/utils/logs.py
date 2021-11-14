@@ -10,13 +10,18 @@ LOG_LEVELS = {
     "critical": logging.CRITICAL,
     "info": logging.INFO,
     "warning": logging.WARNING,
+    "quiet": 1000,
 }
+SORTED_LEVEL_NAMES = [lvl[0] for lvl in sorted(LOG_LEVELS.items(), key=lambda x: x[1])]
+
 logging.root.setLevel(logging.DEBUG)
 
 
 def setup_cli_logging(
     log_level: str, fmt: Optional[str] = None, datefmt: Optional[str] = None
 ) -> None:
+    # Remove any pre-existing logging handlers
+    logging.root.handlers[:] = []
     if fmt is None:
         fmt = "[%(asctime)s][%(levelname)-7s] - %(message)s"
     if datefmt is None:

@@ -2,6 +2,8 @@ import argparse
 import os
 import pathlib
 
+from pydantic import ValidationError
+
 import passivbot.backtest
 import passivbot.batch_optimize
 import passivbot.bot
@@ -10,6 +12,7 @@ import passivbot.multi_symbol_optimize
 import passivbot.optimize
 import passivbot.utils.logs
 import passivbot.utils.procedures
+from passivbot.config import PassivBotConfig
 from passivbot.version import __version__
 
 
@@ -28,6 +31,19 @@ def main() -> None:
         ),
     )
     config_section.add_argument(
+        "-c",
+        "--config",
+        "--config-file",
+        type=pathlib.Path,
+        dest="config_files",
+        default=[],
+        action="append",
+        help=(
+            "Path to configuration file. Can be passed multiple times, but the last configuration file "
+            "will be merged into the previous one, and so forth, overriding the previously defined values."
+        ),
+    )
+    config_section.add_argument(
         "--api-keys",
         type=pathlib.Path,
         help="Path to the `api-keys.json` file. Defaults to <basedir>/api-keys.json",
@@ -37,18 +53,18 @@ def main() -> None:
     )
     cli_logging_params.add_argument(
         "--log-level",
-        choices=sorted(passivbot.utils.logs.LOG_LEVELS),
-        default="warning",
-        help="CLI logging level. Default: %(default)s",
+        choices=passivbot.utils.logs.SORTED_LEVEL_NAMES,
+        default=None,
+        help="CLI logging level. Default: warning",
     )
     cli_logging_params.add_argument(
         "--log-file", type=pathlib.Path, default=None, help="Path to logs file"
     )
     cli_logging_params.add_argument(
         "--log-file-level",
-        choices=sorted(passivbot.utils.logs.LOG_LEVELS),
-        default="warning",
-        help="Logs file logging level. Default: %(default)s",
+        choices=passivbot.utils.logs.SORTED_LEVEL_NAMES,
+        default=None,
+        help="Logs file logging level. Default: warning",
     )
     subparsers = parser.add_subparsers(title="PassivBot commands", dest="subparser")
     passivbot.bot.setup_parser(subparsers)
@@ -66,10 +82,24 @@ def main() -> None:
     else:
         args.basedir = pathlib.Path.cwd()
 
+    try:
+        config = PassivBotConfig.parse_files(*args.config_files)
+    except ValidationError as exc:
+        parser.exit(status=1, message=f"Found some errors in the configuration:\n\n{exc}\n")
+
     # Setup logging
-    passivbot.utils.logs.setup_cli_logging(args.log_level)
-    if args.log_file:
-        passivbot.utils.logs.setup_logfile_logging(args.log_file, log_level=args.log_file_level)
+    passivbot.utils.logs.setup_cli_logging(
+        log_level=args.log_level or config.logging.cli.level,
+        fmt=config.logging.cli.fmt,
+        datefmt=config.logging.cli.datefmt,
+    )
+    if args.log_file or config.logging.file.path:
+        passivbot.utils.logs.setup_logfile_logging(
+            logfile=args.log_file or config.logging.file.path,
+            log_level=args.log_file_level or config.logging.file.level,
+            fmt=config.logging.file.fmt,
+            datefmt=config.logging.file.datefmt,
+        )
 
     if args.nojit:
         # Disable numba JIT compilation
