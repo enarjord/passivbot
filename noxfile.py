@@ -10,7 +10,6 @@ import tempfile
 import nox
 from nox.command import CommandFailed
 
-COVERAGE_VERSION_REQUIREMENT = "coverage==5.5"
 IS_WINDOWS = sys.platform.lower().startswith("win")
 IS_DARWIN = sys.platform.lower().startswith("darwin")
 
@@ -64,7 +63,6 @@ def tests(session):
     if SKIP_REQUIREMENTS_INSTALL is False:
         # Always have the wheel package installed
         session.install("wheel", silent=PIP_INSTALL_SILENT)
-        session.install(COVERAGE_VERSION_REQUIREMENT, silent=PIP_INSTALL_SILENT)
         pytest_version_requirement = os.environ.get("PYTEST_VERSION_REQUIREMENT") or None
         if pytest_version_requirement:
             if not pytest_version_requirement.startswith("pytest"):
