@@ -4,6 +4,7 @@ from typing import Any
 from typing import Dict
 from typing import List
 from typing import Optional
+from typing import Tuple
 
 from pydantic import BaseModel
 from pydantic import PrivateAttr
@@ -26,6 +27,16 @@ class ApiKey(NonMutatingMixin):
     exchange: str
     key: str
     secret: str
+
+    @validator("exchange")
+    @classmethod
+    def _validate_exchange(cls, value: str) -> str:
+        supported_exchanges: Tuple[str, str] = ("binance", "bybit")
+        if value not in supported_exchanges:
+            raise ValueError(
+                f"The exchange {value!r} is not supported. Choose one of {', '.join(supported_exchanges)}"
+            )
+        return value
 
 
 class LongConfig(NonMutatingMixin):
