@@ -711,7 +711,6 @@ async def _main(args: argparse.Namespace) -> None:
         log.error("failed to load config from %s: %s", args.live_config_path, e)
         return
 
-    config_dict["basedir"] = args.basedir
     config_dict["api_key_name"] = args.user
     config_dict["exchange"] = account["exchange"]
     config_dict["symbol"] = args.symbol

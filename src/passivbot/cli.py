@@ -127,6 +127,9 @@ def main() -> None:
     except ValidationError as exc:
         parser.exit(status=1, message=f"Found some errors in the configuration:\n\n{exc}\n")
 
+    # Set the config private attributes
+    config._basedir = args.basedir  # type: ignore[misc]
+
     # Setup logging
     passivbot.utils.logs.setup_cli_logging(
         log_level=args.log_level or config.logging.cli.level,
