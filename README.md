@@ -8,16 +8,15 @@ v5.1.0
 
 ## Overview
 
-Passivbot is a cryptocurrency trading bot written in Python, intended to require minimal user intervention.  
-It is observed that prices in a market will fluctuate up and down, creating opportunities for capitalizing on the noise.  
+Passivbot is a cryptocurrency trading bot written in Python, intended to require minimal user intervention.
+It is observed that prices in a market will fluctuate up and down, creating opportunities for capitalizing on the noise.
 The bot's purpose is to automate the harvest.
 
 It operates on spot or futures markets by listening to websocket stream of live trades,
 automatically creating and cancelling limit buy and sell orders.
 
-Because passivbot's live behavior is deterministic, it may be simulated on historical price data, using the included backtester.  
-Also included is an optimizer, which finds better configurations by iterating thousands of backtests with different candidates.  
-The bot can be controlled via Telegram.
+Because passivbot's live behavior is deterministic, it may be simulated on historical price data, using the included backtester.
+Also included is an optimizer, which finds better configurations by iterating thousands of backtests with different candidates.
 
 The strategy is integrated -- the bot only needs a predefined configuration to run.
 

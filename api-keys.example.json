@@ -2,14 +2,7 @@
     "binance_01" : {
         "exchange": "binance",
         "key": "key",
-        "secret": "secret",
-        "telegram": {
-            "enabled": false,
-            "notify_entry_fill": true,
-            "notify_close_fill": true,
-            "token": "bot_token",
-            "chat_id": "chat_id"
-        }
+        "secret": "secret"
     },
     "binance_02" : {
         "exchange": "binance",

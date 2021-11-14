@@ -44,9 +44,6 @@ The instructions below assume your key is `{X}` and your secret is `{Y}`.
     Make sure you enable `futures` on the API key. Also, be aware that on Binance you have to complete a quiz before you
     can trade futures. Apart from that, you need to make sure there are funds present in the futures wallet.
 
-Also, you will need to get a Telegram token & chat-id to fill into the `api-keys.json`. Please refer to the [Telegram](telegram.md)
-section for instructions on how to set this up.
-
 These instructions show using [vi](http://www.atmos.albany.edu/daes/atmclasses/atm350/vi_cheat_sheet.pdf) to edit the `api-keys.json`, but you can use any command-line editor you like.
 
 ```shell
@@ -56,10 +53,6 @@ vi api-keys.json
 {copy the key from the exchange into your clipboard, and paste it in the editor window}
 {navigate to the secret item in the api-keys file under binance_01 using your arrow keys}
 {copy the secret from the exchange into your clipboard, and paste it in the editor window}
-{navigate to the token item in the telegram subkey in the api-keys file under binance_01 using your arrow keys}
-{copy the telegram token into your clipboard, and paste it in the editor window}
-{navigate to the chat-id item in the telegram subkey in the api-keys file under binance_01 using your arrow keys}
-{copy the telegram chatid into your clipboard, and paste it in the editor window}
 :wq
 ```
 
@@ -118,6 +111,3 @@ python3 passivbot.py binance_01 XLMUSDT configs/live/myconfig.json
 
 If the bot started succesfully, you should receive a message **Passivbot started!**. After this, you can disconnect
 from the screen session by pressing `ctrl+a`, following by pressing `d`.
-
-!!! Info
-    To stop the bot, simply use the `stop` button on the second page of buttons in Telegram

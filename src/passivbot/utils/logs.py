@@ -12,7 +12,6 @@ LOG_LEVELS = {
     "warning": logging.WARNING,
 }
 logging.root.setLevel(logging.DEBUG)
-logging.getLogger("telegram").setLevel(logging.CRITICAL)
 
 
 def setup_cli_logging(

@@ -2,6 +2,9 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v6.0.0] - UNRLEASED
+- Removed built-in telegram support
+
 ## [v3.5.2] - 2021-05-10
 - walk forward optimization
 - more advanced backtest analysis tools
