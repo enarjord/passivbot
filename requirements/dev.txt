@@ -1,4 +1,5 @@
 -r base.txt
+coverage
 flake8
 flake8-docstrings
 flake8-mypy-fork
