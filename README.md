@@ -19,7 +19,7 @@ Because passivbot's live behavior is deterministic, it may be simulated on histo
 Also included is an optimizer, which finds better configurations by iterating thousands of backtests with different candidates.  
 The bot can be controlled via Telegram.
 
-The strategy is integrated -- the bot only needs a predefined configuration to run.
+The strategy is integrated -- the bot only needs a predefined configuration to run. 
 
 ## Requirements
 
