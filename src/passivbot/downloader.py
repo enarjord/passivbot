@@ -3,6 +3,7 @@ import asyncio
 import datetime
 import gzip
 import io
+import logging
 import os
 import sys
 import time
@@ -23,8 +24,9 @@ from passivbot.utils.procedures import create_binance_bot_spot
 from passivbot.utils.procedures import create_bybit_bot
 from passivbot.utils.procedures import make_get_filepath
 from passivbot.utils.procedures import prepare_backtest_config
-from passivbot.utils.procedures import print_
 from passivbot.utils.procedures import utc_ms
+
+log = logging.getLogger(__name__)
 
 
 class Downloader:
@@ -167,7 +169,7 @@ class Downloader:
             )
         except ValueError as e:
             df = pd.DataFrame()
-            print_(["Error in reading dataframe", e])
+            log.error("Error in reading dataframe: %s", e)
         return df
 
     def save_dataframe(self, df: pd.DataFrame, filename: str, missing: bool, verified: bool) -> str:
@@ -184,16 +186,18 @@ class Downloader:
         else:
             new_name = f'{df["trade_id"].iloc[0]}_{df["trade_id"].iloc[-1]}_{df["timestamp"].iloc[0]}_{df["timestamp"].iloc[-1]}.csv'
         if new_name != filename:
-            print_(["Saving file", new_name, ts_to_date(int(new_name.split("_")[2]) / 1000)])
+            log.info(
+                "Saving file %s date=%s", new_name, ts_to_date(int(new_name.split("_")[2]) / 1000)
+            )
             df.to_csv(os.path.join(self.filepath, new_name), index=False)
             new_name = ""
             try:
                 os.remove(os.path.join(self.filepath, filename))
-                print_(["Removed file", filename])
+                log.info("Removed file", filename)
             except Exception:
                 pass
         elif missing:
-            print_(["Replacing file", filename])
+            log.info("Replacing file: %s", filename)
             df.to_csv(os.path.join(self.filepath, filename), index=False)
         else:
             new_name = ""
@@ -256,7 +260,7 @@ class Downloader:
             ticks = await self.bot.fetch_ticks_time(start_time)
             return self.transform_ticks(ticks)
         except Exception:
-            print_(["Finding id for start time..."])
+            log.info("Finding id for start time...")
             ticks = await self.bot.fetch_ticks()
             df = self.transform_ticks(ticks)
             highest_id = df["trade_id"].iloc[-1]
@@ -270,18 +274,12 @@ class Downloader:
                 nw_id, prev_div, forward = self.new_id(
                     first_ts, last_ts, first_id, length, start_time, prev_div
                 )
-                print_(
-                    [
-                        "Current time span from",
-                        df["timestamp"].iloc[0],
-                        "to",
-                        df["timestamp"].iloc[-1],
-                        "with earliest trade id",
-                        df["trade_id"].iloc[0],
-                        "estimating distance of",
-                        forward,
-                        "trades",
-                    ]
+                log.info(
+                    "Current time span from %s to %s with earliest trade id %s estimating distance of %s trades",
+                    df["timestamp"].iloc[0],
+                    df["timestamp"].iloc[-1],
+                    df["trade_id"].iloc[0],
+                    forward,
                 )
                 if nw_id > highest_id:
                     nw_id = highest_id
@@ -296,9 +294,9 @@ class Downloader:
                         if nw_id == 1 and first_ts >= start_time:
                             break
                 except Exception:
-                    print("Failed to fetch or transform...")
+                    log.info("Failed to fetch or transform trades according to time...")
                 await asyncio.sleep(max(0.0, self.fetch_delay_seconds - time.time() + loop_start))
-            print_(["Found id for start time!"])
+            log.info("Found id for start time!")
             return df[df["timestamp"] >= start_time]
 
     def get_zip(self, base_url, symbol, date):
@@ -308,7 +306,7 @@ class Downloader:
         @param date: Day to download.
         @return: Dataframe with full day.
         """
-        print_(["Fetching", symbol, date])
+        log.info("Fetching symbol=%s date=%s", symbol, date)
         url = f"{base_url}{symbol.upper()}/{symbol.upper()}-aggTrades-{date}.zip"
         df = pd.DataFrame(columns=["trade_id", "price", "qty", "timestamp", "is_buyer_maker"])
         column_names = ["trade_id", "price", "qty", "first", "last", "timestamp", "is_buyer_maker"]
@@ -333,13 +331,13 @@ class Downloader:
                     else:
                         df = pd.concat([df, tf])
         except Exception as e:
-            print("Failed to fetch", date, e)
+            log.info("Failed to fetch %s: %s", date, e)
         return df
 
     async def find_df_enclosing_timestamp(self, timestamp, guessed_chunk=None):
         if guessed_chunk is not None:
             if guessed_chunk[0]["timestamp"] < timestamp < guessed_chunk[-1]["timestamp"]:
-                print_(["found id"])
+                log.info("found id")
                 return self.transform_ticks(guessed_chunk)
         else:
             guessed_chunk = sorted(
@@ -359,10 +357,10 @@ class Downloader:
         guessed_chunk = sorted(
             await self.bot.fetch_ticks(guessed_id, do_print=False), key=lambda x: x["trade_id"]
         )
-        print_(
-            [
-                f"guessed_id {guessed_id} earliest ts {ts_to_date(guessed_chunk[0]['timestamp'] / 1000)[:19]} last ts {ts_to_date(guessed_chunk[-1]['timestamp'] / 1000)[:19]} target ts {ts_to_date(timestamp / 1000)[:19]}"
-            ]
+        log.info(
+            f"guessed_id {guessed_id} earliest ts {ts_to_date(guessed_chunk[0]['timestamp'] / 1000)[:19]} "
+            f"last ts {ts_to_date(guessed_chunk[-1]['timestamp'] / 1000)[:19]} target ts "
+            f"{ts_to_date(timestamp / 1000)[:19]}"
         )
         return await self.find_df_enclosing_timestamp(timestamp, guessed_chunk)
 
@@ -389,7 +387,7 @@ class Downloader:
         @param date: Day to download.
         @return: Dataframe with full day.
         """
-        print_(["Fetching", symbol, date])
+        log.info("Fetching symbol=%s, date=%s", symbol, date)
         url = f"{base_url}{symbol.upper()}/{symbol.upper()}{date}.csv.gz"
         df = pd.DataFrame(columns=["trade_id", "price", "qty", "timestamp", "is_buyer_maker"])
         try:
@@ -412,7 +410,7 @@ class Downloader:
                 del ff
                 df = tf
         except Exception as e:
-            print("Failed to fetch", date, e)
+            log.info("Failed to fetch %s: %s", date, e)
         return df
 
     async def download_ticks(self):
@@ -429,7 +427,7 @@ class Downloader:
         elif self.config["exchange"] == "bybit":
             self.bot = await create_bybit_bot(get_dummy_settings(self.config))
         else:
-            print(self.config["exchange"], "not found")
+            log.info("%s not found", self.config["exchange"])
             return
 
         filenames = self.get_filenames()
@@ -451,7 +449,7 @@ class Downloader:
                 and (self.end_time == -1 or (first_time <= self.end_time))
                 or last_time == sys.maxsize
             ):
-                print_(["Validating file", f, ts_to_date(first_time / 1000)])
+                log.info("Validating file: %s; date=%s", f, ts_to_date(first_time / 1000))
                 df = self.read_dataframe(os.path.join(self.filepath, f))
                 missing, df, gaps = self.validate_dataframe(df)
                 exists = False
@@ -486,13 +484,10 @@ class Downloader:
                 if missing and df["timestamp"].iloc[-1] > self.start_time and not exists:
                     current_time = df["timestamp"].iloc[-1]
                     for i in gaps.index:
-                        print_(
-                            [
-                                "Filling gaps from id",
-                                gaps["start"].iloc[i],
-                                "to id",
-                                gaps["end"].iloc[i],
-                            ]
+                        log.info(
+                            "Filling gaps from id %s to id %s",
+                            gaps["start"].iloc[i],
+                            gaps["end"].iloc[i],
                         )
                         current_id = gaps["start"].iloc[i]
                         while current_id < gaps["end"].iloc[i] and utc_ms() - current_time > 10000:
@@ -501,7 +496,7 @@ class Downloader:
                                 fetched_new_trades = await self.bot.fetch_ticks(int(current_id))
                                 tf = self.transform_ticks(fetched_new_trades)
                                 if tf.empty:
-                                    print_(["Response empty. No new trades, exiting..."])
+                                    log.info("Response empty. No new trades, exiting...")
                                     await asyncio.sleep(
                                         max(
                                             0.0, self.fetch_delay_seconds - time.time() + loop_start
@@ -509,7 +504,7 @@ class Downloader:
                                     )
                                     break
                                 if current_id == tf["trade_id"].iloc[-1]:
-                                    print_(["Same trade ID again. No new trades, exiting..."])
+                                    log.info("Same trade ID again. No new trades, exiting...")
                                     await asyncio.sleep(
                                         max(
                                             0.0, self.fetch_delay_seconds - time.time() + loop_start
@@ -527,7 +522,7 @@ class Downloader:
                                 df.reset_index(drop=True, inplace=True)
                                 current_time = df["timestamp"].iloc[-1]
                             except Exception:
-                                print_(["Failed to fetch or transform..."])
+                                log.info("Failed to fetch or transform...")
                             await asyncio.sleep(
                                 max(0.0, self.fetch_delay_seconds - time.time() + loop_start)
                             )
@@ -542,7 +537,7 @@ class Downloader:
                     mod_files.append(nf)
                 elif df["trade_id"].iloc[0] != 1:
                     os.remove(os.path.join(self.filepath, f))
-                    print_(["Removed file fragment", f])
+                    log.info("Removed file fragment: %s", f)
 
         chunk_gaps = []
         filenames = self.get_filenames()
@@ -617,12 +612,12 @@ class Downloader:
                     if month in months_failed:
                         tf = self.get_zip(self.daily_base_url, self.config["symbol"], day)
                         if tf.empty:
-                            print_(["failed to fetch daily", day])
+                            log.error("failed to fetch daily: %s", day)
                             continue
                     else:
                         tf = self.get_zip(self.monthly_base_url, self.config["symbol"], month)
                         if tf.empty:
-                            print_(["failed to fetch monthly", month])
+                            log.error("failed to fetch monthly", month)
                             months_failed.add(month)
                             tf = self.get_zip(self.daily_base_url, self.config["symbol"], day)
                         else:
@@ -674,13 +669,10 @@ class Downloader:
                 and current_time <= end_time
                 and utc_ms() - current_time > 10000
             ):
-                print_(
-                    [
-                        "Downloading from",
-                        ts_to_date(float(current_time) / 1000),
-                        "to",
-                        ts_to_date(float(end_time) / 1000),
-                    ]
+                log.info(
+                    "Downloading from %s to %s",
+                    ts_to_date(float(current_time) / 1000),
+                    ts_to_date(float(end_time) / 1000),
                 )
 
             while (
@@ -692,13 +684,13 @@ class Downloader:
                 fetched_new_trades = await self.bot.fetch_ticks(int(current_id))
                 tf = self.transform_ticks(fetched_new_trades)
                 if tf.empty:
-                    print_(["Response empty. No new trades, exiting..."])
+                    log.info("Response empty. No new trades, exiting...")
                     await asyncio.sleep(
                         max(0.0, self.fetch_delay_seconds - time.time() + loop_start)
                     )
                     break
                 if current_id == tf["trade_id"].iloc[-1]:
-                    print_(["Same trade ID again. No new trades, exiting..."])
+                    log.info("Same trade ID again. No new trades, exiting...")
                     await asyncio.sleep(
                         max(0.0, self.fetch_delay_seconds - time.time() + loop_start)
                     )
@@ -766,7 +758,7 @@ class Downloader:
             ]
             earliest_time = first_frame.timestamp.iloc[0] // sample_size_ms * sample_size_ms
         except Exception as e:
-            print_(["Error in determining earliest time", e])
+            log.error("Error in determining earliest time: %s", e)
             earliest_time = self.start_time
 
         try:
@@ -786,7 +778,7 @@ class Downloader:
             ]
             latest_time = last_frame.timestamp.iloc[-1] // sample_size_ms * sample_size_ms
         except Exception as e:
-            print_(["Error in determining latest time", e])
+            log.error("Error in determining latest time: %s", e)
             latest_time = self.end_time
 
         array = np.zeros(
@@ -836,10 +828,7 @@ class Downloader:
             array[current_index : current_index + len(sampled_ticks)] = sampled_ticks
             current_index += len(sampled_ticks)
 
-            print(
-                "\rloaded chunk of data", f, ts_to_date(float(f.split("_")[2]) / 1000), end="     "
-            )
-        print("\n")
+            log.info("\rloaded chunk of data", f, ts_to_date(float(f.split("_")[2]) / 1000))
 
         # Fill in anything left over
         if not left_overs.empty:
@@ -874,9 +863,9 @@ class Downloader:
             array[current_index : current_index + len(tmp)] = tmp
             current_index += len(tmp)
 
-        print_(["Saving single file with", len(array), " ticks to", self.tick_filepath, "..."])
+        log.info("Saving single file with %d ticks to %s ...", len(array), self.tick_filepath)
         np.save(self.tick_filepath, array)
-        print_(["Saved single file!"])
+        log.info("Saved single file!")
 
     async def get_sampled_ticks(self) -> np.ndarray:
         """
@@ -885,7 +874,7 @@ class Downloader:
         @return: numpy array.
         """
         if os.path.exists(self.tick_filepath):
-            print_(["Loading cached tick data from", self.tick_filepath])
+            log.info("Loading cached tick data from %s", self.tick_filepath)
             tick_data = np.load(self.tick_filepath)
             return tick_data
         await self.download_ticks()

@@ -26,10 +26,12 @@ def test_njit_compilation_by_env_var(envvar_value, njit_compiled, tmp_path):
         """\
     import sys
     import logging
+    import passivbot.utils.logs
     import passivbot.utils.funcs.njit
-
-    logging.basicConfig(level=logging.DEBUG, stream=sys.stderr)
     logging.getLogger("numba").setLevel(logging.ERROR)
+
+    passivbot.utils.logs.setup_cli_logging(log_level="debug")
+
     print(passivbot.utils.funcs.njit.round_dynamic(3.214, 1), file=sys.stdout, flush=True)
     """
     )

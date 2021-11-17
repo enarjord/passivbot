@@ -1,8 +1,8 @@
 import asyncio
 import hmac
 import json
+import logging
 import time
-import traceback
 from typing import Dict
 from typing import List
 from typing import Union
@@ -13,8 +13,9 @@ from passivbot.bot import Bot
 from passivbot.utils.funcs.pure import date_to_ts
 from passivbot.utils.funcs.pure import ts_to_date
 from passivbot.utils.httpclient import ByBitHTTPClient
-from passivbot.utils.procedures import print_
 from passivbot.utils.procedures import print_async_exception
+
+log = logging.getLogger(__name__)
 
 
 def first_capitalized(s: str):
@@ -47,7 +48,7 @@ class Bybit(Bot):
 
     def init_market_type(self):
         if self.symbol.endswith("USDT"):
-            print("linear perpetual")
+            log.info("linear perpetual")
             self.market_type += "_linear_perpetual"
             self.inverse = self.config["inverse"] = False
             self.created_at_key = "created_time"
@@ -68,7 +69,7 @@ class Bybit(Bot):
             self.created_at_key = "created_at"
             self.inverse = self.config["inverse"] = True
             if self.symbol.endswith("USD"):
-                print("inverse perpetual")
+                log.info("inverse perpetual")
                 self.market_type += "_inverse_perpetual"
                 endpoints = {
                     "position": "/v2/private/position/list",
@@ -85,7 +86,7 @@ class Bybit(Bot):
 
                 self.hedge_mode = self.config["hedge_mode"] = False
             else:
-                print("inverse futures")
+                log.info("inverse futures")
                 self.market_type += "_inverse_futures"
                 endpoints = {
                     "position": "/futures/private/position/list",
@@ -245,9 +246,8 @@ class Bybit(Bot):
             else:
                 return o, order
         except Exception as e:
-            print(f"error executing order {order} {e}")
+            log.error(f"error executing order {order} {e}", exc_info=True)
             print_async_exception(o)
-            traceback.print_exc()
             return {}
 
     async def execute_cancellation(self, order: dict) -> dict:
@@ -266,9 +266,8 @@ class Bybit(Bot):
                 "price": order["price"],
             }
         except Exception as e:
-            print(f"error cancelling order {order} {e}")
+            log.error(f"error cancelling order {order} {e}", exc_info=True)
             print_async_exception(cancellation)
-            traceback.print_exc()
             self.ts_released["force_update"] = 0.0
             return {}
 
@@ -277,7 +276,7 @@ class Bybit(Bot):
             resp = await self.httpclient.get("spot_balance", signed=True)
             return resp["result"]
         except Exception as e:
-            print("error fetching account: ", e)
+            log.error("error fetching account: %s", e)
             return {"balances": []}
 
     async def fetch_ticks(self, from_id: int = None, do_print: bool = True):
@@ -287,7 +286,7 @@ class Bybit(Bot):
         try:
             ticks = await self.httpclient.get("ticks", params=params)
         except Exception as e:
-            print("error fetching ticks", e)
+            log.error("error fetching ticks: %s", e)
             return []
         try:
             trades = [
@@ -301,18 +300,16 @@ class Bybit(Bot):
                 for tick in ticks["result"]
             ]
             if do_print:
-                print_(
-                    [
-                        "fetched trades",
-                        self.symbol,
-                        trades[0]["trade_id"],
-                        ts_to_date(float(trades[0]["timestamp"]) / 1000),
-                    ]
+                log.info(
+                    "fetched trades %s %s %s",
+                    self.symbol,
+                    trades[0]["trade_id"],
+                    ts_to_date(float(trades[0]["timestamp"]) / 1000),
                 )
         except Exception:
             trades = []
             if do_print:
-                print_(["fetched no new trades", self.symbol])
+                log.info("fetched no new trades %s", self.symbol)
         return trades
 
     async def fetch_ohlcvs(self, start_time: int = None, interval="1m", limit=200):
@@ -372,7 +369,7 @@ class Bybit(Bot):
             )
             if len(fetched) == 0:
                 break
-            print_(["fetched income", ts_to_date(fetched[0]["timestamp"])])
+            log.info("fetched income %s", ts_to_date(fetched[0]["timestamp"]))
             if fetched == income[-len(fetched) :]:
                 break
             income += fetched
@@ -422,8 +419,7 @@ class Bybit(Bot):
                 key=lambda x: x["timestamp"],
             )
         except Exception as e:
-            print("error fetching income: ", e)
-            traceback.print_exc()
+            log.error("error fetching income: %s", e, exc_info=True)
             print_async_exception(fetched)
             return []
 
@@ -461,11 +457,11 @@ class Bybit(Bot):
     #                fills.append(fill)
     #            return fills
     #        except Exception as e:
-    #            print("error fetching fills", e)
+    #            log.info("error fetching fills", e)
     #            return []
-    #        print("ntufnt")
+    #        log.info("ntufnt")
     #        return fetched
-    #        print("fetch_fills not implemented for Bybit")
+    #        log.info("fetch_fills not implemented for Bybit")
     #        return []
 
     async def init_exchange_config(self):
@@ -492,12 +488,12 @@ class Bybit(Bot):
                         },
                     ),
                 )
-                print(res)
+                log.info("res: %s", res)
                 res = await self.httpclient.post(
                     "/futures/private/position/switch-mode",
                     params={"symbol": self.symbol, "mode": 3},
                 )
-                print(res)
+                log.info("res: %s", res)
             elif "linear_perpetual" in self.market_type:
                 res = await self.httpclient.post(
                     "/private/linear/position/switch-isolated",
@@ -508,21 +504,21 @@ class Bybit(Bot):
                         "sell_leverage": 7,
                     },
                 )
-                print(res)
+                log.info("res: %s", res)
                 res = await self.httpclient.post(
                     "/private/linear/position/set-leverage",
                     params={"symbol": self.symbol, "buy_leverage": 7, "sell_leverage": 7},
                 )
-                print(res)
+                log.info("res: %s", res)
             elif "inverse_perpetual" in self.market_type:
                 res = await self.httpclient.post(
                     "/v2/private/position/leverage/save",
                     params={"symbol": self.symbol, "leverage": 0},
                 )
 
-                print(res)
+                log.info("res: %s", res)
         except Exception as e:
-            print(e)
+            log.error("Error in init_exchange_config: %s", e, exc_info=True)
 
     def standardize_market_stream_event(self, data: dict) -> [dict]:
         ticks = []
@@ -537,7 +533,7 @@ class Bybit(Bot):
                     }
                 )
             except Exception as ex:
-                print("error in websocket tick", e, ex)
+                log.error("error in websocket tick %s: %s", e, ex)
         return ticks
 
     async def beat_heart_user_stream(self) -> None:
@@ -546,8 +542,7 @@ class Bybit(Bot):
             try:
                 await self.ws.send(json.dumps({"op": "ping"}))
             except Exception as e:
-                traceback.print_exc()
-                print_(["error sending heartbeat", e])
+                log.error("error sending heartbeat: %s", e, exc_info=True)
 
     async def subscribe_to_market_stream(self, ws):
         await ws.send(json.dumps({"op": "subscribe", "args": ["trade." + self.symbol]}))

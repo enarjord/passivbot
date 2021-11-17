@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 
 import matplotlib.pyplot as plt
@@ -12,6 +13,8 @@ from passivbot.utils.funcs.njit import round_dynamic
 from passivbot.utils.funcs.njit import round_up
 from passivbot.utils.funcs.pure import denumpyize
 from passivbot.utils.procedures import dump_live_config
+
+log = logging.getLogger(__name__)
 
 
 def dump_plots(result: dict, fdf: pd.DataFrame, sdf: pd.DataFrame, df: pd.DataFrame):
@@ -175,13 +178,13 @@ def dump_plots(result: dict, fdf: pd.DataFrame, sdf: pd.DataFrame, df: pd.DataFr
     dump_live_config(result, result["plots_dirpath"] + "live_config.json")
     json.dump(denumpyize(result), open(result["plots_dirpath"] + "result.json", "w"), indent=4)
 
-    print("writing backtest_result.txt...\n")
+    log.info("writing backtest_result.txt...")
     with open(f"{result['plots_dirpath']}backtest_result.txt", "w") as f:
         output = table.get_string(border=True, padding_width=1)
-        print(output)
+        log.info("Output:\n%s", output)
         f.write(re.sub("\033\\[([0-9]+)(;[0-9]+)*m", "", output))
 
-    print("\nplotting balance and equity...")
+    log.info("plotting balance and equity...")
     plt.clf()
     sdf.balance.plot()
     sdf.equity.plot()
@@ -202,21 +205,21 @@ def dump_plots(result: dict, fdf: pd.DataFrame, sdf: pd.DataFrame, df: pd.DataFr
     adg.plot()
     plt.savefig(f"{result['plots_dirpath']}adg.png")
 
-    print("plotting backtest whole and in chunks...")
+    log.info("plotting backtest whole and in chunks...")
     n_parts = max(3, int(round_up(result["n_days"] / 14, 1.0)))
     for z in range(n_parts):
         start_ = z / n_parts
         end_ = (z + 1) / n_parts
-        print(f"{z} of {n_parts} {start_ * 100:.2f}% to {end_ * 100:.2f}%")
+        log.info(f"{z} of {n_parts} {start_ * 100:.2f}% to {end_ * 100:.2f}%")
         fig = plot_fills(df, fdf.iloc[int(len(fdf) * start_) : int(len(fdf) * end_)], bkr_thr=0.1)
         if fig is not None:
             fig.savefig(f"{result['plots_dirpath']}backtest_{z + 1}of{n_parts}.png")
         else:
-            print("no fills...")
+            log.info("no fills...")
     fig = plot_fills(df, fdf, bkr_thr=0.1, plot_whole_df=True)
     fig.savefig(f"{result['plots_dirpath']}whole_backtest.png")
 
-    print("plotting pos sizes...")
+    log.info("plotting pos sizes...")
     plt.clf()
     longs.psize.plot()
     shorts.psize.plot()

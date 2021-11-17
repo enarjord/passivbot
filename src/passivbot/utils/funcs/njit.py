@@ -470,7 +470,7 @@ def find_qty_bringing_wallet_exposure_to_target(
         while val < wallet_exposure_limit:
             i += 1
             if i >= max_n_iters:
-                print("debug find qty unable to find high enough qty")
+                log.info("debug find qty unable to find high enough qty")
                 return guess
             guess = round_(max(guess + qty_step, guess * 2.0), qty_step)
             val = calc_wallet_exposure_if_filled(
@@ -502,34 +502,23 @@ def find_qty_bringing_wallet_exposure_to_target(
         if guess == too_high[0] or guess == too_low[0]:
             break
     if abs(best_guess[2] - wallet_exposure_limit) / wallet_exposure_limit > 0.15:
-        print("debug find_qty_bringing_wallet_exposure_to_target")
-        print(
-            "balance, psize, pprice, wallet_exposure_limit, entry_price, inverse, qty_step, c_mult,"
-            " error_tolerance, max_n_iters"
-        )
-        print(
+        log.debug("find_qty_bringing_wallet_exposure_to_target")
+        log.info(
+            "balance: %s; psize: %s; pprice: %s; wallet_exposure_limit: %s; entry_price: %s; inverse: %s; "
+            "qty_step: %s; c_mult: %s; error_tolerance: %s; max_n_iters: %s",
             balance,
-            ",",
             psize,
-            ",",
             pprice,
-            ",",
             wallet_exposure_limit,
-            ",",
             entry_price,
-            ",",
             inverse,
-            ",",
             qty_step,
-            ",",
             c_mult,
-            ",",
             error_tolerance,
-            ",",
             max_n_iters,
         )
-        print("wallet_exposure_limit", wallet_exposure_limit)
-        print("best_guess", best_guess)
+        log.info("wallet_exposure_limit: %s", wallet_exposure_limit)
+        log.info("best_guess: %s", best_guess)
     return best_guess[1]
 
 
@@ -639,9 +628,9 @@ def find_eprice_pprice_diff_wallet_exposure_weighting(
         if i >= max_n_iters or abs(old_guess - guess) / guess < error_tolerance * 0.1:
             """
             if best_guess[0] > 0.15:
-                print('debug find_eprice_pprice_diff_wallet_exposure_weighting')
-                print('balance, initial_entry_price, inverse, qty_step, price_step, min_qty, min_cost, c_mult, grid_span, wallet_exposure_limit, max_n_entry_orders, initial_qty_pct, eprice_pprice_diff, eprice_exp_base, max_n_iters, error_tolerance, eprices, prev_pprice')
-                print(balance, ',', initial_entry_price, ',', inverse, ',', qty_step, ',', price_step, ',', min_qty, ',', min_cost, ',', c_mult, ',', grid_span, ',', wallet_exposure_limit, ',', max_n_entry_orders, ',', initial_qty_pct, ',', eprice_pprice_diff, ',', eprice_exp_base, ',', max_n_iters, ',', error_tolerance, ',', eprices, ',', prev_pprice)
+                log.info('debug find_eprice_pprice_diff_wallet_exposure_weighting')
+                log.info('balance, initial_entry_price, inverse, qty_step, price_step, min_qty, min_cost, c_mult, grid_span, wallet_exposure_limit, max_n_entry_orders, initial_qty_pct, eprice_pprice_diff, eprice_exp_base, max_n_iters, error_tolerance, eprices, prev_pprice')
+                log.info(balance, ',', initial_entry_price, ',', inverse, ',', qty_step, ',', price_step, ',', min_qty, ',', min_cost, ',', c_mult, ',', grid_span, ',', wallet_exposure_limit, ',', max_n_entry_orders, ',', initial_qty_pct, ',', eprice_pprice_diff, ',', eprice_exp_base, ',', max_n_iters, ',', error_tolerance, ',', eprices, ',', prev_pprice)
             """
             return best_guess[1]
         old_guess = guess
@@ -929,33 +918,37 @@ def calc_long_entry_grid(
                     qty_to_cost(entry_qty, entry_price, inverse, c_mult) / balance
                     > wallet_exposure_limit * 1.1
                 ):
-                    print("\n\nwarning: abnormally large partial ientry")
-                    print("grid:")
-                    for e in grid:
-                        print(list(e))
-                    print("args:")
-                    print(
-                        balance,
-                        psize,
-                        pprice,
-                        highest_bid,
-                        inverse,
-                        do_long,
-                        qty_step,
-                        price_step,
-                        min_qty,
-                        min_cost,
-                        c_mult,
-                        grid_span,
-                        wallet_exposure_limit,
-                        max_n_entry_orders,
-                        initial_qty_pct,
-                        eprice_pprice_diff,
-                        secondary_allocation,
-                        secondary_pprice_diff,
-                        eprice_exp_base,
+                    log.warning(
+                        "abnormally large partial ientry.\nGrid:\n%s",
+                        "\n".join([str(e) for e in grid]),
                     )
-                    print("\n\n")
+                    log.info(
+                        "Args:\n%s",
+                        "\n".join(
+                            str(arg)
+                            for arg in (
+                                balance,
+                                psize,
+                                pprice,
+                                highest_bid,
+                                inverse,
+                                do_long,
+                                qty_step,
+                                price_step,
+                                min_qty,
+                                min_cost,
+                                c_mult,
+                                grid_span,
+                                wallet_exposure_limit,
+                                max_n_entry_orders,
+                                initial_qty_pct,
+                                eprice_pprice_diff,
+                                secondary_allocation,
+                                secondary_pprice_diff,
+                                eprice_exp_base,
+                            )
+                        ),
+                    )
                 return [(entry_qty, entry_price, "long_ientry")]
         if len(grid) == 0:
             return [(0.0, 0.0, "")]
@@ -1306,10 +1299,10 @@ def njit_backtest(
             long_close_qty = long_closes[0][0]
             new_long_psize = round_(long_psize + long_close_qty, qty_step)
             if new_long_psize < 0.0:
-                print("warning: long close qty greater than long psize")
-                print("long_psize", long_psize)
-                print("long_pprice", long_pprice)
-                print("long_closes[0]", long_closes[0])
+                log.info("warning: long close qty greater than long psize")
+                log.info("long_psize: %s", long_psize)
+                log.info("long_pprice: %s", long_pprice)
+                log.info("long_closes[0]: %s", long_closes[0])
                 long_close_qty = -long_psize
                 new_long_psize, long_pprice = 0.0, 0.0
             long_psize = new_long_psize

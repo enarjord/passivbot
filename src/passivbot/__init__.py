@@ -1,10 +1,14 @@
+import passivbot.utils.logs
+
+passivbot.utils.logs.set_logger_class()
+
 try:
     from .version import __version__
 except ImportError:  # pragma: no cover
     __version__ = "0.0.0.not-installed"
     try:
-        from importlib.metadata import version  # type: ignore [attr-defined]
-        from importlib.metadata import PackageNotFoundError  # type: ignore [attr-defined]
+        from importlib.metadata import version
+        from importlib.metadata import PackageNotFoundError
 
         try:
             __version__ = version("passivbot")
@@ -13,7 +17,8 @@ except ImportError:  # pragma: no cover
             pass
     except ImportError:
         try:
-            from importlib_metadata import version, PackageNotFoundError
+            from importlib_metadata import version  # type: ignore[no-redef]
+            from importlib_metadata import PackageNotFoundError  # type: ignore[no-redef]
 
             try:
                 __version__ = version("passivbot")

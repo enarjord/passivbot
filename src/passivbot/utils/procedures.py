@@ -1,5 +1,7 @@
+import contextlib
 import glob
 import json
+import logging
 import os
 import time
 from datetime import datetime
@@ -16,6 +18,8 @@ from passivbot.utils.funcs.pure import get_dummy_settings
 from passivbot.utils.funcs.pure import get_template_live_config
 from passivbot.utils.funcs.pure import numpyize
 from passivbot.utils.funcs.pure import ts_to_date
+
+log = logging.getLogger(__name__)
 
 
 def load_live_config(live_config_path: str) -> dict:
@@ -113,15 +117,15 @@ async def prepare_optimize_config(args) -> dict:
 async def add_market_specific_settings(config):
     mss = config["caches_dirpath"] + "market_specific_settings.json"
     try:
-        print("fetching market_specific_settings...")
+        log.info("fetching market_specific_settings...")
         market_specific_settings = await fetch_market_specific_settings(config)
         json.dump(market_specific_settings, open(mss, "w"), indent=4)
     except Exception as e:
-        print("\nfailed to fetch market_specific_settings", e, "\n")
+        log.error("failed to fetch market_specific_settings: %s", e)
         try:
             if os.path.exists(mss):
                 market_specific_settings = json.load(open(mss))
-            print("using cached market_specific_settings")
+            log.info("using cached market_specific_settings")
         except Exception:
             raise Exception("failed to load cached market_specific_settings")
     config.update(market_specific_settings)
@@ -143,25 +147,13 @@ def load_exchange_key_secret(user: str) -> (str, str, str):
         if user in keyfile:
             return keyfile[user]["exchange"], keyfile[user]["key"], keyfile[user]["secret"]
         else:
-            print("Looks like the keys aren't configured yet, or you entered the wrong username!")
+            log.info(
+                "Looks like the keys aren't configured yet, or you entered the wrong username!"
+            )
         raise Exception("API KeyFile Missing!")
     except FileNotFoundError:
-        print("File Not Found!")
+        log.info("File Not Found!")
         raise Exception("API KeyFile Missing!")
-
-
-def print_(args, r=False, n=False):
-    line = ts_to_date(utc_ms())[:19] + "  "
-    # line = ts_to_date(local_time())[:19] + '  '
-    str_args = "{} " * len(args)
-    line += str_args.format(*args)
-    if n:
-        print("\n" + line, end=" ")
-    elif r:
-        print("\r" + line, end=" ")
-    else:
-        print(line)
-    return line
 
 
 async def fetch_market_specific_settings(config: dict):
@@ -352,13 +344,13 @@ def make_tick_samples(config: dict, sec_span: int = 1):
         _, _, first_ts, last_ts = map(int, f.replace(".csv", "").split("_"))
         if first_ts > end_ts or last_ts < start_ts:
             continue
-        print(f"\rloading chunk {ts_to_date(first_ts / 1000)}", end="  ")
+        log.info(f"\rloading chunk {ts_to_date(first_ts / 1000)}")
         tdf = pd.read_csv(ticks_filepath + f)
         tdf = tdf[(tdf.timestamp >= start_ts) & (tdf.timestamp <= end_ts)]
         ticks = np.concatenate((ticks, tdf[["timestamp", "qty", "price"]].values))
         del tdf
     samples = calc_samples(ticks[ticks[:, 0].argsort()], sec_span * 1000)
-    print(
+    log.info(
         f"took {time.time() - sts:.2f} seconds to load {len(ticks)} ticks, creating {len(samples)} samples"
     )
     del ticks
@@ -374,12 +366,12 @@ def get_starting_configs(config) -> [dict]:
                     json.load(open(f))
                     for f in glob.glob(os.path.join(config["starting_configs"], "*.json"))
                 ]
-                print("Starting with all configurations in directory.")
+                log.info("Starting with all configurations in directory.")
             else:
                 starting_configs = [json.load(open(config["starting_configs"]))]
-                print("Starting with specified configuration.")
+                log.info("Starting with specified configuration.")
         except Exception as e:
-            print("Could not find specified configuration.", e)
+            log.error("Could not find specified configuration: %s", e)
     return starting_configs
 
 
@@ -392,15 +384,9 @@ def local_time() -> float:
 
 
 def print_async_exception(coro):
-    try:
-        print(f"returned: {coro}")
-    except Exception:
-        pass
-    try:
-        print(f"exception: {coro.exception()}")
-    except Exception:
-        pass
-    try:
-        print(f"result: {coro.result()}")
-    except Exception:
-        pass
+    exception = result = None
+    with contextlib.suppress(Exception):
+        exception = coro.exception()
+    with contextlib.suppress(Exception):
+        result = coro.result()
+    log.info("Coro: %s; Result: %s: Exception: %s", coro, result, exception)

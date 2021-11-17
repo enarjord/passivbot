@@ -1,4 +1,5 @@
 import argparse
+import logging
 import os
 import pathlib
 
@@ -10,6 +11,8 @@ import passivbot.multi_symbol_optimize
 import passivbot.optimize
 import passivbot.utils.logs
 from passivbot.version import __version__
+
+log = logging.getLogger(__name__)
 
 
 def main() -> None:
@@ -53,7 +56,7 @@ def main() -> None:
     if args.nojit:
         # Disable numba JIT compilation
         os.environ["NOJIT"] = "true"
-        print("numba.njit compilation is disabled")
+        log.info("numba.njit compilation is disabled")
 
     # Call the right sub-parser
     args.func(args)

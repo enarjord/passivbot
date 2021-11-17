@@ -1,6 +1,7 @@
 import argparse
 import asyncio
 import glob
+import logging
 import os
 import pprint
 import shutil
@@ -32,6 +33,7 @@ from passivbot.utils.procedures import load_live_config
 from passivbot.utils.procedures import prepare_optimize_config
 from passivbot.utils.reporter import LogReporter
 
+log = logging.getLogger(__name__)
 
 os.environ["TUNE_GLOBAL_CHECKPOINT_S"] = "240"
 
@@ -175,13 +177,13 @@ def single_sliding_window_run(config, data, do_print=True) -> (float, [dict]):
         iter_slices(data, sliding_window_days, max_span=int(round(max_span)))
     ):
         if len(data_slice[0]) == 0:
-            print("debug b no data")
+            log.info("debug b no data")
             continue
         try:
             packed = pack_config(config)
             fills, stats = backtest(packed, data_slice)
         except Exception as e:
-            print(e)
+            log.error(e)
             break
         _, _, analysis = analyze_fills(fills, stats, config)
         analysis["score"], do_break, line = objective_function(analysis, config, metric=metric)
@@ -199,7 +201,7 @@ def single_sliding_window_run(config, data, do_print=True) -> (float, [dict]):
             f'hrs stuck ss {str(round(analysis["hrs_stuck_max"], 1)).zfill(4)}, ' + line
         )
         if do_print:
-            print(line)
+            log.info(line)
         if do_break:
             break
     return objective, analyses
@@ -238,15 +240,15 @@ def simple_sliding_window_wrap(config, data, do_print=False):
 def backtest_tune(data: np.ndarray, config: dict, current_best: Union[dict, list] = None):
     memory = int(sys.getsizeof(data) * 1.2)
     virtual_memory = psutil.virtual_memory()
-    print(f"data size in mb {memory / (1000 * 1000):.4f}")
+    log.info(f"data size in mb {memory / (1000 * 1000):.4f}")
     if (virtual_memory.available - memory) / virtual_memory.total < 0.1:
-        print("Available memory would drop below 10%. Please reduce the time span.")
+        log.info("Available memory would drop below 10%. Please reduce the time span.")
         return None
     config = create_config(config)
-    print("tuning:")
+    log.info("tuning:")
     for k, v in config.items():
         if isinstance(v, (ray.tune.sample.Float, ray.tune.sample.Integer)):
-            print(k, (v.lower, v.upper))
+            log.info("%s %s", k, (v.lower, v.upper))
     phi1 = 1.4962
     phi2 = 1.4962
     omega = 0.7298
@@ -275,7 +277,7 @@ def backtest_tune(data: np.ndarray, config: dict, current_best: Union[dict, list
     algo = ConcurrencyLimiter(algo, max_concurrent=config["num_cpus"])
     scheduler = AsyncHyperBandScheduler()
 
-    print("\n\nsimple sliding window optimization\n\n")
+    log.info("Simple sliding window optimization")
 
     parameter_columns = []
     for side in ["long", "short"]:
@@ -321,12 +323,11 @@ def backtest_tune(data: np.ndarray, config: dict, current_best: Union[dict, list
         raise_on_failed_trial=False,
     )
     ray.shutdown()
-    print("\nCleaning up temporary optimizer data...\n")
+    log.info("Cleaning up temporary optimizer data...")
     try:
         shutil.rmtree(os.path.join(config["optimize_dirpath"], "search"))
     except Exception as e:
-        print("Failed cleaning up.")
-        print(e)
+        log.info("Failed cleaning up: %s", e)
     return analysis
 
 
@@ -338,21 +339,19 @@ def save_results(analysis, config):
     )
     df = df.sort_values("obj", ascending=False)
     df.to_csv(os.path.join(config["optimize_dirpath"], "results.csv"), index=False)
-    print("Best candidate found:")
-    pprint.pprint(analysis.best_config)
+    log.info("Best candidate found:\n%s", pprint.pformat(analysis.best_config))
 
 
 async def execute_optimize(config):
     if not (config["do_long"] and config["do_short"]):
         if not (config["do_long"] or config["do_short"]):
             raise Exception("both long and short disabled")
-        print(
+        log.info(
             f"{'long' if config['do_long'] else 'short'} only, setting maximum_hrs_stuck ="
             " maximum_hrs_stuck_same_side"
         )
         config["maximum_hrs_stuck"] = config["maximum_hrs_stuck_same_side"]
     downloader = Downloader(config)
-    print()
     for k in (
         keys := [
             "exchange",
@@ -378,8 +377,7 @@ async def execute_optimize(config):
         ]
     ):
         if k in config:
-            print(f"{k: <{max(map(len, keys)) + 2}} {config[k]}")
-    print()
+            log.info(f"{k: <{max(map(len, keys)) + 2}} {config[k]}")
     data = await downloader.get_sampled_ticks()
     config["n_days"] = (data[-1][0] - data[0][0]) / (1000 * 60 * 60 * 24)
     config["optimize_dirpath"] = os.path.join(
@@ -394,12 +392,12 @@ async def execute_optimize(config):
                     load_live_config(f)
                     for f in glob.glob(os.path.join(config["starting_configs"], "*.json"))
                 ]
-                print("Starting with all configurations in directory.")
+                log.info("Starting with all configurations in directory.")
             else:
                 start_candidate = load_live_config(config["starting_configs"])
-                print("Starting with specified configuration.")
+                log.info("Starting with specified configuration.")
         except Exception as e:
-            print("Could not find specified configuration.", e)
+            log.error("Could not find specified configuration: %s", e)
     analysis = backtest_tune(data, config, start_candidate)
     if analysis:
         save_results(analysis, config)
