@@ -1,12 +1,8 @@
 import asyncio
-import hashlib
-import hmac
 import json
 import time
 import traceback
-from urllib.parse import urlencode
 
-import aiohttp
 import numpy as np
 
 from passivbot.bot import Bot
@@ -20,9 +16,9 @@ from passivbot.utils.funcs.njit import round_up
 from passivbot.utils.funcs.pure import calc_long_pprice
 from passivbot.utils.funcs.pure import format_float
 from passivbot.utils.funcs.pure import get_position_fills
-from passivbot.utils.funcs.pure import sort_dict_keys
 from passivbot.utils.funcs.pure import spotify_config
 from passivbot.utils.funcs.pure import ts_to_date
+from passivbot.utils.httpclient import BinanceHTTPClient
 from passivbot.utils.procedures import print_
 from passivbot.utils.procedures import print_async_exception
 
@@ -36,49 +32,12 @@ class BinanceBotSpot(Bot):
         self.inverse = self.config["inverse"] = False
         self.hedge_mode = self.config["hedge_mode"] = False
         self.do_short = self.config["do_short"] = self.config["short"]["enabled"] = False
-        self.session = aiohttp.ClientSession()
-        self.headers = {"X-MBX-APIKEY": self.key}
-        self.base_endpoint = ""
         self.force_update_interval = 40
 
-    async def public_get(self, url: str, params: dict = {}) -> dict:
-        async with self.session.get(self.base_endpoint + url, params=params) as response:
-            result = await response.text()
-        return json.loads(result)
-
-    async def private_(self, type_: str, base_endpoint: str, url: str, params: dict = {}) -> dict:
-        timestamp = int(time.time() * 1000)
-        params.update({"timestamp": timestamp, "recvWindow": 5000})
-        for k in params:
-            if isinstance(params[k], bool):
-                params[k] = "true" if params[k] else "false"
-            elif isinstance(params[k], float):
-                params[k] = format_float(params[k])
-        params = sort_dict_keys(params)
-        params["signature"] = hmac.new(
-            self.secret.encode("utf-8"), urlencode(params).encode("utf-8"), hashlib.sha256
-        ).hexdigest()
-        async with getattr(self.session, type_)(
-            base_endpoint + url, params=params, headers=self.headers
-        ) as response:
-            result = await response.text()
-        return json.loads(result)
-
     async def post_listen_key(self):
-        async with self.session.post(
-            self.base_endpoint + self.endpoints["listen_key"], params={}, headers=self.headers
-        ) as response:
+        async with self.httpclient.post("listen_key") as response:
             result = await response.text()
         return json.loads(result)
-
-    async def private_get(self, url: str, params: dict = {}) -> dict:
-        return await self.private_("get", self.base_endpoint, url, params)
-
-    async def private_post(self, url: str, params: dict = {}) -> dict:
-        return await self.private_("post", self.base_endpoint, url, params)
-
-    async def private_delete(self, url: str, params: dict = {}) -> dict:
-        return await self.private_("delete", self.base_endpoint, url, params)
 
     def init_market_type(self):
         print("spot market")
@@ -87,29 +46,33 @@ class BinanceBotSpot(Bot):
         self.inverse = self.config["inverse"] = False
         self.spot = True
         self.hedge_mode = False
-        self.base_endpoint = "https://api.binance.com"
         self.pair = self.symbol
-        self.endpoints = {
-            "balance": "/api/v3/account",
-            "exchange_info": "/api/v3/exchangeInfo",
-            "open_orders": "/api/v3/openOrders",
-            "ticker": "/api/v3/ticker/bookTicker",
-            "fills": "/api/v3/myTrades",
-            "create_order": "/api/v3/order",
-            "cancel_order": "/api/v3/order",
-            "ticks": "/api/v3/aggTrades",
-            "ohlcvs": "/api/v3/klines",
-            "websocket": (ws := "wss://stream.binance.com/ws/"),
-            "websocket_market": ws + f"{self.symbol.lower()}@aggTrade",
-            "websocket_user": ws,
-            "listen_key": "/api/v3/userDataStream",
-        }
-        self.endpoints["transfer"] = "/sapi/v1/asset/transfer"
-        self.endpoints["account"] = "/api/v3/account"
+        self.httpclient = BinanceHTTPClient(
+            "https://api.binance.com",
+            self.key,
+            self.secret,
+            endpoints={
+                "balance": "/api/v3/account",
+                "exchange_info": "/api/v3/exchangeInfo",
+                "open_orders": "/api/v3/openOrders",
+                "ticker": "/api/v3/ticker/bookTicker",
+                "fills": "/api/v3/myTrades",
+                "create_order": "/api/v3/order",
+                "cancel_order": "/api/v3/order",
+                "ticks": "/api/v3/aggTrades",
+                "ohlcvs": "/api/v3/klines",
+                "websocket": (ws := "wss://stream.binance.com/ws/"),
+                "websocket_market": ws + f"{self.symbol.lower()}@aggTrade",
+                "websocket_user": ws,
+                "listen_key": "/api/v3/userDataStream",
+                "transfer": "/sapi/v1/asset/transfer",
+                "account": "/api/v3/account",
+            },
+        )
 
     async def _init(self):
         self.init_market_type()
-        exchange_info = await self.public_get(self.endpoints["exchange_info"])
+        exchange_info = await self.httpclient.get("exchange_info")
         for e in exchange_info["symbols"]:
             if e["symbol"] == self.symbol:
                 self.coin = e["baseAsset"]
@@ -180,7 +143,7 @@ class BinanceBotSpot(Bot):
         await self.check_if_other_positions()
 
     async def init_order_book(self):
-        ticker = await self.public_get(self.endpoints["ticker"], {"symbol": self.symbol})
+        ticker = await self.httpclient.get("ticker", params={"symbol": self.symbol})
         self.ob = [float(ticker["bidPrice"]), float(ticker["askPrice"])]
         self.price = np.random.choice(self.ob)
 
@@ -196,12 +159,14 @@ class BinanceBotSpot(Bot):
                 "position_side": "long",
                 "timestamp": int(e["time"]),
             }
-            for e in await self.private_get(self.endpoints["open_orders"], {"symbol": self.symbol})
+            for e in await self.httpclient.get(
+                "open_orders", signed=True, params={"symbol": self.symbol}
+            )
         ]
 
     async def fetch_position(self) -> dict:
         balances, _ = await asyncio.gather(
-            self.private_get(self.endpoints["balance"]), self.update_fills()
+            self.httpclient.get("balance", signed=True), self.update_fills()
         )
         balance = {}
         for elm in balances["balances"]:
@@ -247,7 +212,7 @@ class BinanceBotSpot(Bot):
             params[
                 "newClientOrderId"
             ] = f"{order['custom_id']}_{str(int(time.time() * 1000))[8:]}_{int(np.random.random() * 1000)}"
-        o = await self.private_post(self.endpoints["create_order"], params)
+        o = await self.httpclient.post("create_order", params=params)
         if "side" in o:
             return {
                 "symbol": self.symbol,
@@ -264,9 +229,9 @@ class BinanceBotSpot(Bot):
     async def execute_cancellation(self, order: dict) -> [dict]:
         cancellation = None
         try:
-            cancellation = await self.private_delete(
-                self.endpoints["cancel_order"],
-                {"symbol": self.symbol, "orderId": order["order_id"]},
+            cancellation = await self.httpclient.delete(
+                "cancel_order",
+                params={"symbol": self.symbol, "orderId": order["order_id"]},
             )
             return {
                 "symbol": self.symbol,
@@ -353,7 +318,7 @@ class BinanceBotSpot(Bot):
         if end_time is not None:
             params["endTime"] = int(min(end_time, start_time + 1000 * 60 * 60 * 23.99))
         try:
-            fetched = await self.private_get(self.endpoints["fills"], params)
+            fetched = await self.httpclient.get("fills", signed=True, params=params)
             fills = [
                 {
                     "symbol": x["symbol"],
@@ -387,7 +352,7 @@ class BinanceBotSpot(Bot):
 
     async def fetch_account(self):
         try:
-            return await self.private_get(self.endpoints["balance"])
+            return await self.httpclient.get("balance", signed=True)
         except Exception as e:
             print("error fetching account: ", e)
             return {"balances": []}
@@ -407,7 +372,7 @@ class BinanceBotSpot(Bot):
         if end_time is not None:
             params["endTime"] = end_time
         try:
-            fetched = await self.public_get(self.endpoints["ticks"], params)
+            fetched = await self.httpclient.get("ticks", params=params)
         except Exception as e:
             print("error fetching ticks a", e)
             return []
@@ -470,7 +435,7 @@ class BinanceBotSpot(Bot):
             params["startTime"] = int(start_time)
             params["endTime"] = params["startTime"] + interval_map[interval] * 60 * 1000 * limit
         try:
-            fetched = await self.public_get(self.endpoints["ohlcvs"], params)
+            fetched = await self.httpclient.get("ohlcvs", params=params)
             return [
                 {
                     **{"timestamp": int(e[0])},

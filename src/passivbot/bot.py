@@ -10,8 +10,6 @@ from typing import Dict
 from typing import List
 from typing import Union
 
-import websockets
-
 from passivbot.utils.funcs.njit import calc_diff
 from passivbot.utils.funcs.njit import calc_long_close_grid
 from passivbot.utils.funcs.njit import calc_long_entry_grid
@@ -23,6 +21,7 @@ from passivbot.utils.funcs.pure import create_xk
 from passivbot.utils.funcs.pure import denumpyize
 from passivbot.utils.funcs.pure import filter_orders
 from passivbot.utils.funcs.pure import spotify_config
+from passivbot.utils.httpclient import HTTPClient
 from passivbot.utils.procedures import load_exchange_key_secret
 from passivbot.utils.procedures import load_live_config
 from passivbot.utils.procedures import make_get_filepath
@@ -30,6 +29,8 @@ from passivbot.utils.procedures import print_
 
 
 class Bot:
+    httpclient: HTTPClient
+
     def __init__(self, config: dict):
         self.spot = False
         self.config = config
@@ -632,8 +633,8 @@ class Bot:
     async def start_websocket_user_stream(self) -> None:
         await self.init_user_stream()
         asyncio.create_task(self.beat_heart_user_stream())
-        print_(["url", self.endpoints["websocket_user"]])
-        async with websockets.connect(self.endpoints["websocket_user"]) as ws:
+        print_(["url", self.httpclient.endpoints["websocket_user"]])
+        async with self.httpclient.ws_connect("websocket_user") as ws:
             self.ws = ws
             await self.subscribe_to_user_stream(ws)
             async for msg in ws:
@@ -653,7 +654,7 @@ class Bot:
 
     async def start_websocket_market_stream(self) -> None:
         k = 1
-        async with websockets.connect(self.endpoints["websocket_market"]) as ws:
+        async with self.httpclient.ws_connect("websocket_market") as ws:
             await self.subscribe_to_market_stream(ws)
             async for msg in ws:
                 if msg is None:
@@ -748,7 +749,7 @@ async def _main(args: argparse.Namespace) -> None:
     signal.signal(signal.SIGINT, bot.stop)
     signal.signal(signal.SIGTERM, bot.stop)
     await start_bot(bot)
-    await bot.session.close()
+    await bot.httpclient.close()
 
 
 def main(args: argparse.Namespace) -> None:

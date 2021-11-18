@@ -266,7 +266,7 @@ def pack_config(d):
     return new
 
 
-def flatten_dict(d, parent_key="", sep="_"):
+def flatten_dict(d: Dict[str, Any], parent_key="", sep="_") -> Dict[str, Any]:
     items = []
     for k, v in d.items():
         new_key = parent_key + sep + k if parent_key else k
@@ -277,7 +277,7 @@ def flatten_dict(d, parent_key="", sep="_"):
     return dict(items)
 
 
-def sort_dict_keys(d):
+def sort_dict_keys(d: Any) -> Any:
     if isinstance(d, list):
         return [sort_dict_keys(e) for e in d]
     if not isinstance(d, dict):

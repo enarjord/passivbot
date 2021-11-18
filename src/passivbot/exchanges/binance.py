@@ -1,172 +1,107 @@
 import asyncio
-import hashlib
-import hmac
-import json
+import logging
 import time
 import traceback
 from typing import Any
 from typing import Dict
 from typing import List
 from typing import Optional
-from urllib.parse import urlencode
 
-import aiohttp
 import numpy as np
 
 from passivbot.bot import Bot
-from passivbot.utils.funcs.pure import format_float
-from passivbot.utils.funcs.pure import sort_dict_keys
 from passivbot.utils.funcs.pure import ts_to_date
+from passivbot.utils.httpclient import BinanceHTTPClient
+from passivbot.utils.httpclient import HTTPRequestError
 from passivbot.utils.procedures import print_
 from passivbot.utils.procedures import print_async_exception
+
+log = logging.getLogger(__name__)
 
 
 class BinanceBot(Bot):
     def __init__(self, config: Dict[str, Any]):
         self.exchange = "binance"
         super().__init__(config)
-        self.session = aiohttp.ClientSession()
-        self.base_endpoint: str = ""
-        self.headers: Dict[str, str] = {"X-MBX-APIKEY": self.key}
-
-    async def public_get(
-        self, url: str, params: Optional[Any] = None, base_endpoint: Optional[str] = None
-    ) -> Dict[str, Any]:
-        try:
-            async with self.session.get(
-                (self.base_endpoint if base_endpoint is None else base_endpoint) + url,
-                params=params or {},
-            ) as response:
-                result = await response.text()
-            return json.loads(result)
-        except Exception:
-            print(f"error with public get {url} {params}")
-            traceback.print_exc()
-            return {}
-
-    async def private_(
-        self, type_: str, base_endpoint: str, url: str, params: Optional[Any] = None
-    ) -> Dict[str, Any]:
-        if params is None:
-            params = {}
-        try:
-            timestamp = int(time.time() * 1000)
-            params.update({"timestamp": timestamp, "recvWindow": 5000})
-            for k in params:
-                if isinstance(params[k], bool):
-                    params[k] = "true" if params[k] else "false"
-                elif isinstance(params[k], float):
-                    params[k] = format_float(params[k])
-            params = sort_dict_keys(params)
-            params["signature"] = hmac.new(
-                self.secret.encode("utf-8"), urlencode(params).encode("utf-8"), hashlib.sha256
-            ).hexdigest()
-            async with getattr(self.session, type_)(
-                base_endpoint + url, params=params, headers=self.headers
-            ) as response:
-                result = await response.text()
-            return json.loads(result)
-        except Exception:
-            print(f"error with private {type_} {base_endpoint} {url} {params}")
-            traceback.print_exc()
-            return {}
-
-    async def private_get(
-        self, url: str, params: Optional[Any] = None, base_endpoint: Optional[str] = None
-    ) -> Dict[str, Any]:
-        return await self.private_(
-            "get", self.base_endpoint if base_endpoint is None else base_endpoint, url, params
-        )
-
-    async def private_post(
-        self, url: str, params: Optional[Any] = None, base_endpoint: Optional[str] = None
-    ) -> Dict[str, Any]:
-        return await self.private_(
-            "post", self.base_endpoint if base_endpoint is None else base_endpoint, url, params
-        )
-
-    async def private_put(
-        self, url: str, params: Optional[Any] = None, base_endpoint: Optional[str] = None
-    ) -> Dict[str, Any]:
-        return await self.private_(
-            "put", self.base_endpoint if base_endpoint is None else base_endpoint, url, params
-        )
-
-    async def private_delete(
-        self, url: str, params: Optional[Any] = None, base_endpoint: Optional[str] = None
-    ) -> Dict[str, Any]:
-        return await self.private_(
-            "delete", self.base_endpoint if base_endpoint is None else base_endpoint, url, params
-        )
 
     async def init_market_type(self):
         fapi_endpoint = "https://fapi.binance.com"
         dapi_endpoint = "https://dapi.binance.com"
-        self.exchange_info = await self.public_get(
-            "/fapi/v1/exchangeInfo", base_endpoint=fapi_endpoint
+        self.exchange_info = await BinanceHTTPClient.onetime_get(
+            f"{fapi_endpoint}/fapi/v1/exchangeInfo"
         )
         if self.symbol in {e["symbol"] for e in self.exchange_info["symbols"]}:
             print("linear perpetual")
             self.market_type += "_linear_perpetual"
             self.inverse = self.config["inverse"] = False
-            self.base_endpoint = fapi_endpoint
-            self.endpoints = {
-                "position": "/fapi/v2/positionRisk",
-                "balance": "/fapi/v2/balance",
-                "exchange_info": "/fapi/v1/exchangeInfo",
-                "leverage_bracket": "/fapi/v1/leverageBracket",
-                "open_orders": "/fapi/v1/openOrders",
-                "ticker": "/fapi/v1/ticker/bookTicker",
-                "fills": "/fapi/v1/userTrades",
-                "income": "/fapi/v1/income",
-                "create_order": "/fapi/v1/order",
-                "cancel_order": "/fapi/v1/order",
-                "ticks": "/fapi/v1/aggTrades",
-                "ohlcvs": "/fapi/v1/klines",
-                "margin_type": "/fapi/v1/marginType",
-                "leverage": "/fapi/v1/leverage",
-                "position_side": "/fapi/v1/positionSide/dual",
-                "websocket": (ws := "wss://fstream.binance.com/ws/"),
-                "websocket_market": ws + f"{self.symbol.lower()}@aggTrade",
-                "websocket_user": ws,
-                "listen_key": "/fapi/v1/listenKey",
-            }
+            websocket_url = "wss://fstream.binance.com/ws"
+            self.httpclient = BinanceHTTPClient(
+                fapi_endpoint,
+                self.key,
+                self.secret,
+                endpoints={
+                    "position": "/fapi/v2/positionRisk",
+                    "balance": "/fapi/v2/balance",
+                    "exchange_info": "/fapi/v1/exchangeInfo",
+                    "leverage_bracket": "/fapi/v1/leverageBracket",
+                    "open_orders": "/fapi/v1/openOrders",
+                    "ticker": "/fapi/v1/ticker/bookTicker",
+                    "fills": "/fapi/v1/userTrades",
+                    "income": "/fapi/v1/income",
+                    "create_order": "/fapi/v1/order",
+                    "cancel_order": "/fapi/v1/order",
+                    "ticks": "/fapi/v1/aggTrades",
+                    "ohlcvs": "/fapi/v1/klines",
+                    "margin_type": "/fapi/v1/marginType",
+                    "leverage": "/fapi/v1/leverage",
+                    "position_side": "/fapi/v1/positionSide/dual",
+                    "websocket": websocket_url,
+                    "websocket_market": f"{websocket_url}/{self.symbol.lower()}@aggTrade",
+                    "websocket_user": websocket_url,
+                    "listen_key": "/fapi/v1/listenKey",
+                },
+            )
         else:
-            self.exchange_info = await self.public_get(
-                "/dapi/v1/exchangeInfo", base_endpoint=dapi_endpoint
+            self.exchange_info = await BinanceHTTPClient.onetime_get(
+                f"{dapi_endpoint}/dapi/v1/exchangeInfo"
             )
             if self.symbol in {e["symbol"] for e in self.exchange_info["symbols"]}:
                 print("inverse coin margined")
-                self.base_endpoint = dapi_endpoint
                 self.market_type += "_inverse_coin_margined"
                 self.inverse = self.config["inverse"] = True
-                self.endpoints = {
-                    "position": "/dapi/v1/positionRisk",
-                    "balance": "/dapi/v1/balance",
-                    "exchange_info": "/dapi/v1/exchangeInfo",
-                    "leverage_bracket": "/dapi/v1/leverageBracket",
-                    "open_orders": "/dapi/v1/openOrders",
-                    "ticker": "/dapi/v1/ticker/bookTicker",
-                    "fills": "/dapi/v1/userTrades",
-                    "income": "/dapi/v1/income",
-                    "create_order": "/dapi/v1/order",
-                    "cancel_order": "/dapi/v1/order",
-                    "ticks": "/dapi/v1/aggTrades",
-                    "ohlcvs": "/dapi/v1/klines",
-                    "margin_type": "/dapi/v1/marginType",
-                    "leverage": "/dapi/v1/leverage",
-                    "position_side": "/dapi/v1/positionSide/dual",
-                    "websocket": (ws := "wss://dstream.binance.com/ws/"),
-                    "websocket_market": ws + f"{self.symbol.lower()}@aggTrade",
-                    "websocket_user": ws,
-                    "listen_key": "/dapi/v1/listenKey",
-                }
+                websocket_url = "wss://dstream.binance.com/ws"
+                self.httpclient = BinanceHTTPClient(
+                    dapi_endpoint,
+                    self.key,
+                    self.secret,
+                    endpoints={
+                        "position": "/dapi/v1/positionRisk",
+                        "balance": "/dapi/v1/balance",
+                        "exchange_info": "/dapi/v1/exchangeInfo",
+                        "leverage_bracket": "/dapi/v1/leverageBracket",
+                        "open_orders": "/dapi/v1/openOrders",
+                        "ticker": "/dapi/v1/ticker/bookTicker",
+                        "fills": "/dapi/v1/userTrades",
+                        "income": "/dapi/v1/income",
+                        "create_order": "/dapi/v1/order",
+                        "cancel_order": "/dapi/v1/order",
+                        "ticks": "/dapi/v1/aggTrades",
+                        "ohlcvs": "/dapi/v1/klines",
+                        "margin_type": "/dapi/v1/marginType",
+                        "leverage": "/dapi/v1/leverage",
+                        "position_side": "/dapi/v1/positionSide/dual",
+                        "websocket": websocket_url,
+                        "websocket_market": f"{websocket_url}/{self.symbol.lower()}@aggTrade",
+                        "websocket_user": websocket_url,
+                        "listen_key": "/dapi/v1/listenKey",
+                    },
+                )
             else:
                 raise Exception(f"unknown symbol {self.symbol}")
 
         self.spot_base_endpoint = "https://api.binance.com"
-        self.endpoints["transfer"] = "/sapi/v1/asset/transfer"
-        self.endpoints["account"] = "/api/v3/account"
+        self.httpclient.endpoints["transfer"] = "https://api.binance.com/sapi/v1/asset/transfer"
+        self.httpclient.endpoints["account"] = "https://api.binance.com/api/v3/account"
 
     async def _init(self):
         await self.init_market_type()
@@ -200,42 +135,44 @@ class BinanceBot(Bot):
 
     async def execute_leverage_change(self):
         lev = 7  # arbitrary
-        return await self.private_post(
-            self.endpoints["leverage"], {"symbol": self.symbol, "leverage": lev}
+        return await self.httpclient.post(
+            "leverage", params={"symbol": self.symbol, "leverage": lev}
         )
 
     async def init_exchange_config(self) -> bool:
         try:
             print_(
                 [
-                    await self.private_post(
-                        self.endpoints["margin_type"],
-                        {"symbol": self.symbol, "marginType": "CROSSED"},
+                    await self.httpclient.post(
+                        "margin_type",
+                        params={"symbol": self.symbol, "marginType": "CROSSED"},
                     )
                 ]
             )
+        except HTTPRequestError as exc:
+            if exc.code not in (-4046, -4059):
+                raise
+            log.info(exc.msg)
         except Exception as e:
-            print(e)
+            log.error("Error: %s", e, exc_info=True)
         try:
             print_([await self.execute_leverage_change()])
         except Exception as e:
             print(e)
         try:
             print_(
-                [
-                    await self.private_post(
-                        self.endpoints["position_side"], {"dualSidePosition": "true"}
-                    )
-                ]
+                [await self.httpclient.post("position_side", params={"dualSidePosition": "true"})]
             )
+        except HTTPRequestError as exc:
+            if exc.code != -4059:
+                raise
+            log.info(exc.msg)
         except Exception as e:
-            if '"code":-4059' not in e.args[0]:
-                print(e)
-                print("unable to set hedge mode, aborting")
-                raise Exception("failed to set hedge mode")
+            log.error("Unable to set hedge mode, aborting. Error: %s", e, exc_info=True)
+            raise Exception("failed to set hedge mode")
 
     async def init_order_book(self):
-        ticker = await self.public_get(self.endpoints["ticker"], {"symbol": self.symbol})
+        ticker = await self.httpclient.get("ticker", params={"symbol": self.symbol})
         if "inverse_coin_margined" in self.market_type:
             ticker = ticker[0]
         self.ob = [float(ticker["bidPrice"]), float(ticker["askPrice"])]
@@ -253,20 +190,23 @@ class BinanceBot(Bot):
                 "position_side": e["positionSide"].lower(),
                 "timestamp": int(e["time"]),
             }
-            for e in await self.private_get(self.endpoints["open_orders"], {"symbol": self.symbol})
+            for e in await self.httpclient.get(
+                "open_orders", signed=True, params={"symbol": self.symbol}
+            )
         ]
 
     async def fetch_position(self) -> Dict[str, Any]:
         positions, balance = await asyncio.gather(
-            self.private_get(
-                self.endpoints["position"],
-                (
+            self.httpclient.get(
+                "position",
+                signed=True,
+                params=(
                     {"symbol": self.symbol}
                     if "linear_perpetual" in self.market_type
                     else {"pair": self.pair}
                 ),
             ),
-            self.private_get(self.endpoints["balance"], {}),
+            self.httpclient.get("balance", signed=True),
         )
         positions = [e for e in positions if e["symbol"] == self.symbol]
         position = {
@@ -313,7 +253,7 @@ class BinanceBot(Bot):
                 params[
                     "newClientOrderId"
                 ] = f"{order['custom_id']}_{str(int(time.time() * 1000))[8:]}_{int(np.random.random() * 1000)}"
-            o = await self.private_post(self.endpoints["create_order"], params)
+            o = await self.httpclient.post("create_order", params=params)
             return {
                 "symbol": self.symbol,
                 "side": o["side"].lower(),
@@ -332,9 +272,9 @@ class BinanceBot(Bot):
     async def execute_cancellation(self, order: Dict[str, Any]) -> Dict[str, Any]:
         cancellation = None
         try:
-            cancellation = await self.private_delete(
-                self.endpoints["cancel_order"],
-                {"symbol": self.symbol, "orderId": order["order_id"]},
+            cancellation = await self.httpclient.delete(
+                "cancel_order",
+                params={"symbol": self.symbol, "orderId": order["order_id"]},
             )
 
             return {
@@ -371,7 +311,7 @@ class BinanceBot(Bot):
         if end_time is not None:
             params["endTime"] = int(min(end_time, start_time + 1000 * 60 * 60 * 24 * 6.99))
         try:
-            fetched = await self.private_get(self.endpoints["fills"], params)
+            fetched = await self.httpclient.get("fills", signed=True, params=params)
             fills = [
                 {
                     "symbol": x["symbol"],
@@ -436,7 +376,7 @@ class BinanceBot(Bot):
         if income_type is not None:
             params["incomeType"] = income_type.upper()
         try:
-            fetched = await self.private_get(self.endpoints["income"], params)
+            fetched = await self.httpclient.get("income", signed=True, params=params)
             return [
                 {
                     "symbol": e["symbol"],
@@ -457,9 +397,7 @@ class BinanceBot(Bot):
 
     async def fetch_account(self):
         try:
-            return await self.private_get(
-                self.endpoints["account"], base_endpoint=self.spot_base_endpoint
-            )
+            return await self.httpclient.get("account", signed=True)
         except Exception as e:
             print("error fetching account: ", e)
             return {"balances": []}
@@ -479,7 +417,7 @@ class BinanceBot(Bot):
         if end_time is not None:
             params["endTime"] = end_time
         try:
-            fetched = await self.public_get(self.endpoints["ticks"], params)
+            fetched = await self.httpclient.get("ticks", params=params)
         except Exception as e:
             print("error fetching ticks a", e)
             return []
@@ -548,7 +486,7 @@ class BinanceBot(Bot):
             params["startTime"] = int(start_time)
             params["endTime"] = params["startTime"] + interval_map[interval] * 60 * 1000 * limit
         try:
-            fetched = await self.public_get(self.endpoints["ohlcvs"], params)
+            fetched = await self.httpclient.get("ohlcvs", params=params)
             return [
                 {
                     **{"timestamp": int(e[0])},
@@ -565,9 +503,7 @@ class BinanceBot(Bot):
 
     async def transfer(self, type_: str, amount: float, asset: str = "USDT"):
         params = {"type": type_.upper(), "amount": amount, "asset": asset}
-        return await self.private_post(
-            self.endpoints["transfer"], params, base_endpoint=self.spot_base_endpoint
-        )
+        return await self.httpclient.post("transfer", params=params)
 
     def standardize_market_stream_event(self, data: dict) -> List[Dict[str, Any]]:
         try:
@@ -590,9 +526,11 @@ class BinanceBot(Bot):
 
     async def init_user_stream(self) -> None:
         try:
-            response = await self.private_post(self.endpoints["listen_key"])
+            response = await self.httpclient.post("listen_key")
             self.listen_key = response["listenKey"]
-            self.endpoints["websocket_user"] = self.endpoints["websocket"] + self.listen_key
+            self.httpclient.endpoints[
+                "websocket_user"
+            ] = f'{self.httpclient.endpoints["websocket"]}/{self.listen_key}'
         except Exception as e:
             traceback.print_exc()
             print_(["error fetching listen key", e])
