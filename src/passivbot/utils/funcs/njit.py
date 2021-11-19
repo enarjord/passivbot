@@ -1,81 +1,56 @@
-import functools
 import logging
-import os
 from typing import Any
 from typing import Callable
-from typing import cast
-from typing import Dict
 from typing import List
 from typing import Tuple
 from typing import TypeVar
 
-import numba
 import numpy as np
+
+from passivbot import numba_njit
 
 log = logging.getLogger(__name__)
 
 F = TypeVar("F", bound=Callable[..., Any])
 
 
-def deferred_njit(func: F) -> F:
-    """
-    Defer numba.njit compilation to when the function is actually called.
-
-    This allows disabling njit compilation through a CLI flag
-    """
-    jit_cache: Dict[str, F] = {}
-
-    @functools.wraps(func)
-    def wrapper(*args: Any, **kwargs: Any):
-        if func.__name__ not in jit_cache:
-            if os.environ.get("NOJIT", "false").lower() in ("false", "0"):
-                log.debug("numba.njit compiling '%s.%s()'", __name__, func.__name__)
-                jit_cache[func.__name__] = numba.njit(func)
-            else:
-                log.debug("Skipping numba.njit compilation of '%s.%s()'", __name__, func.__name__)
-                jit_cache[func.__name__] = func
-        return jit_cache[func.__name__](*args, **kwargs)
-
-    return cast(F, wrapper)
-
-
-@deferred_njit
+@numba_njit
 def round_dynamic(n: float, d: int):
     if n == 0.0:
         return n
     return round(n, d - int(np.floor(np.log10(abs(n)))) - 1)
 
 
-@deferred_njit
+@numba_njit
 def round_up(n: float, step, safety_rounding=10) -> float:
     return np.round(  # type: ignore[no-any-return]
         np.ceil(np.round(n / step, safety_rounding)) * step, safety_rounding
     )
 
 
-@deferred_njit
+@numba_njit
 def round_dn(n, step, safety_rounding=10) -> float:
     return np.round(  # type: ignore[no-any-return]
         np.floor(np.round(n / step, safety_rounding)) * step, safety_rounding
     )
 
 
-@deferred_njit
+@numba_njit
 def round_(n, step, safety_rounding=10) -> float:
     return np.round(np.round(n / step) * step, safety_rounding)  # type: ignore[no-any-return]
 
 
-@deferred_njit
+@numba_njit
 def calc_diff(x, y):
     return abs(x - y) / abs(y)
 
 
-@deferred_njit
+@numba_njit
 def nan_to_0(x) -> float:
     return x if x == x else 0.0  # type: ignore[no-any-return]
 
 
-@deferred_njit
+@numba_njit
 def calc_min_entry_qty(price, inverse, qty_step, min_qty, min_cost) -> float:
     return (  # type: ignore[no-any-return]
         min_qty
@@ -84,24 +59,24 @@ def calc_min_entry_qty(price, inverse, qty_step, min_qty, min_cost) -> float:
     )
 
 
-@deferred_njit
+@numba_njit
 def cost_to_qty(cost, price, inverse, c_mult):
     return cost * price / c_mult if inverse else (cost / price if price > 0.0 else 0.0)
 
 
-@deferred_njit
+@numba_njit
 def qty_to_cost(qty, price, inverse, c_mult) -> float:
     return (  # type: ignore[no-any-return]
         (abs(qty / price) if price > 0.0 else 0.0) * c_mult if inverse else abs(qty * price)
     )
 
 
-@deferred_njit
+@numba_njit
 def calc_ema(alpha, alpha_, prev_ema, new_val) -> float:
     return prev_ema * alpha_ + new_val * alpha  # type: ignore[no-any-return]
 
 
-@deferred_njit
+@numba_njit
 def calc_samples(ticks: np.ndarray, sample_size_ms: int = 1000) -> np.ndarray:
     # ticks [[timestamp, qty, price]]
     sampled_timestamps = np.arange(
@@ -130,7 +105,7 @@ def calc_samples(ticks: np.ndarray, sample_size_ms: int = 1000) -> np.ndarray:
     return samples
 
 
-@deferred_njit
+@numba_njit
 def calc_emas(xs, spans):
     emas = np.zeros((len(xs), len(spans)))
     alphas = 2 / (spans + 1)
@@ -141,27 +116,31 @@ def calc_emas(xs, spans):
     return emas
 
 
-@deferred_njit
-def calc_long_pnl(entry_price, close_price, qty, inverse, c_mult) -> float:
+@numba_njit
+def calc_long_pnl(
+    entry_price: float, close_price: float, qty: float, inverse: bool, c_mult: float
+) -> float:
     if inverse:
         if entry_price == 0.0 or close_price == 0.0:
             return 0.0
-        return abs(qty) * c_mult * (1.0 / entry_price - 1.0 / close_price)  # type: ignore[no-any-return]
+        return abs(qty) * c_mult * (1.0 / entry_price - 1.0 / close_price)
     else:
-        return abs(qty) * (close_price - entry_price)  # type: ignore[no-any-return]
+        return abs(qty) * (close_price - entry_price)
 
 
-@deferred_njit
-def calc_short_pnl(entry_price, close_price, qty, inverse, c_mult) -> float:
+@numba_njit
+def calc_short_pnl(
+    entry_price: float, close_price: float, qty: float, inverse: bool, c_mult: float
+) -> float:
     if inverse:
         if entry_price == 0.0 or close_price == 0.0:
             return 0.0
-        return abs(qty) * c_mult * (1.0 / close_price - 1.0 / entry_price)  # type: ignore[no-any-return]
+        return abs(qty) * c_mult * (1.0 / close_price - 1.0 / entry_price)
     else:
-        return abs(qty) * (entry_price - close_price)  # type: ignore[no-any-return]
+        return abs(qty) * (entry_price - close_price)
 
 
-@deferred_njit
+@numba_njit
 def calc_equity(
     balance, long_psize, long_pprice, short_psize, short_pprice, last_price, inverse, c_mult
 ):
@@ -173,7 +152,7 @@ def calc_equity(
     return equity
 
 
-@deferred_njit
+@numba_njit
 def calc_new_psize_pprice(psize, pprice, qty, price, qty_step) -> Tuple[float, float]:
     if qty == 0.0:
         return psize, pprice
@@ -183,14 +162,14 @@ def calc_new_psize_pprice(psize, pprice, qty, price, qty_step) -> Tuple[float, f
     return new_psize, nan_to_0(pprice) * (psize / new_psize) + price * (qty / new_psize)
 
 
-@deferred_njit
+@numba_njit
 def calc_wallet_exposure_if_filled(balance, psize, pprice, qty, price, inverse, c_mult, qty_step):
     psize, qty = round_(abs(psize), qty_step), round_(abs(qty), qty_step)
     new_psize, new_pprice = calc_new_psize_pprice(psize, pprice, qty, price, qty_step)
     return qty_to_cost(new_psize, new_pprice, inverse, c_mult) / balance
 
 
-@deferred_njit
+@numba_njit
 def calc_long_close_grid(
     balance,
     long_psize,
@@ -272,7 +251,7 @@ def calc_long_close_grid(
         return long_closes
 
 
-@deferred_njit
+@numba_njit
 def calc_short_close_grid(
     balance,
     short_psize,
@@ -339,14 +318,22 @@ def calc_short_close_grid(
         return short_closes
 
 
-@deferred_njit
-def calc_upnl(long_psize, long_pprice, short_psize, short_pprice, last_price, inverse, c_mult):
-    return calc_long_pnl(long_pprice, last_price, long_psize, inverse, c_mult) + calc_short_pnl(
-        short_pprice, last_price, short_psize, inverse, c_mult
-    )
+@numba_njit
+def calc_upnl(
+    long_psize: float,
+    long_pprice: float,
+    short_psize: float,
+    short_pprice: float,
+    last_price: float,
+    inverse: bool,
+    c_mult: float,
+) -> float:
+    long_pnl: float = calc_long_pnl(long_pprice, last_price, long_psize, inverse, c_mult)
+    short_pnl: float = calc_short_pnl(short_pprice, last_price, short_psize, inverse, c_mult)
+    return long_pnl + short_pnl
 
 
-@deferred_njit
+@numba_njit
 def calc_emas_last(xs, spans):
     alphas = 2.0 / (spans + 1.0)
     alphas_ = 1.0 - alphas
@@ -356,7 +343,7 @@ def calc_emas_last(xs, spans):
     return emas
 
 
-@deferred_njit
+@numba_njit
 def calc_bankruptcy_price(
     balance, long_psize, long_pprice, short_psize, short_pprice, inverse, c_mult
 ):
@@ -381,7 +368,7 @@ def calc_bankruptcy_price(
     return max(0.0, bankruptcy_price)
 
 
-@deferred_njit
+@numba_njit
 def basespace(start, end, base, n):
     if base == 1.0:
         return np.linspace(start, end, n)
@@ -390,14 +377,14 @@ def basespace(start, end, base, n):
     return a * (end - start) + start
 
 
-@deferred_njit
+@numba_njit
 def powspace(start, stop, power, num):
     start = np.power(start, 1 / float(power))
     stop = np.power(stop, 1 / float(power))
     return np.power(np.linspace(start, stop, num=num), power)
 
 
-@deferred_njit
+@numba_njit
 def calc_m_b(x0, x1, y0, y1):
     denom = x1 - x0
     if denom == 0.0:
@@ -408,7 +395,7 @@ def calc_m_b(x0, x1, y0, y1):
     return m, y0 - m * x0
 
 
-@deferred_njit
+@numba_njit
 def calc_long_entry_qty(psize, pprice, entry_price, eprice_pprice_diff):
     return -(
         psize
@@ -417,12 +404,12 @@ def calc_long_entry_qty(psize, pprice, entry_price, eprice_pprice_diff):
     )
 
 
-@deferred_njit
+@numba_njit
 def calc_long_entry_price(psize, pprice, entry_qty, eprice_pprice_diff):
     return (psize * pprice) / (psize * eprice_pprice_diff + psize + entry_qty * eprice_pprice_diff)
 
 
-@deferred_njit
+@numba_njit
 def interpolate(x, xs, ys):
     return np.sum(
         np.array(
@@ -435,7 +422,7 @@ def interpolate(x, xs, ys):
     )
 
 
-@deferred_njit
+@numba_njit
 def find_qty_bringing_wallet_exposure_to_target(
     balance,
     psize,
@@ -522,7 +509,7 @@ def find_qty_bringing_wallet_exposure_to_target(
     return best_guess[1]
 
 
-@deferred_njit
+@numba_njit
 def find_eprice_pprice_diff_wallet_exposure_weighting(
     balance,
     initial_entry_price,
@@ -660,7 +647,7 @@ def find_eprice_pprice_diff_wallet_exposure_weighting(
             too_low = (guess, val)
 
 
-@deferred_njit
+@numba_njit
 def eval_long_entry_grid(
     balance,
     initial_entry_price,
@@ -728,7 +715,7 @@ def eval_long_entry_grid(
     return grid
 
 
-@deferred_njit
+@numba_njit
 def calc_whole_long_entry_grid(
     balance,
     initial_entry_price,
@@ -821,7 +808,7 @@ def calc_whole_long_entry_grid(
     return grid[grid[:, 0] > 0.0]
 
 
-@deferred_njit
+@numba_njit
 def calc_long_entry_grid(
     balance,
     psize,
@@ -971,7 +958,7 @@ def calc_long_entry_grid(
     return [(0.0, 0.0, "")]
 
 
-@deferred_njit
+@numba_njit
 def approximate_grid(
     balance,
     psize,
@@ -1079,7 +1066,7 @@ def approximate_grid(
     return grid[k:] if crop else grid
 
 
-@deferred_njit
+@numba_njit
 def njit_backtest(
     ticks,
     starting_balance,

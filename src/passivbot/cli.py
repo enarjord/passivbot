@@ -92,6 +92,8 @@ def main() -> None:
         # Disable numba JIT compilation
         os.environ["NOJIT"] = "true"
         log.info("numba.njit compilation is disabled")
+    else:
+        log.info("numba.njit compilation is enabled")
 
     # Call the right sub-parser
     args.func(args)

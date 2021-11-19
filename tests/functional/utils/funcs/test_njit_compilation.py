@@ -12,25 +12,24 @@ log = logging.getLogger(__name__)
 
 
 @pytest.mark.parametrize(
-    ["envvar_value", "njit_compiled"],
+    ["envvar_value", "argv", "njit_compiled"],
     (
-        (None, True),
-        ("False", True),
-        ("0", True),
-        ("true", False),
-        ("1", False),
+        (None, (), True),
+        ("False", (), True),
+        ("0", (), True),
+        ("true", (), False),
+        ("1", (), False),
+        (None, ("--nojit",), False),
     ),
 )
-def test_njit_compilation_by_env_var(envvar_value, njit_compiled, tmp_path):
+def test_njit_compilation_by_env_var(envvar_value, argv, njit_compiled, tmp_path):
     code = textwrap.dedent(
         """\
     import sys
     import logging
-    import passivbot.utils.logs
+    logging.basicConfig(level=logging.DEBUG, stream=sys.stderr)
     import passivbot.utils.funcs.njit
     logging.getLogger("numba").setLevel(logging.ERROR)
-
-    passivbot.utils.logs.setup_cli_logging(log_level="debug")
 
     print(passivbot.utils.funcs.njit.round_dynamic(3.214, 1), file=sys.stdout, flush=True)
     """
@@ -41,7 +40,7 @@ def test_njit_compilation_by_env_var(envvar_value, njit_compiled, tmp_path):
     if envvar_value is not None:
         env["NOJIT"] = envvar_value
     proc = subprocess.run(
-        [sys.executable, str(source_path)],
+        [sys.executable, str(source_path)] + list(argv),
         shell=False,
         check=False,
         capture_output=True,
@@ -55,9 +54,6 @@ def test_njit_compilation_by_env_var(envvar_value, njit_compiled, tmp_path):
     assert ret.exitcode == 0
     assert ret.stdout.strip() == "3.0"
     if njit_compiled:
-        assert "numba.njit compiling 'passivbot.utils.funcs.njit.round_dynamic()'" in ret.stderr
+        assert "numba.njit compilation is enabled" in ret.stderr
     else:
-        assert (
-            "Skipping numba.njit compilation of 'passivbot.utils.funcs.njit.round_dynamic()'"
-            in ret.stderr
-        )
+        assert "numba.njit compilation is disabled" in ret.stderr
