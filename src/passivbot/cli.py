@@ -38,7 +38,7 @@ def main() -> None:
     cli_logging_params.add_argument(
         "--log-level",
         choices=sorted(passivbot.utils.logs.LOG_LEVELS),
-        default="warning",
+        default="info",
         help="CLI logging level. Default: %(default)s",
     )
     cli_logging_params.add_argument(
@@ -47,7 +47,7 @@ def main() -> None:
     cli_logging_params.add_argument(
         "--log-file-level",
         choices=sorted(passivbot.utils.logs.LOG_LEVELS),
-        default="warning",
+        default="info",
         help="Logs file logging level. Default: %(default)s",
     )
     subparsers = parser.add_subparsers(title="PassivBot commands")
