@@ -250,10 +250,7 @@ def main(args: argparse.Namespace) -> None:
     asyncio.run(_main(args))
 
 
-def setup_parser(subparsers: argparse._SubParsersAction) -> None:
-    parser = subparsers.add_parser(
-        "multi-symbol-optimize", help="Optimize passivbot config multi symbol"
-    )
+def setup_parser(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "-o",
         "--optimize_config",

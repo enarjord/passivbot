@@ -83,6 +83,5 @@ def main(args: argparse.Namespace) -> None:
             log.error("Error: %s %s", kwargs["symbol"], e)
 
 
-def setup_parser(subparsers: argparse._SubParsersAction) -> None:
-    parser = subparsers.add_parser("batch-optimize", help="Batch Optimize PassivBot config")
+def setup_parser(parser: argparse.ArgumentParser) -> None:
     parser.set_defaults(func=main)

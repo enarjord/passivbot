@@ -895,8 +895,7 @@ def main(args: argparse.Namespace) -> None:
     asyncio.run(_main(args))
 
 
-def setup_parser(subparsers: argparse._SubParsersAction) -> None:
-    parser = subparsers.add_parser("downloader", help="Download ticks from exchange API.")
+def setup_parser(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "-d", "--download-only", help="download only, do not dump ticks caches", action="store_true"
     )

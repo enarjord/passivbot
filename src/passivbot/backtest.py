@@ -88,8 +88,7 @@ def main(args: argparse.Namespace) -> None:
     asyncio.run(_main(args))
 
 
-def setup_parser(subparsers: argparse._SubParsersAction) -> None:
-    parser = subparsers.add_parser("backtest", help="Backtest given passivbot config.")
+def setup_parser(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("live_config_path", type=str, help="path to live config to test")
     add_argparse_args(parser)
     parser.set_defaults(func=main)
