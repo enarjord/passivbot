@@ -1,9 +1,12 @@
 import argparse
+import logging
 import os
 import shutil
 import subprocess
 
 from passivbot.utils.procedures import make_get_filepath
+
+log = logging.getLogger(__name__)
 
 
 def main(args: argparse.Namespace) -> None:
@@ -68,18 +71,17 @@ def main(args: argparse.Namespace) -> None:
         cmd_args = [passivbot_cli_path, "optimize"]
         for key in kwargs:
             cmd_args.extend([f"--{key}", f"{kwargs[key]}"])
-        print(cmd_args)
+        log.info("command: %s", cmd_args)
         subprocess.run(cmd_args, shell=False, check=True)
         try:
             d = f'backtests/{exchange}/{kwargs["symbol"]}/plots/'
             ds = sorted(f for f in os.listdir(d) if "20" in f)
             for d1 in ds:
-                print(f"copying resulting config to {cfgs_dir}", d + d1)
+                log.info(f"copying resulting config to {cfgs_dir}: %s", d + d1)
                 shutil.copy(d + d1 + "/live_config.json", f'{cfgs_dir}{kwargs["symbol"]}_{d1}.json')
         except Exception as e:
-            print("error", kwargs["symbol"], e)
+            log.error("Error: %s %s", kwargs["symbol"], e)
 
 
-def setup_parser(subparsers: argparse._SubParsersAction) -> None:
-    parser = subparsers.add_parser("batch-optimize", help="Batch Optimize PassivBot config")
+def setup_parser(parser: argparse.ArgumentParser) -> None:
     parser.set_defaults(func=main)

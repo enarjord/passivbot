@@ -1,11 +1,11 @@
 import argparse
 import asyncio
 import json
+import logging
 import os
 import pprint
 import signal
 import time
-import traceback
 from typing import Dict
 from typing import List
 from typing import Union
@@ -25,7 +25,8 @@ from passivbot.utils.httpclient import HTTPClient
 from passivbot.utils.procedures import load_exchange_key_secret
 from passivbot.utils.procedures import load_live_config
 from passivbot.utils.procedures import make_get_filepath
-from passivbot.utils.procedures import print_
+
+log = logging.getLogger(__name__)
 
 
 class Bot:
@@ -98,7 +99,7 @@ class Bot:
         if "cross_wallet_pct" not in config:
             config["cross_wallet_pct"] = 1.0
         if config["cross_wallet_pct"] > 1.0 or config["cross_wallet_pct"] <= 0.0:
-            print(
+            log.info(
                 f'Invalid cross_wallet_pct given: {config["cross_wallet_pct"]}.  It must be greater'
                 " than zero and less than or equal to one.  Defaulting to 1.0."
             )
@@ -132,8 +133,7 @@ class Bot:
                 self.dump_log({"log_type": "open_orders", "data": open_orders})
             self.open_orders = open_orders
         except Exception as e:
-            print("error with update open orders", e)
-            traceback.print_exc()
+            log.error("error with update open orders: %s", e, exc_info=True)
         finally:
             self.ts_released["update_open_orders"] = time.time()
 
@@ -204,8 +204,7 @@ class Bot:
                 self.dump_log({"log_type": "position", "data": position})
             self.position = position
         except Exception as e:
-            print("error with update position", e)
-            traceback.print_exc()
+            log.error("error with update position: %s", e, exc_info=True)
         finally:
             self.ts_released["update_position"] = time.time()
 
@@ -230,8 +229,7 @@ class Bot:
                     seen.add(fill["order_id"])
             self.fills = sorted(updated_fills, key=lambda x: x["order_id"])[-5000:]
         except Exception as e:
-            print("error with update fills", e)
-            traceback.print_exc()
+            log.error("error with update fills: %s", e, exc_info=True)
         finally:
             self.ts_released["update_fills"] = time.time()
 
@@ -247,31 +245,30 @@ class Bot:
                 try:
                     creations.append((oc, asyncio.create_task(self.execute_order(oc))))
                 except Exception as e:
-                    print_(["error creating order a", oc, e], n=True)
+                    log.error("error creating order a. oc: %s; error: %s", oc, e)
             created_orders = []
             for oc, c in creations:
                 try:
                     o = await c
                     created_orders.append(o)
                     if "side" in o:
-                        print_(
-                            [
-                                "  created order",
-                                o["symbol"],
-                                o["side"],
-                                o["position_side"],
-                                o["qty"],
-                                o["price"],
-                            ],
-                            n=True,
+                        log.info(
+                            "created order symnol=%s side=%s, position_side=%s, qty=%s, price=%s",
+                            o["symbol"],
+                            o["side"],
+                            o["position_side"],
+                            o["qty"],
+                            o["price"],
                         )
                         if o["order_id"] not in {x["order_id"] for x in self.open_orders}:
                             self.open_orders.append(o)
                     else:
-                        print_(["error creating order b", o, oc], n=True)
+                        log.error("error creating order b. order: %s; oc: %s", o, oc)
                     self.dump_log({"log_type": "create_order", "data": o})
                 except Exception as e:
-                    print_(["error creating order c", oc, c.exception(), e], n=True)
+                    log.error(
+                        "error creating order c: oc: %s; error: %s, exc:\n%s", oc, e, c.exception()
+                    )
                     self.dump_log(
                         {
                             "log_type": "create_order",
@@ -294,33 +291,35 @@ class Bot:
                 try:
                     deletions.append((oc, asyncio.create_task(self.execute_cancellation(oc))))
                 except Exception as e:
-                    print_(["error cancelling order a", oc, e])
+                    log.error("error cancelling order a. oc: %s, error: %s", oc, e)
             cancelled_orders = []
             for oc, c in deletions:
                 try:
                     o = await c
                     cancelled_orders.append(o)
                     if "order_id" in o:
-                        print_(
-                            [
-                                "cancelled order",
-                                o["symbol"],
-                                o["side"],
-                                o["position_side"],
-                                o["qty"],
-                                o["price"],
-                            ],
-                            n=True,
+                        log.info(
+                            "cancelled order, symbol=%s, side=%s, position_side=%s, qty=%s, price=%s",
+                            o["symbol"],
+                            o["side"],
+                            o["position_side"],
+                            o["qty"],
+                            o["price"],
                         )
                         self.open_orders = [
                             oo for oo in self.open_orders if oo["order_id"] != o["order_id"]
                         ]
 
                     else:
-                        print_(["error cancelling order", o], n=True)
+                        log.error("error cancelling order: %s", o)
                     self.dump_log({"log_type": "cancel_order", "data": o})
                 except Exception as e:
-                    print_(["error cancelling order b", oc, c.exception(), e], n=True)
+                    log.error(
+                        "error cancelling order b. oc: %s; error: %s, exc:\n%s",
+                        oc,
+                        e,
+                        c.exception(),
+                    )
                     self.dump_log(
                         {
                             "log_type": "cancel_order",
@@ -332,14 +331,14 @@ class Bot:
             self.ts_released["cancel_orders"] = time.time()
 
     def stop(self, signum=None, frame=None) -> None:
-        print("\nStopping passivbot, please wait...")
+        log.info("Stopping passivbot, please wait...")
         try:
 
             self.stop_websocket = True
             self.user_stream_task.cancel()
             self.market_stream_task.cancel()
         except Exception as e:
-            print(f"An error occurred during shutdown: {e}")
+            log.info("An error occurred during shutdown: %s", e, exc_info=True)
 
     def pause(self) -> None:
         self.process_websocket_ticks = False
@@ -355,7 +354,7 @@ class Bot:
 
         if self.stop_mode in ["panic"]:
             if self.exchange == "bybit":
-                print("\n\npanic mode temporarily disabled for bybit\n\n")
+                log.warning("panic mode temporarily disabled for bybit")
                 return []
             panic_orders = []
             if long_psize != 0.0:
@@ -488,8 +487,6 @@ class Bot:
                     results.append(
                         await self.create_orders(to_create[: self.n_orders_per_execution])
                     )
-            if any(results):
-                print()
             await asyncio.sleep(self.delay_between_executions)  # sleep before releasing lock
             return results
         finally:
@@ -505,7 +502,7 @@ class Bot:
             self.price = ticks[-1]["price"]
 
         if self.stop_mode is not None:
-            print(f"{self.stop_mode} stop mode is active")
+            log.info("%s stop mode is active", self.stop_mode)
 
         now = time.time()
         if now - self.ts_released["force_update"] > self.force_update_interval:
@@ -516,7 +513,7 @@ class Bot:
             self.update_output_information()
         if now - self.heartbeat_ts > 60 * 60:
             # print heartbeat once an hour
-            print_(["heartbeat\n"], n=True)
+            log.info("heartbeat")
             self.heartbeat_ts = time.time()
         await self.cancel_and_create()
 
@@ -571,8 +568,7 @@ class Bot:
                 )  # sleep 10 ms to catch both pos update and open orders update
                 await self.cancel_and_create()
         except Exception as e:
-            print(["error handling user stream event", e])
-            traceback.print_exc()
+            log.error("error handling user stream event: %s", e, exc_info=True)
 
     def update_output_information(self):
         self.ts_released["print"] = time.time()
@@ -604,14 +600,14 @@ class Bot:
         line += f"lwallet_exposure {self.position['long']['wallet_exposure']:.3f} "
         line += f"bal {round_dynamic(self.position['wallet_balance'], 5)} "
         line += f"eq {round_dynamic(self.position['equity'], 5)} "
-        print_([line], r=True)
+        log.info(line, wipe_line=True)
 
     def flush_stuck_locks(self, timeout: float = 5.0) -> None:
         now = time.time()
         for key in self.ts_locked:
             if self.ts_locked[key] > self.ts_released[key]:
                 if now - self.ts_locked[key] > timeout:
-                    print("flushing stuck lock", key)
+                    log.info("flushing stuck lock: %s", key)
                     self.ts_released[key] = now
 
     async def start_websocket(self) -> None:
@@ -633,7 +629,7 @@ class Bot:
     async def start_websocket_user_stream(self) -> None:
         await self.init_user_stream()
         asyncio.create_task(self.beat_heart_user_stream())
-        print_(["url", self.httpclient.endpoints["websocket_user"]])
+        log.info("Websocket stream URL: %s", self.httpclient.endpoints["websocket_user"])
         async with self.httpclient.ws_connect("websocket_user") as ws:
             self.ws = ws
             await self.subscribe_to_user_stream(ws)
@@ -649,8 +645,7 @@ class Bot:
                         )
                     )
                 except Exception as e:
-                    print(["error in websocket user stream", e])
-                    traceback.print_exc()
+                    log.error("error in websocket user stream: %s", e, exc_info=True)
 
     async def start_websocket_market_stream(self) -> None:
         k = 1
@@ -672,7 +667,7 @@ class Bot:
 
                 except Exception as e:
                     if "success" not in msg:
-                        print("error in websocket", e, msg)
+                        log.error("error in websocket: %s message: %s", e, msg, exc_info=True)
 
     async def subscribe_to_market_stream(self, ws):
         pass
@@ -686,8 +681,11 @@ async def start_bot(bot):
         try:
             await bot.start_websocket()
         except Exception as e:
-            print("Websocket connection has been lost, attempting to reinitialize the bot...", e)
-            traceback.print_exc()
+            log.error(
+                "Websocket connection has been lost, attempting to reinitialize the bot: %s",
+                e,
+                exc_info=True,
+            )
             await asyncio.sleep(10)
 
 
@@ -695,17 +693,17 @@ async def _main(args: argparse.Namespace) -> None:
     try:
         accounts = json.load(open("api-keys.json"))
     except Exception as e:
-        print(e, "failed to load api-keys.json file")
+        log.error("failed to load api-keys.json file: %s", e)
         return
     try:
         account = accounts[args.user]
     except Exception as e:
-        print("unrecognized account name", args.user, e)
+        log.error("unrecognized account name %s: %s", args.user, e)
         return
     try:
         config = load_live_config(args.live_config_path)
     except Exception as e:
-        print(e, "failed to load config", args.live_config_path)
+        log.error("failed to load config from %s: %s", args.live_config_path, e)
         return
     config["user"] = args.user
     config["exchange"] = account["exchange"]
@@ -713,13 +711,12 @@ async def _main(args: argparse.Namespace) -> None:
     config["live_config_path"] = args.live_config_path
     config["market_type"] = args.market_type if args.market_type is not None else "futures"
     if args.assigned_balance is not None:
-        print(f"\nassigned balance set to {args.assigned_balance}\n")
+        log.info("assigned balance set to: %s", args.assigned_balance)
         config["assigned_balance"] = args.assigned_balance
 
     if args.graceful_stop:
-        print(
-            "\n\ngraceful stop enabled, will not make new entries once existing positions are"
-            " closed\n"
+        log.info(
+            "graceful stop enabled, will not make new entries once existing positions are closed"
         )
         config["long"]["enabled"] = config["do_long"] = False
         config["short"]["enabled"] = config["do_short"] = False
@@ -743,8 +740,7 @@ async def _main(args: argparse.Namespace) -> None:
     else:
         raise Exception("unknown exchange", account["exchange"])
 
-    print("using config")
-    pprint.pprint(denumpyize(config))
+    log.info("using config:\n%s", pprint.pformat(denumpyize(config)))
 
     signal.signal(signal.SIGINT, bot.stop)
     signal.signal(signal.SIGTERM, bot.stop)
@@ -756,10 +752,9 @@ def main(args: argparse.Namespace) -> None:
     try:
         asyncio.run(_main(args))
     except Exception as e:
-        print(f"\nThere was an error starting the bot: {e}")
-        traceback.print_exc()
+        log.error("There was an error starting the bot: %s", e, exc_info=True)
     finally:
-        print("\nPassivbot was stopped succesfully")
+        log.info("Passivbot was stopped successfully")
         os._exit(0)
 
 

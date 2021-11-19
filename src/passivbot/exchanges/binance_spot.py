@@ -1,7 +1,7 @@
 import asyncio
 import json
+import logging
 import time
-import traceback
 
 import numpy as np
 
@@ -19,8 +19,9 @@ from passivbot.utils.funcs.pure import get_position_fills
 from passivbot.utils.funcs.pure import spotify_config
 from passivbot.utils.funcs.pure import ts_to_date
 from passivbot.utils.httpclient import BinanceHTTPClient
-from passivbot.utils.procedures import print_
 from passivbot.utils.procedures import print_async_exception
+
+log = logging.getLogger(__name__)
 
 
 class BinanceBotSpot(Bot):
@@ -40,7 +41,7 @@ class BinanceBotSpot(Bot):
         return json.loads(result)
 
     def init_market_type(self):
-        print("spot market")
+        log.info("spot market")
         if "spot" not in self.market_type:
             self.market_type += "_spot"
         self.inverse = self.config["inverse"] = False
@@ -108,12 +109,12 @@ class BinanceBotSpot(Bot):
             if order["price"] > min(
                 self.max_price, round_dn(self.price * self.price_multiplier_up, self.price_step)
             ):
-                print(f'price {order["price"]} too high')
+                log.warning(f'price {order["price"]} too high')
                 continue
             if order["price"] < max(
                 self.min_price, round_up(self.price * self.price_multiplier_dn, self.price_step)
             ):
-                print(f'price {order["price"]} too low')
+                log.warning(f'price {order["price"]} too low')
                 continue
             if order["side"] == "buy":
                 cost = qty_to_cost(order["qty"], order["price"], self.inverse, self.c_mult)
@@ -242,9 +243,8 @@ class BinanceBotSpot(Bot):
                 "price": float(cancellation["price"]),
             }
         except Exception as e:
-            print(f"error cancelling order {order} {e}")
+            log.info(f"error cancelling order {order}: {e}", exc_info=True)
             print_async_exception(cancellation)
-            traceback.print_exc()
             self.ts_released["force_update"] = 0.0
             return {}
 
@@ -254,10 +254,10 @@ class BinanceBotSpot(Bot):
         while True:
             i += 1
             if i >= 15:
-                print("\nWarning: more than 15 calls to fetch_fills(), breaking")
+                log.info("Warning: more than 15 calls to fetch_fills(), breaking")
                 break
             fetched = await self.fetch_fills(symbol=symbol, start_time=start_time)
-            print_(["fetched fills", ts_to_date(fetched[0]["timestamp"])])
+            log.info("fetched fills %s", ts_to_date(fetched[0]["timestamp"]))
             if fetched == fills[-len(fetched) :]:
                 break
             fills += fetched
@@ -339,22 +339,21 @@ class BinanceBotSpot(Bot):
                 for x in fetched
             ]
         except Exception as e:
-            print("error fetching fills a", e)
-            traceback.print_exc()
+            log.error("error fetching fills a: %s", e, exc_info=True)
             return []
         return fills
 
     async def fetch_income(
         self, symbol: str = None, limit: int = 1000, start_time: int = None, end_time: int = None
     ):
-        print("fetch income not implemented in spot")
+        log.info("fetch income not implemented in spot")
         return []
 
     async def fetch_account(self):
         try:
             return await self.httpclient.get("balance", signed=True)
         except Exception as e:
-            print("error fetching account: ", e)
+            log.error("error fetching account: %s", e)
             return {"balances": []}
 
     async def fetch_ticks(
@@ -374,7 +373,7 @@ class BinanceBotSpot(Bot):
         try:
             fetched = await self.httpclient.get("ticks", params=params)
         except Exception as e:
-            print("error fetching ticks a", e)
+            log.error("error fetching ticks a: %s", e)
             return []
         try:
             ticks = [
@@ -388,19 +387,17 @@ class BinanceBotSpot(Bot):
                 for t in fetched
             ]
             if do_print:
-                print_(
-                    [
-                        "fetched ticks",
-                        self.symbol,
-                        ticks[0]["trade_id"],
-                        ts_to_date(float(ticks[0]["timestamp"]) / 1000),
-                    ]
+                log.info(
+                    "fetched ticks %s %s %s",
+                    self.symbol,
+                    ticks[0]["trade_id"],
+                    ts_to_date(float(ticks[0]["timestamp"]) / 1000),
                 )
         except Exception as e:
-            print("error fetching ticks b", e, fetched)
+            log.info("error fetching ticks b: %s - %s", e, fetched)
             ticks = []
             if do_print:
-                print_(["fetched no new ticks", self.symbol])
+                log.info("fetched no new ticks %s", self.symbol)
         return ticks
 
     async def fetch_ticks_time(self, start_time: int, end_time: int = None, do_print: bool = True):
@@ -447,11 +444,10 @@ class BinanceBotSpot(Bot):
                 for e in fetched
             ]
         except Exception as e:
-            print("error fetching ohlcvs", fetched, e)
-            traceback.print_exc()
+            log.error("error fetching ohlcvs: %s %s", fetched, e, exc_info=True)
 
     async def transfer(self, type_: str, amount: float, asset: str = "USDT"):
-        print("transfer not implemented in spot")
+        log.info("transfer not implemented in spot")
         return
 
     def standardize_market_stream_event(self, data: dict) -> [dict]:
@@ -465,7 +461,7 @@ class BinanceBotSpot(Bot):
                 }
             ]
         except Exception as e:
-            print("error in websocket tick", e)
+            log.error("error in websocket tick: %s", e)
         return []
 
     async def beat_heart_user_stream(self) -> None:
@@ -479,8 +475,7 @@ class BinanceBotSpot(Bot):
             self.listen_key = response["listenKey"]
             self.endpoints["websocket_user"] = self.endpoints["websocket"] + self.listen_key
         except Exception as e:
-            traceback.print_exc()
-            print_(["error fetching listen key", e])
+            log.error("error fetching listen key: %s", e, exc_info=True)
 
     async def on_user_stream_event(self, event: dict) -> None:
         try:
@@ -544,8 +539,7 @@ class BinanceBotSpot(Bot):
                 )  # sleep 10 ms to catch both pos update and open orders update
                 await self.cancel_and_create()
         except Exception as e:
-            print(["error handling user stream event", e])
-            traceback.print_exc()
+            log.error("error handling user stream event: %s", e, exc_info=True)
 
     def standardize_user_stream_event(self, event: dict) -> dict:
         standardized = {}

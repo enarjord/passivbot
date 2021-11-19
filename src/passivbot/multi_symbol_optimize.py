@@ -1,9 +1,11 @@
 import argparse
 import asyncio
 import json
+import logging
 import multiprocessing
 import os
 import time
+from pprint import pprint
 
 import numpy as np
 
@@ -26,6 +28,8 @@ from passivbot.utils.procedures import make_get_filepath
 from passivbot.utils.procedures import prepare_backtest_config
 from passivbot.utils.procedures import prepare_optimize_config
 
+log = logging.getLogger(__name__)
+
 
 def backtest_single_wrap(config_: dict):
     config = config_.copy()
@@ -41,14 +45,12 @@ def backtest_single_wrap(config_: dict):
         pa_distance = analysis["pa_distance_mean_long"]
         adg = analysis["average_daily_gain"]
         score = adg * (min(1.0, config["maximum_pa_distance_mean_long"] / pa_distance) ** 2)
-        print(
+        log.info(
             f"backtested {config['symbol']: <12} pa distance {analysis['pa_distance_mean_long']:.6f} "
             f"adg {adg:.6f} score {score:.8f}"
         )
     except Exception as e:
-        print(f'error with {config["symbol"]} {e}')
-        print("config")
-        print(config)
+        log.error("error with %s: %s\nConfig: %s", config["symbol"], e, pprint.pformat(config))
         score = -9999999999999.9
         adg = 0.0
         pa_distance = 100.0
@@ -70,7 +72,7 @@ def backtest_multi_wrap(config: dict, pool):
     mean_adg = np.mean([v[1] for v in results.values()])
     mean_score = np.mean([v[2] for v in results.values()])
     new_score = mean_adg * min(1.0, config["maximum_pa_distance_mean_long"] / mean_pa_distance)
-    print(
+    log.info(
         f"pa distance {mean_pa_distance:.6f} adg {mean_adg:.6f} score {mean_score:8f} new score {new_score:.8f}"
     )
     return -new_score, results
@@ -105,14 +107,14 @@ def harmony_search(
         if tpl not in seen:
             hm[i] = harmony
         seen.add(tpl)
-    print("evaluating initial harmonies...")
+    log.info("evaluating initial harmonies...")
     hm_evals = numpyize([func(h) for h in hm])
 
-    print("best harmony")
-    print(round_values(denumpyize(hm[hm_evals.argmin()]), 5), f"{hm_evals.min():.8f}")
+    log.info("best harmony")
+    log.info(round_values(denumpyize(hm[hm_evals.argmin()]), 5), f"{hm_evals.min():.8f}")
     if post_processing_func is not None:
         post_processing_func(hm[hm_evals.argmin()])
-    print("starting search...")
+    log.info("starting search...")
     worst_eval_i = hm_evals.argmax()
     for itr in range(iters):
         new_harmony = np.zeros(len(bounds[0]))
@@ -132,11 +134,15 @@ def harmony_search(
             hm[worst_eval_i] = new_harmony
             hm_evals[worst_eval_i] = h_eval
             worst_eval_i = hm_evals.argmax()
-            print("improved harmony")
-            print(round_values(denumpyize(new_harmony), 5), f"{h_eval:.8f}")
-        print("best harmony")
-        print(round_values(denumpyize(hm[hm_evals.argmin()]), 5), f"{hm_evals.min():.8f}")
-        print("iteration", itr, "of", iters)
+            log.info(
+                "improved harmony: %s %s", round_values(denumpyize(new_harmony), 5), f"{h_eval:.8f}"
+            )
+        log.info(
+            "best harmony: %s %s",
+            round_values(denumpyize(hm[hm_evals.argmin()]), 5),
+            f"{hm_evals.min():.8f}",
+        )
+        log.info("iteration %s of %s", itr, iters)
         if post_processing_func is not None:
             post_processing_func(hm[hm_evals.argmin()])
     return hm[hm_evals.argmin()]
@@ -194,7 +200,7 @@ async def _main(args: argparse.Namespace) -> None:
         if not os.path.exists(cache_dirpath + cache_fname) or not os.path.exists(
             cache_dirpath + "market_specific_settings.json"
         ):
-            print(f"fetching data {symbol}")
+            log.info(f"fetching data {symbol}")
             args.symbol = symbol
             tmp_cfg = await prepare_backtest_config(args)
             downloader = Downloader({**config, **tmp_cfg})
@@ -211,12 +217,12 @@ async def _main(args: argparse.Namespace) -> None:
                 try:
                     cfgs.append(load_live_config(os.path.join(args.starting_configs, fname)))
                 except Exception as e:
-                    print("error loading config:", e)
+                    log.error("error loading config: %s", e)
         elif os.path.exists(args.starting_configs):
             try:
                 cfgs = [load_live_config(args.starting_configs)]
             except Exception as e:
-                print("error loading config:", e)
+                log.error("error loading config: %s", e)
     starting_xs = [func_wrap.config_to_xs(cfg) for cfg in cfgs]
 
     n_harmonies = config["n_harmonies"]
@@ -236,8 +242,7 @@ async def _main(args: argparse.Namespace) -> None:
         post_processing_func=func_wrap.post_processing_func,
     )
     best_conf = func_wrap.xs_to_config(best_harmony)
-    print("best conf")
-    print(best_conf)
+    log.info("best conf:\n%s", pprint.pformat(best_conf))
     return
 
 
@@ -245,10 +250,7 @@ def main(args: argparse.Namespace) -> None:
     asyncio.run(_main(args))
 
 
-def setup_parser(subparsers: argparse._SubParsersAction) -> None:
-    parser = subparsers.add_parser(
-        "multi-symbol-optimize", help="Optimize passivbot config multi symbol"
-    )
+def setup_parser(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "-o",
         "--optimize_config",

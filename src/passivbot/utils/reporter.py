@@ -1,3 +1,4 @@
+import logging
 import os
 import sys
 from collections.abc import Mapping
@@ -16,6 +17,8 @@ from ray.tune.utils import unflattened_lookup
 from tabulate import tabulate
 
 from passivbot.utils.procedures import dump_live_config
+
+log = logging.getLogger(__name__)
 
 
 def _get_trial_info(trial: Trial, parameters: List[str], metrics: List[str]):
@@ -239,9 +242,9 @@ class LogReporter(CLIReporter):
                         ),
                     )
         except Exception as e:
-            print("Something went wrong", e)
+            log.error("Something went wrong: %s", e)
 
-        print(self._progress_str(trials, done, *sys_info))
+        log.info(self._progress_str(trials, done, *sys_info))
 
     def _progress_str(
         self, trials: List[Trial], done: bool, *sys_info: Dict, fmt: str = "psql", delim: str = "\n"

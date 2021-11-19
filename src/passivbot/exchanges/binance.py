@@ -1,7 +1,6 @@
 import asyncio
 import logging
 import time
-import traceback
 from typing import Any
 from typing import Dict
 from typing import List
@@ -13,7 +12,6 @@ from passivbot.bot import Bot
 from passivbot.utils.funcs.pure import ts_to_date
 from passivbot.utils.httpclient import BinanceHTTPClient
 from passivbot.utils.httpclient import HTTPRequestError
-from passivbot.utils.procedures import print_
 from passivbot.utils.procedures import print_async_exception
 
 log = logging.getLogger(__name__)
@@ -31,7 +29,7 @@ class BinanceBot(Bot):
             f"{fapi_endpoint}/fapi/v1/exchangeInfo"
         )
         if self.symbol in {e["symbol"] for e in self.exchange_info["symbols"]}:
-            print("linear perpetual")
+            log.info("linear perpetual")
             self.market_type += "_linear_perpetual"
             self.inverse = self.config["inverse"] = False
             websocket_url = "wss://fstream.binance.com/ws"
@@ -66,7 +64,7 @@ class BinanceBot(Bot):
                 f"{dapi_endpoint}/dapi/v1/exchangeInfo"
             )
             if self.symbol in {e["symbol"] for e in self.exchange_info["symbols"]}:
-                print("inverse coin margined")
+                log.info("inverse coin margined")
                 self.market_type += "_inverse_coin_margined"
                 self.inverse = self.config["inverse"] = True
                 websocket_url = "wss://dstream.binance.com/ws"
@@ -141,14 +139,11 @@ class BinanceBot(Bot):
 
     async def init_exchange_config(self) -> bool:
         try:
-            print_(
-                [
-                    await self.httpclient.post(
-                        "margin_type",
-                        params={"symbol": self.symbol, "marginType": "CROSSED"},
-                    )
-                ]
+            ret = await self.httpclient.post(
+                "margin_type",
+                params={"symbol": self.symbol, "marginType": "CROSSED"},
             )
+            log.info("Init Exchange Config: %s", ret)
         except HTTPRequestError as exc:
             if exc.code not in (-4046, -4059):
                 raise
@@ -156,13 +151,13 @@ class BinanceBot(Bot):
         except Exception as e:
             log.error("Error: %s", e, exc_info=True)
         try:
-            print_([await self.execute_leverage_change()])
+            ret = await self.execute_leverage_change()
+            log.info("Leverage Change: %s", ret)
         except Exception as e:
-            print(e)
+            log.error("Error: %s", e, exc_info=True)
         try:
-            print_(
-                [await self.httpclient.post("position_side", params={"dualSidePosition": "true"})]
-            )
+            ret = await self.httpclient.post("position_side", params={"dualSidePosition": "true"})
+            log.info("Position side: %s", ret)
         except HTTPRequestError as exc:
             if exc.code != -4059:
                 raise
@@ -264,9 +259,8 @@ class BinanceBot(Bot):
                 "price": float(o["price"]),
             }
         except Exception as e:
-            print(f"error executing order {order} {e}")
+            log.info("error executing order %s: %s", order, e, exc_info=True)
             print_async_exception(o)
-            traceback.print_exc()
             return {}
 
     async def execute_cancellation(self, order: Dict[str, Any]) -> Dict[str, Any]:
@@ -286,9 +280,8 @@ class BinanceBot(Bot):
                 "price": float(cancellation["price"]),
             }
         except Exception as e:
-            print(f"error cancelling order {order} {e}")
+            log.info("error cancelling order %s: %s", order, e, exc_info=True)
             print_async_exception(cancellation)
-            traceback.print_exc()
             self.ts_released["force_update"] = 0.0
             return {}
 
@@ -331,8 +324,7 @@ class BinanceBot(Bot):
                 for x in fetched
             ]
         except Exception as e:
-            print("error fetching fills", e)
-            traceback.print_exc()
+            log.error("error fetching fills: %s", e, exc_info=True)
             return []
         return fills
 
@@ -348,7 +340,7 @@ class BinanceBot(Bot):
             fetched = await self.fetch_income(
                 symbol=symbol, start_time=start_time, income_type=income_type, limit=1000
             )
-            print_(["fetched income", ts_to_date(fetched[0]["timestamp"])])
+            log.info("Fetched income: %s", ts_to_date(fetched[0]["timestamp"]))
             if fetched == income[-len(fetched) :]:
                 break
             income += fetched
@@ -391,15 +383,14 @@ class BinanceBot(Bot):
                 for e in fetched
             ]
         except Exception as e:
-            print("error fetching income: ", e)
-            traceback.print_exc()
+            log.error("error fetching income: %s", e, exc_info=True)
             return []
 
     async def fetch_account(self):
         try:
             return await self.httpclient.get("account", signed=True)
         except Exception as e:
-            print("error fetching account: ", e)
+            log.error("error fetching account: %s", e, exc_info=True)
             return {"balances": []}
 
     async def fetch_ticks(
@@ -419,7 +410,7 @@ class BinanceBot(Bot):
         try:
             fetched = await self.httpclient.get("ticks", params=params)
         except Exception as e:
-            print("error fetching ticks a", e)
+            log.error("error fetching ticks a: %s", e)
             return []
         try:
             ticks = [
@@ -433,19 +424,17 @@ class BinanceBot(Bot):
                 for t in fetched
             ]
             if do_print:
-                print_(
-                    [
-                        "fetched ticks",
-                        self.symbol,
-                        ticks[0]["trade_id"],
-                        ts_to_date(float(ticks[0]["timestamp"]) / 1000),
-                    ]
+                log.info(
+                    "Fetched ticks %s %s %s",
+                    self.symbol,
+                    ticks[0]["trade_id"],
+                    ts_to_date(float(ticks[0]["timestamp"]) / 1000),
                 )
         except Exception as e:
-            print("error fetching ticks b", e, fetched)
+            log.error("error fetching ticks b: %s  %s", e, fetched)
             ticks = []
             if do_print:
-                print_(["fetched no new ticks", self.symbol])
+                log.info("fetched no new ticks %s", self.symbol)
         return ticks
 
     async def fetch_ticks_time(
@@ -498,8 +487,7 @@ class BinanceBot(Bot):
                 for e in fetched
             ]
         except Exception as e:
-            print("error fetching ohlcvs", fetched, e)
-            traceback.print_exc()
+            log.error("error fetching ohlcvs: %s - %s", fetched, e, exc_info=True)
 
     async def transfer(self, type_: str, amount: float, asset: str = "USDT"):
         params = {"type": type_.upper(), "amount": amount, "asset": asset}
@@ -516,7 +504,7 @@ class BinanceBot(Bot):
                 }
             ]
         except Exception as e:
-            print("error in websocket tick", e, data)
+            log.error("error in websocket tick: %s data: %s", e, data)
         return []
 
     async def beat_heart_user_stream(self) -> None:
@@ -532,8 +520,7 @@ class BinanceBot(Bot):
                 "websocket_user"
             ] = f'{self.httpclient.endpoints["websocket"]}/{self.listen_key}'
         except Exception as e:
-            traceback.print_exc()
-            print_(["error fetching listen key", e])
+            log.error("error fetching listen key: %s", e, exc_info=True)
 
     def standardize_user_stream_event(self, event: Dict[str, Any]) -> Dict[str, Any]:
         standardized = {}
