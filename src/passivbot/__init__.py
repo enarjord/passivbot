@@ -1,6 +1,33 @@
+import logging
+import os
+import sys
+
 import passivbot.utils.logs
 
 passivbot.utils.logs.set_logger_class()
+
+log = logging.getLogger(__name__)
+
+if "--nojit" in sys.argv:
+    os.environ["NOJIT"] = "true"
+
+if os.environ.get("NOJIT", "false") in ("true", "1"):
+
+    log.info("numba.njit compilation is disabled")
+
+    def numba_njit(pyfunc=None, **kwargs):
+        def wrap(func):
+            return func
+
+        if pyfunc is not None:
+            return wrap(pyfunc)
+        else:
+            return wrap
+
+
+else:
+    log.info("numba.njit compilation is enabled")
+    from numba import njit as numba_njit  # type: ignore[no-redef]
 
 try:
     from .version import __version__
