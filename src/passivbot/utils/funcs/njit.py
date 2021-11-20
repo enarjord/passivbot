@@ -1,17 +1,16 @@
 import logging
-from typing import Any
-from typing import Callable
+import os
 from typing import List
 from typing import Tuple
-from typing import TypeVar
 
+import numba
 import numpy as np
 
 from passivbot import numba_njit
 
 log = logging.getLogger(__name__)
 
-F = TypeVar("F", bound=Callable[..., Any])
+JIT_DISABLED = os.environ.get("NOJIT", "false") in ("true", "1")
 
 
 @numba_njit
@@ -457,7 +456,9 @@ def find_qty_bringing_wallet_exposure_to_target(
         while val < wallet_exposure_limit:
             i += 1
             if i >= max_n_iters:
-                log.info("debug find qty unable to find high enough qty")
+                if JIT_DISABLED:
+                    with numba.objmode():
+                        log.info("debug find qty unable to find high enough qty")
                 return guess
             guess = round_(max(guess + qty_step, guess * 2.0), qty_step)
             val = calc_wallet_exposure_if_filled(
@@ -489,23 +490,25 @@ def find_qty_bringing_wallet_exposure_to_target(
         if guess == too_high[0] or guess == too_low[0]:
             break
     if abs(best_guess[2] - wallet_exposure_limit) / wallet_exposure_limit > 0.15:
-        log.debug("find_qty_bringing_wallet_exposure_to_target")
-        log.info(
-            "balance: %s; psize: %s; pprice: %s; wallet_exposure_limit: %s; entry_price: %s; inverse: %s; "
-            "qty_step: %s; c_mult: %s; error_tolerance: %s; max_n_iters: %s",
-            balance,
-            psize,
-            pprice,
-            wallet_exposure_limit,
-            entry_price,
-            inverse,
-            qty_step,
-            c_mult,
-            error_tolerance,
-            max_n_iters,
-        )
-        log.info("wallet_exposure_limit: %s", wallet_exposure_limit)
-        log.info("best_guess: %s", best_guess)
+        if JIT_DISABLED:
+            with numba.objmode():
+                log.debug("find_qty_bringing_wallet_exposure_to_target")
+                log.info(
+                    "balance: %s; psize: %s; pprice: %s; wallet_exposure_limit: %s; entry_price: %s; inverse: %s; "
+                    "qty_step: %s; c_mult: %s; error_tolerance: %s; max_n_iters: %s",
+                    balance,
+                    psize,
+                    pprice,
+                    wallet_exposure_limit,
+                    entry_price,
+                    inverse,
+                    qty_step,
+                    c_mult,
+                    error_tolerance,
+                    max_n_iters,
+                )
+                log.info("wallet_exposure_limit: %s", wallet_exposure_limit)
+                log.info("best_guess: %s", best_guess)
     return best_guess[1]
 
 
@@ -905,37 +908,39 @@ def calc_long_entry_grid(
                     qty_to_cost(entry_qty, entry_price, inverse, c_mult) / balance
                     > wallet_exposure_limit * 1.1
                 ):
-                    log.warning(
-                        "abnormally large partial ientry.\nGrid:\n%s",
-                        "\n".join([str(e) for e in grid]),
-                    )
-                    log.info(
-                        "Args:\n%s",
-                        "\n".join(
-                            str(arg)
-                            for arg in (
-                                balance,
-                                psize,
-                                pprice,
-                                highest_bid,
-                                inverse,
-                                do_long,
-                                qty_step,
-                                price_step,
-                                min_qty,
-                                min_cost,
-                                c_mult,
-                                grid_span,
-                                wallet_exposure_limit,
-                                max_n_entry_orders,
-                                initial_qty_pct,
-                                eprice_pprice_diff,
-                                secondary_allocation,
-                                secondary_pprice_diff,
-                                eprice_exp_base,
+                    if JIT_DISABLED:
+                        with numba.objmode():
+                            log.warning(
+                                "abnormally large partial ientry.\nGrid:\n%s",
+                                "\n".join([str(e) for e in grid]),
                             )
-                        ),
-                    )
+                            log.info(
+                                "Args:\n%s",
+                                "\n".join(
+                                    str(arg)
+                                    for arg in (
+                                        balance,
+                                        psize,
+                                        pprice,
+                                        highest_bid,
+                                        inverse,
+                                        do_long,
+                                        qty_step,
+                                        price_step,
+                                        min_qty,
+                                        min_cost,
+                                        c_mult,
+                                        grid_span,
+                                        wallet_exposure_limit,
+                                        max_n_entry_orders,
+                                        initial_qty_pct,
+                                        eprice_pprice_diff,
+                                        secondary_allocation,
+                                        secondary_pprice_diff,
+                                        eprice_exp_base,
+                                    )
+                                ),
+                            )
                 return [(entry_qty, entry_price, "long_ientry")]
         if len(grid) == 0:
             return [(0.0, 0.0, "")]
@@ -1286,10 +1291,12 @@ def njit_backtest(
             long_close_qty = long_closes[0][0]
             new_long_psize = round_(long_psize + long_close_qty, qty_step)
             if new_long_psize < 0.0:
-                log.info("warning: long close qty greater than long psize")
-                log.info("long_psize: %s", long_psize)
-                log.info("long_pprice: %s", long_pprice)
-                log.info("long_closes[0]: %s", long_closes[0])
+                if JIT_DISABLED:
+                    with numba.objmode():
+                        log.info("warning: long close qty greater than long psize")
+                        log.info("long_psize: %s", long_psize)
+                        log.info("long_pprice: %s", long_pprice)
+                        log.info("long_closes[0]: %s", long_closes[0])
                 long_close_qty = -long_psize
                 new_long_psize, long_pprice = 0.0, 0.0
             long_psize = new_long_psize
