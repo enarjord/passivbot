@@ -1005,7 +1005,8 @@ def approximate_grid(
             eprice_exp_base=eprice_exp_base,
         )
         # find node whose psize is closest to psize
-        diff, i = sorted([(abs(grid[i][2] - psize_) / psize_, i) for i in range(len(grid))])[0]
+        res = [(abs(grid[i][2] - psize_) / psize_, i) for i in range(len(grid))]
+        diff, i = sorted(res)[0]
         return grid, diff, i
 
     if pprice == 0.0:
