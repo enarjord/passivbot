@@ -197,6 +197,28 @@ def main() -> None:
             datefmt=config.logging.file.datefmt,
         )
 
+    if not args.symbol:
+        if len(config.symbols) == 1:
+            symbol = next(iter(config.symbols))
+            log.info(
+                "Defaulting to symbol %r since it's the only defined on the configuration files",
+                symbol,
+            )
+            args.symbol = symbol
+        else:
+            parser.exit(
+                status=1,
+                message=(
+                    "Since there are multiple symbols defined in the config file, "
+                    "passing '--symbol' is required."
+                ),
+            )
+
+    if not args.key_name:
+        # If no key name was passed on the cli, default to the one defined on the config file
+        # for the selected symbol
+        args.key_name = config.symbols[args.symbol].key_name
+
     if args.key_name not in config.api_keys:
         parser.exit(
             status=1,
@@ -206,7 +228,17 @@ def main() -> None:
     # Set the config private attributes
     config._basedir = args.basedir
     config._market_type = args.market_type
-    config._key = config.api_keys[args.key_name]
+    config._symbol = config.symbols[args.symbol]
+
+    if args.key_name and config.symbol.key_name != args.key_name:
+        log.info(
+            "Overriding the defined key name in the selected config, %r with the key named %r",
+            config.symbol.key_name,
+            args.key_name,
+        )
+        config.symbol.key_name = args.key_name
+
+    config._key = config.api_keys[config.symbol.key_name]
 
     if args.nojit:
         # Disable numba JIT compilation
@@ -214,6 +246,14 @@ def main() -> None:
         log.info("numba.njit compilation is disabled")
     else:
         log.info("numba.njit compilation is enabled")
+
+    log.info(
+        "Configuration for symbol %r selected. Key name: %r; Config Name: %s; Details:\n%s",
+        args.symbol,
+        config.symbol.key_name,
+        config.symbol.config_name,
+        config.configs[config.symbol.config_name].json(indent=2),
+    )
 
     if args.subparser == "live":
         passivbot.bot.validate_argparse_parsed_args(parser, args)
