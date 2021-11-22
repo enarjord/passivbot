@@ -13,6 +13,7 @@ from typing import Any
 import numpy as np
 
 from passivbot.backtest import backtest
+from passivbot.config import BaseConfig
 from passivbot.downloader import Downloader
 from passivbot.utils.funcs.pure import analyze_fills
 from passivbot.utils.funcs.pure import candidate_to_live_config
@@ -300,7 +301,7 @@ def setup_parser(parser: argparse.ArgumentParser) -> None:
 
 
 def validate_argparse_parsed_args(
-    parser: argparse.ArgumentParser, args: argparse.Namespace
+    parser: argparse.ArgumentParser, args: argparse.Namespace, config: BaseConfig
 ) -> None:
     validate_backtesting_argparse_args(parser, args)
     if args.optimize_config_path:

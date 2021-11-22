@@ -5,6 +5,7 @@ import logging
 import shutil
 import subprocess
 
+from passivbot.config import BaseConfig
 from passivbot.utils.procedures import validate_backtesting_argparse_args
 
 log = logging.getLogger(__name__)
@@ -92,6 +93,6 @@ def setup_parser(parser: argparse.ArgumentParser) -> None:
 
 
 def validate_argparse_parsed_args(
-    parser: argparse.ArgumentParser, args: argparse.Namespace
+    parser: argparse.ArgumentParser, args: argparse.Namespace, config: BaseConfig
 ) -> None:
     validate_backtesting_argparse_args(parser, args)

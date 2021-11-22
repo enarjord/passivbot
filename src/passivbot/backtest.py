@@ -10,6 +10,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from passivbot.config import BaseConfig
 from passivbot.downloader import Downloader
 from passivbot.utils.funcs.njit import njit_backtest
 from passivbot.utils.funcs.njit import round_
@@ -95,6 +96,6 @@ def setup_parser(parser: argparse.ArgumentParser) -> None:
 
 
 def validate_argparse_parsed_args(
-    parser: argparse.ArgumentParser, args: argparse.Namespace
+    parser: argparse.ArgumentParser, args: argparse.Namespace, config: BaseConfig
 ) -> None:
     validate_backtesting_argparse_args(parser, args)

@@ -257,18 +257,18 @@ def main() -> None:
     )
 
     if args.subparser == "live":
-        passivbot.bot.validate_argparse_parsed_args(parser, args)
+        passivbot.bot.validate_argparse_parsed_args(parser, args, config)
     elif BACKTEST_REQUIREMENTS_MISSING is False:
         if args.subparser == "backtest":
-            passivbot.backtest.validate_argparse_parsed_args(parser, args)
+            passivbot.backtest.validate_argparse_parsed_args(parser, args, config)
         elif args.subparser == "downloader":
-            passivbot.downloader.validate_argparse_parsed_args(parser, args)
+            passivbot.downloader.validate_argparse_parsed_args(parser, args, config)
         elif args.subparser == "optimize":
-            passivbot.optimize.validate_argparse_parsed_args(parser, args)
+            passivbot.optimize.validate_argparse_parsed_args(parser, args, config)
         elif args.subparser == "batch-optimize":
-            passivbot.batch_optimize.validate_argparse_parsed_args(parser, args)
+            passivbot.batch_optimize.validate_argparse_parsed_args(parser, args, config)
         elif args.subparser == "multi-symbol-optimize":
-            passivbot.multi_symbol_optimize.validate_argparse_parsed_args(parser, args)
+            passivbot.multi_symbol_optimize.validate_argparse_parsed_args(parser, args, config)
 
     # Call the right sub-parser
     args.func(args)

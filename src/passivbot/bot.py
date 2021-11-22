@@ -11,6 +11,7 @@ import signal
 import time
 from typing import Any
 
+from passivbot.config import LiveConfig
 from passivbot.datastructures import Fill
 from passivbot.datastructures import Order
 from passivbot.datastructures import Position
@@ -827,6 +828,6 @@ def setup_parser(parser: argparse.ArgumentParser) -> None:
 
 
 def validate_argparse_parsed_args(
-    parser: argparse.ArgumentParser, args: argparse.Namespace
+    parser: argparse.ArgumentParser, args: argparse.Namespace, config: LiveConfig
 ) -> None:
     pass

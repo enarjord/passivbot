@@ -22,6 +22,7 @@ from ray.tune.suggest.nevergrad import NevergradSearch
 
 from passivbot.backtest import backtest
 from passivbot.backtest import plot_wrap
+from passivbot.config import BaseConfig
 from passivbot.downloader import Downloader
 from passivbot.utils.funcs.njit import round_dynamic
 from passivbot.utils.funcs.pure import analyze_fills
@@ -454,6 +455,6 @@ def setup_parser(parser: argparse.ArgumentParser) -> None:
 
 
 def validate_argparse_parsed_args(
-    parser: argparse.ArgumentParser, args: argparse.Namespace
+    parser: argparse.ArgumentParser, args: argparse.Namespace, config: BaseConfig
 ) -> None:
     validate_backtesting_argparse_args(parser, args)

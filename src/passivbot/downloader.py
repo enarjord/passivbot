@@ -18,6 +18,7 @@ import dateutil.parser
 import numpy as np
 import pandas as pd
 
+from passivbot.config import BaseConfig
 from passivbot.utils.funcs.njit import calc_samples
 from passivbot.utils.funcs.pure import get_dummy_settings
 from passivbot.utils.funcs.pure import ts_to_date
@@ -899,6 +900,6 @@ def setup_parser(parser: argparse.ArgumentParser) -> None:
 
 
 def validate_argparse_parsed_args(
-    parser: argparse.ArgumentParser, args: argparse.Namespace
+    parser: argparse.ArgumentParser, args: argparse.Namespace, config: BaseConfig
 ) -> None:
     validate_backtesting_argparse_args(parser, args)
