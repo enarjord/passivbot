@@ -197,6 +197,13 @@ def main() -> None:
             datefmt=config.logging.file.datefmt,
         )
 
+    log.info("Configuration loaded from:")
+    for config_file in args.config_files:
+        try:
+            log.info("  - %s", config_file.relative_to(args.basedir))
+        except ValueError:
+            log.info("  - %s", config_file)
+
     if not args.symbol:
         if len(config.symbols) == 1:
             symbol = next(iter(config.symbols))
