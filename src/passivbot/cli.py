@@ -143,6 +143,17 @@ def main() -> None:
     else:
         args.basedir = pathlib.Path.cwd()
 
+    if not args.config_files:
+        default_config_file = args.basedir / "configs" / "live" / "default.json"
+        if not default_config_file.exists():
+            parser.exit(
+                status=1,
+                message=(
+                    f"Please pass '--config=<path/to/config.json>' at least once or create {default_config_file}"
+                ),
+            )
+        args.config_files.append(default_config_file)
+
     if args.subparser == "live":
         config_cls = passivbot.config.LiveConfig
     elif args.subparser == "backtest":
