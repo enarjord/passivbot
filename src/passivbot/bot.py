@@ -830,4 +830,6 @@ def setup_parser(parser: argparse.ArgumentParser) -> None:
 def validate_argparse_parsed_args(
     parser: argparse.ArgumentParser, args: argparse.Namespace, config: LiveConfig
 ) -> None:
-    pass
+    if args.assigned_balance is not None:
+        log.info("Assigned balance set to: %s", args.assigned_balance)
+        config.active_config.assigned_balance = args.assigned_balance

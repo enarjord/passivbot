@@ -78,6 +78,7 @@ class ShortConfig(NonMutatingMixin):
 
 
 class NamedConfig(NonMutatingMixin):
+    assigned_balance: Optional[float]
     long: LongConfig
     short: ShortConfig
 
