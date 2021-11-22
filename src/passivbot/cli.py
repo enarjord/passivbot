@@ -106,7 +106,7 @@ def main() -> None:
         help=("The API key name as defined under `api_keys` on the configuration file."),
     )
     subparsers = parser.add_subparsers(title="PassivBot commands", dest="subparser")
-    passivbot.bot.setup_parser(subparsers)
+    live_parser = subparsers.add_parser("live", help="Run PassivBot Live")
     backtest_parser = subparsers.add_parser("backtest", help="Backtest given passivbot config.")
     downloader_parser = subparsers.add_parser(
         "downloader", help="Download ticks from exchange API."
@@ -118,6 +118,7 @@ def main() -> None:
     multi_symbol_optimize_parser = subparsers.add_parser(
         "multi-symbol-optimize", help="Optimize passivbot config multi symbol"
     )
+    passivbot.bot.setup_parser(live_parser)
     if BACKTEST_REQUIREMENTS_MISSING is False:
         passivbot.backtest.setup_parser(backtest_parser)
         passivbot.downloader.setup_parser(downloader_parser)
