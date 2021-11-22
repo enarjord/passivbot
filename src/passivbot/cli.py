@@ -239,6 +239,7 @@ def main() -> None:
         config.symbol.key_name = args.key_name
 
     config._key = config.api_keys[config.symbol.key_name]
+    config._active_config = config.configs[config.symbol.config_name]
 
     if args.nojit:
         # Disable numba JIT compilation
@@ -252,7 +253,7 @@ def main() -> None:
         args.symbol,
         config.symbol.key_name,
         config.symbol.config_name,
-        config.configs[config.symbol.config_name].json(indent=2),
+        config.active_config.json(indent=2),
     )
 
     if args.subparser == "live":

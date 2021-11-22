@@ -162,6 +162,7 @@ class LiveConfig(ApiKeysConfigMixin):
 
     # Private attributes
     _symbol: SymbolConfig = PrivateAttr()
+    _active_config: NamedConfig = PrivateAttr()
 
     @validator("symbols", each_item=True)
     @classmethod
@@ -179,6 +180,10 @@ class LiveConfig(ApiKeysConfigMixin):
     @property
     def symbol(self) -> SymbolConfig:
         return self._symbol
+
+    @property
+    def active_config(self) -> NamedConfig:
+        return self._active_config
 
 
 def merge_dictionaries(target_dict: Dict[Any, Any], *source_dicts: Dict[Any, Any]) -> None:
