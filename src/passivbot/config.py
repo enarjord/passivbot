@@ -7,6 +7,7 @@ from typing import Dict
 
 from pydantic import BaseModel
 from pydantic import PrivateAttr
+from pydantic import root_validator
 from pydantic import validator
 
 from passivbot.utils.logs import SORTED_LEVEL_NAMES
@@ -27,6 +28,9 @@ class ApiKey(NonMutatingMixin):
     key: str
     secret: str
 
+    # Private attributes
+    _name: str = PrivateAttr()
+
     @validator("exchange")
     @classmethod
     def _validate_exchange(cls, value: str) -> str:
@@ -36,6 +40,10 @@ class ApiKey(NonMutatingMixin):
                 f"The exchange {value!r} is not supported. Choose one of {', '.join(supported_exchanges)}"
             )
         return value
+
+    @property
+    def name(self) -> str:
+        return self._name
 
 
 class LongConfig(NonMutatingMixin):
@@ -72,10 +80,24 @@ class NamedConfig(NonMutatingMixin):
     long: LongConfig
     short: ShortConfig
 
+    # Private attributes
+    _name: str = PrivateAttr()
+
+    @property
+    def name(self) -> str:
+        return self._name
+
 
 class SymbolConfig(NonMutatingMixin):
     key_name: str
     config_name: str
+
+    # Private attributes
+    _name: str = PrivateAttr()
+
+    @property
+    def name(self) -> str:
+        return self._name
 
 
 class LoggingCliConfig(NonMutatingMixin):
@@ -155,6 +177,13 @@ class BaseConfig(NonMutatingMixin):
 class ApiKeysConfigMixin(BaseConfig):
     api_keys: Dict[str, ApiKey]
 
+    @root_validator
+    @classmethod
+    def _set_name_attribute(cls, values):
+        for name, config in values["api_keys"].items():
+            config._name = name
+        return values
+
 
 class LiveConfig(ApiKeysConfigMixin):
     configs: Dict[str, NamedConfig]
@@ -163,6 +192,15 @@ class LiveConfig(ApiKeysConfigMixin):
     # Private attributes
     _symbol: SymbolConfig = PrivateAttr()
     _active_config: NamedConfig = PrivateAttr()
+
+    @root_validator
+    @classmethod
+    def _set_name_attribute(cls, values):
+        for name, config in values["configs"].items():
+            config._name = name
+        for name, config in values["symbols"].items():
+            config._name = name
+        return values
 
     @validator("symbols", each_item=True)
     @classmethod
