@@ -160,6 +160,9 @@ class LiveConfig(ApiKeysConfigMixin):
     configs: Dict[str, NamedConfig]
     symbols: Dict[str, SymbolConfig]
 
+    # Private attributes
+    _symbol: SymbolConfig = PrivateAttr()
+
     @validator("symbols", each_item=True)
     @classmethod
     def _validate_symbols_mapping(cls, value, values, field, **kwargs):
@@ -172,6 +175,10 @@ class LiveConfig(ApiKeysConfigMixin):
                 f"The {value.config_name!r} configuration name is not defined under 'configs'."
             )
         return value
+
+    @property
+    def symbol(self) -> SymbolConfig:
+        return self._symbol
 
 
 def merge_dictionaries(target_dict: Dict[Any, Any], *source_dicts: Dict[Any, Any]) -> None:
