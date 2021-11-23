@@ -9,9 +9,9 @@ from functools import partial
 from pydantic import ValidationError
 
 import passivbot.bot
+import passivbot.config
 import passivbot.utils.logs
 import passivbot.utils.procedures
-from passivbot.config import PassivBotConfig
 from passivbot.version import __version__
 
 try:
@@ -122,8 +122,21 @@ def main() -> None:
     else:
         args.basedir = pathlib.Path.cwd()
 
+    if args.subparser == "live":
+        config_cls = passivbot.config.LiveConfig
+    elif args.subparser == "backtest":
+        config_cls = passivbot.config.LiveConfig
+    elif args.subparser == "downloader":
+        config_cls = passivbot.config.LiveConfig
+    elif args.subparser == "optimize":
+        config_cls = passivbot.config.LiveConfig
+    elif args.subparser == "batch-optimize":
+        config_cls = passivbot.config.LiveConfig
+    elif args.subparser == "multi-symbol-optimize":
+        config_cls = passivbot.config.LiveConfig
+
     try:
-        config = PassivBotConfig.parse_files(*args.config_files)
+        config = config_cls.parse_files(*args.config_files)
     except ValidationError as exc:
         parser.exit(status=1, message=f"Found some errors in the configuration:\n\n{exc}\n")
 

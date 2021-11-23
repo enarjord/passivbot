@@ -1,5 +1,6 @@
+from __future__ import annotations
+
 from typing import Any
-from typing import Dict
 
 import pytest
 
@@ -7,7 +8,7 @@ from passivbot import config
 
 
 @pytest.fixture
-def complete_config_dictionary() -> Dict[str, Dict[str, Any]]:
+def complete_config_dictionary() -> dict[str, dict[str, Any]]:
     return {
         "api_keys": {
             "account-1": {
@@ -61,8 +62,8 @@ def test_cli_log_level(complete_config_dictionary):
     logging_config_dict = {"cli": {"level": "error"}}
     complete_config_dictionary["logging"] = logging_config_dict
 
-    loaded = config.PassivBotConfig.parse_obj(complete_config_dictionary)
-    assert isinstance(loaded, config.PassivBotConfig)
+    loaded = config.BaseConfig.parse_obj(complete_config_dictionary)
+    assert isinstance(loaded, config.BaseConfig)
     assert loaded.logging.cli.level == "error"
     loaded_dict = loaded.dict()
     expected_cli_logging_dict = config.LoggingCliConfig().dict()

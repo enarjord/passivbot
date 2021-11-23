@@ -106,10 +106,7 @@ class LoggingConfig(NonMutatingMixin):
     file: LoggingFileConfig = LoggingFileConfig()
 
 
-class PassivBotConfig(NonMutatingMixin):
-    api_keys: Dict[str, ApiKey]
-    configs: Dict[str, NamedConfig]
-    symbols: Dict[str, SymbolConfig]
+class BaseConfig(NonMutatingMixin):
 
     # Optional Configs
     logging: LoggingConfig = LoggingConfig()
@@ -118,7 +115,7 @@ class PassivBotConfig(NonMutatingMixin):
     _basedir: pathlib.Path = PrivateAttr()
 
     @classmethod
-    def parse_files(cls, *files: pathlib.Path) -> PassivBotConfig:
+    def parse_files(cls, *files: pathlib.Path) -> BaseConfig:
         """
         Helper class method to load the configuration from multiple files
         """
@@ -129,6 +126,16 @@ class PassivBotConfig(NonMutatingMixin):
         if config_dicts:
             merge_dictionaries(config, *config_dicts)
         return cls.parse_raw(json.dumps(config))
+
+    @property
+    def basedir(self) -> pathlib.Path:
+        return self._basedir
+
+
+class LiveConfig(BaseConfig):
+    api_keys: Dict[str, ApiKey]
+    configs: Dict[str, NamedConfig]
+    symbols: Dict[str, SymbolConfig]
 
     @validator("symbols", each_item=True)
     @classmethod
@@ -142,10 +149,6 @@ class PassivBotConfig(NonMutatingMixin):
                 f"The {value.config_name!r} configuration name is not defined under 'configs'."
             )
         return value
-
-    @property
-    def basedir(self) -> pathlib.Path:
-        return self._basedir
 
 
 def merge_dictionaries(target_dict: Dict[Any, Any], *source_dicts: Dict[Any, Any]) -> None:

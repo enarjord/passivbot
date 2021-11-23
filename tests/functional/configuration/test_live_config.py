@@ -103,8 +103,8 @@ def test_single_config_file(tmp_path, complete_config_dictionary):
     config_file = tmp_path / "example-config.json"
     config_file.write_text(json.dumps(complete_config_dictionary, indent=2))
 
-    loaded = config.PassivBotConfig.parse_files(config_file)
-    assert isinstance(loaded, config.PassivBotConfig)
+    loaded = config.LiveConfig.parse_files(config_file)
+    assert isinstance(loaded, config.LiveConfig)
     assert "account-1" in loaded.api_keys
     assert "account-2" in loaded.api_keys
     assert "config-1" in loaded.configs
@@ -127,7 +127,7 @@ def test_multiple_files(tmp_path, complete_config_dictionary):
     symbols_file = tmp_path / "symbols.json"
     symbols_file.write_text(json.dumps({"symbols": complete_config_dictionary["symbols"]}))
 
-    loaded = config.PassivBotConfig.parse_files(symbols_file, keys_file, configs_file)
+    loaded = config.LiveConfig.parse_files(symbols_file, keys_file, configs_file)
     loaded_dict = loaded.dict()
     # Remove optional config sections for assertion purposes
     loaded_dict.pop("logging")
@@ -137,7 +137,7 @@ def test_multiple_files(tmp_path, complete_config_dictionary):
 def test_unconfigured_key_name(complete_config_dictionary):
     complete_config_dictionary["symbols"]["ETHUSDT"]["key_name"] = "account-3"
     with pytest.raises(ValidationError) as exc:
-        config.PassivBotConfig.parse_obj(complete_config_dictionary)
+        config.LiveConfig.parse_obj(complete_config_dictionary)
 
     assert exc.value.errors() == [
         {
@@ -151,7 +151,7 @@ def test_unconfigured_key_name(complete_config_dictionary):
 def test_unconfigured_config_name(complete_config_dictionary):
     complete_config_dictionary["symbols"]["ETHUSDT"]["config_name"] = "config-3"
     with pytest.raises(ValidationError) as exc:
-        config.PassivBotConfig.parse_obj(complete_config_dictionary)
+        config.LiveConfig.parse_obj(complete_config_dictionary)
 
     assert exc.value.errors() == [
         {
