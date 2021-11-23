@@ -4,6 +4,7 @@ import json
 import pathlib
 from typing import Any
 from typing import Dict
+from typing import TypeVar
 
 from pydantic import BaseModel
 from pydantic import PrivateAttr
@@ -12,6 +13,9 @@ from pydantic import validator
 from pydantic.generics import GenericModel
 
 from passivbot.utils.logs import SORTED_LEVEL_NAMES
+
+
+BaseConfigType = TypeVar("BaseConfigType", bound="BaseConfig")
 
 
 class NonMutatingMixin(BaseModel):
@@ -169,7 +173,7 @@ class BaseConfig(NonMutatingMixin):
     _basedir: pathlib.Path = PrivateAttr()
 
     @classmethod
-    def parse_files(cls, *files: pathlib.Path) -> BaseConfig:
+    def parse_files(cls: type[BaseConfigType], *files: pathlib.Path) -> BaseConfigType:
         """
         Helper class method to load the configuration from multiple files
         """
