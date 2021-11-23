@@ -251,22 +251,13 @@ def add_backtesting_argparse_args(parser):
         help="backtest config hjson file",
     )
     parser.add_argument(
-        "-s",
-        "--symbol",
-        type=str,
-        required=False,
-        dest="symbol",
-        default=None,
-        help="specify symbol, overriding symbol from backtest config",
-    )
-    parser.add_argument(
         "-u",
         "--user",
         type=str,
         required=False,
         dest="user",
         default=None,
-        help="specify user, a.k.a. account_name, overriding user from backtest config",
+        help="DEPRECATED: specify user, a.k.a. account_name, overriding user from backtest config",
     )
     parser.add_argument(
         "-sd",
@@ -298,15 +289,13 @@ def add_backtesting_argparse_args(parser):
         help="specify starting_balance, overriding value from backtest config",
     )
     parser.add_argument(
-        "-m",
         "--market_type",
-        "--market-type",
         type=str,
         choices=["futures", "spot"],
         required=False,
-        dest="market_type",
+        dest="old_market_type",
         default=None,
-        help="specify whether spot or futures (default), overriding value from backtest config",
+        help="DEPRECATED: specify whether spot or futures (default), overriding value from backtest config",
     )
     parser.add_argument(
         "--base_dir",
@@ -344,6 +333,25 @@ def validate_backtesting_argparse_args(
         parser.exit(
             status=1, message="'--base_dir' has been deprecated. Please use '--backtests-dir'"
         )
+
+    if args.market_type and args.old_market_type:
+        parser.exit(
+            status=1,
+            message="'--market-type' and '--market_type' are mutually exclusive. Please use just '--market-type'.",
+        )
+    elif args.old_market_type:
+        parser.exit(
+            status=1,
+            message="'--market_type' has been deprecated. Please use '--market-type'.",
+        )
+
+    if args.user and args.key_name:
+        parser.exit(
+            status=1,
+            message="'--user' and '--key-name' are mutually exclusive. Please use just '--key-name'.",
+        )
+    elif args.user:
+        parser.exit(status=1, message="'--user' has been deprecated. Please use '--key-name'.")
 
 
 def make_tick_samples(config: dict, sec_span: int = 1):

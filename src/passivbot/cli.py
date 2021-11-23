@@ -61,11 +61,6 @@ def main() -> None:
             "will be merged into the previous one, and so forth, overriding the previously defined values."
         ),
     )
-    config_section.add_argument(
-        "--api-keys",
-        type=pathlib.Path,
-        help="Path to the `api-keys.json` file. Defaults to <basedir>/api-keys.json",
-    )
     cli_logging_params = parser.add_argument_group(
         title="Logging", description="Runtime logging configuration"
     )
@@ -83,6 +78,32 @@ def main() -> None:
         choices=passivbot.utils.logs.SORTED_LEVEL_NAMES,
         default=None,
         help="Logs file logging level. Default: info",
+    )
+    runtime_params = parser.add_argument_group("Configuration Selection")
+    runtime_params.add_argument(
+        "-m",
+        "--market",
+        "--market-type",
+        choices=("futures", "spot"),
+        default="futures",
+        help=("Select the market type to run against. Default: %default"),
+    )
+    runtime_params.add_argument(
+        "-s",
+        "--symbol",
+        type=str,
+        required=False,
+        dest="symbol",
+        default=None,
+        help="The symbol to run, as specified under `symbols` on the configuration file",
+    )
+    runtime_params.add_argument(
+        "-k",
+        "--kn",
+        "--key-name",
+        default=None,
+        dest="key_name",
+        help=("The API key name as defined under `api_keys` on the configuration file."),
     )
     subparsers = parser.add_subparsers(title="PassivBot commands", dest="subparser")
     passivbot.bot.setup_parser(subparsers)
@@ -134,14 +155,21 @@ def main() -> None:
         config_cls = passivbot.config.LiveConfig
     elif args.subparser == "multi-symbol-optimize":
         config_cls = passivbot.config.LiveConfig
+    else:
+        parser.exit(
+            status=1,
+            message=(
+                f"Don't know what to do regarding subparser {args.subparser}. Please fix this "
+                "or file a bug report."
+            ),
+        )
 
     try:
-        config = config_cls.parse_files(*args.config_files)
+        config: type[passivbot.config.ApiKeysConfigMixin] = config_cls.parse_files(  # type: ignore[assignment]
+            *args.config_files
+        )
     except ValidationError as exc:
         parser.exit(status=1, message=f"Found some errors in the configuration:\n\n{exc}\n")
-
-    # Set the config private attributes
-    config._basedir = args.basedir  # type: ignore[misc]
 
     # Setup logging
     passivbot.utils.logs.setup_cli_logging(
@@ -157,15 +185,23 @@ def main() -> None:
             datefmt=config.logging.file.datefmt,
         )
 
+    if args.key_name not in config.api_keys:
+        parser.exit(
+            status=1,
+            message=f"The API key name {args.key_name!r} cannot be found under `api_keys` on the configuration.",
+        )
+
+    # Set the config private attributes
+    config._basedir = args.basedir
+    config._market_type = args.market_type
+    config._key = config.api_keys[args.key_name]
+
     if args.nojit:
         # Disable numba JIT compilation
         os.environ["NOJIT"] = "true"
         log.info("numba.njit compilation is disabled")
     else:
         log.info("numba.njit compilation is enabled")
-
-    if not args.api_keys:
-        args.api_keys = args.basedir / "api-keys.json"
 
     if args.subparser == "live":
         passivbot.bot.validate_argparse_parsed_args(parser, args)

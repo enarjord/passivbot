@@ -691,28 +691,12 @@ async def start_bot(bot):
 
 async def _main(args: argparse.Namespace) -> None:
     try:
-        accounts = json.load(args.api_keys.open())
-    except FileNotFoundError:
-        log.error("The '%s' file does not exist.", args.api_keys)
-    except ValueError as exc:
-        log.error("Failed to load JSON from '%s': %s", args.api_keys, exc)
-        return
-    except Exception:
-        log.error("Failed to load %s", args.api_keys, exc_info=True)
-        return
-    try:
-        account = accounts[args.user]
-    except Exception as e:
-        log.error("unrecognized account name %s: %s", args.user, e)
-        return
-    try:
         config_dict = load_live_config(args.live_config_path)
     except Exception as e:
         log.error("failed to load config from %s: %s", args.live_config_path, e)
         return
 
     config_dict["api_key_name"] = args.user
-    config_dict["exchange"] = account["exchange"]
     config_dict["symbol"] = args.symbol
     config_dict["live_config_path"] = args.live_config_path
     if args.market_type:

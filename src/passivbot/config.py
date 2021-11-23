@@ -123,6 +123,8 @@ class BaseConfig(NonMutatingMixin):
 
     # Private attributes
     _basedir: pathlib.Path = PrivateAttr()
+    _market_type: str = PrivateAttr()
+    _key: ApiKey = PrivateAttr()
 
     @classmethod
     def parse_files(cls, *files: pathlib.Path) -> BaseConfig:
@@ -141,9 +143,20 @@ class BaseConfig(NonMutatingMixin):
     def basedir(self) -> pathlib.Path:
         return self._basedir
 
+    @property
+    def market_type(self) -> str:
+        return self._market_type
 
-class LiveConfig(BaseConfig):
+    @property
+    def key(self) -> ApiKey:
+        return self._key
+
+
+class ApiKeysConfigMixin(BaseConfig):
     api_keys: Dict[str, ApiKey]
+
+
+class LiveConfig(ApiKeysConfigMixin):
     configs: Dict[str, NamedConfig]
     symbols: Dict[str, SymbolConfig]
 
