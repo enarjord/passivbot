@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import hashlib
 import hmac
 import json
@@ -5,8 +7,6 @@ import logging
 import time
 import urllib.parse
 from typing import Any
-from typing import Dict
-from typing import Optional
 
 import aiohttp
 import websockets
@@ -36,8 +36,8 @@ class HTTPClient:
         base_url: str,
         api_key: str,
         api_secret: str,
-        endpoints: Dict[str, str],
-        session_headers: Optional[Dict[str, str]] = None,
+        endpoints: dict[str, str],
+        session_headers: dict[str, str] | None = None,
     ):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
@@ -74,7 +74,7 @@ class HTTPClient:
     def signature_params_key(self) -> str:
         raise NotImplementedError
 
-    def get_signature(self, params: Dict[str, Any]) -> str:
+    def get_signature(self, params: dict[str, Any]) -> str:
         signature = hmac.new(
             self.api_secret.encode("utf-8"),
             urllib.parse.urlencode(params).encode("utf-8"),
@@ -82,7 +82,7 @@ class HTTPClient:
         ).hexdigest()
         return signature
 
-    def signed_params(self, params: Dict[str, Any]) -> Dict[str, str]:
+    def signed_params(self, params: dict[str, Any]) -> dict[str, str]:
         params["timestamp"] = f"{int(time.time() * 1000)}"
         for key, value in params.items():
             if isinstance(value, bool):
@@ -97,9 +97,9 @@ class HTTPClient:
         self,
         endpoint: str,
         signed: bool = False,
-        params: Optional[Dict[str, Any]] = None,
-        headers: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+        params: dict[str, Any] | None = None,
+        headers: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         url = self.url_for_endpoint(endpoint)
         if params is None:
             params = {}
@@ -108,7 +108,7 @@ class HTTPClient:
         log.debug("HTTPRequest URL: %s; HEADERS: %s; PARAMS: %s;", url, headers, params)
         async with self.session.get(url, params=params, headers=headers) as response:
             result = await response.text()
-        payload: Dict[str, Any] = json.loads(result)
+        payload: dict[str, Any] = json.loads(result)
         error = self._get_error_from_payload(url, payload)
         if error:
             raise error
@@ -117,9 +117,9 @@ class HTTPClient:
     async def post(
         self,
         endpoint: str,
-        params: Optional[Dict[str, Any]] = None,
-        headers: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+        params: dict[str, Any] | None = None,
+        headers: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         url = self.url_for_endpoint(endpoint)
         if params is None:
             params = {}
@@ -128,7 +128,7 @@ class HTTPClient:
             self.url_for_endpoint(endpoint), params=params, headers=headers
         ) as response:
             result = await response.text()
-        payload: Dict[str, Any] = json.loads(result)
+        payload: dict[str, Any] = json.loads(result)
         error = self._get_error_from_payload(url, payload)
         if error:
             raise error
@@ -137,9 +137,9 @@ class HTTPClient:
     async def put(
         self,
         endpoint: str,
-        params: Optional[Dict[str, Any]] = None,
-        headers: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+        params: dict[str, Any] | None = None,
+        headers: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         url = self.url_for_endpoint(endpoint)
         if params is None:
             params = {}
@@ -148,7 +148,7 @@ class HTTPClient:
             self.url_for_endpoint(endpoint), params=params, headers=headers
         ) as response:
             result = await response.text()
-        payload: Dict[str, Any] = json.loads(result)
+        payload: dict[str, Any] = json.loads(result)
         error = self._get_error_from_payload(url, payload)
         if error:
             raise error
@@ -157,9 +157,9 @@ class HTTPClient:
     async def delete(
         self,
         endpoint: str,
-        params: Optional[Dict[str, Any]] = None,
-        headers: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+        params: dict[str, Any] | None = None,
+        headers: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         url = self.url_for_endpoint(endpoint)
         if params is None:
             params = {}
@@ -168,7 +168,7 @@ class HTTPClient:
             self.url_for_endpoint(endpoint), params=params, headers=headers
         ) as response:
             result = await response.text()
-        payload: Dict[str, Any] = json.loads(result)
+        payload: dict[str, Any] = json.loads(result)
         error = self._get_error_from_payload(url, payload)
         if error:
             raise error
@@ -177,7 +177,7 @@ class HTTPClient:
     def ws_connect(self, endpoint):
         return websockets.connect(self.url_for_endpoint(endpoint))
 
-    def _get_error_from_payload(self, url: str, payload: Dict[str, Any]):
+    def _get_error_from_payload(self, url: str, payload: dict[str, Any]):
         raise NotImplementedError
 
 
@@ -185,7 +185,7 @@ class BinanceHTTPClient(HTTPClient):
     def signature_params_key(self) -> str:
         return "signature"
 
-    def signed_params(self, params: Dict[str, Any]) -> Dict[str, str]:
+    def signed_params(self, params: dict[str, Any]) -> dict[str, str]:
         params["recvWindow"] = 5000
         return super().signed_params(params)
 
@@ -193,9 +193,9 @@ class BinanceHTTPClient(HTTPClient):
         self,
         endpoint: str,
         signed: bool = False,
-        params: Optional[Dict[str, Any]] = None,
-        headers: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+        params: dict[str, Any] | None = None,
+        headers: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         if signed is True:
             if headers is None:
                 headers = {}
@@ -205,9 +205,9 @@ class BinanceHTTPClient(HTTPClient):
     async def post(
         self,
         endpoint: str,
-        params: Optional[Dict[str, Any]] = None,
-        headers: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+        params: dict[str, Any] | None = None,
+        headers: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         if headers is None:
             headers = {}
         headers["X-MBX-APIKEY"] = self.api_key
@@ -216,9 +216,9 @@ class BinanceHTTPClient(HTTPClient):
     async def put(
         self,
         endpoint: str,
-        params: Optional[Dict[str, Any]] = None,
-        headers: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+        params: dict[str, Any] | None = None,
+        headers: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         if headers is None:
             headers = {}
         headers["X-MBX-APIKEY"] = self.api_key
@@ -227,9 +227,9 @@ class BinanceHTTPClient(HTTPClient):
     async def delete(
         self,
         endpoint: str,
-        params: Optional[Dict[str, Any]] = None,
-        headers: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+        params: dict[str, Any] | None = None,
+        headers: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         if headers is None:
             headers = {}
         headers["X-MBX-APIKEY"] = self.api_key
@@ -238,8 +238,8 @@ class BinanceHTTPClient(HTTPClient):
     def _get_error_from_payload(
         self,
         url: str,
-        payload: Dict[str, Any],
-    ) -> Optional[HTTPRequestError]:
+        payload: dict[str, Any],
+    ) -> HTTPRequestError | None:
         if "code" in payload and "msg" in payload:
             return HTTPRequestError(url, code=payload["code"], msg=payload["msg"])
         return None
@@ -249,13 +249,13 @@ class ByBitHTTPClient(HTTPClient):
     def signature_params_key(self) -> str:
         return "sign"
 
-    def signed_params(self, params: Dict[str, Any]) -> Dict[str, str]:
+    def signed_params(self, params: dict[str, Any]) -> dict[str, str]:
         params["api_key"] = self.api_key
         return super().signed_params(params)
 
     def _get_error_from_payload(
         self,
         url: str,
-        payload: Dict[str, Any],
-    ) -> Optional[HTTPRequestError]:
+        payload: dict[str, Any],
+    ) -> HTTPRequestError | None:
         return None

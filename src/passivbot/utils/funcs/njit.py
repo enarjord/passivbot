@@ -1,7 +1,7 @@
+from __future__ import annotations
+
 import logging
 import os
-from typing import List
-from typing import Tuple
 
 import numba
 import numpy as np
@@ -152,7 +152,7 @@ def calc_equity(
 
 
 @numba_njit
-def calc_new_psize_pprice(psize, pprice, qty, price, qty_step) -> Tuple[float, float]:
+def calc_new_psize_pprice(psize, pprice, qty, price, qty_step) -> tuple[float, float]:
     if qty == 0.0:
         return psize, pprice
     new_psize = round_(psize + qty, qty_step)
@@ -186,7 +186,7 @@ def calc_long_close_grid(
     min_markup,
     markup_range,
     n_close_orders,
-) -> List[Tuple[float, float, str]]:
+) -> list[tuple[float, float, str]]:
     if long_psize == 0.0:
         return [(0.0, 0.0, "")]
     minm = long_pprice * (1 + min_markup)
@@ -269,7 +269,7 @@ def calc_short_close_grid(
     min_markup,
     markup_range,
     n_close_orders,
-) -> List[Tuple[float, float, str]]:
+) -> list[tuple[float, float, str]]:
     if short_psize == 0.0:
         return [(0.0, 0.0, "")]
     minm = short_pprice * (1 - min_markup)
@@ -832,7 +832,7 @@ def calc_long_entry_grid(
     secondary_allocation,
     secondary_pprice_diff,
     eprice_exp_base=1.618034,
-) -> List[Tuple[float, float, str]]:
+) -> list[tuple[float, float, str]]:
     min_entry_qty = calc_min_entry_qty(highest_bid, inverse, qty_step, min_qty, min_cost)
     if do_long or psize > min_entry_qty:
         if psize == 0.0:
@@ -944,7 +944,7 @@ def calc_long_entry_grid(
                 return [(entry_qty, entry_price, "long_ientry")]
         if len(grid) == 0:
             return [(0.0, 0.0, "")]
-        entries: List[Tuple[float, float, str]] = []
+        entries: list[tuple[float, float, str]] = []
         for i in range(len(grid)):
             if grid[i][2] < psize * 1.05 or grid[i][1] > pprice * 0.9995:
                 continue

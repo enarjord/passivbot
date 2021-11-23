@@ -1,11 +1,9 @@
+from __future__ import annotations
+
 import logging
 import os
 import sys
 from collections.abc import Mapping
-from typing import Dict
-from typing import List
-from typing import Optional
-from typing import Union
 
 import pandas as pd
 from ray.tune import CLIReporter
@@ -21,7 +19,7 @@ from passivbot.utils.procedures import dump_live_config
 log = logging.getLogger(__name__)
 
 
-def _get_trial_info(trial: Trial, parameters: List[str], metrics: List[str]):
+def _get_trial_info(trial: Trial, parameters: list[str], metrics: list[str]):
     """
     Returns the following information about a trial:
     params... | metrics...
@@ -38,7 +36,7 @@ def _get_trial_info(trial: Trial, parameters: List[str], metrics: List[str]):
     return trial_info
 
 
-def _get_trials_by_order(trials: List[Trial], metric: str, max_trials: int):
+def _get_trials_by_order(trials: list[Trial], metric: str, max_trials: int):
     """
     Sorts trials by metric function and discards low performing ones.
     @param trials: List of trials.
@@ -55,13 +53,13 @@ def _get_trials_by_order(trials: List[Trial], metric: str, max_trials: int):
 
 
 def trial_progress_str(
-    trials: List[Trial],
+    trials: list[Trial],
     metric: str,
-    metric_columns: Union[List[str], Dict[str, str]],
-    parameter_columns: Union[None, List[str], Dict[str, str]] = None,
+    metric_columns: list[str] | dict[str, str],
+    parameter_columns: None | list[str] | dict[str, str] = None,
     total_samples: int = 0,
     fmt: str = "psql",
-    max_rows: Optional[int] = None,
+    max_rows: int | None = None,
 ):
     """
     Returns a human readable message for printing to the console.
@@ -108,12 +106,12 @@ def trial_progress_str(
 
 
 def trial_progress_table(
-    trials: List[Trial],
+    trials: list[Trial],
     metric: str,
-    metric_columns: Union[List[str], Dict[str, str]],
-    parameter_columns: Union[None, List[str], Dict[str, str]] = None,
+    metric_columns: list[str] | dict[str, str],
+    parameter_columns: None | list[str] | dict[str, str] = None,
     fmt: str = "psql",
-    max_rows: Optional[int] = None,
+    max_rows: int | None = None,
 ):
     """
     Create table view for trials.
@@ -182,16 +180,16 @@ class LogReporter(CLIReporter):
 
     def __init__(
         self,
-        metric_columns: Union[None, List[str], Dict[str, str]] = None,
-        parameter_columns: Union[None, List[str], Dict[str, str]] = None,
-        total_samples: Optional[int] = None,
+        metric_columns: None | list[str] | dict[str, str] = None,
+        parameter_columns: None | list[str] | dict[str, str] = None,
+        total_samples: int | None = None,
         max_progress_rows: int = 20,
         max_error_rows: int = 20,
         max_report_frequency: int = 5,
         infer_limit: int = 3,
-        print_intermediate_tables: Optional[bool] = None,
-        metric: Optional[str] = None,
-        mode: Optional[str] = None,
+        print_intermediate_tables: bool | None = None,
+        metric: str | None = None,
+        mode: str | None = None,
     ):
         self.objective = 0
 
@@ -208,7 +206,7 @@ class LogReporter(CLIReporter):
             mode,
         )
 
-    def report(self, trials: List[Trial], done: bool, *sys_info: Dict):
+    def report(self, trials: list[Trial], done: bool, *sys_info: dict):
         evaluated_params = []
         outcomes = []
         best_config = None
@@ -247,7 +245,7 @@ class LogReporter(CLIReporter):
         log.info(self._progress_str(trials, done, *sys_info))
 
     def _progress_str(
-        self, trials: List[Trial], done: bool, *sys_info: Dict, fmt: str = "psql", delim: str = "\n"
+        self, trials: list[Trial], done: bool, *sys_info: dict, fmt: str = "psql", delim: str = "\n"
     ):
         """
         Returns full progress string. This string contains a progress table and error table. The progress table
