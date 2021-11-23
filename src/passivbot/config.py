@@ -27,6 +27,16 @@ class ApiKey(NonMutatingMixin):
     key: str
     secret: str
 
+    @validator("exchange")
+    @classmethod
+    def _validate_exchange(cls, value: str) -> str:
+        supported_exchanges: tuple[str, str] = ("binance", "bybit")
+        if value not in supported_exchanges:
+            raise ValueError(
+                f"The exchange {value!r} is not supported. Choose one of {', '.join(supported_exchanges)}"
+            )
+        return value
+
 
 class LongConfig(NonMutatingMixin):
     enabled: bool
