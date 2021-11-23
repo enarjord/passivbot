@@ -47,6 +47,18 @@ class ApiKey(NonMutatingMixin):
         return self._name
 
 
+class SymbolConfig(NonMutatingMixin):
+    key_name: str
+    config_name: str
+
+    # Private attributes
+    _name: str = PrivateAttr()
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+
 class LongConfig(NonMutatingMixin):
     enabled: bool
     eprice_exp_base: float
@@ -78,28 +90,36 @@ class ShortConfig(NonMutatingMixin):
 
 
 class NamedConfig(NonMutatingMixin):
-    assigned_balance: Optional[float]
+    assigned_balance: float | None
     long: LongConfig
     short: ShortConfig
 
     # Private attributes
     _name: str = PrivateAttr()
+    _parent: BaseConfig = PrivateAttr()
+    _market_type: str = PrivateAttr()
+    _key: ApiKey = PrivateAttr()
+    _symbol: SymbolConfig = PrivateAttr()
 
     @property
     def name(self) -> str:
         return self._name
 
-
-class SymbolConfig(NonMutatingMixin):
-    key_name: str
-    config_name: str
-
-    # Private attributes
-    _name: str = PrivateAttr()
+    @property
+    def parent(self) -> BaseConfig:
+        return self._parent
 
     @property
-    def name(self) -> str:
-        return self._name
+    def market_type(self) -> str:
+        return self._market_type
+
+    @property
+    def key(self) -> ApiKey:
+        return self._key
+
+    @property
+    def symbol(self) -> SymbolConfig:
+        return self._symbol
 
 
 class LoggingCliConfig(NonMutatingMixin):
@@ -147,8 +167,6 @@ class BaseConfig(NonMutatingMixin):
 
     # Private attributes
     _basedir: pathlib.Path = PrivateAttr()
-    _market_type: str = PrivateAttr()
-    _key: ApiKey = PrivateAttr()
 
     @classmethod
     def parse_files(cls, *files: pathlib.Path) -> BaseConfig:
@@ -166,14 +184,6 @@ class BaseConfig(NonMutatingMixin):
     @property
     def basedir(self) -> pathlib.Path:
         return self._basedir
-
-    @property
-    def market_type(self) -> str:
-        return self._market_type
-
-    @property
-    def key(self) -> ApiKey:
-        return self._key
 
 
 class ApiKeysMixin(GenericModel):

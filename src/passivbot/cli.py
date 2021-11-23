@@ -4,6 +4,7 @@ import argparse
 import logging
 import os
 import pathlib
+import traceback
 from functools import partial
 
 from pydantic import ValidationError
@@ -118,6 +119,7 @@ def main() -> None:
     multi_symbol_optimize_parser = subparsers.add_parser(
         "multi-symbol-optimize", help="Optimize passivbot config multi symbol"
     )
+
     passivbot.bot.setup_parser(live_parser)
     if BACKTEST_REQUIREMENTS_MISSING is False:
         passivbot.backtest.setup_parser(backtest_parser)
@@ -177,11 +179,15 @@ def main() -> None:
         )
 
     try:
-        config: type[passivbot.config.ApiKeysConfigMixin] = config_cls.parse_files(  # type: ignore[assignment]
+        config: type[passivbot.config.BaseConfig] = config_cls.parse_files(  # type: ignore[assignment]
             *args.config_files
         )
     except ValidationError as exc:
         parser.exit(status=1, message=f"Found some errors in the configuration:\n\n{exc}\n")
+    except Exception:
+        parser.exit(
+            status=1, message=f"Failed to load the configuration:\n{traceback.format_exc()}"
+        )
 
     # Setup logging
     passivbot.utils.logs.setup_cli_logging(
@@ -234,19 +240,20 @@ def main() -> None:
 
     # Set the config private attributes
     config._basedir = args.basedir
-    config._market_type = args.market_type
-    config._symbol = config.symbols[args.symbol]
+    symbol = config.symbols[args.symbol]
 
-    if args.key_name and config.symbol.key_name != args.key_name:
+    if args.key_name and symbol.key_name != args.key_name:
         log.info(
             "Overriding the defined key name in the selected config, %r with the key named %r",
             config.symbol.key_name,
             args.key_name,
         )
-        config.symbol.key_name = args.key_name
-
-    config._key = config.api_keys[config.symbol.key_name]
-    config._active_config = config.configs[config.symbol.config_name]
+        symbol.key_name = args.key_name
+    config._active_config = config.configs[symbol.config_name]
+    config.active_config._parent = config
+    config.active_config._symbol = symbol
+    config.active_config._key = config.api_keys[symbol.key_name]
+    config.active_config._market_type = args.market_type
 
     if args.nojit:
         # Disable numba JIT compilation
@@ -278,4 +285,4 @@ def main() -> None:
             passivbot.multi_symbol_optimize.validate_argparse_parsed_args(parser, args, config)
 
     # Call the right sub-parser
-    args.func(args)
+    args.func(args, config)
