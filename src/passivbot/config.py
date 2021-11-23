@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from pydantic import PrivateAttr
 from pydantic import root_validator
 from pydantic import validator
+from pydantic.generics import GenericModel
 
 from passivbot.utils.logs import SORTED_LEVEL_NAMES
 
@@ -174,30 +175,34 @@ class BaseConfig(NonMutatingMixin):
         return self._key
 
 
-class ApiKeysConfigMixin(BaseConfig):
+class ApiKeysMixin(GenericModel):
     api_keys: Dict[str, ApiKey]
 
     @root_validator
     @classmethod
-    def _set_name_attribute(cls, values):
+    def _set_api_keys_name_attribute(cls, values):
         for name, config in values["api_keys"].items():
             config._name = name
         return values
 
 
-class LiveConfig(ApiKeysConfigMixin):
+class ConfigsMixin(GenericModel):
     configs: Dict[str, NamedConfig]
-    symbols: Dict[str, SymbolConfig]
-
-    # Private attributes
-    _symbol: SymbolConfig = PrivateAttr()
-    _active_config: NamedConfig = PrivateAttr()
 
     @root_validator
     @classmethod
-    def _set_name_attribute(cls, values):
+    def _set_configs_name_attribute(cls, values):
         for name, config in values["configs"].items():
             config._name = name
+        return values
+
+
+class SymbolsMixin(ApiKeysMixin, ConfigsMixin):
+    symbols: Dict[str, SymbolConfig]
+
+    @root_validator
+    @classmethod
+    def _set_symbols_name_attribute(cls, values):
         for name, config in values["symbols"].items():
             config._name = name
         return values
@@ -214,6 +219,13 @@ class LiveConfig(ApiKeysConfigMixin):
                 f"The {value.config_name!r} configuration name is not defined under 'configs'."
             )
         return value
+
+
+class LiveConfig(BaseConfig, SymbolsMixin):
+
+    # Private attributes
+    _symbol: SymbolConfig = PrivateAttr()
+    _active_config: NamedConfig = PrivateAttr()
 
     @property
     def symbol(self) -> SymbolConfig:
