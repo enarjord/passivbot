@@ -44,14 +44,14 @@ repos:
         exclude: src/passivbot/version.py
 
   - repo: https://github.com/psf/black
-    rev: 21.10b0
+    rev: 21.11b1
     hooks:
       - id: black
         args: [-l 100]
         exclude: src/passivbot/version.py
 
   - repo: https://github.com/asottile/blacken-docs
-    rev: v1.11.0
+    rev: v1.12.0
     hooks:
       - id: blacken-docs
         args: [--skip-errors]
@@ -61,7 +61,7 @@ repos:
 
   # ----- Security ------------------------------------------------------------------------------>
   - repo: https://github.com/PyCQA/bandit
-    rev: "1.7.0"
+    rev: "1.7.1"
     hooks:
       - id: bandit
         alias: bandit-code
@@ -70,7 +70,7 @@ repos:
         files: ^(?!tests/).*\.py$
         exclude: src/passivbot/version.py
   - repo: https://github.com/PyCQA/bandit
-    rev: "1.7.0"
+    rev: "1.7.1"
     hooks:
       - id: bandit
         alias: bandit-tests
