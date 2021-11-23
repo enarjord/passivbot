@@ -8,6 +8,8 @@ from typing import Dict
 from pydantic import BaseModel
 from pydantic import validator
 
+from passivbot.utils.logs import SORTED_LEVEL_NAMES
+
 
 class NonMutatingMixin(BaseModel):
     """
@@ -70,12 +72,32 @@ class LoggingCliConfig(NonMutatingMixin):
     datefmt: str = "%H:%M:%S"
     fmt: str = "[%(asctime)s] [%(levelname)-7s] %(message)s"
 
+    @validator("level")
+    @classmethod
+    def _validate_level(cls, value):
+        value = value.lower()
+        if value.lower() not in SORTED_LEVEL_NAMES:
+            raise ValueError(
+                f"The log level {value!r} is not value. Available levels: {', '.join(SORTED_LEVEL_NAMES)}"
+            )
+        return value
+
 
 class LoggingFileConfig(NonMutatingMixin):
     level: str = "info"
     datefmt: str = "%Y-%m-%d %H:%M:%S"
     fmt: str = "%(asctime)s,%(msecs)03d [%(name)-17s:%(lineno)-4d][%(levelname)-7s] %(message)s"
-    path: pathlib.Path = pathlib.Path("logs/passivbot.log")
+    path: pathlib.Path | None
+
+    @validator("level")
+    @classmethod
+    def _validate_level(cls, value):
+        value = value.lower()
+        if value.lower() not in SORTED_LEVEL_NAMES:
+            raise ValueError(
+                f"The log level {value!r} is not value. Available levels: {', '.join(SORTED_LEVEL_NAMES)}"
+            )
+        return value
 
 
 class LoggingConfig(NonMutatingMixin):
