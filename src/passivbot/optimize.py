@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import argparse
 import asyncio
 import glob
@@ -8,7 +10,6 @@ import shutil
 import sys
 import time
 from collections import OrderedDict
-from typing import Union
 
 import nevergrad as ng
 import numpy as np
@@ -237,7 +238,7 @@ def simple_sliding_window_wrap(config, data, do_print=False):
         )
 
 
-def backtest_tune(data: np.ndarray, config: dict, current_best: Union[dict, list] = None):
+def backtest_tune(data: np.ndarray, config: dict, current_best: dict | list = None):
     memory = int(sys.getsizeof(data) * 1.2)
     virtual_memory = psutil.virtual_memory()
     log.info(f"data size in mb {memory / (1000 * 1000):.4f}")

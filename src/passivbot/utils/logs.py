@@ -1,13 +1,11 @@
+from __future__ import annotations
+
 import logging
 import sys
 from collections import deque
 from logging import handlers
 from typing import Any
-from typing import Dict
-from typing import Optional
-from typing import Type
-
-from typing_extensions import Deque
+from typing import Deque
 
 LOG_LEVELS = {
     "all": logging.NOTSET,
@@ -20,7 +18,7 @@ LOG_LEVELS = {
 logging.root.setLevel(logging.DEBUG)
 
 # Store an instance of the current logging logger class
-LOGGING_LOGGER_CLASS: Type[logging.Logger] = logging.getLoggerClass()
+LOGGING_LOGGER_CLASS: type[logging.Logger] = logging.getLoggerClass()
 
 
 class LogRecord(logging.LogRecord):
@@ -114,7 +112,7 @@ class PassivBotLoggingClass(LOGGING_LOGGER_CLASS):  # type: ignore[valid-type,mi
         msg,
         args,
         exc_info=None,
-        extra: Optional[Dict[Any, Any]] = None,
+        extra: dict[Any, Any] | None = None,
         stack_info: bool = False,
         stacklevel: int = 1,
         wipe_line: bool = False,
@@ -181,9 +179,7 @@ def reset_logging_handlers() -> None:
         logging.root.removeHandler(handler)
 
 
-def setup_cli_logging(
-    log_level: str, fmt: Optional[str] = None, datefmt: Optional[str] = None
-) -> None:
+def setup_cli_logging(log_level: str, fmt: str | None = None, datefmt: str | None = None) -> None:
     """
     Setup CLI logging.
 
@@ -206,7 +202,7 @@ def setup_cli_logging(
 
 
 def setup_logfile_logging(
-    logfile, log_level: str, fmt: Optional[str] = None, datefmt: Optional[str] = None
+    logfile, log_level: str, fmt: str | None = None, datefmt: str | None = None
 ) -> None:
     """
     Setup log file logging.

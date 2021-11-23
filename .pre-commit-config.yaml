@@ -30,8 +30,9 @@ repos:
     hooks:
       - id: reorder-python-imports
         args: [
-          --py3-plus,
+          --py37-plus,
           --application-directories=.:src,
+          --add-import=from __future__ import annotations
         ]
         exclude: src/passivbot/version.py
 

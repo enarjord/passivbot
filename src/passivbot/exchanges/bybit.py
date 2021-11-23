@@ -1,11 +1,10 @@
+from __future__ import annotations
+
 import asyncio
 import hmac
 import json
 import logging
 import time
-from typing import Dict
-from typing import List
-from typing import Union
 
 import numpy as np
 
@@ -565,9 +564,7 @@ class Bybit(Bot):
     async def transfer(self, type_: str, amount: float, asset: str = "USDT"):
         return {"code": "-1", "msg": "Transferring funds not supported for Bybit"}
 
-    def standardize_user_stream_event(
-        self, event: Union[List[Dict], Dict]
-    ) -> Union[List[Dict], Dict]:
+    def standardize_user_stream_event(self, event: list[dict] | dict) -> list[dict] | dict:
         events = []
         if "topic" in event:
             if event["topic"] == "order":

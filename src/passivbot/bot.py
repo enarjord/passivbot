@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import argparse
 import asyncio
 import json
@@ -6,9 +8,6 @@ import os
 import pprint
 import signal
 import time
-from typing import Dict
-from typing import List
-from typing import Union
 
 from passivbot.utils.funcs.njit import calc_diff
 from passivbot.utils.funcs.njit import calc_long_close_grid
@@ -517,7 +516,7 @@ class Bot:
             self.heartbeat_ts = time.time()
         await self.cancel_and_create()
 
-    async def on_user_stream_events(self, events: Union[List[Dict], List]) -> None:
+    async def on_user_stream_events(self, events: list[dict] | list) -> None:
         if isinstance(events, list):
             for event in events:
                 await self.on_user_stream_event(event)
