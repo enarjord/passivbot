@@ -5,6 +5,7 @@ from typing import Optional
 
 from pydantic import BaseModel
 from pydantic import Field
+from pydantic import validator
 
 from passivbot.datastructures import StopMode
 
@@ -29,6 +30,16 @@ class LongConfig(PassivbotBaseModel):
     secondary_allocation: float
     secondary_pprice_diff: float
 
+    @validator("max_n_entry_orders", pre=True)
+    @classmethod
+    def _cast_max_n_entry_orders(cls, value) -> int:
+        return int(round(float(value)))
+
+    @validator("n_close_orders", pre=True)
+    @classmethod
+    def _cast_n_close_orders(cls, value) -> int:
+        return int(round(float(value)))
+
 
 class ShortConfig(PassivbotBaseModel):
     enabled: bool
@@ -43,6 +54,16 @@ class ShortConfig(PassivbotBaseModel):
     wallet_exposure_limit: float
     secondary_allocation: float
     secondary_pprice_diff: float
+
+    @validator("max_n_entry_orders", pre=True)
+    @classmethod
+    def _cast_max_n_entry_orders(cls, value) -> int:
+        return int(round(float(value)))
+
+    @validator("n_close_orders", pre=True)
+    @classmethod
+    def _cast_n_close_orders(cls, value) -> int:
+        return int(round(float(value)))
 
 
 class NamedConfig(PassivbotBaseModel):
