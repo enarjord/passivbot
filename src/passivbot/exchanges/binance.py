@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
 from typing import Any
 
 import numpy as np
 
 from passivbot.bot import Bot
+from passivbot.datastructures import Fill
+from passivbot.datastructures import Order
+from passivbot.datastructures import Position
+from passivbot.datastructures import Tick
+from passivbot.datastructures.runtime import RuntimeFuturesConfig
 from passivbot.utils.funcs.pure import ts_to_date
 from passivbot.utils.httpclient import BinanceHTTPClient
 from passivbot.utils.httpclient import HTTPRequestError
@@ -17,9 +21,14 @@ log = logging.getLogger(__name__)
 
 
 class BinanceBot(Bot):
-    def __init__(self, config: dict[str, Any]):
+    def __bot_init__(self):
+        """
+        Subclass initialization routines
+        """
         self.exchange = "binance"
-        super().__init__(config)
+        self.rtc: RuntimeFuturesConfig = RuntimeFuturesConfig(
+            market_type=self.config.market_type, short=self.config.short, long=self.config.long
+        )
 
     async def init_market_type(self):
         fapi_endpoint = "https://fapi.binance.com"
@@ -27,10 +36,10 @@ class BinanceBot(Bot):
         self.exchange_info = await BinanceHTTPClient.onetime_get(
             f"{fapi_endpoint}/fapi/v1/exchangeInfo"
         )
-        if self.symbol in {e["symbol"] for e in self.exchange_info["symbols"]}:
+        if self.config.symbol in {e["symbol"] for e in self.exchange_info["symbols"]}:
             log.info("linear perpetual")
-            self.market_type += "_linear_perpetual"
-            self.inverse = self.config["inverse"] = False
+            self.rtc.market_type += "_linear_perpetual"
+            self.rtc.inverse = False
             websocket_url = "wss://fstream.binance.com/ws"
             self.httpclient = BinanceHTTPClient(
                 fapi_endpoint,
@@ -53,7 +62,7 @@ class BinanceBot(Bot):
                     "leverage": "/fapi/v1/leverage",
                     "position_side": "/fapi/v1/positionSide/dual",
                     "websocket": websocket_url,
-                    "websocket_market": f"{websocket_url}/{self.symbol.lower()}@aggTrade",
+                    "websocket_market": f"{websocket_url}/{self.config.symbol.lower()}@aggTrade",
                     "websocket_user": websocket_url,
                     "listen_key": "/fapi/v1/listenKey",
                 },
@@ -62,10 +71,10 @@ class BinanceBot(Bot):
             self.exchange_info = await BinanceHTTPClient.onetime_get(
                 f"{dapi_endpoint}/dapi/v1/exchangeInfo"
             )
-            if self.symbol in {e["symbol"] for e in self.exchange_info["symbols"]}:
+            if self.config.symbol in {e["symbol"] for e in self.exchange_info["symbols"]}:
                 log.info("inverse coin margined")
-                self.market_type += "_inverse_coin_margined"
-                self.inverse = self.config["inverse"] = True
+                self.rtc.market_type += "_inverse_coin_margined"
+                self.rtc.inverse = True
                 websocket_url = "wss://dstream.binance.com/ws"
                 self.httpclient = BinanceHTTPClient(
                     dapi_endpoint,
@@ -88,13 +97,13 @@ class BinanceBot(Bot):
                         "leverage": "/dapi/v1/leverage",
                         "position_side": "/dapi/v1/positionSide/dual",
                         "websocket": websocket_url,
-                        "websocket_market": f"{websocket_url}/{self.symbol.lower()}@aggTrade",
+                        "websocket_market": f"{websocket_url}/{self.config.symbol.lower()}@aggTrade",
                         "websocket_user": websocket_url,
                         "listen_key": "/dapi/v1/listenKey",
                     },
                 )
             else:
-                raise Exception(f"unknown symbol {self.symbol}")
+                raise Exception(f"unknown symbol {self.config.symbol}")
 
         self.spot_base_endpoint = "https://api.binance.com"
         self.httpclient.endpoints["transfer"] = "https://api.binance.com/sapi/v1/asset/transfer"
@@ -103,29 +112,24 @@ class BinanceBot(Bot):
     async def _init(self):
         await self.init_market_type()
         for e in self.exchange_info["symbols"]:
-            if e["symbol"] == self.symbol:
-                self.coin = e["baseAsset"]
-                self.quot = e["quoteAsset"]
-                self.margin_coin = e["marginAsset"]
-                self.pair = e["pair"]
-                if "inverse_coin_margined" in self.market_type:
-                    self.c_mult = self.config["c_mult"] = float(e["contractSize"])
+            if e["symbol"] == self.config.symbol:
+                self.rtc.coin = e["baseAsset"]
+                self.rtc.quote = e["quoteAsset"]
+                self.rtc.margin_coin = e["marginAsset"]
+                self.rtc.pair = e["pair"]
+                if "inverse_coin_margined" in self.rtc.market_type:
+                    self.rtc.c_mult = float(e["contractSize"])
                 for q in e["filters"]:
                     if q["filterType"] == "LOT_SIZE":
-                        self.min_qty = self.config["min_qty"] = float(q["minQty"])
+                        self.rtc.min_qty = float(q["minQty"])
                     elif q["filterType"] == "MARKET_LOT_SIZE":
-                        self.qty_step = self.config["qty_step"] = float(q["stepSize"])
+                        self.rtc.qty_step = float(q["stepSize"])
                     elif q["filterType"] == "PRICE_FILTER":
-                        self.price_step = self.config["price_step"] = float(q["tickSize"])
+                        self.rtc.price_step = float(q["tickSize"])
                     elif q["filterType"] == "MIN_NOTIONAL":
-                        self.min_cost = self.config["min_cost"] = float(q["notional"])
-                try:
-                    self.min_cost
-                except AttributeError:
-                    self.min_cost = self.config["min_cost"] = 0.0
+                        self.rtc.min_cost = float(q["notional"])
                 break
 
-        self.max_leverage = self.config["max_leverage"] = 25
         await super()._init()
         await self.init_order_book()
         await self.update_position()
@@ -133,14 +137,14 @@ class BinanceBot(Bot):
     async def execute_leverage_change(self):
         lev = 7  # arbitrary
         return await self.httpclient.post(
-            "leverage", params={"symbol": self.symbol, "leverage": lev}
+            "leverage", params={"symbol": self.config.symbol, "leverage": lev}
         )
 
-    async def init_exchange_config(self) -> bool:
+    async def init_exchange_config(self) -> None:
         try:
             ret = await self.httpclient.post(
                 "margin_type",
-                params={"symbol": self.symbol, "marginType": "CROSSED"},
+                params={"symbol": self.config.symbol, "marginType": "CROSSED"},
             )
             log.info("Init Exchange Config: %s", ret)
         except HTTPRequestError as exc:
@@ -166,43 +170,35 @@ class BinanceBot(Bot):
             raise Exception("failed to set hedge mode")
 
     async def init_order_book(self):
-        ticker = await self.httpclient.get("ticker", params={"symbol": self.symbol})
-        if "inverse_coin_margined" in self.market_type:
-            ticker = ticker[0]
-        self.ob = [float(ticker["bidPrice"]), float(ticker["askPrice"])]
-        self.price = np.random.choice(self.ob)
+        ticker: dict[str, Any] | list[dict[str, Any]]
+        ticker = await self.httpclient.get("ticker", params={"symbol": self.config.symbol})
+        if "inverse_coin_margined" in self.rtc.market_type:
+            ticker = ticker[0]  # type: ignore[index]
+        self.ob = [float(ticker["bidPrice"]), float(ticker["askPrice"])]  # type: ignore[call-overload]
+        self.rtc.price = np.random.choice(self.ob)
 
-    async def fetch_open_orders(self) -> list[dict[str, Any]]:
+    async def fetch_open_orders(self) -> list[Order]:
         return [
-            {
-                "order_id": int(e["orderId"]),
-                "symbol": e["symbol"],
-                "price": float(e["price"]),
-                "qty": float(e["origQty"]),
-                "type": e["type"].lower(),
-                "side": e["side"].lower(),
-                "position_side": e["positionSide"].lower(),
-                "timestamp": int(e["time"]),
-            }
+            Order.from_binance_payload(e, futures=True)
             for e in await self.httpclient.get(
-                "open_orders", signed=True, params={"symbol": self.symbol}
+                "open_orders", signed=True, params={"symbol": self.config.symbol}
             )
         ]
 
-    async def fetch_position(self) -> dict[str, Any]:
-        positions, balance = await asyncio.gather(
-            self.httpclient.get(
-                "position",
-                signed=True,
-                params=(
-                    {"symbol": self.symbol}
-                    if "linear_perpetual" in self.market_type
-                    else {"pair": self.pair}
-                ),
-            ),
-            self.httpclient.get("balance", signed=True),
-        )
-        positions = [e for e in positions if e["symbol"] == self.symbol]
+    async def fetch_position(self) -> Position:
+        if "linear_perpetual" in self.rtc.market_type:
+            params = {"symbol": self.config.symbol}
+            assert self.rtc.quote
+            asset = self.rtc.quote
+        else:
+            assert self.rtc.coin
+            assert self.rtc.pair
+            params = {"pair": self.rtc.pair}
+            asset = self.rtc.coin
+
+        positions: list[dict[str, Any]] = await self.httpclient.get("position", signed=True, params=params)  # type: ignore[assignment]
+        balance: list[dict[str, Any]] = await self.httpclient.get("balance", signed=True)  # type: ignore[assignment]
+        positions = [e for e in positions if e["symbol"] == self.config.symbol]
         position = {
             "long": {"size": 0.0, "price": 0.0, "liquidation_price": 0.0},
             "short": {"size": 0.0, "price": 0.0, "liquidation_price": 0.0},
@@ -224,65 +220,41 @@ class BinanceBot(Bot):
                         "liquidation_price": float(p["liquidationPrice"]),
                     }
         for e in balance:
-            if e["asset"] == (self.quot if "linear_perpetual" in self.market_type else self.coin):
-                position["wallet_balance"] = float(e["balance"])
-                position["equity"] = position["wallet_balance"] + float(e["crossUnPnl"])
+            if e["asset"] == asset:
+                wallet_balance = float(e["balance"])
+                position["wallet_balance"] = wallet_balance
+                position["equity"] = wallet_balance + float(e["crossUnPnl"])
                 break
-        return position
+        return Position.parse_obj(position)
 
-    async def execute_order(self, order: dict[str, Any]) -> dict[str, Any]:
+    async def execute_order(self, order: Order) -> Order | None:
         o = None
         try:
-            params = {
-                "symbol": self.symbol,
-                "side": order["side"].upper(),
-                "positionSide": order["position_side"].upper(),
-                "type": order["type"].upper(),
-                "quantity": str(order["qty"]),
-            }
-            if params["type"] == "LIMIT":
-                params["timeInForce"] = "GTX"
-                params["price"] = order["price"]
-            if "custom_id" in order:
-                params[
-                    "newClientOrderId"
-                ] = f"{order['custom_id']}_{str(int(time.time() * 1000))[8:]}_{int(np.random.random() * 1000)}"
+            params = order.to_binance_payload(futures=True)
             o = await self.httpclient.post("create_order", params=params)
-            return {
-                "symbol": self.symbol,
-                "side": o["side"].lower(),
-                "position_side": o["positionSide"].lower(),
-                "type": o["type"].lower(),
-                "qty": float(o["origQty"]),
-                "order_id": int(o["orderId"]),
-                "price": float(o["price"]),
-            }
+            log.debug("Create Order Returned Payload: %s", o)
+            o["symbol"] = self.config.symbol
+            return Order.from_binance_payload(o, futures=True)
         except Exception as e:
             log.info("error executing order %s: %s", order, e, exc_info=True)
             print_async_exception(o)
-            return {}
+        return None
 
-    async def execute_cancellation(self, order: dict[str, Any]) -> dict[str, Any]:
+    async def execute_cancellation(self, order: Order) -> Order | None:
         cancellation = None
         try:
             cancellation = await self.httpclient.delete(
                 "cancel_order",
-                params={"symbol": self.symbol, "orderId": order["order_id"]},
+                params={"symbol": self.config.symbol, "orderId": order.order_id},
             )
 
-            return {
-                "symbol": self.symbol,
-                "side": cancellation["side"].lower(),
-                "order_id": int(cancellation["orderId"]),
-                "position_side": cancellation["positionSide"].lower(),
-                "qty": float(cancellation["origQty"]),
-                "price": float(cancellation["price"]),
-            }
+            cancellation["symbol"] = order.symbol
+            return Order.from_binance_payload(cancellation, futures=True)
         except Exception as e:
             log.info("error cancelling order %s: %s", order, e, exc_info=True)
             print_async_exception(cancellation)
             self.ts_released["force_update"] = 0.0
-            return {}
+        return None
 
     async def fetch_fills(
         self,
@@ -291,35 +263,21 @@ class BinanceBot(Bot):
         from_id: int | None = None,
         start_time: int | None = None,
         end_time: int | None = None,
-    ):
+    ) -> list[Fill]:
         params = {
-            "symbol": self.symbol if symbol is None else symbol,
-            "limit": min(100, limit) if self.inverse else limit,
+            "symbol": self.config.symbol if symbol is None else symbol,
+            "limit": min(100, limit) if self.rtc.inverse else limit,
         }
         if from_id is not None:
             params["fromId"] = max(0, from_id)
         if start_time is not None:
             params["startTime"] = int(start_time)
-        if end_time is not None:
+        if end_time is not None and start_time is not None:
             params["endTime"] = int(min(end_time, start_time + 1000 * 60 * 60 * 24 * 6.99))
         try:
-            fetched = await self.httpclient.get("fills", signed=True, params=params)
+            fetched: list[dict[str, Any]] = await self.httpclient.get("fills", signed=True, params=params)  # type: ignore[assignment]
             fills = [
-                {
-                    "symbol": x["symbol"],
-                    "id": int(x["id"]),
-                    "order_id": int(x["orderId"]),
-                    "side": x["side"].lower(),
-                    "price": float(x["price"]),
-                    "qty": float(x["qty"]),
-                    "realized_pnl": float(x["realizedPnl"]),
-                    "cost": float(x["baseQty"]) if self.inverse else float(x["quoteQty"]),
-                    "fee_paid": float(x["commission"]),
-                    "fee_token": x["commissionAsset"],
-                    "timestamp": int(x["time"]),
-                    "position_side": x["positionSide"].lower(),
-                    "is_maker": x["maker"],
-                }
+                Fill.from_binance_payload(x, futures=True, inverse=self.rtc.inverse)
                 for x in fetched
             ]
         except Exception as e:
@@ -347,7 +305,7 @@ class BinanceBot(Bot):
                 break
             start_time = income[-1]["timestamp"]
         income_d = {e["transaction_id"]: e for e in income}
-        return sorted(income_d.values(), key=lambda x: x["timestamp"])
+        return sorted(income_d.values(), key=lambda x: x["timestamp"])  # type: ignore[no-any-return]
 
     async def fetch_income(
         self,
@@ -357,7 +315,7 @@ class BinanceBot(Bot):
         start_time: int | None = None,
         end_time: int | None = None,
     ):
-        params = {"limit": limit}
+        params: dict[str, Any] = {"limit": limit}
         if symbol is not None:
             params["symbol"] = symbol
         if start_time is not None:
@@ -367,7 +325,7 @@ class BinanceBot(Bot):
         if income_type is not None:
             params["incomeType"] = income_type.upper()
         try:
-            fetched = await self.httpclient.get("income", signed=True, params=params)
+            fetched: list[dict[str, Any]] = await self.httpclient.get("income", signed=True, params=params)  # type: ignore[assignment]
             return [
                 {
                     "symbol": e["symbol"],
@@ -399,7 +357,7 @@ class BinanceBot(Bot):
         end_time: int | None = None,
         do_print: bool = True,
     ):
-        params = {"symbol": self.symbol, "limit": 1000}
+        params = {"symbol": self.config.symbol, "limit": 1000}
         if from_id is not None:
             params["fromId"] = max(0, from_id)
         if start_time is not None:
@@ -407,33 +365,24 @@ class BinanceBot(Bot):
         if end_time is not None:
             params["endTime"] = end_time
         try:
-            fetched = await self.httpclient.get("ticks", params=params)
+            fetched: list[dict[str, Any]] = await self.httpclient.get("ticks", params=params)  # type: ignore[assignment]
         except Exception as e:
             log.error("error fetching ticks a: %s", e)
             return []
         try:
-            ticks = [
-                {
-                    "trade_id": int(t["a"]),
-                    "price": float(t["p"]),
-                    "qty": float(t["q"]),
-                    "timestamp": int(t["T"]),
-                    "is_buyer_maker": t["m"],
-                }
-                for t in fetched
-            ]
+            ticks = [Tick.from_binance_payload(t) for t in fetched]
             if do_print:
                 log.info(
-                    "Fetched ticks %s %s %s",
-                    self.symbol,
-                    ticks[0]["trade_id"],
-                    ts_to_date(float(ticks[0]["timestamp"]) / 1000),
+                    "Fetched ticks for symbol %r %s %s",
+                    self.config.symbol,
+                    ticks[0].trade_id,
+                    ts_to_date(float(ticks[0].timestamp) / 1000),
                 )
         except Exception as e:
             log.error("error fetching ticks b: %s  %s", e, fetched)
             ticks = []
             if do_print:
-                log.info("fetched no new ticks %s", self.symbol)
+                log.info("fetched no new ticks %s", self.config.symbol)
         return ticks
 
     async def fetch_ticks_time(
@@ -466,7 +415,7 @@ class BinanceBot(Bot):
         }
         assert interval in interval_map
         params = {
-            "symbol": self.symbol if symbol is None else symbol,
+            "symbol": self.config.symbol if symbol is None else symbol,
             "interval": interval,
             "limit": limit,
         }
@@ -492,21 +441,14 @@ class BinanceBot(Bot):
         params = {"type": type_.upper(), "amount": amount, "asset": asset}
         return await self.httpclient.post("transfer", params=params)
 
-    def standardize_market_stream_event(self, data: dict) -> list[dict[str, Any]]:
+    def standardize_market_stream_event(self, data: dict[str, Any]) -> list[Tick]:
         try:
-            return [
-                {
-                    "timestamp": int(data["T"]),
-                    "price": float(data["p"]),
-                    "qty": float(data["q"]),
-                    "is_buyer_maker": data["m"],
-                }
-            ]
+            return [Tick.from_binance_payload(data)]
         except Exception as e:
             log.error("error in websocket tick: %s data: %s", e, data)
         return []
 
-    async def beat_heart_user_stream(self) -> None:
+    async def beat_heart_user_stream(self, ws) -> None:
         while True:
             await asyncio.sleep(60 + np.random.randint(60 * 9, 60 * 14))
             await self.init_user_stream()
@@ -522,16 +464,16 @@ class BinanceBot(Bot):
             log.error("error fetching listen key: %s", e, exc_info=True)
 
     def standardize_user_stream_event(self, event: dict[str, Any]) -> dict[str, Any]:
-        standardized = {}
+        standardized: dict[str, Any] = {}
         if "e" in event:
             if event["e"] == "ACCOUNT_UPDATE":
                 if "a" in event and "B" in event["a"]:
                     for x in event["a"]["B"]:
-                        if x["a"] == self.margin_coin:
+                        if x["a"] == self.rtc.margin_coin:
                             standardized["wallet_balance"] = float(x["cw"])
                 if event["a"]["m"] == "ORDER":
                     for x in event["a"]["P"]:
-                        if x["s"] != self.symbol:
+                        if x["s"] != self.config.symbol:
                             standardized["other_symbol"] = x["s"]
                             standardized["other_type"] = "account_update"
                             continue
@@ -542,7 +484,7 @@ class BinanceBot(Bot):
                             standardized["short_psize"] = float(x["pa"])
                             standardized["short_pprice"] = float(x["ep"])
             elif event["e"] == "ORDER_TRADE_UPDATE":
-                if event["o"]["s"] == self.symbol:
+                if event["o"]["s"] == self.config.symbol:
                     if event["o"]["X"] == "NEW":
                         standardized["new_open_order"] = {
                             "order_id": int(event["o"]["i"]),

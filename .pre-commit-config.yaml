@@ -15,7 +15,7 @@ repos:
 
   # ----- Formatting ---------------------------------------------------------------------------->
   - repo: https://github.com/asottile/pyupgrade
-    rev: v2.29.0
+    rev: v2.29.1
     hooks:
       - id: pyupgrade
         name: Rewrite Code to be Py3.8+
@@ -23,7 +23,14 @@ repos:
           --py38-plus
         ]
         files: ^((setup|noxfile)|(src|tests)/.*)\.py$
-        exclude: src/passivbot/version.py
+        exclude: ^src/passivbot/(version|datastructures/.*)\.py$
+      - id: pyupgrade
+        name: Rewrite Config Models Module be Py3.8+
+        args: [
+          --py38-plus,
+          --keep-runtime-typing
+        ]
+        files: ^src/passivbot/datastructures/.*\.py$
 
   - repo: https://github.com/asottile/reorder_python_imports
     rev: v2.6.0

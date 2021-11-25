@@ -241,11 +241,7 @@ class BinanceHTTPClient(HTTPClient):
         headers["X-MBX-APIKEY"] = self.api_key
         return await super().delete(endpoint, params=params, headers=headers)
 
-    def _get_error_from_payload(
-        self,
-        url: str,
-        payload: dict[str, Any],
-    ) -> HTTPRequestError | None:
+    def _get_error_from_payload(self, url: str, payload: dict[str, Any]) -> HTTPRequestError | None:
         if "code" in payload and "msg" in payload:
             return HTTPRequestError(url, code=payload["code"], msg=payload["msg"])
         return None
@@ -259,9 +255,5 @@ class ByBitHTTPClient(HTTPClient):
         params["api_key"] = self.api_key
         return super().signed_params(params)
 
-    def _get_error_from_payload(
-        self,
-        url: str,
-        payload: dict[str, Any],
-    ) -> HTTPRequestError | None:
+    def _get_error_from_payload(self, url: str, payload: dict[str, Any]) -> HTTPRequestError | None:
         return None

@@ -5,10 +5,15 @@ import hmac
 import json
 import logging
 import time
-
-import numpy as np
+from typing import Any
 
 from passivbot.bot import Bot
+from passivbot.datastructures import Candle
+from passivbot.datastructures import Fill
+from passivbot.datastructures import Order
+from passivbot.datastructures import Position
+from passivbot.datastructures import Tick
+from passivbot.datastructures.runtime import RuntimeFuturesConfig
 from passivbot.utils.funcs.pure import date_to_ts
 from passivbot.utils.funcs.pure import ts_to_date
 from passivbot.utils.httpclient import ByBitHTTPClient
@@ -21,7 +26,7 @@ def first_capitalized(s: str):
     return s[0].upper() + s[1:].lower()
 
 
-def determine_pos_side(o: dict) -> str:
+def determine_pos_side(o: dict[str, Any]) -> str:
     if o["side"].lower() == "buy":
         if "entry" in o["order_link_id"]:
             return "long"
@@ -39,17 +44,21 @@ def determine_pos_side(o: dict) -> str:
 
 
 class Bybit(Bot):
-    def __init__(self, config: dict):
+    def __bot_init__(self):
+        """
+        Subclass initialization routines
+        """
         self.exchange = "bybit"
-        self.min_notional = 0.0
         self.created_at_key: str
-        super().__init__(config)
+        self.rtc: RuntimeFuturesConfig = RuntimeFuturesConfig(
+            market_type=self.config.market_type, short=self.config.short, long=self.config.long
+        )
 
     def init_market_type(self):
-        if self.symbol.endswith("USDT"):
+        if self.config.symbol.endswith("USDT"):
             log.info("linear perpetual")
-            self.market_type += "_linear_perpetual"
-            self.inverse = self.config["inverse"] = False
+            self.rtc.market_type += "_linear_perpetual"
+            self.rtc.inverse = False
             self.created_at_key = "created_time"
             endpoints = {
                 "position": "/private/linear/position/list",
@@ -66,10 +75,10 @@ class Bybit(Bot):
 
         else:
             self.created_at_key = "created_at"
-            self.inverse = self.config["inverse"] = True
-            if self.symbol.endswith("USD"):
+            self.rtc.inverse = True
+            if self.config.symbol.endswith("USD"):
                 log.info("inverse perpetual")
-                self.market_type += "_inverse_perpetual"
+                self.rtc.market_type += "_inverse_perpetual"
                 endpoints = {
                     "position": "/v2/private/position/list",
                     "open_orders": "/v2/private/order",
@@ -83,10 +92,10 @@ class Bybit(Bot):
                     "income": "/v2/private/trade/closed-pnl/list",
                 }
 
-                self.hedge_mode = self.config["hedge_mode"] = False
+                self.rtc.hedge_mode = False
             else:
                 log.info("inverse futures")
-                self.market_type += "_inverse_futures"
+                self.rtc.market_type += "_inverse_futures"
                 endpoints = {
                     "position": "/futures/private/position/list",
                     "open_orders": "/futures/private/order",
@@ -119,70 +128,64 @@ class Bybit(Bot):
     async def _init(self):
         info = await ByBitHTTPClient.onetime_get("https://api.bybit.com/v2/public/symbols")
         for e in info["result"]:
-            if e["name"] == self.symbol:
+            if e["name"] == self.config.symbol:
                 break
         else:
-            raise Exception(f"symbol missing {self.symbol}")
-        self.max_leverage = e["leverage_filter"]["max_leverage"]
-        self.coin = e["base_currency"]
-        self.quot = e["quote_currency"]
-        self.price_step = self.config["price_step"] = float(e["price_filter"]["tick_size"])
-        self.qty_step = self.config["qty_step"] = float(e["lot_size_filter"]["qty_step"])
-        self.min_qty = self.config["min_qty"] = float(e["lot_size_filter"]["min_trading_qty"])
-        self.min_cost = self.config["min_cost"] = 0.0
+            raise Exception(f"symbol missing {self.config.symbol}")
+
+        self.rtc.max_leverage = e["leverage_filter"]["max_leverage"]
+        self.rtc.coin = e["base_currency"]
+        self.rtc.quote = e["quote_currency"]
+        self.rtc.price_step = float(e["price_filter"]["tick_size"])
+        self.rtc.qty_step = float(e["lot_size_filter"]["qty_step"])
+        self.rtc.min_qty = float(e["lot_size_filter"]["min_trading_qty"])
+        self.rtc.min_cost = 0.0
         self.init_market_type()
-        self.margin_coin = self.coin if self.inverse else self.quot
+        if self.rtc.inverse:
+            self.rtc.margin_coin = self.rtc.coin
+        else:
+            self.rtc.margin_coin = self.rtc.quote
         await super()._init()
         await self.init_order_book()
         await self.update_position()
 
     async def init_order_book(self):
-        ticker = await self.httpclient.get("ticker", signed=True, params={"symbol": self.symbol})
-        self.ob = [float(ticker["result"][0]["bid_price"]), float(ticker["result"][0]["ask_price"])]
-        self.price = float(ticker["result"][0]["last_price"])
-
-    async def fetch_open_orders(self) -> [dict]:
-        fetched = await self.httpclient.get(
-            "open_orders", signed=True, params={"symbol": self.symbol}
+        ticker = await self.httpclient.get(
+            "ticker", signed=True, params={"symbol": self.config.symbol}
         )
-        return [
-            {
-                "order_id": elm["order_id"],
-                "custom_id": elm["order_link_id"],
-                "symbol": elm["symbol"],
-                "price": float(elm["price"]),
-                "qty": float(elm["qty"]),
-                "side": elm["side"].lower(),
-                "position_side": determine_pos_side(elm),
-                "timestamp": date_to_ts(elm[self.created_at_key]),
-            }
-            for elm in fetched["result"]
-        ]
+        self.ob = [float(ticker["result"][0]["bid_price"]), float(ticker["result"][0]["ask_price"])]
+        self.rtc.price = float(ticker["result"][0]["last_price"])
 
-    async def fetch_position(self) -> dict:
-        position = {}
-        if "linear_perpetual" in self.market_type:
+    async def fetch_open_orders(self) -> list[Order]:
+        fetched = await self.httpclient.get(
+            "open_orders", signed=True, params={"symbol": self.config.symbol}
+        )
+        return [Order.from_bybit_payload(elm) for elm in fetched["result"]]
+
+    async def fetch_position(self) -> Position:
+        position: dict[str, Any] = {}
+        if "linear_perpetual" in self.rtc.market_type:
             fetched, bal = await asyncio.gather(
-                self.httpclient.get("position", signed=True, params={"symbol": self.symbol}),
-                self.httpclient.get("balance", signed=True, params={"coin": self.quot}),
+                self.httpclient.get("position", signed=True, params={"symbol": self.config.symbol}),
+                self.httpclient.get("balance", signed=True, params={"coin": self.rtc.quote}),
             )
             long_pos = [e for e in fetched["result"] if e["side"] == "Buy"][0]
             short_pos = [e for e in fetched["result"] if e["side"] == "Sell"][0]
-            position["wallet_balance"] = float(bal["result"][self.quot]["wallet_balance"])
+            position["wallet_balance"] = float(bal["result"][self.rtc.quote]["wallet_balance"])
         else:
             fetched, bal = await asyncio.gather(
-                self.httpclient.get("position", signed=True, params={"symbol": self.symbol}),
-                self.httpclient.get("balance", signed=True, params={"coin": self.coin}),
+                self.httpclient.get("position", signed=True, params={"symbol": self.config.symbol}),
+                self.httpclient.get("balance", signed=True, params={"coin": self.rtc.coin}),
             )
-            position["wallet_balance"] = float(bal["result"][self.coin]["wallet_balance"])
-            if "inverse_perpetual" in self.market_type:
+            position["wallet_balance"] = float(bal["result"][self.rtc.coin]["wallet_balance"])
+            if "inverse_perpetual" in self.rtc.market_type:
                 if fetched["result"]["side"] == "Buy":
                     long_pos = fetched["result"]
                     short_pos = {"size": 0.0, "entry_price": 0.0, "liq_price": 0.0}
                 else:
                     long_pos = {"size": 0.0, "entry_price": 0.0, "liq_price": 0.0}
                     short_pos = fetched["result"]
-            elif "inverse_futures" in self.market_type:
+            elif "inverse_futures" in self.rtc.market_type:
                 long_pos = [e["data"] for e in fetched["result"] if e["data"]["position_idx"] == 1][
                     0
                 ]
@@ -202,73 +205,37 @@ class Bybit(Bot):
             "price": float(short_pos["entry_price"]),
             "liquidation_price": float(short_pos["liq_price"]),
         }
-        return position
+        return Position.parse_obj(position)
 
-    async def execute_order(self, order: dict) -> dict:
+    async def execute_order(self, order: Order) -> Order | None:
         o = None
         try:
-            params = {
-                "symbol": self.symbol,
-                "side": first_capitalized(order["side"]),
-                "order_type": first_capitalized(order["type"]),
-                "qty": float(order["qty"])
-                if "linear_perpetual" in self.market_type
-                else int(order["qty"]),
-                "close_on_trigger": False,
-            }
-            if self.hedge_mode:
-                params["position_idx"] = 1 if order["position_side"] == "long" else 2
-                if "linear_perpetual" in self.market_type:
-                    params["reduce_only"] = "close" in order["custom_id"]
-            else:
-                params["position_idx"] = 0
-                params["reduce_only"] = "close" in order["custom_id"]
-            if params["order_type"] == "Limit":
-                params["time_in_force"] = "PostOnly"
-                params["price"] = str(order["price"])
-            else:
-                params["time_in_force"] = "GoodTillCancel"
-            params[
-                "order_link_id"
-            ] = f"{order['custom_id']}_{str(int(time.time() * 1000))[8:]}_{int(np.random.random() * 1000)}"
+            params = order.to_bybit_payload(
+                market_type=self.rtc.market_type, hedge_mode=self.rtc.hedge_mode
+            )
             o = await self.httpclient.post("create_order", params=params)
             if o["result"]:
-                return {
-                    "symbol": o["result"]["symbol"],
-                    "side": o["result"]["side"].lower(),
-                    "order_id": o["result"]["order_id"],
-                    "position_side": order["position_side"],
-                    "type": o["result"]["order_type"].lower(),
-                    "qty": o["result"]["qty"],
-                    "price": o["result"]["price"],
-                }
-            else:
-                return o, order
+                return Order.from_bybit_payload(o["result"])
+            return None
         except Exception as e:
             log.error(f"error executing order {order} {e}", exc_info=True)
             print_async_exception(o)
-            return {}
+        return None
 
-    async def execute_cancellation(self, order: dict) -> dict:
+    async def execute_cancellation(self, order: Order) -> Order | None:
         cancellation = None
         try:
             cancellation = await self.httpclient.post(
                 "cancel_order",
-                params={"symbol": self.symbol, "order_id": order["order_id"]},
+                params={"symbol": self.config.symbol, "order_id": order.order_id},
             )
-            return {
-                "symbol": self.symbol,
-                "side": order["side"],
-                "order_id": cancellation["result"]["order_id"],
-                "position_side": order["position_side"],
-                "qty": order["qty"],
-                "price": order["price"],
-            }
+            order.order_id = cancellation["result"]["order_id"]
+            return order
         except Exception as e:
             log.error(f"error cancelling order {order} {e}", exc_info=True)
             print_async_exception(cancellation)
             self.ts_released["force_update"] = 0.0
-            return {}
+        return None
 
     async def fetch_account(self):
         try:
@@ -278,8 +245,8 @@ class Bybit(Bot):
             log.error("error fetching account: %s", e)
             return {"balances": []}
 
-    async def fetch_ticks(self, from_id: int = None, do_print: bool = True):
-        params = {"symbol": self.symbol, "limit": 1000}
+    async def fetch_ticks(self, from_id: int | None = None, do_print: bool = True):
+        params = {"symbol": self.config.symbol, "limit": 1000}
         if from_id is not None:
             params["from"] = max(0, from_id)
         try:
@@ -288,30 +255,23 @@ class Bybit(Bot):
             log.error("error fetching ticks: %s", e)
             return []
         try:
-            trades = [
-                {
-                    "trade_id": int(tick["id"]),
-                    "price": float(tick["price"]),
-                    "qty": float(tick["qty"]),
-                    "timestamp": date_to_ts(tick["time"]),
-                    "is_buyer_maker": tick["side"] == "Sell",
-                }
-                for tick in ticks["result"]
-            ]
+            trades = [Tick.from_bybit_payload(tick) for tick in ticks["result"]]
             if do_print:
                 log.info(
                     "fetched trades %s %s %s",
-                    self.symbol,
-                    trades[0]["trade_id"],
-                    ts_to_date(float(trades[0]["timestamp"]) / 1000),
+                    self.config.symbol,
+                    trades[0].trade_id,
+                    ts_to_date(float(trades[0].timestamp) / 1000),
                 )
         except Exception:
             trades = []
             if do_print:
-                log.info("fetched no new trades %s", self.symbol)
+                log.info("fetched no new trades %s", self.config.symbol)
         return trades
 
-    async def fetch_ohlcvs(self, start_time: int = None, interval="1m", limit=200):
+    async def fetch_ohlcvs(
+        self, start_time: int | None = None, interval="1m", limit=200
+    ) -> list[Candle]:
         # m -> minutes; h -> hours; d -> days; w -> weeks; M -> months
         interval_map = {
             "1m": 1,
@@ -329,34 +289,34 @@ class Bybit(Bot):
             "1M": "M",
         }
         assert interval in interval_map
-        params = {"symbol": self.symbol, "interval": interval_map[interval], "limit": limit}
+        params = {"symbol": self.config.symbol, "interval": interval_map[interval], "limit": limit}
         if start_time is None:
             server_time = await self.httpclient.get("server_time")
-            if isinstance(interval_map[interval], str):
-                minutes = {"D": 1, "W": 7, "M": 30}[interval_map[interval]] * 60 * 24
+            mapped_interval: int = interval_map[interval]  # type: ignore[assignment]
+            if isinstance(mapped_interval, str):
+                mapped_minutes: int = {"D": 1, "W": 7, "M": 30}[mapped_interval]
+                minutes = mapped_minutes * 60 * 24
             else:
-                minutes = interval_map[interval]
+                minutes = mapped_interval
             params["from"] = int(round(float(server_time["time_now"]))) - 60 * minutes * limit
         else:
             params["from"] = int(start_time / 1000)
-        fetched = await self.httpclient.get("ohlcvs", params=params)
-        return [
-            {
-                **{"timestamp": e["open_time"] * 1000},
-                **{k: float(e[k]) for k in ["open", "high", "low", "close", "volume"]},
-            }
-            for e in fetched["result"]
-        ]
+        fetched: list[dict[str, Any]] = await self.httpclient.get("ohlcvs", params=params)  # type: ignore[assignment]
+        candles: list[Candle] = []
+        for e in fetched:
+            e["timestamp"] = e.pop("open_time") * 1000
+            candles.append(Candle.parse_obj(e))
+        return candles
 
     async def get_all_income(
         self,
-        symbol: str = None,
-        start_time: int = None,
+        symbol: str | None = None,
+        start_time: int | None = None,
         income_type: str = "Trade",
-        end_time: int = None,
+        end_time: int | None = None,
     ):
         limit = 50
-        income = []
+        income: list[dict[str, Any]] = []
         page = 1
         while True:
             fetched = await self.fetch_income(
@@ -376,18 +336,18 @@ class Bybit(Bot):
                 break
             page += 1
         income_d = {e["transaction_id"]: e for e in income}
-        return sorted(income_d.values(), key=lambda x: x["timestamp"])
+        return sorted(income_d.values(), key=lambda x: x["timestamp"])  # type: ignore[no-any-return]
 
     async def fetch_income(
         self,
-        symbol: str = None,
-        income_type: str = None,
+        symbol: str | None = None,
+        income_type: str | None = None,
         limit: int = 50,
-        start_time: int = None,
-        end_time: int = None,
-        page=None,
+        start_time: int | None = None,
+        end_time: int | None = None,
+        page: int | None = None,
     ):
-        params = {"limit": limit, "symbol": self.symbol if symbol is None else symbol}
+        params = {"limit": limit, "symbol": self.config.symbol if symbol is None else symbol}
         if start_time is not None:
             params["start_time"] = int(start_time / 1000)
         if end_time is not None:
@@ -407,7 +367,7 @@ class Bybit(Bot):
                         "symbol": e["symbol"],
                         "income_type": e["exec_type"].lower(),
                         "income": float(e["closed_pnl"]),
-                        "token": self.margin_coin,
+                        "token": self.rtc.margin_coin,
                         "timestamp": float(e["created_at"]) * 1000,
                         "info": {"page": fetched["result"]["current_page"]},
                         "transaction_id": float(e["id"]),
@@ -415,7 +375,7 @@ class Bybit(Bot):
                     }
                     for e in fetched["result"]["data"]
                 ),
-                key=lambda x: x["timestamp"],
+                key=lambda x: x["timestamp"],  # type: ignore[no-any-return]
             )
         except Exception as e:
             log.error("error fetching income: %s", e, exc_info=True)
@@ -423,13 +383,18 @@ class Bybit(Bot):
             return []
 
     async def fetch_fills(
-        self, limit: int = 200, from_id: int = None, start_time: int = None, end_time: int = None
-    ):
+        self,
+        symbol: str | None = None,
+        limit: int = 200,
+        from_id: int | None = None,
+        start_time: int | None = None,
+        end_time: int | None = None,
+    ) -> list[Fill]:
         return []
 
     #        ffills, fpnls = await asyncio.gather(
-    #            self.httpclient.get("fills", signed=True, params={"symbol": self.symbol, "limit": limit}),
-    #            self.httpclient.get("pnls", signed=True, params={"symbol": self.symbol, "limit": 50}),
+    #            self.httpclient.get("fills", signed=True, params={"symbol": self.config.symbol, "limit": limit}),
+    #            self.httpclient.get("pnls", signed=True, params={"symbol": self.config.symbol, "limit": 50}),
     #        )
     #        return ffills, fpnls
     #        try:
@@ -446,9 +411,9 @@ class Bybit(Bot):
     #                    "price": price,
     #                    "qty": qty,
     #                    "realized_pnl": 0.0,
-    #                    "cost": (cost := qty / price if self.inverse else qty * price),
+    #                    "cost": (cost := qty / price if self.rtc.inverse else qty * price),
     #                    "fee_paid": float(x["exec_fee"]),
-    #                    "fee_token": self.margin_coin,
+    #                    "fee_token": self.rtc.margin_coin,
     #                    "timestamp": int(x["trade_time_ms"]),
     #                    "position_side": determine_pos_side(x),
     #                    "is_maker": x["fee_rate"] < 0.0,
@@ -466,12 +431,13 @@ class Bybit(Bot):
     async def init_exchange_config(self):
         try:
             # set cross mode
-            if "inverse_futures" in self.market_type:
+            res: Any  # res can be of 'Any' type since we're only going to use it for logging
+            if "inverse_futures" in self.rtc.market_type:
                 res = await asyncio.gather(
                     self.httpclient.post(
                         "/futures/private/position/leverage/save",
                         params={
-                            "symbol": self.symbol,
+                            "symbol": self.config.symbol,
                             "position_idx": 1,
                             "buy_leverage": 0,
                             "sell_leverage": 0,
@@ -480,7 +446,7 @@ class Bybit(Bot):
                     self.httpclient.post(
                         "/futures/private/position/leverage/save",
                         params={
-                            "symbol": self.symbol,
+                            "symbol": self.config.symbol,
                             "position_idx": 2,
                             "buy_leverage": 0,
                             "sell_leverage": 0,
@@ -490,14 +456,14 @@ class Bybit(Bot):
                 log.info("res: %s", res)
                 res = await self.httpclient.post(
                     "/futures/private/position/switch-mode",
-                    params={"symbol": self.symbol, "mode": 3},
+                    params={"symbol": self.config.symbol, "mode": 3},
                 )
                 log.info("res: %s", res)
-            elif "linear_perpetual" in self.market_type:
+            elif "linear_perpetual" in self.rtc.market_type:
                 res = await self.httpclient.post(
                     "/private/linear/position/switch-isolated",
                     params={
-                        "symbol": self.symbol,
+                        "symbol": self.config.symbol,
                         "is_isolated": False,
                         "buy_leverage": 7,
                         "sell_leverage": 7,
@@ -506,45 +472,38 @@ class Bybit(Bot):
                 log.info("res: %s", res)
                 res = await self.httpclient.post(
                     "/private/linear/position/set-leverage",
-                    params={"symbol": self.symbol, "buy_leverage": 7, "sell_leverage": 7},
+                    params={"symbol": self.config.symbol, "buy_leverage": 7, "sell_leverage": 7},
                 )
                 log.info("res: %s", res)
-            elif "inverse_perpetual" in self.market_type:
+            elif "inverse_perpetual" in self.rtc.market_type:
                 res = await self.httpclient.post(
                     "/v2/private/position/leverage/save",
-                    params={"symbol": self.symbol, "leverage": 0},
+                    params={"symbol": self.config.symbol, "leverage": 0},
                 )
 
                 log.info("res: %s", res)
         except Exception as e:
             log.error("Error in init_exchange_config: %s", e, exc_info=True)
 
-    def standardize_market_stream_event(self, data: dict) -> [dict]:
+    def standardize_market_stream_event(self, data: dict[str, Any]) -> list[Tick]:
         ticks = []
         for e in data["data"]:
             try:
-                ticks.append(
-                    {
-                        "timestamp": int(e["trade_time_ms"]),
-                        "price": float(e["price"]),
-                        "qty": float(e["size"]),
-                        "is_buyer_maker": e["side"] == "Sell",
-                    }
-                )
-            except Exception as ex:
-                log.error("error in websocket tick %s: %s", e, ex)
+                ticks.append(Tick.from_bybit_payload(e))
+            except Exception as exc:
+                log.error("error in websocket tick %s: %s", e, exc, exc_info=True)
         return ticks
 
-    async def beat_heart_user_stream(self) -> None:
+    async def beat_heart_user_stream(self, ws) -> None:
         while True:
             await asyncio.sleep(27)
             try:
-                await self.ws.send(json.dumps({"op": "ping"}))
+                await ws.send(json.dumps({"op": "ping"}))
             except Exception as e:
                 log.error("error sending heartbeat: %s", e, exc_info=True)
 
     async def subscribe_to_market_stream(self, ws):
-        await ws.send(json.dumps({"op": "subscribe", "args": ["trade." + self.symbol]}))
+        await ws.send(json.dumps({"op": "subscribe", "args": ["trade." + self.config.symbol]}))
 
     async def subscribe_to_user_stream(self, ws):
         expires = int((time.time() + 1) * 1000)
@@ -564,31 +523,33 @@ class Bybit(Bot):
     async def transfer(self, type_: str, amount: float, asset: str = "USDT"):
         return {"code": "-1", "msg": "Transferring funds not supported for Bybit"}
 
-    def standardize_user_stream_event(self, event: list[dict] | dict) -> list[dict] | dict:
-        events = []
+    def standardize_user_stream_event(self, event: dict[str, Any]) -> dict[str, Any]:
+        standardized: dict[str, Any] = {}
         if "topic" in event:
             if event["topic"] == "order":
                 for elm in event["data"]:
-                    if elm["symbol"] == self.symbol:
+                    if elm["symbol"] == self.config.symbol:
                         if elm["order_status"] == "Created":
                             pass
                         elif elm["order_status"] == "Rejected":
                             pass
                         elif elm["order_status"] == "New":
+                            if self.rtc.inverse:
+                                timestamp = date_to_ts(elm["timestamp"])
+                            else:
+                                timestamp = date_to_ts(elm["update_time"])
                             new_open_order = {
                                 "order_id": elm["order_id"],
                                 "symbol": elm["symbol"],
                                 "price": float(elm["price"]),
                                 "qty": float(elm["qty"]),
                                 "type": elm["order_type"].lower(),
-                                "side": (side := elm["side"].lower()),  # noqa: F841
-                                "timestamp": date_to_ts(
-                                    elm["timestamp" if self.inverse else "update_time"]
-                                ),
+                                "side": elm["side"].lower(),
+                                "timestamp": timestamp,
                             }
-                            if "inverse_perpetual" in self.market_type:
-                                if self.position["long"]["size"] == 0.0:
-                                    if self.position["short"]["size"] == 0.0:
+                            if "inverse_perpetual" in self.rtc.market_type:
+                                if self.position.long.size == 0.0:
+                                    if self.position.short.size == 0.0:
                                         new_open_order["position_side"] = (
                                             "long" if new_open_order["side"] == "buy" else "short"
                                         )
@@ -596,7 +557,7 @@ class Bybit(Bot):
                                         new_open_order["position_side"] = "short"
                                 else:
                                     new_open_order["position_side"] = "long"
-                            elif "inverse_futures" in self.market_type:
+                            elif "inverse_futures" in self.rtc.market_type:
                                 new_open_order["position_side"] = determine_pos_side(elm)
                             else:
                                 new_open_order["position_side"] = (
@@ -613,44 +574,44 @@ class Bybit(Bot):
                                     )
                                     else "short"
                                 )
-                            events.append({"new_open_order": new_open_order})
+                            standardized["new_open_order"] = new_open_order
                         elif elm["order_status"] == "PartiallyFilled":
-                            events.append(
-                                {"deleted_order_id": elm["order_id"], "partially_filled": True}
-                            )
+                            standardized["deleted_order_id"] = standardized[
+                                "partially_filled"
+                            ] = elm["order_id"]
                         elif elm["order_status"] == "Filled":
-                            events.append({"deleted_order_id": elm["order_id"], "filled": True})
+                            standardized["deleted_order_id"] = elm["order_id"]
                         elif elm["order_status"] == "Cancelled":
-                            events.append({"deleted_order_id": elm["order_id"]})
+                            standardized["deleted_order_id"] = elm["order_id"]
                         elif elm["order_status"] == "PendingCancel":
                             pass
                     else:
-                        events.append({"other_symbol": elm["symbol"], "other_type": event["topic"]})
+                        standardized["other_symbol"] = elm["symbol"]
+                        standardized["other_type"] = event["topic"]
             elif event["topic"] == "execution":
                 for elm in event["data"]:
-                    if elm["symbol"] == self.symbol:
+                    if elm["symbol"] == self.config.symbol:
                         if elm["exec_type"] == "Trade":
                             # already handled by "order"
                             pass
                     else:
-                        events.append({"other_symbol": elm["symbol"], "other_type": event["topic"]})
+                        standardized["other_symbol"] = elm["symbol"]
+                        standardized["other_type"] = event["topic"]
             elif event["topic"] == "position":
                 for elm in event["data"]:
-                    if elm["symbol"] == self.symbol:
-                        standardized = {}
+                    if elm["symbol"] == self.config.symbol:
                         if elm["side"] == "Buy":
                             standardized["long_psize"] = float(elm["size"])
                             standardized["long_pprice"] = float(elm["entry_price"])
                         elif elm["side"] == "Sell":
                             standardized["short_psize"] = -abs(float(elm["size"]))
                             standardized["short_pprice"] = float(elm["entry_price"])
-
-                        events.append(standardized)
-                        if self.inverse:
-                            events.append({"wallet_balance": float(elm["wallet_balance"])})
+                        if self.rtc.inverse:
+                            standardized["wallet_balance"] = float(elm["wallet_balance"])
                     else:
-                        events.append({"other_symbol": elm["symbol"], "other_type": event["topic"]})
-            elif not self.inverse and event["topic"] == "wallet":
+                        standardized["other_symbol"] = elm["symbol"]
+                        standardized["other_type"] = event["topic"]
+            elif not self.rtc.inverse and event["topic"] == "wallet":
                 for elm in event["data"]:
-                    events.append({"wallet_balance": float(elm["wallet_balance"])})
-        return events
+                    standardized["wallet_balance"] = float(elm["wallet_balance"])
+        return standardized
