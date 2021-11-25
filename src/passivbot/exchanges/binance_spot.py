@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import time
 
@@ -37,11 +36,6 @@ class BinanceBotSpot(Bot):
         self.do_short = self.config["do_short"] = self.config["short"]["enabled"] = False
         self.force_update_interval = 40
 
-    async def post_listen_key(self):
-        async with self.httpclient.post("listen_key") as response:
-            result = await response.text()
-        return json.loads(result)
-
     def init_market_type(self):
         log.info("spot market")
         if "spot" not in self.market_type:
@@ -50,6 +44,7 @@ class BinanceBotSpot(Bot):
         self.spot = True
         self.hedge_mode = False
         self.pair = self.symbol
+        websocket_url = "wss://stream.binance.com/ws"
         self.httpclient = BinanceHTTPClient(
             "https://api.binance.com",
             self.key,
@@ -64,9 +59,9 @@ class BinanceBotSpot(Bot):
                 "cancel_order": "/api/v3/order",
                 "ticks": "/api/v3/aggTrades",
                 "ohlcvs": "/api/v3/klines",
-                "websocket": (ws := "wss://stream.binance.com/ws/"),
-                "websocket_market": ws + f"{self.symbol.lower()}@aggTrade",
-                "websocket_user": ws,
+                "websocket": websocket_url,
+                "websocket_market": f"{websocket_url}/{self.config.symbol.lower()}@aggTrade",
+                "websocket_user": websocket_url,
                 "listen_key": "/api/v3/userDataStream",
                 "transfer": "/sapi/v1/asset/transfer",
                 "account": "/api/v3/account",
@@ -473,9 +468,11 @@ class BinanceBotSpot(Bot):
 
     async def init_user_stream(self) -> None:
         try:
-            response = await self.post_listen_key()
+            response = await self.httpclient.post("listen_key", signed=False)
             self.listen_key = response["listenKey"]
-            self.endpoints["websocket_user"] = self.endpoints["websocket"] + self.listen_key
+            self.httpclient.endpoints[
+                "websocket_user"
+            ] = f"{self.httpclient.endpoints['websocket']}/{self.listen_key}"
         except Exception as e:
             log.error("error fetching listen key: %s", e, exc_info=True)
 

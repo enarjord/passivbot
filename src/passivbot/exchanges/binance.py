@@ -513,7 +513,7 @@ class BinanceBot(Bot):
 
     async def init_user_stream(self) -> None:
         try:
-            response = await self.httpclient.post("listen_key")
+            response = await self.httpclient.post("listen_key", signed=False)
             self.listen_key = response["listenKey"]
             self.httpclient.endpoints[
                 "websocket_user"

@@ -105,7 +105,7 @@ class HTTPClient:
             params = {}
         if signed:
             params = self.signed_params(params)
-        log.debug("HTTPRequest URL: %s; HEADERS: %s; PARAMS: %s;", url, headers, params)
+        log.debug("GET HTTPRequest URL: %s; HEADERS: %s; PARAMS: %s;", url, headers, params)
         async with self.session.get(url, params=params, headers=headers) as response:
             result = await response.text()
         payload: dict[str, Any] = json.loads(result)
@@ -119,11 +119,14 @@ class HTTPClient:
         endpoint: str,
         params: dict[str, Any] | None = None,
         headers: dict[str, Any] | None = None,
+        signed: bool = True,
     ) -> dict[str, Any]:
         url = self.url_for_endpoint(endpoint)
         if params is None:
             params = {}
-        params = self.signed_params(params)
+        if signed:
+            params = self.signed_params(params)
+        log.debug("POST HTTPRequest URL: %s; HEADERS: %s; PARAMS: %s;", url, headers, params)
         async with self.session.post(
             self.url_for_endpoint(endpoint), params=params, headers=headers
         ) as response:
@@ -144,6 +147,7 @@ class HTTPClient:
         if params is None:
             params = {}
         params = self.signed_params(params)
+        log.debug("PUT HTTPRequest URL: %s; HEADERS: %s; PARAMS: %s;", url, headers, params)
         async with self.session.put(
             self.url_for_endpoint(endpoint), params=params, headers=headers
         ) as response:
@@ -164,6 +168,7 @@ class HTTPClient:
         if params is None:
             params = {}
         params = self.signed_params(params)
+        log.debug("DELETE HTTPRequest URL: %s; HEADERS: %s; PARAMS: %s;", url, headers, params)
         async with self.session.delete(
             self.url_for_endpoint(endpoint), params=params, headers=headers
         ) as response:
@@ -200,18 +205,19 @@ class BinanceHTTPClient(HTTPClient):
             if headers is None:
                 headers = {}
             headers["X-MBX-APIKEY"] = self.api_key
-        return await super().get(endpoint, signed, params, headers)
+        return await super().get(endpoint, signed=signed, params=params, headers=headers)
 
     async def post(
         self,
         endpoint: str,
         params: dict[str, Any] | None = None,
         headers: dict[str, Any] | None = None,
+        signed: bool = True,
     ) -> dict[str, Any]:
         if headers is None:
             headers = {}
         headers["X-MBX-APIKEY"] = self.api_key
-        return await super().post(endpoint, params, headers)
+        return await super().post(endpoint, params=params, headers=headers, signed=signed)
 
     async def put(
         self,
@@ -222,7 +228,7 @@ class BinanceHTTPClient(HTTPClient):
         if headers is None:
             headers = {}
         headers["X-MBX-APIKEY"] = self.api_key
-        return await super().put(endpoint, params, headers)
+        return await super().put(endpoint, params=params, headers=headers)
 
     async def delete(
         self,
@@ -233,7 +239,7 @@ class BinanceHTTPClient(HTTPClient):
         if headers is None:
             headers = {}
         headers["X-MBX-APIKEY"] = self.api_key
-        return await super().delete(endpoint, params, headers)
+        return await super().delete(endpoint, params=params, headers=headers)
 
     def _get_error_from_payload(
         self,
