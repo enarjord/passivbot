@@ -214,9 +214,9 @@ class BinanceBotSpot(Bot):
                 params={"symbol": self.config.symbol, "orderId": order.order_id},
             )
             cancellation["symbol"] = order.symbol
-            Order.from_binance_payload(cancellation, futures=False)
-        except Exception as e:
-            log.info(f"error cancelling order {order}: {e}", exc_info=True)
+            return Order.from_binance_payload(cancellation, futures=False)
+        except Exception as exc:
+            log.info("error cancelling order %r: %s", order, exc, exc_info=True)
             print_async_exception(cancellation)
             self.ts_released["force_update"] = 0.0
         return None

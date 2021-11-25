@@ -260,8 +260,8 @@ class Bot:
             for oc in orders_to_cancel:
                 try:
                     deletions.append((oc, asyncio.create_task(self.execute_cancellation(oc))))
-                except Exception as e:
-                    log.error("error cancelling order a:: %r, error: %s", oc, e)
+                except Exception as exc:
+                    log.error("error cancelling order a:: %r, error: %s", oc, exc, exc_info=True)
             cancelled_orders: list[Order] = []
             for oc, c in deletions:
                 try:
