@@ -94,7 +94,7 @@ class Fill(BaseModel):
 
     @classmethod
     def from_bybit_payload(cls, payload: Dict[str, Any]) -> Fill:
-        raise NotADirectoryError
+        raise NotImplementedError
 
 
 class Tick(BaseModel):
@@ -145,7 +145,7 @@ class Tick(BaseModel):
 
 
 class Order(BaseModel):
-    order_id: Optional[int]
+    order_id: Optional[Union[int, str]]
     custom_id: Optional[str]
     symbol: str
     price: float
@@ -231,10 +231,15 @@ class Order(BaseModel):
                 else:
                     return "both"
 
-        renames = (("order_link_id", "custom_id"),)
+        if payload.get("order_link_id"):
+            payload["position_side"] = determine_pos_side(payload)
+
+        renames = (
+            ("order_link_id", "custom_id"),
+            ("order_type", "type"),
+        )
         for payload_key, target_key in renames:
             payload[target_key] = payload.pop(payload_key)
-        payload["position_side"] = determine_pos_side(payload)
         payload["timestamp"] = date_to_ts(payload[created_at_key])
         for key in ("side",):
             payload[key] = payload[key].lower()
@@ -266,7 +271,7 @@ class Order(BaseModel):
             payload["price"] = str(self.price)
         else:
             payload["time_in_force"] = "GoodTillCancel"
-        if self.custom_id is None:
+        if self.custom_id:
             payload[
                 "order_link_id"
             ] = f"{self.custom_id}_{str(int(time.time() * 1000))[8:]}_{int(np.random.random() * 1000)}"

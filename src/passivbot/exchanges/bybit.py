@@ -160,7 +160,10 @@ class Bybit(Bot):
         fetched = await self.httpclient.get(
             "open_orders", signed=True, params={"symbol": self.config.symbol}
         )
-        return [Order.from_bybit_payload(elm) for elm in fetched["result"]]
+        return [
+            Order.from_bybit_payload(elm, created_at_key=self.created_at_key)
+            for elm in fetched["result"]
+        ]
 
     async def fetch_position(self) -> Position:
         position: dict[str, Any] = {}
@@ -215,7 +218,7 @@ class Bybit(Bot):
             )
             o = await self.httpclient.post("create_order", params=params)
             if o["result"]:
-                return Order.from_bybit_payload(o["result"])
+                return Order.from_bybit_payload(o["result"], created_at_key=self.created_at_key)
             return None
         except Exception as e:
             log.error(f"error executing order {order} {e}", exc_info=True)
