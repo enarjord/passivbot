@@ -112,6 +112,7 @@ class HTTPClient:
         error = self._get_error_from_payload(url, payload)
         if error:
             raise error
+        log.debug("GET HTTPRequest URL: %s; Response: %s;", url, payload)
         return payload
 
     async def post(
@@ -135,6 +136,7 @@ class HTTPClient:
         error = self._get_error_from_payload(url, payload)
         if error:
             raise error
+        log.debug("POST HTTPRequest URL: %s; Response: %s;", url, payload)
         return payload
 
     async def put(
@@ -156,6 +158,7 @@ class HTTPClient:
         error = self._get_error_from_payload(url, payload)
         if error:
             raise error
+        log.debug("PUT HTTPRequest URL: %s; Response: %s;", url, payload)
         return payload
 
     async def delete(
@@ -177,6 +180,7 @@ class HTTPClient:
         error = self._get_error_from_payload(url, payload)
         if error:
             raise error
+        log.debug("DELETE HTTPRequest URL: %s; Response: %s;", url, payload)
         return payload
 
     def ws_connect(self, endpoint):
@@ -256,4 +260,6 @@ class ByBitHTTPClient(HTTPClient):
         return super().signed_params(params)
 
     def _get_error_from_payload(self, url: str, payload: dict[str, Any]) -> HTTPRequestError | None:
+        if "ret_code" in payload and payload["ret_code"] > 0:
+            return HTTPRequestError(url, code=payload["ret_code"], msg=payload["ret_msg"])
         return None

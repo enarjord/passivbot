@@ -19,6 +19,7 @@ from passivbot.datastructures.runtime import RuntimeFuturesConfig
 from passivbot.utils.funcs.pure import date_to_ts
 from passivbot.utils.funcs.pure import ts_to_date
 from passivbot.utils.httpclient import ByBitHTTPClient
+from passivbot.utils.httpclient import HTTPRequestError
 from passivbot.utils.procedures import print_async_exception
 
 log = logging.getLogger(__name__)
@@ -436,10 +437,9 @@ class Bybit(Bot):
     async def init_exchange_config(self):
         try:
             # set cross mode
-            res: Any  # res can be of 'Any' type since we're only going to use it for logging
             if "inverse_futures" in self.rtc.market_type:
-                res = await asyncio.gather(
-                    self.httpclient.post(
+                try:
+                    await self.httpclient.post(
                         "/futures/private/position/leverage/save",
                         params={
                             "symbol": self.config.symbol,
@@ -447,8 +447,13 @@ class Bybit(Bot):
                             "buy_leverage": 0,
                             "sell_leverage": 0,
                         },
-                    ),
-                    self.httpclient.post(
+                    )
+                except HTTPRequestError as exc:
+                    if exc.code != 130056:
+                        raise
+                    log.info(exc.msg)
+                try:
+                    await self.httpclient.post(
                         "/futures/private/position/leverage/save",
                         params={
                             "symbol": self.config.symbol,
@@ -456,37 +461,59 @@ class Bybit(Bot):
                             "buy_leverage": 0,
                             "sell_leverage": 0,
                         },
-                    ),
-                )
-                log.info("res: %s", res)
-                res = await self.httpclient.post(
-                    "/futures/private/position/switch-mode",
-                    params={"symbol": self.config.symbol, "mode": 3},
-                )
-                log.info("res: %s", res)
+                    )
+                except HTTPRequestError as exc:
+                    if exc.code != 130056:
+                        raise
+                    log.info(exc.msg)
+                try:
+                    await self.httpclient.post(
+                        "/futures/private/position/switch-mode",
+                        params={"symbol": self.config.symbol, "mode": 3},
+                    )
+                except HTTPRequestError as exc:
+                    if exc.code != 130056:
+                        raise
+                    log.info(exc.msg)
             elif "linear_perpetual" in self.rtc.market_type:
-                res = await self.httpclient.post(
-                    "/private/linear/position/switch-isolated",
-                    params={
-                        "symbol": self.config.symbol,
-                        "is_isolated": False,
-                        "buy_leverage": 7,
-                        "sell_leverage": 7,
-                    },
-                )
-                log.info("res: %s", res)
-                res = await self.httpclient.post(
-                    "/private/linear/position/set-leverage",
-                    params={"symbol": self.config.symbol, "buy_leverage": 7, "sell_leverage": 7},
-                )
-                log.info("res: %s", res)
+                try:
+                    await self.httpclient.post(
+                        "/private/linear/position/switch-isolated",
+                        params={
+                            "symbol": self.config.symbol,
+                            "is_isolated": False,
+                            "buy_leverage": 7,
+                            "sell_leverage": 7,
+                        },
+                    )
+                except HTTPRequestError as exc:
+                    if exc.code != 130056:
+                        raise
+                    log.info(exc.msg)
+                try:
+                    await self.httpclient.post(
+                        "/private/linear/position/set-leverage",
+                        params={
+                            "symbol": self.config.symbol,
+                            "buy_leverage": 7,
+                            "sell_leverage": 7,
+                        },
+                    )
+                except HTTPRequestError as exc:
+                    if exc.code != 34036:
+                        raise
+                    log.info(exc.msg)
             elif "inverse_perpetual" in self.rtc.market_type:
-                res = await self.httpclient.post(
-                    "/v2/private/position/leverage/save",
-                    params={"symbol": self.config.symbol, "leverage": 0},
-                )
+                try:
+                    await self.httpclient.post(
+                        "/v2/private/position/leverage/save",
+                        params={"symbol": self.config.symbol, "leverage": 0},
+                    )
+                except HTTPRequestError as exc:
+                    if exc.code != 130056:
+                        raise
+                    log.info(exc.msg)
 
-                log.info("res: %s", res)
         except Exception as e:
             log.error("Error in init_exchange_config: %s", e, exc_info=True)
 
