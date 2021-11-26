@@ -64,6 +64,13 @@ class Bybit(Bot):
             market_type=config.market_type, short=config.short, long=config.long
         )
 
+    @staticmethod
+    async def get_exchange_info() -> dict[str, Any]:
+        response: dict[str, Any] = await ByBitHTTPClient.onetime_get(
+            "https://api.bybit.com/v2/public/symbols"
+        )
+        return response
+
     def init_market_type(self):
         if self.config.symbol.name.endswith("USDT"):
             log.info("linear perpetual")
@@ -139,19 +146,23 @@ class Bybit(Bot):
         )
 
     async def _init(self):
-        info = await ByBitHTTPClient.onetime_get("https://api.bybit.com/v2/public/symbols")
-        for e in info["result"]:
-            if e["name"] == self.config.symbol.name:
+        exchange_info = await self.get_exchange_info()
+        results: list[dict[str, Any]] = exchange_info["result"]
+        symbol_data: dict[str, Any] | None = None
+        for symbol_data in results:
+            if symbol_data["name"] == self.config.symbol.name:
                 break
         else:
             raise Exception(f"symbol missing {self.config.symbol.name}")
 
-        self.rtc.max_leverage = e["leverage_filter"]["max_leverage"]
-        self.rtc.coin = e["base_currency"]
-        self.rtc.quote = e["quote_currency"]
-        self.rtc.price_step = float(e["price_filter"]["tick_size"])
-        self.rtc.qty_step = float(e["lot_size_filter"]["qty_step"])
-        self.rtc.min_qty = float(e["lot_size_filter"]["min_trading_qty"])
+        assert symbol_data
+
+        self.rtc.max_leverage = symbol_data["leverage_filter"]["max_leverage"]
+        self.rtc.coin = symbol_data["base_currency"]
+        self.rtc.quote = symbol_data["quote_currency"]
+        self.rtc.price_step = float(symbol_data["price_filter"]["tick_size"])
+        self.rtc.qty_step = float(symbol_data["lot_size_filter"]["qty_step"])
+        self.rtc.min_qty = float(symbol_data["lot_size_filter"]["min_trading_qty"])
         self.rtc.min_cost = 0.0
         self.init_market_type()
         if self.rtc.inverse:

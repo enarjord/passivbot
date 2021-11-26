@@ -37,6 +37,19 @@ class BinanceBot(Bot):
             market_type=config.market_type, short=config.short, long=config.long
         )
 
+    @staticmethod
+    async def get_exchange_info(inverse: bool = False) -> dict[str, Any]:
+        response: dict[str, Any]
+        if inverse is False:
+            response = await BinanceHTTPClient.onetime_get(
+                "https://fapi.binance.com/fapi/v1/exchangeInfo"
+            )
+        else:
+            response = await BinanceHTTPClient.onetime_get(
+                "https://dapi.binance.com/dapi/v1/exchangeInfo"
+            )
+        return response
+
     async def init_market_type(self):
         fapi_endpoint = "https://fapi.binance.com"
         dapi_endpoint = "https://dapi.binance.com"

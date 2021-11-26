@@ -49,6 +49,13 @@ class BinanceBotSpot(Bot):
     def get_initial_runtime_config(config: NamedConfig) -> RuntimeSpotConfig:
         return RuntimeSpotConfig(market_type=config.market_type, long=config.long)
 
+    @staticmethod
+    async def get_exchange_info() -> dict[str, Any]:
+        response: dict[str, Any] = await BinanceHTTPClient.onetime_get(
+            "https://api.binance.com/api/v3/exchangeInfo"
+        )
+        return response
+
     def init_market_type(self):
         log.info("spot market")
         if "spot" not in self.rtc.market_type:
