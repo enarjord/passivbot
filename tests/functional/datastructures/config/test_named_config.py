@@ -93,3 +93,18 @@ def test_int_rounding(
 
     nc = NamedConfig.parse_obj(named_config_dict)
     assert nc.dict() == complete_named_config_dict
+
+
+def test_pre_v6_config_migration(named_config_dict, complete_named_config_dict):
+    replacements = (
+        ("secondary_pprice_diff", "secondary_grid_spacing"),
+        ("secondary_allocation", "secondary_pbr_allocation"),
+        ("wallet_exposure_limit", "pbr_limit"),
+    )
+    for position in ("short", "long"):
+        for orig, replacement in replacements:
+            named_config_dict[position][replacement] = named_config_dict[position].pop(orig)
+    named_config_dict["shrt"] = named_config_dict.pop("short")
+
+    nc = NamedConfig.parse_obj(named_config_dict)
+    assert nc.dict() == complete_named_config_dict

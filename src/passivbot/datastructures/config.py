@@ -5,6 +5,7 @@ from typing import Optional
 
 from pydantic import BaseModel
 from pydantic import Field
+from pydantic import root_validator
 from pydantic import validator
 
 from passivbot.datastructures import StopMode
@@ -40,6 +41,19 @@ class LongConfig(PassivbotBaseModel):
     def _cast_n_close_orders(cls, value) -> int:
         return int(round(float(value)))
 
+    @root_validator(pre=True)
+    @classmethod
+    def _migrate_pre_v6_configs(cls, fields):
+        replacements = (
+            ("secondary_pprice_diff", "secondary_grid_spacing"),
+            ("secondary_allocation", "secondary_pbr_allocation"),
+            ("wallet_exposure_limit", "pbr_limit"),
+        )
+        for target, previous in replacements:
+            if previous in fields:
+                fields[target] = fields.pop(previous)
+        return fields
+
 
 class ShortConfig(PassivbotBaseModel):
     enabled: bool
@@ -65,6 +79,19 @@ class ShortConfig(PassivbotBaseModel):
     def _cast_n_close_orders(cls, value) -> int:
         return int(round(float(value)))
 
+    @root_validator(pre=True)
+    @classmethod
+    def _migrate_pre_v6_configs(cls, fields):
+        replacements = (
+            ("secondary_pprice_diff", "secondary_grid_spacing"),
+            ("secondary_allocation", "secondary_pbr_allocation"),
+            ("wallet_exposure_limit", "pbr_limit"),
+        )
+        for target, previous in replacements:
+            if previous in fields:
+                fields[target] = fields.pop(previous)
+        return fields
+
 
 class NamedConfig(PassivbotBaseModel):
     exchange: str
@@ -80,3 +107,10 @@ class NamedConfig(PassivbotBaseModel):
     stop_mode: StopMode = StopMode.NORMAL
     long: LongConfig
     short: ShortConfig
+
+    @root_validator(pre=True)
+    @classmethod
+    def _migrate_pre_v6_configs(cls, fields):
+        if "shrt" in fields:
+            fields["short"] = fields.pop("shrt")
+        return fields
