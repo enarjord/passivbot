@@ -41,6 +41,7 @@ class Bot:
     def __init__(self, config: NamedConfig):
         self.spot = False
         self.config = config
+        self._stop_mode_log_message_iterations = 0
         self.__bot_init__()
         self.rtc.long = self.config.long
         if isinstance(self.rtc, RuntimeFuturesConfig):
@@ -503,8 +504,12 @@ class Bot:
                     self.ob[1] = tick.price
             self.rtc.price = ticks[-1].price
 
-        if self.config.stop_mode is not None and self.config.stop_mode != StopMode.NORMAL:
-            log.info("%s stop mode is active", self.config.stop_mode)
+        if self.config.stop_mode and self.config.stop_mode != StopMode.NORMAL:
+            if not self._stop_mode_log_message_iterations:
+                log.info("%s stop mode is active", self.config.stop_mode)
+                self._stop_mode_log_message_iterations = 100
+            else:
+                self._stop_mode_log_message_iterations -= 1
 
         now = time.time()
         if now - self.ts_released["force_update"] > self.force_update_interval:
