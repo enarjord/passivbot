@@ -7,11 +7,14 @@ import logging
 import os
 import time
 from datetime import datetime
+from typing import Any
+from typing import TYPE_CHECKING
 
 import hjson
 import numpy as np
 import pandas as pd
 
+from passivbot.datastructures.config import NamedConfig
 from passivbot.utils.funcs.njit import calc_samples
 from passivbot.utils.funcs.pure import candidate_to_live_config
 from passivbot.utils.funcs.pure import config_pretty_str
@@ -21,10 +24,15 @@ from passivbot.utils.funcs.pure import get_template_live_config
 from passivbot.utils.funcs.pure import numpyize
 from passivbot.utils.funcs.pure import ts_to_date
 
+if TYPE_CHECKING:
+    from passivbot.exchanges.bybit import Bybit
+    from passivbot.exchanges.binance import BinanceBot
+    from passivbot.exchanges.binance_spot import BinanceBotSpot
+
 log = logging.getLogger(__name__)
 
 
-def load_live_config(live_config_path: str) -> dict:
+def load_live_config(live_config_path: str) -> dict[str, Any]:
     try:
         live_config = json.load(open(live_config_path))
         for orig, rpl in [
@@ -40,14 +48,16 @@ def load_live_config(live_config_path: str) -> dict:
         raise Exception(f"failed to load live config {live_config_path} {e}")
 
 
-def dump_live_config(config: dict, path: str):
+def dump_live_config(config: dict[str, Any], path: str):
     pretty_str = config_pretty_str(candidate_to_live_config(config))
     with open(path, "w") as f:
         f.write(pretty_str)
 
 
-def load_config_files(config_paths: []) -> dict:
+def load_config_files(config_paths: list[str] | None = None) -> dict[str, Any] | None:
     config = {}
+    if config_paths is None:
+        return config
     for config_path in config_paths:
         try:
             loaded_config = hjson.load(open(config_path, encoding="utf-8"))
@@ -147,7 +157,7 @@ def make_get_filepath(filepath: str) -> str:
     return filepath
 
 
-def load_exchange_key_secret(user: str) -> (str, str, str):
+def load_exchange_key_secret(user: str) -> tuple[str, str, str]:
     try:
         keyfile = json.load(open("api-keys.json"))
         if user in keyfile:
@@ -209,7 +219,7 @@ async def fetch_market_specific_settings(config: dict):
     return settings_from_exchange
 
 
-async def create_binance_bot(config: dict):
+async def create_binance_bot(config: NamedConfig) -> "BinanceBot":
     # Deferred import due to circular import issues
     from passivbot.exchanges.binance import BinanceBot
 
@@ -218,7 +228,7 @@ async def create_binance_bot(config: dict):
     return bot
 
 
-async def create_binance_bot_spot(config: dict):
+async def create_binance_bot_spot(config: NamedConfig) -> "BinanceBotSpot":
     # Deferred import due to circular import issues
     from passivbot.exchanges.binance_spot import BinanceBotSpot
 
@@ -227,7 +237,7 @@ async def create_binance_bot_spot(config: dict):
     return bot
 
 
-async def create_bybit_bot(config: dict):
+async def create_bybit_bot(config: NamedConfig) -> "Bybit":
     # Deferred import due to circular import issues
     from passivbot.exchanges.bybit import Bybit
 
@@ -389,7 +399,9 @@ def local_time() -> float:
     return datetime.now().astimezone().timestamp() * 1000
 
 
-def print_async_exception(coro):
+def log_async_exception(coro):
+    if coro is None:
+        return
     exception = result = None
     with contextlib.suppress(Exception):
         exception = coro.exception()

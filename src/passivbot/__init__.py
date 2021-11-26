@@ -26,10 +26,19 @@ if os.environ.get("NOJIT", "false") in ("true", "1"):
         else:
             return wrap
 
+    def numba_jitclass(cls_or_spec=None, spec=None):
+        def wrap(cls):
+            return cls
+
+        if cls_or_spec is not None:
+            return wrap(cls_or_spec)
+        return wrap
+
 
 else:
     log.info("numba.njit compilation is enabled")
     from numba import njit as numba_njit  # type: ignore[no-redef]
+    from numba.experimental import jitclass as numba_jitclass  # type: ignore[no-redef]
 
 try:
     from .version import __version__

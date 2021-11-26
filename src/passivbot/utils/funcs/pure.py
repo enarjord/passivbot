@@ -9,6 +9,8 @@ import numpy as np
 import pandas as pd
 from dateutil import parser
 
+from passivbot.datastructures import Fill
+from passivbot.datastructures import Order
 from passivbot.utils.funcs.njit import qty_to_cost
 from passivbot.utils.funcs.njit import round_dynamic
 
@@ -38,56 +40,6 @@ def calc_spans(min_span: int, max_span: int, n_spans: int) -> np.ndarray:
         [min_span * ((max_span / min_span) ** (1 / (n_spans - 1))) ** i for i in range(0, n_spans)]
     )
     return np.array([min_span, (min_span * max_span) ** 0.5, max_span])
-
-
-def get_xk_keys():
-    return [
-        "spot",
-        "hedge_mode",
-        "inverse",
-        "do_long",
-        "do_short",
-        "qty_step",
-        "price_step",
-        "min_qty",
-        "min_cost",
-        "c_mult",
-        "grid_span",
-        "wallet_exposure_limit",
-        "max_n_entry_orders",
-        "initial_qty_pct",
-        "eprice_pprice_diff",
-        "secondary_allocation",
-        "secondary_pprice_diff",
-        "eprice_exp_base",
-        "min_markup",
-        "markup_range",
-        "n_close_orders",
-    ]
-
-
-def create_xk(config: dict[str, Any]) -> dict[str, Any]:
-    xk = {}
-    config_ = config.copy()
-    if "spot" in config_["market_type"]:
-        config_ = spotify_config(config_)
-    else:
-        config_["spot"] = False
-        config_["do_long"] = config["long"]["enabled"]
-        config_["do_short"] = config["short"]["enabled"]
-    keys = get_xk_keys()
-    config_["long"]["n_close_orders"] = int(round(config_["long"]["n_close_orders"]))
-    config_["short"]["n_close_orders"] = int(round(config_["short"]["n_close_orders"]))
-    config_["long"]["max_n_entry_orders"] = int(round(config_["long"]["max_n_entry_orders"]))
-    config_["short"]["max_n_entry_orders"] = int(round(config_["short"]["max_n_entry_orders"]))
-    for k in keys:
-        if k in config_["long"]:
-            xk[k] = (config_["long"][k], config_["short"][k])
-        elif k in config_:
-            xk[k] = config_[k]
-        else:
-            raise Exception("failed to create xk", k)
-    return xk
 
 
 def numpyize(x):
@@ -145,10 +97,14 @@ def denanify(x, nan=0.0, posinf=0.0, neginf=0.0):
             return x
 
 
-def ts_to_date(timestamp: float) -> str:
+def ts_to_date(timestamp: float, cast_to_str: bool = True) -> str | datetime.datetime:
     if timestamp > 253402297199:
-        return str(datetime.datetime.fromtimestamp(timestamp / 1000)).replace(" ", "T")
-    return str(datetime.datetime.fromtimestamp(timestamp)).replace(" ", "T")
+        value = datetime.datetime.fromtimestamp(timestamp / 1000)
+    else:
+        value = datetime.datetime.fromtimestamp(timestamp)
+    if cast_to_str:
+        return str(value).replace(" ", "T")
+    return value
 
 
 def date_to_ts(d):
@@ -265,7 +221,7 @@ def pack_config(d):
 
 
 def flatten_dict(d: dict[str, Any], parent_key="", sep="_") -> dict[str, Any]:
-    items = []
+    items: list[tuple[str, Any]] = []
     for k, v in d.items():
         new_key = parent_key + sep + k if parent_key else k
         if isinstance(v, dict):
@@ -284,10 +240,10 @@ def sort_dict_keys(d: Any) -> Any:
 
 
 def filter_orders(
-    actual_orders: list[dict[Any, Any]],
-    ideal_orders: list[dict[Any, Any]],
-    keys: tuple[str, ...] = ("symbol", "side", "qty", "price"),
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    actual_orders: list[Order],
+    ideal_orders: list[Order],
+    keys: tuple[str, ...] | list[str] = ("symbol", "side", "qty", "price"),
+) -> tuple[list[Order], list[Order]]:
     # returns (orders_to_delete, orders_to_create)
 
     if not actual_orders:
@@ -296,8 +252,8 @@ def filter_orders(
         return actual_orders, []
     actual_orders = actual_orders.copy()
     orders_to_create = []
-    ideal_orders_cropped = [{k: o[k] for k in keys} for o in ideal_orders]
-    actual_orders_cropped = [{k: o[k] for k in keys} for o in actual_orders]
+    ideal_orders_cropped = [{k: getattr(o, k) for k in keys} for o in ideal_orders]
+    actual_orders_cropped = [{k: getattr(o, k) for k in keys} for o in actual_orders]
     for ioc, io in zip(ideal_orders_cropped, ideal_orders):
         matches = [(aoc, ao) for aoc, ao in zip(actual_orders_cropped, actual_orders) if aoc == ioc]
         if matches:
@@ -310,7 +266,6 @@ def filter_orders(
 
 def get_dummy_settings(config: dict[str, Any]) -> dict[str, Any]:
     dummy_settings = get_template_live_config()
-    dummy_settings.update({k: 1.0 for k in get_xk_keys()})
     dummy_settings.update(
         {
             "user": config["user"],
@@ -363,7 +318,12 @@ def get_template_live_config():
 
 
 def analyze_fills(
-    fills: list[Any], stats: list[Any], config: dict[str, Any]
+    fills: list[Fill],
+    stats: list[Any],
+    inverse: bool,
+    c_mult: float,
+    exchange: str | None = None,
+    symbol: str | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, Any]]:
     sdf = pd.DataFrame(
         stats,
@@ -397,19 +357,17 @@ def analyze_fills(
         ],
     )
     fdf.loc[:, "wallet_exposure"] = [
-        qty_to_cost(x.psize, x.pprice, config["inverse"], config["c_mult"]) / x.balance
-        if x.balance > 0.0
-        else 0.0
+        qty_to_cost(x.psize, x.pprice, inverse, c_mult) / x.balance if x.balance > 0.0 else 0.0
         for x in fdf.itertuples()
     ]
     sdf.loc[:, "long_wallet_exposure"] = [
-        qty_to_cost(x.long_psize, x.long_pprice, config["inverse"], config["c_mult"]) / x.balance
+        qty_to_cost(x.long_psize, x.long_pprice, inverse, c_mult) / x.balance
         if x.balance > 0.0
         else 0.0
         for x in sdf.itertuples()
     ]
     sdf.loc[:, "short_wallet_exposure"] = [
-        qty_to_cost(x.short_psize, x.short_pprice, config["inverse"], config["c_mult"]) / x.balance
+        qty_to_cost(x.short_psize, x.short_pprice, inverse, c_mult) / x.balance
         if x.balance > 0.0
         else 0.0
         for x in sdf.itertuples()
@@ -428,8 +386,8 @@ def analyze_fills(
     lpprices = sdf[sdf.long_pprice != 0.0]
     pa_distance_long = (lpprices.long_pprice - lpprices.price).abs() / lpprices.price
     analysis = {
-        "exchange": config["exchange"] if "exchange" in config else "unknown",
-        "symbol": config["symbol"] if "symbol" in config else "unknown",
+        "exchange": exchange or "unknown",
+        "symbol": symbol or "unknown",
         "starting_balance": sdf.balance.iloc[0],
         "pa_distance_mean_long": pa_distance_long.mean(),
         "pa_distance_median_long": pa_distance_long.median(),
@@ -464,18 +422,20 @@ def analyze_fills(
     return fdf, sdf, sort_dict_keys(analysis)
 
 
-def calc_pprice_from_fills(coin_balance, fills, n_fills_limit=100):
+def calc_pprice_from_fills(coin_balance, fills: list[Fill], n_fills_limit=100):
     # assumes fills are sorted old to new
     if coin_balance == 0.0 or len(fills) == 0:
         return 0.0
     relevant_fills = []
     qty_sum = 0.0
     for fill in fills[::-1][:n_fills_limit]:
-        abs_qty = fill["qty"]
-        if fill["side"] == "buy":
+        abs_qty = fill.qty
+        if fill.side == "buy":
             adjusted_qty = min(abs_qty, coin_balance - qty_sum)
             qty_sum += adjusted_qty
-            relevant_fills.append({**fill, **{"qty": adjusted_qty}})
+            rfill = fill.copy()
+            rfill.qty = adjusted_qty
+            relevant_fills.append(rfill)
             if qty_sum >= coin_balance * 0.999:
                 break
         else:
@@ -483,10 +443,10 @@ def calc_pprice_from_fills(coin_balance, fills, n_fills_limit=100):
             relevant_fills.append(fill)
     psize, pprice = 0.0, 0.0
     for fill in relevant_fills[::-1]:
-        abs_qty = abs(fill["qty"])
-        if fill["side"] == "buy":
+        abs_qty = abs(fill.qty)
+        if fill.side == "buy":
             new_psize = psize + abs_qty
-            pprice = pprice * (psize / new_psize) + fill["price"] * (abs_qty / new_psize)
+            pprice = pprice * (psize / new_psize) + fill.price * (abs_qty / new_psize)
             psize = new_psize
         else:
             psize -= abs_qty
@@ -494,8 +454,8 @@ def calc_pprice_from_fills(coin_balance, fills, n_fills_limit=100):
 
 
 def get_position_fills(
-    long_psize: float, short_psize: float, fills: list[dict[str, Any]]
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    long_psize: float, short_psize: float, fills: list[Fill]
+) -> tuple[list[Fill], list[Fill]]:
     """
     assumes fills are sorted old to new
     returns fills since and including initial entry
@@ -509,29 +469,29 @@ def get_position_fills(
         return [], []
     long_pfills, short_pfills = [], []
     for x in fills[::-1]:
-        if x["position_side"] == "long":
+        if x.position_side == "long":
             if not long_done:
-                long_qty_sum += x["qty"] * (1.0 if x["side"] == "buy" else -1.0)
+                long_qty_sum += x.qty * (1.0 if x.side == "buy" else -1.0)
                 long_pfills.append(x)
                 long_done = long_qty_sum >= long_psize
-        elif x["position_side"] == "short":
+        elif x.position_side == "short":
             if not short_done:
-                short_qty_sum += x["qty"] * (1.0 if x["side"] == "sell" else -1.0)
+                short_qty_sum += x.qty * (1.0 if x.side == "sell" else -1.0)
                 short_pfills.append(x)
                 short_done = short_qty_sum >= short_psize
     return long_pfills[::-1], short_pfills[::-1]
 
 
-def calc_long_pprice(long_psize, long_pfills):
+def calc_long_pprice(long_psize, long_pfills: list[Fill]) -> float:
     """
     assumes long pfills are sorted old to new
     """
     psize, pprice = 0.0, 0.0
     for fill in long_pfills:
-        abs_qty = abs(fill["qty"])
-        if fill["side"] == "buy":
+        abs_qty = abs(fill.qty)
+        if fill.side == "buy":
             new_psize = psize + abs_qty
-            pprice = pprice * (psize / new_psize) + fill["price"] * (abs_qty / new_psize)
+            pprice = pprice * (psize / new_psize) + fill.price * (abs_qty / new_psize)
             psize = new_psize
         else:
             psize = max(0.0, psize - abs_qty)

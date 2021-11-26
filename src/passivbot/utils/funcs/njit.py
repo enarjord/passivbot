@@ -437,7 +437,7 @@ def find_qty_bringing_wallet_exposure_to_target(
     wallet_exposure = qty_to_cost(psize, pprice, inverse, c_mult) / balance
     if wallet_exposure >= wallet_exposure_limit * 0.98:
         return 0.0
-    guess = round_(
+    guess: float = round_(
         cost_to_qty(
             balance * (wallet_exposure_limit - wallet_exposure), entry_price, inverse, c_mult
         ),
