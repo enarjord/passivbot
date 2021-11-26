@@ -51,12 +51,12 @@ class BinanceBotSpot(Bot):
         self.rtc.inverse = False
         self.spot = True
         self.rtc.hedge_mode = False
-        self.rtc.pair = self.config.symbol
+        self.rtc.pair = self.config.symbol.name
         websocket_url = "wss://stream.binance.com/ws"
         self.httpclient = BinanceHTTPClient(
             "https://api.binance.com",
-            self.key,
-            self.secret,
+            self.config.api_key.key,
+            self.config.api_key.secret,
             endpoints={
                 "balance": "/api/v3/account",
                 "exchange_info": "/api/v3/exchangeInfo",
@@ -68,7 +68,7 @@ class BinanceBotSpot(Bot):
                 "ticks": "/api/v3/aggTrades",
                 "ohlcvs": "/api/v3/klines",
                 "websocket": websocket_url,
-                "websocket_market": f"{websocket_url}/{self.config.symbol.lower()}@aggTrade",
+                "websocket_market": f"{websocket_url}/{self.config.symbol.name.lower()}@aggTrade",
                 "websocket_user": websocket_url,
                 "listen_key": "/api/v3/userDataStream",
                 "transfer": "/sapi/v1/asset/transfer",
@@ -80,7 +80,7 @@ class BinanceBotSpot(Bot):
         self.init_market_type()
         exchange_info: dict[str, Any] = await self.httpclient.get("exchange_info")
         for e in exchange_info["symbols"]:
-            if e["symbol"] == self.config.symbol:
+            if e["symbol"] == self.config.symbol.name:
                 self.rtc.coin = e["baseAsset"]
                 self.rtc.quote = e["quoteAsset"]
                 self.rtc.margin_coin = e["quoteAsset"]
@@ -155,7 +155,7 @@ class BinanceBotSpot(Bot):
 
     async def init_order_book(self):
         ticker: dict[str, Any] = await self.httpclient.get(
-            "ticker", params={"symbol": self.config.symbol}
+            "ticker", params={"symbol": self.config.symbol.name}
         )
         self.ob = [float(ticker["bidPrice"]), float(ticker["askPrice"])]
         self.rtc.price = np.random.choice(self.ob)
@@ -164,7 +164,7 @@ class BinanceBotSpot(Bot):
         return [
             Order.from_binance_payload(e)
             for e in await self.httpclient.get(
-                "open_orders", signed=True, params={"symbol": self.config.symbol}
+                "open_orders", signed=True, params={"symbol": self.config.symbol.name}
             )
         ]
 
@@ -204,7 +204,7 @@ class BinanceBotSpot(Bot):
     async def execute_order(self, order: Order) -> Order:
         params = order.to_binance_payload(futures=False)
         o = await self.httpclient.post("create_order", params=params)
-        o["symbol"] = self.config.symbol
+        o["symbol"] = self.config.symbol.name
         return Order.from_binance_payload(o, futures=False)
 
     async def execute_cancellation(self, order: Order) -> Order | None:
@@ -212,7 +212,7 @@ class BinanceBotSpot(Bot):
         try:
             cancellation = await self.httpclient.delete(
                 "cancel_order",
-                params={"symbol": self.config.symbol, "orderId": order.order_id},
+                params={"symbol": self.config.symbol.name, "orderId": order.order_id},
             )
             cancellation["symbol"] = order.symbol
             return Order.from_binance_payload(cancellation, futures=False)
@@ -287,7 +287,7 @@ class BinanceBotSpot(Bot):
         end_time: int | None = None,
     ) -> list[Fill]:
         params = {
-            "symbol": (self.config.symbol if symbol is None else symbol),
+            "symbol": (self.config.symbol.name if symbol is None else symbol),
             "limit": min(1000, max(500, limit)),
         }
         if from_id is not None:
@@ -336,7 +336,7 @@ class BinanceBotSpot(Bot):
         end_time: int | None = None,
         do_print: bool = True,
     ):
-        params = {"symbol": self.config.symbol, "limit": 1000}
+        params = {"symbol": self.config.symbol.name, "limit": 1000}
         if from_id is not None:
             params["fromId"] = max(0, from_id)
         if start_time is not None:
@@ -356,7 +356,7 @@ class BinanceBotSpot(Bot):
             if do_print:
                 log.info(
                     "fetched ticks for symbold %r %s %s",
-                    self.config.symbol,
+                    self.config.symbol.name,
                     ticks[0].trade_id,
                     ts_to_date(float(ticks[0].timestamp) / 1000),
                 )
@@ -364,7 +364,7 @@ class BinanceBotSpot(Bot):
             log.info("error fetching ticks b: %s - %s", e, fetched)
             ticks = []
             if do_print:
-                log.info("fetched no new ticks %s", self.config.symbol)
+                log.info("fetched no new ticks %s", self.config.symbol.name)
         return ticks
 
     async def fetch_ticks_time(
@@ -397,7 +397,7 @@ class BinanceBotSpot(Bot):
         }
         assert interval in interval_map
         if symbol is None:
-            symbol = self.config.symbol
+            symbol = self.config.symbol.name
         params = {
             "symbol": symbol,
             "interval": interval,
@@ -527,7 +527,7 @@ class BinanceBotSpot(Bot):
                     }
             elif event["e"] == "executionReport":
                 if event["X"] == "NEW":
-                    if event["s"] == self.config.symbol:
+                    if event["s"] == self.config.symbol.name:
                         standardized["new_open_order"] = {
                             "order_id": int(event["i"]),
                             "symbol": event["s"],
@@ -542,13 +542,13 @@ class BinanceBotSpot(Bot):
                         standardized["other_symbol"] = event["s"]
                         standardized["other_type"] = "new_open_order"
                 elif event["X"] in ["CANCELED", "EXPIRED", "REJECTED"]:
-                    if event["s"] == self.config.symbol:
+                    if event["s"] == self.config.symbol.name:
                         standardized["deleted_order_id"] = int(event["i"])
                     else:
                         standardized["other_symbol"] = event["s"]
                         standardized["other_type"] = event["X"].lower()
                 elif event["X"] == "FILLED":
-                    if event["s"] == self.config.symbol:
+                    if event["s"] == self.config.symbol.name:
                         price = fp if (fp := float(event["p"])) != 0.0 else float(event["L"])
                         standardized["filled"] = Fill.parse_obj(
                             {
@@ -574,7 +574,7 @@ class BinanceBotSpot(Bot):
                         standardized["other_symbol"] = event["s"]
                         standardized["other_type"] = "filled"
                 elif event["X"] == "PARTIALLY_FILLED":
-                    if event["s"] == self.config.symbol:
+                    if event["s"] == self.config.symbol.name:
                         price = fp if (fp := float(event["p"])) != 0.0 else float(event["L"])
                         standardized["filled"] = Fill.parse_obj(
                             {

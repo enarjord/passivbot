@@ -5,13 +5,10 @@ import asyncio
 import json
 import logging
 import os
-import pathlib
-import pprint
 import signal
 import time
 from typing import Any
 
-from passivbot.config import LiveConfig
 from passivbot.datastructures import Fill
 from passivbot.datastructures import Order
 from passivbot.datastructures import Position
@@ -27,12 +24,9 @@ from passivbot.utils.funcs.njit import calc_upnl
 from passivbot.utils.funcs.njit import qty_to_cost
 from passivbot.utils.funcs.njit import round_
 from passivbot.utils.funcs.njit import round_dynamic
-from passivbot.utils.funcs.pure import denumpyize
 from passivbot.utils.funcs.pure import filter_orders
 from passivbot.utils.httpclient import HTTPClient
 from passivbot.utils.httpclient import HTTPRequestError
-from passivbot.utils.procedures import load_exchange_key_secret
-from passivbot.utils.procedures import load_live_config
 
 log = logging.getLogger(__name__)
 
@@ -44,7 +38,6 @@ class Bot:
     def __init__(self, config: NamedConfig):
         self.spot = False
         self.config = config
-        self.basedir: pathlib.Path = config.basedir
         self._stop_mode_log_message_iterations = 0
         self.__bot_init__()
         self.rtc.long = self.config.long
@@ -79,10 +72,6 @@ class Bot:
         self.delay_between_executions = 2
         self.force_update_interval = 30
 
-        # self.log_filepath = make_get_filepath(f"logs/{self.config.exchange}/{config['config_name']}.log")
-
-        _, self.key, self.secret = load_exchange_key_secret(self.config.api_key_name)
-
         self.user_stream_task: asyncio.Task | None = None
         self.market_stream_task: asyncio.Task | None = None
 
@@ -110,7 +99,7 @@ class Bot:
             return
         try:
             open_orders = await self.fetch_open_orders()
-            open_orders = [x for x in open_orders if x.symbol == self.config.symbol]
+            open_orders = [x for x in open_orders if x.symbol == self.config.symbol.name]
             if self.open_orders != open_orders:
                 self.dump_log({"log_type": "open_orders", "data": open_orders})
             self.open_orders = open_orders
@@ -360,7 +349,7 @@ class Bot:
         short_psize = self.position.short.size
 
         if self.config.stop_mode == StopMode.PANIC:
-            if self.config.exchange == "bybit":
+            if self.config.api_key.exchange == "bybit":
                 log.warning("panic mode temporarily disabled for bybit")
                 return []
             panic_orders = []
@@ -446,7 +435,7 @@ class Bot:
         orders = [
             Order.parse_obj(
                 {
-                    "symbol": self.config.symbol,
+                    "symbol": self.config.symbol.name,
                     "side": "buy",
                     "position_side": "long",
                     "qty": abs(float(o[0])),
@@ -462,7 +451,7 @@ class Bot:
         orders += [
             Order.parse_obj(
                 {
-                    "symbol": self.config.symbol,
+                    "symbol": self.config.symbol.name,
                     "side": "sell",
                     "position_side": "long",
                     "qty": abs(float(o[0])),
@@ -579,7 +568,7 @@ class Bot:
 
     def update_output_information(self):
         self.ts_released["print"] = time.time()
-        line = f"{self.config.symbol} "
+        line = f"{self.config.symbol.name} "
         line += f"l {self.position.long.size} @ "
         line += f"{round_(self.position.long.price, self.rtc.price_step)}, "
         long_closes = sorted(
@@ -690,47 +679,7 @@ async def start_bot(bot):
             await asyncio.sleep(10)
 
 
-async def _main(args: argparse.Namespace) -> None:
-    try:
-        config_dict = load_live_config(args.live_config_path)
-    except Exception as e:
-        log.error("failed to load config from %s: %s", args.live_config_path, e)
-        return
-
-    config_dict["api_key_name"] = args.user
-    config_dict["symbol"] = args.symbol
-    config_dict["live_config_path"] = args.live_config_path
-    if args.market_type:
-        config_dict["market_type"] = args.market_type
-
-    if args.assigned_balance is not None:
-        log.info("assigned balance set to: %s", args.assigned_balance)
-        config_dict["assigned_balance"] = args.assigned_balance
-
-    if args.graceful_stop:
-        log.info(
-            "graceful stop enabled, will not make new entries once existing positions are closed"
-        )
-        config_dict["stop_mode"] = StopMode.GRACEFUL
-        config_dict["long"]["enabled"] = config_dict["do_long"] = False
-        config_dict["short"]["enabled"] = config_dict["do_short"] = False
-    if args.long_wallet_exposure_limit is not None:
-        log.info(
-            f"overriding long wallet exposure limit ({config_dict['long']['wallet_exposure_limit']}) "
-            f"with new value: {args.long_wallet_exposure_limit}"
-        )
-        config_dict["long"]["wallet_exposure_limit"] = args.long_wallet_exposure_limit
-    if args.short_wallet_exposure_limit is not None:
-        log.info(
-            f"overriding short wallet exposure limit ({config_dict['short']['wallet_exposure_limit']}) "
-            f"with new value: {args.short_wallet_exposure_limit}"
-        )
-        config_dict["short"]["wallet_exposure_limit"] = args.short_wallet_exposure_limit
-
-    config: NamedConfig = NamedConfig.parse_obj(config_dict)
-
-    # if config["market_type"] == "spot":
-    #    config = spotify_config(config)
+async def _main(config: NamedConfig) -> None:
 
     from passivbot.exchanges.bybit import Bybit
     from passivbot.exchanges.binance import BinanceBot
@@ -738,8 +687,7 @@ async def _main(args: argparse.Namespace) -> None:
 
     bot: BinanceBot | BinanceBotSpot | Bybit
 
-    if config.exchange == "binance":
-
+    if config.api_key.exchange == "binance":
         if config.market_type == "spot":
             from passivbot.utils.procedures import create_binance_bot_spot
 
@@ -748,14 +696,10 @@ async def _main(args: argparse.Namespace) -> None:
             from passivbot.utils.procedures import create_binance_bot
 
             bot = await create_binance_bot(config)
-    elif config.exchange == "bybit":
+    elif config.api_key.exchange == "bybit":
         from passivbot.utils.procedures import create_bybit_bot
 
         bot = await create_bybit_bot(config)
-    else:
-        raise Exception("unknown exchange", config.exchange)
-
-    log.info("using config:\n%s", pprint.pformat(denumpyize(config)))
 
     signal.signal(signal.SIGINT, bot.stop)
     signal.signal(signal.SIGTERM, bot.stop)
@@ -763,9 +707,9 @@ async def _main(args: argparse.Namespace) -> None:
     await bot.httpclient.close()
 
 
-def main(args: argparse.Namespace) -> None:
+def main(config: NamedConfig) -> None:
     try:
-        asyncio.run(_main(args))
+        asyncio.run(_main(config))
     except Exception as e:
         log.error("There was an error starting the bot: %s", e, exc_info=True)
     finally:
@@ -777,16 +721,6 @@ def setup_parser(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("user", type=str, help="user/account_name defined in api-keys.json")
     parser.add_argument("symbol", type=str, help="symbol to trade")
     parser.add_argument("live_config_path", type=str, help="live config to use")
-    parser.add_argument(
-        "-m",
-        "--market_type",
-        "--market-type",
-        type=str,
-        required=False,
-        dest="market_type",
-        default=None,
-        help="specify whether spot or futures (default), overriding value from backtest config",
-    )
     parser.add_argument(
         "-gs",
         "--graceful_stop",
@@ -828,8 +762,30 @@ def setup_parser(parser: argparse.ArgumentParser) -> None:
 
 
 def validate_argparse_parsed_args(
-    parser: argparse.ArgumentParser, args: argparse.Namespace, config: LiveConfig
+    parser: argparse.ArgumentParser, args: argparse.Namespace, config: NamedConfig
 ) -> None:
+
     if args.assigned_balance is not None:
-        log.info("Assigned balance set to: %s", args.assigned_balance)
-        config.active_config.assigned_balance = args.assigned_balance
+        log.info("assigned balance set to: %s", args.assigned_balance)
+        config.assigned_balance = args.assigned_balance
+
+    if args.graceful_stop:
+        log.info(
+            "Graceful stop enabled, will not make new entries once existing positions are closed"
+        )
+        config.stop_mode = StopMode.GRACEFUL
+        config.long.enabled = False
+        config.short.enabled = False
+
+    if args.long_wallet_exposure_limit is not None:
+        log.info(
+            f"overriding long wallet exposure limit ({config.long.wallet_exposure_limit}) "
+            f"with new value: {args.long_wallet_exposure_limit}"
+        )
+        config.long.wallet_exposure_limit = args.long_wallet_exposure_limit
+    if args.short_wallet_exposure_limit is not None:
+        log.info(
+            f"overriding short wallet exposure limit ({config.short.wallet_exposure_limit}) "
+            f"with new value: {args.short_wallet_exposure_limit}"
+        )
+        config.short.wallet_exposure_limit = args.short_wallet_exposure_limit

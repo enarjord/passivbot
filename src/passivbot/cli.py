@@ -10,9 +10,10 @@ from functools import partial
 from pydantic import ValidationError
 
 import passivbot.bot
-import passivbot.config
 import passivbot.utils.logs
 import passivbot.utils.procedures
+from passivbot.datastructures.config import LiveConfig
+from passivbot.datastructures.config import SymbolConfig
 from passivbot.version import __version__
 
 try:
@@ -85,6 +86,7 @@ def main() -> None:
         "-m",
         "--market",
         "--market-type",
+        dest="market_type",
         choices=("futures", "spot"),
         default="futures",
         help=("Select the market type to run against. Default: %default"),
@@ -157,31 +159,27 @@ def main() -> None:
             )
         args.config_files.append(default_config_file)
 
-    if args.subparser == "live":
-        config_cls = passivbot.config.LiveConfig
-    elif args.subparser == "backtest":
-        config_cls = passivbot.config.LiveConfig
-    elif args.subparser == "downloader":
-        config_cls = passivbot.config.LiveConfig
-    elif args.subparser == "optimize":
-        config_cls = passivbot.config.LiveConfig
-    elif args.subparser == "batch-optimize":
-        config_cls = passivbot.config.LiveConfig
-    elif args.subparser == "multi-symbol-optimize":
-        config_cls = passivbot.config.LiveConfig
-    else:
-        parser.exit(
-            status=1,
-            message=(
-                f"Don't know what to do regarding subparser {args.subparser}. Please fix this "
-                "or file a bug report."
-            ),
-        )
-
     try:
-        config: type[passivbot.config.BaseConfig] = config_cls.parse_files(  # type: ignore[assignment]
-            *args.config_files
-        )
+        if args.subparser == "live":
+            config = LiveConfig.parse_files(*args.config_files)
+        elif args.subparser == "backtest":
+            config = LiveConfig.parse_files(*args.config_files)
+        elif args.subparser == "downloader":
+            config = LiveConfig.parse_files(*args.config_files)
+        elif args.subparser == "optimize":
+            config = LiveConfig.parse_files(*args.config_files)
+        elif args.subparser == "batch-optimize":
+            config = LiveConfig.parse_files(*args.config_files)
+        elif args.subparser == "multi-symbol-optimize":
+            config = LiveConfig.parse_files(*args.config_files)
+        else:
+            parser.exit(
+                status=1,
+                message=(
+                    f"Don't know what to do regarding subparser {args.subparser}. Please fix this "
+                    "or file a bug report."
+                ),
+            )
     except ValidationError as exc:
         parser.exit(status=1, message=f"Found some errors in the configuration:\n\n{exc}\n")
     except Exception:
@@ -212,12 +210,12 @@ def main() -> None:
 
     if not args.symbol:
         if len(config.symbols) == 1:
-            symbol = next(iter(config.symbols))
+            symbol_name = next(iter(config.symbols))
             log.info(
                 "Defaulting to symbol %r since it's the only defined on the configuration files",
-                symbol,
+                symbol_name,
             )
-            args.symbol = symbol
+            args.symbol = symbol_name
         else:
             parser.exit(
                 status=1,
@@ -240,19 +238,20 @@ def main() -> None:
 
     # Set the config private attributes
     config._basedir = args.basedir
-    symbol = config.symbols[args.symbol]
+    symbol: SymbolConfig = config.symbols[args.symbol]
 
     if args.key_name and symbol.key_name != args.key_name:
         log.info(
             "Overriding the defined key name in the selected config, %r with the key named %r",
-            config.symbol.key_name,
+            symbol.key_name,
             args.key_name,
         )
         symbol.key_name = args.key_name
+
     config._active_config = config.configs[symbol.config_name]
     config.active_config._parent = config
     config.active_config._symbol = symbol
-    config.active_config._key = config.api_keys[symbol.key_name]
+    config.active_config._api_key = config.api_keys[symbol.key_name]
     config.active_config._market_type = args.market_type
 
     if args.nojit:
@@ -263,26 +262,28 @@ def main() -> None:
         log.info("numba.njit compilation is enabled")
 
     log.info(
-        "Configuration for symbol %r selected. Key name: %r; Config Name: %s; Details:\n%s",
-        args.symbol,
-        config.symbol.key_name,
-        config.symbol.config_name,
+        "Selected configuration for symbol %r:\n%s",
+        config.active_config.symbol,
         config.active_config.json(indent=2),
     )
 
     if args.subparser == "live":
-        passivbot.bot.validate_argparse_parsed_args(parser, args, config)
+        passivbot.bot.validate_argparse_parsed_args(parser, args, config.active_config)
     elif BACKTEST_REQUIREMENTS_MISSING is False:
         if args.subparser == "backtest":
-            passivbot.backtest.validate_argparse_parsed_args(parser, args, config)
+            passivbot.backtest.validate_argparse_parsed_args(parser, args, config.active_config)
         elif args.subparser == "downloader":
-            passivbot.downloader.validate_argparse_parsed_args(parser, args, config)
+            passivbot.downloader.validate_argparse_parsed_args(parser, args, config.active_config)
         elif args.subparser == "optimize":
-            passivbot.optimize.validate_argparse_parsed_args(parser, args, config)
+            passivbot.optimize.validate_argparse_parsed_args(parser, args, config.active_config)
         elif args.subparser == "batch-optimize":
-            passivbot.batch_optimize.validate_argparse_parsed_args(parser, args, config)
+            passivbot.batch_optimize.validate_argparse_parsed_args(
+                parser, args, config.active_config
+            )
         elif args.subparser == "multi-symbol-optimize":
-            passivbot.multi_symbol_optimize.validate_argparse_parsed_args(parser, args, config)
+            passivbot.multi_symbol_optimize.validate_argparse_parsed_args(
+                parser, args, config.active_config
+            )
 
     # Call the right sub-parser
-    args.func(args, config)
+    args.func(config.active_config)
