@@ -2,11 +2,10 @@ from __future__ import annotations
 
 import argparse
 import logging
-import os
 import shutil
 import subprocess
 
-from passivbot.utils.procedures import make_get_filepath
+from passivbot.utils.procedures import validate_backtesting_argparse_args
 
 log = logging.getLogger(__name__)
 
@@ -54,7 +53,7 @@ def main(args: argparse.Namespace) -> None:
     symbols = tokens[tokens.index(start_from) :] + tokens[: tokens.index(start_from)]
 
     quote = "USDT"
-    cfgs_dir = make_get_filepath("cfgs_batch_optimize/")
+    cfgs_dir = args.basedir / "cfgs_batch_optimize"
     exchange = "binance"
 
     symbols = [e + quote for e in symbols]
@@ -76,11 +75,14 @@ def main(args: argparse.Namespace) -> None:
         log.info("command: %s", cmd_args)
         subprocess.run(cmd_args, shell=False, check=True)
         try:
-            d = f'backtests/{exchange}/{kwargs["symbol"]}/plots/'
-            ds = sorted(f for f in os.listdir(d) if "20" in f)
-            for d1 in ds:
-                log.info(f"copying resulting config to {cfgs_dir}: %s", d + d1)
-                shutil.copy(d + d1 + "/live_config.json", f'{cfgs_dir}{kwargs["symbol"]}_{d1}.json')
+            d = args.basedir.joinpath("backtests", "exchange", f"{kwargs['symbol']}", "plots")
+            ds = sorted(f for f in d.iterdir() if "20" in str(f))
+            for path in ds:
+                log.info(f"copying resulting config to {cfgs_dir}: %s", path)
+                shutil.copy(
+                    path / "live_config.json",
+                    cfgs_dir / f"{kwargs['symbol']}_{path.name}.json",
+                )
         except Exception as e:
             log.error("Error: %s %s", kwargs["symbol"], e)
 
@@ -92,4 +94,4 @@ def setup_parser(parser: argparse.ArgumentParser) -> None:
 def validate_argparse_parsed_args(
     parser: argparse.ArgumentParser, args: argparse.Namespace
 ) -> None:
-    pass
+    validate_backtesting_argparse_args(parser, args)

@@ -8,6 +8,7 @@ from functools import partial
 
 import passivbot.bot
 import passivbot.utils.logs
+import passivbot.utils.procedures
 from passivbot.version import __version__
 
 try:
@@ -34,6 +35,21 @@ def main() -> None:
     parser = argparse.ArgumentParser(prog="passivbot", description="PassivBot Crypto Trading")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("--nojit", help="disable numba", action="store_true")
+    config_section = parser.add_argument_group(title="Configuration Paths")
+    config_section.add_argument(
+        "--basedir",
+        type=pathlib.Path,
+        default=None,
+        help=(
+            "The base directory where all paths will be computed from. "
+            "Defaults to the current directory"
+        ),
+    )
+    config_section.add_argument(
+        "--api-keys",
+        type=pathlib.Path,
+        help="Path to the `api-keys.json` file. Defaults to <basedir>/api-keys.json",
+    )
     cli_logging_params = parser.add_argument_group(
         title="Logging", description="Runtime logging configuration"
     )
@@ -85,6 +101,11 @@ def main() -> None:
     # Parse the CLI arguments
     args: argparse.Namespace = parser.parse_args()
 
+    if args.basedir is not None:
+        args.basedir = args.basedir.resolve()
+    else:
+        args.basedir = pathlib.Path.cwd()
+
     # Setup logging
     passivbot.utils.logs.setup_cli_logging(args.log_level)
     if args.log_file:
@@ -96,6 +117,9 @@ def main() -> None:
         log.info("numba.njit compilation is disabled")
     else:
         log.info("numba.njit compilation is enabled")
+
+    if not args.api_keys:
+        args.api_keys = args.basedir / "api-keys.json"
 
     if args.subparser == "live":
         passivbot.bot.validate_argparse_parsed_args(parser, args)

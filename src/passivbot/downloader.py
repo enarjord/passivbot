@@ -7,10 +7,12 @@ import gzip
 import io
 import logging
 import os
+import pathlib
 import sys
 import time
 import urllib.request
 import zipfile
+from typing import Any
 
 import dateutil.parser
 import numpy as np
@@ -23,9 +25,9 @@ from passivbot.utils.procedures import add_backtesting_argparse_args
 from passivbot.utils.procedures import create_binance_bot
 from passivbot.utils.procedures import create_binance_bot_spot
 from passivbot.utils.procedures import create_bybit_bot
-from passivbot.utils.procedures import make_get_filepath
 from passivbot.utils.procedures import prepare_backtest_config
 from passivbot.utils.procedures import utc_ms
+from passivbot.utils.procedures import validate_backtesting_argparse_args
 
 log = logging.getLogger(__name__)
 
@@ -35,13 +37,11 @@ class Downloader:
     Downloader class for tick data. Fetches data from specified time until now or specified time.
     """
 
-    def __init__(self, config: dict):
+    def __init__(self, config: dict[str, Any]):
         self.fetch_delay_seconds = 0.75
         self.config = config
         self.spot = "spot" in config and config["spot"]
-        self.tick_filepath = os.path.join(
-            config["caches_dirpath"], f"{config['session_name']}_ticks_cache.npy"
-        )
+        self.tick_filepath = config["caches_dirpath"] / f"{config['session_name']}_ticks_cache.npy"
         try:
             self.start_time = int(
                 dateutil.parser.parse(self.config["start_date"])
@@ -79,25 +79,19 @@ class Downloader:
         else:
             raise Exception(f"unknown exchange {config['exchange']}")
         if "historical_data_path" in self.config and self.config["historical_data_path"]:
-            self.filepath = make_get_filepath(
-                os.path.join(
-                    self.config["historical_data_path"],
-                    "historical_data",
-                    self.config["exchange"],
-                    f"agg_trades_{'spot' if self.spot else 'futures'}",
-                    self.config["symbol"],
-                    "",
-                )
+            historical_data_path = pathlib.Path(self.config["historical_data_path"]).resolve()
+            self.filepath = historical_data_path.joinpath(
+                "historical_data",
+                self.config["exchange"],
+                f"agg_trades_{'spot' if self.spot else 'futures'}",
+                self.config["symbol"],
             )
         else:
-            self.filepath = make_get_filepath(
-                os.path.join(
-                    "historical_data",
-                    self.config["exchange"],
-                    f"agg_trades_{'spot' if self.spot else 'futures'}",
-                    self.config["symbol"],
-                    "",
-                )
+            self.filepath = self.config["basedir"].joinpath(
+                "historical_data",
+                self.config["exchange"],
+                f"agg_trades_{'spot' if self.spot else 'futures'}",
+                self.config["symbol"],
             )
 
     def validate_dataframe(self, df: pd.DataFrame) -> tuple[bool, pd.DataFrame, pd.DataFrame]:
@@ -190,16 +184,16 @@ class Downloader:
             log.info(
                 "Saving file %s date=%s", new_name, ts_to_date(int(new_name.split("_")[2]) / 1000)
             )
-            df.to_csv(os.path.join(self.filepath, new_name), index=False)
+            df.to_csv(self.filepath / new_name, index=False)
             new_name = ""
             try:
-                os.remove(os.path.join(self.filepath, filename))
+                self.filepath.joinpath(filename).unlink()
                 log.info("Removed file", filename)
             except Exception:
                 pass
         elif missing:
             log.info("Replacing file: %s", filename)
-            df.to_csv(os.path.join(self.filepath, filename), index=False)
+            df.to_csv(self.filepath / filename, index=False)
         else:
             new_name = ""
         return new_name
@@ -451,7 +445,7 @@ class Downloader:
                 or last_time == sys.maxsize
             ):
                 log.info("Validating file: %s; date=%s", f, ts_to_date(first_time / 1000))
-                df = self.read_dataframe(os.path.join(self.filepath, f))
+                df = self.read_dataframe(self.filepath / f)
                 missing, df, gaps = self.validate_dataframe(df)
                 exists = False
                 if gaps.empty:
@@ -537,7 +531,7 @@ class Downloader:
                     nf = self.save_dataframe(df, f, missing, verified)
                     mod_files.append(nf)
                 elif df["trade_id"].iloc[0] != 1:
-                    os.remove(os.path.join(self.filepath, f))
+                    self.filepath.joinpath(f).unlink()
                     log.info("Removed file fragment: %s", f)
 
         chunk_gaps = []
@@ -744,7 +738,7 @@ class Downloader:
 
         try:
             first_frame = pd.read_csv(
-                os.path.join(self.filepath, filenames[0]),
+                self.filepath / filenames[0],
                 dtype={
                     "price": np.float64,
                     "is_buyer_maker": np.float64,
@@ -764,7 +758,7 @@ class Downloader:
 
         try:
             last_frame = pd.read_csv(
-                os.path.join(self.filepath, filenames[-1]),
+                self.filepath / filenames[-1],
                 dtype={
                     "price": np.float64,
                     "is_buyer_maker": np.float64,
@@ -788,7 +782,7 @@ class Downloader:
 
         for f in filenames:
             chunk = pd.read_csv(
-                os.path.join(self.filepath, f),
+                self.filepath / f,
                 dtype={
                     "price": np.float64,
                     "is_buyer_maker": np.float64,
@@ -874,7 +868,7 @@ class Downloader:
         If they do not exist or if their length doesn't match, download the missing data and create them.
         @return: numpy array.
         """
-        if os.path.exists(self.tick_filepath):
+        if self.tick_filepath.exists():
             log.info("Loading cached tick data from %s", self.tick_filepath)
             tick_data = np.load(self.tick_filepath)
             return tick_data
@@ -907,4 +901,4 @@ def setup_parser(parser: argparse.ArgumentParser) -> None:
 def validate_argparse_parsed_args(
     parser: argparse.ArgumentParser, args: argparse.Namespace
 ) -> None:
-    pass
+    validate_backtesting_argparse_args(parser, args)

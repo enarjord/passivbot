@@ -3,9 +3,9 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
-import os
 import pprint
 import time
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -21,20 +21,20 @@ from passivbot.utils.funcs.pure import ts_to_date
 from passivbot.utils.plotting import dump_plots
 from passivbot.utils.procedures import add_backtesting_argparse_args
 from passivbot.utils.procedures import load_live_config
-from passivbot.utils.procedures import make_get_filepath
 from passivbot.utils.procedures import prepare_backtest_config
+from passivbot.utils.procedures import validate_backtesting_argparse_args
 
 log = logging.getLogger(__name__)
 
 
-def backtest(config: dict, data: np.ndarray, do_print=False) -> (list, bool):
+def backtest(config: dict, data: np.ndarray, do_print=False) -> tuple[list, bool]:
     xk = create_xk(config)
     return njit_backtest(
         data, config["starting_balance"], config["latency_simulation_ms"], config["maker_fee"], **xk
     )
 
 
-def plot_wrap(config, data):
+def plot_wrap(config: dict[str, Any], data) -> None:
     log.info("n_days: %s", round_(config["n_days"], 0.1))
     log.info("starting_balance: %s", config["starting_balance"])
     log.info("backtesting...")
@@ -46,16 +46,14 @@ def plot_wrap(config, data):
         return
     fdf, sdf, result = analyze_fills(fills, stats, config)
     config["result"] = result
-    config["plots_dirpath"] = make_get_filepath(
-        os.path.join(
-            config["plots_dirpath"], f"{ts_to_date(time.time())[:19].replace(':', '')}", ""
-        )
+    session_plots_dirpath = (
+        config["plots_dirpath"] / f"{ts_to_date(time.time())[:19].replace(':', '')}"
     )
-    fdf.to_csv(config["plots_dirpath"] + "fills.csv")
-    sdf.to_csv(config["plots_dirpath"] + "stats.csv")
+    fdf.to_csv(session_plots_dirpath / "fills.csv")
+    sdf.to_csv(session_plots_dirpath / "stats.csv")
     df = pd.DataFrame({**{"timestamp": data[:, 0], "qty": data[:, 1], "price": data[:, 2]}, **{}})
     log.info("dumping plots...")
-    dump_plots(config, fdf, sdf, df)
+    dump_plots(session_plots_dirpath, config, fdf, sdf, df)
 
 
 async def _main(args: argparse.Namespace) -> None:
@@ -99,4 +97,4 @@ def setup_parser(parser: argparse.ArgumentParser) -> None:
 def validate_argparse_parsed_args(
     parser: argparse.ArgumentParser, args: argparse.Namespace
 ) -> None:
-    pass
+    validate_backtesting_argparse_args(parser, args)

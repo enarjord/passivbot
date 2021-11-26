@@ -5,6 +5,7 @@ import asyncio
 import json
 import logging
 import os
+import pathlib
 import pprint
 import signal
 import time
@@ -42,6 +43,7 @@ class Bot:
     def __init__(self, config: NamedConfig):
         self.spot = False
         self.config = config
+        self.basedir: pathlib.Path = config.basedir
         self._stop_mode_log_message_iterations = 0
         self.__bot_init__()
         self.rtc.long = self.config.long
@@ -98,8 +100,9 @@ class Bot:
     def dump_log(self, data) -> None:
         return
         if self.config["logging_level"] > 0:
-            with open(self.log_filepath, "a") as f:
-                f.write(json.dumps({**{"log_timestamp": time.time()}, **data}) + "\n")
+            self.log_filepath.write_text(
+                json.dumps({**{"log_timestamp": time.time()}, **data}) + "\n"
+            )
 
     async def update_open_orders(self) -> None:
         if self.ts_locked["update_open_orders"] > self.ts_released["update_open_orders"]:
@@ -688,9 +691,14 @@ async def start_bot(bot):
 
 async def _main(args: argparse.Namespace) -> None:
     try:
-        accounts = json.load(open("api-keys.json"))
-    except Exception as e:
-        log.error("failed to load api-keys.json file: %s", e)
+        accounts = json.load(args.api_keys.open())
+    except FileNotFoundError:
+        log.error("The '%s' file does not exist.", args.api_keys)
+    except ValueError as exc:
+        log.error("Failed to load JSON from '%s': %s", args.api_keys, exc)
+        return
+    except Exception:
+        log.error("Failed to load %s", args.api_keys, exc_info=True)
         return
     try:
         account = accounts[args.user]
@@ -702,12 +710,15 @@ async def _main(args: argparse.Namespace) -> None:
     except Exception as e:
         log.error("failed to load config from %s: %s", args.live_config_path, e)
         return
+
+    config_dict["basedir"] = args.basedir
     config_dict["api_key_name"] = args.user
     config_dict["exchange"] = account["exchange"]
     config_dict["symbol"] = args.symbol
     config_dict["live_config_path"] = args.live_config_path
     if args.market_type:
         config_dict["market_type"] = args.market_type
+
     if args.assigned_balance is not None:
         log.info("assigned balance set to: %s", args.assigned_balance)
         config_dict["assigned_balance"] = args.assigned_balance
