@@ -39,6 +39,7 @@ class Bot:
         self.spot = False
         self.config = config
         self._stop_mode_log_message_iterations = 0
+        self.rtc = self.get_initial_runtime_config(config)
         self.__bot_init__()
         self.rtc.long = self.config.long
         if isinstance(self.rtc, RuntimeFuturesConfig):
@@ -82,6 +83,10 @@ class Bot:
         """
         Subclass initialization routines
         """
+        raise NotImplementedError
+
+    @staticmethod
+    def get_initial_runtime_config(config: NamedConfig) -> RuntimeFuturesConfig | RuntimeSpotConfig:
         raise NotImplementedError
 
     async def _init(self):

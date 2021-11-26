@@ -14,6 +14,7 @@ from passivbot.datastructures import Fill
 from passivbot.datastructures import Order
 from passivbot.datastructures import Position
 from passivbot.datastructures import Tick
+from passivbot.datastructures.config import NamedConfig
 from passivbot.datastructures.runtime import RuntimeSpotConfig
 from passivbot.utils.funcs.njit import calc_diff
 from passivbot.utils.funcs.njit import calc_long_pnl
@@ -33,16 +34,20 @@ log = logging.getLogger(__name__)
 
 
 class BinanceBotSpot(Bot):
+
+    rtc: RuntimeSpotConfig
+
     def __bot_init__(self):
         """
         Subclass initialization routines
         """
         self.exchange = "binance_spot"
-        self.rtc: RuntimeSpotConfig = RuntimeSpotConfig(
-            market_type=self.config.market_type, long=self.config.long
-        )
         self.balance: dict[str, Asset] = {}
         self.force_update_interval = 40
+
+    @staticmethod
+    def get_initial_runtime_config(config: NamedConfig) -> RuntimeSpotConfig:
+        return RuntimeSpotConfig(market_type=config.market_type, long=config.long)
 
     def init_market_type(self):
         log.info("spot market")

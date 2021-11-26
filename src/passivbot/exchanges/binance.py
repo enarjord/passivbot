@@ -11,6 +11,7 @@ from passivbot.datastructures import Fill
 from passivbot.datastructures import Order
 from passivbot.datastructures import Position
 from passivbot.datastructures import Tick
+from passivbot.datastructures.config import NamedConfig
 from passivbot.datastructures.runtime import RuntimeFuturesConfig
 from passivbot.utils.funcs.pure import ts_to_date
 from passivbot.utils.httpclient import BinanceHTTPClient
@@ -21,13 +22,19 @@ log = logging.getLogger(__name__)
 
 
 class BinanceBot(Bot):
+
+    rtc: RuntimeFuturesConfig
+
     def __bot_init__(self):
         """
         Subclass initialization routines
         """
         self.exchange = "binance"
-        self.rtc: RuntimeFuturesConfig = RuntimeFuturesConfig(
-            market_type=self.config.market_type, short=self.config.short, long=self.config.long
+
+    @staticmethod
+    def get_initial_runtime_config(config: NamedConfig) -> RuntimeFuturesConfig:
+        return RuntimeFuturesConfig(
+            market_type=config.market_type, short=config.short, long=config.long
         )
 
     async def init_market_type(self):
