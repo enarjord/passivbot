@@ -20,7 +20,7 @@ from passivbot.utils.funcs.pure import date_to_ts
 from passivbot.utils.funcs.pure import ts_to_date
 from passivbot.utils.httpclient import ByBitHTTPClient
 from passivbot.utils.httpclient import HTTPRequestError
-from passivbot.utils.procedures import print_async_exception
+from passivbot.utils.procedures import log_async_exception
 
 log = logging.getLogger(__name__)
 
@@ -225,7 +225,7 @@ class Bybit(Bot):
             return None
         except Exception as e:
             log.error(f"error executing order {order} {e}", exc_info=True)
-            print_async_exception(o)
+            log_async_exception(o)
         return None
 
     async def execute_cancellation(self, order: Order) -> Order | None:
@@ -239,7 +239,7 @@ class Bybit(Bot):
             return order
         except Exception as e:
             log.error(f"error cancelling order {order} {e}", exc_info=True)
-            print_async_exception(cancellation)
+            log_async_exception(cancellation)
             self.ts_released["force_update"] = 0.0
         return None
 
@@ -385,7 +385,7 @@ class Bybit(Bot):
             )
         except Exception as e:
             log.error("error fetching income: %s", e, exc_info=True)
-            print_async_exception(fetched)
+            log_async_exception(fetched)
             return []
 
     async def fetch_fills(

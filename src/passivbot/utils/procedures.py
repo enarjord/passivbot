@@ -399,7 +399,9 @@ def local_time() -> float:
     return datetime.now().astimezone().timestamp() * 1000
 
 
-def print_async_exception(coro):
+def log_async_exception(coro):
+    if coro is None:
+        return
     exception = result = None
     with contextlib.suppress(Exception):
         exception = coro.exception()

@@ -26,7 +26,7 @@ from passivbot.utils.funcs.pure import calc_long_pprice
 from passivbot.utils.funcs.pure import get_position_fills
 from passivbot.utils.funcs.pure import ts_to_date
 from passivbot.utils.httpclient import BinanceHTTPClient
-from passivbot.utils.procedures import print_async_exception
+from passivbot.utils.procedures import log_async_exception
 
 log = logging.getLogger(__name__)
 
@@ -217,7 +217,7 @@ class BinanceBotSpot(Bot):
             return Order.from_binance_payload(cancellation, futures=False)
         except Exception as exc:
             log.info("error cancelling order %r: %s", order, exc, exc_info=True)
-            print_async_exception(cancellation)
+            log_async_exception(cancellation)
             self.ts_released["force_update"] = 0.0
         return None
 

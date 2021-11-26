@@ -15,7 +15,7 @@ from passivbot.datastructures.runtime import RuntimeFuturesConfig
 from passivbot.utils.funcs.pure import ts_to_date
 from passivbot.utils.httpclient import BinanceHTTPClient
 from passivbot.utils.httpclient import HTTPRequestError
-from passivbot.utils.procedures import print_async_exception
+from passivbot.utils.procedures import log_async_exception
 
 log = logging.getLogger(__name__)
 
@@ -237,7 +237,7 @@ class BinanceBot(Bot):
             return Order.from_binance_payload(o, futures=True)
         except Exception as e:
             log.info("error executing order %s: %s", order, e, exc_info=True)
-            print_async_exception(o)
+            log_async_exception(o)
         return None
 
     async def execute_cancellation(self, order: Order) -> Order | None:
@@ -252,7 +252,7 @@ class BinanceBot(Bot):
             return Order.from_binance_payload(cancellation, futures=True)
         except Exception as e:
             log.info("error cancelling order %s: %s", order, e, exc_info=True)
-            print_async_exception(cancellation)
+            log_async_exception(cancellation)
             self.ts_released["force_update"] = 0.0
         return None
 
