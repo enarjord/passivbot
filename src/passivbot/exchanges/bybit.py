@@ -7,6 +7,8 @@ import logging
 import time
 from typing import Any
 
+import websockets.exceptions
+
 from passivbot.bot import Bot
 from passivbot.datastructures import Candle
 from passivbot.datastructures import Fill
@@ -502,6 +504,8 @@ class Bybit(Bot):
             await asyncio.sleep(27)
             try:
                 await ws.send(json.dumps({"op": "ping"}))
+            except websockets.exceptions.ConnectionClosedOK:
+                break
             except Exception as e:
                 log.error("error sending heartbeat: %s", e, exc_info=True)
 
