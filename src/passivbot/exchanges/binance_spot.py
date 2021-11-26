@@ -26,6 +26,7 @@ from passivbot.utils.funcs.pure import calc_long_pprice
 from passivbot.utils.funcs.pure import get_position_fills
 from passivbot.utils.funcs.pure import ts_to_date
 from passivbot.utils.httpclient import BinanceHTTPClient
+from passivbot.utils.httpclient import HTTPRequestError
 from passivbot.utils.procedures import log_async_exception
 
 log = logging.getLogger(__name__)
@@ -215,6 +216,9 @@ class BinanceBotSpot(Bot):
             )
             cancellation["symbol"] = order.symbol
             return Order.from_binance_payload(cancellation, futures=False)
+        except HTTPRequestError as exc:
+            log.error("API Error code=%s; message=%s", exc.code, exc.msg)
+            self.ts_released["force_update"] = 0.0
         except Exception as exc:
             log.info("error cancelling order %r: %s", order, exc, exc_info=True)
             log_async_exception(cancellation)
@@ -296,14 +300,15 @@ class BinanceBotSpot(Bot):
             fetched: list[dict[str, Any]] = await self.httpclient.get(  # type: ignore[assignment]
                 "fills", signed=True, params=params
             )
-            fills = [
+            return [
                 Fill.from_binance_payload(x, futures=False, inverse=self.rtc.inverse)
                 for x in fetched
             ]
+        except HTTPRequestError as exc:
+            log.error("API Error code=%s; message=%s", exc.code, exc.msg)
         except Exception as e:
             log.error("error fetching fills a: %s", e, exc_info=True)
-            return []
-        return fills
+        return []
 
     async def fetch_income(
         self,
@@ -318,9 +323,11 @@ class BinanceBotSpot(Bot):
     async def fetch_account(self):
         try:
             return await self.httpclient.get("balance", signed=True)
+        except HTTPRequestError as exc:
+            log.error("API Error code=%s; message=%s", exc.code, exc.msg)
         except Exception as e:
             log.error("error fetching account: %s", e)
-            return {"balances": []}
+        return {"balances": []}
 
     async def fetch_ticks(
         self,
@@ -338,6 +345,9 @@ class BinanceBotSpot(Bot):
             params["endTime"] = end_time
         try:
             fetched: list[dict[str, Any]] = await self.httpclient.get("ticks", params=params)  # type: ignore[assignment]
+        except HTTPRequestError as exc:
+            log.error("API Error code=%s; message=%s", exc.code, exc.msg)
+            return []
         except Exception as e:
             log.error("error fetching ticks a: %s", e)
             return []
@@ -403,9 +413,11 @@ class BinanceBotSpot(Bot):
         try:
             fetched = await self.httpclient.get("ohlcvs", params=params)
             return [Candle.parse_obj(e) for e in fetched]
+        except HTTPRequestError as exc:
+            log.error("API Error code=%s; message=%s", exc.code, exc.msg)
         except Exception as e:
             log.error("error fetching ohlcvs: %s %s", fetched, e, exc_info=True)
-            return []
+        return []
 
     async def transfer(self, type_: str, amount: float, asset: str = "USDT"):
         log.info("transfer not implemented in spot")
@@ -430,6 +442,8 @@ class BinanceBotSpot(Bot):
             self.httpclient.endpoints[
                 "websocket_user"
             ] = f"{self.httpclient.endpoints['websocket']}/{self.listen_key}"
+        except HTTPRequestError as exc:
+            log.error("API Error code=%s; message=%s", exc.code, exc.msg)
         except Exception as e:
             log.error("error fetching listen key: %s", e, exc_info=True)
 

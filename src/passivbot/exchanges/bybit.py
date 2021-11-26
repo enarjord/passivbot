@@ -223,6 +223,8 @@ class Bybit(Bot):
             if o["result"]:
                 return Order.from_bybit_payload(o["result"], created_at_key=self.created_at_key)
             return None
+        except HTTPRequestError as exc:
+            log.error("API Error code=%s; message=%s", exc.code, exc.msg)
         except Exception as e:
             log.error(f"error executing order {order} {e}", exc_info=True)
             log_async_exception(o)
@@ -237,6 +239,8 @@ class Bybit(Bot):
             )
             order.order_id = cancellation["result"]["order_id"]
             return order
+        except HTTPRequestError as exc:
+            log.error("API Error code=%s; message=%s", exc.code, exc.msg)
         except Exception as e:
             log.error(f"error cancelling order {order} {e}", exc_info=True)
             log_async_exception(cancellation)
@@ -247,9 +251,11 @@ class Bybit(Bot):
         try:
             resp = await self.httpclient.get("spot_balance", signed=True)
             return resp["result"]
+        except HTTPRequestError as exc:
+            log.error("API Error code=%s; message=%s", exc.code, exc.msg)
         except Exception as e:
             log.error("error fetching account: %s", e)
-            return {"balances": []}
+        return {"balances": []}
 
     async def fetch_ticks(self, from_id: int | None = None, do_print: bool = True):
         params = {"symbol": self.config.symbol, "limit": 1000}
@@ -257,6 +263,9 @@ class Bybit(Bot):
             params["from"] = max(0, from_id)
         try:
             ticks = await self.httpclient.get("ticks", params=params)
+        except HTTPRequestError as exc:
+            log.error("API Error code=%s; message=%s", exc.code, exc.msg)
+            return []
         except Exception as e:
             log.error("error fetching ticks: %s", e)
             return []
@@ -383,10 +392,12 @@ class Bybit(Bot):
                 ),
                 key=lambda x: x["timestamp"],  # type: ignore[no-any-return]
             )
+        except HTTPRequestError as exc:
+            log.error("API Error code=%s; message=%s", exc.code, exc.msg)
         except Exception as e:
             log.error("error fetching income: %s", e, exc_info=True)
             log_async_exception(fetched)
-            return []
+        return []
 
     async def fetch_fills(
         self,

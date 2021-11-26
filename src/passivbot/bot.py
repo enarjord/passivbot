@@ -28,6 +28,7 @@ from passivbot.utils.funcs.njit import round_dynamic
 from passivbot.utils.funcs.pure import denumpyize
 from passivbot.utils.funcs.pure import filter_orders
 from passivbot.utils.httpclient import HTTPClient
+from passivbot.utils.httpclient import HTTPRequestError
 from passivbot.utils.procedures import load_exchange_key_secret
 from passivbot.utils.procedures import load_live_config
 
@@ -180,6 +181,8 @@ class Bot:
                     await self.update_fills()
                 self.dump_log({"log_type": "position", "data": position})
             self.position = position
+        except HTTPRequestError as exc:
+            log.error("API Error code=%s; message=%s", exc.code, exc.msg)
         except Exception as e:
             log.error("error with update position: %s", e, exc_info=True)
         finally:

@@ -136,9 +136,12 @@ class BinanceBot(Bot):
 
     async def execute_leverage_change(self):
         lev = 7  # arbitrary
-        return await self.httpclient.post(
-            "leverage", params={"symbol": self.config.symbol, "leverage": lev}
-        )
+        try:
+            return await self.httpclient.post(
+                "leverage", params={"symbol": self.config.symbol, "leverage": lev}
+            )
+        except HTTPRequestError as exc:
+            log.error("API Error code=%s; message=%s", exc.code, exc.msg)
 
     async def init_exchange_config(self) -> None:
         try:
@@ -235,6 +238,8 @@ class BinanceBot(Bot):
             log.debug("Create Order Returned Payload: %s", o)
             o["symbol"] = self.config.symbol
             return Order.from_binance_payload(o, futures=True)
+        except HTTPRequestError as exc:
+            log.error("API Error code=%s; message=%s", exc.code, exc.msg)
         except Exception as e:
             log.info("error executing order %s: %s", order, e, exc_info=True)
             log_async_exception(o)
@@ -250,6 +255,8 @@ class BinanceBot(Bot):
 
             cancellation["symbol"] = order.symbol
             return Order.from_binance_payload(cancellation, futures=True)
+        except HTTPRequestError as exc:
+            log.error("API Error code=%s; message=%s", exc.code, exc.msg)
         except Exception as e:
             log.info("error cancelling order %s: %s", order, e, exc_info=True)
             log_async_exception(cancellation)
@@ -276,14 +283,16 @@ class BinanceBot(Bot):
             params["endTime"] = int(min(end_time, start_time + 1000 * 60 * 60 * 24 * 6.99))
         try:
             fetched: list[dict[str, Any]] = await self.httpclient.get("fills", signed=True, params=params)  # type: ignore[assignment]
-            fills = [
+            return [
                 Fill.from_binance_payload(x, futures=True, inverse=self.rtc.inverse)
                 for x in fetched
             ]
+        except HTTPRequestError as exc:
+            log.error("API Error code=%s; message=%s", exc.code, exc.msg)
+            return []
         except Exception as e:
             log.error("error fetching fills: %s", e, exc_info=True)
             return []
-        return fills
 
     async def get_all_income(
         self,
@@ -339,16 +348,20 @@ class BinanceBot(Bot):
                 }
                 for e in fetched
             ]
+        except HTTPRequestError as exc:
+            log.error("API Error code=%s; message=%s", exc.code, exc.msg)
         except Exception as e:
             log.error("error fetching income: %s", e, exc_info=True)
-            return []
+        return []
 
     async def fetch_account(self):
         try:
             return await self.httpclient.get("account", signed=True)
+        except HTTPRequestError as exc:
+            log.error("API Error code=%s; message=%s", exc.code, exc.msg)
         except Exception as e:
             log.error("error fetching account: %s", e, exc_info=True)
-            return {"balances": []}
+        return {"balances": []}
 
     async def fetch_ticks(
         self,
@@ -366,6 +379,9 @@ class BinanceBot(Bot):
             params["endTime"] = end_time
         try:
             fetched: list[dict[str, Any]] = await self.httpclient.get("ticks", params=params)  # type: ignore[assignment]
+        except HTTPRequestError as exc:
+            log.error("API Error code=%s; message=%s", exc.code, exc.msg)
+            return []
         except Exception as e:
             log.error("error fetching ticks a: %s", e)
             return []
@@ -434,6 +450,8 @@ class BinanceBot(Bot):
                 }
                 for e in fetched
             ]
+        except HTTPRequestError as exc:
+            log.error("API Error code=%s; message=%s", exc.code, exc.msg)
         except Exception as e:
             log.error("error fetching ohlcvs: %s - %s", fetched, e, exc_info=True)
 
@@ -460,6 +478,8 @@ class BinanceBot(Bot):
             self.httpclient.endpoints[
                 "websocket_user"
             ] = f'{self.httpclient.endpoints["websocket"]}/{self.listen_key}'
+        except HTTPRequestError as exc:
+            log.error("API Error code=%s; message=%s", exc.code, exc.msg)
         except Exception as e:
             log.error("error fetching listen key: %s", e, exc_info=True)
 
