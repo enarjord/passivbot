@@ -733,15 +733,14 @@ def setup_parser(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("symbol", type=str, help="symbol to trade")
     parser.add_argument("live_config_path", type=str, help="live config to use")
     parser.add_argument(
-        "-gs",
-        "--graceful_stop",
+        "--gs",
         "--graceful-stop",
         action="store_true",
+        dest="graceful_stop",
         help="if true, disable long and short",
     )
     parser.add_argument(
-        "-lw",
-        "--long_wallet_exposure_limit",
+        "--lw",
         "--long-wallet-exposure-limit",
         type=float,
         required=False,
@@ -750,8 +749,7 @@ def setup_parser(parser: argparse.ArgumentParser) -> None:
         help="specify long wallet exposure limit, overriding value from live config",
     )
     parser.add_argument(
-        "-sw",
-        "--short_wallet_exposure_limit",
+        "--sw",
         "--short-wallet-exposure-limit",
         type=float,
         required=False,
@@ -760,8 +758,7 @@ def setup_parser(parser: argparse.ArgumentParser) -> None:
         help="specify short wallet exposure limit, overriding value from live config",
     )
     parser.add_argument(
-        "-ab",
-        "--assigned_balance",
+        "--ab",
         "--assigned-balance",
         type=float,
         required=False,
