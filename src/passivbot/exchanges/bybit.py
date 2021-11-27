@@ -17,6 +17,7 @@ from passivbot.datastructures import Position
 from passivbot.datastructures import Tick
 from passivbot.datastructures.config import NamedConfig
 from passivbot.datastructures.runtime import RuntimeFuturesConfig
+from passivbot.exceptions import PassivBotSystemExit
 from passivbot.utils.funcs.pure import date_to_ts
 from passivbot.utils.funcs.pure import ts_to_date
 from passivbot.utils.httpclient import ByBitHTTPClient
@@ -157,7 +158,9 @@ class Bybit(Bot):
             if symbol_data["name"] == config.symbol.name:
                 break
         else:
-            raise Exception(f"symbol missing {config.symbol.name}")
+            raise PassivBotSystemExit(
+                f"Unknown symbol {config.symbol.name} for the {config.api_key.exchange} exchange."
+            )
 
         assert symbol_data
 

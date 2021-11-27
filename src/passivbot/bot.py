@@ -4,7 +4,6 @@ import argparse
 import asyncio
 import json
 import logging
-import os
 import signal
 import time
 from typing import Any
@@ -18,6 +17,7 @@ from passivbot.datastructures.config import NamedConfig
 from passivbot.datastructures.runtime import RuntimeExchangeConfig
 from passivbot.datastructures.runtime import RuntimeFuturesConfig
 from passivbot.datastructures.runtime import RuntimeSpotConfig
+from passivbot.exceptions import PassivBotSystemExit
 from passivbot.utils.funcs.njit import calc_diff
 from passivbot.utils.funcs.njit import calc_long_close_grid
 from passivbot.utils.funcs.njit import calc_long_entry_grid
@@ -96,6 +96,10 @@ class Bot:
 
     async def _init(self):
         await self.init_fills()
+
+    async def await_closed(self) -> None:
+        if self.httpclient:
+            await self.httpclient.close()
 
     def dump_log(self, data) -> None:
         return
@@ -335,10 +339,49 @@ class Bot:
     def standardize_market_stream_event(self, data: dict[str, Any]) -> list[Tick]:
         raise NotImplementedError
 
-    def stop(self, signum=None, frame=None) -> None:
+    async def _on_signal(self, signum, loop):
+        if signum == signal.SIGINT:
+            signame = "SIGINT"
+        else:
+            signame = "SIGTERM"
+        log.info("Caught %s signal, shutting down", signame)
+        # Ignore the signal, since we've handled it already
+        signal.signal(signum, signal.SIG_IGN)
+        self.stop()
+        await self.await_closed()
+        tasks = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks)
+        loop.stop()
+
+    async def run(self):
+        loop = asyncio.get_event_loop()
+
+        for signum in (signal.SIGINT, signal.SIGTERM):
+            loop.add_signal_handler(
+                signum, lambda signum=signum: asyncio.create_task(self._on_signal(signum, loop))
+            )
+
+        self.stop_websocket = False
+        while not self.stop_websocket:
+            try:
+                await self.start_websocket()
+            except PassivBotSystemExit:
+                self.stop()
+                await self.await_closed()
+                raise
+            except Exception as e:
+                log.error(
+                    "Websocket connection has been lost, attempting to reinitialize the bot: %s",
+                    e,
+                    exc_info=True,
+                )
+                await asyncio.sleep(10)
+
+    def stop(self) -> None:
         log.info("Stopping passivbot, please wait...")
         try:
-
             self.stop_websocket = True
             if self.user_stream_task is not None:
                 self.user_stream_task.cancel()
@@ -677,19 +720,6 @@ class Bot:
         pass
 
 
-async def start_bot(bot):
-    while not bot.stop_websocket:
-        try:
-            await bot.start_websocket()
-        except Exception as e:
-            log.error(
-                "Websocket connection has been lost, attempting to reinitialize the bot: %s",
-                e,
-                exc_info=True,
-            )
-            await asyncio.sleep(10)
-
-
 async def _main(config: NamedConfig) -> None:
 
     from passivbot.exchanges.bybit import Bybit
@@ -711,21 +741,24 @@ async def _main(config: NamedConfig) -> None:
         from passivbot.utils.procedures import create_bybit_bot
 
         bot = await create_bybit_bot(config)
+    else:
+        raise PassivBotSystemExit(f"Don't know how to handle exchange {config.api_key.exchange}")
 
-    signal.signal(signal.SIGINT, bot.stop)
-    signal.signal(signal.SIGTERM, bot.stop)
-    await start_bot(bot)
-    await bot.httpclient.close()
+    await bot.run()
 
 
 def main(config: NamedConfig) -> None:
+    loop = asyncio.get_event_loop()
     try:
-        asyncio.run(_main(config))
+        loop.run_until_complete(_main(config))
+    except asyncio.CancelledError:
+        pass
+    except PassivBotSystemExit:
+        raise
     except Exception as e:
         log.error("There was an error starting the bot: %s", e, exc_info=True)
     finally:
         log.info("Passivbot was stopped successfully")
-        os._exit(0)
 
 
 def setup_parser(parser: argparse.ArgumentParser) -> None:

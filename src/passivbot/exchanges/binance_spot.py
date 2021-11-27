@@ -16,6 +16,7 @@ from passivbot.datastructures import Position
 from passivbot.datastructures import Tick
 from passivbot.datastructures.config import NamedConfig
 from passivbot.datastructures.runtime import RuntimeSpotConfig
+from passivbot.exceptions import PassivBotSystemExit
 from passivbot.utils.funcs.njit import calc_diff
 from passivbot.utils.funcs.njit import calc_long_pnl
 from passivbot.utils.funcs.njit import calc_min_entry_qty
@@ -112,6 +113,10 @@ class BinanceBotSpot(Bot):
                     elif q["filterType"] == "MIN_NOTIONAL":
                         rtc.min_cost = float(q["minNotional"])
                 break
+        else:
+            raise PassivBotSystemExit(
+                f"Unknown symbol {config.symbol.name} for the {config.api_key.exchange} exchange."
+            )
 
     async def _init(self):
         self.httpclient = await self.get_httpclient(self.config)

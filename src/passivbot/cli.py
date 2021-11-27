@@ -14,6 +14,7 @@ import passivbot.utils.logs
 import passivbot.utils.procedures
 from passivbot.datastructures.config import LiveConfig
 from passivbot.datastructures.config import SymbolConfig
+from passivbot.exceptions import PassivBotSystemExit
 from passivbot.version import __version__
 
 try:
@@ -311,4 +312,7 @@ def main() -> None:
             )
 
     # Call the right sub-parser
-    args.func(config.active_config)
+    try:
+        args.func(config.active_config)
+    except PassivBotSystemExit as exc:
+        parser.exit(status=1, message=f"Error: {exc}")

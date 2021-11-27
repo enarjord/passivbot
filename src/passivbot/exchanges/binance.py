@@ -13,6 +13,7 @@ from passivbot.datastructures import Position
 from passivbot.datastructures import Tick
 from passivbot.datastructures.config import NamedConfig
 from passivbot.datastructures.runtime import RuntimeFuturesConfig
+from passivbot.exceptions import PassivBotSystemExit
 from passivbot.utils.funcs.pure import ts_to_date
 from passivbot.utils.httpclient import BinanceHTTPClient
 from passivbot.utils.httpclient import HTTPRequestError
@@ -115,7 +116,9 @@ class BinanceBot(Bot):
                     },
                 )
             else:
-                raise Exception(f"unknown symbol {config.symbol.name}")
+                raise PassivBotSystemExit(
+                    f"Unknown symbol {config.symbol.name} for the {config.api_key.exchange} exchange."
+                )
 
         httpclient.endpoints["transfer"] = "https://api.binance.com/sapi/v1/asset/transfer"
         httpclient.endpoints["account"] = "https://api.binance.com/api/v3/account"
