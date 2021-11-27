@@ -253,7 +253,7 @@ class Downloader:
         @return: Dataframe with first trade later or equal to start time.
         """
         try:
-            ticks = await self.bot.fetch_ticks_time(start_time)
+            ticks = await self.bot.fetch_ticks(start_time)
             return self.transform_ticks(ticks)
         except Exception:
             log.info("Finding id for start time...")

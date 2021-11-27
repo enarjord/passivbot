@@ -351,14 +351,16 @@ class BinanceBotSpot(Bot):
             log.error("error fetching account: %s", e)
         return {"balances": []}
 
+    @staticmethod
     async def fetch_ticks(
-        self,
+        httpclient: BinanceHTTPClient,
+        config: NamedConfig,
         from_id: int | None = None,
         start_time: int | None = None,
         end_time: int | None = None,
         do_print: bool = True,
     ):
-        params = {"symbol": self.config.symbol.name, "limit": 1000}
+        params = {"symbol": config.symbol.name, "limit": 1000}
         if from_id is not None:
             params["fromId"] = max(0, from_id)
         if start_time is not None:
@@ -366,7 +368,7 @@ class BinanceBotSpot(Bot):
         if end_time is not None:
             params["endTime"] = end_time
         try:
-            fetched: list[dict[str, Any]] = await self.httpclient.get("ticks", params=params)  # type: ignore[assignment]
+            fetched: list[dict[str, Any]] = await httpclient.get("ticks", params=params)  # type: ignore[assignment]
         except HTTPRequestError as exc:
             log.error("API Error code=%s; message=%s", exc.code, exc.msg)
             return []
@@ -378,7 +380,7 @@ class BinanceBotSpot(Bot):
             if do_print:
                 log.info(
                     "fetched ticks for symbold %r %s %s",
-                    self.config.symbol.name,
+                    config.symbol.name,
                     ticks[0].trade_id,
                     ts_to_date(float(ticks[0].timestamp) / 1000),
                 )
@@ -386,13 +388,8 @@ class BinanceBotSpot(Bot):
             log.info("error fetching ticks b: %s - %s", e, fetched)
             ticks = []
             if do_print:
-                log.info("fetched no new ticks %s", self.config.symbol.name)
+                log.info("fetched no new ticks %s", config.symbol.name)
         return ticks
-
-    async def fetch_ticks_time(
-        self, start_time: int, end_time: int | None = None, do_print: bool = True
-    ):
-        return await self.fetch_ticks(start_time=start_time, end_time=end_time, do_print=do_print)
 
     async def fetch_ohlcvs(
         self,

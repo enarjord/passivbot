@@ -300,12 +300,18 @@ class Bybit(Bot):
             log.error("error fetching account: %s", e)
         return {"balances": []}
 
-    async def fetch_ticks(self, from_id: int | None = None, do_print: bool = True):
-        params = {"symbol": self.config.symbol.name, "limit": 1000}
+    @staticmethod
+    async def fetch_ticks(
+        httpclient: ByBitHTTPClient,
+        config: NamedConfig,
+        from_id: int | None = None,
+        do_print: bool = True,
+    ):
+        params = {"symbol": config.symbol.name, "limit": 1000}
         if from_id is not None:
             params["from"] = max(0, from_id)
         try:
-            ticks = await self.httpclient.get("ticks", params=params)
+            ticks = await httpclient.get("ticks", params=params)
         except HTTPRequestError as exc:
             log.error("API Error code=%s; message=%s", exc.code, exc.msg)
             return []
@@ -317,14 +323,14 @@ class Bybit(Bot):
             if do_print:
                 log.info(
                     "fetched trades %s %s %s",
-                    self.config.symbol.name,
+                    config.symbol.name,
                     trades[0].trade_id,
                     ts_to_date(float(trades[0].timestamp) / 1000),
                 )
         except Exception:
             trades = []
             if do_print:
-                log.info("fetched no new trades %s", self.config.symbol.name)
+                log.info("fetched no new trades %s", config.symbol.name)
         return trades
 
     async def fetch_ohlcvs(
