@@ -24,6 +24,7 @@ log = logging.getLogger(__name__)
 class BinanceBot(Bot):
 
     rtc: RuntimeFuturesConfig
+    httpclient: BinanceHTTPClient
 
     def __bot_init__(self):
         """
@@ -50,21 +51,17 @@ class BinanceBot(Bot):
             )
         return response
 
-    async def init_market_type(self):
+    @staticmethod
+    async def get_httpclient(config: NamedConfig) -> BinanceHTTPClient:
         fapi_endpoint = "https://fapi.binance.com"
         dapi_endpoint = "https://dapi.binance.com"
-        self.exchange_info = await BinanceHTTPClient.onetime_get(
-            f"{fapi_endpoint}/fapi/v1/exchangeInfo"
-        )
-        if self.config.symbol.name in {e["symbol"] for e in self.exchange_info["symbols"]}:
-            log.info("linear perpetual")
-            self.rtc.market_type += "_linear_perpetual"
-            self.rtc.inverse = False
+        exchange_info = await BinanceBot.get_exchange_info()
+        if config.symbol.name in {e["symbol"] for e in exchange_info["symbols"]}:
             websocket_url = "wss://fstream.binance.com/ws"
-            self.httpclient = BinanceHTTPClient(
+            httpclient = BinanceHTTPClient(
                 fapi_endpoint,
-                self.config.api_key.key,
-                self.config.api_key.secret,
+                config.api_key.key,
+                config.api_key.secret,
                 endpoints={
                     "position": "/fapi/v2/positionRisk",
                     "balance": "/fapi/v2/balance",
@@ -82,24 +79,19 @@ class BinanceBot(Bot):
                     "leverage": "/fapi/v1/leverage",
                     "position_side": "/fapi/v1/positionSide/dual",
                     "websocket": websocket_url,
-                    "websocket_market": f"{websocket_url}/{self.config.symbol.name.lower()}@aggTrade",
+                    "websocket_market": f"{websocket_url}/{config.symbol.name.lower()}@aggTrade",
                     "websocket_user": websocket_url,
                     "listen_key": "/fapi/v1/listenKey",
                 },
             )
         else:
-            self.exchange_info = await BinanceHTTPClient.onetime_get(
-                f"{dapi_endpoint}/dapi/v1/exchangeInfo"
-            )
-            if self.config.symbol.name in {e["symbol"] for e in self.exchange_info["symbols"]}:
-                log.info("inverse coin margined")
-                self.rtc.market_type += "_inverse_coin_margined"
-                self.rtc.inverse = True
+            exchange_info = await BinanceBot.get_exchange_info(inverse=True)
+            if config.symbol.name in {e["symbol"] for e in exchange_info["symbols"]}:
                 websocket_url = "wss://dstream.binance.com/ws"
-                self.httpclient = BinanceHTTPClient(
+                httpclient = BinanceHTTPClient(
                     dapi_endpoint,
-                    self.config.api_key.key,
-                    self.config.api_key.secret,
+                    config.api_key.key,
+                    config.api_key.secret,
                     endpoints={
                         "position": "/dapi/v1/positionRisk",
                         "balance": "/dapi/v1/balance",
@@ -117,20 +109,34 @@ class BinanceBot(Bot):
                         "leverage": "/dapi/v1/leverage",
                         "position_side": "/dapi/v1/positionSide/dual",
                         "websocket": websocket_url,
-                        "websocket_market": f"{websocket_url}/{self.config.symbol.name.lower()}@aggTrade",
+                        "websocket_market": f"{websocket_url}/{config.symbol.name.lower()}@aggTrade",
                         "websocket_user": websocket_url,
                         "listen_key": "/dapi/v1/listenKey",
                     },
                 )
             else:
+                raise Exception(f"unknown symbol {config.symbol.name}")
+
+        httpclient.endpoints["transfer"] = "https://api.binance.com/sapi/v1/asset/transfer"
+        httpclient.endpoints["account"] = "https://api.binance.com/api/v3/account"
+        return httpclient
+
+    async def init_market_type(self):
+        exchange_info = await BinanceBot.get_exchange_info()
+        if self.config.symbol.name in {e["symbol"] for e in exchange_info["symbols"]}:
+            log.info("linear perpetual")
+            self.rtc.market_type += "_linear_perpetual"
+            self.rtc.inverse = False
+        else:
+            exchange_info = await BinanceBot.get_exchange_info(inverse=False)
+            if self.config.symbol.name in {e["symbol"] for e in exchange_info["symbols"]}:
+                log.info("inverse coin margined")
+                self.rtc.market_type += "_inverse_coin_margined"
+                self.rtc.inverse = True
+            else:
                 raise Exception(f"unknown symbol {self.config.symbol.name}")
 
-        self.httpclient.endpoints["transfer"] = "https://api.binance.com/sapi/v1/asset/transfer"
-        self.httpclient.endpoints["account"] = "https://api.binance.com/api/v3/account"
-
-    async def _init(self):
-        await self.init_market_type()
-        for e in self.exchange_info["symbols"]:
+        for e in exchange_info["symbols"]:
             if e["symbol"] == self.config.symbol.name:
                 self.rtc.coin = e["baseAsset"]
                 self.rtc.quote = e["quoteAsset"]
@@ -148,6 +154,10 @@ class BinanceBot(Bot):
                     elif q["filterType"] == "MIN_NOTIONAL":
                         self.rtc.min_cost = float(q["notional"])
                 break
+
+    async def _init(self):
+        self.httpclient = await self.get_httpclient(self.config)
+        await self.init_market_type()
 
         await super()._init()
         await self.init_order_book()

@@ -36,6 +36,7 @@ log = logging.getLogger(__name__)
 class BinanceBotSpot(Bot):
 
     rtc: RuntimeSpotConfig
+    httpclient: BinanceHTTPClient
 
     def __bot_init__(self):
         """
@@ -56,19 +57,13 @@ class BinanceBotSpot(Bot):
         )
         return response
 
-    def init_market_type(self):
-        log.info("spot market")
-        if "spot" not in self.rtc.market_type:
-            self.rtc.market_type += "_spot"
-        self.rtc.inverse = False
-        self.spot = True
-        self.rtc.hedge_mode = False
-        self.rtc.pair = self.config.symbol.name
+    @staticmethod
+    async def get_httpclient(config: NamedConfig) -> BinanceHTTPClient:
         websocket_url = "wss://stream.binance.com/ws"
-        self.httpclient = BinanceHTTPClient(
+        httpclient = BinanceHTTPClient(
             "https://api.binance.com",
-            self.config.api_key.key,
-            self.config.api_key.secret,
+            config.api_key.key,
+            config.api_key.secret,
             endpoints={
                 "balance": "/api/v3/account",
                 "exchange_info": "/api/v3/exchangeInfo",
@@ -80,17 +75,24 @@ class BinanceBotSpot(Bot):
                 "ticks": "/api/v3/aggTrades",
                 "ohlcvs": "/api/v3/klines",
                 "websocket": websocket_url,
-                "websocket_market": f"{websocket_url}/{self.config.symbol.name.lower()}@aggTrade",
+                "websocket_market": f"{websocket_url}/{config.symbol.name.lower()}@aggTrade",
                 "websocket_user": websocket_url,
                 "listen_key": "/api/v3/userDataStream",
                 "transfer": "/sapi/v1/asset/transfer",
                 "account": "/api/v3/account",
             },
         )
+        return httpclient
 
-    async def _init(self):
-        self.init_market_type()
-        exchange_info: dict[str, Any] = await self.httpclient.get("exchange_info")
+    async def init_market_type(self):
+        log.info("spot market")
+        if "spot" not in self.rtc.market_type:
+            self.rtc.market_type += "_spot"
+        self.rtc.inverse = False
+        self.spot = True
+        self.rtc.hedge_mode = False
+        self.rtc.pair = self.config.symbol.name
+        exchange_info: dict[str, Any] = await BinanceBotSpot.get_exchange_info()
         for e in exchange_info["symbols"]:
             if e["symbol"] == self.config.symbol.name:
                 self.rtc.coin = e["baseAsset"]
@@ -111,6 +113,9 @@ class BinanceBotSpot(Bot):
                         self.rtc.min_cost = float(q["minNotional"])
                 break
 
+    async def _init(self):
+        self.httpclient = await self.get_httpclient(self.config)
+        await self.init_market_type()
         await super()._init()
         await self.init_order_book()
         await self.update_position()

@@ -89,6 +89,10 @@ class Bot:
     def get_initial_runtime_config(config: NamedConfig) -> RuntimeFuturesConfig | RuntimeSpotConfig:
         raise NotImplementedError
 
+    @staticmethod
+    async def get_httpclient(config: NamedConfig) -> HTTPClient:
+        raise NotImplementedError
+
     async def _init(self):
         await self.init_fills()
 

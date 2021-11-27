@@ -50,6 +50,7 @@ def determine_pos_side(o: dict[str, Any]) -> str:
 class Bybit(Bot):
 
     rtc: RuntimeFuturesConfig
+    httpclient: ByBitHTTPClient
 
     def __bot_init__(self):
         """
@@ -71,12 +72,9 @@ class Bybit(Bot):
         )
         return response
 
-    def init_market_type(self):
-        if self.config.symbol.name.endswith("USDT"):
-            log.info("linear perpetual")
-            self.rtc.market_type += "_linear_perpetual"
-            self.rtc.inverse = False
-            self.created_at_key = "created_time"
+    @staticmethod
+    async def get_httpclient(config: NamedConfig) -> ByBitHTTPClient:
+        if config.symbol.name.endswith("USDT"):
             endpoints = {
                 "position": "/private/linear/position/list",
                 "open_orders": "/private/linear/order/search",
@@ -91,11 +89,7 @@ class Bybit(Bot):
             }
 
         else:
-            self.created_at_key = "created_at"
-            self.rtc.inverse = True
-            if self.config.symbol.name.endswith("USD"):
-                log.info("inverse perpetual")
-                self.rtc.market_type += "_inverse_perpetual"
+            if config.symbol.name.endswith("USD"):
                 endpoints = {
                     "position": "/v2/private/position/list",
                     "open_orders": "/v2/private/order",
@@ -108,11 +102,7 @@ class Bybit(Bot):
                     "websocket_user": "wss://stream.bybit.com/realtime",
                     "income": "/v2/private/trade/closed-pnl/list",
                 }
-
-                self.rtc.hedge_mode = False
             else:
-                log.info("inverse futures")
-                self.rtc.market_type += "_inverse_futures"
                 endpoints = {
                     "position": "/futures/private/position/list",
                     "open_orders": "/futures/private/order",
@@ -138,14 +128,30 @@ class Bybit(Bot):
                 "ticker": "/v2/public/tickers",
             }
         )
-        self.httpclient = ByBitHTTPClient(
+        return ByBitHTTPClient(
             "https://api.bybit.com",
-            self.config.api_key.key,
-            self.config.api_key.secret,
+            config.api_key.key,
+            config.api_key.secret,
             endpoints=endpoints,
         )
 
-    async def _init(self):
+    async def init_market_type(self):
+        if self.config.symbol.name.endswith("USDT"):
+            log.info("linear perpetual")
+            self.rtc.market_type += "_linear_perpetual"
+            self.rtc.inverse = False
+            self.created_at_key = "created_time"
+        else:
+            self.created_at_key = "created_at"
+            self.rtc.inverse = True
+            if self.config.symbol.name.endswith("USD"):
+                log.info("inverse perpetual")
+                self.rtc.market_type += "_inverse_perpetual"
+                self.rtc.hedge_mode = False
+            else:
+                log.info("inverse futures")
+                self.rtc.market_type += "_inverse_futures"
+
         exchange_info = await self.get_exchange_info()
         results: list[dict[str, Any]] = exchange_info["result"]
         symbol_data: dict[str, Any] | None = None
@@ -164,11 +170,14 @@ class Bybit(Bot):
         self.rtc.qty_step = float(symbol_data["lot_size_filter"]["qty_step"])
         self.rtc.min_qty = float(symbol_data["lot_size_filter"]["min_trading_qty"])
         self.rtc.min_cost = 0.0
-        self.init_market_type()
         if self.rtc.inverse:
             self.rtc.margin_coin = self.rtc.coin
         else:
             self.rtc.margin_coin = self.rtc.quote
+
+    async def _init(self):
+        self.httpclient = await self.get_httpclient(self.config)
+        await self.init_market_type()
         await super()._init()
         await self.init_order_book()
         await self.update_position()
