@@ -5,7 +5,6 @@ import asyncio
 import json
 import logging
 import os
-import pathlib
 import signal
 import time
 from typing import Any
@@ -730,9 +729,6 @@ def main(config: NamedConfig) -> None:
 
 
 def setup_parser(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("user", type=str, help="API key name defined in the configuration")
-    parser.add_argument("symbol", type=str, help="symbol to trade")
-    parser.add_argument("live_config_path", type=pathlib.Path, help="live config to use")
     parser.add_argument(
         "--gs",
         "--graceful-stop",
@@ -771,16 +767,7 @@ def setup_parser(parser: argparse.ArgumentParser) -> None:
 
 
 def process_argparse_parsed_args(parser: argparse.ArgumentParser, args: argparse.Namespace):
-    if args.user and args.key_name:
-        parser.exit(
-            status=1,
-            message=f"Passing 'user({args.user})' and '--key-name={args.key_name}' are mutually exclusive.",
-        )
-    elif args.user and not args.key_name:
-        args.key_name = args.user
-
-    if args.live_config_path:
-        args.config_files.append(args.live_config_path)
+    pass
 
 
 def post_process_argparse_parsed_args(
