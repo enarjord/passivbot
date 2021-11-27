@@ -92,7 +92,11 @@ def setup_parser(parser: argparse.ArgumentParser) -> None:
     parser.set_defaults(func=main)
 
 
-def validate_argparse_parsed_args(
+def process_argparse_parsed_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    pass
+
+
+def post_process_argparse_parsed_args(
     parser: argparse.ArgumentParser, args: argparse.Namespace, config: BaseConfig
 ) -> None:
     validate_backtesting_argparse_args(parser, args)

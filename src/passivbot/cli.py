@@ -148,6 +148,29 @@ def main() -> None:
     else:
         args.basedir = pathlib.Path.cwd()
 
+    try:
+        if args.subparser == "live":
+            passivbot.bot.process_argparse_parsed_args(parser, args)
+        elif BACKTEST_REQUIREMENTS_MISSING is False:
+            if args.subparser == "backtest":
+                passivbot.backtest.process_argparse_parsed_args(parser, args)
+            elif args.subparser == "downloader":
+                passivbot.downloader.process_argparse_parsed_args(parser, args)
+            elif args.subparser == "optimize":
+                passivbot.optimize.process_argparse_parsed_args(parser, args)
+            elif args.subparser == "batch-optimize":
+                passivbot.batch_optimize.process_argparse_parsed_args(parser, args)
+            elif args.subparser == "multi-symbol-optimize":
+                passivbot.multi_symbol_optimize.process_argparse_parsed_args(parser, args)
+    except AttributeError:
+        # process_argparse_parsed_args was not implemented
+        pass
+
+    for config_file in list(args.config_files):
+        if not config_file.exists():
+            log.warning("Config file %s does not exist", config_file)
+            args.config_files.remove(config_file)
+
     if not args.config_files:
         default_config_file = args.basedir / "configs" / "live" / "default.json"
         if not default_config_file.exists():
@@ -268,20 +291,22 @@ def main() -> None:
     )
 
     if args.subparser == "live":
-        passivbot.bot.validate_argparse_parsed_args(parser, args, config.active_config)
+        passivbot.bot.post_process_argparse_parsed_args(parser, args, config.active_config)
     elif BACKTEST_REQUIREMENTS_MISSING is False:
         if args.subparser == "backtest":
-            passivbot.backtest.validate_argparse_parsed_args(parser, args, config.active_config)
+            passivbot.backtest.post_process_argparse_parsed_args(parser, args, config.active_config)
         elif args.subparser == "downloader":
-            passivbot.downloader.validate_argparse_parsed_args(parser, args, config.active_config)
+            passivbot.downloader.post_process_argparse_parsed_args(
+                parser, args, config.active_config
+            )
         elif args.subparser == "optimize":
-            passivbot.optimize.validate_argparse_parsed_args(parser, args, config.active_config)
+            passivbot.optimize.post_process_argparse_parsed_args(parser, args, config.active_config)
         elif args.subparser == "batch-optimize":
-            passivbot.batch_optimize.validate_argparse_parsed_args(
+            passivbot.batch_optimize.post_process_argparse_parsed_args(
                 parser, args, config.active_config
             )
         elif args.subparser == "multi-symbol-optimize":
-            passivbot.multi_symbol_optimize.validate_argparse_parsed_args(
+            passivbot.multi_symbol_optimize.post_process_argparse_parsed_args(
                 parser, args, config.active_config
             )
 
