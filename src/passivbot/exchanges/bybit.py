@@ -57,7 +57,6 @@ class Bybit(Bot):
         Subclass initialization routines
         """
         self.exchange = "bybit"
-        self.created_at_key: str
 
     @staticmethod
     def get_initial_runtime_config(config: NamedConfig) -> RuntimeFuturesConfig:
@@ -135,49 +134,48 @@ class Bybit(Bot):
             endpoints=endpoints,
         )
 
-    async def init_market_type(self):
-        if self.config.symbol.name.endswith("USDT"):
+    @staticmethod
+    async def init_market_type(config: NamedConfig, rtc: RuntimeFuturesConfig):  # type: ignore[override]
+        if config.symbol.name.endswith("USDT"):
             log.info("linear perpetual")
-            self.rtc.market_type += "_linear_perpetual"
-            self.rtc.inverse = False
-            self.created_at_key = "created_time"
+            rtc.market_type += "_linear_perpetual"
+            rtc.inverse = False
         else:
-            self.created_at_key = "created_at"
-            self.rtc.inverse = True
-            if self.config.symbol.name.endswith("USD"):
+            rtc.inverse = True
+            if config.symbol.name.endswith("USD"):
                 log.info("inverse perpetual")
-                self.rtc.market_type += "_inverse_perpetual"
-                self.rtc.hedge_mode = False
+                rtc.market_type += "_inverse_perpetual"
+                rtc.hedge_mode = False
             else:
                 log.info("inverse futures")
-                self.rtc.market_type += "_inverse_futures"
+                rtc.market_type += "_inverse_futures"
 
-        exchange_info = await self.get_exchange_info()
+        exchange_info = await Bybit.get_exchange_info()
         results: list[dict[str, Any]] = exchange_info["result"]
         symbol_data: dict[str, Any] | None = None
         for symbol_data in results:
-            if symbol_data["name"] == self.config.symbol.name:
+            if symbol_data["name"] == config.symbol.name:
                 break
         else:
-            raise Exception(f"symbol missing {self.config.symbol.name}")
+            raise Exception(f"symbol missing {config.symbol.name}")
 
         assert symbol_data
 
-        self.rtc.max_leverage = symbol_data["leverage_filter"]["max_leverage"]
-        self.rtc.coin = symbol_data["base_currency"]
-        self.rtc.quote = symbol_data["quote_currency"]
-        self.rtc.price_step = float(symbol_data["price_filter"]["tick_size"])
-        self.rtc.qty_step = float(symbol_data["lot_size_filter"]["qty_step"])
-        self.rtc.min_qty = float(symbol_data["lot_size_filter"]["min_trading_qty"])
-        self.rtc.min_cost = 0.0
-        if self.rtc.inverse:
-            self.rtc.margin_coin = self.rtc.coin
+        rtc.max_leverage = symbol_data["leverage_filter"]["max_leverage"]
+        rtc.coin = symbol_data["base_currency"]
+        rtc.quote = symbol_data["quote_currency"]
+        rtc.price_step = float(symbol_data["price_filter"]["tick_size"])
+        rtc.qty_step = float(symbol_data["lot_size_filter"]["qty_step"])
+        rtc.min_qty = float(symbol_data["lot_size_filter"]["min_trading_qty"])
+        rtc.min_cost = 0.0
+        if rtc.inverse:
+            rtc.margin_coin = rtc.coin
         else:
-            self.rtc.margin_coin = self.rtc.quote
+            rtc.margin_coin = rtc.quote
 
     async def _init(self):
         self.httpclient = await self.get_httpclient(self.config)
-        await self.init_market_type()
+        await self.init_market_type(self.config, self.rtc)
         await super()._init()
         await self.init_order_book()
         await self.update_position()
@@ -193,8 +191,12 @@ class Bybit(Bot):
         fetched = await self.httpclient.get(
             "open_orders", signed=True, params={"symbol": self.config.symbol.name}
         )
+        if self.rtc.inverse:
+            created_at_key = "created_at"
+        else:
+            created_at_key = "created_time"
         return [
-            Order.from_bybit_payload(elm, created_at_key=self.created_at_key)
+            Order.from_bybit_payload(elm, created_at_key=created_at_key)
             for elm in fetched["result"]
         ]
 
@@ -255,7 +257,11 @@ class Bybit(Bot):
             )
             o = await self.httpclient.post("create_order", params=params)
             if o["result"]:
-                return Order.from_bybit_payload(o["result"], created_at_key=self.created_at_key)
+                if self.rtc.inverse:
+                    created_at_key = "created_at"
+                else:
+                    created_at_key = "created_time"
+                return Order.from_bybit_payload(o["result"], created_at_key=created_at_key)
             return None
         except HTTPRequestError as exc:
             log.error("API Error code=%s; message=%s", exc.code, exc.msg)

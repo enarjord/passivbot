@@ -84,38 +84,38 @@ class BinanceBotSpot(Bot):
         )
         return httpclient
 
-    async def init_market_type(self):
+    @staticmethod
+    async def init_market_type(config: NamedConfig, rtc: RuntimeSpotConfig):  # type: ignore[override]
         log.info("spot market")
-        if "spot" not in self.rtc.market_type:
-            self.rtc.market_type += "_spot"
-        self.rtc.inverse = False
-        self.spot = True
-        self.rtc.hedge_mode = False
-        self.rtc.pair = self.config.symbol.name
+        if "spot" not in rtc.market_type:
+            rtc.market_type += "_spot"
+        rtc.inverse = False
+        rtc.hedge_mode = False
+        rtc.pair = config.symbol.name
         exchange_info: dict[str, Any] = await BinanceBotSpot.get_exchange_info()
         for e in exchange_info["symbols"]:
-            if e["symbol"] == self.config.symbol.name:
-                self.rtc.coin = e["baseAsset"]
-                self.rtc.quote = e["quoteAsset"]
-                self.rtc.margin_coin = e["quoteAsset"]
+            if e["symbol"] == config.symbol.name:
+                rtc.coin = e["baseAsset"]
+                rtc.quote = e["quoteAsset"]
+                rtc.margin_coin = e["quoteAsset"]
                 for q in e["filters"]:
                     if q["filterType"] == "LOT_SIZE":
-                        self.rtc.min_qty = float(q["minQty"])
-                        self.rtc.qty_step = float(q["stepSize"])
+                        rtc.min_qty = float(q["minQty"])
+                        rtc.qty_step = float(q["stepSize"])
                     elif q["filterType"] == "PRICE_FILTER":
-                        self.rtc.price_step = float(q["tickSize"])
-                        self.rtc.min_price = float(q["minPrice"])
-                        self.rtc.max_price = float(q["maxPrice"])
+                        rtc.price_step = float(q["tickSize"])
+                        rtc.min_price = float(q["minPrice"])
+                        rtc.max_price = float(q["maxPrice"])
                     elif q["filterType"] == "PERCENT_PRICE":
-                        self.rtc.price_multiplier_up = float(q["multiplierUp"])
-                        self.rtc.price_multiplier_dn = float(q["multiplierDown"])
+                        rtc.price_multiplier_up = float(q["multiplierUp"])
+                        rtc.price_multiplier_dn = float(q["multiplierDown"])
                     elif q["filterType"] == "MIN_NOTIONAL":
-                        self.rtc.min_cost = float(q["minNotional"])
+                        rtc.min_cost = float(q["minNotional"])
                 break
 
     async def _init(self):
         self.httpclient = await self.get_httpclient(self.config)
-        await self.init_market_type()
+        await self.init_market_type(self.config, self.rtc)
         await super()._init()
         await self.init_order_book()
         await self.update_position()

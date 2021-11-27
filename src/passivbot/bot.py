@@ -15,6 +15,7 @@ from passivbot.datastructures import Position
 from passivbot.datastructures import StopMode
 from passivbot.datastructures import Tick
 from passivbot.datastructures.config import NamedConfig
+from passivbot.datastructures.runtime import RuntimeExchangeConfig
 from passivbot.datastructures.runtime import RuntimeFuturesConfig
 from passivbot.datastructures.runtime import RuntimeSpotConfig
 from passivbot.utils.funcs.njit import calc_diff
@@ -302,7 +303,8 @@ class Bot:
     async def init_order_book(self) -> None:
         raise NotImplementedError
 
-    async def init_market_type(self) -> None:
+    @staticmethod
+    async def init_market_type(config: NamedConfig, rct: RuntimeExchangeConfig) -> None:
         raise NotImplementedError
 
     async def fetch_open_orders(self) -> list[Order]:

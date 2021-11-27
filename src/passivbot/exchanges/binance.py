@@ -121,44 +121,44 @@ class BinanceBot(Bot):
         httpclient.endpoints["account"] = "https://api.binance.com/api/v3/account"
         return httpclient
 
-    async def init_market_type(self):
+    @staticmethod
+    async def init_market_type(config: NamedConfig, rtc: RuntimeFuturesConfig):  # type: ignore[override]
         exchange_info = await BinanceBot.get_exchange_info()
-        if self.config.symbol.name in {e["symbol"] for e in exchange_info["symbols"]}:
+        if config.symbol.name in {e["symbol"] for e in exchange_info["symbols"]}:
             log.info("linear perpetual")
-            self.rtc.market_type += "_linear_perpetual"
-            self.rtc.inverse = False
+            rtc.market_type += "_linear_perpetual"
+            rtc.inverse = False
         else:
             exchange_info = await BinanceBot.get_exchange_info(inverse=False)
-            if self.config.symbol.name in {e["symbol"] for e in exchange_info["symbols"]}:
+            if config.symbol.name in {e["symbol"] for e in exchange_info["symbols"]}:
                 log.info("inverse coin margined")
-                self.rtc.market_type += "_inverse_coin_margined"
-                self.rtc.inverse = True
+                rtc.market_type += "_inverse_coin_margined"
+                rtc.inverse = True
             else:
-                raise Exception(f"unknown symbol {self.config.symbol.name}")
+                raise Exception(f"unknown symbol {config.symbol.name}")
 
         for e in exchange_info["symbols"]:
-            if e["symbol"] == self.config.symbol.name:
-                self.rtc.coin = e["baseAsset"]
-                self.rtc.quote = e["quoteAsset"]
-                self.rtc.margin_coin = e["marginAsset"]
-                self.rtc.pair = e["pair"]
-                if "inverse_coin_margined" in self.rtc.market_type:
-                    self.rtc.c_mult = float(e["contractSize"])
+            if e["symbol"] == config.symbol.name:
+                rtc.coin = e["baseAsset"]
+                rtc.quote = e["quoteAsset"]
+                rtc.margin_coin = e["marginAsset"]
+                rtc.pair = e["pair"]
+                if "inverse_coin_margined" in rtc.market_type:
+                    rtc.c_mult = float(e["contractSize"])
                 for q in e["filters"]:
                     if q["filterType"] == "LOT_SIZE":
-                        self.rtc.min_qty = float(q["minQty"])
+                        rtc.min_qty = float(q["minQty"])
                     elif q["filterType"] == "MARKET_LOT_SIZE":
-                        self.rtc.qty_step = float(q["stepSize"])
+                        rtc.qty_step = float(q["stepSize"])
                     elif q["filterType"] == "PRICE_FILTER":
-                        self.rtc.price_step = float(q["tickSize"])
+                        rtc.price_step = float(q["tickSize"])
                     elif q["filterType"] == "MIN_NOTIONAL":
-                        self.rtc.min_cost = float(q["notional"])
+                        rtc.min_cost = float(q["notional"])
                 break
 
     async def _init(self):
         self.httpclient = await self.get_httpclient(self.config)
-        await self.init_market_type()
-
+        await self.init_market_type(self.config, self.rtc)
         await super()._init()
         await self.init_order_book()
         await self.update_position()
