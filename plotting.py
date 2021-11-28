@@ -91,21 +91,21 @@ def dump_plots(result: dict, fdf: pd.DataFrame, sdf: pd.DataFrame, df: pd.DataFr
     print('\nplotting balance and equity...')
     plt.clf()
     sdf.balance.plot()
-    sdf.equity.plot()
+    sdf.equity.plot(title="Balance and equity", xlabel="Time", ylabel="Balance")
     plt.savefig(f"{result['plots_dirpath']}balance_and_equity_sampled.png")
 
 
     plt.clf()
-    longs.pnl.cumsum().plot()
+    longs.pnl.cumsum().plot(title="PNL cumulated sum - Long", xlabel="Time", ylabel="PNL")
     plt.savefig(f"{result['plots_dirpath']}pnl_cumsum_long.png")
 
     plt.clf()
-    shrts.pnl.cumsum().plot()
+    shrts.pnl.cumsum().plot(title="PNL cumulated sum - Short", xlabel="Time", ylabel="PNL")
     plt.savefig(f"{result['plots_dirpath']}pnl_cumsum_shrt.png")
 
     adg = (sdf.equity / sdf.equity.iloc[0]) ** (1 / ((sdf.timestamp - sdf.timestamp.iloc[0]) / (1000 * 60 * 60 * 24)))
     plt.clf()
-    adg.plot()
+    adg.plot(title="Average daily gain", xlabel="Time", ylabel="Average daily gain")
     plt.savefig(f"{result['plots_dirpath']}adg.png")
 
     print('plotting backtest whole and in chunks...')
@@ -114,22 +114,22 @@ def dump_plots(result: dict, fdf: pd.DataFrame, sdf: pd.DataFrame, df: pd.DataFr
         start_ = z / n_parts
         end_ = (z + 1) / n_parts
         print(f'{z} of {n_parts} {start_ * 100:.2f}% to {end_ * 100:.2f}%')
-        fig = plot_fills(df, fdf.iloc[int(len(fdf) * start_):int(len(fdf) * end_)], bkr_thr=0.1)
+        fig = plot_fills(df, fdf.iloc[int(len(fdf) * start_):int(len(fdf) * end_)], bkr_thr=0.1, title=f'Fills {z+1} of {n_parts}')
         if fig is not None:
             fig.savefig(f"{result['plots_dirpath']}backtest_{z + 1}of{n_parts}.png")
         else:
             print('no fills...')
-    fig = plot_fills(df, fdf, bkr_thr=0.1, plot_whole_df=True)
+    fig = plot_fills(df, fdf, bkr_thr=0.1, plot_whole_df=True, title='Overview Fills')
     fig.savefig(f"{result['plots_dirpath']}whole_backtest.png")
 
     print('plotting pos sizes...')
     plt.clf()
     longs.psize.plot()
-    shrts.psize.plot()
+    shrts.psize.plot(title="Position size in terms of contracts", xlabel="Time", ylabel="Position size")
     plt.savefig(f"{result['plots_dirpath']}psizes_plot.png")
 
 
-def plot_fills(df, fdf_, side: int = 0, bkr_thr=0.1, plot_whole_df: bool = False):
+def plot_fills(df, fdf_, side: int = 0, bkr_thr=0.1, plot_whole_df: bool = False, title = ''):
     if fdf_.empty:
         return
     plt.clf()
@@ -140,7 +140,7 @@ def plot_fills(df, fdf_, side: int = 0, bkr_thr=0.1, plot_whole_df: bool = False
     if not plot_whole_df:
         dfc = dfc[(dfc.index > fdf.index[0]) & (dfc.index < fdf.index[-1])]
         dfc = dfc.loc[fdf.index[0]:fdf.index[-1]]
-    dfc.price.plot(style='y-')
+    dfc.price.plot(style='y-',title=title, xlabel="Time", ylabel="Price + Fills")
 
     if side >= 0:
         longs = fdf[fdf.type.str.contains('long')]
