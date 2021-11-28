@@ -27,13 +27,14 @@ from passivbot.utils.funcs.njit import round_
 from passivbot.utils.funcs.njit import round_dynamic
 from passivbot.utils.funcs.pure import filter_orders
 from passivbot.utils.httpclient import HTTPClient
+from passivbot.utils.httpclient import HTTPClientProtocol
 from passivbot.utils.httpclient import HTTPRequestError
 
 log = logging.getLogger(__name__)
 
 
 class Bot:
-    httpclient: HTTPClient
+    httpclient: HTTPClientProtocol
     rtc: RuntimeFuturesConfig | RuntimeSpotConfig
 
     def __init__(self, config: NamedConfig):
@@ -831,3 +832,9 @@ def post_process_argparse_parsed_args(
             f"with new value: {args.short_wallet_exposure_limit}"
         )
         config.short.wallet_exposure_limit = args.short_wallet_exposure_limit
+
+    log.info(
+        "Selected configuration for symbol %r:\n%s",
+        config.symbol,
+        config.json(indent=2),
+    )

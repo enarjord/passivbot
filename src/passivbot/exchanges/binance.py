@@ -16,6 +16,7 @@ from passivbot.datastructures.runtime import RuntimeFuturesConfig
 from passivbot.exceptions import PassivBotSystemExit
 from passivbot.utils.funcs.pure import ts_to_date
 from passivbot.utils.httpclient import BinanceHTTPClient
+from passivbot.utils.httpclient import HTTPClientProtocol
 from passivbot.utils.httpclient import HTTPRequestError
 from passivbot.utils.procedures import log_async_exception
 
@@ -25,7 +26,6 @@ log = logging.getLogger(__name__)
 class BinanceBot(Bot):
 
     rtc: RuntimeFuturesConfig
-    httpclient: BinanceHTTPClient
 
     def __bot_init__(self):
         """
@@ -397,13 +397,13 @@ class BinanceBot(Bot):
 
     @staticmethod
     async def fetch_ticks(
-        httpclient: BinanceHTTPClient,
+        httpclient: HTTPClientProtocol,
         config: NamedConfig,
         from_id: int | None = None,
         start_time: int | None = None,
         end_time: int | None = None,
         do_print: bool = True,
-    ):
+    ) -> list[Tick]:
         params = {"symbol": config.symbol.name, "limit": 1000}
         if from_id is not None:
             params["fromId"] = max(0, from_id)
@@ -427,6 +427,7 @@ class BinanceBot(Bot):
                     config.symbol.name,
                     ticks[0].trade_id,
                     ts_to_date(float(ticks[0].timestamp) / 1000),
+                    wipe_line=True,
                 )
         except Exception as e:
             log.error("error fetching ticks b: %s  %s", e, fetched)

@@ -194,6 +194,15 @@ class NamedConfig(PassivbotBaseModel):
         return fields
 
 
+class DownloaderNamedConfig(NamedConfig):
+
+    _parent: DownloaderConfig = PrivateAttr()
+
+    @property
+    def parent(self) -> DownloaderConfig:
+        return self._parent
+
+
 class LoggingCliConfig(PassivbotBaseModel):
     level: str = "info"
     datefmt: str = "%H:%M:%S"
@@ -314,9 +323,29 @@ class LiveConfig(BaseConfig, SymbolsMixin):
         return self._active_config
 
 
-class DownloaderConfig(BaseConfig):
-    start_date: datetime.datetime
-    end_date: datetime.datetime
+class BaseBacktestConfig(BaseConfig, SymbolsMixin):
+    start_date: Optional[datetime.datetime] = None
+    end_date: Optional[datetime.datetime] = None
+    data_dir: Optional[pathlib.Path] = None
+    backtests_dir: Optional[pathlib.Path] = None
+
+    # Private attributes
+    _active_config: NamedConfig = PrivateAttr()
+
+    @property
+    def active_config(self) -> NamedConfig:
+        return self._active_config
+
+
+class DownloaderConfig(BaseBacktestConfig):
+    download_only: bool = False
+
+    # Private attributes
+    _active_config: DownloaderNamedConfig = PrivateAttr()
+
+    @property
+    def active_config(self) -> DownloaderNamedConfig:
+        return self._active_config
 
 
 def merge_dictionaries(target_dict: Dict[Any, Any], *source_dicts: Dict[Any, Any]) -> None:

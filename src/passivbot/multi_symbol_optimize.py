@@ -13,7 +13,7 @@ from typing import Any
 import numpy as np
 
 from passivbot.backtest import backtest
-from passivbot.config import BaseConfig
+from passivbot.datastructures.config import BaseConfig
 from passivbot.downloader import Downloader
 from passivbot.utils.funcs.pure import analyze_fills
 from passivbot.utils.funcs.pure import candidate_to_live_config

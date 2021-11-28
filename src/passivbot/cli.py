@@ -12,6 +12,7 @@ from pydantic import ValidationError
 import passivbot.bot
 import passivbot.utils.logs
 import passivbot.utils.procedures
+from passivbot.datastructures.config import DownloaderConfig
 from passivbot.datastructures.config import LiveConfig
 from passivbot.datastructures.config import SymbolConfig
 from passivbot.exceptions import PassivBotSystemExit
@@ -189,7 +190,7 @@ def main() -> None:
         elif args.subparser == "backtest":
             config = LiveConfig.parse_files(*args.config_files)
         elif args.subparser == "downloader":
-            config = LiveConfig.parse_files(*args.config_files)
+            config = DownloaderConfig.parse_files(*args.config_files)
         elif args.subparser == "optimize":
             config = LiveConfig.parse_files(*args.config_files)
         elif args.subparser == "batch-optimize":
@@ -284,12 +285,6 @@ def main() -> None:
         log.info("numba.njit compilation is disabled")
     else:
         log.info("numba.njit compilation is enabled")
-
-    log.info(
-        "Selected configuration for symbol %r:\n%s",
-        config.active_config.symbol,
-        config.active_config.json(indent=2),
-    )
 
     if args.subparser == "live":
         passivbot.bot.post_process_argparse_parsed_args(parser, args, config.active_config)

@@ -22,7 +22,7 @@ from ray.tune.suggest.nevergrad import NevergradSearch
 
 from passivbot.backtest import backtest
 from passivbot.backtest import plot_wrap
-from passivbot.config import BaseConfig
+from passivbot.datastructures.config import BaseConfig
 from passivbot.downloader import Downloader
 from passivbot.utils.funcs.njit import round_dynamic
 from passivbot.utils.funcs.pure import analyze_fills

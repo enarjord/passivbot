@@ -21,6 +21,7 @@ from passivbot.exceptions import PassivBotSystemExit
 from passivbot.utils.funcs.pure import date_to_ts
 from passivbot.utils.funcs.pure import ts_to_date
 from passivbot.utils.httpclient import ByBitHTTPClient
+from passivbot.utils.httpclient import HTTPClientProtocol
 from passivbot.utils.httpclient import HTTPRequestError
 from passivbot.utils.procedures import log_async_exception
 
@@ -51,7 +52,6 @@ def determine_pos_side(o: dict[str, Any]) -> str:
 class Bybit(Bot):
 
     rtc: RuntimeFuturesConfig
-    httpclient: ByBitHTTPClient
 
     def __bot_init__(self):
         """
@@ -302,11 +302,11 @@ class Bybit(Bot):
 
     @staticmethod
     async def fetch_ticks(
-        httpclient: ByBitHTTPClient,
+        httpclient: HTTPClientProtocol,
         config: NamedConfig,
         from_id: int | None = None,
         do_print: bool = True,
-    ):
+    ) -> list[Tick]:
         params = {"symbol": config.symbol.name, "limit": 1000}
         if from_id is not None:
             params["from"] = max(0, from_id)
@@ -322,10 +322,11 @@ class Bybit(Bot):
             trades = [Tick.from_bybit_payload(tick) for tick in ticks["result"]]
             if do_print:
                 log.info(
-                    "fetched trades %s %s %s",
+                    "Fetched ticks for symbol %r %s %s",
                     config.symbol.name,
                     trades[0].trade_id,
                     ts_to_date(float(trades[0].timestamp) / 1000),
+                    wipe_line=True,
                 )
         except Exception:
             trades = []
