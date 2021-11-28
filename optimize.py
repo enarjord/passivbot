@@ -261,7 +261,7 @@ def backtest_tune(data: np.ndarray, config: dict, current_best: Union[dict, list
 
     backtest_wrap = tune.with_parameters(simple_sliding_window_wrap, data=data,
                                          do_print=(config['print_slice_progress']
-                                                   if 'print_slice_progress' in config else True))
+                                                   if 'print_slice_progress' in config else False))
     analysis = tune.run(
         backtest_wrap, metric='obj', mode='max', name='search',
         search_alg=algo, scheduler=scheduler, num_samples=config['iters'], config=config, verbose=1,
@@ -277,7 +277,8 @@ def backtest_tune(data: np.ndarray, config: dict, current_best: Union[dict, list
                             'hrs_stuck_avg_avg',
                             'n_slc',
                             'obj'],
-            parameter_columns=parameter_columns),
+            parameter_columns=parameter_columns,
+            max_report_frequency=30),
         raise_on_failed_trial=False
     )
     ray.shutdown()
