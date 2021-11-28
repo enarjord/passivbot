@@ -33,7 +33,7 @@ from passivbot.utils.funcs.pure import unpack_config
 from passivbot.utils.procedures import add_backtesting_argparse_args
 from passivbot.utils.procedures import load_live_config
 from passivbot.utils.procedures import prepare_optimize_config
-from passivbot.utils.procedures import validate_backtesting_argparse_args
+from passivbot.utils.procedures import post_process_backtesting_argparse_parsed_args
 from passivbot.utils.reporter import LogReporter
 
 log = logging.getLogger(__name__)
@@ -461,4 +461,4 @@ def process_argparse_parsed_args(parser: argparse.ArgumentParser, args: argparse
 def post_process_argparse_parsed_args(
     parser: argparse.ArgumentParser, args: argparse.Namespace, config: BaseConfig
 ) -> None:
-    validate_backtesting_argparse_args(parser, args)
+    post_process_backtesting_argparse_parsed_args(parser, args)

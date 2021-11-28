@@ -318,7 +318,7 @@ def add_backtesting_argparse_args(parser):
     return parser
 
 
-def validate_backtesting_argparse_args(
+def post_process_backtesting_argparse_parsed_args(
     parser: argparse.ArgumentParser, args: argparse.Namespace
 ) -> None:
     """
