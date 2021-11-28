@@ -10,7 +10,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from passivbot.config import BaseConfig
+from passivbot.datastructures.config import NamedConfig
 from passivbot.downloader import Downloader
 from passivbot.utils.funcs.njit import njit_backtest
 from passivbot.utils.funcs.njit import round_
