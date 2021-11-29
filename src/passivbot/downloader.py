@@ -14,7 +14,6 @@ import urllib.request
 import zipfile
 from typing import cast
 
-import dateutil.parser
 import numpy as np
 import pandas as pd
 
@@ -29,6 +28,8 @@ from passivbot.exchanges.bybit import Bybit
 from passivbot.utils.funcs.njit import calc_samples
 from passivbot.utils.funcs.pure import ts_to_date
 from passivbot.utils.httpclient import HTTPClientProtocol
+from passivbot.utils.procedures import add_backtesting_argparse_args
+from passivbot.utils.procedures import post_process_backtesting_argparse_parsed_args
 from passivbot.utils.procedures import utc_ms
 
 log = logging.getLogger(__name__)
@@ -68,6 +69,12 @@ class Downloader:
         loop.stop()
 
     async def run(self):
+        loop = asyncio.get_event_loop()
+
+        for signum in (signal.SIGINT, signal.SIGTERM):
+            loop.add_signal_handler(
+                signum, lambda signum=signum: asyncio.create_task(self._on_signal(signum, loop))
+            )
         try:
             await self._init()
             await self.download_ticks()
@@ -77,12 +84,6 @@ class Downloader:
             await self.await_closed()
 
     async def _init(self):
-        loop = asyncio.get_event_loop()
-
-        for signum in (signal.SIGINT, signal.SIGTERM):
-            loop.add_signal_handler(
-                signum, lambda signum=signum: asyncio.create_task(self._on_signal(signum, loop))
-            )
         if self.config.api_key.exchange == "binance":
             if self.config.market_type == "spot":
                 self.bot_cls = BinanceBotSpot
@@ -978,49 +979,7 @@ def main(config: DownloaderNamedConfig) -> None:
 
 
 def setup_parser(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument(
-        "--dt",
-        "--data-dir",
-        type=pathlib.Path,
-        default=None,
-        dest="data_dir",
-        help="Path to where the downloaded historical data should be stored",
-    )
-    parser.add_argument(
-        "--bd",
-        "--backtests-dir",
-        type=pathlib.Path,
-        default=None,
-        dest="backtests_dir",
-        help="Path to where the backtests data should be stored",
-    )
-    parser.add_argument(
-        "-d",
-        "--download-only",
-        default=False,
-        help="download only, do not dump ticks caches",
-        action="store_true",
-    )
-    parser.add_argument(
-        "--sd",
-        "--start_date",
-        "--start-date",
-        type=str,
-        required=True,
-        dest="start_date",
-        default=None,
-        help="Specify start date",
-    )
-    parser.add_argument(
-        "--ed",
-        "--end_date",
-        "--end-date",
-        type=str,
-        required=True,
-        dest="end_date",
-        default=None,
-        help="Specify end date",
-    )
+    add_backtesting_argparse_args(parser)
     parser.set_defaults(func=main)
 
 
@@ -1031,26 +990,5 @@ def process_argparse_parsed_args(parser: argparse.ArgumentParser, args: argparse
 def post_process_argparse_parsed_args(
     parser: argparse.ArgumentParser, args: argparse.Namespace, config: DownloaderNamedConfig
 ) -> None:
-    if not args.data_dir:
-        args.data_dir = args.basedir / "historical_data"
-
-    if not args.backtests_dir:
-        args.backtests_dir = args.basedir / "backtests"
-
-    config.parent.data_dir = args.data_dir
-    config.parent.backtests_dir = args.backtests_dir
+    post_process_backtesting_argparse_parsed_args(parser, args, config)
     config.parent.download_only = args.download_only
-
-    if args.start_date:
-        config.parent.start_date = dateutil.parser.parse(args.start_date).replace(
-            tzinfo=datetime.timezone.utc
-        )
-    if args.end_date:
-        config.parent.end_date = dateutil.parser.parse(args.end_date).replace(
-            tzinfo=datetime.timezone.utc
-        )
-
-    if config.parent.start_date is None:
-        parser.exit(status=1, message="No start date was passed")
-    if config.parent.end_date is None:
-        parser.exit(status=1, message="No end date was passed")

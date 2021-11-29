@@ -12,6 +12,7 @@ from pydantic import ValidationError
 import passivbot.bot
 import passivbot.utils.logs
 import passivbot.utils.procedures
+from passivbot.datastructures.config import BacktestConfig
 from passivbot.datastructures.config import DownloaderConfig
 from passivbot.datastructures.config import LiveConfig
 from passivbot.datastructures.config import SymbolConfig
@@ -26,10 +27,11 @@ try:
     import passivbot.optimize
 
     BACKTEST_REQUIREMENTS_MISSING = False
-except ImportError:
+except ImportError as exc:
     BACKTEST_REQUIREMENTS_MISSING = True
-
-BACKTEST_REQUIREMENTS_MISSING_ERROR = "ATTENTION!!!! Backtesting requirements are missing."
+    BACKTEST_REQUIREMENTS_MISSING_ERROR = (
+        f"ATTENTION!!!! Backtesting requirements are missing: {exc}"
+    )
 
 log = logging.getLogger(__name__)
 
@@ -188,7 +190,7 @@ def main() -> None:
         if args.subparser == "live":
             config = LiveConfig.parse_files(*args.config_files)
         elif args.subparser == "backtest":
-            config = LiveConfig.parse_files(*args.config_files)
+            config = BacktestConfig.parse_files(*args.config_files)
         elif args.subparser == "downloader":
             config = DownloaderConfig.parse_files(*args.config_files)
         elif args.subparser == "optimize":

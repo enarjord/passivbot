@@ -24,10 +24,10 @@ class RuntimeExchangeConfig(BaseModel):
     do_long: bool = True
     do_short: bool = True
     inverse: bool = True
+    spot: bool = False
 
 
 class RuntimeFuturesConfig(RuntimeExchangeConfig):
-    spot: bool = False
     market_type: str = "futures"
     max_leverage: int = 25
     short: ShortConfig

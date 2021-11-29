@@ -203,6 +203,15 @@ class DownloaderNamedConfig(NamedConfig):
         return self._parent
 
 
+class BacktestNamedConfig(NamedConfig):
+
+    _parent: BacktestConfig = PrivateAttr()
+
+    @property
+    def parent(self) -> BacktestConfig:
+        return self._parent
+
+
 class LoggingCliConfig(PassivbotBaseModel):
     level: str = "info"
     datefmt: str = "%H:%M:%S"
@@ -345,6 +354,19 @@ class DownloaderConfig(BaseBacktestConfig):
 
     @property
     def active_config(self) -> DownloaderNamedConfig:
+        return self._active_config
+
+
+class BacktestConfig(BaseBacktestConfig):
+
+    starting_balance: float = Field(10000.0, ge=1.0)
+    latency_simulation_ms: int = Field(1000, ge=0)
+
+    # Private attributes
+    _active_config: BacktestNamedConfig = PrivateAttr()
+
+    @property
+    def active_config(self) -> BacktestNamedConfig:
         return self._active_config
 
 

@@ -2,22 +2,23 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import datetime
 import json
 import logging
 import pathlib
 import time
-from datetime import datetime
 from typing import Any
 from typing import TYPE_CHECKING
 
+import dateutil.parser
 import hjson
 import numpy as np
 import pandas as pd
 
+from passivbot.datastructures.config import BaseBacktestConfig
 from passivbot.datastructures.config import NamedConfig
 from passivbot.utils.funcs.njit import calc_samples
 from passivbot.utils.funcs.pure import candidate_to_live_config
-from passivbot.utils.funcs.pure import config_pretty_str
 from passivbot.utils.funcs.pure import date_to_ts
 from passivbot.utils.funcs.pure import get_dummy_settings
 from passivbot.utils.funcs.pure import get_template_live_config
@@ -49,8 +50,21 @@ def load_live_config(live_config_path: str) -> dict[str, Any]:
 
 
 def dump_live_config(config: dict[str, Any], path: pathlib.Path) -> None:
-    pretty_str = config_pretty_str(candidate_to_live_config(config))
-    path.write_text(pretty_str)
+    candidate_config = candidate_to_live_config(config)
+    name = candidate_config.pop("config_name")
+    live_config = NamedConfig.parse_obj(candidate_config)
+    write_config = {
+        "configs": {
+            name: live_config.dict(
+                exclude={
+                    "stop_mode": ...,
+                    "max_leverage": ...,
+                    "assigned_balance": ...,
+                }
+            )
+        }
+    }
+    path.write_text(json.dumps(write_config, indent=2))
 
 
 def load_config_files(config_paths: list[str] | None = None) -> dict[str, Any] | None:
@@ -241,117 +255,76 @@ async def create_bybit_bot(config: NamedConfig) -> "Bybit":
 
 def add_backtesting_argparse_args(parser):
     parser.add_argument(
-        "-b",
-        "--backtest_config",
-        "--backtest-config",
-        type=str,
-        required=False,
-        dest="backtest_config_path",
-        default="configs/backtest/default.hjson",
-        help="backtest config hjson file",
-    )
-    parser.add_argument(
-        "-u",
-        "--user",
-        type=str,
-        required=False,
-        dest="user",
+        "--dt",
+        "--data-dir",
+        type=pathlib.Path,
         default=None,
-        help="DEPRECATED: specify user, a.k.a. account_name, overriding user from backtest config",
+        dest="data_dir",
+        help="Path to where the downloaded historical data should be stored",
     )
     parser.add_argument(
-        "-sd",
+        "--bd",
+        "--backtests-dir",
+        type=pathlib.Path,
+        default=None,
+        dest="backtests_dir",
+        help="Path to where the backtests data should be stored",
+    )
+    parser.add_argument(
+        "-d",
+        "--download-only",
+        default=False,
+        help="download only, do not dump ticks caches",
+        action="store_true",
+    )
+    parser.add_argument(
+        "--sd",
         "--start_date",
         "--start-date",
         type=str,
-        required=False,
+        required=True,
         dest="start_date",
         default=None,
-        help="specify start date, overriding value from backtest config",
+        help="Specify start date",
     )
     parser.add_argument(
-        "-ed",
+        "--ed",
         "--end_date",
         "--end-date",
         type=str,
-        required=False,
+        required=True,
         dest="end_date",
         default=None,
-        help="specify end date, overriding value from backtest config",
+        help="Specify end date",
     )
-    parser.add_argument(
-        "--starting_balance",
-        "--starting-balance",
-        type=float,
-        required=False,
-        dest="starting_balance",
-        default=None,
-        help="specify starting_balance, overriding value from backtest config",
-    )
-    parser.add_argument(
-        "--market_type",
-        type=str,
-        choices=["futures", "spot"],
-        required=False,
-        dest="old_market_type",
-        default=None,
-        help="DEPRECATED: specify whether spot or futures (default), overriding value from backtest config",
-    )
-    parser.add_argument(
-        "--base_dir",
-        type=str,
-        required=False,
-        dest="base_dir",
-        default=None,
-        help="[DEPRECATED] specify the base output directory for the results",
-    )
-    parser.add_argument(
-        "-bd",
-        "--backtests-dir",
-        type=pathlib.Path,
-        required=False,
-        dest="backtests_dir",
-        default=None,
-        help="Base output directory for the backtest results",
-    )
-
     return parser
 
 
 def post_process_backtesting_argparse_parsed_args(
-    parser: argparse.ArgumentParser, args: argparse.Namespace
+    parser: argparse.ArgumentParser, args: argparse.Namespace, config: BaseBacktestConfig
 ) -> None:
-    """
-    Validates the argparse parsed arguments.
-    """
-    if args.base_dir and args.backtests_dir:
-        parser.exit(
-            status=1,
-            message="'--base_dir' and '--backtests-dir' are mutually exclusive. Please use just '--backtests-dir'.",
+    if not args.data_dir:
+        args.data_dir = args.basedir / "historical_data"
+
+    if not args.backtests_dir:
+        args.backtests_dir = args.basedir / "backtests"
+
+    config.parent.data_dir = args.data_dir
+    config.parent.backtests_dir = args.backtests_dir
+
+    if args.start_date:
+        config.parent.start_date = dateutil.parser.parse(args.start_date).replace(
+            tzinfo=datetime.timezone.utc
         )
-    elif args.base_dir:
-        parser.exit(
-            status=1, message="'--base_dir' has been deprecated. Please use '--backtests-dir'"
+    if args.end_date:
+        config.parent.end_date = dateutil.parser.parse(args.end_date).replace(
+            tzinfo=datetime.timezone.utc
         )
 
-    if args.market_type and args.old_market_type:
-        parser.exit(
-            status=1,
-            message="'--market-type' and '--market_type' are mutually exclusive. Please use just '--market-type'.",
-        )
-    elif args.old_market_type:
-        parser.exit(
-            status=1,
-            message="'--market_type' has been deprecated. Please use '--market-type'.",
-        )
-
-    if args.user and args.key_name:
-        parser.exit(
-            status=1,
-            message="'--user' and '--key-name' are mutually exclusive. Please use just '--key-name'.",
-        )
-    elif args.user:
-        parser.exit(status=1, message="'--user' has been deprecated. Please use '--key-name'.")
+    if config.parent.start_date is None:
+        parser.exit(status=1, message="No start date was passed")
+    if config.parent.end_date is None:
+        parser.exit(status=1, message="No end date was passed")
 
 
 def make_tick_samples(config: dict, sec_span: int = 1):
@@ -416,11 +389,11 @@ def get_starting_configs(config: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def utc_ms() -> float:
-    return datetime.utcnow().timestamp() * 1000
+    return datetime.datetime.utcnow().timestamp() * 1000
 
 
 def local_time() -> float:
-    return datetime.now().astimezone().timestamp() * 1000
+    return datetime.datetime.now().astimezone().timestamp() * 1000
 
 
 def log_async_exception(coro):
