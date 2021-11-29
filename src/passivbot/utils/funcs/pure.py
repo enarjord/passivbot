@@ -11,6 +11,8 @@ from dateutil import parser
 
 from passivbot.datastructures import Fill
 from passivbot.datastructures import Order
+from passivbot.utils.funcs.njit import BacktestFill
+from passivbot.utils.funcs.njit import BacktestStat
 from passivbot.utils.funcs.njit import qty_to_cost
 from passivbot.utils.funcs.njit import round_dynamic
 
@@ -318,15 +320,15 @@ def get_template_live_config():
 
 
 def analyze_fills(
-    fills: list[Fill],
-    stats: list[Any],
+    fills: list[BacktestFill],
+    stats: list[BacktestStat],
     inverse: bool,
     c_mult: float,
     exchange: str | None = None,
     symbol: str | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, Any]]:
     sdf = pd.DataFrame(
-        stats,
+        [s.as_tuple() for s in stats],
         columns=[
             "timestamp",
             "balance",
@@ -341,7 +343,7 @@ def analyze_fills(
         ],
     )
     fdf = pd.DataFrame(
-        fills,
+        [f.as_tuple() for f in fills],
         columns=[
             "trade_id",
             "timestamp",
