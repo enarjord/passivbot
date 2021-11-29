@@ -251,6 +251,11 @@ def main() -> None:
                     "passing '--symbol' is required."
                 ),
             )
+    elif args.symbol not in config.symbols:
+        parser.exit(
+            status=1,
+            message=f"No symbol by the name of {args.symbol} can be found on the configuration.",
+        )
 
     if not args.key_name:
         # If no key name was passed on the cli, default to the one defined on the config file
