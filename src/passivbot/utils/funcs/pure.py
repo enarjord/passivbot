@@ -9,9 +9,9 @@ import numpy as np
 import pandas as pd
 from dateutil import parser
 
-from passivbot.datastructures import Fill
-from passivbot.datastructures import Order
-from passivbot.datastructures.config import NamedConfig
+from passivbot.types import Fill
+from passivbot.types import Order
+from passivbot.types.config import NamedConfig
 from passivbot.utils.funcs.njit import BacktestFill
 from passivbot.utils.funcs.njit import BacktestStat
 from passivbot.utils.funcs.njit import qty_to_cost

@@ -5,7 +5,7 @@ import logging
 import shutil
 import subprocess
 
-from passivbot.datastructures.config import NamedConfig
+from passivbot.types.config import NamedConfig
 from passivbot.utils.procedures import post_process_backtesting_argparse_parsed_args
 
 log = logging.getLogger(__name__)

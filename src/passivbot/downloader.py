@@ -17,14 +17,14 @@ from typing import cast
 import numpy as np
 import pandas as pd
 
-from passivbot.datastructures import Tick
-from passivbot.datastructures.config import DownloaderNamedConfig
-from passivbot.datastructures.runtime import RuntimeExchangeConfig
-from passivbot.datastructures.runtime import RuntimeSpotConfig
 from passivbot.exceptions import PassivBotSystemExit
 from passivbot.exchanges.binance import BinanceBot
 from passivbot.exchanges.binance_spot import BinanceBotSpot
 from passivbot.exchanges.bybit import Bybit
+from passivbot.types import Tick
+from passivbot.types.config import DownloaderNamedConfig
+from passivbot.types.runtime import RuntimeExchangeConfig
+from passivbot.types.runtime import RuntimeSpotConfig
 from passivbot.utils.funcs.njit import calc_samples
 from passivbot.utils.funcs.pure import ts_to_date
 from passivbot.utils.httpclient import HTTPClientProtocol

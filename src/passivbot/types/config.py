@@ -15,7 +15,7 @@ from pydantic import root_validator
 from pydantic import validator
 from pydantic.generics import GenericModel
 
-from passivbot.datastructures import StopMode
+from passivbot.types import StopMode
 from passivbot.utils.logs import SORTED_LEVEL_NAMES
 
 

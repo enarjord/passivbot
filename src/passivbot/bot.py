@@ -8,16 +8,16 @@ import signal
 import time
 from typing import Any
 
-from passivbot.datastructures import Fill
-from passivbot.datastructures import Order
-from passivbot.datastructures import Position
-from passivbot.datastructures import StopMode
-from passivbot.datastructures import Tick
-from passivbot.datastructures.config import NamedConfig
-from passivbot.datastructures.runtime import RuntimeExchangeConfig
-from passivbot.datastructures.runtime import RuntimeFuturesConfig
-from passivbot.datastructures.runtime import RuntimeSpotConfig
 from passivbot.exceptions import PassivBotSystemExit
+from passivbot.types import Fill
+from passivbot.types import Order
+from passivbot.types import Position
+from passivbot.types import StopMode
+from passivbot.types import Tick
+from passivbot.types.config import NamedConfig
+from passivbot.types.runtime import RuntimeExchangeConfig
+from passivbot.types.runtime import RuntimeFuturesConfig
+from passivbot.types.runtime import RuntimeSpotConfig
 from passivbot.utils.funcs.njit import calc_diff
 from passivbot.utils.funcs.njit import calc_long_close_grid
 from passivbot.utils.funcs.njit import calc_long_entry_grid

@@ -13,8 +13,8 @@ from typing import Any
 import numpy as np
 
 from passivbot.backtest import backtest
-from passivbot.datastructures.config import BaseConfig
 from passivbot.downloader import Downloader
+from passivbot.types.config import BaseConfig
 from passivbot.utils.funcs.pure import analyze_fills
 from passivbot.utils.funcs.pure import candidate_to_live_config
 from passivbot.utils.funcs.pure import denumpyize
@@ -28,9 +28,9 @@ from passivbot.utils.procedures import add_backtesting_argparse_args
 from passivbot.utils.procedures import dump_live_config
 from passivbot.utils.procedures import load_exchange_key_secret
 from passivbot.utils.procedures import load_live_config
+from passivbot.utils.procedures import post_process_backtesting_argparse_parsed_args
 from passivbot.utils.procedures import prepare_backtest_config
 from passivbot.utils.procedures import prepare_optimize_config
-from passivbot.utils.procedures import post_process_backtesting_argparse_parsed_args
 
 log = logging.getLogger(__name__)
 

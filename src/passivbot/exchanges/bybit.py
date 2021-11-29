@@ -10,14 +10,14 @@ from typing import Any
 import websockets.exceptions
 
 from passivbot.bot import Bot
-from passivbot.datastructures import Candle
-from passivbot.datastructures import Fill
-from passivbot.datastructures import Order
-from passivbot.datastructures import Position
-from passivbot.datastructures import Tick
-from passivbot.datastructures.config import NamedConfig
-from passivbot.datastructures.runtime import RuntimeFuturesConfig
 from passivbot.exceptions import PassivBotSystemExit
+from passivbot.types import Candle
+from passivbot.types import Fill
+from passivbot.types import Order
+from passivbot.types import Position
+from passivbot.types import Tick
+from passivbot.types.config import NamedConfig
+from passivbot.types.runtime import RuntimeFuturesConfig
 from passivbot.utils.funcs.pure import date_to_ts
 from passivbot.utils.funcs.pure import ts_to_date
 from passivbot.utils.httpclient import ByBitHTTPClient

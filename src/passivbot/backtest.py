@@ -14,10 +14,10 @@ import dateutil.parser
 import numpy as np
 import pandas as pd
 
-from passivbot.datastructures.config import BacktestNamedConfig
-from passivbot.datastructures.config import DownloaderNamedConfig
 from passivbot.downloader import Downloader
 from passivbot.exceptions import PassivBotSystemExit
+from passivbot.types.config import BacktestNamedConfig
+from passivbot.types.config import DownloaderNamedConfig
 from passivbot.utils.funcs.njit import BacktestFill
 from passivbot.utils.funcs.njit import BacktestStat
 from passivbot.utils.funcs.njit import njit_backtest

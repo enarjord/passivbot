@@ -15,8 +15,8 @@ import hjson
 import numpy as np
 import pandas as pd
 
-from passivbot.datastructures.config import BaseBacktestConfig
-from passivbot.datastructures.config import NamedConfig
+from passivbot.types.config import BaseBacktestConfig
+from passivbot.types.config import NamedConfig
 from passivbot.utils.funcs.njit import calc_samples
 from passivbot.utils.funcs.pure import candidate_to_live_config
 from passivbot.utils.funcs.pure import date_to_ts

@@ -10,7 +10,7 @@ from numba import types
 from passivbot import numba_jitclass
 from passivbot import numba_njit
 
-# from passivbot.datastructures.backtest import Stat
+# from passivbot.types.backtest import Stat
 
 log = logging.getLogger(__name__)
 

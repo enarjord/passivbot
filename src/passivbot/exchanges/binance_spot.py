@@ -8,15 +8,15 @@ from typing import Any
 import numpy as np
 
 from passivbot.bot import Bot
-from passivbot.datastructures import Asset
-from passivbot.datastructures import Candle
-from passivbot.datastructures import Fill
-from passivbot.datastructures import Order
-from passivbot.datastructures import Position
-from passivbot.datastructures import Tick
-from passivbot.datastructures.config import NamedConfig
-from passivbot.datastructures.runtime import RuntimeSpotConfig
 from passivbot.exceptions import PassivBotSystemExit
+from passivbot.types import Asset
+from passivbot.types import Candle
+from passivbot.types import Fill
+from passivbot.types import Order
+from passivbot.types import Position
+from passivbot.types import Tick
+from passivbot.types.config import NamedConfig
+from passivbot.types.runtime import RuntimeSpotConfig
 from passivbot.utils.funcs.njit import calc_diff
 from passivbot.utils.funcs.njit import calc_long_pnl
 from passivbot.utils.funcs.njit import calc_min_entry_qty

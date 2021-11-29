@@ -12,11 +12,11 @@ from pydantic import ValidationError
 import passivbot.bot
 import passivbot.utils.logs
 import passivbot.utils.procedures
-from passivbot.datastructures.config import BacktestConfig
-from passivbot.datastructures.config import DownloaderConfig
-from passivbot.datastructures.config import LiveConfig
-from passivbot.datastructures.config import SymbolConfig
 from passivbot.exceptions import PassivBotSystemExit
+from passivbot.types.config import BacktestConfig
+from passivbot.types.config import DownloaderConfig
+from passivbot.types.config import LiveConfig
+from passivbot.types.config import SymbolConfig
 from passivbot.version import __version__
 
 try:

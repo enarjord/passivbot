@@ -4,8 +4,8 @@ import copy
 
 import pytest
 
-from passivbot.datastructures import StopMode
-from passivbot.datastructures.config import NamedConfig
+from passivbot.types import StopMode
+from passivbot.types.config import NamedConfig
 
 
 @pytest.fixture

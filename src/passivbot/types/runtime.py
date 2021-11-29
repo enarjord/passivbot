@@ -4,8 +4,8 @@ from typing import Optional
 
 from pydantic import BaseModel
 
-from passivbot.datastructures.config import LongConfig
-from passivbot.datastructures.config import ShortConfig
+from passivbot.types.config import LongConfig
+from passivbot.types.config import ShortConfig
 
 
 class RuntimeExchangeConfig(BaseModel):
