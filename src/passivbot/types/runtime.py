@@ -4,8 +4,8 @@ from typing import Optional
 
 from pydantic import BaseModel
 
-from passivbot.datastructures.config import LongConfig
-from passivbot.datastructures.config import ShortConfig
+from passivbot.types.config import LongConfig
+from passivbot.types.config import ShortConfig
 
 
 class RuntimeExchangeConfig(BaseModel):
@@ -24,10 +24,10 @@ class RuntimeExchangeConfig(BaseModel):
     do_long: bool = True
     do_short: bool = True
     inverse: bool = True
+    spot: bool = False
 
 
 class RuntimeFuturesConfig(RuntimeExchangeConfig):
-    spot: bool = False
     market_type: str = "futures"
     max_leverage: int = 25
     short: ShortConfig

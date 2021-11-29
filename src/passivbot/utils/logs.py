@@ -14,7 +14,10 @@ LOG_LEVELS = {
     "critical": logging.CRITICAL,
     "info": logging.INFO,
     "warning": logging.WARNING,
+    "quiet": 1000,
 }
+SORTED_LEVEL_NAMES = [lvl[0] for lvl in sorted(LOG_LEVELS.items(), key=lambda x: x[1])]
+
 logging.root.setLevel(logging.DEBUG)
 
 # Store an instance of the current logging logger class

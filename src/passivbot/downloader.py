@@ -6,25 +6,30 @@ import datetime
 import gzip
 import io
 import logging
-import os
+import pathlib
+import signal
 import sys
 import time
 import urllib.request
 import zipfile
+from typing import cast
 
-import dateutil.parser
 import numpy as np
 import pandas as pd
 
+from passivbot.exceptions import PassivBotSystemExit
+from passivbot.exchanges.binance import BinanceBot
+from passivbot.exchanges.binance_spot import BinanceBotSpot
+from passivbot.exchanges.bybit import Bybit
+from passivbot.types import Tick
+from passivbot.types.config import DownloaderNamedConfig
+from passivbot.types.runtime import RuntimeExchangeConfig
+from passivbot.types.runtime import RuntimeSpotConfig
 from passivbot.utils.funcs.njit import calc_samples
-from passivbot.utils.funcs.pure import get_dummy_settings
 from passivbot.utils.funcs.pure import ts_to_date
-from passivbot.utils.procedures import add_argparse_args
-from passivbot.utils.procedures import create_binance_bot
-from passivbot.utils.procedures import create_binance_bot_spot
-from passivbot.utils.procedures import create_bybit_bot
-from passivbot.utils.procedures import make_get_filepath
-from passivbot.utils.procedures import prepare_backtest_config
+from passivbot.utils.httpclient import HTTPClientProtocol
+from passivbot.utils.procedures import add_backtesting_argparse_args
+from passivbot.utils.procedures import post_process_backtesting_argparse_parsed_args
 from passivbot.utils.procedures import utc_ms
 
 log = logging.getLogger(__name__)
@@ -35,70 +40,103 @@ class Downloader:
     Downloader class for tick data. Fetches data from specified time until now or specified time.
     """
 
-    def __init__(self, config: dict):
+    def __init__(self, config: DownloaderNamedConfig, download_only: bool = False):
         self.fetch_delay_seconds = 0.75
         self.config = config
-        self.spot = "spot" in config and config["spot"]
-        self.tick_filepath = os.path.join(
-            config["caches_dirpath"], f"{config['session_name']}_ticks_cache.npy"
-        )
-        try:
-            self.start_time = int(
-                dateutil.parser.parse(self.config["start_date"])
-                .replace(tzinfo=datetime.timezone.utc)
-                .timestamp()
-                * 1000
+        self.download_only = download_only
+        assert config.parent.start_date
+        self.start_time = int(config.parent.start_date.timestamp() * 1000)
+        assert config.parent.end_date
+        self.end_time = int(config.parent.end_date.timestamp() * 1000)
+        self.httpclient: HTTPClientProtocol
+        self.tick_filepath: pathlib.Path
+        self.historical_data_path: pathlib.Path
+        self.rtc: RuntimeExchangeConfig
+
+    async def _on_signal(self, signum, loop):
+        if signum == signal.SIGINT:
+            signame = "SIGINT"
+        else:
+            signame = "SIGTERM"
+        log.info("Caught %s signal", signame)
+        # Ignore the signal, since we've handled it already
+        signal.signal(signum, signal.SIG_IGN)
+        await self.await_closed()
+        tasks = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks)
+        loop.stop()
+
+    async def run(self):
+        loop = asyncio.get_event_loop()
+
+        for signum in (signal.SIGINT, signal.SIGTERM):
+            loop.add_signal_handler(
+                signum, lambda signum=signum: asyncio.create_task(self._on_signal(signum, loop))
             )
-        except Exception:
-            raise Exception(f"Unrecognized date format for start time {config['start_date']}")
         try:
-            self.end_time = int(
-                dateutil.parser.parse(self.config["end_date"])
-                .replace(tzinfo=datetime.timezone.utc)
-                .timestamp()
-                * 1000
-            )
-            if self.end_time > utc_ms():
-                raise Exception(f"End date later than current time {config['end_date']}")
-        except Exception:
-            raise Exception(f"Unrecognized date format for end time {config['end_date']}")
-        if self.config["exchange"] == "binance":
-            if self.spot:
+            await self._init()
+            await self.download_ticks()
+            if not self.download_only:
+                await self.prepare_files()
+        finally:
+            await self.await_closed()
+
+    async def _init(self):
+        if self.config.api_key.exchange == "binance":
+            if self.config.market_type == "spot":
+                self.bot_cls = BinanceBotSpot
+                self.rtc = BinanceBotSpot.get_initial_runtime_config(self.config)
+                self.httpclient = await BinanceBotSpot.get_httpclient(self.config)
+                await BinanceBotSpot.init_market_type(self.config, self.rtc)
                 self.daily_base_url = "https://data.binance.vision/data/spot/daily/aggTrades/"
                 self.monthly_base_url = "https://data.binance.vision/data/spot/monthly/aggTrades/"
             else:
-                market_type = "cm" if config["inverse"] else "um"
+                self.bot_cls = BinanceBot  # type: ignore[assignment]
+                self.rtc = BinanceBot.get_initial_runtime_config(self.config)
+                self.httpclient = await BinanceBot.get_httpclient(self.config)
+                await BinanceBot.init_market_type(self.config, self.rtc)
+                market_type = "cm" if self.rtc.inverse else "um"
                 self.daily_base_url = (
                     f"https://data.binance.vision/data/futures/{market_type}/daily/aggTrades/"
                 )
                 self.monthly_base_url = (
                     f"https://data.binance.vision/data/futures/{market_type}/monthly/aggTrades/"
                 )
-        elif self.config["exchange"] == "bybit":
+        elif self.config.api_key.exchange == "bybit":
+            self.bot_cls = Bybit
+            self.rtc = Bybit.get_initial_runtime_config(self.config)
+            self.httpclient = await Bybit.get_httpclient(self.config)
+            await Bybit.init_market_type(self.config, self.rtc)
             self.daily_base_url = "https://public.bybit.com/trading/"
         else:
-            raise Exception(f"unknown exchange {config['exchange']}")
-        if "historical_data_path" in self.config and self.config["historical_data_path"]:
-            self.filepath = make_get_filepath(
-                os.path.join(
-                    self.config["historical_data_path"],
-                    "historical_data",
-                    self.config["exchange"],
-                    f"agg_trades_{'spot' if self.spot else 'futures'}",
-                    self.config["symbol"],
-                    "",
-                )
-            )
+            raise PassivBotSystemExit(f"Unknown exchange {self.config.api_key.exchange}")
+        if self.config.market_type == "spot":
+            dname = "agg_trades_spot"
         else:
-            self.filepath = make_get_filepath(
-                os.path.join(
-                    "historical_data",
-                    self.config["exchange"],
-                    f"agg_trades_{'spot' if self.spot else 'futures'}",
-                    self.config["symbol"],
-                    "",
-                )
-            )
+            dname = "agg_trades_futures"
+        assert self.config.parent.data_dir
+        self.historical_data_path = self.config.parent.data_dir.joinpath(
+            self.config.api_key.exchange, dname, self.config.symbol.name
+        )
+        self.historical_data_path.mkdir(parents=True, exist_ok=True)
+        assert self.config.parent.start_date
+        assert self.config.parent.end_date
+        start_date_str = self.config.parent.start_date.strftime("%Y-%m-%d")
+        end_date_str = self.config.parent.end_date.strftime("%Y-%m-%d")
+        assert self.config.parent.backtests_dir
+        self.tick_filepath = self.config.parent.backtests_dir.joinpath(
+            self.config.api_key.exchange,
+            self.config.symbol.name,
+            "caches",
+            f"{start_date_str}_{end_date_str}.npy",
+        )
+        self.tick_filepath.parent.mkdir(parents=True, exist_ok=True)
+
+    async def await_closed(self):
+        if self.httpclient:
+            await self.httpclient.close()
 
     def validate_dataframe(self, df: pd.DataFrame) -> tuple[bool, pd.DataFrame, pd.DataFrame]:
         """
@@ -151,7 +189,7 @@ class Downloader:
             gaps["start"] = gaps["start"].replace(0, 1)
             return True, df, gaps
 
-    def read_dataframe(self, path: str) -> pd.DataFrame:
+    def read_dataframe(self, path: pathlib.Path) -> pd.DataFrame:
         """
         Reads a dataframe with correct data types.
         @param path: The path to the dataframe.
@@ -173,7 +211,9 @@ class Downloader:
             log.error("Error in reading dataframe: %s", e)
         return df
 
-    def save_dataframe(self, df: pd.DataFrame, filename: str, missing: bool, verified: bool) -> str:
+    def save_dataframe(
+        self, df: pd.DataFrame, missing: bool, verified: bool, filename: pathlib.Path | None = None
+    ) -> str:
         """
         Saves a processed dataframe. Creates the name based on first and last trade id and first and last timestamp.
         Deletes dataframes that are obsolete. For example, when gaps were filled.
@@ -186,31 +226,46 @@ class Downloader:
             new_name = f'{df["trade_id"].iloc[0]}_{df["trade_id"].iloc[-1]}_{df["timestamp"].iloc[0]}_{df["timestamp"].iloc[-1]}_verified.csv'
         else:
             new_name = f'{df["trade_id"].iloc[0]}_{df["trade_id"].iloc[-1]}_{df["timestamp"].iloc[0]}_{df["timestamp"].iloc[-1]}.csv'
-        if new_name != filename:
-            log.info(
-                "Saving file %s date=%s", new_name, ts_to_date(int(new_name.split("_")[2]) / 1000)
-            )
-            df.to_csv(os.path.join(self.filepath, new_name), index=False)
-            new_name = ""
+
+        if not filename or new_name != filename.name:
+            new_filename = self.historical_data_path / new_name
             try:
-                os.remove(os.path.join(self.filepath, filename))
-                log.info("Removed file", filename)
-            except Exception:
-                pass
+                rel_new_filename = new_filename.relative_to(self.config.parent.basedir)
+            except ValueError:
+                rel_new_filename = new_filename
+            log.info(
+                "Saving file %s date=%s",
+                rel_new_filename,
+                ts_to_date(int(new_name.split("_")[2]) / 1000),
+            )
+            df.to_csv(new_filename, index=False)
+            new_name = ""
+            if filename:
+                try:
+                    rfname = filename.relative_to(self.config.parent.basedir)
+                except ValueError:
+                    rfname = filename
+                filename.unlink()
+                log.info("Removed file: %s", rfname)
         elif missing:
-            log.info("Replacing file: %s", filename)
-            df.to_csv(os.path.join(self.filepath, filename), index=False)
+            if filename:
+                try:
+                    rfname = filename.relative_to(self.config.parent.basedir)
+                except ValueError:
+                    rfname = filename
+                log.info("Replacing file: %s", rfname)
+                df.to_csv(filename, index=False)
         else:
             new_name = ""
         return new_name
 
-    def transform_ticks(self, ticks: list) -> pd.DataFrame:
+    def transform_ticks(self, ticks: list[Tick]) -> pd.DataFrame:
         """
         Transforms tick data into a cleaned dataframe with correct data types.
         @param ticks: List of tick dictionaries.
         @return: Clean dataframe with correct data types.
         """
-        df = pd.DataFrame(ticks)
+        df = pd.DataFrame([t.dict() for t in ticks])
         if not df.empty:
             df["trade_id"] = df["trade_id"].astype(np.int64)
             df["price"] = df["price"].astype(np.float64)
@@ -222,14 +277,14 @@ class Downloader:
             df.reset_index(drop=True, inplace=True)
         return df
 
-    def get_filenames(self) -> list:
+    def get_filenames(self) -> list[pathlib.Path]:
         """
         Returns a sorted list of all file names in the directory.
         @return: Sorted list of file names.
         """
         return sorted(
-            (f for f in os.listdir(self.filepath) if f.endswith(".csv")),
-            key=lambda x: int(eval(x[: x.find("_")].replace(".cs", "").replace("v", ""))),
+            (f for f in self.historical_data_path.glob("*.csv")),
+            key=lambda x: int(x.name.split("_", 1)[0]),
         )
 
     def new_id(self, first_timestamp, last_timestamp, first_trade_id, length, start_time, prev_div):
@@ -258,14 +313,16 @@ class Downloader:
         @return: Dataframe with first trade later or equal to start time.
         """
         try:
-            ticks = await self.bot.fetch_ticks_time(start_time)
+            ticks: list[Tick] = await self.bot_cls.fetch_ticks(
+                self.httpclient, self.config, start_time=start_time
+            )
             return self.transform_ticks(ticks)
         except Exception:
             log.info("Finding id for start time...")
-            ticks = await self.bot.fetch_ticks()
+            ticks = await self.bot_cls.fetch_ticks(self.httpclient, self.config)
             df = self.transform_ticks(ticks)
             highest_id = df["trade_id"].iloc[-1]
-            prev_div = []
+            prev_div: list[int] = []
             first_ts = df["timestamp"].iloc[0]
             last_ts = df["timestamp"].iloc[-1]
             first_id = df["trade_id"].iloc[0]
@@ -285,7 +342,9 @@ class Downloader:
                 if nw_id > highest_id:
                     nw_id = highest_id
                 try:
-                    ticks = await self.bot.fetch_ticks(from_id=int(nw_id), do_print=False)
+                    ticks = await self.bot_cls.fetch_ticks(
+                        self.httpclient, self.config, from_id=int(nw_id), do_print=False
+                    )
                     df = self.transform_ticks(ticks)
                     if not df.empty:
                         first_ts = df["timestamp"].iloc[0]
@@ -311,7 +370,7 @@ class Downloader:
         url = f"{base_url}{symbol.upper()}/{symbol.upper()}-aggTrades-{date}.zip"
         df = pd.DataFrame(columns=["trade_id", "price", "qty", "timestamp", "is_buyer_maker"])
         column_names = ["trade_id", "price", "qty", "first", "last", "timestamp", "is_buyer_maker"]
-        if self.spot:
+        if cast(RuntimeSpotConfig, self.rtc).spot:
             column_names.append("best_match")
         try:
             resp = urllib.request.urlopen(url)
@@ -335,32 +394,38 @@ class Downloader:
             log.info("Failed to fetch %s: %s", date, e)
         return df
 
-    async def find_df_enclosing_timestamp(self, timestamp, guessed_chunk=None):
+    async def find_df_enclosing_timestamp(self, timestamp, guessed_chunk: list[Tick] | None = None):
         if guessed_chunk is not None:
-            if guessed_chunk[0]["timestamp"] < timestamp < guessed_chunk[-1]["timestamp"]:
+            if guessed_chunk[0].timestamp < timestamp < guessed_chunk[-1].timestamp:
                 log.info("found id")
                 return self.transform_ticks(guessed_chunk)
         else:
             guessed_chunk = sorted(
-                await self.bot.fetch_ticks(do_print=False), key=lambda x: x["trade_id"]
+                await self.bot_cls.fetch_ticks(self.httpclient, self.config, do_print=False),
+                key=lambda x: x.trade_id,  # type: ignore[arg-type,return-value]
             )
             return await self.find_df_enclosing_timestamp(timestamp, guessed_chunk)
 
-        if timestamp < guessed_chunk[0]["timestamp"]:
-            guessed_id = guessed_chunk[0]["trade_id"] - len(guessed_chunk) * (
-                guessed_chunk[0]["timestamp"] - timestamp
-            ) / (guessed_chunk[-1]["timestamp"] - guessed_chunk[0]["timestamp"])
+        if timestamp < guessed_chunk[0].timestamp:
+            guessed_id = guessed_chunk[0].trade_id - len(guessed_chunk) * (
+                guessed_chunk[0].timestamp - timestamp
+            ) / (guessed_chunk[-1].timestamp - guessed_chunk[0].timestamp)
         else:
-            guessed_id = guessed_chunk[-1]["trade_id"] + len(guessed_chunk) * (
-                timestamp - guessed_chunk[-1]["timestamp"]
-            ) / (guessed_chunk[-1]["timestamp"] - guessed_chunk[0]["timestamp"])
+            guessed_id = guessed_chunk[-1].trade_id + len(guessed_chunk) * (
+                timestamp - guessed_chunk[-1].timestamp
+            ) / (guessed_chunk[-1].timestamp - guessed_chunk[0].timestamp)
         guessed_id = int(guessed_id - len(guessed_chunk) / 2)
         guessed_chunk = sorted(
-            await self.bot.fetch_ticks(guessed_id, do_print=False), key=lambda x: x["trade_id"]
+            await self.bot_cls.fetch_ticks(
+                self.httpclient, self.config, guessed_id, do_print=False
+            ),
+            key=lambda x: x.trade_id,  # type: ignore[arg-type,return-value]
         )
+        first_chunk = guessed_chunk[0]
+        last_chunk = guessed_chunk[-1]
         log.info(
-            f"guessed_id {guessed_id} earliest ts {ts_to_date(guessed_chunk[0]['timestamp'] / 1000)[:19]} "
-            f"last ts {ts_to_date(guessed_chunk[-1]['timestamp'] / 1000)[:19]} target ts "
+            f"guessed_id {guessed_id} earliest ts {ts_to_date(first_chunk.timestamp / 1000)[:19]} "
+            f"last ts {ts_to_date(last_chunk.timestamp / 1000)[:19]} target ts "
             f"{ts_to_date(timestamp / 1000)[:19]}"
         )
         return await self.find_df_enclosing_timestamp(timestamp, guessed_chunk)
@@ -420,28 +485,19 @@ class Downloader:
         Downloads any missing data based on the specified time frame.
         @return:
         """
-        if self.config["exchange"] == "binance":
-            if self.spot:
-                self.bot = await create_binance_bot_spot(get_dummy_settings(self.config))
-            else:
-                self.bot = await create_binance_bot(get_dummy_settings(self.config))
-        elif self.config["exchange"] == "bybit":
-            self.bot = await create_bybit_bot(get_dummy_settings(self.config))
-        else:
-            log.info("%s not found", self.config["exchange"])
-            return
-
         filenames = self.get_filenames()
-        mod_files = []
+        mod_files: list[pathlib.Path] = []
         highest_id = 0
         for f in filenames:
             verified = False
+            parts = f.stem.split("_")
             try:
-                first_time = int(f.split("_")[2])
-                last_time = int(f.split("_")[3].split(".")[0])
-                if len(f.split("_")) > 4:
+                first_time = int(parts[2])
+                last_time = int(parts[3])
+                if len(parts) > 4:
                     verified = True
             except Exception:
+                raise
                 first_time = sys.maxsize
                 last_time = sys.maxsize
             if (
@@ -450,13 +506,17 @@ class Downloader:
                 and (self.end_time == -1 or (first_time <= self.end_time))
                 or last_time == sys.maxsize
             ):
-                log.info("Validating file: %s; date=%s", f, ts_to_date(first_time / 1000))
-                df = self.read_dataframe(os.path.join(self.filepath, f))
+                try:
+                    relf = f.relative_to(self.config.parent.basedir)
+                except ValueError:
+                    relf = f
+                log.info("Validating file: %s; date=%s", relf, ts_to_date(first_time / 1000))
+                df = self.read_dataframe(f)
                 missing, df, gaps = self.validate_dataframe(df)
                 exists = False
                 if gaps.empty:
                     first_id = df["trade_id"].iloc[0]
-                    self.save_dataframe(df, f, missing, True)
+                    self.save_dataframe(df, missing=missing, verified=True, filename=f)
                 else:
                     first_id = (
                         df["trade_id"].iloc[0]
@@ -464,12 +524,13 @@ class Downloader:
                         else gaps["start"].iloc[0]
                     )
                 if not gaps.empty and (
-                    f != filenames[-1] or str(first_id - first_id % 100000) not in f
+                    f != filenames[-1] or str(first_id - first_id % 100000) not in f.stem
                 ):
                     last_id = df["trade_id"].iloc[-1]
                     for i in filenames:
-                        tmp_first_id = int(i.split("_")[0])
-                        tmp_last_id = int(i.split("_")[1].replace(".csv", ""))
+                        parts = i.stem.split("_")
+                        tmp_first_id = int(parts[0])
+                        tmp_last_id = int(parts[1])
                         if (
                             (first_id - first_id % 100000) == tmp_first_id
                             and (
@@ -494,7 +555,9 @@ class Downloader:
                         while current_id < gaps["end"].iloc[i] and utc_ms() - current_time > 10000:
                             loop_start = time.time()
                             try:
-                                fetched_new_trades = await self.bot.fetch_ticks(int(current_id))
+                                fetched_new_trades = await self.bot_cls.fetch_ticks(
+                                    self.httpclient, self.config, int(current_id)
+                                )
                                 tf = self.transform_ticks(fetched_new_trades)
                                 if tf.empty:
                                     log.info("Response empty. No new trades, exiting...")
@@ -522,8 +585,8 @@ class Downloader:
                                 ]
                                 df.reset_index(drop=True, inplace=True)
                                 current_time = df["timestamp"].iloc[-1]
-                            except Exception:
-                                log.info("Failed to fetch or transform...")
+                            except Exception as exc:
+                                log.error("Failed to fetch or transform: %s", exc, exc_info=True)
                             await asyncio.sleep(
                                 max(0.0, self.fetch_delay_seconds - time.time() + loop_start)
                             )
@@ -534,10 +597,10 @@ class Downloader:
                     tf = df[df["trade_id"].mod(100000) == 0]
                     if len(tf) > 1:
                         df = df[: tf.index[-1]]
-                    nf = self.save_dataframe(df, f, missing, verified)
-                    mod_files.append(nf)
+                    nf = self.save_dataframe(df, missing=missing, verified=verified, filename=f)
+                    mod_files.append(pathlib.Path(nf))
                 elif df["trade_id"].iloc[0] != 1:
-                    os.remove(os.path.join(self.filepath, f))
+                    f.unlink()
                     log.info("Removed file fragment: %s", f)
 
         chunk_gaps = []
@@ -545,10 +608,11 @@ class Downloader:
         prev_last_id = 0
         prev_last_time = self.start_time
         for f in filenames:
-            first_id = int(f.split("_")[0])
-            last_id = int(f.split("_")[1])
-            first_time = int(f.split("_")[2])
-            last_time = int(f.split("_")[3].split(".")[0])
+            parts = f.stem.split("_")
+            first_id = int(parts[0])
+            last_id = int(parts[1])
+            first_time = int(parts[2])
+            last_time = int(parts[3])
             if (
                 first_id - 1 != prev_last_id
                 and f not in mod_files
@@ -581,8 +645,8 @@ class Downloader:
             current_id = start_id + 1
             current_time = start_time
 
-            if self.config["exchange"] == "binance":
-                fetched_new_trades = await self.bot.fetch_ticks(1)
+            if self.config.api_key.exchange == "binance":
+                fetched_new_trades = await self.bot_cls.fetch_ticks(self.httpclient, self.config, 1)
                 tf = self.transform_ticks(fetched_new_trades)
                 earliest = tf["timestamp"].iloc[0]
 
@@ -611,16 +675,16 @@ class Downloader:
                     if month in months_done:
                         continue
                     if month in months_failed:
-                        tf = self.get_zip(self.daily_base_url, self.config["symbol"], day)
+                        tf = self.get_zip(self.daily_base_url, self.config.symbol.name, day)
                         if tf.empty:
                             log.error("failed to fetch daily: %s", day)
                             continue
                     else:
-                        tf = self.get_zip(self.monthly_base_url, self.config["symbol"], month)
+                        tf = self.get_zip(self.monthly_base_url, self.config.symbol.name, month)
                         if tf.empty:
-                            log.error("failed to fetch monthly", month)
+                            log.error("failed to fetch monthly: %s", month)
                             months_failed.add(month)
-                            tf = self.get_zip(self.daily_base_url, self.config["symbol"], day)
+                            tf = self.get_zip(self.daily_base_url, self.config.symbol.name, day)
                         else:
                             months_done.add(month)
                     tf = tf[tf["timestamp"] >= start_time]
@@ -648,9 +712,8 @@ class Downloader:
                                         (df["trade_id"] >= row["trade_id"] - 1000000)
                                         & (df["trade_id"] < row["trade_id"])
                                     ],
-                                    "",
-                                    True,
-                                    False,
+                                    missing=True,
+                                    verified=False,
                                 )
                                 df = df[df["trade_id"] >= row["trade_id"]]
                     if not df.empty:
@@ -682,7 +745,9 @@ class Downloader:
                 and utc_ms() - current_time > 10000
             ):
                 loop_start = time.time()
-                fetched_new_trades = await self.bot.fetch_ticks(int(current_id))
+                fetched_new_trades = await self.bot_cls.fetch_ticks(
+                    self.httpclient, self.config, int(current_id)
+                )
                 tf = self.transform_ticks(fetched_new_trades)
                 if tf.empty:
                     log.info("Response empty. No new trades, exiting...")
@@ -705,10 +770,10 @@ class Downloader:
                 tf = df[df["trade_id"].mod(100000) == 0]
                 if not tf.empty and len(df) > 1:
                     if df["trade_id"].iloc[0] % 100000 == 0 and len(tf) > 1:
-                        self.save_dataframe(df[: tf.index[-1]], "", True, False)
+                        self.save_dataframe(df[: tf.index[-1]], missing=True, verified=False)
                         df = df[tf.index[-1] :]
                     elif df["trade_id"].iloc[0] % 100000 != 0 and len(tf) == 1:
-                        self.save_dataframe(df[: tf.index[-1]], "", True, False)
+                        self.save_dataframe(df[: tf.index[-1]], missing=True, verified=False)
                         df = df[tf.index[-1] :]
                 await asyncio.sleep(max(0.0, self.fetch_delay_seconds - time.time() + loop_start))
             if not df.empty:
@@ -720,12 +785,7 @@ class Downloader:
                 elif end_time != sys.maxsize and not df.empty:
                     df = df[df["timestamp"] <= end_time]
                 if not df.empty:
-                    self.save_dataframe(df, "", True, False)
-
-        try:
-            await self.bot.session.close()
-        except Exception:
-            pass
+                    self.save_dataframe(df, missing=True, verified=False)
 
     async def prepare_files(self):
         """
@@ -735,8 +795,8 @@ class Downloader:
         filenames = [
             f
             for f in self.get_filenames()
-            if int(f.split("_")[3].split(".")[0]) >= self.start_time
-            and int(f.split("_")[2]) <= self.end_time
+            if int(f.stem.split("_")[3]) >= self.start_time
+            and int(f.stem.split("_")[2]) <= self.end_time
         ]
         left_overs = pd.DataFrame()
         sample_size_ms = 1000
@@ -744,7 +804,7 @@ class Downloader:
 
         try:
             first_frame = pd.read_csv(
-                os.path.join(self.filepath, filenames[0]),
+                self.historical_data_path / filenames[0],
                 dtype={
                     "price": np.float64,
                     "is_buyer_maker": np.float64,
@@ -764,7 +824,7 @@ class Downloader:
 
         try:
             last_frame = pd.read_csv(
-                os.path.join(self.filepath, filenames[-1]),
+                self.historical_data_path / filenames[-1],
                 dtype={
                     "price": np.float64,
                     "is_buyer_maker": np.float64,
@@ -788,7 +848,7 @@ class Downloader:
 
         for f in filenames:
             chunk = pd.read_csv(
-                os.path.join(self.filepath, f),
+                self.historical_data_path / f,
                 dtype={
                     "price": np.float64,
                     "is_buyer_maker": np.float64,
@@ -829,7 +889,16 @@ class Downloader:
             array[current_index : current_index + len(sampled_ticks)] = sampled_ticks
             current_index += len(sampled_ticks)
 
-            log.info("\rloaded chunk of data", f, ts_to_date(float(f.split("_")[2]) / 1000))
+            try:
+                relf = f.relative_to(self.config.parent.basedir)
+            except ValueError:
+                relf = f
+            log.info(
+                "Loaded chunk of data %s %s",
+                relf,
+                ts_to_date(float(f.stem.split("_")[2]) / 1000),
+                wipe_line=True,
+            )
 
         # Fill in anything left over
         if not left_overs.empty:
@@ -864,7 +933,11 @@ class Downloader:
             array[current_index : current_index + len(tmp)] = tmp
             current_index += len(tmp)
 
-        log.info("Saving single file with %d ticks to %s ...", len(array), self.tick_filepath)
+        try:
+            rel_tick_filepath = self.tick_filepath.relative_to(self.config.parent.basedir)
+        except ValueError:
+            rel_tick_filepath = self.tick_filepath
+        log.info("Saving single file with %d ticks to %s ...", len(array), rel_tick_filepath)
         np.save(self.tick_filepath, array)
         log.info("Saved single file!")
 
@@ -874,8 +947,12 @@ class Downloader:
         If they do not exist or if their length doesn't match, download the missing data and create them.
         @return: numpy array.
         """
-        if os.path.exists(self.tick_filepath):
-            log.info("Loading cached tick data from %s", self.tick_filepath)
+        if self.tick_filepath.exists():
+            try:
+                rel_tick_filepath = self.tick_filepath.relative_to(self.config.parent.basedir)
+            except ValueError:
+                rel_tick_filepath = self.tick_filepath
+            log.info("Loading cached tick data from %s", rel_tick_filepath)
             tick_data = np.load(self.tick_filepath)
             return tick_data
         await self.download_ticks()
@@ -884,21 +961,34 @@ class Downloader:
         return tick_data
 
 
-async def _main(args: argparse.Namespace) -> None:
-    config = await prepare_backtest_config(args)
-    downloader = Downloader(config)
-    await downloader.download_ticks()
-    if not args.download_only:
-        await downloader.prepare_files()
+async def _main(config: DownloaderNamedConfig) -> None:
+    downloader = Downloader(config, download_only=config.parent.download_only)
+    await downloader.run()
 
 
-def main(args: argparse.Namespace) -> None:
-    asyncio.run(_main(args))
+def main(config: DownloaderNamedConfig) -> None:
+    loop = asyncio.get_event_loop()
+    try:
+        loop.run_until_complete(_main(config))
+    except asyncio.CancelledError:
+        pass
+    except PassivBotSystemExit:
+        raise
+    except Exception as e:
+        log.error("There was an error starting the bot: %s", e, exc_info=True)
 
 
 def setup_parser(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument(
-        "-d", "--download-only", help="download only, do not dump ticks caches", action="store_true"
-    )
-    add_argparse_args(parser)
+    add_backtesting_argparse_args(parser)
     parser.set_defaults(func=main)
+
+
+def process_argparse_parsed_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    pass
+
+
+def post_process_argparse_parsed_args(
+    parser: argparse.ArgumentParser, args: argparse.Namespace, config: DownloaderNamedConfig
+) -> None:
+    post_process_backtesting_argparse_parsed_args(parser, args, config)
+    config.parent.download_only = args.download_only

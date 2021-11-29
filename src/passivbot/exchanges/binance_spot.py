@@ -8,13 +8,15 @@ from typing import Any
 import numpy as np
 
 from passivbot.bot import Bot
-from passivbot.datastructures import Asset
-from passivbot.datastructures import Candle
-from passivbot.datastructures import Fill
-from passivbot.datastructures import Order
-from passivbot.datastructures import Position
-from passivbot.datastructures import Tick
-from passivbot.datastructures.runtime import RuntimeSpotConfig
+from passivbot.exceptions import PassivBotSystemExit
+from passivbot.types import Asset
+from passivbot.types import Candle
+from passivbot.types import Fill
+from passivbot.types import Order
+from passivbot.types import Position
+from passivbot.types import Tick
+from passivbot.types.config import NamedConfig
+from passivbot.types.runtime import RuntimeSpotConfig
 from passivbot.utils.funcs.njit import calc_diff
 from passivbot.utils.funcs.njit import calc_long_pnl
 from passivbot.utils.funcs.njit import calc_min_entry_qty
@@ -26,6 +28,7 @@ from passivbot.utils.funcs.pure import calc_long_pprice
 from passivbot.utils.funcs.pure import get_position_fills
 from passivbot.utils.funcs.pure import ts_to_date
 from passivbot.utils.httpclient import BinanceHTTPClient
+from passivbot.utils.httpclient import HTTPClientProtocol
 from passivbot.utils.httpclient import HTTPRequestError
 from passivbot.utils.procedures import log_async_exception
 
@@ -33,30 +36,35 @@ log = logging.getLogger(__name__)
 
 
 class BinanceBotSpot(Bot):
+
+    rtc: RuntimeSpotConfig
+
     def __bot_init__(self):
         """
         Subclass initialization routines
         """
         self.exchange = "binance_spot"
-        self.rtc: RuntimeSpotConfig = RuntimeSpotConfig(
-            market_type=self.config.market_type, long=self.config.long
-        )
         self.balance: dict[str, Asset] = {}
         self.force_update_interval = 40
 
-    def init_market_type(self):
-        log.info("spot market")
-        if "spot" not in self.rtc.market_type:
-            self.rtc.market_type += "_spot"
-        self.rtc.inverse = False
-        self.spot = True
-        self.rtc.hedge_mode = False
-        self.rtc.pair = self.config.symbol
+    @staticmethod
+    def get_initial_runtime_config(config: NamedConfig) -> RuntimeSpotConfig:
+        return RuntimeSpotConfig(market_type=config.market_type, long=config.long)
+
+    @staticmethod
+    async def get_exchange_info() -> dict[str, Any]:
+        response: dict[str, Any] = await BinanceHTTPClient.onetime_get(
+            "https://api.binance.com/api/v3/exchangeInfo"
+        )
+        return response
+
+    @staticmethod
+    async def get_httpclient(config: NamedConfig) -> BinanceHTTPClient:
         websocket_url = "wss://stream.binance.com/ws"
-        self.httpclient = BinanceHTTPClient(
+        httpclient = BinanceHTTPClient(
             "https://api.binance.com",
-            self.key,
-            self.secret,
+            config.api_key.key,
+            config.api_key.secret,
             endpoints={
                 "balance": "/api/v3/account",
                 "exchange_info": "/api/v3/exchangeInfo",
@@ -68,37 +76,51 @@ class BinanceBotSpot(Bot):
                 "ticks": "/api/v3/aggTrades",
                 "ohlcvs": "/api/v3/klines",
                 "websocket": websocket_url,
-                "websocket_market": f"{websocket_url}/{self.config.symbol.lower()}@aggTrade",
+                "websocket_market": f"{websocket_url}/{config.symbol.name.lower()}@aggTrade",
                 "websocket_user": websocket_url,
                 "listen_key": "/api/v3/userDataStream",
                 "transfer": "/sapi/v1/asset/transfer",
                 "account": "/api/v3/account",
             },
         )
+        return httpclient
 
-    async def _init(self):
-        self.init_market_type()
-        exchange_info: dict[str, Any] = await self.httpclient.get("exchange_info")
+    @staticmethod
+    async def init_market_type(config: NamedConfig, rtc: RuntimeSpotConfig):  # type: ignore[override]
+        log.info("spot market")
+        if "spot" not in rtc.market_type:
+            rtc.market_type += "_spot"
+        rtc.inverse = False
+        rtc.hedge_mode = False
+        rtc.pair = config.symbol.name
+        exchange_info: dict[str, Any] = await BinanceBotSpot.get_exchange_info()
         for e in exchange_info["symbols"]:
-            if e["symbol"] == self.config.symbol:
-                self.rtc.coin = e["baseAsset"]
-                self.rtc.quote = e["quoteAsset"]
-                self.rtc.margin_coin = e["quoteAsset"]
+            if e["symbol"] == config.symbol.name:
+                rtc.coin = e["baseAsset"]
+                rtc.quote = e["quoteAsset"]
+                rtc.margin_coin = e["quoteAsset"]
                 for q in e["filters"]:
                     if q["filterType"] == "LOT_SIZE":
-                        self.rtc.min_qty = float(q["minQty"])
-                        self.rtc.qty_step = float(q["stepSize"])
+                        rtc.min_qty = float(q["minQty"])
+                        rtc.qty_step = float(q["stepSize"])
                     elif q["filterType"] == "PRICE_FILTER":
-                        self.rtc.price_step = float(q["tickSize"])
-                        self.rtc.min_price = float(q["minPrice"])
-                        self.rtc.max_price = float(q["maxPrice"])
+                        rtc.price_step = float(q["tickSize"])
+                        rtc.min_price = float(q["minPrice"])
+                        rtc.max_price = float(q["maxPrice"])
                     elif q["filterType"] == "PERCENT_PRICE":
-                        self.rtc.price_multiplier_up = float(q["multiplierUp"])
-                        self.rtc.price_multiplier_dn = float(q["multiplierDown"])
+                        rtc.price_multiplier_up = float(q["multiplierUp"])
+                        rtc.price_multiplier_dn = float(q["multiplierDown"])
                     elif q["filterType"] == "MIN_NOTIONAL":
-                        self.rtc.min_cost = float(q["minNotional"])
+                        rtc.min_cost = float(q["minNotional"])
                 break
+        else:
+            raise PassivBotSystemExit(
+                f"Unknown symbol {config.symbol.name} for the {config.api_key.exchange} exchange."
+            )
 
+    async def _init(self):
+        self.httpclient = await self.get_httpclient(self.config)
+        await self.init_market_type(self.config, self.rtc)
         await super()._init()
         await self.init_order_book()
         await self.update_position()
@@ -155,7 +177,7 @@ class BinanceBotSpot(Bot):
 
     async def init_order_book(self):
         ticker: dict[str, Any] = await self.httpclient.get(
-            "ticker", params={"symbol": self.config.symbol}
+            "ticker", params={"symbol": self.config.symbol.name}
         )
         self.ob = [float(ticker["bidPrice"]), float(ticker["askPrice"])]
         self.rtc.price = np.random.choice(self.ob)
@@ -164,7 +186,7 @@ class BinanceBotSpot(Bot):
         return [
             Order.from_binance_payload(e)
             for e in await self.httpclient.get(
-                "open_orders", signed=True, params={"symbol": self.config.symbol}
+                "open_orders", signed=True, params={"symbol": self.config.symbol.name}
             )
         ]
 
@@ -204,7 +226,7 @@ class BinanceBotSpot(Bot):
     async def execute_order(self, order: Order) -> Order:
         params = order.to_binance_payload(futures=False)
         o = await self.httpclient.post("create_order", params=params)
-        o["symbol"] = self.config.symbol
+        o["symbol"] = self.config.symbol.name
         return Order.from_binance_payload(o, futures=False)
 
     async def execute_cancellation(self, order: Order) -> Order | None:
@@ -212,7 +234,7 @@ class BinanceBotSpot(Bot):
         try:
             cancellation = await self.httpclient.delete(
                 "cancel_order",
-                params={"symbol": self.config.symbol, "orderId": order.order_id},
+                params={"symbol": self.config.symbol.name, "orderId": order.order_id},
             )
             cancellation["symbol"] = order.symbol
             return Order.from_binance_payload(cancellation, futures=False)
@@ -287,7 +309,7 @@ class BinanceBotSpot(Bot):
         end_time: int | None = None,
     ) -> list[Fill]:
         params = {
-            "symbol": (self.config.symbol if symbol is None else symbol),
+            "symbol": (self.config.symbol.name if symbol is None else symbol),
             "limit": min(1000, max(500, limit)),
         }
         if from_id is not None:
@@ -329,14 +351,16 @@ class BinanceBotSpot(Bot):
             log.error("error fetching account: %s", e)
         return {"balances": []}
 
+    @staticmethod
     async def fetch_ticks(
-        self,
+        httpclient: HTTPClientProtocol,
+        config: NamedConfig,
         from_id: int | None = None,
         start_time: int | None = None,
         end_time: int | None = None,
         do_print: bool = True,
-    ):
-        params = {"symbol": self.config.symbol, "limit": 1000}
+    ) -> list[Tick]:
+        params = {"symbol": config.symbol.name, "limit": 1000}
         if from_id is not None:
             params["fromId"] = max(0, from_id)
         if start_time is not None:
@@ -344,7 +368,7 @@ class BinanceBotSpot(Bot):
         if end_time is not None:
             params["endTime"] = end_time
         try:
-            fetched: list[dict[str, Any]] = await self.httpclient.get("ticks", params=params)  # type: ignore[assignment]
+            fetched: list[dict[str, Any]] = await httpclient.get("ticks", params=params)  # type: ignore[assignment]
         except HTTPRequestError as exc:
             log.error("API Error code=%s; message=%s", exc.code, exc.msg)
             return []
@@ -355,22 +379,18 @@ class BinanceBotSpot(Bot):
             ticks = [Tick.from_binance_payload(t) for t in fetched]
             if do_print:
                 log.info(
-                    "fetched ticks for symbold %r %s %s",
-                    self.config.symbol,
+                    "Fetched ticks for symbol %r %s %s",
+                    config.symbol.name,
                     ticks[0].trade_id,
                     ts_to_date(float(ticks[0].timestamp) / 1000),
+                    wipe_line=True,
                 )
         except Exception as e:
             log.info("error fetching ticks b: %s - %s", e, fetched)
             ticks = []
             if do_print:
-                log.info("fetched no new ticks %s", self.config.symbol)
+                log.info("fetched no new ticks %s", config.symbol.name)
         return ticks
-
-    async def fetch_ticks_time(
-        self, start_time: int, end_time: int | None = None, do_print: bool = True
-    ):
-        return await self.fetch_ticks(start_time=start_time, end_time=end_time, do_print=do_print)
 
     async def fetch_ohlcvs(
         self,
@@ -397,7 +417,7 @@ class BinanceBotSpot(Bot):
         }
         assert interval in interval_map
         if symbol is None:
-            symbol = self.config.symbol
+            symbol = self.config.symbol.name
         params = {
             "symbol": symbol,
             "interval": interval,
@@ -527,7 +547,7 @@ class BinanceBotSpot(Bot):
                     }
             elif event["e"] == "executionReport":
                 if event["X"] == "NEW":
-                    if event["s"] == self.config.symbol:
+                    if event["s"] == self.config.symbol.name:
                         standardized["new_open_order"] = {
                             "order_id": int(event["i"]),
                             "symbol": event["s"],
@@ -542,13 +562,13 @@ class BinanceBotSpot(Bot):
                         standardized["other_symbol"] = event["s"]
                         standardized["other_type"] = "new_open_order"
                 elif event["X"] in ["CANCELED", "EXPIRED", "REJECTED"]:
-                    if event["s"] == self.config.symbol:
+                    if event["s"] == self.config.symbol.name:
                         standardized["deleted_order_id"] = int(event["i"])
                     else:
                         standardized["other_symbol"] = event["s"]
                         standardized["other_type"] = event["X"].lower()
                 elif event["X"] == "FILLED":
-                    if event["s"] == self.config.symbol:
+                    if event["s"] == self.config.symbol.name:
                         price = fp if (fp := float(event["p"])) != 0.0 else float(event["L"])
                         standardized["filled"] = Fill.parse_obj(
                             {
@@ -574,7 +594,7 @@ class BinanceBotSpot(Bot):
                         standardized["other_symbol"] = event["s"]
                         standardized["other_type"] = "filled"
                 elif event["X"] == "PARTIALLY_FILLED":
-                    if event["s"] == self.config.symbol:
+                    if event["s"] == self.config.symbol.name:
                         price = fp if (fp := float(event["p"])) != 0.0 else float(event["L"])
                         standardized["filled"] = Fill.parse_obj(
                             {

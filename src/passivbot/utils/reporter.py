@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import os
 import sys
 from collections.abc import Mapping
 
@@ -229,15 +228,13 @@ class LogReporter(CLIReporter):
                 df.sort_values(self._metric, ascending=False, inplace=True)
                 df.dropna(inplace=True)
                 df[df[self._metric] > 0].to_csv(
-                    os.path.join(config["optimize_dirpath"], "intermediate_results.csv"),
+                    config["optimize_dirpath"] / "intermediate_results.csv",
                     index=False,
                 )
                 if best_eval:
                     dump_live_config(
                         {**best_config, **best_eval.copy()},
-                        os.path.join(
-                            best_config["optimize_dirpath"], "intermediate_best_result.json"
-                        ),
+                        best_config["optimize_dirpath"] / "intermediate_best_result.json",
                     )
         except Exception as e:
             log.error("Something went wrong: %s", e)

@@ -10,15 +10,18 @@ from typing import Any
 import websockets.exceptions
 
 from passivbot.bot import Bot
-from passivbot.datastructures import Candle
-from passivbot.datastructures import Fill
-from passivbot.datastructures import Order
-from passivbot.datastructures import Position
-from passivbot.datastructures import Tick
-from passivbot.datastructures.runtime import RuntimeFuturesConfig
+from passivbot.exceptions import PassivBotSystemExit
+from passivbot.types import Candle
+from passivbot.types import Fill
+from passivbot.types import Order
+from passivbot.types import Position
+from passivbot.types import Tick
+from passivbot.types.config import NamedConfig
+from passivbot.types.runtime import RuntimeFuturesConfig
 from passivbot.utils.funcs.pure import date_to_ts
 from passivbot.utils.funcs.pure import ts_to_date
 from passivbot.utils.httpclient import ByBitHTTPClient
+from passivbot.utils.httpclient import HTTPClientProtocol
 from passivbot.utils.httpclient import HTTPRequestError
 from passivbot.utils.procedures import log_async_exception
 
@@ -47,22 +50,31 @@ def determine_pos_side(o: dict[str, Any]) -> str:
 
 
 class Bybit(Bot):
+
+    rtc: RuntimeFuturesConfig
+
     def __bot_init__(self):
         """
         Subclass initialization routines
         """
         self.exchange = "bybit"
-        self.created_at_key: str
-        self.rtc: RuntimeFuturesConfig = RuntimeFuturesConfig(
-            market_type=self.config.market_type, short=self.config.short, long=self.config.long
+
+    @staticmethod
+    def get_initial_runtime_config(config: NamedConfig) -> RuntimeFuturesConfig:
+        return RuntimeFuturesConfig(
+            market_type=config.market_type, short=config.short, long=config.long
         )
 
-    def init_market_type(self):
-        if self.config.symbol.endswith("USDT"):
-            log.info("linear perpetual")
-            self.rtc.market_type += "_linear_perpetual"
-            self.rtc.inverse = False
-            self.created_at_key = "created_time"
+    @staticmethod
+    async def get_exchange_info() -> dict[str, Any]:
+        response: dict[str, Any] = await ByBitHTTPClient.onetime_get(
+            "https://api.bybit.com/v2/public/symbols"
+        )
+        return response
+
+    @staticmethod
+    async def get_httpclient(config: NamedConfig) -> ByBitHTTPClient:
+        if config.symbol.name.endswith("USDT"):
             endpoints = {
                 "position": "/private/linear/position/list",
                 "open_orders": "/private/linear/order/search",
@@ -77,11 +89,7 @@ class Bybit(Bot):
             }
 
         else:
-            self.created_at_key = "created_at"
-            self.rtc.inverse = True
-            if self.config.symbol.endswith("USD"):
-                log.info("inverse perpetual")
-                self.rtc.market_type += "_inverse_perpetual"
+            if config.symbol.name.endswith("USD"):
                 endpoints = {
                     "position": "/v2/private/position/list",
                     "open_orders": "/v2/private/order",
@@ -94,11 +102,7 @@ class Bybit(Bot):
                     "websocket_user": "wss://stream.bybit.com/realtime",
                     "income": "/v2/private/trade/closed-pnl/list",
                 }
-
-                self.rtc.hedge_mode = False
             else:
-                log.info("inverse futures")
-                self.rtc.market_type += "_inverse_futures"
                 endpoints = {
                     "position": "/futures/private/position/list",
                     "open_orders": "/futures/private/order",
@@ -124,47 +128,78 @@ class Bybit(Bot):
                 "ticker": "/v2/public/tickers",
             }
         )
-        self.httpclient = ByBitHTTPClient(
-            "https://api.bybit.com", self.key, self.secret, endpoints=endpoints
+        return ByBitHTTPClient(
+            "https://api.bybit.com",
+            config.api_key.key,
+            config.api_key.secret,
+            endpoints=endpoints,
         )
 
-    async def _init(self):
-        info = await ByBitHTTPClient.onetime_get("https://api.bybit.com/v2/public/symbols")
-        for e in info["result"]:
-            if e["name"] == self.config.symbol:
+    @staticmethod
+    async def init_market_type(config: NamedConfig, rtc: RuntimeFuturesConfig):  # type: ignore[override]
+        if config.symbol.name.endswith("USDT"):
+            log.info("linear perpetual")
+            rtc.market_type += "_linear_perpetual"
+            rtc.inverse = False
+        else:
+            rtc.inverse = True
+            if config.symbol.name.endswith("USD"):
+                log.info("inverse perpetual")
+                rtc.market_type += "_inverse_perpetual"
+                rtc.hedge_mode = False
+            else:
+                log.info("inverse futures")
+                rtc.market_type += "_inverse_futures"
+
+        exchange_info = await Bybit.get_exchange_info()
+        results: list[dict[str, Any]] = exchange_info["result"]
+        symbol_data: dict[str, Any] | None = None
+        for symbol_data in results:
+            if symbol_data["name"] == config.symbol.name:
                 break
         else:
-            raise Exception(f"symbol missing {self.config.symbol}")
+            raise PassivBotSystemExit(
+                f"Unknown symbol {config.symbol.name} for the {config.api_key.exchange} exchange."
+            )
 
-        self.rtc.max_leverage = e["leverage_filter"]["max_leverage"]
-        self.rtc.coin = e["base_currency"]
-        self.rtc.quote = e["quote_currency"]
-        self.rtc.price_step = float(e["price_filter"]["tick_size"])
-        self.rtc.qty_step = float(e["lot_size_filter"]["qty_step"])
-        self.rtc.min_qty = float(e["lot_size_filter"]["min_trading_qty"])
-        self.rtc.min_cost = 0.0
-        self.init_market_type()
-        if self.rtc.inverse:
-            self.rtc.margin_coin = self.rtc.coin
+        assert symbol_data
+
+        rtc.max_leverage = symbol_data["leverage_filter"]["max_leverage"]
+        rtc.coin = symbol_data["base_currency"]
+        rtc.quote = symbol_data["quote_currency"]
+        rtc.price_step = float(symbol_data["price_filter"]["tick_size"])
+        rtc.qty_step = float(symbol_data["lot_size_filter"]["qty_step"])
+        rtc.min_qty = float(symbol_data["lot_size_filter"]["min_trading_qty"])
+        rtc.min_cost = 0.0
+        if rtc.inverse:
+            rtc.margin_coin = rtc.coin
         else:
-            self.rtc.margin_coin = self.rtc.quote
+            rtc.margin_coin = rtc.quote
+
+    async def _init(self):
+        self.httpclient = await self.get_httpclient(self.config)
+        await self.init_market_type(self.config, self.rtc)
         await super()._init()
         await self.init_order_book()
         await self.update_position()
 
     async def init_order_book(self):
         ticker = await self.httpclient.get(
-            "ticker", signed=True, params={"symbol": self.config.symbol}
+            "ticker", signed=True, params={"symbol": self.config.symbol.name}
         )
         self.ob = [float(ticker["result"][0]["bid_price"]), float(ticker["result"][0]["ask_price"])]
         self.rtc.price = float(ticker["result"][0]["last_price"])
 
     async def fetch_open_orders(self) -> list[Order]:
         fetched = await self.httpclient.get(
-            "open_orders", signed=True, params={"symbol": self.config.symbol}
+            "open_orders", signed=True, params={"symbol": self.config.symbol.name}
         )
+        if self.rtc.inverse:
+            created_at_key = "created_at"
+        else:
+            created_at_key = "created_time"
         return [
-            Order.from_bybit_payload(elm, created_at_key=self.created_at_key)
+            Order.from_bybit_payload(elm, created_at_key=created_at_key)
             for elm in fetched["result"]
         ]
 
@@ -172,7 +207,9 @@ class Bybit(Bot):
         position: dict[str, Any] = {}
         if "linear_perpetual" in self.rtc.market_type:
             fetched, bal = await asyncio.gather(
-                self.httpclient.get("position", signed=True, params={"symbol": self.config.symbol}),
+                self.httpclient.get(
+                    "position", signed=True, params={"symbol": self.config.symbol.name}
+                ),
                 self.httpclient.get("balance", signed=True, params={"coin": self.rtc.quote}),
             )
             long_pos = [e for e in fetched["result"] if e["side"] == "Buy"][0]
@@ -180,7 +217,9 @@ class Bybit(Bot):
             position["wallet_balance"] = float(bal["result"][self.rtc.quote]["wallet_balance"])
         else:
             fetched, bal = await asyncio.gather(
-                self.httpclient.get("position", signed=True, params={"symbol": self.config.symbol}),
+                self.httpclient.get(
+                    "position", signed=True, params={"symbol": self.config.symbol.name}
+                ),
                 self.httpclient.get("balance", signed=True, params={"coin": self.rtc.coin}),
             )
             position["wallet_balance"] = float(bal["result"][self.rtc.coin]["wallet_balance"])
@@ -221,7 +260,11 @@ class Bybit(Bot):
             )
             o = await self.httpclient.post("create_order", params=params)
             if o["result"]:
-                return Order.from_bybit_payload(o["result"], created_at_key=self.created_at_key)
+                if self.rtc.inverse:
+                    created_at_key = "created_at"
+                else:
+                    created_at_key = "created_time"
+                return Order.from_bybit_payload(o["result"], created_at_key=created_at_key)
             return None
         except HTTPRequestError as exc:
             log.error("API Error code=%s; message=%s", exc.code, exc.msg)
@@ -235,7 +278,7 @@ class Bybit(Bot):
         try:
             cancellation = await self.httpclient.post(
                 "cancel_order",
-                params={"symbol": self.config.symbol, "order_id": order.order_id},
+                params={"symbol": self.config.symbol.name, "order_id": order.order_id},
             )
             order.order_id = cancellation["result"]["order_id"]
             return order
@@ -257,12 +300,18 @@ class Bybit(Bot):
             log.error("error fetching account: %s", e)
         return {"balances": []}
 
-    async def fetch_ticks(self, from_id: int | None = None, do_print: bool = True):
-        params = {"symbol": self.config.symbol, "limit": 1000}
+    @staticmethod
+    async def fetch_ticks(
+        httpclient: HTTPClientProtocol,
+        config: NamedConfig,
+        from_id: int | None = None,
+        do_print: bool = True,
+    ) -> list[Tick]:
+        params = {"symbol": config.symbol.name, "limit": 1000}
         if from_id is not None:
             params["from"] = max(0, from_id)
         try:
-            ticks = await self.httpclient.get("ticks", params=params)
+            ticks = await httpclient.get("ticks", params=params)
         except HTTPRequestError as exc:
             log.error("API Error code=%s; message=%s", exc.code, exc.msg)
             return []
@@ -273,15 +322,16 @@ class Bybit(Bot):
             trades = [Tick.from_bybit_payload(tick) for tick in ticks["result"]]
             if do_print:
                 log.info(
-                    "fetched trades %s %s %s",
-                    self.config.symbol,
+                    "Fetched ticks for symbol %r %s %s",
+                    config.symbol.name,
                     trades[0].trade_id,
                     ts_to_date(float(trades[0].timestamp) / 1000),
+                    wipe_line=True,
                 )
         except Exception:
             trades = []
             if do_print:
-                log.info("fetched no new trades %s", self.config.symbol)
+                log.info("fetched no new trades %s", config.symbol.name)
         return trades
 
     async def fetch_ohlcvs(
@@ -304,7 +354,11 @@ class Bybit(Bot):
             "1M": "M",
         }
         assert interval in interval_map
-        params = {"symbol": self.config.symbol, "interval": interval_map[interval], "limit": limit}
+        params = {
+            "symbol": self.config.symbol.name,
+            "interval": interval_map[interval],
+            "limit": limit,
+        }
         if start_time is None:
             server_time = await self.httpclient.get("server_time")
             mapped_interval: int = interval_map[interval]  # type: ignore[assignment]
@@ -362,7 +416,7 @@ class Bybit(Bot):
         end_time: int | None = None,
         page: int | None = None,
     ):
-        params = {"limit": limit, "symbol": self.config.symbol if symbol is None else symbol}
+        params = {"limit": limit, "symbol": self.config.symbol.name if symbol is None else symbol}
         if start_time is not None:
             params["start_time"] = int(start_time / 1000)
         if end_time is not None:
@@ -410,8 +464,8 @@ class Bybit(Bot):
         return []
 
     #        ffills, fpnls = await asyncio.gather(
-    #            self.httpclient.get("fills", signed=True, params={"symbol": self.config.symbol, "limit": limit}),
-    #            self.httpclient.get("pnls", signed=True, params={"symbol": self.config.symbol, "limit": 50}),
+    #            self.httpclient.get("fills", signed=True, params={"symbol": self.config.symbol.name, "limit": limit}),
+    #            self.httpclient.get("pnls", signed=True, params={"symbol": self.config.symbol.name, "limit": 50}),
     #        )
     #        return ffills, fpnls
     #        try:
@@ -453,7 +507,7 @@ class Bybit(Bot):
                     await self.httpclient.post(
                         "/futures/private/position/leverage/save",
                         params={
-                            "symbol": self.config.symbol,
+                            "symbol": self.config.symbol.name,
                             "position_idx": 1,
                             "buy_leverage": 0,
                             "sell_leverage": 0,
@@ -467,7 +521,7 @@ class Bybit(Bot):
                     await self.httpclient.post(
                         "/futures/private/position/leverage/save",
                         params={
-                            "symbol": self.config.symbol,
+                            "symbol": self.config.symbol.name,
                             "position_idx": 2,
                             "buy_leverage": 0,
                             "sell_leverage": 0,
@@ -480,7 +534,7 @@ class Bybit(Bot):
                 try:
                     await self.httpclient.post(
                         "/futures/private/position/switch-mode",
-                        params={"symbol": self.config.symbol, "mode": 3},
+                        params={"symbol": self.config.symbol.name, "mode": 3},
                     )
                 except HTTPRequestError as exc:
                     if exc.code != 130056:
@@ -491,7 +545,7 @@ class Bybit(Bot):
                     await self.httpclient.post(
                         "/private/linear/position/switch-isolated",
                         params={
-                            "symbol": self.config.symbol,
+                            "symbol": self.config.symbol.name,
                             "is_isolated": False,
                             "buy_leverage": 7,
                             "sell_leverage": 7,
@@ -505,7 +559,7 @@ class Bybit(Bot):
                     await self.httpclient.post(
                         "/private/linear/position/set-leverage",
                         params={
-                            "symbol": self.config.symbol,
+                            "symbol": self.config.symbol.name,
                             "buy_leverage": 7,
                             "sell_leverage": 7,
                         },
@@ -518,7 +572,7 @@ class Bybit(Bot):
                 try:
                     await self.httpclient.post(
                         "/v2/private/position/leverage/save",
-                        params={"symbol": self.config.symbol, "leverage": 0},
+                        params={"symbol": self.config.symbol.name, "leverage": 0},
                     )
                 except HTTPRequestError as exc:
                     if exc.code != 130056:
@@ -548,18 +602,20 @@ class Bybit(Bot):
                 log.error("error sending heartbeat: %s", e, exc_info=True)
 
     async def subscribe_to_market_stream(self, ws):
-        await ws.send(json.dumps({"op": "subscribe", "args": ["trade." + self.config.symbol]}))
+        await ws.send(json.dumps({"op": "subscribe", "args": ["trade." + self.config.symbol.name]}))
 
     async def subscribe_to_user_stream(self, ws):
         expires = int((time.time() + 1) * 1000)
         signature = str(
             hmac.new(
-                bytes(self.secret, "utf-8"),
+                bytes(self.config.api_key.secret, "utf-8"),
                 bytes(f"GET/realtime{expires}", "utf-8"),
                 digestmod="sha256",
             ).hexdigest()
         )
-        await ws.send(json.dumps({"op": "auth", "args": [self.key, expires, signature]}))
+        await ws.send(
+            json.dumps({"op": "auth", "args": [self.config.api_key.key, expires, signature]})
+        )
         await asyncio.sleep(1)
         await ws.send(
             json.dumps({"op": "subscribe", "args": ["position", "execution", "wallet", "order"]})
@@ -573,7 +629,7 @@ class Bybit(Bot):
         if "topic" in event:
             if event["topic"] == "order":
                 for elm in event["data"]:
-                    if elm["symbol"] == self.config.symbol:
+                    if elm["symbol"] == self.config.symbol.name:
                         if elm["order_status"] == "Created":
                             pass
                         elif elm["order_status"] == "Rejected":
@@ -635,7 +691,7 @@ class Bybit(Bot):
                         standardized["other_type"] = event["topic"]
             elif event["topic"] == "execution":
                 for elm in event["data"]:
-                    if elm["symbol"] == self.config.symbol:
+                    if elm["symbol"] == self.config.symbol.name:
                         if elm["exec_type"] == "Trade":
                             # already handled by "order"
                             pass
@@ -644,7 +700,7 @@ class Bybit(Bot):
                         standardized["other_type"] = event["topic"]
             elif event["topic"] == "position":
                 for elm in event["data"]:
-                    if elm["symbol"] == self.config.symbol:
+                    if elm["symbol"] == self.config.symbol.name:
                         if elm["side"] == "Buy":
                             standardized["long_psize"] = float(elm["size"])
                             standardized["long_pprice"] = float(elm["entry_price"])

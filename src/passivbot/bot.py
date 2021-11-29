@@ -4,20 +4,20 @@ import argparse
 import asyncio
 import json
 import logging
-import os
-import pprint
 import signal
 import time
 from typing import Any
 
-from passivbot.datastructures import Fill
-from passivbot.datastructures import Order
-from passivbot.datastructures import Position
-from passivbot.datastructures import StopMode
-from passivbot.datastructures import Tick
-from passivbot.datastructures.config import NamedConfig
-from passivbot.datastructures.runtime import RuntimeFuturesConfig
-from passivbot.datastructures.runtime import RuntimeSpotConfig
+from passivbot.exceptions import PassivBotSystemExit
+from passivbot.types import Fill
+from passivbot.types import Order
+from passivbot.types import Position
+from passivbot.types import StopMode
+from passivbot.types import Tick
+from passivbot.types.config import NamedConfig
+from passivbot.types.runtime import RuntimeExchangeConfig
+from passivbot.types.runtime import RuntimeFuturesConfig
+from passivbot.types.runtime import RuntimeSpotConfig
 from passivbot.utils.funcs.njit import calc_diff
 from passivbot.utils.funcs.njit import calc_long_close_grid
 from passivbot.utils.funcs.njit import calc_long_entry_grid
@@ -25,24 +25,23 @@ from passivbot.utils.funcs.njit import calc_upnl
 from passivbot.utils.funcs.njit import qty_to_cost
 from passivbot.utils.funcs.njit import round_
 from passivbot.utils.funcs.njit import round_dynamic
-from passivbot.utils.funcs.pure import denumpyize
 from passivbot.utils.funcs.pure import filter_orders
 from passivbot.utils.httpclient import HTTPClient
+from passivbot.utils.httpclient import HTTPClientProtocol
 from passivbot.utils.httpclient import HTTPRequestError
-from passivbot.utils.procedures import load_exchange_key_secret
-from passivbot.utils.procedures import load_live_config
 
 log = logging.getLogger(__name__)
 
 
 class Bot:
-    httpclient: HTTPClient
+    httpclient: HTTPClientProtocol
     rtc: RuntimeFuturesConfig | RuntimeSpotConfig
 
     def __init__(self, config: NamedConfig):
         self.spot = False
         self.config = config
         self._stop_mode_log_message_iterations = 0
+        self.rtc = self.get_initial_runtime_config(config)
         self.__bot_init__()
         self.rtc.long = self.config.long
         if isinstance(self.rtc, RuntimeFuturesConfig):
@@ -76,10 +75,6 @@ class Bot:
         self.delay_between_executions = 2
         self.force_update_interval = 30
 
-        # self.log_filepath = make_get_filepath(f"logs/{self.config.exchange}/{config['config_name']}.log")
-
-        _, self.key, self.secret = load_exchange_key_secret(self.config.api_key_name)
-
         self.user_stream_task: asyncio.Task | None = None
         self.market_stream_task: asyncio.Task | None = None
 
@@ -92,21 +87,34 @@ class Bot:
         """
         raise NotImplementedError
 
+    @staticmethod
+    def get_initial_runtime_config(config: NamedConfig) -> RuntimeFuturesConfig | RuntimeSpotConfig:
+        raise NotImplementedError
+
+    @staticmethod
+    async def get_httpclient(config: NamedConfig) -> HTTPClient:
+        raise NotImplementedError
+
     async def _init(self):
         await self.init_fills()
+
+    async def await_closed(self) -> None:
+        if self.httpclient:
+            await self.httpclient.close()
 
     def dump_log(self, data) -> None:
         return
         if self.config["logging_level"] > 0:
-            with open(self.log_filepath, "a") as f:
-                f.write(json.dumps({**{"log_timestamp": time.time()}, **data}) + "\n")
+            self.log_filepath.write_text(
+                json.dumps({**{"log_timestamp": time.time()}, **data}) + "\n"
+            )
 
     async def update_open_orders(self) -> None:
         if self.ts_locked["update_open_orders"] > self.ts_released["update_open_orders"]:
             return
         try:
             open_orders = await self.fetch_open_orders()
-            open_orders = [x for x in open_orders if x.symbol == self.config.symbol]
+            open_orders = [x for x in open_orders if x.symbol == self.config.symbol.name]
             if self.open_orders != open_orders:
                 self.dump_log({"log_type": "open_orders", "data": open_orders})
             self.open_orders = open_orders
@@ -300,7 +308,8 @@ class Bot:
     async def init_order_book(self) -> None:
         raise NotImplementedError
 
-    async def init_market_type(self) -> None:
+    @staticmethod
+    async def init_market_type(config: NamedConfig, rct: RuntimeExchangeConfig) -> None:
         raise NotImplementedError
 
     async def fetch_open_orders(self) -> list[Order]:
@@ -331,10 +340,49 @@ class Bot:
     def standardize_market_stream_event(self, data: dict[str, Any]) -> list[Tick]:
         raise NotImplementedError
 
-    def stop(self, signum=None, frame=None) -> None:
+    async def _on_signal(self, signum, loop):
+        if signum == signal.SIGINT:
+            signame = "SIGINT"
+        else:
+            signame = "SIGTERM"
+        log.info("Caught %s signal, shutting down", signame)
+        # Ignore the signal, since we've handled it already
+        signal.signal(signum, signal.SIG_IGN)
+        self.stop()
+        await self.await_closed()
+        tasks = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks)
+        loop.stop()
+
+    async def run(self):
+        loop = asyncio.get_event_loop()
+
+        for signum in (signal.SIGINT, signal.SIGTERM):
+            loop.add_signal_handler(
+                signum, lambda signum=signum: asyncio.create_task(self._on_signal(signum, loop))
+            )
+
+        self.stop_websocket = False
+        while not self.stop_websocket:
+            try:
+                await self.start_websocket()
+            except PassivBotSystemExit:
+                self.stop()
+                await self.await_closed()
+                raise
+            except Exception as e:
+                log.error(
+                    "Websocket connection has been lost, attempting to reinitialize the bot: %s",
+                    e,
+                    exc_info=True,
+                )
+                await asyncio.sleep(10)
+
+    def stop(self) -> None:
         log.info("Stopping passivbot, please wait...")
         try:
-
             self.stop_websocket = True
             if self.user_stream_task is not None:
                 self.user_stream_task.cancel()
@@ -356,7 +404,7 @@ class Bot:
         short_psize = self.position.short.size
 
         if self.config.stop_mode == StopMode.PANIC:
-            if self.config.exchange == "bybit":
+            if self.config.api_key.exchange == "bybit":
                 log.warning("panic mode temporarily disabled for bybit")
                 return []
             panic_orders = []
@@ -442,7 +490,7 @@ class Bot:
         orders = [
             Order.parse_obj(
                 {
-                    "symbol": self.config.symbol,
+                    "symbol": self.config.symbol.name,
                     "side": "buy",
                     "position_side": "long",
                     "qty": abs(float(o[0])),
@@ -458,7 +506,7 @@ class Bot:
         orders += [
             Order.parse_obj(
                 {
-                    "symbol": self.config.symbol,
+                    "symbol": self.config.symbol.name,
                     "side": "sell",
                     "position_side": "long",
                     "qty": abs(float(o[0])),
@@ -575,7 +623,7 @@ class Bot:
 
     def update_output_information(self):
         self.ts_released["print"] = time.time()
-        line = f"{self.config.symbol} "
+        line = f"{self.config.symbol.name} "
         line += f"l {self.position.long.size} @ "
         line += f"{round_(self.position.long.price, self.rtc.price_step)}, "
         long_closes = sorted(
@@ -673,69 +721,7 @@ class Bot:
         pass
 
 
-async def start_bot(bot):
-    while not bot.stop_websocket:
-        try:
-            await bot.start_websocket()
-        except Exception as e:
-            log.error(
-                "Websocket connection has been lost, attempting to reinitialize the bot: %s",
-                e,
-                exc_info=True,
-            )
-            await asyncio.sleep(10)
-
-
-async def _main(args: argparse.Namespace) -> None:
-    try:
-        accounts = json.load(open("api-keys.json"))
-    except Exception as e:
-        log.error("failed to load api-keys.json file: %s", e)
-        return
-    try:
-        account = accounts[args.user]
-    except Exception as e:
-        log.error("unrecognized account name %s: %s", args.user, e)
-        return
-    try:
-        config_dict = load_live_config(args.live_config_path)
-    except Exception as e:
-        log.error("failed to load config from %s: %s", args.live_config_path, e)
-        return
-    config_dict["api_key_name"] = args.user
-    config_dict["exchange"] = account["exchange"]
-    config_dict["symbol"] = args.symbol
-    config_dict["live_config_path"] = args.live_config_path
-    if args.market_type:
-        config_dict["market_type"] = args.market_type
-    if args.assigned_balance is not None:
-        log.info("assigned balance set to: %s", args.assigned_balance)
-        config_dict["assigned_balance"] = args.assigned_balance
-
-    if args.graceful_stop:
-        log.info(
-            "graceful stop enabled, will not make new entries once existing positions are closed"
-        )
-        config_dict["stop_mode"] = StopMode.GRACEFUL
-        config_dict["long"]["enabled"] = config_dict["do_long"] = False
-        config_dict["short"]["enabled"] = config_dict["do_short"] = False
-    if args.long_wallet_exposure_limit is not None:
-        log.info(
-            f"overriding long wallet exposure limit ({config_dict['long']['wallet_exposure_limit']}) "
-            f"with new value: {args.long_wallet_exposure_limit}"
-        )
-        config_dict["long"]["wallet_exposure_limit"] = args.long_wallet_exposure_limit
-    if args.short_wallet_exposure_limit is not None:
-        log.info(
-            f"overriding short wallet exposure limit ({config_dict['short']['wallet_exposure_limit']}) "
-            f"with new value: {args.short_wallet_exposure_limit}"
-        )
-        config_dict["short"]["wallet_exposure_limit"] = args.short_wallet_exposure_limit
-
-    config: NamedConfig = NamedConfig.parse_obj(config_dict)
-
-    # if config["market_type"] == "spot":
-    #    config = spotify_config(config)
+async def _main(config: NamedConfig) -> None:
 
     from passivbot.exchanges.bybit import Bybit
     from passivbot.exchanges.binance import BinanceBot
@@ -743,8 +729,7 @@ async def _main(args: argparse.Namespace) -> None:
 
     bot: BinanceBot | BinanceBotSpot | Bybit
 
-    if config.exchange == "binance":
-
+    if config.api_key.exchange == "binance":
         if config.market_type == "spot":
             from passivbot.utils.procedures import create_binance_bot_spot
 
@@ -753,56 +738,40 @@ async def _main(args: argparse.Namespace) -> None:
             from passivbot.utils.procedures import create_binance_bot
 
             bot = await create_binance_bot(config)
-    elif config.exchange == "bybit":
+    elif config.api_key.exchange == "bybit":
         from passivbot.utils.procedures import create_bybit_bot
 
         bot = await create_bybit_bot(config)
     else:
-        raise Exception("unknown exchange", config.exchange)
+        raise PassivBotSystemExit(f"Don't know how to handle exchange {config.api_key.exchange}")
 
-    log.info("using config:\n%s", pprint.pformat(denumpyize(config)))
-
-    signal.signal(signal.SIGINT, bot.stop)
-    signal.signal(signal.SIGTERM, bot.stop)
-    await start_bot(bot)
-    await bot.httpclient.close()
+    await bot.run()
 
 
-def main(args: argparse.Namespace) -> None:
+def main(config: NamedConfig) -> None:
+    loop = asyncio.get_event_loop()
     try:
-        asyncio.run(_main(args))
+        loop.run_until_complete(_main(config))
+    except asyncio.CancelledError:
+        pass
+    except PassivBotSystemExit:
+        raise
     except Exception as e:
         log.error("There was an error starting the bot: %s", e, exc_info=True)
     finally:
         log.info("Passivbot was stopped successfully")
-        os._exit(0)
 
 
-def setup_parser(subparsers: argparse._SubParsersAction) -> None:
-    parser: argparse.ArgumentParser = subparsers.add_parser("live", help="Run PassivBot Live")
-    parser.add_argument("user", type=str, help="user/account_name defined in api-keys.json")
-    parser.add_argument("symbol", type=str, help="symbol to trade")
-    parser.add_argument("live_config_path", type=str, help="live config to use")
+def setup_parser(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
-        "-m",
-        "--market_type",
-        "--market-type",
-        type=str,
-        required=False,
-        dest="market_type",
-        default=None,
-        help="specify whether spot or futures (default), overriding value from backtest config",
-    )
-    parser.add_argument(
-        "-gs",
-        "--graceful_stop",
+        "--gs",
         "--graceful-stop",
         action="store_true",
+        dest="graceful_stop",
         help="if true, disable long and short",
     )
     parser.add_argument(
-        "-lw",
-        "--long_wallet_exposure_limit",
+        "--lw",
         "--long-wallet-exposure-limit",
         type=float,
         required=False,
@@ -811,8 +780,7 @@ def setup_parser(subparsers: argparse._SubParsersAction) -> None:
         help="specify long wallet exposure limit, overriding value from live config",
     )
     parser.add_argument(
-        "-sw",
-        "--short_wallet_exposure_limit",
+        "--sw",
         "--short-wallet-exposure-limit",
         type=float,
         required=False,
@@ -821,8 +789,7 @@ def setup_parser(subparsers: argparse._SubParsersAction) -> None:
         help="specify short wallet exposure limit, overriding value from live config",
     )
     parser.add_argument(
-        "-ab",
-        "--assigned_balance",
+        "--ab",
         "--assigned-balance",
         type=float,
         required=False,
@@ -831,3 +798,43 @@ def setup_parser(subparsers: argparse._SubParsersAction) -> None:
         help="add assigned_balance to live config",
     )
     parser.set_defaults(func=main)
+
+
+def process_argparse_parsed_args(parser: argparse.ArgumentParser, args: argparse.Namespace):
+    pass
+
+
+def post_process_argparse_parsed_args(
+    parser: argparse.ArgumentParser, args: argparse.Namespace, config: NamedConfig
+) -> None:
+
+    if args.assigned_balance is not None:
+        log.info("assigned balance set to: %s", args.assigned_balance)
+        config.assigned_balance = args.assigned_balance
+
+    if args.graceful_stop:
+        log.info(
+            "Graceful stop enabled, will not make new entries once existing positions are closed"
+        )
+        config.stop_mode = StopMode.GRACEFUL
+        config.long.enabled = False
+        config.short.enabled = False
+
+    if args.long_wallet_exposure_limit is not None:
+        log.info(
+            f"overriding long wallet exposure limit ({config.long.wallet_exposure_limit}) "
+            f"with new value: {args.long_wallet_exposure_limit}"
+        )
+        config.long.wallet_exposure_limit = args.long_wallet_exposure_limit
+    if args.short_wallet_exposure_limit is not None:
+        log.info(
+            f"overriding short wallet exposure limit ({config.short.wallet_exposure_limit}) "
+            f"with new value: {args.short_wallet_exposure_limit}"
+        )
+        config.short.wallet_exposure_limit = args.short_wallet_exposure_limit
+
+    log.info(
+        "Selected configuration for symbol %r:\n%s",
+        config.symbol,
+        config.json(indent=2),
+    )

@@ -5,12 +5,132 @@ import os
 
 import numba
 import numpy as np
+from numba import types
 
+from passivbot import numba_jitclass
 from passivbot import numba_njit
+
+# from passivbot.types.backtest import Stat
 
 log = logging.getLogger(__name__)
 
 JIT_DISABLED = os.environ.get("NOJIT", "false") in ("true", "1")
+
+
+@numba_jitclass(
+    [
+        ("timestamps", types.float64),
+        ("balance", types.float64),
+        ("equity", types.float64),
+        ("bkr_price", types.float64),
+        ("long_psize", types.float64),
+        ("long_pprice", types.float64),
+        ("short_psize", types.float64),
+        ("short_pprice", types.float64),
+        ("prices", types.float64),
+        ("closest_bkr", types.float64),
+    ]
+)
+class BacktestStat:
+    def __init__(
+        self,
+        timestamps: float,
+        balance: float,
+        equity: float,
+        bkr_price: float,
+        long_psize: float,
+        long_pprice: float,
+        short_psize: float,
+        short_pprice: float,
+        prices: float,
+        closest_bkr: float,
+    ):
+        self.timestamps = timestamps
+        self.balance = balance
+        self.equity = equity
+        self.bkr_price = bkr_price
+        self.long_psize = long_psize
+        self.long_pprice = long_pprice
+        self.short_psize = short_psize
+        self.short_pprice = short_pprice
+        self.prices = prices
+        self.closest_bkr = closest_bkr
+
+    def as_tuple(
+        self,
+    ) -> tuple[float, float, float, float, float, float, float, float, float, float]:
+        return (
+            self.timestamps,
+            self.balance,
+            self.equity,
+            self.bkr_price,
+            self.long_psize,
+            self.long_pprice,
+            self.short_psize,
+            self.short_pprice,
+            self.prices,
+            self.closest_bkr,
+        )
+
+
+@numba_jitclass(
+    [
+        ("trade_id", types.float64),
+        ("timestamp", types.float64),
+        ("pnl", types.float64),
+        ("fee_paid", types.float64),
+        ("balance", types.float64),
+        ("equity", types.float64),
+        ("qty", types.float64),
+        ("price", types.float64),
+        ("psize", types.float64),
+        ("pprice", types.float64),
+        ("ftype", types.string),
+    ]
+)
+class BacktestFill:
+    def __init__(
+        self,
+        trade_id: float,
+        timestamp: float,
+        pnl: float,
+        fee_paid: float,
+        balance: float,
+        equity: float,
+        qty: float,
+        price: float,
+        psize: float,
+        pprice: float,
+        ftype: str,
+    ):
+        self.trade_id = trade_id
+        self.timestamp = timestamp
+        self.pnl = pnl
+        self.fee_paid = fee_paid
+        self.balance = balance
+        self.equity = equity
+        self.qty = qty
+        self.price = price
+        self.psize = psize
+        self.pprice = pprice
+        self.ftype = ftype
+
+    def as_tuple(
+        self,
+    ) -> tuple[float, float, float, float, float, float, float, float, float, float, str]:
+        return (
+            self.trade_id,
+            self.timestamp,
+            self.pnl,
+            self.fee_paid,
+            self.balance,
+            self.equity,
+            self.qty,
+            self.price,
+            self.psize,
+            self.pprice,
+            self.ftype,
+        )
 
 
 @numba_njit
@@ -1099,7 +1219,7 @@ def njit_backtest(
     min_markup,
     markup_range,
     n_close_orders,
-):
+) -> tuple[list[BacktestFill], list[BacktestStat]]:
 
     timestamps = ticks[:, 0]
     qtys = ticks[:, 1]
@@ -1131,7 +1251,7 @@ def njit_backtest(
                 long_psize, long_pprice, short_psize, short_pprice, prices[k], inverse, c_mult
             )
             stats.append(
-                (
+                BacktestStat(
                     timestamps[k],
                     balance,
                     equity,
@@ -1198,7 +1318,7 @@ def njit_backtest(
                 equity = 0.0
                 long_psize, long_pprice = 0.0, 0.0
                 fills.append(
-                    (
+                    BacktestFill(
                         k,
                         timestamps[k],
                         pnl,
@@ -1218,7 +1338,7 @@ def njit_backtest(
                 balance, equity = 0.0, 0.0
                 short_psize, short_pprice = 0.0, 0.0
                 fills.append(
-                    (
+                    BacktestFill(
                         k,
                         timestamps[k],
                         pnl,
@@ -1259,7 +1379,7 @@ def njit_backtest(
                 c_mult,
             )
             fills.append(
-                (
+                BacktestFill(
                     k,
                     timestamps[k],
                     0.0,
@@ -1315,7 +1435,7 @@ def njit_backtest(
                 c_mult,
             )
             fills.append(
-                (
+                BacktestFill(
                     k,
                     timestamps[k],
                     pnl,

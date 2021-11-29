@@ -7,6 +7,7 @@ import logging
 import time
 import urllib.parse
 from typing import Any
+from typing import Protocol
 
 import aiohttp
 import websockets
@@ -30,7 +31,74 @@ class HTTPRequestError(Exception):
         return f"Request to {self.url!r} failed. Code: {self.code}; Message: {self.msg}"
 
 
-class HTTPClient:
+class HTTPClientProtocol(Protocol):
+    base_url: str
+    api_key: str
+    api_secret: str
+    endpoints: dict[str, str]
+    session_headers: dict[str, str] | None = None
+
+    @classmethod
+    async def onetime_get(cls, url: str) -> dict[str, Any]:
+        ...
+
+    async def close(self) -> None:
+        ...
+
+    def url_for_endpoint(self, endpoint: str) -> str:
+        ...
+
+    def signature_params_key(self) -> str:
+        ...
+
+    def get_signature(self, params: dict[str, Any]) -> str:
+        ...
+
+    def signed_params(self, params: dict[str, Any]) -> dict[str, str]:
+        ...
+
+    async def get(
+        self,
+        endpoint: str,
+        signed: bool = False,
+        params: dict[str, Any] | None = None,
+        headers: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        ...
+
+    async def post(
+        self,
+        endpoint: str,
+        params: dict[str, Any] | None = None,
+        headers: dict[str, Any] | None = None,
+        signed: bool = True,
+    ) -> dict[str, Any]:
+        ...
+
+    async def put(
+        self,
+        endpoint: str,
+        params: dict[str, Any] | None = None,
+        headers: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        ...
+
+    async def delete(
+        self,
+        endpoint: str,
+        params: dict[str, Any] | None = None,
+        headers: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        ...
+
+    def ws_connect(self, endpoint):
+        ...
+
+    def _get_error_from_payload(self, url: str, payload: dict[str, Any]):
+        ...
+
+
+class HTTPClient(HTTPClientProtocol):
     def __init__(
         self,
         base_url: str,

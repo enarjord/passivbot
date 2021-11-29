@@ -5,14 +5,16 @@ import asyncio
 import json
 import logging
 import multiprocessing
-import os
+import pathlib
 import time
 from pprint import pprint
+from typing import Any
 
 import numpy as np
 
 from passivbot.backtest import backtest
 from passivbot.downloader import Downloader
+from passivbot.types.config import BaseConfig
 from passivbot.utils.funcs.pure import analyze_fills
 from passivbot.utils.funcs.pure import candidate_to_live_config
 from passivbot.utils.funcs.pure import denumpyize
@@ -22,23 +24,26 @@ from passivbot.utils.funcs.pure import pack_config
 from passivbot.utils.funcs.pure import round_values
 from passivbot.utils.funcs.pure import ts_to_date
 from passivbot.utils.funcs.pure import unpack_config
-from passivbot.utils.procedures import add_argparse_args
+from passivbot.utils.procedures import add_backtesting_argparse_args
 from passivbot.utils.procedures import dump_live_config
 from passivbot.utils.procedures import load_exchange_key_secret
 from passivbot.utils.procedures import load_live_config
-from passivbot.utils.procedures import make_get_filepath
+from passivbot.utils.procedures import post_process_backtesting_argparse_parsed_args
 from passivbot.utils.procedures import prepare_backtest_config
 from passivbot.utils.procedures import prepare_optimize_config
 
 log = logging.getLogger(__name__)
 
 
-def backtest_single_wrap(config_: dict):
+def backtest_single_wrap(config_: dict[str, Any]) -> tuple[float, float, float]:
     config = config_.copy()
     exchange_name = config["exchange"] + ("_spot" if config["market_type"] == "spot" else "")
-    cache_filepath = f"backtests/{exchange_name}/{config['symbol']}/caches/"
-    ticks_filepath = cache_filepath + f"{config['start_date']}_{config['end_date']}_ticks_cache.npy"
-    mss = json.load(open(cache_filepath + "market_specific_settings.json"))
+
+    cache_filepath = config["basedir"] / "backtests" / exchange_name / {config["symbol"]} / "caches"
+    cache_fname = f"{config['start_date']}_{config['end_date']}_ticks_cache.npy"
+    ticks_filepath = cache_filepath / cache_fname
+
+    mss = json.loads(cache_filepath.joinpath("market_specific_settings.json").read_text())
     ticks = np.load(ticks_filepath)
     config.update(mss)
     try:
@@ -56,12 +61,14 @@ def backtest_single_wrap(config_: dict):
         score = -9999999999999.9
         adg = 0.0
         pa_distance = 100.0
-        with open(make_get_filepath("tmp/harmony_search_errors.txt"), "a") as f:
+        errors_path = config["basedir"] / "tmp" / "harmony_search_errors.txt"
+        errors_path.parent.makdir(parents=True, exist_ok=True)
+        with errors_path.open("a") as f:
             f.write(json.dumps([time.time(), "error", str(e), denumpyize(config)]) + "\n")
     return (pa_distance, adg, score)
 
 
-def backtest_multi_wrap(config: dict, pool):
+def backtest_multi_wrap(config: dict[str, Any], pool):
     tasks = {}
     for s in sorted(config["symbols"]):
         tasks[s] = pool.apply_async(backtest_single_wrap, args=({**config, **{"symbol": s}},))
@@ -88,7 +95,7 @@ def harmony_search(
     bandwidth: float,
     pitch_adjusting_rate: float,
     iters: int,
-    starting_xs: [np.ndarray] = [],
+    starting_xs: list[np.ndarray] = [],
     post_processing_func=None,
 ):
     # hm == harmony memory
@@ -162,8 +169,12 @@ class FuncWrap:
             ]
         )
         self.now_date = ts_to_date(time.time())[:19].replace(":", "-")
-        self.results_fname = make_get_filepath(f"tmp/harmony_search_results_{self.now_date}.txt")
-        self.best_conf_fname = f"tmp/harmony_search_best_config_{self.now_date}.json"
+        self.results_fname = (
+            base_config["basedir"] / "tmp" / f"harmony_search_results_{self.now_date}.json"
+        )
+        self.best_conf_fname = (
+            base_config["basedir"] / "tmp" / f"harmony_search_best_config_{self.now_date}.json"
+        )
 
     def xs_to_config(self, xs):
         config = unpack_config(self.base_config.copy())
@@ -178,7 +189,7 @@ class FuncWrap:
     def func(self, xs):
         config = self.xs_to_config(xs)
         score, results = backtest_multi_wrap(config, self.pool)
-        with open(self.results_fname, "a") as f:
+        with self.results_fname.open("a") as f:
             f.write(
                 json.dumps({"config": candidate_to_live_config(config), "results": results}) + "\n"
             )
@@ -198,9 +209,11 @@ async def _main(args: argparse.Namespace) -> None:
     cache_fname = f"{config['start_date']}_{config['end_date']}_ticks_cache.npy"
     exchange_name = config["exchange"] + ("_spot" if config["market_type"] == "spot" else "")
     for symbol in sorted(config["symbols"]):
-        cache_dirpath = f"backtests/{exchange_name}/{symbol}/caches/"
-        if not os.path.exists(cache_dirpath + cache_fname) or not os.path.exists(
-            cache_dirpath + "market_specific_settings.json"
+        cache_dirpath = args.backtests_dir / exchange_name / symbol / "caches"
+        cache_config = cache_dirpath / cache_fname
+        if (
+            not cache_config.is_file()
+            or not cache_dirpath.joinpath("market_specific_settings.json").isfile()
         ):
             log.info(f"fetching data {symbol}")
             args.symbol = symbol
@@ -212,19 +225,20 @@ async def _main(args: argparse.Namespace) -> None:
 
     func_wrap = FuncWrap(pool, config)
     cfgs = []
-    if args.starting_configs is not None:
-        if os.path.isdir(args.starting_configs):
-            cfgs = []
-            for fname in os.listdir(args.starting_configs):
+    for path in args.starting_configs:
+        if path.isdir():
+            for fpath in path.iterdir():
                 try:
-                    cfgs.append(load_live_config(os.path.join(args.starting_configs, fname)))
+                    cfgs.append(load_live_config(fpath))
                 except Exception as e:
                     log.error("error loading config: %s", e)
-        elif os.path.exists(args.starting_configs):
+        elif path.isfile():
             try:
-                cfgs = [load_live_config(args.starting_configs)]
+                cfgs.append(load_live_config(path))
             except Exception as e:
                 log.error("error loading config: %s", e)
+        # TODO: Else show an Error?
+
     starting_xs = [func_wrap.config_to_xs(cfg) for cfg in cfgs]
 
     n_harmonies = config["n_harmonies"]
@@ -257,7 +271,7 @@ def setup_parser(parser: argparse.ArgumentParser) -> None:
         "-o",
         "--optimize_config",
         "--optimize-config",
-        type=str,
+        type=pathlib.Path,
         required=False,
         dest="optimize_config_path",
         default="configs/optimize/multi_symbol.hjson",
@@ -266,11 +280,12 @@ def setup_parser(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "-t",
         "--start",
-        type=str,
+        type=pathlib.Path,
+        action="append",
         required=False,
         dest="starting_configs",
-        default=None,
-        help="start with given live configs.  single json file or dir with multiple json files",
+        default=[],
+        help="Start with given live configs. Single JSON file or directory with multiple JSON files",
     )
     parser.add_argument(
         "-i",
@@ -281,5 +296,19 @@ def setup_parser(parser: argparse.ArgumentParser) -> None:
         default=None,
         help="n optimize iters",
     )
-    add_argparse_args(parser)
+    add_backtesting_argparse_args(parser)
     parser.set_defaults(func=main)
+
+
+def process_argparse_parsed_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    pass
+
+
+def post_process_argparse_parsed_args(
+    parser: argparse.ArgumentParser, args: argparse.Namespace, config: BaseConfig
+) -> None:
+    post_process_backtesting_argparse_parsed_args(parser, args)
+    if args.optimize_config_path:
+        args.optimize_config_path = args.optimize_config_path.resolve()
+    else:
+        args.optimize_config_path = args.basedir / "optimize" / "multi_symbol.hjson"

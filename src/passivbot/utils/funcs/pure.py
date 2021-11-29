@@ -9,8 +9,11 @@ import numpy as np
 import pandas as pd
 from dateutil import parser
 
-from passivbot.datastructures import Fill
-from passivbot.datastructures import Order
+from passivbot.types import Fill
+from passivbot.types import Order
+from passivbot.types.config import NamedConfig
+from passivbot.utils.funcs.njit import BacktestFill
+from passivbot.utils.funcs.njit import BacktestStat
 from passivbot.utils.funcs.njit import qty_to_cost
 from passivbot.utils.funcs.njit import round_dynamic
 
@@ -283,50 +286,50 @@ def flatten(lst: list[Any]) -> list[Any]:
 
 
 def get_template_live_config():
-    return {
-        "config_name": "template",
-        "logging_level": 0,
-        "long": {
-            "enabled": True,
-            "grid_span": 0.16,
-            "wallet_exposure_limit": 1.6,
-            "max_n_entry_orders": 10,
-            "initial_qty_pct": 0.01,
-            "eprice_pprice_diff": 0.0025,
-            "secondary_allocation": 0.5,
-            "secondary_pprice_diff": 0.35,
-            "eprice_exp_base": 1.618034,
-            "min_markup": 0.0045,
-            "markup_range": 0.0075,
-            "n_close_orders": 7,
-        },
-        "short": {
-            "enabled": False,
-            "grid_span": 0.16,
-            "wallet_exposure_limit": 1.6,
-            "max_n_entry_orders": 10,
-            "initial_qty_pct": 0.01,
-            "eprice_pprice_diff": 0.0025,
-            "secondary_allocation": 0.5,
-            "secondary_pprice_diff": 0.35,
-            "eprice_exp_base": 1.618034,
-            "min_markup": 0.0045,
-            "markup_range": 0.0075,
-            "n_close_orders": 7,
-        },
-    }
+    return NamedConfig.parse_obj(
+        {
+            "long": {
+                "enabled": True,
+                "grid_span": 0.16,
+                "wallet_exposure_limit": 1.6,
+                "max_n_entry_orders": 10,
+                "initial_qty_pct": 0.01,
+                "eprice_pprice_diff": 0.0025,
+                "secondary_allocation": 0.5,
+                "secondary_pprice_diff": 0.35,
+                "eprice_exp_base": 1.618034,
+                "min_markup": 0.0045,
+                "markup_range": 0.0075,
+                "n_close_orders": 7,
+            },
+            "short": {
+                "enabled": False,
+                "grid_span": 0.16,
+                "wallet_exposure_limit": 1.6,
+                "max_n_entry_orders": 10,
+                "initial_qty_pct": 0.01,
+                "eprice_pprice_diff": 0.0025,
+                "secondary_allocation": 0.5,
+                "secondary_pprice_diff": 0.35,
+                "eprice_exp_base": 1.618034,
+                "min_markup": 0.0045,
+                "markup_range": 0.0075,
+                "n_close_orders": 7,
+            },
+        }
+    ).dict()
 
 
 def analyze_fills(
-    fills: list[Fill],
-    stats: list[Any],
+    fills: list[BacktestFill],
+    stats: list[BacktestStat],
     inverse: bool,
     c_mult: float,
     exchange: str | None = None,
     symbol: str | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, Any]]:
     sdf = pd.DataFrame(
-        stats,
+        [s.as_tuple() for s in stats],
         columns=[
             "timestamp",
             "balance",
@@ -341,7 +344,7 @@ def analyze_fills(
         ],
     )
     fdf = pd.DataFrame(
-        fills,
+        [f.as_tuple() for f in fills],
         columns=[
             "trade_id",
             "timestamp",

@@ -30,8 +30,6 @@ if os.environ.get("NOJIT", "false") in ("true", "1"):
         def wrap(cls):
             return cls
 
-        if cls_or_spec is not None:
-            return wrap(cls_or_spec)
         return wrap
 
 
