@@ -439,8 +439,6 @@ class Bot:
         line = f"{self.symbol} "
         line += f"l {self.position['long']['size']} @ "
         line += f"{round_(self.position['long']['price'], self.price_step)}, "
-        line += f"s {self.position['shrt']['size']} @ "
-        line += f"{round_(self.position['shrt']['price'], self.price_step)}, "
         long_closes = sorted([o for o in self.open_orders if o['side'] == 'sell'
                               and o['position_side'] == 'long'], key=lambda x: x['price'])
         long_entries = sorted([o for o in self.open_orders if o['side'] == 'buy'
@@ -454,6 +452,8 @@ class Bot:
                                and o['position_side'] == 'shrt'], key=lambda x: x['price'])
         seqty, seprice = (shrt_entries[0]['qty'], shrt_entries[0]['price']) if shrt_entries else (0.0, 0.0)
         scqty, scprice = (shrt_closes[-1]['qty'], shrt_closes[-1]['price']) if shrt_closes else (0.0, 0.0)
+        line += f"s {self.position['shrt']['size']} @ "
+        line += f"{round_(self.position['shrt']['price'], self.price_step)}, "
         line += f"e {seqty} @ {seprice}, c {scqty} @ {scprice} "
         if self.position['long']['size'] > abs(self.position['shrt']['size']):
             liq_price = self.position['long']['liquidation_price']
