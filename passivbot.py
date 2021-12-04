@@ -14,7 +14,7 @@ from time import time
 from procedures import load_live_config, make_get_filepath, load_exchange_key_secret, print_, utc_ms
 from pure_funcs import filter_orders, compress_float, create_xk, round_dynamic, denumpyize, \
     spotify_config, get_position_fills
-from njit_funcs import qty_to_cost, calc_diff, round_, calc_long_close_grid, calc_upnl, calc_long_entry_grid
+from njit_funcs import qty_to_cost, calc_diff, round_, calc_long_close_grid, calc_shrt_close_grid, calc_upnl, calc_long_entry_grid, calc_shrt_entry_grid
 from typing import Union, Dict, List
 
 import websockets
@@ -298,9 +298,10 @@ class Bot:
             no_pos = long_psize == 0.0 and shrt_psize == 0.0
             do_long = (no_pos and self.do_long) or long_psize != 0.0
             do_shrt = (no_pos and self.do_shrt) or shrt_psize != 0.0
-        do_shrt = self.do_shrt = False # shorts currently disabled for v5
         self.xk['do_long'] = do_long
         self.xk['do_shrt'] = do_shrt
+
+        orders = []
 
         long_entries = calc_long_entry_grid(
             balance, long_psize, long_pprice, self.ob[0], self.xk['inverse'], self.xk['do_long'],
@@ -315,12 +316,32 @@ class Bot:
             self.xk['initial_qty_pct'][0], self.xk['min_markup'][0], self.xk['markup_range'][0],
             self.xk['n_close_orders'][0]
         )
-        orders = [{'side': 'buy', 'position_side': 'long', 'qty': abs(float(o[0])),
-                   'price': float(o[1]), 'type': 'limit', 'reduce_only': False,
-                   'custom_id': o[2]} for o in long_entries if o[0] > 0.0]
+        orders += [{'side': 'buy', 'position_side': 'long', 'qty': abs(float(o[0])),
+                    'price': float(o[1]), 'type': 'limit', 'reduce_only': False,
+                    'custom_id': o[2]} for o in long_entries if o[0] > 0.0]
         orders += [{'side': 'sell', 'position_side': 'long', 'qty': abs(float(o[0])),
                     'price': float(o[1]), 'type': 'limit', 'reduce_only': True,
                     'custom_id': o[2]} for o in long_closes if o[0] < 0.0]
+
+        shrt_entries = calc_shrt_entry_grid(
+            balance, shrt_psize, shrt_pprice, self.ob[1], self.xk['inverse'], self.xk['do_shrt'],
+            self.xk['qty_step'], self.xk['price_step'], self.xk['min_qty'], self.xk['min_cost'],
+            self.xk['c_mult'], self.xk['grid_span'][1], self.xk['pbr_limit'][1], self.xk['max_n_entry_orders'][1],
+            self.xk['initial_qty_pct'][1], self.xk['eprice_pprice_diff'][1], self.xk['secondary_pbr_allocation'][1],
+            self.xk['secondary_pprice_diff'][1], self.xk['eprice_exp_base'][1]
+        )
+        shrt_closes = calc_shrt_close_grid(balance,
+            shrt_psize, shrt_pprice, self.ob[0], self.xk['spot'], self.xk['inverse'], self.xk['qty_step'],
+            self.xk['price_step'], self.xk['min_qty'], self.xk['min_cost'], self.xk['c_mult'], self.xk['pbr_limit'][1],
+            self.xk['initial_qty_pct'][1], self.xk['min_markup'][1], self.xk['markup_range'][1],
+            self.xk['n_close_orders'][1]
+        )
+        orders += [{'side': 'sell', 'position_side': 'shrt', 'qty': abs(float(o[0])),
+                    'price': float(o[1]), 'type': 'limit', 'reduce_only': False,
+                    'custom_id': o[2]} for o in shrt_entries if o[0] < 0.0]
+        orders += [{'side': 'buy', 'position_side': 'shrt', 'qty': abs(float(o[0])),
+                    'price': float(o[1]), 'type': 'limit', 'reduce_only': True,
+                    'custom_id': o[2]} for o in shrt_closes if o[0] > 0.0]
         return sorted(orders, key=lambda x: calc_diff(x['price'], self.price))
 
     async def cancel_and_create(self):
@@ -418,6 +439,8 @@ class Bot:
         line = f"{self.symbol} "
         line += f"l {self.position['long']['size']} @ "
         line += f"{round_(self.position['long']['price'], self.price_step)}, "
+        line += f"s {self.position['shrt']['size']} @ "
+        line += f"{round_(self.position['shrt']['price'], self.price_step)}, "
         long_closes = sorted([o for o in self.open_orders if o['side'] == 'sell'
                               and o['position_side'] == 'long'], key=lambda x: x['price'])
         long_entries = sorted([o for o in self.open_orders if o['side'] == 'buy'
@@ -425,14 +448,23 @@ class Bot:
         leqty, leprice = (long_entries[-1]['qty'], long_entries[-1]['price']) if long_entries else (0.0, 0.0)
         lcqty, lcprice = (long_closes[0]['qty'], long_closes[0]['price']) if long_closes else (0.0, 0.0)
         line += f"e {leqty} @ {leprice}, c {lcqty} @ {lcprice} "
+        shrt_closes = sorted([o for o in self.open_orders if o['side'] == 'buy'
+                              and o['position_side'] == 'shrt'], key=lambda x: x['price'])
+        shrt_entries = sorted([o for o in self.open_orders if o['side'] == 'sell'
+                               and o['position_side'] == 'shrt'], key=lambda x: x['price'])
+        seqty, seprice = (shrt_entries[0]['qty'], shrt_entries[0]['price']) if shrt_entries else (0.0, 0.0)
+        scqty, scprice = (shrt_closes[-1]['qty'], shrt_closes[-1]['price']) if shrt_closes else (0.0, 0.0)
+        line += f"e {seqty} @ {seprice}, c {scqty} @ {scprice} "
         if self.position['long']['size'] > abs(self.position['shrt']['size']):
             liq_price = self.position['long']['liquidation_price']
         else:
             liq_price = self.position['shrt']['liquidation_price']
         line += f"|| last {self.price} "
-        line += f"pprc diff {calc_diff(self.position['long']['price'], self.price):.3f} "
+        line += f"lpprc diff {calc_diff(self.position['long']['price'], self.price):.3f} "
+        line += f"spprc diff {calc_diff(self.position['shrt']['price'], self.price):.3f} "
         line += f"liq {round_dynamic(liq_price, 5)} "
         line += f"lpbr {self.position['long']['pbr']:.3f} "
+        line += f"spbr {self.position['shrt']['pbr']:.3f} "
         line += f"bal {round_dynamic(self.position['wallet_balance'], 5)} "
         line += f"eq {round_dynamic(self.position['equity'], 5)} "
         print_([line], r=True)
