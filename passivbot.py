@@ -537,6 +537,26 @@ async def main() -> None:
                         help='specify whether spot or futures (default), overriding value from backtest config')
     parser.add_argument('-gs', '--graceful_stop', action='store_true',
                         help='if true, disable long and short')
+    parser.add_argument(
+        "-lw",
+        "--long_wallet_exposure_limit",
+        "--long-wallet-exposure-limit",
+        type=float,
+        required=False,
+        dest="long_wallet_exposure_limit",
+        default=None,
+        help="specify long wallet exposure limit, overriding value from live config",
+    )
+    parser.add_argument(
+        "-sw",
+        "--short_wallet_exposure_limit",
+        "--short-wallet-exposure-limit",
+        type=float,
+        required=False,
+        dest="short_wallet_exposure_limit",
+        default=None,
+        help="specify short wallet exposure limit, overriding value from live config",
+    )
     parser.add_argument('-ab', '--assigned_balance', type=float, required=False, dest='assigned_balance', default=None,
                         help='add assigned_balance to live config')
 
@@ -569,6 +589,19 @@ async def main() -> None:
         print('\n\ngraceful stop enabled, will not make new entries once existing positions are closed\n')
         config['long']['enabled'] = config['do_long'] = False
         config['shrt']['enabled'] = config['do_shrt'] = False
+
+    if args.long_wallet_exposure_limit is not None:
+        print(
+            f"overriding long wallet exposure limit ({config['long']['pbr_limit']}) "
+            f"with new value: {args.long_wallet_exposure_limit}"
+        )
+        config["long"]["pbr_limit"] = args.long_wallet_exposure_limit
+    if args.short_wallet_exposure_limit is not None:
+        print(
+            f"overriding short wallet exposure limit ({config['shrt']['pbr_limit']}) "
+            f"with new value: {args.short_wallet_exposure_limit}"
+        )
+        config["shrt"]["pbr_limit"] = args.short_wallet_exposure_limit
 
     if 'spot' in config['market_type']:
         config = spotify_config(config)
