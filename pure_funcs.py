@@ -343,6 +343,10 @@ def analyze_fills(fills: list, stats: list, config: dict) -> (pd.DataFrame, pd.D
     long_pos_changes_ms_diff = np.diff([sdf.timestamp.iloc[0]] + list(long_pos_changes.timestamp) + [sdf.timestamp.iloc[-1]])
     hrs_stuck_max_long = long_pos_changes_ms_diff.max() / (1000 * 60 * 60)
     hrs_stuck_avg_long = long_pos_changes_ms_diff.mean() / (1000 * 60 * 60)
+    shrt_pos_changes = sdf[sdf.shrt_psize != sdf.shrt_psize.shift()]
+    shrt_pos_changes_ms_diff = np.diff([sdf.timestamp.iloc[0]] + list(shrt_pos_changes.timestamp) + [sdf.timestamp.iloc[-1]])
+    hrs_stuck_max_shrt = shrt_pos_changes_ms_diff.max() / (1000 * 60 * 60)
+    hrs_stuck_avg_shrt = shrt_pos_changes_ms_diff.mean() / (1000 * 60 * 60)
     lpprices = sdf[sdf.long_pprice != 0.0]
     spprices = sdf[sdf.shrt_pprice != 0.0]
     pa_closeness_long = ((lpprices.long_pprice - lpprices.price).abs() / lpprices.price) if len(lpprices) > 0 else pd.Series([100.0])
@@ -372,6 +376,10 @@ def analyze_fills(fills: list, stats: list, config: dict) -> (pd.DataFrame, pd.D
         'hrs_stuck_avg_long': hrs_stuck_avg_long,
         'hrs_stuck_max': hrs_stuck_max_long,
         'hrs_stuck_avg': hrs_stuck_avg_long,
+        'hrs_stuck_max_shrt': hrs_stuck_max_shrt,
+        'hrs_stuck_avg_shrt': hrs_stuck_avg_shrt,
+        'hrs_stuck_max': hrs_stuck_max_shrt,
+        'hrs_stuck_avg': hrs_stuck_avg_shrt,
         'loss_sum': fdf[fdf.pnl < 0.0].pnl.sum(),
         'profit_sum': fdf[fdf.pnl > 0.0].pnl.sum(),
         'pnl_sum': (pnl_sum := fdf.pnl.sum()),
