@@ -133,8 +133,9 @@ class FuncWrap:
         self.bounds = numpyize([[self.base_config['ranges'][k][0] for k in self.xs_conf_map],
                                 [self.base_config['ranges'][k][1] for k in self.xs_conf_map]])
         self.now_date = ts_to_date(time())[:19].replace(':', '-')
-        self.results_fname = make_get_filepath(f'tmp/harmony_search_results_{self.now_date}.txt')
-        self.best_conf_fname = f'tmp/harmony_search_best_config_{self.now_date}.json'
+        self.test_symbol = base_config['symbols'][0]
+        self.results_fname = make_get_filepath(f'tmp/harmony_search_results_{self.test_symbol}_{self.now_date}.txt')
+        self.best_conf_fname = f'tmp/harmony_search_best_config_{self.test_symbol}_{self.now_date}.json'
 
     def xs_to_config(self, xs):
         config = unpack_config(self.base_config.copy())
