@@ -71,11 +71,11 @@ def dump_plots(result: dict, fdf: pd.DataFrame, sdf: pd.DataFrame, df: pd.DataFr
     if result['shrt']['enabled']:
         table.add_row([' ', ' '])
         table.add_row(['Short', result['shrt']['enabled']])
-        table.add_row(["No. initial entries", len(shrts[shrts.type.str.contains('ientry')])])
+        table.add_row(["No. inital entries", len(shrts[shrts.type.str.contains('ientry')])])
         table.add_row(["No. reentries", len(shrts[shrts.type.str.contains('rentry')])])
         table.add_row(["No. normal closes", len(shrts[shrts.type.str.contains('nclose')])])
-        table.add_row(['Mean hours between fills (short)', round_dynamic(result['result']['mean_hrs_between_fills_shrt'], 6)])
-        table.add_row(['Max hours no fills (short)', round_dynamic(result['result']['max_hrs_no_fills_shrt'], 6)])
+        table.add_row(['Mean hours stuck (shrt)', round_dynamic(result['result']['hrs_stuck_avg_shrt'], 6)])
+        table.add_row(['Max hours stuck (shrt)', round_dynamic(result['result']['hrs_stuck_max_shrt'], 6)])
         profit_color = Fore.RED if shrts.pnl.sum() < 0 else Fore.RESET
         table.add_row(["PNL sum", f"{profit_color}{shrts.pnl.sum()}{Fore.RESET}"])
 
