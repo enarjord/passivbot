@@ -347,29 +347,42 @@ class Bot:
             return
         self.ts_locked["cancel_and_create"] = time()
         try:
-            to_cancel, to_create = filter_orders(
+            to_cancel_, to_create_ = filter_orders(
                 self.open_orders,
                 self.calc_orders(),
                 keys=["side", "position_side", "qty", "price"],
             )
-            to_cancel = sorted(
-                [
-                    elm
-                    for elm in to_cancel
-                    if (elm["position_side"] == "long" and self.long_mode != "manual")
-                    or (elm["position_side"] == "shrt" and self.shrt_mode != "manual")
-                ],
-                key=lambda x: calc_diff(x["price"], self.price),
-            )
-            to_create = sorted(
-                [
-                    elm
-                    for elm in to_create
-                    if (elm["position_side"] == "long" and self.long_mode != "manual")
-                    or (elm["position_side"] == "shrt" and self.shrt_mode != "manual")
-                ],
-                key=lambda x: calc_diff(x["price"], self.price),
-            )
+
+            to_cancel, to_create = [], []
+            for elm in to_cancel_:
+                if elm["position_side"] == "long":
+                    if self.long_mode == "tp_only":
+                        if elm["side"] == "sell":
+                            to_cancel.append(elm)
+                    elif self.long_mode != "manual":
+                        to_cancel.append(elm)
+                if elm["position_side"] == "shrt":
+                    if self.shrt_mode == "tp_only":
+                        if elm["side"] == "buy":
+                            to_cancel.append(elm)
+                    elif self.shrt_mode != "manual":
+                        to_cancel.append(elm)
+            for elm in to_create_:
+                if elm["position_side"] == "long":
+                    if self.long_mode == "tp_only":
+                        if elm["side"] == "sell":
+                            to_create.append(elm)
+                    elif self.long_mode != "manual":
+                        to_create.append(elm)
+                if elm["position_side"] == "shrt":
+                    if self.shrt_mode == "tp_only":
+                        if elm["side"] == "buy":
+                            to_create.append(elm)
+                    elif self.shrt_mode != "manual":
+                        to_create.append(elm)
+
+            to_cancel = sorted(to_cancel, key=lambda x: calc_diff(x["price"], self.price))
+            to_create = sorted(to_create, key=lambda x: calc_diff(x["price"], self.price))
 
             results = []
             if to_cancel:
@@ -621,7 +634,7 @@ async def main() -> None:
         required=False,
         dest="short_mode",
         default=None,
-        help="specify one of following short modes: [n (normal), m (manual), gs (graceful_stop), p (panic)]"
+        help="specify one of following short modes: [n (normal), m (manual), gs (graceful_stop), p (panic), t (tp_only)]"
     )
     parser.add_argument(
         "-lm",
@@ -631,7 +644,7 @@ async def main() -> None:
         required=False,
         dest="long_mode",
         default=None,
-        help="specify one of following long modes: [n (normal), m (manual), gs (graceful_stop), p (panic)]"
+        help="specify one of following long modes: [n (normal), m (manual), gs (graceful_stop), p (panic), t (tp_only)]"
     )
     parser.add_argument('-ab', '--assigned_balance', type=float, required=False, dest='assigned_balance', default=None,
                         help='add assigned_balance to live config')
@@ -672,8 +685,12 @@ async def main() -> None:
             print('\n\nlong normal mode')
             config['long']['enabled'] = config['do_long'] = True
         elif args.long_mode in ['p', 'panic']:
+            print('\nlong panic mode enabled')
             config['long_mode'] = 'panic'
             config['long']['enabled'] = config['do_long'] = False
+        elif args.long_mode.lower() in ['t', 'tp_only', 'tp-only']:
+            print('\nlong tp only mode enabled')
+            config['long_mode'] = 'tp_only'
     if args.short_mode is not None:
         if args.short_mode in ['gs', 'graceful_stop', 'graceful-stop']:
             print('\n\nshrt graceful stop enabled; will not make new entries once existing positions are closed\n')
@@ -685,8 +702,12 @@ async def main() -> None:
             print('\n\nshrt normal mode')
             config['shrt']['enabled'] = config['do_shrt'] = True
         elif args.short_mode in ['p', 'panic']:
+            print('\nshort panic mode enabled')
             config['shrt_mode'] = 'panic'
             config['shrt']['enabled'] = config['do_shrt'] = False
+        elif args.short_mode.lower() in ['t', 'tp_only', 'tp-only']:
+            print('\nshort tp only mode enabled')
+            config['shrt_mode'] = 'tp_only'
     if args.graceful_stop:
         print('\n\ngraceful stop enabled for both long and short; will not make new entries once existing positions are closed\n')
         config['long']['enabled'] = config['do_long'] = False
