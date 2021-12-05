@@ -11,6 +11,7 @@ import numpy as np
 import traceback
 
 from pure_funcs import ts_to_date, sort_dict_keys, date_to_ts
+from njit_funcs import round_
 from procedures import print_async_exception, print_, utc_ms
 from passivbot import Bot
 
@@ -195,10 +196,10 @@ class Bybit(Bot):
             else:
                 raise Exception('unknown market type')
 
-        position['long'] = {'size': float(long_pos['size']),
+        position['long'] = {'size': round_(float(long_pos['size']), self.qty_step),
                             'price': float(long_pos['entry_price']),
                             'liquidation_price': float(long_pos['liq_price'])}
-        position['shrt'] = {'size': -float(shrt_pos['size']),
+        position['shrt'] = {'size': -round_(float(shrt_pos['size']), self.qty_step),
                             'price': float(shrt_pos['entry_price']),
                             'liquidation_price': float(shrt_pos['liq_price'])}
         return position
@@ -520,10 +521,10 @@ class Bybit(Bot):
                     if elm['symbol'] == self.symbol:
                         standardized = {}
                         if elm['side'] == 'Buy':
-                            standardized['long_psize'] = float(elm['size'])
+                            standardized['long_psize'] = round_(float(elm['size']), self.qty_step)
                             standardized['long_pprice'] = float(elm['entry_price'])
                         elif elm['side'] == 'Sell':
-                            standardized['shrt_psize'] = -abs(float(elm['size']))
+                            standardized['shrt_psize'] = -round_(abs(float(elm['size'])), self.qty_step)
                             standardized['shrt_pprice'] = float(elm['entry_price'])
 
                         events.append(standardized)

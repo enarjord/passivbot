@@ -4,9 +4,10 @@ First priority to trading should be proper risk management.
 
 ## Leverage
 
-Passivbot does not use leverage.  It uses only unleveraged balance in all its calculations.  
-Leverage may be set to any value and will not affect bot behavior,  
-as long as it is set high enough to avoid insufficent margin errors.
+On futures markets with leverage, passivbot may expose more than 100% of the wallet's funds.  
+Passivbot uses only (unleveraged) wallet balance in its calculations,  
+so adjusting leverage on exchange will make no difference on risk, profit or bot behavior,  
+as long as leverage is set high enough for the bot to make its grid according to the configuration.
 
 ## PBR
 
