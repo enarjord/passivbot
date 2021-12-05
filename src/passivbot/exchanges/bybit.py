@@ -16,6 +16,7 @@ from passivbot.datastructures import Order
 from passivbot.datastructures import Position
 from passivbot.datastructures import Tick
 from passivbot.datastructures.runtime import RuntimeFuturesConfig
+from passivbot.utils.funcs.njit import round_
 from passivbot.utils.funcs.pure import date_to_ts
 from passivbot.utils.funcs.pure import ts_to_date
 from passivbot.utils.httpclient import ByBitHTTPClient
@@ -202,12 +203,12 @@ class Bybit(Bot):
                 raise Exception("unknown market type")
 
         position["long"] = {
-            "size": float(long_pos["size"]),
+            "size": round_(float(long_pos["size"]), self.rtc.qty_step),
             "price": float(long_pos["entry_price"]),
             "liquidation_price": float(long_pos["liq_price"]),
         }
         position["short"] = {
-            "size": -float(short_pos["size"]),
+            "size": -round_(float(short_pos["size"]), self.rtc.qty_step),
             "price": float(short_pos["entry_price"]),
             "liquidation_price": float(short_pos["liq_price"]),
         }
@@ -646,10 +647,10 @@ class Bybit(Bot):
                 for elm in event["data"]:
                     if elm["symbol"] == self.config.symbol:
                         if elm["side"] == "Buy":
-                            standardized["long_psize"] = float(elm["size"])
+                            standardized["long_psize"] = round_(float(elm["size"]), self.rtc.qty_step)
                             standardized["long_pprice"] = float(elm["entry_price"])
                         elif elm["side"] == "Sell":
-                            standardized["short_psize"] = -abs(float(elm["size"]))
+                            standardized["short_psize"] = -round_(abs(float(elm["size"])), self.rtc.qty_step)
                             standardized["short_pprice"] = float(elm["entry_price"])
                         if self.rtc.inverse:
                             standardized["wallet_balance"] = float(elm["wallet_balance"])
