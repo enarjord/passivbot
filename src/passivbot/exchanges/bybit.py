@@ -647,10 +647,14 @@ class Bybit(Bot):
                 for elm in event["data"]:
                     if elm["symbol"] == self.config.symbol:
                         if elm["side"] == "Buy":
-                            standardized["long_psize"] = round_(float(elm["size"]), self.rtc.qty_step)
+                            standardized["long_psize"] = round_(
+                                float(elm["size"]), self.rtc.qty_step
+                            )
                             standardized["long_pprice"] = float(elm["entry_price"])
                         elif elm["side"] == "Sell":
-                            standardized["short_psize"] = -round_(abs(float(elm["size"])), self.rtc.qty_step)
+                            standardized["short_psize"] = -round_(
+                                abs(float(elm["size"])), self.rtc.qty_step
+                            )
                             standardized["short_pprice"] = float(elm["entry_price"])
                         if self.rtc.inverse:
                             standardized["wallet_balance"] = float(elm["wallet_balance"])
