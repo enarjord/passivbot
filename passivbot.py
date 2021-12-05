@@ -70,8 +70,10 @@ class Bot:
         self.process_websocket_ticks = True
 
     def set_config(self, config):
-        if 'stop_mode' not in config:
-            config['stop_mode'] = None
+        if 'long_mode' not in config:
+            config['long_mode'] = None
+        if 'shrt_mode' not in config:
+            config['shrt_mode'] = None
         if 'last_price_diff_limit' not in config:
             config['last_price_diff_limit'] = 0.3
         if 'profit_trans_pct' not in config:
@@ -278,19 +280,6 @@ class Bot:
         shrt_psize = self.position['shrt']['size']
         shrt_pprice = self.position['shrt']['price']
 
-        if self.stop_mode in ['panic']:
-            if self.exchange == 'bybit':
-                print('\n\npanic mode temporarily disabled for bybit\n\n')
-                return []
-            panic_orders = []
-            if long_psize != 0.0:
-                panic_orders.append({'side': 'sell', 'position_side': 'long', 'qty': abs(long_psize), 'price': self.ob[1],
-                                     'type': 'market', 'reduce_only': True, 'custom_id': 'long_panic'})
-            if shrt_psize != 0.0:
-                panic_orders.append({'side': 'buy', 'position_side': 'shrt', 'qty': abs(shrt_psize), 'price': self.ob[0],
-                                     'type': 'market', 'reduce_only': True, 'custom_id': 'shrt_panic'})
-            return panic_orders
-
         if self.hedge_mode:
             do_long = self.do_long or long_psize != 0.0
             do_shrt = self.do_shrt or shrt_psize != 0.0
@@ -303,70 +292,108 @@ class Bot:
 
         orders = []
 
-        long_entries = calc_long_entry_grid(
-            balance, long_psize, long_pprice, self.ob[0], self.xk['inverse'], self.xk['do_long'],
-            self.xk['qty_step'], self.xk['price_step'], self.xk['min_qty'], self.xk['min_cost'],
-            self.xk['c_mult'], self.xk['grid_span'][0], self.xk['pbr_limit'][0], self.xk['max_n_entry_orders'][0],
-            self.xk['initial_qty_pct'][0], self.xk['eprice_pprice_diff'][0], self.xk['secondary_pbr_allocation'][0],
-            self.xk['secondary_pprice_diff'][0], self.xk['eprice_exp_base'][0]
-        )
-        long_closes = calc_long_close_grid(balance,
-            long_psize, long_pprice, self.ob[1], self.xk['spot'], self.xk['inverse'], self.xk['qty_step'],
-            self.xk['price_step'], self.xk['min_qty'], self.xk['min_cost'], self.xk['c_mult'], self.xk['pbr_limit'][0],
-            self.xk['initial_qty_pct'][0], self.xk['min_markup'][0], self.xk['markup_range'][0],
-            self.xk['n_close_orders'][0]
-        )
-        orders += [{'side': 'buy', 'position_side': 'long', 'qty': abs(float(o[0])),
-                    'price': float(o[1]), 'type': 'limit', 'reduce_only': False,
-                    'custom_id': o[2]} for o in long_entries if o[0] > 0.0]
-        orders += [{'side': 'sell', 'position_side': 'long', 'qty': abs(float(o[0])),
-                    'price': float(o[1]), 'type': 'limit', 'reduce_only': True,
-                    'custom_id': o[2]} for o in long_closes if o[0] < 0.0]
-
-        shrt_entries = calc_shrt_entry_grid(
-            balance, shrt_psize, shrt_pprice, self.ob[1], self.xk['inverse'], self.xk['do_shrt'],
-            self.xk['qty_step'], self.xk['price_step'], self.xk['min_qty'], self.xk['min_cost'],
-            self.xk['c_mult'], self.xk['grid_span'][1], self.xk['pbr_limit'][1], self.xk['max_n_entry_orders'][1],
-            self.xk['initial_qty_pct'][1], self.xk['eprice_pprice_diff'][1], self.xk['secondary_pbr_allocation'][1],
-            self.xk['secondary_pprice_diff'][1], self.xk['eprice_exp_base'][1]
-        )
-        shrt_closes = calc_shrt_close_grid(balance,
-            shrt_psize, shrt_pprice, self.ob[0], self.xk['spot'], self.xk['inverse'], self.xk['qty_step'],
-            self.xk['price_step'], self.xk['min_qty'], self.xk['min_cost'], self.xk['c_mult'], self.xk['pbr_limit'][1],
-            self.xk['initial_qty_pct'][1], self.xk['min_markup'][1], self.xk['markup_range'][1],
-            self.xk['n_close_orders'][1]
-        )
-        orders += [{'side': 'sell', 'position_side': 'shrt', 'qty': abs(float(o[0])),
-                    'price': float(o[1]), 'type': 'limit', 'reduce_only': False,
-                    'custom_id': o[2]} for o in shrt_entries if o[0] < 0.0]
-        orders += [{'side': 'buy', 'position_side': 'shrt', 'qty': abs(float(o[0])),
-                    'price': float(o[1]), 'type': 'limit', 'reduce_only': True,
-                    'custom_id': o[2]} for o in shrt_closes if o[0] > 0.0]
+        if self.long_mode == 'panic':
+            if long_psize != 0.0:
+                orders.append({'side': 'sell', 'position_side': 'long', 'qty': abs(long_psize),
+                               'price': float(self.ob[1]), 'type': 'limit', 'reduce_only': True, 'custom_id': 'long_panic'})
+        else:
+            long_entries = calc_long_entry_grid(
+                balance, long_psize, long_pprice, self.ob[0], self.xk['inverse'], self.xk['do_long'],
+                self.xk['qty_step'], self.xk['price_step'], self.xk['min_qty'], self.xk['min_cost'],
+                self.xk['c_mult'], self.xk['grid_span'][0], self.xk['pbr_limit'][0], self.xk['max_n_entry_orders'][0],
+                self.xk['initial_qty_pct'][0], self.xk['eprice_pprice_diff'][0], self.xk['secondary_pbr_allocation'][0],
+                self.xk['secondary_pprice_diff'][0], self.xk['eprice_exp_base'][0]
+            )
+            long_closes = calc_long_close_grid(balance,
+                long_psize, long_pprice, self.ob[1], self.xk['spot'], self.xk['inverse'], self.xk['qty_step'],
+                self.xk['price_step'], self.xk['min_qty'], self.xk['min_cost'], self.xk['c_mult'], self.xk['pbr_limit'][0],
+                self.xk['initial_qty_pct'][0], self.xk['min_markup'][0], self.xk['markup_range'][0],
+                self.xk['n_close_orders'][0]
+            )
+            orders += [{'side': 'buy', 'position_side': 'long', 'qty': abs(float(o[0])),
+                        'price': float(o[1]), 'type': 'limit', 'reduce_only': False,
+                        'custom_id': o[2]} for o in long_entries if o[0] > 0.0]
+            orders += [{'side': 'sell', 'position_side': 'long', 'qty': abs(float(o[0])),
+                        'price': float(o[1]), 'type': 'limit', 'reduce_only': True,
+                        'custom_id': o[2]} for o in long_closes if o[0] < 0.0]
+        if self.shrt_mode == 'panic':
+            if shrt_psize != 0.0:
+                orders.append({'side': 'buy', 'position_side': 'shrt', 'qty': abs(shrt_psize),
+                               'price': float(self.ob[0]), 'type': 'limit', 'reduce_only': True, 'custom_id': 'shrt_panic'})
+        else:
+            shrt_entries = calc_shrt_entry_grid(
+                balance, shrt_psize, shrt_pprice, self.ob[1], self.xk['inverse'], self.xk['do_shrt'],
+                self.xk['qty_step'], self.xk['price_step'], self.xk['min_qty'], self.xk['min_cost'],
+                self.xk['c_mult'], self.xk['grid_span'][1], self.xk['pbr_limit'][1], self.xk['max_n_entry_orders'][1],
+                self.xk['initial_qty_pct'][1], self.xk['eprice_pprice_diff'][1], self.xk['secondary_pbr_allocation'][1],
+                self.xk['secondary_pprice_diff'][1], self.xk['eprice_exp_base'][1]
+            )
+            shrt_closes = calc_shrt_close_grid(balance,
+                shrt_psize, shrt_pprice, self.ob[0], self.xk['spot'], self.xk['inverse'], self.xk['qty_step'],
+                self.xk['price_step'], self.xk['min_qty'], self.xk['min_cost'], self.xk['c_mult'], self.xk['pbr_limit'][1],
+                self.xk['initial_qty_pct'][1], self.xk['min_markup'][1], self.xk['markup_range'][1],
+                self.xk['n_close_orders'][1]
+            )
+            orders += [{'side': 'sell', 'position_side': 'shrt', 'qty': abs(float(o[0])),
+                        'price': float(o[1]), 'type': 'limit', 'reduce_only': False,
+                        'custom_id': o[2]} for o in shrt_entries if o[0] < 0.0]
+            orders += [{'side': 'buy', 'position_side': 'shrt', 'qty': abs(float(o[0])),
+                        'price': float(o[1]), 'type': 'limit', 'reduce_only': True,
+                        'custom_id': o[2]} for o in shrt_closes if o[0] > 0.0]
         return sorted(orders, key=lambda x: calc_diff(x['price'], self.price))
 
     async def cancel_and_create(self):
-        if self.ts_locked['cancel_and_create'] > self.ts_released['cancel_and_create']:
+        if self.ts_locked["cancel_and_create"] > self.ts_released["cancel_and_create"]:
             return
-        self.ts_locked['cancel_and_create'] = time()
+        self.ts_locked["cancel_and_create"] = time()
         try:
-            to_cancel, to_create = filter_orders(self.open_orders, self.calc_orders(),
-                                                 keys=['side', 'position_side', 'qty', 'price'])
-            to_cancel = sorted(to_cancel, key=lambda x: calc_diff(x['price'], self.price))
-            to_create = sorted(to_create, key=lambda x: calc_diff(x['price'], self.price))
+            to_cancel, to_create = filter_orders(
+                self.open_orders,
+                self.calc_orders(),
+                keys=["side", "position_side", "qty", "price"],
+            )
+            to_cancel = sorted(
+                [
+                    elm
+                    for elm in to_cancel
+                    if (elm["position_side"] == "long" and self.long_mode != "manual")
+                    or (elm["position_side"] == "shrt" and self.shrt_mode != "manual")
+                ],
+                key=lambda x: calc_diff(x["price"], self.price),
+            )
+            to_create = sorted(
+                [
+                    elm
+                    for elm in to_create
+                    if (elm["position_side"] == "long" and self.long_mode != "manual")
+                    or (elm["position_side"] == "shrt" and self.shrt_mode != "manual")
+                ],
+                key=lambda x: calc_diff(x["price"], self.price),
+            )
+
             results = []
-            if self.stop_mode not in ['manual']:
-                if to_cancel:
-                    # to avoid building backlog, cancel n+1 orders, create n orders
-                    results.append(asyncio.create_task(self.cancel_orders(to_cancel[:self.n_orders_per_execution + 1])))
-                    await asyncio.sleep(0.01)  # sleep 10 ms between sending cancellations and sending creations
-                if to_create:
-                    results.append(await self.create_orders(to_create[:self.n_orders_per_execution]))
+            if to_cancel:
+                # to avoid building backlog, cancel n+1 orders, create n orders
+                results.append(
+                    asyncio.create_task(
+                        self.cancel_orders(to_cancel[: self.n_orders_per_execution + 1])
+                    )
+                )
+                await asyncio.sleep(
+                    0.01
+                )  # sleep 10 ms between sending cancellations and sending creations
+            if to_create:
+                results.append(
+                    await self.create_orders(to_create[: self.n_orders_per_execution])
+                )
             if any(results):
                 print()
-            await asyncio.sleep(self.delay_between_executions) # sleep before releasing lock
+            await asyncio.sleep(
+                self.delay_between_executions
+            )  # sleep before releasing lock
             return results
         finally:
-            self.ts_released['cancel_and_create'] = time()
+            self.ts_released["cancel_and_create"] = time()
 
     async def on_market_stream_event(self, ticks: [dict]):
         if ticks:
@@ -376,9 +403,6 @@ class Bot:
                 else:
                     self.ob[1] = tick['price']
             self.price = ticks[-1]['price']
-
-        if self.stop_mode is not None:
-            print(f'{self.stop_mode} stop mode is active')
 
         now = time()
         if now - self.ts_released['force_update'] > self.force_update_interval:
@@ -589,6 +613,26 @@ async def main() -> None:
         default=None,
         help="specify short wallet exposure limit, overriding value from live config",
     )
+    parser.add_argument(
+        "-sm",
+        "--short_mode",
+        "--short-mode",
+        type=str,
+        required=False,
+        dest="short_mode",
+        default=None,
+        help="specify one of following short modes: [n (normal), m (manual), gs (graceful_stop), p (panic)]"
+    )
+    parser.add_argument(
+        "-lm",
+        "--long_mode",
+        "--long-mode",
+        type=str,
+        required=False,
+        dest="long_mode",
+        default=None,
+        help="specify one of following long modes: [n (normal), m (manual), gs (graceful_stop), p (panic)]"
+    )
     parser.add_argument('-ab', '--assigned_balance', type=float, required=False, dest='assigned_balance', default=None,
                         help='add assigned_balance to live config')
 
@@ -617,8 +661,34 @@ async def main() -> None:
         print(f'\nassigned balance set to {args.assigned_balance}\n')
         config['assigned_balance'] = args.assigned_balance
 
+    if args.long_mode is not None:
+        if args.long_mode in ['gs', 'graceful_stop', 'graceful-stop']:
+            print('\n\nlong graceful stop enabled; will not make new entries once existing positions are closed\n')
+            config['long']['enabled'] = config['do_long'] = False
+        elif args.long_mode in ['m', 'manual']:
+            print('\n\nlong manual mode enabled; will neither cancel nor create long orders')
+            config['long_mode'] = 'manual'
+        elif args.long_mode in ['n', 'normal']:
+            print('\n\nlong normal mode')
+            config['long']['enabled'] = config['do_long'] = True
+        elif args.long_mode in ['p', 'panic']:
+            config['long_mode'] = 'panic'
+            config['long']['enabled'] = config['do_long'] = False
+    if args.short_mode is not None:
+        if args.short_mode in ['gs', 'graceful_stop', 'graceful-stop']:
+            print('\n\nshrt graceful stop enabled; will not make new entries once existing positions are closed\n')
+            config['shrt']['enabled'] = config['do_shrt'] = False
+        elif args.short_mode in ['m', 'manual']:
+            print('\n\nshrt manual mode enabled; will neither cancel nor create shrt orders')
+            config['shrt_mode'] = 'manual'
+        elif args.short_mode in ['n', 'normal']:
+            print('\n\nshrt normal mode')
+            config['shrt']['enabled'] = config['do_shrt'] = True
+        elif args.short_mode in ['p', 'panic']:
+            config['shrt_mode'] = 'panic'
+            config['shrt']['enabled'] = config['do_shrt'] = False
     if args.graceful_stop:
-        print('\n\ngraceful stop enabled, will not make new entries once existing positions are closed\n')
+        print('\n\ngraceful stop enabled for both long and short; will not make new entries once existing positions are closed\n')
         config['long']['enabled'] = config['do_long'] = False
         config['shrt']['enabled'] = config['do_shrt'] = False
 
