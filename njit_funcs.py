@@ -893,7 +893,7 @@ def calc_shrt_entry_grid(
                 min_entry_qty = calc_min_entry_qty(entry_price, inverse, qty_step, min_qty, min_cost)
                 max_entry_qty = round_(cost_to_qty(balance * pbr_limit * initial_qty_pct,
                                                    entry_price, inverse, c_mult), qty_step)
-                entry_qty = max(min_entry_qty, min(max_entry_qty, grid[0][0]))
+                entry_qty = -max(min_entry_qty, min(max_entry_qty, grid[0][0]))
                 if qty_to_cost(entry_qty, entry_price, inverse, c_mult) / balance > pbr_limit * 1.1:
                     print('\n\nwarning: abnormally large partial ientry')
                     print('grid:')
