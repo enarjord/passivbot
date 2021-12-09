@@ -49,11 +49,45 @@ async def main():
     parser = argparse.ArgumentParser(prog='Backtest', description='Backtest given passivbot config.')
     parser.add_argument('live_config_path', type=str, help='path to live config to test')
     parser = add_argparse_args(parser)
-    args = parser.parse_args()
+    parser.add_argument(
+        "-lw",
+        "--long_wallet_exposure_limit",
+        "--long-wallet-exposure-limit",
+        type=float,
+        required=False,
+        dest="long_wallet_exposure_limit",
+        default=None,
+        help="specify long wallet exposure limit, overriding value from live config",
+    )
+    parser.add_argument(
+        "-sw",
+        "--short_wallet_exposure_limit",
+        "--short-wallet-exposure-limit",
+        type=float,
+        required=False,
+        dest="short_wallet_exposure_limit",
+        default=None,
+        help="specify short wallet exposure limit, overriding value from live config",
+    )
 
+    args = parser.parse_args()
     config = await prepare_backtest_config(args)
     live_config = load_live_config(args.live_config_path)
     config.update(live_config)
+
+    if args.long_wallet_exposure_limit is not None:
+        print(
+            f"overriding long wallet exposure limit ({config['long']['pbr_limit']}) "
+            f"with new value: {args.long_wallet_exposure_limit}"
+        )
+        config["long"]["pbr_limit"] = args.long_wallet_exposure_limit
+    if args.short_wallet_exposure_limit is not None:
+        print(
+            f"overriding short wallet exposure limit ({config['shrt']['pbr_limit']}) "
+            f"with new value: {args.short_wallet_exposure_limit}"
+        )
+        config["shrt"]["pbr_limit"] = args.short_wallet_exposure_limit
+
     if 'spot' in config['market_type']:
         live_config = spotify_config(live_config)
     downloader = Downloader(config)
