@@ -474,24 +474,26 @@ class Bot:
     def update_output_information(self):
         self.ts_released['print'] = time()
         line = f"{self.symbol} "
-        line += f"l {self.position['long']['size']} @ "
-        line += f"{round_(self.position['long']['price'], self.price_step)}, "
-        long_closes = sorted([o for o in self.open_orders if o['side'] == 'sell'
-                              and o['position_side'] == 'long'], key=lambda x: x['price'])
-        long_entries = sorted([o for o in self.open_orders if o['side'] == 'buy'
-                               and o['position_side'] == 'long'], key=lambda x: x['price'])
-        leqty, leprice = (long_entries[-1]['qty'], long_entries[-1]['price']) if long_entries else (0.0, 0.0)
-        lcqty, lcprice = (long_closes[0]['qty'], long_closes[0]['price']) if long_closes else (0.0, 0.0)
-        line += f"e {leqty} @ {leprice}, c {lcqty} @ {lcprice} "
-        shrt_closes = sorted([o for o in self.open_orders if o['side'] == 'buy'
-                              and o['position_side'] == 'shrt'], key=lambda x: x['price'])
-        shrt_entries = sorted([o for o in self.open_orders if o['side'] == 'sell'
-                               and o['position_side'] == 'shrt'], key=lambda x: x['price'])
-        seqty, seprice = (shrt_entries[0]['qty'], shrt_entries[0]['price']) if shrt_entries else (0.0, 0.0)
-        scqty, scprice = (shrt_closes[-1]['qty'], shrt_closes[-1]['price']) if shrt_closes else (0.0, 0.0)
-        line += f"s {self.position['shrt']['size']} @ "
-        line += f"{round_(self.position['shrt']['price'], self.price_step)}, "
-        line += f"e {seqty} @ {seprice}, c {scqty} @ {scprice} "
+        if self.config['do_long']:
+            line += f"l {self.position['long']['size']} @ "
+            line += f"{round_(self.position['long']['price'], self.price_step)}, "
+            long_closes = sorted([o for o in self.open_orders if o['side'] == 'sell'
+                                  and o['position_side'] == 'long'], key=lambda x: x['price'])
+            long_entries = sorted([o for o in self.open_orders if o['side'] == 'buy'
+                                   and o['position_side'] == 'long'], key=lambda x: x['price'])
+            leqty, leprice = (long_entries[-1]['qty'], long_entries[-1]['price']) if long_entries else (0.0, 0.0)
+            lcqty, lcprice = (long_closes[0]['qty'], long_closes[0]['price']) if long_closes else (0.0, 0.0)
+            line += f"e {leqty} @ {leprice}, c {lcqty} @ {lcprice} "
+        if self.config['do_short']:
+            shrt_closes = sorted([o for o in self.open_orders if o['side'] == 'buy'
+                                  and o['position_side'] == 'shrt'], key=lambda x: x['price'])
+            shrt_entries = sorted([o for o in self.open_orders if o['side'] == 'sell'
+                                   and o['position_side'] == 'shrt'], key=lambda x: x['price'])
+            seqty, seprice = (shrt_entries[0]['qty'], shrt_entries[0]['price']) if shrt_entries else (0.0, 0.0)
+            scqty, scprice = (shrt_closes[-1]['qty'], shrt_closes[-1]['price']) if shrt_closes else (0.0, 0.0)
+            line += f"s {self.position['shrt']['size']} @ "
+            line += f"{round_(self.position['shrt']['price'], self.price_step)}, "
+            line += f"e {seqty} @ {seprice}, c {scqty} @ {scprice} "
         if self.position['long']['size'] > abs(self.position['shrt']['size']):
             liq_price = self.position['long']['liquidation_price']
         else:
