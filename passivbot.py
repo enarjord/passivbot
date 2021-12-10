@@ -474,7 +474,7 @@ class Bot:
     def update_output_information(self):
         self.ts_released['print'] = time()
         line = f"{self.symbol} "
-        if self.config['do_long']:
+        if self.position['long']['size'] != 0.0:
             line += f"l {self.position['long']['size']} @ "
             line += f"{round_(self.position['long']['price'], self.price_step)}, "
             long_closes = sorted([o for o in self.open_orders if o['side'] == 'sell'
@@ -484,7 +484,7 @@ class Bot:
             leqty, leprice = (long_entries[-1]['qty'], long_entries[-1]['price']) if long_entries else (0.0, 0.0)
             lcqty, lcprice = (long_closes[0]['qty'], long_closes[0]['price']) if long_closes else (0.0, 0.0)
             line += f"e {leqty} @ {leprice}, c {lcqty} @ {lcprice} "
-        if self.config['do_short']:
+        if self.position['shrt']['size'] != 0.0:
             shrt_closes = sorted([o for o in self.open_orders if o['side'] == 'buy'
                                   and o['position_side'] == 'shrt'], key=lambda x: x['price'])
             shrt_entries = sorted([o for o in self.open_orders if o['side'] == 'sell'
