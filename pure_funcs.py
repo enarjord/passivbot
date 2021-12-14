@@ -308,7 +308,7 @@ def get_template_live_config():
                  "min_markup": 0.0045,
                  "markup_range":  0.0075,
                  "n_close_orders": 7},
-        "shrt": {"enabled": False,
+        "shrt": {"enabled": True,
                  "grid_span": 0.16,
                  "pbr_limit": 1.6,
                  "max_n_entry_orders":  10,
@@ -343,8 +343,15 @@ def analyze_fills(fills: list, stats: list, config: dict) -> (pd.DataFrame, pd.D
     long_pos_changes_ms_diff = np.diff([sdf.timestamp.iloc[0]] + list(long_pos_changes.timestamp) + [sdf.timestamp.iloc[-1]])
     hrs_stuck_max_long = long_pos_changes_ms_diff.max() / (1000 * 60 * 60)
     hrs_stuck_avg_long = long_pos_changes_ms_diff.mean() / (1000 * 60 * 60)
+    shrt_pos_changes = sdf[sdf.shrt_psize != sdf.shrt_psize.shift()]
+    shrt_pos_changes_ms_diff = np.diff([sdf.timestamp.iloc[0]] + list(shrt_pos_changes.timestamp) + [sdf.timestamp.iloc[-1]])
+    hrs_stuck_max_shrt = shrt_pos_changes_ms_diff.max() / (1000 * 60 * 60)
+    hrs_stuck_avg_shrt = shrt_pos_changes_ms_diff.mean() / (1000 * 60 * 60)
     lpprices = sdf[sdf.long_pprice != 0.0]
-    pa_closeness_long = (lpprices.long_pprice - lpprices.price).abs() / lpprices.price
+    spprices = sdf[sdf.shrt_pprice != 0.0]
+    pa_closeness_long = ((lpprices.long_pprice - lpprices.price).abs() / lpprices.price) if len(lpprices) > 0 else pd.Series([100.0])
+    pa_closeness_shrt = ((spprices.shrt_pprice - spprices.price).abs() / spprices.price) if len(spprices) > 0 else pd.Series([100.0])
+
     analysis = {
         'exchange': config['exchange'] if 'exchange' in config else 'unknown',
         'symbol': config['symbol'] if 'symbol' in config else 'unknown',
@@ -352,6 +359,9 @@ def analyze_fills(fills: list, stats: list, config: dict) -> (pd.DataFrame, pd.D
         'pa_closeness_mean_long': pa_closeness_long.mean(),
         'pa_closeness_median_long': pa_closeness_long.median(),
         'pa_closeness_max_long': pa_closeness_long.max(),
+        'pa_closeness_mean_shrt': pa_closeness_shrt.mean(),
+        'pa_closeness_median_shrt': pa_closeness_shrt.median(),
+        'pa_closeness_max_shrt': pa_closeness_shrt.max(),
         'average_daily_gain': adg,
         'adjusted_daily_gain': np.tanh(20 * adg) / 20,
         'gain': gain,
@@ -366,6 +376,10 @@ def analyze_fills(fills: list, stats: list, config: dict) -> (pd.DataFrame, pd.D
         'hrs_stuck_avg_long': hrs_stuck_avg_long,
         'hrs_stuck_max': hrs_stuck_max_long,
         'hrs_stuck_avg': hrs_stuck_avg_long,
+        'hrs_stuck_max_shrt': hrs_stuck_max_shrt,
+        'hrs_stuck_avg_shrt': hrs_stuck_avg_shrt,
+        'hrs_stuck_max': hrs_stuck_max_shrt,
+        'hrs_stuck_avg': hrs_stuck_avg_shrt,
         'loss_sum': fdf[fdf.pnl < 0.0].pnl.sum(),
         'profit_sum': fdf[fdf.pnl > 0.0].pnl.sum(),
         'pnl_sum': (pnl_sum := fdf.pnl.sum()),

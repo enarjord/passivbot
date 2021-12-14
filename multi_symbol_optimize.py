@@ -7,6 +7,7 @@ import asyncio
 import json
 import hjson
 import numpy as np
+import traceback
 from backtest import backtest
 from multiprocessing import Pool
 from pure_funcs import analyze_fills, pack_config, unpack_config, numpyize, denumpyize, config_pretty_str, \
@@ -27,21 +28,20 @@ def backtest_single_wrap(config_: dict):
     try:
         fills, stats = backtest(config, ticks)
         fdf, sdf, analysis = analyze_fills(fills, stats, config)
-        pa_closeness = analysis['pa_closeness_mean_long']
+        pa_closeness_long = analysis['pa_closeness_mean_long']
+        pa_closeness_shrt = analysis['pa_closeness_mean_shrt']
         adg = analysis['average_daily_gain']
-        score = adg * (min(1.0, config['maximum_pa_closeness_mean_long'] / pa_closeness)**2)
-        print(f"backtested {config['symbol']: <12} pa closeness {analysis['pa_closeness_mean_long']:.6f} "
-              f"adg {adg:.6f} score {score:.8f}")
+        print(f"backtested {config['symbol']: <12} pa closeness long {pa_closeness_long:.6f} "
+              f"pa closeness shrt {pa_closeness_shrt:.6f} adg {adg:.6f}")
     except Exception as e:
         print(f'error with {config["symbol"]} {e}')
         print('config')
-        print(config)
-        score = -9999999999999.9
+        traceback.print_exc()
         adg = 0.0
-        pa_closeness = 100.0
+        pa_closeness_long = pa_closeness_shrt = 100.0
         with open(make_get_filepath('tmp/harmony_search_errors.txt'), 'a') as f:
             f.write(json.dumps([time(), 'error', str(e), denumpyize(config)]) + '\n')
-    return (pa_closeness, adg, score)
+    return (pa_closeness_long, pa_closeness_shrt, adg)
 
 
 def backtest_multi_wrap(config: dict, pool):
@@ -53,12 +53,18 @@ def backtest_multi_wrap(config: dict, pool):
             break
         sleep(0.1)
     results = {k: v.get() for k, v in tasks.items()}
-    mean_pa_closeness = np.mean([v[0] for v in results.values()])
-    mean_adg = np.mean([v[1] for v in results.values()])
-    mean_score = np.mean([v[2] for v in results.values()])
-    new_score = mean_adg * min(1.0, config['maximum_pa_closeness_mean_long'] / mean_pa_closeness)
-    print(f'pa closeness {mean_pa_closeness:.6f} adg {mean_adg:.6f} score {mean_score:8f} new score {new_score:.8f}')
-    return -new_score, results
+    pa_closeness_long_mean = np.mean([v[0] for v in results.values()])
+    pa_closeness_shrt_mean = np.mean([v[1] for v in results.values()])
+    adg_mean = np.mean([v[2] for v in results.values()])
+    if config['side'] == 'long':
+        score = adg_mean * min(1.0, config['maximum_pa_closeness_mean_long'] / pa_closeness_long_mean)
+    elif config['side'] == 'shrt':
+        score = adg_mean * min(1.0, config['maximum_pa_closeness_mean_shrt'] / pa_closeness_shrt_mean)
+    elif config['side'] == 'both':
+        score = adg_mean * min(1.0, (config['maximum_pa_closeness_mean_long'] / pa_closeness_long_mean + config['maximum_pa_closeness_mean_shrt'] / pa_closeness_shrt_mean) / 2)
+
+    print(f'pa closeness long {pa_closeness_long_mean:.6f} pa closeness shrt {pa_closeness_shrt_mean:.6f} adg {adg_mean:.6f} score {score:8f}')
+    return -score, results
 
 
 def harmony_search(
@@ -166,6 +172,20 @@ async def main():
     config = await prepare_optimize_config(args)
     config.update(get_template_live_config())
     config['exchange'], _, _ = load_exchange_key_secret(config['user'])
+    config['long']['enabled'] = config['do_long']
+    config['shrt']['enabled'] = config['do_shrt']
+    if config['long']['enabled']:
+        if config['shrt']['enabled']:
+            print('optimizing both long and short')
+            config['side'] = 'both'
+        else:
+            print('optimizing long')
+            config['side'] = 'long'
+    elif config['shrt']['enabled']:
+        print('optimizing short')
+        config['side'] = 'shrt'
+    else:
+        raise Exception('long, shrt or both must be enabled')
 
     # download ticks .npy file if missing
     cache_fname = f"{config['start_date']}_{config['end_date']}_ticks_cache.npy"
