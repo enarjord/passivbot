@@ -4,7 +4,7 @@
 
 :warning: **Use at own risk** :warning:
 
-v5.1.0 
+v5.2.0 
 
 ## Overview
 
@@ -32,7 +32,7 @@ A number of pre-optimized configurations for Passivbot can be found at https://g
 
 ## Documentation:
 
-For more detailed information about Passivbot, you can look at the documentation on https://www.passivbot.com
+For more detailed information about Passivbot, see documentation on https://www.passivbot.com
 
 ## Support
 
