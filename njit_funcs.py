@@ -494,6 +494,8 @@ def find_eprice_pprice_diff_pbr_weighting(
                 prev_pprice=prev_pprice,
             )[-1][4]
 
+
+
     guess = 0.0
     val = eval_(guess)
     if val < pbr_limit:
@@ -502,7 +504,13 @@ def find_eprice_pprice_diff_pbr_weighting(
     guess = 1000.0
     val = eval_(guess)
     if val > pbr_limit:
-        return guess
+        guess = 10000.0
+        val = eval_(guess)
+        if val > pbr_limit:
+            guess = 100000.0
+            val = eval_(guess)
+            if val > pbr_limit:
+                return guess
     too_high = (guess, val)
     guesses = [too_low[1], too_high[1]]
     vals = [too_low[0], too_high[0]]
@@ -832,6 +840,8 @@ def calc_long_entry_grid(
         for i in range(len(grid)):
             if grid[i][2] < psize * 1.05 or grid[i][1] > pprice * 0.9995:
                 continue
+            if grid[i][4] > pbr_limit * 1.01:
+                break
             entry_price = min(highest_bid, grid[i][1])
             min_entry_qty = calc_min_entry_qty(entry_price, inverse, qty_step, min_qty, min_cost)
             grid[i][1] = entry_price
