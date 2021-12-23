@@ -295,7 +295,7 @@ class Bot:
         if self.long_mode == 'panic':
             if long_psize != 0.0:
                 orders.append({'side': 'sell', 'position_side': 'long', 'qty': abs(long_psize),
-                               'price': float(self.ob[1]), 'type': 'limit', 'reduce_only': True, 'custom_id': 'long_panic'})
+                               'price': float(self.ob[1]), 'type': 'limit', 'reduce_only': True, 'custom_id': 'long_panic_close'})
         else:
             long_entries = calc_long_entry_grid(
                 balance, long_psize, long_pprice, self.ob[0], self.xk['inverse'], self.xk['do_long'],
@@ -319,7 +319,7 @@ class Bot:
         if self.shrt_mode == 'panic':
             if shrt_psize != 0.0:
                 orders.append({'side': 'buy', 'position_side': 'shrt', 'qty': abs(shrt_psize),
-                               'price': float(self.ob[0]), 'type': 'limit', 'reduce_only': True, 'custom_id': 'shrt_panic'})
+                               'price': float(self.ob[0]), 'type': 'limit', 'reduce_only': True, 'custom_id': 'shrt_panic_close'})
         else:
             shrt_entries = calc_shrt_entry_grid(
                 balance, shrt_psize, shrt_pprice, self.ob[1], self.xk['inverse'], self.xk['do_shrt'],
