@@ -150,13 +150,15 @@ def plot_fills(df, fdf_, side: int = 0, bkr_thr=0.1, plot_whole_df: bool = False
         lientry = longs[longs.type.str.contains('ientry')]
         lrentry = longs[longs.type.str.contains('rentry')]
         lnclose = longs[longs.type.str.contains('nclose')]
-        lsclose = longs[longs.type.str.contains('sclose')]
+        luentry = longs[longs.type.str.contains('unstuck_entry')]
+        luclose = longs[longs.type.str.contains('unstuck_close')]
         ldca = longs[longs.type.str.contains('secondary')]
         lientry.price.plot(style='b.')
         lrentry.price.plot(style='b.')
         lnclose.price.plot(style='r.')
-        lsclose.price.plot(style=('rx'))
         ldca.price.plot(style='go')
+        luentry.price.plot(style='bx')
+        luclose.price.plot(style='rx')
 
         longs.where(longs.pprice != 0.0).pprice.fillna(method='ffill').plot(style='b--')
     if side <= 0:
@@ -164,13 +166,15 @@ def plot_fills(df, fdf_, side: int = 0, bkr_thr=0.1, plot_whole_df: bool = False
         sientry = shrts[shrts.type.str.contains('ientry')]
         srentry = shrts[shrts.type.str.contains('rentry')]
         snclose = shrts[shrts.type.str.contains('nclose')]
-        ssclose = shrts[shrts.type.str.contains('sclose')]
+        suentry = shrts[shrts.type.str.contains('unstuck_entry')]
+        suclose = shrts[shrts.type.str.contains('unstuck_close')]
         sdca = shrts[shrts.type.str.contains('secondary')]
         sientry.price.plot(style='r.')
         srentry.price.plot(style='r.')
         snclose.price.plot(style='b.')
-        ssclose.price.plot(style=('bx'))
         sdca.price.plot(style='go')
+        suentry.price.plot(style='rx')
+        suclose.price.plot(style='bx')
         shrts.where(shrts.pprice != 0.0).pprice.fillna(method='ffill').plot(style='r--')
 
     if 'bkr_price' in fdf.columns:
