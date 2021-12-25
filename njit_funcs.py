@@ -162,6 +162,7 @@ def calc_long_close_grid(balance,
                          long_psize,
                          long_pprice,
                          lowest_ask,
+                         upper_ema_band,
 
                          spot,
                          inverse,
@@ -175,7 +176,9 @@ def calc_long_close_grid(balance,
                          initial_qty_pct,
                          min_markup,
                          markup_range,
-                         n_close_orders) -> [(float, float, str)]:
+                         n_close_orders,
+                         auto_unstuck_pbr_threshold,
+                         auto_unstuck_ema_dist) -> [(float, float, str)]:
     if long_psize == 0.0:
         return [(0.0, 0.0, '')]
     minm = long_pprice * (1 + min_markup)
@@ -197,6 +200,23 @@ def calc_long_close_grid(balance,
     elif len(close_prices) == 1:
         return [(-long_psize, close_prices[0], 'long_nclose')]
     else:
+        pbr = qty_to_cost(long_psize, long_pprice, inverse, c_mult) / balance
+        threshold = pbr_limit * (1 - auto_unstuck_pbr_threshold) * 1.01
+        if auto_unstuck_pbr_threshold != 0.0 and pbr > threshold:
+            auto_unstuck_price = max(lowest_ask, round_up(upper_ema_band * (1 + auto_unstuck_ema_dist), price_step))
+            if auto_unstuck_price < close_prices[0]:
+                auto_unstuck_qty = find_long_close_qty_bringing_pbr_to_target(
+                    balance,
+                    long_psize,
+                    long_pprice,
+                    threshold,
+                    auto_unstuck_price,
+                    inverse,
+                    qty_step,
+                    c_mult,
+                )
+                if auto_unstuck_qty > calc_min_entry_qty(auto_unstuck_price, inverse, qty_step, min_qty, min_cost):
+                    return [(-auto_unstuck_qty, auto_unstuck_price, 'long_auto_unstuck_close')]
         min_close_qty = calc_min_entry_qty(close_prices[0], inverse, qty_step, min_qty, min_cost)
         default_qty = round_dn(long_psize / len(close_prices), qty_step)
         if default_qty == 0.0:
@@ -226,6 +246,8 @@ def calc_shrt_close_grid(
     shrt_psize,
     shrt_pprice,
     highest_bid,
+    lower_ema_band,
+
     spot,
     inverse,
     qty_step,
@@ -233,11 +255,14 @@ def calc_shrt_close_grid(
     min_qty,
     min_cost,
     c_mult,
+
     pbr_limit,
     initial_qty_pct,
     min_markup,
     markup_range,
     n_close_orders,
+    auto_unstuck_pbr_threshold,
+    auto_unstuck_ema_dist,
 ) -> list[tuple[float, float, str]]:
     if shrt_psize == 0.0:
         return [(0.0, 0.0, "")]
@@ -269,6 +294,23 @@ def calc_shrt_close_grid(
     elif len(close_prices) == 1:
         return [(round_(abs_shrt_psize, qty_step), close_prices[0], "shrt_nclose")]
     else:
+        pbr = qty_to_cost(shrt_psize, shrt_pprice, inverse, c_mult) / balance
+        threshold = pbr_limit * (1 - auto_unstuck_pbr_threshold) * 1.01
+        if auto_unstuck_pbr_threshold != 0.0 and pbr > threshold:
+            auto_unstuck_price = min(highest_bid, round_dn(lower_ema_band * (1 - auto_unstuck_ema_dist), price_step))
+            if auto_unstuck_price > close_prices[0]:
+                auto_unstuck_qty = find_shrt_close_qty_bringing_pbr_to_target(
+                    balance,
+                    shrt_psize,
+                    shrt_pprice,
+                    threshold,
+                    auto_unstuck_price,
+                    inverse,
+                    qty_step,
+                    c_mult,
+                )
+                if auto_unstuck_qty > calc_min_entry_qty(auto_unstuck_price, inverse, qty_step, min_qty, min_cost):
+                    return [(auto_unstuck_qty, auto_unstuck_price, 'shrt_auto_unstuck_close')]
         min_close_qty = calc_min_entry_qty(close_prices[0], inverse, qty_step, min_qty, min_cost)
         default_qty = round_dn(abs_shrt_psize / len(close_prices), qty_step)
         if default_qty == 0.0:
@@ -383,6 +425,24 @@ def calc_long_entry_qty(psize, pprice, entry_price, eprice_pprice_diff):
 
 
 @njit
+def calc_initial_entry_qty(
+        balance,
+        initial_entry_price,
+    
+        inverse,
+        qty_step,
+        min_qty,
+        min_cost,
+        c_mult,
+
+        pbr_limit,
+        initial_qty_pct,
+):
+    return max(calc_min_entry_qty(initial_entry_price, inverse, qty_step, min_qty, min_cost),
+               round_(cost_to_qty(balance * pbr_limit * initial_qty_pct, initial_entry_price, inverse, c_mult), qty_step))
+
+
+@njit
 def calc_shrt_entry_qty(psize, pprice, entry_price, eprice_pprice_diff):
     return -(
         (psize * (entry_price * (eprice_pprice_diff - 1) + pprice))
@@ -399,6 +459,81 @@ def calc_long_entry_price(psize, pprice, entry_qty, eprice_pprice_diff):
 def interpolate(x, xs, ys):
     return np.sum(np.array([np.prod(np.array([(x - xs[m]) / (xs[j] - xs[m])
                                               for m in range(len(xs)) if m != j])) * ys[j] for j in range(len(xs))]))
+
+
+@njit
+def find_long_close_qty_bringing_pbr_to_target(
+    balance,
+    psize,
+    pprice,
+    pbr_target,
+    close_price,
+    inverse,
+    qty_step,
+    c_mult,
+) -> float:
+    pbr = qty_to_cost(psize, pprice, inverse, c_mult) / balance
+    if pbr <= pbr_target:
+        return 0.0
+    guess1 = round_(cost_to_qty(balance * (pbr - pbr_target), close_price, inverse, c_mult), qty_step)
+    guess2 = round_(max(guess1 * 1.2, guess1 + qty_step), qty_step)
+    val1 = qty_to_cost(abs(psize) - guess1, pprice, inverse, c_mult) / \
+        (balance + calc_long_pnl(pprice, close_price, guess1, inverse, c_mult))
+    val2 = qty_to_cost(abs(psize) - guess2, pprice, inverse, c_mult) / \
+        (balance + calc_long_pnl(pprice, close_price, guess2, inverse, c_mult))
+    guess = round_(interpolate(pbr_target, np.array([val1, val2]), np.array([guess1, guess2])), qty_step)
+    val = qty_to_cost(abs(psize) - guess, pprice, inverse, c_mult) / \
+        (balance + calc_long_pnl(pprice, close_price, guess, inverse, c_mult))
+    if abs(val - pbr_target) / pbr_target > 0.15:
+        guess = round_(interpolate(pbr_target, np.array([val1, val]), np.array([guess1, guess])), qty_step)
+        val = qty_to_cost(abs(psize) - guess, pprice, inverse, c_mult) / \
+            (balance + calc_long_pnl(pprice, close_price, guess, inverse, c_mult))
+        if abs(val - pbr_target) / pbr_target > 0.15:
+            print('debug find_long_close_qty_bringing_pbr_to_target')
+            print()
+            print('balance, psize, pprice, pbr_target, close_price, inverse, qty_step, c_mult,')
+            print(balance, ',', psize, ',', pprice, ',', pbr_target, ',', close_price, ',', inverse, ',', qty_step, ',', c_mult,)
+            print('pbr_target', pbr_target)
+            print('best_guess', guess)
+    return guess
+
+
+@njit
+def find_shrt_close_qty_bringing_pbr_to_target(
+    balance,
+    psize,
+    pprice,
+    pbr_target,
+    close_price,
+    inverse,
+    qty_step,
+    c_mult,
+) -> float:
+    pbr = qty_to_cost(psize, pprice, inverse, c_mult) / balance
+    if pbr <= pbr_target:
+        return 0.0
+    guess1 = round_(cost_to_qty(balance * (pbr - pbr_target), close_price, inverse, c_mult), qty_step)
+    guess2 = round_(max(guess1 * 1.2, guess1 + qty_step), qty_step)
+    val1 = qty_to_cost(abs(psize) - guess1, pprice, inverse, c_mult) / \
+        (balance + calc_shrt_pnl(pprice, close_price, guess1, inverse, c_mult))
+    val2 = qty_to_cost(abs(psize) - guess2, pprice, inverse, c_mult) / \
+        (balance + calc_shrt_pnl(pprice, close_price, guess2, inverse, c_mult))
+    guess = round_(interpolate(pbr_target, np.array([val1, val2]), np.array([guess1, guess2])), qty_step)
+    val = qty_to_cost(abs(psize) - guess, pprice, inverse, c_mult) / \
+        (balance + calc_shrt_pnl(pprice, close_price, guess, inverse, c_mult))
+    if abs(val - pbr_target) / pbr_target > 0.15:
+        guess = round_(interpolate(pbr_target, np.array([val1, val]), np.array([guess1, guess])), qty_step)
+        val = qty_to_cost(abs(psize) - guess, pprice, inverse, c_mult) / \
+            (balance + calc_shrt_pnl(pprice, close_price, guess, inverse, c_mult))
+        if abs(val - pbr_target) / pbr_target > 0.15:
+            print('debug find_shrt_close_qty_bringing_pbr_to_target')
+            print()
+            print('balance, psize, pprice, pbr_target, close_price, inverse, qty_step, c_mult,')
+            print(balance, ',', psize, ',', pprice, ',', pbr_target, ',', close_price, ',', inverse, ',', qty_step, ',', c_mult,)
+            print('pbr_target', pbr_target)
+            print('best_guess', guess)
+            print('val', val)
+    return guess
 
 
 @njit
@@ -779,6 +914,7 @@ def calc_long_entry_grid(
         psize,
         pprice,
         highest_bid,
+        lower_ema_band,
         
         inverse,
         do_long,
@@ -792,30 +928,36 @@ def calc_long_entry_grid(
         pbr_limit,
         max_n_entry_orders,
         initial_qty_pct,
+        initial_eprice_ema_dist,
         eprice_pprice_diff,
         secondary_pbr_allocation,
         secondary_pprice_diff,
-        eprice_exp_base=1.618034) -> [(float, float, str)]:
+        eprice_exp_base,
+        auto_unstuck_pbr_threshold,
+        auto_unstuck_ema_dist) -> [(float, float, str)]:
     min_entry_qty = calc_min_entry_qty(highest_bid, inverse, qty_step, min_qty, min_cost)
     if do_long or psize > min_entry_qty:
         if psize == 0.0:
-            grid = calc_whole_long_entry_grid(
-                balance, highest_bid, inverse, qty_step, price_step, min_qty, min_cost, c_mult, grid_span, pbr_limit,
-                max_n_entry_orders, initial_qty_pct, eprice_pprice_diff, secondary_pbr_allocation, secondary_pprice_diff,
-                eprice_exp_base=eprice_exp_base)
-            entry_price = min(highest_bid, grid[0][1])
-            min_entry_qty = calc_min_entry_qty(entry_price, inverse, qty_step, min_qty, min_cost)
-            max_entry_qty = round_(cost_to_qty(balance * pbr_limit * initial_qty_pct,
-                                               entry_price, inverse, c_mult), qty_step)
-            return [(max(min_entry_qty, min(max_entry_qty, grid[0][0])), entry_price, 'long_ientry')]
+            entry_price = min(highest_bid, round_dn(lower_ema_band * (1 - initial_eprice_ema_dist), price_step))
+            entry_qty = calc_initial_entry_qty(balance, entry_price, inverse, qty_step, min_qty, min_cost,
+                                               c_mult, pbr_limit, initial_qty_pct)
+            return [(entry_qty, entry_price, 'long_ientry')]
         else:
+            pbr = qty_to_cost(psize, pprice, inverse, c_mult) / balance
+            if pbr >= pbr_limit:
+                return [(0.0, 0.0, '')]
+            if auto_unstuck_pbr_threshold != 0.0:
+                threshold = pbr_limit * (1 - auto_unstuck_pbr_threshold) * 0.99
+                if pbr > threshold:
+                    auto_unstuck_entry_price = min(highest_bid, round_dn(lower_ema_band * (1 - auto_unstuck_ema_dist), price_step))
+                    auto_unstuck_qty = find_qty_bringing_pbr_to_target(balance, psize, pprice, pbr_limit, auto_unstuck_entry_price,
+                                                                     inverse, qty_step, c_mult)
+                    return [(auto_unstuck_qty, auto_unstuck_entry_price, 'long_auto_unstuck_entry')]
             grid = approximate_long_grid(
                 balance, psize, pprice, inverse, qty_step, price_step, min_qty, min_cost, c_mult, grid_span, pbr_limit,
                 max_n_entry_orders, initial_qty_pct, eprice_pprice_diff, secondary_pbr_allocation, secondary_pprice_diff,
                 eprice_exp_base=eprice_exp_base)
             if len(grid) == 0:
-                return [(0.0, 0.0, '')]
-            if qty_to_cost(psize, pprice, inverse, c_mult) / balance >= pbr_limit:
                 return [(0.0, 0.0, '')]
             if calc_diff(grid[0][3], grid[0][1]) < 0.00001:
                 entry_price = highest_bid
@@ -859,6 +1001,7 @@ def calc_shrt_entry_grid(
         psize,
         pprice,
         lowest_ask,
+        upper_ema_band,
         
         inverse,
         do_shrt,
@@ -872,38 +1015,45 @@ def calc_shrt_entry_grid(
         pbr_limit,
         max_n_entry_orders,
         initial_qty_pct,
+        initial_eprice_ema_dist,
         eprice_pprice_diff,
         secondary_pbr_allocation,
         secondary_pprice_diff,
-        eprice_exp_base=1.618034) -> [(float, float, str)]:
+        eprice_exp_base,
+        auto_unstuck_pbr_threshold,
+        auto_unstuck_ema_dist,) -> [(float, float, str)]:
     min_entry_qty = calc_min_entry_qty(lowest_ask, inverse, qty_step, min_qty, min_cost)
     abs_psize = abs(psize)
     if do_shrt or abs_psize > min_entry_qty:
         if psize == 0.0:
-            grid = calc_whole_shrt_entry_grid(
-                balance, lowest_ask, inverse, qty_step, price_step, min_qty, min_cost, c_mult, grid_span, pbr_limit,
-                max_n_entry_orders, initial_qty_pct, eprice_pprice_diff, secondary_pbr_allocation, secondary_pprice_diff,
-                eprice_exp_base=eprice_exp_base)
-            entry_price = max(lowest_ask, grid[0][1])
-            min_entry_qty = calc_min_entry_qty(entry_price, inverse, qty_step, min_qty, min_cost)
-            max_entry_qty = round_(cost_to_qty(balance * pbr_limit * initial_qty_pct,
-                                               entry_price, inverse, c_mult), qty_step)
-            return [(-max(min_entry_qty, min(max_entry_qty, abs(grid[0][0]))), entry_price, 'shrt_ientry')]
+
+            entry_price = max(lowest_ask, round_up(upper_ema_band * (1 + initial_eprice_ema_dist), price_step))
+            entry_qty = calc_initial_entry_qty(balance, entry_price, inverse, qty_step, min_qty, min_cost,
+                                               c_mult, pbr_limit, initial_qty_pct)
+            return [(-entry_qty, entry_price, 'shrt_ientry')]
         else:
+            pbr = qty_to_cost(psize, pprice, inverse, c_mult) / balance
+            if pbr >= pbr_limit:
+                return [(0.0, 0.0, '')]
+            if auto_unstuck_pbr_threshold != 0.0:
+                threshold = pbr_limit * (1 - auto_unstuck_pbr_threshold) * 0.99
+                if pbr > threshold:
+                    auto_unstuck_entry_price = max(lowest_ask, round_up(upper_ema_band * (1 + auto_unstuck_ema_dist), price_step))
+                    auto_unstuck_qty = find_qty_bringing_pbr_to_target(balance, psize, pprice, pbr_limit, auto_unstuck_entry_price,
+                                                                     inverse, qty_step, c_mult)
+                    return [(-auto_unstuck_qty, auto_unstuck_entry_price, 'shrt_auto_unstuck_entry')]
             grid = approximate_shrt_grid(
                 balance, psize, pprice, inverse, qty_step, price_step, min_qty, min_cost, c_mult, grid_span, pbr_limit,
                 max_n_entry_orders, initial_qty_pct, eprice_pprice_diff, secondary_pbr_allocation, secondary_pprice_diff,
                 eprice_exp_base=eprice_exp_base)
             if len(grid) == 0:
                 return [(0.0, 0.0, '')]
-            if qty_to_cost(psize, pprice, inverse, c_mult) / balance >= pbr_limit:
-                return [(0.0, 0.0, '')]
             if calc_diff(grid[0][3], grid[0][1]) < 0.00001:
                 entry_price = lowest_ask
                 min_entry_qty = calc_min_entry_qty(entry_price, inverse, qty_step, min_qty, min_cost)
                 max_entry_qty = round_(cost_to_qty(balance * pbr_limit * initial_qty_pct,
                                                    entry_price, inverse, c_mult), qty_step)
-                entry_qty = -max(min_entry_qty, min(max_entry_qty, grid[0][0]))
+                entry_qty = -max(min_entry_qty, min(max_entry_qty, abs(grid[0][0])))
                 if qty_to_cost(entry_qty, entry_price, inverse, c_mult) / balance > pbr_limit * 1.1:
                     print('\n\nwarning: abnormally large partial ientry')
                     print('grid:')
@@ -1060,7 +1210,6 @@ def approximate_shrt_grid(
 
     grid, diff, i = eval_(pprice, psize)
     grid, diff, i = eval_(pprice * (pprice / grid[i][3]), psize)
-
     if diff < 0.01:
         # good guess
         grid, diff, i = eval_(grid[0][1] * (pprice / grid[i][3]), psize)
@@ -1075,7 +1224,7 @@ def approximate_shrt_grid(
         # means psize is less than iqty
         # return grid with adjusted iqty
         min_ientry_qty = calc_min_entry_qty(grid[0][1], inverse, qty_step, min_qty, min_cost)
-        grid[0][0] = -max(min_ientry_qty, round_(grid[0][0] - abs_psize, qty_step))
+        grid[0][0] = -max(min_ientry_qty, round_(abs(grid[0][0]) - abs_psize, qty_step))
         grid[0][2] = round_(psize + grid[0][0], qty_step)
         grid[0][4] = qty_to_cost(grid[0][2], grid[0][3], inverse, c_mult) / balance
         return grid
@@ -1117,17 +1266,22 @@ def njit_backtest(
         min_cost,
         c_mult,
 
-        grid_span,
-        pbr_limit,
-        max_n_entry_orders,
-        initial_qty_pct,
+        ema_span_max,
+        ema_span_min,
+        eprice_exp_base,
         eprice_pprice_diff,
+        grid_span,
+        initial_eprice_ema_dist,
+        initial_qty_pct,
+        markup_range,
+        max_n_entry_orders,
+        min_markup,
+        n_close_orders,
+        pbr_limit,
         secondary_pbr_allocation,
         secondary_pprice_diff,
-        eprice_exp_base,
-        min_markup,
-        markup_range,
-        n_close_orders):
+        auto_unstuck_ema_dist,
+        auto_unstuck_pbr_threshold):
 
     timestamps = ticks[:, 0]
     qtys = ticks[:, 1]
@@ -1143,14 +1297,35 @@ def njit_backtest(
     shrt_entries = shrt_closes = [(0.0, 0.0, '')]
     bkr_price = 0.0
 
-    next_entry_grid_update_ts = 0
-    next_close_grid_update_ts = 0
+    next_entry_grid_update_ts_long = 0
+    next_entry_grid_update_ts_shrt = 0
+    next_close_grid_update_ts_long = 0
+    next_close_grid_update_ts_shrt = 0
     next_stats_update = 0
 
     prev_k = 0
     closest_bkr = 1.0
 
-    for k in range(1, len(prices)):
+    spans_long = np.array([ema_span_min[0], (ema_span_min[0] * ema_span_max[0])**0.5, ema_span_max[0]]) * 60.0
+    spans_shrt = np.array([ema_span_min[1], (ema_span_min[1] * ema_span_max[1])**0.5, ema_span_max[1]]) * 60.0
+    assert spans_long[-1] < len(prices), "ema_span_max long larger than len(prices)"
+    assert spans_shrt[-1] < len(prices), "ema_span_max shrt larger than len(prices)"
+    max_span = int(round(max(max(spans_long), max(spans_shrt))))
+    emas_long = calc_emas_last(prices[:max_span], spans_long) if do_long else np.zeros(len(spans_long))
+    if (spans_long == spans_shrt).all():
+        emas_shrt = emas_long
+    else:
+        emas_shrt = calc_emas_last(prices[:max_span], spans_shrt) if do_shrt else np.zeros(len(spans_shrt))
+    alphas_long = 2.0 / (spans_long + 1.0)
+    alphas__long = 1.0 - alphas_long
+    alphas_shrt = 2.0 / (spans_shrt + 1.0)
+    alphas__shrt = 1.0 - alphas_shrt
+
+    for k in range(max_span, len(prices)):
+        if do_long:
+            emas_long = calc_ema(alphas_long, alphas__long, emas_long, prices[k])
+        if do_shrt:
+            emas_shrt = calc_ema(alphas_shrt, alphas__shrt, emas_shrt, prices[k])
         if qtys[k] == 0.0:
             continue
 
@@ -1162,24 +1337,32 @@ def njit_backtest(
             stats.append((timestamps[k], balance, equity, bkr_price, long_psize, long_pprice,
                           shrt_psize, shrt_pprice, prices[k], closest_bkr))
             next_stats_update = timestamps[k] + 60 * 1000
-        if timestamps[k] >= next_entry_grid_update_ts:
+        if timestamps[k] >= next_entry_grid_update_ts_long:
             long_entries = calc_long_entry_grid(
-                balance, long_psize, long_pprice, prices[k - 1], inverse, do_long, qty_step, price_step,
-                min_qty, min_cost, c_mult, grid_span[0], pbr_limit[0], max_n_entry_orders[0], initial_qty_pct[0],
-                eprice_pprice_diff[0], secondary_pbr_allocation[0], secondary_pprice_diff[0], eprice_exp_base[0]) if do_long else [(0.0, 0.0, '')]
+                balance, long_psize, long_pprice, prices[k - 1], min(emas_long), inverse, do_long, qty_step, price_step,
+                min_qty, min_cost, c_mult, grid_span[0], pbr_limit[0], max_n_entry_orders[0], initial_qty_pct[0], initial_eprice_ema_dist[0],
+                eprice_pprice_diff[0], secondary_pbr_allocation[0], secondary_pprice_diff[0], eprice_exp_base[0], auto_unstuck_pbr_threshold[0],
+                auto_unstuck_ema_dist[0]) if do_long else [(0.0, 0.0, '')]
+            next_entry_grid_update_ts_long = timestamps[k] + 1000 * 60 * 10
+        if timestamps[k] >= next_entry_grid_update_ts_shrt:
             shrt_entries = calc_shrt_entry_grid(
-                balance, shrt_psize, shrt_pprice, prices[k - 1], inverse, do_shrt, qty_step, price_step,
-                min_qty, min_cost, c_mult, grid_span[1], pbr_limit[1], max_n_entry_orders[1], initial_qty_pct[1],
-                eprice_pprice_diff[1], secondary_pbr_allocation[1], secondary_pprice_diff[1], eprice_exp_base[1]) if do_shrt else [(0.0, 0.0, '')]
-            next_entry_grid_update_ts = timestamps[k] + 1000 * 60 * 10
-        if timestamps[k] >= next_close_grid_update_ts:
+                balance, shrt_psize, shrt_pprice, prices[k - 1], max(emas_shrt), inverse, do_shrt, qty_step, price_step,
+                min_qty, min_cost, c_mult, grid_span[1], pbr_limit[1], max_n_entry_orders[1], initial_qty_pct[1], initial_eprice_ema_dist[1],
+                eprice_pprice_diff[1], secondary_pbr_allocation[1], secondary_pprice_diff[1], eprice_exp_base[1], auto_unstuck_pbr_threshold[1],
+                auto_unstuck_ema_dist[1]) if do_shrt else [(0.0, 0.0, '')]
+            next_entry_grid_update_ts_shrt = timestamps[k] + 1000 * 60 * 10
+        if timestamps[k] >= next_close_grid_update_ts_long:
             long_closes = calc_long_close_grid(
-                balance, long_psize, long_pprice, prices[k - 1], spot, inverse, qty_step, price_step, min_qty,
-                min_cost, c_mult, pbr_limit[0], initial_qty_pct[0], min_markup[0], markup_range[0], n_close_orders[0]) if do_long else [(0.0, 0.0, '')]
+                balance, long_psize, long_pprice, prices[k - 1], max(emas_long), spot, inverse, qty_step, price_step, min_qty,
+                min_cost, c_mult, pbr_limit[0], initial_qty_pct[0], min_markup[0], markup_range[0], n_close_orders[0],
+                auto_unstuck_pbr_threshold[0], auto_unstuck_ema_dist[0]) if do_long else [(0.0, 0.0, '')]
+            next_close_grid_update_ts_long = timestamps[k] + 1000 * 60 * 10
+        if timestamps[k] >= next_close_grid_update_ts_shrt:
             shrt_closes = calc_shrt_close_grid(
-                balance, shrt_psize, shrt_pprice, prices[k - 1], spot, inverse, qty_step, price_step, min_qty,
-                min_cost, c_mult, pbr_limit[1], initial_qty_pct[1], min_markup[1], markup_range[1], n_close_orders[1]) if do_shrt else [(0.0, 0.0, '')]
-            next_close_grid_update_ts = timestamps[k] + 1000 * 60 * 10
+                balance, shrt_psize, shrt_pprice, prices[k - 1], min(emas_shrt), spot, inverse, qty_step, price_step, min_qty,
+                min_cost, c_mult, pbr_limit[1], initial_qty_pct[1], min_markup[1], markup_range[1], n_close_orders[1],
+                auto_unstuck_pbr_threshold[0], auto_unstuck_ema_dist[0]) if do_shrt else [(0.0, 0.0, '')]
+            next_close_grid_update_ts_shrt = timestamps[k] + 1000 * 60 * 10
 
         if closest_bkr < 0.06:
             # consider bankruptcy within 6% as liquidation
@@ -1201,8 +1384,8 @@ def njit_backtest(
             return fills, stats
 
         while long_entries and long_entries[0][0] > 0.0 and prices[k] < long_entries[0][1]:
-            next_entry_grid_update_ts = min(next_entry_grid_update_ts, timestamps[k] + latency_simulation_ms)
-            next_close_grid_update_ts = min(next_close_grid_update_ts, timestamps[k] + latency_simulation_ms)
+            next_entry_grid_update_ts_long = min(next_entry_grid_update_ts_long, timestamps[k] + latency_simulation_ms)
+            next_close_grid_update_ts_long = min(next_close_grid_update_ts_long, timestamps[k] + latency_simulation_ms)
             long_psize, long_pprice = calc_new_psize_pprice(long_psize, long_pprice, long_entries[0][0],
                                                             long_entries[0][1], qty_step)
             fee_paid = -qty_to_cost(long_entries[0][0], long_entries[0][1], inverse, c_mult) * maker_fee
@@ -1213,8 +1396,8 @@ def njit_backtest(
             long_entries = long_entries[1:]
             bkr_price = calc_bankruptcy_price(balance, long_psize, long_pprice, shrt_psize, shrt_pprice, inverse, c_mult)
         while shrt_entries and shrt_entries[0][0] < 0.0 and prices[k] > shrt_entries[0][1]:
-            next_entry_grid_update_ts = min(next_entry_grid_update_ts, timestamps[k] + latency_simulation_ms)
-            next_close_grid_update_ts = min(next_close_grid_update_ts, timestamps[k] + latency_simulation_ms)
+            next_entry_grid_update_ts_shrt = min(next_entry_grid_update_ts_shrt, timestamps[k] + latency_simulation_ms)
+            next_close_grid_update_ts_shrt = min(next_close_grid_update_ts_shrt, timestamps[k] + latency_simulation_ms)
             shrt_psize, shrt_pprice = calc_new_psize_pprice(shrt_psize, shrt_pprice, shrt_entries[0][0],
                                                             shrt_entries[0][1], qty_step)
             fee_paid = -qty_to_cost(shrt_entries[0][0], shrt_entries[0][1], inverse, c_mult) * maker_fee
@@ -1225,8 +1408,8 @@ def njit_backtest(
             shrt_entries = shrt_entries[1:]
             bkr_price = calc_bankruptcy_price(balance, shrt_psize, shrt_pprice, shrt_psize, shrt_pprice, inverse, c_mult)
         while long_psize > 0.0 and long_closes and long_closes[0][0] < 0.0 and prices[k] > long_closes[0][1]:
-            next_entry_grid_update_ts = min(next_entry_grid_update_ts, timestamps[k] + latency_simulation_ms)
-            next_close_grid_update_ts = min(next_close_grid_update_ts, timestamps[k] + latency_simulation_ms)
+            next_entry_grid_update_ts_long = min(next_entry_grid_update_ts_long, timestamps[k] + latency_simulation_ms)
+            next_close_grid_update_ts_long = min(next_close_grid_update_ts_long, timestamps[k] + latency_simulation_ms)
             long_close_qty = long_closes[0][0]
             new_long_psize = round_(long_psize + long_close_qty, qty_step)
             if new_long_psize < 0.0:
@@ -1246,8 +1429,8 @@ def njit_backtest(
             long_closes = long_closes[1:]
             bkr_price = calc_bankruptcy_price(balance, long_psize, long_pprice, shrt_psize, shrt_pprice, inverse, c_mult)
         while shrt_psize < 0.0 and shrt_closes and shrt_closes[0][0] > 0.0 and prices[k] < shrt_closes[0][1]:
-            next_entry_grid_update_ts = min(next_entry_grid_update_ts, timestamps[k] + latency_simulation_ms)
-            next_close_grid_update_ts = min(next_close_grid_update_ts, timestamps[k] + latency_simulation_ms)
+            next_entry_grid_update_ts_shrt = min(next_entry_grid_update_ts_shrt, timestamps[k] + latency_simulation_ms)
+            next_close_grid_update_ts_shrt = min(next_close_grid_update_ts_shrt, timestamps[k] + latency_simulation_ms)
             shrt_close_qty = shrt_closes[0][0]
             new_shrt_psize = round_(shrt_psize + shrt_close_qty, qty_step)
             if new_shrt_psize > 0.0:
@@ -1266,8 +1449,14 @@ def njit_backtest(
                           shrt_psize, shrt_pprice, shrt_closes[0][2]))
             shrt_closes = shrt_closes[1:]
             bkr_price = calc_bankruptcy_price(balance, shrt_psize, shrt_pprice, shrt_psize, shrt_pprice, inverse, c_mult)
-        if (do_long and long_psize == 0.0) or (do_shrt and shrt_psize == 0.0):
-            next_entry_grid_update_ts = min(next_entry_grid_update_ts, timestamps[k] + latency_simulation_ms)
-        if (do_long and prices[k] > long_pprice) or (do_shrt and prices[k] < shrt_pprice):
-            next_close_grid_update_ts = min(next_close_grid_update_ts, timestamps[k] + latency_simulation_ms)
+        if do_long:
+            if long_psize == 0.0:
+                next_entry_grid_update_ts_long = min(next_entry_grid_update_ts_long, timestamps[k] + latency_simulation_ms)
+            if prices[k] > long_pprice:
+                next_close_grid_update_ts_long = min(next_close_grid_update_ts_long, timestamps[k] + latency_simulation_ms)
+        if do_shrt:
+            if shrt_psize == 0.0:
+                next_entry_grid_update_ts_shrt = min(next_entry_grid_update_ts_shrt, timestamps[k] + latency_simulation_ms)
+            if prices[k] < shrt_pprice:
+                next_close_grid_update_ts_shrt = min(next_close_grid_update_ts_shrt, timestamps[k] + latency_simulation_ms)
     return fills, stats
