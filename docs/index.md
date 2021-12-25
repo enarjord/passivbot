@@ -1,6 +1,6 @@
 # Welcome to Passivbot!
 
-![Passivbot](images/logo.png)
+![Passivbot](images/logo_pbot_dark.png)
 
 <a class="github-button" href="https://github.com/enarjord/passivbot" data-icon="octicon-star" data-size="large" aria-label="Star enarjord/passivbot on GitHub">Star</a>
 <a class="github-button" href="https://github.com/enarjord/passivbot/fork" data-icon="octicon-repo-forked" data-size="large" aria-label="Fork enarjord/passivbot on GitHub">Fork</a>
