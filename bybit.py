@@ -290,12 +290,12 @@ class Bybit(Bot):
                 print_(['fetched no new trades', self.symbol])
         return trades
 
-    async def fetch_ohlcvs(self, start_time: int = None, interval='1m', limit=200):
+    async def fetch_ohlcvs(self, symbol: str = None, start_time: int = None, interval='1m', limit=200):
         # m -> minutes; h -> hours; d -> days; w -> weeks; M -> months
         interval_map = {'1m': 1, '3m': 3, '5m': 5, '15m': 15, '30m': 30, '1h': 60, '2h': 120, '4h': 240, '6h': 360,
                         '12h': 720, '1d': 'D', '1w': 'W', '1M': 'M'}
         assert interval in interval_map
-        params = {'symbol': self.symbol, 'interval': interval_map[interval], 'limit': limit}
+        params = {'symbol': self.symbol if symbol is None else symbol, 'interval': interval_map[interval], 'limit': limit}
         if start_time is None:
             server_time = await self.public_get('/v2/public/time')
             if type(interval_map[interval]) == str:
