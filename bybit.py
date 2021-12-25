@@ -25,12 +25,12 @@ def determine_pos_side(o: dict) -> str:
         if 'entry' in o['order_link_id']:
             return 'long'
         elif 'close' in o['order_link_id']:
-            return 'shrt'
+            return 'short'
         else:
             return 'both'
     else:
         if 'entry' in o['order_link_id']:
-            return 'shrt'
+            return 'short'
         elif 'close' in o['order_link_id']:
             return 'long'
         else:
@@ -175,7 +175,7 @@ class Bybit(Bot):
                 self.private_get(self.endpoints['balance'], {'coin': self.quot})
             )
             long_pos = [e for e in fetched['result'] if e['side'] == 'Buy'][0]
-            shrt_pos = [e for e in fetched['result'] if e['side'] == 'Sell'][0]
+            short_pos = [e for e in fetched['result'] if e['side'] == 'Sell'][0]
             position['wallet_balance'] = float(bal['result'][self.quot]['wallet_balance'])
         else:
             fetched, bal = await asyncio.gather(
@@ -186,22 +186,22 @@ class Bybit(Bot):
             if 'inverse_perpetual' in self.market_type:
                 if fetched['result']['side'] == 'Buy':
                     long_pos = fetched['result']
-                    shrt_pos = {'size': 0.0, 'entry_price': 0.0, 'liq_price': 0.0}
+                    short_pos = {'size': 0.0, 'entry_price': 0.0, 'liq_price': 0.0}
                 else:
                     long_pos = {'size': 0.0, 'entry_price': 0.0, 'liq_price': 0.0}
-                    shrt_pos = fetched['result']
+                    short_pos = fetched['result']
             elif 'inverse_futures' in self.market_type:
                 long_pos = [e['data'] for e in fetched['result'] if e['data']['position_idx'] == 1][0]
-                shrt_pos = [e['data'] for e in fetched['result'] if e['data']['position_idx'] == 2][0]
+                short_pos = [e['data'] for e in fetched['result'] if e['data']['position_idx'] == 2][0]
             else:
                 raise Exception('unknown market type')
 
         position['long'] = {'size': round_(float(long_pos['size']), self.qty_step),
                             'price': float(long_pos['entry_price']),
                             'liquidation_price': float(long_pos['liq_price'])}
-        position['shrt'] = {'size': -round_(float(shrt_pos['size']), self.qty_step),
-                            'price': float(shrt_pos['entry_price']),
-                            'liquidation_price': float(shrt_pos['liq_price'])}
+        position['short'] = {'size': -round_(float(short_pos['size']), self.qty_step),
+                            'price': float(short_pos['entry_price']),
+                            'liquidation_price': float(short_pos['liq_price'])}
         return position
 
     async def execute_order(self, order: dict) -> dict:
@@ -483,10 +483,10 @@ class Bybit(Bot):
                             }
                             if 'inverse_perpetual' in self.market_type:
                                 if self.position['long']['size'] == 0.0:
-                                    if self.position['shrt']['size'] == 0.0:
-                                        new_open_order['position_side'] = 'long' if new_open_order['side'] == 'buy' else 'shrt'
+                                    if self.position['short']['size'] == 0.0:
+                                        new_open_order['position_side'] = 'long' if new_open_order['side'] == 'buy' else 'short'
                                     else:
-                                        new_open_order['position_side'] = 'shrt'
+                                        new_open_order['position_side'] = 'short'
                                 else:
                                     new_open_order['position_side'] = 'long'
                             elif 'inverse_futures' in self.market_type:
@@ -495,7 +495,7 @@ class Bybit(Bot):
                                 new_open_order['position_side'] = (
                                     'long' if ((new_open_order['side'] == 'buy' and elm['create_type'] == 'CreateByUser')
                                                or (new_open_order['side'] == 'sell' and elm['create_type'] == 'CreateByClosing'))
-                                    else 'shrt'
+                                    else 'short'
                                 )
                             events.append({'new_open_order': new_open_order})
                         elif elm['order_status'] == 'PartiallyFilled':
@@ -524,8 +524,8 @@ class Bybit(Bot):
                             standardized['long_psize'] = round_(float(elm['size']), self.qty_step)
                             standardized['long_pprice'] = float(elm['entry_price'])
                         elif elm['side'] == 'Sell':
-                            standardized['shrt_psize'] = -round_(abs(float(elm['size'])), self.qty_step)
-                            standardized['shrt_pprice'] = float(elm['entry_price'])
+                            standardized['short_psize'] = -round_(abs(float(elm['size'])), self.qty_step)
+                            standardized['short_pprice'] = float(elm['entry_price'])
 
                         events.append(standardized)
                         if self.inverse:

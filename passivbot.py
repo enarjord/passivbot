@@ -14,7 +14,7 @@ from time import time
 from procedures import load_live_config, make_get_filepath, load_exchange_key_secret, print_, utc_ms
 from pure_funcs import filter_orders, compress_float, create_xk, round_dynamic, denumpyize, \
     spotify_config, get_position_fills
-from njit_funcs import qty_to_cost, calc_diff, round_, calc_long_close_grid, calc_shrt_close_grid, calc_upnl, calc_long_entry_grid, calc_shrt_entry_grid
+from njit_funcs import qty_to_cost, calc_diff, round_, calc_long_close_grid, calc_short_close_grid, calc_upnl, calc_long_entry_grid, calc_short_entry_grid
 from typing import Union, Dict, List
 
 import websockets
@@ -28,7 +28,7 @@ class Bot:
         self.spot = False
         self.config = config
         self.config['do_long'] = config['long']['enabled']
-        self.config['do_shrt'] = config['shrt']['enabled']
+        self.config['do_short'] = config['short']['enabled']
         self.config['max_leverage'] = 25
         self.telegram = None
         self.xk = {}
@@ -72,8 +72,8 @@ class Bot:
     def set_config(self, config):
         if 'long_mode' not in config:
             config['long_mode'] = None
-        if 'shrt_mode' not in config:
-            config['shrt_mode'] = None
+        if 'short_mode' not in config:
+            config['short_mode'] = None
         if 'last_price_diff_limit' not in config:
             config['last_price_diff_limit'] = 0.3
         if 'profit_trans_pct' not in config:
@@ -122,12 +122,12 @@ class Bot:
     def adjust_wallet_balance(self, balance: float) -> float:
         return (balance if self.assigned_balance is None else self.assigned_balance) * self.cross_wallet_pct
 
-    def add_pbrs_to_pos(self, position_: dict):
+    def add_wallet_exposures_to_pos(self, position_: dict):
         position = position_.copy()
-        position['long']['pbr'] = (qty_to_cost(position['long']['size'], position['long']['price'],
+        position['long']['wallet_exposure'] = (qty_to_cost(position['long']['size'], position['long']['price'],
                                                self.xk['inverse'], self.xk['c_mult']) /
                                    position['wallet_balance']) if position['wallet_balance'] else 0.0
-        position['shrt']['pbr'] = (qty_to_cost(position['shrt']['size'], position['shrt']['price'],
+        position['short']['wallet_exposure'] = (qty_to_cost(position['short']['size'], position['short']['price'],
                                                self.xk['inverse'], self.xk['c_mult']) /
                                    position['wallet_balance']) if position['wallet_balance'] else 0.0
         return position
@@ -142,13 +142,13 @@ class Bot:
             # isolated equity, not cross equity
             position['equity'] = position['wallet_balance'] + \
                 calc_upnl(position['long']['size'], position['long']['price'],
-                          position['shrt']['size'], position['shrt']['price'],
+                          position['short']['size'], position['short']['price'],
                           self.price, self.inverse, self.c_mult)
-            position = self.add_pbrs_to_pos(position)
+            position = self.add_wallet_exposures_to_pos(position)
             if self.position != position:
                 if self.position and 'spot' in self.market_type and \
                         (self.position['long']['size'] != position['long']['size'] or
-                         self.position['shrt']['size'] != position['shrt']['size']):
+                         self.position['short']['size'] != position['short']['size']):
                     # update fills if position size changed
                     await self.update_fills()
                 self.dump_log({'log_type': 'position', 'data': position})
@@ -277,18 +277,18 @@ class Bot:
         balance = self.position['wallet_balance']
         long_psize = self.position['long']['size']
         long_pprice = self.position['long']['price']
-        shrt_psize = self.position['shrt']['size']
-        shrt_pprice = self.position['shrt']['price']
+        short_psize = self.position['short']['size']
+        short_pprice = self.position['short']['price']
 
         if self.hedge_mode:
             do_long = self.do_long or long_psize != 0.0
-            do_shrt = self.do_shrt or shrt_psize != 0.0
+            do_short = self.do_short or short_psize != 0.0
         else:
-            no_pos = long_psize == 0.0 and shrt_psize == 0.0
+            no_pos = long_psize == 0.0 and short_psize == 0.0
             do_long = (no_pos and self.do_long) or long_psize != 0.0
-            do_shrt = (no_pos and self.do_shrt) or shrt_psize != 0.0
+            do_short = (no_pos and self.do_short) or short_psize != 0.0
         self.xk['do_long'] = do_long
-        self.xk['do_shrt'] = do_shrt
+        self.xk['do_short'] = do_short
 
         orders = []
 
@@ -300,13 +300,13 @@ class Bot:
             long_entries = calc_long_entry_grid(
                 balance, long_psize, long_pprice, self.ob[0], self.xk['inverse'], self.xk['do_long'],
                 self.xk['qty_step'], self.xk['price_step'], self.xk['min_qty'], self.xk['min_cost'],
-                self.xk['c_mult'], self.xk['grid_span'][0], self.xk['pbr_limit'][0], self.xk['max_n_entry_orders'][0],
-                self.xk['initial_qty_pct'][0], self.xk['eprice_pprice_diff'][0], self.xk['secondary_pbr_allocation'][0],
+                self.xk['c_mult'], self.xk['grid_span'][0], self.xk['wallet_exposure_limit'][0], self.xk['max_n_entry_orders'][0],
+                self.xk['initial_qty_pct'][0], self.xk['eprice_pprice_diff'][0], self.xk['secondary_allocation'][0],
                 self.xk['secondary_pprice_diff'][0], self.xk['eprice_exp_base'][0]
             )
             long_closes = calc_long_close_grid(balance,
                 long_psize, long_pprice, self.ob[1], self.xk['spot'], self.xk['inverse'], self.xk['qty_step'],
-                self.xk['price_step'], self.xk['min_qty'], self.xk['min_cost'], self.xk['c_mult'], self.xk['pbr_limit'][0],
+                self.xk['price_step'], self.xk['min_qty'], self.xk['min_cost'], self.xk['c_mult'], self.xk['wallet_exposure_limit'][0],
                 self.xk['initial_qty_pct'][0], self.xk['min_markup'][0], self.xk['markup_range'][0],
                 self.xk['n_close_orders'][0]
             )
@@ -316,30 +316,30 @@ class Bot:
             orders += [{'side': 'sell', 'position_side': 'long', 'qty': abs(float(o[0])),
                         'price': float(o[1]), 'type': 'limit', 'reduce_only': True,
                         'custom_id': o[2]} for o in long_closes if o[0] < 0.0]
-        if self.shrt_mode == 'panic':
-            if shrt_psize != 0.0:
-                orders.append({'side': 'buy', 'position_side': 'shrt', 'qty': abs(shrt_psize),
-                               'price': float(self.ob[0]), 'type': 'limit', 'reduce_only': True, 'custom_id': 'shrt_panic_close'})
+        if self.short_mode == 'panic':
+            if short_psize != 0.0:
+                orders.append({'side': 'buy', 'position_side': 'short', 'qty': abs(short_psize),
+                               'price': float(self.ob[0]), 'type': 'limit', 'reduce_only': True, 'custom_id': 'short_panic_close'})
         else:
-            shrt_entries = calc_shrt_entry_grid(
-                balance, shrt_psize, shrt_pprice, self.ob[1], self.xk['inverse'], self.xk['do_shrt'],
+            short_entries = calc_short_entry_grid(
+                balance, short_psize, short_pprice, self.ob[1], self.xk['inverse'], self.xk['do_short'],
                 self.xk['qty_step'], self.xk['price_step'], self.xk['min_qty'], self.xk['min_cost'],
-                self.xk['c_mult'], self.xk['grid_span'][1], self.xk['pbr_limit'][1], self.xk['max_n_entry_orders'][1],
-                self.xk['initial_qty_pct'][1], self.xk['eprice_pprice_diff'][1], self.xk['secondary_pbr_allocation'][1],
+                self.xk['c_mult'], self.xk['grid_span'][1], self.xk['wallet_exposure_limit'][1], self.xk['max_n_entry_orders'][1],
+                self.xk['initial_qty_pct'][1], self.xk['eprice_pprice_diff'][1], self.xk['secondary_allocation'][1],
                 self.xk['secondary_pprice_diff'][1], self.xk['eprice_exp_base'][1]
             )
-            shrt_closes = calc_shrt_close_grid(balance,
-                shrt_psize, shrt_pprice, self.ob[0], self.xk['spot'], self.xk['inverse'], self.xk['qty_step'],
-                self.xk['price_step'], self.xk['min_qty'], self.xk['min_cost'], self.xk['c_mult'], self.xk['pbr_limit'][1],
+            short_closes = calc_short_close_grid(balance,
+                short_psize, short_pprice, self.ob[0], self.xk['spot'], self.xk['inverse'], self.xk['qty_step'],
+                self.xk['price_step'], self.xk['min_qty'], self.xk['min_cost'], self.xk['c_mult'], self.xk['wallet_exposure_limit'][1],
                 self.xk['initial_qty_pct'][1], self.xk['min_markup'][1], self.xk['markup_range'][1],
                 self.xk['n_close_orders'][1]
             )
-            orders += [{'side': 'sell', 'position_side': 'shrt', 'qty': abs(float(o[0])),
+            orders += [{'side': 'sell', 'position_side': 'short', 'qty': abs(float(o[0])),
                         'price': float(o[1]), 'type': 'limit', 'reduce_only': False,
-                        'custom_id': o[2]} for o in shrt_entries if o[0] < 0.0]
-            orders += [{'side': 'buy', 'position_side': 'shrt', 'qty': abs(float(o[0])),
+                        'custom_id': o[2]} for o in short_entries if o[0] < 0.0]
+            orders += [{'side': 'buy', 'position_side': 'short', 'qty': abs(float(o[0])),
                         'price': float(o[1]), 'type': 'limit', 'reduce_only': True,
-                        'custom_id': o[2]} for o in shrt_closes if o[0] > 0.0]
+                        'custom_id': o[2]} for o in short_closes if o[0] > 0.0]
         return sorted(orders, key=lambda x: calc_diff(x['price'], self.price))
 
     async def cancel_and_create(self):
@@ -361,11 +361,11 @@ class Bot:
                             to_cancel.append(elm)
                     elif self.long_mode != "manual":
                         to_cancel.append(elm)
-                if elm["position_side"] == "shrt":
-                    if self.shrt_mode == "tp_only":
+                if elm["position_side"] == "short":
+                    if self.short_mode == "tp_only":
                         if elm["side"] == "buy":
                             to_cancel.append(elm)
-                    elif self.shrt_mode != "manual":
+                    elif self.short_mode != "manual":
                         to_cancel.append(elm)
             for elm in to_create_:
                 if elm["position_side"] == "long":
@@ -374,11 +374,11 @@ class Bot:
                             to_create.append(elm)
                     elif self.long_mode != "manual":
                         to_create.append(elm)
-                if elm["position_side"] == "shrt":
-                    if self.shrt_mode == "tp_only":
+                if elm["position_side"] == "short":
+                    if self.short_mode == "tp_only":
                         if elm["side"] == "buy":
                             to_create.append(elm)
-                    elif self.shrt_mode != "manual":
+                    elif self.short_mode != "manual":
                         to_create.append(elm)
 
             to_cancel = sorted(to_cancel, key=lambda x: calc_diff(x["price"], self.price))
@@ -446,12 +446,12 @@ class Bot:
             if 'long_psize' in event:
                 self.position['long']['size'] = event['long_psize']
                 self.position['long']['price'] = event['long_pprice']
-                self.position = self.add_pbrs_to_pos(self.position)
+                self.position = self.add_wallet_exposures_to_pos(self.position)
                 pos_change = True
-            if 'shrt_psize' in event:
-                self.position['shrt']['size'] = event['shrt_psize']
-                self.position['shrt']['price'] = event['shrt_pprice']
-                self.position = self.add_pbrs_to_pos(self.position)
+            if 'short_psize' in event:
+                self.position['short']['size'] = event['short_psize']
+                self.position['short']['price'] = event['short_pprice']
+                self.position = self.add_wallet_exposures_to_pos(self.position)
                 pos_change = True
             if 'new_open_order' in event:
                 if event['new_open_order']['order_id'] not in {x['order_id'] for x in self.open_orders}:
@@ -463,7 +463,7 @@ class Bot:
             if pos_change:
                 self.position['equity'] = self.position['wallet_balance'] + \
                     calc_upnl(self.position['long']['size'], self.position['long']['price'],
-                              self.position['shrt']['size'], self.position['shrt']['price'],
+                              self.position['short']['size'], self.position['short']['price'],
                               self.price, self.inverse, self.c_mult)
                 await asyncio.sleep(0.01) # sleep 10 ms to catch both pos update and open orders update
                 await self.cancel_and_create()
@@ -484,26 +484,26 @@ class Bot:
             leqty, leprice = (long_entries[-1]['qty'], long_entries[-1]['price']) if long_entries else (0.0, 0.0)
             lcqty, lcprice = (long_closes[0]['qty'], long_closes[0]['price']) if long_closes else (0.0, 0.0)
             line += f"e {leqty} @ {leprice}, c {lcqty} @ {lcprice} "
-        if self.position['shrt']['size'] != 0.0:
-            shrt_closes = sorted([o for o in self.open_orders if o['side'] == 'buy'
-                                  and o['position_side'] == 'shrt'], key=lambda x: x['price'])
-            shrt_entries = sorted([o for o in self.open_orders if o['side'] == 'sell'
-                                   and o['position_side'] == 'shrt'], key=lambda x: x['price'])
-            seqty, seprice = (shrt_entries[0]['qty'], shrt_entries[0]['price']) if shrt_entries else (0.0, 0.0)
-            scqty, scprice = (shrt_closes[-1]['qty'], shrt_closes[-1]['price']) if shrt_closes else (0.0, 0.0)
-            line += f"s {self.position['shrt']['size']} @ "
-            line += f"{round_(self.position['shrt']['price'], self.price_step)}, "
+        if self.position['short']['size'] != 0.0:
+            short_closes = sorted([o for o in self.open_orders if o['side'] == 'buy'
+                                  and o['position_side'] == 'short'], key=lambda x: x['price'])
+            short_entries = sorted([o for o in self.open_orders if o['side'] == 'sell'
+                                   and o['position_side'] == 'short'], key=lambda x: x['price'])
+            seqty, seprice = (short_entries[0]['qty'], short_entries[0]['price']) if short_entries else (0.0, 0.0)
+            scqty, scprice = (short_closes[-1]['qty'], short_closes[-1]['price']) if short_closes else (0.0, 0.0)
+            line += f"s {self.position['short']['size']} @ "
+            line += f"{round_(self.position['short']['price'], self.price_step)}, "
             line += f"e {seqty} @ {seprice}, c {scqty} @ {scprice} "
-        if self.position['long']['size'] > abs(self.position['shrt']['size']):
+        if self.position['long']['size'] > abs(self.position['short']['size']):
             liq_price = self.position['long']['liquidation_price']
         else:
-            liq_price = self.position['shrt']['liquidation_price']
+            liq_price = self.position['short']['liquidation_price']
         line += f"|| last {self.price} "
         line += f"lpprc diff {calc_diff(self.position['long']['price'], self.price):.3f} "
-        line += f"spprc diff {calc_diff(self.position['shrt']['price'], self.price):.3f} "
+        line += f"spprc diff {calc_diff(self.position['short']['price'], self.price):.3f} "
         line += f"liq {round_dynamic(liq_price, 5)} "
-        line += f"lpbr {self.position['long']['pbr']:.3f} "
-        line += f"spbr {self.position['shrt']['pbr']:.3f} "
+        line += f"lwallet_exposure {self.position['long']['wallet_exposure']:.3f} "
+        line += f"swallet_exposure {self.position['short']['wallet_exposure']:.3f} "
         line += f"bal {round_dynamic(self.position['wallet_balance'], 5)} "
         line += f"eq {round_dynamic(self.position['equity'], 5)} "
         print_([line], r=True)
@@ -695,38 +695,38 @@ async def main() -> None:
             config['long_mode'] = 'tp_only'
     if args.short_mode is not None:
         if args.short_mode in ['gs', 'graceful_stop', 'graceful-stop']:
-            print('\n\nshrt graceful stop enabled; will not make new entries once existing positions are closed\n')
-            config['shrt']['enabled'] = config['do_shrt'] = False
+            print('\n\nshort graceful stop enabled; will not make new entries once existing positions are closed\n')
+            config['short']['enabled'] = config['do_short'] = False
         elif args.short_mode in ['m', 'manual']:
-            print('\n\nshrt manual mode enabled; will neither cancel nor create shrt orders')
-            config['shrt_mode'] = 'manual'
+            print('\n\nshort manual mode enabled; will neither cancel nor create short orders')
+            config['short_mode'] = 'manual'
         elif args.short_mode in ['n', 'normal']:
-            print('\n\nshrt normal mode')
-            config['shrt']['enabled'] = config['do_shrt'] = True
+            print('\n\nshort normal mode')
+            config['short']['enabled'] = config['do_short'] = True
         elif args.short_mode in ['p', 'panic']:
             print('\nshort panic mode enabled')
-            config['shrt_mode'] = 'panic'
-            config['shrt']['enabled'] = config['do_shrt'] = False
+            config['short_mode'] = 'panic'
+            config['short']['enabled'] = config['do_short'] = False
         elif args.short_mode.lower() in ['t', 'tp_only', 'tp-only']:
             print('\nshort tp only mode enabled')
-            config['shrt_mode'] = 'tp_only'
+            config['short_mode'] = 'tp_only'
     if args.graceful_stop:
         print('\n\ngraceful stop enabled for both long and short; will not make new entries once existing positions are closed\n')
         config['long']['enabled'] = config['do_long'] = False
-        config['shrt']['enabled'] = config['do_shrt'] = False
+        config['short']['enabled'] = config['do_short'] = False
 
     if args.long_wallet_exposure_limit is not None:
         print(
-            f"overriding long wallet exposure limit ({config['long']['pbr_limit']}) "
+            f"overriding long wallet exposure limit ({config['long']['wallet_exposure_limit']}) "
             f"with new value: {args.long_wallet_exposure_limit}"
         )
-        config["long"]["pbr_limit"] = args.long_wallet_exposure_limit
+        config["long"]["wallet_exposure_limit"] = args.long_wallet_exposure_limit
     if args.short_wallet_exposure_limit is not None:
         print(
-            f"overriding short wallet exposure limit ({config['shrt']['pbr_limit']}) "
+            f"overriding short wallet exposure limit ({config['short']['wallet_exposure_limit']}) "
             f"with new value: {args.short_wallet_exposure_limit}"
         )
-        config["shrt"]["pbr_limit"] = args.short_wallet_exposure_limit
+        config["short"]["wallet_exposure_limit"] = args.short_wallet_exposure_limit
 
     if 'spot' in config['market_type']:
         config = spotify_config(config)

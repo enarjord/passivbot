@@ -109,7 +109,7 @@ async def main():
 
             print()
             for k in (keys := ['exchange', 'symbol', 'starting_balance', 'start_date', 'end_date', 'latency_simulation_ms',
-                               'do_long', 'do_shrt', 'minimum_bankruptcy_distance', 'maximum_hrs_no_fills',
+                               'do_long', 'do_short', 'minimum_bankruptcy_distance', 'maximum_hrs_no_fills',
                                'maximum_hrs_no_fills_same_side', 'iters', 'n_particles', 'sliding_window_size',
                                'n_spans']):
                 if k in config:

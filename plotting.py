@@ -43,9 +43,9 @@ def dump_plots(result: dict, fdf: pd.DataFrame, sdf: pd.DataFrame, df: pd.DataFr
     table.add_row(['Price action distance mean long', round_dynamic(result['result']['pa_closeness_mean_long'], 6)])
     table.add_row(['Price action distance median long', round_dynamic(result['result']['pa_closeness_median_long'], 6)])
     table.add_row(['Price action distance max long', round_dynamic(result['result']['pa_closeness_max_long'], 6)])
-    table.add_row(['Price action distance mean short', round_dynamic(result['result']['pa_closeness_mean_shrt'], 6)])
-    table.add_row(['Price action distance median short', round_dynamic(result['result']['pa_closeness_median_shrt'], 6)])
-    table.add_row(['Price action distance max short', round_dynamic(result['result']['pa_closeness_max_shrt'], 6)])
+    table.add_row(['Price action distance mean short', round_dynamic(result['result']['pa_closeness_mean_short'], 6)])
+    table.add_row(['Price action distance median short', round_dynamic(result['result']['pa_closeness_median_short'], 6)])
+    table.add_row(['Price action distance max short', round_dynamic(result['result']['pa_closeness_max_short'], 6)])
     table.add_row(['Average n fills per day', round_dynamic(result['result']['avg_fills_per_day'], 6)])
     table.add_row([' ', ' '])
     table.add_row(['No. fills', round_dynamic(result['result']['n_fills'], 6)])
@@ -59,7 +59,7 @@ def dump_plots(result: dict, fdf: pd.DataFrame, sdf: pd.DataFrame, df: pd.DataFr
     table.add_row(['Max hours no fills', round_dynamic(result['result']['hrs_stuck_max_long'], 6)])
 
     longs = fdf[fdf.type.str.contains('long')]
-    shrts = fdf[fdf.type.str.contains('shrt')]
+    shorts = fdf[fdf.type.str.contains('short')]
     if result['long']['enabled']:
         table.add_row([' ', ' '])
         table.add_row(['Long', result['long']['enabled']])
@@ -71,16 +71,16 @@ def dump_plots(result: dict, fdf: pd.DataFrame, sdf: pd.DataFrame, df: pd.DataFr
         profit_color = Fore.RED if longs.pnl.sum() < 0 else Fore.RESET
         table.add_row(["PNL sum", f"{profit_color}{longs.pnl.sum()}{Fore.RESET}"])
 
-    if result['shrt']['enabled']:
+    if result['short']['enabled']:
         table.add_row([' ', ' '])
-        table.add_row(['Short', result['shrt']['enabled']])
-        table.add_row(["No. inital entries", len(shrts[shrts.type.str.contains('ientry')])])
-        table.add_row(["No. reentries", len(shrts[shrts.type.str.contains('rentry')])])
-        table.add_row(["No. normal closes", len(shrts[shrts.type.str.contains('nclose')])])
-        table.add_row(['Mean hours stuck (shrt)', round_dynamic(result['result']['hrs_stuck_avg_shrt'], 6)])
-        table.add_row(['Max hours stuck (shrt)', round_dynamic(result['result']['hrs_stuck_max_shrt'], 6)])
-        profit_color = Fore.RED if shrts.pnl.sum() < 0 else Fore.RESET
-        table.add_row(["PNL sum", f"{profit_color}{shrts.pnl.sum()}{Fore.RESET}"])
+        table.add_row(['Short', result['short']['enabled']])
+        table.add_row(["No. inital entries", len(shorts[shorts.type.str.contains('ientry')])])
+        table.add_row(["No. reentries", len(shorts[shorts.type.str.contains('rentry')])])
+        table.add_row(["No. normal closes", len(shorts[shorts.type.str.contains('nclose')])])
+        table.add_row(['Mean hours stuck (short)', round_dynamic(result['result']['hrs_stuck_avg_short'], 6)])
+        table.add_row(['Max hours stuck (short)', round_dynamic(result['result']['hrs_stuck_max_short'], 6)])
+        profit_color = Fore.RED if shorts.pnl.sum() < 0 else Fore.RESET
+        table.add_row(["PNL sum", f"{profit_color}{shorts.pnl.sum()}{Fore.RESET}"])
 
     dump_live_config(result, result['plots_dirpath'] + 'live_config.json')
     json.dump(denumpyize(result), open(result['plots_dirpath'] + 'result.json', 'w'), indent=4)
@@ -103,8 +103,8 @@ def dump_plots(result: dict, fdf: pd.DataFrame, sdf: pd.DataFrame, df: pd.DataFr
     plt.savefig(f"{result['plots_dirpath']}pnl_cumsum_long.png")
 
     plt.clf()
-    shrts.pnl.cumsum().plot(title="PNL cumulated sum - Short", xlabel="Time", ylabel="PNL")
-    plt.savefig(f"{result['plots_dirpath']}pnl_cumsum_shrt.png")
+    shorts.pnl.cumsum().plot(title="PNL cumulated sum - Short", xlabel="Time", ylabel="PNL")
+    plt.savefig(f"{result['plots_dirpath']}pnl_cumsum_short.png")
 
     adg = (sdf.equity / sdf.equity.iloc[0]) ** (1 / ((sdf.timestamp - sdf.timestamp.iloc[0]) / (1000 * 60 * 60 * 24)))
     plt.clf()
@@ -128,7 +128,7 @@ def dump_plots(result: dict, fdf: pd.DataFrame, sdf: pd.DataFrame, df: pd.DataFr
     print('plotting pos sizes...')
     plt.clf()
     longs.psize.plot()
-    shrts.psize.plot(title="Position size in terms of contracts", xlabel="Time", ylabel="Position size")
+    shorts.psize.plot(title="Position size in terms of contracts", xlabel="Time", ylabel="Position size")
     plt.savefig(f"{result['plots_dirpath']}psizes_plot.png")
 
 
@@ -162,20 +162,20 @@ def plot_fills(df, fdf_, side: int = 0, bkr_thr=0.1, plot_whole_df: bool = False
 
         longs.where(longs.pprice != 0.0).pprice.fillna(method='ffill').plot(style='b--')
     if side <= 0:
-        shrts = fdf[fdf.type.str.contains('shrt')]
-        sientry = shrts[shrts.type.str.contains('ientry')]
-        srentry = shrts[shrts.type.str.contains('rentry')]
-        snclose = shrts[shrts.type.str.contains('nclose')]
-        suentry = shrts[shrts.type.str.contains('unstuck_entry')]
-        suclose = shrts[shrts.type.str.contains('unstuck_close')]
-        sdca = shrts[shrts.type.str.contains('secondary')]
+        shorts = fdf[fdf.type.str.contains('short')]
+        sientry = shorts[shorts.type.str.contains('ientry')]
+        srentry = shorts[shorts.type.str.contains('rentry')]
+        snclose = shorts[shorts.type.str.contains('nclose')]
+        suentry = shorts[shorts.type.str.contains('unstuck_entry')]
+        suclose = shorts[shorts.type.str.contains('unstuck_close')]
+        sdca = shorts[shorts.type.str.contains('secondary')]
         sientry.price.plot(style='r.')
         srentry.price.plot(style='r.')
         snclose.price.plot(style='b.')
         sdca.price.plot(style='go')
         suentry.price.plot(style='rx')
         suclose.price.plot(style='bx')
-        shrts.where(shrts.pprice != 0.0).pprice.fillna(method='ffill').plot(style='r--')
+        shorts.where(shorts.pprice != 0.0).pprice.fillna(method='ffill').plot(style='r--')
 
     if 'bkr_price' in fdf.columns:
         fdf.bkr_price.where(fdf.bkr_diff < bkr_thr, np.nan).plot(style='k--')

@@ -34,10 +34,10 @@ def calc_spans(min_span: int, max_span: int, n_spans: int) -> np.ndarray:
 
 
 def get_xk_keys():
-    return ['spot', 'hedge_mode', 'inverse', 'do_long', 'do_shrt', 'qty_step', 'price_step', 'min_qty', 'min_cost',
-            'c_mult', 'grid_span', 'pbr_limit', 'max_n_entry_orders', 'initial_qty_pct', 'eprice_pprice_diff',
-            'secondary_pbr_allocation', 'secondary_pprice_diff', 'eprice_exp_base', 'min_markup', 'markup_range',
-            'n_close_orders', 'ema_span_min', 'ema_span_max', 'initial_eprice_ema_dist', 'auto_unstuck_pbr_threshold', 'auto_unstuck_ema_dist']
+    return ['spot', 'hedge_mode', 'inverse', 'do_long', 'do_short', 'qty_step', 'price_step', 'min_qty', 'min_cost',
+            'c_mult', 'grid_span', 'wallet_exposure_limit', 'max_n_entry_orders', 'initial_qty_pct', 'eprice_pprice_diff',
+            'secondary_allocation', 'secondary_pprice_diff', 'eprice_exp_base', 'min_markup', 'markup_range',
+            'n_close_orders', 'ema_span_min', 'ema_span_max', 'initial_eprice_ema_dist', 'auto_unstuck_wallet_exposure_threshold', 'auto_unstuck_ema_dist']
 
 
 def create_xk(config: dict) -> dict:
@@ -48,15 +48,15 @@ def create_xk(config: dict) -> dict:
     else:
         config_['spot'] = False
         config_['do_long'] = config['long']['enabled']
-        config_['do_shrt'] = config['shrt']['enabled']
+        config_['do_short'] = config['short']['enabled']
     keys = get_xk_keys()
     config_['long']['n_close_orders'] = int(round(config_['long']['n_close_orders']))
-    config_['shrt']['n_close_orders'] = int(round(config_['shrt']['n_close_orders']))
+    config_['short']['n_close_orders'] = int(round(config_['short']['n_close_orders']))
     config_['long']['max_n_entry_orders'] = int(round(config_['long']['max_n_entry_orders']))
-    config_['shrt']['max_n_entry_orders'] = int(round(config_['shrt']['max_n_entry_orders']))
+    config_['short']['max_n_entry_orders'] = int(round(config_['short']['max_n_entry_orders']))
     for k in keys:
         if k in config_['long']:
-            xk[k] = (config_['long'][k], config_['shrt'][k])
+            xk[k] = (config_['long'][k], config_['short'][k])
         elif k in config_:
             xk[k] = config_[k]
         else:
@@ -147,7 +147,7 @@ def config_pretty_str(config: dict):
 def candidate_to_live_config(candidate: dict) -> dict:
     packed = pack_config(candidate)
     live_config = get_template_live_config()
-    sides = ['long', 'shrt']
+    sides = ['long', 'short']
     for side in sides:
         for k in live_config[side]:
             if k in packed[side]:
@@ -157,12 +157,12 @@ def candidate_to_live_config(candidate: dict) -> dict:
             live_config[k] = packed[k]
 
     result_dict = candidate['result'] if 'result' in candidate else candidate
-    if packed['long']['enabled'] and not packed['shrt']['enabled']:
+    if packed['long']['enabled'] and not packed['short']['enabled']:
         side_type = 'longonly'
-    elif packed['shrt']['enabled'] and not packed['long']['enabled']:
-        side_type = 'shrtonly'
+    elif packed['short']['enabled'] and not packed['long']['enabled']:
+        side_type = 'shortonly'
     else:
-        side_type = 'long&shrt'
+        side_type = 'long&short'
     name = f"{side_type}_"
     name += f"{result_dict['exchange'].lower()}_" if 'exchange' in result_dict else 'unknown_'
     name += f"{result_dict['symbol'].lower()}" if 'symbol' in result_dict else 'unknown'
@@ -300,52 +300,52 @@ def get_template_live_config():
                  "ema_span_min": 1440, # in minutes
                  "ema_span_max": 4320,
                  "grid_span": 0.16,
-                 "pbr_limit": 1.6,
+                 "wallet_exposure_limit": 1.6,
                  "max_n_entry_orders":  10,
                  "initial_qty_pct":  0.01,
                  "initial_eprice_ema_dist": -0.01, # negative is closer; positive is further away
 
                  "eprice_pprice_diff": 0.0025,
-                 "secondary_pbr_allocation": 0.5,
+                 "secondary_allocation": 0.5,
                  "secondary_pprice_diff": 0.35,
                  "eprice_exp_base": 1.618034,
                  "min_markup": 0.0045,
                  "markup_range":  0.0075,
                  "n_close_orders": 7,
-                 "auto_unstuck_pbr_threshold": 0.1, # percentage of pbr_limit to trigger soft stop.
-                                                 # e.g. pbr_limit=0.06 and auto_unstuck_pbr_threshold=0.1: soft stop when pbr > 0.06 * (1 - 0.1) == 0.054
+                 "auto_unstuck_wallet_exposure_threshold": 0.1, # percentage of wallet_exposure_limit to trigger soft stop.
+                                                 # e.g. wallet_exposure_limit=0.06 and auto_unstuck_wallet_exposure_threshold=0.1: soft stop when wallet_exposure > 0.06 * (1 - 0.1) == 0.054
                  "auto_unstuck_ema_dist": 0.02},
-        "shrt": {"enabled": True,
+        "short": {"enabled": True,
                  "ema_span_min": 1440, # in minutes
                  "ema_span_max": 4320,
                  "grid_span": 0.16,
-                 "pbr_limit": 1.6,
+                 "wallet_exposure_limit": 1.6,
                  "max_n_entry_orders":  10,
                  "initial_qty_pct":  0.01,
                  "initial_eprice_ema_dist": -0.01, # negative is closer; positive is further away
                  "eprice_pprice_diff": 0.0025,
-                 "secondary_pbr_allocation": 0.5,
+                 "secondary_allocation": 0.5,
                  "secondary_pprice_diff": 0.35,
                  "eprice_exp_base": 1.618034,
                  "min_markup": 0.0045,
                  "markup_range":  0.0075,
                  "n_close_orders": 7,
-                 "auto_unstuck_pbr_threshold": 0.1, # percentage of pbr_limit to trigger soft stop.
-                                                 # e.g. pbr_limit=0.06 and auto_unstuck_pbr_threshold=0.1: soft stop when pbr > 0.06 * (1 - 0.1) == 0.054
+                 "auto_unstuck_wallet_exposure_threshold": 0.1, # percentage of wallet_exposure_limit to trigger soft stop.
+                                                 # e.g. wallet_exposure_limit=0.06 and auto_unstuck_wallet_exposure_threshold=0.1: soft stop when wallet_exposure > 0.06 * (1 - 0.1) == 0.054
                  "auto_unstuck_ema_dist": 0.02},
     }
 
 
 def analyze_fills(fills: list, stats: list, config: dict) -> (pd.DataFrame, pd.DataFrame, dict):
     sdf = pd.DataFrame(stats, columns=['timestamp', 'balance', 'equity', 'bkr_price', 'long_psize',
-                                       'long_pprice', 'shrt_psize', 'shrt_pprice', 'price', 'closest_bkr'])
+                                       'long_pprice', 'short_psize', 'short_pprice', 'price', 'closest_bkr'])
     fdf = pd.DataFrame(fills, columns=['trade_id', 'timestamp', 'pnl', 'fee_paid', 'balance',
                                        'equity', 'qty', 'price', 'psize', 'pprice', 'type'])
-    fdf.loc[:, 'pbr'] = [qty_to_cost(x.psize, x.pprice, config['inverse'], config['c_mult']) / x.balance
+    fdf.loc[:, 'wallet_exposure'] = [qty_to_cost(x.psize, x.pprice, config['inverse'], config['c_mult']) / x.balance
                          if x.balance > 0.0 else 0.0 for x in fdf.itertuples()]
-    sdf.loc[:, 'long_pbr'] = [qty_to_cost(x.long_psize, x.long_pprice, config['inverse'], config['c_mult']) / x.balance
+    sdf.loc[:, 'long_wallet_exposure'] = [qty_to_cost(x.long_psize, x.long_pprice, config['inverse'], config['c_mult']) / x.balance
                               if x.balance > 0.0 else 0.0 for x in sdf.itertuples()]
-    sdf.loc[:, 'shrt_pbr'] = [qty_to_cost(x.shrt_psize, x.shrt_pprice, config['inverse'], config['c_mult']) / x.balance
+    sdf.loc[:, 'short_wallet_exposure'] = [qty_to_cost(x.short_psize, x.short_pprice, config['inverse'], config['c_mult']) / x.balance
                               if x.balance > 0.0 else 0.0 for x in sdf.itertuples()]
     gain = sdf.balance.iloc[-1] / sdf.balance.iloc[0]
     n_days = (sdf.timestamp.iloc[-1] - sdf.timestamp.iloc[0]) / (1000 * 60 * 60 * 24)
@@ -356,14 +356,14 @@ def analyze_fills(fills: list, stats: list, config: dict) -> (pd.DataFrame, pd.D
     long_pos_changes_ms_diff = np.diff([sdf.timestamp.iloc[0]] + list(long_pos_changes.timestamp) + [sdf.timestamp.iloc[-1]])
     hrs_stuck_max_long = long_pos_changes_ms_diff.max() / (1000 * 60 * 60)
     hrs_stuck_avg_long = long_pos_changes_ms_diff.mean() / (1000 * 60 * 60)
-    shrt_pos_changes = sdf[sdf.shrt_psize != sdf.shrt_psize.shift()]
-    shrt_pos_changes_ms_diff = np.diff([sdf.timestamp.iloc[0]] + list(shrt_pos_changes.timestamp) + [sdf.timestamp.iloc[-1]])
-    hrs_stuck_max_shrt = shrt_pos_changes_ms_diff.max() / (1000 * 60 * 60)
-    hrs_stuck_avg_shrt = shrt_pos_changes_ms_diff.mean() / (1000 * 60 * 60)
+    short_pos_changes = sdf[sdf.short_psize != sdf.short_psize.shift()]
+    short_pos_changes_ms_diff = np.diff([sdf.timestamp.iloc[0]] + list(short_pos_changes.timestamp) + [sdf.timestamp.iloc[-1]])
+    hrs_stuck_max_short = short_pos_changes_ms_diff.max() / (1000 * 60 * 60)
+    hrs_stuck_avg_short = short_pos_changes_ms_diff.mean() / (1000 * 60 * 60)
     lpprices = sdf[sdf.long_pprice != 0.0]
-    spprices = sdf[sdf.shrt_pprice != 0.0]
+    spprices = sdf[sdf.short_pprice != 0.0]
     pa_closeness_long = ((lpprices.long_pprice - lpprices.price).abs() / lpprices.price) if len(lpprices) > 0 else pd.Series([100.0])
-    pa_closeness_shrt = ((spprices.shrt_pprice - spprices.price).abs() / spprices.price) if len(spprices) > 0 else pd.Series([100.0])
+    pa_closeness_short = ((spprices.short_pprice - spprices.price).abs() / spprices.price) if len(spprices) > 0 else pd.Series([100.0])
 
     analysis = {
         'exchange': config['exchange'] if 'exchange' in config else 'unknown',
@@ -372,9 +372,9 @@ def analyze_fills(fills: list, stats: list, config: dict) -> (pd.DataFrame, pd.D
         'pa_closeness_mean_long': pa_closeness_long.mean(),
         'pa_closeness_median_long': pa_closeness_long.median(),
         'pa_closeness_max_long': pa_closeness_long.max(),
-        'pa_closeness_mean_shrt': pa_closeness_shrt.mean(),
-        'pa_closeness_median_shrt': pa_closeness_shrt.median(),
-        'pa_closeness_max_shrt': pa_closeness_shrt.max(),
+        'pa_closeness_mean_short': pa_closeness_short.mean(),
+        'pa_closeness_median_short': pa_closeness_short.median(),
+        'pa_closeness_max_short': pa_closeness_short.max(),
         'average_daily_gain': adg,
         'adjusted_daily_gain': np.tanh(20 * adg) / 20,
         'gain': gain,
@@ -389,10 +389,10 @@ def analyze_fills(fills: list, stats: list, config: dict) -> (pd.DataFrame, pd.D
         'hrs_stuck_avg_long': hrs_stuck_avg_long,
         'hrs_stuck_max': hrs_stuck_max_long,
         'hrs_stuck_avg': hrs_stuck_avg_long,
-        'hrs_stuck_max_shrt': hrs_stuck_max_shrt,
-        'hrs_stuck_avg_shrt': hrs_stuck_avg_shrt,
-        'hrs_stuck_max': hrs_stuck_max_shrt,
-        'hrs_stuck_avg': hrs_stuck_avg_shrt,
+        'hrs_stuck_max_short': hrs_stuck_max_short,
+        'hrs_stuck_avg_short': hrs_stuck_avg_short,
+        'hrs_stuck_max': hrs_stuck_max_short,
+        'hrs_stuck_avg': hrs_stuck_avg_short,
         'loss_sum': fdf[fdf.pnl < 0.0].pnl.sum(),
         'profit_sum': fdf[fdf.pnl > 0.0].pnl.sum(),
         'pnl_sum': (pnl_sum := fdf.pnl.sum()),
@@ -438,31 +438,31 @@ def calc_pprice_from_fills(coin_balance, fills, n_fills_limit=100):
     return pprice
 
 
-def get_position_fills(long_psize: float, shrt_psize: float, fills: [dict]) -> ([dict], [dict]):
+def get_position_fills(long_psize: float, short_psize: float, fills: [dict]) -> ([dict], [dict]):
     '''
     assumes fills are sorted old to new
     returns fills since and including initial entry
     '''
     long_psize *= 0.999
-    shrt_psize *= 0.999
+    short_psize *= 0.999
     long_qty_sum = 0.0
-    shrt_qty_sum = 0.0
-    long_done, shrt_done = long_psize == 0.0, shrt_psize == 0.0
-    if long_done and shrt_done:
+    short_qty_sum = 0.0
+    long_done, short_done = long_psize == 0.0, short_psize == 0.0
+    if long_done and short_done:
         return [], []
-    long_pfills, shrt_pfills = [], []
+    long_pfills, short_pfills = [], []
     for x in fills[::-1]:
         if x['position_side'] == 'long':
             if not long_done:
                 long_qty_sum += x['qty'] * (1.0 if x['side'] == 'buy' else -1.0)
                 long_pfills.append(x)
                 long_done = long_qty_sum >= long_psize
-        elif x['position_side'] == 'shrt':
-            if not shrt_done:
-                shrt_qty_sum += x['qty'] * (1.0 if x['side'] == 'sell' else -1.0)
-                shrt_pfills.append(x)
-                shrt_done = shrt_qty_sum >= shrt_psize
-    return long_pfills[::-1], shrt_pfills[::-1]
+        elif x['position_side'] == 'short':
+            if not short_done:
+                short_qty_sum += x['qty'] * (1.0 if x['side'] == 'sell' else -1.0)
+                short_pfills.append(x)
+                short_done = short_qty_sum >= short_psize
+    return long_pfills[::-1], short_pfills[::-1]
 
 
 def calc_long_pprice(long_psize, long_pfills):
@@ -494,7 +494,7 @@ def nullify(x):
         return 0.0
 
 
-def spotify_config(config: dict, nullify_shrt=True) -> dict:
+def spotify_config(config: dict, nullify_short=True) -> dict:
     spotified = config.copy()
 
     spotified['spot'] = True
@@ -503,10 +503,10 @@ def spotify_config(config: dict, nullify_shrt=True) -> dict:
     elif 'spot' not in spotified['market_type']:
         spotified['market_type'] += '_spot'
     spotified['do_long'] = spotified['long']['enabled'] = config['long']['enabled']
-    spotified['do_shrt'] = spotified['shrt']['enabled'] = False
-    spotified['long']['pbr_limit'] = min(1.0, spotified['long']['pbr_limit'])
-    if nullify_shrt:
-        spotified['shrt'] = nullify(spotified['shrt'])
+    spotified['do_short'] = spotified['short']['enabled'] = False
+    spotified['long']['wallet_exposure_limit'] = min(1.0, spotified['long']['wallet_exposure_limit'])
+    if nullify_short:
+        spotified['short'] = nullify(spotified['short'])
     return spotified
 
 

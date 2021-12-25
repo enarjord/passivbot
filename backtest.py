@@ -77,16 +77,16 @@ async def main():
 
     if args.long_wallet_exposure_limit is not None:
         print(
-            f"overriding long wallet exposure limit ({config['long']['pbr_limit']}) "
+            f"overriding long wallet exposure limit ({config['long']['wallet_exposure_limit']}) "
             f"with new value: {args.long_wallet_exposure_limit}"
         )
-        config["long"]["pbr_limit"] = args.long_wallet_exposure_limit
+        config["long"]["wallet_exposure_limit"] = args.long_wallet_exposure_limit
     if args.short_wallet_exposure_limit is not None:
         print(
-            f"overriding short wallet exposure limit ({config['shrt']['pbr_limit']}) "
+            f"overriding short wallet exposure limit ({config['short']['wallet_exposure_limit']}) "
             f"with new value: {args.short_wallet_exposure_limit}"
         )
-        config["shrt"]["pbr_limit"] = args.short_wallet_exposure_limit
+        config["short"]["wallet_exposure_limit"] = args.short_wallet_exposure_limit
 
     if 'spot' in config['market_type']:
         live_config = spotify_config(live_config)

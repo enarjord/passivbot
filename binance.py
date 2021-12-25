@@ -199,7 +199,7 @@ class BinanceBot(Bot):
              'qty': float(e['origQty']),
              'type': e['type'].lower(),
              'side': e['side'].lower(),
-             'position_side': e['positionSide'].lower().replace('short', 'shrt'),
+             'position_side': e['positionSide'].lower().replace('short', 'short'),
              'timestamp': int(e['time'])}
             for e in await self.private_get(self.endpoints['open_orders'], {'symbol': self.symbol})
         ]
@@ -213,7 +213,7 @@ class BinanceBot(Bot):
         )
         positions = [e for e in positions if e['symbol'] == self.symbol]
         position = {'long': {'size': 0.0, 'price': 0.0, 'liquidation_price': 0.0},
-                    'shrt': {'size': 0.0, 'price': 0.0, 'liquidation_price': 0.0},
+                    'short': {'size': 0.0, 'price': 0.0, 'liquidation_price': 0.0},
                     'wallet_balance': 0.0, 'equity': 0.0}
         if positions:
             for p in positions:
@@ -222,7 +222,7 @@ class BinanceBot(Bot):
                                         'price': float(p['entryPrice']),
                                         'liquidation_price': float(p['liquidationPrice'])}
                 elif p['positionSide'] == 'SHORT':
-                    position['shrt'] = {'size': float(p['positionAmt']),
+                    position['short'] = {'size': float(p['positionAmt']),
                                         'price': float(p['entryPrice']),
                                         'liquidation_price': float(p['liquidationPrice'])}
         for e in balance:
@@ -237,7 +237,7 @@ class BinanceBot(Bot):
         try:
             params = {'symbol': self.symbol,
                       'side': order['side'].upper(),
-                      'positionSide': order['position_side'].replace('shrt', 'short').upper(),
+                      'positionSide': order['position_side'].replace('short', 'short').upper(),
                       'type': order['type'].upper(),
                       'quantity': str(order['qty'])}
             if params['type'] == 'LIMIT':
@@ -249,7 +249,7 @@ class BinanceBot(Bot):
             o = await self.private_post(self.endpoints['create_order'], params)
             return {'symbol': self.symbol,
                     'side': o['side'].lower(),
-                    'position_side': o['positionSide'].lower().replace('short', 'shrt'),
+                    'position_side': o['positionSide'].lower().replace('short', 'short'),
                     'type': o['type'].lower(),
                     'qty': float(o['origQty']),
                     'order_id': int(o['orderId']),
@@ -267,7 +267,7 @@ class BinanceBot(Bot):
                                                      {'symbol': self.symbol, 'orderId': order['order_id']})
 
             return {'symbol': self.symbol, 'side': cancellation['side'].lower(), 'order_id': int(cancellation['orderId']),
-                    'position_side': cancellation['positionSide'].lower().replace('short', 'shrt'),
+                    'position_side': cancellation['positionSide'].lower().replace('short', 'short'),
                     'qty': float(cancellation['origQty']), 'price': float(cancellation['price'])}
         except Exception as e:
             print(f'error cancelling order {order} {e}')
@@ -297,7 +297,7 @@ class BinanceBot(Bot):
                       'fee_paid': float(x['commission']),
                       'fee_token': x['commissionAsset'],
                       'timestamp': int(x['time']),
-                      'position_side': x['positionSide'].lower().replace('short', 'shrt'),
+                      'position_side': x['positionSide'].lower().replace('short', 'short'),
                       'is_maker': x['maker']} for x in fetched]
         except Exception as e:
             print('error fetching fills', e)
@@ -448,8 +448,8 @@ class BinanceBot(Bot):
                             standardized['long_psize'] = float(x['pa'])
                             standardized['long_pprice'] = float(x['ep'])
                         elif x['ps'] == 'SHORT':
-                            standardized['shrt_psize'] = float(x['pa'])
-                            standardized['shrt_pprice'] = float(x['ep'])
+                            standardized['short_psize'] = float(x['pa'])
+                            standardized['short_pprice'] = float(x['ep'])
             elif event['e'] == 'ORDER_TRADE_UPDATE':
                 if event['o']['s'] == self.symbol:
                     if event['o']['X'] == 'NEW':
@@ -459,7 +459,7 @@ class BinanceBot(Bot):
                                                           'qty': float(event['o']['q']),
                                                           'type': event['o']['o'].lower(),
                                                           'side': event['o']['S'].lower(),
-                                                          'position_side': event['o']['ps'].lower().replace('short', 'shrt'),
+                                                          'position_side': event['o']['ps'].lower().replace('short', 'short'),
                                                           'timestamp': int(event['o']['T'])}
                     elif event['o']['X'] in ['CANCELED', 'EXPIRED']:
                         standardized['deleted_order_id'] = int(event['o']['i'])

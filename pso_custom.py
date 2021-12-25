@@ -207,8 +207,8 @@ class BacktestWrap:
         for key in ['final_balance', 'final_equity', 'net_pnl_plus_fees', 'gain', 'profit_sum',
                     'n_fills', 'n_entries', 'n_closes', 'n_reentries', 'n_initial_entries',
                     'n_normal_closes', 'n_stop_loss_closes', 'biggest_psize', 'mean_hrs_between_fills',
-                    'mean_hrs_between_fills_long', 'mean_hrs_between_fills_shrt', 'max_hrs_no_fills_long',
-                    'max_hrs_no_fills_shrt', 'max_hrs_no_fills_same_side', 'max_hrs_no_fills']:
+                    'mean_hrs_between_fills_long', 'mean_hrs_between_fills_short', 'max_hrs_no_fills_long',
+                    'max_hrs_no_fills_short', 'max_hrs_no_fills_same_side', 'max_hrs_no_fills']:
             analysis[key] = np.max([a[key] for a in analyses])
         for key in ['loss_sum', 'fee_sum', 'lowest_eqbal_ratio', 'closest_bkr']:
             analysis[key] = np.min([a[key] for a in analyses])
@@ -239,7 +239,7 @@ async def main():
 
             print()
             for k in (keys := ['exchange', 'symbol', 'starting_balance', 'start_date', 'end_date', 'latency_simulation_ms',
-                               'do_long', 'do_shrt', 'minimum_bankruptcy_distance', 'maximum_hrs_no_fills',
+                               'do_long', 'do_short', 'minimum_bankruptcy_distance', 'maximum_hrs_no_fills',
                                'maximum_hrs_no_fills_same_side', 'iters', 'n_particles', 'sliding_window_size',
                                'n_spans']):
                 if k in config:

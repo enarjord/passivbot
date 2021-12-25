@@ -121,7 +121,7 @@ def calc_long_pnl(entry_price, close_price, qty, inverse, c_mult) -> float:
 
 
 @njit
-def calc_shrt_pnl(entry_price, close_price, qty, inverse, c_mult) -> float:
+def calc_short_pnl(entry_price, close_price, qty, inverse, c_mult) -> float:
     if inverse:
         if entry_price == 0.0 or close_price == 0.0:
             return 0.0
@@ -131,12 +131,12 @@ def calc_shrt_pnl(entry_price, close_price, qty, inverse, c_mult) -> float:
 
 
 @njit
-def calc_equity(balance, long_psize, long_pprice, shrt_psize, shrt_pprice, last_price, inverse, c_mult):
+def calc_equity(balance, long_psize, long_pprice, short_psize, short_pprice, last_price, inverse, c_mult):
     equity = balance
     if long_pprice and long_psize:
         equity += calc_long_pnl(long_pprice, last_price, long_psize, inverse, c_mult)
-    if shrt_pprice and shrt_psize:
-        equity += calc_shrt_pnl(shrt_pprice, last_price, shrt_psize, inverse, c_mult)
+    if short_pprice and short_psize:
+        equity += calc_short_pnl(short_pprice, last_price, short_psize, inverse, c_mult)
     return equity
 
 
@@ -151,7 +151,7 @@ def calc_new_psize_pprice(psize, pprice, qty, price, qty_step) -> (float, float)
 
 
 @njit
-def calc_pbr_if_filled(balance, psize, pprice, qty, price, inverse, c_mult, qty_step):
+def calc_wallet_exposure_if_filled(balance, psize, pprice, qty, price, inverse, c_mult, qty_step):
     psize, qty = round_(abs(psize), qty_step), round_(abs(qty), qty_step)
     new_psize, new_pprice = calc_new_psize_pprice(psize, pprice, qty, price, qty_step)
     return qty_to_cost(new_psize, new_pprice, inverse, c_mult) / balance
@@ -172,19 +172,19 @@ def calc_long_close_grid(balance,
                          min_cost,
                          c_mult,
 
-                         pbr_limit,
+                         wallet_exposure_limit,
                          initial_qty_pct,
                          min_markup,
                          markup_range,
                          n_close_orders,
-                         auto_unstuck_pbr_threshold,
+                         auto_unstuck_wallet_exposure_threshold,
                          auto_unstuck_ema_dist) -> [(float, float, str)]:
     if long_psize == 0.0:
         return [(0.0, 0.0, '')]
     minm = long_pprice * (1 + min_markup)
     if spot and round_dn(long_psize, qty_step) < calc_min_entry_qty(minm, inverse, qty_step, min_qty, min_cost):
         return [(0.0, 0.0, '')]
-    if long_psize < cost_to_qty(balance, long_pprice, inverse, c_mult) * pbr_limit * initial_qty_pct * 0.5:
+    if long_psize < cost_to_qty(balance, long_pprice, inverse, c_mult) * wallet_exposure_limit * initial_qty_pct * 0.5:
         # close entire pos at breakeven or better if psize < initial_qty * 0.5
         # assumes maker fee rate 0.001 for spot, 0.0002 for futures
         breakeven_markup = 0.0021 if spot else 0.00041
@@ -200,12 +200,12 @@ def calc_long_close_grid(balance,
     elif len(close_prices) == 1:
         return [(-long_psize, close_prices[0], 'long_nclose')]
     else:
-        pbr = qty_to_cost(long_psize, long_pprice, inverse, c_mult) / balance
-        threshold = pbr_limit * (1 - auto_unstuck_pbr_threshold) * 1.01
-        if auto_unstuck_pbr_threshold != 0.0 and pbr > threshold:
+        wallet_exposure = qty_to_cost(long_psize, long_pprice, inverse, c_mult) / balance
+        threshold = wallet_exposure_limit * (1 - auto_unstuck_wallet_exposure_threshold) * 1.01
+        if auto_unstuck_wallet_exposure_threshold != 0.0 and wallet_exposure > threshold:
             auto_unstuck_price = max(lowest_ask, round_up(upper_ema_band * (1 + auto_unstuck_ema_dist), price_step))
             if auto_unstuck_price < close_prices[0]:
-                auto_unstuck_qty = find_long_close_qty_bringing_pbr_to_target(
+                auto_unstuck_qty = find_long_close_qty_bringing_wallet_exposure_to_target(
                     balance,
                     long_psize,
                     long_pprice,
@@ -226,7 +226,7 @@ def calc_long_close_grid(balance,
         remaining = long_psize
         for close_price in close_prices:
             if remaining < max([min_close_qty,
-                                cost_to_qty(balance, close_price, inverse, c_mult) * pbr_limit * initial_qty_pct * 0.5,
+                                cost_to_qty(balance, close_price, inverse, c_mult) * wallet_exposure_limit * initial_qty_pct * 0.5,
                                 default_qty * 0.5]):
                 break
             close_qty = min(remaining, max(default_qty, min_close_qty))
@@ -241,10 +241,10 @@ def calc_long_close_grid(balance,
 
 
 @njit
-def calc_shrt_close_grid(
+def calc_short_close_grid(
     balance,
-    shrt_psize,
-    shrt_pprice,
+    short_psize,
+    short_pprice,
     highest_bid,
     lower_ema_band,
 
@@ -256,53 +256,53 @@ def calc_shrt_close_grid(
     min_cost,
     c_mult,
 
-    pbr_limit,
+    wallet_exposure_limit,
     initial_qty_pct,
     min_markup,
     markup_range,
     n_close_orders,
-    auto_unstuck_pbr_threshold,
+    auto_unstuck_wallet_exposure_threshold,
     auto_unstuck_ema_dist,
 ) -> list[tuple[float, float, str]]:
-    if shrt_psize == 0.0:
+    if short_psize == 0.0:
         return [(0.0, 0.0, "")]
-    minm = shrt_pprice * (1 - min_markup)
-    abs_shrt_psize = abs(shrt_psize)
-    if spot and round_dn(abs_shrt_psize, qty_step) < calc_min_entry_qty(
+    minm = short_pprice * (1 - min_markup)
+    abs_short_psize = abs(short_psize)
+    if spot and round_dn(abs_short_psize, qty_step) < calc_min_entry_qty(
         minm, inverse, qty_step, min_qty, min_cost
     ):
         return [(0.0, 0.0, "")]
     if (
-        abs_shrt_psize
-        < cost_to_qty(balance, shrt_pprice, inverse, c_mult)
-        * pbr_limit
+        abs_short_psize
+        < cost_to_qty(balance, short_pprice, inverse, c_mult)
+        * wallet_exposure_limit
         * initial_qty_pct
         * 0.5
     ):
         # close entire pos at breakeven or better if psize < initial_qty * 0.5
         # assumes maker fee rate 0.001 for spot, 0.0002 for futures
         breakeven_markup = 0.0021 if spot else 0.00041
-        close_price = min(highest_bid, round_dn(shrt_pprice * (1 - breakeven_markup), price_step))
-        return [(round_(abs_shrt_psize, qty_step), close_price, "shrt_nclose")]
+        close_price = min(highest_bid, round_dn(short_pprice * (1 - breakeven_markup), price_step))
+        return [(round_(abs_short_psize, qty_step), close_price, "short_nclose")]
     close_prices = []
-    for p in np.linspace(minm, shrt_pprice * (1 - min_markup - markup_range), n_close_orders):
+    for p in np.linspace(minm, short_pprice * (1 - min_markup - markup_range), n_close_orders):
         price_ = round_dn(p, price_step)
         if price_ <= highest_bid:
             close_prices.append(price_)
     if len(close_prices) == 0:
-        return [(round_(abs_shrt_psize, qty_step), highest_bid, "shrt_nclose")]
+        return [(round_(abs_short_psize, qty_step), highest_bid, "short_nclose")]
     elif len(close_prices) == 1:
-        return [(round_(abs_shrt_psize, qty_step), close_prices[0], "shrt_nclose")]
+        return [(round_(abs_short_psize, qty_step), close_prices[0], "short_nclose")]
     else:
-        pbr = qty_to_cost(shrt_psize, shrt_pprice, inverse, c_mult) / balance
-        threshold = pbr_limit * (1 - auto_unstuck_pbr_threshold) * 1.01
-        if auto_unstuck_pbr_threshold != 0.0 and pbr > threshold:
+        wallet_exposure = qty_to_cost(short_psize, short_pprice, inverse, c_mult) / balance
+        threshold = wallet_exposure_limit * (1 - auto_unstuck_wallet_exposure_threshold) * 1.01
+        if auto_unstuck_wallet_exposure_threshold != 0.0 and wallet_exposure > threshold:
             auto_unstuck_price = min(highest_bid, round_dn(lower_ema_band * (1 - auto_unstuck_ema_dist), price_step))
             if auto_unstuck_price > close_prices[0]:
-                auto_unstuck_qty = find_shrt_close_qty_bringing_pbr_to_target(
+                auto_unstuck_qty = find_short_close_qty_bringing_wallet_exposure_to_target(
                     balance,
-                    shrt_psize,
-                    shrt_pprice,
+                    short_psize,
+                    short_pprice,
                     threshold,
                     auto_unstuck_price,
                     inverse,
@@ -310,20 +310,20 @@ def calc_shrt_close_grid(
                     c_mult,
                 )
                 if auto_unstuck_qty > calc_min_entry_qty(auto_unstuck_price, inverse, qty_step, min_qty, min_cost):
-                    return [(auto_unstuck_qty, auto_unstuck_price, 'shrt_auto_unstuck_close')]
+                    return [(auto_unstuck_qty, auto_unstuck_price, 'short_auto_unstuck_close')]
         min_close_qty = calc_min_entry_qty(close_prices[0], inverse, qty_step, min_qty, min_cost)
-        default_qty = round_dn(abs_shrt_psize / len(close_prices), qty_step)
+        default_qty = round_dn(abs_short_psize / len(close_prices), qty_step)
         if default_qty == 0.0:
-            return [(round_(abs_shrt_psize, qty_step), close_prices[0], "shrt_nclose")]
+            return [(round_(abs_short_psize, qty_step), close_prices[0], "short_nclose")]
         default_qty = max(min_close_qty, default_qty)
-        shrt_closes = []
-        remaining = round_(abs_shrt_psize, qty_step)
+        short_closes = []
+        remaining = round_(abs_short_psize, qty_step)
         for close_price in close_prices:
             if remaining < max(
                 [
                     min_close_qty,
                     cost_to_qty(balance, close_price, inverse, c_mult)
-                    * pbr_limit
+                    * wallet_exposure_limit
                     * initial_qty_pct
                     * 0.5,
                     default_qty * 0.5,
@@ -331,29 +331,29 @@ def calc_shrt_close_grid(
             ):
                 break
             close_qty = min(remaining, max(default_qty, min_close_qty))
-            shrt_closes.append((close_qty, close_price, "shrt_nclose"))
+            short_closes.append((close_qty, close_price, "short_nclose"))
             remaining = round_(remaining - close_qty, qty_step)
         if remaining:
-            if shrt_closes:
-                shrt_closes[-1] = (
-                    round_(shrt_closes[-1][0] + remaining, qty_step),
-                    shrt_closes[-1][1],
-                    shrt_closes[-1][2],
+            if short_closes:
+                short_closes[-1] = (
+                    round_(short_closes[-1][0] + remaining, qty_step),
+                    short_closes[-1][1],
+                    short_closes[-1][2],
                 )
             else:
-                shrt_closes = [(abs_shrt_psize, close_prices[0], "shrt_nclose")]
-        return shrt_closes
+                short_closes = [(abs_short_psize, close_prices[0], "short_nclose")]
+        return short_closes
 
 
 @njit
 def calc_upnl(long_psize,
               long_pprice,
-              shrt_psize,
-              shrt_pprice,
+              short_psize,
+              short_pprice,
               last_price,
               inverse, c_mult):
     return calc_long_pnl(long_pprice, last_price, long_psize, inverse, c_mult) + \
-           calc_shrt_pnl(shrt_pprice, last_price, shrt_psize, inverse, c_mult)
+           calc_short_pnl(short_pprice, last_price, short_psize, inverse, c_mult)
 
 
 @njit
@@ -370,25 +370,25 @@ def calc_emas_last(xs, spans):
 def calc_bankruptcy_price(balance,
                           long_psize,
                           long_pprice,
-                          shrt_psize,
-                          shrt_pprice,
+                          short_psize,
+                          short_pprice,
                           inverse, c_mult):
     long_pprice = nan_to_0(long_pprice)
-    shrt_pprice = nan_to_0(shrt_pprice)
+    short_pprice = nan_to_0(short_pprice)
     long_psize *= c_mult
-    abs_shrt_psize = abs(shrt_psize) * c_mult
+    abs_short_psize = abs(short_psize) * c_mult
     if inverse:
-        shrt_cost = abs_shrt_psize / shrt_pprice if shrt_pprice > 0.0 else 0.0
+        short_cost = abs_short_psize / short_pprice if short_pprice > 0.0 else 0.0
         long_cost = long_psize / long_pprice if long_pprice > 0.0 else 0.0
-        denominator = (shrt_cost - long_cost - balance)
+        denominator = (short_cost - long_cost - balance)
         if denominator == 0.0:
             return 0.0
-        bankruptcy_price = (abs_shrt_psize - long_psize) / denominator
+        bankruptcy_price = (abs_short_psize - long_psize) / denominator
     else:
-        denominator = long_psize - abs_shrt_psize
+        denominator = long_psize - abs_short_psize
         if denominator == 0.0:
             return 0.0
-        bankruptcy_price = (-balance + long_psize * long_pprice - abs_shrt_psize * shrt_pprice) / denominator
+        bankruptcy_price = (-balance + long_psize * long_pprice - abs_short_psize * short_pprice) / denominator
     return max(0.0, bankruptcy_price)
 
 
@@ -435,15 +435,15 @@ def calc_initial_entry_qty(
         min_cost,
         c_mult,
 
-        pbr_limit,
+        wallet_exposure_limit,
         initial_qty_pct,
 ):
     return max(calc_min_entry_qty(initial_entry_price, inverse, qty_step, min_qty, min_cost),
-               round_(cost_to_qty(balance * pbr_limit * initial_qty_pct, initial_entry_price, inverse, c_mult), qty_step))
+               round_(cost_to_qty(balance * wallet_exposure_limit * initial_qty_pct, initial_entry_price, inverse, c_mult), qty_step))
 
 
 @njit
-def calc_shrt_entry_qty(psize, pprice, entry_price, eprice_pprice_diff):
+def calc_short_entry_qty(psize, pprice, entry_price, eprice_pprice_diff):
     return -(
         (psize * (entry_price * (eprice_pprice_diff - 1) + pprice))
         / (entry_price * eprice_pprice_diff)
@@ -462,111 +462,111 @@ def interpolate(x, xs, ys):
 
 
 @njit
-def find_long_close_qty_bringing_pbr_to_target(
+def find_long_close_qty_bringing_wallet_exposure_to_target(
     balance,
     psize,
     pprice,
-    pbr_target,
+    wallet_exposure_target,
     close_price,
     inverse,
     qty_step,
     c_mult,
 ) -> float:
-    pbr = qty_to_cost(psize, pprice, inverse, c_mult) / balance
-    if pbr <= pbr_target:
+    wallet_exposure = qty_to_cost(psize, pprice, inverse, c_mult) / balance
+    if wallet_exposure <= wallet_exposure_target:
         return 0.0
-    guess1 = round_(cost_to_qty(balance * (pbr - pbr_target), close_price, inverse, c_mult), qty_step)
+    guess1 = round_(cost_to_qty(balance * (wallet_exposure - wallet_exposure_target), close_price, inverse, c_mult), qty_step)
     guess2 = round_(max(guess1 * 1.2, guess1 + qty_step), qty_step)
     val1 = qty_to_cost(abs(psize) - guess1, pprice, inverse, c_mult) / \
         (balance + calc_long_pnl(pprice, close_price, guess1, inverse, c_mult))
     val2 = qty_to_cost(abs(psize) - guess2, pprice, inverse, c_mult) / \
         (balance + calc_long_pnl(pprice, close_price, guess2, inverse, c_mult))
-    guess = round_(interpolate(pbr_target, np.array([val1, val2]), np.array([guess1, guess2])), qty_step)
+    guess = round_(interpolate(wallet_exposure_target, np.array([val1, val2]), np.array([guess1, guess2])), qty_step)
     val = qty_to_cost(abs(psize) - guess, pprice, inverse, c_mult) / \
         (balance + calc_long_pnl(pprice, close_price, guess, inverse, c_mult))
-    if abs(val - pbr_target) / pbr_target > 0.15:
-        guess = round_(interpolate(pbr_target, np.array([val1, val]), np.array([guess1, guess])), qty_step)
+    if abs(val - wallet_exposure_target) / wallet_exposure_target > 0.15:
+        guess = round_(interpolate(wallet_exposure_target, np.array([val1, val]), np.array([guess1, guess])), qty_step)
         val = qty_to_cost(abs(psize) - guess, pprice, inverse, c_mult) / \
             (balance + calc_long_pnl(pprice, close_price, guess, inverse, c_mult))
-        if abs(val - pbr_target) / pbr_target > 0.15:
-            print('debug find_long_close_qty_bringing_pbr_to_target')
+        if abs(val - wallet_exposure_target) / wallet_exposure_target > 0.15:
+            print('debug find_long_close_qty_bringing_wallet_exposure_to_target')
             print()
-            print('balance, psize, pprice, pbr_target, close_price, inverse, qty_step, c_mult,')
-            print(balance, ',', psize, ',', pprice, ',', pbr_target, ',', close_price, ',', inverse, ',', qty_step, ',', c_mult,)
-            print('pbr_target', pbr_target)
+            print('balance, psize, pprice, wallet_exposure_target, close_price, inverse, qty_step, c_mult,')
+            print(balance, ',', psize, ',', pprice, ',', wallet_exposure_target, ',', close_price, ',', inverse, ',', qty_step, ',', c_mult,)
+            print('wallet_exposure_target', wallet_exposure_target)
             print('best_guess', guess)
     return guess
 
 
 @njit
-def find_shrt_close_qty_bringing_pbr_to_target(
+def find_short_close_qty_bringing_wallet_exposure_to_target(
     balance,
     psize,
     pprice,
-    pbr_target,
+    wallet_exposure_target,
     close_price,
     inverse,
     qty_step,
     c_mult,
 ) -> float:
-    pbr = qty_to_cost(psize, pprice, inverse, c_mult) / balance
-    if pbr <= pbr_target:
+    wallet_exposure = qty_to_cost(psize, pprice, inverse, c_mult) / balance
+    if wallet_exposure <= wallet_exposure_target:
         return 0.0
-    guess1 = round_(cost_to_qty(balance * (pbr - pbr_target), close_price, inverse, c_mult), qty_step)
+    guess1 = round_(cost_to_qty(balance * (wallet_exposure - wallet_exposure_target), close_price, inverse, c_mult), qty_step)
     guess2 = round_(max(guess1 * 1.2, guess1 + qty_step), qty_step)
     val1 = qty_to_cost(abs(psize) - guess1, pprice, inverse, c_mult) / \
-        (balance + calc_shrt_pnl(pprice, close_price, guess1, inverse, c_mult))
+        (balance + calc_short_pnl(pprice, close_price, guess1, inverse, c_mult))
     val2 = qty_to_cost(abs(psize) - guess2, pprice, inverse, c_mult) / \
-        (balance + calc_shrt_pnl(pprice, close_price, guess2, inverse, c_mult))
-    guess = round_(interpolate(pbr_target, np.array([val1, val2]), np.array([guess1, guess2])), qty_step)
+        (balance + calc_short_pnl(pprice, close_price, guess2, inverse, c_mult))
+    guess = round_(interpolate(wallet_exposure_target, np.array([val1, val2]), np.array([guess1, guess2])), qty_step)
     val = qty_to_cost(abs(psize) - guess, pprice, inverse, c_mult) / \
-        (balance + calc_shrt_pnl(pprice, close_price, guess, inverse, c_mult))
-    if abs(val - pbr_target) / pbr_target > 0.15:
-        guess = round_(interpolate(pbr_target, np.array([val1, val]), np.array([guess1, guess])), qty_step)
+        (balance + calc_short_pnl(pprice, close_price, guess, inverse, c_mult))
+    if abs(val - wallet_exposure_target) / wallet_exposure_target > 0.15:
+        guess = round_(interpolate(wallet_exposure_target, np.array([val1, val]), np.array([guess1, guess])), qty_step)
         val = qty_to_cost(abs(psize) - guess, pprice, inverse, c_mult) / \
-            (balance + calc_shrt_pnl(pprice, close_price, guess, inverse, c_mult))
-        if abs(val - pbr_target) / pbr_target > 0.15:
-            print('debug find_shrt_close_qty_bringing_pbr_to_target')
+            (balance + calc_short_pnl(pprice, close_price, guess, inverse, c_mult))
+        if abs(val - wallet_exposure_target) / wallet_exposure_target > 0.15:
+            print('debug find_short_close_qty_bringing_wallet_exposure_to_target')
             print()
-            print('balance, psize, pprice, pbr_target, close_price, inverse, qty_step, c_mult,')
-            print(balance, ',', psize, ',', pprice, ',', pbr_target, ',', close_price, ',', inverse, ',', qty_step, ',', c_mult,)
-            print('pbr_target', pbr_target)
+            print('balance, psize, pprice, wallet_exposure_target, close_price, inverse, qty_step, c_mult,')
+            print(balance, ',', psize, ',', pprice, ',', wallet_exposure_target, ',', close_price, ',', inverse, ',', qty_step, ',', c_mult,)
+            print('wallet_exposure_target', wallet_exposure_target)
             print('best_guess', guess)
             print('val', val)
     return guess
 
 
 @njit
-def find_qty_bringing_pbr_to_target(
+def find_qty_bringing_wallet_exposure_to_target(
         balance,
         psize,
         pprice,
-        pbr_limit,
+        wallet_exposure_limit,
         entry_price,
         inverse,
         qty_step,
         c_mult) -> float:
-    pbr = qty_to_cost(psize, pprice, inverse, c_mult) / balance
-    if pbr >= pbr_limit * 0.98:
+    wallet_exposure = qty_to_cost(psize, pprice, inverse, c_mult) / balance
+    if wallet_exposure >= wallet_exposure_limit * 0.98:
         return 0.0
-    guess1 = round_(cost_to_qty(balance * (pbr_limit - pbr), entry_price, inverse, c_mult), qty_step)
+    guess1 = round_(cost_to_qty(balance * (wallet_exposure_limit - wallet_exposure), entry_price, inverse, c_mult), qty_step)
     guess2 = round_(max(guess1 * 1.2, guess1 + qty_step), qty_step)
-    val1 = calc_pbr_if_filled(balance, psize, pprice, guess1, entry_price, inverse, c_mult, qty_step)
-    val2 = calc_pbr_if_filled(balance, psize, pprice, guess2, entry_price, inverse, c_mult, qty_step)
-    guess = round_(interpolate(pbr_limit, np.array([val1, val2]), np.array([guess1, guess2])), qty_step)
-    val = calc_pbr_if_filled(balance, psize, pprice, guess, entry_price, inverse, c_mult, qty_step)
-    if abs(val - pbr_limit) / pbr_limit > 0.15:
-        print('debug find_qty_bringing_pbr_to_target')
+    val1 = calc_wallet_exposure_if_filled(balance, psize, pprice, guess1, entry_price, inverse, c_mult, qty_step)
+    val2 = calc_wallet_exposure_if_filled(balance, psize, pprice, guess2, entry_price, inverse, c_mult, qty_step)
+    guess = round_(interpolate(wallet_exposure_limit, np.array([val1, val2]), np.array([guess1, guess2])), qty_step)
+    val = calc_wallet_exposure_if_filled(balance, psize, pprice, guess, entry_price, inverse, c_mult, qty_step)
+    if abs(val - wallet_exposure_limit) / wallet_exposure_limit > 0.15:
+        print('debug find_qty_bringing_wallet_exposure_to_target')
         print()
-        print('balance, psize, pprice, pbr_limit, entry_price, inverse, qty_step, c_mult')
-        print( balance, ',', psize, ',', pprice, ',', pbr_limit, ',', entry_price, ',', inverse, ',', qty_step, ',', c_mult)
-        print('pbr_limit', pbr_limit)
+        print('balance, psize, pprice, wallet_exposure_limit, entry_price, inverse, qty_step, c_mult')
+        print( balance, ',', psize, ',', pprice, ',', wallet_exposure_limit, ',', entry_price, ',', inverse, ',', qty_step, ',', c_mult)
+        print('wallet_exposure_limit', wallet_exposure_limit)
         print('best_guess', guess)
     return guess
 
 
 @njit
-def find_eprice_pprice_diff_pbr_weighting(
+def find_eprice_pprice_diff_wallet_exposure_weighting(
     is_long: bool,
     balance,
     initial_entry_price,
@@ -577,7 +577,7 @@ def find_eprice_pprice_diff_pbr_weighting(
     min_cost,
     c_mult,
     grid_span,
-    pbr_limit,
+    wallet_exposure_limit,
     max_n_entry_orders,
     initial_qty_pct,
     eprice_pprice_diff,
@@ -599,7 +599,7 @@ def find_eprice_pprice_diff_pbr_weighting(
                 min_cost,
                 c_mult,
                 grid_span,
-                pbr_limit,
+                wallet_exposure_limit,
                 max_n_entry_orders,
                 initial_qty_pct,
                 eprice_pprice_diff,
@@ -609,7 +609,7 @@ def find_eprice_pprice_diff_pbr_weighting(
                 prev_pprice=prev_pprice,
             )[-1][4]
         else:
-            return eval_shrt_entry_grid(
+            return eval_short_entry_grid(
                 balance,
                 initial_entry_price,
                 inverse,
@@ -619,7 +619,7 @@ def find_eprice_pprice_diff_pbr_weighting(
                 min_cost,
                 c_mult,
                 grid_span,
-                pbr_limit,
+                wallet_exposure_limit,
                 max_n_entry_orders,
                 initial_qty_pct,
                 eprice_pprice_diff,
@@ -633,34 +633,34 @@ def find_eprice_pprice_diff_pbr_weighting(
 
     guess = 0.0
     val = eval_(guess)
-    if val < pbr_limit:
+    if val < wallet_exposure_limit:
         return guess
     too_low = (guess, val)
     guess = 1000.0
     val = eval_(guess)
-    if val > pbr_limit:
+    if val > wallet_exposure_limit:
         guess = 10000.0
         val = eval_(guess)
-        if val > pbr_limit:
+        if val > wallet_exposure_limit:
             guess = 100000.0
             val = eval_(guess)
-            if val > pbr_limit:
+            if val > wallet_exposure_limit:
                 return guess
     too_high = (guess, val)
     guesses = [too_low[1], too_high[1]]
     vals = [too_low[0], too_high[0]]
-    guess = interpolate(pbr_limit, np.array(vals), np.array(guesses))
+    guess = interpolate(wallet_exposure_limit, np.array(vals), np.array(guesses))
     val = eval_(guess)
-    if val < pbr_limit:
+    if val < wallet_exposure_limit:
         too_high = (guess, val)
     else:
         too_low = (guess, val)
     i = 0
     old_guess = 0.0
-    best_guess = (abs(val - pbr_limit) / pbr_limit, guess, val)
+    best_guess = (abs(val - wallet_exposure_limit) / wallet_exposure_limit, guess, val)
     while True:
         i += 1
-        diff = abs(val - pbr_limit) / pbr_limit
+        diff = abs(val - wallet_exposure_limit) / wallet_exposure_limit
         if diff < best_guess[0]:
             best_guess = (diff, guess, val)
         if diff < error_tolerance:
@@ -668,15 +668,15 @@ def find_eprice_pprice_diff_pbr_weighting(
         if i >= max_n_iters or abs(old_guess - guess) / guess < error_tolerance * 0.1:
             """
             if best_guess[0] > 0.15:
-                log.info('debug find_eprice_pprice_diff_pbr_weighting')
-                log.info('is_long, balance, initial_entry_price, inverse, qty_step, price_step, min_qty, min_cost, c_mult, grid_span, pbr_limit, max_n_entry_orders, initial_qty_pct, eprice_pprice_diff, eprice_exp_base, max_n_iters, error_tolerance, eprices, prev_pprice')
-                log.info(is_long, ',', balance, ',', initial_entry_price, ',', inverse, ',', qty_step, ',', price_step, ',', min_qty, ',', min_cost, ',', c_mult, ',', grid_span, ',', pbr_limit, ',', max_n_entry_orders, ',', initial_qty_pct, ',', eprice_pprice_diff, ',', eprice_exp_base, ',', max_n_iters, ',', error_tolerance, ',', eprices, ',', prev_pprice)
+                log.info('debug find_eprice_pprice_diff_wallet_exposure_weighting')
+                log.info('is_long, balance, initial_entry_price, inverse, qty_step, price_step, min_qty, min_cost, c_mult, grid_span, wallet_exposure_limit, max_n_entry_orders, initial_qty_pct, eprice_pprice_diff, eprice_exp_base, max_n_iters, error_tolerance, eprices, prev_pprice')
+                log.info(is_long, ',', balance, ',', initial_entry_price, ',', inverse, ',', qty_step, ',', price_step, ',', min_qty, ',', min_cost, ',', c_mult, ',', grid_span, ',', wallet_exposure_limit, ',', max_n_entry_orders, ',', initial_qty_pct, ',', eprice_pprice_diff, ',', eprice_exp_base, ',', max_n_iters, ',', error_tolerance, ',', eprices, ',', prev_pprice)
             """
             return best_guess[1]
         old_guess = guess
         guess = (too_high[0] + too_low[0]) / 2
         val = eval_(guess)
-        if val < pbr_limit:
+        if val < wallet_exposure_limit:
             too_high = (guess, val)
         else:
             too_low = (guess, val)
@@ -695,16 +695,16 @@ def eval_long_entry_grid(
         c_mult,
 
         grid_span,
-        pbr_limit,
+        wallet_exposure_limit,
         max_n_entry_orders,
         initial_qty_pct,
         eprice_pprice_diff,
-        eprice_pprice_diff_pbr_weighting,
+        eprice_pprice_diff_wallet_exposure_weighting,
         eprice_exp_base=1.618034,
         eprices=None,
         prev_pprice=None):
     
-    # returns [qty, price, psize, pprice, pbr]
+    # returns [qty, price, psize, pprice, wallet_exposure]
     if eprices is None:
         grid = np.zeros((max_n_entry_orders, 5))
         grid[:,1] = [round_dn(p, price_step)
@@ -716,12 +716,12 @@ def eval_long_entry_grid(
         grid[:,1] = eprices
 
     grid[0][0] = max(calc_min_entry_qty(grid[0][1], inverse, qty_step, min_qty, min_cost),
-                     round_(cost_to_qty(balance * pbr_limit * initial_qty_pct, initial_entry_price, inverse, c_mult), qty_step))
+                     round_(cost_to_qty(balance * wallet_exposure_limit * initial_qty_pct, initial_entry_price, inverse, c_mult), qty_step))
     grid[0][2] = psize = grid[0][0]
     grid[0][3] = pprice = grid[0][1] if prev_pprice is None else prev_pprice
     grid[0][4] = qty_to_cost(psize, pprice, inverse, c_mult) / balance
     for i in range(1, max_n_entry_orders):
-        adjusted_eprice_pprice_diff = eprice_pprice_diff * (1 + grid[i - 1][4] * eprice_pprice_diff_pbr_weighting)
+        adjusted_eprice_pprice_diff = eprice_pprice_diff * (1 + grid[i - 1][4] * eprice_pprice_diff_wallet_exposure_weighting)
         qty = round_(calc_long_entry_qty(psize, pprice, grid[i][1], adjusted_eprice_pprice_diff), qty_step)
         if qty < calc_min_entry_qty(grid[i][1], inverse, qty_step, min_qty, min_cost):
             qty = 0.0
@@ -732,7 +732,7 @@ def eval_long_entry_grid(
 
 
 @njit
-def eval_shrt_entry_grid(
+def eval_short_entry_grid(
     balance,
     initial_entry_price,
     inverse,
@@ -742,17 +742,17 @@ def eval_shrt_entry_grid(
     min_cost,
     c_mult,
     grid_span,
-    pbr_limit,
+    wallet_exposure_limit,
     max_n_entry_orders,
     initial_qty_pct,
     eprice_pprice_diff,
-    eprice_pprice_diff_pbr_weighting,
+    eprice_pprice_diff_wallet_exposure_weighting,
     eprice_exp_base=1.618034,
     eprices=None,
     prev_pprice=None,
 ):
 
-    # returns [qty, price, psize, pprice, pbr]
+    # returns [qty, price, psize, pprice, wallet_exposure]
     if eprices is None:
         grid = np.zeros((max_n_entry_orders, 5))
         grid[:, 1] = [
@@ -773,7 +773,7 @@ def eval_shrt_entry_grid(
         calc_min_entry_qty(grid[0][1], inverse, qty_step, min_qty, min_cost),
         round_(
             cost_to_qty(
-                balance * pbr_limit * initial_qty_pct,
+                balance * wallet_exposure_limit * initial_qty_pct,
                 initial_entry_price,
                 inverse,
                 c_mult,
@@ -786,10 +786,10 @@ def eval_shrt_entry_grid(
     grid[0][4] = qty_to_cost(psize, pprice, inverse, c_mult) / balance
     for i in range(1, max_n_entry_orders):
         adjusted_eprice_pprice_diff = eprice_pprice_diff * (
-            1 + grid[i - 1][4] * eprice_pprice_diff_pbr_weighting
+            1 + grid[i - 1][4] * eprice_pprice_diff_wallet_exposure_weighting
         )
         qty = round_(
-            calc_shrt_entry_qty(psize, pprice, grid[i][1], adjusted_eprice_pprice_diff),
+            calc_short_entry_qty(psize, pprice, grid[i][1], adjusted_eprice_pprice_diff),
             qty_step,
         )
         if -qty < calc_min_entry_qty(grid[i][1], inverse, qty_step, min_qty, min_cost):
@@ -817,47 +817,47 @@ def calc_whole_long_entry_grid(
         c_mult,
 
         grid_span,
-        pbr_limit,
+        wallet_exposure_limit,
         max_n_entry_orders,
         initial_qty_pct,
         eprice_pprice_diff,
-        secondary_pbr_allocation,
+        secondary_allocation,
         secondary_pprice_diff,
         eprice_exp_base=1.618034,
         eprices=None,
         prev_pprice=None):
 
-    # [qty, price, psize, pprice, pbr]
-    if secondary_pbr_allocation <= 0.05:
+    # [qty, price, psize, pprice, wallet_exposure]
+    if secondary_allocation <= 0.05:
         # set to zero if secondary allocation less than 5%
-        secondary_pbr_allocation = 0.0
-    elif secondary_pbr_allocation >= 1.0:
-        raise Exception('secondary_pbr_allocation cannot be >= 1.0')
-    primary_pbr_allocation = 1.0 - secondary_pbr_allocation
-    primary_pbr_limit = pbr_limit * primary_pbr_allocation
-    eprice_pprice_diff_pbr_weighting = find_eprice_pprice_diff_pbr_weighting(
+        secondary_allocation = 0.0
+    elif secondary_allocation >= 1.0:
+        raise Exception('secondary_allocation cannot be >= 1.0')
+    primary_wallet_exposure_allocation = 1.0 - secondary_allocation
+    primary_wallet_exposure_limit = wallet_exposure_limit * primary_wallet_exposure_allocation
+    eprice_pprice_diff_wallet_exposure_weighting = find_eprice_pprice_diff_wallet_exposure_weighting(
         True, balance, initial_entry_price, inverse, qty_step, price_step, min_qty, min_cost, c_mult,
-        grid_span, primary_pbr_limit, max_n_entry_orders, initial_qty_pct / primary_pbr_allocation,
+        grid_span, primary_wallet_exposure_limit, max_n_entry_orders, initial_qty_pct / primary_wallet_exposure_allocation,
         eprice_pprice_diff, eprice_exp_base,
         eprices=eprices, prev_pprice=prev_pprice
     )
     grid = eval_long_entry_grid(balance, initial_entry_price, inverse, qty_step, price_step, min_qty, min_cost,
-                                c_mult, grid_span, primary_pbr_limit, max_n_entry_orders,
-                                initial_qty_pct / primary_pbr_allocation, eprice_pprice_diff,
-                                eprice_pprice_diff_pbr_weighting, eprice_exp_base,
+                                c_mult, grid_span, primary_wallet_exposure_limit, max_n_entry_orders,
+                                initial_qty_pct / primary_wallet_exposure_allocation, eprice_pprice_diff,
+                                eprice_pprice_diff_wallet_exposure_weighting, eprice_exp_base,
                                 eprices=eprices, prev_pprice=prev_pprice)
-    if secondary_pbr_allocation > 0.0:
+    if secondary_allocation > 0.0:
         entry_price = min(round_dn(grid[-1][3] * (1 - secondary_pprice_diff), price_step), grid[-1][1])
-        qty = find_qty_bringing_pbr_to_target(balance, grid[-1][2], grid[-1][3], pbr_limit, entry_price,
+        qty = find_qty_bringing_wallet_exposure_to_target(balance, grid[-1][2], grid[-1][3], wallet_exposure_limit, entry_price,
                                               inverse, qty_step, c_mult)
         new_psize, new_pprice = calc_new_psize_pprice(grid[-1][2], grid[-1][3], qty, entry_price, qty_step)
-        new_pbr = qty_to_cost(new_psize, new_pprice, inverse, c_mult) / balance
-        grid = np.append(grid, np.array([[qty, entry_price, new_psize, new_pprice, new_pbr]]), axis=0)
+        new_wallet_exposure = qty_to_cost(new_psize, new_pprice, inverse, c_mult) / balance
+        grid = np.append(grid, np.array([[qty, entry_price, new_psize, new_pprice, new_wallet_exposure]]), axis=0)
     return grid[grid[:,0] > 0.0]
 
 
 @njit
-def calc_whole_shrt_entry_grid(
+def calc_whole_short_entry_grid(
         balance,
         initial_entry_price,
     
@@ -869,42 +869,42 @@ def calc_whole_shrt_entry_grid(
         c_mult,
 
         grid_span,
-        pbr_limit,
+        wallet_exposure_limit,
         max_n_entry_orders,
         initial_qty_pct,
         eprice_pprice_diff,
-        secondary_pbr_allocation,
+        secondary_allocation,
         secondary_pprice_diff,
         eprice_exp_base=1.618034,
         eprices=None,
         prev_pprice=None):
 
-    # [qty, price, psize, pprice, pbr]
-    if secondary_pbr_allocation <= 0.05:
+    # [qty, price, psize, pprice, wallet_exposure]
+    if secondary_allocation <= 0.05:
         # set to zero if secondary allocation less than 5%
-        secondary_pbr_allocation = 0.0
-    elif secondary_pbr_allocation >= 1.0:
-        raise Exception('secondary_pbr_allocation cannot be >= 1.0')
-    primary_pbr_allocation = 1.0 - secondary_pbr_allocation
-    primary_pbr_limit = pbr_limit * primary_pbr_allocation
-    eprice_pprice_diff_pbr_weighting = find_eprice_pprice_diff_pbr_weighting(
+        secondary_allocation = 0.0
+    elif secondary_allocation >= 1.0:
+        raise Exception('secondary_allocation cannot be >= 1.0')
+    primary_wallet_exposure_allocation = 1.0 - secondary_allocation
+    primary_wallet_exposure_limit = wallet_exposure_limit * primary_wallet_exposure_allocation
+    eprice_pprice_diff_wallet_exposure_weighting = find_eprice_pprice_diff_wallet_exposure_weighting(
         False, balance, initial_entry_price, inverse, qty_step, price_step, min_qty, min_cost, c_mult,
-        grid_span, primary_pbr_limit, max_n_entry_orders, initial_qty_pct / primary_pbr_allocation,
+        grid_span, primary_wallet_exposure_limit, max_n_entry_orders, initial_qty_pct / primary_wallet_exposure_allocation,
         eprice_pprice_diff, eprice_exp_base,
         eprices=eprices, prev_pprice=prev_pprice
     )
-    grid = eval_shrt_entry_grid(balance, initial_entry_price, inverse, qty_step, price_step, min_qty, min_cost,
-                                c_mult, grid_span, primary_pbr_limit, max_n_entry_orders,
-                                initial_qty_pct / primary_pbr_allocation, eprice_pprice_diff,
-                                eprice_pprice_diff_pbr_weighting, eprice_exp_base,
+    grid = eval_short_entry_grid(balance, initial_entry_price, inverse, qty_step, price_step, min_qty, min_cost,
+                                c_mult, grid_span, primary_wallet_exposure_limit, max_n_entry_orders,
+                                initial_qty_pct / primary_wallet_exposure_allocation, eprice_pprice_diff,
+                                eprice_pprice_diff_wallet_exposure_weighting, eprice_exp_base,
                                 eprices=eprices, prev_pprice=prev_pprice)
-    if secondary_pbr_allocation > 0.0:
+    if secondary_allocation > 0.0:
         entry_price = max(round_up(grid[-1][3] * (1 + secondary_pprice_diff), price_step), grid[-1][1])
-        qty = -find_qty_bringing_pbr_to_target(balance, grid[-1][2], grid[-1][3], pbr_limit, entry_price,
+        qty = -find_qty_bringing_wallet_exposure_to_target(balance, grid[-1][2], grid[-1][3], wallet_exposure_limit, entry_price,
                                                inverse, qty_step, c_mult)
         new_psize, new_pprice = calc_new_psize_pprice(grid[-1][2], grid[-1][3], qty, entry_price, qty_step)
-        new_pbr = qty_to_cost(new_psize, new_pprice, inverse, c_mult) / balance
-        grid = np.append(grid, np.array([[qty, entry_price, new_psize, new_pprice, new_pbr]]), axis=0)
+        new_wallet_exposure = qty_to_cost(new_psize, new_pprice, inverse, c_mult) / balance
+        grid = np.append(grid, np.array([[qty, entry_price, new_psize, new_pprice, new_wallet_exposure]]), axis=0)
     return grid[grid[:,0] < 0.0]
 
 
@@ -925,55 +925,55 @@ def calc_long_entry_grid(
         c_mult,
 
         grid_span,
-        pbr_limit,
+        wallet_exposure_limit,
         max_n_entry_orders,
         initial_qty_pct,
         initial_eprice_ema_dist,
         eprice_pprice_diff,
-        secondary_pbr_allocation,
+        secondary_allocation,
         secondary_pprice_diff,
         eprice_exp_base,
-        auto_unstuck_pbr_threshold,
+        auto_unstuck_wallet_exposure_threshold,
         auto_unstuck_ema_dist) -> [(float, float, str)]:
     min_entry_qty = calc_min_entry_qty(highest_bid, inverse, qty_step, min_qty, min_cost)
     if do_long or psize > min_entry_qty:
         if psize == 0.0:
             entry_price = min(highest_bid, round_dn(lower_ema_band * (1 - initial_eprice_ema_dist), price_step))
             entry_qty = calc_initial_entry_qty(balance, entry_price, inverse, qty_step, min_qty, min_cost,
-                                               c_mult, pbr_limit, initial_qty_pct)
+                                               c_mult, wallet_exposure_limit, initial_qty_pct)
             return [(entry_qty, entry_price, 'long_ientry')]
         else:
-            pbr = qty_to_cost(psize, pprice, inverse, c_mult) / balance
-            if pbr >= pbr_limit:
+            wallet_exposure = qty_to_cost(psize, pprice, inverse, c_mult) / balance
+            if wallet_exposure >= wallet_exposure_limit:
                 return [(0.0, 0.0, '')]
-            if auto_unstuck_pbr_threshold != 0.0:
-                threshold = pbr_limit * (1 - auto_unstuck_pbr_threshold) * 0.99
-                if pbr > threshold:
+            if auto_unstuck_wallet_exposure_threshold != 0.0:
+                threshold = wallet_exposure_limit * (1 - auto_unstuck_wallet_exposure_threshold) * 0.99
+                if wallet_exposure > threshold:
                     auto_unstuck_entry_price = min(highest_bid, round_dn(lower_ema_band * (1 - auto_unstuck_ema_dist), price_step))
-                    auto_unstuck_qty = find_qty_bringing_pbr_to_target(balance, psize, pprice, pbr_limit, auto_unstuck_entry_price,
+                    auto_unstuck_qty = find_qty_bringing_wallet_exposure_to_target(balance, psize, pprice, wallet_exposure_limit, auto_unstuck_entry_price,
                                                                      inverse, qty_step, c_mult)
                     return [(auto_unstuck_qty, auto_unstuck_entry_price, 'long_auto_unstuck_entry')]
             grid = approximate_long_grid(
-                balance, psize, pprice, inverse, qty_step, price_step, min_qty, min_cost, c_mult, grid_span, pbr_limit,
-                max_n_entry_orders, initial_qty_pct, eprice_pprice_diff, secondary_pbr_allocation, secondary_pprice_diff,
+                balance, psize, pprice, inverse, qty_step, price_step, min_qty, min_cost, c_mult, grid_span, wallet_exposure_limit,
+                max_n_entry_orders, initial_qty_pct, eprice_pprice_diff, secondary_allocation, secondary_pprice_diff,
                 eprice_exp_base=eprice_exp_base)
             if len(grid) == 0:
                 return [(0.0, 0.0, '')]
             if calc_diff(grid[0][3], grid[0][1]) < 0.00001:
                 entry_price = highest_bid
                 min_entry_qty = calc_min_entry_qty(entry_price, inverse, qty_step, min_qty, min_cost)
-                max_entry_qty = round_(cost_to_qty(balance * pbr_limit * initial_qty_pct,
+                max_entry_qty = round_(cost_to_qty(balance * wallet_exposure_limit * initial_qty_pct,
                                                    entry_price, inverse, c_mult), qty_step)
                 entry_qty = max(min_entry_qty, min(max_entry_qty, grid[0][0]))
-                if qty_to_cost(entry_qty, entry_price, inverse, c_mult) / balance > pbr_limit * 1.1:
+                if qty_to_cost(entry_qty, entry_price, inverse, c_mult) / balance > wallet_exposure_limit * 1.1:
                     print('\n\nwarning: abnormally large partial ientry')
                     print('grid:')
                     for e in grid:
                         print(list(e))
                     print('args:')
                     print(balance, psize, pprice, highest_bid, inverse, do_long, qty_step, price_step, min_qty,
-                          min_cost, c_mult, grid_span, pbr_limit, max_n_entry_orders, initial_qty_pct,
-                          eprice_pprice_diff, secondary_pbr_allocation, secondary_pprice_diff, eprice_exp_base)
+                          min_cost, c_mult, grid_span, wallet_exposure_limit, max_n_entry_orders, initial_qty_pct,
+                          eprice_pprice_diff, secondary_allocation, secondary_pprice_diff, eprice_exp_base)
                     print('\n\n')
                 return [(entry_qty, entry_price, 'long_ientry')]
         if len(grid) == 0:
@@ -982,13 +982,13 @@ def calc_long_entry_grid(
         for i in range(len(grid)):
             if grid[i][2] < psize * 1.05 or grid[i][1] > pprice * 0.9995:
                 continue
-            if grid[i][4] > pbr_limit * 1.01:
+            if grid[i][4] > wallet_exposure_limit * 1.01:
                 break
             entry_price = min(highest_bid, grid[i][1])
             min_entry_qty = calc_min_entry_qty(entry_price, inverse, qty_step, min_qty, min_cost)
             grid[i][1] = entry_price
             grid[i][0] = max(min_entry_qty, grid[i][0])
-            comment = 'long_secondary_rentry' if i == len(grid) - 1 and secondary_pbr_allocation > 0.05 else 'long_primary_rentry'
+            comment = 'long_secondary_rentry' if i == len(grid) - 1 and secondary_allocation > 0.05 else 'long_primary_rentry'
             if not entries or (entries[-1][1] != entry_price):
                 entries.append((grid[i][0], grid[i][1], comment))
         return entries if entries else [(0.0, 0.0, '')]
@@ -996,7 +996,7 @@ def calc_long_entry_grid(
 
 
 @njit
-def calc_shrt_entry_grid(
+def calc_short_entry_grid(
         balance,
         psize,
         pprice,
@@ -1004,7 +1004,7 @@ def calc_shrt_entry_grid(
         upper_ema_band,
         
         inverse,
-        do_shrt,
+        do_short,
         qty_step,
         price_step,
         min_qty,
@@ -1012,59 +1012,59 @@ def calc_shrt_entry_grid(
         c_mult,
 
         grid_span,
-        pbr_limit,
+        wallet_exposure_limit,
         max_n_entry_orders,
         initial_qty_pct,
         initial_eprice_ema_dist,
         eprice_pprice_diff,
-        secondary_pbr_allocation,
+        secondary_allocation,
         secondary_pprice_diff,
         eprice_exp_base,
-        auto_unstuck_pbr_threshold,
+        auto_unstuck_wallet_exposure_threshold,
         auto_unstuck_ema_dist,) -> [(float, float, str)]:
     min_entry_qty = calc_min_entry_qty(lowest_ask, inverse, qty_step, min_qty, min_cost)
     abs_psize = abs(psize)
-    if do_shrt or abs_psize > min_entry_qty:
+    if do_short or abs_psize > min_entry_qty:
         if psize == 0.0:
 
             entry_price = max(lowest_ask, round_up(upper_ema_band * (1 + initial_eprice_ema_dist), price_step))
             entry_qty = calc_initial_entry_qty(balance, entry_price, inverse, qty_step, min_qty, min_cost,
-                                               c_mult, pbr_limit, initial_qty_pct)
-            return [(-entry_qty, entry_price, 'shrt_ientry')]
+                                               c_mult, wallet_exposure_limit, initial_qty_pct)
+            return [(-entry_qty, entry_price, 'short_ientry')]
         else:
-            pbr = qty_to_cost(psize, pprice, inverse, c_mult) / balance
-            if pbr >= pbr_limit:
+            wallet_exposure = qty_to_cost(psize, pprice, inverse, c_mult) / balance
+            if wallet_exposure >= wallet_exposure_limit:
                 return [(0.0, 0.0, '')]
-            if auto_unstuck_pbr_threshold != 0.0:
-                threshold = pbr_limit * (1 - auto_unstuck_pbr_threshold) * 0.99
-                if pbr > threshold:
+            if auto_unstuck_wallet_exposure_threshold != 0.0:
+                threshold = wallet_exposure_limit * (1 - auto_unstuck_wallet_exposure_threshold) * 0.99
+                if wallet_exposure > threshold:
                     auto_unstuck_entry_price = max(lowest_ask, round_up(upper_ema_band * (1 + auto_unstuck_ema_dist), price_step))
-                    auto_unstuck_qty = find_qty_bringing_pbr_to_target(balance, psize, pprice, pbr_limit, auto_unstuck_entry_price,
+                    auto_unstuck_qty = find_qty_bringing_wallet_exposure_to_target(balance, psize, pprice, wallet_exposure_limit, auto_unstuck_entry_price,
                                                                      inverse, qty_step, c_mult)
-                    return [(-auto_unstuck_qty, auto_unstuck_entry_price, 'shrt_auto_unstuck_entry')]
-            grid = approximate_shrt_grid(
-                balance, psize, pprice, inverse, qty_step, price_step, min_qty, min_cost, c_mult, grid_span, pbr_limit,
-                max_n_entry_orders, initial_qty_pct, eprice_pprice_diff, secondary_pbr_allocation, secondary_pprice_diff,
+                    return [(-auto_unstuck_qty, auto_unstuck_entry_price, 'short_auto_unstuck_entry')]
+            grid = approximate_short_grid(
+                balance, psize, pprice, inverse, qty_step, price_step, min_qty, min_cost, c_mult, grid_span, wallet_exposure_limit,
+                max_n_entry_orders, initial_qty_pct, eprice_pprice_diff, secondary_allocation, secondary_pprice_diff,
                 eprice_exp_base=eprice_exp_base)
             if len(grid) == 0:
                 return [(0.0, 0.0, '')]
             if calc_diff(grid[0][3], grid[0][1]) < 0.00001:
                 entry_price = lowest_ask
                 min_entry_qty = calc_min_entry_qty(entry_price, inverse, qty_step, min_qty, min_cost)
-                max_entry_qty = round_(cost_to_qty(balance * pbr_limit * initial_qty_pct,
+                max_entry_qty = round_(cost_to_qty(balance * wallet_exposure_limit * initial_qty_pct,
                                                    entry_price, inverse, c_mult), qty_step)
                 entry_qty = -max(min_entry_qty, min(max_entry_qty, abs(grid[0][0])))
-                if qty_to_cost(entry_qty, entry_price, inverse, c_mult) / balance > pbr_limit * 1.1:
+                if qty_to_cost(entry_qty, entry_price, inverse, c_mult) / balance > wallet_exposure_limit * 1.1:
                     print('\n\nwarning: abnormally large partial ientry')
                     print('grid:')
                     for e in grid:
                         print(list(e))
                     print('args:')
-                    print(balance, psize, pprice, lowest_ask, inverse, do_shrt, qty_step, price_step, min_qty,
-                          min_cost, c_mult, grid_span, pbr_limit, max_n_entry_orders, initial_qty_pct,
-                          eprice_pprice_diff, secondary_pbr_allocation, secondary_pprice_diff, eprice_exp_base)
+                    print(balance, psize, pprice, lowest_ask, inverse, do_short, qty_step, price_step, min_qty,
+                          min_cost, c_mult, grid_span, wallet_exposure_limit, max_n_entry_orders, initial_qty_pct,
+                          eprice_pprice_diff, secondary_allocation, secondary_pprice_diff, eprice_exp_base)
                     print('\n\n')
-                return [(entry_qty, entry_price, 'shrt_ientry')]
+                return [(entry_qty, entry_price, 'short_ientry')]
         if len(grid) == 0:
             return [(0.0, 0.0, '')]
         entries = []
@@ -1075,7 +1075,7 @@ def calc_shrt_entry_grid(
             min_entry_qty = calc_min_entry_qty(entry_price, inverse, qty_step, min_qty, min_cost)
             grid[i][1] = entry_price
             grid[i][0] = -max(min_entry_qty, abs(grid[i][0]))
-            comment = 'shrt_secondary_rentry' if i == len(grid) - 1 and secondary_pbr_allocation > 0.05 else 'shrt_primary_rentry'
+            comment = 'short_secondary_rentry' if i == len(grid) - 1 and secondary_allocation > 0.05 else 'short_primary_rentry'
             if not entries or (entries[-1][1] != entry_price):
                 entries.append((grid[i][0], grid[i][1], comment))
         return entries if entries else [(0.0, 0.0, '')]
@@ -1096,11 +1096,11 @@ def approximate_long_grid(
         c_mult,
 
         grid_span,
-        pbr_limit,
+        wallet_exposure_limit,
         max_n_entry_orders,
         initial_qty_pct,
         eprice_pprice_diff,
-        secondary_pbr_allocation,
+        secondary_allocation,
         secondary_pprice_diff,
         eprice_exp_base=1.618034,
         crop: bool = True):
@@ -1108,8 +1108,8 @@ def approximate_long_grid(
     def eval_(ientry_price_guess, psize_):
         ientry_price_guess = round_(ientry_price_guess, price_step)
         grid = calc_whole_long_entry_grid(
-            balance, ientry_price_guess, inverse, qty_step, price_step, min_qty, min_cost, c_mult, grid_span, pbr_limit,
-            max_n_entry_orders, initial_qty_pct, eprice_pprice_diff, secondary_pbr_allocation, secondary_pprice_diff,
+            balance, ientry_price_guess, inverse, qty_step, price_step, min_qty, min_cost, c_mult, grid_span, wallet_exposure_limit,
+            max_n_entry_orders, initial_qty_pct, eprice_pprice_diff, secondary_allocation, secondary_pprice_diff,
             eprice_exp_base=eprice_exp_base)
         # find node whose psize is closest to psize
         diff, i = sorted([(abs(grid[i][2] - psize_) / psize_, i) for i in range(len(grid))])[0]
@@ -1119,8 +1119,8 @@ def approximate_long_grid(
         raise Exception('cannot make grid without pprice')
     if psize == 0.0:
         return calc_whole_long_entry_grid(
-            balance, pprice, inverse, qty_step, price_step, min_qty, min_cost, c_mult, grid_span, pbr_limit,
-            max_n_entry_orders, initial_qty_pct, eprice_pprice_diff, secondary_pbr_allocation, secondary_pprice_diff,
+            balance, pprice, inverse, qty_step, price_step, min_qty, min_cost, c_mult, grid_span, wallet_exposure_limit,
+            max_n_entry_orders, initial_qty_pct, eprice_pprice_diff, secondary_allocation, secondary_pprice_diff,
             eprice_exp_base=eprice_exp_base)
 
     grid, diff, i = eval_(pprice, psize)
@@ -1144,7 +1144,7 @@ def approximate_long_grid(
         grid[0][4] = qty_to_cost(grid[0][2], grid[0][3], inverse, c_mult) / balance
         return grid
     if k == len(grid):
-        # means pbr limit is exceeded
+        # means wallet_exposure limit is exceeded
         return np.empty((0, 5)) if crop else grid
     for _ in range(5):
         # find grid as if partial fill were full fill
@@ -1165,7 +1165,7 @@ def approximate_long_grid(
 
 
 @njit
-def approximate_shrt_grid(
+def approximate_short_grid(
         balance,
         psize,
         pprice,
@@ -1178,20 +1178,20 @@ def approximate_shrt_grid(
         c_mult,
 
         grid_span,
-        pbr_limit,
+        wallet_exposure_limit,
         max_n_entry_orders,
         initial_qty_pct,
         eprice_pprice_diff,
-        secondary_pbr_allocation,
+        secondary_allocation,
         secondary_pprice_diff,
         eprice_exp_base=1.618034,
         crop: bool = True):
     
     def eval_(ientry_price_guess, psize_):
         ientry_price_guess = round_(ientry_price_guess, price_step)
-        grid = calc_whole_shrt_entry_grid(
-            balance, ientry_price_guess, inverse, qty_step, price_step, min_qty, min_cost, c_mult, grid_span, pbr_limit,
-            max_n_entry_orders, initial_qty_pct, eprice_pprice_diff, secondary_pbr_allocation, secondary_pprice_diff,
+        grid = calc_whole_short_entry_grid(
+            balance, ientry_price_guess, inverse, qty_step, price_step, min_qty, min_cost, c_mult, grid_span, wallet_exposure_limit,
+            max_n_entry_orders, initial_qty_pct, eprice_pprice_diff, secondary_allocation, secondary_pprice_diff,
             eprice_exp_base=eprice_exp_base)
         # find node whose psize is closest to psize
         abs_psize_ = abs(psize_)
@@ -1203,9 +1203,9 @@ def approximate_shrt_grid(
     if pprice == 0.0:
         raise Exception('cannot make grid without pprice')
     if psize == 0.0:
-        return calc_whole_shrt_entry_grid(
-            balance, pprice, inverse, qty_step, price_step, min_qty, min_cost, c_mult, grid_span, pbr_limit,
-            max_n_entry_orders, initial_qty_pct, eprice_pprice_diff, secondary_pbr_allocation, secondary_pprice_diff,
+        return calc_whole_short_entry_grid(
+            balance, pprice, inverse, qty_step, price_step, min_qty, min_cost, c_mult, grid_span, wallet_exposure_limit,
+            max_n_entry_orders, initial_qty_pct, eprice_pprice_diff, secondary_allocation, secondary_pprice_diff,
             eprice_exp_base=eprice_exp_base)
 
     grid, diff, i = eval_(pprice, psize)
@@ -1229,7 +1229,7 @@ def approximate_shrt_grid(
         grid[0][4] = qty_to_cost(grid[0][2], grid[0][3], inverse, c_mult) / balance
         return grid
     if k == len(grid):
-        # means pbr limit is exceeded
+        # means wallet_exposure limit is exceeded
         return np.empty((0, 5)) if crop else grid
     for _ in range(5):
         # find grid as if partial fill were full fill
@@ -1259,7 +1259,7 @@ def njit_backtest(
         hedge_mode,
         inverse,
         do_long,
-        do_shrt,
+        do_short,
         qty_step,
         price_step,
         min_qty,
@@ -1277,92 +1277,92 @@ def njit_backtest(
         max_n_entry_orders,
         min_markup,
         n_close_orders,
-        pbr_limit,
-        secondary_pbr_allocation,
+        wallet_exposure_limit,
+        secondary_allocation,
         secondary_pprice_diff,
         auto_unstuck_ema_dist,
-        auto_unstuck_pbr_threshold):
+        auto_unstuck_wallet_exposure_threshold):
 
     timestamps = ticks[:, 0]
     qtys = ticks[:, 1]
     prices = ticks[:, 2]
 
     balance = equity = starting_balance
-    long_psize, long_pprice, shrt_psize, shrt_pprice = 0.0, 0.0, 0.0, 0.0
+    long_psize, long_pprice, short_psize, short_pprice = 0.0, 0.0, 0.0, 0.0
 
     fills = []
     stats = []
 
     long_entries = long_closes = [(0.0, 0.0, '')]
-    shrt_entries = shrt_closes = [(0.0, 0.0, '')]
+    short_entries = short_closes = [(0.0, 0.0, '')]
     bkr_price = 0.0
 
     next_entry_grid_update_ts_long = 0
-    next_entry_grid_update_ts_shrt = 0
+    next_entry_grid_update_ts_short = 0
     next_close_grid_update_ts_long = 0
-    next_close_grid_update_ts_shrt = 0
+    next_close_grid_update_ts_short = 0
     next_stats_update = 0
 
     prev_k = 0
     closest_bkr = 1.0
 
     spans_long = np.array([ema_span_min[0], (ema_span_min[0] * ema_span_max[0])**0.5, ema_span_max[0]]) * 60.0
-    spans_shrt = np.array([ema_span_min[1], (ema_span_min[1] * ema_span_max[1])**0.5, ema_span_max[1]]) * 60.0
+    spans_short = np.array([ema_span_min[1], (ema_span_min[1] * ema_span_max[1])**0.5, ema_span_max[1]]) * 60.0
     assert spans_long[-1] < len(prices), "ema_span_max long larger than len(prices)"
-    assert spans_shrt[-1] < len(prices), "ema_span_max shrt larger than len(prices)"
-    max_span = int(round(max(max(spans_long), max(spans_shrt))))
+    assert spans_short[-1] < len(prices), "ema_span_max short larger than len(prices)"
+    max_span = int(round(max(max(spans_long), max(spans_short))))
     emas_long = calc_emas_last(prices[:max_span], spans_long) if do_long else np.zeros(len(spans_long))
-    if (spans_long == spans_shrt).all():
-        emas_shrt = emas_long
+    if (spans_long == spans_short).all():
+        emas_short = emas_long
     else:
-        emas_shrt = calc_emas_last(prices[:max_span], spans_shrt) if do_shrt else np.zeros(len(spans_shrt))
+        emas_short = calc_emas_last(prices[:max_span], spans_short) if do_short else np.zeros(len(spans_short))
     alphas_long = 2.0 / (spans_long + 1.0)
     alphas__long = 1.0 - alphas_long
-    alphas_shrt = 2.0 / (spans_shrt + 1.0)
-    alphas__shrt = 1.0 - alphas_shrt
+    alphas_short = 2.0 / (spans_short + 1.0)
+    alphas__short = 1.0 - alphas_short
 
     for k in range(max_span, len(prices)):
         if do_long:
             emas_long = calc_ema(alphas_long, alphas__long, emas_long, prices[k])
-        if do_shrt:
-            emas_shrt = calc_ema(alphas_shrt, alphas__shrt, emas_shrt, prices[k])
+        if do_short:
+            emas_short = calc_ema(alphas_short, alphas__short, emas_short, prices[k])
         if qtys[k] == 0.0:
             continue
 
         bkr_diff = calc_diff(bkr_price, prices[k])
         closest_bkr = min(closest_bkr, bkr_diff)
         if timestamps[k] >= next_stats_update:
-            equity = balance + calc_upnl(long_psize, long_pprice, shrt_psize, shrt_pprice,
+            equity = balance + calc_upnl(long_psize, long_pprice, short_psize, short_pprice,
                                          prices[k], inverse, c_mult)
             stats.append((timestamps[k], balance, equity, bkr_price, long_psize, long_pprice,
-                          shrt_psize, shrt_pprice, prices[k], closest_bkr))
+                          short_psize, short_pprice, prices[k], closest_bkr))
             next_stats_update = timestamps[k] + 60 * 1000
         if timestamps[k] >= next_entry_grid_update_ts_long:
             long_entries = calc_long_entry_grid(
                 balance, long_psize, long_pprice, prices[k - 1], min(emas_long), inverse, do_long, qty_step, price_step,
-                min_qty, min_cost, c_mult, grid_span[0], pbr_limit[0], max_n_entry_orders[0], initial_qty_pct[0], initial_eprice_ema_dist[0],
-                eprice_pprice_diff[0], secondary_pbr_allocation[0], secondary_pprice_diff[0], eprice_exp_base[0], auto_unstuck_pbr_threshold[0],
+                min_qty, min_cost, c_mult, grid_span[0], wallet_exposure_limit[0], max_n_entry_orders[0], initial_qty_pct[0], initial_eprice_ema_dist[0],
+                eprice_pprice_diff[0], secondary_allocation[0], secondary_pprice_diff[0], eprice_exp_base[0], auto_unstuck_wallet_exposure_threshold[0],
                 auto_unstuck_ema_dist[0]) if do_long else [(0.0, 0.0, '')]
             next_entry_grid_update_ts_long = timestamps[k] + 1000 * 60 * 10
-        if timestamps[k] >= next_entry_grid_update_ts_shrt:
-            shrt_entries = calc_shrt_entry_grid(
-                balance, shrt_psize, shrt_pprice, prices[k - 1], max(emas_shrt), inverse, do_shrt, qty_step, price_step,
-                min_qty, min_cost, c_mult, grid_span[1], pbr_limit[1], max_n_entry_orders[1], initial_qty_pct[1], initial_eprice_ema_dist[1],
-                eprice_pprice_diff[1], secondary_pbr_allocation[1], secondary_pprice_diff[1], eprice_exp_base[1], auto_unstuck_pbr_threshold[1],
-                auto_unstuck_ema_dist[1]) if do_shrt else [(0.0, 0.0, '')]
-            next_entry_grid_update_ts_shrt = timestamps[k] + 1000 * 60 * 10
+        if timestamps[k] >= next_entry_grid_update_ts_short:
+            short_entries = calc_short_entry_grid(
+                balance, short_psize, short_pprice, prices[k - 1], max(emas_short), inverse, do_short, qty_step, price_step,
+                min_qty, min_cost, c_mult, grid_span[1], wallet_exposure_limit[1], max_n_entry_orders[1], initial_qty_pct[1], initial_eprice_ema_dist[1],
+                eprice_pprice_diff[1], secondary_allocation[1], secondary_pprice_diff[1], eprice_exp_base[1], auto_unstuck_wallet_exposure_threshold[1],
+                auto_unstuck_ema_dist[1]) if do_short else [(0.0, 0.0, '')]
+            next_entry_grid_update_ts_short = timestamps[k] + 1000 * 60 * 10
         if timestamps[k] >= next_close_grid_update_ts_long:
             long_closes = calc_long_close_grid(
                 balance, long_psize, long_pprice, prices[k - 1], max(emas_long), spot, inverse, qty_step, price_step, min_qty,
-                min_cost, c_mult, pbr_limit[0], initial_qty_pct[0], min_markup[0], markup_range[0], n_close_orders[0],
-                auto_unstuck_pbr_threshold[0], auto_unstuck_ema_dist[0]) if do_long else [(0.0, 0.0, '')]
+                min_cost, c_mult, wallet_exposure_limit[0], initial_qty_pct[0], min_markup[0], markup_range[0], n_close_orders[0],
+                auto_unstuck_wallet_exposure_threshold[0], auto_unstuck_ema_dist[0]) if do_long else [(0.0, 0.0, '')]
             next_close_grid_update_ts_long = timestamps[k] + 1000 * 60 * 10
-        if timestamps[k] >= next_close_grid_update_ts_shrt:
-            shrt_closes = calc_shrt_close_grid(
-                balance, shrt_psize, shrt_pprice, prices[k - 1], min(emas_shrt), spot, inverse, qty_step, price_step, min_qty,
-                min_cost, c_mult, pbr_limit[1], initial_qty_pct[1], min_markup[1], markup_range[1], n_close_orders[1],
-                auto_unstuck_pbr_threshold[0], auto_unstuck_ema_dist[0]) if do_shrt else [(0.0, 0.0, '')]
-            next_close_grid_update_ts_shrt = timestamps[k] + 1000 * 60 * 10
+        if timestamps[k] >= next_close_grid_update_ts_short:
+            short_closes = calc_short_close_grid(
+                balance, short_psize, short_pprice, prices[k - 1], min(emas_short), spot, inverse, qty_step, price_step, min_qty,
+                min_cost, c_mult, wallet_exposure_limit[1], initial_qty_pct[1], min_markup[1], markup_range[1], n_close_orders[1],
+                auto_unstuck_wallet_exposure_threshold[0], auto_unstuck_ema_dist[0]) if do_short else [(0.0, 0.0, '')]
+            next_close_grid_update_ts_short = timestamps[k] + 1000 * 60 * 10
 
         if closest_bkr < 0.06:
             # consider bankruptcy within 6% as liquidation
@@ -1374,13 +1374,13 @@ def njit_backtest(
                 long_psize, long_pprice = 0.0, 0.0
                 fills.append((k, timestamps[k], pnl, fee_paid, balance, equity,
                               -long_psize, prices[k], 0.0, 0.0, 'long_bankruptcy'))
-            if shrt_psize != 0.0:
-                fee_paid = -qty_to_cost(shrt_psize, shrt_pprice, inverse, c_mult) * maker_fee
-                pnl = calc_shrt_pnl(shrt_pprice, prices[k], -shrt_psize, inverse, c_mult)
+            if short_psize != 0.0:
+                fee_paid = -qty_to_cost(short_psize, short_pprice, inverse, c_mult) * maker_fee
+                pnl = calc_short_pnl(short_pprice, prices[k], -short_psize, inverse, c_mult)
                 balance, equity = 0.0, 0.0
-                shrt_psize, shrt_pprice = 0.0, 0.0
+                short_psize, short_pprice = 0.0, 0.0
                 fills.append((k, timestamps[k], pnl, fee_paid, balance, equity,
-                              -shrt_psize, prices[k], 0.0, 0.0, 'shrt_bankruptcy'))
+                              -short_psize, prices[k], 0.0, 0.0, 'short_bankruptcy'))
             return fills, stats
 
         while long_entries and long_entries[0][0] > 0.0 and prices[k] < long_entries[0][1]:
@@ -1390,23 +1390,23 @@ def njit_backtest(
                                                             long_entries[0][1], qty_step)
             fee_paid = -qty_to_cost(long_entries[0][0], long_entries[0][1], inverse, c_mult) * maker_fee
             balance += fee_paid
-            equity = calc_equity(balance, long_psize, long_pprice, shrt_psize, shrt_pprice, prices[k], inverse, c_mult)
+            equity = calc_equity(balance, long_psize, long_pprice, short_psize, short_pprice, prices[k], inverse, c_mult)
             fills.append((k, timestamps[k], 0.0, fee_paid, balance, equity, long_entries[0][0], long_entries[0][1],
                           long_psize, long_pprice, long_entries[0][2]))
             long_entries = long_entries[1:]
-            bkr_price = calc_bankruptcy_price(balance, long_psize, long_pprice, shrt_psize, shrt_pprice, inverse, c_mult)
-        while shrt_entries and shrt_entries[0][0] < 0.0 and prices[k] > shrt_entries[0][1]:
-            next_entry_grid_update_ts_shrt = min(next_entry_grid_update_ts_shrt, timestamps[k] + latency_simulation_ms)
-            next_close_grid_update_ts_shrt = min(next_close_grid_update_ts_shrt, timestamps[k] + latency_simulation_ms)
-            shrt_psize, shrt_pprice = calc_new_psize_pprice(shrt_psize, shrt_pprice, shrt_entries[0][0],
-                                                            shrt_entries[0][1], qty_step)
-            fee_paid = -qty_to_cost(shrt_entries[0][0], shrt_entries[0][1], inverse, c_mult) * maker_fee
+            bkr_price = calc_bankruptcy_price(balance, long_psize, long_pprice, short_psize, short_pprice, inverse, c_mult)
+        while short_entries and short_entries[0][0] < 0.0 and prices[k] > short_entries[0][1]:
+            next_entry_grid_update_ts_short = min(next_entry_grid_update_ts_short, timestamps[k] + latency_simulation_ms)
+            next_close_grid_update_ts_short = min(next_close_grid_update_ts_short, timestamps[k] + latency_simulation_ms)
+            short_psize, short_pprice = calc_new_psize_pprice(short_psize, short_pprice, short_entries[0][0],
+                                                            short_entries[0][1], qty_step)
+            fee_paid = -qty_to_cost(short_entries[0][0], short_entries[0][1], inverse, c_mult) * maker_fee
             balance += fee_paid
-            equity = calc_equity(balance, shrt_psize, shrt_pprice, shrt_psize, shrt_pprice, prices[k], inverse, c_mult)
-            fills.append((k, timestamps[k], 0.0, fee_paid, balance, equity, shrt_entries[0][0], shrt_entries[0][1],
-                          shrt_psize, shrt_pprice, shrt_entries[0][2]))
-            shrt_entries = shrt_entries[1:]
-            bkr_price = calc_bankruptcy_price(balance, shrt_psize, shrt_pprice, shrt_psize, shrt_pprice, inverse, c_mult)
+            equity = calc_equity(balance, short_psize, short_pprice, short_psize, short_pprice, prices[k], inverse, c_mult)
+            fills.append((k, timestamps[k], 0.0, fee_paid, balance, equity, short_entries[0][0], short_entries[0][1],
+                          short_psize, short_pprice, short_entries[0][2]))
+            short_entries = short_entries[1:]
+            bkr_price = calc_bankruptcy_price(balance, short_psize, short_pprice, short_psize, short_pprice, inverse, c_mult)
         while long_psize > 0.0 and long_closes and long_closes[0][0] < 0.0 and prices[k] > long_closes[0][1]:
             next_entry_grid_update_ts_long = min(next_entry_grid_update_ts_long, timestamps[k] + latency_simulation_ms)
             next_close_grid_update_ts_long = min(next_close_grid_update_ts_long, timestamps[k] + latency_simulation_ms)
@@ -1423,40 +1423,40 @@ def njit_backtest(
             fee_paid = -qty_to_cost(long_close_qty, long_closes[0][1], inverse, c_mult) * maker_fee
             pnl = calc_long_pnl(long_pprice, long_closes[0][1], long_close_qty, inverse, c_mult)
             balance += fee_paid + pnl
-            equity = calc_equity(balance, long_psize, long_pprice, shrt_psize, shrt_pprice, prices[k], inverse, c_mult)
+            equity = calc_equity(balance, long_psize, long_pprice, short_psize, short_pprice, prices[k], inverse, c_mult)
             fills.append((k, timestamps[k], pnl, fee_paid, balance, equity, long_close_qty, long_closes[0][1],
                           long_psize, long_pprice, long_closes[0][2]))
             long_closes = long_closes[1:]
-            bkr_price = calc_bankruptcy_price(balance, long_psize, long_pprice, shrt_psize, shrt_pprice, inverse, c_mult)
-        while shrt_psize < 0.0 and shrt_closes and shrt_closes[0][0] > 0.0 and prices[k] < shrt_closes[0][1]:
-            next_entry_grid_update_ts_shrt = min(next_entry_grid_update_ts_shrt, timestamps[k] + latency_simulation_ms)
-            next_close_grid_update_ts_shrt = min(next_close_grid_update_ts_shrt, timestamps[k] + latency_simulation_ms)
-            shrt_close_qty = shrt_closes[0][0]
-            new_shrt_psize = round_(shrt_psize + shrt_close_qty, qty_step)
-            if new_shrt_psize > 0.0:
-                print('warning: shrt close qty less than shrt psize')
-                print('shrt_psize', shrt_psize)
-                print('shrt_pprice', shrt_pprice)
-                print('shrt_closes[0]', shrt_closes[0])
-                shrt_close_qty = -shrt_psize
-                new_shrt_psize, shrt_pprice = 0.0, 0.0
-            shrt_psize = new_shrt_psize
-            fee_paid = -qty_to_cost(shrt_close_qty, shrt_closes[0][1], inverse, c_mult) * maker_fee
-            pnl = calc_shrt_pnl(shrt_pprice, shrt_closes[0][1], shrt_close_qty, inverse, c_mult)
+            bkr_price = calc_bankruptcy_price(balance, long_psize, long_pprice, short_psize, short_pprice, inverse, c_mult)
+        while short_psize < 0.0 and short_closes and short_closes[0][0] > 0.0 and prices[k] < short_closes[0][1]:
+            next_entry_grid_update_ts_short = min(next_entry_grid_update_ts_short, timestamps[k] + latency_simulation_ms)
+            next_close_grid_update_ts_short = min(next_close_grid_update_ts_short, timestamps[k] + latency_simulation_ms)
+            short_close_qty = short_closes[0][0]
+            new_short_psize = round_(short_psize + short_close_qty, qty_step)
+            if new_short_psize > 0.0:
+                print('warning: short close qty less than short psize')
+                print('short_psize', short_psize)
+                print('short_pprice', short_pprice)
+                print('short_closes[0]', short_closes[0])
+                short_close_qty = -short_psize
+                new_short_psize, short_pprice = 0.0, 0.0
+            short_psize = new_short_psize
+            fee_paid = -qty_to_cost(short_close_qty, short_closes[0][1], inverse, c_mult) * maker_fee
+            pnl = calc_short_pnl(short_pprice, short_closes[0][1], short_close_qty, inverse, c_mult)
             balance += fee_paid + pnl
-            equity = calc_equity(balance, shrt_psize, shrt_pprice, shrt_psize, shrt_pprice, prices[k], inverse, c_mult)
-            fills.append((k, timestamps[k], pnl, fee_paid, balance, equity, shrt_close_qty, shrt_closes[0][1],
-                          shrt_psize, shrt_pprice, shrt_closes[0][2]))
-            shrt_closes = shrt_closes[1:]
-            bkr_price = calc_bankruptcy_price(balance, shrt_psize, shrt_pprice, shrt_psize, shrt_pprice, inverse, c_mult)
+            equity = calc_equity(balance, short_psize, short_pprice, short_psize, short_pprice, prices[k], inverse, c_mult)
+            fills.append((k, timestamps[k], pnl, fee_paid, balance, equity, short_close_qty, short_closes[0][1],
+                          short_psize, short_pprice, short_closes[0][2]))
+            short_closes = short_closes[1:]
+            bkr_price = calc_bankruptcy_price(balance, short_psize, short_pprice, short_psize, short_pprice, inverse, c_mult)
         if do_long:
             if long_psize == 0.0:
                 next_entry_grid_update_ts_long = min(next_entry_grid_update_ts_long, timestamps[k] + latency_simulation_ms)
             if prices[k] > long_pprice:
                 next_close_grid_update_ts_long = min(next_close_grid_update_ts_long, timestamps[k] + latency_simulation_ms)
-        if do_shrt:
-            if shrt_psize == 0.0:
-                next_entry_grid_update_ts_shrt = min(next_entry_grid_update_ts_shrt, timestamps[k] + latency_simulation_ms)
-            if prices[k] < shrt_pprice:
-                next_close_grid_update_ts_shrt = min(next_close_grid_update_ts_shrt, timestamps[k] + latency_simulation_ms)
+        if do_short:
+            if short_psize == 0.0:
+                next_entry_grid_update_ts_short = min(next_entry_grid_update_ts_short, timestamps[k] + latency_simulation_ms)
+            if prices[k] < short_pprice:
+                next_close_grid_update_ts_short = min(next_close_grid_update_ts_short, timestamps[k] + latency_simulation_ms)
     return fills, stats

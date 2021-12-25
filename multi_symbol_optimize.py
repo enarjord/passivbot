@@ -29,19 +29,19 @@ def backtest_single_wrap(config_: dict):
         fills, stats = backtest(config, ticks)
         fdf, sdf, analysis = analyze_fills(fills, stats, config)
         pa_closeness_long = analysis['pa_closeness_mean_long']
-        pa_closeness_shrt = analysis['pa_closeness_mean_shrt']
+        pa_closeness_short = analysis['pa_closeness_mean_short']
         adg = analysis['average_daily_gain']
         print(f"backtested {config['symbol']: <12} pa closeness long {pa_closeness_long:.6f} "
-              f"pa closeness shrt {pa_closeness_shrt:.6f} adg {adg:.6f}")
+              f"pa closeness short {pa_closeness_short:.6f} adg {adg:.6f}")
     except Exception as e:
         print(f'error with {config["symbol"]} {e}')
         print('config')
         traceback.print_exc()
         adg = 0.0
-        pa_closeness_long = pa_closeness_shrt = 100.0
+        pa_closeness_long = pa_closeness_short = 100.0
         with open(make_get_filepath('tmp/harmony_search_errors.txt'), 'a') as f:
             f.write(json.dumps([time(), 'error', str(e), denumpyize(config)]) + '\n')
-    return (pa_closeness_long, pa_closeness_shrt, adg)
+    return (pa_closeness_long, pa_closeness_short, adg)
 
 
 def backtest_multi_wrap(config: dict, pool):
@@ -54,16 +54,16 @@ def backtest_multi_wrap(config: dict, pool):
         sleep(0.1)
     results = {k: v.get() for k, v in tasks.items()}
     pa_closeness_long_mean = np.mean([v[0] for v in results.values()])
-    pa_closeness_shrt_mean = np.mean([v[1] for v in results.values()])
+    pa_closeness_short_mean = np.mean([v[1] for v in results.values()])
     adg_mean = np.mean([v[2] for v in results.values()])
     if config['side'] == 'long':
         score = adg_mean * min(1.0, config['maximum_pa_closeness_mean_long'] / pa_closeness_long_mean)
-    elif config['side'] == 'shrt':
-        score = adg_mean * min(1.0, config['maximum_pa_closeness_mean_shrt'] / pa_closeness_shrt_mean)
+    elif config['side'] == 'short':
+        score = adg_mean * min(1.0, config['maximum_pa_closeness_mean_short'] / pa_closeness_short_mean)
     elif config['side'] == 'both':
-        score = adg_mean * min(1.0, (config['maximum_pa_closeness_mean_long'] / pa_closeness_long_mean + config['maximum_pa_closeness_mean_shrt'] / pa_closeness_shrt_mean) / 2)
+        score = adg_mean * min(1.0, (config['maximum_pa_closeness_mean_long'] / pa_closeness_long_mean + config['maximum_pa_closeness_mean_short'] / pa_closeness_short_mean) / 2)
 
-    print(f'pa closeness long {pa_closeness_long_mean:.6f} pa closeness shrt {pa_closeness_shrt_mean:.6f} adg {adg_mean:.6f} score {score:8f}')
+    print(f'pa closeness long {pa_closeness_long_mean:.6f} pa closeness short {pa_closeness_short_mean:.6f} adg {adg_mean:.6f} score {score:8f}')
     return -score, results
 
 
@@ -173,19 +173,19 @@ async def main():
     config.update(get_template_live_config())
     config['exchange'], _, _ = load_exchange_key_secret(config['user'])
     config['long']['enabled'] = config['do_long']
-    config['shrt']['enabled'] = config['do_shrt']
+    config['short']['enabled'] = config['do_short']
     if config['long']['enabled']:
-        if config['shrt']['enabled']:
+        if config['short']['enabled']:
             print('optimizing both long and short')
             config['side'] = 'both'
         else:
             print('optimizing long')
             config['side'] = 'long'
-    elif config['shrt']['enabled']:
+    elif config['short']['enabled']:
         print('optimizing short')
-        config['side'] = 'shrt'
+        config['side'] = 'short'
     else:
-        raise Exception('long, shrt or both must be enabled')
+        raise Exception('long, short or both must be enabled')
 
     # download ticks .npy file if missing
     cache_fname = f"{config['start_date']}_{config['end_date']}_ticks_cache.npy"
