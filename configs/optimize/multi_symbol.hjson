@@ -22,14 +22,17 @@
             "OMGUSDT", "CELRUSDT", "COTIUSDT", "SFPUSDT", "ETCUSDT", "KEEPUSDT", "ONEUSDT",
             "UNIUSDT", "ALGOUSDT", "ICPUSDT", "BCHUSDT", "NEARUSDT", "XLMUSDT", "ALICEUSDT",
             "VETUSDT", "TRXUSDT", "SUSHIUSDT", "THETAUSDT", "GALAUSDT", "RUNEUSDT", "AAVEUSDT",]
-  symbols: ["XMRUSDT", "XTZUSDT"]
+  symbols: ["XMRUSDT", "XTZUSDT", "ADAUSDT"]
 
   ranges:
   {
     long£grid_span: [0.06, 0.4]
+    long£ema_span_min: [360, 2880]
+    long£ema_span_max: [2880, 10080]
     long£pbr_limit: [0.1, 0.1]
     long£max_n_entry_orders: [10, 10]
     long£initial_qty_pct: [0.001, 0.1]
+    long£initial_eprice_ema_dist: [-0.03, 0.03]
     long£eprice_pprice_diff: [0.002, 0.02]
     long£secondary_pbr_allocation: [0.2, 0.8]
     long£secondary_pprice_diff: [0.1, 0.5]
@@ -37,11 +40,16 @@
     long£min_markup: [0.002, 0.03]
     long£markup_range: [0.002, 0.03]
     long£n_close_orders: [4, 12]
+    long£auto_unstuck_pbr_threshold: [0.0, 0.2]
+    long£auto_unstuck_ema_dist: [-0.01, 0.05]
 
     shrt£grid_span: [0.06, 0.4]
+    shrt£ema_span_min: [360, 2880]
+    shrt£ema_span_max: [2880, 10080]
     shrt£pbr_limit: [0.1, 0.1]
     shrt£max_n_entry_orders: [10, 10]
     shrt£initial_qty_pct: [0.001, 0.1]
+    shrt£initial_eprice_ema_dist: [-0.03, 0.03]
     shrt£eprice_pprice_diff: [0.002, 0.02]
     shrt£secondary_pbr_allocation: [0.2, 0.8]
     shrt£secondary_pprice_diff: [0.1, 0.5]
@@ -49,5 +57,7 @@
     shrt£min_markup: [0.002, 0.03]
     shrt£markup_range: [0.002, 0.03]
     shrt£n_close_orders: [4, 12]
+    shrt£auto_unstuck_pbr_threshold: [0.0, 0.2]
+    shrt£auto_unstuck_ema_dist: [-0.01, 0.05]
   }
 }
