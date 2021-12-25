@@ -1,4 +1,4 @@
-![Passivbot](docs/images/logo_pbot_dark.png)
+![Passivbot](docs/images/logo_pbot.svg)
 
 # Trading bot running on Bybit and Binance Futures
 
