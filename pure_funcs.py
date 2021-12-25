@@ -37,7 +37,7 @@ def get_xk_keys():
     return ['spot', 'hedge_mode', 'inverse', 'do_long', 'do_shrt', 'qty_step', 'price_step', 'min_qty', 'min_cost',
             'c_mult', 'grid_span', 'pbr_limit', 'max_n_entry_orders', 'initial_qty_pct', 'eprice_pprice_diff',
             'secondary_pbr_allocation', 'secondary_pprice_diff', 'eprice_exp_base', 'min_markup', 'markup_range',
-            'n_close_orders']
+            'n_close_orders', 'ema_span_min', 'ema_span_max', 'initial_eprice_ema_dist', 'auto_unstuck_pbr_threshold', 'auto_unstuck_ema_dist']
 
 
 def create_xk(config: dict) -> dict:
@@ -297,29 +297,42 @@ def get_template_live_config():
         "config_name": "template",
         "logging_level": 0,
         "long": {"enabled": True,
+                 "ema_span_min": 1440, # in minutes
+                 "ema_span_max": 4320,
                  "grid_span": 0.16,
                  "pbr_limit": 1.6,
                  "max_n_entry_orders":  10,
                  "initial_qty_pct":  0.01,
+                 "initial_eprice_ema_dist": -0.01, # negative is closer; positive is further away
+
                  "eprice_pprice_diff": 0.0025,
                  "secondary_pbr_allocation": 0.5,
                  "secondary_pprice_diff": 0.35,
                  "eprice_exp_base": 1.618034,
                  "min_markup": 0.0045,
                  "markup_range":  0.0075,
-                 "n_close_orders": 7},
+                 "n_close_orders": 7,
+                 "auto_unstuck_pbr_threshold": 0.1, # percentage of pbr_limit to trigger soft stop.
+                                                 # e.g. pbr_limit=0.06 and auto_unstuck_pbr_threshold=0.1: soft stop when pbr > 0.06 * (1 - 0.1) == 0.054
+                 "auto_unstuck_ema_dist": 0.02},
         "shrt": {"enabled": True,
+                 "ema_span_min": 1440, # in minutes
+                 "ema_span_max": 4320,
                  "grid_span": 0.16,
                  "pbr_limit": 1.6,
                  "max_n_entry_orders":  10,
                  "initial_qty_pct":  0.01,
+                 "initial_eprice_ema_dist": -0.01, # negative is closer; positive is further away
                  "eprice_pprice_diff": 0.0025,
                  "secondary_pbr_allocation": 0.5,
                  "secondary_pprice_diff": 0.35,
                  "eprice_exp_base": 1.618034,
                  "min_markup": 0.0045,
                  "markup_range":  0.0075,
-                 "n_close_orders": 7},
+                 "n_close_orders": 7,
+                 "auto_unstuck_pbr_threshold": 0.1, # percentage of pbr_limit to trigger soft stop.
+                                                 # e.g. pbr_limit=0.06 and auto_unstuck_pbr_threshold=0.1: soft stop when pbr > 0.06 * (1 - 0.1) == 0.054
+                 "auto_unstuck_ema_dist": 0.02},
     }
 
 
