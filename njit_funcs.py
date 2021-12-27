@@ -2092,8 +2092,8 @@ def njit_backtest(
                     min_markup[1],
                     markup_range[1],
                     n_close_orders[1],
-                    auto_unstuck_wallet_exposure_threshold[0],
-                    auto_unstuck_ema_dist[0],
+                    auto_unstuck_wallet_exposure_threshold[1],
+                    auto_unstuck_ema_dist[1],
                 )
                 if do_short
                 else [(0.0, 0.0, "")]
