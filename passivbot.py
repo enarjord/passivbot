@@ -18,6 +18,7 @@ from procedures import (
     load_exchange_key_secret,
     print_,
     utc_ms,
+    numpyize,
 )
 from pure_funcs import (
     filter_orders,
@@ -37,6 +38,9 @@ from njit_funcs import (
     calc_upnl,
     calc_long_entry_grid,
     calc_short_entry_grid,
+    calc_samples,
+    calc_emas_last,
+    calc_ema,
 )
 from typing import Union, Dict, List
 
@@ -84,6 +88,9 @@ class Bot:
         self.fills = []
         self.price = 0.0
         self.ob = [0.0, 0.0]
+        self.emas_long = np.zeros(3)
+        self.emas_short = np.zeros(3)
+        self.ema_sec = 0
 
         self.n_orders_per_execution = 2
         self.delay_between_executions = 2
@@ -123,6 +130,16 @@ class Bot:
                 f'Invalid cross_wallet_pct given: {config["cross_wallet_pct"]}.  It must be greater than zero and less than or equal to one.  Defaulting to 1.0.'
             )
             config["cross_wallet_pct"] = 1.0
+        self.ema_spans_long = [
+            config["long"]["ema_span_min"],
+            (config["long"]["ema_span_min"] * config["long"]["ema_span_max"]) ** 0.5,
+            config["long"]["ema_span_max"],
+        ]
+        self.ema_spans_short = [
+            config["short"]["ema_span_min"],
+            (config["short"]["ema_span_min"] * config["short"]["ema_span_max"]) ** 0.5,
+            config["short"]["ema_span_max"],
+        ]
         self.config = config
         for key in config:
             setattr(self, key, config[key])
@@ -141,6 +158,56 @@ class Bot:
         if self.config["logging_level"] > 0:
             with open(self.log_filepath, "a") as f:
                 f.write(json.dumps({**{"log_timestamp": time()}, **data}) + "\n")
+
+    async def init_emas(self) -> None:
+        ohlcvs1m = await self.fetch_ohlcvs(interval="1m")
+        max_span = max(list(self.ema_spans_long) + list(self.ema_spans_short))
+        for mins, interval in zip(
+            [5, 15, 30, 60, 60 * 4], ["5m", "15m", "30m", "1h", "4h"]
+        ):
+            if max_span <= len(ohlcvs1m) * mins:
+                print("debug", mins, interval, len(ohlcvs1m))
+                break
+        ohlcvs = await self.fetch_ohlcvs(interval=interval)
+        ohlcvs = {ohlcv["timestamp"]: ohlcv for ohlcv in ohlcvs + ohlcvs1m}
+        samples1s = calc_samples(
+            numpyize(
+                [
+                    [o["timestamp"], o["volume"], o["close"]]
+                    for o in sorted(ohlcvs.values(), key=lambda x: x["timestamp"])
+                ]
+            )
+        )
+        spans1s_long = np.array(self.ema_spans_long) * 60
+        spans1s_short = np.array(self.ema_spans_short) * 60
+        self.emas_long = calc_emas_last(samples1s[:, 2], spans1s_long)
+        self.emas_short = calc_emas_last(samples1s[:, 2], spans1s_short)
+        self.alpha_long = 2 / (spans1s_long)
+        self.alpha__long = 1 - self.alpha_long
+        self.alpha_short = 2 / (spans1s_short)
+        self.alpha__short = 1 - self.alpha_short
+        self.ema_sec = int(time())
+        return samples1s
+
+    def update_emas(self, price: float, prev_price: float) -> None:
+        now_sec = int(time())
+        if now_sec <= self.ema_sec:
+            return
+        while self.ema_sec < int(round(now_sec - 1)):
+            self.emas_long = calc_ema(
+                self.alpha_long, self.alpha__long, self.emas_long, prev_price
+            )
+            self.emas_short = calc_ema(
+                self.alpha_short, self.alpha__short, self.emas_short, prev_price
+            )
+            self.ema_sec += 1
+        self.emas_long = calc_ema(
+            self.alpha_long, self.alpha__long, self.emas_long, price
+        )
+        self.emas_short = calc_ema(
+            self.alpha_short, self.alpha__short, self.emas_short, price
+        )
+        self.ema_sec = now_sec
 
     async def update_open_orders(self) -> None:
         if (
@@ -430,6 +497,7 @@ class Bot:
                 long_psize,
                 long_pprice,
                 self.ob[0],
+                min(self.emas_long),
                 self.xk["inverse"],
                 self.xk["do_long"],
                 self.xk["qty_step"],
@@ -441,16 +509,20 @@ class Bot:
                 self.xk["wallet_exposure_limit"][0],
                 self.xk["max_n_entry_orders"][0],
                 self.xk["initial_qty_pct"][0],
+                self.xk["initial_eprice_ema_dist"][0],
                 self.xk["eprice_pprice_diff"][0],
                 self.xk["secondary_allocation"][0],
                 self.xk["secondary_pprice_diff"][0],
                 self.xk["eprice_exp_base"][0],
+                self.xk["auto_unstuck_wallet_exposure_threshold"][0],
+                self.xk["auto_unstuck_ema_dist"][0],
             )
             long_closes = calc_long_close_grid(
                 balance,
                 long_psize,
                 long_pprice,
                 self.ob[1],
+                max(self.emas_long),
                 self.xk["spot"],
                 self.xk["inverse"],
                 self.xk["qty_step"],
@@ -463,6 +535,8 @@ class Bot:
                 self.xk["min_markup"][0],
                 self.xk["markup_range"][0],
                 self.xk["n_close_orders"][0],
+                self.xk["auto_unstuck_wallet_exposure_threshold"][0],
+                self.xk["auto_unstuck_ema_dist"][0],
             )
             orders += [
                 {
@@ -509,6 +583,7 @@ class Bot:
                 short_psize,
                 short_pprice,
                 self.ob[1],
+                max(self.emas_short),
                 self.xk["inverse"],
                 self.xk["do_short"],
                 self.xk["qty_step"],
@@ -520,16 +595,20 @@ class Bot:
                 self.xk["wallet_exposure_limit"][1],
                 self.xk["max_n_entry_orders"][1],
                 self.xk["initial_qty_pct"][1],
+                self.xk["initial_eprice_ema_dist"][1],
                 self.xk["eprice_pprice_diff"][1],
                 self.xk["secondary_allocation"][1],
                 self.xk["secondary_pprice_diff"][1],
                 self.xk["eprice_exp_base"][1],
+                self.xk["auto_unstuck_wallet_exposure_threshold"][1],
+                self.xk["auto_unstuck_ema_dist"][1],
             )
             short_closes = calc_short_close_grid(
                 balance,
                 short_psize,
                 short_pprice,
                 self.ob[0],
+                min(self.emas_short),
                 self.xk["spot"],
                 self.xk["inverse"],
                 self.xk["qty_step"],
@@ -542,6 +621,8 @@ class Bot:
                 self.xk["min_markup"][1],
                 self.xk["markup_range"][1],
                 self.xk["n_close_orders"][1],
+                self.xk["auto_unstuck_wallet_exposure_threshold"][1],
+                self.xk["auto_unstuck_ema_dist"][1],
             )
             orders += [
                 {
@@ -648,6 +729,7 @@ class Bot:
                     self.ob[0] = tick["price"]
                 else:
                     self.ob[1] = tick["price"]
+            self.update_emas(ticks[-1]["price"], self.price)
             self.price = ticks[-1]["price"]
 
         now = time()
@@ -814,6 +896,7 @@ class Bot:
         await asyncio.gather(self.update_position(), self.update_open_orders())
         await self.init_exchange_config()
         await self.init_order_book()
+        await self.init_emas()
         self.user_stream_task = asyncio.create_task(self.start_websocket_user_stream())
         self.market_stream_task = asyncio.create_task(
             self.start_websocket_market_stream()
