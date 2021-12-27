@@ -51,6 +51,21 @@ If you found a good config and want to share this configuration, please feel fre
 While the bot is running, you can use Telegram to control the bot. This includes getting information on the results,
 open trades as well as pausing the bot, and much more. You can read more on how to set up [Telegram here](telegram.md).
 
+It is possible to control the bot using the following CLI options:
+* `-lm LONG_MODE` (or `-sm SHORT_MODE` for shorts): specify one of the following modes: [n (normal), m (manual), gs (graceful_stop), p (panic), t (tp_only)]
+  * `n` (normal); normal operation
+  * `m` (manual): bot doesn't create nor cancel orders.
+  * `gs` (graceful stop): let the bot continue as normal until all positions are fully closed, then not open any more positions.
+  * `p` (panic): bot will close positions asap using limit orders
+  * `t` (TP-only): bot only manages TP grid and will not cancel or create any entries.
+* `-lw 0.12` (or `-sw 0.12` for shorts): specify long wallet exposure limit, overriding value from live config
+* `-lw -0` (or `sw -0` for shorts): disable and remove all reentries. Bot still manages TP.
+
+You can use the command for shorts and long in the same line.
+Example to set pbr = 0.1 for longs, 0.05 for shorts, normal mode for longs and manual mode for shorts: 
+```shell
+python3 passivbot.py binance_01 XMRUSDT configs/live/binance_xmrusdt.json -lw 0.1 -sw 0.05 -lm n -sm m
+```
 ## Startup checks
 
 When you start Passivbot, it will verify if there are no positions open on other coins. If there is an existing position
