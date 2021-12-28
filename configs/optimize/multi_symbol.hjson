@@ -26,11 +26,11 @@
 
   ranges:
   {
-    long£grid_span: [0.06, 0.4]
+    long£grid_span: [0.06, 0.5]
     long£ema_span_min: [360, 2880]
     long£ema_span_max: [2880, 10080]
     long£wallet_exposure_limit: [0.1, 0.1]
-    long£max_n_entry_orders: [10, 10]
+    long£max_n_entry_orders: [7, 14]
     long£initial_qty_pct: [0.001, 0.1]
     long£initial_eprice_ema_dist: [-0.03, 0.03]
     long£eprice_pprice_diff: [0.002, 0.02]
@@ -43,11 +43,11 @@
     long£auto_unstuck_wallet_exposure_threshold: [0.0, 0.2]
     long£auto_unstuck_ema_dist: [-0.01, 0.05]
 
-    short£grid_span: [0.06, 0.4]
+    short£grid_span: [0.06, 0.5]
     short£ema_span_min: [360, 2880]
     short£ema_span_max: [2880, 10080]
     short£wallet_exposure_limit: [0.1, 0.1]
-    short£max_n_entry_orders: [10, 10]
+    short£max_n_entry_orders: [7, 14]
     short£initial_qty_pct: [0.001, 0.1]
     short£initial_eprice_ema_dist: [-0.03, 0.03]
     short£eprice_pprice_diff: [0.002, 0.02]
