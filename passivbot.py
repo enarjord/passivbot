@@ -51,7 +51,7 @@ class Bot:
         self.spot = False
         self.config = config
         self.config['do_long'] = config['long']['enabled']
-        self.config['do_shrt'] = config['shrt']['enabled']
+        self.config['do_short'] = config['short']['enabled']
         self.config['max_leverage'] = 25
         self.xk = {}
 
