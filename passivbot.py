@@ -45,19 +45,14 @@ from njit_funcs import (
 from typing import Union, Dict, List
 
 import websockets
-from telegram_bot import Telegram
-
-logging.getLogger("telegram").setLevel(logging.CRITICAL)
-
 
 class Bot:
     def __init__(self, config: dict):
         self.spot = False
         self.config = config
-        self.config["do_long"] = config["long"]["enabled"]
-        self.config["do_short"] = config["short"]["enabled"]
-        self.config["max_leverage"] = 25
-        self.telegram = None
+        self.config['do_long'] = config['long']['enabled']
+        self.config['do_shrt'] = config['shrt']['enabled']
+        self.config['max_leverage'] = 25
         self.xk = {}
 
         self.ws = None
@@ -446,10 +441,7 @@ class Bot:
             self.stop_websocket = True
             self.user_stream_task.cancel()
             self.market_stream_task.cancel()
-            if self.telegram is not None:
-                self.telegram.exit()
-            else:
-                print("No telegram active")
+
         except Exception as e:
             print(f"An error occurred during shutdown: {e}")
 
@@ -940,8 +932,6 @@ class Bot:
                     continue
                 try:
                     if self.stop_websocket:
-                        if self.telegram is not None:
-                            self.telegram.send_msg("<pre>Bot stopped</pre>")
                         break
                     ticks = self.standardize_market_stream_event(json.loads(msg))
                     if self.process_websocket_ticks:
@@ -973,14 +963,6 @@ async def start_bot(bot):
             )
             traceback.print_exc()
             await asyncio.sleep(10)
-
-
-async def _start_telegram(account: dict, bot: Bot):
-    telegram = Telegram(
-        config=account["telegram"], bot=bot, loop=asyncio.get_event_loop()
-    )
-    telegram.log_start()
-    return telegram
 
 
 async def main() -> None:
@@ -1165,10 +1147,6 @@ async def main() -> None:
 
     print("using config")
     pprint.pprint(denumpyize(config))
-
-    if "telegram" in account and account["telegram"]["enabled"]:
-        telegram = await _start_telegram(account=account, bot=bot)
-        bot.telegram = telegram
     signal.signal(signal.SIGINT, bot.stop)
     signal.signal(signal.SIGTERM, bot.stop)
     await start_bot(bot)
