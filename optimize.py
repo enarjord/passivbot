@@ -130,14 +130,8 @@ def objective_function(analysis: dict, config: dict, metric='adjusted_daily_gain
                 break_early = True
                 line += f" broke on {ckey} {round_dynamic(analysis[akey], 5)}"
 
-    max_iter_array = [('minimum_bankruptcy_distance', 'closest_bkr'),
-                       ('minimum_equity_balance_ratio', 'eqbal_ratio_min')]
-    if config['do_long']:
-        max_iter_array.append(('maximum_pa_closeness_mean_long', 'pa_closeness_mean_long' ))
-    if config['do_shrt']:
-        max_iter_array.append(('maximum_pa_closeness_mean_shrt', 'pa_closeness_mean_shrt' ))
-
-    for ckey, akey in max_iter_array:
+    for ckey, akey in [('minimum_bankruptcy_distance', 'closest_bkr'),
+                       ('minimum_equity_balance_ratio', 'eqbal_ratio_min')]:
         # maximize/break these
         if config[ckey] != 0.0:
             #new_obj = obj * min(1.0, analysis[akey] / config[ckey])
