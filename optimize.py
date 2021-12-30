@@ -111,23 +111,37 @@ def objective_function(analysis: dict, config: dict, metric='adjusted_daily_gain
     obj = analysis[metric]
     break_early = False
     line = ''
-    for ckey, akey in [('maximum_hrs_stuck', 'hrs_stuck_max'),
-                       ('maximum_hrs_stuck_same_side', 'hrs_stuck_max'),
-                       ('maximum_hrs_stuck_avg', 'hrs_stuck_avg')]:
-        # minimize these
+
+    min_iter_array = []
+    if config['do_long']:
+        min_iter_array.append(('hrs_stuck_max_long', 'hrs_stuck_max_long' ))
+        min_iter_array.append(('hrs_stuck_avg_long', 'hrs_stuck_avg_long' ))
+    if config['do_shrt']:
+        min_iter_array.append(('hrs_stuck_max_shrt', 'hrs_stuck_max_shrt' ))
+        min_iter_array.append(('hrs_stuck_avg_shrt', 'hrs_stuck_avg_shrt' ))
+
+    for ckey, akey in min_iter_array:
+        # minimize/break these
         if config[ckey] != 0.0:
-            new_obj = obj * min(1.0, config[ckey] / analysis[akey])
-            obj = -abs(new_obj) if (obj < 0.0 or analysis[akey] < 0.0) else new_obj
+            #new_obj = obj * min(1.0, config[ckey] / analysis[akey])
+            #obj = -abs(new_obj) if (obj < 0.0 or analysis[akey] < 0.0) else new_obj
             if config['break_early_factor'] != 0.0 \
                     and analysis[akey] > config[ckey] * (1 + config['break_early_factor']):
                 break_early = True
                 line += f" broke on {ckey} {round_dynamic(analysis[akey], 5)}"
-    for ckey, akey in [('minimum_bankruptcy_distance', 'closest_bkr'),
-                       ('minimum_equity_balance_ratio', 'eqbal_ratio_min')]:
-        # maximize these
+
+    max_iter_array = [('minimum_bankruptcy_distance', 'closest_bkr'),
+                       ('minimum_equity_balance_ratio', 'eqbal_ratio_min')]
+    if config['do_long']:
+        max_iter_array.append(('maximum_pa_closeness_mean_long', 'pa_closeness_mean_long' ))
+    if config['do_shrt']:
+        max_iter_array.append(('maximum_pa_closeness_mean_shrt', 'pa_closeness_mean_shrt' ))
+
+    for ckey, akey in max_iter_array:
+        # maximize/break these
         if config[ckey] != 0.0:
-            new_obj = obj * min(1.0, analysis[akey] / config[ckey])
-            obj = -abs(new_obj) if (obj < 0.0 or analysis[akey] < 0.0) else new_obj
+            #new_obj = obj * min(1.0, analysis[akey] / config[ckey])
+            #obj = -abs(new_obj) if (obj < 0.0 or analysis[akey] < 0.0) else new_obj
             if config['break_early_factor'] != 0.0 \
                     and analysis[akey] < config[ckey] * (1 - config['break_early_factor']):
                 break_early = True
@@ -137,6 +151,11 @@ def objective_function(analysis: dict, config: dict, metric='adjusted_daily_gain
         if analysis[akey] < config[ckey]:
             break_early = True
             line += f" broke on {ckey} {round_dynamic(analysis[akey], 5)}"
+    #pa_closeness objective search
+    pa_closeness_long = analysis['pa_closeness_mean_long']
+    pa_closeness_shrt = analysis['pa_closeness_mean_shrt']
+    adg = analysis['average_daily_gain']
+    obj = adg * (min(1.0, config['maximum_pa_closeness_mean_long'] / pa_closeness_long)**2 if config['do_long'] else 1) * (min(1.0, config['maximum_pa_closeness_mean_shrt'] / pa_closeness_shrt)**2 if config['do_shrt'] else 1)  
     return obj, break_early, line
 
 
@@ -149,8 +168,8 @@ def single_sliding_window_run(config, data, do_print=True) -> (float, [dict]):
         sliding_window_days = n_days
     else:
         # sliding window n days should be greater than max hrs no fills
-        sliding_window_days = min(n_days, max([config['maximum_hrs_stuck'] * 2.1 / 24,
-                                               config['maximum_hrs_stuck_same_side'] * 2.1 / 24,
+        sliding_window_days = min(n_days, max([config['hrs_stuck_max_long'] * 2.1 / 24,
+                                               config['hrs_stuck_max_shrt'] * 2.1 / 24,
                                                config['sliding_window_days']]))
     sample_size_ms = data[1][0] - data[0][0]
     max_span = config['max_span'] if 'max_span' in config else 0
@@ -191,10 +210,10 @@ def simple_sliding_window_wrap(config, data, do_print=False):
                     avg_adg=0.0,
                     min_bkr=0.0,
                     eqbal_ratio_min=0.0,
-                    hrs_stuck_max=1000.0,
-                    hrs_stuck_max_ss=1000.0,
-                    hrs_stuck_max_avg=1000.0,
-                    hrs_stuck_avg_avg=1000.0,
+                    hrs_stuck_max_l=1000.0,
+                    hrs_stuck_max_s=1000.0,
+                    pac_mean_l=1000.0,
+                    pac_mean_s=1000.0,
                     n_slc=0)
     else:
         tune.report(obj=objective,
@@ -202,10 +221,10 @@ def simple_sliding_window_wrap(config, data, do_print=False):
                     avg_adg=np.mean([r['average_daily_gain'] for r in analyses]),
                     min_bkr=np.min([r['closest_bkr'] for r in analyses]),
                     eqbal_ratio_min=np.min([r['eqbal_ratio_min'] for r in analyses]),
-                    hrs_stuck_max=np.max([r['hrs_stuck_max'] for r in analyses]),
-                    hrs_stuck_max_ss=np.max([r['hrs_stuck_max'] for r in analyses]),
-                    hrs_stuck_max_avg=np.max([r['hrs_stuck_avg'] for r in analyses]),
-                    hrs_stuck_avg_avg=np.mean([r['hrs_stuck_avg'] for r in analyses]),
+                    hrs_stuck_max_l=np.max([r['hrs_stuck_max_long'] for r in analyses]),
+                    hrs_stuck_max_s=np.max([r['hrs_stuck_max_shrt'] for r in analyses]),
+                    pac_mean_l=np.mean([r['pa_closeness_mean_long'] for r in analyses]),
+                    pac_mean_s=np.mean([r['pa_closeness_mean_shrt'] for r in analyses]),
                     n_slc=len(analyses))
 
 
@@ -271,10 +290,10 @@ def backtest_tune(data: np.ndarray, config: dict, current_best: Union[dict, list
                             'avg_adg',
                             'min_bkr',
                             'eqbal_ratio_min',
-                            'hrs_stuck_max',
-                            'hrs_stuck_max_ss',
-                            'hrs_stuck_max_avg',
-                            'hrs_stuck_avg_avg',
+                            'hrs_stuck_max_l',
+                            'hrs_stuck_max_s',
+                            'pac_mean_l',
+                            'pac_mean_s',
                             'n_slc',
                             'obj'],
             parameter_columns=parameter_columns,
@@ -305,16 +324,15 @@ async def execute_optimize(config):
     if not (config['do_long'] and config['do_shrt']):
         if not (config['do_long'] or config['do_shrt']):
             raise Exception('both long and shrt disabled')
-        print(
-            f"{'long' if config['do_long'] else 'shrt'} only, setting maximum_hrs_stuck = maximum_hrs_stuck_same_side")
-        config['maximum_hrs_stuck'] = config['maximum_hrs_stuck_same_side']
     downloader = Downloader(config)
     print()
     for k in (keys := ['exchange', 'symbol', 'market_type', 'starting_balance', 'start_date',
                        'end_date', 'latency_simulation_ms',
                        'do_long', 'do_shrt',
-                       'minimum_bankruptcy_distance', 'maximum_hrs_stuck',
-                       'maximum_hrs_stuck_same_side', 'maximum_hrs_stuck_avg', 'iters', 'n_particles',
+                       'minimum_bankruptcy_distance', 'hrs_stuck_max_long',
+                       'hrs_stuck_max_shrt', 'hrs_stuck_avg_long','hrs_stuck_avg_shrt', 
+                       'maximum_pa_closeness_mean_long', 'maximum_pa_closeness_mean_shrt',
+                       'iters', 'n_particles',
                        'sliding_window_days', 'metric',
                        'min_span', 'max_span', 'n_spans']):
         if k in config:
