@@ -1948,6 +1948,27 @@ def njit_backtest(
     alphas_short = 2.0 / (spans_short + 1.0)
     alphas__short = 1.0 - alphas_short
 
+    long_wallet_exposure = 0.0
+    short_wallet_exposure = 0.0
+    long_wallet_exposure_auto_unstuck_threshold = (
+        (
+            wallet_exposure_limit[0]
+            * (1 - auto_unstuck_wallet_exposure_threshold[0])
+            * 1.01
+        )
+        if auto_unstuck_wallet_exposure_threshold[0] != 0.0
+        else wallet_exposure_limit[0] * 10
+    )
+    short_wallet_exposure_auto_unstuck_threshold = (
+        (
+            wallet_exposure_limit[1]
+            * (1 - auto_unstuck_wallet_exposure_threshold[1])
+            * 1.01
+        )
+        if auto_unstuck_wallet_exposure_threshold[1] != 0.0
+        else wallet_exposure_limit[1] * 10
+    )
+
     for k in range(max_span, len(prices)):
         if do_long:
             emas_long = calc_ema(alphas_long, alphas__long, emas_long, prices[k])
@@ -2209,6 +2230,9 @@ def njit_backtest(
                 inverse,
                 c_mult,
             )
+            long_wallet_exposure = (
+                qty_to_cost(long_psize, long_pprice, inverse, c_mult) / balance
+            )
         while (
             short_entries
             and short_entries[0][0] < 0.0
@@ -2266,6 +2290,9 @@ def njit_backtest(
                 short_pprice,
                 inverse,
                 c_mult,
+            )
+            short_wallet_exposure = (
+                qty_to_cost(short_psize, short_pprice, inverse, c_mult) / balance
             )
         while (
             long_psize > 0.0
@@ -2332,6 +2359,9 @@ def njit_backtest(
                 inverse,
                 c_mult,
             )
+            long_wallet_exposure = (
+                qty_to_cost(long_psize, long_pprice, inverse, c_mult) / balance
+            )
         while (
             short_psize < 0.0
             and short_closes
@@ -2397,13 +2427,19 @@ def njit_backtest(
                 inverse,
                 c_mult,
             )
+            short_wallet_exposure = (
+                qty_to_cost(short_psize, short_pprice, inverse, c_mult) / balance
+            )
         if do_long:
             if long_psize == 0.0:
                 next_entry_grid_update_ts_long = min(
                     next_entry_grid_update_ts_long,
                     timestamps[k] + latency_simulation_ms,
                 )
-            if prices[k] > long_pprice:
+            if (
+                prices[k] > long_pprice
+                or long_wallet_exposure >= long_wallet_exposure_auto_unstuck_threshold
+            ):
                 next_close_grid_update_ts_long = min(
                     next_close_grid_update_ts_long,
                     timestamps[k] + latency_simulation_ms,
@@ -2414,7 +2450,10 @@ def njit_backtest(
                     next_entry_grid_update_ts_short,
                     timestamps[k] + latency_simulation_ms,
                 )
-            if prices[k] < short_pprice:
+            if (
+                prices[k] < short_pprice
+                or short_wallet_exposure >= short_wallet_exposure_auto_unstuck_threshold
+            ):
                 next_close_grid_update_ts_short = min(
                     next_close_grid_update_ts_short,
                     timestamps[k] + latency_simulation_ms,
