@@ -19,16 +19,30 @@ from pure_funcs import (
 )
 from njit_funcs import calc_samples
 from datetime import datetime
+import traceback
 
 
 def load_live_config(live_config_path: str) -> dict:
     try:
         live_config = json.load(open(live_config_path))
-        live_config = json.loads(
-            json.dumps(live_config).replace(
-                "secondary_grid_spacing", "secondary_pprice_diff"
-            )
-        )
+        for src, dst in [
+            ("secondary_grid_spacing", "secondary_pprice_diff"),
+            ("shrt", "short"),
+            ("secondary_pbr_allocation", "secondary_allocation"),
+            ("pbr_limit", "wallet_exposure_limit"),
+        ]:
+            live_config = json.loads(json.dumps(live_config).replace(src, dst))
+        for side in ["long", "short"]:
+            if "initial_eprice_ema_dist" not in live_config[side]:
+                live_config[side]["initial_eprice_ema_dist"] = -1000.0
+            if "ema_span_min" not in live_config[side]:
+                live_config[side]["ema_span_min"] = 1
+            if "ema_span_max" not in live_config[side]:
+                live_config[side]["ema_span_max"] = 1
+            if "auto_unstuck_wallet_exposure_threshold" not in live_config[side]:
+                live_config[side]["auto_unstuck_wallet_exposure_threshold"] = 0.0
+            if "auto_unstuck_ema_dist" not in live_config[side]:
+                live_config[side]["auto_unstuck_ema_dist"] = 0.0
         assert all(k in live_config["long"] for k in get_template_live_config()["long"])
         return numpyize(live_config)
     except Exception as e:
@@ -128,6 +142,7 @@ async def add_market_specific_settings(config):
         market_specific_settings = await fetch_market_specific_settings(config)
         json.dump(market_specific_settings, open(mss, "w"), indent=4)
     except Exception as e:
+        traceback.print_exc()
         print("\nfailed to fetch market_specific_settings", e, "\n")
         try:
             if os.path.exists(mss):
