@@ -14,11 +14,11 @@
   minimum_equity_balance_ratio: 0.5
   minimum_slice_adg: -0.1
   hrs_stuck_max_long: 48.0
-  hrs_stuck_max_shrt: 48.0
+  hrs_stuck_max_short: 48.0
   hrs_stuck_avg_long: 10.0
-  hrs_stuck_avg_shrt: 10.0
+  hrs_stuck_avg_short: 10.0
   maximum_pa_closeness_mean_long: 0.03
-  maximum_pa_closeness_mean_shrt: 0.03
+  maximum_pa_closeness_mean_short: 0.03
 
   # set to 0.0 to do disable sliding windows
   # otherwise sliding window days will be max([maximum_hrs_stuck / 24 * 2.1,
