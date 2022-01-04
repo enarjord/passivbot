@@ -52,14 +52,17 @@ While the bot is running, you can use Telegram to control the bot. This includes
 open trades as well as pausing the bot, and much more. You can read more on how to set up [Telegram here](telegram.md).
 
 It is possible to control the bot using the following CLI options:
-* `-lm LONG_MODE` (or `-sm SHORT_MODE` for shorts): specify one of the following modes: [n (normal), m (manual), gs (graceful_stop), p (panic), t (tp_only)]
-  * `n` (normal); normal operation
-  * `m` (manual): bot doesn't create nor cancel orders.
-  * `gs` (graceful stop): let the bot continue as normal until all positions are fully closed, then not open any more positions.
-  * `p` (panic): bot will close positions asap using limit orders
-  * `t` (TP-only): bot only manages TP grid and will not cancel or create any entries.
-* `-lw 0.12` (or `-sw 0.12` for shorts): specify long wallet exposure limit, overriding value from live config
-* `-lw -0` (or `sw -0` for shorts): disable and remove all reentries. Bot still manages TP.
+
+It is possible to control the bot using the following CLI options:
+
+- `-lm LONG_MODE` (or `-sm SHORT_MODE` for shorts): specify one of the following modes: [n (normal), m (manual), gs (graceful_stop), p (panic), t (tp_only)]
+  - `n` (normal); normal operation
+  - `m` (manual): bot doesn't create nor cancel orders.
+  - `gs` (graceful stop): let the bot continue as normal until all positions are fully closed, then not open any more positions.
+  - `p` (panic): bot will close positions asap using limit orders
+  - `t` (TP-only): bot only manages TP grid and will not cancel or create any entries.
+- `-lw 0.12` (or `-sw 0.12` for shorts): specify long wallet exposure limit, overriding value from live config
+- `-lw -0` (or `sw -0` for shorts): disable and remove all reentries. Bot still manages TP.
 
 You can use the command for shorts and long in the same line.
 Example to set pbr = 0.1 for longs, 0.05 for shorts, normal mode for longs and manual mode for shorts: 
