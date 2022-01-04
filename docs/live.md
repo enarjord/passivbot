@@ -56,11 +56,11 @@ It is possible to control the bot using the following CLI options:
 It is possible to control the bot using the following CLI options:
 
 - `-lm LONG_MODE` (or `-sm SHORT_MODE` for shorts): specify one of the following modes: [n (normal), m (manual), gs (graceful_stop), p (panic), t (tp_only)]
-  - `n` (normal); normal operation
-  - `m` (manual): bot neither creates nor cancels orders.
-  - `gs` (graceful stop): let the bot continue as normal until all positions are fully closed, then not open any more positions.
-  - `p` (panic): bot will close positions asap using limit orders
-  - `t` (TP-only): bot only manages TP grid and will not cancel or create any entries.
+    - `n` (normal); normal operation
+    - `m` (manual): bot neither creates nor cancels orders.
+    - `gs` (graceful stop): let the bot continue as normal until all positions are fully closed, then not open any more positions.
+    - `p` (panic): bot will close positions asap using limit orders
+    - `t` (TP-only): bot only manages TP grid and will not cancel or create any entries.
 - `-lw 0.12` (or `-sw 0.12` for shorts): specify long wallet exposure limit, overriding value from live config
 - `-lw -0` (or `sw -0` for shorts): disable and remove all reentries. Bot still manages TP.
 
