@@ -57,7 +57,7 @@ It is possible to control the bot using the following CLI options:
 
 - `-lm LONG_MODE` (or `-sm SHORT_MODE` for shorts): specify one of the following modes: [n (normal), m (manual), gs (graceful_stop), p (panic), t (tp_only)]
   - `n` (normal); normal operation
-  - `m` (manual): bot doesn't create nor cancel orders.
+  - `m` (manual): bot neither creates nor cancels orders.
   - `gs` (graceful stop): let the bot continue as normal until all positions are fully closed, then not open any more positions.
   - `p` (panic): bot will close positions asap using limit orders
   - `t` (TP-only): bot only manages TP grid and will not cancel or create any entries.
@@ -70,11 +70,6 @@ Example to set pbr = 0.1 for longs, 0.05 for shorts, normal mode for longs and m
 python3 passivbot.py binance_01 XMRUSDT configs/live/binance_xmrusdt.json -lw 0.1 -sw 0.05 -lm n -sm m
 ```
 ## Startup checks
-
-When you start Passivbot, it will verify if there are no positions open on other coins. If there is an existing position
-found on at least 1 other symbol, the bot will shut down. The reason for this is that the bot operates in cross-mode for futures,
-which means that it will start influencing the existing position. If you want to, you can disable this check by setting
-the configuration parameter `allow_sharing_wallet` to `true`.
 
 When Passivbot is started, it will (if possible) set the position mode to `hedge` on the exchange, and set the leverage
 to such a level that you do not run into errors about insufficient margin. To accomplish this, the configuration parameter
