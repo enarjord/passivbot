@@ -30,3 +30,6 @@ Secondary entry is independent of primary entry grid, intended to catch abnormal
 
 More info may come later.
 
+Here is a diagram summarizing the parameters:
+
+![Grid Parameters](images/passivbot_grid_parameters.jpeg)
