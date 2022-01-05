@@ -667,7 +667,10 @@ async def main() -> None:
         print(f'\nassigned balance set to {args.assigned_balance}\n')
         config['assigned_balance'] = args.assigned_balance
 
-    if args.long_mode is not None:
+    if args.long_mode is None:
+        if not config['long']['enabled']:
+            config['long_mode'] = 'manual'
+    else:
         if args.long_mode in ['gs', 'graceful_stop', 'graceful-stop']:
             print('\n\nlong graceful stop enabled; will not make new entries once existing positions are closed\n')
             config['long']['enabled'] = config['do_long'] = False
@@ -684,7 +687,10 @@ async def main() -> None:
         elif args.long_mode.lower() in ['t', 'tp_only', 'tp-only']:
             print('\nlong tp only mode enabled')
             config['long_mode'] = 'tp_only'
-    if args.short_mode is not None:
+    if args.short_mode is None:
+        if not config['shrt']['enabled']:
+            config['shrt_mode'] = 'manual'
+    else:
         if args.short_mode in ['gs', 'graceful_stop', 'graceful-stop']:
             print('\n\nshrt graceful stop enabled; will not make new entries once existing positions are closed\n')
             config['shrt']['enabled'] = config['do_shrt'] = False
@@ -705,6 +711,8 @@ async def main() -> None:
         print('\n\ngraceful stop enabled for both long and short; will not make new entries once existing positions are closed\n')
         config['long']['enabled'] = config['do_long'] = False
         config['shrt']['enabled'] = config['do_shrt'] = False
+        config['long_mode'] = None
+        config['shrt_mode'] = None
 
     if args.long_wallet_exposure_limit is not None:
         print(
