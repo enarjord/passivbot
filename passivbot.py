@@ -37,6 +37,7 @@ class Bot:
                                            'update_position', 'print', 'create_orders',
                                            'check_fills', 'update_fills', 'force_update']}
         self.ts_released = {k: 1.0 for k in self.ts_locked}
+        self.error_halt = {'update_open_orders': False, 'update_fills': False, 'update_position': False}
         self.heartbeat_ts = 0
         self.listen_key = None
 
@@ -108,7 +109,9 @@ class Bot:
             if self.open_orders != open_orders:
                 self.dump_log({'log_type': 'open_orders', 'data': open_orders})
             self.open_orders = open_orders
+            self.error_halt['update_open_orders'] = False
         except Exception as e:
+            self.error_halt['update_open_orders'] = True
             print('error with update open orders', e)
             traceback.print_exc()
         finally:
@@ -148,7 +151,9 @@ class Bot:
                     await self.update_fills()
                 self.dump_log({'log_type': 'position', 'data': position})
             self.position = position
+            self.error_halt['update_position'] = False
         except Exception as e:
+            self.error_halt['update_position'] = True
             print('error with update position', e)
             traceback.print_exc()
         finally:
@@ -174,7 +179,9 @@ class Bot:
                     updated_fills.append(fill)
                     seen.add(fill['order_id'])
             self.fills = sorted(updated_fills, key=lambda x: x['order_id'])[-5000:]
+            self.error_halt['update_fills'] = False
         except Exception as e:
+            self.error_halt['update_fills'] = True
             print('error with update fills', e)
             traceback.print_exc()
         finally:
@@ -336,6 +343,9 @@ class Bot:
 
     async def cancel_and_create(self):
         if self.ts_locked["cancel_and_create"] > self.ts_released["cancel_and_create"]:
+            return
+        if any(self.error_halt.values()):
+            print_([f'warning:  error in rest api fetch {self.error_halt}, halting order creations/cancellations'])
             return
         self.ts_locked["cancel_and_create"] = time()
         try:
