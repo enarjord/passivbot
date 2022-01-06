@@ -1907,6 +1907,11 @@ def njit_backtest(
     prev_k = 0
     closest_bkr = 1.0
 
+    ema_span_min[0] = max(1, ema_span_min[0])
+    ema_span_min[1] = max(1, ema_span_min[1])
+    ema_span_max[0] = max(1, ema_span_max[0])
+    ema_span_max[1] = max(1, ema_span_max[1])
+
     spans_long = (
         np.array(
             [
