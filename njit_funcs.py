@@ -1984,6 +1984,9 @@ def njit_backtest(
                 inverse,
                 c_mult,
             )
+            if equity / starting_balance < 0.5:
+                # break early when equity is less than half of starting balance
+                return fills, stats
             stats.append(
                 (
                     timestamps[k],
