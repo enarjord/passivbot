@@ -126,7 +126,9 @@ class HarmonySearch:
         for cfg in self.starting_configs:
             # ensure starting configs are within bounds and override enabled: true/false
             cfg["long"] = {
-                k: max(self.long_bounds[k][0], min(self.long_bounds[k][1], cfg["long"][k]))
+                k: max(
+                    self.long_bounds[k][0], min(self.long_bounds[k][1], cfg["long"][k])
+                )
                 for k in self.long_bounds
             }
             cfg["long"]["enabled"] = self.config["long"]["enabled"]
@@ -137,7 +139,10 @@ class HarmonySearch:
                 i_long += 1
                 seen_long.add(key_long)
             cfg["short"] = {
-                k: max(self.short_bounds[k][0], min(self.short_bounds[k][1], cfg["short"][k]))
+                k: max(
+                    self.short_bounds[k][0],
+                    min(self.short_bounds[k][1], cfg["short"][k]),
+                )
                 for k in self.short_bounds
             }
             cfg["short"]["enabled"] = self.config["short"]["enabled"]
@@ -220,7 +225,12 @@ class HarmonySearch:
                                 print(
                                     f"improved long harmony, prev score ",
                                     f"{hm_evals_long[worst_long_i]:.5f} new score {long_score:.5f}",
-                                    '_'.join([str(round_dynamic(e, 4)) for e in cfg["long"].values()]),
+                                    " ".join(
+                                        [
+                                            str(round_dynamic(e, 3))
+                                            for e in cfg["long"].values()
+                                        ]
+                                    ),
                                 )
                                 hm_long[worst_long_i] = cfg["long"]
                                 hm_evals_long[worst_long_i] = long_score
@@ -234,10 +244,12 @@ class HarmonySearch:
                                 print(
                                     f"improved short harmony, prev score ",
                                     f"{hm_evals_short[worst_short_i]:.5f} new score {short_score:.5f}",
-                                    '_'.join([
-                                        str(round_dynamic(e, 4))
-                                        for e in cfg["short"].values()
-                                    ]),
+                                    " ".join(
+                                        [
+                                            str(round_dynamic(e, 3))
+                                            for e in cfg["short"].values()
+                                        ]
+                                    ),
                                 )
                                 hm_short[worst_short_i] = cfg["short"]
                                 hm_evals_short[worst_short_i] = short_score
@@ -323,12 +335,19 @@ class HarmonySearch:
                                 config["initial_eval_i"] = ei
                                 print(
                                     "starting new initial eval, long:",
-                                    '_'.join([str(round_dynamic(e, 4)) for e in hm_long[ei].values()]),
+                                    " ".join(
+                                        [
+                                            str(round_dynamic(e, 3))
+                                            for e in hm_long[ei].values()
+                                        ]
+                                    ),
                                     "short:",
-                                    '_'.join([
-                                        str(round_dynamic(e, 4))
-                                        for e in hm_short[ei].values()
-                                    ]),
+                                    " ".join(
+                                        [
+                                            str(round_dynamic(e, 3))
+                                            for e in hm_short[ei].values()
+                                        ]
+                                    ),
                                     self.symbols[0],
                                 )
                                 # arbitrary unique identifier
@@ -359,23 +378,17 @@ class HarmonySearch:
                                     new_note_short = np.random.choice(hm_short)[key]
                                     if np.random.random() < self.pitch_adjusting_rate:
                                         # tweak note
-                                        new_note_long = (
-                                            new_note_long
-                                            + self.bandwidth
-                                            * (np.random.random() - 0.5)
-                                            * abs(
-                                                self.long_bounds[key][0]
-                                                - self.long_bounds[key][1]
-                                            )
+                                        new_note_long = new_note_long + self.bandwidth * (
+                                            np.random.random() - 0.5
+                                        ) * abs(
+                                            self.long_bounds[key][0]
+                                            - self.long_bounds[key][1]
                                         )
-                                        new_note_short = (
-                                            new_note_short
-                                            + self.bandwidth
-                                            * (np.random.random() - 0.5)
-                                            * abs(
-                                                self.short_bounds[key][0]
-                                                - self.short_bounds[key][1]
-                                            )
+                                        new_note_short = new_note_short + self.bandwidth * (
+                                            np.random.random() - 0.5
+                                        ) * abs(
+                                            self.short_bounds[key][0]
+                                            - self.short_bounds[key][1]
                                         )
                                     # ensure note is within bounds
                                     new_note_long = max(
@@ -400,15 +413,19 @@ class HarmonySearch:
                                 new_harmony["short"][key] = new_note_short
                             print(
                                 "starting new harmony, long",
-                                '_'.join([
-                                    str(round_dynamic(e, 4))
-                                    for e in new_harmony["long"].values()
-                                ]),
+                                " ".join(
+                                    [
+                                        str(round_dynamic(e, 3))
+                                        for e in new_harmony["long"].values()
+                                    ]
+                                ),
                                 "short:",
-                                '_'.join([
-                                    str(round_dynamic(e, 4))
-                                    for e in new_harmony["short"].values()
-                                ]),
+                                " ".join(
+                                    [
+                                        str(round_dynamic(e, 3))
+                                        for e in new_harmony["short"].values()
+                                    ]
+                                ),
                                 self.symbols[0],
                             )
                             id_key = str(time()) + str(np.random.random())
