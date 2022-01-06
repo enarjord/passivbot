@@ -111,37 +111,37 @@ def dump_plots(result: dict, fdf: pd.DataFrame, sdf: pd.DataFrame, df: pd.DataFr
     table.add_row(
         [
             "Price action distance mean long",
-            round_dynamic(result["result"]["pa_closeness_mean_long"], 6),
+            round_dynamic(result["result"]["pa_distance_mean_long"], 6),
         ]
     )
     table.add_row(
         [
             "Price action distance median long",
-            round_dynamic(result["result"]["pa_closeness_median_long"], 6),
+            round_dynamic(result["result"]["pa_distance_median_long"], 6),
         ]
     )
     table.add_row(
         [
             "Price action distance max long",
-            round_dynamic(result["result"]["pa_closeness_max_long"], 6),
+            round_dynamic(result["result"]["pa_distance_max_long"], 6),
         ]
     )
     table.add_row(
         [
             "Price action distance mean short",
-            round_dynamic(result["result"]["pa_closeness_mean_short"], 6),
+            round_dynamic(result["result"]["pa_distance_mean_short"], 6),
         ]
     )
     table.add_row(
         [
             "Price action distance median short",
-            round_dynamic(result["result"]["pa_closeness_median_short"], 6),
+            round_dynamic(result["result"]["pa_distance_median_short"], 6),
         ]
     )
     table.add_row(
         [
             "Price action distance max short",
-            round_dynamic(result["result"]["pa_closeness_max_short"], 6),
+            round_dynamic(result["result"]["pa_distance_max_short"], 6),
         ]
     )
     table.add_row(
