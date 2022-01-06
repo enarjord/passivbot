@@ -46,13 +46,14 @@ from typing import Union, Dict, List
 
 import websockets
 
+
 class Bot:
     def __init__(self, config: dict):
         self.spot = False
         self.config = config
-        self.config['do_long'] = config['long']['enabled']
-        self.config['do_short'] = config['short']['enabled']
-        self.config['max_leverage'] = 25
+        self.config["do_long"] = config["long"]["enabled"]
+        self.config["do_short"] = config["short"]["enabled"]
+        self.config["max_leverage"] = 25
         self.xk = {}
 
         self.ws = None
@@ -73,6 +74,11 @@ class Bot:
                 "update_fills",
                 "force_update",
             ]
+        }
+        self.error_halt = {
+            "update_open_orders": False,
+            "update_fills": False,
+            "update_position": False,
         }
         self.ts_released = {k: 1.0 for k in self.ts_locked}
         self.heartbeat_ts = 0
@@ -182,7 +188,7 @@ class Bot:
         self.alpha_short = 2 / (spans1s_short)
         self.alpha__short = 1 - self.alpha_short
         self.ema_sec = int(time())
-        return samples1s
+        # return samples1s
 
     def update_emas(self, price: float, prev_price: float) -> None:
         now_sec = int(time())
@@ -216,7 +222,10 @@ class Bot:
             if self.open_orders != open_orders:
                 self.dump_log({"log_type": "open_orders", "data": open_orders})
             self.open_orders = open_orders
+            self.error_halt["update_open_orders"] = False
         except Exception as e:
+            self.error_halt["update_open_orders"] = True
+
             print("error with update open orders", e)
             traceback.print_exc()
         finally:
@@ -290,7 +299,9 @@ class Bot:
                     await self.update_fills()
                 self.dump_log({"log_type": "position", "data": position})
             self.position = position
+            self.error_halt["update_position"] = False
         except Exception as e:
+            self.error_halt["update_position"] = True
             print("error with update position", e)
             traceback.print_exc()
         finally:
@@ -316,7 +327,9 @@ class Bot:
                     updated_fills.append(fill)
                     seen.add(fill["order_id"])
             self.fills = sorted(updated_fills, key=lambda x: x["order_id"])[-5000:]
+            self.error_halt["update_fills"] = False
         except Exception as e:
+            self.error_halt["update_fills"] = True
             print("error with update fills", e)
             traceback.print_exc()
         finally:
@@ -648,6 +661,13 @@ class Bot:
         if self.ts_locked["cancel_and_create"] > self.ts_released["cancel_and_create"]:
             return
         self.ts_locked["cancel_and_create"] = time()
+        if any(self.error_halt.values()):
+            print_(
+                [
+                    f"warning:  error in api fetch {self.error_halt}, halting order creations/cancellations"
+                ]
+            )
+            return
         try:
             to_cancel_, to_create_ = filter_orders(
                 self.open_orders,
@@ -868,8 +888,8 @@ class Bot:
             f"spprc diff {calc_diff(self.position['short']['price'], self.price):.3f} "
         )
         line += f"liq {round_dynamic(liq_price, 5)} "
-        line += f"lwallet_exposure {self.position['long']['wallet_exposure']:.3f} "
-        line += f"swallet_exposure {self.position['short']['wallet_exposure']:.3f} "
+        line += f"lw {self.position['long']['wallet_exposure']:.3f} "
+        line += f"sw {self.position['short']['wallet_exposure']:.3f} "
         line += f"bal {round_dynamic(self.position['wallet_balance'], 5)} "
         line += f"eq {round_dynamic(self.position['equity'], 5)} "
         print_([line], r=True)
