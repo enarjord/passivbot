@@ -75,12 +75,12 @@ class Bot:
                 "force_update",
             ]
         }
+        self.ts_released = {k: 1.0 for k in self.ts_locked}
         self.error_halt = {
             "update_open_orders": False,
             "update_fills": False,
             "update_position": False,
         }
-        self.ts_released = {k: 1.0 for k in self.ts_locked}
         self.heartbeat_ts = 0
         self.listen_key = None
 
@@ -660,14 +660,14 @@ class Bot:
     async def cancel_and_create(self):
         if self.ts_locked["cancel_and_create"] > self.ts_released["cancel_and_create"]:
             return
-        self.ts_locked["cancel_and_create"] = time()
         if any(self.error_halt.values()):
             print_(
                 [
-                    f"warning:  error in api fetch {self.error_halt}, halting order creations/cancellations"
+                    f"warning:  error in rest api fetch {self.error_halt}, halting order creations/cancellations"
                 ]
             )
             return
+        self.ts_locked["cancel_and_create"] = time()
         try:
             to_cancel_, to_create_ = filter_orders(
                 self.open_orders,
@@ -1084,7 +1084,10 @@ async def main() -> None:
         print(f"\nassigned balance set to {args.assigned_balance}\n")
         config["assigned_balance"] = args.assigned_balance
 
-    if args.long_mode is not None:
+    if args.long_mode is None:
+        if not config["long"]["enabled"]:
+            config["long_mode"] = "manual"
+    else:
         if args.long_mode in ["gs", "graceful_stop", "graceful-stop"]:
             print(
                 "\n\nlong graceful stop enabled; will not make new entries once existing positions are closed\n"
@@ -1105,33 +1108,38 @@ async def main() -> None:
         elif args.long_mode.lower() in ["t", "tp_only", "tp-only"]:
             print("\nlong tp only mode enabled")
             config["long_mode"] = "tp_only"
-    if args.short_mode is not None:
+    if args.short_mode is None:
+        if not config["shrt"]["enabled"]:
+            config["shrt_mode"] = "manual"
+    else:
         if args.short_mode in ["gs", "graceful_stop", "graceful-stop"]:
             print(
-                "\n\nshort graceful stop enabled; will not make new entries once existing positions are closed\n"
+                "\n\nshrt graceful stop enabled; will not make new entries once existing positions are closed\n"
             )
-            config["short"]["enabled"] = config["do_short"] = False
+            config["shrt"]["enabled"] = config["do_shrt"] = False
         elif args.short_mode in ["m", "manual"]:
             print(
-                "\n\nshort manual mode enabled; will neither cancel nor create short orders"
+                "\n\nshrt manual mode enabled; will neither cancel nor create shrt orders"
             )
-            config["short_mode"] = "manual"
+            config["shrt_mode"] = "manual"
         elif args.short_mode in ["n", "normal"]:
-            print("\n\nshort normal mode")
-            config["short"]["enabled"] = config["do_short"] = True
+            print("\n\nshrt normal mode")
+            config["shrt"]["enabled"] = config["do_shrt"] = True
         elif args.short_mode in ["p", "panic"]:
             print("\nshort panic mode enabled")
-            config["short_mode"] = "panic"
-            config["short"]["enabled"] = config["do_short"] = False
+            config["shrt_mode"] = "panic"
+            config["shrt"]["enabled"] = config["do_shrt"] = False
         elif args.short_mode.lower() in ["t", "tp_only", "tp-only"]:
             print("\nshort tp only mode enabled")
-            config["short_mode"] = "tp_only"
+            config["shrt_mode"] = "tp_only"
     if args.graceful_stop:
         print(
             "\n\ngraceful stop enabled for both long and short; will not make new entries once existing positions are closed\n"
         )
         config["long"]["enabled"] = config["do_long"] = False
-        config["short"]["enabled"] = config["do_short"] = False
+        config["shrt"]["enabled"] = config["do_shrt"] = False
+        config["long_mode"] = None
+        config["shrt_mode"] = None
 
     if args.long_wallet_exposure_limit is not None:
         print(
