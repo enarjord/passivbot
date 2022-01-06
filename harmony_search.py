@@ -181,30 +181,32 @@ class HarmonySearch:
                     results = unfinished_evals[id_key]["single_results"]
                     if set(results) == set(self.symbols):
                         # completed multisymbol iter
-                        long_score = -np.mean(
+                        adg_mean_long = np.mean(
                             [v["adg_long"] for v in results.values()]
-                        ) * min(
+                        )
+                        pad_mean_long = np.mean(
+                            [v["pa_distance_long"] for v in results.values()]
+                        )
+                        long_score = -adg_mean_long * min(
                             1.0,
                             self.config["maximum_pa_distance_mean_long"]
-                            / np.mean(
-                                [v["pa_distance_long"] for v in results.values()]
-                            ),
+                            / pad_mean_long,
                         )
-                        short_score = -np.mean(
+                        adg_mean_short = np.mean(
                             [v["adg_short"] for v in results.values()]
-                        ) * min(
+                        )
+                        pad_mean_short = np.mean(
+                            [v["pa_distance_short"] for v in results.values()]
+                        )
+                        short_score = -adg_mean_short * min(
                             1.0,
                             self.config["maximum_pa_distance_mean_short"]
-                            / np.mean(
-                                [v["pa_distance_short"] for v in results.values()]
-                            ),
+                            / pad_mean_short,
                         )
                         print(
                             "completed multisymbol iter",
-                            "long score",
-                            long_score,
-                            "short score",
-                            short_score,
+                            f"adg long {adg_mean_long:.6f} pad long {pad_mean_long:.6f} score long {long_score:.6f}",
+                            f"adg short {adg_mean_short:.6f} pad short {pad_mean_short:.6f} score short {short_score:.6f}",
                             "is initial",
                             "initial_eval_i" in cfg,
                         )
@@ -305,15 +307,9 @@ class HarmonySearch:
                         )
                         if missing_symbols:
                             # start eval for missing symbol
-                            symbol = missing_symbols.pop()
+                            symbol = sorted(missing_symbols).pop(0)
                             config = unfinished_evals[id_key]["config"].copy()
                             config["symbol"] = symbol
-                            print(
-                                "assigning work unfinished eval",
-                                symbol,
-                                "is initial",
-                                "initial_eval_i" in config,
-                            )
                             workers[wi] = {
                                 "config": config,
                                 "task": self.pool.apply_async(
