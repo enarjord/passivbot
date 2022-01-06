@@ -1,6 +1,6 @@
 {
   # harmony search options
-  n_harmonies: 6
+  n_harmonies: 24
   hm_considering_rate: 0.9
   bandwidth: 0.07
   pitch_adjusting_rate: 0.24
