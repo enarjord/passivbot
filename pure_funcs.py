@@ -467,27 +467,35 @@ def analyze_fills(
     hrs_stuck_avg_short = short_pos_changes_ms_diff.mean() / (1000 * 60 * 60)
     lpprices = sdf[sdf.long_pprice != 0.0]
     spprices = sdf[sdf.short_pprice != 0.0]
-    pa_closeness_long = (
+    pa_distance_long = (
         ((lpprices.long_pprice - lpprices.price).abs() / lpprices.price)
         if len(lpprices) > 0
         else pd.Series([100.0])
     )
-    pa_closeness_short = (
+    pa_distance_short = (
         ((spprices.short_pprice - spprices.price).abs() / spprices.price)
         if len(spprices) > 0
         else pd.Series([100.0])
     )
+    gain_long = fdf[fdf.type.str.contains("long")].pnl.sum() / sdf.balance.iloc[0]
+    adg_long = (gain_long + 1) ** (1 / n_days) - 1
+    gain_short = fdf[fdf.type.str.contains("short")].pnl.sum() / sdf.balance.iloc[0]
+    adg_short = (gain_short + 1) ** (1 / n_days) - 1
 
     analysis = {
         "exchange": config["exchange"] if "exchange" in config else "unknown",
         "symbol": config["symbol"] if "symbol" in config else "unknown",
         "starting_balance": sdf.balance.iloc[0],
-        "pa_closeness_mean_long": pa_closeness_long.mean(),
-        "pa_closeness_median_long": pa_closeness_long.median(),
-        "pa_closeness_max_long": pa_closeness_long.max(),
-        "pa_closeness_mean_short": pa_closeness_short.mean(),
-        "pa_closeness_median_short": pa_closeness_short.median(),
-        "pa_closeness_max_short": pa_closeness_short.max(),
+        "pa_distance_mean_long": pa_distance_long.mean(),
+        "pa_distance_median_long": pa_distance_long.median(),
+        "pa_distance_max_long": pa_distance_long.max(),
+        "pa_distance_mean_short": pa_distance_short.mean(),
+        "pa_distance_median_short": pa_distance_short.median(),
+        "pa_distance_max_short": pa_distance_short.max(),
+        "gain_long": gain_long,
+        "adg_long": adg_long,
+        "gain_short": gain_short,
+        "adg_short": adg_short,
         "average_daily_gain": adg,
         "adjusted_daily_gain": np.tanh(20 * adg) / 20,
         "gain": gain,
@@ -631,11 +639,17 @@ def spotify_config(config: dict, nullify_short=True) -> dict:
     return spotified
 
 
-def tuplify(xs):
+def tuplify(xs, sort=False):
     if type(xs) in [list]:
-        return tuple(tuplify(x) for x in xs)
-    elif type(xs) in [dict]:
-        return tuple({k: tuplify(v) for k, v in xs.items()}.items())
+        if sort:
+            return tuple(sorted(tuplify(x, sort=sort) for x in xs))
+        return tuple(tuplify(x, sort=sort) for x in xs)
+    elif type(xs) in [dict, OrderedDict]:
+        if sort:
+            return tuple(
+                sorted({k: tuplify(v, sort=sort) for k, v in xs.items()}.items())
+            )
+        return tuple({k: tuplify(v, sort=sort) for k, v in xs.items()}.items())
     return xs
 
 
