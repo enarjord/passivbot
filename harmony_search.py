@@ -204,7 +204,7 @@ class HarmonySearch:
                             / pad_mean_short,
                         )
                         print(
-                            "completed multisymbol iter",
+                            f"completed multisymbol iter {iter_counter}",
                             f"adg long {adg_mean_long:.6f} pad long {pad_mean_long:.6f} score long {long_score:.6f}",
                             f"adg short {adg_mean_short:.6f} pad short {pad_mean_short:.6f} score short {short_score:.6f}",
                             "is initial",
