@@ -167,7 +167,6 @@ class Bot:
             [5, 15, 30, 60, 60 * 4], ["5m", "15m", "30m", "1h", "4h"]
         ):
             if max_span <= len(ohlcvs1m) * mins:
-                print("debug", mins, interval, len(ohlcvs1m))
                 break
         ohlcvs = await self.fetch_ohlcvs(interval=interval)
         ohlcvs = {ohlcv["timestamp"]: ohlcv for ohlcv in ohlcvs + ohlcvs1m}
@@ -709,6 +708,11 @@ class Bot:
             to_create = sorted(
                 to_create, key=lambda x: calc_diff(x["price"], self.price)
             )
+            """
+            print('to_cancel', to_cancel.values())
+            print('to create', to_create.values())
+            return
+            """
 
             results = []
             if to_cancel:
@@ -846,6 +850,7 @@ class Bot:
                 else (0.0, 0.0)
             )
             line += f"e {leqty} @ {leprice}, c {lcqty} @ {lcprice} "
+            line += f"emas {[round_dynamic(e, 3) for e in self.emas_long]}"
         if self.position["short"]["size"] != 0.0:
             short_closes = sorted(
                 [
@@ -1109,37 +1114,37 @@ async def main() -> None:
             print("\nlong tp only mode enabled")
             config["long_mode"] = "tp_only"
     if args.short_mode is None:
-        if not config["shrt"]["enabled"]:
-            config["shrt_mode"] = "manual"
+        if not config["short"]["enabled"]:
+            config["short_mode"] = "manual"
     else:
         if args.short_mode in ["gs", "graceful_stop", "graceful-stop"]:
             print(
-                "\n\nshrt graceful stop enabled; will not make new entries once existing positions are closed\n"
+                "\n\nshort graceful stop enabled; will not make new entries once existing positions are closed\n"
             )
-            config["shrt"]["enabled"] = config["do_shrt"] = False
+            config["short"]["enabled"] = config["do_short"] = False
         elif args.short_mode in ["m", "manual"]:
             print(
-                "\n\nshrt manual mode enabled; will neither cancel nor create shrt orders"
+                "\n\nshort manual mode enabled; will neither cancel nor create short orders"
             )
-            config["shrt_mode"] = "manual"
+            config["short_mode"] = "manual"
         elif args.short_mode in ["n", "normal"]:
-            print("\n\nshrt normal mode")
-            config["shrt"]["enabled"] = config["do_shrt"] = True
+            print("\n\nshort normal mode")
+            config["short"]["enabled"] = config["do_short"] = True
         elif args.short_mode in ["p", "panic"]:
             print("\nshort panic mode enabled")
-            config["shrt_mode"] = "panic"
-            config["shrt"]["enabled"] = config["do_shrt"] = False
+            config["short_mode"] = "panic"
+            config["short"]["enabled"] = config["do_short"] = False
         elif args.short_mode.lower() in ["t", "tp_only", "tp-only"]:
             print("\nshort tp only mode enabled")
-            config["shrt_mode"] = "tp_only"
+            config["short_mode"] = "tp_only"
     if args.graceful_stop:
         print(
             "\n\ngraceful stop enabled for both long and short; will not make new entries once existing positions are closed\n"
         )
         config["long"]["enabled"] = config["do_long"] = False
-        config["shrt"]["enabled"] = config["do_shrt"] = False
+        config["short"]["enabled"] = config["do_short"] = False
         config["long_mode"] = None
-        config["shrt_mode"] = None
+        config["short_mode"] = None
 
     if args.long_wallet_exposure_limit is not None:
         print(
