@@ -19,6 +19,7 @@ from pure_funcs import (
     get_template_live_config,
     ts_to_date,
     tuplify,
+    sort_dict_keys,
 )
 from procedures import (
     add_argparse_args,
@@ -85,8 +86,8 @@ class HarmonySearch:
         self.iters = config["iters"]
         self.n_cpus = config["n_cpus"]
         self.pool = Pool(processes=config["n_cpus"])
-        self.long_bounds = config["bounds"]["long"]
-        self.short_bounds = config["bounds"]["short"]
+        self.long_bounds = sort_dict_keys(config["bounds"]["long"])
+        self.short_bounds = sort_dict_keys(config["bounds"]["short"])
         self.symbols = config["symbols"]
         self.identifying_name = "".join([e[0] for e in config["symbols"]])
         self.now_date = ts_to_date(time())[:19].replace(":", "-")
@@ -157,7 +158,7 @@ class HarmonySearch:
                         f"improved long harmony, prev score ",
                         f"{self.hm_evals_long[worst_long_i]:.5f} new score {long_score:.5f}",
                         " ".join(
-                            [str(round_dynamic(e, 3)) for e in cfg["long"].values()]
+                            [str(round_dynamic(e[1], 3)) for e in sorted(cfg["long"].items())]
                         ),
                     )
                     self.hm_long[worst_long_i] = cfg["long"]
@@ -170,7 +171,7 @@ class HarmonySearch:
                         f"improved short harmony, prev score ",
                         f"{self.hm_evals_short[worst_short_i]:.5f} new score {short_score:.5f}",
                         " ".join(
-                            [str(round_dynamic(e, 3)) for e in cfg["short"].values()]
+                            [str(round_dynamic(e[1], 3)) for e in sorted(cfg["short"].items())]
                         ),
                     )
                     self.hm_short[worst_short_i] = cfg["short"]
@@ -249,9 +250,9 @@ class HarmonySearch:
             new_harmony["short"][key] = new_note_short
         print(
             f"starting new harmony {self.iter_counter}, long",
-            " ".join([str(round_dynamic(e, 3)) for e in new_harmony["long"].values()]),
+            " ".join([str(round_dynamic(e[1], 3)) for e in sorted(new_harmony["long"].items())]),
             "short:",
-            " ".join([str(round_dynamic(e, 3)) for e in new_harmony["short"].values()]),
+            " ".join([str(round_dynamic(e[1], 3)) for e in sorted(new_harmony["short"].items())]),
             self.symbols[0],
         )
         # arbitrary unique identifier
@@ -275,9 +276,9 @@ class HarmonySearch:
         config["initial_eval_i"] = ei
         print(
             f"starting new initial eval {ei}, long:",
-            " ".join([str(round_dynamic(e, 3)) for e in self.hm_long[ei].values()]),
+            " ".join([str(round_dynamic(e[1], 3)) for e in sorted(self.hm_long[ei].items())]),
             "short:",
-            " ".join([str(round_dynamic(e, 3)) for e in self.hm_short[ei].values()]),
+            " ".join([str(round_dynamic(e[1], 3)) for e in sorted(self.hm_short[ei].items())]),
             self.symbols[0],
         )
         # arbitrary unique identifier
