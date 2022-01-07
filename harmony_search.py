@@ -94,18 +94,15 @@ class HarmonySearch:
         self.results_fname = make_get_filepath(
             f"tmp/harmony_search_results_{self.identifying_name}_{self.now_date}.txt"
         )
-        self.best_conf_fname = f"tmp/harmony_search_best_config_{self.identifying_name}_{self.now_date}.json"
+        self.best_conf_fpath = make_get_filepath(
+            f"tmp/harmony_search_best_config_{self.identifying_name}_{self.now_date}_best_configs/"
+        )
 
         # [{'config': dict, 'task': process, 'id_key': tuple}]
         self.workers = [None for _ in range(self.n_cpus)]
 
-        # hm_long/short = [{long/short_conf0}, {long/short_conf1}, ...]
-        self.hm_long = []
-        self.hm_short = []
-
-        # [score: float]
-        self.hm_evals_long = []
-        self.hm_evals_short = []
+        # hm = {hm_key: str: {'long': {'score': float, 'config': dict}, 'short': {...}}}
+        self.hm = {}
 
         # {identifier: {'config': dict,
         #               'single_results': {symbol_finished: single_backtest_result},
@@ -128,65 +125,86 @@ class HarmonySearch:
             # completed multisymbol iter
             adg_mean_long = np.mean([v["adg_long"] for v in results.values()])
             pad_mean_long = np.mean([v["pa_distance_long"] for v in results.values()])
-            long_score = -adg_mean_long * min(
+            score_long = -adg_mean_long * min(
                 1.0,
                 self.config["maximum_pa_distance_mean_long"] / pad_mean_long,
             )
             adg_mean_short = np.mean([v["adg_short"] for v in results.values()])
             pad_mean_short = np.mean([v["pa_distance_short"] for v in results.values()])
-            short_score = -adg_mean_short * min(
+            score_short = -adg_mean_short * min(
                 1.0,
                 self.config["maximum_pa_distance_mean_short"] / pad_mean_short,
             )
             print(
                 f"completed multisymbol iter {self.iter_counter}",
-                f"adg long {adg_mean_long:.6f} pad long {pad_mean_long:.6f} score long {long_score:.6f}",
-                f"adg short {adg_mean_short:.6f} pad short {pad_mean_short:.6f} score short {short_score:.6f}",
+                f"adg long {adg_mean_long:.6f} pad long {pad_mean_long:.6f} score long {score_long:.6f}",
+                f"adg short {adg_mean_short:.6f} pad short {pad_mean_short:.6f} score short {score_short:.6f}",
             )
             # check whether initial eval or new harmony
-            if "initial_eval_i" in cfg:
-                self.hm_evals_long[cfg["initial_eval_i"]] = long_score
-                self.hm_evals_short[cfg["initial_eval_i"]] = short_score
+            if "initial_eval_key" in cfg:
+                self.hm[cfg["initial_eval_key"]]["long"]["score"] = score_long
+                self.hm[cfg["initial_eval_key"]]["short"]["score"] = score_short
             else:
                 self.iter_counter += 1
                 # check if better than worst in harmony memory
-                worst_long_i = np.argmax(
-                    [-np.inf if type(e) == str else e for e in self.hm_evals_long]
-                )
-                if long_score < self.hm_evals_long[worst_long_i]:
+                worst_long_key = sorted(
+                    {
+                        k: v
+                        for k, v in self.hm.items()
+                        if type(v["long"]["score"]) != str
+                    }.items(),
+                    key=lambda x: x[1]["long"]["score"],
+                )[-1][0]
+                print("debug worst long key", worst_long_key)
+                if score_long < self.hm[worst_long_key]["long"]["score"]:
                     print(
                         f"improved long harmony, prev score ",
-                        f"{self.hm_evals_long[worst_long_i]:.5f} new score {long_score:.5f}",
+                        f"{self.hm[worst_long_key]['long']['score']:.5f} new score {score_long:.5f}",
                         " ".join(
-                            [str(round_dynamic(e[1], 3)) for e in sorted(cfg["long"].items())]
+                            [
+                                str(round_dynamic(e[1], 3))
+                                for e in sorted(cfg["long"].items())
+                            ]
                         ),
                     )
-                    self.hm_long[worst_long_i] = cfg["long"]
-                    self.hm_evals_long[worst_long_i] = long_score
-                worst_short_i = np.argmax(
-                    [-np.inf if type(e) == str else e for e in self.hm_evals_short]
-                )
-                if short_score < self.hm_evals_short[worst_short_i]:
+                    self.hm[worst_long_key]["long"] = {
+                        "config": cfg["long"],
+                        "score": score_long,
+                    }
+                worst_short_key = sorted(
+                    {
+                        k: v
+                        for k, v in self.hm.items()
+                        if type(v["short"]["score"]) != str
+                    }.items(),
+                    key=lambda x: x[1]["short"]["score"],
+                )[-1][0]
+                if score_short < self.hm[worst_short_key]["short"]["score"]:
                     print(
                         f"improved short harmony, prev score ",
-                        f"{self.hm_evals_short[worst_short_i]:.5f} new score {short_score:.5f}",
+                        f"{self.hm[worst_short_key]['short']['score']:.5f} new score {score_short:.5f}",
                         " ".join(
-                            [str(round_dynamic(e[1], 3)) for e in sorted(cfg["short"].items())]
+                            [
+                                str(round_dynamic(e[1], 3))
+                                for e in sorted(cfg["short"].items())
+                            ]
                         ),
                     )
-                    self.hm_short[worst_short_i] = cfg["short"]
-                    self.hm_evals_short[worst_short_i] = short_score
+                    self.hm[worst_short_key]["short"] = {
+                        "config": cfg["short"],
+                        "score": score_short,
+                    }
+            best_long_key = sorted(
+                {k: v for k, v in self.hm.items() if type(v["long"]["score"]) != str}.items(),
+                key=lambda x: x[1]["long"]["score"],
+            )[0][0]
+            best_short_key = sorted(
+                {k: v for k, v in self.hm.items() if type(v["short"]["score"]) != str}.items(),
+                key=lambda x: x[1]["short"]["score"],
+            )[0][0]
             best_config = {
-                "long": self.hm_long[
-                    np.argmin(
-                        [np.inf if type(e) == str else e for e in self.hm_evals_long]
-                    )
-                ],
-                "short": self.hm_short[
-                    np.argmin(
-                        [np.inf if type(e) == str else e for e in self.hm_evals_short]
-                    )
-                ],
+                "long": self.hm[best_long_key]["long"]["config"],
+                "short": self.hm[best_short_key]["short"]["config"],
             }
             best_config["result"] = {
                 "symbol": f"{len(self.symbols)}_symbols",
@@ -194,7 +212,10 @@ class HarmonySearch:
                 "start_date": self.config["start_date"],
                 "end_date": self.config["end_date"],
             }
-            dump_live_config(best_config, self.best_conf_fname)
+            dump_live_config(
+                best_config,
+                self.best_conf_fpath + str(self.iter_counter).zfill(6) + ".json",
+            )
             with open(self.results_fname, "a") as f:
                 f.write(
                     json.dumps(
@@ -217,8 +238,12 @@ class HarmonySearch:
         for key in self.long_bounds:
             if np.random.random() < self.hm_considering_rate:
                 # take note randomly from harmony memory
-                new_note_long = np.random.choice(self.hm_long)[key]
-                new_note_short = np.random.choice(self.hm_short)[key]
+                new_note_long = self.hm[np.random.choice(list(self.hm))]["long"][
+                    "config"
+                ][key]
+                new_note_short = self.hm[np.random.choice(list(self.hm))]["short"][
+                    "config"
+                ][key]
                 if np.random.random() < self.pitch_adjusting_rate:
                     # tweak note
                     new_note_long = new_note_long + self.bandwidth * (
@@ -250,9 +275,19 @@ class HarmonySearch:
             new_harmony["short"][key] = new_note_short
         print(
             f"starting new harmony {self.iter_counter}, long",
-            " ".join([str(round_dynamic(e[1], 3)) for e in sorted(new_harmony["long"].items())]),
+            " ".join(
+                [
+                    str(round_dynamic(e[1], 3))
+                    for e in sorted(new_harmony["long"].items())
+                ]
+            ),
             "short:",
-            " ".join([str(round_dynamic(e[1], 3)) for e in sorted(new_harmony["short"].items())]),
+            " ".join(
+                [
+                    str(round_dynamic(e[1], 3))
+                    for e in sorted(new_harmony["short"].items())
+                ]
+            ),
             self.symbols[0],
         )
         # arbitrary unique identifier
@@ -268,17 +303,27 @@ class HarmonySearch:
             "in_progress": set([self.symbols[0]]),
         }
 
-    def start_new_initial_eval(self, wi: int, ei: int):
+    def start_new_initial_eval(self, wi: int, hm_key: str):
         config = self.config.copy()
-        config["long"] = self.hm_long[ei]
-        config["short"] = self.hm_short[ei]
+        config["long"] = self.hm[hm_key]["long"]["config"]
+        config["short"] = self.hm[hm_key]["short"]["config"]
         config["symbol"] = self.symbols[0]
-        config["initial_eval_i"] = ei
+        config["initial_eval_key"] = hm_key
         print(
-            f"starting new initial eval {ei}, long:",
-            " ".join([str(round_dynamic(e[1], 3)) for e in sorted(self.hm_long[ei].items())]),
+            f"starting new initial eval {len([e for e in self.hm if self.hm[e]['long']['score'] != 'not_started'])}, long:",
+            " ".join(
+                [
+                    str(round_dynamic(e[1], 3))
+                    for e in sorted(self.hm[hm_key]["long"]["config"].items())
+                ]
+            ),
             "short:",
-            " ".join([str(round_dynamic(e[1], 3)) for e in sorted(self.hm_short[ei].items())]),
+            " ".join(
+                [
+                    str(round_dynamic(e[1], 3))
+                    for e in sorted(self.hm[hm_key]["short"]["config"].items())
+                ]
+            ),
             self.symbols[0],
         )
         # arbitrary unique identifier
@@ -293,32 +338,32 @@ class HarmonySearch:
             "single_results": {},
             "in_progress": set([self.symbols[0]]),
         }
-        self.hm_evals_long[ei] = "in_progress"
-        self.hm_evals_short[ei] = "in_progress"
+        self.hm[hm_key]["long"]["score"] = "in_progress"
+        self.hm[hm_key]["short"]["score"] = "in_progress"
 
     def run(self):
 
         # initialize harmony memory
         for _ in range(self.n_harmonies):
-            new_cfg = {
-                "long": self.config["long"].copy(),
-                "short": self.config["short"].copy(),
-            }
+            cfg_long = self.config["long"].copy()
+            cfg_short = self.config["short"].copy()
             for k in self.long_bounds:
-                new_cfg["long"][k] = np.random.uniform(
+                cfg_long[k] = np.random.uniform(
                     self.long_bounds[k][0], self.long_bounds[k][1]
                 )
-                new_cfg["short"][k] = np.random.uniform(
+                cfg_short[k] = np.random.uniform(
                     self.short_bounds[k][0], self.short_bounds[k][1]
                 )
-            self.hm_long.append(new_cfg["long"])
-            self.hm_short.append(new_cfg["short"])
+            hm_key = str(time()) + str(np.random.random())
+            self.hm[hm_key] = {
+                "long": {"score": "not_started", "config": cfg_long},
+                "short": {"score": "not_started", "config": cfg_short},
+            }
 
         # add starting configs
-        seen_long, seen_short = set(), set()
-        i_long, i_short = 0, 0
+        seen = set()
+        available_ids = set(self.hm)
         for cfg in self.starting_configs:
-            # ensure starting configs are within bounds and override enabled: true/false
             cfg["long"] = {
                 k: max(
                     self.long_bounds[k][0], min(self.long_bounds[k][1], cfg["long"][k])
@@ -326,12 +371,6 @@ class HarmonySearch:
                 for k in self.long_bounds
             }
             cfg["long"]["enabled"] = self.config["long"]["enabled"]
-            key_long = tuplify(cfg["long"], sort=True)
-            if key_long not in seen_long:
-                # prevent duplicates
-                self.hm_long[i_long] = cfg["long"]
-                i_long += 1
-                seen_long.add(key_long)
             cfg["short"] = {
                 k: max(
                     self.short_bounds[k][0],
@@ -340,14 +379,12 @@ class HarmonySearch:
                 for k in self.short_bounds
             }
             cfg["short"]["enabled"] = self.config["short"]["enabled"]
-            key_short = tuplify(cfg["short"], sort=True)
-            if key_short not in seen_short:
-                self.hm_short[i_short] = cfg["short"]
-                i_short += 1
-                seen_short.add(key_short)
-
-        self.hm_evals_long = ["not_started" for _ in range(len(self.hm_long))]
-        self.hm_evals_short = ["not_started" for _ in range(len(self.hm_short))]
+            seen_key = tuplify(cfg, sort=True)
+            if seen_key not in seen:
+                hm_key = available_ids.pop()
+                self.hm[hm_key]["long"]["config"] = cfg["long"]
+                self.hm[hm_key]["short"]["config"] = cfg["short"]
+                seen.add(seen_key)
 
         # start main loop
         while True:
@@ -387,10 +424,10 @@ class HarmonySearch:
                             break
                     else:
                         # means all symbols are accounted for in all unfinished evals; start new eval
-                        for ei in range(len(self.hm_evals_long)):
-                            if self.hm_evals_long[ei] == "not_started":
+                        for hm_key in self.hm:
+                            if self.hm[hm_key]["long"]["score"] == "not_started":
                                 # means initial evals not yet done
-                                self.start_new_initial_eval(wi, ei)
+                                self.start_new_initial_eval(wi, hm_key)
                                 break
                         else:
                             # means initial evals are done; start new harmony
