@@ -16,6 +16,7 @@ from pure_funcs import (
     config_pretty_str,
     date_to_ts,
     get_template_live_config,
+    sort_dict_keys
 )
 from njit_funcs import calc_samples
 from datetime import datetime
@@ -44,7 +45,7 @@ def load_live_config(live_config_path: str) -> dict:
             if "auto_unstuck_ema_dist" not in live_config[side]:
                 live_config[side]["auto_unstuck_ema_dist"] = 0.0
         assert all(k in live_config["long"] for k in get_template_live_config()["long"])
-        return numpyize(live_config)
+        return sort_dict_keys(numpyize(live_config))
     except Exception as e:
         raise Exception(f"failed to load live config {live_config_path} {e}")
 
