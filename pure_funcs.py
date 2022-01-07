@@ -344,7 +344,7 @@ def flatten(lst: list) -> list:
 
 
 def get_template_live_config():
-    return {
+    return sort_dict_keys({
         "config_name": "template",
         "logging_level": 0,
         "long": {
@@ -387,7 +387,7 @@ def get_template_live_config():
             # e.g. wallet_exposure_limit=0.06 and auto_unstuck_wallet_exposure_threshold=0.1: soft stop when wallet_exposure > 0.06 * (1 - 0.1) == 0.054
             "auto_unstuck_ema_dist": 0.02,
         },
-    }
+    })
 
 
 def analyze_fills(
