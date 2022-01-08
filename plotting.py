@@ -258,7 +258,6 @@ def dump_plots(result: dict, fdf: pd.DataFrame, sdf: pd.DataFrame, df: pd.DataFr
         output = table.get_string(border=True, padding_width=1)
         print(output)
         f.write(re.sub("\033\\[([0-9]+)(;[0-9]+)*m", "", output))
-    return
 
     print("\nplotting balance and equity...")
     plt.clf()
