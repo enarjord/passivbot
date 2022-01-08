@@ -344,50 +344,52 @@ def flatten(lst: list) -> list:
 
 
 def get_template_live_config():
-    return sort_dict_keys({
-        "config_name": "template",
-        "logging_level": 0,
-        "long": {
-            "enabled": True,
-            "ema_span_min": 1440,  # in minutes
-            "ema_span_max": 4320,
-            "grid_span": 0.16,
-            "wallet_exposure_limit": 1.6,
-            "max_n_entry_orders": 10,
-            "initial_qty_pct": 0.01,
-            "initial_eprice_ema_dist": -0.01,  # negative is closer; positive is further away
-            "eprice_pprice_diff": 0.0025,
-            "secondary_allocation": 0.5,
-            "secondary_pprice_diff": 0.35,
-            "eprice_exp_base": 1.618034,
-            "min_markup": 0.0045,
-            "markup_range": 0.0075,
-            "n_close_orders": 7,
-            "auto_unstuck_wallet_exposure_threshold": 0.1,  # percentage of wallet_exposure_limit to trigger soft stop.
-            # e.g. wallet_exposure_limit=0.06 and auto_unstuck_wallet_exposure_threshold=0.1: soft stop when wallet_exposure > 0.06 * (1 - 0.1) == 0.054
-            "auto_unstuck_ema_dist": 0.02,
-        },
-        "short": {
-            "enabled": True,
-            "ema_span_min": 1440,  # in minutes
-            "ema_span_max": 4320,
-            "grid_span": 0.16,
-            "wallet_exposure_limit": 1.6,
-            "max_n_entry_orders": 10,
-            "initial_qty_pct": 0.01,
-            "initial_eprice_ema_dist": -0.01,  # negative is closer; positive is further away
-            "eprice_pprice_diff": 0.0025,
-            "secondary_allocation": 0.5,
-            "secondary_pprice_diff": 0.35,
-            "eprice_exp_base": 1.618034,
-            "min_markup": 0.0045,
-            "markup_range": 0.0075,
-            "n_close_orders": 7,
-            "auto_unstuck_wallet_exposure_threshold": 0.1,  # percentage of wallet_exposure_limit to trigger soft stop.
-            # e.g. wallet_exposure_limit=0.06 and auto_unstuck_wallet_exposure_threshold=0.1: soft stop when wallet_exposure > 0.06 * (1 - 0.1) == 0.054
-            "auto_unstuck_ema_dist": 0.02,
-        },
-    })
+    return sort_dict_keys(
+        {
+            "config_name": "template",
+            "logging_level": 0,
+            "long": {
+                "enabled": True,
+                "ema_span_min": 1440,  # in minutes
+                "ema_span_max": 4320,
+                "grid_span": 0.16,
+                "wallet_exposure_limit": 1.6,
+                "max_n_entry_orders": 10,
+                "initial_qty_pct": 0.01,
+                "initial_eprice_ema_dist": -0.01,  # negative is closer; positive is further away
+                "eprice_pprice_diff": 0.0025,
+                "secondary_allocation": 0.5,
+                "secondary_pprice_diff": 0.35,
+                "eprice_exp_base": 1.618034,
+                "min_markup": 0.0045,
+                "markup_range": 0.0075,
+                "n_close_orders": 7,
+                "auto_unstuck_wallet_exposure_threshold": 0.1,  # percentage of wallet_exposure_limit to trigger soft stop.
+                # e.g. wallet_exposure_limit=0.06 and auto_unstuck_wallet_exposure_threshold=0.1: soft stop when wallet_exposure > 0.06 * (1 - 0.1) == 0.054
+                "auto_unstuck_ema_dist": 0.02,
+            },
+            "short": {
+                "enabled": True,
+                "ema_span_min": 1440,  # in minutes
+                "ema_span_max": 4320,
+                "grid_span": 0.16,
+                "wallet_exposure_limit": 1.6,
+                "max_n_entry_orders": 10,
+                "initial_qty_pct": 0.01,
+                "initial_eprice_ema_dist": -0.01,  # negative is closer; positive is further away
+                "eprice_pprice_diff": 0.0025,
+                "secondary_allocation": 0.5,
+                "secondary_pprice_diff": 0.35,
+                "eprice_exp_base": 1.618034,
+                "min_markup": 0.0045,
+                "markup_range": 0.0075,
+                "n_close_orders": 7,
+                "auto_unstuck_wallet_exposure_threshold": 0.1,  # percentage of wallet_exposure_limit to trigger soft stop.
+                # e.g. wallet_exposure_limit=0.06 and auto_unstuck_wallet_exposure_threshold=0.1: soft stop when wallet_exposure > 0.06 * (1 - 0.1) == 0.054
+                "auto_unstuck_ema_dist": 0.02,
+            },
+        }
+    )
 
 
 def analyze_fills(
@@ -477,35 +479,94 @@ def analyze_fills(
         if len(spprices) > 0
         else pd.Series([100.0])
     )
-    gain_long = fdf[fdf.type.str.contains("long")].pnl.sum() / sdf.balance.iloc[0]
+    longs = fdf[fdf.type.str.contains("long")]
+    shorts = fdf[fdf.type.str.contains("short")]
+    gain_long = longs.pnl.sum() / sdf.balance.iloc[0]
     adg_long = (gain_long + 1) ** (1 / n_days) - 1
-    gain_short = fdf[fdf.type.str.contains("short")].pnl.sum() / sdf.balance.iloc[0]
+    gain_short = shorts.pnl.sum() / sdf.balance.iloc[0]
     adg_short = (gain_short + 1) ** (1 / n_days) - 1
+
+    pos_costs = fdf.apply(
+        lambda x: qty_to_cost(
+            x["psize"], x["pprice"], config["inverse"], config["c_mult"]
+        ),
+        axis=1,
+    )
+    pos_costs_long = longs.apply(
+        lambda x: qty_to_cost(
+            x["psize"], x["pprice"], config["inverse"], config["c_mult"]
+        ),
+        axis=1,
+    )
+    pos_costs_short = shorts.apply(
+        lambda x: qty_to_cost(
+            x["psize"], x["pprice"], config["inverse"], config["c_mult"]
+        ),
+        axis=1,
+    )
+    volume_quote = fdf.apply(
+        lambda x: qty_to_cost(
+            x["qty"], x["price"], config["inverse"], config["c_mult"]
+        ),
+        axis=1,
+    ).sum()
+    volume_quote_long = longs.apply(
+        lambda x: qty_to_cost(
+            x["qty"], x["price"], config["inverse"], config["c_mult"]
+        ),
+        axis=1,
+    ).sum()
+    volume_quote_short = shorts.apply(
+        lambda x: qty_to_cost(
+            x["qty"], x["price"], config["inverse"], config["c_mult"]
+        ),
+        axis=1,
+    ).sum()
 
     analysis = {
         "exchange": config["exchange"] if "exchange" in config else "unknown",
         "symbol": config["symbol"] if "symbol" in config else "unknown",
         "starting_balance": sdf.balance.iloc[0],
         "pa_distance_mean_long": pa_distance_long.mean(),
-        "pa_distance_median_long": pa_distance_long.median(),
         "pa_distance_max_long": pa_distance_long.max(),
         "pa_distance_mean_short": pa_distance_short.mean(),
-        "pa_distance_median_short": pa_distance_short.median(),
         "pa_distance_max_short": pa_distance_short.max(),
         "gain_long": gain_long,
         "adg_long": adg_long if adg_long == adg_long else -1.0,
         "gain_short": gain_short,
         "adg_short": adg_short if adg_short == adg_short else -1.0,
         "average_daily_gain": adg,
-        "adjusted_daily_gain": np.tanh(20 * adg) / 20,
         "gain": gain,
         "n_days": n_days,
         "n_fills": len(fills),
         "n_entries": len(fdf[fdf.type.str.contains("entry")]),
         "n_closes": len(fdf[fdf.type.str.contains("close")]),
+        "n_normal_closes": len(fdf[fdf.type.str.contains("nclose")]),
+        "n_normal_closes_long": len(longs[longs.type.str.contains("nclose")]),
+        "n_normal_closes_short": len(shorts[shorts.type.str.contains("nclose")]),
         "n_ientries": len(fdf[fdf.type.str.contains("ientry")]),
+        "n_ientries_long": len(longs[longs.type.str.contains("ientry")]),
+        "n_ientries_short": len(shorts[shorts.type.str.contains("ientry")]),
         "n_rentries": len(fdf[fdf.type.str.contains("rentry")]),
+        "n_rentries_long": len(longs[longs.type.str.contains("rentry")]),
+        "n_rentries_short": len(shorts[shorts.type.str.contains("rentry")]),
+        "n_unstuck_closes": len(fdf[fdf.type.str.contains("auto_unstuck_close")]),
+        "n_unstuck_closes_long": len(
+            longs[longs.type.str.contains("auto_unstuck_close")]
+        ),
+        "n_unstuck_closes_short": len(
+            shorts[shorts.type.str.contains("auto_unstuck_close")]
+        ),
+        "n_unstuck_entries": len(fdf[fdf.type.str.contains("auto_unstuck_entry")]),
+        "n_unstuck_entries_long": len(
+            longs[longs.type.str.contains("auto_unstuck_entry")]
+        ),
+        "n_unstuck_entries_short": len(
+            shorts[shorts.type.str.contains("auto_unstuck_entry")]
+        ),
         "avg_fills_per_day": fills_per_day,
+        "avg_fills_per_day_long": len(longs) / n_days,
+        "avg_fills_per_day_short": len(shorts) / n_days,
         "hrs_stuck_max_long": hrs_stuck_max_long,
         "hrs_stuck_avg_long": hrs_stuck_avg_long,
         "hrs_stuck_max": hrs_stuck_max_long,
@@ -515,17 +576,34 @@ def analyze_fills(
         "hrs_stuck_max": hrs_stuck_max_short,
         "hrs_stuck_avg": hrs_stuck_avg_short,
         "loss_sum": fdf[fdf.pnl < 0.0].pnl.sum(),
+        "loss_sum_long": longs[longs.pnl < 0.0].pnl.sum(),
+        "loss_sum_short": shorts[shorts.pnl < 0.0].pnl.sum(),
         "profit_sum": fdf[fdf.pnl > 0.0].pnl.sum(),
+        "profit_sum_long": longs[longs.pnl > 0.0].pnl.sum(),
+        "profit_sum_short": shorts[shorts.pnl > 0.0].pnl.sum(),
         "pnl_sum": (pnl_sum := fdf.pnl.sum()),
+        "pnl_sum_long": (pnl_sum_long := longs.pnl.sum()),
+        "pnl_sum_short": (pnl_sum_short := shorts.pnl.sum()),
         "fee_sum": (fee_sum := fdf.fee_paid.sum()),
+        "fee_sum_long": (fee_sum_long := longs.fee_paid.sum()),
+        "fee_sum_short": (fee_sum_short := shorts.fee_paid.sum()),
         "net_pnl_plus_fees": pnl_sum + fee_sum,
+        "net_pnl_plus_fees_long": pnl_sum_long + fee_sum_long,
+        "net_pnl_plus_fees_short": pnl_sum_short + fee_sum_short,
         "final_equity": sdf.equity.iloc[-1],
         "final_balance": sdf.balance.iloc[-1],
         "closest_bkr": sdf.closest_bkr.min(),
         "eqbal_ratio_min": (eqbal_ratios := sdf.equity / sdf.balance).min(),
         "eqbal_ratio_mean": eqbal_ratios.mean(),
-        "eqbal_ratio_median": eqbal_ratios.median(),
         "biggest_psize": fdf.psize.abs().max(),
+        "biggest_psize_long": longs.psize.abs().max(),
+        "biggest_psize_short": shorts.psize.abs().max(),
+        "biggest_psize_quote": pos_costs.max(),
+        "biggest_psize_quote_long": pos_costs_long.max(),
+        "biggest_psize_quote_short": pos_costs_short.max(),
+        "volume_quote": volume_quote,
+        "volume_quote_long": volume_quote_long,
+        "volume_quote_short": volume_quote_short,
     }
     return fdf, sdf, sort_dict_keys(analysis)
 
