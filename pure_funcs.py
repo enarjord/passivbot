@@ -492,18 +492,18 @@ def analyze_fills(
         ),
         axis=1,
     )
-    pos_costs_long = longs.apply(
+    biggest_pos_cost_long = longs.apply(
         lambda x: qty_to_cost(
             x["psize"], x["pprice"], config["inverse"], config["c_mult"]
         ),
         axis=1,
-    )
-    pos_costs_short = shorts.apply(
+    ).max() if len(longs) > 0 else 0.0
+    biggest_pos_cost_short = shorts.apply(
         lambda x: qty_to_cost(
             x["psize"], x["pprice"], config["inverse"], config["c_mult"]
         ),
         axis=1,
-    )
+    ).max() if len(shorts) > 0 else 0.0
     volume_quote = fdf.apply(
         lambda x: qty_to_cost(
             x["qty"], x["price"], config["inverse"], config["c_mult"]
@@ -515,13 +515,13 @@ def analyze_fills(
             x["qty"], x["price"], config["inverse"], config["c_mult"]
         ),
         axis=1,
-    ).sum()
+    ).sum() if len(longs) > 0 else 0.0
     volume_quote_short = shorts.apply(
         lambda x: qty_to_cost(
             x["qty"], x["price"], config["inverse"], config["c_mult"]
         ),
         axis=1,
-    ).sum()
+    ).sum() if len(shorts) > 0 else 0.0
 
     analysis = {
         "exchange": config["exchange"] if "exchange" in config else "unknown",
@@ -599,8 +599,8 @@ def analyze_fills(
         "biggest_psize_long": longs.psize.abs().max(),
         "biggest_psize_short": shorts.psize.abs().max(),
         "biggest_psize_quote": pos_costs.max(),
-        "biggest_psize_quote_long": pos_costs_long.max(),
-        "biggest_psize_quote_short": pos_costs_short.max(),
+        "biggest_psize_quote_long": biggest_pos_cost_long,
+        "biggest_psize_quote_short": biggest_pos_cost_short,
         "volume_quote": volume_quote,
         "volume_quote_long": volume_quote_long,
         "volume_quote_short": volume_quote_short,
