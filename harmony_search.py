@@ -158,7 +158,7 @@ class HarmonySearch:
                 if score_long < self.hm[worst_long_key]["long"]["score"]:
                     print(
                         f"improved long harmony, prev score ",
-                        f"{self.hm[worst_long_key]['long']['score']:.5f} new score {score_long:.5f}",
+                        f"{self.hm[worst_long_key]['long']['score']:.6f} new score {score_long:.6f}",
                         " ".join(
                             [
                                 str(round_dynamic(e[1], 3))
@@ -187,7 +187,7 @@ class HarmonySearch:
                 if score_short < self.hm[worst_short_key]["short"]["score"]:
                     print(
                         f"improved short harmony, prev score ",
-                        f"{self.hm[worst_short_key]['short']['score']:.5f} new score {score_short:.5f}",
+                        f"{self.hm[worst_short_key]['short']['score']:.6f} new score {score_short:.6f}",
                         " ".join(
                             [
                                 str(round_dynamic(e[1], 3))
