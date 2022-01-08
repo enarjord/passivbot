@@ -189,13 +189,19 @@ def dump_plots(result: dict, fdf: pd.DataFrame, sdf: pd.DataFrame, df: pd.DataFr
         )
         profit_color = Fore.RED if result["result"]["pnl_sum_long"] < 0 else Fore.RESET
         table.add_row(
-            ["PNL sum", f"{profit_color}{result['result']['pnl_sum_long']}{Fore.RESET}"]
+            [
+                "PNL sum",
+                f"{profit_color}{round_dynamic(result['result']['pnl_sum_long'], 4)}{Fore.RESET}",
+            ]
         )
-        table.add_row(["Loss sum", result["result"]["loss_sum_long"]])
-        table.add_row(["Fee sum", result["result"]["fee_sum_long"]])
+        table.add_row(["Loss sum", round_dynamic(result["result"]["loss_sum_long"], 4)])
+        table.add_row(["Fee sum", round_dynamic(result["result"]["fee_sum_long"], 4)])
         table.add_row(["Biggest pos size", result["result"]["biggest_psize_long"]])
         table.add_row(
-            ["Biggest pos cost", result["result"]["biggest_psize_quote_long"]]
+            [
+                "Biggest pos cost",
+                round_dynamic(result["result"]["biggest_psize_quote_long"], 4),
+            ]
         )
         table.add_row(
             [
@@ -229,14 +235,19 @@ def dump_plots(result: dict, fdf: pd.DataFrame, sdf: pd.DataFrame, df: pd.DataFr
         table.add_row(
             [
                 "PNL sum",
-                f"{profit_color}{result['result']['pnl_sum_short']}{Fore.RESET}",
+                f"{profit_color}{round_dynamic(result['result']['pnl_sum_short'], 4)}{Fore.RESET}",
             ]
         )
-        table.add_row(["Loss sum", result["result"]["loss_sum_short"]])
-        table.add_row(["Fee sum", result["result"]["fee_sum_short"]])
+        table.add_row(
+            ["Loss sum", round_dynamic(result["result"]["loss_sum_short"], 4)]
+        )
+        table.add_row(["Fee sum", round_dynamic(result["result"]["fee_sum_short"], 4)])
         table.add_row(["Biggest pos size", result["result"]["biggest_psize_short"]])
         table.add_row(
-            ["Biggest pos cost", result["result"]["biggest_psize_quote_short"]]
+            [
+                "Biggest pos cost",
+                round_dynamic(result["result"]["biggest_psize_quote_short"], 4),
+            ]
         )
         table.add_row(
             [
