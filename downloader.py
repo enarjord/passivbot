@@ -36,6 +36,10 @@ class Downloader:
     def __init__(self, config: dict):
         self.fetch_delay_seconds = 0.75
         self.config = config
+        # use binance data for bybit
+        self.config["exchange"] = (
+            "binance" if self.config["exchange"] == "bybit" else self.config["exchange"]
+        )
         self.spot = "spot" in config and config["spot"]
         self.tick_filepath = os.path.join(
             config["caches_dirpath"], f"{config['session_name']}_ticks_cache.npy"
