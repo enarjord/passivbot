@@ -8,6 +8,7 @@ import asyncio
 import json
 import numpy as np
 import traceback
+from copy import deepcopy
 from backtest import backtest
 from multiprocessing import Pool
 from njit_funcs import round_dynamic
@@ -37,7 +38,7 @@ def backtest_single_wrap(config_: dict):
     """
     loads historical data from disk, runs backtest and returns relevant metrics
     """
-    config = config_.copy()
+    config = deepcopy(config_)
     exchange_name = config["exchange"] + (
         "_spot" if config["market_type"] == "spot" else ""
     )
@@ -148,13 +149,11 @@ class HarmonySearch:
                 self.iter_counter += 1
                 # check if better than worst in harmony memory
                 worst_long_key = sorted(
-                    {
-                        k: v
-                        for k, v in self.hm.items()
-                        if type(v["long"]["score"]) != str
-                    }.items(),
-                    key=lambda x: x[1]["long"]["score"],
-                )[-1][0]
+                    self.hm,
+                    key=lambda x: self.hm[x]["long"]["score"]
+                    if type(self.hm[x]["long"]["score"]) != str
+                    else -np.inf,
+                )[-1]
                 print("debug worst long key", worst_long_key)
                 if score_long < self.hm[worst_long_key]["long"]["score"]:
                     print(
@@ -171,14 +170,20 @@ class HarmonySearch:
                         "config": cfg["long"],
                         "score": score_long,
                     }
+                    with open(
+                        self.best_conf_fpath
+                        + "hm_"
+                        + str(self.iter_counter).zfill(6)
+                        + ".txt",
+                        "a",
+                    ) as f:
+                        f.write(json.dumps(self.hm) + "\n")
                 worst_short_key = sorted(
-                    {
-                        k: v
-                        for k, v in self.hm.items()
-                        if type(v["short"]["score"]) != str
-                    }.items(),
-                    key=lambda x: x[1]["short"]["score"],
-                )[-1][0]
+                    self.hm,
+                    key=lambda x: self.hm[x]["short"]["score"]
+                    if type(self.hm[x]["short"]["score"]) != str
+                    else -np.inf,
+                )[-1]
                 if score_short < self.hm[worst_short_key]["short"]["score"]:
                     print(
                         f"improved short harmony, prev score ",
@@ -195,13 +200,18 @@ class HarmonySearch:
                         "score": score_short,
                     }
             best_long_key = sorted(
-                {k: v for k, v in self.hm.items() if type(v["long"]["score"]) != str}.items(),
-                key=lambda x: x[1]["long"]["score"],
-            )[0][0]
+                self.hm,
+                key=lambda x: self.hm[x]["long"]["score"]
+                if type(self.hm[x]["long"]["score"]) != str
+                else np.inf,
+            )[0]
+            print("debug best long key", best_long_key)
             best_short_key = sorted(
-                {k: v for k, v in self.hm.items() if type(v["short"]["score"]) != str}.items(),
-                key=lambda x: x[1]["short"]["score"],
-            )[0][0]
+                self.hm,
+                key=lambda x: self.hm[x]["short"]["score"]
+                if type(self.hm[x]["short"]["score"]) != str
+                else np.inf,
+            )[0]
             best_config = {
                 "long": self.hm[best_long_key]["long"]["config"],
                 "short": self.hm[best_short_key]["short"]["config"],
@@ -233,7 +243,7 @@ class HarmonySearch:
         self.workers[wi] = None
 
     def start_new_harmony(self, wi: int):
-        new_harmony = self.config.copy()
+        new_harmony = deepcopy(self.config)
         new_harmony["symbol"] = self.symbols[0]
         for key in self.long_bounds:
             if np.random.random() < self.hm_considering_rate:
@@ -304,7 +314,7 @@ class HarmonySearch:
         }
 
     def start_new_initial_eval(self, wi: int, hm_key: str):
-        config = self.config.copy()
+        config = deepcopy(self.config)
         config["long"] = self.hm[hm_key]["long"]["config"]
         config["short"] = self.hm[hm_key]["short"]["config"]
         config["symbol"] = self.symbols[0]
@@ -345,8 +355,8 @@ class HarmonySearch:
 
         # initialize harmony memory
         for _ in range(self.n_harmonies):
-            cfg_long = self.config["long"].copy()
-            cfg_short = self.config["short"].copy()
+            cfg_long = deepcopy(self.config["long"])
+            cfg_short = deepcopy(self.config["short"])
             for k in self.long_bounds:
                 cfg_long[k] = np.random.uniform(
                     self.long_bounds[k][0], self.long_bounds[k][1]
@@ -410,8 +420,8 @@ class HarmonySearch:
                         )
                         if missing_symbols:
                             # start eval for missing symbol
-                            symbol = sorted(missing_symbols).pop(0)
-                            config = self.unfinished_evals[id_key]["config"].copy()
+                            symbol = sorted(missing_symbols)[0]
+                            config = deepcopy(self.unfinished_evals[id_key]["config"])
                             config["symbol"] = symbol
                             self.workers[wi] = {
                                 "config": config,
