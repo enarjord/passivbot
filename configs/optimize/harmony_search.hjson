@@ -5,15 +5,17 @@
   bandwidth: 0.07
   pitch_adjusting_rate: 0.24
 
-  n_cpus: 7
+  n_cpus: 3
   iters: 10000
 
-  maximum_pa_distance_mean_long: 0.03
-  maximum_pa_distance_mean_short: 0.03
+  # score formula:
+  # adg * min(1, max_pa_dist / mean([max(max_pa_dist, pa_dist) for pa_dist in results]))
+  maximum_pa_distance_mean_long: 0.04
+  maximum_pa_distance_mean_short: 0.04
 
   # will override any starting configs' long/short enabled parameter
   do_long: true
-  do_short: true
+  do_short: false
 
   # symbols with min notional < $5 @ 2022-01-06
   symbols: [
@@ -43,38 +45,38 @@
     long:
     {
       grid_span: [0.06, 0.5]
-      ema_span_min: [360, 2880]
-      ema_span_max: [2880, 10080]
-      wallet_exposure_limit: [0.1, 0.1]
+      ema_span_min: [360, 1440]
+      ema_span_max: [1440, 10080]
+      wallet_exposure_limit: [0.05, 0.05]
       max_n_entry_orders: [7, 14]
       initial_qty_pct: [0.001, 0.1]
-      initial_eprice_ema_dist: [-0.06, 0.06]
+      initial_eprice_ema_dist: [-0.1, 0.06]
       eprice_pprice_diff: [0.002, 0.02]
       secondary_allocation: [0.2, 0.8]
       secondary_pprice_diff: [0.1, 0.5]
       eprice_exp_base: [1.0, 2.1]
       min_markup: [0.002, 0.03]
       markup_range: [0.002, 0.03]
-      n_close_orders: [4, 12]
+      n_close_orders: [1, 12]
       auto_unstuck_wallet_exposure_threshold: [0.0, 0.2]
       auto_unstuck_ema_dist: [-0.01, 0.07]
   }
     short:
     {
       grid_span: [0.06, 0.5]
-      ema_span_min: [360, 2880]
-      ema_span_max: [2880, 10080]
-      wallet_exposure_limit: [0.1, 0.1]
+      ema_span_min: [360, 1440]
+      ema_span_max: [1440, 10080]
+      wallet_exposure_limit: [0.05, 0.05]
       max_n_entry_orders: [7, 14]
       initial_qty_pct: [0.001, 0.1]
-      initial_eprice_ema_dist: [-0.06, 0.06]
+      initial_eprice_ema_dist: [-0.1, 0.06]
       eprice_pprice_diff: [0.002, 0.02]
       secondary_allocation: [0.2, 0.8]
       secondary_pprice_diff: [0.1, 0.5]
       eprice_exp_base: [1.0, 2.1]
       min_markup: [0.002, 0.03]
       markup_range: [0.002, 0.03]
-      n_close_orders: [4, 12]
+      n_close_orders: [1, 12]
       auto_unstuck_wallet_exposure_threshold: [0.0, 0.2]
       auto_unstuck_ema_dist: [-0.01, 0.07]
     }
