@@ -241,7 +241,7 @@ class HarmonySearch:
             if best_config != self.current_best_config:
                 tmp_fname = f"{self.results_fpath}{self.iter_counter:06}_best_config"
                 if score_long == self.hm[best_key_long]["long"]["score"]:
-                    print("new best config long")
+                    print(f"new best config long, score {score_long:.7f}")
                     tmp_fname += "_long"
                     json.dump(
                         results,
@@ -251,7 +251,7 @@ class HarmonySearch:
                         ),
                     )
                 if score_short == self.hm[best_key_short]["short"]["score"]:
-                    print("new best config short")
+                    print(f"new best config short, score {score_short:.7f}")
                     tmp_fname += "_short"
                     json.dump(
                         results,
