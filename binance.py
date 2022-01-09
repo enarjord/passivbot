@@ -211,6 +211,8 @@ class BinanceBot(Bot):
                                                           else {'pair': self.pair})),
             self.private_get(self.endpoints['balance'], {})
         )
+        assert all(key in positions[0] for key in ['symbol', 'positionAmt', 'entryPrice']), "bogus position fetch"
+        assert all(key in balance[0] for key in ['asset', 'balance', 'crossUnPnl']), "bogus balance fetch"
         positions = [e for e in positions if e['symbol'] == self.symbol]
         position = {'long': {'size': 0.0, 'price': 0.0, 'liquidation_price': 0.0},
                     'shrt': {'size': 0.0, 'price': 0.0, 'liquidation_price': 0.0},
