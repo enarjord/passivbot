@@ -92,12 +92,10 @@ class HarmonySearch:
         self.symbols = config["symbols"]
         self.identifying_name = "".join([e[0] for e in config["symbols"]])
         self.now_date = ts_to_date(time())[:19].replace(":", "-")
-        self.results_fname = make_get_filepath(
-            f"tmp/harmony_search_results_{self.identifying_name}_{self.now_date}.txt"
+        self.results_fpath = make_get_filepath(
+            f"results_harmony_search/{self.identifying_name}_{self.now_date}/"
         )
-        self.best_conf_fpath = make_get_filepath(
-            f"tmp/harmony_search_best_config_{self.identifying_name}_{self.now_date}_best_configs/"
-        )
+        self.current_best_config = None
 
         # [{'config': dict, 'task': process, 'id_key': tuple}]
         self.workers = [None for _ in range(self.n_cpus)]
@@ -125,13 +123,29 @@ class HarmonySearch:
         if set(results) == set(self.symbols):
             # completed multisymbol iter
             adg_mean_long = np.mean([v["adg_long"] for v in results.values()])
-            pad_mean_long = np.mean([v["pa_distance_long"] for v in results.values()])
+            pad_mean_long = np.mean(
+                [
+                    max(
+                        self.config["maximum_pa_distance_mean_long"],
+                        v["pa_distance_long"],
+                    )
+                    for v in results.values()
+                ]
+            )
             score_long = -adg_mean_long * min(
                 1.0,
                 self.config["maximum_pa_distance_mean_long"] / pad_mean_long,
             )
             adg_mean_short = np.mean([v["adg_short"] for v in results.values()])
-            pad_mean_short = np.mean([v["pa_distance_short"] for v in results.values()])
+            pad_mean_short = np.mean(
+                [
+                    max(
+                        self.config["maximum_pa_distance_mean_short"],
+                        v["pa_distance_short"],
+                    )
+                    for v in results.values()
+                ]
+            )
             score_short = -adg_mean_short * min(
                 1.0,
                 self.config["maximum_pa_distance_mean_short"] / pad_mean_short,
@@ -142,23 +156,22 @@ class HarmonySearch:
                 f"adg short {adg_mean_short:.6f} pad short {pad_mean_short:.6f} score short {score_short:.6f}",
             )
             # check whether initial eval or new harmony
+            self.iter_counter += 1
             if "initial_eval_key" in cfg:
                 self.hm[cfg["initial_eval_key"]]["long"]["score"] = score_long
                 self.hm[cfg["initial_eval_key"]]["short"]["score"] = score_short
             else:
-                self.iter_counter += 1
                 # check if better than worst in harmony memory
-                worst_long_key = sorted(
+                worst_key_long = sorted(
                     self.hm,
                     key=lambda x: self.hm[x]["long"]["score"]
                     if type(self.hm[x]["long"]["score"]) != str
                     else -np.inf,
                 )[-1]
-                print("debug worst long key", worst_long_key)
-                if score_long < self.hm[worst_long_key]["long"]["score"]:
+                if score_long < self.hm[worst_key_long]["long"]["score"]:
                     print(
                         f"improved long harmony, prev score ",
-                        f"{self.hm[worst_long_key]['long']['score']:.6f} new score {score_long:.6f}",
+                        f"{self.hm[worst_key_long]['long']['score']:.6f} new score {score_long:.6f}",
                         " ".join(
                             [
                                 str(round_dynamic(e[1], 3))
@@ -166,28 +179,26 @@ class HarmonySearch:
                             ]
                         ),
                     )
-                    self.hm[worst_long_key]["long"] = {
+                    self.hm[worst_key_long]["long"] = {
                         "config": cfg["long"],
                         "score": score_long,
                     }
-                    with open(
-                        self.best_conf_fpath
-                        + "hm_"
-                        + str(self.iter_counter).zfill(6)
-                        + ".txt",
-                        "a",
-                    ) as f:
-                        f.write(json.dumps(self.hm) + "\n")
-                worst_short_key = sorted(
+                    json.dump(
+                        self.hm,
+                        open(
+                            f"{self.results_fpath}hm_{self.iter_counter:06}.json", "w"
+                        ),
+                    )
+                worst_key_short = sorted(
                     self.hm,
                     key=lambda x: self.hm[x]["short"]["score"]
                     if type(self.hm[x]["short"]["score"]) != str
                     else -np.inf,
                 )[-1]
-                if score_short < self.hm[worst_short_key]["short"]["score"]:
+                if score_short < self.hm[worst_key_short]["short"]["score"]:
                     print(
                         f"improved short harmony, prev score ",
-                        f"{self.hm[worst_short_key]['short']['score']:.6f} new score {score_short:.6f}",
+                        f"{self.hm[worst_key_short]['short']['score']:.6f} new score {score_short:.6f}",
                         " ".join(
                             [
                                 str(round_dynamic(e[1], 3))
@@ -195,26 +206,31 @@ class HarmonySearch:
                             ]
                         ),
                     )
-                    self.hm[worst_short_key]["short"] = {
+                    self.hm[worst_key_short]["short"] = {
                         "config": cfg["short"],
                         "score": score_short,
                     }
-            best_long_key = sorted(
+                    json.dump(
+                        self.hm,
+                        open(
+                            f"{self.results_fpath}hm_{self.iter_counter:06}.json", "w"
+                        ),
+                    )
+            best_key_long = sorted(
                 self.hm,
                 key=lambda x: self.hm[x]["long"]["score"]
                 if type(self.hm[x]["long"]["score"]) != str
                 else np.inf,
             )[0]
-            print("debug best long key", best_long_key)
-            best_short_key = sorted(
+            best_key_short = sorted(
                 self.hm,
                 key=lambda x: self.hm[x]["short"]["score"]
                 if type(self.hm[x]["short"]["score"]) != str
                 else np.inf,
             )[0]
             best_config = {
-                "long": self.hm[best_long_key]["long"]["config"],
-                "short": self.hm[best_short_key]["short"]["config"],
+                "long": self.hm[best_key_long]["long"]["config"],
+                "short": self.hm[best_key_short]["short"]["config"],
             }
             best_config["result"] = {
                 "symbol": f"{len(self.symbols)}_symbols",
@@ -222,11 +238,34 @@ class HarmonySearch:
                 "start_date": self.config["start_date"],
                 "end_date": self.config["end_date"],
             }
-            dump_live_config(
-                best_config,
-                self.best_conf_fpath + str(self.iter_counter).zfill(6) + ".json",
-            )
-            with open(self.results_fname, "a") as f:
+            if best_config != self.current_best_config:
+                tmp_fname = f"{self.results_fpath}{self.iter_counter:06}_best_config"
+                if score_long == self.hm[best_key_long]["long"]["score"]:
+                    print("new best config long")
+                    tmp_fname += "_long"
+                    json.dump(
+                        results,
+                        open(
+                            f"{self.results_fpath}{self.iter_counter:06}_result_long.json",
+                            "w",
+                        ),
+                    )
+                if score_short == self.hm[best_key_short]["short"]["score"]:
+                    print("new best config short")
+                    tmp_fname += "_short"
+                    json.dump(
+                        results,
+                        open(
+                            f"{self.results_fpath}{self.iter_counter:06}_result_short.json",
+                            "w",
+                        ),
+                    )
+                dump_live_config(
+                    best_config,
+                    tmp_fname + ".json",
+                )
+                self.current_best_config = deepcopy(best_config)
+            with open(self.results_fpath + "all_results.txt", "a") as f:
                 f.write(
                     json.dumps(
                         {
@@ -319,8 +358,11 @@ class HarmonySearch:
         config["short"] = self.hm[hm_key]["short"]["config"]
         config["symbol"] = self.symbols[0]
         config["initial_eval_key"] = hm_key
+        ieval_n = len(
+            [e for e in self.hm if self.hm[e]["long"]["score"] != "not_started"]
+        )
         print(
-            f"starting new initial eval {len([e for e in self.hm if self.hm[e]['long']['score'] != 'not_started'])}, long:",
+            f"starting new initial eval {ieval_n} of {self.n_harmonies}, long:",
             " ".join(
                 [
                     str(round_dynamic(e[1], 3))
@@ -402,7 +444,7 @@ class HarmonySearch:
             for wi in range(len(self.workers)):
                 if self.workers[wi] is not None and self.workers[wi]["task"].ready():
                     self.post_process(wi)
-            if self.iter_counter >= self.iters:
+            if self.iter_counter >= self.iters + self.n_harmonies:
                 if all(worker is None for worker in self.workers):
                     # break when all work is finished
                     break
