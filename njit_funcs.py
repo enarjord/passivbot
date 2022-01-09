@@ -1380,7 +1380,8 @@ def calc_long_entry_grid(
             if len(grid) == 0:
                 return [(0.0, 0.0, "")]
             if calc_diff(grid[0][3], grid[0][1]) < 0.00001:
-                entry_price = highest_bid
+                # means initial entry was partially filled
+                entry_price = min(highest_bid, pprice)
                 min_entry_qty = calc_min_entry_qty(
                     entry_price, inverse, qty_step, min_qty, min_cost
                 )
@@ -1554,7 +1555,8 @@ def calc_short_entry_grid(
             if len(grid) == 0:
                 return [(0.0, 0.0, "")]
             if calc_diff(grid[0][3], grid[0][1]) < 0.00001:
-                entry_price = lowest_ask
+                # means initial entry was partially filled
+                entry_price = max(lowest_ask, pprice)
                 min_entry_qty = calc_min_entry_qty(
                     entry_price, inverse, qty_step, min_qty, min_cost
                 )
