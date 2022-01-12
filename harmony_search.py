@@ -521,6 +521,9 @@ async def main():
     config["exchange"], _, _ = load_exchange_key_secret(config["user"])
     config["long"]["enabled"] = config["do_long"]
     config["short"]["enabled"] = config["do_short"]
+    args = parser.parse_args()
+    if args.symbol is not None:
+        config['symbols'] = args.symbol.split(',')
 
     # download ticks .npy file if missing
     cache_fname = f"{config['start_date']}_{config['end_date']}_ticks_cache.npy"
