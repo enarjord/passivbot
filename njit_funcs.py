@@ -1381,7 +1381,7 @@ def calc_long_entry_grid(
                 return [(0.0, 0.0, "")]
             if calc_diff(grid[0][3], grid[0][1]) < 0.00001:
                 # means initial entry was partially filled
-                entry_price = min(highest_bid, pprice)
+                entry_price = min(highest_bid, round_(pprice, price_step))
                 min_entry_qty = calc_min_entry_qty(
                     entry_price, inverse, qty_step, min_qty, min_cost
                 )
@@ -1556,7 +1556,7 @@ def calc_short_entry_grid(
                 return [(0.0, 0.0, "")]
             if calc_diff(grid[0][3], grid[0][1]) < 0.00001:
                 # means initial entry was partially filled
-                entry_price = max(lowest_ask, pprice)
+                entry_price = max(lowest_ask, round_(pprice, price_step))
                 min_entry_qty = calc_min_entry_qty(
                     entry_price, inverse, qty_step, min_qty, min_cost
                 )
@@ -1916,9 +1916,6 @@ def njit_backtest(
     prev_k = 0
     closest_bkr = 1.0
 
-    ema_span_min = (max(1.0, ema_span_min[0]), max(1.0, ema_span_min[1]))
-    ema_span_max = (max(1.0, ema_span_max[0]), max(1.0, ema_span_max[1]))
-
     spans_long = (
         np.array(
             [
@@ -1941,6 +1938,8 @@ def njit_backtest(
     )
     assert spans_long[-1] < len(prices), "ema_span_max long larger than len(prices)"
     assert spans_short[-1] < len(prices), "ema_span_max short larger than len(prices)"
+    spans_long = np.where(spans_long < 1.0, 1.0, spans_long)
+    spans_short = np.where(spans_short < 1.0, 1.0, spans_short)
     max_span = int(round(max(max(spans_long), max(spans_short))))
     emas_long = (
         calc_emas_last(prices[:max_span], spans_long)
