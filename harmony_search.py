@@ -470,10 +470,23 @@ async def main():
                 except Exception as e:
                     print("error loading config:", e)
         elif os.path.exists(args.starting_configs):
-            try:
-                cfgs = [load_live_config(args.starting_configs)]
-            except Exception as e:
-                print("error loading config:", e)
+            hm_load_failed = True
+            if "hm_" in args.starting_configs:
+                try:
+                    hm = json.load(open(args.starting_configs))
+                    for k in hm:
+                        cfgs.append(
+                            {"long": hm[k]["long"]["config"], "short": hm[k]["short"]["config"]}
+                        )
+                    print(f"loaded harmony memory {args.starting_configs}")
+                    hm_load_failed = False
+                except Exception as e:
+                    print("error loading harmony memory", e)
+            if hm_load_failed:
+                try:
+                    cfgs = [load_live_config(args.starting_configs)]
+                except Exception as e:
+                    print("error loading config:", e)
 
     config["starting_configs"] = cfgs
     harmony_search = HarmonySearch(config)
