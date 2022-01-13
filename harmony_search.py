@@ -90,10 +90,14 @@ class HarmonySearch:
         self.long_bounds = sort_dict_keys(config["bounds"]["long"])
         self.short_bounds = sort_dict_keys(config["bounds"]["short"])
         self.symbols = config["symbols"]
-        self.identifying_name = "".join([e[0] for e in config["symbols"]])
+        self.identifying_name = (
+            "".join([e[0] for e in config["symbols"]])
+            if len(self.symbols) > 10
+            else "_".join(self.symbols)
+        )
         self.now_date = ts_to_date(time())[:19].replace(":", "-")
         self.results_fpath = make_get_filepath(
-            f"results_harmony_search/{self.identifying_name}_{self.now_date}/"
+            f"results_harmony_search/{self.now_date}_{self.identifying_name}/"
         )
         self.current_best_config = None
 
@@ -133,8 +137,7 @@ class HarmonySearch:
                 ]
             )
             score_long = -adg_mean_long * min(
-                1.0,
-                self.config["maximum_pa_distance_mean_long"] / pad_mean_long,
+                1.0, self.config["maximum_pa_distance_mean_long"] / pad_mean_long
             )
             adg_mean_short = np.mean([v["adg_short"] for v in results.values()])
             pad_mean_short = np.mean(
@@ -147,8 +150,7 @@ class HarmonySearch:
                 ]
             )
             score_short = -adg_mean_short * min(
-                1.0,
-                self.config["maximum_pa_distance_mean_short"] / pad_mean_short,
+                1.0, self.config["maximum_pa_distance_mean_short"] / pad_mean_short
             )
             print(
                 f"completed multisymbol iter {self.iter_counter}",
@@ -260,19 +262,13 @@ class HarmonySearch:
                             "w",
                         ),
                     )
-                dump_live_config(
-                    best_config,
-                    tmp_fname + ".json",
-                )
+                dump_live_config(best_config, tmp_fname + ".json")
                 self.current_best_config = deepcopy(best_config)
             with open(self.results_fpath + "all_results.txt", "a") as f:
                 f.write(
                     json.dumps(
                         {
-                            "config": {
-                                "long": cfg["long"],
-                                "short": cfg["short"],
-                            },
+                            "config": {"long": cfg["long"], "short": cfg["short"]},
                             "results": results,
                         }
                     )
@@ -313,12 +309,10 @@ class HarmonySearch:
             else:
                 # new random note
                 new_note_long = np.random.uniform(
-                    self.long_bounds[key][0],
-                    self.long_bounds[key][1],
+                    self.long_bounds[key][0], self.long_bounds[key][1]
                 )
                 new_note_short = np.random.uniform(
-                    self.short_bounds[key][0],
-                    self.short_bounds[key][1],
+                    self.short_bounds[key][0], self.short_bounds[key][1]
                 )
             new_harmony["long"][key] = new_note_long
             new_harmony["short"][key] = new_note_short
@@ -527,6 +521,9 @@ async def main():
     config["exchange"], _, _ = load_exchange_key_secret(config["user"])
     config["long"]["enabled"] = config["do_long"]
     config["short"]["enabled"] = config["do_short"]
+    args = parser.parse_args()
+    if args.symbol is not None:
+        config['symbols'] = args.symbol.split(',')
 
     # download ticks .npy file if missing
     cache_fname = f"{config['start_date']}_{config['end_date']}_ticks_cache.npy"
