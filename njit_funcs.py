@@ -172,7 +172,10 @@ def calc_new_psize_pprice(psize, pprice, qty, price, qty_step) -> (float, float)
     new_psize = round_(psize + qty, qty_step)
     if new_psize == 0.0:
         return 0.0, 0.0
-    return new_psize, nan_to_0(pprice) * (psize / new_psize) + price * (qty / new_psize)
+    return (
+        new_psize,
+        nan_to_0(pprice) * (psize / new_psize) + price * (qty / new_psize),
+    )
 
 
 @njit
@@ -190,7 +193,7 @@ def calc_long_close_grid(
     long_psize,
     long_pprice,
     lowest_ask,
-    upper_ema_band,
+    ema_band_upper,
     spot,
     inverse,
     qty_step,
@@ -252,20 +255,18 @@ def calc_long_close_grid(
         ):
             auto_unstuck_price = max(
                 lowest_ask,
-                round_up(upper_ema_band * (1 + auto_unstuck_ema_dist), price_step),
+                round_up(ema_band_upper * (1 + auto_unstuck_ema_dist), price_step),
             )
             if auto_unstuck_price < close_prices[0]:
-                auto_unstuck_qty = (
-                    find_long_close_qty_bringing_wallet_exposure_to_target(
-                        balance,
-                        long_psize,
-                        long_pprice,
-                        threshold,
-                        auto_unstuck_price,
-                        inverse,
-                        qty_step,
-                        c_mult,
-                    )
+                auto_unstuck_qty = find_long_close_qty_bringing_wallet_exposure_to_target(
+                    balance,
+                    long_psize,
+                    long_pprice,
+                    threshold,
+                    auto_unstuck_price,
+                    inverse,
+                    qty_step,
+                    c_mult,
                 )
                 if auto_unstuck_qty > calc_min_entry_qty(
                     auto_unstuck_price, inverse, qty_step, min_qty, min_cost
@@ -322,7 +323,7 @@ def calc_short_close_grid(
     short_psize,
     short_pprice,
     highest_bid,
-    lower_ema_band,
+    ema_band_lower,
     spot,
     inverse,
     qty_step,
@@ -385,20 +386,18 @@ def calc_short_close_grid(
         ):
             auto_unstuck_price = min(
                 highest_bid,
-                round_dn(lower_ema_band * (1 - auto_unstuck_ema_dist), price_step),
+                round_dn(ema_band_lower * (1 - auto_unstuck_ema_dist), price_step),
             )
             if auto_unstuck_price > close_prices[0]:
-                auto_unstuck_qty = (
-                    find_short_close_qty_bringing_wallet_exposure_to_target(
-                        balance,
-                        short_psize,
-                        short_pprice,
-                        threshold,
-                        auto_unstuck_price,
-                        inverse,
-                        qty_step,
-                        c_mult,
-                    )
+                auto_unstuck_qty = find_short_close_qty_bringing_wallet_exposure_to_target(
+                    balance,
+                    short_psize,
+                    short_pprice,
+                    threshold,
+                    auto_unstuck_price,
+                    inverse,
+                    qty_step,
+                    c_mult,
                 )
                 if auto_unstuck_qty > calc_min_entry_qty(
                     auto_unstuck_price, inverse, qty_step, min_qty, min_cost
@@ -1109,26 +1108,24 @@ def calc_whole_long_entry_grid(
     primary_wallet_exposure_limit = (
         wallet_exposure_limit * primary_wallet_exposure_allocation
     )
-    eprice_pprice_diff_wallet_exposure_weighting = (
-        find_eprice_pprice_diff_wallet_exposure_weighting(
-            True,
-            balance,
-            initial_entry_price,
-            inverse,
-            qty_step,
-            price_step,
-            min_qty,
-            min_cost,
-            c_mult,
-            grid_span,
-            primary_wallet_exposure_limit,
-            max_n_entry_orders,
-            initial_qty_pct / primary_wallet_exposure_allocation,
-            eprice_pprice_diff,
-            eprice_exp_base,
-            eprices=eprices,
-            prev_pprice=prev_pprice,
-        )
+    eprice_pprice_diff_wallet_exposure_weighting = find_eprice_pprice_diff_wallet_exposure_weighting(
+        True,
+        balance,
+        initial_entry_price,
+        inverse,
+        qty_step,
+        price_step,
+        min_qty,
+        min_cost,
+        c_mult,
+        grid_span,
+        primary_wallet_exposure_limit,
+        max_n_entry_orders,
+        initial_qty_pct / primary_wallet_exposure_allocation,
+        eprice_pprice_diff,
+        eprice_exp_base,
+        eprices=eprices,
+        prev_pprice=prev_pprice,
     )
     grid = eval_long_entry_grid(
         balance,
@@ -1209,26 +1206,24 @@ def calc_whole_short_entry_grid(
     primary_wallet_exposure_limit = (
         wallet_exposure_limit * primary_wallet_exposure_allocation
     )
-    eprice_pprice_diff_wallet_exposure_weighting = (
-        find_eprice_pprice_diff_wallet_exposure_weighting(
-            False,
-            balance,
-            initial_entry_price,
-            inverse,
-            qty_step,
-            price_step,
-            min_qty,
-            min_cost,
-            c_mult,
-            grid_span,
-            primary_wallet_exposure_limit,
-            max_n_entry_orders,
-            initial_qty_pct / primary_wallet_exposure_allocation,
-            eprice_pprice_diff,
-            eprice_exp_base,
-            eprices=eprices,
-            prev_pprice=prev_pprice,
-        )
+    eprice_pprice_diff_wallet_exposure_weighting = find_eprice_pprice_diff_wallet_exposure_weighting(
+        False,
+        balance,
+        initial_entry_price,
+        inverse,
+        qty_step,
+        price_step,
+        min_qty,
+        min_cost,
+        c_mult,
+        grid_span,
+        primary_wallet_exposure_limit,
+        max_n_entry_orders,
+        initial_qty_pct / primary_wallet_exposure_allocation,
+        eprice_pprice_diff,
+        eprice_exp_base,
+        eprices=eprices,
+        prev_pprice=prev_pprice,
     )
     grid = eval_short_entry_grid(
         balance,
@@ -1283,7 +1278,7 @@ def calc_long_entry_grid(
     psize,
     pprice,
     highest_bid,
-    lower_ema_band,
+    ema_band_lower,
     inverse,
     do_long,
     qty_step,
@@ -1310,7 +1305,7 @@ def calc_long_entry_grid(
         if psize == 0.0:
             entry_price = min(
                 highest_bid,
-                round_dn(lower_ema_band * (1 - initial_eprice_ema_dist), price_step),
+                round_dn(ema_band_lower * (1 - initial_eprice_ema_dist), price_step),
             )
             entry_qty = calc_initial_entry_qty(
                 balance,
@@ -1338,7 +1333,7 @@ def calc_long_entry_grid(
                     auto_unstuck_entry_price = min(
                         highest_bid,
                         round_dn(
-                            lower_ema_band * (1 - auto_unstuck_ema_dist), price_step
+                            ema_band_lower * (1 - auto_unstuck_ema_dist), price_step
                         ),
                     )
                     auto_unstuck_qty = find_qty_bringing_wallet_exposure_to_target(
@@ -1381,7 +1376,12 @@ def calc_long_entry_grid(
                 return [(0.0, 0.0, "")]
             if calc_diff(grid[0][3], grid[0][1]) < 0.00001:
                 # means initial entry was partially filled
-                entry_price = min(highest_bid, round_(pprice, price_step))
+                entry_price = min(
+                    highest_bid,
+                    round_dn(
+                        ema_band_lower * (1 - initial_eprice_ema_dist), price_step
+                    ),
+                )
                 min_entry_qty = calc_min_entry_qty(
                     entry_price, inverse, qty_step, min_qty, min_cost
                 )
@@ -1458,7 +1458,7 @@ def calc_short_entry_grid(
     psize,
     pprice,
     lowest_ask,
-    upper_ema_band,
+    ema_band_upper,
     inverse,
     do_short,
     qty_step,
@@ -1485,7 +1485,7 @@ def calc_short_entry_grid(
 
             entry_price = max(
                 lowest_ask,
-                round_up(upper_ema_band * (1 + initial_eprice_ema_dist), price_step),
+                round_up(ema_band_upper * (1 + initial_eprice_ema_dist), price_step),
             )
             entry_qty = calc_initial_entry_qty(
                 balance,
@@ -1513,7 +1513,7 @@ def calc_short_entry_grid(
                     auto_unstuck_entry_price = max(
                         lowest_ask,
                         round_up(
-                            upper_ema_band * (1 + auto_unstuck_ema_dist), price_step
+                            ema_band_upper * (1 + auto_unstuck_ema_dist), price_step
                         ),
                     )
                     auto_unstuck_qty = find_qty_bringing_wallet_exposure_to_target(
@@ -1556,7 +1556,12 @@ def calc_short_entry_grid(
                 return [(0.0, 0.0, "")]
             if calc_diff(grid[0][3], grid[0][1]) < 0.00001:
                 # means initial entry was partially filled
-                entry_price = max(lowest_ask, round_(pprice, price_step))
+                entry_price = max(
+                    lowest_ask,
+                    round_up(
+                        ema_band_upper * (1 + initial_eprice_ema_dist), price_step
+                    ),
+                )
                 min_entry_qty = calc_min_entry_qty(
                     entry_price, inverse, qty_step, min_qty, min_cost
                 )
