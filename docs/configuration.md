@@ -33,3 +33,4 @@ More info may come later.
 Here is a diagram summarizing the parameters:
 
 ![Grid Parameters](images/passivbot_grid_parameters.jpeg)
+[Full image](images/passivbot_grid_parameters.jpeg)
