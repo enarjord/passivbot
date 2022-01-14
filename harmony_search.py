@@ -315,14 +315,14 @@ class HarmonySearch:
         if self.config["long"]["enabled"]:
             line += " - long: " + " ".join(
                 [
-                    str(round_dynamic(e[1], 3))
+                    f"{e[0][:2]}{e[0][-2:]}" + str(round_dynamic(e[1], 3))
                     for e in sorted(self.hm[hm_key]["long"]["config"].items())
                 ]
             )
         if self.config["short"]["enabled"]:
             line += " - short: " + " ".join(
                 [
-                    str(round_dynamic(e[1], 3))
+                    f"{e[0][:2]}{e[0][-2:]}" + str(round_dynamic(e[1], 3))
                     for e in sorted(self.hm[hm_key]["short"]["config"].items())
                 ]
             )
