@@ -32,7 +32,12 @@ from procedures import (
     dump_live_config,
 )
 from time import sleep, time
-
+import logging
+import logging.config
+logging.config.dictConfig({
+    'version': 1,
+    'disable_existing_loggers': True
+})
 
 def backtest_single_wrap(config_: dict):
     """
@@ -52,13 +57,13 @@ def backtest_single_wrap(config_: dict):
         pa_distance_short = analysis["pa_distance_mean_short"]
         adg_long = analysis["adg_long"]
         adg_short = analysis["adg_short"]
-        print(
-            f"backtested {config['symbol']: <12} pa distance long {pa_distance_long:.6f} "
+        logging.debug(
+            f"backtested {config['symbol']: <12} pa distance long {pa_distance_long:.6f} " +
             f"pa distance short {pa_distance_short:.6f} adg long {adg_long:.6f} adg short {adg_short:.6f}"
         )
     except Exception as e:
-        print(f'error with {config["symbol"]} {e}')
-        print("config")
+        logging.error(f'error with {config["symbol"]} {e}')
+        logging.error("config")
         traceback.print_exc()
         adg_long, adg_short = 0.0, 0.0
         pa_distance_long = pa_distance_short = 100.0
@@ -140,10 +145,10 @@ class HarmonySearch:
             score_short = -adg_mean_short * min(
                 1.0, self.config["maximum_pa_distance_mean_short"] / pad_mean_short
             )
-            print(
-                f"completed multisymbol iter {self.iter_counter}",
-                f"adg long {adg_mean_long:.6f} pad long {pad_mean_long:.6f} score long {score_long:.6f}",
-                f"adg short {adg_mean_short:.6f} pad short {pad_mean_short:.6f} score short {score_short:.6f}",
+            logging.debug(
+                f"completed multisymbol iter {self.iter_counter} - " +
+                f"adg long {adg_mean_long:.6f} pad long {pad_mean_long:.6f} score long {score_long:.6f} - " +
+                f"adg short {adg_mean_short:.6f} pad short {pad_mean_short:.6f} score short {score_short:.6f}"
             )
             # check whether initial eval or new harmony
             self.iter_counter += 1
@@ -159,10 +164,10 @@ class HarmonySearch:
                     else -np.inf,
                 )[-1]
                 if score_long < self.hm[worst_key_long]["long"]["score"]:
-                    print(
-                        f"improved long harmony, prev score ",
-                        f"{self.hm[worst_key_long]['long']['score']:.6f} new score {score_long:.6f}",
-                        " ".join([str(round_dynamic(e[1], 3)) for e in sorted(cfg["long"].items())]),
+                    logging.debug(
+                        f"improved long harmony, prev score " +
+                        f"{self.hm[worst_key_long]['long']['score']:.6f} new score {score_long:.6f}" +
+                        " ".join([str(round_dynamic(e[1], 3)) for e in sorted(cfg["long"].items())])
                     )
                     self.hm[worst_key_long]["long"] = {"config": cfg["long"], "score": score_long}
                     json.dump(
@@ -175,10 +180,10 @@ class HarmonySearch:
                     else -np.inf,
                 )[-1]
                 if score_short < self.hm[worst_key_short]["short"]["score"]:
-                    print(
+                    logging.debug(
                         f"improved short harmony, prev score ",
-                        f"{self.hm[worst_key_short]['short']['score']:.6f} new score {score_short:.6f}",
-                        " ".join([str(round_dynamic(e[1], 3)) for e in sorted(cfg["short"].items())]),
+                        f"{self.hm[worst_key_short]['short']['score']:.6f} new score {score_short:.6f}" +
+                        " ".join([str(round_dynamic(e[1], 3)) for e in sorted(cfg["short"].items())])
                     )
                     self.hm[worst_key_short]["short"] = {"config": cfg["short"], "score": score_short}
                     json.dump(
@@ -209,14 +214,14 @@ class HarmonySearch:
             if best_config != self.current_best_config:
                 tmp_fname = f"{self.results_fpath}{self.iter_counter:06}_best_config"
                 if score_long == self.hm[best_key_long]["long"]["score"]:
-                    print(f"new best config long, score {score_long:.7f}")
+                    logging.info(f"i{self.iter_counter} - new best config long, score {score_long:.7f}")
                     tmp_fname += "_long"
                     json.dump(
                         results,
                         open(f"{self.results_fpath}{self.iter_counter:06}_result_long.json", "w"),
                     )
                 if score_short == self.hm[best_key_short]["short"]["score"]:
-                    print(f"new best config short, score {score_short:.7f}")
+                    logging.info(f"i{self.iter_counter} - new best config short, score {score_short:.7f}")
                     tmp_fname += "_short"
                     json.dump(
                         results,
@@ -224,6 +229,8 @@ class HarmonySearch:
                     )
                 dump_live_config(best_config, tmp_fname + ".json")
                 self.current_best_config = deepcopy(best_config)
+            elif self.iter_counter % 25 == 0:
+                logging.info(f"i{self.iter_counter}")
             with open(self.results_fpath + "all_results.txt", "a") as f:
                 f.write(
                     json.dumps(
@@ -265,12 +272,12 @@ class HarmonySearch:
                 )
             new_harmony["long"][key] = new_note_long
             new_harmony["short"][key] = new_note_short
-        print(
-            f"starting new harmony {self.iter_counter}, long",
-            " ".join([str(round_dynamic(e[1], 3)) for e in sorted(new_harmony["long"].items())]),
-            "short:",
-            " ".join([str(round_dynamic(e[1], 3)) for e in sorted(new_harmony["short"].items())]),
-            self.symbols[0],
+        logging.debug(
+            f"starting new harmony {self.iter_counter} - long " +
+            " ".join([str(round_dynamic(e[1], 3)) for e in sorted(new_harmony["long"].items())]) +
+            " - short: " +
+            " ".join([str(round_dynamic(e[1], 3)) for e in sorted(new_harmony["short"].items())]) + " - " +
+            self.symbols[0]
         )
         # arbitrary unique identifier
         id_key = str(time()) + str(np.random.random())
@@ -292,22 +299,22 @@ class HarmonySearch:
         config["symbol"] = self.symbols[0]
         config["initial_eval_key"] = hm_key
         ieval_n = len([e for e in self.hm if self.hm[e]["long"]["score"] != "not_started"])
-        print(
-            f"starting new initial eval {ieval_n} of {self.n_harmonies}, long:",
+        logging.info(
+            f"starting new initial eval {ieval_n} of {self.n_harmonies} - long: " +
             " ".join(
                 [
                     str(round_dynamic(e[1], 3))
                     for e in sorted(self.hm[hm_key]["long"]["config"].items())
                 ]
-            ),
-            "short:",
+            ) +
+            " - short: " +
             " ".join(
                 [
                     str(round_dynamic(e[1], 3))
                     for e in sorted(self.hm[hm_key]["short"]["config"].items())
                 ]
-            ),
-            self.symbols[0],
+            ) + " - " +
+            self.symbols[0]
         )
         # arbitrary unique identifier
         id_key = str(time()) + str(np.random.random())
@@ -408,6 +415,8 @@ class HarmonySearch:
 
 
 async def main():
+    logging.basicConfig(format='', level=os.environ.get("LOGLEVEL", "INFO"))
+
     parser = argparse.ArgumentParser(
         prog="Optimize multi symbol", description="Optimize passivbot config multi symbol"
     )
@@ -453,7 +462,7 @@ async def main():
         if not os.path.exists(cache_dirpath + cache_fname) or not os.path.exists(
             cache_dirpath + "market_specific_settings.json"
         ):
-            print(f"fetching data {symbol}")
+            logging.info(f"fetching data {symbol}")
             args.symbol = symbol
             tmp_cfg = await prepare_backtest_config(args)
             downloader = Downloader({**config, **tmp_cfg})
@@ -468,7 +477,7 @@ async def main():
                 try:
                     cfgs.append(load_live_config(os.path.join(args.starting_configs, fname)))
                 except Exception as e:
-                    print("error loading config:", e)
+                    logging.error("error loading config:", e)
         elif os.path.exists(args.starting_configs):
             hm_load_failed = True
             if "hm_" in args.starting_configs:
@@ -478,15 +487,15 @@ async def main():
                         cfgs.append(
                             {"long": hm[k]["long"]["config"], "short": hm[k]["short"]["config"]}
                         )
-                    print(f"loaded harmony memory {args.starting_configs}")
+                    logging.info(f"loaded harmony memory {args.starting_configs}")
                     hm_load_failed = False
                 except Exception as e:
-                    print("error loading harmony memory", e)
+                    logging.error("error loading harmony memory", e)
             if hm_load_failed:
                 try:
                     cfgs = [load_live_config(args.starting_configs)]
                 except Exception as e:
-                    print("error loading config:", e)
+                    logging.error("error loading config:", e)
 
     config["starting_configs"] = cfgs
     harmony_search = HarmonySearch(config)
