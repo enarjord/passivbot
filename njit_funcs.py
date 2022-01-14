@@ -591,6 +591,7 @@ def interpolate(x, xs, ys):
     )
 
 
+
 @njit
 def find_long_close_qty_bringing_wallet_exposure_to_target(
     balance,
@@ -605,67 +606,59 @@ def find_long_close_qty_bringing_wallet_exposure_to_target(
     wallet_exposure = qty_to_cost(psize, pprice, inverse, c_mult) / balance
     if wallet_exposure <= wallet_exposure_target:
         return 0.0
-    guess1 = round_(
-        cost_to_qty(
-            balance * (wallet_exposure - wallet_exposure_target),
-            close_price,
-            inverse,
-            c_mult,
-        ),
-        qty_step,
-    )
-    guess2 = round_(max(guess1 * 1.2, guess1 + qty_step), qty_step)
-    val1 = qty_to_cost(abs(psize) - guess1, pprice, inverse, c_mult) / (
-        balance + calc_long_pnl(pprice, close_price, guess1, inverse, c_mult)
-    )
-    val2 = qty_to_cost(abs(psize) - guess2, pprice, inverse, c_mult) / (
-        balance + calc_long_pnl(pprice, close_price, guess2, inverse, c_mult)
-    )
-    guess = round_(
-        interpolate(
-            wallet_exposure_target, np.array([val1, val2]), np.array([guess1, guess2])
-        ),
-        qty_step,
-    )
-    val = qty_to_cost(abs(psize) - guess, pprice, inverse, c_mult) / (
-        balance + calc_long_pnl(pprice, close_price, guess, inverse, c_mult)
-    )
-    if abs(val - wallet_exposure_target) / wallet_exposure_target > 0.15:
-        guess = round_(
+    guesses = []
+    vals = []
+    evals = []
+    guesses.append(max(0.0, round_(psize * (wallet_exposure_target / wallet_exposure), qty_step)))
+    vals.append(qty_to_cost(abs(psize) - guesses[-1], pprice, inverse, c_mult) / (
+        balance + calc_long_pnl(pprice, close_price, guesses[-1], inverse, c_mult)
+    ))
+    evals.append(abs(vals[-1] - wallet_exposure_target) / wallet_exposure_target)
+    guesses.append(max(0.0, round_(max(guesses[-1] * 1.2, guesses[-1] + qty_step), qty_step)))
+    vals.append(qty_to_cost(abs(psize) - guesses[-1], pprice, inverse, c_mult) / (
+        balance + calc_long_pnl(pprice, close_price, guesses[-1], inverse, c_mult)
+    ))
+    evals.append(abs(vals[-1] - wallet_exposure_target) / wallet_exposure_target)
+    for _ in range(7):
+        if guesses[-1] == guesses[-2]:
+            guesses[-1] = abs(round_(max(guesses[-2] * 1.1, guesses[-2] + qty_step), qty_step))
+            vals[-1] = qty_to_cost(abs(psize) - guesses[-1], pprice, inverse, c_mult) / (
+                balance + calc_long_pnl(pprice, close_price, guesses[-1], inverse, c_mult)
+            )
+        guesses.append(max(0.0, round_(
             interpolate(
-                wallet_exposure_target, np.array([val1, val]), np.array([guess1, guess])
+                wallet_exposure_target, np.array(vals[-2:]), np.array(guesses[-2:])
             ),
             qty_step,
+        )))
+        vals.append(qty_to_cost(abs(psize) - guesses[-1], pprice, inverse, c_mult) / (
+            balance + calc_long_pnl(pprice, close_price, guesses[-1], inverse, c_mult)
+        ))
+        evals.append(abs(vals[-1] - wallet_exposure_target) / wallet_exposure_target)
+        if evals[-1] < 0.04:
+            # close enough
+            break
+    evals_guesses = sorted([(e, g) for e, g in zip(evals, guesses)])
+    if evals_guesses[0][0] > 0.15:
+        print("debug find_long_close_qty_bringing_wallet_exposure_to_target")
+        print(
+            "balance, psize, pprice, wallet_exposure_target, close_price, inverse, qty_step, c_mult,"
         )
-        val = qty_to_cost(abs(psize) - guess, pprice, inverse, c_mult) / (
-            balance + calc_long_pnl(pprice, close_price, guess, inverse, c_mult)
+        print(
+            balance,
+            psize,
+            pprice,
+            wallet_exposure_target,
+            close_price,
+            inverse,
+            qty_step,
+            c_mult,
         )
-        if abs(val - wallet_exposure_target) / wallet_exposure_target > 0.15:
-            print("debug find_long_close_qty_bringing_wallet_exposure_to_target")
-            print()
-            print(
-                "balance, psize, pprice, wallet_exposure_target, close_price, inverse, qty_step, c_mult,"
-            )
-            print(
-                balance,
-                ",",
-                psize,
-                ",",
-                pprice,
-                ",",
-                wallet_exposure_target,
-                ",",
-                close_price,
-                ",",
-                inverse,
-                ",",
-                qty_step,
-                ",",
-                c_mult,
-            )
-            print("wallet_exposure_target", wallet_exposure_target)
-            print("best_guess", guess)
-    return guess
+        print("wallet_exposure", wallet_exposure)
+        print("wallet_exposure_target", wallet_exposure_target)
+        print("guess, val, target diff", [(g, round_dynamic(v, 4), round_dynamic(e, 4)) for g, v, e in zip(guesses, vals, evals)])
+        print()
+    return evals_guesses[0][1]
 
 
 @njit
@@ -682,135 +675,129 @@ def find_short_close_qty_bringing_wallet_exposure_to_target(
     wallet_exposure = qty_to_cost(psize, pprice, inverse, c_mult) / balance
     if wallet_exposure <= wallet_exposure_target:
         return 0.0
-    guess1 = round_(
-        cost_to_qty(
-            balance * (wallet_exposure - wallet_exposure_target),
-            close_price,
-            inverse,
-            c_mult,
-        ),
-        qty_step,
-    )
-    guess2 = round_(max(guess1 * 1.2, guess1 + qty_step), qty_step)
-    val1 = qty_to_cost(abs(psize) - guess1, pprice, inverse, c_mult) / (
-        balance + calc_short_pnl(pprice, close_price, guess1, inverse, c_mult)
-    )
-    val2 = qty_to_cost(abs(psize) - guess2, pprice, inverse, c_mult) / (
-        balance + calc_short_pnl(pprice, close_price, guess2, inverse, c_mult)
-    )
-    guess = round_(
-        interpolate(
-            wallet_exposure_target, np.array([val1, val2]), np.array([guess1, guess2])
-        ),
-        qty_step,
-    )
-    val = qty_to_cost(abs(psize) - guess, pprice, inverse, c_mult) / (
-        balance + calc_short_pnl(pprice, close_price, guess, inverse, c_mult)
-    )
-    if abs(val - wallet_exposure_target) / wallet_exposure_target > 0.15:
-        guess = round_(
+    guesses = []
+    vals = []
+    evals = []
+    guesses.append(max(0.0, round_(psize * (wallet_exposure_target / wallet_exposure), qty_step)))
+    vals.append(qty_to_cost(abs(psize) - guesses[-1], pprice, inverse, c_mult) / (
+        balance + calc_short_pnl(pprice, close_price, guesses[-1], inverse, c_mult)
+    ))
+    evals.append(abs(vals[-1] - wallet_exposure_target) / wallet_exposure_target)
+    guesses.append(max(0.0, round_(max(guesses[-1] * 1.2, guesses[-1] + qty_step), qty_step)))
+    vals.append(qty_to_cost(abs(psize) - guesses[-1], pprice, inverse, c_mult) / (
+        balance + calc_short_pnl(pprice, close_price, guesses[-1], inverse, c_mult)
+    ))
+    evals.append(abs(vals[-1] - wallet_exposure_target) / wallet_exposure_target)
+    for _ in range(7):
+        if guesses[-1] == guesses[-2]:
+            guesses[-1] = abs(round_(max(guesses[-2] * 1.1, guesses[-2] + qty_step), qty_step))
+            vals[-1] = qty_to_cost(abs(psize) - guesses[-1], pprice, inverse, c_mult) / (
+                balance + calc_short_pnl(pprice, close_price, guesses[-1], inverse, c_mult)
+            )
+        guesses.append(max(0.0, round_(
             interpolate(
-                wallet_exposure_target, np.array([val1, val]), np.array([guess1, guess])
+                wallet_exposure_target, np.array(vals[-2:]), np.array(guesses[-2:])
             ),
             qty_step,
+        )))
+        vals.append(qty_to_cost(abs(psize) - guesses[-1], pprice, inverse, c_mult) / (
+            balance + calc_short_pnl(pprice, close_price, guesses[-1], inverse, c_mult)
+        ))
+        evals.append(abs(vals[-1] - wallet_exposure_target) / wallet_exposure_target)
+        if evals[-1] < 0.04:
+            # close enough
+            break
+    evals_guesses = sorted([(e, g) for e, g in zip(evals, guesses)])
+    if evals_guesses[0][0] > 0.15:
+        print("debug find_short_close_qty_bringing_wallet_exposure_to_target")
+        print(
+            "balance, psize, pprice, wallet_exposure_target, close_price, inverse, qty_step, c_mult,"
         )
-        val = qty_to_cost(abs(psize) - guess, pprice, inverse, c_mult) / (
-            balance + calc_short_pnl(pprice, close_price, guess, inverse, c_mult)
+        print(
+            balance,
+            psize,
+            pprice,
+            wallet_exposure_target,
+            close_price,
+            inverse,
+            qty_step,
+            c_mult,
         )
-        if abs(val - wallet_exposure_target) / wallet_exposure_target > 0.15:
-            print("debug find_short_close_qty_bringing_wallet_exposure_to_target")
-            print()
-            print(
-                "balance, psize, pprice, wallet_exposure_target, close_price, inverse, qty_step, c_mult,"
-            )
-            print(
-                balance,
-                ",",
-                psize,
-                ",",
-                pprice,
-                ",",
-                wallet_exposure_target,
-                ",",
-                close_price,
-                ",",
-                inverse,
-                ",",
-                qty_step,
-                ",",
-                c_mult,
-            )
-            print("wallet_exposure_target", wallet_exposure_target)
-            print("best_guess", guess)
-            print("val", val)
-    return guess
+        print("wallet_exposure", wallet_exposure)
+        print("wallet_exposure_target", wallet_exposure_target)
+        print("guess, val, target diff", [(g, round_dynamic(v, 4), round_dynamic(e, 4)) for g, v, e in zip(guesses, vals, evals)])
+        print()
+    return evals_guesses[0][1]
 
 
 @njit
-def find_qty_bringing_wallet_exposure_to_target(
+def find_entry_qty_bringing_wallet_exposure_to_target(
     balance,
     psize,
     pprice,
-    wallet_exposure_limit,
+    wallet_exposure_target,
     entry_price,
     inverse,
     qty_step,
     c_mult,
 ) -> float:
     wallet_exposure = qty_to_cost(psize, pprice, inverse, c_mult) / balance
-    if wallet_exposure >= wallet_exposure_limit * 0.98:
+    if wallet_exposure >= wallet_exposure_target * 0.99:
+        # return zero if exposure already is within 1% of target
         return 0.0
-    guess1 = round_(
-        cost_to_qty(
-            balance * (wallet_exposure_limit - wallet_exposure),
-            entry_price,
-            inverse,
-            c_mult,
-        ),
-        qty_step,
-    )
-    guess2 = round_(max(guess1 * 1.2, guess1 + qty_step), qty_step)
-    val1 = calc_wallet_exposure_if_filled(
-        balance, psize, pprice, guess1, entry_price, inverse, c_mult, qty_step
-    )
-    val2 = calc_wallet_exposure_if_filled(
-        balance, psize, pprice, guess2, entry_price, inverse, c_mult, qty_step
-    )
-    guess = round_(
-        interpolate(
-            wallet_exposure_limit, np.array([val1, val2]), np.array([guess1, guess2])
-        ),
-        qty_step,
-    )
-    val = calc_wallet_exposure_if_filled(
-        balance, psize, pprice, guess, entry_price, inverse, c_mult, qty_step
-    )
-    if abs(val - wallet_exposure_limit) / wallet_exposure_limit > 0.15:
-        print("debug find_qty_bringing_wallet_exposure_to_target")
-        print()
+    guesses = []
+    vals = []
+    evals = []
+    guesses.append(round_(abs(psize) * wallet_exposure_target / wallet_exposure, qty_step))
+    vals.append(calc_wallet_exposure_if_filled(
+        balance, psize, pprice, guesses[-1], entry_price, inverse, c_mult, qty_step
+    ))
+    evals.append(abs(vals[-1] - wallet_exposure_target) / wallet_exposure_target)
+    guesses.append(max(0.0, round_(max(guesses[-1] * 1.2, guesses[-1] + qty_step), qty_step)))
+    vals.append(calc_wallet_exposure_if_filled(
+        balance, psize, pprice, guesses[-1], entry_price, inverse, c_mult, qty_step
+    ))
+    evals.append(abs(vals[-1] - wallet_exposure_target) / wallet_exposure_target)
+    for _ in range(7):
+        if guesses[-1] == guesses[-2]:
+            guesses[-1] = abs(round_(max(guesses[-2] * 1.1, guesses[-2] + qty_step), qty_step))
+            vals[-1] = calc_wallet_exposure_if_filled(
+                balance, psize, pprice, guesses[-1], entry_price, inverse, c_mult, qty_step
+            )
+        guesses.append(max(0.0, round_(
+            interpolate(
+                wallet_exposure_target, np.array(vals[-2:]), np.array(guesses[-2:])
+            ),
+            qty_step,
+        )))
+        vals.append(calc_wallet_exposure_if_filled(
+            balance, psize, pprice, guesses[-1], entry_price, inverse, c_mult, qty_step
+        ))
+        evals.append(abs(vals[-1] - wallet_exposure_target) / wallet_exposure_target)
+        if evals[-1] < 0.04:
+            # close enough
+            break
+    evals_guesses = sorted([(e, g) for e, g in zip(evals, guesses)])
+    if evals_guesses[0][0] > 0.15:
+        print("debug find_entry_qty_bringing_wallet_exposure_to_target")
         print(
-            "balance, psize, pprice, wallet_exposure_limit, entry_price, inverse, qty_step, c_mult"
+            "balance, psize, pprice, wallet_exposure_target, entry_price, inverse, qty_step, c_mult,"
         )
         print(
             balance,
-            ",",
             psize,
-            ",",
             pprice,
-            ",",
-            wallet_exposure_limit,
-            ",",
+            wallet_exposure_target,
             entry_price,
-            ",",
             inverse,
-            ",",
             qty_step,
-            ",",
             c_mult,
         )
-        print("wallet_exposure_limit", wallet_exposure_limit)
-        print("best_guess", guess)
-    return guess
+        print("wallet_exposure", wallet_exposure)
+        print("wallet_exposure_target", wallet_exposure_target)
+        print("guess, val, target diff", [(g, round_dynamic(v, 4), round_dynamic(e, 4)) for g, v, e in zip(guesses, vals, evals)])
+        print()
+    return evals_guesses[0][1]
 
 
 @njit
@@ -1150,7 +1137,7 @@ def calc_whole_long_entry_grid(
         entry_price = min(
             round_dn(grid[-1][3] * (1 - secondary_pprice_diff), price_step), grid[-1][1]
         )
-        qty = find_qty_bringing_wallet_exposure_to_target(
+        qty = find_entry_qty_bringing_wallet_exposure_to_target(
             balance,
             grid[-1][2],
             grid[-1][3],
@@ -1248,7 +1235,7 @@ def calc_whole_short_entry_grid(
         entry_price = max(
             round_up(grid[-1][3] * (1 + secondary_pprice_diff), price_step), grid[-1][1]
         )
-        qty = -find_qty_bringing_wallet_exposure_to_target(
+        qty = -find_entry_qty_bringing_wallet_exposure_to_target(
             balance,
             grid[-1][2],
             grid[-1][3],
@@ -1336,7 +1323,7 @@ def calc_long_entry_grid(
                             ema_band_lower * (1 - auto_unstuck_ema_dist), price_step
                         ),
                     )
-                    auto_unstuck_qty = find_qty_bringing_wallet_exposure_to_target(
+                    auto_unstuck_qty = find_entry_qty_bringing_wallet_exposure_to_target(
                         balance,
                         psize,
                         pprice,
@@ -1516,7 +1503,7 @@ def calc_short_entry_grid(
                             ema_band_upper * (1 + auto_unstuck_ema_dist), price_step
                         ),
                     )
-                    auto_unstuck_qty = find_qty_bringing_wallet_exposure_to_target(
+                    auto_unstuck_qty = find_entry_qty_bringing_wallet_exposure_to_target(
                         balance,
                         psize,
                         pprice,
