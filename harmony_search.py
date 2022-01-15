@@ -219,7 +219,8 @@ class HarmonySearch:
                     and self.config["long"]["enabled"]
                 ):
                     logging.info(
-                        f"i{self.iter_counter} - new best config long, score {score_long:.7f}"
+                        f"i{self.iter_counter} - new best config long, score {score_long:.7f} " + 
+                        f"adg {adg_mean_long:.7f} pad {pad_mean_long:.7f}"
                     )
                     tmp_fname += "_long"
                     json.dump(
@@ -231,7 +232,8 @@ class HarmonySearch:
                     and self.config["short"]["enabled"]
                 ):
                     logging.info(
-                        f"i{self.iter_counter} - new best config short, score {score_short:.7f}"
+                        f"i{self.iter_counter} - new best config short, score {score_short:.7f} " +
+                        f"adg {adg_mean_short:.7f} pad {pad_mean_short:.7f}"
                     )
                     tmp_fname += "_short"
                     json.dump(
