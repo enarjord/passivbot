@@ -20,17 +20,11 @@ def dump_plots(result: dict, fdf: pd.DataFrame, sdf: pd.DataFrame, df: pd.DataFr
     table.align["Value"] = "l"
     table.title = "Summary"
 
-    table.add_row(
-        ["Exchange", result["exchange"] if "exchange" in result else "unknown"]
-    )
-    table.add_row(
-        ["Market type", result["market_type"] if "market_type" in result else "unknown"]
-    )
+    table.add_row(["Exchange", result["exchange"] if "exchange" in result else "unknown"])
+    table.add_row(["Market type", result["market_type"] if "market_type" in result else "unknown"])
     table.add_row(["Symbol", result["symbol"] if "symbol" in result else "unknown"])
     table.add_row(["No. days", round_dynamic(result["result"]["n_days"], 6)])
-    table.add_row(
-        ["Starting balance", round_dynamic(result["result"]["starting_balance"], 6)]
-    )
+    table.add_row(["Starting balance", round_dynamic(result["result"]["starting_balance"], 6)])
     profit_color = (
         Fore.RED
         if result["result"]["final_balance"] < result["result"]["starting_balance"]
@@ -99,9 +93,7 @@ def dump_plots(result: dict, fdf: pd.DataFrame, sdf: pd.DataFrame, df: pd.DataFr
             round_dynamic(result["result"]["eqbal_ratio_min"], 6),
         ]
     )
-    table.add_row(
-        ["Biggest pos size", round_dynamic(result["result"]["biggest_psize"], 6)]
-    )
+    table.add_row(["Biggest pos size", round_dynamic(result["result"]["biggest_psize"], 6)])
     table.add_row(
         [
             "Biggest pos cost",
@@ -143,16 +135,10 @@ def dump_plots(result: dict, fdf: pd.DataFrame, sdf: pd.DataFrame, df: pd.DataFr
     table.add_row(["No. fills", round_dynamic(result["result"]["n_fills"], 6)])
     table.add_row(["No. entries", round_dynamic(result["result"]["n_entries"], 6)])
     table.add_row(["No. closes", round_dynamic(result["result"]["n_closes"], 6)])
-    table.add_row(
-        ["No. initial entries", round_dynamic(result["result"]["n_ientries"], 6)]
-    )
+    table.add_row(["No. initial entries", round_dynamic(result["result"]["n_ientries"], 6)])
     table.add_row(["No. reentries", round_dynamic(result["result"]["n_rentries"], 6)])
-    table.add_row(
-        ["No. unstuck entries", round_dynamic(result["result"]["n_unstuck_entries"], 6)]
-    )
-    table.add_row(
-        ["No. unstuck closes", round_dynamic(result["result"]["n_unstuck_closes"], 6)]
-    )
+    table.add_row(["No. unstuck entries", round_dynamic(result["result"]["n_unstuck_entries"], 6)])
+    table.add_row(["No. unstuck closes", round_dynamic(result["result"]["n_unstuck_closes"], 6)])
     table.add_row([" ", " "])
     table.add_row(
         [
@@ -172,6 +158,8 @@ def dump_plots(result: dict, fdf: pd.DataFrame, sdf: pd.DataFrame, df: pd.DataFr
     if result["long"]["enabled"]:
         table.add_row([" ", " "])
         table.add_row(["Long", result["long"]["enabled"]])
+        adg_per_exp = result["result"]["adg_long"] / result["long"]["wallet_exposure_limit"]
+        table.add_row(["ADG per exposure", f"{round_dynamic(adg_per_exp * 100, 3)}%"])
         table.add_row(["No. inital entries", result["result"]["n_ientries_long"]])
         table.add_row(["No. reentries", result["result"]["n_rentries_long"]])
         table.add_row(["No. normal closes", result["result"]["n_normal_closes_long"]])
@@ -209,9 +197,7 @@ def dump_plots(result: dict, fdf: pd.DataFrame, sdf: pd.DataFrame, df: pd.DataFr
                 round_dynamic(result["result"]["avg_fills_per_day_long"], 3),
             ]
         )
-        table.add_row(
-            ["Volume quote", round_dynamic(result["result"]["volume_quote_long"], 6)]
-        )
+        table.add_row(["Volume quote", round_dynamic(result["result"]["volume_quote_long"], 6)])
 
     if result["short"]["enabled"]:
         table.add_row([" ", " "])
@@ -238,9 +224,7 @@ def dump_plots(result: dict, fdf: pd.DataFrame, sdf: pd.DataFrame, df: pd.DataFr
                 f"{profit_color}{round_dynamic(result['result']['pnl_sum_short'], 4)}{Fore.RESET}",
             ]
         )
-        table.add_row(
-            ["Loss sum", round_dynamic(result["result"]["loss_sum_short"], 4)]
-        )
+        table.add_row(["Loss sum", round_dynamic(result["result"]["loss_sum_short"], 4)])
         table.add_row(["Fee sum", round_dynamic(result["result"]["fee_sum_short"], 4)])
         table.add_row(["Biggest pos size", result["result"]["biggest_psize_short"]])
         table.add_row(
@@ -255,14 +239,10 @@ def dump_plots(result: dict, fdf: pd.DataFrame, sdf: pd.DataFrame, df: pd.DataFr
                 round_dynamic(result["result"]["avg_fills_per_day_short"], 3),
             ]
         )
-        table.add_row(
-            ["Volume quote", round_dynamic(result["result"]["volume_quote_short"], 6)]
-        )
+        table.add_row(["Volume quote", round_dynamic(result["result"]["volume_quote_short"], 6)])
 
     dump_live_config(result, result["plots_dirpath"] + "live_config.json")
-    json.dump(
-        denumpyize(result), open(result["plots_dirpath"] + "result.json", "w"), indent=4
-    )
+    json.dump(denumpyize(result), open(result["plots_dirpath"] + "result.json", "w"), indent=4)
 
     print("writing backtest_result.txt...\n")
     with open(f"{result['plots_dirpath']}backtest_result.txt", "w") as f:
@@ -277,15 +257,11 @@ def dump_plots(result: dict, fdf: pd.DataFrame, sdf: pd.DataFrame, df: pd.DataFr
     plt.savefig(f"{result['plots_dirpath']}balance_and_equity_sampled.png")
 
     plt.clf()
-    longs.pnl.cumsum().plot(
-        title="PNL cumulated sum - Long", xlabel="Time", ylabel="PNL"
-    )
+    longs.pnl.cumsum().plot(title="PNL cumulated sum - Long", xlabel="Time", ylabel="PNL")
     plt.savefig(f"{result['plots_dirpath']}pnl_cumsum_long.png")
 
     plt.clf()
-    shorts.pnl.cumsum().plot(
-        title="PNL cumulated sum - Short", xlabel="Time", ylabel="PNL"
-    )
+    shorts.pnl.cumsum().plot(title="PNL cumulated sum - Short", xlabel="Time", ylabel="PNL")
     plt.savefig(f"{result['plots_dirpath']}pnl_cumsum_short.png")
 
     adg = (sdf.equity / sdf.equity.iloc[0]) ** (
@@ -316,15 +292,12 @@ def dump_plots(result: dict, fdf: pd.DataFrame, sdf: pd.DataFrame, df: pd.DataFr
     if result["long"]["enabled"]:
         print("plotting long fills...")
         plt.clf()
-        fig = plot_fills(
-            df, fdf, side=1, plot_whole_df=True, title="Overview Long Fills"
-        )
+        fig = plot_fills(df, fdf, side=1, plot_whole_df=True, title="Overview Long Fills")
         fig.savefig(f"{result['plots_dirpath']}whole_backtest_long.png")
         print("plotting long initial entry band")
         spans = [
             result["long"]["ema_span_min"] * 60,
-            ((result["long"]["ema_span_min"] * result["long"]["ema_span_max"]) ** 0.5)
-            * 60,
+            ((result["long"]["ema_span_min"] * result["long"]["ema_span_max"]) ** 0.5) * 60,
             result["long"]["ema_span_max"] * 60,
         ]
         emas = pd.DataFrame(
@@ -332,21 +305,15 @@ def dump_plots(result: dict, fdf: pd.DataFrame, sdf: pd.DataFrame, df: pd.DataFr
         )
         ema_band_lower = emas.min(axis=1)
         ema_band_upper = emas.max(axis=1)
-        long_ientry_band = ema_band_lower * (
-            1 - result["long"]["initial_eprice_ema_dist"]
-        )
+        long_ientry_band = ema_band_lower * (1 - result["long"]["initial_eprice_ema_dist"])
         plt.clf()
         df.price.plot(style="y-", title="Long Initial Entry Band")
         long_ientry_band.plot(style="b-.")
         plt.savefig(f"{result['plots_dirpath']}initial_entry_band_long.png")
         if result["long"]["auto_unstuck_wallet_exposure_threshold"] != 0.0:
             print("plotting long unstucking bands...")
-            unstucking_band_lower = ema_band_lower * (
-                1 - result["long"]["auto_unstuck_ema_dist"]
-            )
-            unstucking_band_upper = ema_band_lower * (
-                1 + result["long"]["auto_unstuck_ema_dist"]
-            )
+            unstucking_band_lower = ema_band_lower * (1 - result["long"]["auto_unstuck_ema_dist"])
+            unstucking_band_upper = ema_band_lower * (1 + result["long"]["auto_unstuck_ema_dist"])
             plt.clf()
             df.price.plot(style="y-", title="Long Auto Unstucking Bands")
             unstucking_band_lower.plot(style="b-.")
@@ -355,15 +322,12 @@ def dump_plots(result: dict, fdf: pd.DataFrame, sdf: pd.DataFrame, df: pd.DataFr
     if result["short"]["enabled"]:
         print("plotting short fills...")
         plt.clf()
-        fig = plot_fills(
-            df, fdf, side=-1, plot_whole_df=True, title="Overview Short Fills"
-        )
+        fig = plot_fills(df, fdf, side=-1, plot_whole_df=True, title="Overview Short Fills")
         fig.savefig(f"{result['plots_dirpath']}whole_backtest_short.png")
         print("plotting short initial entry band")
         spans = [
             result["short"]["ema_span_min"] * 60,
-            ((result["short"]["ema_span_min"] * result["short"]["ema_span_max"]) ** 0.5)
-            * 60,
+            ((result["short"]["ema_span_min"] * result["short"]["ema_span_max"]) ** 0.5) * 60,
             result["short"]["ema_span_max"] * 60,
         ]
         emas = pd.DataFrame(
@@ -371,21 +335,15 @@ def dump_plots(result: dict, fdf: pd.DataFrame, sdf: pd.DataFrame, df: pd.DataFr
         )
         ema_band_lower = emas.min(axis=1)
         ema_band_upper = emas.max(axis=1)
-        short_ientry_band = ema_band_lower * (
-            1 + result["short"]["initial_eprice_ema_dist"]
-        )
+        short_ientry_band = ema_band_lower * (1 + result["short"]["initial_eprice_ema_dist"])
         plt.clf()
         df.price.plot(style="y-", title="Short Initial Entry Band")
         short_ientry_band.plot(style="r-.")
         plt.savefig(f"{result['plots_dirpath']}initial_entry_band_short.png")
         if result["short"]["auto_unstuck_wallet_exposure_threshold"] != 0.0:
             print("plotting short unstucking bands...")
-            unstucking_band_lower = ema_band_lower * (
-                1 - result["short"]["auto_unstuck_ema_dist"]
-            )
-            unstucking_band_upper = ema_band_lower * (
-                1 + result["short"]["auto_unstuck_ema_dist"]
-            )
+            unstucking_band_lower = ema_band_lower * (1 - result["short"]["auto_unstuck_ema_dist"])
+            unstucking_band_upper = ema_band_lower * (1 + result["short"]["auto_unstuck_ema_dist"])
             plt.clf()
             df.price.plot(style="y-", title="short Auto Unstucking Bands")
             unstucking_band_lower.plot(style="b-.")
@@ -445,7 +403,5 @@ def plot_fills(df, fdf_, side: int = 0, plot_whole_df: bool = False, title=""):
         sdca.price.plot(style="go")
         suentry.price.plot(style="rx")
         suclose.price.plot(style="bx")
-        shorts.where(shorts.pprice != 0.0).pprice.fillna(method="ffill").plot(
-            style="r--"
-        )
+        shorts.where(shorts.pprice != 0.0).pprice.fillna(method="ffill").plot(style="r--")
     return plt
