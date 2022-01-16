@@ -179,8 +179,8 @@ def calc_wallet_exposure_if_filled(balance, psize, pprice, qty, price, inverse, 
 @njit
 def calc_long_close_grid(
     balance,
-    long_psize,
-    long_pprice,
+    psize,
+    pprice,
     lowest_ask,
     ema_band_upper,
     spot,
@@ -190,105 +190,73 @@ def calc_long_close_grid(
     min_qty,
     min_cost,
     c_mult,
-    wallet_exposure_limit,
-    initial_qty_pct,
+    exposure_limit,
+    iqty_pct,
     min_markup,
     markup_range,
     n_close_orders,
-    auto_unstuck_wallet_exposure_threshold,
+    auto_unstuck_exposure_threshold,
     auto_unstuck_ema_dist,
-) -> [(float, float, str)]:
-    if long_psize == 0.0:
+):
+    if psize == 0.0:
         return [(0.0, 0.0, "")]
-    minm = long_pprice * (1 + min_markup)
-    if spot and round_dn(long_psize, qty_step) < calc_min_entry_qty(
-        minm, inverse, qty_step, min_qty, min_cost
-    ):
-        return [(0.0, 0.0, "")]
-    if (
-        long_psize
-        < cost_to_qty(balance, long_pprice, inverse, c_mult)
-        * wallet_exposure_limit
-        * initial_qty_pct
-        * 0.5
-    ):
-        # close entire pos at breakeven or better if psize < initial_qty * 0.5
-        # assumes maker fee rate 0.001 for spot, 0.0002 for futures
-        breakeven_markup = 0.0021 if spot else 0.00041
-        close_price = max(lowest_ask, round_up(long_pprice * (1 + breakeven_markup), price_step))
-        return [(-round_(long_psize, qty_step), close_price, "long_nclose")]
+    minm = pprice * (1 + min_markup)
+    raw_close_prices = np.linspace(
+        minm, pprice * (1 + min_markup + markup_range), int(round(n_close_orders))
+    )
     close_prices = []
-    for p in np.linspace(minm, long_pprice * (1 + min_markup + markup_range), n_close_orders):
-        price_ = round_up(p, price_step)
-        if price_ >= lowest_ask:
-            close_prices.append(price_)
+    for p_ in raw_close_prices:
+        price = round_up(p_, price_step)
+        if price >= lowest_ask:
+            close_prices.append(price)
+    psize_ = round_dn(psize, qty_step)  # round up for spot
+    closes = []
     if len(close_prices) == 0:
-        return [(-long_psize, lowest_ask, "long_nclose")]
-    elif len(close_prices) == 1:
-        return [(-long_psize, close_prices[0], "long_nclose")]
-    else:
-        long_closes = []
-        wallet_exposure = qty_to_cost(long_psize, long_pprice, inverse, c_mult) / balance
-        threshold = wallet_exposure_limit * (1 - auto_unstuck_wallet_exposure_threshold) * 1.01
-        if auto_unstuck_wallet_exposure_threshold != 0.0 and wallet_exposure > threshold:
-            auto_unstuck_price = max(
-                lowest_ask,
-                round_up(ema_band_upper * (1 + auto_unstuck_ema_dist), price_step),
+        return [(-psize, lowest_ask, "long_nclose")]
+    exposure = qty_to_cost(psize, pprice, inverse, c_mult) / balance
+    threshold = exposure_limit * (1 - auto_unstuck_exposure_threshold)
+    if auto_unstuck_exposure_threshold != 0.0 and exposure > threshold:
+        unstuck_close_price = max(
+            lowest_ask, round_up(ema_band_upper * (1 + auto_unstuck_ema_dist), price_step)
+        )
+        if unstuck_close_price < close_prices[0]:
+            unstuck_close_qty = find_long_close_qty_bringing_wallet_exposure_to_target(
+                balance,
+                psize_,
+                pprice,
+                threshold * 1.01,
+                unstuck_close_price,
+                inverse,
+                qty_step,
+                c_mult,
             )
-            if auto_unstuck_price < close_prices[0]:
-                auto_unstuck_qty = find_long_close_qty_bringing_wallet_exposure_to_target(
-                    balance,
-                    long_psize,
-                    long_pprice,
-                    threshold,
-                    auto_unstuck_price,
-                    inverse,
-                    qty_step,
-                    c_mult,
-                )
-                if auto_unstuck_qty >= calc_min_entry_qty(
-                    auto_unstuck_price, inverse, qty_step, min_qty, min_cost
-                ):
-                    long_closes.append(
-                        (
-                            -auto_unstuck_qty,
-                            auto_unstuck_price,
-                            "long_auto_unstuck_close",
-                        )
-                    )
-                    long_psize = max(0.0, round_(long_psize - auto_unstuck_qty, qty_step))
-
-        min_close_qty = calc_min_entry_qty(close_prices[0], inverse, qty_step, min_qty, min_cost)
-        default_qty = round_dn(long_psize / len(close_prices), qty_step)
-        if default_qty == 0.0:
-            return [(-long_psize, close_prices[0], "long_nclose")]
-        default_qty = max(min_close_qty, default_qty)
-        remaining = long_psize
-        for close_price in close_prices:
-            if remaining < max(
-                [
-                    min_close_qty,
-                    cost_to_qty(balance, close_price, inverse, c_mult)
-                    * wallet_exposure_limit
-                    * initial_qty_pct
-                    * 0.5,
-                    default_qty * 0.5,
-                ]
-            ):
-                break
-            close_qty = min(remaining, max(default_qty, min_close_qty))
-            long_closes.append((-close_qty, close_price, "long_nclose"))
-            remaining = round_(remaining - close_qty, qty_step)
-        if remaining:
-            if long_closes:
-                long_closes[-1] = (
-                    round_(long_closes[-1][0] - remaining, qty_step),
-                    long_closes[-1][1],
-                    long_closes[-1][2],
-                )
-            else:
-                long_closes = [(-long_psize, close_prices[0], "long_nclose")]
-        return long_closes
+            min_entry_qty = calc_min_entry_qty(
+                unstuck_close_price, inverse, qty_step, min_qty, min_cost
+            )
+            if unstuck_close_qty >= min_entry_qty:
+                psize_ = round_(psize_ - unstuck_close_qty, qty_step)
+                if psize_ < min_entry_qty:
+                    # close whole pos; include leftovers
+                    return [(-round_dn(psize, qty_step), unstuck_close_price, "long_unstuck_close")]
+                closes.append((-unstuck_close_qty, unstuck_close_price, "long_unstuck_close"))
+    if len(close_prices) == 1:
+        if psize_ >= calc_min_entry_qty(close_prices[0], inverse, qty_step, min_qty, min_cost):
+            closes.append((-psize_, close_prices[0], "long_nclose"))
+        return closes
+    default_close_qty = round_dn(psize_ / len(close_prices), qty_step)
+    for price in close_prices[:-1]:
+        min_close_qty = calc_min_entry_qty(price, inverse, qty_step, min_qty, min_cost)
+        if psize_ < min_close_qty:
+            break
+        close_qty = min(psize_, max(min_close_qty, default_close_qty))
+        closes.append((-close_qty, price, "long_nclose"))
+        psize_ = round_(psize_ - close_qty, qty_step)
+    min_close_qty = calc_min_entry_qty(close_prices[-1], inverse, qty_step, min_qty, min_cost)
+    if psize_ >= min_close_qty:
+        closes.append((-psize_, close_prices[-1], "long_nclose"))
+    elif len(closes) > 0:
+        closes[-1] = (-(abs(closes[-1][0]) + psize_), closes[-1][1], closes[-1][2])
+    return closes
 
 
 @njit
@@ -566,7 +534,9 @@ def find_long_close_qty_bringing_wallet_exposure_to_target(
         min(psize, max(0.0, round_(max(guesses[-1] * 1.2, guesses[-1] + qty_step), qty_step)))
     )
     if guesses[-1] == guesses[-2]:
-        guesses[-1] = min(psize, max(0.0, round_(min(guesses[-1] * 0.8, guesses[-1] - qty_step), qty_step)))
+        guesses[-1] = min(
+            psize, max(0.0, round_(min(guesses[-1] * 0.8, guesses[-1] - qty_step), qty_step))
+        )
     vals.append(
         qty_to_cost(abs(psize) - guesses[-1], pprice, inverse, c_mult)
         / (balance + calc_long_pnl(pprice, close_price, guesses[-1], inverse, c_mult))
@@ -581,9 +551,11 @@ def find_long_close_qty_bringing_wallet_exposure_to_target(
                 balance + calc_long_pnl(pprice, close_price, guesses[-1], inverse, c_mult)
             )
         try:
-            new_guess = interpolate(wallet_exposure_target, np.array(vals[-2:]), np.array(guesses[-2:]))
+            new_guess = interpolate(
+                wallet_exposure_target, np.array(vals[-2:]), np.array(guesses[-2:])
+            )
         except:
-            print('debug zero div error find_long_close_qty_bringing_wallet_exposure_to_target')
+            print("debug zero div error find_long_close_qty_bringing_wallet_exposure_to_target")
             print(
                 "balance, psize, pprice, wallet_exposure_target, close_price, inverse, qty_step, c_mult,"
             )
@@ -597,7 +569,7 @@ def find_long_close_qty_bringing_wallet_exposure_to_target(
                 qty_step,
                 c_mult,
             )
-            print('guesses, vals', guesses, vals)
+            print("guesses, vals", guesses, vals)
             new_guess = round_(psize / 2, qty_step)
         guesses.append(min(psize, max(0.0, round_(new_guess, qty_step))))
         vals.append(
@@ -669,7 +641,9 @@ def find_short_close_qty_bringing_wallet_exposure_to_target(
         min(abs_psize, max(0.0, round_(max(guesses[-1] * 1.2, guesses[-1] + qty_step), qty_step)))
     )
     if guesses[-1] == guesses[-2]:
-        guesses[-1] = min(abs_psize, max(0.0, round_(min(guesses[-1] * 0.8, guesses[-1] - qty_step), qty_step)))
+        guesses[-1] = min(
+            abs_psize, max(0.0, round_(min(guesses[-1] * 0.8, guesses[-1] - qty_step), qty_step))
+        )
     vals.append(
         qty_to_cost(abs_psize - guesses[-1], pprice, inverse, c_mult)
         / (balance + calc_short_pnl(pprice, close_price, guesses[-1], inverse, c_mult))
@@ -684,9 +658,11 @@ def find_short_close_qty_bringing_wallet_exposure_to_target(
                 balance + calc_short_pnl(pprice, close_price, guesses[-1], inverse, c_mult)
             )
         try:
-            new_guess = interpolate(wallet_exposure_target, np.array(vals[-2:]), np.array(guesses[-2:]))
+            new_guess = interpolate(
+                wallet_exposure_target, np.array(vals[-2:]), np.array(guesses[-2:])
+            )
         except:
-            print('debug zero div error find_short_close_qty_bringing_wallet_exposure_to_target')
+            print("debug zero div error find_short_close_qty_bringing_wallet_exposure_to_target")
             print(
                 "balance, psize, pprice, wallet_exposure_target, close_price, inverse, qty_step, c_mult,"
             )
@@ -700,7 +676,7 @@ def find_short_close_qty_bringing_wallet_exposure_to_target(
                 qty_step,
                 c_mult,
             )
-            print('guesses, vals', guesses, vals)
+            print("guesses, vals", guesses, vals)
             new_guess = round_(abs_psize / 2, qty_step)
         guesses.append(min(abs_psize, max(0.0, round_(new_guess, qty_step))))
         vals.append(
@@ -1903,8 +1879,8 @@ def njit_backtest(
         )
         * 60.0
     )
-    assert spans_long[-1] < len(prices), "ema_span_max long larger than len(prices)"
-    assert spans_short[-1] < len(prices), "ema_span_max short larger than len(prices)"
+    assert max(spans_long) < len(prices), "ema_span_max long larger than len(prices)"
+    assert max(spans_short) < len(prices), "ema_span_max short larger than len(prices)"
     spans_long = np.where(spans_long < 1.0, 1.0, spans_long)
     spans_short = np.where(spans_short < 1.0, 1.0, spans_short)
     max_span = int(round(max(max(spans_long), max(spans_short))))
