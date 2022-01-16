@@ -503,13 +503,14 @@ class BinanceBot(Bot):
         if from_id is not None:
             params["fromId"] = max(0, from_id)
         if start_time is not None:
-            params["startTime"] = start_time
+            params["startTime"] = int(start_time)
         if end_time is not None:
-            params["endTime"] = end_time
+            params["endTime"] = int(end_time)
         try:
             fetched = await self.public_get(self.endpoints["ticks"], params)
         except Exception as e:
             print("error fetching ticks a", e)
+            traceback.print_exc()
             return []
         try:
             ticks = [
