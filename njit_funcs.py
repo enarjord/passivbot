@@ -255,7 +255,7 @@ def calc_long_close_grid(
     if psize_ >= min_close_qty:
         closes.append((-psize_, close_prices[-1], "long_nclose"))
     elif len(closes) > 0:
-        closes[-1] = (-(abs(closes[-1][0]) + psize_), closes[-1][1], closes[-1][2])
+        closes[-1] = (-round_(abs(closes[-1][0]) + psize_, qty_step), closes[-1][1], closes[-1][2])
     return closes
 
 
