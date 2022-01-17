@@ -16,6 +16,7 @@ if "NOJIT" in os.environ and os.environ["NOJIT"] == "true":
         else:
             return wrap
 
+
 else:
     print("using numba")
     from numba import njit
@@ -1859,40 +1860,34 @@ def njit_backtest(
     prev_k = 0
     closest_bkr = 1.0
 
-    spans_long = (
-        np.array(
-            [
-                ema_span_min[0],
-                (ema_span_min[0] * ema_span_max[0]) ** 0.5,
-                ema_span_max[0],
-            ]
-        )
-        * 60.0
-    )
-    spans_short = (
-        np.array(
-            [
-                ema_span_min[1],
-                (ema_span_min[1] * ema_span_max[1]) ** 0.5,
-                ema_span_max[1],
-            ]
-        )
-        * 60.0
-    )
+    spans_long = [
+        ema_span_min[0],
+        (ema_span_min[0] * ema_span_max[0]) ** 0.5,
+        ema_span_max[0],
+    ]
+    spans_long = np.array(spans_long) * 60 if do_long else np.ones(3)
+    spans_short = [
+        ema_span_min[1],
+        (ema_span_min[1] * ema_span_max[1]) ** 0.5,
+        ema_span_max[1],
+    ]
+    spans_short = np.array(spans_short) * 60 if do_short else np.ones(3)
+
     assert max(spans_long) < len(prices), "ema_span_max long larger than len(prices)"
     assert max(spans_short) < len(prices), "ema_span_max short larger than len(prices)"
     spans_long = np.where(spans_long < 1.0, 1.0, spans_long)
     spans_short = np.where(spans_short < 1.0, 1.0, spans_short)
     max_span = int(round(max(max(spans_long), max(spans_short))))
     emas_long = (
-        calc_emas_last(prices[:max_span], spans_long) if do_long else np.zeros(len(spans_long))
+        (calc_emas_last(prices[:max_span], spans_long) if do_long else np.zeros(len(spans_long)))
+        if do_long
+        else np.zeros(3)
     )
-    if (spans_long == spans_short).all():
-        emas_short = emas_long
-    else:
-        emas_short = (
-            calc_emas_last(prices[:max_span], spans_short) if do_short else np.zeros(len(spans_short))
-        )
+    emas_short = (
+        (calc_emas_last(prices[:max_span], spans_short) if do_short else np.zeros(len(spans_short)))
+        if do_short
+        else np.zeros(3)
+    )
     alphas_long = 2.0 / (spans_long + 1.0)
     alphas__long = 1.0 - alphas_long
     alphas_short = 2.0 / (spans_short + 1.0)
