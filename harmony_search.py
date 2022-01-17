@@ -38,17 +38,28 @@ import logging.config
 logging.config.dictConfig({"version": 1, "disable_existing_loggers": True})
 
 
-def backtest_single_wrap(config_: dict):
+def backtest_wrap(config_: dict):
     """
     loads historical data from disk, runs backtest and returns relevant metrics
     """
-    config = deepcopy(config_)
-    exchange_name = config["exchange"] + ("_spot" if config["market_type"] == "spot" else "")
-    cache_filepath = f"backtests/{exchange_name}/{config['symbol']}/caches/"
-    ticks_filepath = cache_filepath + f"{config['start_date']}_{config['end_date']}_ticks_cache.npy"
-    mss = json.load(open(cache_filepath + "market_specific_settings.json"))
-    ticks = np.load(ticks_filepath)
-    config.update(mss)
+    config = {
+        **{"long": deepcopy(config_["long"]), "short": deepcopy(config_["short"])},
+        **{
+            k: config_[k]
+            for k in [
+                "starting_balance",
+                "latency_simulation_ms",
+                "symbol",
+                "market_type",
+                "config_no",
+            ]
+        },
+        **{k: v for k, v in config_["market_specific_settings"].items()},
+    }
+    if config["symbol"] in config_["ticks_caches"]:
+        ticks = config_["ticks_caches"][config["symbol"]]
+    else:
+        ticks = np.load(config_["ticks_cache_fname"])
     try:
         fills, stats = backtest(config, ticks)
         fdf, sdf, analysis = analyze_fills(fills, stats, config)
@@ -56,6 +67,10 @@ def backtest_single_wrap(config_: dict):
         pa_distance_short = analysis["pa_distance_mean_short"]
         adg_long = analysis["adg_long"]
         adg_short = analysis["adg_short"]
+        '''
+        with open("logs/debug_harmonysearch.txt", "a") as f:
+            f.write(json.dumps({"config": denumpyize(config), "analysis": analysis}) + "\n")
+        '''
         logging.debug(
             f"backtested {config['symbol']: <12} pa distance long {pa_distance_long:.6f} "
             + f"pa distance short {pa_distance_short:.6f} adg long {adg_long:.6f} adg short {adg_short:.6f}"
@@ -79,6 +94,8 @@ def backtest_single_wrap(config_: dict):
 class HarmonySearch:
     def __init__(self, config: dict):
         self.config = config
+        self.do_long = config["long"]["enabled"]
+        self.do_short = config["short"]["enabled"]
         self.n_harmonies = max(config["n_harmonies"], len(config["starting_configs"]))
         self.starting_configs = config["starting_configs"]
         self.hm_considering_rate = config["hm_considering_rate"]
@@ -99,6 +116,25 @@ class HarmonySearch:
         self.results_fpath = make_get_filepath(
             f"results_harmony_search/{self.now_date}_{self.identifying_name}/"
         )
+
+        self.exchange_name = config["exchange"] + ("_spot" if config["market_type"] == "spot" else "")
+        self.market_specific_settings = {
+            s: json.load(
+                open(f"backtests/{self.exchange_name}/{s}/caches/market_specific_settings.json")
+            )
+            for s in self.symbols
+        }
+        self.date_range = f"{self.config['start_date']}_{self.config['end_date']}"
+        self.bt_dir = f"backtests/{self.exchange_name}"
+        self.ticks_cache_fname = f"caches/{self.date_range}_ticks_cache.npy"
+        """
+        self.ticks_caches = (
+            {s: np.load(f"{self.bt_dir}/{s}/{self.ticks_cache_fname}") for s in self.symbols}
+            if self.n_harmonies > len(self.symbols)
+            else {}
+        )
+        """
+        self.ticks_caches = {}  # todo implement shared memory
         self.current_best_config = None
 
         # [{'config': dict, 'task': process, 'id_key': tuple}]
@@ -116,12 +152,12 @@ class HarmonySearch:
 
     def post_process(self, wi: int):
         # a worker has finished a job; process it
-        cfg = self.workers[wi]["config"]
+        cfg = deepcopy(self.workers[wi]["config"])
         id_key = self.workers[wi]["id_key"]
         symbol = cfg["symbol"]
         self.unfinished_evals[id_key]["single_results"][symbol] = self.workers[wi]["task"].get()
         self.unfinished_evals[id_key]["in_progress"].remove(symbol)
-        results = self.unfinished_evals[id_key]["single_results"]
+        results = deepcopy(self.unfinished_evals[id_key]["single_results"])
         if set(results) == set(self.symbols):
             # completed multisymbol iter
             adg_mean_long = np.mean([v["adg_long"] for v in results.values()])
@@ -144,13 +180,13 @@ class HarmonySearch:
             score_short = -adg_mean_short * min(
                 1.0, self.config["maximum_pa_distance_mean_short"] / pad_mean_short
             )
-            logging.debug(
-                f"completed multisymbol iter {self.iter_counter} - "
-                + f"adg long {adg_mean_long:.6f} pad long {pad_mean_long:.6f} score long {score_long:.6f} - "
-                + f"adg short {adg_mean_short:.6f} pad short {pad_mean_short:.6f} score short {score_short:.6f}"
-            )
+            line = f"completed multisymbol iter {cfg['config_no']} "
+            if self.do_long:
+                line += f"- adg long {adg_mean_long:.6f} pad long {pad_mean_long:.6f} score long {score_long:.7f} "
+            if self.do_short:
+                line += f"- adg short {adg_mean_short:.6f} pad short {pad_mean_short:.6f} score short {score_short:.7f}"
+            logging.debug(line)
             # check whether initial eval or new harmony
-            self.iter_counter += 1
             if "initial_eval_key" in cfg:
                 self.hm[cfg["initial_eval_key"]]["long"]["score"] = score_long
                 self.hm[cfg["initial_eval_key"]]["short"]["score"] = score_short
@@ -162,15 +198,21 @@ class HarmonySearch:
                     if type(self.hm[x]["long"]["score"]) != str
                     else -np.inf,
                 )[-1]
-                if score_long < self.hm[worst_key_long]["long"]["score"]:
+                if self.do_long and score_long < self.hm[worst_key_long]["long"]["score"]:
                     logging.debug(
                         f"improved long harmony, prev score "
-                        + f"{self.hm[worst_key_long]['long']['score']:.6f} new score {score_long:.6f}"
+                        + f"{self.hm[worst_key_long]['long']['score']:.7f} new score {score_long:.7f} - "
                         + " ".join([str(round_dynamic(e[1], 3)) for e in sorted(cfg["long"].items())])
                     )
-                    self.hm[worst_key_long]["long"] = {"config": cfg["long"], "score": score_long}
+                    self.hm[worst_key_long]["long"] = {
+                        "config": deepcopy(cfg["long"]),
+                        "score": score_long,
+                    }
                     json.dump(
-                        self.hm, open(f"{self.results_fpath}hm_{self.iter_counter:06}.json", "w")
+                        self.hm,
+                        open(f"{self.results_fpath}hm_{cfg['config_no']:06}.json", "w"),
+                        indent=4,
+                        sort_keys=True,
                     )
                 worst_key_short = sorted(
                     self.hm,
@@ -178,17 +220,23 @@ class HarmonySearch:
                     if type(self.hm[x]["short"]["score"]) != str
                     else -np.inf,
                 )[-1]
-                if score_short < self.hm[worst_key_short]["short"]["score"]:
+                if self.do_short and score_short < self.hm[worst_key_short]["short"]["score"]:
                     logging.debug(
                         f"improved short harmony, prev score ",
-                        f"{self.hm[worst_key_short]['short']['score']:.6f} new score {score_short:.6f}"
+                        f"{self.hm[worst_key_short]['short']['score']:.7f} new score {score_short:.7f} - "
                         + " ".join(
                             [str(round_dynamic(e[1], 3)) for e in sorted(cfg["short"].items())]
                         ),
                     )
-                    self.hm[worst_key_short]["short"] = {"config": cfg["short"], "score": score_short}
+                    self.hm[worst_key_short]["short"] = {
+                        "config": deepcopy(cfg["short"]),
+                        "score": score_short,
+                    }
                     json.dump(
-                        self.hm, open(f"{self.results_fpath}hm_{self.iter_counter:06}.json", "w")
+                        self.hm,
+                        open(f"{self.results_fpath}hm_{cfg['config_no']:06}.json", "w"),
+                        indent=4,
+                        sort_keys=True,
                     )
             best_key_long = sorted(
                 self.hm,
@@ -203,8 +251,8 @@ class HarmonySearch:
                 else np.inf,
             )[0]
             best_config = {
-                "long": self.hm[best_key_long]["long"]["config"],
-                "short": self.hm[best_key_short]["short"]["config"],
+                "long": deepcopy(self.hm[best_key_long]["long"]["config"]),
+                "short": deepcopy(self.hm[best_key_short]["short"]["config"]),
             }
             best_config["result"] = {
                 "symbol": f"{len(self.symbols)}_symbols",
@@ -212,38 +260,38 @@ class HarmonySearch:
                 "start_date": self.config["start_date"],
                 "end_date": self.config["end_date"],
             }
-            if best_config != self.current_best_config:
-                tmp_fname = f"{self.results_fpath}{self.iter_counter:06}_best_config"
-                if (
-                    score_long == self.hm[best_key_long]["long"]["score"]
-                    and self.config["long"]["enabled"]
-                ):
-                    logging.info(
-                        f"i{self.iter_counter} - new best config long, score {score_long:.7f} " + 
-                        f"adg {adg_mean_long:.7f} pad {pad_mean_long:.7f}"
-                    )
-                    tmp_fname += "_long"
-                    json.dump(
-                        results,
-                        open(f"{self.results_fpath}{self.iter_counter:06}_result_long.json", "w"),
-                    )
-                if (
-                    score_short == self.hm[best_key_short]["short"]["score"]
-                    and self.config["short"]["enabled"]
-                ):
-                    logging.info(
-                        f"i{self.iter_counter} - new best config short, score {score_short:.7f} " +
-                        f"adg {adg_mean_short:.7f} pad {pad_mean_short:.7f}"
-                    )
-                    tmp_fname += "_short"
-                    json.dump(
-                        results,
-                        open(f"{self.results_fpath}{self.iter_counter:06}_result_short.json", "w"),
-                    )
+            tmp_fname = f"{self.results_fpath}{cfg['config_no']:06}_best_config"
+            is_better = False
+            if self.do_long and score_long <= self.hm[best_key_long]["long"]["score"]:
+                is_better = True
+                logging.info(
+                    f"i{cfg['config_no']} - new best config long, score {score_long:.7f} "
+                    + f"adg {adg_mean_long:.7f} pad {pad_mean_long:.7f}"
+                )
+                tmp_fname += "_long"
+                json.dump(
+                    results,
+                    open(f"{self.results_fpath}{cfg['config_no']:06}_result_long.json", "w"),
+                    indent=4,
+                    sort_keys=True,
+                )
+            if self.do_short and score_short <= self.hm[best_key_short]["short"]["score"]:
+                is_better = True
+                logging.info(
+                    f"i{cfg['config_no']} - new best config short, score {score_short:.7f} "
+                    + f"adg {adg_mean_short:.7f} pad {pad_mean_short:.7f}"
+                )
+                tmp_fname += "_short"
+                json.dump(
+                    results,
+                    open(f"{self.results_fpath}{cfg['config_no']:06}_result_short.json", "w"),
+                    indent=4,
+                    sort_keys=True,
+                )
+            if is_better:
                 dump_live_config(best_config, tmp_fname + ".json")
-                self.current_best_config = deepcopy(best_config)
-            elif self.iter_counter % 25 == 0:
-                logging.info(f"i{self.iter_counter}")
+            elif cfg["config_no"] % 25 == 0:
+                logging.info(f"i{cfg['config_no']}")
             with open(self.results_fpath + "all_results.txt", "a") as f:
                 f.write(
                     json.dumps(
@@ -255,8 +303,21 @@ class HarmonySearch:
         self.workers[wi] = None
 
     def start_new_harmony(self, wi: int):
-        new_harmony = deepcopy(self.config)
-        new_harmony["symbol"] = self.symbols[0]
+        self.iter_counter += 1  # up iter counter on each new config started
+        template = get_template_live_config()
+        new_harmony = {
+            **{
+                "long": deepcopy(template["long"]),
+                "short": deepcopy(template["short"]),
+            },
+            **{
+                k: self.config[k]
+                for k in ["starting_balance", "latency_simulation_ms", "market_type"]
+            },
+            **{"symbol": self.symbols[0], "config_no": self.iter_counter},
+        }
+        new_harmony["long"]["enabled"] = self.do_long
+        new_harmony["short"]["enabled"] = self.do_short
         for key in self.long_bounds:
             if np.random.random() < self.hm_considering_rate:
                 # take note randomly from harmony memory
@@ -286,42 +347,52 @@ class HarmonySearch:
             new_harmony["long"][key] = new_note_long
             new_harmony["short"][key] = new_note_short
         logging.debug(
-            f"starting new harmony {self.iter_counter} - long "
+            f"starting new harmony {new_harmony['config_no']} - long "
             + " ".join([str(round_dynamic(e[1], 3)) for e in sorted(new_harmony["long"].items())])
             + " - short: "
             + " ".join([str(round_dynamic(e[1], 3)) for e in sorted(new_harmony["short"].items())])
             + " - "
             + self.symbols[0]
         )
-        # arbitrary unique identifier
-        id_key = str(time()) + str(np.random.random())
+
+        new_harmony["ticks_caches"] = {}  # todo implement shared memory
+        new_harmony["market_specific_settings"] = self.market_specific_settings[new_harmony["symbol"]]
+        new_harmony[
+            "ticks_cache_fname"
+        ] = f"{self.bt_dir}/{new_harmony['symbol']}/{self.ticks_cache_fname}"
         self.workers[wi] = {
-            "config": new_harmony,
-            "task": self.pool.apply_async(backtest_single_wrap, args=(new_harmony,)),
-            "id_key": id_key,
+            "config": deepcopy(new_harmony),
+            "task": self.pool.apply_async(backtest_wrap, args=(deepcopy(new_harmony),)),
+            "id_key": new_harmony["config_no"],
         }
-        self.unfinished_evals[id_key] = {
-            "config": new_harmony,
+        self.unfinished_evals[new_harmony["config_no"]] = {
+            "config": deepcopy(new_harmony),
             "single_results": {},
             "in_progress": set([self.symbols[0]]),
         }
 
     def start_new_initial_eval(self, wi: int, hm_key: str):
-        config = deepcopy(self.config)
-        config["long"] = self.hm[hm_key]["long"]["config"]
-        config["short"] = self.hm[hm_key]["short"]["config"]
-        config["symbol"] = self.symbols[0]
-        config["initial_eval_key"] = hm_key
-        ieval_n = len([e for e in self.hm if self.hm[e]["long"]["score"] != "not_started"])
-        line = f"starting new initial eval {ieval_n} of {self.n_harmonies} "
-        if self.config["long"]["enabled"]:
+        self.iter_counter += 1  # up iter counter on each new config started
+        config = {
+            **{
+                "long": deepcopy(self.hm[hm_key]["long"]["config"]),
+                "short": deepcopy(self.hm[hm_key]["short"]["config"]),
+            },
+            **{
+                k: self.config[k]
+                for k in ["starting_balance", "latency_simulation_ms", "market_type"]
+            },
+            **{"symbol": self.symbols[0], "initial_eval_key": hm_key, "config_no": self.iter_counter},
+        }
+        line = f"starting new initial eval {config['config_no']} of {self.n_harmonies} "
+        if self.do_long:
             line += " - long: " + " ".join(
                 [
                     f"{e[0][:2]}{e[0][-2:]}" + str(round_dynamic(e[1], 3))
                     for e in sorted(self.hm[hm_key]["long"]["config"].items())
                 ]
             )
-        if self.config["short"]["enabled"]:
+        if self.do_short:
             line += " - short: " + " ".join(
                 [
                     f"{e[0][:2]}{e[0][-2:]}" + str(round_dynamic(e[1], 3))
@@ -330,15 +401,18 @@ class HarmonySearch:
             )
         line += " - " + self.symbols[0]
         logging.info(line)
-        # arbitrary unique identifier
-        id_key = str(time()) + str(np.random.random())
+
+        config["ticks_caches"] = {}  # todo implement shared memory
+        config["market_specific_settings"] = self.market_specific_settings[config["symbol"]]
+        config["ticks_cache_fname"] = f"{self.bt_dir}/{config['symbol']}/{self.ticks_cache_fname}"
+
         self.workers[wi] = {
-            "config": config,
-            "task": self.pool.apply_async(backtest_single_wrap, args=(config,)),
-            "id_key": id_key,
+            "config": deepcopy(config),
+            "task": self.pool.apply_async(backtest_wrap, args=(deepcopy(config),)),
+            "id_key": config["config_no"],
         }
-        self.unfinished_evals[id_key] = {
-            "config": config,
+        self.unfinished_evals[config["config_no"]] = {
+            "config": deepcopy(config),
             "single_results": {},
             "in_progress": set([self.symbols[0]]),
         }
@@ -368,12 +442,12 @@ class HarmonySearch:
                 k: max(self.long_bounds[k][0], min(self.long_bounds[k][1], cfg["long"][k]))
                 for k in self.long_bounds
             }
-            cfg["long"]["enabled"] = self.config["long"]["enabled"]
+            cfg["long"]["enabled"] = self.do_long
             cfg["short"] = {
                 k: max(self.short_bounds[k][0], min(self.short_bounds[k][1], cfg["short"][k]))
                 for k in self.short_bounds
             }
-            cfg["short"]["enabled"] = self.config["short"]["enabled"]
+            cfg["short"]["enabled"] = self.do_short
             seen_key = tuplify(cfg, sort=True)
             if seen_key not in seen:
                 hm_key = available_ids.pop()
@@ -408,9 +482,16 @@ class HarmonySearch:
                             symbol = sorted(missing_symbols)[0]
                             config = deepcopy(self.unfinished_evals[id_key]["config"])
                             config["symbol"] = symbol
+                            config["ticks_caches"] = {}  # todo implement shared memory
+                            config["market_specific_settings"] = self.market_specific_settings[
+                                config["symbol"]
+                            ]
+                            config[
+                                "ticks_cache_fname"
+                            ] = f"{self.bt_dir}/{config['symbol']}/{self.ticks_cache_fname}"
                             self.workers[wi] = {
                                 "config": config,
-                                "task": self.pool.apply_async(backtest_single_wrap, args=(config,)),
+                                "task": self.pool.apply_async(backtest_wrap, args=(config,)),
                                 "id_key": id_key,
                             }
                             self.unfinished_evals[id_key]["in_progress"].add(symbol)
@@ -425,7 +506,7 @@ class HarmonySearch:
                         else:
                             # means initial evals are done; start new harmony
                             self.start_new_harmony(wi)
-                sleep(0.5)
+                        sleep(0.25)
 
 
 async def main():
