@@ -16,7 +16,7 @@ from pure_funcs import (
     config_pretty_str,
     date_to_ts,
     get_template_live_config,
-    sort_dict_keys
+    sort_dict_keys,
 )
 from njit_funcs import calc_samples
 from datetime import datetime
@@ -103,21 +103,15 @@ async def prepare_backtest_config(args) -> dict:
     )
 
     if config["base_dir"].startswith("~"):
-        raise Exception(
-            "error: using the ~ to indicate the user's home directory is not supported"
-        )
+        raise Exception("error: using the ~ to indicate the user's home directory is not supported")
 
     base_dirpath = os.path.join(
         config["base_dir"],
         f"{config['exchange']}{'_spot' if 'spot' in config['market_type'] else ''}",
         config["symbol"],
     )
-    config["caches_dirpath"] = make_get_filepath(
-        os.path.join(base_dirpath, "caches", "")
-    )
-    config["optimize_dirpath"] = make_get_filepath(
-        os.path.join(base_dirpath, "optimize", "")
-    )
+    config["caches_dirpath"] = make_get_filepath(os.path.join(base_dirpath, "caches", ""))
+    config["optimize_dirpath"] = make_get_filepath(os.path.join(base_dirpath, "optimize", ""))
     config["plots_dirpath"] = make_get_filepath(os.path.join(base_dirpath, "plots", ""))
 
     await add_market_specific_settings(config)
@@ -174,9 +168,7 @@ def load_exchange_key_secret(user: str) -> (str, str, str):
                 keyfile[user]["secret"],
             )
         else:
-            print(
-                "Looks like the keys aren't configured yet, or you entered the wrong username!"
-            )
+            print("Looks like the keys aren't configured yet, or you entered the wrong username!")
         raise Exception("API KeyFile Missing!")
     except FileNotFoundError:
         print("File Not Found!")
@@ -372,9 +364,7 @@ def make_tick_samples(config: dict, sec_span: int = 1):
     )
     if not os.path.exists(ticks_filepath):
         return
-    ticks_filenames = sorted(
-        [f for f in os.listdir(ticks_filepath) if f.endswith(".csv")]
-    )
+    ticks_filenames = sorted([f for f in os.listdir(ticks_filepath) if f.endswith(".csv")])
     ticks = np.empty((0, 3))
     sts = time()
     for f in ticks_filenames:
@@ -401,9 +391,7 @@ def get_starting_configs(config) -> [dict]:
             if os.path.isdir(config["starting_configs"]):
                 starting_configs = [
                     json.load(open(f))
-                    for f in glob.glob(
-                        os.path.join(config["starting_configs"], "*.json")
-                    )
+                    for f in glob.glob(os.path.join(config["starting_configs"], "*.json"))
                 ]
                 print("Starting with all configurations in directory.")
             else:
