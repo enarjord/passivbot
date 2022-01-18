@@ -46,26 +46,18 @@ def plot_wrap(config, data):
     fdf, sdf, result = analyze_fills(fills, stats, config)
     config["result"] = result
     config["plots_dirpath"] = make_get_filepath(
-        os.path.join(
-            config["plots_dirpath"], f"{ts_to_date(time())[:19].replace(':', '')}", ""
-        )
+        os.path.join(config["plots_dirpath"], f"{ts_to_date(time())[:19].replace(':', '')}", "")
     )
     fdf.to_csv(config["plots_dirpath"] + "fills.csv")
     sdf.to_csv(config["plots_dirpath"] + "stats.csv")
-    df = pd.DataFrame(
-        {**{"timestamp": data[:, 0], "qty": data[:, 1], "price": data[:, 2]}, **{}}
-    )
+    df = pd.DataFrame({**{"timestamp": data[:, 0], "qty": data[:, 1], "price": data[:, 2]}, **{}})
     print("dumping plots...")
     dump_plots(config, fdf, sdf, df)
 
 
 async def main():
-    parser = argparse.ArgumentParser(
-        prog="Backtest", description="Backtest given passivbot config."
-    )
-    parser.add_argument(
-        "live_config_path", type=str, help="path to live config to test"
-    )
+    parser = argparse.ArgumentParser(prog="Backtest", description="Backtest given passivbot config.")
+    parser.add_argument("live_config_path", type=str, help="path to live config to test")
     parser = add_argparse_args(parser)
     parser.add_argument(
         "-lw",
