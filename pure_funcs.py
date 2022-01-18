@@ -550,19 +550,19 @@ def analyze_fills(
         "n_rentries": len(fdf[fdf.type.str.contains("rentry")]),
         "n_rentries_long": len(longs[longs.type.str.contains("rentry")]),
         "n_rentries_short": len(shorts[shorts.type.str.contains("rentry")]),
-        "n_unstuck_closes": len(fdf[fdf.type.str.contains("auto_unstuck_close")]),
+        "n_unstuck_closes": len(fdf[fdf.type.str.contains("unstuck_close")]),
         "n_unstuck_closes_long": len(
-            longs[longs.type.str.contains("auto_unstuck_close")]
+            longs[longs.type.str.contains("unstuck_close")]
         ),
         "n_unstuck_closes_short": len(
-            shorts[shorts.type.str.contains("auto_unstuck_close")]
+            shorts[shorts.type.str.contains("unstuck_close")]
         ),
-        "n_unstuck_entries": len(fdf[fdf.type.str.contains("auto_unstuck_entry")]),
+        "n_unstuck_entries": len(fdf[fdf.type.str.contains("unstuck_entry")]),
         "n_unstuck_entries_long": len(
-            longs[longs.type.str.contains("auto_unstuck_entry")]
+            longs[longs.type.str.contains("unstuck_entry")]
         ),
         "n_unstuck_entries_short": len(
-            shorts[shorts.type.str.contains("auto_unstuck_entry")]
+            shorts[shorts.type.str.contains("unstuck_entry")]
         ),
         "avg_fills_per_day": fills_per_day,
         "avg_fills_per_day_long": len(longs) / n_days,
