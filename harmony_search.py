@@ -67,10 +67,10 @@ def backtest_wrap(config_: dict):
         pa_distance_short = analysis["pa_distance_mean_short"]
         adg_long = analysis["adg_long"]
         adg_short = analysis["adg_short"]
-        '''
+        """
         with open("logs/debug_harmonysearch.txt", "a") as f:
             f.write(json.dumps({"config": denumpyize(config), "analysis": analysis}) + "\n")
-        '''
+        """
         logging.debug(
             f"backtested {config['symbol']: <12} pa distance long {pa_distance_long:.6f} "
             + f"pa distance short {pa_distance_short:.6f} adg long {adg_long:.6f} adg short {adg_short:.6f}"
