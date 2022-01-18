@@ -122,15 +122,9 @@ class Bybit(Bot):
         self.max_leverage = e["leverage_filter"]["max_leverage"]
         self.coin = e["base_currency"]
         self.quot = e["quote_currency"]
-        self.price_step = self.config["price_step"] = float(
-            e["price_filter"]["tick_size"]
-        )
-        self.qty_step = self.config["qty_step"] = float(
-            e["lot_size_filter"]["qty_step"]
-        )
-        self.min_qty = self.config["min_qty"] = float(
-            e["lot_size_filter"]["min_trading_qty"]
-        )
+        self.price_step = self.config["price_step"] = float(e["price_filter"]["tick_size"])
+        self.qty_step = self.config["qty_step"] = float(e["lot_size_filter"]["qty_step"])
+        self.min_qty = self.config["min_qty"] = float(e["lot_size_filter"]["min_trading_qty"])
         self.min_cost = self.config["min_cost"] = 0.0
         self.init_market_type()
         self.margin_coin = self.coin if self.inverse else self.quot
@@ -139,9 +133,7 @@ class Bybit(Bot):
         await self.update_position()
 
     async def init_order_book(self):
-        ticker = await self.private_get(
-            self.endpoints["ticker"], {"symbol": self.symbol}
-        )
+        ticker = await self.private_get(self.endpoints["ticker"], {"symbol": self.symbol})
         self.ob = [
             float(ticker["result"][0]["bid_price"]),
             float(ticker["result"][0]["ask_price"]),
@@ -149,9 +141,7 @@ class Bybit(Bot):
         self.price = float(ticker["result"][0]["last_price"])
 
     async def fetch_open_orders(self) -> [dict]:
-        fetched = await self.private_get(
-            self.endpoints["open_orders"], {"symbol": self.symbol}
-        )
+        fetched = await self.private_get(self.endpoints["open_orders"], {"symbol": self.symbol})
         return [
             {
                 "order_id": elm["order_id"],
@@ -167,15 +157,11 @@ class Bybit(Bot):
         ]
 
     async def public_get(self, url: str, params: dict = {}) -> dict:
-        async with self.session.get(
-            self.base_endpoint + url, params=params
-        ) as response:
+        async with self.session.get(self.base_endpoint + url, params=params) as response:
             result = await response.text()
         return json.loads(result)
 
-    async def private_(
-        self, type_: str, base_endpoint: str, url: str, params: dict = {}
-    ) -> dict:
+    async def private_(self, type_: str, base_endpoint: str, url: str, params: dict = {}) -> dict:
         timestamp = int(time() * 1000)
         params.update({"api_key": self.key, "timestamp": timestamp})
         for k in params:
@@ -188,15 +174,11 @@ class Bybit(Bot):
             urlencode(sort_dict_keys(params)).encode("utf-8"),
             hashlib.sha256,
         ).hexdigest()
-        async with getattr(self.session, type_)(
-            base_endpoint + url, params=params
-        ) as response:
+        async with getattr(self.session, type_)(base_endpoint + url, params=params) as response:
             result = await response.text()
         return json.loads(result)
 
-    async def private_get(
-        self, url: str, params: dict = {}, base_endpoint: str = None
-    ) -> dict:
+    async def private_get(self, url: str, params: dict = {}, base_endpoint: str = None) -> dict:
         return await self.private_(
             "get",
             self.base_endpoint if base_endpoint is None else base_endpoint,
@@ -204,9 +186,7 @@ class Bybit(Bot):
             params,
         )
 
-    async def private_post(
-        self, url: str, params: dict = {}, base_endpoint: str = None
-    ) -> dict:
+    async def private_post(self, url: str, params: dict = {}, base_endpoint: str = None) -> dict:
         return await self.private_(
             "post",
             self.base_endpoint if base_endpoint is None else base_endpoint,
@@ -223,17 +203,13 @@ class Bybit(Bot):
             )
             long_pos = [e for e in fetched["result"] if e["side"] == "Buy"][0]
             short_pos = [e for e in fetched["result"] if e["side"] == "Sell"][0]
-            position["wallet_balance"] = float(
-                bal["result"][self.quot]["wallet_balance"]
-            )
+            position["wallet_balance"] = float(bal["result"][self.quot]["wallet_balance"])
         else:
             fetched, bal = await asyncio.gather(
                 self.private_get(self.endpoints["position"], {"symbol": self.symbol}),
                 self.private_get(self.endpoints["balance"], {"coin": self.coin}),
             )
-            position["wallet_balance"] = float(
-                bal["result"][self.coin]["wallet_balance"]
-            )
+            position["wallet_balance"] = float(bal["result"][self.coin]["wallet_balance"])
             if "inverse_perpetual" in self.market_type:
                 if fetched["result"]["side"] == "Buy":
                     long_pos = fetched["result"]
@@ -242,16 +218,10 @@ class Bybit(Bot):
                     long_pos = {"size": 0.0, "entry_price": 0.0, "liq_price": 0.0}
                     short_pos = fetched["result"]
             elif "inverse_futures" in self.market_type:
-                long_pos = [
-                    e["data"]
-                    for e in fetched["result"]
-                    if e["data"]["position_idx"] == 1
-                ][0]
-                short_pos = [
-                    e["data"]
-                    for e in fetched["result"]
-                    if e["data"]["position_idx"] == 2
-                ][0]
+                long_pos = [e["data"] for e in fetched["result"] if e["data"]["position_idx"] == 1][0]
+                short_pos = [e["data"] for e in fetched["result"] if e["data"]["position_idx"] == 2][
+                    0
+                ]
             else:
                 raise Exception("unknown market type")
 
@@ -411,9 +381,7 @@ class Bybit(Bot):
                 minutes = {"D": 1, "W": 7, "M": 30}[interval_map[interval]] * 60 * 24
             else:
                 minutes = interval_map[interval]
-            params["from"] = (
-                int(round(float(server_time["time_now"]))) - 60 * minutes * limit
-            )
+            params["from"] = int(round(float(server_time["time_now"]))) - 60 * minutes * limit
         else:
             params["from"] = int(start_time / 1000)
         fetched = await self.public_get(self.endpoints["ohlcvs"], params)
@@ -509,12 +477,8 @@ class Bybit(Bot):
     ):
         return []
         ffills, fpnls = await asyncio.gather(
-            self.private_get(
-                self.endpoints["fills"], {"symbol": self.symbol, "limit": limit}
-            ),
-            self.private_get(
-                self.endpoints["pnls"], {"symbol": self.symbol, "limit": 50}
-            ),
+            self.private_get(self.endpoints["fills"], {"symbol": self.symbol, "limit": limit}),
+            self.private_get(self.endpoints["pnls"], {"symbol": self.symbol, "limit": 50}),
         )
         return ffills, fpnls
         try:
@@ -641,9 +605,7 @@ class Bybit(Bot):
                 digestmod="sha256",
             ).hexdigest()
         )
-        await ws.send(
-            json.dumps({"op": "auth", "args": [self.key, expires, signature]})
-        )
+        await ws.send(json.dumps({"op": "auth", "args": [self.key, expires, signature]}))
         await asyncio.sleep(1)
         await ws.send(
             json.dumps(
@@ -685,18 +647,14 @@ class Bybit(Bot):
                                 if self.position["long"]["size"] == 0.0:
                                     if self.position["short"]["size"] == 0.0:
                                         new_open_order["position_side"] = (
-                                            "long"
-                                            if new_open_order["side"] == "buy"
-                                            else "short"
+                                            "long" if new_open_order["side"] == "buy" else "short"
                                         )
                                     else:
                                         new_open_order["position_side"] = "short"
                                 else:
                                     new_open_order["position_side"] = "long"
                             elif "inverse_futures" in self.market_type:
-                                new_open_order["position_side"] = determine_pos_side(
-                                    elm
-                                )
+                                new_open_order["position_side"] = determine_pos_side(elm)
                             else:
                                 new_open_order["position_side"] = (
                                     "long"
@@ -721,9 +679,7 @@ class Bybit(Bot):
                                 }
                             )
                         elif elm["order_status"] == "Filled":
-                            events.append(
-                                {"deleted_order_id": elm["order_id"], "filled": True}
-                            )
+                            events.append({"deleted_order_id": elm["order_id"], "filled": True})
                         elif elm["order_status"] == "Cancelled":
                             events.append({"deleted_order_id": elm["order_id"]})
                         elif elm["order_status"] == "PendingCancel":
@@ -753,9 +709,7 @@ class Bybit(Bot):
                     if elm["symbol"] == self.symbol:
                         standardized = {}
                         if elm["side"] == "Buy":
-                            standardized["long_psize"] = round_(
-                                float(elm["size"]), self.qty_step
-                            )
+                            standardized["long_psize"] = round_(float(elm["size"]), self.qty_step)
                             standardized["long_pprice"] = float(elm["entry_price"])
                         elif elm["side"] == "Sell":
                             standardized["short_psize"] = -round_(
@@ -765,9 +719,7 @@ class Bybit(Bot):
 
                         events.append(standardized)
                         if self.inverse:
-                            events.append(
-                                {"wallet_balance": float(elm["wallet_balance"])}
-                            )
+                            events.append({"wallet_balance": float(elm["wallet_balance"])})
                     else:
                         events.append(
                             {
