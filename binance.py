@@ -36,9 +36,7 @@ class BinanceBot(Bot):
             traceback.print_exc()
             return {}
 
-    async def private_(
-        self, type_: str, base_endpoint: str, url: str, params: dict = {}
-    ) -> dict:
+    async def private_(self, type_: str, base_endpoint: str, url: str, params: dict = {}) -> dict:
         try:
             timestamp = int(time() * 1000)
             params.update({"timestamp": timestamp, "recvWindow": 5000})
@@ -63,9 +61,7 @@ class BinanceBot(Bot):
             traceback.print_exc()
             return {}
 
-    async def private_get(
-        self, url: str, params: dict = {}, base_endpoint: str = None
-    ) -> dict:
+    async def private_get(self, url: str, params: dict = {}, base_endpoint: str = None) -> dict:
         return await self.private_(
             "get",
             self.base_endpoint if base_endpoint is None else base_endpoint,
@@ -73,9 +69,7 @@ class BinanceBot(Bot):
             params,
         )
 
-    async def private_post(
-        self, url: str, params: dict = {}, base_endpoint: str = None
-    ) -> dict:
+    async def private_post(self, url: str, params: dict = {}, base_endpoint: str = None) -> dict:
         return await self.private_(
             "post",
             self.base_endpoint if base_endpoint is None else base_endpoint,
@@ -83,9 +77,7 @@ class BinanceBot(Bot):
             params,
         )
 
-    async def private_put(
-        self, url: str, params: dict = {}, base_endpoint: str = None
-    ) -> dict:
+    async def private_put(self, url: str, params: dict = {}, base_endpoint: str = None) -> dict:
         return await self.private_(
             "put",
             self.base_endpoint if base_endpoint is None else base_endpoint,
@@ -93,9 +85,7 @@ class BinanceBot(Bot):
             params,
         )
 
-    async def private_delete(
-        self, url: str, params: dict = {}, base_endpoint: str = None
-    ) -> dict:
+    async def private_delete(self, url: str, params: dict = {}, base_endpoint: str = None) -> dict:
         return await self.private_(
             "delete",
             self.base_endpoint if base_endpoint is None else base_endpoint,
@@ -188,9 +178,7 @@ class BinanceBot(Bot):
                     elif q["filterType"] == "MARKET_LOT_SIZE":
                         self.qty_step = self.config["qty_step"] = float(q["stepSize"])
                     elif q["filterType"] == "PRICE_FILTER":
-                        self.price_step = self.config["price_step"] = float(
-                            q["tickSize"]
-                        )
+                        self.price_step = self.config["price_step"] = float(q["tickSize"])
                     elif q["filterType"] == "MIN_NOTIONAL":
                         self.min_cost = self.config["min_cost"] = float(q["notional"])
                 try:
@@ -241,9 +229,7 @@ class BinanceBot(Bot):
                 raise Exception("failed to set hedge mode")
 
     async def init_order_book(self):
-        ticker = await self.public_get(
-            self.endpoints["ticker"], {"symbol": self.symbol}
-        )
+        ticker = await self.public_get(self.endpoints["ticker"], {"symbol": self.symbol})
         if "inverse_coin_margined" in self.market_type:
             ticker = ticker[0]
         self.ob = [float(ticker["bidPrice"]), float(ticker["askPrice"])]
@@ -261,9 +247,7 @@ class BinanceBot(Bot):
                 "position_side": e["positionSide"].lower().replace("short", "short"),
                 "timestamp": int(e["time"]),
             }
-            for e in await self.private_get(
-                self.endpoints["open_orders"], {"symbol": self.symbol}
-            )
+            for e in await self.private_get(self.endpoints["open_orders"], {"symbol": self.symbol})
         ]
 
     async def fetch_position(self) -> dict:
@@ -278,8 +262,12 @@ class BinanceBot(Bot):
             ),
             self.private_get(self.endpoints["balance"], {}),
         )
-        assert all(key in positions[0] for key in ['symbol', 'positionAmt', 'entryPrice']), "bogus position fetch"
-        assert all(key in balance[0] for key in ['asset', 'balance', 'crossUnPnl']), "bogus balance fetch"
+        assert all(
+            key in positions[0] for key in ["symbol", "positionAmt", "entryPrice"]
+        ), "bogus position fetch"
+        assert all(
+            key in balance[0] for key in ["asset", "balance", "crossUnPnl"]
+        ), "bogus balance fetch"
         positions = [e for e in positions if e["symbol"] == self.symbol]
         position = {
             "long": {"size": 0.0, "price": 0.0, "liquidation_price": 0.0},
@@ -302,9 +290,7 @@ class BinanceBot(Bot):
                         "liquidation_price": float(p["liquidationPrice"]),
                     }
         for e in balance:
-            if e["asset"] == (
-                self.quot if "linear_perpetual" in self.market_type else self.coin
-            ):
+            if e["asset"] == (self.quot if "linear_perpetual" in self.market_type else self.coin):
                 position["wallet_balance"] = float(e["balance"])
                 position["equity"] = position["wallet_balance"] + float(e["crossUnPnl"])
                 break
@@ -316,9 +302,7 @@ class BinanceBot(Bot):
             params = {
                 "symbol": self.symbol,
                 "side": order["side"].upper(),
-                "positionSide": order["position_side"]
-                .replace("short", "short")
-                .upper(),
+                "positionSide": order["position_side"].replace("short", "short").upper(),
                 "type": order["type"].upper(),
                 "quantity": str(order["qty"]),
             }
@@ -357,9 +341,7 @@ class BinanceBot(Bot):
                 "symbol": self.symbol,
                 "side": cancellation["side"].lower(),
                 "order_id": int(cancellation["orderId"]),
-                "position_side": cancellation["positionSide"]
-                .lower()
-                .replace("short", "short"),
+                "position_side": cancellation["positionSide"].lower().replace("short", "short"),
                 "qty": float(cancellation["origQty"]),
                 "price": float(cancellation["price"]),
             }
@@ -387,9 +369,7 @@ class BinanceBot(Bot):
         if start_time is not None:
             params["startTime"] = int(start_time)
         if end_time is not None:
-            params["endTime"] = int(
-                min(end_time, start_time + 1000 * 60 * 60 * 24 * 6.99)
-            )
+            params["endTime"] = int(min(end_time, start_time + 1000 * 60 * 60 * 24 * 6.99))
         try:
             fetched = await self.private_get(self.endpoints["fills"], params)
             fills = [
@@ -401,15 +381,11 @@ class BinanceBot(Bot):
                     "price": float(x["price"]),
                     "qty": float(x["qty"]),
                     "realized_pnl": float(x["realizedPnl"]),
-                    "cost": float(x["baseQty"])
-                    if self.inverse
-                    else float(x["quoteQty"]),
+                    "cost": float(x["baseQty"]) if self.inverse else float(x["quoteQty"]),
                     "fee_paid": float(x["commission"]),
                     "fee_token": x["commissionAsset"],
                     "timestamp": int(x["time"]),
-                    "position_side": x["positionSide"]
-                    .lower()
-                    .replace("short", "short"),
+                    "position_side": x["positionSide"].lower().replace("short", "short"),
                     "is_maker": x["maker"],
                 }
                 for x in fetched
@@ -539,12 +515,8 @@ class BinanceBot(Bot):
                 print_(["fetched no new ticks", self.symbol])
         return ticks
 
-    async def fetch_ticks_time(
-        self, start_time: int, end_time: int = None, do_print: bool = True
-    ):
-        return await self.fetch_ticks(
-            start_time=start_time, end_time=end_time, do_print=do_print
-        )
+    async def fetch_ticks_time(self, start_time: int, end_time: int = None, do_print: bool = True):
+        return await self.fetch_ticks(start_time=start_time, end_time=end_time, do_print=do_print)
 
     async def fetch_ohlcvs(
         self, symbol: str = None, start_time: int = None, interval="1m", limit=1500
@@ -573,9 +545,7 @@ class BinanceBot(Bot):
         }
         if start_time is not None:
             params["startTime"] = int(start_time)
-            params["endTime"] = (
-                params["startTime"] + interval_map[interval] * 60 * 1000 * limit
-            )
+            params["endTime"] = params["startTime"] + interval_map[interval] * 60 * 1000 * limit
         try:
             fetched = await self.public_get(self.endpoints["ohlcvs"], params)
             return [
@@ -583,9 +553,7 @@ class BinanceBot(Bot):
                     **{"timestamp": int(e[0])},
                     **{
                         k: float(e[i + 1])
-                        for i, k in enumerate(
-                            ["open", "high", "low", "close", "volume"]
-                        )
+                        for i, k in enumerate(["open", "high", "low", "close", "volume"])
                     },
                 }
                 for e in fetched
@@ -623,9 +591,7 @@ class BinanceBot(Bot):
         try:
             response = await self.private_post(self.endpoints["listen_key"])
             self.listen_key = response["listenKey"]
-            self.endpoints["websocket_user"] = (
-                self.endpoints["websocket"] + self.listen_key
-            )
+            self.endpoints["websocket_user"] = self.endpoints["websocket"] + self.listen_key
         except Exception as e:
             traceback.print_exc()
             print_(["error fetching listen key", e])
@@ -660,9 +626,7 @@ class BinanceBot(Bot):
                             "qty": float(event["o"]["q"]),
                             "type": event["o"]["o"].lower(),
                             "side": event["o"]["S"].lower(),
-                            "position_side": event["o"]["ps"]
-                            .lower()
-                            .replace("short", "short"),
+                            "position_side": event["o"]["ps"].lower().replace("short", "short"),
                             "timestamp": int(event["o"]["T"]),
                         }
                     elif event["o"]["X"] in ["CANCELED", "EXPIRED"]:
