@@ -467,8 +467,8 @@ def analyze_fills(
     )
     hrs_stuck_max_short = short_pos_changes_ms_diff.max() / (1000 * 60 * 60)
     hrs_stuck_avg_short = short_pos_changes_ms_diff.mean() / (1000 * 60 * 60)
-    lpprices = sdf[sdf.long_pprice != 0.0]
-    spprices = sdf[sdf.short_pprice != 0.0]
+    lpprices = sdf[sdf.long_psize != 0.0]
+    spprices = sdf[sdf.short_psize != 0.0]
     pa_distance_long = (
         ((lpprices.long_pprice - lpprices.price).abs() / lpprices.price)
         if len(lpprices) > 0
