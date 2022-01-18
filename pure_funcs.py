@@ -30,10 +30,7 @@ def compress_float(n: float, d: int) -> str:
 
 def calc_spans(min_span: int, max_span: int, n_spans: int) -> np.ndarray:
     return np.array(
-        [
-            min_span * ((max_span / min_span) ** (1 / (n_spans - 1))) ** i
-            for i in range(0, n_spans)
-        ]
+        [min_span * ((max_span / min_span) ** (1 / (n_spans - 1))) ** i for i in range(0, n_spans)]
     )
     return np.array([min_span, (min_span * max_span) ** 0.5, max_span])
 
@@ -81,12 +78,8 @@ def create_xk(config: dict) -> dict:
     keys = get_xk_keys()
     config_["long"]["n_close_orders"] = int(round(config_["long"]["n_close_orders"]))
     config_["short"]["n_close_orders"] = int(round(config_["short"]["n_close_orders"]))
-    config_["long"]["max_n_entry_orders"] = int(
-        round(config_["long"]["max_n_entry_orders"])
-    )
-    config_["short"]["max_n_entry_orders"] = int(
-        round(config_["short"]["max_n_entry_orders"])
-    )
+    config_["long"]["max_n_entry_orders"] = int(round(config_["long"]["max_n_entry_orders"]))
+    config_["short"]["max_n_entry_orders"] = int(round(config_["short"]["max_n_entry_orders"]))
     for k in keys:
         if k in config_["long"]:
             xk[k] = (config_["long"][k], config_["short"][k])
@@ -197,18 +190,14 @@ def candidate_to_live_config(candidate: dict) -> dict:
     else:
         side_type = "long&short"
     name = f"{side_type}_"
-    name += (
-        f"{result_dict['exchange'].lower()}_"
-        if "exchange" in result_dict
-        else "unknown_"
-    )
+    name += f"{result_dict['exchange'].lower()}_" if "exchange" in result_dict else "unknown_"
     name += f"{result_dict['symbol'].lower()}" if "symbol" in result_dict else "unknown"
     if "n_days" in result_dict:
         n_days = result_dict["n_days"]
     elif "start_date" in result_dict:
-        n_days = (
-            date_to_ts(result_dict["end_date"]) - date_to_ts(result_dict["start_date"])
-        ) / (1000 * 60 * 60 * 24)
+        n_days = (date_to_ts(result_dict["end_date"]) - date_to_ts(result_dict["start_date"])) / (
+            1000 * 60 * 60 * 24
+        )
     else:
         n_days = 0
     name += f"_{n_days:.0f}days"
@@ -311,11 +300,7 @@ def filter_orders(
     ideal_orders_cropped = [{k: o[k] for k in keys} for o in ideal_orders]
     actual_orders_cropped = [{k: o[k] for k in keys} for o in actual_orders]
     for ioc, io in zip(ideal_orders_cropped, ideal_orders):
-        matches = [
-            (aoc, ao)
-            for aoc, ao in zip(actual_orders_cropped, actual_orders)
-            if aoc == ioc
-        ]
+        matches = [(aoc, ao) for aoc, ao in zip(actual_orders_cropped, actual_orders) if aoc == ioc]
         if matches:
             actual_orders.remove(matches[0][1])
             actual_orders_cropped.remove(matches[0][0])
@@ -392,9 +377,7 @@ def get_template_live_config():
     )
 
 
-def analyze_fills(
-    fills: list, stats: list, config: dict
-) -> (pd.DataFrame, pd.DataFrame, dict):
+def analyze_fills(fills: list, stats: list, config: dict) -> (pd.DataFrame, pd.DataFrame, dict):
     sdf = pd.DataFrame(
         stats,
         columns=[
@@ -433,15 +416,13 @@ def analyze_fills(
         for x in fdf.itertuples()
     ]
     sdf.loc[:, "long_wallet_exposure"] = [
-        qty_to_cost(x.long_psize, x.long_pprice, config["inverse"], config["c_mult"])
-        / x.balance
+        qty_to_cost(x.long_psize, x.long_pprice, config["inverse"], config["c_mult"]) / x.balance
         if x.balance > 0.0
         else 0.0
         for x in sdf.itertuples()
     ]
     sdf.loc[:, "short_wallet_exposure"] = [
-        qty_to_cost(x.short_psize, x.short_pprice, config["inverse"], config["c_mult"])
-        / x.balance
+        qty_to_cost(x.short_psize, x.short_pprice, config["inverse"], config["c_mult"]) / x.balance
         if x.balance > 0.0
         else 0.0
         for x in sdf.itertuples()
@@ -453,17 +434,13 @@ def analyze_fills(
     fills_per_day = len(fills) / n_days
     long_pos_changes = sdf[sdf.long_psize != sdf.long_psize.shift()]
     long_pos_changes_ms_diff = np.diff(
-        [sdf.timestamp.iloc[0]]
-        + list(long_pos_changes.timestamp)
-        + [sdf.timestamp.iloc[-1]]
+        [sdf.timestamp.iloc[0]] + list(long_pos_changes.timestamp) + [sdf.timestamp.iloc[-1]]
     )
     hrs_stuck_max_long = long_pos_changes_ms_diff.max() / (1000 * 60 * 60)
     hrs_stuck_avg_long = long_pos_changes_ms_diff.mean() / (1000 * 60 * 60)
     short_pos_changes = sdf[sdf.short_psize != sdf.short_psize.shift()]
     short_pos_changes_ms_diff = np.diff(
-        [sdf.timestamp.iloc[0]]
-        + list(short_pos_changes.timestamp)
-        + [sdf.timestamp.iloc[-1]]
+        [sdf.timestamp.iloc[0]] + list(short_pos_changes.timestamp) + [sdf.timestamp.iloc[-1]]
     )
     hrs_stuck_max_short = short_pos_changes_ms_diff.max() / (1000 * 60 * 60)
     hrs_stuck_avg_short = short_pos_changes_ms_diff.mean() / (1000 * 60 * 60)
@@ -487,41 +464,45 @@ def analyze_fills(
     adg_short = (gain_short + 1) ** (1 / n_days) - 1
 
     pos_costs = fdf.apply(
-        lambda x: qty_to_cost(
-            x["psize"], x["pprice"], config["inverse"], config["c_mult"]
-        ),
+        lambda x: qty_to_cost(x["psize"], x["pprice"], config["inverse"], config["c_mult"]),
         axis=1,
     )
-    biggest_pos_cost_long = longs.apply(
-        lambda x: qty_to_cost(
-            x["psize"], x["pprice"], config["inverse"], config["c_mult"]
-        ),
-        axis=1,
-    ).max() if len(longs) > 0 else 0.0
-    biggest_pos_cost_short = shorts.apply(
-        lambda x: qty_to_cost(
-            x["psize"], x["pprice"], config["inverse"], config["c_mult"]
-        ),
-        axis=1,
-    ).max() if len(shorts) > 0 else 0.0
+    biggest_pos_cost_long = (
+        longs.apply(
+            lambda x: qty_to_cost(x["psize"], x["pprice"], config["inverse"], config["c_mult"]),
+            axis=1,
+        ).max()
+        if len(longs) > 0
+        else 0.0
+    )
+    biggest_pos_cost_short = (
+        shorts.apply(
+            lambda x: qty_to_cost(x["psize"], x["pprice"], config["inverse"], config["c_mult"]),
+            axis=1,
+        ).max()
+        if len(shorts) > 0
+        else 0.0
+    )
     volume_quote = fdf.apply(
-        lambda x: qty_to_cost(
-            x["qty"], x["price"], config["inverse"], config["c_mult"]
-        ),
+        lambda x: qty_to_cost(x["qty"], x["price"], config["inverse"], config["c_mult"]),
         axis=1,
     ).sum()
-    volume_quote_long = longs.apply(
-        lambda x: qty_to_cost(
-            x["qty"], x["price"], config["inverse"], config["c_mult"]
-        ),
-        axis=1,
-    ).sum() if len(longs) > 0 else 0.0
-    volume_quote_short = shorts.apply(
-        lambda x: qty_to_cost(
-            x["qty"], x["price"], config["inverse"], config["c_mult"]
-        ),
-        axis=1,
-    ).sum() if len(shorts) > 0 else 0.0
+    volume_quote_long = (
+        longs.apply(
+            lambda x: qty_to_cost(x["qty"], x["price"], config["inverse"], config["c_mult"]),
+            axis=1,
+        ).sum()
+        if len(longs) > 0
+        else 0.0
+    )
+    volume_quote_short = (
+        shorts.apply(
+            lambda x: qty_to_cost(x["qty"], x["price"], config["inverse"], config["c_mult"]),
+            axis=1,
+        ).sum()
+        if len(shorts) > 0
+        else 0.0
+    )
 
     analysis = {
         "exchange": config["exchange"] if "exchange" in config else "unknown",
@@ -551,19 +532,11 @@ def analyze_fills(
         "n_rentries_long": len(longs[longs.type.str.contains("rentry")]),
         "n_rentries_short": len(shorts[shorts.type.str.contains("rentry")]),
         "n_unstuck_closes": len(fdf[fdf.type.str.contains("unstuck_close")]),
-        "n_unstuck_closes_long": len(
-            longs[longs.type.str.contains("unstuck_close")]
-        ),
-        "n_unstuck_closes_short": len(
-            shorts[shorts.type.str.contains("unstuck_close")]
-        ),
+        "n_unstuck_closes_long": len(longs[longs.type.str.contains("unstuck_close")]),
+        "n_unstuck_closes_short": len(shorts[shorts.type.str.contains("unstuck_close")]),
         "n_unstuck_entries": len(fdf[fdf.type.str.contains("unstuck_entry")]),
-        "n_unstuck_entries_long": len(
-            longs[longs.type.str.contains("unstuck_entry")]
-        ),
-        "n_unstuck_entries_short": len(
-            shorts[shorts.type.str.contains("unstuck_entry")]
-        ),
+        "n_unstuck_entries_long": len(longs[longs.type.str.contains("unstuck_entry")]),
+        "n_unstuck_entries_short": len(shorts[shorts.type.str.contains("unstuck_entry")]),
         "avg_fills_per_day": fills_per_day,
         "avg_fills_per_day_long": len(longs) / n_days,
         "avg_fills_per_day_short": len(shorts) / n_days,
@@ -630,18 +603,14 @@ def calc_pprice_from_fills(coin_balance, fills, n_fills_limit=100):
         abs_qty = abs(fill["qty"])
         if fill["side"] == "buy":
             new_psize = psize + abs_qty
-            pprice = pprice * (psize / new_psize) + fill["price"] * (
-                abs_qty / new_psize
-            )
+            pprice = pprice * (psize / new_psize) + fill["price"] * (abs_qty / new_psize)
             psize = new_psize
         else:
             psize -= abs_qty
     return pprice
 
 
-def get_position_fills(
-    long_psize: float, short_psize: float, fills: [dict]
-) -> ([dict], [dict]):
+def get_position_fills(long_psize: float, short_psize: float, fills: [dict]) -> ([dict], [dict]):
     """
     assumes fills are sorted old to new
     returns fills since and including initial entry
@@ -677,9 +646,7 @@ def calc_long_pprice(long_psize, long_pfills):
         abs_qty = abs(fill["qty"])
         if fill["side"] == "buy":
             new_psize = psize + abs_qty
-            pprice = pprice * (psize / new_psize) + fill["price"] * (
-                abs_qty / new_psize
-            )
+            pprice = pprice * (psize / new_psize) + fill["price"] * (abs_qty / new_psize)
             psize = new_psize
         else:
             psize = max(0.0, psize - abs_qty)
@@ -709,9 +676,7 @@ def spotify_config(config: dict, nullify_short=True) -> dict:
         spotified["market_type"] += "_spot"
     spotified["do_long"] = spotified["long"]["enabled"] = config["long"]["enabled"]
     spotified["do_short"] = spotified["short"]["enabled"] = False
-    spotified["long"]["wallet_exposure_limit"] = min(
-        1.0, spotified["long"]["wallet_exposure_limit"]
-    )
+    spotified["long"]["wallet_exposure_limit"] = min(1.0, spotified["long"]["wallet_exposure_limit"])
     if nullify_short:
         spotified["short"] = nullify(spotified["short"])
     return spotified
@@ -724,9 +689,7 @@ def tuplify(xs, sort=False):
         return tuple(tuplify(x, sort=sort) for x in xs)
     elif type(xs) in [dict, OrderedDict]:
         if sort:
-            return tuple(
-                sorted({k: tuplify(v, sort=sort) for k, v in xs.items()}.items())
-            )
+            return tuple(sorted({k: tuplify(v, sort=sort) for k, v in xs.items()}.items()))
         return tuple({k: tuplify(v, sort=sort) for k, v in xs.items()}.items())
     return xs
 
