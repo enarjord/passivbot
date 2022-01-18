@@ -94,7 +94,7 @@ class Bot:
         self.ema_sec = 0
 
         self.n_orders_per_execution = 2
-        self.delay_between_executions = 2
+        self.delay_between_executions = 3
         self.force_update_interval = 30
 
         self.c_mult = self.config["c_mult"] = 1.0
@@ -900,6 +900,7 @@ class Bot:
         print_([line], r=True)
 
     def flush_stuck_locks(self, timeout: float = 5.0) -> None:
+        timeout = max(timeout, self.delay_between_executions + 1)
         now = time()
         for key in self.ts_locked:
             if self.ts_locked[key] > self.ts_released[key]:
