@@ -99,9 +99,7 @@ class Bot:
 
         self.c_mult = self.config["c_mult"] = 1.0
 
-        self.log_filepath = make_get_filepath(
-            f"logs/{self.exchange}/{config['config_name']}.log"
-        )
+        self.log_filepath = make_get_filepath(f"logs/{self.exchange}/{config['config_name']}.log")
 
         _, self.key, self.secret = load_exchange_key_secret(self.user)
 
@@ -163,9 +161,7 @@ class Bot:
     async def init_emas(self) -> None:
         ohlcvs1m = await self.fetch_ohlcvs(interval="1m")
         max_span = max(list(self.ema_spans_long) + list(self.ema_spans_short))
-        for mins, interval in zip(
-            [5, 15, 30, 60, 60 * 4], ["5m", "15m", "30m", "1h", "4h"]
-        ):
+        for mins, interval in zip([5, 15, 30, 60, 60 * 4], ["5m", "15m", "30m", "1h", "4h"]):
             if max_span <= len(ohlcvs1m) * mins:
                 break
         ohlcvs = await self.fetch_ohlcvs(interval=interval)
@@ -194,26 +190,17 @@ class Bot:
         if now_sec <= self.ema_sec:
             return
         while self.ema_sec < int(round(now_sec - 1)):
-            self.emas_long = calc_ema(
-                self.alpha_long, self.alpha__long, self.emas_long, prev_price
-            )
+            self.emas_long = calc_ema(self.alpha_long, self.alpha__long, self.emas_long, prev_price)
             self.emas_short = calc_ema(
                 self.alpha_short, self.alpha__short, self.emas_short, prev_price
             )
             self.ema_sec += 1
-        self.emas_long = calc_ema(
-            self.alpha_long, self.alpha__long, self.emas_long, price
-        )
-        self.emas_short = calc_ema(
-            self.alpha_short, self.alpha__short, self.emas_short, price
-        )
+        self.emas_long = calc_ema(self.alpha_long, self.alpha__long, self.emas_long, price)
+        self.emas_short = calc_ema(self.alpha_short, self.alpha__short, self.emas_short, price)
         self.ema_sec = now_sec
 
     async def update_open_orders(self) -> None:
-        if (
-            self.ts_locked["update_open_orders"]
-            > self.ts_released["update_open_orders"]
-        ):
+        if self.ts_locked["update_open_orders"] > self.ts_released["update_open_orders"]:
             return
         try:
             open_orders = await self.fetch_open_orders()
@@ -271,9 +258,7 @@ class Bot:
         self.ts_locked["update_position"] = time()
         try:
             position = await self.fetch_position()
-            position["wallet_balance"] = self.adjust_wallet_balance(
-                position["wallet_balance"]
-            )
+            position["wallet_balance"] = self.adjust_wallet_balance(position["wallet_balance"])
             # isolated equity, not cross equity
             position["equity"] = position["wallet_balance"] + calc_upnl(
                 position["long"]["size"],
@@ -342,9 +327,7 @@ class Bot:
         self.ts_locked["create_orders"] = time()
         try:
             creations = []
-            for oc in sorted(
-                orders_to_create, key=lambda x: calc_diff(x["price"], self.price)
-            ):
+            for oc in sorted(orders_to_create, key=lambda x: calc_diff(x["price"], self.price)):
                 try:
                     creations.append((oc, asyncio.create_task(self.execute_order(oc))))
                 except Exception as e:
@@ -366,9 +349,7 @@ class Bot:
                             ],
                             n=True,
                         )
-                        if o["order_id"] not in {
-                            x["order_id"] for x in self.open_orders
-                        }:
+                        if o["order_id"] not in {x["order_id"] for x in self.open_orders}:
                             self.open_orders.append(o)
                     else:
                         print_(["error creating order b", o, oc], n=True)
@@ -399,9 +380,7 @@ class Bot:
             deletions = []
             for oc in orders_to_cancel:
                 try:
-                    deletions.append(
-                        (oc, asyncio.create_task(self.execute_cancellation(oc)))
-                    )
+                    deletions.append((oc, asyncio.create_task(self.execute_cancellation(oc))))
                 except Exception as e:
                     print_(["error cancelling order a", oc, e])
             cancelled_orders = []
@@ -422,9 +401,7 @@ class Bot:
                             n=True,
                         )
                         self.open_orders = [
-                            oo
-                            for oo in self.open_orders
-                            if oo["order_id"] != o["order_id"]
+                            oo for oo in self.open_orders if oo["order_id"] != o["order_id"]
                         ]
 
                     else:
@@ -702,12 +679,8 @@ class Bot:
                     elif self.short_mode != "manual":
                         to_create.append(elm)
 
-            to_cancel = sorted(
-                to_cancel, key=lambda x: calc_diff(x["price"], self.price)
-            )
-            to_create = sorted(
-                to_create, key=lambda x: calc_diff(x["price"], self.price)
-            )
+            to_cancel = sorted(to_cancel, key=lambda x: calc_diff(x["price"], self.price))
+            to_create = sorted(to_create, key=lambda x: calc_diff(x["price"], self.price))
             """
             print('to_cancel', to_cancel.values())
             print('to create', to_create.values())
@@ -726,14 +699,10 @@ class Bot:
                     0.01
                 )  # sleep 10 ms between sending cancellations and sending creations
             if to_create:
-                results.append(
-                    await self.create_orders(to_create[: self.n_orders_per_execution])
-                )
+                results.append(await self.create_orders(to_create[: self.n_orders_per_execution]))
             if any(results):
                 print()
-            await asyncio.sleep(
-                self.delay_between_executions
-            )  # sleep before releasing lock
+            await asyncio.sleep(self.delay_between_executions)  # sleep before releasing lock
             return results
         finally:
             self.ts_released["cancel_and_create"] = time()
@@ -772,9 +741,7 @@ class Bot:
         try:
             pos_change = False
             if "wallet_balance" in event:
-                self.position["wallet_balance"] = self.adjust_wallet_balance(
-                    event["wallet_balance"]
-                )
+                self.position["wallet_balance"] = self.adjust_wallet_balance(event["wallet_balance"])
                 pos_change = True
             if "long_psize" in event:
                 self.position["long"]["size"] = event["long_psize"]
@@ -793,9 +760,7 @@ class Bot:
                     self.open_orders.append(event["new_open_order"])
             if "deleted_order_id" in event:
                 self.open_orders = [
-                    oo
-                    for oo in self.open_orders
-                    if oo["order_id"] != event["deleted_order_id"]
+                    oo for oo in self.open_orders if oo["order_id"] != event["deleted_order_id"]
                 ]
             if "partially_filled" in event:
                 await self.update_open_orders()
@@ -820,78 +785,53 @@ class Bot:
     def update_output_information(self):
         self.ts_released["print"] = time()
         line = f"{self.symbol} "
-        if self.position["long"]["size"] != 0.0:
-            line += f"l {self.position['long']['size']} @ "
-            line += f"{round_(self.position['long']['price'], self.price_step)}, "
-            long_closes = sorted(
-                [
-                    o
-                    for o in self.open_orders
-                    if o["side"] == "sell" and o["position_side"] == "long"
-                ],
-                key=lambda x: x["price"],
-            )
-            long_entries = sorted(
-                [
-                    o
-                    for o in self.open_orders
-                    if o["side"] == "buy" and o["position_side"] == "long"
-                ],
-                key=lambda x: x["price"],
-            )
+        long_closes = sorted(
+            [o for o in self.open_orders if o["side"] == "sell" and o["position_side"] == "long"],
+            key=lambda x: x["price"],
+        )
+        long_entries = sorted(
+            [o for o in self.open_orders if o["side"] == "buy" and o["position_side"] == "long"],
+            key=lambda x: x["price"],
+        )
+        if self.position["long"]["size"] != 0.0 or long_closes or long_entries:
             leqty, leprice = (
-                (long_entries[-1]["qty"], long_entries[-1]["price"])
-                if long_entries
-                else (0.0, 0.0)
+                (long_entries[-1]["qty"], long_entries[-1]["price"]) if long_entries else (0.0, 0.0)
             )
             lcqty, lcprice = (
-                (long_closes[0]["qty"], long_closes[0]["price"])
-                if long_closes
-                else (0.0, 0.0)
+                (long_closes[0]["qty"], long_closes[0]["price"]) if long_closes else (0.0, 0.0)
             )
+            line += f"l {self.position['long']['size']} @ "
+            line += f"{round_(self.position['long']['price'], self.price_step)}, "
             line += f"e {leqty} @ {leprice}, c {lcqty} @ {lcprice} "
-            line += f"emas {[round_dynamic(e, 3) for e in self.emas_long]}"
-        if self.position["short"]["size"] != 0.0:
-            short_closes = sorted(
-                [
-                    o
-                    for o in self.open_orders
-                    if o["side"] == "buy" and o["position_side"] == "short"
-                ],
-                key=lambda x: x["price"],
-            )
-            short_entries = sorted(
-                [
-                    o
-                    for o in self.open_orders
-                    if o["side"] == "sell" and o["position_side"] == "short"
-                ],
-                key=lambda x: x["price"],
-            )
+            line += f"l.EMAs {[round_dynamic(e, 4) for e in self.emas_long]} "
+        short_closes = sorted(
+            [o for o in self.open_orders if o["side"] == "buy" and o["position_side"] == "short"],
+            key=lambda x: x["price"],
+        )
+        short_entries = sorted(
+            [o for o in self.open_orders if o["side"] == "sell" and o["position_side"] == "short"],
+            key=lambda x: x["price"],
+        )
+        if self.position["short"]["size"] != 0.0 or short_closes or short_entries:
             seqty, seprice = (
-                (short_entries[0]["qty"], short_entries[0]["price"])
-                if short_entries
-                else (0.0, 0.0)
+                (short_entries[0]["qty"], short_entries[0]["price"]) if short_entries else (0.0, 0.0)
             )
             scqty, scprice = (
-                (short_closes[-1]["qty"], short_closes[-1]["price"])
-                if short_closes
-                else (0.0, 0.0)
+                (short_closes[-1]["qty"], short_closes[-1]["price"]) if short_closes else (0.0, 0.0)
             )
             line += f"s {self.position['short']['size']} @ "
             line += f"{round_(self.position['short']['price'], self.price_step)}, "
             line += f"e {seqty} @ {seprice}, c {scqty} @ {scprice} "
-        if self.position["long"]["size"] > abs(self.position["short"]["size"]):
+            line += f"s.EMAs {[round_dynamic(e, 4) for e in self.emas_short]} "
+        if calc_diff(self.position["long"]["liquidation_price"], self.price) < calc_diff(
+            self.position["short"]["liquidation_price"], self.price
+        ):
             liq_price = self.position["long"]["liquidation_price"]
         else:
             liq_price = self.position["short"]["liquidation_price"]
         line += f"|| last {self.price} "
-        line += (
-            f"lpprc diff {calc_diff(self.position['long']['price'], self.price):.3f} "
-        )
-        line += (
-            f"spprc diff {calc_diff(self.position['short']['price'], self.price):.3f} "
-        )
+        line += f"lpprc diff {calc_diff(self.position['long']['price'], self.price):.3f} "
+        line += f"spprc diff {calc_diff(self.position['short']['price'], self.price):.3f} "
         line += f"liq {round_dynamic(liq_price, 5)} "
         line += f"lw {self.position['long']['wallet_exposure']:.3f} "
         line += f"sw {self.position['short']['wallet_exposure']:.3f} "
@@ -916,9 +856,7 @@ class Bot:
         await self.init_order_book()
         await self.init_emas()
         self.user_stream_task = asyncio.create_task(self.start_websocket_user_stream())
-        self.market_stream_task = asyncio.create_task(
-            self.start_websocket_market_stream()
-        )
+        self.market_stream_task = asyncio.create_task(self.start_websocket_market_stream())
         await asyncio.gather(self.user_stream_task, self.market_stream_task)
 
     async def beat_heart_user_stream(self) -> None:
@@ -993,9 +931,7 @@ async def start_bot(bot):
 
 async def main() -> None:
     parser = argparse.ArgumentParser(prog="passivbot", description="run passivbot")
-    parser.add_argument(
-        "user", type=str, help="user/account_name defined in api-keys.json"
-    )
+    parser.add_argument("user", type=str, help="user/account_name defined in api-keys.json")
     parser.add_argument("symbol", type=str, help="symbol to trade")
     parser.add_argument("live_config_path", type=str, help="live config to use")
     parser.add_argument(
@@ -1083,9 +1019,7 @@ async def main() -> None:
     config["exchange"] = account["exchange"]
     config["symbol"] = args.symbol
     config["live_config_path"] = args.live_config_path
-    config["market_type"] = (
-        args.market_type if args.market_type is not None else "futures"
-    )
+    config["market_type"] = args.market_type if args.market_type is not None else "futures"
     if args.assigned_balance is not None:
         print(f"\nassigned balance set to {args.assigned_balance}\n")
         config["assigned_balance"] = args.assigned_balance
@@ -1100,9 +1034,7 @@ async def main() -> None:
             )
             config["long"]["enabled"] = config["do_long"] = False
         elif args.long_mode in ["m", "manual"]:
-            print(
-                "\n\nlong manual mode enabled; will neither cancel nor create long orders"
-            )
+            print("\n\nlong manual mode enabled; will neither cancel nor create long orders")
             config["long_mode"] = "manual"
         elif args.long_mode in ["n", "normal"]:
             print("\n\nlong normal mode")
@@ -1124,9 +1056,7 @@ async def main() -> None:
             )
             config["short"]["enabled"] = config["do_short"] = False
         elif args.short_mode in ["m", "manual"]:
-            print(
-                "\n\nshort manual mode enabled; will neither cancel nor create short orders"
-            )
+            print("\n\nshort manual mode enabled; will neither cancel nor create short orders")
             config["short_mode"] = "manual"
         elif args.short_mode in ["n", "normal"]:
             print("\n\nshort normal mode")
