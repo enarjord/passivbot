@@ -338,7 +338,7 @@ def calc_short_close_grid(
                         (
                             auto_unstuck_qty,
                             auto_unstuck_price,
-                            "short_auto_unstuck_close",
+                            "short_unstuck_close",
                         )
                     )
                     abs_short_psize = max(0.0, round_(abs_short_psize - auto_unstuck_qty, qty_step))
@@ -1318,7 +1318,7 @@ def calc_long_entry_grid(
                         (
                             auto_unstuck_qty,
                             auto_unstuck_entry_price,
-                            "long_auto_unstuck_entry",
+                            "long_unstuck_entry",
                         )
                     ]
             grid = approximate_long_grid(
@@ -1488,7 +1488,7 @@ def calc_short_entry_grid(
                         (
                             -auto_unstuck_qty,
                             auto_unstuck_entry_price,
-                            "short_auto_unstuck_entry",
+                            "short_unstuck_entry",
                         )
                     ]
             grid = approximate_short_grid(
