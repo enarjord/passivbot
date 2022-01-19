@@ -292,6 +292,7 @@ class HarmonySearch:
                 dump_live_config(best_config, tmp_fname + ".json")
             elif cfg["config_no"] % 25 == 0:
                 logging.info(f"i{cfg['config_no']}")
+            results["config_no"] = cfg["config_no"]
             with open(self.results_fpath + "all_results.txt", "a") as f:
                 f.write(
                     json.dumps(
