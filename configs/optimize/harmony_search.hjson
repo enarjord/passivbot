@@ -5,8 +5,9 @@
   bandwidth: 0.07
   pitch_adjusting_rate: 0.24
 
-  n_cpus: 7
+  n_cpus: 4
   iters: 10000
+  cache_ticks: false  # set to true to keep all ticks in RAM
 
   # score formula:
   # adg * min(1, max_pa_dist / mean([max(max_pa_dist, pa_dist) for pa_dist in results]))
@@ -57,12 +58,12 @@
       initial_eprice_ema_dist: [-0.1, 0.03]
       eprice_pprice_diff: [0.002, 0.02]
       secondary_allocation: [0.0, 0.7]
-      secondary_pprice_diff: [0.1, 0.5]
+      secondary_pprice_diff: [0.05, 0.5]
       eprice_exp_base: [1.0, 2.1]
-      min_markup: [0.007, 0.035]
-      markup_range: [0.01, 0.035]
-      n_close_orders: [3, 10]
-      auto_unstuck_wallet_exposure_threshold: [0.0, 0.6]
+      min_markup: [0.006, 0.035]
+      markup_range: [0.006, 0.035]
+      n_close_orders: [1, 12]
+      auto_unstuck_wallet_exposure_threshold: [0.03, 0.6]
       auto_unstuck_ema_dist: [-0.01, 0.07]
   }
     short:
@@ -76,12 +77,12 @@
       initial_eprice_ema_dist: [-0.1, 0.03]
       eprice_pprice_diff: [0.002, 0.02]
       secondary_allocation: [0.0, 0.7]
-      secondary_pprice_diff: [0.1, 0.5]
+      secondary_pprice_diff: [0.05, 0.5]
       eprice_exp_base: [1.0, 2.1]
-      min_markup: [0.007, 0.035]
-      markup_range: [0.01, 0.035]
-      n_close_orders: [3, 10]
-      auto_unstuck_wallet_exposure_threshold: [0.0, 0.6]
+      min_markup: [0.006, 0.035]
+      markup_range: [0.006, 0.035]
+      n_close_orders: [1, 12]
+      auto_unstuck_wallet_exposure_threshold: [0.03, 0.6]
       auto_unstuck_ema_dist: [-0.01, 0.07]
   }
   }
