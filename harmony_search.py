@@ -75,7 +75,7 @@ def backtest_wrap(config_: dict):
         """
         logging.debug(
             f"backtested {config['symbol']: <12} pa distance long {pa_distance_mean_long:.6f} "
-            + f"pa distance short {pa_distance_mean_short:.6f} adg long {adg_long:.6f} adg short {adg_short:.6f}"
+            + f"pa distance short {pa_distance_mean_short:.6f} adg long {adg_long:.6f} adg short {adg_short:.6f} std long {pa_distance_std_long:.3f} std short {pa_distance_std_short:.3f}"
         )
     except Exception as e:
         logging.error(f'error with {config["symbol"]} {e}')
@@ -175,7 +175,7 @@ class HarmonySearch:
             score_long = -adg_mean_long * min(
                 1.0, self.config["maximum_pa_distance_mean_long"] / pad_mean_long
             )
-			# score_long = -adg_mean_long / max(0.02,pad_std_long) # use std dev for the score function. Only optimize adg when below 2%
+            # score_long = -adg_mean_long / max(0.02,pad_std_long) # use std dev for the score function. Only optimize adg when below 2%
 			
             adg_mean_short = np.mean([v["adg_short"] for v in results.values()])
             pad_std_short = np.mean([v["pa_distance_std_short"] for v in results.values()])
@@ -188,13 +188,13 @@ class HarmonySearch:
             score_short = -adg_mean_short * min(
                 1.0, self.config["maximum_pa_distance_mean_short"] / pad_mean_short
             )
-			# score_short = -adg_mean_short / max(0.02,pad_std_short) # use std dev for the score function. Only optimize adg when below 2%
+            # score_short = -adg_mean_short / max(0.02,pad_std_short) # use std dev for the score function. Only optimize adg when below 2%
 			
             line = f"completed multisymbol iter {cfg['config_no']} "
             if self.do_long:
-                line += f"- adg long {adg_mean_long:.6f} pad long {pad_mean_long:.6f} score long {score_long:.7f} "
+                line += f"- adg long {adg_mean_long:.6f} pad long {pad_mean_long:.6f} std long {pa_distance_std_long:.3f} score long {score_long:.7f} "
             if self.do_short:
-                line += f"- adg short {adg_mean_short:.6f} pad short {pad_mean_short:.6f} score short {score_short:.7f}"
+                line += f"- adg short {adg_mean_short:.6f} pad short {pad_mean_short:.6f} std short {pa_distance_std_short:.3f} score short {score_short:.7f}"
             logging.debug(line)
             # check whether initial eval or new harmony
             if "initial_eval_key" in cfg:
@@ -276,7 +276,7 @@ class HarmonySearch:
                 is_better = True
                 logging.info(
                     f"i{cfg['config_no']} - new best config long, score {score_long:.7f} "
-                    + f"adg {adg_mean_long:.7f} pad {pad_mean_long:.7f}"
+                    + f"adg {adg_mean_long:.7f} pad {pad_mean_long:.7f} std {pa_distance_std_long:.3f}"
                 )
                 tmp_fname += "_long"
                 json.dump(
@@ -289,7 +289,7 @@ class HarmonySearch:
                 is_better = True
                 logging.info(
                     f"i{cfg['config_no']} - new best config short, score {score_short:.7f} "
-                    + f"adg {adg_mean_short:.7f} pad {pad_mean_short:.7f}"
+                    + f"adg {adg_mean_short:.7f} pad {pad_mean_short:.7f} std {pa_distance_std_short:.3f}"
                 )
                 tmp_fname += "_short"
                 json.dump(
