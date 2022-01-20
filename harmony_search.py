@@ -382,7 +382,9 @@ class HarmonySearch:
         ] = f"{self.bt_dir}/{new_harmony['symbol']}/{self.ticks_cache_fname}"
         self.workers[wi] = {
             "config": deepcopy(new_harmony),
-            "task": self.pool.apply_async(backtest_wrap, args=(deepcopy(new_harmony), self.ticks_caches)),
+            "task": self.pool.apply_async(
+                backtest_wrap, args=(deepcopy(new_harmony), self.ticks_caches)
+            ),
             "id_key": new_harmony["config_no"],
         }
         self.unfinished_evals[new_harmony["config_no"]] = {
@@ -449,11 +451,11 @@ class HarmonySearch:
     def run_(self):
 
         # initialize ticks cache
-        '''
+        """
         if self.n_cpus >= len(self.symbols) or (
             "cache_ticks" in self.config and self.config["cache_ticks"]
         ):
-        '''
+        """
         if False:
             for s in self.symbols:
                 ticks = np.load(f"{self.bt_dir}/{s}/{self.ticks_cache_fname}")
@@ -534,7 +536,9 @@ class HarmonySearch:
                             ] = f"{self.bt_dir}/{config['symbol']}/{self.ticks_cache_fname}"
                             self.workers[wi] = {
                                 "config": config,
-                                "task": self.pool.apply_async(backtest_wrap, args=(config, self.ticks_caches)),
+                                "task": self.pool.apply_async(
+                                    backtest_wrap, args=(config, self.ticks_caches)
+                                ),
                                 "id_key": id_key,
                             }
                             self.unfinished_evals[id_key]["in_progress"].add(symbol)
@@ -582,15 +586,49 @@ async def main():
     parser.add_argument(
         "-c", "--n_cpus", type=int, required=False, dest="n_cpus", default=None, help="n cpus"
     )
+    parser.add_argument(
+        "-le",
+        "--long",
+        type=str,
+        required=False,
+        dest="long_enabled",
+        default=None,
+        help="long enabled: [y/n]",
+    )
+    parser.add_argument(
+        "-se",
+        "--short",
+        type=str,
+        required=False,
+        dest="short_enabled",
+        default=None,
+        help="short enabled: [y/n]",
+    )
     parser = add_argparse_args(parser)
     args = parser.parse_args()
     args.symbol = "BTCUSDT"  # dummy symbol
     config = await prepare_optimize_config(args)
     config.update(get_template_live_config())
     config["exchange"], _, _ = load_exchange_key_secret(config["user"])
-    config["long"]["enabled"] = config["do_long"]
-    config["short"]["enabled"] = config["do_short"]
     args = parser.parse_args()
+    if args.long_enabled is None:
+        config["long"]["enabled"] = config["do_long"]
+    else:
+        if "y" in args.long_enabled.lower():
+            config["long"]["enabled"] = config["do_long"] = True
+        elif "n" in args.long_enabled.lower():
+            config["long"]["enabled"] = config["do_long"] = False
+        else:
+            raise Exception("please specify y/n with kwarg -le/--long")
+    if args.short_enabled is None:
+        config["short"]["enabled"] = config["do_short"]
+    else:
+        if "y" in args.short_enabled.lower():
+            config["short"]["enabled"] = config["do_short"] = True
+        elif "n" in args.short_enabled.lower():
+            config["short"]["enabled"] = config["do_short"] = False
+        else:
+            raise Exception("please specify y/n with kwarg -le/--short")
     if args.symbol is not None:
         config["symbols"] = args.symbol.split(",")
     if args.n_cpus is not None:
