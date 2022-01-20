@@ -448,9 +448,12 @@ class HarmonySearch:
     def run_(self):
 
         # initialize ticks cache
+        '''
         if self.n_cpus >= len(self.symbols) or (
             "cache_ticks" in self.config and self.config["cache_ticks"]
         ):
+        '''
+        if False:
             for s in self.symbols:
                 ticks = np.load(f"{self.bt_dir}/{s}/{self.ticks_cache_fname}")
                 self.shms[s] = shared_memory.SharedMemory(create=True, size=ticks.nbytes)
