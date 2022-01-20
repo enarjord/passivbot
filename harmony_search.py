@@ -38,7 +38,7 @@ import logging.config
 logging.config.dictConfig({"version": 1, "disable_existing_loggers": True})
 
 
-def backtest_wrap(config_: dict):
+def backtest_wrap(config_: dict, ticks_caches: dict):
     """
     loads historical data from disk, runs backtest and returns relevant metrics
     """
@@ -56,8 +56,8 @@ def backtest_wrap(config_: dict):
         },
         **{k: v for k, v in config_["market_specific_settings"].items()},
     }
-    if config["symbol"] in config_["ticks_caches"]:
-        ticks = config_["ticks_caches"][config["symbol"]]
+    if config["symbol"] in ticks_caches:
+        ticks = ticks_caches[config["symbol"]]
     else:
         ticks = np.load(config_["ticks_cache_fname"])
     try:
@@ -375,14 +375,13 @@ class HarmonySearch:
             + self.symbols[0]
         )
 
-        new_harmony["ticks_caches"] = self.ticks_caches
         new_harmony["market_specific_settings"] = self.market_specific_settings[new_harmony["symbol"]]
         new_harmony[
             "ticks_cache_fname"
         ] = f"{self.bt_dir}/{new_harmony['symbol']}/{self.ticks_cache_fname}"
         self.workers[wi] = {
             "config": deepcopy(new_harmony),
-            "task": self.pool.apply_async(backtest_wrap, args=(deepcopy(new_harmony),)),
+            "task": self.pool.apply_async(backtest_wrap, args=(deepcopy(new_harmony), self.ticks_caches)),
             "id_key": new_harmony["config_no"],
         }
         self.unfinished_evals[new_harmony["config_no"]] = {
@@ -422,13 +421,12 @@ class HarmonySearch:
         line += " - " + self.symbols[0]
         logging.info(line)
 
-        config["ticks_caches"] = self.ticks_caches
         config["market_specific_settings"] = self.market_specific_settings[config["symbol"]]
         config["ticks_cache_fname"] = f"{self.bt_dir}/{config['symbol']}/{self.ticks_cache_fname}"
 
         self.workers[wi] = {
             "config": deepcopy(config),
-            "task": self.pool.apply_async(backtest_wrap, args=(deepcopy(config),)),
+            "task": self.pool.apply_async(backtest_wrap, args=(deepcopy(config), self.ticks_caches)),
             "id_key": config["config_no"],
         }
         self.unfinished_evals[config["config_no"]] = {
@@ -461,6 +459,7 @@ class HarmonySearch:
                 )
                 self.ticks_caches[s][:] = ticks[:]
                 del ticks
+                logging.info(f"loaded {s} ticks into shared memory")
 
         # initialize harmony memory
         for _ in range(self.n_harmonies):
@@ -523,7 +522,6 @@ class HarmonySearch:
                             symbol = sorted(missing_symbols)[0]
                             config = deepcopy(self.unfinished_evals[id_key]["config"])
                             config["symbol"] = symbol
-                            config["ticks_caches"] = self.ticks_caches
                             config["market_specific_settings"] = self.market_specific_settings[
                                 config["symbol"]
                             ]
@@ -532,7 +530,7 @@ class HarmonySearch:
                             ] = f"{self.bt_dir}/{config['symbol']}/{self.ticks_cache_fname}"
                             self.workers[wi] = {
                                 "config": config,
-                                "task": self.pool.apply_async(backtest_wrap, args=(config,)),
+                                "task": self.pool.apply_async(backtest_wrap, args=(config, self.ticks_caches)),
                                 "id_key": id_key,
                             }
                             self.unfinished_evals[id_key]["in_progress"].add(symbol)
@@ -551,7 +549,7 @@ class HarmonySearch:
 
 
 async def main():
-    logging.basicConfig(format="", level=os.environ.get("LOGLEVEL", "DEBUG"))
+    logging.basicConfig(format="", level=os.environ.get("LOGLEVEL", "INFO"))
 
     parser = argparse.ArgumentParser(
         prog="Optimize multi symbol", description="Optimize passivbot config multi symbol"
