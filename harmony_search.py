@@ -63,8 +63,10 @@ def backtest_wrap(config_: dict):
     try:
         fills, stats = backtest(config, ticks)
         fdf, sdf, analysis = analyze_fills(fills, stats, config)
-        pa_distance_long = analysis["pa_distance_mean_long"]
-        pa_distance_short = analysis["pa_distance_mean_short"]
+        pa_distance_mean_long = analysis["pa_distance_mean_long"]
+        pa_distance_mean_short = analysis["pa_distance_mean_short"]
+        pad_std_long = analysis["pa_distance_std_long"]
+        pad_std_short = analysis["pa_distance_std_short"]
         adg_long = analysis["adg_long"]
         adg_short = analysis["adg_short"]
         """
@@ -72,20 +74,24 @@ def backtest_wrap(config_: dict):
             f.write(json.dumps({"config": denumpyize(config), "analysis": analysis}) + "\n")
         """
         logging.debug(
-            f"backtested {config['symbol']: <12} pa distance long {pa_distance_long:.6f} "
-            + f"pa distance short {pa_distance_short:.6f} adg long {adg_long:.6f} adg short {adg_short:.6f}"
+            f"backtested {config['symbol']: <12} pa distance long {pa_distance_mean_long:.6f} "
+            + f"pa distance short {pa_distance_mean_short:.6f} adg long {adg_long:.6f} "
+            + f"adg short {adg_short:.6f} std long {pad_std_long:.3f} "
+            + f"std short {pad_std_short:.3f}"
         )
     except Exception as e:
         logging.error(f'error with {config["symbol"]} {e}')
         logging.error("config")
         traceback.print_exc()
         adg_long, adg_short = 0.0, 0.0
-        pa_distance_long = pa_distance_short = 100.0
+        pa_distance_mean_long = pa_distance_mean_short = 100.0
         with open(make_get_filepath("tmp/harmony_search_errors.txt"), "a") as f:
             f.write(json.dumps([time(), "error", str(e), denumpyize(config)]) + "\n")
     return {
-        "pa_distance_long": pa_distance_long,
-        "pa_distance_short": pa_distance_short,
+        "pa_distance_mean_long": pa_distance_mean_long,
+        "pa_distance_mean_short": pa_distance_mean_short,
+        "pa_distance_std_long": pad_std_long,
+        "pa_distance_std_short": pad_std_short,
         "adg_long": adg_long,
         "adg_short": adg_short,
     }
@@ -161,30 +167,42 @@ class HarmonySearch:
         if set(results) == set(self.symbols):
             # completed multisymbol iter
             adg_mean_long = np.mean([v["adg_long"] for v in results.values()])
+            pad_std_long = np.mean([v["pa_distance_std_long"] for v in results.values()])
             pad_mean_long = np.mean(
                 [
-                    max(self.config["maximum_pa_distance_mean_long"], v["pa_distance_long"])
+                    max(self.config["maximum_pa_distance_mean_long"], v["pa_distance_mean_long"])
                     for v in results.values()
                 ]
             )
             score_long = -adg_mean_long * min(
                 1.0, self.config["maximum_pa_distance_mean_long"] / pad_mean_long
             )
+
+            # use std dev for the score function. Only optimize adg when below 2%
+            # score_long = -adg_mean_long / max(0.02, pad_std_long)
+
             adg_mean_short = np.mean([v["adg_short"] for v in results.values()])
+            pad_std_short = np.mean([v["pa_distance_std_short"] for v in results.values()])
             pad_mean_short = np.mean(
                 [
-                    max(self.config["maximum_pa_distance_mean_short"], v["pa_distance_short"])
+                    max(self.config["maximum_pa_distance_mean_short"], v["pa_distance_mean_short"])
                     for v in results.values()
                 ]
             )
             score_short = -adg_mean_short * min(
                 1.0, self.config["maximum_pa_distance_mean_short"] / pad_mean_short
             )
+
+            # use std dev for the score function. Only optimize adg when below 2%
+            # score_short = -adg_mean_short / max(0.02, pad_std_short)
+
             line = f"completed multisymbol iter {cfg['config_no']} "
             if self.do_long:
-                line += f"- adg long {adg_mean_long:.6f} pad long {pad_mean_long:.6f} score long {score_long:.7f} "
+                line += f"- adg long {adg_mean_long:.6f} pad long {pad_mean_long:.6f} std long "
+                line += f"{pad_std_long:.3f} score long {score_long:.7f} "
             if self.do_short:
-                line += f"- adg short {adg_mean_short:.6f} pad short {pad_mean_short:.6f} score short {score_short:.7f}"
+                line += f"- adg short {adg_mean_short:.6f} pad short {pad_mean_short:.6f} std short "
+                line += f"{pad_std_short:.3f} score short {score_short:.7f}"
             logging.debug(line)
             # check whether initial eval or new harmony
             if "initial_eval_key" in cfg:
@@ -222,8 +240,8 @@ class HarmonySearch:
                 )[-1]
                 if self.do_short and score_short < self.hm[worst_key_short]["short"]["score"]:
                     logging.debug(
-                        f"improved short harmony, prev score ",
-                        f"{self.hm[worst_key_short]['short']['score']:.7f} new score {score_short:.7f} - "
+                        f"improved short harmony, prev score "
+                        + f"{self.hm[worst_key_short]['short']['score']:.7f} new score {score_short:.7f} - "
                         + " ".join(
                             [str(round_dynamic(e[1], 3)) for e in sorted(cfg["short"].items())]
                         ),
@@ -266,7 +284,7 @@ class HarmonySearch:
                 is_better = True
                 logging.info(
                     f"i{cfg['config_no']} - new best config long, score {score_long:.7f} "
-                    + f"adg {adg_mean_long:.7f} pad {pad_mean_long:.7f}"
+                    + f"adg {adg_mean_long:.7f} pad {pad_mean_long:.7f} std {pad_std_long:.3f}"
                 )
                 tmp_fname += "_long"
                 json.dump(
@@ -279,7 +297,7 @@ class HarmonySearch:
                 is_better = True
                 logging.info(
                     f"i{cfg['config_no']} - new best config short, score {score_short:.7f} "
-                    + f"adg {adg_mean_short:.7f} pad {pad_mean_short:.7f}"
+                    + f"adg {adg_mean_short:.7f} pad {pad_mean_short:.7f} std {pad_std_short:.3f}"
                 )
                 tmp_fname += "_short"
                 json.dump(
@@ -511,7 +529,7 @@ class HarmonySearch:
 
 
 async def main():
-    logging.basicConfig(format="", level=os.environ.get("LOGLEVEL", "INFO"))
+    logging.basicConfig(format="", level=os.environ.get("LOGLEVEL", "DEBUG"))
 
     parser = argparse.ArgumentParser(
         prog="Optimize multi symbol", description="Optimize passivbot config multi symbol"
@@ -537,6 +555,9 @@ async def main():
     parser.add_argument(
         "-i", "--iters", type=int, required=False, dest="iters", default=None, help="n optimize iters"
     )
+    parser.add_argument(
+        "-c", "--n_cpus", type=int, required=False, dest="n_cpus", default=None, help="n cpus"
+    )
     parser = add_argparse_args(parser)
     args = parser.parse_args()
     args.symbol = "BTCUSDT"  # dummy symbol
@@ -548,6 +569,13 @@ async def main():
     args = parser.parse_args()
     if args.symbol is not None:
         config["symbols"] = args.symbol.split(",")
+    if args.n_cpus is not None:
+        config["n_cpus"] = args.n_cpus
+    print()
+    lines = [(k, getattr(args, k)) for k in args.__dict__ if args.__dict__[k] is not None]
+    for line in lines:
+        logging.info(f"{line[0]: <{max([len(x[0]) for x in lines]) + 2}} {line[1]}")
+    print()
 
     # download ticks .npy file if missing
     cache_fname = f"{config['start_date']}_{config['end_date']}_ticks_cache.npy"
