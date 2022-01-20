@@ -63,8 +63,10 @@ def backtest_wrap(config_: dict):
     try:
         fills, stats = backtest(config, ticks)
         fdf, sdf, analysis = analyze_fills(fills, stats, config)
-        pa_distance_long = analysis["pa_distance_mean_long"]
-        pa_distance_short = analysis["pa_distance_mean_short"]
+        pa_distance_mean_long = analysis["pa_distance_mean_long"]
+        pa_distance_mean_short = analysis["pa_distance_mean_short"]
+        pa_distance_std_long = analysis["pa_distance_std_long"]
+        pa_distance_std_short = analysis["pa_distance_std_short"]
         adg_long = analysis["adg_long"]
         adg_short = analysis["adg_short"]
         """
@@ -72,20 +74,22 @@ def backtest_wrap(config_: dict):
             f.write(json.dumps({"config": denumpyize(config), "analysis": analysis}) + "\n")
         """
         logging.debug(
-            f"backtested {config['symbol']: <12} pa distance long {pa_distance_long:.6f} "
-            + f"pa distance short {pa_distance_short:.6f} adg long {adg_long:.6f} adg short {adg_short:.6f}"
+            f"backtested {config['symbol']: <12} pa distance long {pa_distance_mean_long:.6f} "
+            + f"pa distance short {pa_distance_mean_short:.6f} adg long {adg_long:.6f} adg short {adg_short:.6f}"
         )
     except Exception as e:
         logging.error(f'error with {config["symbol"]} {e}')
         logging.error("config")
         traceback.print_exc()
         adg_long, adg_short = 0.0, 0.0
-        pa_distance_long = pa_distance_short = 100.0
+        pa_distance_mean_long = pa_distance_mean_short = 100.0
         with open(make_get_filepath("tmp/harmony_search_errors.txt"), "a") as f:
             f.write(json.dumps([time(), "error", str(e), denumpyize(config)]) + "\n")
     return {
-        "pa_distance_long": pa_distance_long,
-        "pa_distance_short": pa_distance_short,
+        "pa_distance_mean_long": pa_distance_mean_long,
+        "pa_distance_mean_short": pa_distance_mean_short,
+        "pa_distance_std_long": pa_distance_std_long,
+        "pa_distance_std_short": pa_distance_std_short,
         "adg_long": adg_long,
         "adg_short": adg_short,
     }
@@ -161,25 +165,31 @@ class HarmonySearch:
         if set(results) == set(self.symbols):
             # completed multisymbol iter
             adg_mean_long = np.mean([v["adg_long"] for v in results.values()])
+            pad_std_long = np.mean([v["pa_distance_std_long"] for v in results.values()])
             pad_mean_long = np.mean(
                 [
-                    max(self.config["maximum_pa_distance_mean_long"], v["pa_distance_long"])
+                    max(self.config["maximum_pa_distance_mean_long"], v["pa_distance_mean_long"])
                     for v in results.values()
                 ]
             )
             score_long = -adg_mean_long * min(
                 1.0, self.config["maximum_pa_distance_mean_long"] / pad_mean_long
             )
+			# score_long = -adg_mean_long / max(0.02,pad_std_long) # use std dev for the score function. Only optimize adg when below 2%
+			
             adg_mean_short = np.mean([v["adg_short"] for v in results.values()])
+            pad_std_short = np.mean([v["pa_distance_std_short"] for v in results.values()])
             pad_mean_short = np.mean(
                 [
-                    max(self.config["maximum_pa_distance_mean_short"], v["pa_distance_short"])
+                    max(self.config["maximum_pa_distance_mean_short"], v["pa_distance_mean_short"])
                     for v in results.values()
                 ]
             )
             score_short = -adg_mean_short * min(
                 1.0, self.config["maximum_pa_distance_mean_short"] / pad_mean_short
             )
+			# score_short = -adg_mean_short / max(0.02,pad_std_short) # use std dev for the score function. Only optimize adg when below 2%
+			
             line = f"completed multisymbol iter {cfg['config_no']} "
             if self.do_long:
                 line += f"- adg long {adg_mean_long:.6f} pad long {pad_mean_long:.6f} score long {score_long:.7f} "
