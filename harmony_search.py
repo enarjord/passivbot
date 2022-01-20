@@ -10,7 +10,7 @@ import numpy as np
 import traceback
 from copy import deepcopy
 from backtest import backtest
-from multiprocessing import Pool
+from multiprocessing import Pool, shared_memory
 from njit_funcs import round_dynamic
 from pure_funcs import (
     analyze_fills,
@@ -140,7 +140,8 @@ class HarmonySearch:
             else {}
         )
         """
-        self.ticks_caches = {}  # todo implement shared memory
+        self.ticks_caches = {}
+        self.shms = {}  # shared memories
         self.current_best_config = None
 
         # [{'config': dict, 'task': process, 'id_key': tuple}]
@@ -374,7 +375,7 @@ class HarmonySearch:
             + self.symbols[0]
         )
 
-        new_harmony["ticks_caches"] = {}  # todo implement shared memory
+        new_harmony["ticks_caches"] = self.ticks_caches
         new_harmony["market_specific_settings"] = self.market_specific_settings[new_harmony["symbol"]]
         new_harmony[
             "ticks_cache_fname"
@@ -421,7 +422,7 @@ class HarmonySearch:
         line += " - " + self.symbols[0]
         logging.info(line)
 
-        config["ticks_caches"] = {}  # todo implement shared memory
+        config["ticks_caches"] = self.ticks_caches
         config["market_specific_settings"] = self.market_specific_settings[config["symbol"]]
         config["ticks_cache_fname"] = f"{self.bt_dir}/{config['symbol']}/{self.ticks_cache_fname}"
 
@@ -439,6 +440,27 @@ class HarmonySearch:
         self.hm[hm_key]["short"]["score"] = "in_progress"
 
     def run(self):
+        try:
+            self.run_()
+        finally:
+            for s in self.shms:
+                self.shms[s].close()
+                self.shms[s].unlink()
+
+    def run_(self):
+
+        # initialize ticks cache
+        if self.n_cpus >= len(self.symbols) or (
+            "cache_ticks" in self.config and self.config["cache_ticks"]
+        ):
+            for s in self.symbols:
+                ticks = np.load(f"{self.bt_dir}/{s}/{self.ticks_cache_fname}")
+                self.shms[s] = shared_memory.SharedMemory(create=True, size=ticks.nbytes)
+                self.ticks_caches[s] = np.ndarray(
+                    ticks.shape, dtype=ticks.dtype, buffer=self.shms[s].buf
+                )
+                self.ticks_caches[s][:] = ticks[:]
+                del ticks
 
         # initialize harmony memory
         for _ in range(self.n_harmonies):
@@ -501,7 +523,7 @@ class HarmonySearch:
                             symbol = sorted(missing_symbols)[0]
                             config = deepcopy(self.unfinished_evals[id_key]["config"])
                             config["symbol"] = symbol
-                            config["ticks_caches"] = {}  # todo implement shared memory
+                            config["ticks_caches"] = self.ticks_caches
                             config["market_specific_settings"] = self.market_specific_settings[
                                 config["symbol"]
                             ]
