@@ -85,6 +85,7 @@ def backtest_wrap(config_: dict, ticks_caches: dict):
         traceback.print_exc()
         adg_long, adg_short = 0.0, 0.0
         pa_distance_mean_long = pa_distance_mean_short = 100.0
+        pad_std_long = pad_std_short = 100.0
         with open(make_get_filepath("tmp/harmony_search_errors.txt"), "a") as f:
             f.write(json.dumps([time(), "error", str(e), denumpyize(config)]) + "\n")
     return {
