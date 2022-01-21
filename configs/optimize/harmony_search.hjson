@@ -1,6 +1,6 @@
 {
   # harmony search options
-  n_harmonies: 24
+  n_harmonies: 27
   hm_considering_rate: 0.9
   bandwidth: 0.07
   pitch_adjusting_rate: 0.24
@@ -9,40 +9,46 @@
   iters: 10000
   cache_ticks: false  # set to true to keep all ticks in RAM
 
-  # score formula:
-  # adg * min(1, max_pa_dist / mean([max(max_pa_dist, pa_dist) for pa_dist in results]))
-  maximum_pa_distance_mean_long: 0.04
-  maximum_pa_distance_mean_short: 0.04
+  # score formula choices: [adg_pad_mean, adg_pad_std]
+  score_formula: adg_pad_std
+
+  # adg_pad_std:
+  # adg / min(1, max_pa_dist_std / mean([max(max_pa_dist_std, pad_std) for pad_std in results]))
+  maximum_pa_distance_std_long: 0.02
+  maximum_pa_distance_std_short: 0.02
+
+  # adg_pad_mean:
+  # adg * min(1, max_pa_dist_mean / mean([max(max_pa_dist_mean, pa_dist) for pa_dist in results]))
+  maximum_pa_distance_mean_long: 0.035
+  maximum_pa_distance_mean_short: 0.035
 
   # will override any starting configs' long/short enabled parameter
   do_long: true
   do_short: false
 
-  # symbols with min notional < $5 @ 2022-01-14, sorted highest to lowest vol last ~60 days
-  symbols: ["ETHUSDT", "SANDUSDT", "GALAUSDT", "1000SHIBUSDT", "MANAUSDT",
-            "MATICUSDT", "FTMUSDT", "BNBUSDT", "XRPUSDT", "DOTUSDT",
-            "DOGEUSDT", "ADAUSDT", "ATOMUSDT", "LINKUSDT", "LTCUSDT",
-            "LRCUSDT", "CRVUSDT", "ALICEUSDT", "EOSUSDT", "ICPUSDT",
-            "ONEUSDT", "FILUSDT", "DYDXUSDT", "ALGOUSDT", "CHRUSDT",
-            "TLMUSDT", "XTZUSDT", "ENJUSDT", "GTCUSDT", "ZECUSDT",
-            "IOTXUSDT", "VETUSDT", "CELRUSDT", "BATUSDT", "BCHUSDT",
-            "ETCUSDT", "STORJUSDT", "TRXUSDT", "SFPUSDT", "CHZUSDT",
-            "SXPUSDT", "XLMUSDT", "1INCHUSDT", "THETAUSDT", "OMGUSDT",
-            "KEEPUSDT", "ANKRUSDT", "IOTAUSDT", "GRTUSDT", "BLZUSDT",
-            "HOTUSDT", "LINAUSDT", "RSRUSDT", "DENTUSDT", "ICXUSDT",
-            "OCEANUSDT", "AUDIOUSDT", "QTUMUSDT", "COTIUSDT", "DASHUSDT",
-            "CTKUSDT", "C98USDT", "RENUSDT", "HBARUSDT", "NUUSDT",
-            "XMRUSDT", "CVCUSDT", "LITUSDT", "WAVESUSDT", "DODOUSDT",
-            "RVNUSDT", "RLCUSDT", "SRMUSDT", "REEFUSDT", "COMPUSDT",
-            "KAVAUSDT", "ROSEUSDT", "BANDUSDT", "LPTUSDT", "IOSTUSDT",
-            "SNXUSDT", "ATAUSDT", "SKLUSDT", "BELUSDT", "BAKEUSDT",
-            "PEOPLEUSDT", "ANTUSDT", "CELOUSDT", "ALPHAUSDT", "ZILUSDT",
-            "CTSIUSDT", "NEOUSDT", "OGNUSDT", "SCUSDT", "NKNUSDT",
-            "ONTUSDT", "KNCUSDT", "UNFIUSDT", "TOMOUSDT", "ENSUSDT",
-            "STMXUSDT", "ARPAUSDT", "MKRUSDT", "YFIIUSDT", "BALUSDT",
-            "MTLUSDT", "TRBUSDT", "ZRXUSDT", "AKROUSDT", "FLMUSDT",
-            "RAYUSDT", "BTSUSDT", "1000XECUSDT", "XEMUSDT", "KLAYUSDT",
-            "DGBUSDT", "ETHUSDT_220325", "DUSKUSDT", "BTCDOMUSDT", "DEFIUSDT"]
+  # symbols with min notional < $5 @ 2022-01-22,
+  # and at least 250 days of data,
+  # sorted highest to lowest vol last 250 days
+  symbols: ["ETHUSDT", "XRPUSDT", "1000SHIBUSDT", "DOGEUSDT", "ADAUSDT",
+            "BNBUSDT", "MATICUSDT", "DOTUSDT", "SANDUSDT", "FTMUSDT",
+            "LTCUSDT", "LINKUSDT", "MANAUSDT", "ETCUSDT", "EOSUSDT",
+            "ATOMUSDT", "FILUSDT", "ICPUSDT", "ALICEUSDT", "LRCUSDT",
+            "BCHUSDT", "SUSHIUSDT", "XTZUSDT", "THETAUSDT", "CRVUSDT",
+            "ALGOUSDT", "CHZUSDT", "TRXUSDT", "VETUSDT", "CHRUSDT",
+            "ONEUSDT", "OMGUSDT", "XLMUSDT", "RUNEUSDT", "ENJUSDT",
+            "CELRUSDT", "SXPUSDT", "1INCHUSDT", "SRMUSDT", "COTIUSDT",
+            "ZECUSDT", "QTUMUSDT", "GRTUSDT", "DENTUSDT", "SFPUSDT",
+            "STORJUSDT", "IOTAUSDT", "HOTUSDT", "NEOUSDT", "COMPUSDT",
+            "LINAUSDT", "KAVAUSDT", "BATUSDT", "WAVESUSDT", "IOSTUSDT",
+            "ALPHAUSDT", "RLCUSDT", "HBARUSDT", "DODOUSDT", "XMRUSDT",
+            "SNXUSDT", "ANKRUSDT", "DASHUSDT", "REEFUSDT", "ZENUSDT",
+            "CVCUSDT", "RENUSDT", "ICXUSDT", "RSRUSDT", "SKLUSDT",
+            "NKNUSDT", "BELUSDT", "ONTUSDT", "OGNUSDT", "BLZUSDT",
+            "MTLUSDT", "CTKUSDT", "RVNUSDT", "LITUSDT", "MKRUSDT",
+            "OCEANUSDT", "ZILUSDT", "UNFIUSDT", "BANDUSDT", "YFIIUSDT",
+            "TOMOUSDT", "TRBUSDT", "KNCUSDT", "STMXUSDT", "ZRXUSDT",
+            "SCUSDT", "AKROUSDT", "XEMUSDT", "FLMUSDT", "BALUSDT",
+            "BTSUSDT", "DGBUSDT", "DEFIUSDT",]
 
 
   bounds:
