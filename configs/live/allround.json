@@ -21,7 +21,7 @@
            "auto_unstuck_wallet_exposure_threshold": 0.03,
            "ema_span_max": 3784.195345528258,
            "ema_span_min": 4719.027742394792,
-           "enabled": true,
+           "enabled": false,
            "eprice_exp_base": 1.3007074739562385,
            "eprice_pprice_diff": 0.01836867322472171,
            "grid_span": 0.2627314508191393,
