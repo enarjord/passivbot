@@ -76,8 +76,8 @@ def backtest_wrap(config_: dict, ticks_caches: dict):
         logging.debug(
             f"backtested {config['symbol']: <12} pa distance long {pa_distance_mean_long:.6f} "
             + f"pa distance short {pa_distance_mean_short:.6f} adg long {adg_long:.6f} "
-            + f"adg short {adg_short:.6f} std long {pad_std_long:.3f} "
-            + f"std short {pad_std_short:.3f}"
+            + f"adg short {adg_short:.6f} std long {pad_std_long:.5f} "
+            + f"std short {pad_std_short:.5f}"
         )
     except Exception as e:
         logging.error(f'error with {config["symbol"]} {e}')
@@ -169,42 +169,55 @@ class HarmonySearch:
         if set(results) == set(self.symbols):
             # completed multisymbol iter
             adg_mean_long = np.mean([v["adg_long"] for v in results.values()])
-            pad_std_long = np.mean([v["pa_distance_std_long"] for v in results.values()])
+            pad_std_long = np.mean(
+                [
+                    max(self.config["maximum_pa_distance_std_long"], v["pa_distance_std_long"])
+                    for v in results.values()
+                ]
+            )
             pad_mean_long = np.mean(
                 [
                     max(self.config["maximum_pa_distance_mean_long"], v["pa_distance_mean_long"])
                     for v in results.values()
                 ]
             )
-            score_long = -adg_mean_long * min(
-                1.0, self.config["maximum_pa_distance_mean_long"] / pad_mean_long
-            )
-
-            # use std dev for the score function. Only optimize adg when below 2%
-            # score_long = -adg_mean_long / max(0.02, pad_std_long)
-
             adg_mean_short = np.mean([v["adg_short"] for v in results.values()])
-            pad_std_short = np.mean([v["pa_distance_std_short"] for v in results.values()])
+            pad_std_short = np.mean(
+                [
+                    max(self.config["maximum_pa_distance_std_short"], v["pa_distance_std_short"])
+                    for v in results.values()
+                ]
+            )
             pad_mean_short = np.mean(
                 [
                     max(self.config["maximum_pa_distance_mean_short"], v["pa_distance_mean_short"])
                     for v in results.values()
                 ]
             )
-            score_short = -adg_mean_short * min(
-                1.0, self.config["maximum_pa_distance_mean_short"] / pad_mean_short
-            )
-
-            # use std dev for the score function. Only optimize adg when below 2%
-            # score_short = -adg_mean_short / max(0.02, pad_std_short)
+            if self.config["score_formula"] == "adg_pad_mean":
+                score_long = -adg_mean_long * min(
+                    1.0, self.config["maximum_pa_distance_mean_long"] / pad_mean_long
+                )
+                score_short = -adg_mean_short * min(
+                    1.0, self.config["maximum_pa_distance_mean_short"] / pad_mean_short
+                )
+            elif self.config["score_formula"] == "adg_pad_std":
+                score_long = -adg_mean_long * min(
+                    1.0, self.config["maximum_pa_distance_std_long"] / pad_std_long
+                )
+                score_short = -adg_mean_short * min(
+                    1.0, self.config["maximum_pa_distance_std_short"] / pad_std_short
+                )
+            else:
+                raise Exception(f"unknown score formula {self.config['score_formula']}")
 
             line = f"completed multisymbol iter {cfg['config_no']} "
             if self.do_long:
                 line += f"- adg long {adg_mean_long:.6f} pad long {pad_mean_long:.6f} std long "
-                line += f"{pad_std_long:.3f} score long {score_long:.7f} "
+                line += f"{pad_std_long:.5f} score long {score_long:.7f} "
             if self.do_short:
                 line += f"- adg short {adg_mean_short:.6f} pad short {pad_mean_short:.6f} std short "
-                line += f"{pad_std_short:.3f} score short {score_short:.7f}"
+                line += f"{pad_std_short:.5f} score short {score_short:.7f}"
             logging.debug(line)
             # check whether initial eval or new harmony
             if "initial_eval_key" in cfg:
@@ -286,7 +299,7 @@ class HarmonySearch:
                 is_better = True
                 logging.info(
                     f"i{cfg['config_no']} - new best config long, score {score_long:.7f} "
-                    + f"adg {adg_mean_long:.7f} pad {pad_mean_long:.7f} std {pad_std_long:.3f}"
+                    + f"adg {adg_mean_long:.7f} pad {pad_mean_long:.7f} std {pad_std_long:.5f}"
                 )
                 tmp_fname += "_long"
                 json.dump(
@@ -299,7 +312,7 @@ class HarmonySearch:
                 is_better = True
                 logging.info(
                     f"i{cfg['config_no']} - new best config short, score {score_short:.7f} "
-                    + f"adg {adg_mean_short:.7f} pad {pad_mean_short:.7f} std {pad_std_short:.3f}"
+                    + f"adg {adg_mean_short:.7f} pad {pad_mean_short:.7f} std {pad_std_short:.5f}"
                 )
                 tmp_fname += "_short"
                 json.dump(
@@ -489,15 +502,21 @@ class HarmonySearch:
                 for k in self.long_bounds
             }
             cfg["long"]["enabled"] = self.do_long
+            seen_key = tuplify(cfg["long"], sort=True)
+            if seen_key not in seen:
+                hm_key = available_ids.pop()
+                self.hm[hm_key]["long"]["config"] = cfg["long"]
+        seen = set()
+        available_ids = set(self.hm)
+        for cfg in self.starting_configs:
             cfg["short"] = {
                 k: max(self.short_bounds[k][0], min(self.short_bounds[k][1], cfg["short"][k]))
                 for k in self.short_bounds
             }
             cfg["short"]["enabled"] = self.do_short
-            seen_key = tuplify(cfg, sort=True)
+            seen_key = tuplify(cfg["short"], sort=True)
             if seen_key not in seen:
                 hm_key = available_ids.pop()
-                self.hm[hm_key]["long"]["config"] = cfg["long"]
                 self.hm[hm_key]["short"]["config"] = cfg["short"]
                 seen.add(seen_key)
 
