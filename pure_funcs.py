@@ -516,8 +516,14 @@ def analyze_fills(fills: list, stats: list, config: dict) -> (pd.DataFrame, pd.D
         "pa_distance_std_short": pa_distance_short.std(),
         "gain_long": gain_long,
         "adg_long": adg_long if adg_long == adg_long else -1.0,
+        "adg_per_exposure_long": adg_long / config["long"]["wallet_exposure_limit"]
+        if config["long"]["enabled"] and config["long"]["wallet_exposure_limit"] > 0.0
+        else 0.0,
         "gain_short": gain_short,
         "adg_short": adg_short if adg_short == adg_short else -1.0,
+        "adg_per_exposure_short": adg_short / config["short"]["wallet_exposure_limit"]
+        if config["short"]["enabled"] and config["short"]["wallet_exposure_limit"] > 0.0
+        else 0.0,
         "average_daily_gain": adg,
         "gain": gain,
         "n_days": n_days,
