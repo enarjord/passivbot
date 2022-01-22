@@ -1895,12 +1895,12 @@ def njit_backtest(
     long_wallet_exposure = 0.0
     short_wallet_exposure = 0.0
     long_wallet_exposure_auto_unstuck_threshold = (
-        (wallet_exposure_limit[0] * (1 - auto_unstuck_wallet_exposure_threshold[0]) * 1.01)
+        (wallet_exposure_limit[0] * (1 - auto_unstuck_wallet_exposure_threshold[0]))
         if auto_unstuck_wallet_exposure_threshold[0] != 0.0
         else wallet_exposure_limit[0] * 10
     )
     short_wallet_exposure_auto_unstuck_threshold = (
-        (wallet_exposure_limit[1] * (1 - auto_unstuck_wallet_exposure_threshold[1]) * 1.01)
+        (wallet_exposure_limit[1] * (1 - auto_unstuck_wallet_exposure_threshold[1]))
         if auto_unstuck_wallet_exposure_threshold[1] != 0.0
         else wallet_exposure_limit[1] * 10
     )
@@ -2341,26 +2341,41 @@ def njit_backtest(
                     next_entry_grid_update_ts_long,
                     timestamps[k] + latency_simulation_ms,
                 )
-            if (
-                prices[k] > long_pprice
-                or long_wallet_exposure >= long_wallet_exposure_auto_unstuck_threshold
-            ):
-                next_close_grid_update_ts_long = min(
-                    next_close_grid_update_ts_long,
-                    timestamps[k] + latency_simulation_ms,
-                )
+            else:
+                if prices[k] > long_pprice:
+                    next_close_grid_update_ts_long = min(
+                        next_close_grid_update_ts_long,
+                        timestamps[k] + latency_simulation_ms + 2500,
+                    )
+                elif long_wallet_exposure >= long_wallet_exposure_auto_unstuck_threshold:
+                    next_close_grid_update_ts_long = min(
+                        next_close_grid_update_ts_long,
+                        timestamps[k] + latency_simulation_ms + 15000,
+                    )
+                    next_entry_grid_update_ts_long = min(
+                        next_entry_grid_update_ts_long,
+                        timestamps[k] + latency_simulation_ms + 15000,
+                    )
         if do_short:
             if short_psize == 0.0:
                 next_entry_grid_update_ts_short = min(
                     next_entry_grid_update_ts_short,
                     timestamps[k] + latency_simulation_ms,
                 )
-            if (
-                prices[k] < short_pprice
-                or short_wallet_exposure >= short_wallet_exposure_auto_unstuck_threshold
-            ):
-                next_close_grid_update_ts_short = min(
-                    next_close_grid_update_ts_short,
-                    timestamps[k] + latency_simulation_ms,
-                )
+            else:
+                if prices[k] < short_pprice:
+                    next_close_grid_update_ts_short = min(
+                        next_close_grid_update_ts_short,
+                        timestamps[k] + latency_simulation_ms + 2500,
+                    )
+                elif short_wallet_exposure >= short_wallet_exposure_auto_unstuck_threshold:
+                    next_close_grid_update_ts_short = min(
+                        next_close_grid_update_ts_short,
+                        timestamps[k] + latency_simulation_ms + 15000,
+                    )
+                    next_entry_grid_update_ts_short = min(
+                        next_entry_grid_update_ts_short,
+                        timestamps[k] + latency_simulation_ms + 15000,
+                    )
+
     return fills, stats
