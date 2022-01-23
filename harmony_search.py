@@ -202,11 +202,11 @@ class HarmonySearch:
                     1.0, self.config["maximum_pa_distance_mean_short"] / pad_mean_short
                 )
             elif self.config["score_formula"] == "adg_pad_std":
-                score_long = -adg_mean_long * min(
-                    1.0, self.config["maximum_pa_distance_std_long"] / pad_std_long
+                score_long = -adg_mean_long / max(
+                    self.config["maximum_pa_distance_std_long"], pad_std_long
                 )
-                score_short = -adg_mean_short * min(
-                    1.0, self.config["maximum_pa_distance_std_short"] / pad_std_short
+                score_short = -adg_mean_short / max(
+                    self.config["maximum_pa_distance_std_short"], pad_std_short
                 )
             else:
                 raise Exception(f"unknown score formula {self.config['score_formula']}")
