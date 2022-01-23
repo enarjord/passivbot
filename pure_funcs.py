@@ -464,31 +464,39 @@ def analyze_fills(fills: list, stats: list, config: dict) -> (pd.DataFrame, pd.D
     adg_short = (gain_short + 1) ** (1 / n_days) - 1
 
     ms2d = 1000 * 60 * 60 * 24
-    upnls_long = longs.apply(
-        lambda x: calc_long_pnl(x.pprice, x.price, x.psize, config["inverse"], config["c_mult"]),
-        axis=1,
-    )
-    equities_long = longs.balance + upnls_long
-    daily_gains_long = (
-        longs.groupby(longs.index // ms2d).pnl.sum()
-        / equities_long.groupby(equities_long.index // ms2d).last()
-    ) / config["long"]["wallet_exposure_limit"]
-    dg_mean_std_ratio_long = (
-        daily_gains_long.mean() / daily_gains_long.std() if len(daily_gains_long) > 0 else 0.0
-    )
+    if len(longs) > 0:
+        longs.loc[:, "balance_long"] = (
+            fdf.balance.iloc[0] + longs.pnl.cumsum() + longs.fee_paid.cumsum()
+        )
+        longs.loc[:, "upnl_long"] = longs.apply(
+            lambda x: calc_long_pnl(x.pprice, x.price, x.psize, config["inverse"], config["c_mult"]),
+            axis=1,
+        )
+        longs.loc[:, "equity_long"] = longs.balance_long + longs.upnl_long
+        daily_equity_long = longs.groupby(longs.index // ms2d).equity_long.last()
+        daily_gains_long = daily_equity_long / daily_equity_long.shift(1) - 1
+        dg_mean_std_ratio_long = (
+            daily_gains_long.mean() / daily_gains_long.std() if len(daily_gains_long) > 0 else 0.0
+        )
+    else:
+        dg_mean_std_ratio_long = 0.0
 
-    upnls_short = shorts.apply(
-        lambda x: calc_short_pnl(x.pprice, x.price, x.psize, config["inverse"], config["c_mult"]),
-        axis=1,
-    )
-    equities_short = shorts.balance + upnls_short
-    daily_gains_short = (
-        shorts.groupby(shorts.index // ms2d).pnl.sum()
-        / equities_short.groupby(equities_short.index // ms2d).last()
-    ) / config["short"]["wallet_exposure_limit"]
-    dg_mean_std_ratio_short = (
-        daily_gains_short.mean() / daily_gains_short.std() if len(daily_gains_short) > 0 else 0.0
-    )
+    if len(shorts) > 0:
+        shorts.loc[:, "balance_short"] = (
+            fdf.balance.iloc[0] + shorts.pnl.cumsum() + shorts.fee_paid.cumsum()
+        )
+        shorts.loc[:, "upnl_short"] = shorts.apply(
+            lambda x: calc_short_pnl(x.pprice, x.price, x.psize, config["inverse"], config["c_mult"]),
+            axis=1,
+        )
+        shorts.loc[:, "equity_short"] = shorts.balance_short + shorts.upnl_short
+        daily_equity_short = shorts.groupby(shorts.index // ms2d).equity_short.last()
+        daily_gains_short = daily_equity_short / daily_equity_short.shift(1) - 1
+        dg_mean_std_ratio_short = (
+            daily_gains_short.mean() / daily_gains_short.std() if len(daily_gains_short) > 0 else 0.0
+        )
+    else:
+        dg_mean_std_ratio_short = 0.0
 
     pos_costs = fdf.apply(
         lambda x: qty_to_cost(x["psize"], x["pprice"], config["inverse"], config["c_mult"]),
