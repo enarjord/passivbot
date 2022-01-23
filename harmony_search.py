@@ -394,8 +394,7 @@ class HarmonySearch:
             + " ".join([str(round_dynamic(e[1], 3)) for e in sorted(new_harmony["long"].items())])
             + " - short: "
             + " ".join([str(round_dynamic(e[1], 3)) for e in sorted(new_harmony["short"].items())])
-            + " - "
-            + self.symbols[0]
+
         )
 
         new_harmony["market_specific_settings"] = self.market_specific_settings[new_harmony["symbol"]]
@@ -443,7 +442,6 @@ class HarmonySearch:
                     for e in sorted(self.hm[hm_key]["short"]["config"].items())
                 ]
             )
-        line += " - " + self.symbols[0]
         logging.info(line)
 
         config["market_specific_settings"] = self.market_specific_settings[config["symbol"]]
