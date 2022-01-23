@@ -160,6 +160,9 @@ def dump_plots(result: dict, fdf: pd.DataFrame, sdf: pd.DataFrame, df: pd.DataFr
         table.add_row(["Long", result["long"]["enabled"]])
         adg_per_exp = result["result"]["adg_long"] / result["long"]["wallet_exposure_limit"]
         table.add_row(["ADG per exposure", f"{round_dynamic(adg_per_exp * 100, 3)}%"])
+        table.add_row(
+            ["DG mean std ratio", f"{round_dynamic(result['result']['dg_mean_std_ratio_long'], 4)}"]
+        )
         table.add_row(["No. inital entries", result["result"]["n_ientries_long"]])
         table.add_row(["No. reentries", result["result"]["n_rentries_long"]])
         table.add_row(["No. normal closes", result["result"]["n_normal_closes_long"]])
@@ -202,6 +205,12 @@ def dump_plots(result: dict, fdf: pd.DataFrame, sdf: pd.DataFrame, df: pd.DataFr
     if result["short"]["enabled"]:
         table.add_row([" ", " "])
         table.add_row(["Short", result["short"]["enabled"]])
+        adg_per_exp = result["result"]["adg_short"] / result["short"]["wallet_exposure_limit"]
+        table.add_row(["ADG per exposure", f"{round_dynamic(adg_per_exp * 100, 3)}%"])
+        table.add_row(
+            ["DG mean std ratio", f"{round_dynamic(result['result']['dg_mean_std_ratio_short'], 4)}"]
+        )
+        table.add_row(["No. inital entries", result["result"]["n_ientries_short"]])
         table.add_row(["No. inital entries", result["result"]["n_ientries_short"]])
         table.add_row(["No. reentries", result["result"]["n_rentries_short"]])
         table.add_row(["No. normal closes", result["result"]["n_normal_closes_short"]])
