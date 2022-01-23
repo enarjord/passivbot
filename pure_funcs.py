@@ -471,20 +471,22 @@ def analyze_fills(fills: list, stats: list, config: dict) -> (pd.DataFrame, pd.D
     if len(longs) > 0:
         daily_equity_long = sdf.groupby(sdf.timestamp // ms2d).equity_long.last()
         daily_gains_long = daily_equity_long / daily_equity_long.shift(1) - 1
-        dg_mean_std_ratio_long = (
-            daily_gains_long.mean() / daily_gains_long.std() if len(daily_gains_long) > 0 else 0.0
-        )
+        adg_long = daily_gains_long.mean()
+        DGstd_long = daily_gains_long.std()
+        adg_DGstd_ratio_long = adg_long / DGstd_long if len(daily_gains_long) > 0 else 0.0
     else:
-        dg_mean_std_ratio_long = 0.0
+        adg_long = adg_DGstd_ratio_long = 0.0
+        DGstd_long = 100.0
 
     if len(shorts) > 0:
         daily_equity_short = sdf.groupby(sdf.timestamp // ms2d).equity_short.last()
         daily_gains_short = daily_equity_short / daily_equity_short.shift(1) - 1
-        dg_mean_std_ratio_short = (
-            daily_gains_short.mean() / daily_gains_short.std() if len(daily_gains_short) > 0 else 0.0
-        )
+        adg_short = daily_gains_short.mean()
+        DGstd_short = daily_gains_short.std()
+        adg_DGstd_ratio_short = adg_short / DGstd_short if len(daily_gains_short) > 0 else 0.0
     else:
-        dg_mean_std_ratio_short = 0.0
+        adg_short = adg_DGstd_ratio_short = 0.0
+        DGstd_short = 100.0
 
     pos_costs = fdf.apply(
         lambda x: qty_to_cost(x["psize"], x["pprice"], config["inverse"], config["c_mult"]),
@@ -547,8 +549,10 @@ def analyze_fills(fills: list, stats: list, config: dict) -> (pd.DataFrame, pd.D
         "adg_per_exposure_short": adg_short / config["short"]["wallet_exposure_limit"]
         if config["short"]["enabled"] and config["short"]["wallet_exposure_limit"] > 0.0
         else 0.0,
-        "dg_mean_std_ratio_long": dg_mean_std_ratio_long,
-        "dg_mean_std_ratio_short": dg_mean_std_ratio_short,
+        "adg_DGstd_ratio_long": adg_DGstd_ratio_long,
+        "adg_DGstd_ratio_short": adg_DGstd_ratio_short,
+        "DGstd_long": DGstd_long,
+        "DGstd_short": DGstd_short,
         "average_daily_gain": adg,
         "gain": gain,
         "n_days": n_days,
