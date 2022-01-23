@@ -172,12 +172,14 @@ class HarmonySearch:
         if set(results) == set(self.symbols):
             # completed multisymbol iter
             adg_mean_long = np.mean([v["adg_long"] for v in results.values()])
+            pad_std_long_raw = np.mean([v["pa_distance_std_long"] for v in results.values()])
             pad_std_long = np.mean(
                 [
                     max(self.config["maximum_pa_distance_std_long"], v["pa_distance_std_long"])
                     for v in results.values()
                 ]
             )
+            pad_mean_long_raw = np.mean([v["pa_distance_mean_long"] for v in results.values()])
             pad_mean_long = np.mean(
                 [
                     max(self.config["maximum_pa_distance_mean_long"], v["pa_distance_mean_long"])
@@ -185,13 +187,18 @@ class HarmonySearch:
                 ]
             )
             adg_DGstd_ratios_long = [v["adg_DGstd_ratio_long"] for v in results.values()]
+            adg_DGstd_ratios_long_mean = np.mean(adg_DGstd_ratios_long)
             adg_mean_short = np.mean([v["adg_short"] for v in results.values()])
+            pad_std_short_raw = np.mean([v["pa_distance_std_short"] for v in results.values()])
+
             pad_std_short = np.mean(
                 [
                     max(self.config["maximum_pa_distance_std_short"], v["pa_distance_std_short"])
                     for v in results.values()
                 ]
             )
+            pad_mean_short_raw = np.mean([v["pa_distance_mean_short"] for v in results.values()])
+
             pad_mean_short = np.mean(
                 [
                     max(self.config["maximum_pa_distance_mean_short"], v["pa_distance_mean_short"])
@@ -199,6 +206,7 @@ class HarmonySearch:
                 ]
             )
             adg_DGstd_ratios_short = [v["adg_DGstd_ratio_short"] for v in results.values()]
+            adg_DGstd_ratios_short_mean = np.mean(adg_DGstd_ratios_short)
 
             if self.config["score_formula"] == "adg_pad_mean":
                 score_long = -adg_mean_long * min(
@@ -215,8 +223,8 @@ class HarmonySearch:
                     self.config["maximum_pa_distance_std_short"], pad_std_short
                 )
             elif self.config["score_formula"] == "adg_DGstd_ratio":
-                score_long = -np.mean(adg_DGstd_ratios_long)
-                score_short = -np.mean(adg_DGstd_ratios_short)
+                score_long = -adg_DGstd_ratios_long_mean
+                score_short = -adg_DGstd_ratios_short_mean
             else:
                 raise Exception(f"unknown score formula {self.config['score_formula']}")
 
@@ -308,7 +316,8 @@ class HarmonySearch:
                 is_better = True
                 logging.info(
                     f"i{cfg['config_no']} - new best config long, score {score_long:.7f} "
-                    + f"adg {adg_mean_long:.7f} pad {pad_mean_long:.7f} std {pad_std_long:.5f}"
+                    + f"adg {adg_mean_long:.7f} pad {pad_mean_long_raw:.7f} "
+                    + f"std {pad_std_long_raw:.5f} adg/DGstd {adg_DGstd_ratios_long_mean:.7f}"
                 )
                 tmp_fname += "_long"
                 json.dump(
@@ -321,7 +330,8 @@ class HarmonySearch:
                 is_better = True
                 logging.info(
                     f"i{cfg['config_no']} - new best config short, score {score_short:.7f} "
-                    + f"adg {adg_mean_short:.7f} pad {pad_mean_short:.7f} std {pad_std_short:.5f}"
+                    + f"adg {adg_mean_short:.7f} pad {pad_mean_short_raw:.7f} "
+                    + f"std {pad_std_short_raw:.5f} adg/DGstd {adg_DGstd_ratios_short_mean:.7f}"
                 )
                 tmp_fname += "_short"
                 json.dump(
