@@ -316,8 +316,8 @@ class HarmonySearch:
                 is_better = True
                 logging.info(
                     f"i{cfg['config_no']} - new best config long, score {score_long:.7f} "
-                    + f"adg {adg_mean_long:.7f} pad {pad_mean_long_raw:.7f} "
-                    + f"std {pad_std_long_raw:.5f} adg/DGstd {adg_DGstd_ratios_long_mean:.7f}"
+                    + f"adg {adg_mean_long:.7f} pad mean {pad_mean_long_raw:.7f} "
+                    + f"pad std {pad_std_long_raw:.5f} adg/DGstd {adg_DGstd_ratios_long_mean:.7f}"
                 )
                 tmp_fname += "_long"
                 json.dump(
@@ -330,8 +330,8 @@ class HarmonySearch:
                 is_better = True
                 logging.info(
                     f"i{cfg['config_no']} - new best config short, score {score_short:.7f} "
-                    + f"adg {adg_mean_short:.7f} pad {pad_mean_short_raw:.7f} "
-                    + f"std {pad_std_short_raw:.5f} adg/DGstd {adg_DGstd_ratios_short_mean:.7f}"
+                    + f"adg {adg_mean_short:.7f} pad mean {pad_mean_short_raw:.7f} "
+                    + f"pad std {pad_std_short_raw:.5f} adg/DGstd {adg_DGstd_ratios_short_mean:.7f}"
                 )
                 tmp_fname += "_short"
                 json.dump(
