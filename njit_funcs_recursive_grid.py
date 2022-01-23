@@ -1,9 +1,7 @@
 import os
 
-# os.environ["NOJIT"] = "true"
-
 import numpy as np
-from numba import njit
+
 from njit_funcs import (
     round_dn,
     round_,
@@ -23,6 +21,8 @@ from njit_funcs import (
     find_entry_qty_bringing_wallet_exposure_to_target,
     calc_long_close_grid,
 )
+
+# os.environ["NOJIT"] = "true"
 
 
 if "NOJIT" in os.environ and os.environ["NOJIT"] == "true":

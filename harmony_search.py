@@ -14,8 +14,6 @@ from multiprocessing import Pool, shared_memory
 from njit_funcs import round_dynamic
 from pure_funcs import (
     analyze_fills,
-    pack_config,
-    numpyize,
     denumpyize,
     get_template_live_config,
     ts_to_date,

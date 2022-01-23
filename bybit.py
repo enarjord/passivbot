@@ -2,18 +2,18 @@ import asyncio
 import hashlib
 import hmac
 import json
+import traceback
 from time import time
-from urllib.parse import urlencode
 from typing import Union, List, Dict
+from urllib.parse import urlencode
 
 import aiohttp
 import numpy as np
-import traceback
 
-from pure_funcs import ts_to_date, sort_dict_keys, date_to_ts
 from njit_funcs import round_
-from procedures import print_async_exception, print_, utc_ms
 from passivbot import Bot
+from procedures import print_async_exception, print_
+from pure_funcs import ts_to_date, sort_dict_keys, date_to_ts
 
 
 def first_capitalized(s: str):

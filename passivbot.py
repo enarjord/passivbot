@@ -7,7 +7,6 @@ import traceback
 import argparse
 import asyncio
 import json
-import logging
 import signal
 import pprint
 import numpy as np
@@ -17,17 +16,14 @@ from procedures import (
     make_get_filepath,
     load_exchange_key_secret,
     print_,
-    utc_ms,
     numpyize,
 )
 from pure_funcs import (
     filter_orders,
-    compress_float,
     create_xk,
     round_dynamic,
     denumpyize,
     spotify_config,
-    get_position_fills,
 )
 from njit_funcs import (
     qty_to_cost,

@@ -2,21 +2,13 @@ import asyncio
 import hashlib
 import hmac
 import json
+import traceback
 from time import time
 from urllib.parse import urlencode
 
 import aiohttp
 import numpy as np
-import traceback
 
-from pure_funcs import (
-    ts_to_date,
-    sort_dict_keys,
-    calc_long_pprice,
-    format_float,
-    get_position_fills,
-    spotify_config,
-)
 from njit_funcs import (
     round_dn,
     round_up,
@@ -28,6 +20,14 @@ from njit_funcs import (
 )
 from passivbot import Bot
 from procedures import print_, print_async_exception
+from pure_funcs import (
+    ts_to_date,
+    sort_dict_keys,
+    calc_long_pprice,
+    format_float,
+    get_position_fills,
+    spotify_config,
+)
 
 
 class BinanceBotSpot(Bot):

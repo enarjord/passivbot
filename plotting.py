@@ -1,13 +1,14 @@
+import json
+import re
+
 import matplotlib.pyplot as plt
 import pandas as pd
-import numpy as np
-import json
-from pure_funcs import round_dynamic, denumpyize, candidate_to_live_config
+from colorama import init, Fore
+from prettytable import PrettyTable
+
 from njit_funcs import round_up
 from procedures import dump_live_config
-from prettytable import PrettyTable
-from colorama import init, Fore
-import re
+from pure_funcs import round_dynamic, denumpyize
 
 
 def dump_plots(result: dict, fdf: pd.DataFrame, sdf: pd.DataFrame, df: pd.DataFrame):
