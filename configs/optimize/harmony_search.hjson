@@ -10,7 +10,7 @@
   cache_ticks: false  # set to true to keep all ticks in RAM
 
   # score formula choices: [adg_pad_mean, adg_pad_std]
-  score_formula: adg_pad_std
+  score_formula: dg_mean_std_ratio
 
   # adg_pad_std:
   # adg / max(max_pa_dist_std, mean([max(max_pa_dist_std, pad_std) for pad_std in results]))
@@ -58,7 +58,7 @@
   {
     long:
     {
-      grid_span: [0.06, 0.6]
+      grid_span: [0.06, 0.65]
       ema_span_min: [360, 10080]
       ema_span_max: [360, 10080]
       wallet_exposure_limit: [0.05, 0.05]
@@ -77,7 +77,7 @@
   }
     short:
     {
-      grid_span: [0.06, 0.6]
+      grid_span: [0.06, 0.65]
       ema_span_min: [360, 10080]
       ema_span_max: [360, 10080]
       wallet_exposure_limit: [0.05, 0.05]
