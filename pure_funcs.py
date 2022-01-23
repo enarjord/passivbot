@@ -35,7 +35,34 @@ def calc_spans(min_span: int, max_span: int, n_spans: int) -> np.ndarray:
     return np.array([min_span, (min_span * max_span) ** 0.5, max_span])
 
 
-def get_xk_keys():
+def get_xk_keys(recursive_grid=False):
+    if recursive_grid:
+        return [
+            "starting_balance",
+            "latency_simulation_ms",
+            "maker_fee",
+            "inverse",
+            "do_long",
+            "do_short",
+            "qty_step",
+            "price_step",
+            "min_qty",
+            "min_cost",
+            "c_mult",
+            "ema_span_0",
+            "ema_span_1",
+            "iqty_pct",
+            "iprice_ema_dist",
+            "wallet_exposure_limit",
+            "ddown_factor",
+            "rentry_pprice_dist",
+            "rentry_pprice_dist_wallet_exposure_weighting",
+            "min_markup",
+            "markup_range",
+            "n_close_orders",
+            "auto_unstuck_wallet_exposure_threshold",
+            "auto_unstuck_ema_dist",
+        ]
     return [
         "spot",
         "hedge_mode",
@@ -66,7 +93,7 @@ def get_xk_keys():
     ]
 
 
-def create_xk(config: dict) -> dict:
+def create_xk(config: dict, recursive_grid=False) -> dict:
     xk = {}
     config_ = config.copy()
     if "spot" in config_["market_type"]:
@@ -75,11 +102,12 @@ def create_xk(config: dict) -> dict:
         config_["spot"] = False
         config_["do_long"] = config["long"]["enabled"]
         config_["do_short"] = config["short"]["enabled"]
-    keys = get_xk_keys()
+    keys = get_xk_keys(recursive_grid)
     config_["long"]["n_close_orders"] = int(round(config_["long"]["n_close_orders"]))
     config_["short"]["n_close_orders"] = int(round(config_["short"]["n_close_orders"]))
-    config_["long"]["max_n_entry_orders"] = int(round(config_["long"]["max_n_entry_orders"]))
-    config_["short"]["max_n_entry_orders"] = int(round(config_["short"]["max_n_entry_orders"]))
+    if not recursive_grid:
+        config_["long"]["max_n_entry_orders"] = int(round(config_["long"]["max_n_entry_orders"]))
+        config_["short"]["max_n_entry_orders"] = int(round(config_["short"]["max_n_entry_orders"]))
     for k in keys:
         if k in config_["long"]:
             xk[k] = (config_["long"][k], config_["short"][k])
