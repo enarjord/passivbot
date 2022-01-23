@@ -801,7 +801,7 @@ class Bot:
             line += f"l {self.position['long']['size']} @ "
             line += f"{round_(self.position['long']['price'], self.price_step)}, "
             line += f"e {leqty} @ {leprice}, c {lcqty} @ {lcprice} "
-            line += f"l.EMAs {[round_dynamic(e, 4) for e in self.emas_long]} "
+            line += f"l.EMAs {[round_dynamic(e, 5) for e in self.emas_long]} "
         short_closes = sorted(
             [o for o in self.open_orders if o["side"] == "buy" and o["position_side"] == "short"],
             key=lambda x: x["price"],
@@ -820,7 +820,7 @@ class Bot:
             line += f"s {self.position['short']['size']} @ "
             line += f"{round_(self.position['short']['price'], self.price_step)}, "
             line += f"e {seqty} @ {seprice}, c {scqty} @ {scprice} "
-            line += f"s.EMAs {[round_dynamic(e, 4) for e in self.emas_short]} "
+            line += f"s.EMAs {[round_dynamic(e, 5) for e in self.emas_short]} "
         if calc_diff(self.position["long"]["liquidation_price"], self.price) < calc_diff(
             self.position["short"]["liquidation_price"], self.price
         ):
