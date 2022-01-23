@@ -69,6 +69,8 @@ def backtest_wrap(config_: dict, ticks_caches: dict):
         pad_std_short = analysis["pa_distance_std_short"]
         adg_long = analysis["adg_long"]
         adg_short = analysis["adg_short"]
+        dg_mean_std_ratio_long = analysis["dg_mean_std_ratio_long"]
+        dg_mean_std_ratio_short = analysis["dg_mean_std_ratio_short"]
         """
         with open("logs/debug_harmonysearch.txt", "a") as f:
             f.write(json.dumps({"config": denumpyize(config), "analysis": analysis}) + "\n")
@@ -83,14 +85,15 @@ def backtest_wrap(config_: dict, ticks_caches: dict):
         logging.error(f'error with {config["symbol"]} {e}')
         logging.error("config")
         traceback.print_exc()
-        adg_long, adg_short = 0.0, 0.0
-        pa_distance_mean_long = pa_distance_mean_short = 100.0
-        pad_std_long = pad_std_short = 100.0
+        adg_long = adg_short = dg_mean_std_ratio_long = dg_mean_std_ratio_short = 0.0
+        pa_distance_mean_long = pa_distance_mean_short = pad_std_long = pad_std_short = 100.0
         with open(make_get_filepath("tmp/harmony_search_errors.txt"), "a") as f:
             f.write(json.dumps([time(), "error", str(e), denumpyize(config)]) + "\n")
     return {
         "pa_distance_mean_long": pa_distance_mean_long,
         "pa_distance_mean_short": pa_distance_mean_short,
+        "dg_mean_std_ratio_long": dg_mean_std_ratio_long,
+        "dg_mean_std_ratio_short": dg_mean_std_ratio_short,
         "pa_distance_std_long": pad_std_long,
         "pa_distance_std_short": pad_std_short,
         "adg_long": adg_long,
@@ -181,6 +184,7 @@ class HarmonySearch:
                     for v in results.values()
                 ]
             )
+            dg_mean_std_ratios_long = [v["dg_mean_std_ratio_long"] for v in results.values()]
             adg_mean_short = np.mean([v["adg_short"] for v in results.values()])
             pad_std_short = np.mean(
                 [
@@ -194,6 +198,8 @@ class HarmonySearch:
                     for v in results.values()
                 ]
             )
+            dg_mean_std_ratios_short = [v["dg_mean_std_ratio_short"] for v in results.values()]
+
             if self.config["score_formula"] == "adg_pad_mean":
                 score_long = -adg_mean_long * min(
                     1.0, self.config["maximum_pa_distance_mean_long"] / pad_mean_long
@@ -208,6 +214,11 @@ class HarmonySearch:
                 score_short = -adg_mean_short / max(
                     self.config["maximum_pa_distance_std_short"], pad_std_short
                 )
+            elif self.config["score_formula"] == "dg_mean_std_ratio":
+                lx_std = np.std(dg_mean_std_ratios_long)
+                score_long = -np.mean(dg_mean_std_ratios_long) / (lx_std if lx_std != 0 else 1)
+                sx_std = np.std(dg_mean_std_ratios_short)
+                score_short = -np.mean(dg_mean_std_ratios_short) / (sx_std if sx_std != 0 else 1)
             else:
                 raise Exception(f"unknown score formula {self.config['score_formula']}")
 
