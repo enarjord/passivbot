@@ -5,11 +5,8 @@ import os
 import numpy as np
 from numba import njit
 from njit_funcs import (
-    nan_to_0,
-    round_up,
     round_dn,
     round_,
-    round_dynamic,
     calc_min_entry_qty,
     cost_to_qty,
     qty_to_cost,
@@ -22,11 +19,9 @@ from njit_funcs import (
     calc_upnl,
     calc_equity,
     calc_emas_last,
-    interpolate,
     calc_wallet_exposure_if_filled,
     find_entry_qty_bringing_wallet_exposure_to_target,
-    find_long_close_qty_bringing_wallet_exposure_to_target,
-    calc_long_close_grid
+    calc_long_close_grid,
 )
 
 
