@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 from dateutil import parser
 
-from njit_funcs import round_dynamic, calc_emas, qty_to_cost
+from njit_funcs import round_dynamic, calc_emas, qty_to_cost, calc_long_pnl, calc_short_pnl
 
 
 def format_float(num):
@@ -456,12 +456,39 @@ def analyze_fills(fills: list, stats: list, config: dict) -> (pd.DataFrame, pd.D
         if len(spprices) > 0
         else pd.Series([100.0])
     )
-    longs = fdf[fdf.type.str.contains("long")]
-    shorts = fdf[fdf.type.str.contains("short")]
+    longs = fdf[fdf.type.str.contains("long")].set_index("timestamp")
+    shorts = fdf[fdf.type.str.contains("short")].set_index("timestamp")
     gain_long = longs.pnl.sum() / sdf.balance.iloc[0]
     adg_long = (gain_long + 1) ** (1 / n_days) - 1
     gain_short = shorts.pnl.sum() / sdf.balance.iloc[0]
     adg_short = (gain_short + 1) ** (1 / n_days) - 1
+
+    ms2d = 1000 * 60 * 60 * 24
+    upnls_long = longs.apply(
+        lambda x: calc_long_pnl(x.pprice, x.price, x.psize, config["inverse"], config["c_mult"]),
+        axis=1,
+    )
+    equities_long = longs.balance + upnls_long
+    daily_gains_long = (
+        longs.groupby(longs.index // ms2d).pnl.sum()
+        / equities_long.groupby(equities_long.index // ms2d).last()
+    ) / config["long"]["wallet_exposure_limit"]
+    dg_mean_std_ratio_long = (
+        daily_gains_long.mean() / daily_gains_long.std() if len(daily_gains_long) > 0 else 0.0
+    )
+
+    upnls_short = shorts.apply(
+        lambda x: calc_short_pnl(x.pprice, x.price, x.psize, config["inverse"], config["c_mult"]),
+        axis=1,
+    )
+    equities_short = shorts.balance + upnls_short
+    daily_gains_short = (
+        shorts.groupby(shorts.index // ms2d).pnl.sum()
+        / equities_short.groupby(equities_short.index // ms2d).last()
+    ) / config["short"]["wallet_exposure_limit"]
+    dg_mean_std_ratio_short = (
+        daily_gains_short.mean() / daily_gains_short.std() if len(daily_gains_short) > 0 else 0.0
+    )
 
     pos_costs = fdf.apply(
         lambda x: qty_to_cost(x["psize"], x["pprice"], config["inverse"], config["c_mult"]),
@@ -524,6 +551,8 @@ def analyze_fills(fills: list, stats: list, config: dict) -> (pd.DataFrame, pd.D
         "adg_per_exposure_short": adg_short / config["short"]["wallet_exposure_limit"]
         if config["short"]["enabled"] and config["short"]["wallet_exposure_limit"] > 0.0
         else 0.0,
+        "dg_mean_std_ratio_long": dg_mean_std_ratio_long,
+        "dg_mean_std_ratio_short": dg_mean_std_ratio_short,
         "average_daily_gain": adg,
         "gain": gain,
         "n_days": n_days,
