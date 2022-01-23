@@ -313,7 +313,7 @@ def calc_short_close_grid(
     else:
         short_closes = []
         wallet_exposure = qty_to_cost(short_psize, short_pprice, inverse, c_mult) / balance
-        threshold = wallet_exposure_limit * (1 - auto_unstuck_wallet_exposure_threshold) * 1.01
+        threshold = wallet_exposure_limit * (1 - auto_unstuck_wallet_exposure_threshold)
         if auto_unstuck_wallet_exposure_threshold != 0.0 and wallet_exposure > threshold:
             auto_unstuck_price = min(
                 highest_bid,
@@ -324,7 +324,7 @@ def calc_short_close_grid(
                     balance,
                     short_psize,
                     short_pprice,
-                    threshold,
+                    threshold * 1.01,
                     auto_unstuck_price,
                     inverse,
                     qty_step,
@@ -1840,7 +1840,7 @@ def njit_backtest(
     qtys = ticks[:, 1]
     prices = ticks[:, 2]
 
-    balance = equity = starting_balance
+    balance = balance_long = balance_short = equity = starting_balance
     long_psize, long_pprice, short_psize, short_pprice = 0.0, 0.0, 0.0, 0.0
 
     fills = []
@@ -1925,8 +1925,10 @@ def njit_backtest(
                 inverse,
                 c_mult,
             )
-            if equity / starting_balance < 0.5:
-                # break early when equity is less than half of starting balance
+            equity_long = balance_long + calc_long_pnl(long_pprice, prices[k], long_psize, inverse, c_mult)
+            equity_short = balance_short + calc_short_pnl(short_pprice, prices[k], short_psize, inverse, c_mult)
+            if equity / starting_balance < 0.2:
+                # break early when equity is less than 20% of starting balance
                 return fills, stats
             stats.append(
                 (
@@ -1940,6 +1942,10 @@ def njit_backtest(
                     short_pprice,
                     prices[k],
                     closest_bkr,
+                    balance_long,
+                    balance_short,
+                    equity_long,
+                    equity_short,
                 )
             )
             next_stats_update = timestamps[k] + 60 * 1000
@@ -2123,6 +2129,7 @@ def njit_backtest(
                 -qty_to_cost(long_entries[0][0], long_entries[0][1], inverse, c_mult) * maker_fee
             )
             balance += fee_paid
+            balance_long += fee_paid
             equity = calc_equity(
                 balance,
                 long_psize,
@@ -2177,6 +2184,7 @@ def njit_backtest(
                 -qty_to_cost(short_entries[0][0], short_entries[0][1], inverse, c_mult) * maker_fee
             )
             balance += fee_paid
+            balance_short += fee_paid
             equity = calc_equity(
                 balance,
                 short_psize,
@@ -2238,6 +2246,7 @@ def njit_backtest(
             fee_paid = -qty_to_cost(long_close_qty, long_closes[0][1], inverse, c_mult) * maker_fee
             pnl = calc_long_pnl(long_pprice, long_closes[0][1], long_close_qty, inverse, c_mult)
             balance += fee_paid + pnl
+            balance_long += fee_paid + pnl
             equity = calc_equity(
                 balance,
                 long_psize,
@@ -2299,6 +2308,7 @@ def njit_backtest(
             fee_paid = -qty_to_cost(short_close_qty, short_closes[0][1], inverse, c_mult) * maker_fee
             pnl = calc_short_pnl(short_pprice, short_closes[0][1], short_close_qty, inverse, c_mult)
             balance += fee_paid + pnl
+            balance_short += fee_paid + pnl
             equity = calc_equity(
                 balance,
                 short_psize,
