@@ -97,8 +97,8 @@ The following options can be provided to the backtester. Note that any argument 
 | -d / --download-only | Instructs the backtest to only download the data, but not dump the ticks caches to disk
 | -s / --symbol | A CSV specifying the symbol(s) to run the backtest on
 | -u / --user | The name of the account used to download trade data
-| --start_date | The starting date of the backtest<br/>**Syntax:** YYYY-MM-DDThh:mm
-| --end_date | The end date of the backtest<br/>**Syntax:** YYYY-MM-DDThh:mm
+| --start_date | The starting date of the backtest<br/>**Syntax:** YYYY-MM-DD
+| --end_date | The end date of the backtest<br/>**Syntax:** YYYY-MM-DD
 | -bd / --base_dir | The base directory to place the output files
 | -m spot / --market_type spot | Sets the market to spot instead of the default Futures
 
