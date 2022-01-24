@@ -7,4 +7,4 @@ write_to = "src/passivbot/version.py"
 write_to_template = "# pylint: skip-file\n\n__version__ = \"{version}\""
 
 [tool.black]
-line-length = 100
+line-length = 102
