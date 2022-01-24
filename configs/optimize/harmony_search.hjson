@@ -9,8 +9,8 @@
   iters: 2000
   cache_ticks: false  # set to true to keep all ticks in RAM
 
-  # score formula choices: [adg_pad_mean, adg_pad_std]
-  score_formula: dg_mean_std_ratio
+  # score formula choices: [adg_pad_mean, adg_pad_std, adg_DGstd_ratio]
+  score_formula: adg_pad_std
 
   # adg_pad_std:
   # adg / max(max_pa_dist_std, mean([max(max_pa_dist_std, pad_std) for pad_std in results]))
@@ -22,7 +22,7 @@
   maximum_pa_distance_mean_long: 0.035
   maximum_pa_distance_mean_short: 0.035
 
-  # dg_mean_std_ratio:
+  # adg_DGstd_ratio:
   # mean([dg_mean_std_ratio]) / std(dg_mean_std_ratio)
 
   # will override any starting configs' long/short enabled parameter
