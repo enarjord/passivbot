@@ -2,17 +2,16 @@ import asyncio
 import hashlib
 import hmac
 import json
+import traceback
 from time import time
 from urllib.parse import urlencode
 
 import aiohttp
 import numpy as np
-import traceback
 
-from pure_funcs import ts_to_date, sort_dict_keys, format_float
-from njit_funcs import calc_upnl, qty_to_cost
 from passivbot import Bot
 from procedures import print_, print_async_exception
+from pure_funcs import ts_to_date, sort_dict_keys, format_float
 
 
 class BinanceBot(Bot):

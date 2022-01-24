@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import os
-import numpy as np
 
+import numpy as np
 
 if "NOJIT" in os.environ and os.environ["NOJIT"] == "true":
     print("not using numba")

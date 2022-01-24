@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 from dateutil import parser
 
-from njit_funcs import round_dynamic, calc_emas, qty_to_cost, calc_long_pnl, calc_short_pnl
+from njit_funcs import round_dynamic, qty_to_cost
 
 
 def format_float(num):
@@ -607,12 +607,10 @@ def analyze_fills(fills: list, stats: list, config: dict) -> (pd.DataFrame, pd.D
         "avg_fills_per_day_short": len(shorts) / n_days,
         "hrs_stuck_max_long": hrs_stuck_max_long,
         "hrs_stuck_avg_long": hrs_stuck_avg_long,
-        "hrs_stuck_max": hrs_stuck_max_long,
-        "hrs_stuck_avg": hrs_stuck_avg_long,
         "hrs_stuck_max_short": hrs_stuck_max_short,
         "hrs_stuck_avg_short": hrs_stuck_avg_short,
-        "hrs_stuck_max": hrs_stuck_max_short,
-        "hrs_stuck_avg": hrs_stuck_avg_short,
+        "hrs_stuck_max": max(hrs_stuck_max_long, hrs_stuck_max_short),
+        "hrs_stuck_avg": max(hrs_stuck_avg_long, hrs_stuck_avg_short),
         "loss_sum": fdf[fdf.pnl < 0.0].pnl.sum(),
         "loss_sum_long": longs[longs.pnl < 0.0].pnl.sum(),
         "loss_sum_short": shorts[shorts.pnl < 0.0].pnl.sum(),

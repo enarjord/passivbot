@@ -445,7 +445,7 @@ class Downloader:
                         "is_buyer_maker": (ff.side == "Sell").astype(np.int8),
                     }
                 )
-                tf["trade_id"] = deduce_trade_ids(tf, df_for_id_matching)
+                tf["trade_id"] = self.deduce_trade_ids(tf, df_for_id_matching)
                 tf.sort_values("timestamp", inplace=True)
                 tf.reset_index(drop=True, inplace=True)
                 del ff
