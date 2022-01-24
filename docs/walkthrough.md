@@ -25,9 +25,9 @@ The instructions in this tutorial will assume you are running an Ubuntu-server a
 Run the following commands to install git, python and Passivbot:
 
 ```shell
-sudo apt-get install screen
-sudo apt-get install python
-sudo apt-get install git python
+sudo apt install tmux
+sudo apt install python
+sudo apt install git python
 git clone https://github.com/enarjord/passivbot.git
 cd passivbot
 pip install -r requirements.txt
@@ -43,25 +43,6 @@ The instructions below assume your key is `{X}` and your secret is `{Y}`.
 !!! Warning
     Make sure you enable `futures` on the API key. Also, be aware that on Binance you have to complete a quiz before you
     can trade futures. Apart from that, you need to make sure there are funds present in the futures wallet. 
-
-Also, you will need to get a Telegram token & chat-id to fill into the `api-keys.json`. Please refer to the [Telegram](telegram.md)
-section for instructions on how to set this up.
-
-These instructions show using [vi](http://www.atmos.albany.edu/daes/atmclasses/atm350/vi_cheat_sheet.pdf) to edit the `api-keys.json`, but you can use any command-line editor you like.
-
-```shell
-cp api-keys.example.json api-keys.json
-vi api-keys.json
-{navigate to the key item in the api-keys file under binance_01 using your arrow keys}
-{copy the key from the exchange into your clipboard, and paste it in the editor window}
-{navigate to the secret item in the api-keys file under binance_01 using your arrow keys}
-{copy the secret from the exchange into your clipboard, and paste it in the editor window}
-{navigate to the token item in the telegram subkey in the api-keys file under binance_01 using your arrow keys}
-{copy the telegram token into your clipboard, and paste it in the editor window}
-{navigate to the chat-id item in the telegram subkey in the api-keys file under binance_01 using your arrow keys}
-{copy the telegram chatid into your clipboard, and paste it in the editor window}
-:wq
-```
 
 ## Run the optimizer for a config
 
@@ -85,15 +66,15 @@ vi configs/optimize/myconfig.hjson
 After this, you can start an optimize run on a symbol (XLMUSDT in this example):
 
 ```shell
-python3 optimize.py -u binance_01 -s XLMUSDT -o configs/optimize/myconfig.hjson --start_date 2021-06-01 --end_date 2021-07-01
+python3 harmony_search.py -u binance_01 -s XLMUSDT -o configs/optimize/myconfig.hjson --start_date 2021-06-01 --end_date 2021-07-01
 ```
 
 ## Run the backtest for a config
 
-After the optimizer finishes, it will run a backtest for you. You can also manually trigger the same result the optimize produced:
+After the optimizer finishes, you can backtest the best config produced:
 
 ```shell
-python3 backtest.py -u binance_01 -s XLMUSDT --start_date 2021-06-01 --end_date 2021-07-01 backtest/binance/XLMUSDT/plots/{date}/live_config.json
+python3 backtest.py results_harmony_search/{date}XXX/xxxxxx_best_config_{long/short}.json -u binance_01 -s XLMUSDT --start_date 2021-06-01 --end_date 2021-07-01
 ```
 
 If you're happy with the config, copy it over to your live config file:
@@ -104,10 +85,10 @@ cp backtests/binance/XLMUSDT/plots/{date}/live_config.json configs/live/myconfig
 
 ## Starting the bot
 
-To allow the bot to keep on running after you've disconnected, start a new screen session:
+To allow the bot to keep on running after you've disconnected, start a new tmux session:
 
 ```shell
-screen -S mypassivbot
+tmux new -s mypassivbot
 ```
 
 Once you're satisfied with the configuration, start the bot:
@@ -117,7 +98,7 @@ python3 passivbot.py binance_01 XLMUSDT configs/live/myconfig.json
 ```
 
 If the bot started succesfully, you should receive a message **Passivbot started!**. After this, you can disconnect
-from the screen session by pressing `ctrl+a`, following by pressing `d`.
+from the tmux session by pressing `ctrl+b`, following by pressing `d`.
 
 !!! Info
-    To stop the bot, simply use the `stop` button on the second page of buttons in Telegram
+    To stop the bot, hit `ctrl+c`
