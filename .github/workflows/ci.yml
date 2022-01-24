@@ -10,7 +10,7 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v1
       with:
-        python-version: 3.8
+        python-version: 3.9
     - name: Set Cache Key
       run: echo "PY=$(python --version --version | sha256sum | cut -d' ' -f1)" >> $GITHUB_ENV
     - name: Install System Deps
@@ -38,7 +38,7 @@ jobs:
       matrix:
         python-version:
           - '3.8'
-          # - '3.9'
+          - '3.9'
           # - '3.10'
 
     steps:
@@ -87,7 +87,7 @@ jobs:
       matrix:
         python-version:
           - '3.8'
-          # - '3.9'
+          - '3.9'
           # - '3.10'
 
     steps:
@@ -136,7 +136,7 @@ jobs:
       matrix:
         python-version:
           - '3.8'
-          # - '3.9'
+          - '3.9'
           # - '3.10'
 
     steps:
