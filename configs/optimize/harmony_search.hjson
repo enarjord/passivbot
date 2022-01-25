@@ -103,7 +103,7 @@
     {
       ema_span_0: [360, 10080]
       ema_span_1: [360, 10080]
-      iqty_pct: [0.01, 0.1]
+      initial_qty_pct: [0.01, 0.1]
       initial_eprice_ema_dist: [-0.1, 0.05]
       wallet_exposure_limit: [0.05, 0.05]
       ddown_factor: [0.1, 3.0]
@@ -119,7 +119,7 @@
     {
       ema_span_0: [360, 10080]
       ema_span_1: [360, 10080]
-      iqty_pct: [0.01, 0.1]
+      initial_qty_pct: [0.01, 0.1]
       initial_eprice_ema_dist: [-0.1, 0.05]
       wallet_exposure_limit: [0.05, 0.05]
       ddown_factor: [0.1, 3.0]
