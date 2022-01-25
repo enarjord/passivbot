@@ -19,6 +19,7 @@ from pure_funcs import (
     ts_to_date,
     tuplify,
     sort_dict_keys,
+    determine_passivbot_mode,
 )
 from procedures import (
     add_argparse_args,
@@ -63,8 +64,8 @@ def backtest_wrap(config_: dict, ticks_caches: dict):
         fdf, sdf, analysis = analyze_fills(fills, stats, config)
         pa_distance_mean_long = analysis["pa_distance_mean_long"]
         pa_distance_mean_short = analysis["pa_distance_mean_short"]
-        pad_std_long = analysis["pa_distance_std_long"]
-        pad_std_short = analysis["pa_distance_std_short"]
+        PAD_std_long = analysis["pa_distance_std_long"]
+        PAD_std_short = analysis["pa_distance_std_short"]
         adg_long = analysis["adg_long"]
         adg_short = analysis["adg_short"]
         adg_DGstd_ratio_long = analysis["adg_DGstd_ratio_long"]
@@ -76,15 +77,15 @@ def backtest_wrap(config_: dict, ticks_caches: dict):
         logging.debug(
             f"backtested {config['symbol']: <12} pa distance long {pa_distance_mean_long:.6f} "
             + f"pa distance short {pa_distance_mean_short:.6f} adg long {adg_long:.6f} "
-            + f"adg short {adg_short:.6f} std long {pad_std_long:.5f} "
-            + f"std short {pad_std_short:.5f}"
+            + f"adg short {adg_short:.6f} std long {PAD_std_long:.5f} "
+            + f"std short {PAD_std_short:.5f}"
         )
     except Exception as e:
         logging.error(f'error with {config["symbol"]} {e}')
         logging.error("config")
         traceback.print_exc()
         adg_long = adg_short = adg_DGstd_ratio_long = adg_DGstd_ratio_short = 0.0
-        pa_distance_mean_long = pa_distance_mean_short = pad_std_long = pad_std_short = 100.0
+        pa_distance_mean_long = pa_distance_mean_short = PAD_std_long = PAD_std_short = 100.0
         with open(make_get_filepath("tmp/harmony_search_errors.txt"), "a") as f:
             f.write(json.dumps([time(), "error", str(e), denumpyize(config)]) + "\n")
     return {
@@ -92,8 +93,8 @@ def backtest_wrap(config_: dict, ticks_caches: dict):
         "pa_distance_mean_short": pa_distance_mean_short,
         "adg_DGstd_ratio_long": adg_DGstd_ratio_long,
         "adg_DGstd_ratio_short": adg_DGstd_ratio_short,
-        "pa_distance_std_long": pad_std_long,
-        "pa_distance_std_short": pad_std_short,
+        "pa_distance_std_long": PAD_std_long,
+        "pa_distance_std_short": PAD_std_short,
         "adg_long": adg_long,
         "adg_short": adg_short,
     }
@@ -112,19 +113,16 @@ class HarmonySearch:
         self.iters = config["iters"]
         self.n_cpus = config["n_cpus"]
         self.pool = Pool(processes=config["n_cpus"])
-        self.long_bounds = sort_dict_keys(config["bounds"]["long"])
-        self.short_bounds = sort_dict_keys(config["bounds"]["short"])
+        self.long_bounds = sort_dict_keys(config[f"bounds_{self.config['passivbot_mode']}"]["long"])
+        self.short_bounds = sort_dict_keys(config[f"bounds_{self.config['passivbot_mode']}"]["short"])
         self.symbols = config["symbols"]
         self.identifying_name = (
-            "".join([e[0] for e in config["symbols"]])
-            if len(self.symbols) > 10
-            else "_".join(self.symbols)
+            f"{len(self.symbols)}_symbols" if len(self.symbols) > 1 else self.symbols[0]
         )
         self.now_date = ts_to_date(time())[:19].replace(":", "-")
         self.results_fpath = make_get_filepath(
-            f"results_harmony_search/{self.now_date}_{self.identifying_name}/"
+            f"results_harmony_search_{self.config['passivbot_mode']}/{self.now_date}_{self.identifying_name}/"
         )
-
         self.exchange_name = config["exchange"] + ("_spot" if config["market_type"] == "spot" else "")
         self.market_specific_settings = {
             s: json.load(
@@ -170,15 +168,15 @@ class HarmonySearch:
         if set(results) == set(self.symbols):
             # completed multisymbol iter
             adg_mean_long = np.mean([v["adg_long"] for v in results.values()])
-            pad_std_long_raw = np.mean([v["pa_distance_std_long"] for v in results.values()])
-            pad_std_long = np.mean(
+            PAD_std_long_raw = np.mean([v["pa_distance_std_long"] for v in results.values()])
+            PAD_std_long = np.mean(
                 [
                     max(self.config["maximum_pa_distance_std_long"], v["pa_distance_std_long"])
                     for v in results.values()
                 ]
             )
-            pad_mean_long_raw = np.mean([v["pa_distance_mean_long"] for v in results.values()])
-            pad_mean_long = np.mean(
+            PAD_mean_long_raw = np.mean([v["pa_distance_mean_long"] for v in results.values()])
+            PAD_mean_long = np.mean(
                 [
                     max(self.config["maximum_pa_distance_mean_long"], v["pa_distance_mean_long"])
                     for v in results.values()
@@ -187,17 +185,17 @@ class HarmonySearch:
             adg_DGstd_ratios_long = [v["adg_DGstd_ratio_long"] for v in results.values()]
             adg_DGstd_ratios_long_mean = np.mean(adg_DGstd_ratios_long)
             adg_mean_short = np.mean([v["adg_short"] for v in results.values()])
-            pad_std_short_raw = np.mean([v["pa_distance_std_short"] for v in results.values()])
+            PAD_std_short_raw = np.mean([v["pa_distance_std_short"] for v in results.values()])
 
-            pad_std_short = np.mean(
+            PAD_std_short = np.mean(
                 [
                     max(self.config["maximum_pa_distance_std_short"], v["pa_distance_std_short"])
                     for v in results.values()
                 ]
             )
-            pad_mean_short_raw = np.mean([v["pa_distance_mean_short"] for v in results.values()])
+            PAD_mean_short_raw = np.mean([v["pa_distance_mean_short"] for v in results.values()])
 
-            pad_mean_short = np.mean(
+            PAD_mean_short = np.mean(
                 [
                     max(self.config["maximum_pa_distance_mean_short"], v["pa_distance_mean_short"])
                     for v in results.values()
@@ -206,33 +204,36 @@ class HarmonySearch:
             adg_DGstd_ratios_short = [v["adg_DGstd_ratio_short"] for v in results.values()]
             adg_DGstd_ratios_short_mean = np.mean(adg_DGstd_ratios_short)
 
-            if self.config["score_formula"] == "adg_pad_mean":
+            if self.config["score_formula"] == "adg_PAD_mean":
                 score_long = -adg_mean_long * min(
-                    1.0, self.config["maximum_pa_distance_mean_long"] / pad_mean_long
+                    1.0, self.config["maximum_pa_distance_mean_long"] / PAD_mean_long
                 )
                 score_short = -adg_mean_short * min(
-                    1.0, self.config["maximum_pa_distance_mean_short"] / pad_mean_short
+                    1.0, self.config["maximum_pa_distance_mean_short"] / PAD_mean_short
                 )
-            elif self.config["score_formula"] == "adg_pad_std":
+            elif self.config["score_formula"] == "adg_PAD_std":
                 score_long = -adg_mean_long / max(
-                    self.config["maximum_pa_distance_std_long"], pad_std_long
+                    self.config["maximum_pa_distance_std_long"], PAD_std_long
                 )
                 score_short = -adg_mean_short / max(
-                    self.config["maximum_pa_distance_std_short"], pad_std_short
+                    self.config["maximum_pa_distance_std_short"], PAD_std_short
                 )
             elif self.config["score_formula"] == "adg_DGstd_ratio":
                 score_long = -adg_DGstd_ratios_long_mean
                 score_short = -adg_DGstd_ratios_short_mean
+            elif self.config["score_formula"] == "adg":
+                score_long = -adg_mean_long
+                score_short = -adg_mean_short
             else:
                 raise Exception(f"unknown score formula {self.config['score_formula']}")
 
             line = f"completed multisymbol iter {cfg['config_no']} "
             if self.do_long:
-                line += f"- adg long {adg_mean_long:.6f} pad long {pad_mean_long:.6f} std long "
-                line += f"{pad_std_long:.5f} score long {score_long:.7f} "
+                line += f"- adg long {adg_mean_long:.6f} PAD long {PAD_mean_long:.6f} std long "
+                line += f"{PAD_std_long:.5f} score long {score_long:.7f} "
             if self.do_short:
-                line += f"- adg short {adg_mean_short:.6f} pad short {pad_mean_short:.6f} std short "
-                line += f"{pad_std_short:.5f} score short {score_short:.7f}"
+                line += f"- adg short {adg_mean_short:.6f} PAD short {PAD_mean_short:.6f} std short "
+                line += f"{PAD_std_short:.5f} score short {score_short:.7f}"
             logging.debug(line)
             # check whether initial eval or new harmony
             if "initial_eval_key" in cfg:
@@ -314,8 +315,8 @@ class HarmonySearch:
                 is_better = True
                 logging.info(
                     f"i{cfg['config_no']} - new best config long, score {score_long:.7f} "
-                    + f"adg {adg_mean_long:.7f} pad mean {pad_mean_long_raw:.7f} "
-                    + f"pad std {pad_std_long_raw:.5f} adg/DGstd {adg_DGstd_ratios_long_mean:.7f}"
+                    + f"adg {adg_mean_long:.7f} PAD mean {PAD_mean_long_raw:.7f} "
+                    + f"PAD std {PAD_std_long_raw:.5f} adg/DGstd {adg_DGstd_ratios_long_mean:.7f}"
                 )
                 tmp_fname += "_long"
                 json.dump(
@@ -328,8 +329,8 @@ class HarmonySearch:
                 is_better = True
                 logging.info(
                     f"i{cfg['config_no']} - new best config short, score {score_short:.7f} "
-                    + f"adg {adg_mean_short:.7f} pad mean {pad_mean_short_raw:.7f} "
-                    + f"pad std {pad_std_short_raw:.5f} adg/DGstd {adg_DGstd_ratios_short_mean:.7f}"
+                    + f"adg {adg_mean_short:.7f} PAD mean {PAD_mean_short_raw:.7f} "
+                    + f"PAD std {PAD_std_short_raw:.5f} adg/DGstd {adg_DGstd_ratios_short_mean:.7f}"
                 )
                 tmp_fname += "_short"
                 json.dump(
@@ -355,7 +356,7 @@ class HarmonySearch:
 
     def start_new_harmony(self, wi: int):
         self.iter_counter += 1  # up iter counter on each new config started
-        template = get_template_live_config()
+        template = get_template_live_config(self.config["passivbot_mode"])
         new_harmony = {
             **{
                 "long": deepcopy(template["long"]),
@@ -402,13 +403,13 @@ class HarmonySearch:
             + " ".join([str(round_dynamic(e[1], 3)) for e in sorted(new_harmony["long"].items())])
             + " - short: "
             + " ".join([str(round_dynamic(e[1], 3)) for e in sorted(new_harmony["short"].items())])
-
         )
 
         new_harmony["market_specific_settings"] = self.market_specific_settings[new_harmony["symbol"]]
         new_harmony[
             "ticks_cache_fname"
         ] = f"{self.bt_dir}/{new_harmony['symbol']}/{self.ticks_cache_fname}"
+        new_harmony["passivbot_mode"] = self.config["passivbot_mode"]
         self.workers[wi] = {
             "config": deepcopy(new_harmony),
             "task": self.pool.apply_async(
@@ -454,6 +455,7 @@ class HarmonySearch:
 
         config["market_specific_settings"] = self.market_specific_settings[config["symbol"]]
         config["ticks_cache_fname"] = f"{self.bt_dir}/{config['symbol']}/{self.ticks_cache_fname}"
+        config["passivbot_mode"] = self.config["passivbot_mode"]
 
         self.workers[wi] = {
             "config": deepcopy(config),
@@ -568,6 +570,7 @@ class HarmonySearch:
                             config[
                                 "ticks_cache_fname"
                             ] = f"{self.bt_dir}/{config['symbol']}/{self.ticks_cache_fname}"
+                            config["passivbot_mode"] = self.config["passivbot_mode"]
                             self.workers[wi] = {
                                 "config": config,
                                 "task": self.pool.apply_async(
@@ -638,11 +641,27 @@ async def main():
         default=None,
         help="short enabled: [y/n]",
     )
+    parser.add_argument(
+        "-pm",
+        "--passivbot_mode",
+        "--passivbot-mode",
+        type=str,
+        required=False,
+        dest="passivbot_mode",
+        default="static_grid",
+        help="passivbot mode options: [s/static_grid (default), r/recursive_grid]",
+    )
     parser = add_argparse_args(parser)
     args = parser.parse_args()
     args.symbol = "BTCUSDT"  # dummy symbol
     config = await prepare_optimize_config(args)
-    config.update(get_template_live_config())
+    if args.passivbot_mode in ["s", "static_grid"]:
+        passivbot_mode = config["passivbot_mode"] = "static_grid"
+    elif args.passivbot_mode in ["r", "recursive_grid"]:
+        passivbot_mode = config["passivbot_mode"] = "recursive_grid"
+    else:
+        raise Exception("unknown passivbot mode {args.passivbot_mode}")
+    config.update(get_template_live_config(passivbot_mode))
     config["exchange"], _, _ = load_exchange_key_secret(config["user"])
     args = parser.parse_args()
     if args.long_enabled is None:
@@ -707,6 +726,9 @@ async def main():
                         cfgs.append(
                             {"long": hm[k]["long"]["config"], "short": hm[k]["short"]["config"]}
                         )
+                        assert determine_passivbot_mode(
+                            cfgs[-1]
+                        ), "unknown passivbot mode in harmony memory"
                     logging.info(f"loaded harmony memory {args.starting_configs}")
                     hm_load_failed = False
                 except Exception as e:

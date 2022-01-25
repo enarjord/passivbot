@@ -25,6 +25,13 @@ from pure_funcs import (
 def load_live_config(live_config_path: str) -> dict:
     try:
         live_config = json.load(open(live_config_path))
+        template_recurv = get_template_live_config("recursive_grid")
+        if all(k in live_config["long"] for k in template_recurv["long"]):
+            live_config["long"]["n_close_orders"] = int(round(live_config["long"]["n_close_orders"]))
+            live_config["short"]["n_close_orders"] = int(
+                round(live_config["short"]["n_close_orders"])
+            )
+            return sort_dict_keys(live_config)
         for src, dst in [
             ("secondary_grid_spacing", "secondary_pprice_diff"),
             ("shrt", "short"),
@@ -331,7 +338,7 @@ def add_argparse_args(parser):
         type=str,
         required=False,
         dest="base_dir",
-        default="backtests",
+        default=None,
         help="specify the base output directory for the results",
     )
 
