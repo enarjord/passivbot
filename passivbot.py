@@ -126,14 +126,14 @@ class Bot:
             )
             config["cross_wallet_pct"] = 1.0
         self.ema_spans_long = [
-            config["long"]["ema_span_min"],
-            (config["long"]["ema_span_min"] * config["long"]["ema_span_max"]) ** 0.5,
-            config["long"]["ema_span_max"],
+            config["long"]["ema_span_0"],
+            (config["long"]["ema_span_0"] * config["long"]["ema_span_1"]) ** 0.5,
+            config["long"]["ema_span_1"],
         ]
         self.ema_spans_short = [
-            config["short"]["ema_span_min"],
-            (config["short"]["ema_span_min"] * config["short"]["ema_span_max"]) ** 0.5,
-            config["short"]["ema_span_max"],
+            config["short"]["ema_span_0"],
+            (config["short"]["ema_span_0"] * config["short"]["ema_span_1"]) ** 0.5,
+            config["short"]["ema_span_1"],
         ]
         self.config = config
         for key in config:
