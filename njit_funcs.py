@@ -258,7 +258,6 @@ def calc_long_close_grid(
     return closes
 
 
-
 @njit
 def calc_short_close_grid(
     balance,
