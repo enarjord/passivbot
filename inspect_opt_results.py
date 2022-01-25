@@ -19,7 +19,14 @@ def main():
         "-s", "--side", dest="side", type=str, required=False, default="long", help="long/short"
     )
     parser.add_argument(
-        "-p", "--PAD", "--pad" dest="PAD_max", type=float, required=False, default=0.035, help="max pa dist"
+        "-p",
+        "--PAD",
+        "--pad",
+        dest="PAD_max",
+        type=float,
+        required=False,
+        default=0.035,
+        help="max pa dist",
     )
     parser.add_argument(
         "-i", "--index", dest="index", type=int, required=False, default=1, help="best conf index"
