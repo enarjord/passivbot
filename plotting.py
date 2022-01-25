@@ -14,8 +14,10 @@ from pure_funcs import round_dynamic, denumpyize
 def dump_plots(result: dict, fdf: pd.DataFrame, sdf: pd.DataFrame, df: pd.DataFrame):
     init(autoreset=True)
     plt.rcParams["figure.figsize"] = [29, 18]
-    pd.set_option("precision", 10)
-
+    try:
+        pd.set_option("display.precision", 10)
+    except Exception as e:
+        print("error setting pandas precision", e)
     table = PrettyTable(["Metric", "Value"])
     table.align["Metric"] = "l"
     table.align["Value"] = "l"
