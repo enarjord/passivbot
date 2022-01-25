@@ -14,7 +14,7 @@ from pure_funcs import round_dynamic, denumpyize
 def dump_plots(result: dict, fdf: pd.DataFrame, sdf: pd.DataFrame, df: pd.DataFrame):
     init(autoreset=True)
     plt.rcParams["figure.figsize"] = [29, 18]
-    pd.set_option("precision", 10)
+    # pd.set_option("precision", 10)
 
     table = PrettyTable(["Metric", "Value"])
     table.align["Metric"] = "l"
@@ -306,9 +306,9 @@ def dump_plots(result: dict, fdf: pd.DataFrame, sdf: pd.DataFrame, df: pd.DataFr
         fig.savefig(f"{result['plots_dirpath']}whole_backtest_long.png")
         print("plotting long initial entry band")
         spans = [
-            result["long"]["ema_span_min"] * 60,
-            ((result["long"]["ema_span_min"] * result["long"]["ema_span_max"]) ** 0.5) * 60,
-            result["long"]["ema_span_max"] * 60,
+            result["long"]["ema_span_0"] * 60,
+            ((result["long"]["ema_span_0"] * result["long"]["ema_span_1"]) ** 0.5) * 60,
+            result["long"]["ema_span_1"] * 60,
         ]
         emas = pd.DataFrame(
             {str(span): df.price.ewm(span=span, adjust=False).mean() for span in spans}
@@ -336,9 +336,9 @@ def dump_plots(result: dict, fdf: pd.DataFrame, sdf: pd.DataFrame, df: pd.DataFr
         fig.savefig(f"{result['plots_dirpath']}whole_backtest_short.png")
         print("plotting short initial entry band")
         spans = [
-            result["short"]["ema_span_min"] * 60,
-            ((result["short"]["ema_span_min"] * result["short"]["ema_span_max"]) ** 0.5) * 60,
-            result["short"]["ema_span_max"] * 60,
+            result["short"]["ema_span_0"] * 60,
+            ((result["short"]["ema_span_0"] * result["short"]["ema_span_1"]) ** 0.5) * 60,
+            result["short"]["ema_span_1"] * 60,
         ]
         emas = pd.DataFrame(
             {str(span): df.price.ewm(span=span, adjust=False).mean() for span in spans}

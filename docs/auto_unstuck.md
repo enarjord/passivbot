@@ -30,7 +30,7 @@ Per uno of exposure limit which bot will close at a potential loss.
 If wallet exposure exceeds `wallet_exposure * (1 - auto_unstuck_wallet_exposure_threshold)`, auto unstuck mode is activated.  
 If set to zero, auto unstuck is disabled.  
 
-- `ema_span_min`, `ema_span_max`  
+- `ema_span_0`, `ema_span_1`  
 Bot uses three emas: `[min_span, (min_span * max_span)**0.5, max_span]`, given in minutes.  
 
 - `auto_unstuck_ema_dist`  

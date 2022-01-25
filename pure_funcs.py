@@ -82,8 +82,8 @@ def get_xk_keys(passivbot_mode="static_grid"):
         "min_markup",
         "markup_range",
         "n_close_orders",
-        "ema_span_min",
-        "ema_span_max",
+        "ema_span_0",
+        "ema_span_1",
         "initial_eprice_ema_dist",
         "auto_unstuck_wallet_exposure_threshold",
         "auto_unstuck_ema_dist",
@@ -411,8 +411,8 @@ def get_template_live_config(passivbot_mode="static_grid"):
             "logging_level": 0,
             "long": {
                 "enabled": True,
-                "ema_span_min": 1440,  # in minutes
-                "ema_span_max": 4320,
+                "ema_span_0": 1440,  # in minutes
+                "ema_span_1": 4320,
                 "grid_span": 0.16,
                 "wallet_exposure_limit": 1.6,
                 "max_n_entry_orders": 10,
@@ -431,8 +431,8 @@ def get_template_live_config(passivbot_mode="static_grid"):
             },
             "short": {
                 "enabled": True,
-                "ema_span_min": 1440,  # in minutes
-                "ema_span_max": 4320,
+                "ema_span_0": 1440,  # in minutes
+                "ema_span_1": 4320,
                 "grid_span": 0.16,
                 "wallet_exposure_limit": 1.6,
                 "max_n_entry_orders": 10,

@@ -1784,8 +1784,8 @@ def njit_backtest(
     min_qty,
     min_cost,
     c_mult,
-    ema_span_max,
-    ema_span_min,
+    ema_span_1,
+    ema_span_0,
     eprice_exp_base,
     eprice_pprice_diff,
     grid_span,
@@ -1826,20 +1826,20 @@ def njit_backtest(
     closest_bkr = 1.0
 
     spans_long = [
-        ema_span_min[0],
-        (ema_span_min[0] * ema_span_max[0]) ** 0.5,
-        ema_span_max[0],
+        ema_span_0[0],
+        (ema_span_0[0] * ema_span_1[0]) ** 0.5,
+        ema_span_1[0],
     ]
     spans_long = np.array(spans_long) * 60 if do_long else np.ones(3)
     spans_short = [
-        ema_span_min[1],
-        (ema_span_min[1] * ema_span_max[1]) ** 0.5,
-        ema_span_max[1],
+        ema_span_0[1],
+        (ema_span_0[1] * ema_span_1[1]) ** 0.5,
+        ema_span_1[1],
     ]
     spans_short = np.array(spans_short) * 60 if do_short else np.ones(3)
 
-    assert max(spans_long) < len(prices), "ema_span_max long larger than len(prices)"
-    assert max(spans_short) < len(prices), "ema_span_max short larger than len(prices)"
+    assert max(spans_long) < len(prices), "ema_span long larger than len(prices)"
+    assert max(spans_short) < len(prices), "ema_span short larger than len(prices)"
     spans_long = np.where(spans_long < 1.0, 1.0, spans_long)
     spans_short = np.where(spans_short < 1.0, 1.0, spans_short)
     max_span = int(round(max(max(spans_long), max(spans_short))))

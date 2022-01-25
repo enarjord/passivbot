@@ -37,15 +37,17 @@ def load_live_config(live_config_path: str) -> dict:
             ("shrt", "short"),
             ("secondary_pbr_allocation", "secondary_allocation"),
             ("pbr_limit", "wallet_exposure_limit"),
+            ("ema_span_min", "ema_span_0"),
+            ("ema_span_max", "ema_span_1"),
         ]:
             live_config = json.loads(json.dumps(live_config).replace(src, dst))
         for side in ["long", "short"]:
             if "initial_eprice_ema_dist" not in live_config[side]:
                 live_config[side]["initial_eprice_ema_dist"] = -1000.0
-            if "ema_span_min" not in live_config[side]:
-                live_config[side]["ema_span_min"] = 1
-            if "ema_span_max" not in live_config[side]:
-                live_config[side]["ema_span_max"] = 1
+            if "ema_span_0" not in live_config[side]:
+                live_config[side]["ema_span_0"] = 1
+            if "ema_span_1" not in live_config[side]:
+                live_config[side]["ema_span_1"] = 1
             if "auto_unstuck_wallet_exposure_threshold" not in live_config[side]:
                 live_config[side]["auto_unstuck_wallet_exposure_threshold"] = 0.0
             if "auto_unstuck_ema_dist" not in live_config[side]:
