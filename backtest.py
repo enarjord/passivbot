@@ -12,7 +12,6 @@ import pandas as pd
 
 from downloader import Downloader
 from njit_funcs import njit_backtest, round_
-from njit_funcs_recursive_grid import backtest_recursive_grid
 from plotting import dump_plots
 from procedures import (
     prepare_backtest_config,
@@ -23,10 +22,7 @@ from procedures import (
 from pure_funcs import create_xk, denumpyize, ts_to_date, analyze_fills, spotify_config
 
 
-def backtest(config: dict, data: np.ndarray, do_print=False, recursive_grid=False) -> (list, bool):
-    if recursive_grid:
-        xk = create_xk(config, recursive_grid)
-        return backtest_recursive_grid(ticks=data, **xk)
+def backtest(config: dict, data: np.ndarray, do_print=False) -> (list, bool):
     xk = create_xk(config)
     return njit_backtest(
         data,
