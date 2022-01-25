@@ -14,7 +14,7 @@ from pure_funcs import config_pretty_str, candidate_to_live_config
 def main():
 
     parser = argparse.ArgumentParser(prog="view conf", description="inspect conf")
-    parser.add_argument("results_dir", type=str, help="path to results dir")
+    parser.add_argument("results_fpath", type=str, help="path to results file")
     parser.add_argument(
         "-s", "--side", dest="side", type=str, required=False, default="long", help="long/short"
     )
@@ -24,22 +24,13 @@ def main():
     parser.add_argument(
         "-i", "--index", dest="index", type=int, required=False, default=1, help="best conf index"
     )
-
-    parser.add_argument(
-        "-f",
-        dest="filename",
-        type=str,
-        required=False,
-        default="all_results.txt",
-        help="all_results fpath",
-    )
     parser.add_argument(
         "-sf",
         dest="score_formula",
         type=str,
         required=False,
         default="adgpadstd",
-        help="choices: [adgpadstd, adg, adgpadmean]",
+        help="choices: [adgpadstd, adg, adgpadmean, adgdgstd, adgdgstdstd]",
     )
 
     args = parser.parse_args()
@@ -47,7 +38,7 @@ def main():
     side = args.side
     pad_max = args.pad_max
 
-    with open(args.results_dir + args.filename) as f:
+    with open(args.results_fpath) as f:
         results = [json.loads(x) for x in f.readlines()]
 
     stats = []
@@ -73,6 +64,10 @@ def main():
             score = adg_mean
         elif args.score_formula == 'adgpadmean':
             score = adg_mean * min(1, pad_max / pad_mean_mean)
+        elif args.score_formula == 'adgdgstd':
+            score = adg_DGstd_ratios_mean
+        elif args.score_formula == 'adgdgstdstd':
+            score = adg_DGstd_ratios_mean / adg_DGstd_ratios_std
         else:
             raise Exception('unknown score formula')
         stats.append(
