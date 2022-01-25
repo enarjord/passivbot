@@ -12,6 +12,7 @@ import pandas as pd
 
 from downloader import Downloader
 from njit_funcs import njit_backtest, round_
+from njit_funcs_recursive_grid import backtest_recursive_grid
 from plotting import dump_plots
 from procedures import (
     prepare_backtest_config,
@@ -19,11 +20,27 @@ from procedures import (
     load_live_config,
     add_argparse_args,
 )
-from pure_funcs import create_xk, denumpyize, ts_to_date, analyze_fills, spotify_config
+from pure_funcs import (
+    create_xk,
+    denumpyize,
+    ts_to_date,
+    analyze_fills,
+    spotify_config,
+    determine_passivbot_mode,
+)
 
 
 def backtest(config: dict, data: np.ndarray, do_print=False) -> (list, bool):
+    passivbot_mode = determine_passivbot_mode(config)
     xk = create_xk(config)
+    if passivbot_mode == "recursive_grid":
+        return backtest_recursive_grid(
+            data,
+            config["starting_balance"],
+            config["latency_simulation_ms"],
+            config["maker_fee"],
+            **xk,
+        )
     return njit_backtest(
         data,
         config["starting_balance"],

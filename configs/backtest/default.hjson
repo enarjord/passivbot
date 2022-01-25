@@ -16,5 +16,9 @@
   end_date: 2022-01-21
 
   # non default historical data path
+  # defaults to local dir if unspecified
   # historical_data_path: "/mnt/d/"
+
+  # backtests path
+  base_dir: backtests
 }

@@ -35,7 +35,31 @@ def calc_spans(min_span: int, max_span: int, n_spans: int) -> np.ndarray:
     return np.array([min_span, (min_span * max_span) ** 0.5, max_span])
 
 
-def get_xk_keys():
+def get_xk_keys(passivbot_mode="static_grid"):
+    if passivbot_mode == "recursive_grid":
+        return [
+            "inverse",
+            "do_long",
+            "do_short",
+            "qty_step",
+            "price_step",
+            "min_qty",
+            "min_cost",
+            "c_mult",
+            "ema_span_0",
+            "ema_span_1",
+            "initial_qty_pct",
+            "initial_eprice_ema_dist",
+            "wallet_exposure_limit",
+            "ddown_factor",
+            "rentry_pprice_dist",
+            "rentry_pprice_dist_wallet_exposure_weighting",
+            "min_markup",
+            "markup_range",
+            "n_close_orders",
+            "auto_unstuck_wallet_exposure_threshold",
+            "auto_unstuck_ema_dist",
+        ]
     return [
         "spot",
         "hedge_mode",
@@ -58,12 +82,21 @@ def get_xk_keys():
         "min_markup",
         "markup_range",
         "n_close_orders",
-        "ema_span_min",
-        "ema_span_max",
+        "ema_span_0",
+        "ema_span_1",
         "initial_eprice_ema_dist",
         "auto_unstuck_wallet_exposure_threshold",
         "auto_unstuck_ema_dist",
     ]
+
+
+def determine_passivbot_mode(config: dict) -> str:
+    if all(k in config["long"] for k in get_template_live_config("recursive_grid")["long"]):
+        return "recursive_grid"
+    elif all(k in config["long"] for k in get_template_live_config("static_grid")["long"]):
+        return "static_grid"
+    else:
+        raise Exception("unable to determine passivbot mode")
 
 
 def create_xk(config: dict) -> dict:
@@ -75,11 +108,13 @@ def create_xk(config: dict) -> dict:
         config_["spot"] = False
         config_["do_long"] = config["long"]["enabled"]
         config_["do_short"] = config["short"]["enabled"]
-    keys = get_xk_keys()
+    config["passivbot_mode"] = determine_passivbot_mode(config)
+    keys = get_xk_keys(config["passivbot_mode"])
     config_["long"]["n_close_orders"] = int(round(config_["long"]["n_close_orders"]))
     config_["short"]["n_close_orders"] = int(round(config_["short"]["n_close_orders"]))
-    config_["long"]["max_n_entry_orders"] = int(round(config_["long"]["max_n_entry_orders"]))
-    config_["short"]["max_n_entry_orders"] = int(round(config_["short"]["max_n_entry_orders"]))
+    if config["passivbot_mode"] == "static_grid":
+        config_["long"]["max_n_entry_orders"] = int(round(config_["long"]["max_n_entry_orders"]))
+        config_["short"]["max_n_entry_orders"] = int(round(config_["short"]["max_n_entry_orders"]))
     for k in keys:
         if k in config_["long"]:
             xk[k] = (config_["long"][k], config_["short"][k])
@@ -170,28 +205,34 @@ def config_pretty_str(config: dict):
     return pretty_str
 
 
-def candidate_to_live_config(candidate: dict) -> dict:
-    packed = pack_config(candidate)
-    live_config = get_template_live_config()
-    sides = ["long", "short"]
-    for side in sides:
-        for k in live_config[side]:
-            if k in packed[side]:
-                live_config[side][k] = packed[side][k]
-    for k in live_config:
-        if k not in sides and k in packed:
-            live_config[k] = packed[k]
-
+def candidate_to_live_config(candidate: dict, recursive_grid=False) -> dict:
     result_dict = candidate["result"] if "result" in candidate else candidate
-    if packed["long"]["enabled"] and not packed["short"]["enabled"]:
-        side_type = "longonly"
-    elif packed["short"]["enabled"] and not packed["long"]["enabled"]:
-        side_type = "shortonly"
+    passivbot_mode = name = determine_passivbot_mode(candidate)
+    if passivbot_mode == "recursive_grid":
+        live_config = get_template_live_config("recursive_grid")
+        for side in ["long", "short"]:
+            for k in live_config[side]:
+                live_config[side][k] = candidate[side][k]
+            live_config[side]["n_close_orders"] = int(round(live_config[side]["n_close_orders"]))
+    elif passivbot_mode == "static_grid":
+        live_config = get_template_live_config("static_grid")
+        sides = ["long", "short"]
+        for side in sides:
+            for k in live_config[side]:
+                if k in candidate[side]:
+                    live_config[side][k] = candidate[side][k]
+        for k in live_config:
+            if k not in sides and k in candidate:
+                live_config[k] = candidate[k]
     else:
-        side_type = "long&short"
-    name = f"{side_type}_"
-    name += f"{result_dict['exchange'].lower()}_" if "exchange" in result_dict else "unknown_"
-    name += f"{result_dict['symbol'].lower()}" if "symbol" in result_dict else "unknown"
+        raise Exception("unknown passivbot mode")
+    if "symbols" in result_dict:
+        if len(result_dict["symbols"]) > 1:
+            name += f"_{len(result_dict['symbols'])}_symbols"
+        else:
+            name += f"_{result_dict['symbols'][0]}"
+    elif "symbol" in result_dict:
+        name += f"_{result_dict['symbol']}"
     if "n_days" in result_dict:
         n_days = result_dict["n_days"]
     elif "start_date" in result_dict:
@@ -205,10 +246,6 @@ def candidate_to_live_config(candidate: dict) -> dict:
         name += f"_adg{(result_dict['average_daily_gain']) * 100:.3f}%"
     elif "daily_gain" in result_dict:
         name += f"_adg{(result_dict['daily_gain'] - 1) * 100:.3f}%"
-    if "closest_bkr" in result_dict:
-        name += f"_bkr{(result_dict['closest_bkr']) * 100:.2f}%"
-    if "eqbal_ratio_min" in result_dict:
-        name += f"_eqbal{(result_dict['eqbal_ratio_min']) * 100:.2f}%"
     live_config["config_name"] = name
     return denumpyize(live_config)
 
@@ -328,15 +365,54 @@ def flatten(lst: list) -> list:
     return [y for x in lst for y in x]
 
 
-def get_template_live_config():
+def get_template_live_config(passivbot_mode="static_grid"):
+    if passivbot_mode == "recursive_grid":
+        return sort_dict_keys(
+            {
+                "config_name": "recursive_grid_test",
+                "logging_level": 0,
+                "long": {
+                    "enabled": True,
+                    "ema_span_0": 1036.4758617491368,
+                    "ema_span_1": 1125.5167077975314,
+                    "initial_qty_pct": 0.01,
+                    "initial_eprice_ema_dist": -0.02,
+                    "wallet_exposure_limit": 1.0,
+                    "ddown_factor": 0.6,
+                    "rentry_pprice_dist": 0.015,
+                    "rentry_pprice_dist_wallet_exposure_weighting": 15,
+                    "min_markup": 0.02,
+                    "markup_range": 0.02,
+                    "n_close_orders": 7,
+                    "auto_unstuck_wallet_exposure_threshold": 0.15,
+                    "auto_unstuck_ema_dist": 0.02,
+                },
+                "short": {
+                    "enabled": False,
+                    "ema_span_0": 1036.4758617491368,
+                    "ema_span_1": 1125.5167077975314,
+                    "initial_qty_pct": 0.01,
+                    "initial_eprice_ema_dist": -0.02,
+                    "wallet_exposure_limit": 1.0,
+                    "ddown_factor": 0.6,
+                    "rentry_pprice_dist": 0.015,
+                    "rentry_pprice_dist_wallet_exposure_weighting": 15,
+                    "min_markup": 0.02,
+                    "markup_range": 0.02,
+                    "n_close_orders": 7,
+                    "auto_unstuck_wallet_exposure_threshold": 0.15,
+                    "auto_unstuck_ema_dist": 0.02,
+                },
+            }
+        )
     return sort_dict_keys(
         {
             "config_name": "template",
             "logging_level": 0,
             "long": {
                 "enabled": True,
-                "ema_span_min": 1440,  # in minutes
-                "ema_span_max": 4320,
+                "ema_span_0": 1440,  # in minutes
+                "ema_span_1": 4320,
                 "grid_span": 0.16,
                 "wallet_exposure_limit": 1.6,
                 "max_n_entry_orders": 10,
@@ -355,8 +431,8 @@ def get_template_live_config():
             },
             "short": {
                 "enabled": True,
-                "ema_span_min": 1440,  # in minutes
-                "ema_span_max": 4320,
+                "ema_span_0": 1440,  # in minutes
+                "ema_span_1": 4320,
                 "grid_span": 0.16,
                 "wallet_exposure_limit": 1.6,
                 "max_n_entry_orders": 10,
