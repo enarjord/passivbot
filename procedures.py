@@ -19,41 +19,14 @@ from pure_funcs import (
     date_to_ts,
     get_template_live_config,
     sort_dict_keys,
+    make_compatible,
 )
 
 
 def load_live_config(live_config_path: str) -> dict:
     try:
         live_config = json.load(open(live_config_path))
-        template_recurv = get_template_live_config("recursive_grid")
-        if all(k in live_config["long"] for k in template_recurv["long"]):
-            live_config["long"]["n_close_orders"] = int(round(live_config["long"]["n_close_orders"]))
-            live_config["short"]["n_close_orders"] = int(
-                round(live_config["short"]["n_close_orders"])
-            )
-            return sort_dict_keys(live_config)
-        for src, dst in [
-            ("secondary_grid_spacing", "secondary_pprice_diff"),
-            ("shrt", "short"),
-            ("secondary_pbr_allocation", "secondary_allocation"),
-            ("pbr_limit", "wallet_exposure_limit"),
-            ("ema_span_min", "ema_span_0"),
-            ("ema_span_max", "ema_span_1"),
-        ]:
-            live_config = json.loads(json.dumps(live_config).replace(src, dst))
-        for side in ["long", "short"]:
-            if "initial_eprice_ema_dist" not in live_config[side]:
-                live_config[side]["initial_eprice_ema_dist"] = -1000.0
-            if "ema_span_0" not in live_config[side]:
-                live_config[side]["ema_span_0"] = 1
-            if "ema_span_1" not in live_config[side]:
-                live_config[side]["ema_span_1"] = 1
-            if "auto_unstuck_wallet_exposure_threshold" not in live_config[side]:
-                live_config[side]["auto_unstuck_wallet_exposure_threshold"] = 0.0
-            if "auto_unstuck_ema_dist" not in live_config[side]:
-                live_config[side]["auto_unstuck_ema_dist"] = 0.0
-        assert all(k in live_config["long"] for k in get_template_live_config()["long"])
-        return sort_dict_keys(numpyize(live_config))
+        return sort_dict_keys(numpyize(make_compatible(live_config)))
     except Exception as e:
         raise Exception(f"failed to load live config {live_config_path} {e}")
 
