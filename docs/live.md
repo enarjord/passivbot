@@ -6,7 +6,7 @@ how you can start your bot, and anything relating to keeping the system running 
 ## Usage
 
 In order to start the bot in live mode, you will need two things:
-1) setup your API-keys and (optionally) your telegram settings in the `api-keys.json` file in the root folder.
+1) setup your API-keys in the `api-keys.json` file in the root folder.
    The template file `api-keys.example.json` can be copied as a starting file. 
 2) have the config file you want to use in live mode readily available for the bot (typically placed in `configs/live`)
 
@@ -48,11 +48,6 @@ If you found a good config and want to share this configuration, please feel fre
 
 ## Controlling the bot
 
-While the bot is running, you can use Telegram to control the bot. This includes getting information on the results,
-open trades as well as pausing the bot, and much more. You can read more on how to set up [Telegram here](telegram.md).
-
-It is possible to control the bot using the following CLI options:
-
 It is possible to control the bot using the following CLI options:
 
 - `-lm LONG_MODE` (or `-sm SHORT_MODE` for shorts): specify one of the following modes: [n (normal), m (manual), gs (graceful_stop), p (panic), t (tp_only)]
@@ -80,12 +75,10 @@ to such a level that you do not run into errors about insufficient margin. To ac
 !!! Warning
     Before stopping the bot, please make sure it is in an appropriate state, e.g. make sure there are no positions or orders open that will cause problems if left open for a longer period 
 
-If you want to stop, you can achieve this by either:
-* using the `/stop` button in Telegram (if configured), or
-* by pressing `ctrl+c` in the terminal
+If you want to stop, you can achieve this by pressing `ctrl+c` in the terminal
 
 !!! Info
-    Please note that shutting down the bot properly may take a couple of seconds, as it needs time to properly detach from the websocket and shutdown the bot. When the bot is completely shut down, you will see a message that Telegram has been shut down, and another message that Passivbot has been shut down.
+    Please note that shutting down the bot properly may take a couple of seconds, as it needs time to properly detach from the websocket and shutdown the bot.
 
 ## Running unattended
 
