@@ -167,7 +167,8 @@ class HarmonySearch:
         results = deepcopy(self.unfinished_evals[id_key]["single_results"])
         if set(results) == set(self.symbols):
             # completed multisymbol iter
-            adg_mean_long = np.mean([v["adg_long"] for v in results.values()])
+            adgs_long = [v["adg_long"] for v in results.values()]
+            adg_mean_long = np.mean(adgs_long)
             PAD_std_long_raw = np.mean([v["pa_distance_std_long"] for v in results.values()])
             PAD_std_long = np.mean(
                 [
@@ -184,7 +185,8 @@ class HarmonySearch:
             )
             adg_DGstd_ratios_long = [v["adg_DGstd_ratio_long"] for v in results.values()]
             adg_DGstd_ratios_long_mean = np.mean(adg_DGstd_ratios_long)
-            adg_mean_short = np.mean([v["adg_short"] for v in results.values()])
+            adgs_short = [v["adg_short"] for v in results.values()]
+            adg_mean_short = np.mean(adgs_short)
             PAD_std_short_raw = np.mean([v["pa_distance_std_short"] for v in results.values()])
 
             PAD_std_short = np.mean(
@@ -221,9 +223,12 @@ class HarmonySearch:
             elif self.config["score_formula"] == "adg_DGstd_ratio":
                 score_long = -adg_DGstd_ratios_long_mean
                 score_short = -adg_DGstd_ratios_short_mean
-            elif self.config["score_formula"] == "adg":
+            elif self.config["score_formula"] == "adg_mean":
                 score_long = -adg_mean_long
                 score_short = -adg_mean_short
+            elif self.config["score_formula"] == "adg_min":
+                score_long = -min(adgs_long)
+                score_short = -min(adgs_short)
             else:
                 raise Exception(f"unknown score formula {self.config['score_formula']}")
 
@@ -315,7 +320,8 @@ class HarmonySearch:
                 is_better = True
                 logging.info(
                     f"i{cfg['config_no']} - new best config long, score {score_long:.7f} "
-                    + f"adg {adg_mean_long:.7f} PAD mean {PAD_mean_long_raw:.7f} "
+                    + f"adg {adg_mean_long / cfg['long']['wallet_exposure_limit']:.7f} "
+                    + f"PAD mean {PAD_mean_long_raw:.7f} "
                     + f"PAD std {PAD_std_long_raw:.5f} adg/DGstd {adg_DGstd_ratios_long_mean:.7f}"
                 )
                 tmp_fname += "_long"
@@ -329,7 +335,8 @@ class HarmonySearch:
                 is_better = True
                 logging.info(
                     f"i{cfg['config_no']} - new best config short, score {score_short:.7f} "
-                    + f"adg {adg_mean_short:.7f} PAD mean {PAD_mean_short_raw:.7f} "
+                    + f"adg {adg_mean_short / cfg['short']['wallet_exposure_limit']:.7f} "
+                    + f"PAD mean {PAD_mean_short_raw:.7f} "
                     + f"PAD std {PAD_std_short_raw:.5f} adg/DGstd {adg_DGstd_ratios_short_mean:.7f}"
                 )
                 tmp_fname += "_short"
