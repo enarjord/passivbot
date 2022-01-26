@@ -5,11 +5,16 @@
   bandwidth: 0.07
   pitch_adjusting_rate: 0.24
 
-  n_cpus: 3
+  n_cpus: 4
   iters: 3000
   cache_ticks: false  # set to true to keep all ticks in RAM
 
-  # score formula choices: [adg_PAD_mean, adg_PAD_std, adg_DGstd_ratio, adg]
+  # score formula choices:
+  #  adg_PAD_mean
+  #  adg_PAD_std
+  #  adg_DGstd_ratio
+  #  adg_mean
+  #  adg_min
   score_formula: adg_PAD_std
 
   # adg_PAD_std:
@@ -25,8 +30,11 @@
   # adg_DGstd_ratio:
   # mean([dg_mean_std_ratio]) / std(dg_mean_std_ratio)
 
-  # adg:
-  # adg_mean
+  # adg_mean:
+  # mean(adgs)
+
+  # adg_min:
+  # min(adgs)
 
   # will override any starting configs' long/short enabled parameter
   do_long: true
