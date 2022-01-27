@@ -60,8 +60,8 @@ def backtest_wrap(config_: dict, ticks_caches: dict):
     else:
         ticks = np.load(config_["ticks_cache_fname"])
     try:
-        fills, stats = backtest(config, ticks)
-        fdf, sdf, analysis = analyze_fills(fills, stats, config)
+        fills_long, fills_short, stats = backtest(config, ticks)
+        longs, shorts, sdf, analysis = analyze_fills(fills_long, fills_short, stats, config)
         pa_distance_mean_long = analysis["pa_distance_mean_long"]
         pa_distance_mean_short = analysis["pa_distance_mean_short"]
         PAD_std_long = analysis["pa_distance_std_long"]
