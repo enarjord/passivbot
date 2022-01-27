@@ -3,12 +3,9 @@
 In order to configure Passivbot, you will need to provide a json file when starting the bot.
 These config files are typically stored in the `configs/live`.
 
-!!! Info
-    The configuration of telegram is not covered in this chapter. Please refer to [Telegram](telegram.md) for configuring Telegram.
-
 ## Configuration options
 
-At the moment only long positions are supported.
+Long and short positions are supported and have each the same parameters.
 
 | Parameter                  | Description
 | -------------------------- | ------------- |
@@ -28,9 +25,12 @@ At the moment only long positions are supported.
 
 Secondary entry is independent of primary entry grid, intended to catch abnormally deep dips.
 
-More info may come later.
+Since Passivbot 5.3, EMA are introduced to allow:
+* limit initial entries at peak of pump/dump
+* auto unstuck position
+The mechanism is described in this chapter : (https://github.com/enarjord/passivbot/blob/master/docs/auto_unstuck.md)
 
-Here is a diagram summarizing the parameters:
+Here is a diagram summarizing the parameters (without EMA):
 
 ![Grid Parameters](images/passivbot_grid_parameters.jpeg)
 [Full image](images/passivbot_grid_parameters.jpeg)

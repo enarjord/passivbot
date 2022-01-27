@@ -561,6 +561,7 @@ def analyze_fills(fills_long: list, fills_short: list, stats: list, config: dict
     gain_long = longs.pnl.sum() / sdf.balance_long.iloc[0]
     gain_short = shorts.pnl.sum() / sdf.balance_short.iloc[0]
 
+
     ms2d = 1000 * 60 * 60 * 24
     if len(longs) > 0:
         daily_equity_long = sdf.groupby(sdf.timestamp // ms2d).equity_long.last()
