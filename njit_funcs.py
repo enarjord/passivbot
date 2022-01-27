@@ -16,7 +16,6 @@ if "NOJIT" in os.environ and os.environ["NOJIT"] == "true":
         else:
             return wrap
 
-
 else:
     print("using numba")
     from numba import njit

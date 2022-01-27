@@ -455,7 +455,9 @@ def get_template_live_config(passivbot_mode="static_grid"):
     )
 
 
-def analyze_fills(fills_long: list, fills_short: list, stats: list, config: dict) -> (pd.DataFrame, pd.DataFrame, dict):
+def analyze_fills(
+    fills_long: list, fills_short: list, stats: list, config: dict
+) -> (pd.DataFrame, pd.DataFrame, dict):
     sdf = pd.DataFrame(
         stats,
         columns=[
@@ -528,7 +530,8 @@ def analyze_fills(fills_long: list, fills_short: list, stats: list, config: dict
         for x in sdf.itertuples()
     ]
     sdf.loc[:, "wallet_exposure_short"] = [
-        qty_to_cost(x.psize_short, x.pprice_short, config["inverse"], config["c_mult"]) / x.balance_short
+        qty_to_cost(x.psize_short, x.pprice_short, config["inverse"], config["c_mult"])
+        / x.balance_short
         if x.balance_short > 0.0
         else 0.0
         for x in sdf.itertuples()
@@ -560,7 +563,6 @@ def analyze_fills(fills_long: list, fills_short: list, stats: list, config: dict
     )
     gain_long = longs.pnl.sum() / sdf.balance_long.iloc[0]
     gain_short = shorts.pnl.sum() / sdf.balance_short.iloc[0]
-
 
     ms2d = 1000 * 60 * 60 * 24
     if len(longs) > 0:
@@ -873,9 +875,7 @@ def make_compatible(live_config_: dict) -> dict:
     template_recurv = get_template_live_config("recursive_grid")
     if all(k in live_config["long"] for k in template_recurv["long"]):
         live_config["long"]["n_close_orders"] = int(round(live_config["long"]["n_close_orders"]))
-        live_config["short"]["n_close_orders"] = int(
-            round(live_config["short"]["n_close_orders"])
-        )
+        live_config["short"]["n_close_orders"] = int(round(live_config["short"]["n_close_orders"]))
         for src, dst in [
             ("iprice_ema_dist", "initial_eprice_ema_dist"),
             ("iqty_pct", "initial_qty_pct"),
