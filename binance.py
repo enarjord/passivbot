@@ -610,11 +610,11 @@ class BinanceBot(Bot):
                             standardized["other_type"] = "account_update"
                             continue
                         if x["ps"] == "LONG":
-                            standardized["long_psize"] = float(x["pa"])
-                            standardized["long_pprice"] = float(x["ep"])
+                            standardized["psize_long"] = float(x["pa"])
+                            standardized["pprice_long"] = float(x["ep"])
                         elif x["ps"] == "SHORT":
-                            standardized["short_psize"] = float(x["pa"])
-                            standardized["short_pprice"] = float(x["ep"])
+                            standardized["psize_short"] = float(x["pa"])
+                            standardized["pprice_short"] = float(x["ep"])
             elif event["e"] == "ORDER_TRADE_UPDATE":
                 if event["o"]["s"] == self.symbol:
                     if event["o"]["X"] == "NEW":
