@@ -455,28 +455,28 @@ def get_template_live_config(passivbot_mode="static_grid"):
     )
 
 
-def analyze_fills(fills: list, stats: list, config: dict) -> (pd.DataFrame, pd.DataFrame, dict):
+def analyze_fills(fills_long: list, fills_short: list, stats: list, config: dict) -> (pd.DataFrame, pd.DataFrame, dict):
     sdf = pd.DataFrame(
         stats,
         columns=[
             "timestamp",
-            "balance",
-            "equity",
-            "bkr_price",
-            "long_psize",
-            "long_pprice",
-            "short_psize",
-            "short_pprice",
+            "bkr_price_long",
+            "bkr_price_short",
+            "psize_long",
+            "pprice_long",
+            "psize_short",
+            "pprice_short",
             "price",
-            "closest_bkr",
+            "closest_bkr_long",
+            "closest_bkr_short",
             "balance_long",
             "balance_short",
             "equity_long",
             "equity_short",
         ],
     )
-    fdf = pd.DataFrame(
-        fills,
+    longs = pd.DataFrame(
+        fills_long,
         columns=[
             "trade_id",
             "timestamp",
@@ -491,59 +491,75 @@ def analyze_fills(fills: list, stats: list, config: dict) -> (pd.DataFrame, pd.D
             "type",
         ],
     )
-    fdf.loc[:, "wallet_exposure"] = [
+    longs.index = longs.timestamp
+    shorts = pd.DataFrame(
+        fills_short,
+        columns=[
+            "trade_id",
+            "timestamp",
+            "pnl",
+            "fee_paid",
+            "balance",
+            "equity",
+            "qty",
+            "price",
+            "psize",
+            "pprice",
+            "type",
+        ],
+    )
+    shorts.index = shorts.timestamp
+    longs.loc[:, "wallet_exposure"] = [
         qty_to_cost(x.psize, x.pprice, config["inverse"], config["c_mult"]) / x.balance
         if x.balance > 0.0
         else 0.0
-        for x in fdf.itertuples()
+        for x in longs.itertuples()
     ]
-    sdf.loc[:, "long_wallet_exposure"] = [
-        qty_to_cost(x.long_psize, x.long_pprice, config["inverse"], config["c_mult"]) / x.balance
+    shorts.loc[:, "wallet_exposure"] = [
+        qty_to_cost(x.psize, x.pprice, config["inverse"], config["c_mult"]) / x.balance
         if x.balance > 0.0
+        else 0.0
+        for x in shorts.itertuples()
+    ]
+    sdf.loc[:, "wallet_exposure_long"] = [
+        qty_to_cost(x.psize_long, x.pprice_long, config["inverse"], config["c_mult"]) / x.balance_long
+        if x.balance_long > 0.0
         else 0.0
         for x in sdf.itertuples()
     ]
-    sdf.loc[:, "short_wallet_exposure"] = [
-        qty_to_cost(x.short_psize, x.short_pprice, config["inverse"], config["c_mult"]) / x.balance
-        if x.balance > 0.0
+    sdf.loc[:, "wallet_exposure_short"] = [
+        qty_to_cost(x.psize_short, x.pprice_short, config["inverse"], config["c_mult"]) / x.balance_short
+        if x.balance_short > 0.0
         else 0.0
         for x in sdf.itertuples()
     ]
-    gain = sdf.balance.iloc[-1] / sdf.balance.iloc[0]
     n_days = (sdf.timestamp.iloc[-1] - sdf.timestamp.iloc[0]) / (1000 * 60 * 60 * 24)
-    adg = gain ** (1 / n_days) - 1
-    gain -= 1
-    fills_per_day = len(fills) / n_days
-    long_pos_changes = sdf[sdf.long_psize != sdf.long_psize.shift()]
-    long_pos_changes_ms_diff = np.diff(
-        [sdf.timestamp.iloc[0]] + list(long_pos_changes.timestamp) + [sdf.timestamp.iloc[-1]]
+    pos_changes_long = sdf[sdf.psize_long != sdf.psize_long.shift()]
+    pos_changes_long_ms_diff = np.diff(
+        [sdf.timestamp.iloc[0]] + list(pos_changes_long.timestamp) + [sdf.timestamp.iloc[-1]]
     )
-    hrs_stuck_max_long = long_pos_changes_ms_diff.max() / (1000 * 60 * 60)
-    hrs_stuck_avg_long = long_pos_changes_ms_diff.mean() / (1000 * 60 * 60)
-    short_pos_changes = sdf[sdf.short_psize != sdf.short_psize.shift()]
-    short_pos_changes_ms_diff = np.diff(
-        [sdf.timestamp.iloc[0]] + list(short_pos_changes.timestamp) + [sdf.timestamp.iloc[-1]]
+    hrs_stuck_max_long = pos_changes_long_ms_diff.max() / (1000 * 60 * 60)
+    hrs_stuck_avg_long = pos_changes_long_ms_diff.mean() / (1000 * 60 * 60)
+    pos_changes_short = sdf[sdf.psize_short != sdf.psize_short.shift()]
+    pos_changes_short_ms_diff = np.diff(
+        [sdf.timestamp.iloc[0]] + list(pos_changes_short.timestamp) + [sdf.timestamp.iloc[-1]]
     )
-    hrs_stuck_max_short = short_pos_changes_ms_diff.max() / (1000 * 60 * 60)
-    hrs_stuck_avg_short = short_pos_changes_ms_diff.mean() / (1000 * 60 * 60)
-    lpprices = sdf[sdf.long_psize != 0.0]
-    spprices = sdf[sdf.short_psize != 0.0]
+    hrs_stuck_max_short = pos_changes_short_ms_diff.max() / (1000 * 60 * 60)
+    hrs_stuck_avg_short = pos_changes_short_ms_diff.mean() / (1000 * 60 * 60)
+    lpprices = sdf[sdf.psize_long != 0.0]
+    spprices = sdf[sdf.psize_short != 0.0]
     pa_distance_long = (
-        ((lpprices.long_pprice - lpprices.price).abs() / lpprices.price)
+        ((lpprices.pprice_long - lpprices.price).abs() / lpprices.price)
         if len(lpprices) > 0
         else pd.Series([100.0])
     )
     pa_distance_short = (
-        ((spprices.short_pprice - spprices.price).abs() / spprices.price)
+        ((spprices.pprice_short - spprices.price).abs() / spprices.price)
         if len(spprices) > 0
         else pd.Series([100.0])
     )
-    longs = fdf[fdf.type.str.contains("long")].set_index("timestamp")
-    shorts = fdf[fdf.type.str.contains("short")].set_index("timestamp")
-    gain_long = longs.pnl.sum() / sdf.balance.iloc[0]
-    adg_long = (gain_long + 1) ** (1 / n_days) - 1
-    gain_short = shorts.pnl.sum() / sdf.balance.iloc[0]
-    adg_short = (gain_short + 1) ** (1 / n_days) - 1
+    gain_long = longs.pnl.sum() / sdf.balance_long.iloc[0]
+    gain_short = shorts.pnl.sum() / sdf.balance_short.iloc[0]
 
     ms2d = 1000 * 60 * 60 * 24
     if len(longs) > 0:
@@ -566,30 +582,16 @@ def analyze_fills(fills: list, stats: list, config: dict) -> (pd.DataFrame, pd.D
         adg_short = adg_DGstd_ratio_short = 0.0
         DGstd_short = 100.0
 
-    pos_costs = fdf.apply(
+    pos_costs_long = longs.apply(
         lambda x: qty_to_cost(x["psize"], x["pprice"], config["inverse"], config["c_mult"]),
         axis=1,
     )
-    biggest_pos_cost_long = (
-        longs.apply(
-            lambda x: qty_to_cost(x["psize"], x["pprice"], config["inverse"], config["c_mult"]),
-            axis=1,
-        ).max()
-        if len(longs) > 0
-        else 0.0
-    )
-    biggest_pos_cost_short = (
-        shorts.apply(
-            lambda x: qty_to_cost(x["psize"], x["pprice"], config["inverse"], config["c_mult"]),
-            axis=1,
-        ).max()
-        if len(shorts) > 0
-        else 0.0
-    )
-    volume_quote = fdf.apply(
-        lambda x: qty_to_cost(x["qty"], x["price"], config["inverse"], config["c_mult"]),
+    pos_costs_short = shorts.apply(
+        lambda x: qty_to_cost(x["psize"], x["pprice"], config["inverse"], config["c_mult"]),
         axis=1,
-    ).sum()
+    )
+    biggest_pos_cost_long = pos_costs_long.max() if len(longs) > 0 else 0.0
+    biggest_pos_cost_short = pos_costs_short.max() if len(shorts) > 0 else 0.0
     volume_quote_long = (
         longs.apply(
             lambda x: qty_to_cost(x["qty"], x["price"], config["inverse"], config["c_mult"]),
@@ -610,7 +612,7 @@ def analyze_fills(fills: list, stats: list, config: dict) -> (pd.DataFrame, pd.D
     analysis = {
         "exchange": config["exchange"] if "exchange" in config else "unknown",
         "symbol": config["symbol"] if "symbol" in config else "unknown",
-        "starting_balance": sdf.balance.iloc[0],
+        "starting_balance": sdf.balance_long.iloc[0],
         "pa_distance_mean_long": pa_distance_long.mean(),
         "pa_distance_max_long": pa_distance_long.max(),
         "pa_distance_std_long": pa_distance_long.std(),
@@ -631,28 +633,23 @@ def analyze_fills(fills: list, stats: list, config: dict) -> (pd.DataFrame, pd.D
         "adg_DGstd_ratio_short": adg_DGstd_ratio_short,
         "DGstd_long": DGstd_long,
         "DGstd_short": DGstd_short,
-        "average_daily_gain": adg,
-        "gain": gain,
         "n_days": n_days,
-        "n_fills": len(fills),
-        "n_entries": len(fdf[fdf.type.str.contains("entry")]),
-        "n_closes": len(fdf[fdf.type.str.contains("close")]),
-        "n_normal_closes": len(fdf[fdf.type.str.contains("nclose")]),
+        "n_fills_long": len(fills_long),
+        "n_fills_short": len(fills_short),
+        "n_closes_long": len(longs[longs.type.str.contains("close")]),
+        "n_closes_short": len(shorts[shorts.type.str.contains("close")]),
         "n_normal_closes_long": len(longs[longs.type.str.contains("nclose")]),
         "n_normal_closes_short": len(shorts[shorts.type.str.contains("nclose")]),
-        "n_ientries": len(fdf[fdf.type.str.contains("ientry")]),
+        "n_entries_long": len(longs[longs.type.str.contains("entry")]),
+        "n_entries_short": len(shorts[shorts.type.str.contains("entry")]),
         "n_ientries_long": len(longs[longs.type.str.contains("ientry")]),
         "n_ientries_short": len(shorts[shorts.type.str.contains("ientry")]),
-        "n_rentries": len(fdf[fdf.type.str.contains("rentry")]),
         "n_rentries_long": len(longs[longs.type.str.contains("rentry")]),
         "n_rentries_short": len(shorts[shorts.type.str.contains("rentry")]),
-        "n_unstuck_closes": len(fdf[fdf.type.str.contains("unstuck_close")]),
         "n_unstuck_closes_long": len(longs[longs.type.str.contains("unstuck_close")]),
         "n_unstuck_closes_short": len(shorts[shorts.type.str.contains("unstuck_close")]),
-        "n_unstuck_entries": len(fdf[fdf.type.str.contains("unstuck_entry")]),
         "n_unstuck_entries_long": len(longs[longs.type.str.contains("unstuck_entry")]),
         "n_unstuck_entries_short": len(shorts[shorts.type.str.contains("unstuck_entry")]),
-        "avg_fills_per_day": fills_per_day,
         "avg_fills_per_day_long": len(longs) / n_days,
         "avg_fills_per_day_short": len(shorts) / n_days,
         "hrs_stuck_max_long": hrs_stuck_max_long,
@@ -661,37 +658,32 @@ def analyze_fills(fills: list, stats: list, config: dict) -> (pd.DataFrame, pd.D
         "hrs_stuck_avg_short": hrs_stuck_avg_short,
         "hrs_stuck_max": max(hrs_stuck_max_long, hrs_stuck_max_short),
         "hrs_stuck_avg": max(hrs_stuck_avg_long, hrs_stuck_avg_short),
-        "loss_sum": fdf[fdf.pnl < 0.0].pnl.sum(),
         "loss_sum_long": longs[longs.pnl < 0.0].pnl.sum(),
         "loss_sum_short": shorts[shorts.pnl < 0.0].pnl.sum(),
-        "profit_sum": fdf[fdf.pnl > 0.0].pnl.sum(),
         "profit_sum_long": longs[longs.pnl > 0.0].pnl.sum(),
         "profit_sum_short": shorts[shorts.pnl > 0.0].pnl.sum(),
-        "pnl_sum": (pnl_sum := fdf.pnl.sum()),
         "pnl_sum_long": (pnl_sum_long := longs.pnl.sum()),
         "pnl_sum_short": (pnl_sum_short := shorts.pnl.sum()),
-        "fee_sum": (fee_sum := fdf.fee_paid.sum()),
         "fee_sum_long": (fee_sum_long := longs.fee_paid.sum()),
         "fee_sum_short": (fee_sum_short := shorts.fee_paid.sum()),
-        "net_pnl_plus_fees": pnl_sum + fee_sum,
         "net_pnl_plus_fees_long": pnl_sum_long + fee_sum_long,
         "net_pnl_plus_fees_short": pnl_sum_short + fee_sum_short,
-        "final_equity": sdf.equity.iloc[-1],
-        "final_balance": sdf.balance.iloc[-1],
-        "closest_bkr": sdf.closest_bkr.min(),
-        "eqbal_ratio_min": (eqbal_ratios := sdf.equity / sdf.balance).min(),
-        "eqbal_ratio_mean": eqbal_ratios.mean(),
-        "biggest_psize": fdf.psize.abs().max(),
+        "final_equity_long": sdf.equity_long.iloc[-1],
+        "final_balance_long": sdf.balance_long.iloc[-1],
+        "closest_bkr_long": sdf.closest_bkr_long.min(),
+        "closest_bkr_short": sdf.closest_bkr_short.min(),
+        "eqbal_ratio_min_long": (eqbal_ratios_long := sdf.equity_long / sdf.balance_long).min(),
+        "eqbal_ratio_mean_long": eqbal_ratios_long.mean(),
+        "eqbal_ratio_min_short": (eqbal_ratios_short := sdf.equity_short / sdf.balance_short).min(),
+        "eqbal_ratio_mean_short": eqbal_ratios_short.mean(),
         "biggest_psize_long": longs.psize.abs().max(),
         "biggest_psize_short": shorts.psize.abs().max(),
-        "biggest_psize_quote": pos_costs.max(),
         "biggest_psize_quote_long": biggest_pos_cost_long,
         "biggest_psize_quote_short": biggest_pos_cost_short,
-        "volume_quote": volume_quote,
         "volume_quote_long": volume_quote_long,
         "volume_quote_short": volume_quote_short,
     }
-    return fdf, sdf, sort_dict_keys(analysis)
+    return longs, shorts, sdf, sort_dict_keys(analysis)
 
 
 def calc_pprice_from_fills(coin_balance, fills, n_fills_limit=100):
@@ -723,16 +715,16 @@ def calc_pprice_from_fills(coin_balance, fills, n_fills_limit=100):
     return pprice
 
 
-def get_position_fills(long_psize: float, short_psize: float, fills: [dict]) -> ([dict], [dict]):
+def get_position_fills(psize_long: float, psize_short: float, fills: [dict]) -> ([dict], [dict]):
     """
     assumes fills are sorted old to new
     returns fills since and including initial entry
     """
-    long_psize *= 0.999
-    short_psize *= 0.999
+    psize_long *= 0.999
+    psize_short *= 0.999
     long_qty_sum = 0.0
     short_qty_sum = 0.0
-    long_done, short_done = long_psize == 0.0, short_psize == 0.0
+    long_done, short_done = psize_long == 0.0, psize_short == 0.0
     if long_done and short_done:
         return [], []
     long_pfills, short_pfills = [], []
@@ -741,16 +733,16 @@ def get_position_fills(long_psize: float, short_psize: float, fills: [dict]) -> 
             if not long_done:
                 long_qty_sum += x["qty"] * (1.0 if x["side"] == "buy" else -1.0)
                 long_pfills.append(x)
-                long_done = long_qty_sum >= long_psize
+                long_done = long_qty_sum >= psize_long
         elif x["position_side"] == "short":
             if not short_done:
                 short_qty_sum += x["qty"] * (1.0 if x["side"] == "sell" else -1.0)
                 short_pfills.append(x)
-                short_done = short_qty_sum >= short_psize
+                short_done = short_qty_sum >= psize_short
     return long_pfills[::-1], short_pfills[::-1]
 
 
-def calc_long_pprice(long_psize, long_pfills):
+def calc_pprice_long(psize_long, long_pfills):
     """
     assumes long pfills are sorted old to new
     """

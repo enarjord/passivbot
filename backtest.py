@@ -55,17 +55,18 @@ def plot_wrap(config, data):
     print("starting_balance", config["starting_balance"])
     print("backtesting...")
     sts = time()
-    fills, stats = backtest(config, data, do_print=True)
+    fills_long, fills_short, stats = backtest(config, data, do_print=True)
     print(f"{time() - sts:.2f} seconds elapsed")
-    if not fills:
+    if not fills_long and not fills_short:
         print("no fills")
         return
-    fdf, sdf, result = analyze_fills(fills, stats, config)
+    fdf_long, fdf_short, sdf, result = analyze_fills(fills_long, fills_short, stats, config)
     config["result"] = result
     config["plots_dirpath"] = make_get_filepath(
         os.path.join(config["plots_dirpath"], f"{ts_to_date(time())[:19].replace(':', '')}", "")
     )
-    fdf.to_csv(config["plots_dirpath"] + "fills.csv")
+    fdf_long.to_csv(config["plots_dirpath"] + "fills_long.csv")
+    fdf_short.to_csv(config["plots_dirpath"] + "fills_short.csv")
     sdf.to_csv(config["plots_dirpath"] + "stats.csv")
     df = pd.DataFrame({**{"timestamp": data[:, 0], "qty": data[:, 1], "price": data[:, 2]}, **{}})
     print("dumping plots...")

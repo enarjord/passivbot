@@ -141,19 +141,19 @@ def calc_short_pnl(entry_price, close_price, qty, inverse, c_mult) -> float:
 @njit
 def calc_equity(
     balance,
-    long_psize,
-    long_pprice,
-    short_psize,
-    short_pprice,
+    psize_long,
+    pprice_long,
+    psize_short,
+    pprice_short,
     last_price,
     inverse,
     c_mult,
 ):
     equity = balance
-    if long_pprice and long_psize:
-        equity += calc_long_pnl(long_pprice, last_price, long_psize, inverse, c_mult)
-    if short_pprice and short_psize:
-        equity += calc_short_pnl(short_pprice, last_price, short_psize, inverse, c_mult)
+    if pprice_long and psize_long:
+        equity += calc_long_pnl(pprice_long, last_price, psize_long, inverse, c_mult)
+    if pprice_short and psize_short:
+        equity += calc_short_pnl(pprice_short, last_price, psize_short, inverse, c_mult)
     return equity
 
 
@@ -190,11 +190,11 @@ def calc_long_close_grid(
     min_qty,
     min_cost,
     c_mult,
-    exposure_limit,
+    wallet_exposure_limit,
     min_markup,
     markup_range,
     n_close_orders,
-    auto_unstuck_exposure_threshold,
+    auto_unstuck_wallet_exposure_threshold,
     auto_unstuck_ema_dist,
 ):
     psize = psize_ = round_dn(psize, qty_step)  # round down for spot
@@ -212,9 +212,9 @@ def calc_long_close_grid(
     closes = []
     if len(close_prices) == 0:
         return [(-psize, lowest_ask, "long_nclose")]
-    exposure = qty_to_cost(psize, pprice, inverse, c_mult) / balance
-    threshold = exposure_limit * (1 - auto_unstuck_exposure_threshold)
-    if auto_unstuck_exposure_threshold != 0.0 and exposure > threshold:
+    wallet_exposure = qty_to_cost(psize, pprice, inverse, c_mult) / balance
+    threshold = wallet_exposure_limit * (1 - auto_unstuck_wallet_exposure_threshold)
+    if auto_unstuck_wallet_exposure_threshold != 0.0 and wallet_exposure > threshold:
         unstuck_close_price = max(
             lowest_ask, round_up(ema_band_upper * (1 + auto_unstuck_ema_dist), price_step)
         )
@@ -271,11 +271,11 @@ def calc_short_close_grid(
     min_qty,
     min_cost,
     c_mult,
-    exposure_limit,
+    wallet_exposure_limit,
     min_markup,
     markup_range,
     n_close_orders,
-    auto_unstuck_exposure_threshold,
+    auto_unstuck_wallet_exposure_threshold,
     auto_unstuck_ema_dist,
 ):
     abs_psize = abs_psize_ = round_dn(abs(psize), qty_step)  # round down for spot
@@ -293,9 +293,9 @@ def calc_short_close_grid(
     closes = []
     if len(close_prices) == 0:
         return [(abs_psize, highest_bid, "short_nclose")]
-    exposure = qty_to_cost(psize, pprice, inverse, c_mult) / balance
-    threshold = exposure_limit * (1 - auto_unstuck_exposure_threshold)
-    if auto_unstuck_exposure_threshold != 0.0 and exposure > threshold:
+    wallet_exposure = qty_to_cost(psize, pprice, inverse, c_mult) / balance
+    threshold = wallet_exposure_limit * (1 - auto_unstuck_wallet_exposure_threshold)
+    if auto_unstuck_wallet_exposure_threshold != 0.0 and wallet_exposure > threshold:
         unstuck_close_price = min(
             highest_bid, round_dn(ema_band_lower * (1 - auto_unstuck_ema_dist), price_step)
         )
@@ -340,9 +340,9 @@ def calc_short_close_grid(
 
 
 @njit
-def calc_upnl(long_psize, long_pprice, short_psize, short_pprice, last_price, inverse, c_mult):
-    return calc_long_pnl(long_pprice, last_price, long_psize, inverse, c_mult) + calc_short_pnl(
-        short_pprice, last_price, short_psize, inverse, c_mult
+def calc_upnl(psize_long, pprice_long, psize_short, pprice_short, last_price, inverse, c_mult):
+    return calc_long_pnl(pprice_long, last_price, psize_long, inverse, c_mult) + calc_short_pnl(
+        pprice_short, last_price, psize_short, inverse, c_mult
     )
 
 
@@ -358,25 +358,25 @@ def calc_emas_last(xs, spans):
 
 @njit
 def calc_bankruptcy_price(
-    balance, long_psize, long_pprice, short_psize, short_pprice, inverse, c_mult
+    balance, psize_long, pprice_long, psize_short, pprice_short, inverse, c_mult
 ):
-    long_pprice = nan_to_0(long_pprice)
-    short_pprice = nan_to_0(short_pprice)
-    long_psize *= c_mult
-    abs_short_psize = abs(short_psize) * c_mult
+    pprice_long = nan_to_0(pprice_long)
+    pprice_short = nan_to_0(pprice_short)
+    psize_long *= c_mult
+    abs_psize_short = abs(psize_short) * c_mult
     if inverse:
-        short_cost = abs_short_psize / short_pprice if short_pprice > 0.0 else 0.0
-        long_cost = long_psize / long_pprice if long_pprice > 0.0 else 0.0
+        short_cost = abs_psize_short / pprice_short if pprice_short > 0.0 else 0.0
+        long_cost = psize_long / pprice_long if pprice_long > 0.0 else 0.0
         denominator = short_cost - long_cost - balance
         if denominator == 0.0:
             return 0.0
-        bankruptcy_price = (abs_short_psize - long_psize) / denominator
+        bankruptcy_price = (abs_psize_short - psize_long) / denominator
     else:
-        denominator = long_psize - abs_short_psize
+        denominator = psize_long - abs_psize_short
         if denominator == 0.0:
             return 0.0
         bankruptcy_price = (
-            -balance + long_psize * long_pprice - abs_short_psize * short_pprice
+            -balance + psize_long * pprice_long - abs_psize_short * pprice_short
         ) / denominator
     return max(0.0, bankruptcy_price)
 
@@ -482,7 +482,7 @@ def find_long_close_qty_bringing_wallet_exposure_to_target(
 ) -> float:
     wallet_exposure = qty_to_cost(psize, pprice, inverse, c_mult) / balance
     if wallet_exposure <= wallet_exposure_target * 1.001:
-        # exposure within 0.1% of target: return zero
+        # wallet_exposure within 0.1% of target: return zero
         return 0.0
     guesses = []
     vals = []
@@ -585,7 +585,7 @@ def find_short_close_qty_bringing_wallet_exposure_to_target(
 ) -> float:
     wallet_exposure = qty_to_cost(psize, pprice, inverse, c_mult) / balance
     if wallet_exposure <= wallet_exposure_target * 1.001:
-        # exposure within 0.1% of target: return zero
+        # wallet_exposure within 0.1% of target: return zero
         return 0.0
     guesses = []
     vals = []
@@ -692,7 +692,7 @@ def find_entry_qty_bringing_wallet_exposure_to_target(
 ) -> float:
     wallet_exposure = qty_to_cost(psize, pprice, inverse, c_mult) / balance
     if wallet_exposure >= wallet_exposure_target * 0.99:
-        # return zero if exposure already is within 1% of target
+        # return zero if wallet_exposure already is within 1% of target
         return 0.0
     guesses = []
     vals = []
@@ -1806,7 +1806,7 @@ def njit_backtest(
     prices = ticks[:, 2]
 
     balance = balance_long = balance_short = equity = starting_balance
-    long_psize, long_pprice, short_psize, short_pprice = 0.0, 0.0, 0.0, 0.0
+    psize_long, pprice_long, psize_short, pprice_short = 0.0, 0.0, 0.0, 0.0
 
     fills = []
     stats = []
@@ -1882,33 +1882,33 @@ def njit_backtest(
         closest_bkr = min(closest_bkr, bkr_diff)
         if timestamps[k] >= next_stats_update:
             equity = balance + calc_upnl(
-                long_psize,
-                long_pprice,
-                short_psize,
-                short_pprice,
+                psize_long,
+                pprice_long,
+                psize_short,
+                pprice_short,
                 prices[k],
                 inverse,
                 c_mult,
             )
             equity_long = balance_long + calc_long_pnl(
-                long_pprice, prices[k], long_psize, inverse, c_mult
+                pprice_long, prices[k], psize_long, inverse, c_mult
             )
             equity_short = balance_short + calc_short_pnl(
-                short_pprice, prices[k], short_psize, inverse, c_mult
+                pprice_short, prices[k], psize_short, inverse, c_mult
             )
             if equity / starting_balance < 0.2:
                 # break early when equity is less than 20% of starting balance
-                return fills, stats
+                return fills, [], stats
             stats.append(
                 (
                     timestamps[k],
                     balance,
                     equity,
                     bkr_price,
-                    long_psize,
-                    long_pprice,
-                    short_psize,
-                    short_pprice,
+                    psize_long,
+                    pprice_long,
+                    psize_short,
+                    pprice_short,
                     prices[k],
                     closest_bkr,
                     balance_long,
@@ -1922,8 +1922,8 @@ def njit_backtest(
             long_entries = (
                 calc_long_entry_grid(
                     balance,
-                    long_psize,
-                    long_pprice,
+                    psize_long,
+                    pprice_long,
                     prices[k - 1],
                     min(emas_long),
                     inverse,
@@ -1953,8 +1953,8 @@ def njit_backtest(
             short_entries = (
                 calc_short_entry_grid(
                     balance,
-                    short_psize,
-                    short_pprice,
+                    psize_short,
+                    pprice_short,
                     prices[k - 1],
                     max(emas_short),
                     inverse,
@@ -1984,8 +1984,8 @@ def njit_backtest(
             long_closes = (
                 calc_long_close_grid(
                     balance,
-                    long_psize,
-                    long_pprice,
+                    psize_long,
+                    pprice_long,
                     prices[k - 1],
                     max(emas_long),
                     inverse,
@@ -2009,8 +2009,8 @@ def njit_backtest(
             short_closes = (
                 calc_short_close_grid(
                     balance,
-                    short_psize,
-                    short_pprice,
+                    psize_short,
+                    pprice_short,
                     prices[k - 1],
                     min(emas_short),
                     inverse,
@@ -2033,12 +2033,12 @@ def njit_backtest(
 
         if closest_bkr < 0.06:
             # consider bankruptcy within 6% as liquidation
-            if long_psize != 0.0:
-                fee_paid = -qty_to_cost(long_psize, long_pprice, inverse, c_mult) * maker_fee
-                pnl = calc_long_pnl(long_pprice, prices[k], -long_psize, inverse, c_mult)
+            if psize_long != 0.0:
+                fee_paid = -qty_to_cost(psize_long, pprice_long, inverse, c_mult) * maker_fee
+                pnl = calc_long_pnl(pprice_long, prices[k], -psize_long, inverse, c_mult)
                 balance = 0.0
                 equity = 0.0
-                long_psize, long_pprice = 0.0, 0.0
+                psize_long, pprice_long = 0.0, 0.0
                 fills.append(
                     (
                         k,
@@ -2047,18 +2047,18 @@ def njit_backtest(
                         fee_paid,
                         balance,
                         equity,
-                        -long_psize,
+                        -psize_long,
                         prices[k],
                         0.0,
                         0.0,
                         "long_bankruptcy",
                     )
                 )
-            if short_psize != 0.0:
-                fee_paid = -qty_to_cost(short_psize, short_pprice, inverse, c_mult) * maker_fee
-                pnl = calc_short_pnl(short_pprice, prices[k], -short_psize, inverse, c_mult)
+            if psize_short != 0.0:
+                fee_paid = -qty_to_cost(psize_short, pprice_short, inverse, c_mult) * maker_fee
+                pnl = calc_short_pnl(pprice_short, prices[k], -psize_short, inverse, c_mult)
                 balance, equity = 0.0, 0.0
-                short_psize, short_pprice = 0.0, 0.0
+                psize_short, pprice_short = 0.0, 0.0
                 fills.append(
                     (
                         k,
@@ -2067,14 +2067,14 @@ def njit_backtest(
                         fee_paid,
                         balance,
                         equity,
-                        -short_psize,
+                        -psize_short,
                         prices[k],
                         0.0,
                         0.0,
                         "short_bankruptcy",
                     )
                 )
-            return fills, stats
+            return fills, [], stats
 
         while long_entries and long_entries[0][0] > 0.0 and prices[k] < long_entries[0][1]:
             next_entry_grid_update_ts_long = min(
@@ -2083,9 +2083,9 @@ def njit_backtest(
             next_close_grid_update_ts_long = min(
                 next_close_grid_update_ts_long, timestamps[k] + latency_simulation_ms
             )
-            long_psize, long_pprice = calc_new_psize_pprice(
-                long_psize,
-                long_pprice,
+            psize_long, pprice_long = calc_new_psize_pprice(
+                psize_long,
+                pprice_long,
                 long_entries[0][0],
                 long_entries[0][1],
                 qty_step,
@@ -2097,10 +2097,10 @@ def njit_backtest(
             balance_long += fee_paid
             equity = calc_equity(
                 balance,
-                long_psize,
-                long_pprice,
-                short_psize,
-                short_pprice,
+                psize_long,
+                pprice_long,
+                psize_short,
+                pprice_short,
                 prices[k],
                 inverse,
                 c_mult,
@@ -2115,22 +2115,22 @@ def njit_backtest(
                     equity,
                     long_entries[0][0],
                     long_entries[0][1],
-                    long_psize,
-                    long_pprice,
+                    psize_long,
+                    pprice_long,
                     long_entries[0][2],
                 )
             )
             long_entries = long_entries[1:]
             bkr_price = calc_bankruptcy_price(
                 balance,
-                long_psize,
-                long_pprice,
-                short_psize,
-                short_pprice,
+                psize_long,
+                pprice_long,
+                psize_short,
+                pprice_short,
                 inverse,
                 c_mult,
             )
-            long_wallet_exposure = qty_to_cost(long_psize, long_pprice, inverse, c_mult) / balance
+            long_wallet_exposure = qty_to_cost(psize_long, pprice_long, inverse, c_mult) / balance
         while short_entries and short_entries[0][0] < 0.0 and prices[k] > short_entries[0][1]:
             next_entry_grid_update_ts_short = min(
                 next_entry_grid_update_ts_short, timestamps[k] + latency_simulation_ms
@@ -2138,9 +2138,9 @@ def njit_backtest(
             next_close_grid_update_ts_short = min(
                 next_close_grid_update_ts_short, timestamps[k] + latency_simulation_ms
             )
-            short_psize, short_pprice = calc_new_psize_pprice(
-                short_psize,
-                short_pprice,
+            psize_short, pprice_short = calc_new_psize_pprice(
+                psize_short,
+                pprice_short,
                 short_entries[0][0],
                 short_entries[0][1],
                 qty_step,
@@ -2152,10 +2152,10 @@ def njit_backtest(
             balance_short += fee_paid
             equity = calc_equity(
                 balance,
-                short_psize,
-                short_pprice,
-                short_psize,
-                short_pprice,
+                psize_short,
+                pprice_short,
+                psize_short,
+                pprice_short,
                 prices[k],
                 inverse,
                 c_mult,
@@ -2170,24 +2170,24 @@ def njit_backtest(
                     equity,
                     short_entries[0][0],
                     short_entries[0][1],
-                    short_psize,
-                    short_pprice,
+                    psize_short,
+                    pprice_short,
                     short_entries[0][2],
                 )
             )
             short_entries = short_entries[1:]
             bkr_price = calc_bankruptcy_price(
                 balance,
-                short_psize,
-                short_pprice,
-                short_psize,
-                short_pprice,
+                psize_short,
+                pprice_short,
+                psize_short,
+                pprice_short,
                 inverse,
                 c_mult,
             )
-            short_wallet_exposure = qty_to_cost(short_psize, short_pprice, inverse, c_mult) / balance
+            short_wallet_exposure = qty_to_cost(psize_short, pprice_short, inverse, c_mult) / balance
         while (
-            long_psize > 0.0
+            psize_long > 0.0
             and long_closes
             and long_closes[0][0] < 0.0
             and prices[k] > long_closes[0][1]
@@ -2199,25 +2199,25 @@ def njit_backtest(
                 next_close_grid_update_ts_long, timestamps[k] + latency_simulation_ms
             )
             long_close_qty = long_closes[0][0]
-            new_long_psize = round_(long_psize + long_close_qty, qty_step)
-            if new_long_psize < 0.0:
+            new_psize_long = round_(psize_long + long_close_qty, qty_step)
+            if new_psize_long < 0.0:
                 print("warning: long close qty greater than long psize")
-                print("long_psize", long_psize)
-                print("long_pprice", long_pprice)
+                print("psize_long", psize_long)
+                print("pprice_long", pprice_long)
                 print("long_closes[0]", long_closes[0])
-                long_close_qty = -long_psize
-                new_long_psize, long_pprice = 0.0, 0.0
-            long_psize = new_long_psize
+                long_close_qty = -psize_long
+                new_psize_long, pprice_long = 0.0, 0.0
+            psize_long = new_psize_long
             fee_paid = -qty_to_cost(long_close_qty, long_closes[0][1], inverse, c_mult) * maker_fee
-            pnl = calc_long_pnl(long_pprice, long_closes[0][1], long_close_qty, inverse, c_mult)
+            pnl = calc_long_pnl(pprice_long, long_closes[0][1], long_close_qty, inverse, c_mult)
             balance += fee_paid + pnl
             balance_long += fee_paid + pnl
             equity = calc_equity(
                 balance,
-                long_psize,
-                long_pprice,
-                short_psize,
-                short_pprice,
+                psize_long,
+                pprice_long,
+                psize_short,
+                pprice_short,
                 prices[k],
                 inverse,
                 c_mult,
@@ -2232,24 +2232,24 @@ def njit_backtest(
                     equity,
                     long_close_qty,
                     long_closes[0][1],
-                    long_psize,
-                    long_pprice,
+                    psize_long,
+                    pprice_long,
                     long_closes[0][2],
                 )
             )
             long_closes = long_closes[1:]
             bkr_price = calc_bankruptcy_price(
                 balance,
-                long_psize,
-                long_pprice,
-                short_psize,
-                short_pprice,
+                psize_long,
+                pprice_long,
+                psize_short,
+                pprice_short,
                 inverse,
                 c_mult,
             )
-            long_wallet_exposure = qty_to_cost(long_psize, long_pprice, inverse, c_mult) / balance
+            long_wallet_exposure = qty_to_cost(psize_long, pprice_long, inverse, c_mult) / balance
         while (
-            short_psize < 0.0
+            psize_short < 0.0
             and short_closes
             and short_closes[0][0] > 0.0
             and prices[k] < short_closes[0][1]
@@ -2261,25 +2261,25 @@ def njit_backtest(
                 next_close_grid_update_ts_short, timestamps[k] + latency_simulation_ms
             )
             short_close_qty = short_closes[0][0]
-            new_short_psize = round_(short_psize + short_close_qty, qty_step)
-            if new_short_psize > 0.0:
+            new_psize_short = round_(psize_short + short_close_qty, qty_step)
+            if new_psize_short > 0.0:
                 print("warning: short close qty less than short psize")
-                print("short_psize", short_psize)
-                print("short_pprice", short_pprice)
+                print("psize_short", psize_short)
+                print("pprice_short", pprice_short)
                 print("short_closes[0]", short_closes[0])
-                short_close_qty = -short_psize
-                new_short_psize, short_pprice = 0.0, 0.0
-            short_psize = new_short_psize
+                short_close_qty = -psize_short
+                new_psize_short, pprice_short = 0.0, 0.0
+            psize_short = new_psize_short
             fee_paid = -qty_to_cost(short_close_qty, short_closes[0][1], inverse, c_mult) * maker_fee
-            pnl = calc_short_pnl(short_pprice, short_closes[0][1], short_close_qty, inverse, c_mult)
+            pnl = calc_short_pnl(pprice_short, short_closes[0][1], short_close_qty, inverse, c_mult)
             balance += fee_paid + pnl
             balance_short += fee_paid + pnl
             equity = calc_equity(
                 balance,
-                short_psize,
-                short_pprice,
-                short_psize,
-                short_pprice,
+                psize_short,
+                pprice_short,
+                psize_short,
+                pprice_short,
                 prices[k],
                 inverse,
                 c_mult,
@@ -2294,30 +2294,30 @@ def njit_backtest(
                     equity,
                     short_close_qty,
                     short_closes[0][1],
-                    short_psize,
-                    short_pprice,
+                    psize_short,
+                    pprice_short,
                     short_closes[0][2],
                 )
             )
             short_closes = short_closes[1:]
             bkr_price = calc_bankruptcy_price(
                 balance,
-                short_psize,
-                short_pprice,
-                short_psize,
-                short_pprice,
+                psize_short,
+                pprice_short,
+                psize_short,
+                pprice_short,
                 inverse,
                 c_mult,
             )
-            short_wallet_exposure = qty_to_cost(short_psize, short_pprice, inverse, c_mult) / balance
+            short_wallet_exposure = qty_to_cost(psize_short, pprice_short, inverse, c_mult) / balance
         if do_long:
-            if long_psize == 0.0:
+            if psize_long == 0.0:
                 next_entry_grid_update_ts_long = min(
                     next_entry_grid_update_ts_long,
                     timestamps[k] + latency_simulation_ms,
                 )
             else:
-                if prices[k] > long_pprice:
+                if prices[k] > pprice_long:
                     next_close_grid_update_ts_long = min(
                         next_close_grid_update_ts_long,
                         timestamps[k] + latency_simulation_ms + 2500,
@@ -2332,13 +2332,13 @@ def njit_backtest(
                         timestamps[k] + latency_simulation_ms + 15000,
                     )
         if do_short:
-            if short_psize == 0.0:
+            if psize_short == 0.0:
                 next_entry_grid_update_ts_short = min(
                     next_entry_grid_update_ts_short,
                     timestamps[k] + latency_simulation_ms,
                 )
             else:
-                if prices[k] < short_pprice:
+                if prices[k] < pprice_short:
                     next_close_grid_update_ts_short = min(
                         next_close_grid_update_ts_short,
                         timestamps[k] + latency_simulation_ms + 2500,
@@ -2353,4 +2353,4 @@ def njit_backtest(
                         timestamps[k] + latency_simulation_ms + 15000,
                     )
 
-    return fills, stats
+    return fills, [], stats
