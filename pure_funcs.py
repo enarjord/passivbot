@@ -463,9 +463,7 @@ def analyze_fills(fills: list, stats: list, config: dict) -> (pd.DataFrame, pd.D
     longs = fdf[fdf.type.str.contains("long")].set_index("timestamp")
     shorts = fdf[fdf.type.str.contains("short")].set_index("timestamp")
     gain_long = longs.pnl.sum() / sdf.balance.iloc[0]
-    adg_long = (gain_long + 1) ** (1 / n_days) - 1
     gain_short = shorts.pnl.sum() / sdf.balance.iloc[0]
-    adg_short = (gain_short + 1) ** (1 / n_days) - 1
 
     ms2d = 1000 * 60 * 60 * 24
     if len(longs) > 0:
