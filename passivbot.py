@@ -438,30 +438,30 @@ class Bot:
 
     def calc_orders(self):
         balance = self.position["wallet_balance"]
-        long_psize = self.position["long"]["size"]
-        long_pprice = self.position["long"]["price"]
-        short_psize = self.position["short"]["size"]
-        short_pprice = self.position["short"]["price"]
+        psize_long = self.position["long"]["size"]
+        pprice_long = self.position["long"]["price"]
+        psize_short = self.position["short"]["size"]
+        pprice_short = self.position["short"]["price"]
 
         if self.hedge_mode:
-            do_long = self.do_long or long_psize != 0.0
-            do_short = self.do_short or short_psize != 0.0
+            do_long = self.do_long or psize_long != 0.0
+            do_short = self.do_short or psize_short != 0.0
         else:
-            no_pos = long_psize == 0.0 and short_psize == 0.0
-            do_long = (no_pos and self.do_long) or long_psize != 0.0
-            do_short = (no_pos and self.do_short) or short_psize != 0.0
+            no_pos = psize_long == 0.0 and psize_short == 0.0
+            do_long = (no_pos and self.do_long) or psize_long != 0.0
+            do_short = (no_pos and self.do_short) or psize_short != 0.0
         self.xk["do_long"] = do_long
         self.xk["do_short"] = do_short
 
         orders = []
 
         if self.long_mode == "panic":
-            if long_psize != 0.0:
+            if psize_long != 0.0:
                 orders.append(
                     {
                         "side": "sell",
                         "position_side": "long",
-                        "qty": abs(long_psize),
+                        "qty": abs(psize_long),
                         "price": float(self.ob[1]),
                         "type": "limit",
                         "reduce_only": True,
@@ -471,8 +471,8 @@ class Bot:
         else:
             long_entries = calc_long_entry_grid(
                 balance,
-                long_psize,
-                long_pprice,
+                psize_long,
+                pprice_long,
                 self.ob[0],
                 min(self.emas_long),
                 self.xk["inverse"],
@@ -496,8 +496,8 @@ class Bot:
             )
             long_closes = calc_long_close_grid(
                 balance,
-                long_psize,
-                long_pprice,
+                psize_long,
+                pprice_long,
                 self.ob[1],
                 max(self.emas_long),
                 self.xk["inverse"],
@@ -540,12 +540,12 @@ class Bot:
                 if o[0] < 0.0
             ]
         if self.short_mode == "panic":
-            if short_psize != 0.0:
+            if psize_short != 0.0:
                 orders.append(
                     {
                         "side": "buy",
                         "position_side": "short",
-                        "qty": abs(short_psize),
+                        "qty": abs(psize_short),
                         "price": float(self.ob[0]),
                         "type": "limit",
                         "reduce_only": True,
@@ -555,8 +555,8 @@ class Bot:
         else:
             short_entries = calc_short_entry_grid(
                 balance,
-                short_psize,
-                short_pprice,
+                psize_short,
+                pprice_short,
                 self.ob[1],
                 max(self.emas_short),
                 self.xk["inverse"],
@@ -580,8 +580,8 @@ class Bot:
             )
             short_closes = calc_short_close_grid(
                 balance,
-                short_psize,
-                short_pprice,
+                psize_short,
+                pprice_short,
                 self.ob[0],
                 min(self.emas_short),
                 self.xk["inverse"],
@@ -735,14 +735,14 @@ class Bot:
             if "wallet_balance" in event:
                 self.position["wallet_balance"] = self.adjust_wallet_balance(event["wallet_balance"])
                 pos_change = True
-            if "long_psize" in event:
-                self.position["long"]["size"] = event["long_psize"]
-                self.position["long"]["price"] = event["long_pprice"]
+            if "psize_long" in event:
+                self.position["long"]["size"] = event["psize_long"]
+                self.position["long"]["price"] = event["pprice_long"]
                 self.position = self.add_wallet_exposures_to_pos(self.position)
                 pos_change = True
-            if "short_psize" in event:
-                self.position["short"]["size"] = event["short_psize"]
-                self.position["short"]["price"] = event["short_pprice"]
+            if "psize_short" in event:
+                self.position["short"]["size"] = event["psize_short"]
+                self.position["short"]["price"] = event["pprice_short"]
                 self.position = self.add_wallet_exposures_to_pos(self.position)
                 pos_change = True
             if "new_open_order" in event:
