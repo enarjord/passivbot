@@ -218,7 +218,7 @@ def calc_long_close_grid(
             lowest_ask, round_up(ema_band_upper * (1 + auto_unstuck_ema_dist), price_step)
         )
         if unstuck_close_price < close_prices[0]:
-            unstuck_close_qty = find_long_close_qty_bringing_wallet_exposure_to_target(
+            unstuck_close_qty = find_close_qty_long_bringing_wallet_exposure_to_target(
                 balance,
                 psize_,
                 pprice,
@@ -299,7 +299,7 @@ def calc_short_close_grid(
             highest_bid, round_dn(ema_band_lower * (1 - auto_unstuck_ema_dist), price_step)
         )
         if unstuck_close_price > close_prices[0]:
-            unstuck_close_qty = find_short_close_qty_bringing_wallet_exposure_to_target(
+            unstuck_close_qty = find_close_qty_short_bringing_wallet_exposure_to_target(
                 balance,
                 psize,
                 pprice,
@@ -408,7 +408,7 @@ def calc_m_b(x0, x1, y0, y1):
 
 
 @njit
-def calc_long_entry_qty(psize, pprice, entry_price, eprice_pprice_diff):
+def calc_entry_qty_long(psize, pprice, entry_price, eprice_pprice_diff):
     return -(
         psize
         * (entry_price * eprice_pprice_diff + entry_price - pprice)
@@ -443,7 +443,7 @@ def calc_initial_entry_qty(
 
 
 @njit
-def calc_short_entry_qty(psize, pprice, entry_price, eprice_pprice_diff):
+def calc_entry_qty_short(psize, pprice, entry_price, eprice_pprice_diff):
     return -(
         (psize * (entry_price * (eprice_pprice_diff - 1) + pprice))
         / (entry_price * eprice_pprice_diff)
@@ -451,7 +451,7 @@ def calc_short_entry_qty(psize, pprice, entry_price, eprice_pprice_diff):
 
 
 @njit
-def calc_long_entry_price(psize, pprice, entry_qty, eprice_pprice_diff):
+def calc_entry_price_long(psize, pprice, entry_qty, eprice_pprice_diff):
     return (psize * pprice) / (psize * eprice_pprice_diff + psize + entry_qty * eprice_pprice_diff)
 
 
@@ -469,7 +469,7 @@ def interpolate(x, xs, ys):
 
 
 @njit
-def find_long_close_qty_bringing_wallet_exposure_to_target(
+def find_close_qty_long_bringing_wallet_exposure_to_target(
     balance,
     psize,
     pprice,
@@ -519,7 +519,7 @@ def find_long_close_qty_bringing_wallet_exposure_to_target(
                 wallet_exposure_target, np.array(vals[-2:]), np.array(guesses[-2:])
             )
         except:
-            print("debug zero div error find_long_close_qty_bringing_wallet_exposure_to_target")
+            print("debug zero div error find_close_qty_long_bringing_wallet_exposure_to_target")
             print(
                 "balance, psize, pprice, wallet_exposure_target, close_price, inverse, qty_step, c_mult,"
             )
@@ -546,7 +546,7 @@ def find_long_close_qty_bringing_wallet_exposure_to_target(
             break
     evals_guesses = sorted([(e, g) for e, g in zip(evals, guesses)])
     if evals_guesses[0][0] > 0.15:
-        print("debug find_long_close_qty_bringing_wallet_exposure_to_target")
+        print("debug find_close_qty_long_bringing_wallet_exposure_to_target")
         print(
             "balance, psize, pprice, wallet_exposure_target, close_price, inverse, qty_step, c_mult,"
         )
@@ -572,7 +572,7 @@ def find_long_close_qty_bringing_wallet_exposure_to_target(
 
 
 @njit
-def find_short_close_qty_bringing_wallet_exposure_to_target(
+def find_close_qty_short_bringing_wallet_exposure_to_target(
     balance,
     psize,
     pprice,
@@ -626,7 +626,7 @@ def find_short_close_qty_bringing_wallet_exposure_to_target(
                 wallet_exposure_target, np.array(vals[-2:]), np.array(guesses[-2:])
             )
         except:
-            print("debug zero div error find_short_close_qty_bringing_wallet_exposure_to_target")
+            print("debug zero div error find_close_qty_short_bringing_wallet_exposure_to_target")
             print(
                 "balance, psize, pprice, wallet_exposure_target, close_price, inverse, qty_step, c_mult,"
             )
@@ -653,7 +653,7 @@ def find_short_close_qty_bringing_wallet_exposure_to_target(
             break
     evals_guesses = sorted([(e, g) for e, g in zip(evals, guesses)])
     if evals_guesses[0][0] > 0.15:
-        print("debug find_short_close_qty_bringing_wallet_exposure_to_target")
+        print("debug find_close_qty_short_bringing_wallet_exposure_to_target")
         print(
             "balance, psize, pprice, wallet_exposure_target, close_price, inverse, qty_step, c_mult,"
         )
@@ -784,7 +784,7 @@ def find_eprice_pprice_diff_wallet_exposure_weighting(
 ):
     def eval_(guess_):
         if is_long:
-            return eval_long_entry_grid(
+            return eval_entry_grid_long(
                 balance,
                 initial_entry_price,
                 inverse,
@@ -804,7 +804,7 @@ def find_eprice_pprice_diff_wallet_exposure_weighting(
                 prev_pprice=prev_pprice,
             )[-1][4]
         else:
-            return eval_short_entry_grid(
+            return eval_entry_grid_short(
                 balance,
                 initial_entry_price,
                 inverse,
@@ -876,7 +876,7 @@ def find_eprice_pprice_diff_wallet_exposure_weighting(
 
 
 @njit
-def eval_long_entry_grid(
+def eval_entry_grid_long(
     balance,
     initial_entry_price,
     inverse,
@@ -933,7 +933,7 @@ def eval_long_entry_grid(
             1 + grid[i - 1][4] * eprice_pprice_diff_wallet_exposure_weighting
         )
         qty = round_(
-            calc_long_entry_qty(psize, pprice, grid[i][1], adjusted_eprice_pprice_diff),
+            calc_entry_qty_long(psize, pprice, grid[i][1], adjusted_eprice_pprice_diff),
             qty_step,
         )
         if qty < calc_min_entry_qty(grid[i][1], inverse, qty_step, min_qty, min_cost):
@@ -949,7 +949,7 @@ def eval_long_entry_grid(
 
 
 @njit
-def eval_short_entry_grid(
+def eval_entry_grid_short(
     balance,
     initial_entry_price,
     inverse,
@@ -1006,7 +1006,7 @@ def eval_short_entry_grid(
             1 + grid[i - 1][4] * eprice_pprice_diff_wallet_exposure_weighting
         )
         qty = round_(
-            calc_short_entry_qty(psize, pprice, grid[i][1], adjusted_eprice_pprice_diff),
+            calc_entry_qty_short(psize, pprice, grid[i][1], adjusted_eprice_pprice_diff),
             qty_step,
         )
         if -qty < calc_min_entry_qty(grid[i][1], inverse, qty_step, min_qty, min_cost):
@@ -1022,7 +1022,7 @@ def eval_short_entry_grid(
 
 
 @njit
-def calc_whole_long_entry_grid(
+def calc_whole_entry_grid_long(
     balance,
     initial_entry_price,
     inverse,
@@ -1070,7 +1070,7 @@ def calc_whole_long_entry_grid(
         eprices=eprices,
         prev_pprice=prev_pprice,
     )
-    grid = eval_long_entry_grid(
+    grid = eval_entry_grid_long(
         balance,
         initial_entry_price,
         inverse,
@@ -1116,7 +1116,7 @@ def calc_whole_long_entry_grid(
 
 
 @njit
-def calc_whole_short_entry_grid(
+def calc_whole_entry_grid_short(
     balance,
     initial_entry_price,
     inverse,
@@ -1164,7 +1164,7 @@ def calc_whole_short_entry_grid(
         eprices=eprices,
         prev_pprice=prev_pprice,
     )
-    grid = eval_short_entry_grid(
+    grid = eval_entry_grid_short(
         balance,
         initial_entry_price,
         inverse,
@@ -1210,7 +1210,7 @@ def calc_whole_short_entry_grid(
 
 
 @njit
-def calc_long_entry_grid(
+def calc_entry_grid_long(
     balance,
     psize,
     pprice,
@@ -1378,7 +1378,7 @@ def calc_long_entry_grid(
 
 
 @njit
-def calc_short_entry_grid(
+def calc_entry_grid_short(
     balance,
     psize,
     pprice,
@@ -1568,7 +1568,7 @@ def approximate_long_grid(
 ):
     def eval_(ientry_price_guess, psize_):
         ientry_price_guess = round_(ientry_price_guess, price_step)
-        grid = calc_whole_long_entry_grid(
+        grid = calc_whole_entry_grid_long(
             balance,
             ientry_price_guess,
             inverse,
@@ -1593,7 +1593,7 @@ def approximate_long_grid(
     if pprice == 0.0:
         raise Exception("cannot make grid without pprice")
     if psize == 0.0:
-        return calc_whole_long_entry_grid(
+        return calc_whole_entry_grid_long(
             balance,
             pprice,
             inverse,
@@ -1676,7 +1676,7 @@ def approximate_short_grid(
 ):
     def eval_(ientry_price_guess, psize_):
         ientry_price_guess = round_(ientry_price_guess, price_step)
-        grid = calc_whole_short_entry_grid(
+        grid = calc_whole_entry_grid_short(
             balance,
             ientry_price_guess,
             inverse,
@@ -1706,7 +1706,7 @@ def approximate_short_grid(
     if pprice == 0.0:
         raise Exception("cannot make grid without pprice")
     if psize == 0.0:
-        return calc_whole_short_entry_grid(
+        return calc_whole_entry_grid_short(
             balance,
             pprice,
             inverse,
@@ -1767,13 +1767,11 @@ def approximate_short_grid(
 
 
 @njit
-def njit_backtest(
+def backtest_static_grid(
     ticks,
     starting_balance,
     latency_simulation_ms,
     maker_fee,
-    spot,
-    hedge_mode,
     inverse,
     do_long,
     do_short,
@@ -1782,8 +1780,8 @@ def njit_backtest(
     min_qty,
     min_cost,
     c_mult,
-    ema_span_1,
     ema_span_0,
+    ema_span_1,
     eprice_exp_base,
     eprice_pprice_diff,
     grid_span,
@@ -1804,15 +1802,14 @@ def njit_backtest(
     qtys = ticks[:, 1]
     prices = ticks[:, 2]
 
-    balance = balance_long = balance_short = equity = starting_balance
+    balance_long = balance_short = equity_long = equity_short = starting_balance
     psize_long, pprice_long, psize_short, pprice_short = 0.0, 0.0, 0.0, 0.0
 
-    fills = []
-    stats = []
+    fills_long, fills_short, stats = [], [], []
 
-    long_entries = long_closes = [(0.0, 0.0, "")]
-    short_entries = short_closes = [(0.0, 0.0, "")]
-    bkr_price = 0.0
+    entries_long = long_closes = [(0.0, 0.0, "")]
+    entries_short = short_closes = [(0.0, 0.0, "")]
+    bkr_price_long = bkr_price_short = 0.0
 
     next_entry_grid_update_ts_long = 0
     next_entry_grid_update_ts_short = 0
@@ -1820,37 +1817,19 @@ def njit_backtest(
     next_close_grid_update_ts_short = 0
     next_stats_update = 0
 
-    prev_k = 0
-    closest_bkr = 1.0
+    closest_bkr_long = closest_bkr_short = 1.0
 
-    spans_long = [
-        ema_span_0[0],
-        (ema_span_0[0] * ema_span_1[0]) ** 0.5,
-        ema_span_1[0],
-    ]
-    spans_long = np.array(spans_long) * 60 if do_long else np.ones(3)
-    spans_short = [
-        ema_span_0[1],
-        (ema_span_0[1] * ema_span_1[1]) ** 0.5,
-        ema_span_1[1],
-    ]
-    spans_short = np.array(spans_short) * 60 if do_short else np.ones(3)
-
-    assert max(spans_long) < len(prices), "ema_span long larger than len(prices)"
-    assert max(spans_short) < len(prices), "ema_span short larger than len(prices)"
+    spans_long = [ema_span_0[0], (ema_span_0[0] * ema_span_1[0]) ** 0.5, ema_span_1[0]]
+    spans_long = np.array(sorted(spans_long)) * 60.0 if do_long else np.ones(3)
+    spans_short = [ema_span_0[1], (ema_span_0[1] * ema_span_1[1]) ** 0.5, ema_span_1[1]]
+    spans_short = np.array(sorted(spans_short)) * 60.0 if do_short else np.ones(3)
+    assert max(spans_long) < len(prices), "max ema_span long larger than len(prices)"
+    assert max(spans_short) < len(prices), "max ema_span short larger than len(prices)"
     spans_long = np.where(spans_long < 1.0, 1.0, spans_long)
     spans_short = np.where(spans_short < 1.0, 1.0, spans_short)
-    max_span = int(round(max(max(spans_long), max(spans_short))))
-    emas_long = (
-        (calc_emas_last(prices[:max_span], spans_long) if do_long else np.zeros(len(spans_long)))
-        if do_long
-        else np.zeros(3)
-    )
-    emas_short = (
-        (calc_emas_last(prices[:max_span], spans_short) if do_short else np.zeros(len(spans_short)))
-        if do_short
-        else np.zeros(3)
-    )
+    max_span_long = int(round(max(spans_long)))
+    max_span_short = int(round(max(spans_short)))
+    emas_long, emas_short = np.repeat(prices[0], 3), np.repeat(prices[0], 3)
     alphas_long = 2.0 / (spans_long + 1.0)
     alphas__long = 1.0 - alphas_long
     alphas_short = 2.0 / (spans_short + 1.0)
@@ -1869,47 +1848,469 @@ def njit_backtest(
         else wallet_exposure_limit[1] * 10
     )
 
-    for k in range(max_span, len(prices)):
+    for k in range(0, len(prices)):
         if do_long:
             emas_long = calc_ema(alphas_long, alphas__long, emas_long, prices[k])
+            if k >= max_span_long:
+                # check bankruptcy
+                bkr_diff_long = calc_diff(bkr_price_long, prices[k])
+                closest_bkr_long = min(closest_bkr_long, bkr_diff_long)
+                if closest_bkr_long < 0.06:
+                    # consider bankruptcy within 6% as liquidation
+                    if psize_long != 0.0:
+                        fee_paid = -qty_to_cost(psize_long, pprice_long, inverse, c_mult) * maker_fee
+                        pnl = calc_long_pnl(pprice_long, prices[k], -psize_long, inverse, c_mult)
+                        balance_long = 0.0
+                        equity_long = 0.0
+                        psize_long, pprice_long = 0.0, 0.0
+                        fills_long.append(
+                            (
+                                k,
+                                timestamps[k],
+                                pnl,
+                                fee_paid,
+                                balance_long,
+                                equity_long,
+                                -psize_long,
+                                prices[k],
+                                0.0,
+                                0.0,
+                                "long_bankruptcy",
+                            )
+                        )
+                    do_long = False
+                    if not do_short:
+                        return fills_long, fills_short, stats
+
+                # check if long entry grid should be updated
+                if timestamps[k] >= next_entry_grid_update_ts_long:
+                    entries_long = calc_entry_grid_long(
+                        balance_long,
+                        psize_long,
+                        pprice_long,
+                        prices[k - 1],
+                        min(emas_long),
+                        inverse,
+                        do_long,
+                        qty_step,
+                        price_step,
+                        min_qty,
+                        min_cost,
+                        c_mult,
+                        grid_span[0],
+                        wallet_exposure_limit[0],
+                        max_n_entry_orders[0],
+                        initial_qty_pct[0],
+                        initial_eprice_ema_dist[0],
+                        eprice_pprice_diff[0],
+                        secondary_allocation[0],
+                        secondary_pprice_diff[0],
+                        eprice_exp_base[0],
+                        auto_unstuck_wallet_exposure_threshold[0],
+                        auto_unstuck_ema_dist[0],
+                    )
+                    next_entry_grid_update_ts_long = timestamps[k] + 1000 * 60 * 5
+                # check if close grid should be updated
+                if timestamps[k] >= next_close_grid_update_ts_long:
+                    long_closes = calc_long_close_grid(
+                        balance_long,
+                        psize_long,
+                        pprice_long,
+                        prices[k - 1],
+                        max(emas_long),
+                        inverse,
+                        qty_step,
+                        price_step,
+                        min_qty,
+                        min_cost,
+                        c_mult,
+                        wallet_exposure_limit[0],
+                        min_markup[0],
+                        markup_range[0],
+                        n_close_orders[0],
+                        auto_unstuck_wallet_exposure_threshold[0],
+                        auto_unstuck_ema_dist[0],
+                    )
+                    next_close_grid_update_ts_long = timestamps[k] + 1000 * 60 * 5
+
+                # check for long entry fills
+                while entries_long and entries_long[0][0] > 0.0 and prices[k] < entries_long[0][1]:
+                    next_entry_grid_update_ts_long = min(
+                        next_entry_grid_update_ts_long, timestamps[k] + latency_simulation_ms
+                    )
+                    next_close_grid_update_ts_long = min(
+                        next_close_grid_update_ts_long, timestamps[k] + latency_simulation_ms
+                    )
+                    psize_long, pprice_long = calc_new_psize_pprice(
+                        psize_long,
+                        pprice_long,
+                        entries_long[0][0],
+                        entries_long[0][1],
+                        qty_step,
+                    )
+                    fee_paid = (
+                        -qty_to_cost(entries_long[0][0], entries_long[0][1], inverse, c_mult)
+                        * maker_fee
+                    )
+                    balance_long += fee_paid
+                    equity_long = balance_long + calc_long_pnl(
+                        pprice_long, prices[k], psize_long, inverse, c_mult
+                    )
+                    fills_long.append(
+                        (
+                            k,
+                            timestamps[k],
+                            0.0,
+                            fee_paid,
+                            balance_long,
+                            equity_long,
+                            entries_long[0][0],
+                            entries_long[0][1],
+                            psize_long,
+                            pprice_long,
+                            entries_long[0][2],
+                        )
+                    )
+                    entries_long = entries_long[1:]
+                    bkr_price_long = calc_bankruptcy_price(
+                        balance_long,
+                        psize_long,
+                        pprice_long,
+                        0.0,
+                        0.0,
+                        inverse,
+                        c_mult,
+                    )
+                    long_wallet_exposure = (
+                        qty_to_cost(psize_long, pprice_long, inverse, c_mult) / balance_long
+                    )
+
+                # check if long closes filled
+                while (
+                    psize_long > 0.0
+                    and closes_long
+                    and closes_long[0][0] < 0.0
+                    and prices[k] > closes_long[0][1]
+                ):
+                    next_entry_update_ts_long = min(
+                        next_entry_update_ts_long, timestamps[k] + latency_simulation_ms
+                    )
+                    next_closes_update_ts_long = min(
+                        next_closes_update_ts_long, timestamps[k] + latency_simulation_ms
+                    )
+                    close_qty_long = closes_long[0][0]
+                    new_psize_long = round_(psize_long + close_qty_long, qty_step)
+                    if new_psize_long < 0.0:
+                        print("warning: long close qty greater than long psize")
+                        print("psize_long", psize_long)
+                        print("pprice_long", pprice_long)
+                        print("closes_long[0]", closes_long[0])
+                        close_qty_long = -psize_long
+                        new_psize_long, pprice_long = 0.0, 0.0
+                    psize_long = new_psize_long
+                    fee_paid = (
+                        -qty_to_cost(close_qty_long, closes_long[0][1], inverse, c_mult) * maker_fee
+                    )
+                    pnl = calc_long_pnl(
+                        pprice_long, closes_long[0][1], close_qty_long, inverse, c_mult
+                    )
+                    balance_long += fee_paid + pnl
+                    equity_long = balance_long + calc_long_pnl(
+                        pprice_long, prices[k], psize_long, inverse, c_mult
+                    )
+                    fills_long.append(
+                        (
+                            k,
+                            timestamps[k],
+                            pnl,
+                            fee_paid,
+                            balance_long,
+                            equity_long,
+                            close_qty_long,
+                            closes_long[0][1],
+                            psize_long,
+                            pprice_long,
+                            closes_long[0][2],
+                        )
+                    )
+                    closes_long = closes_long[1:]
+                    bkr_price_long = calc_bankruptcy_price(
+                        balance_long,
+                        psize_long,
+                        pprice_long,
+                        0.0,
+                        0.0,
+                        inverse,
+                        c_mult,
+                    )
+                    long_wallet_exposure = (
+                        qty_to_cost(psize_long, pprice_long, inverse, c_mult) / balance_long
+                    )
+                if psize_long == 0.0:
+                    # update entry order
+                    next_entry_grid_update_ts_long = min(
+                        next_entry_grid_update_ts_long,
+                        timestamps[k] + latency_simulation_ms,
+                    )
+                else:
+                    if prices[k] > pprice_long:
+                        # update closes after 2.5 sec
+                        next_close_grid_update_ts_long = min(
+                            next_close_grid_update_ts_long,
+                            timestamps[k] + latency_simulation_ms + 2500,
+                        )
+                    elif long_wallet_exposure >= long_wallet_exposure_auto_unstuck_threshold:
+                        # update both entry grid and closes after 15 secs
+                        next_close_grid_update_ts_long = min(
+                            next_close_grid_update_ts_long,
+                            timestamps[k] + latency_simulation_ms + 15000,
+                        )
+                        next_entry_grid_update_ts_long = min(
+                            next_entry_grid_update_ts_long,
+                            timestamps[k] + latency_simulation_ms + 15000,
+                        )
+
         if do_short:
             emas_short = calc_ema(alphas_short, alphas__short, emas_short, prices[k])
-        if qtys[k] == 0.0:
-            continue
+            if k >= max_span_short:
+                # check bankruptcy
+                bkr_diff_short = calc_diff(bkr_price_short, prices[k])
+                closest_bkr_short = min(closest_bkr_short, bkr_diff_short)
 
-        bkr_diff = calc_diff(bkr_price, prices[k])
-        closest_bkr = min(closest_bkr, bkr_diff)
+                if closest_bkr_short < 0.06:
+                    # consider bankruptcy within 6% as liquidation
+                    if psize_short != 0.0:
+                        fee_paid = (
+                            -qty_to_cost(psize_short, pprice_short, inverse, c_mult) * maker_fee
+                        )
+                        pnl = calc_short_pnl(pprice_short, prices[k], -psize_short, inverse, c_mult)
+                        balance_short = 0.0
+                        equity_short = 0.0
+                        psize_short, pprice_short = 0.0, 0.0
+                        fills_short.append(
+                            (
+                                k,
+                                timestamps[k],
+                                pnl,
+                                fee_paid,
+                                balance_short,
+                                equity_short,
+                                -psize_short,
+                                prices[k],
+                                0.0,
+                                0.0,
+                                "short_bankruptcy",
+                            )
+                        )
+                    do_short = False
+                    if not do_long:
+                        return fills_long, fills_short, stats
+
+                # check if entry grid should be updated
+                if timestamps[k] >= next_entry_grid_update_ts_short:
+                    entries_short = calc_entry_grid_short(
+                        balance_short,
+                        psize_short,
+                        pprice_short,
+                        prices[k - 1],
+                        max(emas_short),
+                        inverse,
+                        do_short,
+                        qty_step,
+                        price_step,
+                        min_qty,
+                        min_cost,
+                        c_mult,
+                        grid_span[1],
+                        wallet_exposure_limit[1],
+                        max_n_entry_orders[1],
+                        initial_qty_pct[1],
+                        initial_eprice_ema_dist[1],
+                        eprice_pprice_diff[1],
+                        secondary_allocation[1],
+                        secondary_pprice_diff[1],
+                        eprice_exp_base[1],
+                        auto_unstuck_wallet_exposure_threshold[1],
+                        auto_unstuck_ema_dist[1],
+                    )
+                    next_entry_grid_update_ts_short = timestamps[k] + 1000 * 60 * 5
+
+                # check if close grid should be updated
+                if timestamps[k] >= next_closes_update_ts_short:
+                    closes_short = calc_short_close_grid(
+                        balance_short,
+                        psize_short,
+                        pprice_short,
+                        prices[k - 1],
+                        min(emas_short),
+                        inverse,
+                        qty_step,
+                        price_step,
+                        min_qty,
+                        min_cost,
+                        c_mult,
+                        wallet_exposure_limit[1],
+                        min_markup[1],
+                        markup_range[1],
+                        n_close_orders[1],
+                        auto_unstuck_wallet_exposure_threshold[1],
+                        auto_unstuck_ema_dist[1],
+                    )
+                    next_closes_update_ts_short = timestamps[k] + 1000 * 60 * 5  # five mins delay
+
+                while entries_short and entries_short[0][0] < 0.0 and prices[k] > entries_short[0][1]:
+                    next_entry_grid_update_ts_short = min(
+                        next_entry_grid_update_ts_short, timestamps[k] + latency_simulation_ms
+                    )
+                    next_close_grid_update_ts_short = min(
+                        next_close_grid_update_ts_short, timestamps[k] + latency_simulation_ms
+                    )
+                    psize_short, pprice_short = calc_new_psize_pprice(
+                        psize_short,
+                        pprice_short,
+                        entries_short[0][0],
+                        entries_short[0][1],
+                        qty_step,
+                    )
+                    fee_paid = (
+                        -qty_to_cost(entries_short[0][0], entries_short[0][1], inverse, c_mult)
+                        * maker_fee
+                    )
+                    balance_short += fee_paid
+                    equity_short = balance_short + calc_short_pnl(
+                        pprice_short, prices[k], psize_short, inverse, c_mult
+                    )
+                    fills_short.append(
+                        (
+                            k,
+                            timestamps[k],
+                            0.0,
+                            fee_paid,
+                            balance_short,
+                            equity_short,
+                            entries_short[0][0],
+                            entries_short[0][1],
+                            psize_short,
+                            pprice_short,
+                            entries_short[0][2],
+                        )
+                    )
+                    entries_short = entries_short[1:]
+                    bkr_price_short = calc_bankruptcy_price(
+                        balance_short,
+                        0.0,
+                        0.0,
+                        psize_short,
+                        pprice_short,
+                        inverse,
+                        c_mult,
+                    )
+                    short_wallet_exposure = (
+                        qty_to_cost(psize_short, pprice_short, inverse, c_mult) / balance_short
+                    )
+
+                # check if short closes filled
+                while (
+                    psize_short < 0.0
+                    and closes_short
+                    and closes_short[0][0] > 0.0
+                    and prices[k] < closes_short[0][1]
+                ):
+                    next_entry_update_ts_short = min(
+                        next_entry_update_ts_short, timestamps[k] + latency_simulation_ms
+                    )
+                    next_closes_update_ts_short = min(
+                        next_closes_update_ts_short, timestamps[k] + latency_simulation_ms
+                    )
+                    close_qty_short = closes_short[0][0]
+                    new_psize_short = round_(psize_short + close_qty_short, qty_step)
+                    if new_psize_short > 0.0:
+                        print("warning: short close qty greater than short psize")
+                        print("psize_short", psize_short)
+                        print("pprice_short", pprice_short)
+                        print("closes_short[0]", closes_short[0])
+                        close_qty_short = abs(psize_short)
+                        new_psize_short, pprice_short = 0.0, 0.0
+                    psize_short = new_psize_short
+                    fee_paid = (
+                        -qty_to_cost(close_qty_short, closes_short[0][1], inverse, c_mult) * maker_fee
+                    )
+                    pnl = calc_short_pnl(
+                        pprice_short, closes_short[0][1], close_qty_short, inverse, c_mult
+                    )
+                    balance_short += fee_paid + pnl
+                    equity_short = balance_short + calc_short_pnl(
+                        pprice_short, prices[k], psize_short, inverse, c_mult
+                    )
+                    fills_short.append(
+                        (
+                            k,
+                            timestamps[k],
+                            pnl,
+                            fee_paid,
+                            balance_short,
+                            equity_short,
+                            close_qty_short,
+                            closes_short[0][1],
+                            psize_short,
+                            pprice_short,
+                            closes_short[0][2],
+                        )
+                    )
+                    closes_short = closes_short[1:]
+                    bkr_price_short = calc_bankruptcy_price(
+                        balance_short,
+                        0.0,
+                        0.0,
+                        psize_short,
+                        pprice_short,
+                        inverse,
+                        c_mult,
+                    )
+                    short_wallet_exposure = (
+                        qty_to_cost(psize_short, pprice_short, inverse, c_mult) / balance_short
+                    )
+                if psize_short == 0.0:
+                    next_entry_grid_update_ts_short = min(
+                        next_entry_grid_update_ts_short,
+                        timestamps[k] + latency_simulation_ms,
+                    )
+                else:
+                    if prices[k] < pprice_short:
+                        next_close_grid_update_ts_short = min(
+                            next_close_grid_update_ts_short,
+                            timestamps[k] + latency_simulation_ms + 2500,
+                        )
+                    elif short_wallet_exposure >= short_wallet_exposure_auto_unstuck_threshold:
+                        next_close_grid_update_ts_short = min(
+                            next_close_grid_update_ts_short,
+                            timestamps[k] + latency_simulation_ms + 15000,
+                        )
+                        next_entry_grid_update_ts_short = min(
+                            next_entry_grid_update_ts_short,
+                            timestamps[k] + latency_simulation_ms + 15000,
+                        )
+
+        # process stats
         if timestamps[k] >= next_stats_update:
-            equity = balance + calc_upnl(
-                psize_long,
-                pprice_long,
-                psize_short,
-                pprice_short,
-                prices[k],
-                inverse,
-                c_mult,
-            )
             equity_long = balance_long + calc_long_pnl(
                 pprice_long, prices[k], psize_long, inverse, c_mult
             )
             equity_short = balance_short + calc_short_pnl(
                 pprice_short, prices[k], psize_short, inverse, c_mult
             )
-            if equity / starting_balance < 0.2:
-                # break early when equity is less than 20% of starting balance
-                return fills, [], stats
             stats.append(
                 (
                     timestamps[k],
-                    balance,
-                    equity,
-                    bkr_price,
+                    bkr_price_long,
+                    bkr_price_short,
                     psize_long,
                     pprice_long,
                     psize_short,
                     pprice_short,
                     prices[k],
-                    closest_bkr,
+                    closest_bkr_long,
+                    closest_bkr_short,
                     balance_long,
                     balance_short,
                     equity_long,
@@ -1917,439 +2318,5 @@ def njit_backtest(
                 )
             )
             next_stats_update = timestamps[k] + 60 * 1000
-        if timestamps[k] >= next_entry_grid_update_ts_long:
-            long_entries = (
-                calc_long_entry_grid(
-                    balance,
-                    psize_long,
-                    pprice_long,
-                    prices[k - 1],
-                    min(emas_long),
-                    inverse,
-                    do_long,
-                    qty_step,
-                    price_step,
-                    min_qty,
-                    min_cost,
-                    c_mult,
-                    grid_span[0],
-                    wallet_exposure_limit[0],
-                    max_n_entry_orders[0],
-                    initial_qty_pct[0],
-                    initial_eprice_ema_dist[0],
-                    eprice_pprice_diff[0],
-                    secondary_allocation[0],
-                    secondary_pprice_diff[0],
-                    eprice_exp_base[0],
-                    auto_unstuck_wallet_exposure_threshold[0],
-                    auto_unstuck_ema_dist[0],
-                )
-                if do_long
-                else [(0.0, 0.0, "")]
-            )
-            next_entry_grid_update_ts_long = timestamps[k] + 1000 * 60 * 10
-        if timestamps[k] >= next_entry_grid_update_ts_short:
-            short_entries = (
-                calc_short_entry_grid(
-                    balance,
-                    psize_short,
-                    pprice_short,
-                    prices[k - 1],
-                    max(emas_short),
-                    inverse,
-                    do_short,
-                    qty_step,
-                    price_step,
-                    min_qty,
-                    min_cost,
-                    c_mult,
-                    grid_span[1],
-                    wallet_exposure_limit[1],
-                    max_n_entry_orders[1],
-                    initial_qty_pct[1],
-                    initial_eprice_ema_dist[1],
-                    eprice_pprice_diff[1],
-                    secondary_allocation[1],
-                    secondary_pprice_diff[1],
-                    eprice_exp_base[1],
-                    auto_unstuck_wallet_exposure_threshold[1],
-                    auto_unstuck_ema_dist[1],
-                )
-                if do_short
-                else [(0.0, 0.0, "")]
-            )
-            next_entry_grid_update_ts_short = timestamps[k] + 1000 * 60 * 10
-        if timestamps[k] >= next_close_grid_update_ts_long:
-            long_closes = (
-                calc_long_close_grid(
-                    balance,
-                    psize_long,
-                    pprice_long,
-                    prices[k - 1],
-                    max(emas_long),
-                    inverse,
-                    qty_step,
-                    price_step,
-                    min_qty,
-                    min_cost,
-                    c_mult,
-                    wallet_exposure_limit[0],
-                    min_markup[0],
-                    markup_range[0],
-                    n_close_orders[0],
-                    auto_unstuck_wallet_exposure_threshold[0],
-                    auto_unstuck_ema_dist[0],
-                )
-                if do_long
-                else [(0.0, 0.0, "")]
-            )
-            next_close_grid_update_ts_long = timestamps[k] + 1000 * 60 * 10
-        if timestamps[k] >= next_close_grid_update_ts_short:
-            short_closes = (
-                calc_short_close_grid(
-                    balance,
-                    psize_short,
-                    pprice_short,
-                    prices[k - 1],
-                    min(emas_short),
-                    inverse,
-                    qty_step,
-                    price_step,
-                    min_qty,
-                    min_cost,
-                    c_mult,
-                    wallet_exposure_limit[1],
-                    min_markup[1],
-                    markup_range[1],
-                    n_close_orders[1],
-                    auto_unstuck_wallet_exposure_threshold[1],
-                    auto_unstuck_ema_dist[1],
-                )
-                if do_short
-                else [(0.0, 0.0, "")]
-            )
-            next_close_grid_update_ts_short = timestamps[k] + 1000 * 60 * 10
 
-        if closest_bkr < 0.06:
-            # consider bankruptcy within 6% as liquidation
-            if psize_long != 0.0:
-                fee_paid = -qty_to_cost(psize_long, pprice_long, inverse, c_mult) * maker_fee
-                pnl = calc_long_pnl(pprice_long, prices[k], -psize_long, inverse, c_mult)
-                balance = 0.0
-                equity = 0.0
-                psize_long, pprice_long = 0.0, 0.0
-                fills.append(
-                    (
-                        k,
-                        timestamps[k],
-                        pnl,
-                        fee_paid,
-                        balance,
-                        equity,
-                        -psize_long,
-                        prices[k],
-                        0.0,
-                        0.0,
-                        "long_bankruptcy",
-                    )
-                )
-            if psize_short != 0.0:
-                fee_paid = -qty_to_cost(psize_short, pprice_short, inverse, c_mult) * maker_fee
-                pnl = calc_short_pnl(pprice_short, prices[k], -psize_short, inverse, c_mult)
-                balance, equity = 0.0, 0.0
-                psize_short, pprice_short = 0.0, 0.0
-                fills.append(
-                    (
-                        k,
-                        timestamps[k],
-                        pnl,
-                        fee_paid,
-                        balance,
-                        equity,
-                        -psize_short,
-                        prices[k],
-                        0.0,
-                        0.0,
-                        "short_bankruptcy",
-                    )
-                )
-            return fills, [], stats
-
-        while long_entries and long_entries[0][0] > 0.0 and prices[k] < long_entries[0][1]:
-            next_entry_grid_update_ts_long = min(
-                next_entry_grid_update_ts_long, timestamps[k] + latency_simulation_ms
-            )
-            next_close_grid_update_ts_long = min(
-                next_close_grid_update_ts_long, timestamps[k] + latency_simulation_ms
-            )
-            psize_long, pprice_long = calc_new_psize_pprice(
-                psize_long,
-                pprice_long,
-                long_entries[0][0],
-                long_entries[0][1],
-                qty_step,
-            )
-            fee_paid = (
-                -qty_to_cost(long_entries[0][0], long_entries[0][1], inverse, c_mult) * maker_fee
-            )
-            balance += fee_paid
-            balance_long += fee_paid
-            equity = calc_equity(
-                balance,
-                psize_long,
-                pprice_long,
-                psize_short,
-                pprice_short,
-                prices[k],
-                inverse,
-                c_mult,
-            )
-            fills.append(
-                (
-                    k,
-                    timestamps[k],
-                    0.0,
-                    fee_paid,
-                    balance,
-                    equity,
-                    long_entries[0][0],
-                    long_entries[0][1],
-                    psize_long,
-                    pprice_long,
-                    long_entries[0][2],
-                )
-            )
-            long_entries = long_entries[1:]
-            bkr_price = calc_bankruptcy_price(
-                balance,
-                psize_long,
-                pprice_long,
-                psize_short,
-                pprice_short,
-                inverse,
-                c_mult,
-            )
-            long_wallet_exposure = qty_to_cost(psize_long, pprice_long, inverse, c_mult) / balance
-        while short_entries and short_entries[0][0] < 0.0 and prices[k] > short_entries[0][1]:
-            next_entry_grid_update_ts_short = min(
-                next_entry_grid_update_ts_short, timestamps[k] + latency_simulation_ms
-            )
-            next_close_grid_update_ts_short = min(
-                next_close_grid_update_ts_short, timestamps[k] + latency_simulation_ms
-            )
-            psize_short, pprice_short = calc_new_psize_pprice(
-                psize_short,
-                pprice_short,
-                short_entries[0][0],
-                short_entries[0][1],
-                qty_step,
-            )
-            fee_paid = (
-                -qty_to_cost(short_entries[0][0], short_entries[0][1], inverse, c_mult) * maker_fee
-            )
-            balance += fee_paid
-            balance_short += fee_paid
-            equity = calc_equity(
-                balance,
-                psize_short,
-                pprice_short,
-                psize_short,
-                pprice_short,
-                prices[k],
-                inverse,
-                c_mult,
-            )
-            fills.append(
-                (
-                    k,
-                    timestamps[k],
-                    0.0,
-                    fee_paid,
-                    balance,
-                    equity,
-                    short_entries[0][0],
-                    short_entries[0][1],
-                    psize_short,
-                    pprice_short,
-                    short_entries[0][2],
-                )
-            )
-            short_entries = short_entries[1:]
-            bkr_price = calc_bankruptcy_price(
-                balance,
-                psize_short,
-                pprice_short,
-                psize_short,
-                pprice_short,
-                inverse,
-                c_mult,
-            )
-            short_wallet_exposure = qty_to_cost(psize_short, pprice_short, inverse, c_mult) / balance
-        while (
-            psize_long > 0.0
-            and long_closes
-            and long_closes[0][0] < 0.0
-            and prices[k] > long_closes[0][1]
-        ):
-            next_entry_grid_update_ts_long = min(
-                next_entry_grid_update_ts_long, timestamps[k] + latency_simulation_ms
-            )
-            next_close_grid_update_ts_long = min(
-                next_close_grid_update_ts_long, timestamps[k] + latency_simulation_ms
-            )
-            long_close_qty = long_closes[0][0]
-            new_psize_long = round_(psize_long + long_close_qty, qty_step)
-            if new_psize_long < 0.0:
-                print("warning: long close qty greater than long psize")
-                print("psize_long", psize_long)
-                print("pprice_long", pprice_long)
-                print("long_closes[0]", long_closes[0])
-                long_close_qty = -psize_long
-                new_psize_long, pprice_long = 0.0, 0.0
-            psize_long = new_psize_long
-            fee_paid = -qty_to_cost(long_close_qty, long_closes[0][1], inverse, c_mult) * maker_fee
-            pnl = calc_long_pnl(pprice_long, long_closes[0][1], long_close_qty, inverse, c_mult)
-            balance += fee_paid + pnl
-            balance_long += fee_paid + pnl
-            equity = calc_equity(
-                balance,
-                psize_long,
-                pprice_long,
-                psize_short,
-                pprice_short,
-                prices[k],
-                inverse,
-                c_mult,
-            )
-            fills.append(
-                (
-                    k,
-                    timestamps[k],
-                    pnl,
-                    fee_paid,
-                    balance,
-                    equity,
-                    long_close_qty,
-                    long_closes[0][1],
-                    psize_long,
-                    pprice_long,
-                    long_closes[0][2],
-                )
-            )
-            long_closes = long_closes[1:]
-            bkr_price = calc_bankruptcy_price(
-                balance,
-                psize_long,
-                pprice_long,
-                psize_short,
-                pprice_short,
-                inverse,
-                c_mult,
-            )
-            long_wallet_exposure = qty_to_cost(psize_long, pprice_long, inverse, c_mult) / balance
-        while (
-            psize_short < 0.0
-            and short_closes
-            and short_closes[0][0] > 0.0
-            and prices[k] < short_closes[0][1]
-        ):
-            next_entry_grid_update_ts_short = min(
-                next_entry_grid_update_ts_short, timestamps[k] + latency_simulation_ms
-            )
-            next_close_grid_update_ts_short = min(
-                next_close_grid_update_ts_short, timestamps[k] + latency_simulation_ms
-            )
-            short_close_qty = short_closes[0][0]
-            new_psize_short = round_(psize_short + short_close_qty, qty_step)
-            if new_psize_short > 0.0:
-                print("warning: short close qty less than short psize")
-                print("psize_short", psize_short)
-                print("pprice_short", pprice_short)
-                print("short_closes[0]", short_closes[0])
-                short_close_qty = -psize_short
-                new_psize_short, pprice_short = 0.0, 0.0
-            psize_short = new_psize_short
-            fee_paid = -qty_to_cost(short_close_qty, short_closes[0][1], inverse, c_mult) * maker_fee
-            pnl = calc_short_pnl(pprice_short, short_closes[0][1], short_close_qty, inverse, c_mult)
-            balance += fee_paid + pnl
-            balance_short += fee_paid + pnl
-            equity = calc_equity(
-                balance,
-                psize_short,
-                pprice_short,
-                psize_short,
-                pprice_short,
-                prices[k],
-                inverse,
-                c_mult,
-            )
-            fills.append(
-                (
-                    k,
-                    timestamps[k],
-                    pnl,
-                    fee_paid,
-                    balance,
-                    equity,
-                    short_close_qty,
-                    short_closes[0][1],
-                    psize_short,
-                    pprice_short,
-                    short_closes[0][2],
-                )
-            )
-            short_closes = short_closes[1:]
-            bkr_price = calc_bankruptcy_price(
-                balance,
-                psize_short,
-                pprice_short,
-                psize_short,
-                pprice_short,
-                inverse,
-                c_mult,
-            )
-            short_wallet_exposure = qty_to_cost(psize_short, pprice_short, inverse, c_mult) / balance
-        if do_long:
-            if psize_long == 0.0:
-                next_entry_grid_update_ts_long = min(
-                    next_entry_grid_update_ts_long,
-                    timestamps[k] + latency_simulation_ms,
-                )
-            else:
-                if prices[k] > pprice_long:
-                    next_close_grid_update_ts_long = min(
-                        next_close_grid_update_ts_long,
-                        timestamps[k] + latency_simulation_ms + 2500,
-                    )
-                elif long_wallet_exposure >= long_wallet_exposure_auto_unstuck_threshold:
-                    next_close_grid_update_ts_long = min(
-                        next_close_grid_update_ts_long,
-                        timestamps[k] + latency_simulation_ms + 15000,
-                    )
-                    next_entry_grid_update_ts_long = min(
-                        next_entry_grid_update_ts_long,
-                        timestamps[k] + latency_simulation_ms + 15000,
-                    )
-        if do_short:
-            if psize_short == 0.0:
-                next_entry_grid_update_ts_short = min(
-                    next_entry_grid_update_ts_short,
-                    timestamps[k] + latency_simulation_ms,
-                )
-            else:
-                if prices[k] < pprice_short:
-                    next_close_grid_update_ts_short = min(
-                        next_close_grid_update_ts_short,
-                        timestamps[k] + latency_simulation_ms + 2500,
-                    )
-                elif short_wallet_exposure >= short_wallet_exposure_auto_unstuck_threshold:
-                    next_close_grid_update_ts_short = min(
-                        next_close_grid_update_ts_short,
-                        timestamps[k] + latency_simulation_ms + 15000,
-                    )
-                    next_entry_grid_update_ts_short = min(
-                        next_entry_grid_update_ts_short,
-                        timestamps[k] + latency_simulation_ms + 15000,
-                    )
-
-    return fills, [], stats
+    return fills_long, fills_short, stats
