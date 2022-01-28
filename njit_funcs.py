@@ -177,7 +177,7 @@ def calc_wallet_exposure_if_filled(balance, psize, pprice, qty, price, inverse, 
 
 
 @njit
-def calc_long_close_grid(
+def calc_close_grid_long(
     balance,
     psize,
     pprice,
@@ -258,7 +258,7 @@ def calc_long_close_grid(
 
 
 @njit
-def calc_short_close_grid(
+def calc_close_grid_short(
     balance,
     psize,
     pprice,
@@ -1807,8 +1807,8 @@ def backtest_static_grid(
 
     fills_long, fills_short, stats = [], [], []
 
-    entries_long = long_closes = [(0.0, 0.0, "")]
-    entries_short = short_closes = [(0.0, 0.0, "")]
+    entries_long = closes_long = [(0.0, 0.0, "")]
+    entries_short = closes_short = [(0.0, 0.0, "")]
     bkr_price_long = bkr_price_short = 0.0
 
     next_entry_grid_update_ts_long = 0
@@ -1912,7 +1912,7 @@ def backtest_static_grid(
                     next_entry_grid_update_ts_long = timestamps[k] + 1000 * 60 * 5
                 # check if close grid should be updated
                 if timestamps[k] >= next_close_grid_update_ts_long:
-                    long_closes = calc_long_close_grid(
+                    closes_long = calc_close_grid_long(
                         balance_long,
                         psize_long,
                         pprice_long,
@@ -2137,7 +2137,7 @@ def backtest_static_grid(
 
                 # check if close grid should be updated
                 if timestamps[k] >= next_closes_update_ts_short:
-                    closes_short = calc_short_close_grid(
+                    closes_short = calc_close_grid_short(
                         balance_short,
                         psize_short,
                         pprice_short,
