@@ -32,8 +32,8 @@ from njit_funcs import (
     calc_long_close_grid,
     calc_short_close_grid,
     calc_upnl,
-    calc_long_entry_grid,
-    calc_short_entry_grid,
+    calc_entry_grid_long,
+    calc_entry_grid_short,
     calc_samples,
     calc_emas_last,
     calc_ema,
@@ -469,7 +469,7 @@ class Bot:
                     }
                 )
         else:
-            long_entries = calc_long_entry_grid(
+            entries_long = calc_entry_grid_long(
                 balance,
                 psize_long,
                 pprice_long,
@@ -523,7 +523,7 @@ class Bot:
                     "reduce_only": False,
                     "custom_id": o[2],
                 }
-                for o in long_entries
+                for o in entries_long
                 if o[0] > 0.0
             ]
             orders += [
@@ -553,7 +553,7 @@ class Bot:
                     }
                 )
         else:
-            short_entries = calc_short_entry_grid(
+            entries_short = calc_entry_grid_short(
                 balance,
                 psize_short,
                 pprice_short,
@@ -607,7 +607,7 @@ class Bot:
                     "reduce_only": False,
                     "custom_id": o[2],
                 }
-                for o in short_entries
+                for o in entries_short
                 if o[0] < 0.0
             ]
             orders += [
@@ -781,13 +781,13 @@ class Bot:
             [o for o in self.open_orders if o["side"] == "sell" and o["position_side"] == "long"],
             key=lambda x: x["price"],
         )
-        long_entries = sorted(
+        entries_long = sorted(
             [o for o in self.open_orders if o["side"] == "buy" and o["position_side"] == "long"],
             key=lambda x: x["price"],
         )
-        if self.position["long"]["size"] != 0.0 or long_closes or long_entries:
+        if self.position["long"]["size"] != 0.0 or long_closes or entries_long:
             leqty, leprice = (
-                (long_entries[-1]["qty"], long_entries[-1]["price"]) if long_entries else (0.0, 0.0)
+                (entries_long[-1]["qty"], entries_long[-1]["price"]) if entries_long else (0.0, 0.0)
             )
             lcqty, lcprice = (
                 (long_closes[0]["qty"], long_closes[0]["price"]) if long_closes else (0.0, 0.0)
@@ -800,13 +800,13 @@ class Bot:
             [o for o in self.open_orders if o["side"] == "buy" and o["position_side"] == "short"],
             key=lambda x: x["price"],
         )
-        short_entries = sorted(
+        entries_short = sorted(
             [o for o in self.open_orders if o["side"] == "sell" and o["position_side"] == "short"],
             key=lambda x: x["price"],
         )
-        if self.position["short"]["size"] != 0.0 or short_closes or short_entries:
+        if self.position["short"]["size"] != 0.0 or short_closes or entries_short:
             seqty, seprice = (
-                (short_entries[0]["qty"], short_entries[0]["price"]) if short_entries else (0.0, 0.0)
+                (entries_short[0]["qty"], entries_short[0]["price"]) if entries_short else (0.0, 0.0)
             )
             scqty, scprice = (
                 (short_closes[-1]["qty"], short_closes[-1]["price"]) if short_closes else (0.0, 0.0)
