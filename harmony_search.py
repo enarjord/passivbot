@@ -115,7 +115,9 @@ class HarmonySearch:
         self.long_bounds = sort_dict_keys(config["bounds"]["long"])
         self.short_bounds = sort_dict_keys(config["bounds"]["short"])
         self.symbols = config["symbols"]
-        self.identifying_name = f"{len(self.symbols)}" if len(self.symbols) > 1 else self.symbols[0]
+        self.identifying_name = (
+            f"{len(self.symbols)}_symbols" if len(self.symbols) > 1 else self.symbols[0]
+        )
         self.now_date = ts_to_date(time())[:19].replace(":", "-")
         self.results_fpath = make_get_filepath(
             f"results_harmony_search/{self.now_date}_{self.identifying_name}/"
