@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 
 from downloader import Downloader
-from njit_funcs import njit_backtest, round_
+from njit_funcs import backtest_static_grid, round_
 from njit_funcs_recursive_grid import backtest_recursive_grid
 from plotting import dump_plots
 from procedures import (
@@ -41,7 +41,7 @@ def backtest(config: dict, data: np.ndarray, do_print=False) -> (list, bool):
             config["maker_fee"],
             **xk,
         )
-    return njit_backtest(
+    return backtest_static_grid(
         data,
         config["starting_balance"],
         config["latency_simulation_ms"],
