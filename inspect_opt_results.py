@@ -38,6 +38,7 @@ def main():
         required=False,
         default="adgPADstd",
         help="choices: [adgPADstd, adg_mean, adg_min, adgPADmean, adgDGstd, adgDGstdstd]",
+    )
     parser.add_argument(
         "-d",
         "--dump_live_config",
