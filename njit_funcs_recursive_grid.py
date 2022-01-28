@@ -15,8 +15,8 @@ from njit_funcs import (
     calc_bankruptcy_price,
     calc_ema,
     calc_diff,
-    calc_long_pnl,
-    calc_short_pnl,
+    calc_pnl_long,
+    calc_pnl_short,
     calc_upnl,
     calc_equity,
     calc_emas_last,
@@ -466,7 +466,7 @@ def backtest_recursive_grid(
                     # consider bankruptcy within 6% as liquidation
                     if psize_long != 0.0:
                         fee_paid = -qty_to_cost(psize_long, pprice_long, inverse, c_mult) * maker_fee
-                        pnl = calc_long_pnl(pprice_long, prices[k], -psize_long, inverse, c_mult)
+                        pnl = calc_pnl_long(pprice_long, prices[k], -psize_long, inverse, c_mult)
                         balance_long = 0.0
                         equity_long = 0.0
                         psize_long, pprice_long = 0.0, 0.0
@@ -554,7 +554,7 @@ def backtest_recursive_grid(
                     )
                     fee_paid = -qty_to_cost(entry_long[0], entry_long[1], inverse, c_mult) * maker_fee
                     balance_long += fee_paid
-                    equity_long = balance_long + calc_long_pnl(
+                    equity_long = balance_long + calc_pnl_long(
                         pprice_long, prices[k], psize_long, inverse, c_mult
                     )
                     fills_long.append(
@@ -611,11 +611,11 @@ def backtest_recursive_grid(
                     fee_paid = (
                         -qty_to_cost(close_qty_long, closes_long[0][1], inverse, c_mult) * maker_fee
                     )
-                    pnl = calc_long_pnl(
+                    pnl = calc_pnl_long(
                         pprice_long, closes_long[0][1], close_qty_long, inverse, c_mult
                     )
                     balance_long += fee_paid + pnl
-                    equity_long = balance_long + calc_long_pnl(
+                    equity_long = balance_long + calc_pnl_long(
                         pprice_long, prices[k], psize_long, inverse, c_mult
                     )
                     fills_long.append(
@@ -684,7 +684,7 @@ def backtest_recursive_grid(
                         fee_paid = (
                             -qty_to_cost(psize_short, pprice_short, inverse, c_mult) * maker_fee
                         )
-                        pnl = calc_short_pnl(pprice_short, prices[k], -psize_short, inverse, c_mult)
+                        pnl = calc_pnl_short(pprice_short, prices[k], -psize_short, inverse, c_mult)
                         balance_short = 0.0
                         equity_short = 0.0
                         psize_short, pprice_short = 0.0, 0.0
@@ -773,7 +773,7 @@ def backtest_recursive_grid(
                         -qty_to_cost(entry_short[0], entry_short[1], inverse, c_mult) * maker_fee
                     )
                     balance_short += fee_paid
-                    equity_short = balance_short + calc_short_pnl(
+                    equity_short = balance_short + calc_pnl_short(
                         pprice_short, prices[k], psize_short, inverse, c_mult
                     )
                     fills_short.append(
@@ -830,11 +830,11 @@ def backtest_recursive_grid(
                     fee_paid = (
                         -qty_to_cost(close_qty_short, closes_short[0][1], inverse, c_mult) * maker_fee
                     )
-                    pnl = calc_short_pnl(
+                    pnl = calc_pnl_short(
                         pprice_short, closes_short[0][1], close_qty_short, inverse, c_mult
                     )
                     balance_short += fee_paid + pnl
-                    equity_short = balance_short + calc_short_pnl(
+                    equity_short = balance_short + calc_pnl_short(
                         pprice_short, prices[k], psize_short, inverse, c_mult
                     )
                     fills_short.append(
@@ -892,10 +892,10 @@ def backtest_recursive_grid(
 
         # process stats
         if timestamps[k] >= next_stats_update:
-            equity_long = balance_long + calc_long_pnl(
+            equity_long = balance_long + calc_pnl_long(
                 pprice_long, prices[k], psize_long, inverse, c_mult
             )
-            equity_short = balance_short + calc_short_pnl(
+            equity_short = balance_short + calc_pnl_short(
                 pprice_short, prices[k], psize_short, inverse, c_mult
             )
             stats.append(
