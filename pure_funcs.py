@@ -62,8 +62,6 @@ def get_xk_keys(passivbot_mode="static_grid"):
             "auto_unstuck_ema_dist",
         ]
     return [
-        "spot",
-        "hedge_mode",
         "inverse",
         "do_long",
         "do_short",
