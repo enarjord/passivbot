@@ -29,8 +29,8 @@ from njit_funcs import (
     qty_to_cost,
     calc_diff,
     round_,
-    calc_long_close_grid,
-    calc_short_close_grid,
+    calc_close_grid_long,
+    calc_close_grid_short,
     calc_upnl,
     calc_entry_grid_long,
     calc_entry_grid_short,
@@ -494,7 +494,7 @@ class Bot:
                 self.xk["auto_unstuck_wallet_exposure_threshold"][0],
                 self.xk["auto_unstuck_ema_dist"][0],
             )
-            long_closes = calc_long_close_grid(
+            closes_long = calc_close_grid_long(
                 balance,
                 psize_long,
                 pprice_long,
@@ -536,7 +536,7 @@ class Bot:
                     "reduce_only": True,
                     "custom_id": o[2],
                 }
-                for o in long_closes
+                for o in closes_long
                 if o[0] < 0.0
             ]
         if self.short_mode == "panic":
@@ -578,7 +578,7 @@ class Bot:
                 self.xk["auto_unstuck_wallet_exposure_threshold"][1],
                 self.xk["auto_unstuck_ema_dist"][1],
             )
-            short_closes = calc_short_close_grid(
+            closes_short = calc_close_grid_short(
                 balance,
                 psize_short,
                 pprice_short,
@@ -620,7 +620,7 @@ class Bot:
                     "reduce_only": True,
                     "custom_id": o[2],
                 }
-                for o in short_closes
+                for o in closes_short
                 if o[0] > 0.0
             ]
         return sorted(orders, key=lambda x: calc_diff(x["price"], self.price))
@@ -777,7 +777,7 @@ class Bot:
     def update_output_information(self):
         self.ts_released["print"] = time()
         line = f"{self.symbol} "
-        long_closes = sorted(
+        closes_long = sorted(
             [o for o in self.open_orders if o["side"] == "sell" and o["position_side"] == "long"],
             key=lambda x: x["price"],
         )
@@ -785,18 +785,18 @@ class Bot:
             [o for o in self.open_orders if o["side"] == "buy" and o["position_side"] == "long"],
             key=lambda x: x["price"],
         )
-        if self.position["long"]["size"] != 0.0 or long_closes or entries_long:
+        if self.position["long"]["size"] != 0.0 or closes_long or entries_long:
             leqty, leprice = (
                 (entries_long[-1]["qty"], entries_long[-1]["price"]) if entries_long else (0.0, 0.0)
             )
             lcqty, lcprice = (
-                (long_closes[0]["qty"], long_closes[0]["price"]) if long_closes else (0.0, 0.0)
+                (closes_long[0]["qty"], closes_long[0]["price"]) if closes_long else (0.0, 0.0)
             )
             line += f"l {self.position['long']['size']} @ "
             line += f"{round_(self.position['long']['price'], self.price_step)}, "
             line += f"e {leqty} @ {leprice}, c {lcqty} @ {lcprice} "
             line += f"l.EMAs {[round_dynamic(e, 5) for e in self.emas_long]} "
-        short_closes = sorted(
+        closes_short = sorted(
             [o for o in self.open_orders if o["side"] == "buy" and o["position_side"] == "short"],
             key=lambda x: x["price"],
         )
@@ -804,12 +804,12 @@ class Bot:
             [o for o in self.open_orders if o["side"] == "sell" and o["position_side"] == "short"],
             key=lambda x: x["price"],
         )
-        if self.position["short"]["size"] != 0.0 or short_closes or entries_short:
+        if self.position["short"]["size"] != 0.0 or closes_short or entries_short:
             seqty, seprice = (
                 (entries_short[0]["qty"], entries_short[0]["price"]) if entries_short else (0.0, 0.0)
             )
             scqty, scprice = (
-                (short_closes[-1]["qty"], short_closes[-1]["price"]) if short_closes else (0.0, 0.0)
+                (closes_short[-1]["qty"], closes_short[-1]["price"]) if closes_short else (0.0, 0.0)
             )
             line += f"s {self.position['short']['size']} @ "
             line += f"{round_(self.position['short']['price'], self.price_step)}, "
