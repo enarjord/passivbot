@@ -24,6 +24,7 @@ from pure_funcs import (
     round_dynamic,
     denumpyize,
     spotify_config,
+    determine_passivbot_mode,
 )
 from njit_funcs import (
     qty_to_cost,
@@ -37,6 +38,10 @@ from njit_funcs import (
     calc_samples,
     calc_emas_last,
     calc_ema,
+)
+from njit_funcs_recursive_grid import (
+    calc_recursive_entries_long,
+    calc_recursive_entries_short,
 )
 from typing import Union, Dict, List
 
@@ -114,15 +119,14 @@ class Bot:
             config["short_mode"] = None
         if "last_price_diff_limit" not in config:
             config["last_price_diff_limit"] = 0.3
-        if "profit_trans_pct" not in config:
-            config["profit_trans_pct"] = 0.0
         if "assigned_balance" not in config:
             config["assigned_balance"] = None
         if "cross_wallet_pct" not in config:
             config["cross_wallet_pct"] = 1.0
         if config["cross_wallet_pct"] > 1.0 or config["cross_wallet_pct"] <= 0.0:
             print(
-                f'Invalid cross_wallet_pct given: {config["cross_wallet_pct"]}.  It must be greater than zero and less than or equal to one.  Defaulting to 1.0.'
+                f"Invalid cross_wallet_pct given: {config['cross_wallet_pct']}.  "
+                + "It must be greater than zero and less than or equal to one.  Defaulting to 1.0."
             )
             config["cross_wallet_pct"] = 1.0
         self.ema_spans_long = [
@@ -469,31 +473,56 @@ class Bot:
                     }
                 )
         else:
-            entries_long = calc_entry_grid_long(
-                balance,
-                psize_long,
-                pprice_long,
-                self.ob[0],
-                min(self.emas_long),
-                self.xk["inverse"],
-                self.xk["do_long"],
-                self.xk["qty_step"],
-                self.xk["price_step"],
-                self.xk["min_qty"],
-                self.xk["min_cost"],
-                self.xk["c_mult"],
-                self.xk["grid_span"][0],
-                self.xk["wallet_exposure_limit"][0],
-                self.xk["max_n_entry_orders"][0],
-                self.xk["initial_qty_pct"][0],
-                self.xk["initial_eprice_ema_dist"][0],
-                self.xk["eprice_pprice_diff"][0],
-                self.xk["secondary_allocation"][0],
-                self.xk["secondary_pprice_diff"][0],
-                self.xk["eprice_exp_base"][0],
-                self.xk["auto_unstuck_wallet_exposure_threshold"][0],
-                self.xk["auto_unstuck_ema_dist"][0],
-            )
+            if self.passivbot_mode == "recursive_grid":
+                entries_long = calc_recursive_entries_long(
+                    balance,
+                    psize_long,
+                    pprice_long,
+                    self.ob[0],
+                    min(self.emas_long),
+                    self.xk["inverse"],
+                    self.xk["qty_step"],
+                    self.xk["price_step"],
+                    self.xk["min_qty"],
+                    self.xk["min_cost"],
+                    self.xk["c_mult"],
+                    self.xk["initial_qty_pct"][0],
+                    self.xk["initial_eprice_ema_dist"][0],
+                    self.xk["ddown_factor"][0],
+                    self.xk["rentry_pprice_dist"][0],
+                    self.xk["rentry_pprice_dist_wallet_exposure_weighting"][0],
+                    self.xk["wallet_exposure_limit"][0],
+                    self.xk["auto_unstuck_ema_dist"][0],
+                    self.xk["auto_unstuck_wallet_exposure_threshold"][0],
+                )
+            elif self.passivbot_mode == "static_grid":
+                entries_long = calc_entry_grid_long(
+                    balance,
+                    psize_long,
+                    pprice_long,
+                    self.ob[0],
+                    min(self.emas_long),
+                    self.xk["inverse"],
+                    self.xk["do_long"],
+                    self.xk["qty_step"],
+                    self.xk["price_step"],
+                    self.xk["min_qty"],
+                    self.xk["min_cost"],
+                    self.xk["c_mult"],
+                    self.xk["grid_span"][0],
+                    self.xk["wallet_exposure_limit"][0],
+                    self.xk["max_n_entry_orders"][0],
+                    self.xk["initial_qty_pct"][0],
+                    self.xk["initial_eprice_ema_dist"][0],
+                    self.xk["eprice_pprice_diff"][0],
+                    self.xk["secondary_allocation"][0],
+                    self.xk["secondary_pprice_diff"][0],
+                    self.xk["eprice_exp_base"][0],
+                    self.xk["auto_unstuck_wallet_exposure_threshold"][0],
+                    self.xk["auto_unstuck_ema_dist"][0],
+                )
+            else:
+                raise Exception(f"unknown passivbot mode {self.passivbot_mode}")
             closes_long = calc_close_grid_long(
                 balance,
                 psize_long,
@@ -553,31 +582,56 @@ class Bot:
                     }
                 )
         else:
-            entries_short = calc_entry_grid_short(
-                balance,
-                psize_short,
-                pprice_short,
-                self.ob[1],
-                max(self.emas_short),
-                self.xk["inverse"],
-                self.xk["do_short"],
-                self.xk["qty_step"],
-                self.xk["price_step"],
-                self.xk["min_qty"],
-                self.xk["min_cost"],
-                self.xk["c_mult"],
-                self.xk["grid_span"][1],
-                self.xk["wallet_exposure_limit"][1],
-                self.xk["max_n_entry_orders"][1],
-                self.xk["initial_qty_pct"][1],
-                self.xk["initial_eprice_ema_dist"][1],
-                self.xk["eprice_pprice_diff"][1],
-                self.xk["secondary_allocation"][1],
-                self.xk["secondary_pprice_diff"][1],
-                self.xk["eprice_exp_base"][1],
-                self.xk["auto_unstuck_wallet_exposure_threshold"][1],
-                self.xk["auto_unstuck_ema_dist"][1],
-            )
+            if self.passivbot_mode == "recursive_grid":
+                entries_short = calc_recursive_entries_short(
+                    balance,
+                    psize_short,
+                    pprice_short,
+                    self.ob[1],
+                    max(self.emas_short),
+                    self.xk["inverse"],
+                    self.xk["qty_step"],
+                    self.xk["price_step"],
+                    self.xk["min_qty"],
+                    self.xk["min_cost"],
+                    self.xk["c_mult"],
+                    self.xk["initial_qty_pct"][1],
+                    self.xk["initial_eprice_ema_dist"][1],
+                    self.xk["ddown_factor"][1],
+                    self.xk["rentry_pprice_dist"][1],
+                    self.xk["rentry_pprice_dist_wallet_exposure_weighting"][1],
+                    self.xk["wallet_exposure_limit"][1],
+                    self.xk["auto_unstuck_ema_dist"][1],
+                    self.xk["auto_unstuck_wallet_exposure_threshold"][1],
+                )
+            elif self.passivbot_mode == "static_grid":
+                entries_short = calc_entry_grid_short(
+                    balance,
+                    psize_short,
+                    pprice_short,
+                    self.ob[1],
+                    max(self.emas_short),
+                    self.xk["inverse"],
+                    self.xk["do_short"],
+                    self.xk["qty_step"],
+                    self.xk["price_step"],
+                    self.xk["min_qty"],
+                    self.xk["min_cost"],
+                    self.xk["c_mult"],
+                    self.xk["grid_span"][1],
+                    self.xk["wallet_exposure_limit"][1],
+                    self.xk["max_n_entry_orders"][1],
+                    self.xk["initial_qty_pct"][1],
+                    self.xk["initial_eprice_ema_dist"][1],
+                    self.xk["eprice_pprice_diff"][1],
+                    self.xk["secondary_allocation"][1],
+                    self.xk["secondary_pprice_diff"][1],
+                    self.xk["eprice_exp_base"][1],
+                    self.xk["auto_unstuck_wallet_exposure_threshold"][1],
+                    self.xk["auto_unstuck_ema_dist"][1],
+                )
+            else:
+                raise Exception(f"unknown passivbot mode {self.passivbot_mode}")
             closes_short = calc_close_grid_short(
                 balance,
                 psize_short,
@@ -631,7 +685,8 @@ class Bot:
         if any(self.error_halt.values()):
             print_(
                 [
-                    f"warning:  error in rest api fetch {self.error_halt}, halting order creations/cancellations"
+                    f"warning:  error in rest api fetch {self.error_halt}, "
+                    + "halting order creations/cancellations"
                 ]
             )
             return
@@ -1010,8 +1065,8 @@ async def main() -> None:
     config["user"] = args.user
     config["exchange"] = account["exchange"]
     config["symbol"] = args.symbol
-    config["live_config_path"] = args.live_config_path
     config["market_type"] = args.market_type if args.market_type is not None else "futures"
+    config["passivbot_mode"] = determine_passivbot_mode(config)
     if args.assigned_balance is not None:
         print(f"\nassigned balance set to {args.assigned_balance}\n")
         config["assigned_balance"] = args.assigned_balance
