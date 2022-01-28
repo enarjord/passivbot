@@ -421,8 +421,8 @@ def backtest_recursive_grid(
 
     next_entry_update_ts_long = 0
     next_entry_update_ts_short = 0
-    next_closes_update_ts_long = 0
-    next_closes_update_ts_short = 0
+    next_close_grid_update_ts_long = 0
+    next_close_grid_update_ts_short = 0
     next_stats_update = 0
 
     closest_bkr_long = closest_bkr_short = 1.0
@@ -515,7 +515,7 @@ def backtest_recursive_grid(
                     next_entry_update_ts_long = timestamps[k] + 1000 * 60 * 5  # five mins delay
 
                 # check if close grid should be updated
-                if timestamps[k] >= next_closes_update_ts_long:
+                if timestamps[k] >= next_close_grid_update_ts_long:
                     closes_long = calc_close_grid_long(
                         balance_long,
                         psize_long,
@@ -535,15 +535,15 @@ def backtest_recursive_grid(
                         auto_unstuck_wallet_exposure_threshold[0],
                         auto_unstuck_ema_dist[0],
                     )
-                    next_closes_update_ts_long = timestamps[k] + 1000 * 60 * 5  # five mins delay
+                    next_close_grid_update_ts_long = timestamps[k] + 1000 * 60 * 5  # five mins delay
 
                 # check if long entry filled
                 if entry_long[0] != 0.0 and prices[k] < entry_long[1]:
                     next_entry_update_ts_long = min(
                         next_entry_update_ts_long, timestamps[k] + latency_simulation_ms
                     )
-                    next_closes_update_ts_long = min(
-                        next_closes_update_ts_long, timestamps[k] + latency_simulation_ms
+                    next_close_grid_update_ts_long = min(
+                        next_close_grid_update_ts_long, timestamps[k] + latency_simulation_ms
                     )
                     psize_long, pprice_long = calc_new_psize_pprice(
                         psize_long,
@@ -595,8 +595,8 @@ def backtest_recursive_grid(
                     next_entry_update_ts_long = min(
                         next_entry_update_ts_long, timestamps[k] + latency_simulation_ms
                     )
-                    next_closes_update_ts_long = min(
-                        next_closes_update_ts_long, timestamps[k] + latency_simulation_ms
+                    next_close_grid_update_ts_long = min(
+                        next_close_grid_update_ts_long, timestamps[k] + latency_simulation_ms
                     )
                     close_qty_long = closes_long[0][0]
                     new_psize_long = round_(psize_long + close_qty_long, qty_step)
@@ -656,14 +656,14 @@ def backtest_recursive_grid(
                 else:
                     if prices[k] > pprice_long:
                         # update closes after 2.5 secs
-                        next_closes_update_ts_long = min(
-                            next_closes_update_ts_long,
+                        next_close_grid_update_ts_long = min(
+                            next_close_grid_update_ts_long,
                             timestamps[k] + latency_simulation_ms + 2500,
                         )
                     elif long_wallet_exposure >= long_wallet_exposure_auto_unstuck_threshold:
                         # update both entry and closes after 15 secs
-                        next_closes_update_ts_long = min(
-                            next_closes_update_ts_long,
+                        next_close_grid_update_ts_long = min(
+                            next_close_grid_update_ts_long,
                             timestamps[k] + latency_simulation_ms + 15000,
                         )
                         next_entry_update_ts_long = min(
@@ -732,7 +732,7 @@ def backtest_recursive_grid(
                     )
                     next_entry_update_ts_short = timestamps[k] + 1000 * 60 * 5  # five mins delay
                 # check if close grid should be updated
-                if timestamps[k] >= next_closes_update_ts_short:
+                if timestamps[k] >= next_close_grid_update_ts_short:
                     closes_short = calc_close_grid_short(
                         balance_short,
                         psize_short,
@@ -752,15 +752,15 @@ def backtest_recursive_grid(
                         auto_unstuck_wallet_exposure_threshold[1],
                         auto_unstuck_ema_dist[1],
                     )
-                    next_closes_update_ts_short = timestamps[k] + 1000 * 60 * 5  # five mins delay
+                    next_close_grid_update_ts_short = timestamps[k] + 1000 * 60 * 5  # five mins delay
 
                 # check if short entry filled
                 if entry_short[0] != 0.0 and prices[k] > entry_short[1]:
                     next_entry_update_ts_short = min(
                         next_entry_update_ts_short, timestamps[k] + latency_simulation_ms
                     )
-                    next_closes_update_ts_short = min(
-                        next_closes_update_ts_short, timestamps[k] + latency_simulation_ms
+                    next_close_grid_update_ts_short = min(
+                        next_close_grid_update_ts_short, timestamps[k] + latency_simulation_ms
                     )
                     psize_short, pprice_short = calc_new_psize_pprice(
                         psize_short,
@@ -814,8 +814,8 @@ def backtest_recursive_grid(
                     next_entry_update_ts_short = min(
                         next_entry_update_ts_short, timestamps[k] + latency_simulation_ms
                     )
-                    next_closes_update_ts_short = min(
-                        next_closes_update_ts_short, timestamps[k] + latency_simulation_ms
+                    next_close_grid_update_ts_short = min(
+                        next_close_grid_update_ts_short, timestamps[k] + latency_simulation_ms
                     )
                     close_qty_short = closes_short[0][0]
                     new_psize_short = round_(psize_short + close_qty_short, qty_step)
@@ -875,14 +875,14 @@ def backtest_recursive_grid(
                 else:
                     if prices[k] > pprice_short:
                         # update closes after 2.5 secs
-                        next_closes_update_ts_short = min(
-                            next_closes_update_ts_short,
+                        next_close_grid_update_ts_short = min(
+                            next_close_grid_update_ts_short,
                             timestamps[k] + latency_simulation_ms + 2500,
                         )
                     elif short_wallet_exposure >= short_wallet_exposure_auto_unstuck_threshold:
                         # update both entry and closes after 15 secs
-                        next_closes_update_ts_short = min(
-                            next_closes_update_ts_short,
+                        next_close_grid_update_ts_short = min(
+                            next_close_grid_update_ts_short,
                             timestamps[k] + latency_simulation_ms + 15000,
                         )
                         next_entry_update_ts_short = min(
