@@ -1992,8 +1992,8 @@ def backtest_static_grid(
                     and closes_long[0][0] < 0.0
                     and prices[k] > closes_long[0][1]
                 ):
-                    next_entry_update_ts_long = min(
-                        next_entry_update_ts_long, timestamps[k] + latency_simulation_ms
+                    next_entry_grid_update_ts_long = min(
+                        next_entry_grid_update_ts_long, timestamps[k] + latency_simulation_ms
                     )
                     next_closes_update_ts_long = min(
                         next_closes_update_ts_long, timestamps[k] + latency_simulation_ms
@@ -2216,8 +2216,8 @@ def backtest_static_grid(
                     and closes_short[0][0] > 0.0
                     and prices[k] < closes_short[0][1]
                 ):
-                    next_entry_update_ts_short = min(
-                        next_entry_update_ts_short, timestamps[k] + latency_simulation_ms
+                    next_entry_grid_update_ts_short = min(
+                        next_entry_grid_update_ts_short, timestamps[k] + latency_simulation_ms
                     )
                     next_closes_update_ts_short = min(
                         next_closes_update_ts_short, timestamps[k] + latency_simulation_ms
