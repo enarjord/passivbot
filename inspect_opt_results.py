@@ -7,7 +7,7 @@ import json
 import pprint
 import numpy as np
 import argparse
-from procedures import load_live_config
+from procedures import load_live_config, dump_live_config, make_get_filepath
 from pure_funcs import config_pretty_str, candidate_to_live_config
 
 
@@ -37,7 +37,12 @@ def main():
         type=str,
         required=False,
         default="adgPADstd",
-        help="choices: [adgPADstd, adg, adgPADmean, adgDGstd, adgDGstdstd]",
+        help="choices: [adgPADstd, adg_mean, adg_min, adgPADmean, adgDGstd, adgDGstdstd]",
+    parser.add_argument(
+        "-d",
+        "--dump_live_config",
+        action="store_true",
+        help="dump config in tmp/",
     )
 
     args = parser.parse_args()
@@ -67,8 +72,10 @@ def main():
         adg_DGstd_ratios_std = np.std(adg_DGstd_ratios)
         if args.score_formula.lower() == "adgpadstd":
             score = adg_mean / max(PAD_max, PAD_std_mean)
-        elif args.score_formula.lower() == "adg":
+        elif args.score_formula.lower() == "adg_mean":
             score = adg_mean
+        elif args.score_formula.lower() == "adg_min":
+            score = min(adg)
         elif args.score_formula.lower() == "adgpadmean":
             score = adg_mean * min(1, PAD_max / PAD_mean_mean)
         elif args.score_formula.lower() == "adgdgstd":
@@ -91,7 +98,13 @@ def main():
         )
     ss = sorted(stats, key=lambda x: x["score"])
     bc = ss[-args.index]
-    print(config_pretty_str(candidate_to_live_config(bc["config"])))
+    live_config = candidate_to_live_config(bc["config"])
+    if args.dump_live_config:
+        print("dump_live_config")
+        dump_live_config(
+            live_config, make_get_filepath(f"{args.results_fpath.replace('.txt', '_config.json')}")
+        )
+    print(config_pretty_str(live_config))
     pprint.pprint({k: v for k, v in bc.items() if k != "config"})
     for r in results:
         if r["results"]["config_no"] == bc["config_no"]:
