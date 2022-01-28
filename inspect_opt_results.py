@@ -7,7 +7,7 @@ import json
 import pprint
 import numpy as np
 import argparse
-from procedures import load_live_config
+from procedures import load_live_config, dump_live_config, make_get_filepath
 from pure_funcs import config_pretty_str, candidate_to_live_config
 
 
@@ -30,7 +30,13 @@ def main():
         type=str,
         required=False,
         default="adgpadstd",
-        help="choices: [adgpadstd, adg, adgpadmean, adgdgstd, adgdgstdstd]",
+        help="choices: [adgpadstd, adg_mean, adg_min, adgpadmean, adgdgstd, adgdgstdstd]",
+    )
+    parser.add_argument(
+        "-d",
+        "--dump_live_config",
+        action="store_true",
+        help="dump config in tmp/",
     )
 
     args = parser.parse_args()
@@ -58,18 +64,20 @@ def main():
         pad_mean_mean = np.mean(pad_means)
         adg_DGstd_ratios_mean = np.mean(adg_DGstd_ratios)
         adg_DGstd_ratios_std = np.std(adg_DGstd_ratios)
-        if args.score_formula == 'adgpadstd':
+        if args.score_formula == "adgpadstd":
             score = adg_mean / max(pad_max, pad_std_mean)
-        elif args.score_formula == 'adg':
+        elif args.score_formula == "adg_mean":
             score = adg_mean
-        elif args.score_formula == 'adgpadmean':
+        elif args.score_formula == "adg_min":
+            score = min(adgs)
+        elif args.score_formula == "adgpadmean":
             score = adg_mean * min(1, pad_max / pad_mean_mean)
-        elif args.score_formula == 'adgdgstd':
+        elif args.score_formula == "adgdgstd":
             score = adg_DGstd_ratios_mean
-        elif args.score_formula == 'adgdgstdstd':
+        elif args.score_formula == "adgdgstdstd":
             score = adg_DGstd_ratios_mean / adg_DGstd_ratios_std
         else:
-            raise Exception('unknown score formula')
+            raise Exception("unknown score formula")
         stats.append(
             {
                 "config": r["config"],
@@ -84,7 +92,13 @@ def main():
         )
     ss = sorted(stats, key=lambda x: x["score"])
     bc = ss[-args.index]
-    print(config_pretty_str(candidate_to_live_config(bc["config"])))
+    live_config = candidate_to_live_config(bc["config"])
+    if args.dump_live_config:
+        print("dump_live_config")
+        dump_live_config(
+            live_config, make_get_filepath(f"{args.results_fpath.replace('.txt', '_config.json')}")
+        )
+    print(config_pretty_str(live_config))
     pprint.pprint({k: v for k, v in bc.items() if k != "config"})
     for r in results:
         if r["results"]["config_no"] == bc["config_no"]:
