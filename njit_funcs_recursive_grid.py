@@ -22,8 +22,8 @@ from njit_funcs import (
     calc_emas_last,
     calc_wallet_exposure_if_filled,
     find_entry_qty_bringing_wallet_exposure_to_target,
-    calc_long_close_grid,
-    calc_short_close_grid,
+    calc_close_grid_long,
+    calc_close_grid_short,
 )
 
 
@@ -516,7 +516,7 @@ def backtest_recursive_grid(
 
                 # check if close grid should be updated
                 if timestamps[k] >= next_closes_update_ts_long:
-                    closes_long = calc_long_close_grid(
+                    closes_long = calc_close_grid_long(
                         balance_long,
                         psize_long,
                         pprice_long,
@@ -733,7 +733,7 @@ def backtest_recursive_grid(
                     next_entry_update_ts_short = timestamps[k] + 1000 * 60 * 5  # five mins delay
                 # check if close grid should be updated
                 if timestamps[k] >= next_closes_update_ts_short:
-                    closes_short = calc_short_close_grid(
+                    closes_short = calc_close_grid_short(
                         balance_short,
                         psize_short,
                         pprice_short,
