@@ -115,11 +115,7 @@ class HarmonySearch:
         self.long_bounds = sort_dict_keys(config["bounds"]["long"])
         self.short_bounds = sort_dict_keys(config["bounds"]["short"])
         self.symbols = config["symbols"]
-        self.identifying_name = (
-            "".join([e[0] for e in config["symbols"]])
-            if len(self.symbols) > 10
-            else "_".join(self.symbols)
-        )
+        self.identifying_name = f"{len(self.symbols)}" if len(self.symbols) > 1 else self.symbols[0]
         self.now_date = ts_to_date(time())[:19].replace(":", "-")
         self.results_fpath = make_get_filepath(
             f"results_harmony_search/{self.now_date}_{self.identifying_name}/"
@@ -402,7 +398,6 @@ class HarmonySearch:
             + " ".join([str(round_dynamic(e[1], 3)) for e in sorted(new_harmony["long"].items())])
             + " - short: "
             + " ".join([str(round_dynamic(e[1], 3)) for e in sorted(new_harmony["short"].items())])
-
         )
 
         new_harmony["market_specific_settings"] = self.market_specific_settings[new_harmony["symbol"]]
