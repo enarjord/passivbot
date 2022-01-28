@@ -1995,8 +1995,8 @@ def backtest_static_grid(
                     next_entry_grid_update_ts_long = min(
                         next_entry_grid_update_ts_long, timestamps[k] + latency_simulation_ms
                     )
-                    next_closes_update_ts_long = min(
-                        next_closes_update_ts_long, timestamps[k] + latency_simulation_ms
+                    next_close_grid_update_ts_long = min(
+                        next_close_grid_update_ts_long, timestamps[k] + latency_simulation_ms
                     )
                     close_qty_long = closes_long[0][0]
                     new_psize_long = round_(psize_long + close_qty_long, qty_step)
@@ -2136,7 +2136,7 @@ def backtest_static_grid(
                     next_entry_grid_update_ts_short = timestamps[k] + 1000 * 60 * 5
 
                 # check if close grid should be updated
-                if timestamps[k] >= next_closes_update_ts_short:
+                if timestamps[k] >= next_close_grid_update_ts_short:
                     closes_short = calc_close_grid_short(
                         balance_short,
                         psize_short,
@@ -2156,7 +2156,7 @@ def backtest_static_grid(
                         auto_unstuck_wallet_exposure_threshold[1],
                         auto_unstuck_ema_dist[1],
                     )
-                    next_closes_update_ts_short = timestamps[k] + 1000 * 60 * 5  # five mins delay
+                    next_close_grid_update_ts_short = timestamps[k] + 1000 * 60 * 5  # five mins delay
 
                 while entries_short and entries_short[0][0] < 0.0 and prices[k] > entries_short[0][1]:
                     next_entry_grid_update_ts_short = min(
@@ -2219,8 +2219,8 @@ def backtest_static_grid(
                     next_entry_grid_update_ts_short = min(
                         next_entry_grid_update_ts_short, timestamps[k] + latency_simulation_ms
                     )
-                    next_closes_update_ts_short = min(
-                        next_closes_update_ts_short, timestamps[k] + latency_simulation_ms
+                    next_close_grid_update_ts_short = min(
+                        next_close_grid_update_ts_short, timestamps[k] + latency_simulation_ms
                     )
                     close_qty_short = closes_short[0][0]
                     new_psize_short = round_(psize_short + close_qty_short, qty_step)
