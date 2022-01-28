@@ -12,7 +12,7 @@ import numpy as np
 from njit_funcs import (
     round_dn,
     round_up,
-    calc_long_pnl,
+    calc_pnl_long,
     calc_min_entry_qty,
     qty_to_cost,
     calc_upnl,
@@ -340,7 +340,7 @@ class BinanceBotSpot(Bot):
                     {
                         "symbol": fill["symbol"],
                         "income_type": "realized_pnl",
-                        "income": calc_long_pnl(pprice, fill["price"], fill["qty"], False, 1.0),
+                        "income": calc_pnl_long(pprice, fill["price"], fill["qty"], False, 1.0),
                         "token": self.quot,
                         "timestamp": fill["timestamp"],
                         "info": 0,
