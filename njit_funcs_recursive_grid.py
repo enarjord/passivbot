@@ -45,7 +45,7 @@ else:
 
 
 @njit
-def calc_entry_long(
+def calc_recursive_entry_long(
     balance,
     psize,
     pprice,
@@ -139,7 +139,7 @@ def calc_entry_long(
 
 
 @njit
-def calc_entry_short(
+def calc_recursive_entry_short(
     balance,
     psize,
     pprice,
@@ -241,7 +241,7 @@ def calc_entry_short(
 
 
 @njit
-def calc_entries_long(
+def calc_recursive_entries_long(
     balance,
     psize,
     pprice,
@@ -272,7 +272,7 @@ def calc_entries_long(
         i += 1
         if i > infinite_loop_break:
             break
-        entry_qty, entry_price, entry_type = calc_entry_long(
+        entry_qty, entry_price, entry_type = calc_recursive_entry_long(
             balance,
             psize_,
             pprice_,
@@ -310,7 +310,7 @@ def calc_entries_long(
 
 
 @njit
-def calc_entries_short(
+def calc_recursive_entries_short(
     balance,
     psize,
     pprice,
@@ -341,7 +341,7 @@ def calc_entries_short(
         i += 1
         if i > infinite_loop_break:
             break
-        entry_qty, entry_price, entry_type = calc_entry_short(
+        entry_qty, entry_price, entry_type = calc_recursive_entry_short(
             balance,
             psize_,
             pprice_,
@@ -491,7 +491,7 @@ def backtest_recursive_grid(
 
                 # check if long entry order should be updated
                 if timestamps[k] >= next_entry_update_ts_long:
-                    entry_long = calc_entry_long(
+                    entry_long = calc_recursive_entry_long(
                         balance_long,
                         psize_long,
                         pprice_long,
@@ -709,7 +709,7 @@ def backtest_recursive_grid(
 
                 # check if entry order should be updated
                 if timestamps[k] >= next_entry_update_ts_short:
-                    entry_short = calc_entry_short(
+                    entry_short = calc_recursive_entry_short(
                         balance_short,
                         psize_short,
                         pprice_short,
