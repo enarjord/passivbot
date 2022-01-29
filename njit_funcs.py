@@ -317,7 +317,7 @@ def calc_close_grid_short(
             if abs_psize_ < min_entry_qty:
                 # close whole pos; include leftovers
                 return [(abs_psize, unstuck_close_price, "short_unstuck_close")]
-                closes.append((unstuck_close_qty, unstuck_close_price, "short_unstuck_close"))
+            closes.append((unstuck_close_qty, unstuck_close_price, "short_unstuck_close"))
     if len(close_prices) == 1:
         if abs_psize_ >= calc_min_entry_qty(close_prices[0], inverse, qty_step, min_qty, min_cost):
             closes.append((abs_psize_, close_prices[0], "short_nclose"))
