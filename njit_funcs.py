@@ -231,12 +231,12 @@ def calc_long_close_grid(
             min_entry_qty = calc_min_entry_qty(
                 unstuck_close_price, inverse, qty_step, min_qty, min_cost
             )
-            if unstuck_close_qty >= min_entry_qty:
-                psize_ = round_(psize_ - unstuck_close_qty, qty_step)
-                if psize_ < min_entry_qty:
-                    # close whole pos; include leftovers
-                    return [(-round_dn(psize, qty_step), unstuck_close_price, "long_unstuck_close")]
-                closes.append((-unstuck_close_qty, unstuck_close_price, "long_unstuck_close"))
+            unstuck_close_qty = max(min_entry_qty, unstuck_close_qty)
+            psize_ = round_(psize_ - unstuck_close_qty, qty_step)
+            if psize_ < min_entry_qty:
+                # close whole pos; include leftovers
+                return [(-round_dn(psize, qty_step), unstuck_close_price, "long_unstuck_close")]
+            closes.append((-unstuck_close_qty, unstuck_close_price, "long_unstuck_close"))
     if len(close_prices) == 1:
         if psize_ >= calc_min_entry_qty(close_prices[0], inverse, qty_step, min_qty, min_cost):
             closes.append((-psize_, close_prices[0], "long_nclose"))
@@ -328,17 +328,18 @@ def calc_short_close_grid(
                     qty_step,
                     c_mult,
                 )
-                if auto_unstuck_qty >= calc_min_entry_qty(
+                min_entry_qty = calc_min_entry_qty(
                     auto_unstuck_price, inverse, qty_step, min_qty, min_cost
-                ):
-                    short_closes.append(
-                        (
-                            auto_unstuck_qty,
-                            auto_unstuck_price,
-                            "short_unstuck_close",
-                        )
+                )
+                auto_unstuck_qty = max(auto_unstuck_qty, min_entry_qty)
+                short_closes.append(
+                    (
+                        auto_unstuck_qty,
+                        auto_unstuck_price,
+                        "short_unstuck_close",
                     )
-                    abs_short_psize = max(0.0, round_(abs_short_psize - auto_unstuck_qty, qty_step))
+                )
+                abs_short_psize = max(0.0, round_(abs_short_psize - auto_unstuck_qty, qty_step))
         min_close_qty = calc_min_entry_qty(close_prices[0], inverse, qty_step, min_qty, min_cost)
         default_qty = round_dn(abs_short_psize / len(close_prices), qty_step)
         if default_qty == 0.0:
