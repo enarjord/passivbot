@@ -60,17 +60,17 @@ def plot_wrap(config, data):
     if not fills_long and not fills_short:
         print("no fills")
         return
-    fdf_long, fdf_short, sdf, result = analyze_fills(fills_long, fills_short, stats, config)
+    longs, shorts, sdf, result = analyze_fills(fills_long, fills_short, stats, config)
     config["result"] = result
     config["plots_dirpath"] = make_get_filepath(
         os.path.join(config["plots_dirpath"], f"{ts_to_date(time())[:19].replace(':', '')}", "")
     )
-    fdf_long.to_csv(config["plots_dirpath"] + "fills_long.csv")
-    fdf_short.to_csv(config["plots_dirpath"] + "fills_short.csv")
+    longs.to_csv(config["plots_dirpath"] + "fills_long.csv")
+    shorts.to_csv(config["plots_dirpath"] + "fills_short.csv")
     sdf.to_csv(config["plots_dirpath"] + "stats.csv")
     df = pd.DataFrame({**{"timestamp": data[:, 0], "qty": data[:, 1], "price": data[:, 2]}, **{}})
     print("dumping plots...")
-    dump_plots(config, fdf, sdf, df)
+    dump_plots(config, longs, shorts, sdf, df)
 
 
 async def main():
