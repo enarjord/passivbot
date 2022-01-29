@@ -231,12 +231,12 @@ def calc_close_grid_long(
             min_entry_qty = calc_min_entry_qty(
                 unstuck_close_price, inverse, qty_step, min_qty, min_cost
             )
-            if unstuck_close_qty >= min_entry_qty:
-                psize_ = round_(psize_ - unstuck_close_qty, qty_step)
-                if psize_ < min_entry_qty:
-                    # close whole pos; include leftovers
-                    return [(-psize, unstuck_close_price, "long_unstuck_close")]
-                closes.append((-unstuck_close_qty, unstuck_close_price, "long_unstuck_close"))
+            unstuck_close_qty = max(min_entry_qty, unstuck_close_qty)
+            psize_ = round_(psize_ - unstuck_close_qty, qty_step)
+            if psize_ < min_entry_qty:
+                # close whole pos; include leftovers
+                return [(-psize, unstuck_close_price, "long_unstuck_close")]
+            closes.append((-unstuck_close_qty, unstuck_close_price, "long_unstuck_close"))
     if len(close_prices) == 1:
         if psize_ >= calc_min_entry_qty(close_prices[0], inverse, qty_step, min_qty, min_cost):
             closes.append((-psize_, close_prices[0], "long_nclose"))
@@ -312,11 +312,11 @@ def calc_close_grid_short(
             min_entry_qty = calc_min_entry_qty(
                 unstuck_close_price, inverse, qty_step, min_qty, min_cost
             )
-            if unstuck_close_qty >= min_entry_qty:
-                abs_psize_ = round_(abs_psize_ - unstuck_close_qty, qty_step)
-                if abs_psize_ < min_entry_qty:
-                    # close whole pos; include leftovers
-                    return [(abs_psize, unstuck_close_price, "short_unstuck_close")]
+            unstuck_close_qty = max(min_entry_qty, unstuck_close_qty)
+            abs_psize_ = round_(abs_psize_ - unstuck_close_qty, qty_step)
+            if abs_psize_ < min_entry_qty:
+                # close whole pos; include leftovers
+                return [(abs_psize, unstuck_close_price, "short_unstuck_close")]
                 closes.append((unstuck_close_qty, unstuck_close_price, "short_unstuck_close"))
     if len(close_prices) == 1:
         if abs_psize_ >= calc_min_entry_qty(close_prices[0], inverse, qty_step, min_qty, min_cost):
