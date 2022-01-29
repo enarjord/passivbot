@@ -11,7 +11,7 @@ from procedures import dump_live_config
 from pure_funcs import round_dynamic, denumpyize
 
 
-def dump_plots(result: dict, fdf: pd.DataFrame, sdf: pd.DataFrame, df: pd.DataFrame):
+def dump_plots(result: dict, longs: pd.DataFrame, shorts: pd.DataFrame, sdf: pd.DataFrame, df: pd.DataFrame):
     init(autoreset=True)
     plt.rcParams["figure.figsize"] = [29, 18]
     try:
@@ -28,82 +28,6 @@ def dump_plots(result: dict, fdf: pd.DataFrame, sdf: pd.DataFrame, df: pd.DataFr
     table.add_row(["Symbol", result["symbol"] if "symbol" in result else "unknown"])
     table.add_row(["No. days", round_dynamic(result["result"]["n_days"], 6)])
     table.add_row(["Starting balance", round_dynamic(result["result"]["starting_balance"], 6)])
-    profit_color = (
-        Fore.RED
-        if result["result"]["final_balance"] < result["result"]["starting_balance"]
-        else Fore.RESET
-    )
-    table.add_row(
-        [
-            "Final balance",
-            f"{profit_color}{round_dynamic(result['result']['final_balance'], 6)}{Fore.RESET}",
-        ]
-    )
-    table.add_row(
-        [
-            "Final equity",
-            f"{profit_color}{round_dynamic(result['result']['final_equity'], 6)}{Fore.RESET}",
-        ]
-    )
-    table.add_row(
-        [
-            "Net PNL + fees",
-            f"{profit_color}{round_dynamic(result['result']['net_pnl_plus_fees'], 6)}{Fore.RESET}",
-        ]
-    )
-    table.add_row(
-        [
-            "Total gain percentage",
-            f"{profit_color}{round_dynamic(result['result']['gain'] * 100, 4)}%{Fore.RESET}",
-        ]
-    )
-    table.add_row(
-        [
-            "Average daily gain percentage",
-            f"{profit_color}{round_dynamic((result['result']['average_daily_gain']) * 100, 3)}%{Fore.RESET}",
-        ]
-    )
-    bankruptcy_color = (
-        Fore.RED
-        if result["result"]["closest_bkr"] < 0.4
-        else Fore.YELLOW
-        if result["result"]["closest_bkr"] < 0.8
-        else Fore.RESET
-    )
-    table.add_row(
-        [
-            "Closest bankruptcy percentage",
-            f"{bankruptcy_color}{round_dynamic(result['result']['closest_bkr'] * 100, 4)}%{Fore.RESET}",
-        ]
-    )
-    table.add_row([" ", " "])
-    table.add_row(
-        [
-            "Profit sum",
-            f"{profit_color}{round_dynamic(result['result']['profit_sum'], 6)}{Fore.RESET}",
-        ]
-    )
-    table.add_row(
-        [
-            "Loss sum",
-            f"{Fore.RED}{round_dynamic(result['result']['loss_sum'], 6)}{Fore.RESET}",
-        ]
-    )
-    table.add_row(["Fee sum", round_dynamic(result["result"]["fee_sum"], 6)])
-    table.add_row(
-        [
-            "Lowest equity/balance ratio",
-            round_dynamic(result["result"]["eqbal_ratio_min"], 6),
-        ]
-    )
-    table.add_row(["Biggest pos size", round_dynamic(result["result"]["biggest_psize"], 6)])
-    table.add_row(
-        [
-            "Biggest pos cost",
-            round_dynamic(result["result"]["biggest_psize_quote"], 6),
-        ]
-    )
-    table.add_row(["Volume quote", round_dynamic(result["result"]["volume_quote"], 6)])
     table.add_row(
         [
             "Price action distance mean long",
@@ -128,36 +52,8 @@ def dump_plots(result: dict, fdf: pd.DataFrame, sdf: pd.DataFrame, df: pd.DataFr
             round_dynamic(result["result"]["pa_distance_max_short"], 6),
         ]
     )
-    table.add_row(
-        [
-            "Average n fills per day",
-            round_dynamic(result["result"]["avg_fills_per_day"], 6),
-        ]
-    )
     table.add_row([" ", " "])
-    table.add_row(["No. fills", round_dynamic(result["result"]["n_fills"], 6)])
-    table.add_row(["No. entries", round_dynamic(result["result"]["n_entries"], 6)])
-    table.add_row(["No. closes", round_dynamic(result["result"]["n_closes"], 6)])
-    table.add_row(["No. initial entries", round_dynamic(result["result"]["n_ientries"], 6)])
-    table.add_row(["No. reentries", round_dynamic(result["result"]["n_rentries"], 6)])
-    table.add_row(["No. unstuck entries", round_dynamic(result["result"]["n_unstuck_entries"], 6)])
-    table.add_row(["No. unstuck closes", round_dynamic(result["result"]["n_unstuck_closes"], 6)])
-    table.add_row([" ", " "])
-    table.add_row(
-        [
-            "Mean hours between fills",
-            round_dynamic(result["result"]["hrs_stuck_avg_long"], 6),
-        ]
-    )
-    table.add_row(
-        [
-            "Max hours no fills (same side)",
-            round_dynamic(result["result"]["hrs_stuck_max"], 6),
-        ]
-    )
 
-    longs = fdf[fdf.type.str.contains("long")]
-    shorts = fdf[fdf.type.str.contains("short")]
     if result["long"]["enabled"]:
         table.add_row([" ", " "])
         table.add_row(["Long", result["long"]["enabled"]])
@@ -264,25 +160,16 @@ def dump_plots(result: dict, fdf: pd.DataFrame, sdf: pd.DataFrame, df: pd.DataFr
 
     print("\nplotting balance and equity...")
     plt.clf()
-    sdf.balance.plot()
-    sdf.equity.plot(title="Balance and equity", xlabel="Time", ylabel="Balance")
-    plt.savefig(f"{result['plots_dirpath']}balance_and_equity_sampled.png")
-
+    sdf.balance_long.plot()
+    sdf.equity_long.plot(title="Balance and equity Long", xlabel="Time", ylabel="Balance")
+    plt.savefig(f"{result['plots_dirpath']}balance_and_equity_sampled_long.png")
     plt.clf()
-    longs.pnl.cumsum().plot(title="PNL cumulated sum - Long", xlabel="Time", ylabel="PNL")
-    plt.savefig(f"{result['plots_dirpath']}pnl_cumsum_long.png")
+    sdf.balance_short.plot()
+    sdf.equity_short.plot(title="Balance and equity Long", xlabel="Time", ylabel="Balance")
+    plt.savefig(f"{result['plots_dirpath']}balance_and_equity_sampled_short.png")
 
-    plt.clf()
-    shorts.pnl.cumsum().plot(title="PNL cumulated sum - Short", xlabel="Time", ylabel="PNL")
-    plt.savefig(f"{result['plots_dirpath']}pnl_cumsum_short.png")
-
-    adg = (sdf.equity / sdf.equity.iloc[0]) ** (
-        1 / ((sdf.timestamp - sdf.timestamp.iloc[0]) / (1000 * 60 * 60 * 24))
-    )
-    plt.clf()
-    adg.plot(title="Average daily gain", xlabel="Time", ylabel="Average daily gain")
-    plt.savefig(f"{result['plots_dirpath']}adg.png")
-
+    # TODO... fix
+    return
     print("plotting backtest in chunks...")
     n_parts = max(3, int(round_up(result["n_days"] / 14, 1.0)))
     for z in range(n_parts):
