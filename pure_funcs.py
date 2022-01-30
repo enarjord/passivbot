@@ -871,16 +871,9 @@ def get_daily_from_income(
 def make_compatible(live_config_: dict) -> dict:
     live_config = live_config_.copy()
     template_recurv = get_template_live_config("recursive_grid")
-    if all(k in live_config["long"] for k in template_recurv["long"]):
-        live_config["long"]["n_close_orders"] = int(round(live_config["long"]["n_close_orders"]))
-        live_config["short"]["n_close_orders"] = int(round(live_config["short"]["n_close_orders"]))
-        for src, dst in [
-            ("iprice_ema_dist", "initial_eprice_ema_dist"),
-            ("iqty_pct", "initial_qty_pct"),
-        ]:
-            live_config = json.loads(json.dumps(live_config).replace(src, dst))
-        return sort_dict_keys(live_config)
     for src, dst in [
+        ("iprice_ema_dist", "initial_eprice_ema_dist"),
+        ("iqty_pct", "initial_qty_pct"),
         ("secondary_grid_spacing", "secondary_pprice_diff"),
         ("shrt", "short"),
         ("secondary_pbr_allocation", "secondary_allocation"),
@@ -889,6 +882,10 @@ def make_compatible(live_config_: dict) -> dict:
         ("ema_span_max", "ema_span_1"),
     ]:
         live_config = json.loads(json.dumps(live_config).replace(src, dst))
+    if all(k in live_config["long"] for k in template_recurv["long"]):
+        live_config["long"]["n_close_orders"] = int(round(live_config["long"]["n_close_orders"]))
+        live_config["short"]["n_close_orders"] = int(round(live_config["short"]["n_close_orders"]))
+        return sort_dict_keys(live_config)
     for side in ["long", "short"]:
         if "initial_eprice_ema_dist" not in live_config[side]:
             live_config[side]["initial_eprice_ema_dist"] = -1000.0
