@@ -2311,7 +2311,6 @@ def backtest_static_grid(
                         next_entry_grid_update_ts_short,
                         timestamps[k] + latency_simulation_ms,
                     )
-<<<<<<< HEAD
                 else:
                     if prices[k] < pprice_short:
                         next_close_grid_update_ts_short = min(
