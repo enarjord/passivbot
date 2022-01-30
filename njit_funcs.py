@@ -1948,7 +1948,7 @@ def njit_backtest(
                     equity_short,
                 )
             )
-            next_stats_update = timestamps[k] + 60 * 1000
+            next_stats_update = round(timestamps[k] + 60 * 1000)
         if timestamps[k] >= next_entry_grid_update_ts_long:
             long_entries = (
                 calc_long_entry_grid(
@@ -2107,6 +2107,39 @@ def njit_backtest(
                         "short_bankruptcy",
                     )
                 )
+            equity = balance + calc_upnl(
+                long_psize,
+                long_pprice,
+                short_psize,
+                short_pprice,
+                prices[k],
+                inverse,
+                c_mult,
+            )
+            equity_long = balance_long + calc_long_pnl(
+                long_pprice, prices[k], long_psize, inverse, c_mult
+            )
+            equity_short = balance_short + calc_short_pnl(
+                short_pprice, prices[k], short_psize, inverse, c_mult
+            )
+            stats.append(
+                (
+                    next_stats_update,
+                    balance,
+                    equity,
+                    bkr_price,
+                    long_psize,
+                    long_pprice,
+                    short_psize,
+                    short_pprice,
+                    prices[k],
+                    closest_bkr,
+                    balance_long,
+                    balance_short,
+                    equity_long,
+                    equity_short,
+                )
+            )
             return fills, stats
 
         while long_entries and long_entries[0][0] > 0.0 and prices[k] < long_entries[0][1]:
