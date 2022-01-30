@@ -2418,5 +2418,37 @@ def njit_backtest(
                         next_entry_grid_update_ts_short,
                         timestamps[k] + latency_simulation_ms + 15000,
                     )
-
+    equity = balance + calc_upnl(
+        long_psize,
+        long_pprice,
+        short_psize,
+        short_pprice,
+        prices[k],
+        inverse,
+        c_mult,
+    )
+    equity_long = balance_long + calc_long_pnl(
+        long_pprice, prices[k], long_psize, inverse, c_mult
+    )
+    equity_short = balance_short + calc_short_pnl(
+        short_pprice, prices[k], short_psize, inverse, c_mult
+    )
+    stats.append(
+        (
+            next_stats_update,
+            balance,
+            equity,
+            bkr_price,
+            long_psize,
+            long_pprice,
+            short_psize,
+            short_pprice,
+            prices[k],
+            closest_bkr,
+            balance_long,
+            balance_short,
+            equity_long,
+            equity_short,
+        )
+    )
     return fills, stats
