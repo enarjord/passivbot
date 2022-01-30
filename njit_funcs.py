@@ -1930,9 +1930,6 @@ def njit_backtest(
             equity_short = balance_short + calc_short_pnl(
                 short_pprice, prices[k], short_psize, inverse, c_mult
             )
-            if equity / starting_balance < 0.2:
-                # break early when equity is less than 20% of starting balance
-                return fills, stats
             stats.append(
                 (
                     timestamps[k],
