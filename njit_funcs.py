@@ -1880,6 +1880,24 @@ def backtest_static_grid(
                         )
                     do_long = False
                     if not do_short:
+                        stats.append(
+                            (
+                                next_stats_update,
+                                bkr_price_long,
+                                bkr_price_short,
+                                psize_long,
+                                pprice_long,
+                                psize_short,
+                                pprice_short,
+                                prices[k],
+                                closest_bkr_long,
+                                closest_bkr_short,
+                                balance_long,
+                                balance_short,
+                                equity_long,
+                                equity_short,
+                            )
+                        )
                         return fills_long, fills_short, stats
 
                 # check if long entry grid should be updated
@@ -2104,6 +2122,24 @@ def backtest_static_grid(
                         )
                     do_short = False
                     if not do_long:
+                        stats.append(
+                            (
+                                next_stats_update,
+                                bkr_price_long,
+                                bkr_price_short,
+                                psize_long,
+                                pprice_long,
+                                psize_short,
+                                pprice_short,
+                                prices[k],
+                                closest_bkr_long,
+                                closest_bkr_short,
+                                balance_long,
+                                balance_short,
+                                equity_long,
+                                equity_short,
+                            )
+                        )
                         return fills_long, fills_short, stats
 
                 # check if entry grid should be updated
@@ -2317,6 +2353,24 @@ def backtest_static_grid(
                     equity_short,
                 )
             )
-            next_stats_update = timestamps[k] + 60 * 1000
+            next_stats_update = round(timestamps[k] + 60 * 1000)
 
+    stats.append(
+        (
+            next_stats_update,
+            bkr_price_long,
+            bkr_price_short,
+            psize_long,
+            pprice_long,
+            psize_short,
+            pprice_short,
+            prices[k],
+            closest_bkr_long,
+            closest_bkr_short,
+            balance_long,
+            balance_short,
+            equity_long,
+            equity_short,
+        )
+    )
     return fills_long, fills_short, stats
