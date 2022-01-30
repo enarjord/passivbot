@@ -572,7 +572,7 @@ def backtest_recursive_grid(
                             entry_long[2],
                         )
                     )
-                    bkr_price = calc_bankruptcy_price(
+                    bkr_price_long = calc_bankruptcy_price(
                         balance_long,
                         psize_long,
                         pprice_long,
@@ -791,7 +791,7 @@ def backtest_recursive_grid(
                             entry_short[2],
                         )
                     )
-                    bkr_price = calc_bankruptcy_price(
+                    bkr_price_short = calc_bankruptcy_price(
                         balance_short,
                         0.0,
                         0.0,
