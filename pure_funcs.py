@@ -569,6 +569,8 @@ def analyze_fills(
         adg_long = daily_gains_long.mean()
         DGstd_long = daily_gains_long.std()
         adg_DGstd_ratio_long = adg_long / DGstd_long if len(daily_gains_long) > 0 else 0.0
+        if any("bankruptcy" in e for e in longs.type.unique()):
+            adg_long = 0.01 ** (1 / n_days) - 1 # reward bankrupt runs lasting longer
     else:
         adg_long = adg_DGstd_ratio_long = 0.0
         DGstd_long = 100.0
@@ -579,6 +581,8 @@ def analyze_fills(
         adg_short = daily_gains_short.mean()
         DGstd_short = daily_gains_short.std()
         adg_DGstd_ratio_short = adg_short / DGstd_short if len(daily_gains_short) > 0 else 0.0
+        if any("bankruptcy" in e for e in shorts.type.unique()):
+            adg_short = 0.01 ** (1 / n_days) - 1 # reward bankrupt runs lasting longer
     else:
         adg_short = adg_DGstd_ratio_short = 0.0
         DGstd_short = 100.0
