@@ -76,7 +76,7 @@ def main():
         elif args.score_formula.lower() == "adg_mean":
             score = adg_mean
         elif args.score_formula.lower() == "adg_min":
-            score = min(adg)
+            score = min(adgs)
         elif args.score_formula.lower() == "adgpadmean":
             score = adg_mean * min(1, PAD_max / PAD_mean_mean)
         elif args.score_formula.lower() == "adgdgstd":
