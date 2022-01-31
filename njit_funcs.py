@@ -1851,7 +1851,7 @@ def backtest_static_grid(
     for k in range(0, len(prices)):
         if do_long:
             emas_long = calc_ema(alphas_long, alphas__long, emas_long, prices[k])
-            if k >= max_span_long:
+            if qtys[k] != 0.0 and k >= max_span_long:
                 # check bankruptcy
                 bkr_diff_long = calc_diff(bkr_price_long, prices[k])
                 closest_bkr_long = min(closest_bkr_long, bkr_diff_long)
@@ -2090,7 +2090,7 @@ def backtest_static_grid(
 
         if do_short:
             emas_short = calc_ema(alphas_short, alphas__short, emas_short, prices[k])
-            if k >= max_span_short:
+            if qtys[k] != 0.0 and k >= max_span_short:
                 # check bankruptcy
                 bkr_diff_short = calc_diff(bkr_price_short, prices[k])
                 closest_bkr_short = min(closest_bkr_short, bkr_diff_short)
