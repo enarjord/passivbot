@@ -11,7 +11,9 @@ from procedures import dump_live_config
 from pure_funcs import round_dynamic, denumpyize
 
 
-def dump_plots(result: dict, longs: pd.DataFrame, shorts: pd.DataFrame, sdf: pd.DataFrame, df: pd.DataFrame):
+def dump_plots(
+    result: dict, longs: pd.DataFrame, shorts: pd.DataFrame, sdf: pd.DataFrame, df: pd.DataFrame
+):
     init(autoreset=True)
     plt.rcParams["figure.figsize"] = [29, 18]
     try:
