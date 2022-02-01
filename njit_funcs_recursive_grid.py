@@ -261,6 +261,7 @@ def calc_recursive_entries_long(
     wallet_exposure_limit,
     auto_unstuck_ema_dist,
     auto_unstuck_wallet_exposure_threshold,
+    whole_grid=False,
 ):
     entries = []
     psize_ = psize
@@ -306,6 +307,8 @@ def calc_recursive_entries_long(
                 return [(entry_qty, entry_price, entry_type, psize_, pprice_, wallet_exposure)]
         else:
             entries.append((entry_qty, entry_price, entry_type, psize_, pprice_, wallet_exposure))
+        if not whole_grid and psize == 0.0:
+            break
     return entries
 
 
@@ -330,6 +333,7 @@ def calc_recursive_entries_short(
     wallet_exposure_limit,
     auto_unstuck_ema_dist,
     auto_unstuck_wallet_exposure_threshold,
+    whole_grid=False,
 ):
     entries = []
     psize_ = psize
@@ -375,6 +379,8 @@ def calc_recursive_entries_short(
                 return [(entry_qty, entry_price, entry_type, psize_, pprice_, wallet_exposure)]
         else:
             entries.append((entry_qty, entry_price, entry_type, psize_, pprice_, wallet_exposure))
+        if not whole_grid and psize == 0.0:
+            break
     return entries
 
 
