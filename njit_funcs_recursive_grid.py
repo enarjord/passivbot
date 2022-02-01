@@ -85,7 +85,7 @@ def calc_recursive_entry_long(
         return ientry_qty, ientry_price, "long_ientry_normal"
     elif psize < ientry_qty * 0.8:
         # partial ientry
-        entry_qty = max(min_entry_qty, round_(psize - ientry_qty, qty_step))
+        entry_qty = max(min_entry_qty, round_(ientry_qty - psize, qty_step))
         return entry_qty, ientry_price, "long_ientry_partial"
     else:
         wallet_exposure = qty_to_cost(psize, pprice, inverse, c_mult) / balance
@@ -179,7 +179,7 @@ def calc_recursive_entry_short(
         return -ientry_qty, ientry_price, "short_ientry_normal"
     elif abs_psize < ientry_qty * 0.8:
         # partial ientry
-        entry_qty = max(min_entry_qty, round_(abs_psize - ientry_qty, qty_step))
+        entry_qty = max(min_entry_qty, round_(ientry_qty - abs_psize, qty_step))
         return -entry_qty, ientry_price, "short_ientry_partial"
     else:
         wallet_exposure = qty_to_cost(abs_psize, pprice, inverse, c_mult) / balance
