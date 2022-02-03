@@ -656,19 +656,19 @@ async def main():
         required=False,
         dest="passivbot_mode",
         default=None,
-        help="passivbot mode options: [s/static_grid (default), r/recursive_grid]",
+        help="passivbot mode options: [s/static_grid, r/recursive_grid]",
     )
     parser = add_argparse_args(parser)
     args = parser.parse_args()
     args.symbol = "BTCUSDT"  # dummy symbol
     config = await prepare_optimize_config(args)
     if args.passivbot_mode is not None:
-        if args.passivbot_mode in ["s", "static_grid"]:
+        if args.passivbot_mode in ["s", "static_grid", "static"]:
             config["passivbot_mode"] = "static_grid"
-        elif args.passivbot_mode in ["r", "recursive_grid"]:
+        elif args.passivbot_mode in ["r", "recursive_grid", "recursive"]:
             config["passivbot_mode"] = "recursive_grid"
         else:
-            raise Exception("unknown passivbot mode {args.passivbot_mode}")
+            raise Exception(f"unknown passivbot mode {args.passivbot_mode}")
     passivbot_mode = config["passivbot_mode"]
     assert passivbot_mode in [
         "recursive_grid",
