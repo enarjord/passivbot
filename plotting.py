@@ -164,8 +164,8 @@ def dump_plots(
                 plt.savefig(f"{result['plots_dirpath']}auto_unstuck_bands_{side}.png")
     print("plotting pos sizes...")
     plt.clf()
-    longs.psize.plot()
-    shorts.psize.plot(
+
+    sdf[["psize_long", "psize_short"]].plot(
         title="Position size in terms of contracts",
         xlabel="Time",
         ylabel="Position size",
