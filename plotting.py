@@ -158,7 +158,7 @@ def dump_plots(
                 unstucking_band_lower = ema_band_lower * (1 - result[side]["auto_unstuck_ema_dist"])
                 unstucking_band_upper = ema_band_upper * (1 + result[side]["auto_unstuck_ema_dist"])
                 plt.clf()
-                df.price.plot(style="y-", title=f"{side.capitalize()} Auto Unstucking Bands")
+                df.price.iloc[::100].plot(style="y-", title=f"{side.capitalize()} Auto Unstucking Bands")
                 unstucking_band_lower.plot(style="b-.")
                 unstucking_band_upper.plot(style="r-.")
                 plt.savefig(f"{result['plots_dirpath']}auto_unstuck_bands_{side}.png")
