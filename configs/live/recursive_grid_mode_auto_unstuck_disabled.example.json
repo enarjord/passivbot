@@ -1,4 +1,4 @@
-{"config_name": "recursive_grid_80_symbols_275days",
+{"config_name": "multi_80symbols_2021-05-01to2022-01-31_recursive_grid_auto_unstuck_enabled",
  "logging_level": 0,
  "long": {"auto_unstuck_ema_dist": 0,
           "auto_unstuck_wallet_exposure_threshold": 0.0,
