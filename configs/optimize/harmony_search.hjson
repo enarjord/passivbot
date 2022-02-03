@@ -38,7 +38,10 @@
 
   # will override any starting configs' long/short enabled parameter
   do_long: true
-  do_short: false
+  do_short: true
+
+  # choices: [recursive_grid, static_grid]
+  passivbot_mode: recursive_grid
 
   # symbols with min notional < $5 @ 2022-01-22,
   # and at least 250 days of data,
