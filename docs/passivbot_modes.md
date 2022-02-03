@@ -44,8 +44,11 @@ Recursive Grid Mode and Static Grid Mode
 	- higher than 1.0 and spacing will increase deeper in the grid
 - eprice_pprice_diff
 	- per uno distance from entry price to pos_price if filled
-	- e.g. long and if `eprice_pprice_diff=0.015` and `entry_price==100`, pos price after node fill is 98.5
-	- eprice_pprice_diff is dynamically increased behind the scenes in some proportion to wallet_exposure lest wallet_exposure exceeds wallet_exposure_limit
+	- a node's qty is determined such that pos price after fill is equal to `entry price * (1 + eprice_pprice_diff)`
+	- e.g. if long and pos_price is greater than 101.5 and `eprice_pprice_diff=0.015` and `entry_price==100`...  
+	- ...qty will be such that pos price after node fill is 101.5
+	- eprice_pprice_diff is dynamically increased behind the scenes in some proportion to wallet_exposure...  
+	- ...lest wallet_exposure exceeds wallet_exposure_limit
 - grid_span
 	- per uno distance from initial entry price to last node's price
 - secondary_allocation
@@ -54,7 +57,8 @@ Recursive Grid Mode and Static Grid Mode
 	- wallet_exposure_limit is always observed
 - secondary_pprice_diff
 	- per uno distance from pos price after last primary grid node is filled to secondary node
-	- e.g. if long and pos price after primary grid's exhaustion is 40 and secondary_pprice_diff is 0.15, secondary grid node's price is `40 * (1 - 0.15) == 34`
+	- e.g. if long and pos price after primary grid's exhaustion is 40 and secondary_pprice_diff is 0.15...  
+	- ...secondary grid node's price is `40 * (1 - 0.15) == 34`
 
 It is called static grid mode because the grid is defined as a whole.  
 If there already is a position, the grid is reverse engineered by deducing initial entry price  
