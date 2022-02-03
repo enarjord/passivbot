@@ -97,6 +97,26 @@ async def main():
         default=None,
         help="specify short wallet exposure limit, overriding value from live config",
     )
+    parser.add_argument(
+        "-le",
+        "--long_enabled",
+        "--long-enabled",
+        type=bool,
+        required=False,
+        dest="long_enabled",
+        default=None,
+        help="specify long enabled [y/n], overriding value from live config",
+    )
+    parser.add_argument(
+        "-se",
+        "--short_enabled",
+        "--short-enabled",
+        type=bool,
+        required=False,
+        dest="short_enabled",
+        default=None,
+        help="specify short enabled [y/n], overriding value from live config",
+    )
 
     args = parser.parse_args()
     config = await prepare_backtest_config(args)
@@ -115,7 +135,10 @@ async def main():
             f"with new value: {args.short_wallet_exposure_limit}"
         )
         config["short"]["wallet_exposure_limit"] = args.short_wallet_exposure_limit
-
+    if args.long_enabled is not None:
+        config["long"]["enabled"] = "y" in args.long_enabled.lower()
+    if args.short_enabled is not None:
+        config["short"]["enabled"] = "y" in args.short_enabled.lower()
     if "spot" in config["market_type"]:
         live_config = spotify_config(live_config)
     downloader = Downloader(config)
