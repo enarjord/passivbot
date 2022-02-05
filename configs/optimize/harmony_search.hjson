@@ -12,6 +12,7 @@
   # score formula choices:
   #  adg_PAD_mean
   #  adg_PAD_std
+  #  adg_PAD_std_min
   #  adg_DGstd_ratio
   #  adg_mean
   #  adg_min
@@ -21,6 +22,9 @@
   # adg / max(max_pa_dist_std, mean([max(max_pa_dist_std, PAD_std) for PAD_std in results]))
   maximum_pa_distance_std_long: 0.025
   maximum_pa_distance_std_short: 0.025
+
+  # adg_PAD_std_min:
+  # min([adg / max(max_pa_dist_std, mean([max(max_pa_dist_std, PAD_std) for adg, PAD_std in results])))
 
   # adg_PAD_mean:
   # adg * min(1, max_pa_dist_mean / mean([max(max_pa_dist_mean, pa_dist) for pa_dist in results]))

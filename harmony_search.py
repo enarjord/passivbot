@@ -229,6 +229,20 @@ class HarmonySearch:
             elif self.config["score_formula"] == "adg_min":
                 score_long = -min(adgs_long)
                 score_short = -min(adgs_short)
+            elif self.config["score_formula"] == "adg_PAD_std_min":
+                # best worst score
+                scores_long = [
+                    v["adg_long"]
+                    / max(v["pa_distance_std_long"], self.config["maximum_pa_distance_std_long"])
+                    for v in results.values()
+                ]
+                score_long = -min(scores_long)
+                scores_short = [
+                    v["adg_short"]
+                    / max(v["pa_distance_std_short"], self.config["maximum_pa_distance_std_short"])
+                    for v in results.values()
+                ]
+                score_short = -min(scores_short)
             else:
                 raise Exception(f"unknown score formula {self.config['score_formula']}")
 
