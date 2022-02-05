@@ -149,6 +149,7 @@ async def main():
             "spot",
             "symbol",
             "market_type",
+            "passivbot_mode",
             "config_type",
             "starting_balance",
             "start_date",
