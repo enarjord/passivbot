@@ -12,7 +12,12 @@ from pure_funcs import round_dynamic, denumpyize
 
 
 def dump_plots(
-    result: dict, longs: pd.DataFrame, shorts: pd.DataFrame, sdf: pd.DataFrame, df: pd.DataFrame
+    result: dict,
+    longs: pd.DataFrame,
+    shorts: pd.DataFrame,
+    sdf: pd.DataFrame,
+    df: pd.DataFrame,
+    n_parts: int = None,
 ):
     init(autoreset=True)
     plt.rcParams["figure.figsize"] = [29, 18]
@@ -112,7 +117,7 @@ def dump_plots(
     sdf.equity_short.plot(title="Balance and equity Long", xlabel="Time", ylabel="Balance")
     plt.savefig(f"{result['plots_dirpath']}balance_and_equity_sampled_short.png")
 
-    n_parts = max(3, int(round_up(result["n_days"] / 14, 1.0)))
+    n_parts = n_parts if n_parts is not None else max(3, int(round_up(result["n_days"] / 14, 1.0)))
     for side, fdf in [("long", longs), ("short", shorts)]:
         if result[side]["enabled"]:
             fig = plot_fills(df, fdf, plot_whole_df=True, title=f"Overview Fills {side.capitalize()}")
@@ -158,7 +163,9 @@ def dump_plots(
                 unstucking_band_lower = ema_band_lower * (1 - result[side]["auto_unstuck_ema_dist"])
                 unstucking_band_upper = ema_band_upper * (1 + result[side]["auto_unstuck_ema_dist"])
                 plt.clf()
-                df.price.iloc[::100].plot(style="y-", title=f"{side.capitalize()} Auto Unstucking Bands")
+                df.price.iloc[::100].plot(
+                    style="y-", title=f"{side.capitalize()} Auto Unstucking Bands"
+                )
                 unstucking_band_lower.plot(style="b-.")
                 unstucking_band_upper.plot(style="r-.")
                 plt.savefig(f"{result['plots_dirpath']}auto_unstuck_bands_{side}.png")
