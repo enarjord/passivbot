@@ -178,9 +178,9 @@ class Bot:
         spans1s_short = np.array(self.ema_spans_short) * 60
         self.emas_long = calc_emas_last(samples1s[:, 2], spans1s_long)
         self.emas_short = calc_emas_last(samples1s[:, 2], spans1s_short)
-        self.alpha_long = 2 / (spans1s_long)
+        self.alpha_long = 2 / (spans1s_long + 1)
         self.alpha__long = 1 - self.alpha_long
-        self.alpha_short = 2 / (spans1s_short)
+        self.alpha_short = 2 / (spans1s_short + 1)
         self.alpha__short = 1 - self.alpha_short
         self.ema_sec = int(time())
         # return samples1s
