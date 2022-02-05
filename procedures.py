@@ -261,7 +261,8 @@ def add_argparse_args(parser):
         required=False,
         dest="symbol",
         default=None,
-        help="specify symbol, overriding symbol from backtest config",
+        help="specify symbol(s), overriding symbol from backtest config.  "
+        + "multiple symbols separated with comma",
     )
     parser.add_argument(
         "-u",
