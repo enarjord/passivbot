@@ -70,7 +70,8 @@ def plot_wrap(config, data):
     sdf.to_csv(config["plots_dirpath"] + "stats.csv")
     df = pd.DataFrame({**{"timestamp": data[:, 0], "qty": data[:, 1], "price": data[:, 2]}, **{}})
     print("dumping plots...")
-    dump_plots(config, longs, shorts, sdf, df)
+    # set n_parts to zero to skip plotting backtest slices
+    dump_plots(config, longs, shorts, sdf, df) #, n_parts=0)
 
 
 async def main():
@@ -119,51 +120,55 @@ async def main():
     )
 
     args = parser.parse_args()
-    config = await prepare_backtest_config(args)
-    live_config = load_live_config(args.live_config_path)
-    config.update(live_config)
+    for symbol in args.symbol.split(","):
+        args = parser.parse_args()
+        args.symbol = symbol
+        config = await prepare_backtest_config(args)
+        live_config = load_live_config(args.live_config_path)
+        config.update(live_config)
 
-    if args.long_wallet_exposure_limit is not None:
-        print(
-            f"overriding long wallet exposure limit ({config['long']['wallet_exposure_limit']}) "
-            f"with new value: {args.long_wallet_exposure_limit}"
-        )
-        config["long"]["wallet_exposure_limit"] = args.long_wallet_exposure_limit
-    if args.short_wallet_exposure_limit is not None:
-        print(
-            f"overriding short wallet exposure limit ({config['short']['wallet_exposure_limit']}) "
-            f"with new value: {args.short_wallet_exposure_limit}"
-        )
-        config["short"]["wallet_exposure_limit"] = args.short_wallet_exposure_limit
-    if args.long_enabled is not None:
-        config["long"]["enabled"] = "y" in args.long_enabled.lower()
-    if args.short_enabled is not None:
-        config["short"]["enabled"] = "y" in args.short_enabled.lower()
-    if "spot" in config["market_type"]:
-        live_config = spotify_config(live_config)
-    downloader = Downloader(config)
-    print()
-    for k in (
-        keys := [
-            "exchange",
-            "spot",
-            "symbol",
-            "market_type",
-            "passivbot_mode",
-            "config_type",
-            "starting_balance",
-            "start_date",
-            "end_date",
-            "latency_simulation_ms",
-        ]
-    ):
-        if k in config:
-            print(f"{k: <{max(map(len, keys)) + 2}} {config[k]}")
-    print()
-    data = await downloader.get_sampled_ticks()
-    config["n_days"] = round_((data[-1][0] - data[0][0]) / (1000 * 60 * 60 * 24), 0.1)
-    pprint.pprint(denumpyize(live_config))
-    plot_wrap(config, data)
+        if args.long_wallet_exposure_limit is not None:
+            print(
+                f"overriding long wallet exposure limit ({config['long']['wallet_exposure_limit']}) "
+                f"with new value: {args.long_wallet_exposure_limit}"
+            )
+            config["long"]["wallet_exposure_limit"] = args.long_wallet_exposure_limit
+        if args.short_wallet_exposure_limit is not None:
+            print(
+                f"overriding short wallet exposure limit ({config['short']['wallet_exposure_limit']}) "
+                f"with new value: {args.short_wallet_exposure_limit}"
+            )
+            config["short"]["wallet_exposure_limit"] = args.short_wallet_exposure_limit
+        if args.long_enabled is not None:
+            config["long"]["enabled"] = "y" in args.long_enabled.lower()
+        if args.short_enabled is not None:
+            config["short"]["enabled"] = "y" in args.short_enabled.lower()
+        if "spot" in config["market_type"]:
+            live_config = spotify_config(live_config)
+
+        downloader = Downloader(config)
+        print()
+        for k in (
+            keys := [
+                "exchange",
+                "spot",
+                "symbol",
+                "market_type",
+                "passivbot_mode",
+                "config_type",
+                "starting_balance",
+                "start_date",
+                "end_date",
+                "latency_simulation_ms",
+            ]
+        ):
+            if k in config:
+                print(f"{k: <{max(map(len, keys)) + 2}} {config[k]}")
+        print()
+        data = await downloader.get_sampled_ticks()
+        config["n_days"] = round_((data[-1][0] - data[0][0]) / (1000 * 60 * 60 * 24), 0.1)
+        pprint.pprint(denumpyize(live_config))
+        plot_wrap(config, data)
 
 
 if __name__ == "__main__":
