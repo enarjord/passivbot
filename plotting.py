@@ -57,7 +57,18 @@ def dump_plots(
                     round_dynamic(result["result"][f"pa_distance_max_{side}"], 6),
                 ]
             )
-            table.add_row(["Closest bankruptcy", f'{round_dynamic(result["result"][f"closest_bkr_{side}"] * 100, 4)}%'])
+            table.add_row(
+                [
+                    "Closest bankruptcy",
+                    f'{round_dynamic(result["result"][f"closest_bkr_{side}"] * 100, 4)}%',
+                ]
+            )
+            table.add_row(
+                [
+                    "Lowest equity/balance ratio",
+                    f'{round_dynamic(result["result"][f"eqbal_ratio_min_{side}"], 4)}',
+                ]
+            )
             table.add_row(["No. inital entries", result["result"][f"n_ientries_{side}"]])
             table.add_row(["No. reentries", result["result"][f"n_rentries_{side}"]])
             table.add_row(["No. normal closes", result["result"][f"n_normal_closes_{side}"]])
@@ -117,7 +128,9 @@ def dump_plots(
             print(f"\nplotting balance and equity {side}...")
             plt.clf()
             sdf[f"balance_{side}"].plot()
-            sdf[f"equity_{side}"].plot(title=f"Balance and equity {side.capitalize()}", xlabel="Time", ylabel="Balance")
+            sdf[f"equity_{side}"].plot(
+                title=f"Balance and equity {side.capitalize()}", xlabel="Time", ylabel="Balance"
+            )
             plt.savefig(f"{result['plots_dirpath']}balance_and_equity_sampled_{side}.png")
 
             for z in range(n_parts):
