@@ -108,21 +108,18 @@ def dump_plots(
         print(output)
         f.write(re.sub("\033\\[([0-9]+)(;[0-9]+)*m", "", output))
 
-    print("\nplotting balance and equity...")
-    plt.clf()
-    sdf.balance_long.plot()
-    sdf.equity_long.plot(title="Balance and equity Long", xlabel="Time", ylabel="Balance")
-    plt.savefig(f"{result['plots_dirpath']}balance_and_equity_sampled_long.png")
-    plt.clf()
-    sdf.balance_short.plot()
-    sdf.equity_short.plot(title="Balance and equity Long", xlabel="Time", ylabel="Balance")
-    plt.savefig(f"{result['plots_dirpath']}balance_and_equity_sampled_short.png")
-
     n_parts = n_parts if n_parts is not None else max(3, int(round_up(result["n_days"] / 14, 1.0)))
     for side, fdf in [("long", longs), ("short", shorts)]:
         if result[side]["enabled"]:
+            plt.clf()
             fig = plot_fills(df, fdf, plot_whole_df=True, title=f"Overview Fills {side.capitalize()}")
             fig.savefig(f"{result['plots_dirpath']}whole_backtest_{side}.png")
+            print(f"\nplotting balance and equity {side}...")
+            plt.clf()
+            sdf[f"balance_{side}"].plot()
+            sdf[f"equity_{side}"].plot(title=f"Balance and equity {side.capitalize()}", xlabel="Time", ylabel="Balance")
+            plt.savefig(f"{result['plots_dirpath']}balance_and_equity_sampled_{side}.png")
+
             for z in range(n_parts):
                 start_ = z / n_parts
                 end_ = (z + 1) / n_parts
@@ -156,7 +153,7 @@ def dump_plots(
             else:
                 ientry_band = ema_band_upper * (1 + result[side]["initial_eprice_ema_dist"])
             plt.clf()
-            df.price.iloc[::100].plot(style="y-", title=f"{side.capitalize} Initial Entry Band")
+            df.price.iloc[::100].plot(style="y-", title=f"{side.capitalize()} Initial Entry Band")
             ientry_band.plot(style=f"{('b' if side == 'long' else 'r')}-.")
             plt.savefig(f"{result['plots_dirpath']}initial_entry_band_{side}.png")
             if result[side]["auto_unstuck_wallet_exposure_threshold"] != 0.0:
