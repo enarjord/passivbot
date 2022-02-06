@@ -70,7 +70,7 @@ def plot_wrap(config, data):
     sdf.to_csv(config["plots_dirpath"] + "stats.csv")
     df = pd.DataFrame({**{"timestamp": data[:, 0], "qty": data[:, 1], "price": data[:, 2]}, **{}})
     print("dumping plots...")
-    dump_plots(config, longs, shorts, sdf, df, n_parts=config['n_parts'])
+    dump_plots(config, longs, shorts, sdf, df, n_parts=config["n_parts"])
 
 
 async def main():
@@ -133,7 +133,7 @@ async def main():
         args = parser.parse_args()
         args.symbol = symbol
         config = await prepare_backtest_config(args)
-        config['n_parts'] = args.n_parts
+        config["n_parts"] = args.n_parts
         live_config = load_live_config(args.live_config_path)
         config.update(live_config)
 
