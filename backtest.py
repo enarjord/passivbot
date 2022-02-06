@@ -71,7 +71,7 @@ def plot_wrap(config, data):
     df = pd.DataFrame({**{"timestamp": data[:, 0], "qty": data[:, 1], "price": data[:, 2]}, **{}})
     print("dumping plots...")
     # set n_parts to zero to skip plotting backtest slices
-    dump_plots(config, longs, shorts, sdf, df) #, n_parts=0)
+    dump_plots(config, longs, shorts, sdf, df)  # , n_parts=0)
 
 
 async def main():
