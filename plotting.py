@@ -47,16 +47,17 @@ def dump_plots(
             )
             table.add_row(
                 [
-                    f"Price action distance mean {side}",
+                    f"Price action distance mean",
                     round_dynamic(result["result"][f"pa_distance_mean_{side}"], 6),
                 ]
             )
             table.add_row(
                 [
-                    f"Price action distance max {side}",
+                    f"Price action distance max",
                     round_dynamic(result["result"][f"pa_distance_max_{side}"], 6),
                 ]
             )
+            table.add_row(["Closest bankruptcy", f'{round_dynamic(result["result"][f"closest_bkr_{side}"] * 100, 4)}%'])
             table.add_row(["No. inital entries", result["result"][f"n_ientries_{side}"]])
             table.add_row(["No. reentries", result["result"][f"n_rentries_{side}"]])
             table.add_row(["No. normal closes", result["result"][f"n_normal_closes_{side}"]])
