@@ -70,8 +70,7 @@ def plot_wrap(config, data):
     sdf.to_csv(config["plots_dirpath"] + "stats.csv")
     df = pd.DataFrame({**{"timestamp": data[:, 0], "qty": data[:, 1], "price": data[:, 2]}, **{}})
     print("dumping plots...")
-    # set n_parts to zero to skip plotting backtest slices
-    dump_plots(config, longs, shorts, sdf, df)  # , n_parts=0)
+    dump_plots(config, longs, shorts, sdf, df, n_parts=config['n_parts'])
 
 
 async def main():
@@ -118,12 +117,23 @@ async def main():
         default=None,
         help="specify short enabled [y/n], overriding value from live config",
     )
+    parser.add_argument(
+        "-np",
+        "--n_parts",
+        "--n-parts",
+        type=int,
+        required=False,
+        dest="n_parts",
+        default=None,
+        help="set n backtest slices to plot",
+    )
 
     args = parser.parse_args()
     for symbol in args.symbol.split(","):
         args = parser.parse_args()
         args.symbol = symbol
         config = await prepare_backtest_config(args)
+        config['n_parts'] = args.n_parts
         live_config = load_live_config(args.live_config_path)
         config.update(live_config)
 
