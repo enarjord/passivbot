@@ -536,15 +536,11 @@ def analyze_fills(
     ]
     n_days = (sdf.timestamp.iloc[-1] - sdf.timestamp.iloc[0]) / (1000 * 60 * 60 * 24)
     pos_changes_long = sdf[sdf.psize_long != sdf.psize_long.shift()]
-    pos_changes_long_ms_diff = np.diff(
-        [sdf.timestamp.iloc[0]] + list(pos_changes_long.timestamp) + [sdf.timestamp.iloc[-1]]
-    )
+    pos_changes_long_ms_diff = np.diff(list(pos_changes_long.timestamp) + [sdf.timestamp.iloc[-1]])
     hrs_stuck_max_long = pos_changes_long_ms_diff.max() / (1000 * 60 * 60)
     hrs_stuck_avg_long = pos_changes_long_ms_diff.mean() / (1000 * 60 * 60)
     pos_changes_short = sdf[sdf.psize_short != sdf.psize_short.shift()]
-    pos_changes_short_ms_diff = np.diff(
-        [sdf.timestamp.iloc[0]] + list(pos_changes_short.timestamp) + [sdf.timestamp.iloc[-1]]
-    )
+    pos_changes_short_ms_diff = np.diff(list(pos_changes_short.timestamp) + [sdf.timestamp.iloc[-1]])
     hrs_stuck_max_short = pos_changes_short_ms_diff.max() / (1000 * 60 * 60)
     hrs_stuck_avg_short = pos_changes_short_ms_diff.mean() / (1000 * 60 * 60)
     lpprices = sdf[sdf.psize_long != 0.0]
@@ -675,6 +671,8 @@ def analyze_fills(
         "net_pnl_plus_fees_short": pnl_sum_short + fee_sum_short,
         "final_equity_long": sdf.equity_long.iloc[-1],
         "final_balance_long": sdf.balance_long.iloc[-1],
+        "final_equity_short": sdf.equity_short.iloc[-1],
+        "final_balance_short": sdf.balance_short.iloc[-1],
         "closest_bkr_long": sdf.closest_bkr_long.min(),
         "closest_bkr_short": sdf.closest_bkr_short.min(),
         "eqbal_ratio_min_long": (eqbal_ratios_long := sdf.equity_long / sdf.balance_long).min(),
