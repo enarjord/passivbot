@@ -40,10 +40,50 @@ def dump_plots(
         if result[side]["enabled"]:
             table.add_row([" ", " "])
             table.add_row([side.capitalize(), result[side]["enabled"]])
-            adg_per_exp = result["result"][f"adg_{side}"] / result[side]["wallet_exposure_limit"]
-            table.add_row(["ADG per exposure", f"{round_dynamic(adg_per_exp * 100, 3)}%"])
+            profit_color = (
+                Fore.RED
+                if result["result"][f"final_balance_{side}"] < result["result"]["starting_balance"]
+                else Fore.RESET
+            )
             table.add_row(
-                ["DG mean std ratio", f"{round_dynamic(result['result']['adg_DGstd_ratio_long'], 4)}"]
+                [
+                    "Final balance",
+                    f"{profit_color}{round_dynamic(result['result'][f'final_balance_{side}'], 6)}{Fore.RESET}",
+                ]
+            )
+            table.add_row(
+                [
+                    "Final equity",
+                    f"{profit_color}{round_dynamic(result['result'][f'final_equity_{side}'], 6)}{Fore.RESET}",
+                ]
+            )
+            table.add_row(
+                [
+                    "Net PNL + fees",
+                    f"{profit_color}{round_dynamic(result['result'][f'net_pnl_plus_fees_{side}'], 6)}{Fore.RESET}",
+                ]
+            )
+            table.add_row(
+                [
+                    "Total gain",
+                    f"{profit_color}{round_dynamic(result['result'][f'gain_{side}'] * 100, 4)}%{Fore.RESET}",
+                ]
+            )
+            table.add_row(
+                [
+                    "Average daily gain",
+                    f"{profit_color}{round_dynamic((result['result'][f'adg_{side}']) * 100, 3)}%{Fore.RESET}",
+                ]
+            )
+            adg_per_exp = result["result"][f"adg_{side}"] / result[side]["wallet_exposure_limit"]
+            gain_per_exp = result["result"][f"gain_{side}"] / result[side]["wallet_exposure_limit"]
+            table.add_row(["ADG per exposure", f"{round_dynamic(adg_per_exp * 100, 3)}%"])
+            table.add_row(["Gain per exposure", f"{round_dynamic(gain_per_exp * 100, 3)}%"])
+            table.add_row(
+                [
+                    "DG mean std ratio",
+                    f"{round_dynamic(result['result'][f'adg_DGstd_ratio_{side}'], 4)}",
+                ]
             )
             table.add_row(
                 [
@@ -69,9 +109,20 @@ def dump_plots(
                     f'{round_dynamic(result["result"][f"eqbal_ratio_min_{side}"], 4)}',
                 ]
             )
-            table.add_row(["No. inital entries", result["result"][f"n_ientries_{side}"]])
+            table.add_row(["No. fills", result["result"][f"n_fills_{side}"]])
+            table.add_row(["No. entries", result["result"][f"n_entries_{side}"]])
+            table.add_row(["No. closes", result["result"][f"n_closes_{side}"]])
+            table.add_row(["No. initial entries", result["result"][f"n_ientries_{side}"]])
             table.add_row(["No. reentries", result["result"][f"n_rentries_{side}"]])
+            table.add_row(["No. unstuck entries", result["result"][f"n_unstuck_entries_{side}"]])
+            table.add_row(["No. unstuck closes", result["result"][f"n_unstuck_closes_{side}"]])
             table.add_row(["No. normal closes", result["result"][f"n_normal_closes_{side}"]])
+            table.add_row(
+                [
+                    "Average n fills per day",
+                    round_dynamic(result["result"][f"avg_fills_per_day_{side}"], 3),
+                ]
+            )
             table.add_row(
                 [
                     "Mean hours stuck",
@@ -98,12 +149,6 @@ def dump_plots(
                 [
                     "Biggest pos cost",
                     round_dynamic(result["result"][f"biggest_psize_quote_{side}"], 4),
-                ]
-            )
-            table.add_row(
-                [
-                    "Average n fills per day",
-                    round_dynamic(result["result"][f"avg_fills_per_day_{side}"], 3),
                 ]
             )
             table.add_row(
