@@ -40,6 +40,8 @@ def dump_plots(
         if result[side]["enabled"]:
             table.add_row([" ", " "])
             table.add_row([side.capitalize(), result[side]["enabled"]])
+            adg_per_exp = result["result"][f"adg_{side}"] / result[side]["wallet_exposure_limit"]
+            table.add_row(["ADG per exposure", f"{round_dynamic(adg_per_exp * 100, 3)}%"])
             profit_color = (
                 Fore.RED
                 if result["result"][f"final_balance_{side}"] < result["result"]["starting_balance"]
@@ -75,9 +77,7 @@ def dump_plots(
                     f"{profit_color}{round_dynamic((result['result'][f'adg_{side}']) * 100, 3)}%{Fore.RESET}",
                 ]
             )
-            adg_per_exp = result["result"][f"adg_{side}"] / result[side]["wallet_exposure_limit"]
             gain_per_exp = result["result"][f"gain_{side}"] / result[side]["wallet_exposure_limit"]
-            table.add_row(["ADG per exposure", f"{round_dynamic(adg_per_exp * 100, 3)}%"])
             table.add_row(["Gain per exposure", f"{round_dynamic(gain_per_exp * 100, 3)}%"])
             table.add_row(
                 [
@@ -142,6 +142,7 @@ def dump_plots(
                     f"{profit_color}{round_dynamic(result['result'][f'pnl_sum_{side}'], 4)}{Fore.RESET}",
                 ]
             )
+            table.add_row(["Profit sum", round_dynamic(result["result"][f"profit_sum_{side}"], 4)])
             table.add_row(["Loss sum", round_dynamic(result["result"][f"loss_sum_{side}"], 4)])
             table.add_row(["Fee sum", round_dynamic(result["result"][f"fee_sum_{side}"], 4)])
             table.add_row(["Biggest pos size", result["result"][f"biggest_psize_{side}"]])
