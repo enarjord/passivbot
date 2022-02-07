@@ -1,8 +1,9 @@
 #!/bin/bash
-symbols=(DOGEUSDT XLMUSDT VETUSDT CHZUSDT SHIB1000USDT IOSTUSDT BITUSDT ONEUSDT SLPUSDT SPELLUSDT PEOPLEUSDT )
+symbols=(SXPUSDT CELRUSDT CHRUSDT DOGEUSDT CHZUSDT ONEUSDT 1INCHUSDT ENJUSDT RSRUSDT GRTUSDT VETUSDT )
 for i in "${symbols[@]}"
 do
     :
     echo "Kill screen for $i"
     screen -S "tedy_$i" -X quit
 done
+

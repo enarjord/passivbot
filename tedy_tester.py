@@ -31,8 +31,7 @@ backtest_command_line = [
     , start_date, "-ed", end_date, config_file
     ]
 
-print('----------------------------------------------------------------------------------------')
-print("Reading informations from ByBit to find :")
+print('-----------------------------------------Step 1 : Reading informations from ByBit to find GRIDOK coins-----------------------------------------------')
 print("1/ coin with grid OK")
 print("2/ turnover_24h > ", min_turnover_24h)
 print("3/ volums_24h > ", min_volume_24h)
@@ -69,8 +68,7 @@ for coin in res['result']:
 
 print ("found ", len(bash_symbols), " symbols.")
 print ("Wallet exposure id ", len(bash_symbols) * config['wallet_exposure_limit'])
-print('----------------------------------------------------------------------------------------')
-print("Starting Backtesting")
+print('-------------------------------------Step 2 : Backtest all finded coins---------------------------------------------------')
 print("Command executed is : ", print(' '.join(backtest_command_line)))
 # python3 backtest.py -u bybit_tedy -s XLMUSDT --starting_balance=100 -sd 2021-01-01 -ed 2022-02-01 configs/live/auto_unstuck_enabled.example.json
 nb_coin=len(bash_symbols)
@@ -90,39 +88,7 @@ for current_symbol in bash_symbols:
         print('Timeout Reached (', freqtrade_timeout_seconds, ' seconds)')
     current_i = current_i + 1
 
-print ("found ", len(bash_symbols), " symbols.")
-print ("Wallet exposure id ", len(bash_symbols) * config['wallet_exposure_limit'])
 
-################### shell script generating ##############
-print('----------------------------------------------------------------------------------------')
-print ("Linux Bash to create the screens commands (run_server_live.sh) :")
-print("#!/bin/bash")
-print('symbols=(', end='')
-for symbol in bash_symbols:
-    print (symbol, end=' ')
-print(')')
-print ('for i in "${symbols[@]}"')
-print ('do')
-print ('    :')
-print ('    echo "Running screen on $i"')
-print ('    screen -S "tedy_$i" -dm bash -c "cd /home/tedy/Documents/passivbot5.3/passivbot;python3 passivbot.py bybit_tedy $i  configs/live/auto_unstuck_enabled.example.json"')
-print ('done')
-print ('')
-
-print('----------------------------------------------------------------------------------------')
-print ("Linux Bash to kill all screens (stop_server_live.sh) :")
-print("#!/bin/bash")
-print('symbols=(', end='')
-for symbol in bash_symbols:
-    print (symbol, end=' ')
-print(')')
-print ('for i in "${symbols[@]}"')
-print ('do')
-print ('    :')
-print ('    echo "Kill screen for $i"')
-print ('    screen -S "tedy_$i" -X quit')
-print ('done')
-print ('')
 
 
 
