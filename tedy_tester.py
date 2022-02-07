@@ -2,11 +2,19 @@
 from pybit import HTTP
 import subprocess
 
+# @TODO : faire un script de lecture des fichiers et de sort
+
+# @TODO : tedy_grid_ok => qui écrit dans un fichier le résultat ?
+# @TODO : tedy_bach_backtest
+# @TODO : tedy_resultat_manager
+# @TODO : séparer la generation du script shell
+
+
 # SETTINGS PART START =============>
 starting_balance = 100
 wallet_exposure_limit = 0.15
-min_volume_24h = 10000000 # the min volume you want, to avoid low volume coin 
-min_turnover_24h = 3000000
+min_volume_24h = 0 # 10000000 # the min volume you want, to avoid low volume coin 
+min_turnover_24h = 0 # 3000000
 start_date = "2021-01-01"
 end_date = "2022-02-01"
 user_connexion = "bybit_tedy"
