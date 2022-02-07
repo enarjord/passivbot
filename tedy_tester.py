@@ -2,12 +2,15 @@
 from pybit import HTTP
 import subprocess
 
-# @TODO : faire un script de lecture des fichiers et de sort
+# @DONE : faire un script de lecture des fichiers et de sort
+# @DONE : relancer le serveur avec les bons coins
+# @DONE : séparer la generation du script shell
+
+# @TODO : trouver des noms de script qui veulent dire quelque chose
 
 # @TODO : tedy_grid_ok => qui écrit dans un fichier le résultat ?
 # @TODO : tedy_bach_backtest
 # @TODO : tedy_resultat_manager
-# @TODO : séparer la generation du script shell
 
 
 # SETTINGS PART START =============>
