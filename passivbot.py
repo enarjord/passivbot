@@ -1097,9 +1097,9 @@ async def main() -> None:
 
             bot = await create_binance_bot(config)
     elif account["exchange"] == "binance_us":
-        from procedures import create_binance_bot_us
+        from procedures import create_binance_bot_spot
 
-        bot = await create_binance_bot_us(config)
+        bot = await create_binance_bot_spot(config)
     elif account["exchange"] == "bybit":
         from procedures import create_bybit_bot
 

@@ -32,7 +32,10 @@ from pure_funcs import (
 
 class BinanceBotSpot(Bot):
     def __init__(self, config: dict):
-        self.exchange = "binance_spot"
+        if config['exchange'] == "binance_us":
+            self.exchange="binance_us"
+        else:
+            self.exchange = "binance_spot"
         self.balance = {}
         super().__init__(spotify_config(config))
         self.spot = self.config["spot"] = True
@@ -113,7 +116,9 @@ class BinanceBotSpot(Bot):
         }
         self.endpoints["transfer"] = "/sapi/v1/asset/transfer"
         self.endpoints["account"] = "/api/v3/account"
-
+        if self.exchange == "binance_us":
+            self.base_endpoint = "https://api.binance.us"
+            self.endpoints["websocket"] = (ws := f"wss://stream.binance.us:9443/ws/")
     async def _init(self):
         self.init_market_type()
         exchange_info = await self.public_get(self.endpoints["exchange_info"])
