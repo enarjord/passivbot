@@ -13,6 +13,7 @@ from zipfile import ZipFile
 import numpy as np
 import pandas as pd
 from dateutil import parser
+from tqdm import tqdm
 
 from njit_funcs import calc_samples
 from procedures import (
@@ -116,7 +117,7 @@ class Downloader:
         gaps["start"] = df.iloc[missing_end_frame[1:].index - 1]["trade_id"].tolist()
         gaps["end"] = missing_end_frame[1:].tolist()
         if missing_ids := df["trade_id"].iloc[0] % 100000 != 0:
-            gaps.append(
+            gaps.concat(
                 {
                     "start": df["trade_id"].iloc[0] - missing_ids,
                     "end": df["trade_id"].iloc[0] - 1,
@@ -124,7 +125,7 @@ class Downloader:
                 ignore_index=True,
             )
         if missing_ids := df["trade_id"].iloc[-1] % 100000 != 99999:
-            gaps.append(
+            gaps.concat(
                 {
                     "start": df["trade_id"].iloc[-1],
                     "end": df["trade_id"].iloc[-1] + (100000 - missing_ids - 1),
@@ -133,7 +134,7 @@ class Downloader:
             )
         missing_ids = df["trade_id"].iloc[0] % 100000
         if missing_ids != 0:
-            gaps = gaps.append(
+            gaps = gaps.concat(
                 {
                     "start": df["trade_id"].iloc[0] - missing_ids,
                     "end": df["trade_id"].iloc[0] - 1,
@@ -142,7 +143,7 @@ class Downloader:
             )
         missing_ids = df["trade_id"].iloc[-1] % 100000
         if missing_ids != 99999:
-            gaps = gaps.append(
+            gaps = gaps.concat(
                 {
                     "start": df["trade_id"].iloc[-1],
                     "end": df["trade_id"].iloc[-1] + (100000 - missing_ids - 1),
@@ -349,7 +350,15 @@ class Downloader:
             column_names.append("best_match")
         try:
             resp = urlopen(url)
-            with ZipFile(BytesIO(resp.read())) as my_zip_file:
+            file_tmp = BytesIO()
+            with tqdm.wrapattr(open(os.devnull, "wb"), "write",
+                               miniters=1,
+                               total=getattr(resp, 'length', None)) as fout:
+                for chunk in resp:
+                    fout.write(chunk)
+                    file_tmp.write(chunk)
+
+            with ZipFile(file_tmp) as my_zip_file:
                 for contained_file in my_zip_file.namelist():
                     tf = pd.read_csv(my_zip_file.open(contained_file), names=column_names)
                     tf.drop(
