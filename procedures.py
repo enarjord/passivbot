@@ -189,6 +189,14 @@ async def fetch_market_specific_settings(config: dict):
             settings_from_exchange["taker_fee"] = 0.0004
             settings_from_exchange["spot"] = False
         settings_from_exchange["exchange"] = "binance"
+    elif exchange == "binance_us":
+        bot = await create_binance_bot_spot(tmp_live_settings)
+        settings_from_exchange["maker_fee"] = 0.001
+        settings_from_exchange["taker_fee"] = 0.001
+        settings_from_exchange["spot"] = True
+        settings_from_exchange["hedge_mode"] = False
+        settings_from_exchange["exchange"] = "binance"
+
     elif exchange == "bybit":
         if "spot" in config["market_type"]:
             raise Exception("spot not implemented on bybit")

@@ -32,7 +32,10 @@ from pure_funcs import (
 
 class BinanceBotSpot(Bot):
     def __init__(self, config: dict):
-        self.exchange = "binance_spot"
+        if config["exchange"] == "binance_us":
+            self.exchange = "binance_us"
+        else:
+            self.exchange = "binance_spot"
         self.balance = {}
         super().__init__(spotify_config(config))
         self.spot = self.config["spot"] = True
@@ -94,7 +97,6 @@ class BinanceBotSpot(Bot):
         self.inverse = self.config["inverse"] = False
         self.spot = True
         self.hedge_mode = False
-        self.base_endpoint = "https://api.binance.com"
         self.pair = self.symbol
         self.endpoints = {
             "balance": "/api/v3/account",
@@ -106,13 +108,20 @@ class BinanceBotSpot(Bot):
             "cancel_order": "/api/v3/order",
             "ticks": "/api/v3/aggTrades",
             "ohlcvs": "/api/v3/klines",
-            "websocket": (ws := f"wss://stream.binance.com/ws/"),
-            "websocket_market": ws + f"{self.symbol.lower()}@aggTrade",
-            "websocket_user": ws,
             "listen_key": "/api/v3/userDataStream",
         }
         self.endpoints["transfer"] = "/sapi/v1/asset/transfer"
         self.endpoints["account"] = "/api/v3/account"
+        if self.exchange == "binance_us":
+            self.base_endpoint = "https://api.binance.us"
+            self.endpoints["websocket"] = "wss://stream.binance.us:9443/ws/"
+        else:
+            self.base_endpoint = "https://api.binance.com"
+            self.endpoints["websocket"] = "wss://stream.binance.com/ws/"
+        self.endpoints["websocket_market"] = (
+            self.endpoints["websocket"] + f"{self.symbol.lower()}@aggTrade"
+        )
+        self.endpoints["websocket_user"] = self.endpoints["websocket"]
 
     async def _init(self):
         self.init_market_type()
