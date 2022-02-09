@@ -116,25 +116,9 @@ class Downloader:
         gaps = pd.DataFrame()
         gaps["start"] = df.iloc[missing_end_frame[1:].index - 1]["trade_id"].tolist()
         gaps["end"] = missing_end_frame[1:].tolist()
-        if missing_ids := df["trade_id"].iloc[0] % 100000 != 0:
-            gaps.concat(
-                {
-                    "start": df["trade_id"].iloc[0] - missing_ids,
-                    "end": df["trade_id"].iloc[0] - 1,
-                },
-                ignore_index=True,
-            )
-        if missing_ids := df["trade_id"].iloc[-1] % 100000 != 99999:
-            gaps.concat(
-                {
-                    "start": df["trade_id"].iloc[-1],
-                    "end": df["trade_id"].iloc[-1] + (100000 - missing_ids - 1),
-                },
-                ignore_index=True,
-            )
         missing_ids = df["trade_id"].iloc[0] % 100000
         if missing_ids != 0:
-            gaps = gaps.concat(
+            gaps = gaps.append(
                 {
                     "start": df["trade_id"].iloc[0] - missing_ids,
                     "end": df["trade_id"].iloc[0] - 1,
@@ -143,7 +127,7 @@ class Downloader:
             )
         missing_ids = df["trade_id"].iloc[-1] % 100000
         if missing_ids != 99999:
-            gaps = gaps.concat(
+            gaps = gaps.append(
                 {
                     "start": df["trade_id"].iloc[-1],
                     "end": df["trade_id"].iloc[-1] + (100000 - missing_ids - 1),
@@ -351,9 +335,9 @@ class Downloader:
         try:
             resp = urlopen(url)
             file_tmp = BytesIO()
-            with tqdm.wrapattr(open(os.devnull, "wb"), "write",
-                               miniters=1,
-                               total=getattr(resp, 'length', None)) as fout:
+            with tqdm.wrapattr(
+                open(os.devnull, "wb"), "write", miniters=1, total=getattr(resp, "length", None)
+            ) as fout:
                 for chunk in resp:
                     fout.write(chunk)
                     file_tmp.write(chunk)
