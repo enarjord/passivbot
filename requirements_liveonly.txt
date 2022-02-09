@@ -1,6 +1,6 @@
 websockets==10.1
 pandas==1.4.0
 hjson==3.0.2
-numba==0.55.0
+numba==0.55.1
 aiohttp==3.8.1
 python-dateutil==2.8.2
