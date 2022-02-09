@@ -672,10 +672,33 @@ async def main():
         default=None,
         help="passivbot mode options: [s/static_grid, r/recursive_grid]",
     )
+    parser.add_argument(
+        "-sf",
+        "--score_formula",
+        "--score-formula",
+        type=str,
+        required=False,
+        dest="score_formula",
+        default=None,
+        help="passivbot score formula options: [adg_PAD_mean, adg_PAD_std, adg_DGstd_ratio, adg_mean, adg_min, adg_PAD_std_min]",
+    )
     parser = add_argparse_args(parser)
     args = parser.parse_args()
     args.symbol = "BTCUSDT"  # dummy symbol
     config = await prepare_optimize_config(args)
+    if args.score_formula is not None:
+        if args.score_formula not in [
+            "adg_PAD_mean",
+            "adg_PAD_std",
+            "adg_DGstd_ratio",
+            "adg_mean",
+            "adg_min",
+            "adg_PAD_std_min",
+        ]:
+            logging.error(f"unknown score formula {args.score_formula}")
+            logging.error(f"using score formula {config['score_formula']}")
+        else:
+            config["score_formula"] = args.score_formula
     if args.passivbot_mode is not None:
         if args.passivbot_mode in ["s", "static_grid", "static"]:
             config["passivbot_mode"] = "static_grid"
