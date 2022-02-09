@@ -737,34 +737,38 @@ async def main():
     # prepare starting configs
     cfgs = []
     if args.starting_configs is not None:
+        logging.info("preparing starting configs...")
         if os.path.isdir(args.starting_configs):
             cfgs = []
             for fname in os.listdir(args.starting_configs):
                 try:
-                    cfgs.append(load_live_config(os.path.join(args.starting_configs, fname)))
+                    cfg = load_live_config(os.path.join(args.starting_configs, fname))
+                    assert determine_passivbot_mode(cfg) == passivbot_mode, "wrong passivbot mode"
+                    cfgs.append(cfg)
                 except Exception as e:
-                    logging.error("error loading config:", e)
+                    logging.error(f"error loading config {fname}: {e}")
         elif os.path.exists(args.starting_configs):
             hm_load_failed = True
             if "hm_" in args.starting_configs:
                 try:
                     hm = json.load(open(args.starting_configs))
                     for k in hm:
-                        cfgs.append(
-                            {"long": hm[k]["long"]["config"], "short": hm[k]["short"]["config"]}
-                        )
-                        assert determine_passivbot_mode(
-                            cfgs[-1]
+                        cfg = {"long": hm[k]["long"]["config"], "short": hm[k]["short"]["config"]}
+                        assert (
+                            determine_passivbot_mode(cfg) == passivbot_mode
                         ), "unknown passivbot mode in harmony memory"
+                        cfgs.append(cfg)
                     logging.info(f"loaded harmony memory {args.starting_configs}")
                     hm_load_failed = False
                 except Exception as e:
-                    logging.error("error loading harmony memory", e)
+                    logging.error(f"error loading harmony memory {args.starting_configs}: {e}")
             if hm_load_failed:
                 try:
-                    cfgs = [load_live_config(args.starting_configs)]
+                    cfg = load_live_config(args.starting_configs)
+                    assert determine_passivbot_mode(cfg) == passivbot_mode, "wrong passivbot mode"
+                    cfgs = [cfg]
                 except Exception as e:
-                    logging.error("error loading config:", e)
+                    logging.error(f"error loading config {args.starting_configs}: {e}")
 
     config["starting_configs"] = cfgs
     harmony_search = HarmonySearch(config)
