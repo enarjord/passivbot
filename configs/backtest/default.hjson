@@ -3,13 +3,13 @@
   market_type: futures
 
   # exchange from api-keys.json is used
-  user: bybit_tedy
+  user: user
 
-  symbol: DENTUSDT
+  symbol: SYMBOLUSDT
   latency_simulation_ms: 1000
 
   # specify starting balance in terms of margin token (i.e. usdt for usdt-m, coin for inverse coin-m)
-  starting_balance: 60.0
+  starting_balance: 100000.0
 
   # format YYYY-MM-DD
   start_date: 2021-01-01
@@ -17,4 +17,7 @@
 
   # non default historical data path
   # historical_data_path: "/mnt/d/"
+
+  # backtests path
+  base_dir: backtests  
 }

@@ -19,32 +19,14 @@ from pure_funcs import (
     date_to_ts,
     get_template_live_config,
     sort_dict_keys,
+    make_compatible,
 )
 
 
 def load_live_config(live_config_path: str) -> dict:
     try:
         live_config = json.load(open(live_config_path))
-        for src, dst in [
-            ("secondary_grid_spacing", "secondary_pprice_diff"),
-            ("shrt", "short"),
-            ("secondary_pbr_allocation", "secondary_allocation"),
-            ("pbr_limit", "wallet_exposure_limit"),
-        ]:
-            live_config = json.loads(json.dumps(live_config).replace(src, dst))
-        for side in ["long", "short"]:
-            if "initial_eprice_ema_dist" not in live_config[side]:
-                live_config[side]["initial_eprice_ema_dist"] = -1000.0
-            if "ema_span_min" not in live_config[side]:
-                live_config[side]["ema_span_min"] = 1
-            if "ema_span_max" not in live_config[side]:
-                live_config[side]["ema_span_max"] = 1
-            if "auto_unstuck_wallet_exposure_threshold" not in live_config[side]:
-                live_config[side]["auto_unstuck_wallet_exposure_threshold"] = 0.0
-            if "auto_unstuck_ema_dist" not in live_config[side]:
-                live_config[side]["auto_unstuck_ema_dist"] = 0.0
-        assert all(k in live_config["long"] for k in get_template_live_config()["long"])
-        return sort_dict_keys(numpyize(live_config))
+        return sort_dict_keys(numpyize(make_compatible(live_config)))
     except Exception as e:
         raise Exception(f"failed to load live config {live_config_path} {e}")
 
@@ -207,6 +189,14 @@ async def fetch_market_specific_settings(config: dict):
             settings_from_exchange["taker_fee"] = 0.0004
             settings_from_exchange["spot"] = False
         settings_from_exchange["exchange"] = "binance"
+    elif exchange == "binance_us":
+        bot = await create_binance_bot_spot(tmp_live_settings)
+        settings_from_exchange["maker_fee"] = 0.001
+        settings_from_exchange["taker_fee"] = 0.001
+        settings_from_exchange["spot"] = True
+        settings_from_exchange["hedge_mode"] = False
+        settings_from_exchange["exchange"] = "binance"
+
     elif exchange == "bybit":
         if "spot" in config["market_type"]:
             raise Exception("spot not implemented on bybit")
@@ -279,7 +269,8 @@ def add_argparse_args(parser):
         required=False,
         dest="symbol",
         default=None,
-        help="specify symbol, overriding symbol from backtest config",
+        help="specify symbol(s), overriding symbol from backtest config.  "
+        + "multiple symbols separated with comma",
     )
     parser.add_argument(
         "-u",
@@ -331,7 +322,7 @@ def add_argparse_args(parser):
         type=str,
         required=False,
         dest="base_dir",
-        default="backtests",
+        default=None,
         help="specify the base output directory for the results",
     )
 

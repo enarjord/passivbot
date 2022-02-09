@@ -12,7 +12,7 @@ import numpy as np
 from njit_funcs import (
     round_dn,
     round_up,
-    calc_long_pnl,
+    calc_pnl_long,
     calc_min_entry_qty,
     qty_to_cost,
     calc_upnl,
@@ -23,7 +23,7 @@ from procedures import print_, print_async_exception
 from pure_funcs import (
     ts_to_date,
     sort_dict_keys,
-    calc_long_pprice,
+    calc_pprice_long,
     format_float,
     get_position_fills,
     spotify_config,
@@ -32,7 +32,10 @@ from pure_funcs import (
 
 class BinanceBotSpot(Bot):
     def __init__(self, config: dict):
-        self.exchange = "binance_spot"
+        if config["exchange"] == "binance_us":
+            self.exchange = "binance_us"
+        else:
+            self.exchange = "binance_spot"
         self.balance = {}
         super().__init__(spotify_config(config))
         self.spot = self.config["spot"] = True
@@ -94,7 +97,6 @@ class BinanceBotSpot(Bot):
         self.inverse = self.config["inverse"] = False
         self.spot = True
         self.hedge_mode = False
-        self.base_endpoint = "https://api.binance.com"
         self.pair = self.symbol
         self.endpoints = {
             "balance": "/api/v3/account",
@@ -106,13 +108,20 @@ class BinanceBotSpot(Bot):
             "cancel_order": "/api/v3/order",
             "ticks": "/api/v3/aggTrades",
             "ohlcvs": "/api/v3/klines",
-            "websocket": (ws := f"wss://stream.binance.com/ws/"),
-            "websocket_market": ws + f"{self.symbol.lower()}@aggTrade",
-            "websocket_user": ws,
             "listen_key": "/api/v3/userDataStream",
         }
         self.endpoints["transfer"] = "/sapi/v1/asset/transfer"
         self.endpoints["account"] = "/api/v3/account"
+        if self.exchange == "binance_us":
+            self.base_endpoint = "https://api.binance.us"
+            self.endpoints["websocket"] = "wss://stream.binance.us:9443/ws/"
+        else:
+            self.base_endpoint = "https://api.binance.com"
+            self.endpoints["websocket"] = "wss://stream.binance.com/ws/"
+        self.endpoints["websocket_market"] = (
+            self.endpoints["websocket"] + f"{self.symbol.lower()}@aggTrade"
+        )
+        self.endpoints["websocket_user"] = self.endpoints["websocket"]
 
     async def _init(self):
         self.init_market_type()
@@ -233,20 +242,20 @@ class BinanceBotSpot(Bot):
         balance = {'BTC': {'free': float, 'locked': float, 'onhand': float}, ...}
         long_pfills = [{order...}, ...]
         """
-        long_psize = round_dn(balance[self.coin]["onhand"], self.qty_step)
-        long_pfills, short_pfills = get_position_fills(long_psize, 0.0, self.fills)
-        long_pprice = calc_long_pprice(long_psize, long_pfills) if long_psize else 0.0
-        if long_psize * long_pprice < self.min_cost:
-            long_psize, long_pprice, long_pfills = 0.0, 0.0, []
+        psize_long = round_dn(balance[self.coin]["onhand"], self.qty_step)
+        long_pfills, short_pfills = get_position_fills(psize_long, 0.0, self.fills)
+        pprice_long = calc_pprice_long(psize_long, long_pfills) if psize_long else 0.0
+        if psize_long * pprice_long < self.min_cost:
+            psize_long, pprice_long, long_pfills = 0.0, 0.0, []
         position = {
             "long": {
-                "size": long_psize,
-                "price": long_pprice,
+                "size": psize_long,
+                "price": pprice_long,
                 "liquidation_price": 0.0,
             },
             "short": {"size": 0.0, "price": 0.0, "liquidation_price": 0.0},
             "wallet_balance": balance[self.quot]["onhand"]
-            + balance[self.coin]["onhand"] * long_pprice,
+            + balance[self.coin]["onhand"] * pprice_long,
         }
         return position
 
@@ -340,7 +349,7 @@ class BinanceBotSpot(Bot):
                     {
                         "symbol": fill["symbol"],
                         "income_type": "realized_pnl",
-                        "income": calc_long_pnl(pprice, fill["price"], fill["qty"], False, 1.0),
+                        "income": calc_pnl_long(pprice, fill["price"], fill["qty"], False, 1.0),
                         "token": self.quot,
                         "timestamp": fill["timestamp"],
                         "info": 0,

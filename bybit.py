@@ -709,13 +709,13 @@ class Bybit(Bot):
                     if elm["symbol"] == self.symbol:
                         standardized = {}
                         if elm["side"] == "Buy":
-                            standardized["long_psize"] = round_(float(elm["size"]), self.qty_step)
-                            standardized["long_pprice"] = float(elm["entry_price"])
+                            standardized["psize_long"] = round_(float(elm["size"]), self.qty_step)
+                            standardized["pprice_long"] = float(elm["entry_price"])
                         elif elm["side"] == "Sell":
-                            standardized["short_psize"] = -round_(
+                            standardized["psize_short"] = -round_(
                                 abs(float(elm["size"])), self.qty_step
                             )
-                            standardized["short_pprice"] = float(elm["entry_price"])
+                            standardized["pprice_short"] = float(elm["entry_price"])
 
                         events.append(standardized)
                         if self.inverse:

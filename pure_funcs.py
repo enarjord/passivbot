@@ -2,6 +2,7 @@ import datetime
 import pprint
 from collections import OrderedDict
 
+import json
 import numpy as np
 import pandas as pd
 from dateutil import parser
@@ -35,10 +36,32 @@ def calc_spans(min_span: int, max_span: int, n_spans: int) -> np.ndarray:
     return np.array([min_span, (min_span * max_span) ** 0.5, max_span])
 
 
-def get_xk_keys():
+def get_xk_keys(passivbot_mode="static_grid"):
+    if passivbot_mode == "recursive_grid":
+        return [
+            "inverse",
+            "do_long",
+            "do_short",
+            "qty_step",
+            "price_step",
+            "min_qty",
+            "min_cost",
+            "c_mult",
+            "ema_span_0",
+            "ema_span_1",
+            "initial_qty_pct",
+            "initial_eprice_ema_dist",
+            "wallet_exposure_limit",
+            "ddown_factor",
+            "rentry_pprice_dist",
+            "rentry_pprice_dist_wallet_exposure_weighting",
+            "min_markup",
+            "markup_range",
+            "n_close_orders",
+            "auto_unstuck_wallet_exposure_threshold",
+            "auto_unstuck_ema_dist",
+        ]
     return [
-        "spot",
-        "hedge_mode",
         "inverse",
         "do_long",
         "do_short",
@@ -58,12 +81,21 @@ def get_xk_keys():
         "min_markup",
         "markup_range",
         "n_close_orders",
-        "ema_span_min",
-        "ema_span_max",
+        "ema_span_0",
+        "ema_span_1",
         "initial_eprice_ema_dist",
         "auto_unstuck_wallet_exposure_threshold",
         "auto_unstuck_ema_dist",
     ]
+
+
+def determine_passivbot_mode(config: dict) -> str:
+    if all(k in config["long"] for k in get_template_live_config("recursive_grid")["long"]):
+        return "recursive_grid"
+    elif all(k in config["long"] for k in get_template_live_config("static_grid")["long"]):
+        return "static_grid"
+    else:
+        raise Exception("unable to determine passivbot mode")
 
 
 def create_xk(config: dict) -> dict:
@@ -75,11 +107,13 @@ def create_xk(config: dict) -> dict:
         config_["spot"] = False
         config_["do_long"] = config["long"]["enabled"]
         config_["do_short"] = config["short"]["enabled"]
-    keys = get_xk_keys()
+    config["passivbot_mode"] = determine_passivbot_mode(config)
+    keys = get_xk_keys(config["passivbot_mode"])
     config_["long"]["n_close_orders"] = int(round(config_["long"]["n_close_orders"]))
     config_["short"]["n_close_orders"] = int(round(config_["short"]["n_close_orders"]))
-    config_["long"]["max_n_entry_orders"] = int(round(config_["long"]["max_n_entry_orders"]))
-    config_["short"]["max_n_entry_orders"] = int(round(config_["short"]["max_n_entry_orders"]))
+    if config["passivbot_mode"] == "static_grid":
+        config_["long"]["max_n_entry_orders"] = int(round(config_["long"]["max_n_entry_orders"]))
+        config_["short"]["max_n_entry_orders"] = int(round(config_["short"]["max_n_entry_orders"]))
     for k in keys:
         if k in config_["long"]:
             xk[k] = (config_["long"][k], config_["short"][k])
@@ -170,28 +204,35 @@ def config_pretty_str(config: dict):
     return pretty_str
 
 
-def candidate_to_live_config(candidate: dict) -> dict:
-    packed = pack_config(candidate)
-    live_config = get_template_live_config()
-    sides = ["long", "short"]
-    for side in sides:
-        for k in live_config[side]:
-            if k in packed[side]:
-                live_config[side][k] = packed[side][k]
-    for k in live_config:
-        if k not in sides and k in packed:
-            live_config[k] = packed[k]
-
-    result_dict = candidate["result"] if "result" in candidate else candidate
-    if packed["long"]["enabled"] and not packed["short"]["enabled"]:
-        side_type = "longonly"
-    elif packed["short"]["enabled"] and not packed["long"]["enabled"]:
-        side_type = "shortonly"
+def candidate_to_live_config(candidate_: dict) -> dict:
+    result_dict = candidate_["result"] if "result" in candidate_ else candidate_
+    candidate = make_compatible(candidate_)
+    passivbot_mode = name = determine_passivbot_mode(candidate)
+    if passivbot_mode == "recursive_grid":
+        live_config = get_template_live_config("recursive_grid")
+        for side in ["long", "short"]:
+            for k in live_config[side]:
+                live_config[side][k] = candidate[side][k]
+            live_config[side]["n_close_orders"] = int(round(live_config[side]["n_close_orders"]))
+    elif passivbot_mode == "static_grid":
+        live_config = get_template_live_config("static_grid")
+        sides = ["long", "short"]
+        for side in sides:
+            for k in live_config[side]:
+                if k in candidate[side]:
+                    live_config[side][k] = candidate[side][k]
+        for k in live_config:
+            if k not in sides and k in candidate:
+                live_config[k] = candidate[k]
     else:
-        side_type = "long&short"
-    name = f"{side_type}_"
-    name += f"{result_dict['exchange'].lower()}_" if "exchange" in result_dict else "unknown_"
-    name += f"{result_dict['symbol'].lower()}" if "symbol" in result_dict else "unknown"
+        raise Exception("unknown passivbot mode")
+    if "symbols" in result_dict:
+        if len(result_dict["symbols"]) > 1:
+            name += f"_{len(result_dict['symbols'])}_symbols"
+        else:
+            name += f"_{result_dict['symbols'][0]}"
+    elif "symbol" in result_dict:
+        name += f"_{result_dict['symbol']}"
     if "n_days" in result_dict:
         n_days = result_dict["n_days"]
     elif "start_date" in result_dict:
@@ -205,10 +246,6 @@ def candidate_to_live_config(candidate: dict) -> dict:
         name += f"_adg{(result_dict['average_daily_gain']) * 100:.3f}%"
     elif "daily_gain" in result_dict:
         name += f"_adg{(result_dict['daily_gain'] - 1) * 100:.3f}%"
-    if "closest_bkr" in result_dict:
-        name += f"_bkr{(result_dict['closest_bkr']) * 100:.2f}%"
-    if "eqbal_ratio_min" in result_dict:
-        name += f"_eqbal{(result_dict['eqbal_ratio_min']) * 100:.2f}%"
     live_config["config_name"] = name
     return denumpyize(live_config)
 
@@ -328,15 +365,54 @@ def flatten(lst: list) -> list:
     return [y for x in lst for y in x]
 
 
-def get_template_live_config():
+def get_template_live_config(passivbot_mode="static_grid"):
+    if passivbot_mode == "recursive_grid":
+        return sort_dict_keys(
+            {
+                "config_name": "recursive_grid_test",
+                "logging_level": 0,
+                "long": {
+                    "enabled": True,
+                    "ema_span_0": 1036.4758617491368,
+                    "ema_span_1": 1125.5167077975314,
+                    "initial_qty_pct": 0.01,
+                    "initial_eprice_ema_dist": -0.02,
+                    "wallet_exposure_limit": 1.0,
+                    "ddown_factor": 0.6,
+                    "rentry_pprice_dist": 0.015,
+                    "rentry_pprice_dist_wallet_exposure_weighting": 15,
+                    "min_markup": 0.02,
+                    "markup_range": 0.02,
+                    "n_close_orders": 7,
+                    "auto_unstuck_wallet_exposure_threshold": 0.15,
+                    "auto_unstuck_ema_dist": 0.02,
+                },
+                "short": {
+                    "enabled": False,
+                    "ema_span_0": 1036.4758617491368,
+                    "ema_span_1": 1125.5167077975314,
+                    "initial_qty_pct": 0.01,
+                    "initial_eprice_ema_dist": -0.02,
+                    "wallet_exposure_limit": 1.0,
+                    "ddown_factor": 0.6,
+                    "rentry_pprice_dist": 0.015,
+                    "rentry_pprice_dist_wallet_exposure_weighting": 15,
+                    "min_markup": 0.02,
+                    "markup_range": 0.02,
+                    "n_close_orders": 7,
+                    "auto_unstuck_wallet_exposure_threshold": 0.15,
+                    "auto_unstuck_ema_dist": 0.02,
+                },
+            }
+        )
     return sort_dict_keys(
         {
             "config_name": "template",
             "logging_level": 0,
             "long": {
                 "enabled": True,
-                "ema_span_min": 1440,  # in minutes
-                "ema_span_max": 4320,
+                "ema_span_0": 1440,  # in minutes
+                "ema_span_1": 4320,
                 "grid_span": 0.16,
                 "wallet_exposure_limit": 1.6,
                 "max_n_entry_orders": 10,
@@ -355,8 +431,8 @@ def get_template_live_config():
             },
             "short": {
                 "enabled": True,
-                "ema_span_min": 1440,  # in minutes
-                "ema_span_max": 4320,
+                "ema_span_0": 1440,  # in minutes
+                "ema_span_1": 4320,
                 "grid_span": 0.16,
                 "wallet_exposure_limit": 1.6,
                 "max_n_entry_orders": 10,
@@ -377,28 +453,30 @@ def get_template_live_config():
     )
 
 
-def analyze_fills(fills: list, stats: list, config: dict) -> (pd.DataFrame, pd.DataFrame, dict):
+def analyze_fills(
+    fills_long: list, fills_short: list, stats: list, config: dict
+) -> (pd.DataFrame, pd.DataFrame, dict):
     sdf = pd.DataFrame(
         stats,
         columns=[
             "timestamp",
-            "balance",
-            "equity",
-            "bkr_price",
-            "long_psize",
-            "long_pprice",
-            "short_psize",
-            "short_pprice",
+            "bkr_price_long",
+            "bkr_price_short",
+            "psize_long",
+            "pprice_long",
+            "psize_short",
+            "pprice_short",
             "price",
-            "closest_bkr",
+            "closest_bkr_long",
+            "closest_bkr_short",
             "balance_long",
             "balance_short",
             "equity_long",
             "equity_short",
         ],
     )
-    fdf = pd.DataFrame(
-        fills,
+    longs = pd.DataFrame(
+        fills_long,
         columns=[
             "trade_id",
             "timestamp",
@@ -413,57 +491,72 @@ def analyze_fills(fills: list, stats: list, config: dict) -> (pd.DataFrame, pd.D
             "type",
         ],
     )
-    fdf.loc[:, "wallet_exposure"] = [
+    longs.index = longs.timestamp
+    shorts = pd.DataFrame(
+        fills_short,
+        columns=[
+            "trade_id",
+            "timestamp",
+            "pnl",
+            "fee_paid",
+            "balance",
+            "equity",
+            "qty",
+            "price",
+            "psize",
+            "pprice",
+            "type",
+        ],
+    )
+    shorts.index = shorts.timestamp
+    longs.loc[:, "wallet_exposure"] = [
         qty_to_cost(x.psize, x.pprice, config["inverse"], config["c_mult"]) / x.balance
         if x.balance > 0.0
         else 0.0
-        for x in fdf.itertuples()
+        for x in longs.itertuples()
     ]
-    sdf.loc[:, "long_wallet_exposure"] = [
-        qty_to_cost(x.long_psize, x.long_pprice, config["inverse"], config["c_mult"]) / x.balance
+    shorts.loc[:, "wallet_exposure"] = [
+        qty_to_cost(x.psize, x.pprice, config["inverse"], config["c_mult"]) / x.balance
         if x.balance > 0.0
+        else 0.0
+        for x in shorts.itertuples()
+    ]
+    sdf.loc[:, "wallet_exposure_long"] = [
+        qty_to_cost(x.psize_long, x.pprice_long, config["inverse"], config["c_mult"]) / x.balance_long
+        if x.balance_long > 0.0
         else 0.0
         for x in sdf.itertuples()
     ]
-    sdf.loc[:, "short_wallet_exposure"] = [
-        qty_to_cost(x.short_psize, x.short_pprice, config["inverse"], config["c_mult"]) / x.balance
-        if x.balance > 0.0
+    sdf.loc[:, "wallet_exposure_short"] = [
+        qty_to_cost(x.psize_short, x.pprice_short, config["inverse"], config["c_mult"])
+        / x.balance_short
+        if x.balance_short > 0.0
         else 0.0
         for x in sdf.itertuples()
     ]
-    gain = sdf.balance.iloc[-1] / sdf.balance.iloc[0]
     n_days = (sdf.timestamp.iloc[-1] - sdf.timestamp.iloc[0]) / (1000 * 60 * 60 * 24)
-    adg = gain ** (1 / n_days) - 1
-    gain -= 1
-    fills_per_day = len(fills) / n_days
-    long_pos_changes = sdf[sdf.long_psize != sdf.long_psize.shift()]
-    long_pos_changes_ms_diff = np.diff(
-        [sdf.timestamp.iloc[0]] + list(long_pos_changes.timestamp) + [sdf.timestamp.iloc[-1]]
-    )
-    hrs_stuck_max_long = long_pos_changes_ms_diff.max() / (1000 * 60 * 60)
-    hrs_stuck_avg_long = long_pos_changes_ms_diff.mean() / (1000 * 60 * 60)
-    short_pos_changes = sdf[sdf.short_psize != sdf.short_psize.shift()]
-    short_pos_changes_ms_diff = np.diff(
-        [sdf.timestamp.iloc[0]] + list(short_pos_changes.timestamp) + [sdf.timestamp.iloc[-1]]
-    )
-    hrs_stuck_max_short = short_pos_changes_ms_diff.max() / (1000 * 60 * 60)
-    hrs_stuck_avg_short = short_pos_changes_ms_diff.mean() / (1000 * 60 * 60)
-    lpprices = sdf[sdf.long_psize != 0.0]
-    spprices = sdf[sdf.short_psize != 0.0]
+    pos_changes_long = sdf[sdf.psize_long != sdf.psize_long.shift()]
+    pos_changes_long_ms_diff = np.diff(list(pos_changes_long.timestamp) + [sdf.timestamp.iloc[-1]])
+    hrs_stuck_max_long = pos_changes_long_ms_diff.max() / (1000 * 60 * 60)
+    hrs_stuck_avg_long = pos_changes_long_ms_diff.mean() / (1000 * 60 * 60)
+    pos_changes_short = sdf[sdf.psize_short != sdf.psize_short.shift()]
+    pos_changes_short_ms_diff = np.diff(list(pos_changes_short.timestamp) + [sdf.timestamp.iloc[-1]])
+    hrs_stuck_max_short = pos_changes_short_ms_diff.max() / (1000 * 60 * 60)
+    hrs_stuck_avg_short = pos_changes_short_ms_diff.mean() / (1000 * 60 * 60)
+    lpprices = sdf[sdf.psize_long != 0.0]
+    spprices = sdf[sdf.psize_short != 0.0]
     pa_distance_long = (
-        ((lpprices.long_pprice - lpprices.price).abs() / lpprices.price)
+        ((lpprices.pprice_long - lpprices.price).abs() / lpprices.price)
         if len(lpprices) > 0
         else pd.Series([100.0])
     )
     pa_distance_short = (
-        ((spprices.short_pprice - spprices.price).abs() / spprices.price)
+        ((spprices.pprice_short - spprices.price).abs() / spprices.price)
         if len(spprices) > 0
         else pd.Series([100.0])
     )
-    longs = fdf[fdf.type.str.contains("long")].set_index("timestamp")
-    shorts = fdf[fdf.type.str.contains("short")].set_index("timestamp")
-    gain_long = longs.pnl.sum() / sdf.balance.iloc[0]
-    gain_short = shorts.pnl.sum() / sdf.balance.iloc[0]
+    gain_long = longs.pnl.sum() / sdf.balance_long.iloc[0]
+    gain_short = shorts.pnl.sum() / sdf.balance_short.iloc[0]
 
     ms2d = 1000 * 60 * 60 * 24
     if len(longs) > 0:
@@ -473,7 +566,7 @@ def analyze_fills(fills: list, stats: list, config: dict) -> (pd.DataFrame, pd.D
         DGstd_long = daily_gains_long.std()
         adg_DGstd_ratio_long = adg_long / DGstd_long if len(daily_gains_long) > 0 else 0.0
         if any("bankruptcy" in e for e in longs.type.unique()):
-            adg_long = 0.01 ** (1 / n_days) - 1 # reward bankrupt runs lasting longer
+            adg_long = 0.01 ** (1 / n_days) - 1  # reward bankrupt runs lasting longer
     else:
         adg_long = adg_DGstd_ratio_long = 0.0
         DGstd_long = 100.0
@@ -485,35 +578,21 @@ def analyze_fills(fills: list, stats: list, config: dict) -> (pd.DataFrame, pd.D
         DGstd_short = daily_gains_short.std()
         adg_DGstd_ratio_short = adg_short / DGstd_short if len(daily_gains_short) > 0 else 0.0
         if any("bankruptcy" in e for e in shorts.type.unique()):
-            adg_short = 0.01 ** (1 / n_days) - 1 # reward bankrupt runs lasting longer
+            adg_short = 0.01 ** (1 / n_days) - 1  # reward bankrupt runs lasting longer
     else:
         adg_short = adg_DGstd_ratio_short = 0.0
         DGstd_short = 100.0
 
-    pos_costs = fdf.apply(
+    pos_costs_long = longs.apply(
         lambda x: qty_to_cost(x["psize"], x["pprice"], config["inverse"], config["c_mult"]),
         axis=1,
     )
-    biggest_pos_cost_long = (
-        longs.apply(
-            lambda x: qty_to_cost(x["psize"], x["pprice"], config["inverse"], config["c_mult"]),
-            axis=1,
-        ).max()
-        if len(longs) > 0
-        else 0.0
-    )
-    biggest_pos_cost_short = (
-        shorts.apply(
-            lambda x: qty_to_cost(x["psize"], x["pprice"], config["inverse"], config["c_mult"]),
-            axis=1,
-        ).max()
-        if len(shorts) > 0
-        else 0.0
-    )
-    volume_quote = fdf.apply(
-        lambda x: qty_to_cost(x["qty"], x["price"], config["inverse"], config["c_mult"]),
+    pos_costs_short = shorts.apply(
+        lambda x: qty_to_cost(x["psize"], x["pprice"], config["inverse"], config["c_mult"]),
         axis=1,
-    ).sum()
+    )
+    biggest_pos_cost_long = pos_costs_long.max() if len(longs) > 0 else 0.0
+    biggest_pos_cost_short = pos_costs_short.max() if len(shorts) > 0 else 0.0
     volume_quote_long = (
         longs.apply(
             lambda x: qty_to_cost(x["qty"], x["price"], config["inverse"], config["c_mult"]),
@@ -534,7 +613,7 @@ def analyze_fills(fills: list, stats: list, config: dict) -> (pd.DataFrame, pd.D
     analysis = {
         "exchange": config["exchange"] if "exchange" in config else "unknown",
         "symbol": config["symbol"] if "symbol" in config else "unknown",
-        "starting_balance": sdf.balance.iloc[0],
+        "starting_balance": sdf.balance_long.iloc[0],
         "pa_distance_mean_long": pa_distance_long.mean(),
         "pa_distance_max_long": pa_distance_long.max(),
         "pa_distance_std_long": pa_distance_long.std(),
@@ -555,28 +634,23 @@ def analyze_fills(fills: list, stats: list, config: dict) -> (pd.DataFrame, pd.D
         "adg_DGstd_ratio_short": adg_DGstd_ratio_short,
         "DGstd_long": DGstd_long,
         "DGstd_short": DGstd_short,
-        "average_daily_gain": adg,
-        "gain": gain,
         "n_days": n_days,
-        "n_fills": len(fills),
-        "n_entries": len(fdf[fdf.type.str.contains("entry")]),
-        "n_closes": len(fdf[fdf.type.str.contains("close")]),
-        "n_normal_closes": len(fdf[fdf.type.str.contains("nclose")]),
+        "n_fills_long": len(fills_long),
+        "n_fills_short": len(fills_short),
+        "n_closes_long": len(longs[longs.type.str.contains("close")]),
+        "n_closes_short": len(shorts[shorts.type.str.contains("close")]),
         "n_normal_closes_long": len(longs[longs.type.str.contains("nclose")]),
         "n_normal_closes_short": len(shorts[shorts.type.str.contains("nclose")]),
-        "n_ientries": len(fdf[fdf.type.str.contains("ientry")]),
+        "n_entries_long": len(longs[longs.type.str.contains("entry")]),
+        "n_entries_short": len(shorts[shorts.type.str.contains("entry")]),
         "n_ientries_long": len(longs[longs.type.str.contains("ientry")]),
         "n_ientries_short": len(shorts[shorts.type.str.contains("ientry")]),
-        "n_rentries": len(fdf[fdf.type.str.contains("rentry")]),
         "n_rentries_long": len(longs[longs.type.str.contains("rentry")]),
         "n_rentries_short": len(shorts[shorts.type.str.contains("rentry")]),
-        "n_unstuck_closes": len(fdf[fdf.type.str.contains("unstuck_close")]),
         "n_unstuck_closes_long": len(longs[longs.type.str.contains("unstuck_close")]),
         "n_unstuck_closes_short": len(shorts[shorts.type.str.contains("unstuck_close")]),
-        "n_unstuck_entries": len(fdf[fdf.type.str.contains("unstuck_entry")]),
         "n_unstuck_entries_long": len(longs[longs.type.str.contains("unstuck_entry")]),
         "n_unstuck_entries_short": len(shorts[shorts.type.str.contains("unstuck_entry")]),
-        "avg_fills_per_day": fills_per_day,
         "avg_fills_per_day_long": len(longs) / n_days,
         "avg_fills_per_day_short": len(shorts) / n_days,
         "hrs_stuck_max_long": hrs_stuck_max_long,
@@ -585,37 +659,34 @@ def analyze_fills(fills: list, stats: list, config: dict) -> (pd.DataFrame, pd.D
         "hrs_stuck_avg_short": hrs_stuck_avg_short,
         "hrs_stuck_max": max(hrs_stuck_max_long, hrs_stuck_max_short),
         "hrs_stuck_avg": max(hrs_stuck_avg_long, hrs_stuck_avg_short),
-        "loss_sum": fdf[fdf.pnl < 0.0].pnl.sum(),
         "loss_sum_long": longs[longs.pnl < 0.0].pnl.sum(),
         "loss_sum_short": shorts[shorts.pnl < 0.0].pnl.sum(),
-        "profit_sum": fdf[fdf.pnl > 0.0].pnl.sum(),
         "profit_sum_long": longs[longs.pnl > 0.0].pnl.sum(),
         "profit_sum_short": shorts[shorts.pnl > 0.0].pnl.sum(),
-        "pnl_sum": (pnl_sum := fdf.pnl.sum()),
         "pnl_sum_long": (pnl_sum_long := longs.pnl.sum()),
         "pnl_sum_short": (pnl_sum_short := shorts.pnl.sum()),
-        "fee_sum": (fee_sum := fdf.fee_paid.sum()),
         "fee_sum_long": (fee_sum_long := longs.fee_paid.sum()),
         "fee_sum_short": (fee_sum_short := shorts.fee_paid.sum()),
-        "net_pnl_plus_fees": pnl_sum + fee_sum,
         "net_pnl_plus_fees_long": pnl_sum_long + fee_sum_long,
         "net_pnl_plus_fees_short": pnl_sum_short + fee_sum_short,
-        "final_equity": sdf.equity.iloc[-1],
-        "final_balance": sdf.balance.iloc[-1],
-        "closest_bkr": sdf.closest_bkr.min(),
-        "eqbal_ratio_min": (eqbal_ratios := sdf.equity / sdf.balance).min(),
-        "eqbal_ratio_mean": eqbal_ratios.mean(),
-        "biggest_psize": fdf.psize.abs().max(),
+        "final_equity_long": sdf.equity_long.iloc[-1],
+        "final_balance_long": sdf.balance_long.iloc[-1],
+        "final_equity_short": sdf.equity_short.iloc[-1],
+        "final_balance_short": sdf.balance_short.iloc[-1],
+        "closest_bkr_long": sdf.closest_bkr_long.min(),
+        "closest_bkr_short": sdf.closest_bkr_short.min(),
+        "eqbal_ratio_min_long": (eqbal_ratios_long := sdf.equity_long / sdf.balance_long).min(),
+        "eqbal_ratio_mean_long": eqbal_ratios_long.mean(),
+        "eqbal_ratio_min_short": (eqbal_ratios_short := sdf.equity_short / sdf.balance_short).min(),
+        "eqbal_ratio_mean_short": eqbal_ratios_short.mean(),
         "biggest_psize_long": longs.psize.abs().max(),
         "biggest_psize_short": shorts.psize.abs().max(),
-        "biggest_psize_quote": pos_costs.max(),
         "biggest_psize_quote_long": biggest_pos_cost_long,
         "biggest_psize_quote_short": biggest_pos_cost_short,
-        "volume_quote": volume_quote,
         "volume_quote_long": volume_quote_long,
         "volume_quote_short": volume_quote_short,
     }
-    return fdf, sdf, sort_dict_keys(analysis)
+    return longs, shorts, sdf, sort_dict_keys(analysis)
 
 
 def calc_pprice_from_fills(coin_balance, fills, n_fills_limit=100):
@@ -647,16 +718,16 @@ def calc_pprice_from_fills(coin_balance, fills, n_fills_limit=100):
     return pprice
 
 
-def get_position_fills(long_psize: float, short_psize: float, fills: [dict]) -> ([dict], [dict]):
+def get_position_fills(psize_long: float, psize_short: float, fills: [dict]) -> ([dict], [dict]):
     """
     assumes fills are sorted old to new
     returns fills since and including initial entry
     """
-    long_psize *= 0.999
-    short_psize *= 0.999
+    psize_long *= 0.999
+    psize_short *= 0.999
     long_qty_sum = 0.0
     short_qty_sum = 0.0
-    long_done, short_done = long_psize == 0.0, short_psize == 0.0
+    long_done, short_done = psize_long == 0.0, psize_short == 0.0
     if long_done and short_done:
         return [], []
     long_pfills, short_pfills = [], []
@@ -665,16 +736,16 @@ def get_position_fills(long_psize: float, short_psize: float, fills: [dict]) -> 
             if not long_done:
                 long_qty_sum += x["qty"] * (1.0 if x["side"] == "buy" else -1.0)
                 long_pfills.append(x)
-                long_done = long_qty_sum >= long_psize
+                long_done = long_qty_sum >= psize_long
         elif x["position_side"] == "short":
             if not short_done:
                 short_qty_sum += x["qty"] * (1.0 if x["side"] == "sell" else -1.0)
                 short_pfills.append(x)
-                short_done = short_qty_sum >= short_psize
+                short_done = short_qty_sum >= psize_short
     return long_pfills[::-1], short_pfills[::-1]
 
 
-def calc_long_pprice(long_psize, long_pfills):
+def calc_pprice_long(psize_long, long_pfills):
     """
     assumes long pfills are sorted old to new
     """
@@ -797,3 +868,36 @@ def get_daily_from_income(
         index=[ts_to_date(x) for x in daily_income.index],
     )
     return idf, bdf
+
+
+def make_compatible(live_config_: dict) -> dict:
+    live_config = live_config_.copy()
+    template_recurv = get_template_live_config("recursive_grid")
+    for src, dst in [
+        ("iprice_ema_dist", "initial_eprice_ema_dist"),
+        ("iqty_pct", "initial_qty_pct"),
+        ("secondary_grid_spacing", "secondary_pprice_diff"),
+        ("shrt", "short"),
+        ("secondary_pbr_allocation", "secondary_allocation"),
+        ("pbr_limit", "wallet_exposure_limit"),
+        ("ema_span_min", "ema_span_0"),
+        ("ema_span_max", "ema_span_1"),
+    ]:
+        live_config = json.loads(json.dumps(live_config).replace(src, dst))
+    if all(k in live_config["long"] for k in template_recurv["long"]):
+        live_config["long"]["n_close_orders"] = int(round(live_config["long"]["n_close_orders"]))
+        live_config["short"]["n_close_orders"] = int(round(live_config["short"]["n_close_orders"]))
+        return sort_dict_keys(live_config)
+    for side in ["long", "short"]:
+        if "initial_eprice_ema_dist" not in live_config[side]:
+            live_config[side]["initial_eprice_ema_dist"] = -1000.0
+        if "ema_span_0" not in live_config[side]:
+            live_config[side]["ema_span_0"] = 1
+        if "ema_span_1" not in live_config[side]:
+            live_config[side]["ema_span_1"] = 1
+        if "auto_unstuck_wallet_exposure_threshold" not in live_config[side]:
+            live_config[side]["auto_unstuck_wallet_exposure_threshold"] = 0.0
+        if "auto_unstuck_ema_dist" not in live_config[side]:
+            live_config[side]["auto_unstuck_ema_dist"] = 0.0
+    assert all(k in live_config["long"] for k in get_template_live_config()["long"])
+    return live_config
