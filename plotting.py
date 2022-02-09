@@ -93,6 +93,12 @@ def dump_plots(
             )
             table.add_row(
                 [
+                    f"Price action distance std",
+                    round_dynamic(result["result"][f"pa_distance_std_{side}"], 6),
+                ]
+            )
+            table.add_row(
+                [
                     f"Price action distance max",
                     round_dynamic(result["result"][f"pa_distance_max_{side}"], 6),
                 ]
