@@ -762,7 +762,6 @@ async def main():
     if args.starting_configs is not None:
         logging.info("preparing starting configs...")
         if os.path.isdir(args.starting_configs):
-            cfgs = []
             for fname in os.listdir(args.starting_configs):
                 try:
                     cfg = load_live_config(os.path.join(args.starting_configs, fname))
@@ -779,7 +778,7 @@ async def main():
                         cfg = {"long": hm[k]["long"]["config"], "short": hm[k]["short"]["config"]}
                         assert (
                             determine_passivbot_mode(cfg) == passivbot_mode
-                        ), "unknown passivbot mode in harmony memory"
+                        ), "wrong passivbot mode in harmony memory"
                         cfgs.append(cfg)
                     logging.info(f"loaded harmony memory {args.starting_configs}")
                     hm_load_failed = False
@@ -789,10 +788,9 @@ async def main():
                 try:
                     cfg = load_live_config(args.starting_configs)
                     assert determine_passivbot_mode(cfg) == passivbot_mode, "wrong passivbot mode"
-                    cfgs = [cfg]
+                    cfgs.append(cfg)
                 except Exception as e:
                     logging.error(f"error loading config {args.starting_configs}: {e}")
-
     config["starting_configs"] = cfgs
     harmony_search = HarmonySearch(config)
     harmony_search.run()
