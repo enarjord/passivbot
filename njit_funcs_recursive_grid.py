@@ -102,7 +102,7 @@ def calc_recursive_entry_long(
                 balance, psize, pprice, wallet_exposure_limit, entry_price, inverse, qty_step, c_mult
             )
             return (
-                (entry_qty, entry_price, "long_unstuck_rentry")
+                (entry_qty, entry_price, "long_unstuck_entry")
                 if entry_qty > calc_min_entry_qty(entry_price, inverse, qty_step, min_qty, min_cost)
                 else (0.0, 0.0, "")
             )
@@ -203,7 +203,7 @@ def calc_recursive_entry_short(
                 c_mult,
             )
             return (
-                (-entry_qty, entry_price, "short_unstuck_rentry")
+                (-entry_qty, entry_price, "short_unstuck_entry")
                 if entry_qty > calc_min_entry_qty(entry_price, inverse, qty_step, min_qty, min_cost)
                 else (0.0, 0.0, "")
             )
