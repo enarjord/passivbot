@@ -3,7 +3,7 @@
   market_type: futures
 
   # exchange from api-keys.json is used
-  user: user
+  user: bybit_tedy
 
   symbol: SYMBOLUSDT
   latency_simulation_ms: 1000

@@ -353,4 +353,6 @@ live_configs/*
 configs/live/multigrid.json
 # Reports
 reports/*
-tedy_scripts/tmp/grid_ok_coins.json
+scripts/tmp/grid_ok_coins.json
+!/scripts
+!/scripts/backtests
