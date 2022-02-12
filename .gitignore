@@ -356,3 +356,4 @@ reports/*
 scripts/tmp/grid_ok_coins.json
 !/scripts
 !/scripts/backtests
+/scripts/backtests/*/

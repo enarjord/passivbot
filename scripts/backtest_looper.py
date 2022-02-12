@@ -1,16 +1,18 @@
 import argparse
 import os
 from pickle import FALSE, TRUE
-import json
 import hjson
 import subprocess
-
+import glob
+import shutil
 
 def arguments_management():
     ### Parameters management
     parser = argparse.ArgumentParser( description="This script will loop and generate backtests on a list of coins",
     epilog=""
     )
+
+    parser.add_argument("live_config_filepath", type=str, help="file path to live config")
     parser.add_argument("backtest_config_filepath", type=str, help="file path to backtest")
 
     parser.add_argument("-jf","--json-file-coin-list",
@@ -25,9 +27,17 @@ def arguments_management():
 
     args = parser.parse_args()
 
+    if not os.path.exists(args.live_config_filepath) :
+        print("live_config_path doesn't exist")
+        exit()
+
     if not os.path.exists(args.backtest_config_filepath) :
         print("backtest_config_path doesn't exist")
         exit()
+
+
+    args.live_config_filepath       = os.path.realpath(args.live_config_filepath)
+    args.backtest_config_filepath   = os.path.realpath(args.backtest_config_filepath)
 
     args.builded_coin_list = []
     if (len(args.coin_list.strip().split(' ')) > 0) :
@@ -44,15 +54,21 @@ def arguments_management():
 
     return args
 
-def backtest_looping(args) :
-    nb_coin=len(args.builded_coin_list)
+def backtest_looping(args, backtest_directory) :
+    nb_coin=len(args.builded_coin_list)   
     backtest_command_line = [
-                                "python3", "backtest.py", "-s", "#SYMBOL_NAME#",  args.backtest_config_filepath,
-                                "-bd", "./tedy_scripts/backtests/"
+                                "python3", "backtest.py", 
+                                "-s", "#SYMBOL_NAME#",
+                                "-bd", backtest_directory,  
+                                "-b", args.backtest_config_filepath,
+                                args.live_config_filepath
     ]
 
-    # @TODO : idealement bosser dans un repertoire pour ce script 
-    # @TODO : supprimer les plots en amont 
+    if not os.path.exists("../"+backtest_directory) :
+        print("Sorry, you must create this directory : ", os.path.realpath("../"+backtest_directory))
+        exit()
+
+
 
     print("Coin list : ", args.builded_coin_list)
     print("Number of coins : ", nb_coin)
@@ -77,5 +93,14 @@ def backtest_looping(args) :
             print('Timeout Reached (', freqtrade_timeout_seconds, ' seconds)')
         current_i = current_i + 1
 
+def clean_backtest_directories(backtest_directory) :
+    glob_delete = "../" + backtest_directory + "/*/*/plots"
+    list = glob.glob(glob_delete, recursive=True)
+    for to_delete in list :
+        print('Cleaning directory : ', os.path.realpath(to_delete))
+        shutil.rmtree(to_delete)
+
+backtest_directory = "./scripts/backtests/"
 args = arguments_management()
-backtest_looping(args)
+clean_backtest_directories(backtest_directory)
+backtest_looping(args, backtest_directory)
