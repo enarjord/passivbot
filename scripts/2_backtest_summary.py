@@ -5,8 +5,23 @@ import subprocess
 import json
 import pandas as pd
 from tabulate import tabulate
+import argparse
+import os
 
-number_coin_wanted = 11
+def arguments_management():
+    ### Parameters management
+    parser = argparse.ArgumentParser( description="This script will read all the 'plots' folders from backtests and create a summary sorted by adg",
+    epilog="",
+    usage="python3 " + __file__ + " 11"
+    )
+    
+    parser.add_argument("nb_best_coins", type=int, help="Number of coin wanted")
+    args = parser.parse_args()
+
+    return args
+
+args = arguments_management()
+number_coin_wanted = args.nb_best_coins
 
 print("List all files availables")
 files = glob.glob('backtests/*/*/plots/*/result.json')
