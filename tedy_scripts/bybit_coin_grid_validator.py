@@ -10,7 +10,8 @@ from pybit import HTTP
 def arguments_management():
     ### Parameters management
     parser = argparse.ArgumentParser( description="This script will list the coins working with the grid settings",
-    epilog="This script will use 'starting_balance', 'initial_qty_pct', 'wallet_exposure_limit' to find coin working with the grid"
+    usage="python3 " + __file__ + " ../configs/live/a_tedy.json ../configs/backtest/default.hjson -mv24 0 -mt24 0",
+    epilog="This script will use starting_balance, initial_qty_pct, wallet_exposure_limit to find coin working with the grid."
     )
     parser.add_argument("live_config_filepath", type=str, help="file path to live config")
     parser.add_argument("backtest_config_filepath", type=str, help="file path to backtest")
@@ -98,5 +99,9 @@ input_datas = get_config_data(args)
 bash_symbols = find_grid_ok(input_datas)
 
 print ("found ", len(bash_symbols), " symbols.")
-print ("Full Wallet exposure with all this symbls is : ", len(bash_symbols) * input_datas['wallet_exposure_limit'])
+print ("Full Wallet exposure with all this symbols is : ", len(bash_symbols) * input_datas['wallet_exposure_limit'])
 
+saving_data = "./tmp/grid_ok_coins.json"
+print ("Saving list to ", saving_data)
+with open(saving_data, 'w') as outfile:
+    json.dump(bash_symbols, outfile)
