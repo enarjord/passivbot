@@ -27,7 +27,7 @@ print("List all files availables")
 files = glob.glob('backtests/*/*/plots/*/result.json')
 
 if len(files) == 0:
-    print('No files finded')
+    print('No files found')
     exit()
 
 datas_list = []
@@ -63,7 +63,7 @@ df = pd.DataFrame(datas_list)
 df.sort_values(by=['adg %', 'gain %'], ascending=False, inplace=True)
 
 print(tabulate(df, headers='keys', tablefmt='psql'))
-print("The best ", number_coin_wanted, " coins finded ")
+print("The best ", number_coin_wanted, " coins found ")
 best_coin = df['symbol'].values[0:number_coin_wanted].tolist()
 print(best_coin)
 
