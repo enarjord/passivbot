@@ -87,7 +87,6 @@ def backtest_looping(args, backtest_directory) :
         for element in backtest_command_line:
             final_command_line.append(element.replace("#SYMBOL_NAME#", current_symbol))
 
-        # run FreqTrade
         try:
             subprocess.run(final_command_line, cwd="..")
         except subprocess.TimeoutExpired:
