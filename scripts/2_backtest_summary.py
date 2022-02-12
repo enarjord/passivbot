@@ -40,10 +40,20 @@ for file in files:
     datas = {}
     datas['symbol']                 = bt['result']['symbol']
     datas['n_days']                 = bt['result']['n_days']
-    datas['adg %']                  = bt['result']['adg_long']*100
     datas['hrs_stuck_avg_long']     = bt['result']['hrs_stuck_avg_long']
     datas['hrs_stuck_max_long']     = bt['result']['hrs_stuck_max_long']
-    datas['gain %']                 = bt['result']['gain_long']*100
+
+    if ('average_daily_gain' in bt['result']) :
+        datas['adg %']                  = bt['result']['average_daily_gain']*100
+    if ('adg_long' in bt['result']) :
+        datas['adg %']                  = bt['result']['adg_long']*100
+    
+    if ('gain' in bt['result']) :
+        datas['gain %']                 = bt['result']['gain']*100
+    if ('gain_long' in bt['result']) :
+        datas['gain %']                 = bt['result']['gain_long']*100
+
+
 
     # print(datas)
     datas_list.append(datas)
