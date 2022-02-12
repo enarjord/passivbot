@@ -16,6 +16,12 @@ def arguments_management():
     )
     
     parser.add_argument("nb_best_coins", type=int, help="Number of coin wanted")
+
+    parser.add_argument("-mbkr","--min-closest-bkr",
+                        type=float,required=False,dest="min_closest_bkr",default=0,
+                        help="Show only result upper than min_closest_bkr",
+    )
+
     args = parser.parse_args()
 
     return args
@@ -38,6 +44,17 @@ for file in files:
     f.close()
 
     datas = {}
+
+    closest_bkr = 0
+    if ('closest_bkr' in bt['result']) :
+        closest_bkr            = bt['result']['closest_bkr']
+    if ('closest_bkr_long' in bt['result']) :
+        closest_bkr            = bt['result']['closest_bkr_long']
+
+    if (closest_bkr < args.min_closest_bkr) :
+        continue
+    
+
     datas['symbol']                 = bt['result']['symbol']
     datas['n_days']                 = bt['result']['n_days']
     datas['hrs_stuck_avg_long']     = bt['result']['hrs_stuck_avg_long']
@@ -55,16 +72,16 @@ for file in files:
 
     datas['starting balance']       = bt['result']['starting_balance']
     
-    if ('closest_bkr' in bt['result']) :
-        datas['closest bkr']            = bt['result']['closest_bkr']
-    if ('closest_bkr_long' in bt['result']) :
-        datas['closest bkr']            = bt['result']['closest_bkr_long']
+    datas['closest bkr']            = closest_bkr
     
 
     # print(datas)
     datas_list.append(datas)
 
-
+if len(datas_list) == 0:
+    print("No results finded")
+    exit()
+    
 df = pd.DataFrame(datas_list)
 df.sort_values(by=['adg %', 'gain %'], ascending=False, inplace=True)
 
