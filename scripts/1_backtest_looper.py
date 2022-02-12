@@ -10,7 +10,7 @@ def arguments_management():
     ### Parameters management
     parser = argparse.ArgumentParser( description="This script will loop and generate backtests on a list of coins",
     epilog="",
-    usage="python3 backtest_looper.py -jf tmp/grid_ok_coins.json  ../configs/live/a_tedy.json ../configs/backtest/default.hjson"
+    usage="python3 " + __file__ + " -jf tmp/grid_ok_coins.json  ../configs/live/a_tedy.json ../configs/backtest/default.hjson"
     )
 
     parser.add_argument("live_config_filepath", type=str, help="file path to live config")

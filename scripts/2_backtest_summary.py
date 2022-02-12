@@ -39,4 +39,10 @@ df.sort_values(by=['adg %', 'gain %'], ascending=False, inplace=True)
 
 print(tabulate(df, headers='keys', tablefmt='psql'))
 print("The best ", number_coin_wanted, " coins finded ")
-print(   df['symbol'].values[0:number_coin_wanted] )
+best_coin = df['symbol'].values[0:number_coin_wanted].tolist()
+print(best_coin)
+
+saving_data = "./tmp/best_coins.json"
+print ("Saving list to ", saving_data)
+with open(saving_data, 'w') as outfile:
+    json.dump(best_coin, outfile)

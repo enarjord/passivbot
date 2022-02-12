@@ -357,3 +357,4 @@ scripts/tmp/grid_ok_coins.json
 !/scripts
 !/scripts/backtests
 /scripts/backtests/*/
+scripts/tmp/best_coins.json
