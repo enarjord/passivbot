@@ -53,7 +53,13 @@ for file in files:
     if ('gain_long' in bt['result']) :
         datas['gain %']                 = bt['result']['gain_long']*100
 
-
+    datas['starting balance']       = bt['result']['starting_balance']
+    
+    if ('closest_bkr' in bt['result']) :
+        datas['closest bkr']            = bt['result']['closest_bkr']
+    if ('closest_bkr_long' in bt['result']) :
+        datas['closest bkr']            = bt['result']['closest_bkr_long']
+    
 
     # print(datas)
     datas_list.append(datas)
