@@ -40,6 +40,14 @@ def arguments_management():
     args.live_config_filepath       = os.path.realpath(args.live_config_filepath)
     args.backtest_config_filepath   = os.path.realpath(args.backtest_config_filepath)
 
+    if not os.path.exists(args.live_config_filepath) :
+        print("live_config_path doesn't exist")
+        exit()
+
+    if not os.path.exists(args.backtest_config_filepath) :
+        print("backtest_config_path doesn't exist")
+        exit()
+
     args.builded_coin_list = []
     if (len(args.coin_list.strip().split(' ')) > 0) :
        args.builded_coin_list = args.coin_list.strip().split(' ')

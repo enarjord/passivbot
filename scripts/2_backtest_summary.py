@@ -7,15 +7,17 @@ import pandas as pd
 from tabulate import tabulate
 import argparse
 import os
+import hjson
 
 def arguments_management():
     ### Parameters management
     parser = argparse.ArgumentParser( description="This script will read all the 'plots' folders from backtests and create a summary sorted by adg",
     epilog="",
-    usage="python3 " + __file__ + " 11"
+    usage="python3 " + __file__ + " 11 ../configs/live/a_tedy.json -max-stuck-avg 7 -max-stuck 200  -min-gain 10"
     )
     
     parser.add_argument("nb_best_coins", type=int, help="Number of coin wanted")
+    parser.add_argument("live_config_filepath", type=str, help="file path to live config")
 
     parser.add_argument("-min-bkr","--min-closest-bkr",
                         type=float,required=False,dest="min_closest_bkr",default=0,
@@ -39,6 +41,15 @@ def arguments_management():
 
 
     args = parser.parse_args()
+
+    args.live_config_filepath       = os.path.realpath(args.live_config_filepath)
+
+    live_config = hjson.load(open(args.live_config_filepath, encoding="utf-8"))
+    args.wallet_exposure_limit = live_config['long']['wallet_exposure_limit']
+
+    if not os.path.exists(args.live_config_filepath) :
+        print("live_config_path doesn't exist")
+        exit()
 
     return args
 
@@ -114,6 +125,7 @@ best_coin = df['symbol'].values[0:number_coin_wanted].tolist()
 print("- coin list : ", best_coin)
 print("- Sum adg % : ", df['adg %'].values[0:number_coin_wanted].sum())
 print("- Sum gain % : ", df['gain %'].values[0:number_coin_wanted].sum())
+print("- Total wallet_exposure_limit : ", args.wallet_exposure_limit * len(best_coin))
 print("--------------------------------------------------------------")
 saving_data = "./tmp/best_coins.json"
 print ("Saving the coin list to ", saving_data)
