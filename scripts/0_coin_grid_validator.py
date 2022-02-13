@@ -5,6 +5,8 @@ from ast import arg
 import hjson
 import json
 from pybit import HTTP
+#binance
+import requests
 
 
 def arguments_management():
@@ -26,6 +28,11 @@ def arguments_management():
                         help="specify minimum turnover 24h wanted",
     )
 
+    parser.add_argument("-we","--force-wallet-exposure",
+                        type=float,required=False,dest="force_wallet_exposure",default=0,
+                        help="Force the wallet exposure ratio",
+    )
+
     args = parser.parse_args()
 
     if not os.path.exists(args.live_config_filepath) :
@@ -43,13 +50,24 @@ def get_config_data(args):
 
     backtest_config = hjson.load(open(args.backtest_config_filepath, encoding="utf-8"))
     live_config = hjson.load(open(args.live_config_filepath, encoding="utf-8"))
+    api_key = hjson.load(open("./../api-keys.json", encoding="utf-8"))
+
+    platform = ''
+    try:
+        platform = api_key[backtest_config['user']]['exchange']
+    except Exception as e:
+            print('Problem reading the user', backtest_config['user'] ,'in the api-keys.json')
+            print(f'Error: {e}')
+            exit()
 
     input_datas = {
                 'min_volume_24h'        : args.min_volume_24h,
                 'min_turnover_24h'      : args.min_turnover_24h,
                 'starting_balance'      : backtest_config['starting_balance'],
-                'wallet_exposure_limit' : live_config['long']['wallet_exposure_limit'],
+                'wallet_exposure_limit' : args.force_wallet_exposure if not (args.force_wallet_exposure == 0) else live_config['long']['wallet_exposure_limit'],
                 'initial_qty_pct'       : live_config['long']['initial_qty_pct'],
+                'user'                  : backtest_config['user'],
+                'platform'              : platform,
     }
 
     print("-----------------")
@@ -60,10 +78,49 @@ def get_config_data(args):
 
     return input_datas
 
-def find_grid_ok(input_datas):
-    print("-----------------------------------------")
-    print("- Loading Coins informations From ByBit -")
-    print("-----------------------------------------")
+
+def binance_find_frid_ok(input_datas):
+    #dont touch these
+    iec = input_datas['starting_balance'] * input_datas['wallet_exposure_limit'] * input_datas['initial_qty_pct']
+
+    data_url = "https://fapi.binance.com/fapi/v1/exchangeInfo"
+    data = requests.get(data_url).json()
+    prices_url = "https://fapi.binance.com/fapi/v1/ticker/price"
+    pricedata = requests.get(prices_url).json()
+    
+    bash_symbols=[]
+    try: 
+        for datas in data["symbols"]:
+            if "USDT" in datas["pair"]:
+                # print(datas)
+                symbol = datas["pair"]
+                min_qty = float(datas["filters"][1]["minQty"] )     
+                min_notional_fixed =  float(datas["filters"][5]["notional"])
+
+                for i in pricedata:
+                    if i["symbol"] == symbol:
+                        price = i["price"]
+                        # print(i)
+
+                min_notional_calc = min_qty * float(price)
+
+                if min_notional_calc <= min_notional_fixed:
+                    min_notional = min_notional_fixed
+                else:
+                    min_notional = min_notional_calc
+
+                if iec >= min_notional:
+                    print(f"{symbol.ljust(13)}\t min_notional: ${min_notional:.2f}\t GRID OK")
+                    bash_symbols.append(symbol)
+                    
+    except Exception as e:
+        print(f'Error: {e}')
+        
+
+    return bash_symbols
+
+
+def bybit_find_grid_ok(input_datas):
     #Initial Entry Cost:
     session = HTTP("https://api.bybit.com")
     res = session.query_symbol() #gives all symbols, cannot filter
@@ -96,7 +153,24 @@ def find_grid_ok(input_datas):
 
 args = arguments_management()
 input_datas = get_config_data(args)
-bash_symbols = find_grid_ok(input_datas)
+
+print("-----------------------------------------")
+print("- Loading Coins informations From " + input_datas['platform'] + " -")
+print("-----------------------------------------")
+
+bash_symbols = []
+
+if (input_datas['platform'] == 'bybit'):
+    bash_symbols = bybit_find_grid_ok(input_datas)
+
+if (input_datas['platform'] == 'binance'):
+    if input_datas['min_turnover_24h'] > 0:
+        print('Sorry the turnover 24h filter is not available on Binance')
+        exit()
+    if input_datas['min_volume_24h'] > 0:
+        print('Sorry the volume 24h filter is not available on Binance')
+        exit()
+    bash_symbols = binance_find_frid_ok(input_datas)
 
 print ("found ", len(bash_symbols), " symbols.")
 print ("Full Wallet exposure with all this symbols is : ", len(bash_symbols) * input_datas['wallet_exposure_limit'])
