@@ -207,7 +207,7 @@ def dump_plots(
             ]
             emas = pd.DataFrame(
                 {
-                    str(span): df.iloc[::100].price.ewm(span=max(1.0, span) / 100, adjust=False).mean()
+                    str(span): df.iloc[::100].price.ewm(span=max(1.0, span / 100), adjust=False).mean()
                     for span in spans
                 }
             )
