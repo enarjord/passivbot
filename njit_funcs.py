@@ -1827,7 +1827,7 @@ def backtest_static_grid(
 
     closest_bkr_long = closest_bkr_short = 1.0
 
-    spans_multiplier = 61 - (timestamps[1] - timestamps[0]) / 1000
+    spans_multiplier = 60 / ((timestamps[1] - timestamps[0]) / 1000)
 
     spans_long = [ema_span_0[0], (ema_span_0[0] * ema_span_1[0]) ** 0.5, ema_span_1[0]]
     spans_long = np.array(sorted(spans_long)) * spans_multiplier if do_long else np.ones(3)
