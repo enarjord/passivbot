@@ -185,6 +185,12 @@ def ts_to_date(timestamp: float) -> str:
     return str(datetime.datetime.fromtimestamp(timestamp)).replace(" ", "T")
 
 
+def ts_to_date_utc(timestamp: float) -> str:
+    if timestamp > 253402297199:
+        return str(datetime.datetime.utcfromtimestamp(timestamp / 1000)).replace(" ", "T")
+    return str(datetime.datetime.utcfromtimestamp(timestamp)).replace(" ", "T")
+
+
 def date_to_ts(d):
     return int(parser.parse(d).replace(tzinfo=datetime.timezone.utc).timestamp() * 1000)
 
