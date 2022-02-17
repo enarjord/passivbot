@@ -89,8 +89,8 @@ def calc_recursive_entry_long(
         return entry_qty, ientry_price, "long_ientry_partial"
     else:
         wallet_exposure = qty_to_cost(psize, pprice, inverse, c_mult) / balance
-        if wallet_exposure >= wallet_exposure_limit * 0.995:
-            # no entry if wallet_exposure within 0.5% of limit
+        if wallet_exposure >= wallet_exposure_limit * 0.999:
+            # no entry if wallet_exposure within 0.1% of limit
             return 0.0, 0.0, ""
         threshold = wallet_exposure_limit * (1 - auto_unstuck_wallet_exposure_threshold)
         if auto_unstuck_wallet_exposure_threshold != 0.0 and wallet_exposure > threshold:
@@ -101,11 +101,8 @@ def calc_recursive_entry_long(
             entry_qty = find_entry_qty_bringing_wallet_exposure_to_target(
                 balance, psize, pprice, wallet_exposure_limit, entry_price, inverse, qty_step, c_mult
             )
-            return (
-                (entry_qty, entry_price, "long_unstuck_entry")
-                if entry_qty > calc_min_entry_qty(entry_price, inverse, qty_step, min_qty, min_cost)
-                else (0.0, 0.0, "")
-            )
+            min_entry_qty = calc_min_entry_qty(entry_price, inverse, qty_step, min_qty, min_cost)
+            return (max(entry_qty, min_entry_qty), entry_price, "long_unstuck_entry")
         else:
             # normal reentry
             ratio = wallet_exposure / wallet_exposure_limit
@@ -117,6 +114,7 @@ def calc_recursive_entry_long(
                 ),
                 price_step,
             )
+            entry_price = min(highest_bid, entry_price)
             min_entry_qty = calc_min_entry_qty(entry_price, inverse, qty_step, min_qty, min_cost)
             entry_qty = max(min_entry_qty, round_(psize * ddown_factor, qty_step))
             wallet_exposure_if_filled = calc_wallet_exposure_if_filled(
@@ -133,8 +131,7 @@ def calc_recursive_entry_long(
                     qty_step,
                     c_mult,
                 )
-                if entry_qty < min_entry_qty:
-                    return 0.0, 0.0, ""
+                entry_qty = max(entry_qty, min_entry_qty)
             return entry_qty, entry_price, "long_rentry"
 
 
@@ -183,8 +180,8 @@ def calc_recursive_entry_short(
         return -entry_qty, ientry_price, "short_ientry_partial"
     else:
         wallet_exposure = qty_to_cost(abs_psize, pprice, inverse, c_mult) / balance
-        if wallet_exposure >= wallet_exposure_limit * 0.995:
-            # no entry if wallet_exposure within 0.5% of limit
+        if wallet_exposure >= wallet_exposure_limit * 0.999:
+            # no entry if wallet_exposure within 0.1% of limit
             return 0.0, 0.0, ""
         threshold = wallet_exposure_limit * (1 - auto_unstuck_wallet_exposure_threshold)
         if auto_unstuck_wallet_exposure_threshold != 0.0 and wallet_exposure > threshold:
@@ -202,11 +199,8 @@ def calc_recursive_entry_short(
                 qty_step,
                 c_mult,
             )
-            return (
-                (-entry_qty, entry_price, "short_unstuck_entry")
-                if entry_qty > calc_min_entry_qty(entry_price, inverse, qty_step, min_qty, min_cost)
-                else (0.0, 0.0, "")
-            )
+            min_entry_qty = calc_min_entry_qty(entry_price, inverse, qty_step, min_qty, min_cost)
+            return (-max(entry_qty, min_entry_qty), entry_price, "short_unstuck_entry")
         else:
             # normal reentry
             ratio = wallet_exposure / wallet_exposure_limit
@@ -218,6 +212,7 @@ def calc_recursive_entry_short(
                 ),
                 price_step,
             )
+            entry_price = max(entry_price, lowest_ask)
             min_entry_qty = calc_min_entry_qty(entry_price, inverse, qty_step, min_qty, min_cost)
             entry_qty = max(min_entry_qty, round_(abs_psize * ddown_factor, qty_step))
             wallet_exposure_if_filled = calc_wallet_exposure_if_filled(
@@ -235,8 +230,7 @@ def calc_recursive_entry_short(
                     qty_step,
                     c_mult,
                 )
-                if entry_qty < min_entry_qty:
-                    return 0.0, 0.0, ""
+                entry_qty = max(entry_qty, min_entry_qty)
             return -entry_qty, entry_price, "short_rentry"
 
 
