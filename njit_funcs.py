@@ -543,7 +543,7 @@ def find_close_qty_long_bringing_wallet_exposure_to_target(
             / (balance + calc_pnl_long(pprice, close_price, guesses[-1], inverse, c_mult))
         )
         evals.append(abs(vals[-1] - wallet_exposure_target) / wallet_exposure_target)
-        if evals[-1] < 0.04:
+        if evals[-1] < 0.01:
             # close enough
             break
     evals_guesses = sorted([(e, g) for e, g in zip(evals, guesses)])
@@ -650,7 +650,7 @@ def find_close_qty_short_bringing_wallet_exposure_to_target(
             / (balance + calc_pnl_short(pprice, close_price, guesses[-1], inverse, c_mult))
         )
         evals.append(abs(vals[-1] - wallet_exposure_target) / wallet_exposure_target)
-        if evals[-1] < 0.04:
+        if evals[-1] < 0.01:
             # close enough
             break
     evals_guesses = sorted([(e, g) for e, g in zip(evals, guesses)])
@@ -733,7 +733,7 @@ def find_entry_qty_bringing_wallet_exposure_to_target(
             )
         )
         evals.append(abs(vals[-1] - wallet_exposure_target) / wallet_exposure_target)
-        if evals[-1] < 0.04:
+        if evals[-1] < 0.01:
             # close enough
             break
     evals_guesses = sorted([(e, g) for e, g in zip(evals, guesses)])
