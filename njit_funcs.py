@@ -1261,10 +1261,8 @@ def calc_entry_grid_long(
             if wallet_exposure >= wallet_exposure_limit:
                 return [(0.0, 0.0, "")]
             if auto_unstuck_wallet_exposure_threshold != 0.0:
-                threshold = (
-                    wallet_exposure_limit * (1 - auto_unstuck_wallet_exposure_threshold) * 0.99
-                )
-                if wallet_exposure > threshold:
+                threshold = wallet_exposure_limit * (1 - auto_unstuck_wallet_exposure_threshold)
+                if wallet_exposure > threshold * 0.99:
                     auto_unstuck_entry_price = min(
                         highest_bid,
                         round_dn(ema_band_lower * (1 - auto_unstuck_ema_dist), price_step),
@@ -1432,10 +1430,8 @@ def calc_entry_grid_short(
             if wallet_exposure >= wallet_exposure_limit:
                 return [(0.0, 0.0, "")]
             if auto_unstuck_wallet_exposure_threshold != 0.0:
-                threshold = (
-                    wallet_exposure_limit * (1 - auto_unstuck_wallet_exposure_threshold) * 0.99
-                )
-                if wallet_exposure > threshold:
+                threshold = wallet_exposure_limit * (1 - auto_unstuck_wallet_exposure_threshold)
+                if wallet_exposure > threshold * 0.99:
                     auto_unstuck_entry_price = max(
                         lowest_ask,
                         round_up(ema_band_upper * (1 + auto_unstuck_ema_dist), price_step),
