@@ -1279,9 +1279,10 @@ def calc_entry_grid_long(
                         qty_step,
                         c_mult,
                     )
+                    min_entry_qty = calc_min_entry_qty(auto_unstuck_entry_price, inverse, qty_step, min_qty, min_cost)
                     return [
                         (
-                            auto_unstuck_qty,
+                            max(auto_unstuck_qty, min_entry_qty),
                             auto_unstuck_entry_price,
                             "long_unstuck_entry",
                         )
@@ -1449,9 +1450,10 @@ def calc_entry_grid_short(
                         qty_step,
                         c_mult,
                     )
+                    min_entry_qty = calc_min_entry_qty(auto_unstuck_entry_price, inverse, qty_step, min_qty, min_cost)
                     return [
                         (
-                            -auto_unstuck_qty,
+                            -max(auto_unstuck_qty, min_entry_qty),
                             auto_unstuck_entry_price,
                             "short_unstuck_entry",
                         )
