@@ -89,11 +89,11 @@ def calc_recursive_entry_long(
         return entry_qty, ientry_price, "long_ientry_partial"
     else:
         wallet_exposure = qty_to_cost(psize, pprice, inverse, c_mult) / balance
-        if wallet_exposure >= wallet_exposure_limit * 0.999:
+        if wallet_exposure >= wallet_exposure_limit * 1.001:
             # no entry if wallet_exposure within 0.1% of limit
             return 0.0, 0.0, ""
         threshold = wallet_exposure_limit * (1 - auto_unstuck_wallet_exposure_threshold)
-        if auto_unstuck_wallet_exposure_threshold != 0.0 and wallet_exposure > threshold:
+        if auto_unstuck_wallet_exposure_threshold != 0.0 and wallet_exposure > threshold * 0.99:
             # auto unstuck mode
             entry_price = round_dn(
                 min([highest_bid, pprice, ema_band_lower * (1 - auto_unstuck_ema_dist)]), price_step
@@ -180,11 +180,11 @@ def calc_recursive_entry_short(
         return -entry_qty, ientry_price, "short_ientry_partial"
     else:
         wallet_exposure = qty_to_cost(abs_psize, pprice, inverse, c_mult) / balance
-        if wallet_exposure >= wallet_exposure_limit * 0.999:
+        if wallet_exposure >= wallet_exposure_limit * 1.001:
             # no entry if wallet_exposure within 0.1% of limit
             return 0.0, 0.0, ""
         threshold = wallet_exposure_limit * (1 - auto_unstuck_wallet_exposure_threshold)
-        if auto_unstuck_wallet_exposure_threshold != 0.0 and wallet_exposure > threshold:
+        if auto_unstuck_wallet_exposure_threshold != 0.0 and wallet_exposure > threshold * 0.99:
             # auto unstuck mode
             entry_price = round_up(
                 max([lowest_ask, pprice, ema_band_upper * (1 + auto_unstuck_ema_dist)]), price_step
