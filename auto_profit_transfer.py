@@ -14,8 +14,6 @@ from time import sleep
 import logging
 import logging.config
 
-logging.config.dictConfig({"version": 1, "disable_existing_loggers": True})
-
 
 async def main():
     logging.basicConfig(
@@ -73,7 +71,7 @@ async def main():
                 traceback.print_exc()
         else:
             logging.info("nothing to transfer")
-        sleep(20)
+        sleep(60 * 60)
 
 
 if __name__ == "__main__":
