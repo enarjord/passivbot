@@ -89,11 +89,11 @@ def calc_recursive_entry_long(
         return entry_qty, ientry_price, "long_ientry_partial"
     else:
         wallet_exposure = qty_to_cost(psize, pprice, inverse, c_mult) / balance
-        if wallet_exposure >= wallet_exposure_limit * 0.995:
-            # no entry if wallet_exposure within 0.5% of limit
+        if wallet_exposure >= wallet_exposure_limit * 1.001:
+            # no entry if wallet_exposure within 0.1% of limit
             return 0.0, 0.0, ""
         threshold = wallet_exposure_limit * (1 - auto_unstuck_wallet_exposure_threshold)
-        if auto_unstuck_wallet_exposure_threshold != 0.0 and wallet_exposure > threshold:
+        if auto_unstuck_wallet_exposure_threshold != 0.0 and wallet_exposure > threshold * 0.99:
             # auto unstuck mode
             entry_price = round_dn(
                 min([highest_bid, pprice, ema_band_lower * (1 - auto_unstuck_ema_dist)]), price_step
@@ -101,11 +101,8 @@ def calc_recursive_entry_long(
             entry_qty = find_entry_qty_bringing_wallet_exposure_to_target(
                 balance, psize, pprice, wallet_exposure_limit, entry_price, inverse, qty_step, c_mult
             )
-            return (
-                (entry_qty, entry_price, "long_unstuck_entry")
-                if entry_qty > calc_min_entry_qty(entry_price, inverse, qty_step, min_qty, min_cost)
-                else (0.0, 0.0, "")
-            )
+            min_entry_qty = calc_min_entry_qty(entry_price, inverse, qty_step, min_qty, min_cost)
+            return (max(entry_qty, min_entry_qty), entry_price, "long_unstuck_entry")
         else:
             # normal reentry
             ratio = wallet_exposure / wallet_exposure_limit
@@ -117,6 +114,7 @@ def calc_recursive_entry_long(
                 ),
                 price_step,
             )
+            entry_price = min(highest_bid, entry_price)
             min_entry_qty = calc_min_entry_qty(entry_price, inverse, qty_step, min_qty, min_cost)
             entry_qty = max(min_entry_qty, round_(psize * ddown_factor, qty_step))
             wallet_exposure_if_filled = calc_wallet_exposure_if_filled(
@@ -133,8 +131,7 @@ def calc_recursive_entry_long(
                     qty_step,
                     c_mult,
                 )
-                if entry_qty < min_entry_qty:
-                    return 0.0, 0.0, ""
+                entry_qty = max(entry_qty, min_entry_qty)
             return entry_qty, entry_price, "long_rentry"
 
 
@@ -183,11 +180,11 @@ def calc_recursive_entry_short(
         return -entry_qty, ientry_price, "short_ientry_partial"
     else:
         wallet_exposure = qty_to_cost(abs_psize, pprice, inverse, c_mult) / balance
-        if wallet_exposure >= wallet_exposure_limit * 0.995:
-            # no entry if wallet_exposure within 0.5% of limit
+        if wallet_exposure >= wallet_exposure_limit * 1.001:
+            # no entry if wallet_exposure within 0.1% of limit
             return 0.0, 0.0, ""
         threshold = wallet_exposure_limit * (1 - auto_unstuck_wallet_exposure_threshold)
-        if auto_unstuck_wallet_exposure_threshold != 0.0 and wallet_exposure > threshold:
+        if auto_unstuck_wallet_exposure_threshold != 0.0 and wallet_exposure > threshold * 0.99:
             # auto unstuck mode
             entry_price = round_up(
                 max([lowest_ask, pprice, ema_band_upper * (1 + auto_unstuck_ema_dist)]), price_step
@@ -202,11 +199,8 @@ def calc_recursive_entry_short(
                 qty_step,
                 c_mult,
             )
-            return (
-                (-entry_qty, entry_price, "short_unstuck_entry")
-                if entry_qty > calc_min_entry_qty(entry_price, inverse, qty_step, min_qty, min_cost)
-                else (0.0, 0.0, "")
-            )
+            min_entry_qty = calc_min_entry_qty(entry_price, inverse, qty_step, min_qty, min_cost)
+            return (-max(entry_qty, min_entry_qty), entry_price, "short_unstuck_entry")
         else:
             # normal reentry
             ratio = wallet_exposure / wallet_exposure_limit
@@ -218,6 +212,7 @@ def calc_recursive_entry_short(
                 ),
                 price_step,
             )
+            entry_price = max(entry_price, lowest_ask)
             min_entry_qty = calc_min_entry_qty(entry_price, inverse, qty_step, min_qty, min_cost)
             entry_qty = max(min_entry_qty, round_(abs_psize * ddown_factor, qty_step))
             wallet_exposure_if_filled = calc_wallet_exposure_if_filled(
@@ -235,8 +230,7 @@ def calc_recursive_entry_short(
                     qty_step,
                     c_mult,
                 )
-                if entry_qty < min_entry_qty:
-                    return 0.0, 0.0, ""
+                entry_qty = max(entry_qty, min_entry_qty)
             return -entry_qty, entry_price, "short_rentry"
 
 
@@ -412,9 +406,16 @@ def backtest_recursive_grid(
     auto_unstuck_wallet_exposure_threshold,
     auto_unstuck_ema_dist,
 ):
-    timestamps = ticks[:, 0]
-    qtys = ticks[:, 1]
-    prices = ticks[:, 2]
+    if len(ticks[0]) == 3:
+        timestamps = ticks[:, 0]
+        closes = ticks[:, 2]
+        lows = closes
+        highs = closes
+    else:
+        timestamps = ticks[:, 0]
+        highs = ticks[:, 1]
+        lows = ticks[:, 2]
+        closes = ticks[:, 3]
 
     balance_long = balance_short = equity_long = equity_short = starting_balance
     psize_long, pprice_long, psize_short, pprice_short = 0.0, 0.0, 0.0, 0.0
@@ -433,17 +434,19 @@ def backtest_recursive_grid(
 
     closest_bkr_long = closest_bkr_short = 1.0
 
+    spans_multiplier = 60 / ((timestamps[1] - timestamps[0]) / 1000)
+
     spans_long = [ema_span_0[0], (ema_span_0[0] * ema_span_1[0]) ** 0.5, ema_span_1[0]]
-    spans_long = np.array(sorted(spans_long)) * 60.0 if do_long else np.ones(3)
+    spans_long = np.array(sorted(spans_long)) * spans_multiplier if do_long else np.ones(3)
     spans_short = [ema_span_0[1], (ema_span_0[1] * ema_span_1[1]) ** 0.5, ema_span_1[1]]
-    spans_short = np.array(sorted(spans_short)) * 60.0 if do_short else np.ones(3)
-    assert max(spans_long) < len(prices), "ema_span_1 long larger than len(prices)"
-    assert max(spans_short) < len(prices), "ema_span_1 short larger than len(prices)"
+    spans_short = np.array(sorted(spans_short)) * spans_multiplier if do_short else np.ones(3)
+    assert max(spans_long) < len(ticks), "ema_span_1 long larger than len(prices)"
+    assert max(spans_short) < len(ticks), "ema_span_1 short larger than len(prices)"
     spans_long = np.where(spans_long < 1.0, 1.0, spans_long)
     spans_short = np.where(spans_short < 1.0, 1.0, spans_short)
     max_span_long = int(round(max(spans_long)))
     max_span_short = int(round(max(spans_short)))
-    emas_long, emas_short = np.repeat(prices[0], 3), np.repeat(prices[0], 3)
+    emas_long, emas_short = np.repeat(closes[0], 3), np.repeat(closes[0], 3)
     alphas_long = 2.0 / (spans_long + 1.0)
     alphas__long = 1.0 - alphas_long
     alphas_short = 2.0 / (spans_short + 1.0)
@@ -461,18 +464,18 @@ def backtest_recursive_grid(
         if auto_unstuck_wallet_exposure_threshold[1] != 0.0
         else wallet_exposure_limit[1] * 10
     )
-    for k in range(0, len(prices)):
+    for k in range(0, len(ticks)):
         if do_long:
-            emas_long = calc_ema(alphas_long, alphas__long, emas_long, prices[k])
-            if qtys[k] != 0.0 and k >= max_span_long:
+            emas_long = calc_ema(alphas_long, alphas__long, emas_long, closes[k])
+            if k >= max_span_long:
                 # check bankruptcy
-                bkr_diff_long = calc_diff(bkr_price_long, prices[k])
+                bkr_diff_long = calc_diff(bkr_price_long, closes[k])
                 closest_bkr_long = min(closest_bkr_long, bkr_diff_long)
                 if closest_bkr_long < 0.06:
                     # consider bankruptcy within 6% as liquidation
                     if psize_long != 0.0:
                         fee_paid = -qty_to_cost(psize_long, pprice_long, inverse, c_mult) * maker_fee
-                        pnl = calc_pnl_long(pprice_long, prices[k], -psize_long, inverse, c_mult)
+                        pnl = calc_pnl_long(pprice_long, closes[k], -psize_long, inverse, c_mult)
                         balance_long = 0.0
                         equity_long = 0.0
                         psize_long, pprice_long = 0.0, 0.0
@@ -485,7 +488,7 @@ def backtest_recursive_grid(
                                 balance_long,
                                 equity_long,
                                 -psize_long,
-                                prices[k],
+                                closes[k],
                                 0.0,
                                 0.0,
                                 "long_bankruptcy",
@@ -501,7 +504,7 @@ def backtest_recursive_grid(
                         balance_long,
                         psize_long,
                         pprice_long,
-                        prices[k - 1],
+                        closes[k - 1],
                         min(emas_long),
                         inverse,
                         qty_step,
@@ -526,7 +529,7 @@ def backtest_recursive_grid(
                         balance_long,
                         psize_long,
                         pprice_long,
-                        prices[k - 1],
+                        closes[k - 1],
                         max(emas_long),
                         inverse,
                         qty_step,
@@ -544,7 +547,7 @@ def backtest_recursive_grid(
                     next_close_grid_update_ts_long = timestamps[k] + 1000 * 60 * 5  # five mins delay
 
                 # check if long entry filled
-                if entry_long[0] != 0.0 and prices[k] < entry_long[1]:
+                while entry_long[0] != 0.0 and lows[k] < entry_long[1]:
                     next_entry_update_ts_long = min(
                         next_entry_update_ts_long, timestamps[k] + latency_simulation_ms
                     )
@@ -561,7 +564,7 @@ def backtest_recursive_grid(
                     fee_paid = -qty_to_cost(entry_long[0], entry_long[1], inverse, c_mult) * maker_fee
                     balance_long += fee_paid
                     equity_long = balance_long + calc_pnl_long(
-                        pprice_long, prices[k], psize_long, inverse, c_mult
+                        pprice_long, closes[k], psize_long, inverse, c_mult
                     )
                     fills_long.append(
                         (
@@ -590,13 +593,34 @@ def backtest_recursive_grid(
                     long_wallet_exposure = (
                         qty_to_cost(psize_long, pprice_long, inverse, c_mult) / balance_long
                     )
+                    entry_long = calc_recursive_entry_long(
+                        balance_long,
+                        psize_long,
+                        pprice_long,
+                        closes[k - 1],
+                        min(emas_long),
+                        inverse,
+                        qty_step,
+                        price_step,
+                        min_qty,
+                        min_cost,
+                        c_mult,
+                        initial_qty_pct[0],
+                        initial_eprice_ema_dist[0],
+                        ddown_factor[0],
+                        rentry_pprice_dist[0],
+                        rentry_pprice_dist_wallet_exposure_weighting[0],
+                        wallet_exposure_limit[0],
+                        auto_unstuck_ema_dist[0],
+                        auto_unstuck_wallet_exposure_threshold[0],
+                    )
 
                 # check if long closes filled
                 while (
                     psize_long > 0.0
                     and closes_long
                     and closes_long[0][0] < 0.0
-                    and prices[k] > closes_long[0][1]
+                    and highs[k] > closes_long[0][1]
                 ):
                     next_entry_update_ts_long = min(
                         next_entry_update_ts_long, timestamps[k] + latency_simulation_ms
@@ -622,7 +646,7 @@ def backtest_recursive_grid(
                     )
                     balance_long += fee_paid + pnl
                     equity_long = balance_long + calc_pnl_long(
-                        pprice_long, prices[k], psize_long, inverse, c_mult
+                        pprice_long, closes[k], psize_long, inverse, c_mult
                     )
                     fills_long.append(
                         (
@@ -660,7 +684,7 @@ def backtest_recursive_grid(
                         timestamps[k] + latency_simulation_ms,
                     )
                 else:
-                    if prices[k] > pprice_long:
+                    if closes[k] > pprice_long:
                         # update closes after 2.5 secs
                         next_close_grid_update_ts_long = min(
                             next_close_grid_update_ts_long,
@@ -678,10 +702,10 @@ def backtest_recursive_grid(
                         )
 
         if do_short:
-            emas_short = calc_ema(alphas_short, alphas__short, emas_short, prices[k])
-            if qtys[k] != 0.0 and k >= max_span_short:
+            emas_short = calc_ema(alphas_short, alphas__short, emas_short, closes[k])
+            if k >= max_span_short:
                 # check bankruptcy
-                bkr_diff_short = calc_diff(bkr_price_short, prices[k])
+                bkr_diff_short = calc_diff(bkr_price_short, closes[k])
                 closest_bkr_short = min(closest_bkr_short, bkr_diff_short)
 
                 if closest_bkr_short < 0.06:
@@ -690,7 +714,7 @@ def backtest_recursive_grid(
                         fee_paid = (
                             -qty_to_cost(psize_short, pprice_short, inverse, c_mult) * maker_fee
                         )
-                        pnl = calc_pnl_short(pprice_short, prices[k], -psize_short, inverse, c_mult)
+                        pnl = calc_pnl_short(pprice_short, closes[k], -psize_short, inverse, c_mult)
                         balance_short = 0.0
                         equity_short = 0.0
                         psize_short, pprice_short = 0.0, 0.0
@@ -703,7 +727,7 @@ def backtest_recursive_grid(
                                 balance_short,
                                 equity_short,
                                 -psize_short,
-                                prices[k],
+                                closes[k],
                                 0.0,
                                 0.0,
                                 "short_bankruptcy",
@@ -719,7 +743,7 @@ def backtest_recursive_grid(
                         balance_short,
                         psize_short,
                         pprice_short,
-                        prices[k - 1],
+                        closes[k - 1],
                         max(emas_short),
                         inverse,
                         qty_step,
@@ -743,7 +767,7 @@ def backtest_recursive_grid(
                         balance_short,
                         psize_short,
                         pprice_short,
-                        prices[k - 1],
+                        closes[k - 1],
                         min(emas_short),
                         inverse,
                         qty_step,
@@ -761,7 +785,7 @@ def backtest_recursive_grid(
                     next_close_grid_update_ts_short = timestamps[k] + 1000 * 60 * 5  # five mins delay
 
                 # check if short entry filled
-                if entry_short[0] != 0.0 and prices[k] > entry_short[1]:
+                while entry_short[0] != 0.0 and highs[k] > entry_short[1]:
                     next_entry_update_ts_short = min(
                         next_entry_update_ts_short, timestamps[k] + latency_simulation_ms
                     )
@@ -780,7 +804,7 @@ def backtest_recursive_grid(
                     )
                     balance_short += fee_paid
                     equity_short = balance_short + calc_pnl_short(
-                        pprice_short, prices[k], psize_short, inverse, c_mult
+                        pprice_short, closes[k], psize_short, inverse, c_mult
                     )
                     fills_short.append(
                         (
@@ -809,13 +833,33 @@ def backtest_recursive_grid(
                     short_wallet_exposure = (
                         qty_to_cost(psize_short, pprice_short, inverse, c_mult) / balance_short
                     )
-
+                    entry_short = calc_recursive_entry_short(
+                        balance_short,
+                        psize_short,
+                        pprice_short,
+                        closes[k - 1],
+                        max(emas_short),
+                        inverse,
+                        qty_step,
+                        price_step,
+                        min_qty,
+                        min_cost,
+                        c_mult,
+                        initial_qty_pct[1],
+                        initial_eprice_ema_dist[1],
+                        ddown_factor[1],
+                        rentry_pprice_dist[1],
+                        rentry_pprice_dist_wallet_exposure_weighting[1],
+                        wallet_exposure_limit[1],
+                        auto_unstuck_ema_dist[1],
+                        auto_unstuck_wallet_exposure_threshold[1],
+                    )
                 # check if short closes filled
                 while (
                     psize_short < 0.0
                     and closes_short
                     and closes_short[0][0] > 0.0
-                    and prices[k] < closes_short[0][1]
+                    and lows[k] < closes_short[0][1]
                 ):
                     next_entry_update_ts_short = min(
                         next_entry_update_ts_short, timestamps[k] + latency_simulation_ms
@@ -841,7 +885,7 @@ def backtest_recursive_grid(
                     )
                     balance_short += fee_paid + pnl
                     equity_short = balance_short + calc_pnl_short(
-                        pprice_short, prices[k], psize_short, inverse, c_mult
+                        pprice_short, closes[k], psize_short, inverse, c_mult
                     )
                     fills_short.append(
                         (
@@ -879,7 +923,7 @@ def backtest_recursive_grid(
                         timestamps[k] + latency_simulation_ms,
                     )
                 else:
-                    if prices[k] > pprice_short:
+                    if closes[k] > pprice_short:
                         # update closes after 2.5 secs
                         next_close_grid_update_ts_short = min(
                             next_close_grid_update_ts_short,
@@ -899,10 +943,10 @@ def backtest_recursive_grid(
         # process stats
         if timestamps[k] >= next_stats_update:
             equity_long = balance_long + calc_pnl_long(
-                pprice_long, prices[k], psize_long, inverse, c_mult
+                pprice_long, closes[k], psize_long, inverse, c_mult
             )
             equity_short = balance_short + calc_pnl_short(
-                pprice_short, prices[k], psize_short, inverse, c_mult
+                pprice_short, closes[k], psize_short, inverse, c_mult
             )
             stats.append(
                 (
@@ -913,7 +957,7 @@ def backtest_recursive_grid(
                     pprice_long,
                     psize_short,
                     pprice_short,
-                    prices[k],
+                    closes[k],
                     closest_bkr_long,
                     closest_bkr_short,
                     balance_long,

@@ -14,6 +14,7 @@ from pure_funcs import (
     numpyize,
     candidate_to_live_config,
     ts_to_date,
+    ts_to_date_utc,
     get_dummy_settings,
     config_pretty_str,
     date_to_ts,
@@ -68,6 +69,7 @@ async def prepare_backtest_config(args) -> dict:
         "starting_balance",
         "market_type",
         "base_dir",
+        "ohlcv",
     ]:
         if hasattr(args, key) and getattr(args, key) is not None:
             config[key] = getattr(args, key)
@@ -77,6 +79,8 @@ async def prepare_backtest_config(args) -> dict:
         config["spot"] = False
     else:
         config["spot"] = args.market_type == "spot"
+    config["start_date"] = ts_to_date_utc(date_to_ts(config["start_date"]))[:10]
+    config["end_date"] = ts_to_date_utc(date_to_ts(config["end_date"]))[:10]
     config["exchange"], _, _ = load_exchange_key_secret(config["user"])
     config["session_name"] = (
         f"{config['start_date'].replace(' ', '').replace(':', '').replace('.', '')}_"

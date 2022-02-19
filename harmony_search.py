@@ -2,7 +2,7 @@ import os
 
 os.environ["NOJIT"] = "false"
 
-from downloader import Downloader
+from downloader import Downloader, load_hlc_cache
 import argparse
 import asyncio
 import json
@@ -17,6 +17,8 @@ from pure_funcs import (
     denumpyize,
     get_template_live_config,
     ts_to_date,
+    ts_to_date_utc,
+    date_to_ts,
     tuplify,
     sort_dict_keys,
     determine_passivbot_mode,
@@ -132,7 +134,9 @@ class HarmonySearch:
         }
         self.date_range = f"{self.config['start_date']}_{self.config['end_date']}"
         self.bt_dir = f"backtests/{self.exchange_name}"
-        self.ticks_cache_fname = f"caches/{self.date_range}_ticks_cache.npy"
+        self.ticks_cache_fname = (
+            f"caches/{self.date_range}{'_ohlcv_cache.npy' if config['ohlcv'] else '_ticks_cache.npy'}"
+        )
         """
         self.ticks_caches = (
             {s: np.load(f"{self.bt_dir}/{s}/{self.ticks_cache_fname}") for s in self.symbols}
@@ -682,6 +686,12 @@ async def main():
         default=None,
         help="passivbot score formula options: [adg_PAD_mean, adg_PAD_std, adg_DGstd_ratio, adg_mean, adg_min, adg_PAD_std_min]",
     )
+    parser.add_argument(
+        "-oh",
+        "--ohlcv",
+        help="use 1m ohlcv instead of 1s ticks",
+        action="store_true",
+    )
     parser = add_argparse_args(parser)
     args = parser.parse_args()
     args.symbol = "BTCUSDT"  # dummy symbol
@@ -736,6 +746,7 @@ async def main():
         config["symbols"] = args.symbol.split(",")
     if args.n_cpus is not None:
         config["n_cpus"] = args.n_cpus
+    config["ohlcv"] = args.ohlcv
     print()
     lines = [(k, getattr(args, k)) for k in args.__dict__ if args.__dict__[k] is not None]
     for line in lines:
@@ -743,7 +754,10 @@ async def main():
     print()
 
     # download ticks .npy file if missing
-    cache_fname = f"{config['start_date']}_{config['end_date']}_ticks_cache.npy"
+    if config["ohlcv"]:
+        cache_fname = f"{config['start_date']}_{config['end_date']}_ohlcv_cache.npy"
+    else:
+        cache_fname = f"{config['start_date']}_{config['end_date']}_ticks_cache.npy"
     exchange_name = config["exchange"] + ("_spot" if config["market_type"] == "spot" else "")
     config["symbols"] = sorted(config["symbols"])
     for symbol in config["symbols"]:
@@ -753,9 +767,18 @@ async def main():
         ):
             logging.info(f"fetching data {symbol}")
             args.symbol = symbol
-            tmp_cfg = await prepare_backtest_config(args)
-            downloader = Downloader({**config, **tmp_cfg})
-            await downloader.get_sampled_ticks()
+            if config["ohlcv"]:
+                data = load_hlc_cache(
+                    symbol,
+                    config["start_date"],
+                    config["end_date"],
+                    base_dir=config["base_dir"],
+                    spot=config["spot"],
+                )
+            else:
+                tmp_cfg = await prepare_backtest_config(args)
+                downloader = Downloader({**config, **tmp_cfg})
+                await downloader.get_sampled_ticks()
 
     # prepare starting configs
     cfgs = []

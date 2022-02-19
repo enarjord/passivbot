@@ -479,6 +479,11 @@ def find_close_qty_long_bringing_wallet_exposure_to_target(
     qty_step,
     c_mult,
 ) -> float:
+    def eval_(guess_):
+        return qty_to_cost(psize - guess_, pprice, inverse, c_mult) / (
+            balance + calc_pnl_long(pprice, close_price, guess_, inverse, c_mult)
+        )
+
     wallet_exposure = qty_to_cost(psize, pprice, inverse, c_mult) / balance
     if wallet_exposure <= wallet_exposure_target * 1.001:
         # wallet_exposure within 0.1% of target: return zero
@@ -487,12 +492,12 @@ def find_close_qty_long_bringing_wallet_exposure_to_target(
     vals = []
     evals = []
     guesses.append(
-        min(psize, max(0.0, round_(psize * (wallet_exposure_target / wallet_exposure), qty_step)))
+        min(
+            psize,
+            max(0.0, round_(psize * (1 - wallet_exposure_target / wallet_exposure), qty_step)),
+        )
     )
-    vals.append(
-        qty_to_cost(abs(psize) - guesses[-1], pprice, inverse, c_mult)
-        / (balance + calc_pnl_long(pprice, close_price, guesses[-1], inverse, c_mult))
-    )
+    vals.append(eval_(guesses[-1]))
     evals.append(abs(vals[-1] - wallet_exposure_target) / wallet_exposure_target)
     guesses.append(
         min(psize, max(0.0, round_(max(guesses[-1] * 1.2, guesses[-1] + qty_step), qty_step)))
@@ -501,22 +506,15 @@ def find_close_qty_long_bringing_wallet_exposure_to_target(
         guesses[-1] = min(
             psize, max(0.0, round_(min(guesses[-1] * 0.8, guesses[-1] - qty_step), qty_step))
         )
-    vals.append(
-        qty_to_cost(abs(psize) - guesses[-1], pprice, inverse, c_mult)
-        / (balance + calc_pnl_long(pprice, close_price, guesses[-1], inverse, c_mult))
-    )
+    vals.append(eval_(guesses[-1]))
     evals.append(abs(vals[-1] - wallet_exposure_target) / wallet_exposure_target)
     for _ in range(15):
-        if guesses[-1] == guesses[-2] or vals[-1] == vals[-2]:
-            guesses[-1] = min(
-                psize, abs(round_(max(guesses[-2] * 2, guesses[-2] + qty_step * 10), qty_step))
-            )
-            vals[-1] = qty_to_cost(abs(psize) - guesses[-1], pprice, inverse, c_mult) / (
-                balance + calc_pnl_long(pprice, close_price, guesses[-1], inverse, c_mult)
-            )
+        egv = sorted([(e, g, v) for e, g, v in zip(evals, guesses, vals)])
         try:
             new_guess = interpolate(
-                wallet_exposure_target, np.array(vals[-2:]), np.array(guesses[-2:])
+                wallet_exposure_target,
+                np.array([egv[0][2], egv[1][2]]),
+                np.array([egv[0][1], egv[1][1]]),
             )
         except:
             print("debug zero div error find_close_qty_long_bringing_wallet_exposure_to_target")
@@ -534,14 +532,18 @@ def find_close_qty_long_bringing_wallet_exposure_to_target(
                 c_mult,
             )
             print("guesses, vals", guesses, vals)
-            new_guess = round_(psize / 2, qty_step)
-        guesses.append(min(psize, max(0.0, round_(new_guess, qty_step))))
-        vals.append(
-            qty_to_cost(abs(psize) - guesses[-1], pprice, inverse, c_mult)
-            / (balance + calc_pnl_long(pprice, close_price, guesses[-1], inverse, c_mult))
-        )
+            new_guess = (egv[0][1] + egv[1][1]) / 2
+        new_guess = min(psize, max(0.0, round_(new_guess, qty_step)))
+        if new_guess in guesses:
+            new_guess = min(psize, max(0.0, round_(new_guess - qty_step, qty_step)))
+            if new_guess in guesses:
+                new_guess = min(psize, max(0.0, round_(new_guess + 2 * qty_step, qty_step)))
+                if new_guess in guesses:
+                    break
+        guesses.append(new_guess)
+        vals.append(eval_(guesses[-1]))
         evals.append(abs(vals[-1] - wallet_exposure_target) / wallet_exposure_target)
-        if evals[-1] < 0.04:
+        if evals[-1] < 0.01:
             # close enough
             break
     evals_guesses = sorted([(e, g) for e, g in zip(evals, guesses)])
@@ -582,6 +584,11 @@ def find_close_qty_short_bringing_wallet_exposure_to_target(
     qty_step,
     c_mult,
 ) -> float:
+    def eval_(guess_):
+        return qty_to_cost(abs(psize) - guess_, pprice, inverse, c_mult) / (
+            balance + calc_pnl_short(pprice, close_price, guess_, inverse, c_mult)
+        )
+
     wallet_exposure = qty_to_cost(psize, pprice, inverse, c_mult) / balance
     if wallet_exposure <= wallet_exposure_target * 1.001:
         # wallet_exposure within 0.1% of target: return zero
@@ -593,13 +600,10 @@ def find_close_qty_short_bringing_wallet_exposure_to_target(
     guesses.append(
         min(
             abs_psize,
-            max(0.0, round_(abs_psize * (wallet_exposure_target / wallet_exposure), qty_step)),
+            max(0.0, round_(abs_psize * (1 - wallet_exposure_target / wallet_exposure), qty_step)),
         )
     )
-    vals.append(
-        qty_to_cost(abs_psize - guesses[-1], pprice, inverse, c_mult)
-        / (balance + calc_pnl_short(pprice, close_price, guesses[-1], inverse, c_mult))
-    )
+    vals.append(eval_(guesses[-1]))
     evals.append(abs(vals[-1] - wallet_exposure_target) / wallet_exposure_target)
     guesses.append(
         min(abs_psize, max(0.0, round_(max(guesses[-1] * 1.2, guesses[-1] + qty_step), qty_step)))
@@ -608,22 +612,15 @@ def find_close_qty_short_bringing_wallet_exposure_to_target(
         guesses[-1] = min(
             abs_psize, max(0.0, round_(min(guesses[-1] * 0.8, guesses[-1] - qty_step), qty_step))
         )
-    vals.append(
-        qty_to_cost(abs_psize - guesses[-1], pprice, inverse, c_mult)
-        / (balance + calc_pnl_short(pprice, close_price, guesses[-1], inverse, c_mult))
-    )
+    vals.append(eval_(guesses[-1]))
     evals.append(abs(vals[-1] - wallet_exposure_target) / wallet_exposure_target)
     for _ in range(15):
-        if guesses[-1] == guesses[-2] or vals[-1] == vals[-2]:
-            guesses[-1] = min(
-                abs_psize, abs(round_(max(guesses[-2] * 1.1, guesses[-2] + qty_step), qty_step))
-            )
-            vals[-1] = qty_to_cost(abs_psize - guesses[-1], pprice, inverse, c_mult) / (
-                balance + calc_pnl_short(pprice, close_price, guesses[-1], inverse, c_mult)
-            )
+        egv = sorted([(e, g, v) for e, g, v in zip(evals, guesses, vals)])
         try:
             new_guess = interpolate(
-                wallet_exposure_target, np.array(vals[-2:]), np.array(guesses[-2:])
+                wallet_exposure_target,
+                np.array([egv[0][2], egv[1][2]]),
+                np.array([egv[0][1], egv[1][1]]),
             )
         except:
             print("debug zero div error find_close_qty_short_bringing_wallet_exposure_to_target")
@@ -641,14 +638,18 @@ def find_close_qty_short_bringing_wallet_exposure_to_target(
                 c_mult,
             )
             print("guesses, vals", guesses, vals)
-            new_guess = round_(abs_psize / 2, qty_step)
-        guesses.append(min(abs_psize, max(0.0, round_(new_guess, qty_step))))
-        vals.append(
-            qty_to_cost(abs_psize - guesses[-1], pprice, inverse, c_mult)
-            / (balance + calc_pnl_short(pprice, close_price, guesses[-1], inverse, c_mult))
-        )
+            new_guess = (egv[0][1] + egv[1][1]) / 2
+        new_guess = min(abs_psize, max(0.0, round_(new_guess, qty_step)))
+        if new_guess in guesses:
+            new_guess = min(abs_psize, max(0.0, round_(new_guess - qty_step, qty_step)))
+            if new_guess in guesses:
+                new_guess = min(abs_psize, max(0.0, round_(new_guess + 2 * qty_step, qty_step)))
+                if new_guess in guesses:
+                    break
+        guesses.append(new_guess)
+        vals.append(eval_(guesses[-1]))
         evals.append(abs(vals[-1] - wallet_exposure_target) / wallet_exposure_target)
-        if evals[-1] < 0.04:
+        if evals[-1] < 0.01:
             # close enough
             break
     evals_guesses = sorted([(e, g) for e, g in zip(evals, guesses)])
@@ -731,7 +732,7 @@ def find_entry_qty_bringing_wallet_exposure_to_target(
             )
         )
         evals.append(abs(vals[-1] - wallet_exposure_target) / wallet_exposure_target)
-        if evals[-1] < 0.04:
+        if evals[-1] < 0.01:
             # close enough
             break
     evals_guesses = sorted([(e, g) for e, g in zip(evals, guesses)])
@@ -1259,10 +1260,8 @@ def calc_entry_grid_long(
             if wallet_exposure >= wallet_exposure_limit:
                 return [(0.0, 0.0, "")]
             if auto_unstuck_wallet_exposure_threshold != 0.0:
-                threshold = (
-                    wallet_exposure_limit * (1 - auto_unstuck_wallet_exposure_threshold) * 0.99
-                )
-                if wallet_exposure > threshold:
+                threshold = wallet_exposure_limit * (1 - auto_unstuck_wallet_exposure_threshold)
+                if wallet_exposure > threshold * 0.99:
                     auto_unstuck_entry_price = min(
                         highest_bid,
                         round_dn(ema_band_lower * (1 - auto_unstuck_ema_dist), price_step),
@@ -1277,9 +1276,12 @@ def calc_entry_grid_long(
                         qty_step,
                         c_mult,
                     )
+                    min_entry_qty = calc_min_entry_qty(
+                        auto_unstuck_entry_price, inverse, qty_step, min_qty, min_cost
+                    )
                     return [
                         (
-                            auto_unstuck_qty,
+                            max(auto_unstuck_qty, min_entry_qty),
                             auto_unstuck_entry_price,
                             "long_unstuck_entry",
                         )
@@ -1429,10 +1431,8 @@ def calc_entry_grid_short(
             if wallet_exposure >= wallet_exposure_limit:
                 return [(0.0, 0.0, "")]
             if auto_unstuck_wallet_exposure_threshold != 0.0:
-                threshold = (
-                    wallet_exposure_limit * (1 - auto_unstuck_wallet_exposure_threshold) * 0.99
-                )
-                if wallet_exposure > threshold:
+                threshold = wallet_exposure_limit * (1 - auto_unstuck_wallet_exposure_threshold)
+                if wallet_exposure > threshold * 0.99:
                     auto_unstuck_entry_price = max(
                         lowest_ask,
                         round_up(ema_band_upper * (1 + auto_unstuck_ema_dist), price_step),
@@ -1447,9 +1447,12 @@ def calc_entry_grid_short(
                         qty_step,
                         c_mult,
                     )
+                    min_entry_qty = calc_min_entry_qty(
+                        auto_unstuck_entry_price, inverse, qty_step, min_qty, min_cost
+                    )
                     return [
                         (
-                            -auto_unstuck_qty,
+                            -max(auto_unstuck_qty, min_entry_qty),
                             auto_unstuck_entry_price,
                             "short_unstuck_entry",
                         )
@@ -1797,10 +1800,16 @@ def backtest_static_grid(
     auto_unstuck_ema_dist,
     auto_unstuck_wallet_exposure_threshold,
 ):
-
-    timestamps = ticks[:, 0]
-    qtys = ticks[:, 1]
-    prices = ticks[:, 2]
+    if len(ticks[0]) == 3:
+        timestamps = ticks[:, 0]
+        closes = ticks[:, 2]
+        lows = closes
+        highs = closes
+    else:
+        timestamps = ticks[:, 0]
+        highs = ticks[:, 1]
+        lows = ticks[:, 2]
+        closes = ticks[:, 3]
 
     balance_long = balance_short = equity_long = equity_short = starting_balance
     psize_long, pprice_long, psize_short, pprice_short = 0.0, 0.0, 0.0, 0.0
@@ -1819,17 +1828,19 @@ def backtest_static_grid(
 
     closest_bkr_long = closest_bkr_short = 1.0
 
+    spans_multiplier = 60 / ((timestamps[1] - timestamps[0]) / 1000)
+
     spans_long = [ema_span_0[0], (ema_span_0[0] * ema_span_1[0]) ** 0.5, ema_span_1[0]]
-    spans_long = np.array(sorted(spans_long)) * 60.0 if do_long else np.ones(3)
+    spans_long = np.array(sorted(spans_long)) * spans_multiplier if do_long else np.ones(3)
     spans_short = [ema_span_0[1], (ema_span_0[1] * ema_span_1[1]) ** 0.5, ema_span_1[1]]
-    spans_short = np.array(sorted(spans_short)) * 60.0 if do_short else np.ones(3)
-    assert max(spans_long) < len(prices), "max ema_span long larger than len(prices)"
-    assert max(spans_short) < len(prices), "max ema_span short larger than len(prices)"
+    spans_short = np.array(sorted(spans_short)) * spans_multiplier if do_short else np.ones(3)
+    assert max(spans_long) < len(closes), "max ema_span long larger than len(closes)"
+    assert max(spans_short) < len(closes), "max ema_span short larger than len(closes)"
     spans_long = np.where(spans_long < 1.0, 1.0, spans_long)
     spans_short = np.where(spans_short < 1.0, 1.0, spans_short)
     max_span_long = int(round(max(spans_long)))
     max_span_short = int(round(max(spans_short)))
-    emas_long, emas_short = np.repeat(prices[0], 3), np.repeat(prices[0], 3)
+    emas_long, emas_short = np.repeat(closes[0], 3), np.repeat(closes[0], 3)
     alphas_long = 2.0 / (spans_long + 1.0)
     alphas__long = 1.0 - alphas_long
     alphas_short = 2.0 / (spans_short + 1.0)
@@ -1848,18 +1859,18 @@ def backtest_static_grid(
         else wallet_exposure_limit[1] * 10
     )
 
-    for k in range(0, len(prices)):
+    for k in range(0, len(closes)):
         if do_long:
-            emas_long = calc_ema(alphas_long, alphas__long, emas_long, prices[k])
-            if qtys[k] != 0.0 and k >= max_span_long:
+            emas_long = calc_ema(alphas_long, alphas__long, emas_long, closes[k])
+            if k >= max_span_long:
                 # check bankruptcy
-                bkr_diff_long = calc_diff(bkr_price_long, prices[k])
+                bkr_diff_long = calc_diff(bkr_price_long, closes[k])
                 closest_bkr_long = min(closest_bkr_long, bkr_diff_long)
                 if closest_bkr_long < 0.06:
                     # consider bankruptcy within 6% as liquidation
                     if psize_long != 0.0:
                         fee_paid = -qty_to_cost(psize_long, pprice_long, inverse, c_mult) * maker_fee
-                        pnl = calc_pnl_long(pprice_long, prices[k], -psize_long, inverse, c_mult)
+                        pnl = calc_pnl_long(pprice_long, closes[k], -psize_long, inverse, c_mult)
                         balance_long = 0.0
                         equity_long = 0.0
                         psize_long, pprice_long = 0.0, 0.0
@@ -1872,7 +1883,7 @@ def backtest_static_grid(
                                 balance_long,
                                 equity_long,
                                 -psize_long,
-                                prices[k],
+                                closes[k],
                                 0.0,
                                 0.0,
                                 "long_bankruptcy",
@@ -1889,7 +1900,7 @@ def backtest_static_grid(
                                 pprice_long,
                                 psize_short,
                                 pprice_short,
-                                prices[k],
+                                closes[k],
                                 closest_bkr_long,
                                 closest_bkr_short,
                                 balance_long,
@@ -1906,7 +1917,7 @@ def backtest_static_grid(
                         balance_long,
                         psize_long,
                         pprice_long,
-                        prices[k - 1],
+                        closes[k - 1],
                         min(emas_long),
                         inverse,
                         do_long,
@@ -1934,7 +1945,7 @@ def backtest_static_grid(
                         balance_long,
                         psize_long,
                         pprice_long,
-                        prices[k - 1],
+                        closes[k - 1],
                         max(emas_long),
                         inverse,
                         qty_step,
@@ -1952,7 +1963,7 @@ def backtest_static_grid(
                     next_close_grid_update_ts_long = timestamps[k] + 1000 * 60 * 5
 
                 # check for long entry fills
-                while entries_long and entries_long[0][0] > 0.0 and prices[k] < entries_long[0][1]:
+                while entries_long and entries_long[0][0] > 0.0 and lows[k] < entries_long[0][1]:
                     next_entry_grid_update_ts_long = min(
                         next_entry_grid_update_ts_long, timestamps[k] + latency_simulation_ms
                     )
@@ -1972,7 +1983,7 @@ def backtest_static_grid(
                     )
                     balance_long += fee_paid
                     equity_long = balance_long + calc_pnl_long(
-                        pprice_long, prices[k], psize_long, inverse, c_mult
+                        pprice_long, closes[k], psize_long, inverse, c_mult
                     )
                     fills_long.append(
                         (
@@ -2008,7 +2019,7 @@ def backtest_static_grid(
                     psize_long > 0.0
                     and closes_long
                     and closes_long[0][0] < 0.0
-                    and prices[k] > closes_long[0][1]
+                    and highs[k] > closes_long[0][1]
                 ):
                     next_entry_grid_update_ts_long = min(
                         next_entry_grid_update_ts_long, timestamps[k] + latency_simulation_ms
@@ -2034,7 +2045,7 @@ def backtest_static_grid(
                     )
                     balance_long += fee_paid + pnl
                     equity_long = balance_long + calc_pnl_long(
-                        pprice_long, prices[k], psize_long, inverse, c_mult
+                        pprice_long, closes[k], psize_long, inverse, c_mult
                     )
                     fills_long.append(
                         (
@@ -2071,7 +2082,7 @@ def backtest_static_grid(
                         timestamps[k] + latency_simulation_ms,
                     )
                 else:
-                    if prices[k] > pprice_long:
+                    if closes[k] > pprice_long:
                         # update closes after 2.5 sec
                         next_close_grid_update_ts_long = min(
                             next_close_grid_update_ts_long,
@@ -2089,10 +2100,10 @@ def backtest_static_grid(
                         )
 
         if do_short:
-            emas_short = calc_ema(alphas_short, alphas__short, emas_short, prices[k])
-            if qtys[k] != 0.0 and k >= max_span_short:
+            emas_short = calc_ema(alphas_short, alphas__short, emas_short, closes[k])
+            if k >= max_span_short:
                 # check bankruptcy
-                bkr_diff_short = calc_diff(bkr_price_short, prices[k])
+                bkr_diff_short = calc_diff(bkr_price_short, closes[k])
                 closest_bkr_short = min(closest_bkr_short, bkr_diff_short)
 
                 if closest_bkr_short < 0.06:
@@ -2101,7 +2112,7 @@ def backtest_static_grid(
                         fee_paid = (
                             -qty_to_cost(psize_short, pprice_short, inverse, c_mult) * maker_fee
                         )
-                        pnl = calc_pnl_short(pprice_short, prices[k], -psize_short, inverse, c_mult)
+                        pnl = calc_pnl_short(pprice_short, closes[k], -psize_short, inverse, c_mult)
                         balance_short = 0.0
                         equity_short = 0.0
                         psize_short, pprice_short = 0.0, 0.0
@@ -2114,7 +2125,7 @@ def backtest_static_grid(
                                 balance_short,
                                 equity_short,
                                 -psize_short,
-                                prices[k],
+                                closes[k],
                                 0.0,
                                 0.0,
                                 "short_bankruptcy",
@@ -2131,7 +2142,7 @@ def backtest_static_grid(
                                 pprice_long,
                                 psize_short,
                                 pprice_short,
-                                prices[k],
+                                closes[k],
                                 closest_bkr_long,
                                 closest_bkr_short,
                                 balance_long,
@@ -2148,7 +2159,7 @@ def backtest_static_grid(
                         balance_short,
                         psize_short,
                         pprice_short,
-                        prices[k - 1],
+                        closes[k - 1],
                         max(emas_short),
                         inverse,
                         do_short,
@@ -2177,7 +2188,7 @@ def backtest_static_grid(
                         balance_short,
                         psize_short,
                         pprice_short,
-                        prices[k - 1],
+                        closes[k - 1],
                         min(emas_short),
                         inverse,
                         qty_step,
@@ -2194,7 +2205,7 @@ def backtest_static_grid(
                     )
                     next_close_grid_update_ts_short = timestamps[k] + 1000 * 60 * 5  # five mins delay
 
-                while entries_short and entries_short[0][0] < 0.0 and prices[k] > entries_short[0][1]:
+                while entries_short and entries_short[0][0] < 0.0 and highs[k] > entries_short[0][1]:
                     next_entry_grid_update_ts_short = min(
                         next_entry_grid_update_ts_short, timestamps[k] + latency_simulation_ms
                     )
@@ -2214,7 +2225,7 @@ def backtest_static_grid(
                     )
                     balance_short += fee_paid
                     equity_short = balance_short + calc_pnl_short(
-                        pprice_short, prices[k], psize_short, inverse, c_mult
+                        pprice_short, closes[k], psize_short, inverse, c_mult
                     )
                     fills_short.append(
                         (
@@ -2250,7 +2261,7 @@ def backtest_static_grid(
                     psize_short < 0.0
                     and closes_short
                     and closes_short[0][0] > 0.0
-                    and prices[k] < closes_short[0][1]
+                    and lows[k] < closes_short[0][1]
                 ):
                     next_entry_grid_update_ts_short = min(
                         next_entry_grid_update_ts_short, timestamps[k] + latency_simulation_ms
@@ -2276,7 +2287,7 @@ def backtest_static_grid(
                     )
                     balance_short += fee_paid + pnl
                     equity_short = balance_short + calc_pnl_short(
-                        pprice_short, prices[k], psize_short, inverse, c_mult
+                        pprice_short, closes[k], psize_short, inverse, c_mult
                     )
                     fills_short.append(
                         (
@@ -2312,7 +2323,7 @@ def backtest_static_grid(
                         timestamps[k] + latency_simulation_ms,
                     )
                 else:
-                    if prices[k] < pprice_short:
+                    if closes[k] < pprice_short:
                         next_close_grid_update_ts_short = min(
                             next_close_grid_update_ts_short,
                             timestamps[k] + latency_simulation_ms + 2500,
@@ -2330,10 +2341,10 @@ def backtest_static_grid(
         # process stats
         if timestamps[k] >= next_stats_update:
             equity_long = balance_long + calc_pnl_long(
-                pprice_long, prices[k], psize_long, inverse, c_mult
+                pprice_long, closes[k], psize_long, inverse, c_mult
             )
             equity_short = balance_short + calc_pnl_short(
-                pprice_short, prices[k], psize_short, inverse, c_mult
+                pprice_short, closes[k], psize_short, inverse, c_mult
             )
             stats.append(
                 (
@@ -2344,7 +2355,7 @@ def backtest_static_grid(
                     pprice_long,
                     psize_short,
                     pprice_short,
-                    prices[k],
+                    closes[k],
                     closest_bkr_long,
                     closest_bkr_short,
                     balance_long,
@@ -2364,7 +2375,7 @@ def backtest_static_grid(
             pprice_long,
             psize_short,
             pprice_short,
-            prices[k],
+            closes[k],
             closest_bkr_long,
             closest_bkr_short,
             balance_long,

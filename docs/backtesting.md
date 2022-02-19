@@ -60,6 +60,7 @@ The following options can be provided to the backtester. Note that any argument 
 | --start_date | The starting date of the backtest<br/>**Syntax:** YYYY-MM-DD
 | --end_date | The end date of the backtest<br/>**Syntax:** YYYY-MM-DD
 | -bd / --base_dir | the base directory to place the output files in<br/>**Default:** `backtests`
+| -oh / --ohlcv | use 1m ohlcv instead of 1s tick samples
 
 ## Backtest results
 

@@ -43,7 +43,7 @@ def main():
         "-d",
         "--dump_live_config",
         action="store_true",
-        help="dump config in tmp/",
+        help="dump config",
     )
 
     args = parser.parse_args()
@@ -61,14 +61,16 @@ def main():
         for s in (rs := r["results"]):
             try:
                 adgs.append(rs[s][f"adg_{side}"])
-                PAD_stds.append(max(PAD_max, rs[s][f"pa_distance_std_{side}"]))
-                PAD_means.append(max(PAD_max, rs[s][f"pa_distance_mean_{side}"]))
+                PAD_stds.append(rs[s][f"pa_distance_std_{side}"])
+                PAD_means.append(rs[s][f"pa_distance_mean_{side}"])
                 adg_DGstd_ratios.append(rs[s][f"adg_DGstd_ratio_{side}"])
             except Exception as e:
                 pass
         adg_mean = np.mean(adgs)
-        PAD_std_mean = np.mean(PAD_stds)
-        PAD_mean_mean = np.mean(PAD_means)
+        PAD_std_mean_raw = np.mean(PAD_stds)
+        PAD_std_mean = np.mean([max(PAD_max, x) for x in PAD_stds])
+        PAD_mean_mean_raw = np.mean(PAD_means)
+        PAD_mean_mean = np.mean([max(PAD_max, x) for x in PAD_means])
         adg_DGstd_ratios_mean = np.mean(adg_DGstd_ratios)
         adg_DGstd_ratios_std = np.std(adg_DGstd_ratios)
         if args.score_formula.lower() == "adgpadstd":
@@ -90,7 +92,9 @@ def main():
                 "config": r["config"],
                 "adg_mean": adg_mean,
                 "PAD_std_mean": PAD_std_mean,
+                "PAD_std_mean_raw": PAD_std_mean_raw,
                 "PAD_mean_mean": PAD_mean_mean,
+                "PAD_mean_mean_raw": PAD_mean_mean_raw,
                 "score": score,
                 "adg_DGstd_ratios_mean": adg_DGstd_ratios_mean,
                 "adg_DGstd_ratios_std": adg_DGstd_ratios_std,
@@ -120,8 +124,8 @@ def main():
                 )
             print(
                 f"{'means': <20} {bc['adg_mean'] / bc['config'][side]['wallet_exposure_limit']:.6f} "
-                + f"{bc['PAD_std_mean']:.6f} "
-                + f"{bc['PAD_mean_mean']:.6f} {bc['adg_DGstd_ratios_mean']:.6f}"
+                + f"{bc['PAD_std_mean_raw']:.6f} "
+                + f"{bc['PAD_mean_mean_raw']:.6f} {bc['adg_DGstd_ratios_mean']:.6f}"
             )
 
 

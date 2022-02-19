@@ -26,7 +26,7 @@ from procedures import (
     add_argparse_args,
     utc_ms,
 )
-from pure_funcs import ts_to_date, get_dummy_settings
+from pure_funcs import ts_to_date, ts_to_date_utc, date_to_ts, get_dummy_settings
 
 
 class Downloader:
@@ -927,6 +927,106 @@ class Downloader:
         return tick_data
 
 
+def get_zip(url: str):
+    col_names = ["timestamp", "open", "high", "low", "close", "volume"]
+    try:
+        resp = urlopen(url)
+        file_tmp = BytesIO()
+        with tqdm.wrapattr(
+            open(os.devnull, "wb"), "write", miniters=1, total=getattr(resp, "length", None)
+        ) as fout:
+            for chunk in resp:
+                fout.write(chunk)
+                file_tmp.write(chunk)
+        dfs = []
+        with ZipFile(file_tmp) as my_zip_file:
+            for contained_file in my_zip_file.namelist():
+                df = pd.read_csv(my_zip_file.open(contained_file))
+                df.columns = col_names + [str(i) for i in range(len(df.columns) - len(col_names))]
+                dfs.append(df[col_names])
+        return pd.concat(dfs).sort_values("timestamp").reset_index()
+    except Exception as e:
+        print(e)
+
+
+def download_ohlcvs(symbol, start_date, end_date, download_only=False) -> pd.DataFrame:
+    dirpath = make_get_filepath(f"historical_data/ohlcvs_futures/{symbol}/")
+    base_url = f"https://data.binance.vision/data/futures/um/"
+    col_names = ["timestamp", "open", "high", "low", "close", "volume"]
+    start_ts = date_to_ts(start_date)
+    end_ts = date_to_ts(end_date)
+    days = [ts_to_date_utc(x)[:10] for x in list(range(start_ts, end_ts, 1000 * 60 * 60 * 24))]
+    months = sorted(set([x[:7] for x in days]))
+    months_done = set()
+    dfs = []
+    for month in months:
+        month_filepath = dirpath + month + ".csv"
+        if os.path.exists(month_filepath):
+            months_done.add(month)
+            if not download_only:
+                dfs.append(pd.read_csv(month_filepath))
+            continue
+        try:
+            url = base_url + f"monthly/klines/{symbol}/1m/{symbol}-1m-{month}.zip"
+            print("fetching", url)
+            csv = get_zip(url)
+            csv.to_csv(month_filepath)
+            months_done.add(month)
+            if not download_only:
+                dfs.append(csv)
+            for f in os.listdir(dirpath):
+                if month in f and len(f) > 11:
+                    print("deleting", dirpath + f)
+                    os.remove(dirpath + f)
+        except Exception as e:
+            if month != months[-1]:
+                months_done.add(month)
+            print(e)
+    for day in days:
+        if day[:7] in months_done:
+            continue
+        day_filepath = dirpath + day + ".csv"
+        if os.path.exists(day_filepath):
+            if not download_only:
+                dfs.append(pd.read_csv(day_filepath))
+            continue
+        try:
+            print("fetching", day_filepath)
+            csv = get_zip(base_url + f"daily/klines/{symbol}/1m/{symbol}-1m-{day}.zip")
+            csv.to_csv(day_filepath)
+            if not download_only:
+                dfs.append(csv)
+        except Exception as e:
+            print(e)
+            break
+    if not download_only:
+        df = pd.concat(dfs)[col_names].sort_values("timestamp")
+        df = df.drop_duplicates(subset=["timestamp"]).reset_index()
+        nindex = np.arange(df.timestamp.iloc[0], df.timestamp.iloc[-1] + 60000, 60000)
+        return (
+            df[col_names].set_index("timestamp").reindex(nindex).fillna(method="ffill").reset_index()
+        )
+
+
+def load_hlc_cache(symbol, start_date, end_date, base_dir="backtests", spot=False):
+    cache_fname = (
+        f"{ts_to_date_utc(date_to_ts(start_date))[:10]}_"
+        + f"{ts_to_date_utc(date_to_ts(end_date))[:10]}_ohlcv_cache.npy"
+    )
+
+    filepath = make_get_filepath(
+        os.path.join(base_dir, "binance" + ("_spot" if spot else ""), symbol, "caches", cache_fname)
+    )
+    if os.path.exists(filepath):
+        return np.load(filepath)
+    df = download_ohlcvs(symbol, start_date, end_date)
+    df = df[df.timestamp >= date_to_ts(start_date)]
+    df = df[df.timestamp <= date_to_ts(end_date)]
+    data = df[["timestamp", "high", "low", "close"]].values
+    np.save(filepath, data)
+    return data
+
+
 async def main():
     parser = argparse.ArgumentParser(
         prog="Downloader", description="Download ticks from exchange API."
@@ -937,14 +1037,23 @@ async def main():
         help="download only, do not dump ticks caches",
         action="store_true",
     )
+    parser.add_argument(
+        "-oh",
+        "--ohlcv",
+        help="use 1m ohlcv instead of 1s ticks",
+        action="store_true",
+    )
     parser = add_argparse_args(parser)
 
     args = parser.parse_args()
     config = await prepare_backtest_config(args)
-    downloader = Downloader(config)
-    await downloader.download_ticks()
-    if not args.download_only:
-        await downloader.prepare_files()
+    if args.ohlcv:
+        data = load_hlc_cache(config["symbol"], config["start_date"], config["end_date"])
+    else:
+        downloader = Downloader(config)
+        await downloader.download_ticks()
+        if not args.download_only:
+            await downloader.prepare_files()
 
 
 if __name__ == "__main__":

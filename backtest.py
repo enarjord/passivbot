@@ -10,7 +10,7 @@ from time import time
 import numpy as np
 import pandas as pd
 
-from downloader import Downloader
+from downloader import Downloader, load_hlc_cache
 from njit_funcs import backtest_static_grid, round_
 from njit_funcs_recursive_grid import backtest_recursive_grid
 from plotting import dump_plots
@@ -127,6 +127,12 @@ async def main():
         default=None,
         help="set n backtest slices to plot",
     )
+    parser.add_argument(
+        "-oh",
+        "--ohlcv",
+        help="use 1m ohlcv instead of 1s ticks",
+        action="store_true",
+    )
 
     args = parser.parse_args()
     for symbol in args.symbol.split(","):
@@ -155,8 +161,8 @@ async def main():
             config["short"]["enabled"] = "y" in args.short_enabled.lower()
         if "spot" in config["market_type"]:
             live_config = spotify_config(live_config)
+        config["ohlcv"] = args.ohlcv
 
-        downloader = Downloader(config)
         print()
         for k in (
             keys := [
@@ -170,12 +176,23 @@ async def main():
                 "start_date",
                 "end_date",
                 "latency_simulation_ms",
+                "base_dir",
             ]
         ):
             if k in config:
                 print(f"{k: <{max(map(len, keys)) + 2}} {config[k]}")
         print()
-        data = await downloader.get_sampled_ticks()
+        if config["ohlcv"]:
+            data = load_hlc_cache(
+                symbol,
+                config["start_date"],
+                config["end_date"],
+                base_dir=config["base_dir"],
+                spot=config["spot"],
+            )
+        else:
+            downloader = Downloader(config)
+            data = await downloader.get_sampled_ticks()
         config["n_days"] = round_((data[-1][0] - data[0][0]) / (1000 * 60 * 60 * 24), 0.1)
         pprint.pprint(denumpyize(live_config))
         plot_wrap(config, data)

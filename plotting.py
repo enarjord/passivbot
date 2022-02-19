@@ -200,14 +200,17 @@ def dump_plots(
                     print(f"no {side} fills...")
 
             print(f"plotting {side} initial entry band")
+            spans_multiplier = 60 / ((df.index[1] - df.index[0]) / 1000)
             spans = [
-                result[side]["ema_span_0"] * 60,
-                ((result[side]["ema_span_0"] * result[side]["ema_span_1"]) ** 0.5) * 60,
-                result[side]["ema_span_1"] * 60,
+                result[side]["ema_span_0"] * spans_multiplier,
+                ((result[side]["ema_span_0"] * result[side]["ema_span_1"]) ** 0.5) * spans_multiplier,
+                result[side]["ema_span_1"] * spans_multiplier,
             ]
             emas = pd.DataFrame(
                 {
-                    str(span): df.iloc[::100].price.ewm(span=max(1.0, span / 100), adjust=False).mean()
+                    str(span): df.iloc[::100]
+                    .price.ewm(span=max(1.0, span / 100), adjust=False)
+                    .mean()
                     for span in spans
                 }
             )

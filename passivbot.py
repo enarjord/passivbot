@@ -696,9 +696,15 @@ class Bot:
             return
         self.ts_locked["cancel_and_create"] = time()
         try:
+            ideal_orders = [
+                o
+                for o in self.calc_orders()
+                if not any(k in o["custom_id"] for k in ["ientry", "unstuck"])
+                or abs(o["price"] - self.price) / self.price < 0.01
+            ]
             to_cancel_, to_create_ = filter_orders(
                 self.open_orders,
-                self.calc_orders(),
+                ideal_orders,
                 keys=["side", "position_side", "qty", "price"],
             )
 
