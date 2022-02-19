@@ -56,7 +56,7 @@ bash_symbols = args.builded_coin_list
 
 ################### shell script generating ##############
 print('---------------------------------------Step 3 : generate shell scripts-------------------------------------------------')
-print ("Linux Bash to create the screens commands in run_server_live.sh")
+print ("Linux Bash to create the screens commands in run_server_live_" + args.user_name + ".sh")
 file_content = ""
 file_content += "#!/bin/bash"+"\n"
 file_content += "current_pwd=`pwd`"+"\n"
@@ -77,7 +77,7 @@ file.write(file_content)
 file.close()
 
 print('----------------------------------------------------------------------------------------')
-print ("Linux Bash to kill all screens (stop_server_live.sh) ")
+print ("Linux Bash to kill all screens (stop_server_live_" + args.user_name + ".sh) ")
 file_content = ""
 file_content += "#!/bin/bash"+"\n"
 file_content += 'symbols=('
