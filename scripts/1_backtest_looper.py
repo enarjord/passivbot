@@ -103,6 +103,12 @@ def backtest_looping(args, backtest_directory) :
 
 def clean_backtest_directories(backtest_directory) :
     glob_delete = "../" + backtest_directory + "/*/*/plots"
+
+    question = input("We are going to delete all this files " + glob_delete + ", are you ok (Y/N) ? ")
+    if not (question.upper() == 'Y'):
+        print("Ok, script is stoped Now !")
+        exit()
+
     list = glob.glob(glob_delete, recursive=True)
     for to_delete in list :
         print('Cleaning directory : ', os.path.realpath(to_delete))
