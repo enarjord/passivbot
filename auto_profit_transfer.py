@@ -52,7 +52,12 @@ async def main():
         logging.info(f"no previous transfers to load")
     while True:
         now = (await bot.public_get(bot.endpoints["time"]))["serverTime"]
-        income = await bot.get_all_income(start_time=now - 1000 * 60 * 60 * 24)
+        try:
+            income = await bot.get_all_income(start_time=now - 1000 * 60 * 60 * 24)
+        except Exception as e:
+            logging.error(f"failed fetching income {e}")
+            traceback.print_exc()
+            income = []
         income = [e for e in income if e["transaction_id"] not in already_transferred_ids]
         profit = sum([e["income"] for e in income])
         to_transfer = round_dynamic(profit * args.percentage, 4)
