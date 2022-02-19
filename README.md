@@ -6,6 +6,7 @@
 
 v5.5.0  
 
+
 ## Overview
 
 Passivbot is a cryptocurrency trading bot written in Python, intended to require minimal user intervention.  
