@@ -4,10 +4,27 @@ import os
 from ast import arg
 import hjson
 import json
+import sys
 from pybit import HTTP
 #binance
 import requests
 
+class Logger(object):
+    def __init__(self):
+        self.terminal = sys.stdout
+        self.log = open("tmp/" + __file__ +".log", "a")
+   
+    def write(self, message):
+        self.terminal.write(message)
+        self.log.write(message)  
+
+    def flush(self):
+        # this flush method is needed for python 3 compatibility.
+        # this handles the flush command by doing nothing.
+        # you might want to specify some extra behavior here.
+        pass    
+
+sys.stdout = Logger()
 
 def arguments_management():
     ### Parameters management
@@ -112,6 +129,8 @@ def binance_find_frid_ok(input_datas):
                 if iec >= min_notional:
                     print(f"{symbol.ljust(13)}\t min_notional: ${min_notional:.2f}\t GRID OK")
                     bash_symbols.append(symbol)
+                else:
+                    print(f"{symbol.ljust(13)}\t min_notional: ${min_notional:.2f}\t GRID --KO")
                     
     except Exception as e:
         print(f'Error: {e}')
@@ -172,7 +191,7 @@ if (input_datas['platform'] == 'binance'):
         exit()
     bash_symbols = binance_find_frid_ok(input_datas)
 
-print ("found ", len(bash_symbols), " symbols.")
+print ("found ", len(bash_symbols), " symbols OK with the grid.")
 print ("Full Wallet exposure with all this symbols is : ", len(bash_symbols) * input_datas['wallet_exposure_limit'])
 
 saving_data = "./tmp/grid_ok_coins.json"
