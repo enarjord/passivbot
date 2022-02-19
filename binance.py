@@ -104,6 +104,7 @@ class BinanceBot(Bot):
             self.inverse = self.config["inverse"] = False
             self.base_endpoint = fapi_endpoint
             self.endpoints = {
+                "time": "/fapi/v1/time",
                 "position": "/fapi/v2/positionRisk",
                 "balance": "/fapi/v2/balance",
                 "exchange_info": "/fapi/v1/exchangeInfo",
@@ -134,6 +135,7 @@ class BinanceBot(Bot):
                 self.market_type += "_inverse_coin_margined"
                 self.inverse = self.config["inverse"] = True
                 self.endpoints = {
+                    "time": "/dapi/v1/time",
                     "position": "/dapi/v1/positionRisk",
                     "balance": "/dapi/v1/balance",
                     "exchange_info": "/dapi/v1/exchangeInfo",
@@ -159,6 +161,7 @@ class BinanceBot(Bot):
 
         self.spot_base_endpoint = "https://api.binance.com"
         self.endpoints["transfer"] = "/sapi/v1/asset/transfer"
+        self.endpoints["futures_transfer"] = "/sapi/v1/futures/transfer"
         self.endpoints["account"] = "/api/v3/account"
 
     async def _init(self):
@@ -448,7 +451,7 @@ class BinanceBot(Bot):
                     "timestamp": float(e["time"]),
                     "info": e["info"],
                     "transaction_id": float(e["tranId"]),
-                    "trade_id": float(e["tradeId"]),
+                    "trade_id": float(e["tradeId"]) if e["tradeId"] != "" else 0,
                 }
                 for e in fetched
             ]
