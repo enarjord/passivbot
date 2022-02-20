@@ -18,6 +18,7 @@ from procedures import (
     prepare_backtest_config,
     make_get_filepath,
     load_live_config,
+    load_hjson_config,
     add_argparse_args,
 )
 from pure_funcs import (
@@ -133,9 +134,10 @@ async def main():
         help="use 1m ohlcv instead of 1s ticks",
         action="store_true",
     )
-
     args = parser.parse_args()
-    for symbol in args.symbol.split(","):
+    tmp_cfg = load_hjson_config(args.backtest_config_path)
+    symbols = tmp_cfg['symbol'] if type(tmp_cfg['symbol']) == list else tmp_cfg['symbol'].split(",")
+    for symbol in symbols:
         args = parser.parse_args()
         args.symbol = symbol
         config = await prepare_backtest_config(args)
