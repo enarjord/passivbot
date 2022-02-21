@@ -517,6 +517,7 @@ def find_close_qty_long_bringing_wallet_exposure_to_target(
                 np.array([egv[0][1], egv[1][1]]),
             )
         except:
+            """
             print("debug zero div error find_close_qty_long_bringing_wallet_exposure_to_target")
             print(
                 "balance, psize, pprice, wallet_exposure_target, close_price, inverse, qty_step, c_mult,"
@@ -532,6 +533,7 @@ def find_close_qty_long_bringing_wallet_exposure_to_target(
                 c_mult,
             )
             print("guesses, vals", guesses, vals)
+            """
             new_guess = (egv[0][1] + egv[1][1]) / 2
         new_guess = min(psize, max(0.0, round_(new_guess, qty_step)))
         if new_guess in guesses:
@@ -547,7 +549,7 @@ def find_close_qty_long_bringing_wallet_exposure_to_target(
             # close enough
             break
     evals_guesses = sorted([(e, g) for e, g in zip(evals, guesses)])
-    if evals_guesses[0][0] > 0.15:
+    if False:  # evals_guesses[0][0] > 0.15:
         print("debug find_close_qty_long_bringing_wallet_exposure_to_target")
         print(
             "balance, psize, pprice, wallet_exposure_target, close_price, inverse, qty_step, c_mult,"
@@ -623,6 +625,7 @@ def find_close_qty_short_bringing_wallet_exposure_to_target(
                 np.array([egv[0][1], egv[1][1]]),
             )
         except:
+            """
             print("debug zero div error find_close_qty_short_bringing_wallet_exposure_to_target")
             print(
                 "balance, psize, pprice, wallet_exposure_target, close_price, inverse, qty_step, c_mult,"
@@ -638,6 +641,7 @@ def find_close_qty_short_bringing_wallet_exposure_to_target(
                 c_mult,
             )
             print("guesses, vals", guesses, vals)
+            """
             new_guess = (egv[0][1] + egv[1][1]) / 2
         new_guess = min(abs_psize, max(0.0, round_(new_guess, qty_step)))
         if new_guess in guesses:
@@ -653,7 +657,7 @@ def find_close_qty_short_bringing_wallet_exposure_to_target(
             # close enough
             break
     evals_guesses = sorted([(e, g) for e, g in zip(evals, guesses)])
-    if evals_guesses[0][0] > 0.15:
+    if False:  # evals_guesses[0][0] > 0.15:
         print("debug find_close_qty_short_bringing_wallet_exposure_to_target")
         print(
             "balance, psize, pprice, wallet_exposure_target, close_price, inverse, qty_step, c_mult,"
@@ -736,7 +740,7 @@ def find_entry_qty_bringing_wallet_exposure_to_target(
             # close enough
             break
     evals_guesses = sorted([(e, g) for e, g in zip(evals, guesses)])
-    if evals_guesses[0][0] > 0.15:
+    if False:  # evals_guesses[0][0] > 0.15:
         print("debug find_entry_qty_bringing_wallet_exposure_to_target")
         print(
             "balance, psize, pprice, wallet_exposure_target, entry_price, inverse, qty_step, c_mult,"
