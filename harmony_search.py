@@ -541,6 +541,7 @@ class HarmonySearch:
             bounds = getattr(self, f"{side}_bounds")
             for cfg in self.starting_configs:
                 cfg = {k: max(bounds[k][0], min(bounds[k][1], cfg[side][k])) for k in bounds}
+                cfg["enabled"] = getattr(self, f"do_{side}")
                 if cfg not in [self.hm[k][side]["config"] for k in self.hm]:
                     self.hm[hm_keys.pop()][side]["config"] = deepcopy(cfg)
 
