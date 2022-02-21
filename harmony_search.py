@@ -536,31 +536,13 @@ class HarmonySearch:
             }
 
         # add starting configs
-        seen = set()
-        available_ids = set(self.hm)
-        for cfg in self.starting_configs:
-            cfg["long"] = {
-                k: max(self.long_bounds[k][0], min(self.long_bounds[k][1], cfg["long"][k]))
-                for k in self.long_bounds
-            }
-            cfg["long"]["enabled"] = self.do_long
-            seen_key = tuplify(cfg["long"], sort=True)
-            if seen_key not in seen:
-                hm_key = available_ids.pop()
-                self.hm[hm_key]["long"]["config"] = cfg["long"]
-        seen = set()
-        available_ids = set(self.hm)
-        for cfg in self.starting_configs:
-            cfg["short"] = {
-                k: max(self.short_bounds[k][0], min(self.short_bounds[k][1], cfg["short"][k]))
-                for k in self.short_bounds
-            }
-            cfg["short"]["enabled"] = self.do_short
-            seen_key = tuplify(cfg["short"], sort=True)
-            if seen_key not in seen:
-                hm_key = available_ids.pop()
-                self.hm[hm_key]["short"]["config"] = cfg["short"]
-                seen.add(seen_key)
+        for side in ["long", "short"]:
+            hm_keys = list(self.hm)
+            bounds = getattr(self, f"{side}_bounds")
+            for cfg in self.starting_configs:
+                cfg = {k: max(bounds[k][0], min(bounds[k][1], cfg[side][k])) for k in bounds}
+                if cfg not in [self.hm[k][side]["config"] for k in self.hm]:
+                    self.hm[hm_keys.pop()][side]["config"] = deepcopy(cfg)
 
         # start main loop
         while True:
