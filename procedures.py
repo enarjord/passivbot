@@ -304,7 +304,9 @@ def add_argparse_args(parser):
         help="specify end date, overriding value from backtest config",
     )
     parser.add_argument(
+        "-sb",
         "--starting_balance",
+        "--starting-balance",
         type=float,
         required=False,
         dest="starting_balance",
