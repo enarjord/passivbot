@@ -135,8 +135,13 @@ async def main():
         action="store_true",
     )
     args = parser.parse_args()
-    tmp_cfg = load_hjson_config(args.backtest_config_path)
-    symbols = tmp_cfg['symbol'] if type(tmp_cfg['symbol']) == list else tmp_cfg['symbol'].split(",")
+    if args.symbol is None:
+        tmp_cfg = load_hjson_config(args.backtest_config_path)
+        symbols = (
+            tmp_cfg["symbol"] if type(tmp_cfg["symbol"]) == list else tmp_cfg["symbol"].split(",")
+        )
+    else:
+        symbols = args.symbol.split(",")
     for symbol in symbols:
         args = parser.parse_args()
         args.symbol = symbol
