@@ -52,7 +52,7 @@ def main():
 
     print("n results", len(results), "score formula: adg / PADstd, PAD max:", PAD_max)
     best_config = {}
-    for side in ['long', 'short']:
+    for side in ["long", "short"]:
         stats = []
         for r in results:
             adgs, PAD_stds, PAD_means, adg_DGstd_ratios = [], [], [], []
@@ -101,7 +101,7 @@ def main():
             )
         ss = sorted(stats, key=lambda x: x["score"])
         bc = ss[-args.index]
-        best_config[side] = bc['config'][side]
+        best_config[side] = bc["config"][side]
         for r in results:
             if r["results"]["config_no"] == bc["config_no"]:
                 rs = r["results"]
