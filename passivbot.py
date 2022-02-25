@@ -123,6 +123,7 @@ class Bot:
             config["assigned_balance"] = None
         if "cross_wallet_pct" not in config:
             config["cross_wallet_pct"] = 1.0
+        self.passivbot_mode = config["passivbot_mode"] = determine_passivbot_mode(config)
         if config["cross_wallet_pct"] > 1.0 or config["cross_wallet_pct"] <= 0.0:
             print(
                 f"Invalid cross_wallet_pct given: {config['cross_wallet_pct']}.  "
