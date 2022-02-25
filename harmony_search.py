@@ -750,6 +750,7 @@ async def main():
         ):
             logging.info(f"fetching data {symbol}")
             args.symbol = symbol
+            tmp_cfg = await prepare_backtest_config(args)
             if config["ohlcv"]:
                 data = load_hlc_cache(
                     symbol,
@@ -757,9 +758,9 @@ async def main():
                     config["end_date"],
                     base_dir=config["base_dir"],
                     spot=config["spot"],
+                    exchange=config["exchange"],
                 )
             else:
-                tmp_cfg = await prepare_backtest_config(args)
                 downloader = Downloader({**config, **tmp_cfg})
                 await downloader.get_sampled_ticks()
 
