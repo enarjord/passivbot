@@ -1008,14 +1008,16 @@ def download_ohlcvs(symbol, start_date, end_date, download_only=False) -> pd.Dat
         )
 
 
-def load_hlc_cache(symbol, start_date, end_date, base_dir="backtests", spot=False):
+def load_hlc_cache(
+    symbol, start_date, end_date, base_dir="backtests", spot=False, exchange="binance"
+):
     cache_fname = (
         f"{ts_to_date_utc(date_to_ts(start_date))[:10]}_"
         + f"{ts_to_date_utc(date_to_ts(end_date))[:10]}_ohlcv_cache.npy"
     )
 
     filepath = make_get_filepath(
-        os.path.join(base_dir, "binance" + ("_spot" if spot else ""), symbol, "caches", cache_fname)
+        os.path.join(base_dir, exchange + ("_spot" if spot else ""), symbol, "caches", cache_fname)
     )
     if os.path.exists(filepath):
         return np.load(filepath)
