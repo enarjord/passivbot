@@ -196,6 +196,7 @@ async def main():
                 config["end_date"],
                 base_dir=config["base_dir"],
                 spot=config["spot"],
+                exchange=config["exchange"],
             )
         else:
             downloader = Downloader(config)
