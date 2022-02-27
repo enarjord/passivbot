@@ -37,6 +37,7 @@ def arguments_management():
     
     parser.add_argument("nb_best_coins", type=int, help="Number of coin wanted")
     parser.add_argument("live_config_filepath", type=str, help="file path to live config")
+    parser.add_argument("backtest_config_filepath", type=str, help="file path to backtest")
 
     parser.add_argument("-min-bkr","--min-closest-bkr",
                         type=float,required=False,dest="min_closest_bkr",default=0,
@@ -63,12 +64,23 @@ def arguments_management():
 
     args.live_config_filepath       = os.path.realpath(args.live_config_filepath)
 
-    live_config = hjson.load(open(args.live_config_filepath, encoding="utf-8"))
-    args.wallet_exposure_limit = live_config['long']['wallet_exposure_limit']
 
     if not os.path.exists(args.live_config_filepath) :
         print("live_config_path doesn't exist")
         exit()
+
+    live_config = hjson.load(open(args.live_config_filepath, encoding="utf-8"))
+    args.wallet_exposure_limit = live_config['long']['wallet_exposure_limit']
+
+    args.backtest_config_filepath   = os.path.realpath(args.backtest_config_filepath)
+
+    if not os.path.exists(args.backtest_config_filepath) :
+        print("backtest_config_path doesn't exist")
+        exit()
+
+    backtest_config = hjson.load(open(args.backtest_config_filepath, encoding="utf-8"))
+
+    args.starting_balance = backtest_config['starting_balance']
 
     return args
 
@@ -137,16 +149,32 @@ else:
 
 df = pd.DataFrame(datas_list)
 df.sort_values(by=['adg %', 'gain %'], ascending=False, inplace=True)
+best_coin = df['symbol'].values[0:number_coin_wanted].tolist()
+total_wallet_exposure = args.wallet_exposure_limit * len(best_coin)
 print(tabulate(df, headers='keys', tablefmt='psql'))
 print('')
 print('')
 print("--------------------------------------------------------------")
 print("Limited to the first ", number_coin_wanted, " coins found : ")
-best_coin = df['symbol'].values[0:number_coin_wanted].tolist()
+
+print("- Total wallet_exposure_limit : ", total_wallet_exposure)
+
 print("- coin list : ", best_coin)
-print("- global adg % : ", (df['adg %'].values[0:number_coin_wanted].mean() * args.wallet_exposure_limit))
-print("- global gain % : ", (df['gain %'].values[0:number_coin_wanted].mean() * args.wallet_exposure_limit))
-print("- Total wallet_exposure_limit : ", args.wallet_exposure_limit * len(best_coin))
+
+adg_pct                 = (df['adg %'].values[0:number_coin_wanted].mean() * total_wallet_exposure)
+print("- global adg % : ", adg_pct)
+
+adg_dollard             = adg_pct * args.starting_balance / 100
+print("- global adg $ : ", adg_dollard )
+
+print("- global adg 1 month (30 days) : ", adg_dollard * 30 )
+
+global_gain_pct         = (df['gain %'].values[0:number_coin_wanted].mean() * total_wallet_exposure)
+print("- global gain % : ", global_gain_pct)
+
+global_gain_dollard     = global_gain_pct * args.starting_balance / 100
+print("- global gain $ : ", global_gain_dollard)
+
 print("--------------------------------------------------------------")
 saving_data = "./tmp/best_coins.json"
 print ("Saving the coin list to ", saving_data)
