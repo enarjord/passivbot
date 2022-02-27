@@ -114,6 +114,9 @@ for file in files:
     starting_balance    = bt['result']['starting_balance']
     closest_bkr         = (bt['result']['closest_bkr']) if ('closest_bkr' in bt['result']) else (bt['result']['closest_bkr_long'])
 
+    gain_dollard = bt['result']['final_balance_long'] -  bt['result']['starting_balance']
+
+
     if (closest_bkr < args.min_closest_bkr) :
         continue
     
@@ -134,6 +137,7 @@ for file in files:
     datas['hrs_stuck_max_long']     = hrs_stuck_max_long
     datas['adg %']                  = adg_perct
     datas['gain %']                 = gain_pct
+    datas['total gain $']                 = gain_dollard
     datas['starting balance']       = starting_balance
     datas['closest bkr']            = closest_bkr
     
@@ -161,7 +165,8 @@ print("- Total wallet_exposure_limit : ", total_wallet_exposure)
 
 print("- coin list : ", best_coin)
 
-adg_pct                 = (df['adg %'].values[0:number_coin_wanted].mean() * total_wallet_exposure)
+# adg_pct                 = (df['adg %'].values[0:number_coin_wanted].mean() * total_wallet_exposure)
+adg_pct                 = (df['adg %'].values[0:number_coin_wanted].sum())
 print("- global adg % : ", adg_pct)
 
 adg_dollard             = adg_pct * args.starting_balance / 100
@@ -169,7 +174,8 @@ print("- global adg $ : ", adg_dollard )
 
 print("- global adg 1 month (30 days) : ", adg_dollard * 30 )
 
-global_gain_pct         = (df['gain %'].values[0:number_coin_wanted].mean() * total_wallet_exposure)
+# global_gain_pct         = (df['gain %'].values[0:number_coin_wanted].mean() * total_wallet_exposure)
+global_gain_pct         = (df['gain %'].values[0:number_coin_wanted].sum())
 print("- global gain % : ", global_gain_pct)
 
 global_gain_dollard     = global_gain_pct * args.starting_balance / 100
