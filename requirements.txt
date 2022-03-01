@@ -7,3 +7,4 @@ mkdocs==1.2.3
 mkdocs-material==8.1.8
 pymdown-extensions==9.1
 tqdm==4.62.3
+numpy==1.21.5
