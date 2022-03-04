@@ -1,4 +1,3 @@
-from time import sleep
 import yaml
 from constants import INSTANCE_SIGNATURE_BASE, MANAGER_CONFIG_PATH
 from instance import Instance, instances_from_config

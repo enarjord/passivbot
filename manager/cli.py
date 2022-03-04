@@ -1,4 +1,4 @@
-from time import sleep
+from sys import argv
 from manager import Manager
 from pm import ProcessManager
 
@@ -9,6 +9,7 @@ class CLI:
             'sync': self.sync,
             'list': self.list,
             'info': self.info,
+            'restart': self.restart,
             'start-all': self.start_all,
             'start': self.start,
             'stop-all': self.stop_all,
@@ -170,6 +171,26 @@ class CLI:
         else:
             print('Instance {} is not running'.format(instance_id))
 
+    def restart(self, args=[]):
+        '''Restart an instance
+        Args: <instance_id>'''
+        if len(args) == 0:
+            self.help(['restart'])
+            return
+
+        instance_id = args[0]
+        instance = self.manager.get_instance_by_id(instance_id)
+        if instance is None:
+            print('Instance {} not found'.format(instance_id))
+            return
+
+        if instance.is_running():
+            instance.stop()
+            instance.start()
+        else:
+            instance.start()
+        print('Restarted instance {}'.format(instance_id))
+
     def sync(self, args=[]):
         '''Sync instances with config
         Flags:
@@ -194,3 +215,7 @@ class CLI:
             self.commands[command](args[1:])
         else:
             self.help()
+
+
+if __name__ == '__main__':
+    CLI().run_command(argv[1:])

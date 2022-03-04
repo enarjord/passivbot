@@ -17,14 +17,14 @@ if PYTHON_EXC_ALIAS is None:
 
 MANAGER_PATH = os.path.dirname(os.path.abspath(__file__))
 MANAGER_CONFIG_PATH = os.path.join(MANAGER_PATH, 'config.yaml')
-EXC_PATH = os.getcwd()
-s = EXC_PATH.split('/')
+PASSIVBOT_PATH = os.getcwd()
+s = PASSIVBOT_PATH.split('/')
 
 # support for /home/username and /root paths
 UNELEVATED_USER = s[2] if len(s) > 2 else s[1]
 
 # relative to passivbot.py
-CONFIGS_PATH = os.path.join(EXC_PATH, 'configs/live')
+CONFIGS_PATH = os.path.join(PASSIVBOT_PATH, 'configs/live')
 SERVICES_PATH = '/etc/systemd/system'
 
 INSTANCE_SIGNATURE_BASE = [PYTHON_EXC_ALIAS, '-u', 'passivbot.py']

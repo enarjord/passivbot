@@ -1,6 +1,5 @@
 import os
 import sys
-import yaml
 from typing import Dict, List
 from constants import CONFIGS_PATH, INSTANCE_SIGNATURE_BASE
 from pm import ProcessManager

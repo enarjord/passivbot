@@ -1,7 +1,7 @@
 import os
 import sys
 from time import sleep
-from typing import List, Union
+from typing import List
 import subprocess
 from constants import UNELEVATED_USER
 
@@ -24,7 +24,7 @@ class ProcessManager:
 
         man: https://linux.die.net/man/1/nohup
         '''
-        nohuo_command = ['sudo', '-u', UNELEVATED_USER, 'nohup']
+        nohuo_command = ['nohup']
         nohuo_command.extend(['sh', '-c', '"{}"'.format(' '.join(command))])
         if log_file_path is not None:
             nohuo_command.extend(['>', log_file_path, '2>&1', '&'])
@@ -76,8 +76,7 @@ class ProcessManager:
         :param pid: The process id of the process to get the info of.
         :return: The info of the process with the given pid.
         '''
-        cmd = ['sudo', '-u', UNELEVATED_USER,
-               'ps', '-p', str(pid), '-o', 'args=']
+        cmd = ['ps', '-p', str(pid), '-o', 'args=']
         try:
             return subprocess.check_output(cmd).decode('utf-8').strip()
         except subprocess.CalledProcessError:
@@ -91,9 +90,9 @@ class ProcessManager:
         :return: The error code of the kill command.
         '''
         if force:
-            cmd_arr = ['sudo', '-u', UNELEVATED_USER, 'kill', '-9', str(pid)]
+            cmd_arr = ['kill', '-9', str(pid)]
         else:
-            cmd_arr = ['sudo', '-u', UNELEVATED_USER, 'kill', str(pid)]
+            cmd_arr = ['kill', str(pid)]
 
         cmd = ' '.join(cmd_arr)
         os.system(cmd)
