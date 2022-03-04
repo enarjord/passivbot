@@ -23,40 +23,22 @@ class Manager:
 
     def start_all(self):
         for instance in self.instances:
-            self.start(instance)
-
-    def start(self, instance):
-        instance.start()
+            instance.start()
 
     def stop_all(self):
         stopped_instances = []
         for instance in self.get_running_instances():
-            stopped = self.stop(instance)
+            stopped = instance.stop()
             if stopped:
                 stopped_instances.append(instance.get_id())
 
         return stopped_instances
 
-    def stop(self, instance: Instance) -> bool:
-        return self.stop_attempt(instance, retries=3)
-
-    def stop_attempt(self, instance: Instance, retries: int = 1):
-        '''
-        Attempt to stop instance several times
-        :param instance: Instance to stop
-        :param retries: Number of retries
-        :return: True if instance was stopped, False otherwise
-        '''
-        while retries > 0:
-            if instance.stop():
-                return True
-            retries -= 1
-            sleep(1)
-
-        return False
-
     def get_instances(self):
         return self.instances
+
+    def get_instances_length(self):
+        return len(self.instances)
 
     def get_instance_by_id(self, instance_id):
         for instance in self.instances:

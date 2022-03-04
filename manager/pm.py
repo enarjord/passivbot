@@ -78,7 +78,10 @@ class ProcessManager:
         '''
         cmd = ['sudo', '-u', UNELEVATED_USER,
                'ps', '-p', str(pid), '-o', 'args=']
-        return subprocess.check_output(cmd).decode('utf-8').strip()
+        try:
+            return subprocess.check_output(cmd).decode('utf-8').strip()
+        except subprocess.CalledProcessError:
+            return None
 
     def kill(self, pid: int, force: bool = False):
         '''
@@ -88,6 +91,15 @@ class ProcessManager:
         :return: The error code of the kill command.
         '''
         if force:
-            return os.system('sudo kill -9 {}'.format(pid))
+            cmd_arr = ['sudo', '-u', UNELEVATED_USER, 'kill', '-9', str(pid)]
         else:
-            return os.system('sudo kill {}'.format(pid))
+            cmd_arr = ['sudo', '-u', UNELEVATED_USER, 'kill', str(pid)]
+
+        cmd = ' '.join(cmd_arr)
+        os.system(cmd)
+        retries = 10
+        while retries > 0:
+            if not self.info(pid):
+                break
+            sleep(0.2)
+            retries -= 1

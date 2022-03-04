@@ -68,13 +68,13 @@ class Instance:
             }
         }
 
-        flags = []
-        for k, v in flags:
-            if v['valid']:
-                flags.append(k)
-                flags.append(str(v['value']))
+        valid_flags = []
+        for k, v in flags.items():
+            if v['valid'] is True:
+                valid_flags.append(k)
+                valid_flags.append(str(v['value']))
 
-        return flags
+        return valid_flags
 
     def get_pid_signature(self):
         signature = INSTANCE_SIGNATURE_BASE.copy()
@@ -128,7 +128,7 @@ class Instance:
 def instances_from_config(config: Dict, defaults: Dict) -> List[Instance]:
     instances = []
     for symbol in config['symbols']:
-        cfg = dict(defaults)
+        cfg = defaults.copy()
         cfg['symbol'] = symbol
         cfg['user'] = config['user']
         for k, v in config.items():

@@ -4,13 +4,16 @@ defaults:
   live_config_path: "" # absolute path. Will be auto-generated if empty
 
   market_type: "futures" # futures | spot
-  long_wallet_exposure_limit: 0 # 0 means no limit
-  short_wallet_exposure_limit: 0 # 0 means no limit
-  assigned_balance: 10 # 0 means no limit
 
+  # 0 means no limit
+  long_wallet_exposure_limit: 0
+  short_wallet_exposure_limit: 0
+  assigned_balance: 0
+
+  # modes:  # n | m | gs | p | t
   # modes info: https://www.passivbot.com/en/latest/live/#controlling-the-bot
-  long_mode: "n" # n | m | gs | p | t
-  short_mode: "m" # n | m | gs | p | t
+  long_mode: "n"
+  short_mode: "m"
 
 instances:
   - user: "binance_01"
@@ -34,7 +37,7 @@ instances:
       - "ATOMUSDT"
       - "MANAUSDT"
 
-  # ! WARNING - such users will be considered as one user,
+  # ! WARNING - following users will be treated as the same user,
   # ! because market_type is not used to identify instances
   #
   # - user: "binance_01"
