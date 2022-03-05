@@ -743,26 +743,62 @@ class Bot:
         if now - self.heartbeat_ts > 60 * 60:
             # print heartbeat once an hour
             logging.info(f"heartbeat {self.symbol}")
-            logging.info(
-                f'position long: {self.position["long"]["size"]} @ '
-                + f'{round_dynamic(self.position["long"]["price"], 5)} '
-                + f'long wallet exposure {self.position["long"]["wallet_exposure"]:.4f} '
-                + f' pprice diff long {calc_diff(self.position["long"]["price"], self.price):.3f} '
-            )
-            logging.info(f" EMAs long {[round_dynamic(e, 5) for e in self.emas_long]} ")
-            logging.info(
-                f'position short: {self.position["short"]["size"]} @ '
-                + f'{round_dynamic(self.position["short"]["price"], 5)} '
-                + f'short wallet exposure {self.position["short"]["wallet_exposure"]:.4f} '
-                + f'pprice diff short {calc_diff(self.position["short"]["price"], self.price):.3f} '
-            )
-            logging.info(f"EMAs short {[round_dynamic(e, 5) for e in self.emas_short]} ")
+            self.log_position_long()
+            self.log_position_short()
             logging.info(
                 f'balance: {round_dynamic(self.position["wallet_balance"], 6)} '
                 + f'equity: {round_dynamic(self.position["equity"], 6)} last price: {self.price}'
             )
             self.heartbeat_ts = time()
         await self.cancel_and_create()
+
+    def log_position_long(self):
+        closes_long = sorted(
+            [o for o in self.open_orders if o["side"] == "sell" and o["position_side"] == "long"],
+            key=lambda x: x["price"],
+        )
+        entries_long = sorted(
+            [o for o in self.open_orders if o["side"] == "buy" and o["position_side"] == "long"],
+            key=lambda x: x["price"],
+        )
+        leqty, leprice = (
+            (entries_long[-1]["qty"], entries_long[-1]["price"]) if entries_long else (0.0, 0.0)
+        )
+        lcqty, lcprice = (
+            (closes_long[0]["qty"], closes_long[0]["price"]) if closes_long else (0.0, 0.0)
+        )
+        logging.info(
+            f'position long: {self.position["long"]["size"]} @ '
+            + f'{round_dynamic(self.position["long"]["price"], 5)} '
+            + f'long wallet exposure {self.position["long"]["wallet_exposure"]:.4f} '
+            + f' pprice diff long {calc_diff(self.position["long"]["price"], self.price):.3f} '
+        )
+        logging.info(f" EMAs long {[round_dynamic(e, 5) for e in self.emas_long]} ")
+        logging.info(f" long entry {leqty} @ {leprice} | long close {lcqty} @ {lcprice}")
+
+    def log_position_short(self):
+        closes_short = sorted(
+            [o for o in self.open_orders if o["side"] == "buy" and o["position_side"] == "short"],
+            key=lambda x: x["price"],
+        )
+        entries_short = sorted(
+            [o for o in self.open_orders if o["side"] == "sell" and o["position_side"] == "short"],
+            key=lambda x: x["price"],
+        )
+        leqty, leprice = (
+            (entries_short[0]["qty"], entries_short[0]["price"]) if entries_short else (0.0, 0.0)
+        )
+        lcqty, lcprice = (
+            (closes_short[-1]["qty"], closes_short[-1]["price"]) if closes_short else (0.0, 0.0)
+        )
+        logging.info(
+            f'position short: {self.position["short"]["size"]} @ '
+            + f'{round_dynamic(self.position["short"]["price"], 5)} '
+            + f'short wallet exposure {self.position["short"]["wallet_exposure"]:.4f} '
+            + f' pprice diff short {calc_diff(self.position["short"]["price"], self.price):.3f} '
+        )
+        logging.info(f" EMAs short {[round_dynamic(e, 5) for e in self.emas_short]} ")
+        logging.info(f" short entry {leqty} @ {leprice} | short close {lcqty} @ {lcprice}")
 
     async def on_user_stream_events(self, events: Union[List[Dict], List]) -> None:
         if type(events) == list:
@@ -779,7 +815,7 @@ class Bot:
                 if new_wallet_balance != self.position["wallet_balance"]:
                     logging.info(
                         f"balance: {round_dynamic(new_wallet_balance, 6)} "
-                        + f'equity: {round_dynamic(self.position["equity"])}'
+                        + f'equity: {round_dynamic(self.position["equity"], 6)}'
                     )
                 self.position["wallet_balance"] = new_wallet_balance
                 pos_change = True
@@ -792,10 +828,7 @@ class Bot:
                 self.position = self.add_wallet_exposures_to_pos(self.position)
                 pos_change = True
                 if do_log:
-                    logging.info(
-                        f'position long: {event["psize_long"]} @ {event["pprice_long"]} '
-                        + f'long wallet exposure {self.position["long"]["wallet_exposure"]:.4f}'
-                    )
+                    self.log_position_long()
             if "psize_short" in event:
                 do_log = False
                 if event["psize_short"] != self.position["short"]["size"]:
@@ -805,10 +838,7 @@ class Bot:
                 self.position = self.add_wallet_exposures_to_pos(self.position)
                 pos_change = True
                 if do_log:
-                    logging.info(
-                        f'position short: {event["psize_short"]} @ {event["pprice_short"]} '
-                        + f'short wallet exposure {self.position["short"]["wallet_exposure"]:.4f}'
-                    )
+                    self.log_position_short()
             if "new_open_order" in event:
                 if event["new_open_order"]["order_id"] not in {
                     x["order_id"] for x in self.open_orders
