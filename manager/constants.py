@@ -1,3 +1,4 @@
+from getpass import getuser
 import sys
 import os
 
@@ -17,14 +18,15 @@ if PYTHON_EXC_ALIAS is None:
 
 MANAGER_PATH = os.path.dirname(os.path.abspath(__file__))
 MANAGER_CONFIG_PATH = os.path.join(MANAGER_PATH, 'config.yaml')
-PASSIVBOT_PATH = os.getcwd()
-s = PASSIVBOT_PATH.split('/')
-
-# support for /home/username and /root paths
-UNELEVATED_USER = s[2] if len(s) > 2 else s[1]
+PASSIVBOT_PATH = os.path.dirname(MANAGER_PATH)
+USER = getuser()
+if USER == 'root':
+    print('Do not run manager as root')
+    sys.exit(1)
 
 # relative to passivbot.py
 CONFIGS_PATH = os.path.join(PASSIVBOT_PATH, 'configs/live')
 SERVICES_PATH = '/etc/systemd/system'
 
-INSTANCE_SIGNATURE_BASE = [PYTHON_EXC_ALIAS, '-u', 'passivbot.py']
+INSTANCE_SIGNATURE_BASE = [PYTHON_EXC_ALIAS, '-u',
+                           os.path.join(PASSIVBOT_PATH, 'passivbot.py')]

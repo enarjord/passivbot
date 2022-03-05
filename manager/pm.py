@@ -3,7 +3,7 @@ import sys
 from time import sleep
 from typing import List
 import subprocess
-from constants import UNELEVATED_USER
+from constants import USER
 
 
 class ProcessManager:
@@ -42,7 +42,7 @@ class ProcessManager:
         '''
         for i in range(retries):
             try:
-                cmd = ['pgrep', '-U', UNELEVATED_USER, '-f', signature]
+                cmd = ['pgrep', '-U', USER, '-f', signature]
                 pids = subprocess.check_output(cmd).decode('utf-8').strip()
                 if len(pids) > 0:
                     break

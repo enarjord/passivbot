@@ -1,7 +1,7 @@
 import os
 import sys
 from typing import Dict, List
-from constants import CONFIGS_PATH, INSTANCE_SIGNATURE_BASE
+from constants import CONFIGS_PATH, INSTANCE_SIGNATURE_BASE, PASSIVBOT_PATH
 from pm import ProcessManager
 
 
@@ -87,7 +87,7 @@ class Instance:
         return cmd
 
     def start(self) -> bool:
-        log_file = 'logs/{}.log'.format(self.get_id())
+        log_file = os.path.join(PASSIVBOT_PATH, 'logs/{}.log'.format(self.get_id()))
         cmd = self.get_cmd()
 
         pm = ProcessManager()
