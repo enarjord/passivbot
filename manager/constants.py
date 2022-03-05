@@ -1,6 +1,14 @@
 from getpass import getuser
+import logging
 import sys
 import os
+
+
+logging.basicConfig(
+    stream=sys.stdout,
+    level=logging.INFO,
+    format='%(message)s'
+)
 
 
 def get_python_executable():
@@ -12,7 +20,7 @@ def get_python_executable():
 
 PYTHON_EXC_ALIAS = get_python_executable()
 if PYTHON_EXC_ALIAS is None:
-    print('Python 3 is not installed on this system')
+    logging.error('Unsupported python version')
     sys.exit(1)
 
 
@@ -21,7 +29,7 @@ MANAGER_CONFIG_PATH = os.path.join(MANAGER_PATH, 'config.yaml')
 PASSIVBOT_PATH = os.path.dirname(MANAGER_PATH)
 USER = getuser()
 if USER == 'root':
-    print('Do not run manager as root')
+    logging.error('Do not run this script as root')
     sys.exit(1)
 
 # relative to passivbot.py

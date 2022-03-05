@@ -2,6 +2,7 @@ import yaml
 from constants import INSTANCE_SIGNATURE_BASE, MANAGER_CONFIG_PATH
 from instance import Instance, instances_from_config
 from pm import ProcessManager
+from typing import List
 
 
 class Manager:
@@ -20,20 +21,20 @@ class Manager:
             self.instances.extend(instances_from_config(
                 instance, self.defaults))
 
-    def get_instances(self):
+    def get_instances(self) -> List[Instance]:
         return self.instances
 
-    def get_instances_length(self):
+    def get_instances_length(self) -> int:
         return len(self.instances)
 
-    def get_instance_by_id(self, instance_id):
+    def get_instance_by_id(self, instance_id) -> Instance:
         for instance in self.instances:
             if instance.get_id() == instance_id:
                 return instance
 
         return None
 
-    def get_running_instances(self):
+    def get_running_instances(self) -> List[Instance]:
         running_instances = []
         for instance in self.instances:
             if instance.is_running():
@@ -41,7 +42,7 @@ class Manager:
 
         return running_instances
 
-    def get_all_passivbot_instances(self):
+    def get_all_passivbot_instances(self) -> List[Instance]:
         '''Get all passivbot instances running on this machine'''
         pm = ProcessManager()
         signature = '^{}'.format(' '.join(INSTANCE_SIGNATURE_BASE))
