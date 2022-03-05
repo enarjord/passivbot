@@ -86,9 +86,12 @@ class Instance:
         cmd.extend(self.get_flags())
         return cmd
 
-    def start(self) -> bool:
+    def start(self, silent=False) -> bool:
         log_file = os.path.join(PASSIVBOT_PATH, 'logs/{}.log'.format(self.get_id()))
         cmd = self.get_cmd()
+
+        if silent is True:
+            log_file = '/dev/null'
 
         pm = ProcessManager()
         pm.add_nohup_process(cmd, log_file)
@@ -100,7 +103,7 @@ class Instance:
 
         return True
 
-    def stop(self) -> bool:
+    def stop(self, force=False) -> bool:
         if not self.is_running():
             return False
 
@@ -109,15 +112,16 @@ class Instance:
         if pid is None:
             return False
 
-        pm.kill(pid)
+        pm.kill(pid, force)
         return True
 
-    def restart(self) -> bool:
-        stopped = self.stop()
-        if not stopped:
-            return False
+    def restart(self, force=False, silent=False) -> bool:
+        if self.is_running():
+            stopped = self.stop(force)
+            if not stopped:
+                return False
 
-        return self.start()
+        return self.start(silent)
 
     def is_running(self):
         pm = ProcessManager()

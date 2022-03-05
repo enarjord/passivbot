@@ -29,7 +29,7 @@ After=network.target
 [Service]
 Type=simple
 User=root
-ExecStart=su $SUDO_USER -c "python3 $PASSIVBOT_DIR/manager start-all"
+ExecStart=su $SUDO_USER -c "python3 manager start -a"
 WorkingDirectory=$PASSIVBOT_DIR
 Restart=no
 

@@ -20,33 +20,6 @@ class Manager:
             self.instances.extend(instances_from_config(
                 instance, self.defaults))
 
-    def start_all(self):
-        for instance in self.instances:
-            instance.start()
-
-    def stop_all(self):
-        stopped_instances = []
-        for instance in self.get_running_instances():
-            stopped = instance.stop()
-            if stopped:
-                stopped_instances.append(instance.get_id())
-
-        return stopped_instances
-
-    def start(self, instance_id):
-        instance = self.get_instance_by_id(instance_id)
-        if instance is None:
-            return False
-
-        return instance.start()
-
-    def stop(self, instance_id):
-        instance = self.get_instance_by_id(instance_id)
-        if instance is None:
-            return False
-
-        return instance.stop()
-
     def get_instances(self):
         return self.instances
 
