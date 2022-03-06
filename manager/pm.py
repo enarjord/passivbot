@@ -23,13 +23,13 @@ class ProcessManager:
 
         man: https://linux.die.net/man/1/nohup
         '''
-        nohuo_command = ['nohup']
-        nohuo_command.extend(['sh', '-c', '"{}"'.format(' '.join(command))])
+        nohup_command = ['nohup']
+        nohup_command.extend(command)
         if log_file_path is not None:
-            nohuo_command.extend(['>', log_file_path, '2>&1', '&'])
+            nohup_command.extend(['>', log_file_path, '2>&1', '&'])
         else:
-            nohuo_command.extend(['>', '/dev/null', '2>&1', '&'])
-        return self.add(nohuo_command)
+            nohup_command.extend(['>', '/dev/null', '2>&1', '&'])
+        return self.add(nohup_command)
 
     def get_pid(self, signature: str, all_matches: bool = False, retries: int = 5) -> List[int]:
         '''
