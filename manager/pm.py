@@ -1,5 +1,4 @@
 import os
-import sys
 from time import sleep
 from typing import List
 import subprocess

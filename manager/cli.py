@@ -1,7 +1,7 @@
+import logging
 from sys import argv
-from typing import Dict, List
+from typing import Dict
 from manager import Manager
-from pm import ProcessManager
 
 
 class CLI:
@@ -50,12 +50,12 @@ class CLI:
 
         delimiter = '-' * 20
         self.stop(['-a'] + args)
-        print(delimiter)
+        logging.info(delimiter)
         self.manager.sync_config()
         self.start(['-a'] + args)
-        print(delimiter)
-        print('Sync complete.')
-        print(delimiter)
+        logging.info(delimiter)
+        logging.info('Sync complete')
+        logging.info(delimiter)
         self.list()
 
     def list(self, args=[]):
@@ -67,40 +67,39 @@ class CLI:
             return
 
         instances = self.manager.get_instances()
-        print('Instances:')
         format_str = '  {:<15} {:<10} {:<10} {:<10} {:<30}'
-        print(format_str.format('user', 'symbol', 'status', 'pid', 'id'))
+        logging.info('Instances:')
+        logging.info(format_str.format(
+            'user', 'symbol', 'status', 'pid', 'id'))
         for instance in instances:
-            pm = ProcessManager()
-            pid = pm.get_pid(instance.get_pid_signature())
-            status = 'running' if pid is not None else 'stopped'
-            print(format_str.format(
+            pid = instance.get_pid()
+            logging.info(format_str.format(
                 instance.user,
                 instance.symbol,
-                status,
+                instance.get_status(),
                 str(pid) if pid is not None else '-',
                 instance.get_id(),
             ))
 
-        print('\nUse "manager info <instance_id>" to get more info.')
+        logging.info('\nUse "manager info <instance_id>" to get more info')
 
     def instance_info(self, args=[]):
         instances = self.get_instances_for_action(args)
         if len(instances) == 0:
-            print('No instances matched given arguments')
             return
         instance = instances[0]
-
-        print('Instance {}:'.format(instance.get_id()))
-        print('\tuser: {}'.format(instance.user))
-        print('\tsymbol: {}'.format(instance.symbol))
-        print('\tlive config path: {}'.format(instance.live_config_path))
-        print('\tstatus: {}'.format(
-            'running' if instance.is_running() else 'stopped'))
-        print('Flags:')
+        pid = instance.get_pid()
+        pid = str(pid) if pid is not None else '-'
+        logging.info('Instance {}:'.format(instance.get_id()))
+        logging.info('  user: {}'.format(instance.user))
+        logging.info('  symbol: {}'.format(instance.symbol))
+        logging.info('  config: {}'.format(instance.live_config_path))
+        logging.info('  pid: {}'.format(pid))
+        logging.info('  status: {}'.format(instance.get_status()))
+        logging.info('Flags:')
         flags = instance.get_flags()
         for i in range(0, len(flags), 2):
-            print('\t{}: {}'.format(flags[i], flags[i + 1]))
+            logging.info('  {}: {}'.format(flags[i], flags[i + 1]))
 
     def start(self, args=[]):
         '''Start a new instance.
@@ -114,10 +113,9 @@ class CLI:
         silent = flags.get('silent', False)
         instances_to_start = self.get_instances_for_action(args)
         if len(instances_to_start) == 0:
-            print('No instances matched given arguments')
             return
 
-        print('Starting instance(s)...')
+        logging.info('Starting instances...')
         started_instances = []
         for instance in instances_to_start:
             if instance.is_running():
@@ -126,9 +124,9 @@ class CLI:
             if started:
                 started_instances.append(instance.get_id())
 
-        print('Started {} instance(s)'.format(len(started_instances)))
+        logging.info('Started {} instance(s)'.format(len(started_instances)))
         for instance_id in started_instances:
-            print('  {}'.format(instance_id))
+            logging.info('- {}'.format(instance_id))
 
     def stop(self, args=[]):
         '''Stop running instance(s).
@@ -144,18 +142,17 @@ class CLI:
         force = flags.get('force', False)
         instances_to_stop = self.get_instances_for_action(args)
         if len(instances_to_stop) == 0:
-            print('No instances matched given arguments')
             return
 
-        print('Stopping instance(s). This may take a while...')
+        logging.info('Stopping instances. This may take a while...')
         stopped_instances = []
         for instance in instances_to_stop:
             if instance.stop(force):
                 stopped_instances.append(instance.get_id())
 
-        print('Stopped {} instance(s)'.format(len(stopped_instances)))
+        logging.info('Stopped {} instance(s)'.format(len(stopped_instances)))
         for instance_id in stopped_instances:
-            print('- {}'.format(instance_id))
+            logging.info('- {}'.format(instance_id))
 
         if flags.get('all', False):
             self.prompt_stop_unsynced(confirm=flags.get('yes', False))
@@ -173,18 +170,18 @@ class CLI:
         silent = flags.get('silent', False)
         instances_to_restart = self.get_instances_for_action(args)
         if len(instances_to_restart) == 0:
-            print('No instances matched given arguments')
             return
 
-        print('Restarting instance(s). This may take a while...')
+        logging.info('Restarting instances. This may take a while...')
         restarted_instances = []
         for instance in instances_to_restart:
             if instance.restart(force, silent):
                 restarted_instances.append(instance.get_id())
 
-        print('Restarted {} instance(s)'.format(len(restarted_instances)))
+        logging.info('Restarted {} instance(s)'.format(
+            len(restarted_instances)))
         for instance_id in restarted_instances:
-            print('- {}'.format(instance_id))
+            logging.info('- {}'.format(instance_id))
 
     def help(self, args=[]):
         '''Show help'''
@@ -194,28 +191,26 @@ class CLI:
             command = None
 
         if command is not None and command in self.commands:
-            print('Help for {}:'.format(command))
-            print(self.commands[command].__doc__)
-            print('\nUse following command to get info about flags: "manager help"')
+            logging.info('Help for {}:'.format(command))
+            logging.info(self.commands[command].__doc__)
             return
 
-        print('Usage: manager <command> [args]\n')
-        print('  CLI for managing instances of PassivBot\n')
-        print('Commands:')
+        logging.info('Usage: manager <command> [args]\n')
+        logging.info('  CLI for managing instances of PassivBot\n')
+        logging.info('Commands:')
         for command in self.commands.keys():
-            # print command name and __doc__ with valid indentation of __doc__
             doc_lines = self.commands[command].__doc__.split('\n')
             doc_lines = [line.strip() for line in doc_lines]
 
-            print('  {:<8} - {}'.format(command, doc_lines[0]))
+            logging.info('  {:<8} - {}'.format(command, doc_lines[0]))
             for line in doc_lines[1:]:
-                print('  {:<8} {}'.format('', line))
+                logging.info('  {:<8} {}'.format('', line))
 
-        print('\nFlags:')
-        for k, v in self.flags.items():
-            print('  {:<13} - {}'.format(
-                ', '.join(v['variants']),
-                v['docs'],
+        logging.info('\nFlags:')
+        for flag in self.flags.values():
+            logging.info('  {:<13} - {}'.format(
+                ', '.join(flag['variants']),
+                flag['docs'],
             ))
 
     # ---------------------------------------------------------------------------- #
@@ -224,10 +219,12 @@ class CLI:
 
     def get_instances_for_action(self, args=[]):
         if len(args) == 0:
+            logging.warn('No instances specified')
             return []
 
         total_instances = self.manager.get_instances_length()
         if total_instances == 0:
+            logging.warn('You have no instances configured')
             return []
 
         flags = self.parse_flags(args)
@@ -236,6 +233,7 @@ class CLI:
 
         instance = self.manager.get_instance_by_id(args[0])
         if instance is None:
+            logging.warn('No instances matced the given id')
             return []
         return [instance]
 

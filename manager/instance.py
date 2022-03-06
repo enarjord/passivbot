@@ -1,3 +1,4 @@
+import logging
 import os
 import sys
 from typing import Dict, List
@@ -7,7 +8,6 @@ from pm import ProcessManager
 
 class Instance:
     def __init__(self, config):
-        self.prooc_id = None
         self.user = str(config['user'])
         self.symbol = str(config['symbol'])
 
@@ -30,16 +30,13 @@ class Instance:
         self.lm = str(config['long_mode']) or 'n'
         self.sm = str(config['short_mode']) or 'm'
 
-    def get_id(self):
-        return '{}:{}'.format(self.user, self.symbol)
+    def say(self, message) -> None:
+        logging.info('[{}] {}'.format(self.get_id(), message))
 
-    def say(self, message):
-        print('{}: {}'.format(self.get_id(), message))
-
-    def get_args(self):
+    def get_args(self) -> List[str]:
         return [self.user, self.symbol, self.live_config_path]
 
-    def get_flags(self):
+    def get_flags(self) -> List[str]:
         flags = {
             '-m': {
                 'value': self.market_type,
@@ -75,19 +72,34 @@ class Instance:
 
         return valid_flags
 
-    def get_pid_signature(self):
+    def get_id(self) -> str:
+        return '{}:{}'.format(self.user, self.symbol)
+
+    def get_pid_signature(self) -> str:
         signature = INSTANCE_SIGNATURE_BASE.copy()
         signature.extend([self.user, self.symbol])
         return '^{}'.format(' '.join(signature))
 
-    def get_cmd(self):
+    def get_pid(self) -> int:
+        pm = ProcessManager()
+        return pm.get_pid(self.get_pid_signature())
+
+    def get_cmd(self) -> List[str]:
         cmd = INSTANCE_SIGNATURE_BASE.copy()
         cmd.extend(self.get_args())
         cmd.extend(self.get_flags())
         return cmd
 
+    def get_status(self) -> str:
+        return 'running' if self.is_running() else 'stopped'
+
+    def is_running(self) -> bool:
+        pm = ProcessManager()
+        return pm.is_running(self.get_pid_signature())
+
     def start(self, silent=False) -> bool:
-        log_file = os.path.join(PASSIVBOT_PATH, 'logs/{}.log'.format(self.get_id()))
+        log_file = os.path.join(
+            PASSIVBOT_PATH, 'logs/{}.log'.format(self.get_id()))
         cmd = self.get_cmd()
 
         if silent is True:
@@ -122,10 +134,6 @@ class Instance:
                 return False
 
         return self.start(silent)
-
-    def is_running(self):
-        pm = ProcessManager()
-        return pm.is_running(self.get_pid_signature())
 
 
 def instances_from_config(config: Dict, defaults: Dict) -> List[Instance]:
