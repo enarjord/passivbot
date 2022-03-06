@@ -747,8 +747,8 @@ class Bot:
             self.log_position_long()
             self.log_position_short()
             logging.info(
-                f'balance: {round_dynamic(self.position["wallet_balance"], 6)} '
-                + f'equity: {round_dynamic(self.position["equity"], 6)} last price: {self.price}'
+                f'balance: {round_dynamic(self.position["wallet_balance"], 6)}'
+                + f' equity: {round_dynamic(self.position["equity"], 6)} last price: {self.price}'
             )
             self.heartbeat_ts = time()
         await self.cancel_and_create()
@@ -815,8 +815,8 @@ class Bot:
                 new_wallet_balance = self.adjust_wallet_balance(event["wallet_balance"])
                 if new_wallet_balance != self.position["wallet_balance"]:
                     logging.info(
-                        f"balance: {round_dynamic(new_wallet_balance, 6)} "
-                        + f'equity: {round_dynamic(self.position["equity"], 6)}'
+                        f"balance: {round_dynamic(new_wallet_balance, 6)}"
+                        + f' equity: {round_dynamic(self.position["equity"], 6)} last price: {self.price}'
                     )
                 self.position["wallet_balance"] = new_wallet_balance
                 pos_change = True
