@@ -83,6 +83,7 @@ class Bot:
             "update_position": False,
         }
         self.heartbeat_ts = 0
+        self.heartbeat_interval_seconds = 60 * 60
         self.listen_key = None
 
         self.position = {}
@@ -740,7 +741,7 @@ class Bot:
             self.ts_released["force_update"] = now
             # force update pos and open orders thru rest API every 30 sec
             await asyncio.gather(self.update_position(), self.update_open_orders())
-        if now - self.heartbeat_ts > 60 * 60:
+        if now - self.heartbeat_ts > self.heartbeat_interval_seconds:
             # print heartbeat once an hour
             logging.info(f"heartbeat {self.symbol}")
             self.log_position_long()
@@ -768,13 +769,13 @@ class Bot:
             (closes_long[0]["qty"], closes_long[0]["price"]) if closes_long else (0.0, 0.0)
         )
         logging.info(
-            f'position long: {self.position["long"]["size"]} @ '
-            + f'{round_dynamic(self.position["long"]["price"], 5)} '
-            + f'long wallet exposure {self.position["long"]["wallet_exposure"]:.4f} '
-            + f' pprice diff long {calc_diff(self.position["long"]["price"], self.price):.3f} '
+            f'long: {self.position["long"]["size"]} @'
+            + f' {round_dynamic(self.position["long"]["price"], 5)}'
+            + f' lWE: {self.position["long"]["wallet_exposure"]:.4f}'
+            + f' pprc diff {self.position["long"]["price"] / self.price - 1:.3f}'
+            + f" EMAs: {[round_dynamic(e, 5) for e in self.emas_long]}"
+            + f" e {leqty} @ {leprice} | c {lcqty} @ {lcprice}"
         )
-        logging.info(f" EMAs long {[round_dynamic(e, 5) for e in self.emas_long]} ")
-        logging.info(f" long entry {leqty} @ {leprice} | long close {lcqty} @ {lcprice}")
 
     def log_position_short(self):
         closes_short = sorted(
@@ -792,13 +793,13 @@ class Bot:
             (closes_short[-1]["qty"], closes_short[-1]["price"]) if closes_short else (0.0, 0.0)
         )
         logging.info(
-            f'position short: {self.position["short"]["size"]} @ '
-            + f'{round_dynamic(self.position["short"]["price"], 5)} '
-            + f'short wallet exposure {self.position["short"]["wallet_exposure"]:.4f} '
-            + f' pprice diff short {calc_diff(self.position["short"]["price"], self.price):.3f} '
+            f'short: {self.position["short"]["size"]} @'
+            + f' {round_dynamic(self.position["short"]["price"], 5)}'
+            + f' sWE: {self.position["short"]["wallet_exposure"]:.4f}'
+            + f' pprc diff {self.price / self.position["short"]["price"] - 1:.3f}'
+            + f" EMAs: {[round_dynamic(e, 5) for e in self.emas_short]}"
+            + f" e {leqty} @ {leprice} | c {lcqty} @ {lcprice}"
         )
-        logging.info(f" EMAs short {[round_dynamic(e, 5) for e in self.emas_short]} ")
-        logging.info(f" short entry {leqty} @ {leprice} | short close {lcqty} @ {lcprice}")
 
     async def on_user_stream_events(self, events: Union[List[Dict], List]) -> None:
         if type(events) == list:
