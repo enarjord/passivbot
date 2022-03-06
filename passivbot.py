@@ -792,11 +792,16 @@ class Bot:
         lcqty, lcprice = (
             (closes_short[-1]["qty"], closes_short[-1]["price"]) if closes_short else (0.0, 0.0)
         )
+        pprice_diff = (
+            (self.price / self.position["short"]["price"] - 1)
+            if self.position["short"]["price"] != 0.0
+            else 1.0
+        )
         logging.info(
             f'short: {self.position["short"]["size"]} @'
             + f' {round_dynamic(self.position["short"]["price"], 5)}'
             + f' sWE: {self.position["short"]["wallet_exposure"]:.4f}'
-            + f' pprc diff {self.price / self.position["short"]["price"] - 1:.3f}'
+            + f" pprc diff {pprice_diff:.3f}"
             + f" EMAs: {[round_dynamic(e, 5) for e in self.emas_short]}"
             + f" e {leqty} @ {leprice} | c {lcqty} @ {lcprice}"
         )
