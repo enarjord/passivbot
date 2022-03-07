@@ -200,7 +200,11 @@ def dump_plots(
                     print(f"no {side} fills...")
 
             print(f"plotting {side} initial entry band")
-            spans_multiplier = 60 / ((df.index[1] - df.index[0]) / 1000)
+            if "timestamp" in df.columns:
+                tick_interval = df.timestamp.iloc[1] - df.timestamp.iloc[0]
+            else:
+                tick_interval = df.index[1] - df.index[0]
+            spans_multiplier = 60 / (tick_interval / 1000)
             spans = [
                 result[side]["ema_span_0"] * spans_multiplier,
                 ((result[side]["ema_span_0"] * result[side]["ema_span_1"]) ** 0.5) * spans_multiplier,
