@@ -277,7 +277,12 @@ def plot_fills(df, fdf_, side: int = 0, plot_whole_df: bool = False, title=""):
         luentry.price.plot(style="bx")
         luclose.price.plot(style="rx")
 
-        longs.where(longs.pprice != 0.0).pprice.fillna(method="ffill").plot(style="b--")
+        # longs.where(longs.pprice != 0.0).pprice.fillna(method="ffill").plot(style="b--")
+        lppu = longs[(longs.pprice != longs.pprice.shift(1)) & (longs.pprice != 0.0)]
+        for i in range(len(lppu) - 1):
+            plt.plot(
+                [lppu.index[i], lppu.index[i + 1]], [lppu.pprice.iloc[i], lppu.pprice.iloc[i]], "b--"
+            )
     if side <= 0:
         shorts = fdf[fdf.type.str.contains("short")]
         sientry = shorts[shorts.type.str.contains("ientry")]
@@ -292,5 +297,11 @@ def plot_fills(df, fdf_, side: int = 0, plot_whole_df: bool = False, title=""):
         sdca.price.plot(style="go")
         suentry.price.plot(style="rx")
         suclose.price.plot(style="bx")
-        shorts.where(shorts.pprice != 0.0).pprice.fillna(method="ffill").plot(style="r--")
+        # shorts.where(shorts.pprice != 0.0).pprice.fillna(method="ffill").plot(style="r--")
+        sppu = shorts[(shorts.pprice != shorts.pprice.shift(1)) & (shorts.pprice != 0.0)]
+        for i in range(len(sppu) - 1):
+            plt.plot(
+                [sppu.index[i], sppu.index[i + 1]], [sppu.pprice.iloc[i], sppu.pprice.iloc[i]], "r--"
+            )
+
     return plt
