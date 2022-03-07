@@ -476,7 +476,7 @@ def backtest_recursive_grid(
                     if psize_long != 0.0:
                         fee_paid = -qty_to_cost(psize_long, pprice_long, inverse, c_mult) * maker_fee
                         pnl = calc_pnl_long(pprice_long, closes[k], -psize_long, inverse, c_mult)
-                        balance_long = 0.0
+                        balance_long = starting_balance * 1e-6
                         equity_long = 0.0
                         psize_long, pprice_long = 0.0, 0.0
                         fills_long.append(
@@ -562,7 +562,7 @@ def backtest_recursive_grid(
                         qty_step,
                     )
                     fee_paid = -qty_to_cost(entry_long[0], entry_long[1], inverse, c_mult) * maker_fee
-                    balance_long += fee_paid
+                    balance_long = max(starting_balance * 1e-6, balance_long + fee_paid)
                     equity_long = balance_long + calc_pnl_long(
                         pprice_long, closes[k], psize_long, inverse, c_mult
                     )
@@ -644,7 +644,7 @@ def backtest_recursive_grid(
                     pnl = calc_pnl_long(
                         pprice_long, closes_long[0][1], close_qty_long, inverse, c_mult
                     )
-                    balance_long += fee_paid + pnl
+                    balance_long = max(starting_balance * 1e-6, balance_long + fee_paid + pnl)
                     equity_long = balance_long + calc_pnl_long(
                         pprice_long, closes[k], psize_long, inverse, c_mult
                     )
@@ -715,7 +715,7 @@ def backtest_recursive_grid(
                             -qty_to_cost(psize_short, pprice_short, inverse, c_mult) * maker_fee
                         )
                         pnl = calc_pnl_short(pprice_short, closes[k], -psize_short, inverse, c_mult)
-                        balance_short = 0.0
+                        balance_short = starting_balance * 1e-6
                         equity_short = 0.0
                         psize_short, pprice_short = 0.0, 0.0
                         fills_short.append(
@@ -802,7 +802,7 @@ def backtest_recursive_grid(
                     fee_paid = (
                         -qty_to_cost(entry_short[0], entry_short[1], inverse, c_mult) * maker_fee
                     )
-                    balance_short += fee_paid
+                    balance_short = max(starting_balance * 1e-6, balance_short + fee_paid)
                     equity_short = balance_short + calc_pnl_short(
                         pprice_short, closes[k], psize_short, inverse, c_mult
                     )
@@ -883,7 +883,7 @@ def backtest_recursive_grid(
                     pnl = calc_pnl_short(
                         pprice_short, closes_short[0][1], close_qty_short, inverse, c_mult
                     )
-                    balance_short += fee_paid + pnl
+                    balance_short = max(starting_balance * 1e-6, balance_short + fee_paid + pnl)
                     equity_short = balance_short + calc_pnl_short(
                         pprice_short, closes[k], psize_short, inverse, c_mult
                     )
