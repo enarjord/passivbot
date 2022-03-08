@@ -12,7 +12,6 @@ from pure_funcs import get_template_live_config, flatten
 from njit_funcs import round_dynamic
 from time import sleep
 import logging
-import logging.config
 
 
 async def main():
@@ -33,7 +32,7 @@ async def main():
         required=False,
         default=0.5,
         dest="percentage",
-        help="per uno, i.e. 0.02==2%.  default=0.5",
+        help="per uno, i.e. 0.02 per uno == 2 per cent.  default=0.5",
     )
     args = parser.parse_args()
     config = get_template_live_config()
@@ -52,13 +51,15 @@ async def main():
         logging.info(f"no previous transfers to load")
     while True:
         now = (await bot.public_get(bot.endpoints["time"]))["serverTime"]
+        since = now - 1000 * 60 * 60 * 24
         try:
-            income = await bot.get_all_income(start_time=now - 1000 * 60 * 60 * 24)
+            income = await bot.get_all_income(start_time=since)
         except Exception as e:
             logging.error(f"failed fetching income {e}")
             traceback.print_exc()
             income = []
         income = [e for e in income if e["transaction_id"] not in already_transferred_ids]
+        income = [e for e in income if e["timestamp"] >= since]
         profit = sum([e["income"] for e in income])
         to_transfer = round_dynamic(profit * args.percentage, 4)
         if to_transfer > 0:
