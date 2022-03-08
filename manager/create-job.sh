@@ -20,6 +20,18 @@ then
     exit
 fi
 
+echo "This script will create a systemctl service"
+echo "to run configured instances on system start"
+echo
+echo "Do you want to continue? (y/n)"
+read -n 1 -r
+echo
+if [[ ! $REPLY =~ ^[Yy]$ ]]
+then
+    echo "Aborted"
+    exit
+fi
+
 echo "Creating service file..."
 cat <<EOF > $SERVICES/$SERVICE_NAME
 [Unit]

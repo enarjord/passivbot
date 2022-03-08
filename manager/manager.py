@@ -17,6 +17,10 @@ class Manager:
         with open(MANAGER_CONFIG_PATH, 'r') as f:
             config = yaml.load(f, Loader=yaml.FullLoader)
         self.defaults = config['defaults']
+
+        if 'instances' not in config or not isinstance(config['instances'], list):
+            return
+
         for instance in config['instances']:
             self.instances.extend(instances_from_config(
                 instance, self.defaults))

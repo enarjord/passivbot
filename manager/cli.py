@@ -141,18 +141,17 @@ class CLI:
         flags = self.parse_flags(args)
         force = flags.get('force', False)
         instances_to_stop = self.get_instances_for_action(args)
-        if len(instances_to_stop) == 0:
-            return
+        if len(instances_to_stop) > 0:
+            logging.info('Stopping instances. This may take a while...')
+            stopped_instances = []
+            for instance in instances_to_stop:
+                if instance.stop(force):
+                    stopped_instances.append(instance.get_id())
 
-        logging.info('Stopping instances. This may take a while...')
-        stopped_instances = []
-        for instance in instances_to_stop:
-            if instance.stop(force):
-                stopped_instances.append(instance.get_id())
-
-        logging.info('Stopped {} instance(s)'.format(len(stopped_instances)))
-        for instance_id in stopped_instances:
-            logging.info('- {}'.format(instance_id))
+            logging.info('Stopped {} instance(s)'.format(
+                len(stopped_instances)))
+            for instance_id in stopped_instances:
+                logging.info('- {}'.format(instance_id))
 
         if flags.get('all', False):
             self.prompt_stop_unsynced(confirm=flags.get('yes', False))

@@ -73,7 +73,7 @@ class Instance:
         return valid_flags
 
     def get_id(self) -> str:
-        return '{}:{}'.format(self.user, self.symbol)
+        return '{}-{}'.format(self.user, self.symbol)
 
     def get_pid_signature(self) -> str:
         signature = INSTANCE_SIGNATURE_BASE.copy()
@@ -99,7 +99,10 @@ class Instance:
 
     def start(self, silent=False) -> bool:
         log_file = os.path.join(
-            PASSIVBOT_PATH, 'logs/{}.log'.format(self.get_id()))
+            PASSIVBOT_PATH, 'logs/{}/{}.log'.format(self.user, self.symbol))
+        if not os.path.exists(os.path.dirname(log_file)):
+            os.makedirs(os.path.dirname(log_file))
+
         cmd = self.get_cmd()
 
         if silent is True:

@@ -1,7 +1,13 @@
+#
+# copy this to manager/config.yaml and edit
+# structure:
+#
 defaults:
-  user: "binance_01"
-  live_config_name: "matic.json" # name of a file in the config/live directory
-  live_config_path: "" # absolute path. Will be auto-generated if empty
+  # name of a file in the config/live directory
+  live_config_name: "matic.json"
+
+  # absolute path. Will be auto-generated if empty
+  live_config_path: ""
 
   market_type: "futures" # futures | spot
 
@@ -15,6 +21,9 @@ defaults:
   long_mode: "n"
   short_mode: "m"
 
+# to disable all instances, set instances to []
+# or remove instances section completely.
+# instances: []
 instances:
   - user: "binance_01"
     symbols:
@@ -31,6 +40,7 @@ instances:
       - "ETHUSDT"
       - "BTCUSDT"
 
+  # or different users
   - user: "binance_02"
     symbols:
       - "ALGOUSDT"
