@@ -1,21 +1,23 @@
 import logging
 from sys import argv
-from typing import Dict
+from typing import Any, Dict, List
 from manager import Manager
+from instance import Instance
 
 
 class CLI:
     def __init__(self):
-        self.commands = {
+        self.commands_available = {
             'sync': self.sync,
             'list': self.list,
+            'info': self.info,
             'start': self.start,
             'stop': self.stop,
             'restart': self.restart,
             'help': self.help,
         }
 
-        self.flags = {
+        self.flags_available = {
             'all': {
                 'variants': ['-a', '--all'],
                 'docs': 'perform action on all instances',
@@ -32,87 +34,116 @@ class CLI:
             'force': {
                 'variants': ['-f', '--force'],
                 'docs': 'force action',
-            }
+            },
+            'help': {
+                'variants': ['-h', '--help'],
+                'docs': 'show help for a command',
+            },
         }
 
         self.manager = Manager()
+        self.args = []
+        self.flags = {}
 
     # ---------------------------------------------------------------------------- #
     #                                   commands                                   #
     # ---------------------------------------------------------------------------- #
 
-    def sync(self, args=[]):
+    def sync(self):
         '''Sync instances with config
-        This will perform stop and start 
-        on all instances. See help for those 
+        This will perform stop and start
+        on all instances. See help for those
         commands to understand consequences.
         Flags: [ -y ] [ -s ] [ -f ]'''
 
         delimiter = '-' * 20
-        self.stop(['-a'] + args)
+        self.flags['all'] = True
+
+        self.stop()
         logging.info(delimiter)
         self.manager.sync_config()
-        self.start(['-a'] + args)
+        self.start()
+
         logging.info(delimiter)
         logging.info('Sync complete')
         logging.info(delimiter)
         self.list()
 
-    def list(self, args=[]):
-        '''List running instances,
-        or get detailed info about an instance.
-        Args: [ instance_id ]'''
-        if len(args) > 0:
-            self.instance_info(args)
+    def list(self):
+        '''List all instances, if no query is given.
+        If a query is given, only matching instances
+        will be shown.
+        Args: [ query ]'''
+
+        instances_to_list = self.get_instances_for_action()
+        if len(instances_to_list) == 0:
             return
 
-        instances = self.manager.get_instances()
+        lines = []
         format_str = '  {:<15} {:<10} {:<10} {:<10} {:<30}'
-        logging.info('Instances:')
-        logging.info(format_str.format(
-            'user', 'symbol', 'status', 'pid', 'id'))
-        for instance in instances:
-            pid = instance.get_pid()
-            logging.info(format_str.format(
-                instance.user,
-                instance.symbol,
+        lines.extend([
+            'Instances:',
+            format_str.format('user', 'symbol', 'status', 'pid', 'id'),
+        ])
+
+        lines.extend([
+            format_str.format(
+                instance.get_user(),
+                instance.get_symbol(),
                 instance.get_status(),
-                str(pid) if pid is not None else '-',
+                instance.get_pid_str(),
                 instance.get_id(),
-            ))
+            )
+            for instance in instances_to_list
+        ])
 
-        logging.info('\nUse "manager info <instance_id>" to get more info')
+        lines.append('\nUse "manager info <query>" to get more info')
 
-    def instance_info(self, args=[]):
-        instances = self.get_instances_for_action(args)
+        for line in lines:
+            logging.info(line)
+
+    def info(self):
+        '''Get detailed info about an instance.
+        If multiple instances are matched,
+        only the first one will be shown.
+        Args: <query>'''
+        instances = self.get_instances_for_action()
         if len(instances) == 0:
             return
-        instance = instances[0]
-        pid = instance.get_pid()
-        pid = str(pid) if pid is not None else '-'
-        logging.info('Instance {}:'.format(instance.get_id()))
-        logging.info('  user: {}'.format(instance.user))
-        logging.info('  symbol: {}'.format(instance.symbol))
-        logging.info('  config: {}'.format(instance.live_config_path))
-        logging.info('  pid: {}'.format(pid))
-        logging.info('  status: {}'.format(instance.get_status()))
-        logging.info('Flags:')
-        flags = instance.get_flags()
-        for i in range(0, len(flags), 2):
-            logging.info('  {}: {}'.format(flags[i], flags[i + 1]))
 
-    def start(self, args=[]):
-        '''Start a new instance.
-        Args: [ instance_id ]
-        Flags: [ -a ] [ -s ]'''
-        if len(args) == 0:
-            self.help(['start'])
+        instance = instances[0]
+        flags = instance.get_flags()
+
+        lines = []
+        lines.extend([
+            'Instance {}:'.format(instance.get_id()),
+            '  user: {}'.format(instance.user),
+            '  symbol: {}'.format(instance.symbol),
+            '  config: {}'.format(instance.live_config_path),
+            '  pid: {}'.format(instance.get_pid_str()),
+            '  status: {}'.format(instance.get_status()),
+            'Flags:',
+        ])
+
+        lines.extend(['  {}: {}'.format(flags[i], flags[i + 1])
+                     for i in range(0, len(flags), 2)])
+
+        for line in lines:
+            logging.info(line)
+
+    def start(self):
+        '''Start instances that match
+        the given arguments.
+        Args: [ query ]
+        Flags: [ -a ] [ -s ] [ -y ]'''
+
+        silent = self.flags.get('silent', False)
+
+        instances_to_start = self.get_instances_for_action()
+        if len(instances_to_start) == 0:
             return
 
-        flags = self.parse_flags(args)
-        silent = flags.get('silent', False)
-        instances_to_start = self.get_instances_for_action(args)
-        if len(instances_to_start) == 0:
+        if not self.confirm_action('start', instances_to_start):
             return
 
         logging.info('Starting instances...')
@@ -128,47 +159,51 @@ class CLI:
         for instance_id in started_instances:
             logging.info('- {}'.format(instance_id))
 
-    def stop(self, args=[]):
-        '''Stop running instance(s).
+    def stop(self):
+        '''Stop instances that match
+        the given arguments.
         You will be prompted to stop
         instances that are out of sync.
-        Args: [ instance_id ]
+        Args: [ query ]
         Flags: [ -a ] [ -y ] [ -f ]'''
-        if len(args) == 0:
-            self.help(['stop'])
+
+        force = self.flags.get('force', False)
+        stop_all = self.flags.get('all', False)
+
+        instances_to_stop = self.get_instances_for_action()
+        if len(instances_to_stop) == 0:
             return
 
-        flags = self.parse_flags(args)
-        force = flags.get('force', False)
-        instances_to_stop = self.get_instances_for_action(args)
-        if len(instances_to_stop) > 0:
-            logging.info('Stopping instances. This may take a while...')
-            stopped_instances = []
-            for instance in instances_to_stop:
-                if instance.stop(force):
-                    stopped_instances.append(instance.get_id())
-
-            logging.info('Stopped {} instance(s)'.format(
-                len(stopped_instances)))
-            for instance_id in stopped_instances:
-                logging.info('- {}'.format(instance_id))
-
-        if flags.get('all', False):
-            self.prompt_stop_unsynced(confirm=flags.get('yes', False))
-
-    def restart(self, args=[]):
-        '''Restart instance(s).
-        Args: [ instance_id ]
-        Flags: [ -a ] [ -s ] [ -f ]'''
-        if len(args) == 0:
-            self.help(['restart'])
+        if not self.confirm_action('stop', instances_to_stop):
             return
 
-        flags = self.parse_flags(args)
-        force = flags.get('force', False)
-        silent = flags.get('silent', False)
-        instances_to_restart = self.get_instances_for_action(args)
+        logging.info('Stopping instances. This may take a while...')
+        stopped_instances = []
+        for instance in instances_to_stop:
+            if instance.stop(force):
+                stopped_instances.append(instance.get_id())
+
+        logging.info('Stopped {} instance(s)'.format(
+            len(stopped_instances)))
+        for instance_id in stopped_instances:
+            logging.info('- {}'.format(instance_id))
+
+        if stop_all:
+            self.prompt_stop_unsynced()
+
+    def restart(self):
+        '''Restart instances that match
+        the given arguments.
+        Args: [ query ]
+        Flags: [ -a ] [ -s ] [ -f ] [ -y ]'''
+        force = self.flags.get('force', False)
+        silent = self.flags.get('silent', False)
+
+        instances_to_restart = self.get_instances_for_action()
         if len(instances_to_restart) == 0:
+            return
+
+        if not self.confirm_action('restart', instances_to_restart):
             return
 
         logging.info('Restarting instances. This may take a while...')
@@ -182,111 +217,195 @@ class CLI:
         for instance_id in restarted_instances:
             logging.info('- {}'.format(instance_id))
 
-    def help(self, args=[]):
-        '''Show help'''
-        if len(args) > 0:
-            command = args[0]
-        else:
-            command = None
+    def help(self):
+        '''Show help
+        Args: [ command ]'''
 
-        if command is not None and command in self.commands:
-            logging.info('Help for {}:'.format(command))
-            logging.info(self.commands[command].__doc__)
+        if len(self.args) > 0:
+            command = self.commands_available.get(self.args[0], None)
+            if command is None:
+                logging.info('No such command: {}'.format(self.args[0]))
+                return
+
+            logging.info('Help for {}:'.format(self.args[0]))
+            doc_lines = self.prepare_function_doc(command)
+            for line in doc_lines:
+                logging.info('  {}'.format(line))
             return
 
-        logging.info('Usage: manager <command> [args]\n')
-        logging.info('  CLI for managing instances of PassivBot\n')
-        logging.info('Commands:')
-        for command in self.commands.keys():
-            doc_lines = self.commands[command].__doc__.split('\n')
-            doc_lines = [line.strip() for line in doc_lines]
+        lines = [
+            'Usage: manager <command> [args]',
+            '\n  CLI for managing instances of PassivBot\n',
+            'Commands:',
+        ]
 
-            logging.info('  {:<8} - {}'.format(command, doc_lines[0]))
+        for command, func in self.commands_available.items():
+            doc_lines = self.prepare_function_doc(func)
+
+            lines.append('  {:<8} - {}'.format(command, doc_lines[0]))
             for line in doc_lines[1:]:
-                logging.info('  {:<8} {}'.format('', line))
+                lines.append('  {:<8} {}'.format('', line))
 
-        logging.info('\nFlags:')
-        for flag in self.flags.values():
-            logging.info('  {:<13} - {}'.format(
-                ', '.join(flag['variants']),
+        lines.extend([
+            '\nArgs:',
+            '  <arg>  - required argument',
+            '  [arg]  - optional argument',
+            '  query  - a query to match instances.',
+            '         These params for queries:',
+            '         user, symbol, status, pid, id.',
+            '         You can use several params at once,',
+            '         separate them with spaces for that.',
+            '         Examples:',
+            '           - user=passivbot symbol=btc',
+            '           - symbol=btcusd status=running',
+            '           - passivbot stopped',
+
+        ])
+
+        lines.append('\nFlags:')
+        for flag in self.flags_available.values():
+            variants = ', '.join(flag['variants'])
+            lines.append('  {:<13} - {}'.format(
+                variants,
                 flag['docs'],
             ))
+
+        for line in lines:
+            logging.info(line)
 
     # ---------------------------------------------------------------------------- #
     #                                    helpers                                   #
     # ---------------------------------------------------------------------------- #
 
-    def get_instances_for_action(self, args=[]):
-        if len(args) == 0:
-            logging.warn('No instances specified')
-            return []
+    def confirm_action(self, action, instances) -> bool:
+        if len(instances) == 0:
+            return False
 
+        if self.flags.get('yes', False):
+            return True
+
+        logging.info(
+            'You are about to {} these instances:'.format(action))
+        for instance in instances:
+            logging.info('- {}'.format(instance.get_id()))
+
+        try:
+            answer = input('Type "yes" or "y" to confirm: ')
+        except KeyboardInterrupt:
+            logging.info('\nAborted')
+            return False
+
+        if answer in ['yes', 'y']:
+            return True
+
+        logging.info('Aborted')
+        return False
+
+    def get_instances_for_action(self) -> List[Instance]:
         total_instances = self.manager.get_instances_length()
         if total_instances == 0:
             logging.warn('You have no instances configured')
             return []
 
-        flags = self.parse_flags(args)
-        if flags.get('all', False):
+        if self.flags.get('all', False):
             return self.manager.get_instances()
 
-        instance = self.manager.get_instance_by_id(args[0])
-        if instance is None:
-            logging.warn('No instances matced the given id')
-            return []
-        return [instance]
+        instances = self.manager.query_instances(self.args)
+        if len(instances) == 0:
+            logging.warn('No instances matched the given arguments')
 
-    def prompt_stop_unsynced(self, confirm=False):
+        return instances
+
+    def prompt_stop_unsynced(self):
         unsynced = self.manager.get_all_passivbot_instances()
         if len(unsynced) == 0:
             return
 
-        if not confirm:
-            print('These instances are out of sync:')
-            for instance in unsynced:
-                print('- {} {} {}'
-                      .format(instance.user,
-                              instance.symbol,
-                              instance.live_config_path))
-            try:
-                stop = input('Do you want to stop them? (y/n) ')
-                if stop.lower() == 'y':
-                    confirm = True
-            except KeyboardInterrupt:
-                confirm = False
-
-        if not confirm:
+        if not self.confirm_action('FORCE stop', unsynced):
             return
 
         stopped_instances = []
         for instance in unsynced:
-            if instance.stop():
+            if instance.stop(force=True):
                 stopped_instances.append(instance.get_id())
 
         if len(stopped_instances) > 0:
-            print('Successfully stopped these instances:')
+            logging.info('Successfully stopped these instances:')
         for instance_id in stopped_instances:
-            print('- {}'.format(instance_id))
+            logging.info('- {}'.format(instance_id))
 
-    def parse_flags(self, args=[]) -> Dict[str, bool]:
-        flags = {}
+    def parse_args(self, args=[]) -> Dict[str, Any]:
+        def flag_key(arg):
+            if '=' in arg:
+                arg = arg.split('=')[0]
+            return arg
+
+        def flag_value(arg):
+            if '=' not in arg:
+                return True
+            return arg.split('=')[1]
+
+        passed_flags = {}
+        clean_args = []
         for arg in args:
-            for flag in self.flags.keys():
-                if arg in self.flags[flag]['variants']:
-                    flags[flag] = True
+            if len(arg) < 2 or arg[0] != '-':
+                clean_args.append(arg)
+                continue
+
+            value = flag_value(arg)
+            arg = flag_key(arg)
+
+            if arg[1] == '-':
+                passed_flags[arg] = value
+                continue
+
+            for flag in list(arg[1:]):
+                passed_flags['-' + flag] = value
+            continue
+
+        flags = {}
+        for flag_name in self.flags_available.keys():
+            flag = self.flags_available[flag_name]
+            for variant in flag['variants']:
+                passed = passed_flags.get(variant, False)
+                if passed:
+                    flags[flag_name] = passed
                     break
-        return flags
+
+        return {'flags': flags, 'args': clean_args}
+
+    def prepare_function_doc(self, func) -> List[str]:
+        doc = func.__doc__
+        if doc is None:
+            return []
+
+        doc = doc.split('\n')
+        return [line.strip() for line in doc]
 
     def run_command(self, args=[]):
         if len(args) == 0:
             self.help()
             return
 
-        command = args[0]
-        if command in self.commands:
-            self.commands[command](args[1:])
-        else:
+        command = self.commands_available.get(args[0], None)
+        if command is None:
+            logging.info('No such command: {}'.format(args[0]))
+            return
+
+        args = args[1:]
+        parsed_args = self.parse_args(args)
+        self.flags = parsed_args['flags']
+        self.args = parsed_args['args']
+
+        if self.flags.get('help', False):
+            self.args = [args[0]]
             self.help()
+            return
+
+        try:
+            command()
+        except KeyboardInterrupt:
+            logging.info('\nAborted')
 
 
 if __name__ == '__main__':

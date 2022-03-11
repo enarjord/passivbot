@@ -75,6 +75,12 @@ class Instance:
     def get_id(self) -> str:
         return '{}-{}'.format(self.user, self.symbol)
 
+    def get_symbol(self) -> str:
+        return self.symbol
+
+    def get_user(self) -> str:
+        return self.user
+
     def get_pid_signature(self) -> str:
         signature = INSTANCE_SIGNATURE_BASE.copy()
         signature.extend([self.user, self.symbol])
@@ -83,6 +89,10 @@ class Instance:
     def get_pid(self) -> int:
         pm = ProcessManager()
         return pm.get_pid(self.get_pid_signature())
+
+    def get_pid_str(self) -> str:
+        pid = self.get_pid()
+        return str(pid) if pid is not None else '-'
 
     def get_cmd(self) -> List[str]:
         cmd = INSTANCE_SIGNATURE_BASE.copy()
@@ -96,6 +106,36 @@ class Instance:
     def is_running(self) -> bool:
         pm = ProcessManager()
         return pm.is_running(self.get_pid_signature())
+
+    def match(self, query: List[str], exact: bool = False) -> bool:
+        parameters = {
+            'id': self.get_id(),
+            'pid': self.get_pid_str(),
+            'symbol': self.get_symbol(),
+            'user': self.get_user(),
+            'status': self.get_status(),
+        }
+
+        if not exact:
+            parameters = {k: v.lower() for k, v in parameters.items()}
+            query = [q.lower() for q in query]
+
+        matches = 0
+        for condition in query:
+            if '=' in condition:
+                k, v = condition.split('=')
+                if k in parameters and parameters[k].startswith(v):
+                    matches += 1
+                    continue
+
+            if any(condition in v for v in parameters.values()):
+                matches += 1
+
+        return matches == len(query)
+
+    # ---------------------------------------------------------------------------- #
+    #                                 state methods                                #
+    # ---------------------------------------------------------------------------- #
 
     def start(self, silent=False) -> bool:
         log_file = os.path.join(
