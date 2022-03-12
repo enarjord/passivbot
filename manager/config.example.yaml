@@ -1,0 +1,70 @@
+#
+# copy this to manager/config.yaml and edit
+# structure:
+#
+defaults:
+  # name of a file in the config/live directory
+  live_config_name: "matic.json"
+
+  # absolute path. Will be auto-generated if empty
+  live_config_path: ""
+
+  market_type: "futures" # futures | spot
+
+  # 0 means no limit
+  long_wallet_exposure_limit: 0
+  short_wallet_exposure_limit: 0
+  assigned_balance: 0
+
+  # modes:  # n | m | gs | p | t
+  # modes info: https://www.passivbot.com/en/latest/live/#controlling-the-bot
+  long_mode: "n"
+  short_mode: "m"
+
+# to disable all instances, set instances to []
+# or remove instances section completely.
+# instances: []
+instances:
+  - user: "binance_01"
+    symbols:
+      - "ALICEUSDT"
+      - "HBARUSDT"
+      - "GTCUSDT"
+    # all default settings may be overridden below:
+    live_config_name: "risky.json"
+    # ...
+
+  # you may have multiple entries for the same user
+  - user: "binance_01"
+    symbols:
+      - "ETHUSDT"
+      - "BTCUSDT"
+
+  # or different users
+  - user: "binance_02"
+    symbols:
+      - "ALGOUSDT"
+      - "ATOMUSDT"
+      - "MANAUSDT"
+
+  # ! WARNING - following users will be treated as the same user,
+  # ! because market_type is not used to identify instances
+  #
+  # - user: "binance_01"
+  # symbols:
+  #   - "ETHUSDT"
+  # market_type: "spot"
+
+  # - user: "binance_01"
+  # symbols:
+  #   - "ETHUSDT"
+  # market_type: "futures"
+  #
+  # ? But there is a workaround,
+  # ? you can create two users with different names,
+  # ? but with the same API keys
+  #
+  # - user: "binance_01"
+  # ...
+  # - user: "binance_01_spot"
+  # ...
