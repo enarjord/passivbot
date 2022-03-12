@@ -1,6 +1,7 @@
 import logging
 from sys import argv
-from typing import Any, Dict, List
+import sys
+from typing import Any, Dict, List, Callable
 from manager import Manager
 from instance import Instance
 
@@ -54,11 +55,13 @@ class CLI:
         This will perform stop and start
         on all instances. See help for those
         commands to understand consequences.
-        Flags: [ -y ] [ -s ] [ -f ]'''
+        Args: [ query ]
+        Flags: [ -a ] [ -y ] [ -s ] [ -f ]'''
 
         delimiter = '-' * 20
-        self.flags['all'] = True
 
+        logging.info('Syncing instances...')
+        logging.info(delimiter)
         self.stop()
         logging.info(delimiter)
         self.manager.sync_config()
@@ -139,7 +142,9 @@ class CLI:
 
         silent = self.flags.get('silent', False)
 
-        instances_to_start = self.get_instances_for_action()
+        logging.info('Seeking for stopped instances...')
+        def filter(i): return not i.is_running()
+        instances_to_start = self.get_instances_for_action(filter)
         if len(instances_to_start) == 0:
             return
 
@@ -170,7 +175,9 @@ class CLI:
         force = self.flags.get('force', False)
         stop_all = self.flags.get('all', False)
 
-        instances_to_stop = self.get_instances_for_action()
+        logging.info('Seeking for running instances...')
+        def filter(i): return i.is_running()
+        instances_to_stop = self.get_instances_for_action(filter)
         if len(instances_to_stop) == 0:
             return
 
@@ -285,32 +292,36 @@ class CLI:
             return True
 
         logging.info(
-            'You are about to {} these instances:'.format(action))
-        for instance in instances:
-            logging.info('- {}'.format(instance.get_id()))
+            'Action "{}" will be performed on {} instance(s). Continue?'.format(action, len(instances)))
 
         try:
-            answer = input('Type "yes" or "y" to confirm: ')
+            answer = input(
+                'Type "yes" or "y" to confirm, or Ctrl+C to cancel: ')
         except KeyboardInterrupt:
             logging.info('\nAborted')
-            return False
+            sys.exit(1)
 
-        if answer in ['yes', 'y']:
+        if answer.lower() in ['yes', 'y']:
             return True
 
-        logging.info('Aborted')
+        logging.info('Skipped')
         return False
 
-    def get_instances_for_action(self) -> List[Instance]:
+    def get_instances_for_action(self, filter: Callable = None) -> List[Instance]:
         total_instances = self.manager.get_instances_length()
         if total_instances == 0:
             logging.warn('You have no instances configured')
             return []
 
         if self.flags.get('all', False):
-            return self.manager.get_instances()
+            instances = self.manager.get_instances()
+        else:
+            instances = self.manager.query_instances(self.args)
 
-        instances = self.manager.query_instances(self.args)
+        if callable(filter):
+            instances = [
+                instance for instance in instances if filter(instance)]
+
         if len(instances) == 0:
             logging.warn('No instances matched the given arguments')
 
