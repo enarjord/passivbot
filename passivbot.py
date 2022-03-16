@@ -118,8 +118,6 @@ class Bot:
             config["long_mode"] = None
         if "short_mode" not in config:
             config["short_mode"] = None
-        if "last_price_diff_limit" not in config:
-            config["last_price_diff_limit"] = 0.3
         if "assigned_balance" not in config:
             config["assigned_balance"] = None
         if "cross_wallet_pct" not in config:
@@ -660,12 +658,16 @@ class Bot:
             return
         self.ts_locked["cancel_and_create"] = time()
         try:
-            ideal_orders = [
-                o
-                for o in self.calc_orders()
-                if not any(k in o["custom_id"] for k in ["ientry", "unstuck"])
-                or abs(o["price"] - self.price) / self.price < 0.01
-            ]
+            ideal_orders = []
+            for o in self.calc_orders():
+                if o["custom_id"] in ["ientry", "unstuck"]:
+                    if calc_diff(o["price"], self.price) < 0.01:
+                        # EMA based orders must be closer than 1% of current price
+                        ideal_orders.append(o)
+                else:
+                    if calc_diff(o["price"], self.price) < self.price_distance_threshold:
+                        # all orders must be closer than x% of current price
+                        ideal_orders.append(o)
             to_cancel_, to_create_ = filter_orders(
                 self.open_orders,
                 ideal_orders,
@@ -1039,7 +1041,16 @@ async def main() -> None:
         default=None,
         help="add assigned_balance to live config",
     )
-
+    parser.add_argument(
+        "-pt",
+        "--price-distance-threshold",
+        "--price_distance_threshold",
+        type=float,
+        required=False,
+        dest="price_distance_threshold",
+        default=0.5,
+        help="only create limit orders closer to price than threshold; default=0.5",
+    )
     args = parser.parse_args()
     try:
         accounts = json.load(open("api-keys.json"))
@@ -1061,6 +1072,7 @@ async def main() -> None:
     config["symbol"] = args.symbol
     config["market_type"] = args.market_type if args.market_type is not None else "futures"
     config["passivbot_mode"] = determine_passivbot_mode(config)
+    config["price_distance_threshold"] = args.price_distance_threshold
     if args.assigned_balance is not None:
         logging.info(f"assigned balance set to {args.assigned_balance}")
         config["assigned_balance"] = args.assigned_balance
