@@ -660,7 +660,7 @@ class Bot:
         try:
             ideal_orders = []
             for o in self.calc_orders():
-                if o["custom_id"] in ["ientry", "unstuck"]:
+                if any(x in o["custom_id"] for x in ["ientry", "unstuck"]):
                     if calc_diff(o["price"], self.price) < 0.01:
                         # EMA based orders must be closer than 1% of current price
                         ideal_orders.append(o)
