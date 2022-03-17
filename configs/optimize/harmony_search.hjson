@@ -1,6 +1,6 @@
 {
   # harmony search options
-  n_harmonies: 42
+  n_harmonies: 32
   hm_considering_rate: 0.9
   bandwidth: 0.07
   pitch_adjusting_rate: 0.24
@@ -15,6 +15,7 @@
   #  adg_DGstd_ratio
   #  adg_mean
   #  adg_min
+  #  adg_realized_PAD_mean
   score_formula: adg_PAD_std
 
   # adg_PAD_std:
@@ -27,8 +28,12 @@
 
   # adg_PAD_mean:
   # adg * min(1, max_pa_dist_mean / mean([max(max_pa_dist_mean, pa_dist) for pa_dist in results]))
-  maximum_pa_distance_mean_long: 0.045
-  maximum_pa_distance_mean_short: 0.045
+
+  # adg_realized_PAD_mean:
+  # adg_realized / max(max_pa_dist_mean, mean([max(max_pa_dist_mean, PAD_mean) for PAD_mean in results]))
+  
+  maximum_pa_distance_mean_long: 0.02
+  maximum_pa_distance_mean_short: 0.02
 
   # adg_DGstd_ratio:
   # mean([dg_mean_std_ratio]) / std(dg_mean_std_ratio)
@@ -59,7 +64,8 @@
     "ENJUSDT", "IOTXUSDT", "TLMUSDT", "CHZUSDT", "AAVEUSDT",
     "BCHUSDT", "VETUSDT", "EGLDUSDT", "CELRUSDT", "THETAUSDT",
     "SFPUSDT", "UNIUSDT", "TRXUSDT", "XLMUSDT", "1INCHUSDT",
-    "GTCUSDT", "KEEPUSDT", "ZECUSDT", "STORJUSDT", "RUNEUSDT",
+    #"GTCUSDT", "KEEPUSDT", "ZECUSDT", "STORJUSDT", "RUNEUSDT",
+    "GTCUSDT", "ZECUSDT", "STORJUSDT", "RUNEUSDT",
     "BATUSDT", "YFIUSDT", "SXPUSDT", "GRTUSDT", "COTIUSDT",
     "HOTUSDT", "ANKRUSDT", "LINAUSDT", "MASKUSDT", "QTUMUSDT",
     "DENTUSDT", "C98USDT", "ARUSDT", "IOTAUSDT", "HNTUSDT",
@@ -88,12 +94,12 @@
       max_n_entry_orders: [10, 10]
       initial_qty_pct: [0.01, 0.05]
       initial_eprice_ema_dist: [-0.1, 0.0]
-      eprice_pprice_diff: [0.002, 0.04]
+      eprice_pprice_diff: [0.002, 0.05]
       secondary_allocation: [0.0, 0.7]
       secondary_pprice_diff: [0.05, 0.5]
       eprice_exp_base: [1.0, 2.1]
-      min_markup: [0.005, 0.05]
-      markup_range: [0.005, 0.05]
+      min_markup: [0.005, 0.06]
+      markup_range: [0.005, 0.06]
       n_close_orders: [4, 14]
       auto_unstuck_wallet_exposure_threshold: [0.0, 1.0]
       auto_unstuck_ema_dist: [0.0, 0.1]
@@ -107,12 +113,12 @@
       max_n_entry_orders: [10, 10]
       initial_qty_pct: [0.01, 0.05]
       initial_eprice_ema_dist: [-0.1, 0.0]
-      eprice_pprice_diff: [0.002, 0.04]
+      eprice_pprice_diff: [0.002, 0.05]
       secondary_allocation: [0.0, 0.7]
       secondary_pprice_diff: [0.05, 0.5]
       eprice_exp_base: [1.0, 2.1]
-      min_markup: [0.005, 0.05]
-      markup_range: [0.005, 0.05]
+      min_markup: [0.005, 0.06]
+      markup_range: [0.005, 0.06]
       n_close_orders: [4, 14]
       auto_unstuck_wallet_exposure_threshold: [0.0, 1.0]
       auto_unstuck_ema_dist: [0.0, 0.1]
@@ -129,9 +135,9 @@
       wallet_exposure_limit: [0.1, 0.1]
       ddown_factor: [0.05, 3.0]
       rentry_pprice_dist: [0.005, 0.05]
-      rentry_pprice_dist_wallet_exposure_weighting: [0.0, 80.0]
-      min_markup: [0.005, 0.05]
-      markup_range: [0.005, 0.05]
+      rentry_pprice_dist_wallet_exposure_weighting: [0.0, 90.0]
+      min_markup: [0.005, 0.06]
+      markup_range: [0.005, 0.06]
       n_close_orders: [4, 14]
       auto_unstuck_wallet_exposure_threshold: [0.0, 1.0]
       auto_unstuck_ema_dist: [0.0, 0.1]
@@ -145,9 +151,9 @@
       wallet_exposure_limit: [0.1, 0.1]
       ddown_factor: [0.05, 3.0]
       rentry_pprice_dist: [0.005, 0.05]
-      rentry_pprice_dist_wallet_exposure_weighting: [0.0, 80.0]
-      min_markup: [0.005, 0.05]
-      markup_range: [0.005, 0.05]
+      rentry_pprice_dist_wallet_exposure_weighting: [0.0, 90.0]
+      min_markup: [0.005, 0.06]
+      markup_range: [0.005, 0.06]
       n_close_orders: [4, 14]
       auto_unstuck_wallet_exposure_threshold: [0.0, 1.0]
       auto_unstuck_ema_dist: [0.0, 0.1]
