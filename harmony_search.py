@@ -22,6 +22,7 @@ from pure_funcs import (
     tuplify,
     sort_dict_keys,
     determine_passivbot_mode,
+    get_empty_analysis,
 )
 from procedures import (
     add_argparse_args,
@@ -64,42 +65,24 @@ def backtest_wrap(config_: dict, ticks_caches: dict):
     try:
         fills_long, fills_short, stats = backtest(config, ticks)
         longs, shorts, sdf, analysis = analyze_fills(fills_long, fills_short, stats, config)
-        pa_distance_mean_long = analysis["pa_distance_mean_long"]
-        pa_distance_mean_short = analysis["pa_distance_mean_short"]
-        PAD_std_long = analysis["pa_distance_std_long"]
-        PAD_std_short = analysis["pa_distance_std_short"]
-        adg_long = analysis["adg_long"]
-        adg_short = analysis["adg_short"]
-        adg_DGstd_ratio_long = analysis["adg_DGstd_ratio_long"]
-        adg_DGstd_ratio_short = analysis["adg_DGstd_ratio_short"]
         """
         with open("logs/debug_harmonysearch.txt", "a") as f:
             f.write(json.dumps({"config": denumpyize(config), "analysis": analysis}) + "\n")
         """
         logging.debug(
-            f"backtested {config['symbol']: <12} pa distance long {pa_distance_mean_long:.6f} "
-            + f"pa distance short {pa_distance_mean_short:.6f} adg long {adg_long:.6f} "
-            + f"adg short {adg_short:.6f} std long {PAD_std_long:.5f} "
-            + f"std short {PAD_std_short:.5f}"
+            f"backtested {config['symbol']: <12} pa distance long {analysis['pa_distance_mean_long']:.6f} "
+            + f"pa distance short {analysis['pa_distance_mean_short']:.6f} adg long {analysis['adg_long']:.6f} "
+            + f"adg short {analysis['adg_short']:.6f} std long {analysis['pa_distance_std_long']:.5f} "
+            + f"std short {analysis['pa_distance_std_short']:.5f}"
         )
     except Exception as e:
+        analysis = get_empty_analysis()
         logging.error(f'error with {config["symbol"]} {e}')
         logging.error("config")
         traceback.print_exc()
-        adg_long = adg_short = adg_DGstd_ratio_long = adg_DGstd_ratio_short = 0.0
-        pa_distance_mean_long = pa_distance_mean_short = PAD_std_long = PAD_std_short = 100.0
         with open(make_get_filepath("tmp/harmony_search_errors.txt"), "a") as f:
             f.write(json.dumps([time(), "error", str(e), denumpyize(config)]) + "\n")
-    return {
-        "pa_distance_mean_long": pa_distance_mean_long,
-        "pa_distance_mean_short": pa_distance_mean_short,
-        "adg_DGstd_ratio_long": adg_DGstd_ratio_long,
-        "adg_DGstd_ratio_short": adg_DGstd_ratio_short,
-        "pa_distance_std_long": PAD_std_long,
-        "pa_distance_std_short": PAD_std_short,
-        "adg_long": adg_long,
-        "adg_short": adg_short,
-    }
+    return analysis
 
 
 class HarmonySearch:
@@ -173,8 +156,8 @@ class HarmonySearch:
             # completed multisymbol iter
             adgs_long = [v["adg_long"] for v in results.values()]
             adg_mean_long = np.mean(adgs_long)
-            PAD_std_long_raw = np.mean([v["pa_distance_std_long"] for v in results.values()])
-            PAD_std_long = np.mean(
+            pa_distance_std_long_raw = np.mean([v["pa_distance_std_long"] for v in results.values()])
+            pa_distance_std_long = np.mean(
                 [
                     max(self.config["maximum_pa_distance_std_long"], v["pa_distance_std_long"])
                     for v in results.values()
@@ -191,9 +174,11 @@ class HarmonySearch:
             adg_DGstd_ratios_long_mean = np.mean(adg_DGstd_ratios_long)
             adgs_short = [v["adg_short"] for v in results.values()]
             adg_mean_short = np.mean(adgs_short)
-            PAD_std_short_raw = np.mean([v["pa_distance_std_short"] for v in results.values()])
+            pa_distance_std_short_raw = np.mean(
+                [v["pa_distance_std_short"] for v in results.values()]
+            )
 
-            PAD_std_short = np.mean(
+            pa_distance_std_short = np.mean(
                 [
                     max(self.config["maximum_pa_distance_std_short"], v["pa_distance_std_short"])
                     for v in results.values()
@@ -217,12 +202,22 @@ class HarmonySearch:
                 score_short = -adg_mean_short * min(
                     1.0, self.config["maximum_pa_distance_mean_short"] / PAD_mean_short
                 )
+            elif self.config["score_formula"] == "adg_realized_PAD_mean":
+                adgs_realized_long = [v["adg_realized_per_exposure_long"] for v in results.values()]
+                adgs_realized_short = [v["adg_realized_per_exposure_short"] for v in results.values()]
+
+                score_long = -np.mean(adgs_realized_long) / max(
+                    self.config["maximum_pa_distance_mean_long"], PAD_mean_long
+                )
+                score_short = -np.mean(adgs_realized_short) / max(
+                    self.config["maximum_pa_distance_mean_short"], PAD_mean_short
+                )
             elif self.config["score_formula"] == "adg_PAD_std":
                 score_long = -adg_mean_long / max(
-                    self.config["maximum_pa_distance_std_long"], PAD_std_long
+                    self.config["maximum_pa_distance_std_long"], pa_distance_std_long
                 )
                 score_short = -adg_mean_short / max(
-                    self.config["maximum_pa_distance_std_short"], PAD_std_short
+                    self.config["maximum_pa_distance_std_short"], pa_distance_std_short
                 )
             elif self.config["score_formula"] == "adg_DGstd_ratio":
                 score_long = -adg_DGstd_ratios_long_mean
@@ -253,10 +248,10 @@ class HarmonySearch:
             line = f"completed multisymbol iter {cfg['config_no']} "
             if self.do_long:
                 line += f"- adg long {adg_mean_long:.6f} PAD long {PAD_mean_long:.6f} std long "
-                line += f"{PAD_std_long:.5f} score long {score_long:.7f} "
+                line += f"{pa_distance_std_long:.5f} score long {score_long:.7f} "
             if self.do_short:
                 line += f"- adg short {adg_mean_short:.6f} PAD short {PAD_mean_short:.6f} std short "
-                line += f"{PAD_std_short:.5f} score short {score_short:.7f}"
+                line += f"{pa_distance_std_short:.5f} score short {score_short:.7f}"
             logging.debug(line)
             # check whether initial eval or new harmony
             if "initial_eval_key" in cfg:
@@ -340,7 +335,7 @@ class HarmonySearch:
                     f"i{cfg['config_no']} - new best config long, score {score_long:.7f} "
                     + f"adg {adg_mean_long / cfg['long']['wallet_exposure_limit']:.7f} "
                     + f"PAD mean {PAD_mean_long_raw:.7f} "
-                    + f"PAD std {PAD_std_long_raw:.5f} adg/DGstd {adg_DGstd_ratios_long_mean:.7f}"
+                    + f"PAD std {pa_distance_std_long_raw:.5f} adg/DGstd {adg_DGstd_ratios_long_mean:.7f}"
                 )
                 tmp_fname += "_long"
                 json.dump(
@@ -355,7 +350,7 @@ class HarmonySearch:
                     f"i{cfg['config_no']} - new best config short, score {score_short:.7f} "
                     + f"adg {adg_mean_short / cfg['short']['wallet_exposure_limit']:.7f} "
                     + f"PAD mean {PAD_mean_short_raw:.7f} "
-                    + f"PAD std {PAD_std_short_raw:.5f} adg/DGstd {adg_DGstd_ratios_short_mean:.7f}"
+                    + f"PAD std {pa_distance_std_short_raw:.5f} adg/DGstd {adg_DGstd_ratios_short_mean:.7f}"
                 )
                 tmp_fname += "_short"
                 json.dump(
