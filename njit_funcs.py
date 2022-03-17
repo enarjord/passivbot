@@ -593,6 +593,8 @@ def find_close_qty_short_bringing_wallet_exposure_to_target(
             balance + calc_pnl_short(pprice, close_price, guess_, inverse, c_mult)
         )
 
+    if wallet_exposure_target == 0.0:
+        return abs(psize)
     wallet_exposure = qty_to_cost(psize, pprice, inverse, c_mult) / balance
     if wallet_exposure <= wallet_exposure_target * 1.001:
         # wallet_exposure within 0.1% of target: return zero
@@ -696,6 +698,8 @@ def find_entry_qty_bringing_wallet_exposure_to_target(
     qty_step,
     c_mult,
 ) -> float:
+    if wallet_exposure_target == 0.0:
+        return 0.0
     wallet_exposure = qty_to_cost(psize, pprice, inverse, c_mult) / balance
     if wallet_exposure >= wallet_exposure_target * 0.99:
         # return zero if wallet_exposure already is within 1% of target
