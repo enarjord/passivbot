@@ -573,6 +573,7 @@ def analyze_fills(
         adg_DGstd_ratio_long = adg_long / DGstd_long if len(daily_gains_long) > 0 else 0.0
         if any("bankruptcy" in e for e in longs.type.unique()):
             adg_long = 0.01 ** (1 / n_days) - 1  # reward bankrupt runs lasting longer
+        adg_realized_long = (sdf.iloc[-1].balance_long / sdf.iloc[0].balance_long) ** (1 / n_days) - 1
     else:
         adg_long = adg_DGstd_ratio_long = 0.0
         DGstd_long = 100.0
@@ -585,6 +586,7 @@ def analyze_fills(
         adg_DGstd_ratio_short = adg_short / DGstd_short if len(daily_gains_short) > 0 else 0.0
         if any("bankruptcy" in e for e in shorts.type.unique()):
             adg_short = 0.01 ** (1 / n_days) - 1  # reward bankrupt runs lasting longer
+        adg_realized_short = (sdf.iloc[-1].balance_short / sdf.iloc[0].balance_short) ** (1 / n_days) - 1
     else:
         adg_short = adg_DGstd_ratio_short = 0.0
         DGstd_short = 100.0
@@ -638,6 +640,15 @@ def analyze_fills(
         else 0.0,
         "adg_DGstd_ratio_long": adg_DGstd_ratio_long,
         "adg_DGstd_ratio_short": adg_DGstd_ratio_short,
+        "adg_realized_long": adg_realized_long,
+        "adg_realized_short": adg_realized_short,
+        "adg_realized_per_exposure_long": adg_realized_long / config["long"]["wallet_exposure_limit"]
+        if config["long"]["enabled"] and config["long"]["wallet_exposure_limit"] > 0.0
+        else 0.0,
+        "adg_realized_per_exposure_short": adg_realized_short
+        / config["short"]["wallet_exposure_limit"]
+        if config["short"]["enabled"] and config["short"]["wallet_exposure_limit"] > 0.0
+        else 0.0,
         "DGstd_long": DGstd_long,
         "DGstd_short": DGstd_short,
         "n_days": n_days,
@@ -693,6 +704,85 @@ def analyze_fills(
         "volume_quote_short": volume_quote_short,
     }
     return longs, shorts, sdf, sort_dict_keys(analysis)
+
+
+def get_empty_analysis():
+    return {
+        "exchange": "unknown",
+        "symbol": "unknown",
+        "starting_balance": 0.0,
+        "pa_distance_mean_long": 1000.0,
+        "pa_distance_max_long": 1000.0,
+        "pa_distance_std_long": 1000.0,
+        "pa_distance_mean_short": 1000.0,
+        "pa_distance_max_short": 1000.0,
+        "pa_distance_std_short": 1000.0,
+        "gain_long": 0.0,
+        "adg_long": 0.0,
+        "adg_per_exposure_long": 0.0,
+        "gain_short": 0.0,
+        "adg_short": 0.0,
+        "adg_per_exposure_short": 0.0,
+        "adg_DGstd_ratio_long": 0.0,
+        "adg_DGstd_ratio_short": 0.0,
+        "adg_realized_long": 0.0,
+        "adg_realized_short": 0.0,
+        "adg_realized_per_exposure_long": 0.0,
+        "adg_realized_per_exposure_short": 0.0,
+        "DGstd_long": 0.0,
+        "DGstd_short": 0.0,
+        "n_days": 0.0,
+        "n_fills_long": 0.0,
+        "n_fills_short": 0.0,
+        "n_closes_long": 0.0,
+        "n_closes_short": 0.0,
+        "n_normal_closes_long": 0.0,
+        "n_normal_closes_short": 0.0,
+        "n_entries_long": 0.0,
+        "n_entries_short": 0.0,
+        "n_ientries_long": 0.0,
+        "n_ientries_short": 0.0,
+        "n_rentries_long": 0.0,
+        "n_rentries_short": 0.0,
+        "n_unstuck_closes_long": 0.0,
+        "n_unstuck_closes_short": 0.0,
+        "n_unstuck_entries_long": 0.0,
+        "n_unstuck_entries_short": 0.0,
+        "avg_fills_per_day_long": 0.0,
+        "avg_fills_per_day_short": 0.0,
+        "hrs_stuck_max_long": 1000.0,
+        "hrs_stuck_avg_long": 1000.0,
+        "hrs_stuck_max_short": 1000.0,
+        "hrs_stuck_avg_short": 1000.0,
+        "hrs_stuck_max": 1000.0,
+        "hrs_stuck_avg": 1000.0,
+        "loss_sum_long": 0.0,
+        "loss_sum_short": 0.0,
+        "profit_sum_long": 0.0,
+        "profit_sum_short": 0.0,
+        "pnl_sum_long": 0.0,
+        "pnl_sum_short": 0.0,
+        "fee_sum_long": 0.0,
+        "fee_sum_short": 0.0,
+        "net_pnl_plus_fees_long": 0.0,
+        "net_pnl_plus_fees_short": 0.0,
+        "final_equity_long": 0.0,
+        "final_balance_long": 0.0,
+        "final_equity_short": 0.0,
+        "final_balance_short": 0.0,
+        "closest_bkr_long": 0.0,
+        "closest_bkr_short": 0.0,
+        "eqbal_ratio_min_long": 0.0,
+        "eqbal_ratio_mean_long": 0.0,
+        "eqbal_ratio_min_short": 0.0,
+        "eqbal_ratio_mean_short": 0.0,
+        "biggest_psize_long": 0.0,
+        "biggest_psize_short": 0.0,
+        "biggest_psize_quote_long": 0.0,
+        "biggest_psize_quote_short": 0.0,
+        "volume_quote_long": 0.0,
+        "volume_quote_short": 0.0,
+    }
 
 
 def calc_pprice_from_fills(coin_balance, fills, n_fills_limit=100):
