@@ -575,7 +575,7 @@ def analyze_fills(
             adg_long = 0.01 ** (1 / n_days) - 1  # reward bankrupt runs lasting longer
         adg_realized_long = (sdf.iloc[-1].balance_long / sdf.iloc[0].balance_long) ** (1 / n_days) - 1
     else:
-        adg_long = adg_DGstd_ratio_long = 0.0
+        adg_long = adg_DGstd_ratio_long = adg_realized_long = 0.0
         DGstd_long = 100.0
 
     if len(shorts) > 0:
@@ -586,9 +586,10 @@ def analyze_fills(
         adg_DGstd_ratio_short = adg_short / DGstd_short if len(daily_gains_short) > 0 else 0.0
         if any("bankruptcy" in e for e in shorts.type.unique()):
             adg_short = 0.01 ** (1 / n_days) - 1  # reward bankrupt runs lasting longer
-        adg_realized_short = (sdf.iloc[-1].balance_short / sdf.iloc[0].balance_short) ** (1 / n_days) - 1
+        gain_realized_short = sdf.iloc[-1].balance_short / sdf.iloc[0].balance_short
+        adg_realized_short = gain_realized_short ** (1 / n_days) - 1
     else:
-        adg_short = adg_DGstd_ratio_short = 0.0
+        adg_short = adg_DGstd_ratio_short = adg_realized_short = 0.0
         DGstd_short = 100.0
 
     pos_costs_long = longs.apply(
