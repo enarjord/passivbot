@@ -205,8 +205,8 @@ async def fetch_market_specific_settings(config: dict):
         if "spot" in config["market_type"]:
             raise Exception("spot not implemented on bybit")
         bot = await create_bybit_bot(tmp_live_settings)
-        settings_from_exchange["maker_fee"] = -0.00025
-        settings_from_exchange["taker_fee"] = 0.00075
+        settings_from_exchange["maker_fee"] = 0.0001
+        settings_from_exchange["taker_fee"] = 0.0006
         settings_from_exchange["exchange"] = "bybit"
     else:
         raise Exception(f"unknown exchange {exchange}")
