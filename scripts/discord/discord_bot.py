@@ -2,10 +2,13 @@ import discord
 from actions.hello import hello
 from actions.pumpdump import pumpdump
 from actions.long_short import long_short
+from actions.chart import chart
 import os
 
 # python3 -m pip install python-binance
 # pip install discord
+# pip install plotly
+# pip install kaleido
 # https://github.com/Rapptz/discord.py
 #d doc du framework : https://discordpy.readthedocs.io/en/latest/api.html#discord.Member
 
@@ -24,6 +27,9 @@ class MyClient(discord.Client):
         if message.content.startswith('!hello'):
             await hello(message)
 
+        if message.content.startswith('!chart'):
+            await chart(message)
+
         if message.content.startswith('!ls'):
             await long_short(message)
 
@@ -37,6 +43,7 @@ class MyClient(discord.Client):
         # await message.channel.send('Hello {0.author.mention}'.format(message))
         # await message.channel.send('Hello {0.author.mention}'.format(message))
         # await message.channel.send('Hello {0.author}'.format(message))
+
 
 client = MyClient()
 base_dir = os.path.realpath(os.path.dirname(os.path.abspath(__file__))+'/')+'/'
