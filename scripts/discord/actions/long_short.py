@@ -7,7 +7,7 @@ async def long_short(message):
     api_key = ''
     api_secret = ''
  
-    await message.channel.send('Ok c\'est parti je vais calculer les ratios Long/Short.')
+    # await message.channel.send('Ok c\'est parti je vais calculer les ratios Long/Short.')
  
     # Connect to the api
     client = Client(api_key, api_secret)
@@ -47,7 +47,7 @@ async def long_short(message):
 
         current_i = current_i + 1
 
-    await message.channel.send('Fini 100%')
+    # await message.channel.send('Fini 100%')
     # Aggregate data
     table = pd.DataFrame.from_dict(exchange_info['symbols'])[['pair']]
     table['global long short ratio'] = ls_ratio
@@ -72,7 +72,7 @@ async def long_short(message):
         to_send = to_send + line + "\n"
         nb_line = nb_line + 1
         if nb_line > 20:
-            await message.channel.send(to_send)
+            await message.channel.send("```"+to_send+"```")
             nb_line = 0
             to_send = ""
     if nb_line > 0:

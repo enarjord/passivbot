@@ -4,7 +4,9 @@ from actions.pumpdump import pumpdump
 from actions.long_short import long_short
 import os
 
-
+# python3 -m pip install python-binance
+# pip install discord
+# https://github.com/Rapptz/discord.py
 #d doc du framework : https://discordpy.readthedocs.io/en/latest/api.html#discord.Member
 
 class MyClient(discord.Client):
