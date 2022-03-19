@@ -20,7 +20,7 @@ async def chart(message):
     coin = re.sub("[^A-Z0-9]", "", args[1].upper())
 
     ut = "1d"
-    if len(args) == 3 :
+    if len(args) >= 3 :
         ut   = re.sub("[^a-z0-9]", "", args[2].lower())
 
     nb_days   = 0
