@@ -2,7 +2,7 @@
 current_pwd=`pwd`
 gs=" -gs "
 gs=""
-symbols=(BNBUSDT MATICUSDT ALICEUSDT )
+symbols=(ALICEUSDT CHZUSDT 1INCHUSDT MATICUSDT RUNEUSDT )
 
 for i in "${symbols[@]}"
 do

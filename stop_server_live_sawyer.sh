@@ -1,5 +1,5 @@
 #!/bin/bash
-symbols=(BNBUSDT MATICUSDT ALICEUSDT )
+symbols=(ALICEUSDT CHZUSDT 1INCHUSDT MATICUSDT RUNEUSDT )
 for i in "${symbols[@]}"
 do
     :
