@@ -85,7 +85,7 @@ async def long_short(message):
     top_nb = 3
 
     best_long = table.iloc[0:top_nb]
-    await message.channel.send("Top 5 coin à **Long** : ")
+    await message.channel.send("------------------------------------------------\nTop 5 coin à **Long** : ")
     
     for index, row in best_long.iterrows():
         if row['pair'] == "1000SHIBUSDT": 
@@ -93,7 +93,7 @@ async def long_short(message):
         await chart(message, '!chart ' + row['pair'] + " 1h 24h [ls ratio : " + str(row['global long short ratio']) + "]")
     
     best_short = table.iloc[-top_nb:]
-    await message.channel.send("Top 5 coin à **Short** : " )
+    await message.channel.send("------------------------------------------------\nTop 5 coin à **Short** : " )
     for index, row in best_short.iterrows():
         if row['pair'] == "1000SHIBUSDT": 
             row['pair'] = "SHIBUSDT"
