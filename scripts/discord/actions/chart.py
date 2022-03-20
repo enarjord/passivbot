@@ -8,9 +8,14 @@ from plotly.subplots import make_subplots
 import ta 
 
 
-async def chart(message):
+async def chart(message, subdefined_message=""):
 
-    content = str(message.content)
+    content = ""
+    if (subdefined_message == ""):
+        content = str(message.content)
+    else:
+        content = subdefined_message
+
     # content = '!chart ETHUSDT 1D'
 
     args = content.split(' ')
@@ -144,4 +149,4 @@ async def chart(message):
     )
 
     fig.write_image("tmp/name_of_file.jpeg")
-    await message.channel.send('Chart '+ coin + " " + ut, file=discord.File('tmp/name_of_file.jpeg'))
+    await message.channel.send(content, file=discord.File('tmp/name_of_file.jpeg'))

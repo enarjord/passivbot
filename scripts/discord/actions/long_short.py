@@ -1,6 +1,7 @@
 from binance.client import Client
 import pandas as pd
 from tabulate import tabulate
+from actions.chart import chart
 
 async def long_short(message):
     # We don't need any specific api key and password to get long short ratio data
@@ -77,3 +78,20 @@ async def long_short(message):
             to_send = ""
     if nb_line > 0:
         await message.channel.send("```"+to_send+"```")
+
+    top_nb = 3
+
+    best_long = table['pair'].values[0:top_nb].tolist()
+    await message.channel.send("Top 5 coin à **Long** : ")
+    for pair in  best_long:
+        if pair == "1000SHIBUSDT": 
+            pair = "SHIBUSDT"
+        await chart(message, '!chart '+pair+" 5m 24h")
+    
+    best_short = table['pair'].values[-top_nb:].tolist()
+    await message.channel.send("Top 5 coin à **Short** : " )
+    for pair in  best_short:
+        if pair == "1000SHIBUSDT": 
+            pair = "SHIBUSDT"
+        await chart(message, '!chart '+pair+" 5m 24h")
+    
