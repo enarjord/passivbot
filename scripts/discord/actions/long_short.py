@@ -34,6 +34,9 @@ async def long_short(message):
     for pair in pairs:
         funding.append(float(client.futures_funding_rate(symbol=pair, limit=nLastPeriods)[0]['fundingRate']))
         ls_ratio.append(float(client.futures_global_longshort_ratio(symbol=pair, period=period, limit=nLastPeriods)[0]['longShortRatio']))
+        # funding.append(5)
+        # ls_ratio.append(5)
+        #spreads.append(float("nan"))
         try:
             spreads.append(float(client.futures_symbol_ticker(symbol=pair)['price']) - float(client.get_symbol_ticker(symbol=pair)['price']))
         except: 
@@ -47,7 +50,7 @@ async def long_short(message):
             await message.channel.send('Progression '+ str(pct) + "%")
 
         current_i = current_i + 1
-
+        
     # await message.channel.send('Fini 100%')
     # Aggregate data
     table = pd.DataFrame.from_dict(exchange_info['symbols'])[['pair']]
@@ -81,17 +84,18 @@ async def long_short(message):
 
     top_nb = 3
 
-    best_long = table['pair'].values[0:top_nb].tolist()
+    best_long = table.iloc[0:top_nb]
     await message.channel.send("Top 5 coin à **Long** : ")
-    for pair in  best_long:
-        if pair == "1000SHIBUSDT": 
-            pair = "SHIBUSDT"
-        await chart(message, '!chart '+pair+" 5m 24h")
     
-    best_short = table['pair'].values[-top_nb:].tolist()
+    for index, row in best_long.iterrows():
+        if row['pair'] == "1000SHIBUSDT": 
+            row['pair'] = "SHIBUSDT"
+        await chart(message, '!chart ' + row['pair'] + " 5m 24h [ls ratio : " + str(row['global long short ratio']) + "]")
+    
+    best_short = table.iloc[-top_nb:]
     await message.channel.send("Top 5 coin à **Short** : " )
-    for pair in  best_short:
-        if pair == "1000SHIBUSDT": 
-            pair = "SHIBUSDT"
-        await chart(message, '!chart '+pair+" 5m 24h")
+    for index, row in best_short.iterrows():
+        if row['pair'] == "1000SHIBUSDT": 
+            row['pair'] = "SHIBUSDT"
+        await chart(message, '!chart ' + row['pair'] + " 5m 24h [ls ratio : " + str(row['global long short ratio']) + "]")
     
