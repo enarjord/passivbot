@@ -358,3 +358,4 @@ scripts/tmp/grid_ok_coins.json
 !/scripts/backtests
 /scripts/backtests/*/
 scripts/tmp/best_coins.json
+scripts/discord/tmp/name_of_file.jpeg
