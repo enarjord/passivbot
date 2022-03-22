@@ -35,6 +35,15 @@ async def main():
         dest="percentage",
         help="per uno, i.e. 0.02==2%.  default=0.5",
     )
+    parser.add_argument(
+        "-q",
+        "--quote",
+        type=str,
+        required=False,
+        default="USDT",
+        dest="quote",
+        help="quote coin, default USDT",
+    )
     args = parser.parse_args()
     config = get_template_live_config()
     config["user"] = args.user
@@ -59,16 +68,17 @@ async def main():
             traceback.print_exc()
             income = []
         income = [e for e in income if e["transaction_id"] not in already_transferred_ids]
+        income = [e for e in income if e["token"] == args.quote]
         profit = sum([e["income"] for e in income])
         to_transfer = round_dynamic(profit * args.percentage, 4)
         if to_transfer > 0:
             try:
                 transferred = await bot.private_post(
                     bot.endpoints["futures_transfer"],
-                    {"asset": "USDT", "amount": to_transfer, "type": 2},
+                    {"asset": args.quote, "amount": to_transfer, "type": 2},
                     base_endpoint=bot.spot_base_endpoint,
                 )
-                logging.info(f"income: {profit} transferred {to_transfer} USDT")
+                logging.info(f"income: {profit} transferred {to_transfer} {args.quote}")
                 already_transferred_ids.update([e["transaction_id"] for e in income])
                 json.dump(list(already_transferred_ids), open(transfer_log_fpath, "w"))
             except Exception as e:
