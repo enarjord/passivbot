@@ -3,6 +3,7 @@ from actions.hello import hello
 from actions.pumpdump import pumpdump
 from actions.long_short import long_short
 from actions.chart import chart
+from actions.wallet import wallet
 import os
 import logging
 import traceback
@@ -34,6 +35,7 @@ class MyClient(discord.Client):
     !hello => just say hello :)\n\
     !chart => show a chart\n\
     !ls => longshort ratio\n\
+    !wallet => Show Tedy Grid Wallet\n\
         ')
 
             if message.content.startswith('!hello'):
@@ -45,10 +47,13 @@ class MyClient(discord.Client):
             if message.content.startswith('!ls'):
                 await long_short(message)
 
-            if 'dump' in message.content:
-                await pumpdump(message, 'dump')
-            elif 'pump' in message.content:
-                await pumpdump(message, 'pump')
+            if message.content.startswith('!wallet'):
+                await wallet(message)
+
+            # if 'dump' in message.content:
+            #     await pumpdump(message, 'dump')
+            # elif 'pump' in message.content:
+            #     await pumpdump(message, 'pump')
                 
 
             # Garé pour les infos
