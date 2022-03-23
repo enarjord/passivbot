@@ -7,8 +7,21 @@ from tabulate import tabulate
 
 async def wallet(message):
 
-    api_keys_file = "../../api-keys.json"
+    a_message = message.content.split(' ')
+    if len(a_message) < 2:
+        await message.channel.send("Mauvais usage. Ex : !w tedy")
+        return 
+
     api_keys_user = "bybit_tedy"
+    if a_message[1] == "tedy": 
+        api_keys_user = "bybit_tedy"
+    elif a_message[1] == "jojo":
+        api_keys_user = "bybit_jojo"
+    else:
+        await message.channel.send("Mauvais user.")
+        return 
+
+    api_keys_file = "../../api-keys.json"
     coin_ballance = "USDT"
 
     def get_equity_and_pnl(api_keys_file, api_keys_user, coin_ballance):

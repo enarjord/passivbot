@@ -4,18 +4,28 @@ from actions.pumpdump import pumpdump
 from actions.long_short import long_short
 from actions.chart import chart
 from actions.wallet import wallet
+
 import os
 import logging
 import traceback
 
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
+
 
 # python3 -m pip install python-binance
 # pip install ta
+# pip install apscheduler
 # pip install discord
 # pip install plotly
 # pip install kaleido
 # https://github.com/Rapptz/discord.py
 #d doc du framework : https://discordpy.readthedocs.io/en/latest/api.html#discord.Member
+
+
+class Struct:
+    def __init__(self, **entries):
+        self.__dict__.update(entries)
 
 class MyClient(discord.Client):
     async def on_ready(self):
@@ -30,24 +40,26 @@ class MyClient(discord.Client):
             if message.author.id == self.user.id:
                 return
 
-            if message.content.startswith('!help'):
+            a_message = message.content.split(' ')
+
+            if a_message[0] == '!help':
                 await message.channel.send('Commandes disponibles \n\
     !hello => just say hello :)\n\
     !chart => show a chart\n\
     !ls => longshort ratio\n\
-    !wallet => Show Tedy Grid Wallet\n\
+    !w user => Show Wallet user=[tedy, jojo]\n\
         ')
 
-            if message.content.startswith('!hello'):
+            if a_message[0] == '!hello':
                 await hello(message)
 
-            if message.content.startswith('!chart'):
+            if a_message[0] == '!chart':
                 await chart(message)
 
-            if message.content.startswith('!ls'):
+            if a_message[0] == '!ls':
                 await long_short(message)
 
-            if message.content.startswith('!wallet'):
+            if a_message[0] == '!w':
                 await wallet(message)
 
             # if 'dump' in message.content:
@@ -67,4 +79,33 @@ class MyClient(discord.Client):
 
 client = MyClient()
 base_dir = os.path.realpath(os.path.dirname(os.path.abspath(__file__))+'/')+'/'
+
+# @tasks.loop(seconds=2)
+# async def show_wallet():
+#     print('test')
+
+# show_wallet.start()
+async def show_wallet():
+    await client.wait_until_ready()
+
+    # 926406999107846245 channel grid-passivbot
+    # 955193076668829696 channel test
+    c = client.get_channel(926406999107846245)  
+    data = {'content': "!w tedy", 'channel': c}
+    message = Struct(**data)
+    await wallet(message)
+
+    # data = {'content': "!w jojo", 'channel': c}
+    # message = Struct(**data)
+    # await wallet(message)
+
+#initializing scheduler
+scheduler = AsyncIOScheduler()
+#sends "Your Message" at 12PM and 18PM (Local Time)
+scheduler.add_job(show_wallet, CronTrigger(hour="10", minute="0", second="0")) 
+#starting the scheduler
+scheduler.start()
+
+
 client.run(open(base_dir+"/config/token.txt", 'r').read())
+
