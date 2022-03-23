@@ -1,6 +1,6 @@
 {
   # futures or spot
-  market_type: spot
+  market_type: futures
 
   # exchange from api-keys.json is used
   user: bybit_pro

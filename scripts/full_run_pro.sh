@@ -8,3 +8,4 @@ python3 1_backtest_looper.py ${live_config} ${backtest_config} -jf tmp/grid_ok_c
 python3 2_backtest_summary.py ${nb_best_coin} ${live_config} ${backtest_config} -max-stuck-avg 7 -max-stuck 200  -min-gain 10
 
 # ATTENTION pour la génération de script faut les passer en spot le live ajouter : -m spot
+# Fuck en fait on peut pas passivbot ne supporte pas le spot...
