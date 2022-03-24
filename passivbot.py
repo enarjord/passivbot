@@ -748,9 +748,15 @@ class Bot:
             logging.info(f"heartbeat {self.symbol}")
             self.log_position_long()
             self.log_position_short()
+            liq_price = self.position["long"]["liquidation_price"]
+            if calc_diff(self.position["short"]["liquidation_price"], self.price) < calc_diff(
+                liq_price, self.price
+            ):
+                liq_price = self.position["short"]["liquidation_price"]
             logging.info(
                 f'balance: {round_dynamic(self.position["wallet_balance"], 6)}'
                 + f' equity: {round_dynamic(self.position["equity"], 6)} last price: {self.price}'
+                + f" liq: {round_(liq_price, self.price_step)}"
             )
             self.heartbeat_ts = time()
         await self.cancel_and_create()
@@ -821,9 +827,15 @@ class Bot:
             if "wallet_balance" in event:
                 new_wallet_balance = self.adjust_wallet_balance(event["wallet_balance"])
                 if new_wallet_balance != self.position["wallet_balance"]:
+                    liq_price = self.position["long"]["liquidation_price"]
+                    if calc_diff(self.position["short"]["liquidation_price"], self.price) < calc_diff(
+                        liq_price, self.price
+                    ):
+                        liq_price = self.position["short"]["liquidation_price"]
                     logging.info(
                         f"balance: {round_dynamic(new_wallet_balance, 6)}"
                         + f' equity: {round_dynamic(self.position["equity"], 6)} last price: {self.price}'
+                        + f" liq: {round_(liq_price, self.price_step)}"
                     )
                 self.position["wallet_balance"] = new_wallet_balance
                 pos_change = True
