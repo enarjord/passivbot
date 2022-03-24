@@ -6,6 +6,9 @@ import hjson
 from tabulate import tabulate
 import json
 from datetime import datetime, date
+import pandas as pd
+import plotly.express as px
+import discord
 
 
 async def wallet(message):
@@ -68,7 +71,7 @@ async def wallet(message):
 
     wallet_data = get_equity_and_pnl(api_keys_file, api_keys_user, coin_ballance)
 
-    
+    discord_message_to_send = ""
 
     if wallet_data['error'] == "":
         colonne = 20
@@ -77,7 +80,7 @@ async def wallet(message):
         user_name.ljust(colonne)   + wallet_data['equity'].ljust(colonne)     +   wallet_data['cum_realised_pnl'].ljust(colonne)
         message_content = message_content.replace('.', ',')
 
-        await message.channel.send("```"+message_content+"```")
+        discord_message_to_send = "```"+message_content+"```"
     else:
         await message.channel.send("Problem :"+wallet_data['error'])
 
@@ -100,3 +103,13 @@ async def wallet(message):
     jsonFile = open(json_file, "w")
     jsonFile.write(jsonString)
     jsonFile.close()
+
+    df = pd.DataFrame(json_base).T
+    df.cum_realised_pnl = pd.to_numeric(df.cum_realised_pnl)
+    print(tabulate(df, headers='keys', tablefmt='psql'))
+
+    fig = px.line(df, x="date", y="cum_realised_pnl", title='Profit')
+    
+    image_file = json_file + ".jpeg"
+    fig.write_image(image_file)
+    await message.channel.send(discord_message_to_send, file=discord.File(image_file))
