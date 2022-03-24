@@ -34,6 +34,9 @@ class MyClient(discord.Client):
         print(self.user.id)
         print('------')
 
+        # Test part
+        #await show_wallet(Test=True)
+
     async def on_message(self, message):
         try:
             # we do not want the bot to reply to itself
@@ -85,21 +88,28 @@ base_dir = os.path.realpath(os.path.dirname(os.path.abspath(__file__))+'/')+'/'
 #     print('test')
 
 # show_wallet.start()
-async def show_wallet():
+async def show_wallet(Test=False):
     await client.wait_until_ready()
 
     # 926406999107846245 channel grid-passivbot
     # 955193076668829696 channel test
     # 910612726081024010 channel onlyupx3
-    c = client.get_channel(926406999107846245)  
-    data = {'content': "!w tedy", 'channel': c}
-    message = Struct(**data)
-    await wallet(message)
+    if not Test:
+        c = client.get_channel(926406999107846245)  
+        data = {'content': "!w tedy", 'channel': c}
+        message = Struct(**data)
+        await wallet(message)
 
-    c = client.get_channel(910612726081024010)  
-    data = {'content': "!w jojo", 'channel': c}
-    message = Struct(**data)
-    await wallet(message)
+        c = client.get_channel(910612726081024010)  
+        data = {'content': "!w jojo", 'channel': c}
+        message = Struct(**data)
+        await wallet(message)
+    else:
+        c = client.get_channel(955193076668829696)  
+        data = {'content': "!w tedy", 'channel': c}
+        message = Struct(**data)
+        await wallet(message)
+
 
 #initializing scheduler
 scheduler = AsyncIOScheduler()

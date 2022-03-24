@@ -4,8 +4,12 @@ from pybit import HTTP  # supports inverse perp & futures, usdt perp, spot.
 import os
 import hjson
 from tabulate import tabulate
+import json
+from datetime import datetime, date
+
 
 async def wallet(message):
+
 
     a_message = message.content.split(' ')
     if len(a_message) < 2:
@@ -21,6 +25,11 @@ async def wallet(message):
     else:
         await message.channel.send("Mauvais user.")
         return 
+
+
+
+
+
 
     api_keys_file = "../../api-keys.json"
     coin_ballance = "USDT"
@@ -71,3 +80,23 @@ async def wallet(message):
         await message.channel.send("```"+message_content+"```")
     else:
         await message.channel.send("Problem :"+wallet_data['error'])
+
+
+    # JSON reading
+    json_file = 'tmp/data_' + user_name + '.json'
+    json_base = {}
+    if os.path.exists(json_file) :
+        json_base = hjson.load(open(json_file, encoding="utf-8"))
+
+    today = date.today().strftime('%d/%m/%Y1')
+    json_base[today] = {}
+    json_base[today]['equity'] = wallet_data['equity']
+    json_base[today]['cum_realised_pnl'] = wallet_data['cum_realised_pnl']
+    json_base[today]['date'] = today
+
+    
+    # JSON wrinting
+    jsonString = hjson.dumps(json_base)
+    jsonFile = open(json_file, "w")
+    jsonFile.write(jsonString)
+    jsonFile.close()
