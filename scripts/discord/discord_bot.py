@@ -90,19 +90,21 @@ async def show_wallet():
 
     # 926406999107846245 channel grid-passivbot
     # 955193076668829696 channel test
+    # 910612726081024010 channel onlyupx3
     c = client.get_channel(926406999107846245)  
     data = {'content': "!w tedy", 'channel': c}
     message = Struct(**data)
     await wallet(message)
 
-    # data = {'content': "!w jojo", 'channel': c}
-    # message = Struct(**data)
-    # await wallet(message)
+    c = client.get_channel(910612726081024010)  
+    data = {'content': "!w jojo", 'channel': c}
+    message = Struct(**data)
+    await wallet(message)
 
 #initializing scheduler
 scheduler = AsyncIOScheduler()
 #sends "Your Message" at 12PM and 18PM (Local Time)
-scheduler.add_job(show_wallet, CronTrigger(hour="10", minute="0", second="0")) 
+scheduler.add_job(show_wallet, CronTrigger(hour="9", minute="0", second="0")) 
 #starting the scheduler
 scheduler.start()
 

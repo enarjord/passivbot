@@ -6,7 +6,7 @@ def arguments_management():
     ### Parameters management
     parser = argparse.ArgumentParser( description="This script will create Shell script for my server",
     epilog="",
-    usage="python3 " + __file__ + " -jf tmp/grid_ok_coins.json tedy configs/live/a_tedy.json"
+    usage="python3 " + __file__ + " user_keys -jf tmp/grid_ok_coins.json tedy configs/live/a_tedy.json"
     )
 
     parser.add_argument("user_name", type=str, help="api_key username")
@@ -59,7 +59,10 @@ print('---------------------------------------Step 3 : generate shell scripts---
 print ("Linux Bash to create the screens commands in run_server_live_" + args.user_name + ".sh")
 file_content = ""
 file_content += "#!/bin/bash"+"\n"
+
 file_content += "current_pwd=`pwd`"+"\n"
+file_content += "gs=' -gs '"+"\n"
+file_content += "gs=''"+"\n"
 file_content += 'symbols=('
 for symbol in bash_symbols:
     file_content +=   symbol + " "
@@ -68,7 +71,7 @@ file_content += 'for i in "${symbols[@]}"'+"\n"
 file_content += 'do'+"\n"
 file_content += '    :'+"\n"
 file_content += '    echo "Running screen on $i"'+"\n"
-file_content += '    screen -S "' + args.user_name + '_$i" -dm bash -c "cd ${current_pwd}/;python3 passivbot.py ' + args.user_name + ' $i  ' + args.live_config_filepath + '"'+"\n"
+file_content += '    screen -S "' + args.user_name + '_$i" -dm bash -c "cd ${current_pwd}/;python3 passivbot.py $gs ' + args.user_name + ' $i  ' + args.live_config_filepath + '"'+"\n"
 file_content += 'done'+"\n"
 file_content += ''+"\n"
 

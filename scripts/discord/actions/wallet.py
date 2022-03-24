@@ -13,6 +13,7 @@ async def wallet(message):
         return 
 
     api_keys_user = "bybit_tedy"
+    user_name = a_message[1]
     if a_message[1] == "tedy": 
         api_keys_user = "bybit_tedy"
     elif a_message[1] == "jojo":
@@ -58,11 +59,13 @@ async def wallet(message):
 
     wallet_data = get_equity_and_pnl(api_keys_file, api_keys_user, coin_ballance)
 
+    
+
     if wallet_data['error'] == "":
         colonne = 20
         message_content = \
-        "Equity".ljust(colonne)                  +   "Total Realized PNL".ljust(colonne) + "\n" + \
-        wallet_data['equity'].ljust(colonne)     +   wallet_data['cum_realised_pnl'].ljust(colonne)
+        "User".ljust(colonne)      + "Equity".ljust(colonne)                  +   "Total Realized PNL".ljust(colonne) + "\n" + \
+        user_name.ljust(colonne)   + wallet_data['equity'].ljust(colonne)     +   wallet_data['cum_realised_pnl'].ljust(colonne)
         message_content = message_content.replace('.', ',')
 
         await message.channel.send("```"+message_content+"```")
