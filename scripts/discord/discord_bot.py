@@ -22,6 +22,7 @@ from apscheduler.triggers.cron import CronTrigger
 # https://github.com/Rapptz/discord.py
 #d doc du framework : https://discordpy.readthedocs.io/en/latest/api.html#discord.Member
 
+# problem pybit de syncronisation sur WSL :  sudo hwclock -s
 
 class Struct:
     def __init__(self, **entries):
@@ -97,17 +98,17 @@ async def show_wallet(Test=False):
     # 910612726081024010 channel onlyupx3
     if not Test:
         c = client.get_channel(926406999107846245)  
-        data = {'content': "!w tedy", 'channel': c}
+        data = {'content': "!w tedy from_auto_bot", 'channel': c}
         message = Struct(**data)
         await wallet(message)
 
         c = client.get_channel(910612726081024010)  
-        data = {'content': "!w jojo", 'channel': c}
+        data = {'content': "!w jojo from_auto_bot", 'channel': c}
         message = Struct(**data)
         await wallet(message)
     else:
         c = client.get_channel(955193076668829696)  
-        data = {'content': "!w tedy", 'channel': c}
+        data = {'content': "!w tedy from_auto_bot", 'channel': c}
         message = Struct(**data)
         await wallet(message)
 

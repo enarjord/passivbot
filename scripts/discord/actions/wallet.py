@@ -9,7 +9,8 @@ from datetime import datetime, date
 import pandas as pd
 import plotly.express as px
 import discord
-
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 async def wallet(message):
 
@@ -29,8 +30,10 @@ async def wallet(message):
         await message.channel.send("Mauvais user.")
         return 
 
-
-
+    from_auto_bot = False
+    if (len(a_message) >= 3):
+        if (a_message[2] == 'from_auto_bot'):
+            from_auto_bot = True
 
 
 
@@ -73,6 +76,12 @@ async def wallet(message):
 
     discord_message_to_send = ""
 
+    # JSON reading
+    json_file = 'tmp/data_' + user_name + '.json'
+    json_base = {}
+    if os.path.exists(json_file) :
+        json_base = hjson.load(open(json_file, encoding="utf-8"))
+
     if wallet_data['error'] == "":
         colonne = 20
         message_content = \
@@ -86,32 +95,53 @@ async def wallet(message):
     else:
         await message.channel.send("Problem :"+wallet_data['error'])
 
+    if not from_auto_bot:
+         await message.channel.send(discord_message_to_send)
+    elif from_auto_bot:
+        # JSON adding
+        today = date.today().strftime('%d/%m/%Y1')
+        json_base[today] = {}
+        json_base[today]['equity'] = wallet_data['equity']
+        json_base[today]['cum_realised_pnl'] = wallet_data['cum_realised_pnl']
+        json_base[today]['date'] = today
 
-    # JSON reading
-    json_file = 'tmp/data_' + user_name + '.json'
-    json_base = {}
-    if os.path.exists(json_file) :
-        json_base = hjson.load(open(json_file, encoding="utf-8"))
+        
+        # JSON writing
+        jsonString = hjson.dumps(json_base)
+        jsonFile = open(json_file, "w")
+        jsonFile.write(jsonString)
+        jsonFile.close()
 
-    today = date.today().strftime('%d/%m/%Y1')
-    json_base[today] = {}
-    json_base[today]['equity'] = wallet_data['equity']
-    json_base[today]['cum_realised_pnl'] = wallet_data['cum_realised_pnl']
-    json_base[today]['date'] = today
+        df = pd.DataFrame(json_base).T
+        df.cum_realised_pnl = pd.to_numeric(df.cum_realised_pnl)
+        df.equity = pd.to_numeric(df.equity)
+        print(tabulate(df, headers='keys', tablefmt='psql'))
 
+        # une seule ligne
+        #fig = px.line(df, x="date", y="cum_realised_pnl", title='Profit')
+        
+        fig = make_subplots(specs=[[{"secondary_y": True}]])
+
+        fig.add_trace(
+            go.Scatter(x=df["date"], y=df["cum_realised_pnl"], name="Profit"),
+            secondary_y=False,
+        )
+
+        fig.add_trace(
+            go.Scatter(x=df["date"], y=df["equity"], name="Equity"),
+            secondary_y=True,
+        )
+
+        fig.update_layout(
+            title_text="Summary"
+        )
+
+        fig.update_xaxes(title_text="Date")
+
+        fig.update_yaxes(title_text="Profits", secondary_y=False)
+        fig.update_yaxes(title_text="Equity", secondary_y=True)
+
+        image_file = json_file + ".jpeg"
+        fig.write_image(image_file)
+        await message.channel.send(discord_message_to_send, file=discord.File(image_file))
     
-    # JSON wrinting
-    jsonString = hjson.dumps(json_base)
-    jsonFile = open(json_file, "w")
-    jsonFile.write(jsonString)
-    jsonFile.close()
-
-    df = pd.DataFrame(json_base).T
-    df.cum_realised_pnl = pd.to_numeric(df.cum_realised_pnl)
-    print(tabulate(df, headers='keys', tablefmt='psql'))
-
-    fig = px.line(df, x="date", y="cum_realised_pnl", title='Profit')
-    
-    image_file = json_file + ".jpeg"
-    fig.write_image(image_file)
-    await message.channel.send(discord_message_to_send, file=discord.File(image_file))
