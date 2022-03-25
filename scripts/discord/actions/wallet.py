@@ -76,8 +76,9 @@ async def wallet(message):
     if wallet_data['error'] == "":
         colonne = 20
         message_content = \
-        "User".ljust(colonne)      + "Equity".ljust(colonne)                  +   "Total Realized PNL".ljust(colonne) + "\n" + \
-        user_name.ljust(colonne)   + wallet_data['equity'].ljust(colonne)     +   wallet_data['cum_realised_pnl'].ljust(colonne)
+        user_name + "\n" + \
+        "Equity".ljust(colonne)                  +   "Total Realized PNL".ljust(colonne) + "\n" + \
+        wallet_data['equity'].ljust(colonne)     +   wallet_data['cum_realised_pnl'].ljust(colonne)
         message_content = message_content.replace('.', ',')
 
         discord_message_to_send = "```"+message_content+"```"
