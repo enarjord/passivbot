@@ -76,8 +76,8 @@ async def wallet(message):
     if wallet_data['error'] == "":
         colonne = 20
         message_content = \
-        user_name + "\n" + \
-        "Equity".ljust(colonne)                  +   "Total Realized PNL".ljust(colonne) + "\n" + \
+        "" + user_name + "\n" + \
+        "Equity".ljust(colonne)                  +   "T. R. PNL".ljust(colonne) + "\n" + \
         wallet_data['equity'].ljust(colonne)     +   wallet_data['cum_realised_pnl'].ljust(colonne)
         message_content = message_content.replace('.', ',')
 
