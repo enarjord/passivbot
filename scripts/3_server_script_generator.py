@@ -22,6 +22,11 @@ def arguments_management():
                         help="A list of coin separated by space, ex : 'ONEUSDT XLMUSDT'",
     )
 
+    parser.add_argument("-type","--type",
+                        type=str,required=False,dest="type",default="futures",
+                        help="futures or spot",
+    )
+
     args = parser.parse_args()
 
 
@@ -54,6 +59,10 @@ def arguments_management():
 args = arguments_management()
 bash_symbols = args.builded_coin_list
 
+sport_part = ""
+if args.type == 'spot':
+    sport_part = " -m spot "
+
 ################### shell script generating ##############
 print('---------------------------------------Step 3 : generate shell scripts-------------------------------------------------')
 print ("Linux Bash to create the screens commands in run_server_live_" + args.user_name + ".sh")
@@ -71,7 +80,7 @@ file_content += 'for i in "${symbols[@]}"'+"\n"
 file_content += 'do'+"\n"
 file_content += '    :'+"\n"
 file_content += '    echo "Running screen on $i"'+"\n"
-file_content += '    screen -S "' + args.user_name + '_$i" -dm bash -c "cd ${current_pwd}/;python3 passivbot.py $gs ' + args.user_name + ' $i  ' + args.live_config_filepath + '"'+"\n"
+file_content += '    screen -S "' + args.user_name + '_$i" -dm bash -c "cd ${current_pwd}/;python3 passivbot.py $gs ' + args.user_name + ' $i  ' + args.live_config_filepath + ' ' + sport_part + '"'+"\n"
 file_content += 'done'+"\n"
 file_content += ''+"\n"
 

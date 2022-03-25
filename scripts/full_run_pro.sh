@@ -7,7 +7,7 @@ nb_best_coin=20
 #python3 1_backtest_looper.py ${live_config} ${backtest_config} -jf tmp/grid_ok_coins.json
 #python3 2_backtest_summary.py ${nb_best_coin} ${live_config} ${backtest_config} -max-stuck-avg 9999 -max-stuck 264  -min-gain 4
 
-python3 3_server_script_generator.py  bybit_pro ${live_config} -jf tmp/grid_ok_coins.json
-
 # ATTENTION pour la génération de script faut les passer en spot le live ajouter : -m spot
 # Fuck en fait on peut pas passivbot ne supporte pas le spot...
+python3 3_server_script_generator.py  bybit_pro ${live_config} -jf tmp/best_coins.json -type spot
+
