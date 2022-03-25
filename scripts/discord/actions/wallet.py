@@ -12,6 +12,29 @@ import discord
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
+def fill_calculation(json_base):
+    # build data % if not present in the JSON file
+    the_i = 0
+    old_pnl_realized = 0
+    old_equity = 0
+    for key in json_base:
+        if the_i == 0 :
+            json_base[key]['gain_in_$'] = 0
+            json_base[key]['daily_gain_pct'] = 0
+        else:
+            data = json_base[key]
+            if not 'gain_in_$' in data:
+                json_base[key]['gain_in_$'] = float(json_base[key]['cum_realised_pnl']) - old_pnl_realized
+            if not 'daily_gain_pct' in data :
+                json_base[key]['daily_gain_pct'] = (float(json_base[key]['gain_in_$']) / old_equity) * 100
+        
+        old_pnl_realized = float(json_base[key]['cum_realised_pnl'])
+        old_equity = float(json_base[key]['equity'])
+
+        the_i = the_i + 1
+    return json_base
+
+
 async def wallet(message):
 
 
@@ -82,15 +105,28 @@ async def wallet(message):
     if os.path.exists(json_file) :
         json_base = hjson.load(open(json_file, encoding="utf-8"))
 
+    # JSON adding
+    today = date.today().strftime('%d/%m/%Y1')
+    json_base[today] = {}
+    json_base[today]['equity'] = wallet_data['equity']
+    json_base[today]['cum_realised_pnl'] = wallet_data['cum_realised_pnl']
+    json_base[today]['date'] = today
+
+    json_base = fill_calculation(json_base)
+
+    now_data = json_base[today]
+
     if wallet_data['error'] == "":
         colonne = 20
         message_content = \
         "" + user_name + " : \n" + \
         "```" + \
-        "Equity".ljust(colonne)                                    +   "Tot. Rea. PNL".ljust(colonne) + "\n" + \
-        wallet_data['equity'].ljust(colonne).replace('.', ',')     +   wallet_data['cum_realised_pnl'].ljust(colonne).replace('.', ',') + \
+        "Equity".ljust(colonne)                                                                 +   "Tot. Rea. PNL".ljust(colonne) + "\n" + \
+        str(now_data['equity']).ljust(colonne).replace('.', ',')                                +   str(now_data['cum_realised_pnl']).ljust(colonne).replace('.', ',') + "\n" + \
+        "\n" + \
+        "Daily Gain".ljust(colonne)                                                                 +   "Daily gain".ljust(colonne) + "\n" + \
+        (str(round(number=now_data['gain_in_$'], ndigits=2))+"$").ljust(colonne).replace('.', ',')  +   (str(round(number=now_data['daily_gain_pct'], ndigits=2))+"%").ljust(colonne).replace('.', ',') + \
         "```"
-
         discord_message_to_send = message_content
     else:
         await message.channel.send("Problem :"+wallet_data['error'])
@@ -98,14 +134,7 @@ async def wallet(message):
     if not from_auto_bot:
          await message.channel.send(discord_message_to_send)
     elif from_auto_bot:
-        # JSON adding
-        today = date.today().strftime('%d/%m/%Y1')
-        json_base[today] = {}
-        json_base[today]['equity'] = wallet_data['equity']
-        json_base[today]['cum_realised_pnl'] = wallet_data['cum_realised_pnl']
-        json_base[today]['date'] = today
 
-        
         # JSON writing
         jsonString = hjson.dumps(json_base)
         jsonFile = open(json_file, "w")
