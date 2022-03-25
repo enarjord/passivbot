@@ -76,12 +76,13 @@ async def wallet(message):
     if wallet_data['error'] == "":
         colonne = 20
         message_content = \
-        "" + user_name + "\n" + \
-        "Equity".ljust(colonne)                  +   "T. R. PNL".ljust(colonne) + "\n" + \
-        wallet_data['equity'].ljust(colonne)     +   wallet_data['cum_realised_pnl'].ljust(colonne)
-        message_content = message_content.replace('.', ',')
+        "|" + user_name + "| : \n" + \
+        "```" + \
+        "Equity".ljust(colonne)                                    +   "T. R. PNL".ljust(colonne) + "\n" + \
+        wallet_data['equity'].ljust(colonne).replace('.', ',')     +   wallet_data['cum_realised_pnl'].ljust(colonne).replace('.', ',') + \
+        "```"
 
-        discord_message_to_send = "```"+message_content+"```"
+        discord_message_to_send = message_content
     else:
         await message.channel.send("Problem :"+wallet_data['error'])
 
