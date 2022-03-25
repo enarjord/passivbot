@@ -78,7 +78,7 @@ async def wallet(message):
         message_content = \
         "" + user_name + " : \n" + \
         "```" + \
-        "Equity".ljust(colonne)                                    +   "T. R. PNL".ljust(colonne) + "\n" + \
+        "Equity".ljust(colonne)                                    +   "Tot. Rea. PNL".ljust(colonne) + "\n" + \
         wallet_data['equity'].ljust(colonne).replace('.', ',')     +   wallet_data['cum_realised_pnl'].ljust(colonne).replace('.', ',') + \
         "```"
 
