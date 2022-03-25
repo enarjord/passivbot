@@ -35,7 +35,8 @@ class MyClient(discord.Client):
         print('------')
 
         # Test part
-        await show_wallet(Test=True)
+        # await show_wallet(Test=True)
+        
 
     async def on_message(self, message):
         try:
