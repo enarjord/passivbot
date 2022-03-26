@@ -79,6 +79,15 @@ async def wallet(message):
         )
 
         result = session_auth.get_wallet_balance(coin=coin_ballance)
+        
+        positions = session_auth.my_position(endpoint='/private/linear/position/list')
+
+
+        # print(json.dumps(positions['result'][0]['data']))
+        # print(json.dumps(positions['result'][1]['data']))
+        total_position = 0
+        for key in positions['result']:
+            total_position += key['data']['position_value']
 
         if result['ret_code'] != 0:
             return {'error' : 'bad ret_code'}
@@ -87,8 +96,10 @@ async def wallet(message):
 
         return {
                     'error'  : '',
-                    'equity' : '%.4f'%(result['result'][coin_ballance]['equity']),
-                    'cum_realised_pnl' : '%.4f'%(result['result'][coin_ballance]['cum_realised_pnl'])
+                    'equity' : float('%.4f'%(result['result'][coin_ballance]['equity'])),
+                    'cum_realised_pnl' : float('%.4f'%(result['result'][coin_ballance]['cum_realised_pnl'])),
+                    'used_margin' : float('%.4f'%(result['result'][coin_ballance]['used_margin'])),
+                    'total_position' : total_position
         }
         
         
@@ -111,6 +122,8 @@ async def wallet(message):
     json_base[today]['equity'] = wallet_data['equity']
     json_base[today]['cum_realised_pnl'] = wallet_data['cum_realised_pnl']
     json_base[today]['date'] = today
+    json_base[today]['used_margin'] = wallet_data['used_margin']
+    json_base[today]['total_position'] = wallet_data['total_position']
 
     json_base = fill_calculation(json_base)
 
@@ -119,7 +132,8 @@ async def wallet(message):
     if wallet_data['error'] == "":
         colonne = 20
         message_content = \
-        "" + user_name + " : \n" + \
+        "" + user_name + " (Positions : " + str(round(now_data['total_position'])) \
+                         + "$ | Margin used : " + str(round(now_data['used_margin'])) + "$): \n" + \
         "```" + \
         "Equity".ljust(colonne)                                                                 +   "Tot. Rea. PNL".ljust(colonne) + "\n" + \
         str(now_data['equity']).ljust(colonne).replace('.', ',')                                +   str(now_data['cum_realised_pnl']).ljust(colonne).replace('.', ',') + "\n" + \
@@ -142,8 +156,8 @@ async def wallet(message):
         jsonFile.close()
 
         df = pd.DataFrame(json_base).T
-        df.cum_realised_pnl = pd.to_numeric(df.cum_realised_pnl)
-        df.equity = pd.to_numeric(df.equity)
+        # df.cum_realised_pnl = pd.to_numeric(df.cum_realised_pnl)
+        # df.equity = pd.to_numeric(df.equity)
         print(tabulate(df, headers='keys', tablefmt='psql'))
 
         # une seule ligne
