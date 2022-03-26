@@ -129,10 +129,12 @@ async def wallet(message):
 
     now_data = json_base[today]
 
+    risk_pct = 100*now_data['used_margin']/now_data['equity']
+
     if wallet_data['error'] == "":
         colonne = 20
         message_content = \
-        "" + user_name.upper() + " | Positions : " + str(round(now_data['total_position'])) + "$ | Margin used : " + str(round(now_data['used_margin'])) + "$ \n" + \
+        "" + user_name.upper() + " | Positions : " + str(round(now_data['total_position'])) + "$ | Margin used : " + str(round(now_data['used_margin'])) + "$ < risk : " + risk_pct + "%\n" + \
         "```" + \
         "Equity".ljust(colonne)                                                                 +   "Tot. Rea. PNL".ljust(colonne) + "\n" + \
         str(now_data['equity']).ljust(colonne).replace('.', ',')                                +   str(now_data['cum_realised_pnl']).ljust(colonne).replace('.', ',') + "\n" + \
