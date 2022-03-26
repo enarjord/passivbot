@@ -157,8 +157,8 @@ async def wallet(message):
         jsonFile.close()
 
         df = pd.DataFrame(json_base).T
-        # df.cum_realised_pnl = pd.to_numeric(df.cum_realised_pnl)
-        # df.equity = pd.to_numeric(df.equity)
+        df.cum_realised_pnl = pd.to_numeric(df.cum_realised_pnl)
+        df.equity = pd.to_numeric(df.equity)
         print(tabulate(df, headers='keys', tablefmt='psql'))
 
         # une seule ligne
