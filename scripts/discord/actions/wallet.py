@@ -49,6 +49,8 @@ async def wallet(message):
         api_keys_user = "bybit_tedy"
     elif a_message[1] == "jojo":
         api_keys_user = "bybit_jojo"
+    elif a_message[1] == "pro":
+        api_keys_user = "bybit_pro" # @TODO ce serait bien de le locker à lui même / à l'auto bot / et à moi
     else:
         await message.channel.send("Mauvais user.")
         return 
@@ -79,6 +81,7 @@ async def wallet(message):
         )
 
         result = session_auth.get_wallet_balance(coin=coin_ballance)
+        print(result)
         
         positions = session_auth.my_position(endpoint='/private/linear/position/list')
 

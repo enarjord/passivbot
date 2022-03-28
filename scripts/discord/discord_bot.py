@@ -23,6 +23,7 @@ from apscheduler.triggers.cron import CronTrigger
 #d doc du framework : https://discordpy.readthedocs.io/en/latest/api.html#discord.Member
 
 # problem pybit de syncronisation sur WSL :  sudo hwclock -s
+#       sudo ntpdate pool.ntp.org
 
 class Struct:
     def __init__(self, **entries):
@@ -106,6 +107,12 @@ async def show_wallet(Test=False):
         data = {'content': "!w jojo from_auto_bot", 'channel': c}
         message = Struct(**data)
         await wallet(message)
+
+        c = client.get_channel(958078641483427880)  
+        data = {'content': "!w pro from_auto_bot", 'channel': c}
+        message = Struct(**data)
+        await wallet(message)
+        
     else:
         c = client.get_channel(955193076668829696)  
         data = {'content': "!w tedy from_auto_bot", 'channel': c}
