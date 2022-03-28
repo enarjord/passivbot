@@ -4,10 +4,18 @@ from collections import OrderedDict
 
 import json
 import numpy as np
-import pandas as pd
 from dateutil import parser
-
 from njit_funcs import round_dynamic, qty_to_cost
+
+try:
+    import pandas as pd
+except:
+    print('pandas not found, trying without...')
+    class PD:
+        # dummy class when running without pandas
+        def __init__(self):
+            self.DataFrame = None
+    pd = PD()
 
 
 def format_float(num):
