@@ -156,7 +156,9 @@ class Bot:
     def dump_log(self, data) -> None:
         if self.config["logging_level"] > 0:
             with open(self.log_filepath, "a") as f:
-                f.write(json.dumps({**{"log_timestamp": time()}, **data}) + "\n")
+                f.write(
+                    json.dumps({**{"log_timestamp": time(), "symbol": self.symbol}, **data}) + "\n"
+                )
 
     async def init_emas(self) -> None:
         ohlcvs1m = await self.fetch_ohlcvs(interval="1m")
