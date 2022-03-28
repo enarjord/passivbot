@@ -4,10 +4,18 @@ import os
 import traceback
 from datetime import datetime
 from time import time
-
-import hjson
 import numpy as np
-import pandas as pd
+
+try:
+    print('hjson not found, trying without...')
+    import hjson
+except:
+    pass
+try:
+    print('pandas not found, trying without...')
+    import pandas as pd
+except:
+    pass
 
 from njit_funcs import calc_samples
 from pure_funcs import (
