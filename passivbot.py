@@ -1078,7 +1078,7 @@ async def main() -> None:
 
     args = parser.parse_args()
     try:
-        accounts = json.load(config["api_keys"])
+        accounts = json.load(args.api_keys)
     except Exception as e:
         logging.error(f"{e} failed to load api-keys.json file")
         return
