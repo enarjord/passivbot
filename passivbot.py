@@ -1065,9 +1065,20 @@ async def main() -> None:
         default=0.5,
         help="only create limit orders closer to price than threshold; default=0.5",
     )
+    parser.add_argument(
+        "-ak",
+        "--api-keys",
+        "--api_keys",
+        type=open,
+        required=False,
+        dest="api_keys",
+        default="api-keys.json",
+        help="File containing users/accounts and api-keys for each exchanges",
+    )
+
     args = parser.parse_args()
     try:
-        accounts = json.load(open("api-keys.json"))
+        accounts = json.load(args.api_keys)
     except Exception as e:
         logging.error(f"{e} failed to load api-keys.json file")
         return
