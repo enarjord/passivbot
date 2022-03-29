@@ -11,6 +11,9 @@ import plotly.express as px
 import discord
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+import sys
+from PIL import Image
+
 
 def fill_calculation(json_base):
     # build data % if not present in the JSON file
@@ -162,8 +165,10 @@ async def wallet(message):
         df = pd.DataFrame(json_base).T
         df.cum_realised_pnl = pd.to_numeric(df.cum_realised_pnl)
         df.equity = pd.to_numeric(df.equity)
+        df.total_position = pd.to_numeric(df.total_position)
         print(tabulate(df, headers='keys', tablefmt='psql'))
 
+        ################################################"       ewuity & profit
         # une seule ligne
         #fig = px.line(df, x="date", y="cum_realised_pnl", title='Profit')
         
@@ -180,7 +185,7 @@ async def wallet(message):
         )
 
         fig.update_layout(
-            title_text="Summary"
+            title_text="Equity & Profit"
         )
 
         fig.update_xaxes(title_text="Date")
@@ -188,7 +193,59 @@ async def wallet(message):
         fig.update_yaxes(title_text="Profits", secondary_y=False)
         fig.update_yaxes(title_text="Equity", secondary_y=True)
 
-        image_file = json_file + ".jpeg"
-        fig.write_image(image_file)
-        await message.channel.send(discord_message_to_send, file=discord.File(image_file))
+        image_file_1 = json_file + ".jpeg"
+        fig.write_image(image_file_1)
+        # await message.channel.send(discord_message_to_send, file=discord.File(image_file_1))
+        
+
+
+        ################################################"       Generation chart Position & gain
+        # une seule ligne
+        fig = make_subplots(specs=[[{"secondary_y": True}]])
+
+        fig.add_trace(
+            go.Scatter(x=df["date"], y=df["total_position"], name="Position Size"),
+            secondary_y=False,
+        )
+
+        fig.add_trace(
+            go.Scatter(x=df["date"], y=df["gain_in_$"], name="Gain $"),
+            secondary_y=True,
+        )
+
+        fig.update_layout(
+            title_text="Position & Gain"
+        )
+
+        fig.update_xaxes(title_text="Date")
+
+        fig.update_yaxes(title_text="Position Size", secondary_y=False)
+        fig.update_yaxes(title_text="Gain $", secondary_y=True)
+
+        # fig = px.line(df, x="date", y="total_position", title='Positions size')
+        image_file_2 = json_file + ".position.jpeg"
+        fig.write_image(image_file_2)
+        # await message.channel.send("", file=discord.File(image_file_2))
+
+
+        ################################################"       aggragation des charts
+        images = [Image.open(x) for x in [image_file_1, image_file_2]]
+        widths, heights = zip(*(i.size for i in images))
+
+        total_width = sum(widths)
+        max_height = max(heights)
+
+        new_im = Image.new('RGB', (total_width, max_height))
+
+        x_offset = 0
+        for im in images:
+            new_im.paste(im, (x_offset,0))
+            x_offset += im.size[0]
+
+        image_file_combined = json_file + ".combined.jpeg"
+        new_im.save(image_file_combined)
+
+        
+        ################################################"       envoi des messages
+        await message.channel.send(discord_message_to_send, file=discord.File(image_file_combined))
     

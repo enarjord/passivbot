@@ -37,7 +37,7 @@ class MyClient(discord.Client):
         print('------')
 
         # Test part
-        # await show_wallet(Test=True)
+        #await show_wallet(Test=True)
         
 
     async def on_message(self, message):
@@ -86,11 +86,6 @@ class MyClient(discord.Client):
 client = MyClient()
 base_dir = os.path.realpath(os.path.dirname(os.path.abspath(__file__))+'/')+'/'
 
-# @tasks.loop(seconds=2)
-# async def show_wallet():
-#     print('test')
-
-# show_wallet.start()
 async def show_wallet(Test=False):
     await client.wait_until_ready()
 
