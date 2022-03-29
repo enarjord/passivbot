@@ -52,7 +52,7 @@ async def wallet(message):
         api_keys_user = "bybit_tedy"
     elif a_message[1] == "jojo":
         api_keys_user = "bybit_jojo"
-    elif a_message[1] == "pro":
+    elif (a_message[1] == "pro") and (message.channel.id == 958078641483427880):
         api_keys_user = "bybit_pro" # @TODO ce serait bien de le locker à lui même / à l'auto bot / et à moi
     else:
         await message.channel.send("Mauvais user.")

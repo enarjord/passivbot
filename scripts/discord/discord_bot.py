@@ -46,6 +46,11 @@ class MyClient(discord.Client):
             if message.author.id == self.user.id:
                 return
 
+
+            if ((message.channel.id != 956956942633414817) 
+                and (message.channel.id != 955193076668829696)):
+                return
+
             a_message = message.content.split(' ')
 
             if a_message[0] == '!help':
