@@ -47,8 +47,11 @@ class MyClient(discord.Client):
                 return
 
 
-            if ((message.channel.id != 956956942633414817) 
-                and (message.channel.id != 955193076668829696)):
+            if (
+                    (message.channel.id != 956956942633414817) 
+                and (message.channel.id != 955193076668829696)
+                and (message.channel.id != 958078641483427880)
+                ):
                 return
 
             a_message = message.content.split(' ')
