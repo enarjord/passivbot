@@ -28,11 +28,11 @@ def send_slack_message(text, blocks = None):
     slack_channel = '#wallet'
     slack_icon_emoji = ':see_no_evil:'
     slack_user_name = 'WalletBot'
-    return requests.post('https://slack.com/api/chat.postMessage', {
+    print( requests.post('https://slack.com/api/chat.postMessage', {
         'token': slack_token,
         'channel': slack_channel,
         'text': text,
         'icon_emoji': slack_icon_emoji,
         'username': slack_user_name,
         'blocks': json.dumps(blocks) if blocks else None
-    }).json()
+    }).json())
