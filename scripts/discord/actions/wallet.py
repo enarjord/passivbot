@@ -13,6 +13,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import sys
 from PIL import Image
+from functions.functions import get_pro_channel_enabled, send_slack_message
 
 
 def fill_calculation(json_base):
@@ -52,8 +53,8 @@ async def wallet(message):
         api_keys_user = "bybit_tedy"
     elif a_message[1] == "jojo":
         api_keys_user = "bybit_jojo"
-    elif (a_message[1] == "pro") and (message.channel.id == 958078641483427880):
-        api_keys_user = "bybit_pro" # @TODO ce serait bien de le locker à lui même / à l'auto bot / et à moi
+    elif (a_message[1] == "pro") and (message.channel.id in get_pro_channel_enabled()):
+        api_keys_user = "bybit_pro" 
     else:
         await message.channel.send("Mauvais user.")
         return 
@@ -248,4 +249,7 @@ async def wallet(message):
         
         ################################################"       envoi des messages
         await message.channel.send(discord_message_to_send, file=discord.File(image_file_combined))
+
+        if (a_message[1] == "pro") and (message.channel.id in get_pro_channel_enabled()) and (from_auto_bot):
+            send_slack_message(discord_message_to_send, file=discord.File(image_file_combined))
     

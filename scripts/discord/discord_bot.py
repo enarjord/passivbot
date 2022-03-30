@@ -4,6 +4,7 @@ from actions.pumpdump import pumpdump
 from actions.long_short import long_short
 from actions.chart import chart
 from actions.wallet import wallet
+from functions.functions import get_channel_id, get_bot_commands_enabled_channels, send_slack_message
 
 import os
 import logging
@@ -37,7 +38,8 @@ class MyClient(discord.Client):
         print('------')
 
         # Test part
-        #await show_wallet(Test=True)
+        await show_wallet(Test=True)
+        send_slack_message('Start Running')
         
 
     async def on_message(self, message):
@@ -47,11 +49,7 @@ class MyClient(discord.Client):
                 return
 
 
-            if (
-                    (message.channel.id != 956956942633414817) 
-                and (message.channel.id != 955193076668829696)
-                and (message.channel.id != 958078641483427880)
-                ):
+            if not (message.channel.id in get_bot_commands_enabled_channels()):
                 return
 
             a_message = message.content.split(' ')
@@ -76,12 +74,6 @@ class MyClient(discord.Client):
             if a_message[0] == '!w':
                 await wallet(message)
 
-            # if 'dump' in message.content:
-            #     await pumpdump(message, 'dump')
-            # elif 'pump' in message.content:
-            #     await pumpdump(message, 'pump')
-                
-
             # Garé pour les infos
             # await message.channel.send('Hello {0.author.mention}'.format(message))
             # await message.channel.send('Hello {0.author.mention}'.format(message))
@@ -97,27 +89,24 @@ base_dir = os.path.realpath(os.path.dirname(os.path.abspath(__file__))+'/')+'/'
 async def show_wallet(Test=False):
     await client.wait_until_ready()
 
-    # 926406999107846245 channel grid-passivbot
-    # 955193076668829696 channel test
-    # 910612726081024010 channel onlyupx3
     if not Test:
-        c = client.get_channel(926406999107846245)  
+        c = client.get_channel(get_channel_id("passivbot"))  
         data = {'content': "!w tedy from_auto_bot", 'channel': c}
         message = Struct(**data)
         await wallet(message)
 
-        c = client.get_channel(910612726081024010)  
+        c = client.get_channel(get_channel_id("onlyupx3"))  
         data = {'content': "!w jojo from_auto_bot", 'channel': c}
         message = Struct(**data)
         await wallet(message)
 
-        c = client.get_channel(958078641483427880)  
+        c = client.get_channel(get_channel_id("pro"))  
         data = {'content': "!w pro from_auto_bot", 'channel': c}
         message = Struct(**data)
         await wallet(message)
         
     else:
-        c = client.get_channel(955193076668829696)  
+        c = client.get_channel(get_channel_id("test"))  
         data = {'content': "!w tedy from_auto_bot", 'channel': c}
         message = Struct(**data)
         await wallet(message)
