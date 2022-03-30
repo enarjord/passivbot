@@ -38,8 +38,8 @@ class MyClient(discord.Client):
         print('------')
 
         # Test part
-        await show_wallet(Test=True)
-        send_slack_message('Start Running')
+        #await show_wallet(Test=True)
+        #send_slack_message('Start Running')
         
 
     async def on_message(self, message):
