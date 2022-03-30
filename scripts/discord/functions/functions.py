@@ -25,8 +25,6 @@ def get_pro_channel_enabled():
 
 def send_slack_message(text, blocks = None):
     slack_token = open("config/token_slack.txt", 'r').read()
-    print("slack_token")
-    print("*", slack_token ,"*")
     slack_channel = '#wallet'
     slack_icon_emoji = ':see_no_evil:'
     slack_user_name = 'WalletBot'
