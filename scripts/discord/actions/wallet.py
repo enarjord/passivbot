@@ -45,6 +45,7 @@ async def wallet(message):
     a_message = message.content.split(' ')
     if len(a_message) < 2:
         await message.channel.send("Mauvais usage. Ex : !w tedy")
+        await message.channel.send("Mauvais usage. Ex : !w tedy chart")
         return 
 
     api_keys_user = "bybit_tedy"
@@ -59,10 +60,13 @@ async def wallet(message):
         await message.channel.send("Mauvais user.")
         return 
 
+    print_chart = False
     from_auto_bot = False
     if (len(a_message) >= 3):
-        if (a_message[2] == 'from_auto_bot'):
+        if (a_message[2] == 'from_auto_bot_x15'):
             from_auto_bot = True
+        if (a_message[2] == 'chart'):
+            print_chart = True
 
 
 
@@ -131,37 +135,53 @@ async def wallet(message):
     json_base[today]['date'] = today
     json_base[today]['used_margin'] = wallet_data['used_margin']
     json_base[today]['total_position'] = wallet_data['total_position']
+    json_base[today]['risk'] = 100*wallet_data['used_margin']/wallet_data['equity']
 
     json_base = fill_calculation(json_base)
 
+    previous = json_base[list(json_base.keys())[-2]]
+
     now_data = json_base[today]
 
-    risk_pct = 100*now_data['used_margin']/now_data['equity']
+    def print_el(now, previous, key, symbol="$", show_icon=False):
+
+        icon = ""
+        if show_icon:
+            if previous[key] < now[key]:
+                icon = ":arrow_upper_right:"
+            else:
+                icon = ":arrow_lower_right:"
+        else:
+            if previous[key] < now[key]:
+                icon = "^"
+            else:
+                icon = "v"
+
+        return (str(round(number=now[key], ndigits=2)) + symbol).replace('.', ',') + icon
+        
+
+
 
     if wallet_data['error'] == "":
         colonne = 20
         message_content = \
-        "" + user_name.upper() + " | Positions : " + str(round(now_data['total_position'])) + "$ | Margin used : " + str(round(now_data['used_margin'])) + "$ | Risk : " + str(round(risk_pct)) + "%\n" + \
+        "" + user_name.upper() + " | Positions : " + print_el(now_data, previous, 'total_position', show_icon=True) + " | Margin used : " + print_el(now_data, previous, 'used_margin', show_icon=True) + " | Risk : " + str(round(now_data['risk'])) + "%\n" + \
         "```" + \
-        "Equity".ljust(colonne)                                                                 +   "Tot. Rea. PNL".ljust(colonne) + "\n" + \
-        str(now_data['equity']).ljust(colonne).replace('.', ',')                                +   str(now_data['cum_realised_pnl']).ljust(colonne).replace('.', ',') + "\n" + \
+        "Equity".ljust(colonne)                                     +   "Tot. Rea. PNL".ljust(colonne) + "\n" + \
+        print_el(now_data, previous, 'equity').ljust(colonne)       +   print_el(now_data, previous, 'cum_realised_pnl').ljust(colonne) + "\n" + \
         "\n" + \
-        "Daily Gain".ljust(colonne)                                                                 +   "Daily gain".ljust(colonne) + "\n" + \
-        (str(round(number=now_data['gain_in_$'], ndigits=2))+"$").ljust(colonne).replace('.', ',')  +   (str(round(number=now_data['daily_gain_pct'], ndigits=2))+"%").ljust(colonne).replace('.', ',') + \
+        "Daily Gain".ljust(colonne)                                 +   "Daily gain".ljust(colonne) + "\n" + \
+        print_el(now_data, previous, 'gain_in_$').ljust(colonne)    +   print_el(now_data, previous, 'daily_gain_pct', '%').ljust(colonne) + \
         "```"
         discord_message_to_send = message_content
     else:
         await message.channel.send("Problem :"+wallet_data['error'])
+        return
 
-    if not from_auto_bot:
+    if not (from_auto_bot or print_chart):
          await message.channel.send(discord_message_to_send)
-    elif from_auto_bot:
+    elif (from_auto_bot or print_chart):
 
-        # JSON writing
-        jsonString = hjson.dumps(json_base)
-        jsonFile = open(json_file, "w")
-        jsonFile.write(jsonString)
-        jsonFile.close()
 
         df = pd.DataFrame(json_base).T
         df.cum_realised_pnl = pd.to_numeric(df.cum_realised_pnl)
@@ -245,6 +265,14 @@ async def wallet(message):
 
         image_file_combined = json_file + ".combined.jpeg"
         new_im.save(image_file_combined)
+
+
+        if from_auto_bot:
+            # JSON writing
+            jsonString = hjson.dumps(json_base)
+            jsonFile = open(json_file, "w")
+            jsonFile.write(jsonString)
+            jsonFile.close()
 
         
         ################################################"       envoi des messages
