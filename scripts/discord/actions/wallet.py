@@ -130,12 +130,15 @@ async def wallet(message):
     # JSON adding
     today = date.today().strftime('%d/%m/%Y1')
     json_base[today] = {}
+    nb_jours = len(json_base)
     json_base[today]['equity'] = wallet_data['equity']
     json_base[today]['cum_realised_pnl'] = wallet_data['cum_realised_pnl']
     json_base[today]['date'] = today
     json_base[today]['used_margin'] = wallet_data['used_margin']
     json_base[today]['total_position'] = wallet_data['total_position']
     json_base[today]['risk'] = 100*wallet_data['used_margin']/wallet_data['equity']
+    json_base[today]['monthly_gain_$'] = wallet_data['cum_realised_pnl'] * 30 / nb_jours
+    json_base[today]['year_gain_$'] = wallet_data['cum_realised_pnl'] * 365 / nb_jours
 
     json_base = fill_calculation(json_base)
 
@@ -143,19 +146,27 @@ async def wallet(message):
 
     now_data = json_base[today]
 
+
+
+
     def print_el(now, previous, key, symbol="$", show_icon=False):
 
         icon = ""
-        if show_icon:
-            if previous[key] < now[key]:
-                icon = ":arrow_upper_right:"
+        if (key in previous) :
+            if show_icon:
+                if previous[key] < now[key]:
+                    icon = ":arrow_upper_right:"
+                elif previous[key] > now[key]:
+                    icon = ":arrow_lower_right:"
+                else:
+                    icon = "="
             else:
-                icon = ":arrow_lower_right:"
-        else:
-            if previous[key] < now[key]:
-                icon = "^"
-            else:
-                icon = "v"
+                if previous[key] < now[key]:
+                    icon = "^"
+                elif previous[key] > now[key]:
+                    icon = "v"
+                else:
+                    icon = "="
 
         return (str(round(number=now[key], ndigits=2)) + symbol).replace('.', ',') + icon
         
@@ -165,13 +176,20 @@ async def wallet(message):
     if wallet_data['error'] == "":
         colonne = 20
         message_content = \
-        "" + user_name.upper() + " | Positions : " + print_el(now_data, previous, 'total_position', show_icon=True) + " | Margin used : " + print_el(now_data, previous, 'used_margin', show_icon=True) + " | Risk : " + str(round(now_data['risk'])) + "%\n" + \
-        "```" + \
-        "Equity".ljust(colonne)                                     +   "Tot. Rea. PNL".ljust(colonne) + "\n" + \
-        print_el(now_data, previous, 'equity').ljust(colonne)       +   print_el(now_data, previous, 'cum_realised_pnl').ljust(colonne) + "\n" + \
+        "" + user_name.upper() + \
+        " | Positions : " + print_el(now_data, previous, 'total_position', show_icon=True) + \
+        " | Margin used : " + print_el(now_data, previous, 'used_margin', show_icon=True) + \
+        " | Risk : " + str(round(now_data['risk'])) + "%" + \
+        " | Days : " + str(nb_jours) + "" + \
+        "\n```" + \
+        "Equity".ljust(colonne)                                       +  "Tot. Rea. PNL".ljust(colonne) + "\n" + \
+        print_el(now_data, previous, 'equity').ljust(colonne)         +  print_el(now_data, previous, 'cum_realised_pnl').ljust(colonne) + "\n" + \
         "\n" + \
-        "Daily Gain".ljust(colonne)                                 +   "Daily gain".ljust(colonne) + "\n" + \
-        print_el(now_data, previous, 'gain_in_$').ljust(colonne)    +   print_el(now_data, previous, 'daily_gain_pct', '%').ljust(colonne) + \
+        "Daily Gain".ljust(colonne)                                   +  "Daily gain".ljust(colonne) + "\n" + \
+        print_el(now_data, previous, 'gain_in_$').ljust(colonne)      +  print_el(now_data, previous, 'daily_gain_pct', '%').ljust(colonne) + "\n" + \
+        "\n" + \
+        "Monthly Gain".ljust(colonne)                                 +  "Year Gain".ljust(colonne) + "\n" + \
+        print_el(now_data, previous, 'monthly_gain_$').ljust(colonne) +  print_el(now_data, previous, 'year_gain_$').ljust(colonne) + "\n" + \
         "```"
         discord_message_to_send = message_content
     else:
