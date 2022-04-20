@@ -10,7 +10,7 @@ from time import time
 import numpy as np
 import pandas as pd
 
-from downloader import Downloader
+from downloader import Downloader, load_hlc_cache
 from njit_funcs import backtest_static_grid, round_
 from njit_funcs_recursive_grid import backtest_recursive_grid
 from plotting import dump_plots
@@ -18,6 +18,7 @@ from procedures import (
     prepare_backtest_config,
     make_get_filepath,
     load_live_config,
+    load_hjson_config,
     add_argparse_args,
 )
 from pure_funcs import (
@@ -127,9 +128,21 @@ async def main():
         default=None,
         help="set n backtest slices to plot",
     )
-
+    parser.add_argument(
+        "-oh",
+        "--ohlcv",
+        help="use 1m ohlcv instead of 1s ticks",
+        action="store_true",
+    )
     args = parser.parse_args()
-    for symbol in args.symbol.split(","):
+    if args.symbol is None:
+        tmp_cfg = load_hjson_config(args.backtest_config_path)
+        symbols = (
+            tmp_cfg["symbol"] if type(tmp_cfg["symbol"]) == list else tmp_cfg["symbol"].split(",")
+        )
+    else:
+        symbols = args.symbol.split(",")
+    for symbol in symbols:
         args = parser.parse_args()
         args.symbol = symbol
         config = await prepare_backtest_config(args)
@@ -155,8 +168,8 @@ async def main():
             config["short"]["enabled"] = "y" in args.short_enabled.lower()
         if "spot" in config["market_type"]:
             live_config = spotify_config(live_config)
+        config["ohlcv"] = args.ohlcv
 
-        downloader = Downloader(config)
         print()
         for k in (
             keys := [
@@ -170,12 +183,24 @@ async def main():
                 "start_date",
                 "end_date",
                 "latency_simulation_ms",
+                "base_dir",
             ]
         ):
             if k in config:
                 print(f"{k: <{max(map(len, keys)) + 2}} {config[k]}")
         print()
-        data = await downloader.get_sampled_ticks()
+        if config["ohlcv"]:
+            data = load_hlc_cache(
+                symbol,
+                config["start_date"],
+                config["end_date"],
+                base_dir=config["base_dir"],
+                spot=config["spot"],
+                exchange=config["exchange"],
+            )
+        else:
+            downloader = Downloader(config)
+            data = await downloader.get_sampled_ticks()
         config["n_days"] = round_((data[-1][0] - data[0][0]) / (1000 * 60 * 60 * 24), 0.1)
         pprint.pprint(denumpyize(live_config))
         plot_wrap(config, data)

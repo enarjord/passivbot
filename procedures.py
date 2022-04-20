@@ -4,16 +4,25 @@ import os
 import traceback
 from datetime import datetime
 from time import time
-
-import hjson
 import numpy as np
-import pandas as pd
+
+try:
+    import hjson
+except:
+    print('hjson not found, trying without...')
+    pass
+try:
+    import pandas as pd
+except:
+    print('pandas not found, trying without...')
+    pass
 
 from njit_funcs import calc_samples
 from pure_funcs import (
     numpyize,
     candidate_to_live_config,
     ts_to_date,
+    ts_to_date_utc,
     get_dummy_settings,
     config_pretty_str,
     date_to_ts,
@@ -68,6 +77,7 @@ async def prepare_backtest_config(args) -> dict:
         "starting_balance",
         "market_type",
         "base_dir",
+        "ohlcv",
     ]:
         if hasattr(args, key) and getattr(args, key) is not None:
             config[key] = getattr(args, key)
@@ -77,6 +87,8 @@ async def prepare_backtest_config(args) -> dict:
         config["spot"] = False
     else:
         config["spot"] = args.market_type == "spot"
+    config["start_date"] = ts_to_date_utc(date_to_ts(config["start_date"]))[:10]
+    config["end_date"] = ts_to_date_utc(date_to_ts(config["end_date"]))[:10]
     config["exchange"], _, _ = load_exchange_key_secret(config["user"])
     config["session_name"] = (
         f"{config['start_date'].replace(' ', '').replace(':', '').replace('.', '')}_"
@@ -201,8 +213,8 @@ async def fetch_market_specific_settings(config: dict):
         if "spot" in config["market_type"]:
             raise Exception("spot not implemented on bybit")
         bot = await create_bybit_bot(tmp_live_settings)
-        settings_from_exchange["maker_fee"] = -0.00025
-        settings_from_exchange["taker_fee"] = 0.00075
+        settings_from_exchange["maker_fee"] = 0.0001
+        settings_from_exchange["taker_fee"] = 0.0006
         settings_from_exchange["exchange"] = "bybit"
     else:
         raise Exception(f"unknown exchange {exchange}")
@@ -300,7 +312,9 @@ def add_argparse_args(parser):
         help="specify end date, overriding value from backtest config",
     )
     parser.add_argument(
+        "-sb",
         "--starting_balance",
+        "--starting-balance",
         type=float,
         required=False,
         dest="starting_balance",

@@ -7,6 +7,7 @@ These config files are typically stored in the `configs/live`.
 
 Long and short positions are supported and have each the same parameters.
 
+**Static grid mode**
 | Parameter                  | Description
 | -------------------------- | ------------- |
 | `enabled`                  | Set to false and bot continue as normal, but not make new positions once previous positions have been closed.
