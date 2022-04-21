@@ -464,9 +464,9 @@ def backtest_recursive_grid(
         if auto_unstuck_wallet_exposure_threshold[1] != 0.0
         else wallet_exposure_limit[1] * 10
     )
-    for k in range(0, len(ticks)):
+    for k in range(1, len(ticks)):
         if do_long:
-            emas_long = calc_ema(alphas_long, alphas__long, emas_long, closes[k])
+            emas_long = calc_ema(alphas_long, alphas__long, emas_long, closes[k - 1])
             if k >= max_span_long:
                 # check bankruptcy
                 bkr_diff_long = calc_diff(bkr_price_long, closes[k])
@@ -702,7 +702,7 @@ def backtest_recursive_grid(
                         )
 
         if do_short:
-            emas_short = calc_ema(alphas_short, alphas__short, emas_short, closes[k])
+            emas_short = calc_ema(alphas_short, alphas__short, emas_short, closes[k - 1])
             if k >= max_span_short:
                 # check bankruptcy
                 bkr_diff_short = calc_diff(bkr_price_short, closes[k])
