@@ -505,6 +505,7 @@ class Bot:
                 ]
             if do_long or self.long_mode == "tp_only":
                 closes_long = calc_close_grid_long(
+                    self.xk["backwards_tp"][0],
                     balance,
                     psize_long,
                     pprice_long,
@@ -616,6 +617,7 @@ class Bot:
                 ]
             if do_short or self.short_mode == "tp_only":
                 closes_short = calc_close_grid_short(
+                    self.xk["backwards_tp"][1],
                     balance,
                     psize_short,
                     pprice_short,

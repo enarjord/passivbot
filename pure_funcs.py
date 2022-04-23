@@ -10,11 +10,13 @@ from njit_funcs import round_dynamic, qty_to_cost
 try:
     import pandas as pd
 except:
-    print('pandas not found, trying without...')
+    print("pandas not found, trying without...")
+
     class PD:
         # dummy class when running without pandas
         def __init__(self):
             self.DataFrame = None
+
     pd = PD()
 
 
@@ -50,6 +52,7 @@ def get_xk_keys(passivbot_mode="static_grid"):
             "inverse",
             "do_long",
             "do_short",
+            "backwards_tp",
             "qty_step",
             "price_step",
             "min_qty",
@@ -73,6 +76,7 @@ def get_xk_keys(passivbot_mode="static_grid"):
         "inverse",
         "do_long",
         "do_short",
+        "backwards_tp",
         "qty_step",
         "price_step",
         "min_qty",
@@ -400,6 +404,7 @@ def get_template_live_config(passivbot_mode="static_grid"):
                     "n_close_orders": 7,
                     "auto_unstuck_wallet_exposure_threshold": 0.15,
                     "auto_unstuck_ema_dist": 0.02,
+                    "backwards_tp": False,
                 },
                 "short": {
                     "enabled": False,
@@ -416,6 +421,7 @@ def get_template_live_config(passivbot_mode="static_grid"):
                     "n_close_orders": 7,
                     "auto_unstuck_wallet_exposure_threshold": 0.15,
                     "auto_unstuck_ema_dist": 0.02,
+                    "backwards_tp": False,
                 },
             }
         )
@@ -442,6 +448,7 @@ def get_template_live_config(passivbot_mode="static_grid"):
                 "auto_unstuck_wallet_exposure_threshold": 0.1,  # percentage of wallet_exposure_limit to trigger soft stop.
                 # e.g. wallet_exposure_limit=0.06 and auto_unstuck_wallet_exposure_threshold=0.1: soft stop when wallet_exposure > 0.06 * (1 - 0.1) == 0.054
                 "auto_unstuck_ema_dist": 0.02,
+                "backwards_tp": False,
             },
             "short": {
                 "enabled": True,
@@ -462,6 +469,7 @@ def get_template_live_config(passivbot_mode="static_grid"):
                 "auto_unstuck_wallet_exposure_threshold": 0.1,  # percentage of wallet_exposure_limit to trigger soft stop.
                 # e.g. wallet_exposure_limit=0.06 and auto_unstuck_wallet_exposure_threshold=0.1: soft stop when wallet_exposure > 0.06 * (1 - 0.1) == 0.054
                 "auto_unstuck_ema_dist": 0.02,
+                "backwards_tp": False,
             },
         }
     )
@@ -989,10 +997,6 @@ def make_compatible(live_config_: dict) -> dict:
         ("ema_span_max", "ema_span_1"),
     ]:
         live_config = json.loads(json.dumps(live_config).replace(src, dst))
-    if all(k in live_config["long"] for k in template_recurv["long"]):
-        live_config["long"]["n_close_orders"] = int(round(live_config["long"]["n_close_orders"]))
-        live_config["short"]["n_close_orders"] = int(round(live_config["short"]["n_close_orders"]))
-        return sort_dict_keys(live_config)
     for side in ["long", "short"]:
         if "initial_eprice_ema_dist" not in live_config[side]:
             live_config[side]["initial_eprice_ema_dist"] = -1000.0
@@ -1004,5 +1008,10 @@ def make_compatible(live_config_: dict) -> dict:
             live_config[side]["auto_unstuck_wallet_exposure_threshold"] = 0.0
         if "auto_unstuck_ema_dist" not in live_config[side]:
             live_config[side]["auto_unstuck_ema_dist"] = 0.0
+        if "backwards_tp" not in live_config[side]:
+            live_config[side]["backwards_tp"] = False
+        live_config[side]["n_close_orders"] = int(round(live_config[side]["n_close_orders"]))
+    if all(k in live_config["long"] for k in template_recurv["long"]):
+        return sort_dict_keys(live_config)
     assert all(k in live_config["long"] for k in get_template_live_config()["long"])
     return live_config
