@@ -26,6 +26,12 @@ def arguments_management():
                         help="A list of coin separated by space, ex : 'ONEUSDT XLMUSDT'",
     )
 
+    parser.add_argument("-oh","--ohlcv",
+                        dest="ohlc",
+                        help="use 1m ohlcv instead of 1s ticks",
+                        action="store_true"
+    )
+
     args = parser.parse_args()
 
     if not os.path.exists(args.live_config_filepath) :
@@ -70,6 +76,7 @@ def backtest_looping(args, backtest_directory) :
                                 "-s", "#SYMBOL_NAME#",
                                 "-bd", backtest_directory,  
                                 "-b", args.backtest_config_filepath,
+                                "-oh" if args.ohlc else "",
                                 args.live_config_filepath
     ]
 
