@@ -13,7 +13,7 @@
 
   # format YYYY-MM-DD
   start_date: 2021-01-01
-  end_date: 2022-01-21
+  end_date: 2022-04-22
 
   # non default historical data path
   # historical_data_path: "/mnt/d/"
