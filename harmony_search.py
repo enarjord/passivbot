@@ -736,7 +736,7 @@ async def main():
         config["symbols"] = args.symbol.split(",")
     if args.n_cpus is not None:
         config["n_cpus"] = args.n_cpus
-    config["base_dir"] = args.base_dir
+    config["base_dir"] = "backtests" if args.base_dir is None else args.base_dir
     config["ohlcv"] = args.ohlcv
     print()
     lines = [(k, getattr(args, k)) for k in args.__dict__ if args.__dict__[k] is not None]
@@ -752,7 +752,7 @@ async def main():
     exchange_name = config["exchange"] + ("_spot" if config["market_type"] == "spot" else "")
     config["symbols"] = sorted(config["symbols"])
     for symbol in config["symbols"]:
-        cache_dirpath = os.path.join(args.base_dir, exchange_name, symbol, "caches", "")
+        cache_dirpath = os.path.join(config["base_dir"], exchange_name, symbol, "caches", "")
         if not os.path.exists(cache_dirpath + cache_fname) or not os.path.exists(
             cache_dirpath + "market_specific_settings.json"
         ):
