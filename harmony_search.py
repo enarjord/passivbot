@@ -111,12 +111,20 @@ class HarmonySearch:
         self.exchange_name = config["exchange"] + ("_spot" if config["market_type"] == "spot" else "")
         self.market_specific_settings = {
             s: json.load(
-                open(f"backtests/{self.exchange_name}/{s}/caches/market_specific_settings.json")
+                open(
+                    os.path.join(
+                        self.config["base_dir"],
+                        self.exchange_name,
+                        s,
+                        "caches",
+                        "market_specific_settings.json",
+                    )
+                )
             )
             for s in self.symbols
         }
         self.date_range = f"{self.config['start_date']}_{self.config['end_date']}"
-        self.bt_dir = f"backtests/{self.exchange_name}"
+        self.bt_dir = os.path.join(self.config["base_dir"], self.exchange_name)
         self.ticks_cache_fname = (
             f"caches/{self.date_range}{'_ohlcv_cache.npy' if config['ohlcv'] else '_ticks_cache.npy'}"
         )
@@ -724,6 +732,7 @@ async def main():
         config["symbols"] = args.symbol.split(",")
     if args.n_cpus is not None:
         config["n_cpus"] = args.n_cpus
+    config["base_dir"] = args.base_dir
     config["ohlcv"] = args.ohlcv
     print()
     lines = [(k, getattr(args, k)) for k in args.__dict__ if args.__dict__[k] is not None]
@@ -739,7 +748,7 @@ async def main():
     exchange_name = config["exchange"] + ("_spot" if config["market_type"] == "spot" else "")
     config["symbols"] = sorted(config["symbols"])
     for symbol in config["symbols"]:
-        cache_dirpath = f"backtests/{exchange_name}/{symbol}/caches/"
+        cache_dirpath = os.path.join(args.base_dir, exchange_name, symbol, "caches", "")
         if not os.path.exists(cache_dirpath + cache_fname) or not os.path.exists(
             cache_dirpath + "market_specific_settings.json"
         ):
