@@ -736,7 +736,8 @@ async def main():
         config["symbols"] = args.symbol.split(",")
     if args.n_cpus is not None:
         config["n_cpus"] = args.n_cpus
-    config["base_dir"] = "backtests" if args.base_dir is None else args.base_dir
+    if args.base_dir is not None:
+        config["base_dir"] = args.base_dir
     config["ohlcv"] = args.ohlcv
     print()
     lines = [(k, getattr(args, k)) for k in args.__dict__ if args.__dict__[k] is not None]
