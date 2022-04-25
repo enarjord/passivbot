@@ -387,7 +387,7 @@ def calc_close_grid_backwards_long(
             break
     if psize_ > 0.0 and closes:
         closes[-1] = (round_(closes[-1][0] - psize_, qty_step), closes[-1][1], closes[-1][2])
-    return closes[::-1]
+    return sorted(closes, key=lambda x: x[1])
 
 
 @njit
@@ -556,7 +556,7 @@ def calc_close_grid_backwards_short(
             break
     if psize_ > 0.0 and closes:
         closes[-1] = (round_(closes[-1][0] + psize_, qty_step), closes[-1][1], closes[-1][2])
-    return closes[::-1]
+    return sorted(closes, key=lambda x: x[1], reverse=True)
 
 
 @njit
