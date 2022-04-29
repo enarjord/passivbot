@@ -387,6 +387,7 @@ def backtest_recursive_grid(
     inverse,
     do_long,
     do_short,
+    backwards_tp,
     qty_step,
     price_step,
     min_qty,
@@ -526,6 +527,7 @@ def backtest_recursive_grid(
                 # check if close grid should be updated
                 if timestamps[k] >= next_close_grid_update_ts_long:
                     closes_long = calc_close_grid_long(
+                        backwards_tp[0],
                         balance_long,
                         psize_long,
                         pprice_long,
@@ -764,6 +766,7 @@ def backtest_recursive_grid(
                 # check if close grid should be updated
                 if timestamps[k] >= next_close_grid_update_ts_short:
                     closes_short = calc_close_grid_short(
+                        backwards_tp[1],
                         balance_short,
                         psize_short,
                         pprice_short,

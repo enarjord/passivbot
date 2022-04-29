@@ -44,9 +44,11 @@
   # adg_min:
   # min(adgs)
 
-  # will override any starting configs' long/short enabled parameter
+  # will override starting configs' parameters
   do_long: true
   do_short: true
+  backwards_tp_long: true
+  backwards_tp_short: true
 
   # choices: [recursive_grid, static_grid]
   passivbot_mode: recursive_grid
@@ -98,7 +100,7 @@
       secondary_allocation: [0.0, 0.7]
       secondary_pprice_diff: [0.05, 0.5]
       eprice_exp_base: [1.0, 2.1]
-      min_markup: [0.005, 0.06]
+      min_markup: [0.002, 0.06]
       markup_range: [0.005, 0.06]
       n_close_orders: [4, 14]
       auto_unstuck_wallet_exposure_threshold: [0.0, 1.0]
@@ -117,7 +119,7 @@
       secondary_allocation: [0.0, 0.7]
       secondary_pprice_diff: [0.05, 0.5]
       eprice_exp_base: [1.0, 2.1]
-      min_markup: [0.005, 0.06]
+      min_markup: [0.002, 0.06]
       markup_range: [0.005, 0.06]
       n_close_orders: [4, 14]
       auto_unstuck_wallet_exposure_threshold: [0.0, 1.0]
@@ -136,7 +138,7 @@
       ddown_factor: [0.05, 3.0]
       rentry_pprice_dist: [0.005, 0.05]
       rentry_pprice_dist_wallet_exposure_weighting: [0.0, 90.0]
-      min_markup: [0.005, 0.06]
+      min_markup: [0.002, 0.06]
       markup_range: [0.005, 0.06]
       n_close_orders: [4, 14]
       auto_unstuck_wallet_exposure_threshold: [0.0, 1.0]
@@ -152,7 +154,7 @@
       ddown_factor: [0.05, 3.0]
       rentry_pprice_dist: [0.005, 0.05]
       rentry_pprice_dist_wallet_exposure_weighting: [0.0, 90.0]
-      min_markup: [0.005, 0.06]
+      min_markup: [0.002, 0.06]
       markup_range: [0.005, 0.06]
       n_close_orders: [4, 14]
       auto_unstuck_wallet_exposure_threshold: [0.0, 1.0]
