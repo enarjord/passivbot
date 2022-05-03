@@ -505,6 +505,7 @@ class Bot:
                 ]
             if do_long or self.long_mode == "tp_only":
                 closes_long = calc_close_grid_long(
+                    self.xk["backwards_tp"][0],
                     balance,
                     psize_long,
                     pprice_long,
@@ -616,6 +617,7 @@ class Bot:
                 ]
             if do_short or self.short_mode == "tp_only":
                 closes_short = calc_close_grid_short(
+                    self.xk["backwards_tp"][1],
                     balance,
                     psize_short,
                     pprice_short,
@@ -1007,26 +1009,6 @@ async def main() -> None:
         help="if true, disable long and short",
     )
     parser.add_argument(
-        "-lw",
-        "--long_wallet_exposure_limit",
-        "--long-wallet-exposure-limit",
-        type=float,
-        required=False,
-        dest="long_wallet_exposure_limit",
-        default=None,
-        help="specify long wallet exposure limit, overriding value from live config",
-    )
-    parser.add_argument(
-        "-sw",
-        "--short_wallet_exposure_limit",
-        "--short-wallet-exposure-limit",
-        type=float,
-        required=False,
-        dest="short_wallet_exposure_limit",
-        default=None,
-        help="specify short wallet exposure limit, overriding value from live config",
-    )
-    parser.add_argument(
         "-sm",
         "--short_mode",
         "--short-mode",
@@ -1075,6 +1057,36 @@ async def main() -> None:
         default="api-keys.json",
         help="File containing users/accounts and api-keys for each exchanges",
     )
+
+    float_kwargs = [
+        ("-lmm", "--long_min_markup", "--long-min-markup", "long_min_markup"),
+        ("-smm", "--short_min_markup", "--short-min-markup", "short_min_markup"),
+        ("-lmr", "--long_markup_range", "--long-markup-range", "long_markup_range"),
+        ("-smr", "--short_markup_range", "--short-markup-range", "short_markup_range"),
+        (
+            "-lw",
+            "--long_wallet_exposure_limit",
+            "--long-wallet-exposure-limit",
+            "long_wallet_exposure_limit",
+        ),
+        (
+            "-sw",
+            "--short_wallet_exposure_limit",
+            "--short-wallet-exposure-limit",
+            "short_wallet_exposure_limit",
+        ),
+    ]
+    for k0, k1, k2, dest in float_kwargs:
+        parser.add_argument(
+            k0,
+            k1,
+            k2,
+            type=float,
+            required=False,
+            dest=dest,
+            default=None,
+            help=f"specify {dest}, overriding value from live config",
+        )
 
     args = parser.parse_args()
     try:
@@ -1155,19 +1167,13 @@ async def main() -> None:
         config["short"]["enabled"] = config["do_short"] = False
         config["long_mode"] = None
         config["short_mode"] = None
-
-    if args.long_wallet_exposure_limit is not None:
-        logging.info(
-            f"overriding long wallet exposure limit ({config['long']['wallet_exposure_limit']}) "
-            + f"with new value: {args.long_wallet_exposure_limit}"
-        )
-        config["long"]["wallet_exposure_limit"] = args.long_wallet_exposure_limit
-    if args.short_wallet_exposure_limit is not None:
-        logging.info(
-            f"overriding short wallet exposure limit ({config['short']['wallet_exposure_limit']}) "
-            + f"with new value: {args.short_wallet_exposure_limit}"
-        )
-        config["short"]["wallet_exposure_limit"] = args.short_wallet_exposure_limit
+    for _, _, _, dest in float_kwargs:
+        if getattr(args, dest) is not None:
+            side, key = dest[: dest.find("_")], dest[dest.find("_") + 1 :]
+            logging.info(
+                f"overriding {dest} {config[side][key]} " + f"with new value: {getattr(args, dest)}"
+            )
+            config[side][key] = getattr(args, dest)
 
     if "spot" in config["market_type"]:
         config = spotify_config(config)
