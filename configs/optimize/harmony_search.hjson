@@ -16,7 +16,7 @@
   #  adg_mean
   #  adg_min
   #  adg_realized_PAD_mean
-  score_formula: adg_PAD_std
+  score_formula: adg_realized_PAD_mean
 
   # adg_PAD_std:
   # adg / max(max_pa_dist_std, mean([max(max_pa_dist_std, PAD_std) for PAD_std in results]))
@@ -32,8 +32,8 @@
   # adg_realized_PAD_mean:
   # adg_realized / max(max_pa_dist_mean, mean([max(max_pa_dist_mean, PAD_mean) for PAD_mean in results]))
   
-  maximum_pa_distance_mean_long: 0.02
-  maximum_pa_distance_mean_short: 0.02
+  maximum_pa_distance_mean_long: 0.04
+  maximum_pa_distance_mean_short: 0.04
 
   # adg_DGstd_ratio:
   # mean([dg_mean_std_ratio]) / std(dg_mean_std_ratio)
@@ -101,8 +101,8 @@
       secondary_pprice_diff: [0.05, 0.5]
       eprice_exp_base: [1.0, 2.1]
       min_markup: [0.002, 0.06]
-      markup_range: [0.005, 0.06]
-      n_close_orders: [4, 14]
+      markup_range: [0.0, 0.06]
+      n_close_orders: [4, 30]
       auto_unstuck_wallet_exposure_threshold: [0.0, 1.0]
       auto_unstuck_ema_dist: [0.0, 0.1]
     }
@@ -120,8 +120,8 @@
       secondary_pprice_diff: [0.05, 0.5]
       eprice_exp_base: [1.0, 2.1]
       min_markup: [0.002, 0.06]
-      markup_range: [0.005, 0.06]
-      n_close_orders: [4, 14]
+      markup_range: [0.0, 0.06]
+      n_close_orders: [4, 30]
       auto_unstuck_wallet_exposure_threshold: [0.0, 1.0]
       auto_unstuck_ema_dist: [0.0, 0.1]
     }
@@ -139,8 +139,8 @@
       rentry_pprice_dist: [0.005, 0.05]
       rentry_pprice_dist_wallet_exposure_weighting: [0.0, 90.0]
       min_markup: [0.002, 0.06]
-      markup_range: [0.005, 0.06]
-      n_close_orders: [4, 14]
+      markup_range: [0.0, 0.06]
+      n_close_orders: [4, 30]
       auto_unstuck_wallet_exposure_threshold: [0.0, 1.0]
       auto_unstuck_ema_dist: [0.0, 0.1]
     }
@@ -155,8 +155,8 @@
       rentry_pprice_dist: [0.005, 0.05]
       rentry_pprice_dist_wallet_exposure_weighting: [0.0, 90.0]
       min_markup: [0.002, 0.06]
-      markup_range: [0.005, 0.06]
-      n_close_orders: [4, 14]
+      markup_range: [0.0, 0.06]
+      n_close_orders: [4, 30]
       auto_unstuck_wallet_exposure_threshold: [0.0, 1.0]
       auto_unstuck_ema_dist: [0.0, 0.1]
     }
