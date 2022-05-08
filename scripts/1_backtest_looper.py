@@ -75,10 +75,11 @@ def backtest_looping(args, backtest_directory) :
                                 "python3", "backtest.py", 
                                 "-s", "#SYMBOL_NAME#",
                                 "-bd", backtest_directory,  
-                                "-b", args.backtest_config_filepath,
-                                "-oh" if args.ohlc else "",
-                                args.live_config_filepath
-    ]
+                                "-b", args.backtest_config_filepath]
+    if args.ohlc:
+        backtest_command_line.append("-oh") 
+
+    backtest_command_line.append(args.live_config_filepath)
 
     if not os.path.exists("../"+backtest_directory) :
         print("Sorry, you must create this directory : ", os.path.realpath("../"+backtest_directory))
