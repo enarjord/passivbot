@@ -1,0 +1,44 @@
+defaults:
+  # name of a file in the config/live directory
+  live_config_name: "recursive_grid_124symbols_390days_AUenabled_2022-05-03.json"
+  # absolute path. Will be auto-generated if empty
+  live_config_path: ""
+  market_type:
+    "futures" # futures | spot
+  # 0 means no limit
+  long_wallet_exposure_limit: 0.15
+  short_wallet_exposure_limit: 0.15
+  backwards_tp: true
+  assigned_balance: 0
+  # modes:  # n | m | gs | p | t
+  # modes info: https://www.passivbot.com/en/latest/live/#controlling-the-bot
+  long_mode: "n"
+  short_mode: "n"
+instances:
+  - user: "bybit_01"
+    symbols: 
+        - 'ALICEUSDT'
+        - 'APEUSDT'
+        - 'API3USDT'
+        - 'ARPAUSDT'
+        - 'ARUSDT'
+        - 'AUDIOUSDT'
+        - 'C98USDT'
+        - 'CELRUSDT'
+        - 'CHRUSDT'
+        - 'COTIUSDT'
+        - 'CRVUSDT'
+        - 'CTKUSDT'
+        - 'CTSIUSDT'
+        - 'DARUSDT'
+        - 'FILUSDT'
+        - 'GALAUSDT'
+        - 'GMTUSDT'
+        - 'IMXUSDT'
+        - 'LRCUSDT'
+        - 'PEOPLEUSDT'
+        - 'RENUSDT'
+        - 'RUNEUSDT'      
+        - 'THETAUSDT'
+        - 'WOOUSDT'
+        - 'ZRXUSDT'
