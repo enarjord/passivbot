@@ -396,8 +396,9 @@ class HarmonySearch:
             },
             **{"symbol": self.symbols[0], "config_no": self.iter_counter},
         }
-        new_harmony["long"]["enabled"] = self.do_long
-        new_harmony["short"]["enabled"] = self.do_short
+        for side in ["long", "short"]:
+            new_harmony[side]["enabled"] = getattr(self, f"do_{side}")
+            new_harmony[side]["backwards_tp"] = self.config[f"backwards_tp_{side}"]
         for key in self.long_bounds:
             if np.random.random() < self.hm_considering_rate:
                 # take note randomly from harmony memory
@@ -545,6 +546,7 @@ class HarmonySearch:
             for cfg in self.starting_configs:
                 cfg = {k: max(bounds[k][0], min(bounds[k][1], cfg[side][k])) for k in bounds}
                 cfg["enabled"] = getattr(self, f"do_{side}")
+                cfg["backwards_tp"] = self.config[f"backwards_tp_{side}"]
                 if cfg not in [self.hm[k][side]["config"] for k in self.hm]:
                     self.hm[hm_keys.pop()][side]["config"] = deepcopy(cfg)
 
@@ -565,7 +567,7 @@ class HarmonySearch:
                         continue
                     # a worker is idle; give it a job
                     for id_key in self.unfinished_evals:
-                        # check of unfinished evals
+                        # check if unfinished evals
                         missing_symbols = set(self.symbols) - (
                             set(self.unfinished_evals[id_key]["single_results"])
                             | self.unfinished_evals[id_key]["in_progress"]
@@ -708,6 +710,8 @@ async def main():
         "static_grid",
     ], f"unknown passivbot mode {passivbot_mode}"
     config.update(get_template_live_config(passivbot_mode))
+    config["long"]["backwards_tp"] = config["backwards_tp_long"]
+    config["short"]["backwards_tp"] = config["backwards_tp_short"]
     config["exchange"], _, _ = load_exchange_key_secret(config["user"])
     args = parser.parse_args()
     if args.long_enabled is None:
