@@ -1,0 +1,9 @@
+#!/bin/bash
+symbols=(ALICEUSDT CELRUSDT RUNEUSDT FTMUSDT CTKUSDT SXPUSDT MATICUSDT COTIUSDT ONEUSDT YFIUSDT ENJUSDT EGLDUSDT BANDUSDT VETUSDT GRTUSDT OCEANUSDT CVCUSDT ATOMUSDT CRVUSDT IOSTUSDT )
+for i in "${symbols[@]}"
+do
+    :
+    echo "Kill screen for $i"
+    screen -S "bybit_pro_$i" -X quit
+done
+
