@@ -167,6 +167,8 @@ def bybit_find_grid_ok(input_datas):
             ) :
             print (f"{config_symbol.ljust(15)} min_notional: {min_notional:.2f} GRID OK [volume_24h : {volume_24h}, turnover_24 : {turnover_24h}]")
             bash_symbols.append(config_symbol)
+        else:
+            print (f"{coin['name'].ljust(15)} min_notional: {min_notional:.2f} GRID NOTPOSSIBLE")
 
     return bash_symbols
 
