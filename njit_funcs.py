@@ -329,10 +329,13 @@ def calc_close_grid_backwards_long(
     n_close_orders = int(round(n_close_orders))
     raw_close_prices = np.linspace(minm, pprice * (1 + min_markup + markup_range), n_close_orders)
     close_prices = []
+    close_prices_all = []
     for p_ in raw_close_prices:
         price = round_up(p_, price_step)
-        if price >= lowest_ask and price not in close_prices:
-            close_prices.append(price)
+        if price not in close_prices_all:
+            close_prices_all.append(price)
+            if price >= lowest_ask:
+                close_prices.append(price)
     if len(close_prices) == 0:
         return [(-psize, lowest_ask, "long_nclose")]
     wallet_exposure = qty_to_cost(psize, pprice, inverse, c_mult) / balance
@@ -370,7 +373,7 @@ def calc_close_grid_backwards_long(
         full_psize = (wallet_exposure_limit * balance / c_mult) * pprice
     else:
         full_psize = (wallet_exposure_limit * balance) / pprice
-    qty_per_close = max(min_qty, round_up(full_psize / len(close_prices), qty_step))
+    qty_per_close = max(min_qty, round_up(full_psize / len(close_prices_all), qty_step))
     for price in close_prices[::-1]:
         min_entry_qty = calc_min_entry_qty(price, inverse, qty_step, min_qty, min_cost)
         qty = min(psize_, max(qty_per_close, min_entry_qty))
@@ -498,10 +501,13 @@ def calc_close_grid_backwards_short(
     n_close_orders = int(round(n_close_orders))
     raw_close_prices = np.linspace(minm, pprice * (1 - min_markup - markup_range), n_close_orders)
     close_prices = []
+    close_prices_all = []
     for p_ in raw_close_prices:
         price = round_dn(p_, price_step)
-        if price <= highest_bid and price not in close_prices:
-            close_prices.append(price)
+        if price not in close_prices_all:
+            close_prices_all.append(price)
+            if price <= highest_bid:
+                close_prices.append(price)
     if len(close_prices) == 0:
         return [(psize, highest_bid, "short_nclose")]
     wallet_exposure = qty_to_cost(psize, pprice, inverse, c_mult) / balance
@@ -539,7 +545,7 @@ def calc_close_grid_backwards_short(
         full_psize = (wallet_exposure_limit * balance / c_mult) * pprice
     else:
         full_psize = (wallet_exposure_limit * balance) / pprice
-    qty_per_close = max(min_qty, round_up(full_psize / len(close_prices), qty_step))
+    qty_per_close = max(min_qty, round_up(full_psize / len(close_prices_all), qty_step))
     for price in close_prices[::-1]:
         min_entry_qty = calc_min_entry_qty(price, inverse, qty_step, min_qty, min_cost)
         qty = min(psize_, max(qty_per_close, min_entry_qty))
