@@ -3,7 +3,7 @@
   market_type: futures
 
   # exchange from api-keys.json is used
-  user: bybit_tedy
+  user: bybit_01
 
   symbol: SYMBOLUSDT
   latency_simulation_ms: 1000
@@ -12,8 +12,8 @@
   starting_balance: 1000.0
 
   # format YYYY-MM-DD
-  start_date: 2021-01-01
-  end_date: 2022-04-22
+  start_date: 2021-05-10
+  end_date: 2022-05-20
 
   # non default historical data path
   # historical_data_path: "/mnt/d/"
