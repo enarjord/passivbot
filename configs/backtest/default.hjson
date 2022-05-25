@@ -12,8 +12,8 @@
   starting_balance: 1000.0
 
   # format YYYY-MM-DD
-  start_date: 2021-05-10
-  end_date: 2022-05-20
+  start_date: 2022-05-12
+  end_date: 2022-05-24
 
   # non default historical data path
   # historical_data_path: "/mnt/d/"
