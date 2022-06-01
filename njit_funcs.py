@@ -334,7 +334,7 @@ def calc_close_grid_backwards_long(
         n_close_orders,
         full_psize / calc_min_entry_qty(pprice, inverse, qty_step, min_qty, min_cost),
     )
-    n_close_orders = int(round(n_close_orders))
+    n_close_orders = max(1, int(round(n_close_orders)))
     raw_close_prices = np.linspace(minm, pprice * (1 + min_markup + markup_range), n_close_orders)
     close_prices = []
     close_prices_all = []
@@ -510,7 +510,7 @@ def calc_close_grid_backwards_short(
         n_close_orders,
         full_psize / calc_min_entry_qty(pprice, inverse, qty_step, min_qty, min_cost),
     )
-    n_close_orders = int(round(n_close_orders))
+    n_close_orders = max(1, int(round(n_close_orders)))
     raw_close_prices = np.linspace(minm, pprice * (1 - min_markup - markup_range), n_close_orders)
     close_prices = []
     close_prices_all = []
