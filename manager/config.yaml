@@ -1,13 +1,13 @@
 defaults:
   # name of a file in the config/live directory
-  live_config_name: "recursive_grid_124symbols_390days_AUenabled_2022-05-03.json"
+  live_config_name: "recursive_grid_124_symbols_390days_AUdisabled_2022-05-09.json"
   # absolute path. Will be auto-generated if empty
   live_config_path: ""
   market_type:
     "futures" # futures | spot
   # 0 means no limit
-  long_wallet_exposure_limit: 0.15
-  short_wallet_exposure_limit: 0.15
+  long_wallet_exposure_limit: 0.2
+  short_wallet_exposure_limit: 0.2
   backwards_tp: true
   assigned_balance: 0
   # modes:  # n | m | gs | p | t
