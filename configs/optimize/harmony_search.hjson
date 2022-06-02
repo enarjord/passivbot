@@ -4,7 +4,7 @@
   "hm_considering_rate": 0.9,
   "bandwidth": 0.07,
   "pitch_adjusting_rate": 0.24,
-  "n_cpus": 4,
+  "n_cpus": 8,
   "iters": 6000,
 
   # score formula choices:
@@ -50,7 +50,7 @@
   "backwards_tp_short": true,
 
   # choices: [recursive_grid, static_grid]
-  "passivbot_mode": "recursive_grid",
+  "passivbot_mode": "static_grid",
 
   # and at least 125 days of data,
   # sorted highest to lowest vol last 125 days
@@ -60,7 +60,7 @@
   "bounds_static_grid": {
     "long": {
       "grid_span": [
-        0.1,
+        0.01,
         0.7
       ],
       "ema_span_0": [
@@ -72,8 +72,8 @@
         10080
       ],
       "wallet_exposure_limit": [
-        0.1,
-        0.1
+        2.4,
+        2.4
       ],
       "max_n_entry_orders": [
         10,
@@ -123,7 +123,7 @@
     },
     "short": {
       "grid_span": [
-        0.1,
+        0.01,
         0.7
       ],
       "ema_span_0": [
@@ -135,8 +135,8 @@
         10080
       ],
       "wallet_exposure_limit": [
-        0.1,
-        0.1
+        1.2,
+        1.2
       ],
       "max_n_entry_orders": [
         10,
