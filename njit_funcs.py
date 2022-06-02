@@ -1562,6 +1562,8 @@ def calc_entry_grid_long(
     auto_unstuck_wallet_exposure_threshold,
     auto_unstuck_ema_dist,
 ) -> [(float, float, str)]:
+    if wallet_exposure_limit == 0.0:
+        return [(0.0, 0.0, "")]
     min_entry_qty = calc_min_entry_qty(highest_bid, inverse, qty_step, min_qty, min_cost)
     if do_long or psize > min_entry_qty:
         if psize == 0.0:
@@ -1731,6 +1733,8 @@ def calc_entry_grid_short(
     auto_unstuck_wallet_exposure_threshold,
     auto_unstuck_ema_dist,
 ) -> [(float, float, str)]:
+    if wallet_exposure_limit == 0.0:
+        return [(0.0, 0.0, "")]
     min_entry_qty = calc_min_entry_qty(lowest_ask, inverse, qty_step, min_qty, min_cost)
     abs_psize = abs(psize)
     if do_short or abs_psize > min_entry_qty:
