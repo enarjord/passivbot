@@ -40,8 +40,10 @@ def dump_plots(
         if result[side]["enabled"]:
             table.add_row([" ", " "])
             table.add_row([side.capitalize(), result[side]["enabled"]])
-            adg_per_exp = result["result"][f"adg_{side}"] / result[side]["wallet_exposure_limit"]
-            table.add_row(["ADG per exposure", f"{round_dynamic(adg_per_exp * 100, 3)}%"])
+            adg_realized_per_exp = result["result"][f"adg_realized_per_exposure_{side}"]
+            table.add_row(
+                ["ADG realized per exposure", f"{round_dynamic(adg_realized_per_exp * 100, 3)}%"]
+            )
             profit_color = (
                 Fore.RED
                 if result["result"][f"final_balance_{side}"] < result["result"]["starting_balance"]
@@ -77,8 +79,6 @@ def dump_plots(
                     f"{profit_color}{round_dynamic((result['result'][f'adg_{side}']) * 100, 3)}%{Fore.RESET}",
                 ]
             )
-            gain_per_exp = result["result"][f"gain_{side}"] / result[side]["wallet_exposure_limit"]
-            table.add_row(["Gain per exposure", f"{round_dynamic(gain_per_exp * 100, 3)}%"])
             table.add_row(
                 [
                     "DG mean std ratio",
@@ -182,6 +182,8 @@ def dump_plots(
         if result[side]["enabled"]:
             plt.clf()
             fig = plot_fills(df, fdf, plot_whole_df=True, title=f"Overview Fills {side.capitalize()}")
+            if not fig:
+                continue
             fig.savefig(f"{result['plots_dirpath']}whole_backtest_{side}.png")
             print(f"\nplotting balance and equity {side}...")
             plt.clf()
