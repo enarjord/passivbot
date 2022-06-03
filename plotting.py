@@ -115,6 +115,12 @@ def dump_plots(
                     f'{round_dynamic(result["result"][f"eqbal_ratio_min_{side}"], 4)}',
                 ]
             )
+            table.add_row(
+                [
+                    "Equity/balance ratio std",
+                    f'{round_dynamic(result["result"][f"equity_balance_ratio_std_{side}"], 4)}',
+                ]
+            )
             table.add_row(["No. fills", result["result"][f"n_fills_{side}"]])
             table.add_row(["No. entries", result["result"][f"n_entries_{side}"]])
             table.add_row(["No. closes", result["result"][f"n_closes_{side}"]])
