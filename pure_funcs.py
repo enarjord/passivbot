@@ -586,7 +586,7 @@ def analyze_fills(
         daily_gains_long = daily_equity_long / daily_equity_long.shift(1) - 1
         adg_long = daily_gains_long.mean()
         DGstd_long = daily_gains_long.std()
-        adg_DGstd_ratio_long = adg_long / DGstd_long if len(daily_gains_long) > 0 else 0.0
+        adg_DGstd_ratio_long = adg_long / DGstd_long if (len(daily_gains_long) > 0 and DGstd_long != 0.0) else 0.0
         if any("bankruptcy" in e for e in longs.type.unique()):
             adg_long = 0.01 ** (1 / n_days) - 1  # reward bankrupt runs lasting longer
         adg_realized_long = (sdf.iloc[-1].balance_long / sdf.iloc[0].balance_long) ** (1 / n_days) - 1
@@ -599,7 +599,7 @@ def analyze_fills(
         daily_gains_short = daily_equity_short / daily_equity_short.shift(1) - 1
         adg_short = daily_gains_short.mean()
         DGstd_short = daily_gains_short.std()
-        adg_DGstd_ratio_short = adg_short / DGstd_short if len(daily_gains_short) > 0 else 0.0
+        adg_DGstd_ratio_short = adg_short / DGstd_short if (len(daily_gains_short) > 0 and DGstd_short != 0.0) else 0.0
         if any("bankruptcy" in e for e in shorts.type.unique()):
             adg_short = 0.01 ** (1 / n_days) - 1  # reward bankrupt runs lasting longer
         gain_realized_short = sdf.iloc[-1].balance_short / sdf.iloc[0].balance_short
@@ -645,6 +645,10 @@ def analyze_fills(
         "pa_distance_mean_short": pa_distance_short.mean(),
         "pa_distance_max_short": pa_distance_short.max(),
         "pa_distance_std_short": pa_distance_short.std(),
+        "equity_balance_ratio_mean_long": (sdf.equity_long / sdf.balance_long).mean(),
+        "equity_balance_ratio_std_long": (sdf.equity_long / sdf.balance_long).std(),
+        "equity_balance_ratio_mean_short": (sdf.equity_short / sdf.balance_short).mean(),
+        "equity_balance_ratio_std_short": (sdf.equity_short / sdf.balance_short).std(),
         "gain_long": gain_long,
         "adg_long": adg_long if adg_long == adg_long else -1.0,
         "adg_per_exposure_long": adg_long / config["long"]["wallet_exposure_limit"]
