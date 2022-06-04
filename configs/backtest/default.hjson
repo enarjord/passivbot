@@ -6,14 +6,14 @@
   user: bybit_01
 
   symbol: SYMBOLUSDT
-  latency_simulation_ms: 1000
+  latency_simulation_ms: 100
 
   # specify starting balance in terms of margin token (i.e. usdt for usdt-m, coin for inverse coin-m)
   starting_balance: 1000.0
 
   # format YYYY-MM-DD
-  start_date: 2022-05-19
-  end_date: 2022-06-01
+  start_date: 2022-05-15
+  end_date: 2022-06-03
 
   # non default historical data path
   # historical_data_path: "/mnt/d/"
