@@ -14,7 +14,7 @@ import sys
 class Logger(object):
     def __init__(self):
         self.terminal = sys.stdout
-        self.log = open("tmp/" + __file__ +".log", "a")
+        self.log = open(__file__ +".log", "a")
    
     def write(self, message):
         self.terminal.write(message)
