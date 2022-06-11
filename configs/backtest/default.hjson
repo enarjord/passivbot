@@ -12,7 +12,7 @@
   starting_balance: 1000.0
 
   # format YYYY-MM-DD
-  start_date: 2022-06-01
+  start_date: 2022-05-08
   end_date: 2022-06-08
 
   # non default historical data path
