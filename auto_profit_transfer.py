@@ -85,14 +85,11 @@ async def main():
         if to_transfer > 0:
             try:
                 transferred = await bot.transfer_from_derivatives_to_spot(args.quote, to_transfer)
-                """
-                transferred = await bot.private_post(
-                    bot.endpoints["futures_transfer"],
-                    {"asset": args.quote, "amount": to_transfer, "type": 2},
-                    base_endpoint=bot.spot_base_endpoint,
-                )
-                """
                 logging.info(f"income: {profit} transferred {to_transfer} {args.quote}")
+                if exchange == 'bybit':
+                    if 'ret_msg' not in transferred or transferred['ret_msg'] != 'OK':
+                        print(f"error with transfer {transferred}")
+                logging.info(f"{transferred}")
                 already_transferred_ids.update([e["transaction_id"] for e in income])
                 json.dump(list(already_transferred_ids), open(transfer_log_fpath, "w"))
             except Exception as e:
