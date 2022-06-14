@@ -180,7 +180,6 @@ class Bybit(Bot):
             hashlib.sha256,
         ).hexdigest()
         if json_:
-            print(params)
             async with getattr(self.session, type_)(base_endpoint + url, json=params) as response:
                 result = await response.text()
         else:
