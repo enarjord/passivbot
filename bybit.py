@@ -6,6 +6,7 @@ import traceback
 from time import time
 from typing import Union, List, Dict
 from urllib.parse import urlencode
+from uuid import uuid4
 
 import aiohttp
 import numpy as np
@@ -47,6 +48,7 @@ class Bybit(Bot):
             "balance": "/v2/private/wallet/balance",
             "exchange_info": "/v2/public/symbols",
             "ticker": "/v2/public/tickers",
+            "funds_transfer": "/asset/v1/private/transfer",
         }
         self.session = aiohttp.ClientSession(headers={"referer": "passivbotbybit"})
 
@@ -111,6 +113,7 @@ class Bybit(Bot):
         self.endpoints["balance"] = "/v2/private/wallet/balance"
         self.endpoints["exchange_info"] = "/v2/public/symbols"
         self.endpoints["ticker"] = "/v2/public/tickers"
+        self.endpoints["funds_transfer"] = "/asset/v1/private/transfer"
 
     async def _init(self):
         info = await self.public_get(self.endpoints["exchange_info"])
@@ -161,7 +164,9 @@ class Bybit(Bot):
             result = await response.text()
         return json.loads(result)
 
-    async def private_(self, type_: str, base_endpoint: str, url: str, params: dict = {}) -> dict:
+    async def private_(
+        self, type_: str, base_endpoint: str, url: str, params: dict = {}, json_: bool = False
+    ) -> dict:
         timestamp = int(time() * 1000)
         params.update({"api_key": self.key, "timestamp": timestamp})
         for k in params:
@@ -174,8 +179,13 @@ class Bybit(Bot):
             urlencode(sort_dict_keys(params)).encode("utf-8"),
             hashlib.sha256,
         ).hexdigest()
-        async with getattr(self.session, type_)(base_endpoint + url, params=params) as response:
-            result = await response.text()
+        if json_:
+            print(params)
+            async with getattr(self.session, type_)(base_endpoint + url, json=params) as response:
+                result = await response.text()
+        else:
+            async with getattr(self.session, type_)(base_endpoint + url, params=params) as response:
+                result = await response.text()
         return json.loads(result)
 
     async def private_get(self, url: str, params: dict = {}, base_endpoint: str = None) -> dict:
@@ -193,6 +203,22 @@ class Bybit(Bot):
             url,
             params,
         )
+
+    async def transfer_from_derivatives_to_spot(self, coin: str, amount: float):
+        params = {
+            "coin": coin,
+            "amount": str(amount),
+            "from_account_type": "CONTRACT",
+            "to_account_type": "SPOT",
+            "transfer_id": str(uuid4()),
+        }
+        return await self.private_(
+            "post", self.base_endpoint, self.endpoints["funds_transfer"], params=params, json_=True
+        )
+
+    async def get_server_time(self):
+        now = await self.public_get("/v2/public/time")
+        return float(now["time_now"]) * 1000
 
     async def fetch_position(self) -> dict:
         position = {}
@@ -400,6 +426,23 @@ class Bybit(Bot):
         income_type: str = "Trade",
         end_time: int = None,
     ):
+        if symbol is None:
+            all_income = []
+            all_positions = await self.private_get(self.endpoints["position"])
+            symbols = sorted(
+                set(
+                    [
+                        x["data"]["symbol"]
+                        for x in all_positions["result"]
+                        if float(x["data"]["size"]) > 0
+                    ]
+                )
+            )
+            for symbol in symbols:
+                all_income += await self.get_all_income(
+                    symbol=symbol, start_time=start_time, income_type=income_type, end_time=end_time
+                )
+            return sorted(all_income, key=lambda x: x["timestamp"])
         limit = 50
         income = []
         page = 1
@@ -413,7 +456,7 @@ class Bybit(Bot):
             )
             if len(fetched) == 0:
                 break
-            print_(["fetched income", ts_to_date(fetched[0]["timestamp"])])
+            print_(["fetched income", symbol, ts_to_date(fetched[0]["timestamp"])])
             if fetched == income[-len(fetched) :]:
                 break
             income += fetched
