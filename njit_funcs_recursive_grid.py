@@ -66,6 +66,8 @@ def calc_recursive_entry_long(
     auto_unstuck_ema_dist,
     auto_unstuck_wallet_exposure_threshold,
 ):
+    if wallet_exposure_limit == 0.0:
+        return 0.0, 0.0, ""
     ientry_price = max(
         price_step,
         min(highest_bid, round_dn(ema_band_lower * (1 - initial_eprice_ema_dist), price_step)),
@@ -157,6 +159,8 @@ def calc_recursive_entry_short(
     auto_unstuck_ema_dist,
     auto_unstuck_wallet_exposure_threshold,
 ):
+    if wallet_exposure_limit == 0.0:
+        return 0.0, 0.0, ""
     abs_psize = abs(psize)
     ientry_price = max(
         lowest_ask, round_up(ema_band_upper * (1 + initial_eprice_ema_dist), price_step)
@@ -387,6 +391,7 @@ def backtest_recursive_grid(
     inverse,
     do_long,
     do_short,
+    backwards_tp,
     qty_step,
     price_step,
     min_qty,
@@ -464,9 +469,9 @@ def backtest_recursive_grid(
         if auto_unstuck_wallet_exposure_threshold[1] != 0.0
         else wallet_exposure_limit[1] * 10
     )
-    for k in range(0, len(ticks)):
+    for k in range(1, len(ticks)):
         if do_long:
-            emas_long = calc_ema(alphas_long, alphas__long, emas_long, closes[k])
+            emas_long = calc_ema(alphas_long, alphas__long, emas_long, closes[k - 1])
             if k >= max_span_long:
                 # check bankruptcy
                 bkr_diff_long = calc_diff(bkr_price_long, closes[k])
@@ -526,6 +531,7 @@ def backtest_recursive_grid(
                 # check if close grid should be updated
                 if timestamps[k] >= next_close_grid_update_ts_long:
                     closes_long = calc_close_grid_long(
+                        backwards_tp[0],
                         balance_long,
                         psize_long,
                         pprice_long,
@@ -702,7 +708,7 @@ def backtest_recursive_grid(
                         )
 
         if do_short:
-            emas_short = calc_ema(alphas_short, alphas__short, emas_short, closes[k])
+            emas_short = calc_ema(alphas_short, alphas__short, emas_short, closes[k - 1])
             if k >= max_span_short:
                 # check bankruptcy
                 bkr_diff_short = calc_diff(bkr_price_short, closes[k])
@@ -764,6 +770,7 @@ def backtest_recursive_grid(
                 # check if close grid should be updated
                 if timestamps[k] >= next_close_grid_update_ts_short:
                     closes_short = calc_close_grid_short(
+                        backwards_tp[1],
                         balance_short,
                         psize_short,
                         pprice_short,

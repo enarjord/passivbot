@@ -111,12 +111,20 @@ class HarmonySearch:
         self.exchange_name = config["exchange"] + ("_spot" if config["market_type"] == "spot" else "")
         self.market_specific_settings = {
             s: json.load(
-                open(f"backtests/{self.exchange_name}/{s}/caches/market_specific_settings.json")
+                open(
+                    os.path.join(
+                        self.config["base_dir"],
+                        self.exchange_name,
+                        s,
+                        "caches",
+                        "market_specific_settings.json",
+                    )
+                )
             )
             for s in self.symbols
         }
         self.date_range = f"{self.config['start_date']}_{self.config['end_date']}"
-        self.bt_dir = f"backtests/{self.exchange_name}"
+        self.bt_dir = os.path.join(self.config["base_dir"], self.exchange_name)
         self.ticks_cache_fname = (
             f"caches/{self.date_range}{'_ohlcv_cache.npy' if config['ohlcv'] else '_ticks_cache.npy'}"
         )
@@ -388,8 +396,9 @@ class HarmonySearch:
             },
             **{"symbol": self.symbols[0], "config_no": self.iter_counter},
         }
-        new_harmony["long"]["enabled"] = self.do_long
-        new_harmony["short"]["enabled"] = self.do_short
+        for side in ["long", "short"]:
+            new_harmony[side]["enabled"] = getattr(self, f"do_{side}")
+            new_harmony[side]["backwards_tp"] = self.config[f"backwards_tp_{side}"]
         for key in self.long_bounds:
             if np.random.random() < self.hm_considering_rate:
                 # take note randomly from harmony memory
@@ -537,6 +546,7 @@ class HarmonySearch:
             for cfg in self.starting_configs:
                 cfg = {k: max(bounds[k][0], min(bounds[k][1], cfg[side][k])) for k in bounds}
                 cfg["enabled"] = getattr(self, f"do_{side}")
+                cfg["backwards_tp"] = self.config[f"backwards_tp_{side}"]
                 if cfg not in [self.hm[k][side]["config"] for k in self.hm]:
                     self.hm[hm_keys.pop()][side]["config"] = deepcopy(cfg)
 
@@ -557,7 +567,7 @@ class HarmonySearch:
                         continue
                     # a worker is idle; give it a job
                     for id_key in self.unfinished_evals:
-                        # check of unfinished evals
+                        # check if unfinished evals
                         missing_symbols = set(self.symbols) - (
                             set(self.unfinished_evals[id_key]["single_results"])
                             | self.unfinished_evals[id_key]["in_progress"]
@@ -700,6 +710,8 @@ async def main():
         "static_grid",
     ], f"unknown passivbot mode {passivbot_mode}"
     config.update(get_template_live_config(passivbot_mode))
+    config["long"]["backwards_tp"] = config["backwards_tp_long"]
+    config["short"]["backwards_tp"] = config["backwards_tp_short"]
     config["exchange"], _, _ = load_exchange_key_secret(config["user"])
     args = parser.parse_args()
     if args.long_enabled is None:
@@ -724,6 +736,8 @@ async def main():
         config["symbols"] = args.symbol.split(",")
     if args.n_cpus is not None:
         config["n_cpus"] = args.n_cpus
+    if args.base_dir is not None:
+        config["base_dir"] = args.base_dir
     config["ohlcv"] = args.ohlcv
     print()
     lines = [(k, getattr(args, k)) for k in args.__dict__ if args.__dict__[k] is not None]
@@ -739,7 +753,7 @@ async def main():
     exchange_name = config["exchange"] + ("_spot" if config["market_type"] == "spot" else "")
     config["symbols"] = sorted(config["symbols"])
     for symbol in config["symbols"]:
-        cache_dirpath = f"backtests/{exchange_name}/{symbol}/caches/"
+        cache_dirpath = os.path.join(config["base_dir"], exchange_name, symbol, "caches", "")
         if not os.path.exists(cache_dirpath + cache_fname) or not os.path.exists(
             cache_dirpath + "market_specific_settings.json"
         ):
