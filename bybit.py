@@ -427,7 +427,7 @@ class Bybit(Bot):
     ):
         if symbol is None:
             all_income = []
-            all_positions = await self.private_get(self.endpoints["position"])
+            all_positions = await self.private_get(self.endpoints["position"], params={"symbol": ""})
             symbols = sorted(
                 set(
                     [
