@@ -82,13 +82,16 @@ async def main():
         income = [e for e in income if e["token"] == args.quote]
         profit = sum([e["income"] for e in income])
         to_transfer = round_dynamic(profit * args.percentage, 4)
+        if args.quote in ["USDT", "BUSD", "USDC"]:
+            to_transfer = round(to_transfer, 4)
         if to_transfer > 0:
             try:
                 transferred = await bot.transfer_from_derivatives_to_spot(args.quote, to_transfer)
                 logging.info(f"income: {profit} transferred {to_transfer} {args.quote}")
-                if exchange == 'bybit':
-                    if 'ret_msg' not in transferred or transferred['ret_msg'] != 'OK':
+                if exchange == "bybit":
+                    if "ret_msg" not in transferred or transferred["ret_msg"] != "OK":
                         print(f"error with transfer {transferred}")
+                        continue
                 logging.info(f"{transferred}")
                 already_transferred_ids.update([e["transaction_id"] for e in income])
                 json.dump(list(already_transferred_ids), open(transfer_log_fpath, "w"))
