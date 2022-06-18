@@ -163,6 +163,7 @@ class BinanceBot(Bot):
         self.endpoints["transfer"] = "/sapi/v1/asset/transfer"
         self.endpoints["futures_transfer"] = "/sapi/v1/futures/transfer"
         self.endpoints["account"] = "/api/v3/account"
+        self.endpoints["server_time"] = "/api/v3/time"
 
     async def _init(self):
         await self.init_market_type()
@@ -193,6 +194,19 @@ class BinanceBot(Bot):
         await super()._init()
         await self.init_order_book()
         await self.update_position()
+
+    async def get_server_time(self):
+        now = await self.public_get(
+            self.endpoints["server_time"], base_endpoint=self.spot_base_endpoint
+        )
+        return now["serverTime"]
+
+    async def transfer_from_derivatives_to_spot(self, coin: str, amount: float):
+        return await self.private_post(
+            self.endpoints["futures_transfer"],
+            {"asset": coin, "amount": amount, "type": 2},
+            base_endpoint=self.spot_base_endpoint,
+        )
 
     async def execute_leverage_change(self):
         lev = 7  # arbitrary

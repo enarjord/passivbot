@@ -7,7 +7,12 @@ import traceback
 import json
 import argparse
 import asyncio
-from procedures import create_binance_bot, make_get_filepath
+from procedures import (
+    create_binance_bot,
+    create_bybit_bot,
+    make_get_filepath,
+    load_exchange_key_secret,
+)
 from pure_funcs import get_template_live_config, flatten
 from njit_funcs import round_dynamic
 from time import sleep
@@ -49,9 +54,15 @@ async def main():
     config["user"] = args.user
     config["symbol"] = "BTCUSDT"  # dummy symbol
     config["market_type"] = "futures"
-    bot = await create_binance_bot(config)
+    exchange, _, _ = load_exchange_key_secret(args.user)
+    if exchange == "binance":
+        bot = await create_binance_bot(config)
+    elif exchange == "bybit":
+        bot = await create_bybit_bot(config)
+    else:
+        raise Exception(f"unknown exchange {exchange}")
     transfer_log_fpath = make_get_filepath(
-        os.path.join("logs", f"automatic_profit_transfer_log_{config['user']}.json")
+        os.path.join("logs", f"automatic_profit_transfer_log_{exchange}_{config['user']}.json")
     )
     try:
         already_transferred_ids = set(json.load(open(transfer_log_fpath)))
@@ -60,7 +71,7 @@ async def main():
         already_transferred_ids = set()
         logging.info(f"no previous transfers to load")
     while True:
-        now = (await bot.public_get(bot.endpoints["time"]))["serverTime"]
+        now = await bot.get_server_time()
         try:
             income = await bot.get_all_income(start_time=now - 1000 * 60 * 60 * 24)
         except Exception as e:
@@ -71,14 +82,17 @@ async def main():
         income = [e for e in income if e["token"] == args.quote]
         profit = sum([e["income"] for e in income])
         to_transfer = round_dynamic(profit * args.percentage, 4)
+        if args.quote in ["USDT", "BUSD", "USDC"]:
+            to_transfer = round(to_transfer, 4)
         if to_transfer > 0:
             try:
-                transferred = await bot.private_post(
-                    bot.endpoints["futures_transfer"],
-                    {"asset": args.quote, "amount": to_transfer, "type": 2},
-                    base_endpoint=bot.spot_base_endpoint,
-                )
+                transferred = await bot.transfer_from_derivatives_to_spot(args.quote, to_transfer)
                 logging.info(f"income: {profit} transferred {to_transfer} {args.quote}")
+                if exchange == "bybit":
+                    if "ret_msg" not in transferred or transferred["ret_msg"] != "OK":
+                        print(f"error with transfer {transferred}")
+                        continue
+                logging.info(f"{transferred}")
                 already_transferred_ids.update([e["transaction_id"] for e in income])
                 json.dump(list(already_transferred_ids), open(transfer_log_fpath, "w"))
             except Exception as e:
