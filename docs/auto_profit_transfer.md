@@ -1,6 +1,6 @@
 # Automatic Profit Transfer
 
-Only Binance USDT futures -> spot transfer supported at this time.  
+Only Binance and Bybit USDT futures -> spot transfer supported at this time.  
 
 ```shell
 python3 auto_profit_transfer.py {user_name}
