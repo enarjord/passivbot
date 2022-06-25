@@ -58,7 +58,7 @@ def arguments_management():
 
     parser.add_argument("-min-gain","--min-gain",
                         type=float,required=False,dest="min_gain",default=0,
-                        help="Show only result lower than max_stuck",
+                        help="Show only result upper than gain_dollard",
     )
 
     parser.add_argument("-min-days","--min-days",
@@ -68,7 +68,7 @@ def arguments_management():
 
     parser.add_argument("-max-marketcap-pos","--max-marketcap-pos",
                         type=float,required=False,dest="max_marketcap_pos",default=1000,
-                        help="Max marketcap position",
+                        help="Max marketcap position accepted",
     )
 
 
@@ -162,7 +162,7 @@ for file in files:
     if (hrs_stuck_max_long > args.max_stuck) :
         continue
     
-    if (gain_pct < args.min_gain) :
+    if (gain_dollard < args.min_gain) :
         continue
 
     if (n_days < args.min_days) :
@@ -205,7 +205,8 @@ else:
     print(len(datas_list), " coins after filtering")
 
 df = pd.DataFrame(datas_list)
-df.sort_values(by=['marketcapPosition', 'adg %', 'gain %'], ascending=[True, False, False], inplace=True)
+# df.sort_values(by=['marketcapPosition', 'adg %', 'gain %'], ascending=[True, False, False], inplace=True)
+df.sort_values(by=[ 'adg %', 'gain %'], ascending=[ False, False], inplace=True)
 best_coin = df['symbol'].values[0:number_coin_wanted].tolist()
 total_wallet_exposure = args.wallet_exposure_limit * len(best_coin)
 print(tabulate(df, headers='keys', tablefmt='psql'))
