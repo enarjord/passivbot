@@ -15,36 +15,35 @@ user="bybit_pro" #bybit_tedy sawyer bybit_pro
 
 echo "-------------------------"
 # Update the Starting balance for backtest
-echo "Starting balance => ${starting_balance}$"
+echo "Starting balance          => ${starting_balance}$"
 
 # Calculate the 1 bot exposure
 bot_wallet_exposure=$(python3<<<"print(${total_wallet_exposure} / ${nb_best_coin})")
 # "wallet_exposure_limit": 0.15
-echo "Bot wallet exposure => ${bot_wallet_exposure}"
+echo "Bot wallet exposure       => ${bot_wallet_exposure}"
 
 # Calculate the amount traded by bot
 amount_traded_by_bot=$(python3<<<"print(${total_wallet_exposure} * ${starting_balance} / ${nb_best_coin})")
-echo "Amount traded by 1 bot => ${amount_traded_by_bot}$"
+echo "Amount traded by 1 bot    => ${amount_traded_by_bot}$"
 
 
 # Calculate the amount traded by bot
-echo "start_date => ${start_date}"
+echo "start_date                => ${start_date}"
 # Calculate the amount traded by bot
-echo "end_date => ${end_date}"
+echo "end_date                  => ${end_date}"
 
 # set the user
 # user: bybit_tedy
-echo "user => ${user}"
-
-echo "Full wallet exposure => ${total_wallet_exposure}$"
-echo "Nb best coin => ${nb_best_coin}$"
+echo "user                      => ${user}"
+echo "Full wallet exposure      => ${total_wallet_exposure}$"
+echo "Nb best coin              => ${nb_best_coin}$"
 
 echo "-------------------------"
 
 
-echo "Using live config => ${live_config}"
-echo "Using backtest config => ${backtest_config}"
-echo "Searching nb coins => ${nb_best_coin}"
+echo "Using live config         => ${live_config}"
+echo "Using backtest config     => ${backtest_config}"
+echo "Searching nb coins        => ${nb_best_coin}"
 echo "-------------------------"
 
 read -r -p "Are you sure? [y/N] " response

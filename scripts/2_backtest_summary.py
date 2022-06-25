@@ -67,7 +67,7 @@ def arguments_management():
     )
 
     parser.add_argument("-max-marketcap-pos","--max-marketcap-pos",
-                        type=float,required=False,dest="max_marketcap_pos",default=0,
+                        type=float,required=False,dest="max_marketcap_pos",default=1000,
                         help="Max marketcap position",
     )
 
@@ -113,7 +113,7 @@ r = requests.get(url, headers=headers)
 find_ranks = {}
 if r.status_code == 200:
     data = r.json()
-    print(data)
+    # print(data)
     for d in data['data']:
         symbol = d['symbol']
         find_ranks[symbol] = d['cmc_rank']
