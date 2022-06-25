@@ -371,3 +371,6 @@ scripts/discord/tmp/data_pro.json.combined.jpeg
 scripts/discord/tmp/data_pro.json.position.jpeg
 scripts/discord/tmp/data_tedy.json.combined.jpeg
 scripts/discord/tmp/data_tedy.json.position.jpeg
+results_harmony_search_recursive_grid
+results_harmony_search_static_grid
+tmp/hand_tuned.json

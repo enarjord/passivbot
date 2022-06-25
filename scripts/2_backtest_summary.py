@@ -8,6 +8,8 @@ from tabulate import tabulate
 import argparse
 import os
 import hjson
+import requests
+
 
 import sys
 
@@ -59,6 +61,16 @@ def arguments_management():
                         help="Show only result lower than max_stuck",
     )
 
+    parser.add_argument("-min-days","--min-days",
+                        type=float,required=False,dest="min_days",default=0,
+                        help="Show only result upper than min-days",
+    )
+
+    parser.add_argument("-max-marketcap-pos","--max-marketcap-pos",
+                        type=float,required=False,dest="max_marketcap_pos",default=0,
+                        help="Max marketcap position",
+    )
+
 
     args = parser.parse_args()
 
@@ -89,6 +101,26 @@ number_coin_wanted = args.nb_best_coins
 
 print('python3 ' + __file__ + (" ").join(sys.argv[1:]))
 
+# find the market cap
+API_KEY = open('config/api.coinmarketcap.com.conf', 'r').read()
+
+headers = {
+    'X-CMC_PRO_API_KEY': API_KEY
+}
+
+url = 'https://pro-api.coinmarketcap.com/v1/cryptocurrency/listings/latest'
+r = requests.get(url, headers=headers)
+find_ranks = {}
+if r.status_code == 200:
+    data = r.json()
+    print(data)
+    for d in data['data']:
+        symbol = d['symbol']
+        find_ranks[symbol] = d['cmc_rank']
+
+
+
+
 # Grab all files availables
 files = glob.glob('backtests/*/*/plots/*/result.json')
 
@@ -116,6 +148,10 @@ for file in files:
 
     gain_dollard = bt['result']['final_balance_long'] -  bt['result']['starting_balance']
 
+    marketcap_symbol = symbol.upper().replace('USDT', '')
+
+
+    marketcapPosition = find_ranks[marketcap_symbol] if (marketcap_symbol in find_ranks) else 999
 
     if (closest_bkr < args.min_closest_bkr) :
         continue
@@ -129,6 +165,21 @@ for file in files:
     if (gain_pct < args.min_gain) :
         continue
 
+    if (n_days < args.min_days) :
+        continue
+
+    if (marketcapPosition > args.max_marketcap_pos) :
+        continue
+
+
+ 
+    # print('BTC', find_ranks.get('BTC'))
+    # print('TRX', find_ranks.get('TRX'))
+
+
+
+
+
 
     datas = {}
     datas['symbol']                 = symbol
@@ -140,6 +191,8 @@ for file in files:
     datas['total gain $']                 = gain_dollard
     datas['starting balance']       = starting_balance
     datas['closest bkr']            = closest_bkr
+    datas['marketcapPosition']            = marketcapPosition
+    
     
 
     # print(datas)
@@ -152,7 +205,7 @@ else:
     print(len(datas_list), " coins after filtering")
 
 df = pd.DataFrame(datas_list)
-df.sort_values(by=['adg %', 'gain %'], ascending=False, inplace=True)
+df.sort_values(by=['marketcapPosition', 'adg %', 'gain %'], ascending=[True, False, False], inplace=True)
 best_coin = df['symbol'].values[0:number_coin_wanted].tolist()
 total_wallet_exposure = args.wallet_exposure_limit * len(best_coin)
 print(tabulate(df, headers='keys', tablefmt='psql'))
@@ -167,22 +220,25 @@ print("- coin list : ", best_coin)
 
 # adg_pct                 = (df['adg %'].values[0:number_coin_wanted].mean() * total_wallet_exposure)
 adg_pct                 = (df['adg %'].values[0:number_coin_wanted].sum())
-print("- global adg % : ", adg_pct)
+print("- global adg % : ", (adg_pct), "%")
 
 adg_dollard             = adg_pct * args.starting_balance / 100
-print("- global adg $ : ", adg_dollard )
+print("- global adg $ : ", (adg_dollard), "$" )
 
-print("- global adg 1 month (30 days) : ", adg_dollard * 30 )
+print("- global adg 1 month (30 days) : ", int(adg_dollard * 30) , "$" )
 
 # global_gain_pct         = (df['gain %'].values[0:number_coin_wanted].mean() * total_wallet_exposure)
 global_gain_pct         = (df['gain %'].values[0:number_coin_wanted].sum())
-print("- global gain % : ", global_gain_pct)
+print("- global gain % : ", int(global_gain_pct), "%")
 
 global_gain_dollard     = global_gain_pct * args.starting_balance / 100
-print("- global gain $ : ", global_gain_dollard)
+print("- global gain $ : ", int(global_gain_dollard), "$")
 
 print("--------------------------------------------------------------")
 saving_data = "./tmp/best_coins.json"
 print ("Saving the coin list to ", saving_data)
 with open(saving_data, 'w') as outfile:
     json.dump(best_coin, outfile)
+
+
+print('python3 ' + __file__ + (" ").join(sys.argv[1:]))
