@@ -143,10 +143,9 @@ for file in files:
     hrs_stuck_max_long  = bt['result']['hrs_stuck_max_long']
     adg_perct           = (bt['result']['average_daily_gain']*100) if ('average_daily_gain' in bt['result']) else bt['result']['adg_long']*100
     gain_pct            = (bt['result']['gain']*100)  if ('gain' in bt['result']) else  bt['result']['gain_long']*100
-    starting_balance    = bt['result']['starting_balance']
     closest_bkr         = (bt['result']['closest_bkr']) if ('closest_bkr' in bt['result']) else (bt['result']['closest_bkr_long'])
 
-    gain_dollard = bt['result']['final_balance_long'] -  bt['result']['starting_balance']
+    gain_dollard = bt['result']['net_pnl_plus_fees_long']
 
     marketcap_symbol = symbol.upper().replace('USDT', '')
 
@@ -189,7 +188,6 @@ for file in files:
     datas['adg %']                  = adg_perct
     datas['gain %']                 = gain_pct
     datas['total gain $']                 = gain_dollard
-    datas['starting balance']       = starting_balance
     datas['closest bkr']            = closest_bkr
     datas['marketcapPosition']            = marketcapPosition
     
@@ -234,6 +232,7 @@ print("- global gain % : ", int(global_gain_pct), "%")
 
 global_gain_dollard     = global_gain_pct * args.starting_balance / 100
 print("- global gain $ : ", int(global_gain_dollard), "$")
+print("- Final amount $ : ", (int(args.starting_balance) + int(global_gain_dollard)), "$")
 
 print("--------------------------------------------------------------")
 saving_data = "./tmp/best_coins.json"
