@@ -202,6 +202,14 @@ class HarmonySearch:
             )
             adg_DGstd_ratios_short = [v["adg_DGstd_ratio_short"] for v in results.values()]
             adg_DGstd_ratios_short_mean = np.mean(adg_DGstd_ratios_short)
+            eqbal_ratios_std_long = [v["equity_balance_ratio_std_long"] for v in results.values()]
+            eqbal_ratios_std_short = [v["equity_balance_ratio_std_short"] for v in results.values()]
+            eqbal_ratio_std_long_mean = np.mean(eqbal_ratios_std_long)
+            eqbal_ratio_std_short_mean = np.mean(eqbal_ratios_std_short)
+            adgs_realized_long = [v["adg_realized_per_exposure_long"] for v in results.values()]
+            adgs_realized_short = [v["adg_realized_per_exposure_short"] for v in results.values()]
+            adg_realized_long_mean = np.mean(adgs_realized_long)
+            adg_realized_short_mean = np.mean(adgs_realized_short)
 
             if self.config["score_formula"] == "adg_PAD_mean":
                 score_long = -adg_mean_long * min(
@@ -211,14 +219,18 @@ class HarmonySearch:
                     1.0, self.config["maximum_pa_distance_mean_short"] / PAD_mean_short
                 )
             elif self.config["score_formula"] == "adg_realized_PAD_mean":
-                adgs_realized_long = [v["adg_realized_per_exposure_long"] for v in results.values()]
-                adgs_realized_short = [v["adg_realized_per_exposure_short"] for v in results.values()]
-
-                score_long = -np.mean(adgs_realized_long) / max(
+                score_long = -adg_realized_long_mean / max(
                     self.config["maximum_pa_distance_mean_long"], PAD_mean_long
                 )
-                score_short = -np.mean(adgs_realized_short) / max(
+                score_short = -adg_realized_short_mean / max(
                     self.config["maximum_pa_distance_mean_short"], PAD_mean_short
+                )
+            elif self.config["score_formula"] == "adg_realized_PAD_std":
+                score_long = -adg_realized_long_mean / max(
+                    self.config["maximum_pa_distance_std_long"], pa_distance_std_long
+                )
+                score_short = -adg_realized_short_mean / max(
+                    self.config["maximum_pa_distance_std_short"], pa_distance_std_short
                 )
             elif self.config["score_formula"] == "adg_PAD_std":
                 score_long = -adg_mean_long / max(
@@ -341,9 +353,10 @@ class HarmonySearch:
                 is_better = True
                 logging.info(
                     f"i{cfg['config_no']} - new best config long, score {score_long:.7f} "
-                    + f"adg {adg_mean_long / cfg['long']['wallet_exposure_limit']:.7f} "
-                    + f"PAD mean {PAD_mean_long_raw:.7f} "
-                    + f"PAD std {pa_distance_std_long_raw:.5f} adg/DGstd {adg_DGstd_ratios_long_mean:.7f}"
+                    + f"adg {adg_realized_long_mean:.6f} "
+                    + f"PAD mean {PAD_mean_long_raw:.6f} "
+                    + f"PAD std {pa_distance_std_long_raw:.5f} "
+                    + f"eqbal ratio std {eqbal_ratio_std_long_mean:.6f}"
                 )
                 tmp_fname += "_long"
                 json.dump(
@@ -356,9 +369,10 @@ class HarmonySearch:
                 is_better = True
                 logging.info(
                     f"i{cfg['config_no']} - new best config short, score {score_short:.7f} "
-                    + f"adg {adg_mean_short / cfg['short']['wallet_exposure_limit']:.7f} "
-                    + f"PAD mean {PAD_mean_short_raw:.7f} "
-                    + f"PAD std {pa_distance_std_short_raw:.5f} adg/DGstd {adg_DGstd_ratios_short_mean:.7f}"
+                    + f"adg {adg_realized_short_mean:.6f} "
+                    + f"PAD mean {PAD_mean_short_raw:.6f} "
+                    + f"PAD std {pa_distance_std_short_raw:.5f} "
+                    + f"eqbal ratio std {eqbal_ratio_std_short_mean:.6f}"
                 )
                 tmp_fname += "_short"
                 json.dump(
