@@ -8,7 +8,6 @@ from tabulate import tabulate
 import argparse
 import os
 import hjson
-import requests
 
 
 import sys
@@ -66,10 +65,6 @@ def arguments_management():
                         help="Show only result upper than min-days",
     )
 
-    parser.add_argument("-max-marketcap-pos","--max-marketcap-pos",
-                        type=float,required=False,dest="max_marketcap_pos",default=1000,
-                        help="Max marketcap position accepted",
-    )
 
 
     args = parser.parse_args()
@@ -101,26 +96,6 @@ number_coin_wanted = args.nb_best_coins
 
 print('python3 ' + __file__ + (" ").join(sys.argv[1:]))
 
-# find the market cap
-API_KEY = open('config/api.coinmarketcap.com.conf', 'r').read()
-
-headers = {
-    'X-CMC_PRO_API_KEY': API_KEY
-}
-
-url = 'https://pro-api.coinmarketcap.com/v1/cryptocurrency/listings/latest'
-r = requests.get(url, headers=headers)
-find_ranks = {}
-if r.status_code == 200:
-    data = r.json()
-    # print(data)
-    for d in data['data']:
-        symbol = d['symbol']
-        find_ranks[symbol] = d['cmc_rank']
-
-
-
-
 # Grab all files availables
 files = glob.glob('backtests/*/*/plots/*/result.json')
 
@@ -147,10 +122,7 @@ for file in files:
 
     gain_dollard = bt['result']['net_pnl_plus_fees_long']
 
-    marketcap_symbol = symbol.upper().replace('USDT', '')
 
-
-    marketcapPosition = find_ranks[marketcap_symbol] if (marketcap_symbol in find_ranks) else 999
 
     if (closest_bkr < args.min_closest_bkr) :
         continue
@@ -167,13 +139,7 @@ for file in files:
     if (n_days < args.min_days) :
         continue
 
-    if (marketcapPosition > args.max_marketcap_pos) :
-        continue
 
-
- 
-    # print('BTC', find_ranks.get('BTC'))
-    # print('TRX', find_ranks.get('TRX'))
 
 
 
@@ -189,7 +155,6 @@ for file in files:
     datas['gain %']                 = gain_pct
     datas['total gain $']                 = gain_dollard
     datas['closest bkr']            = closest_bkr
-    datas['marketcapPosition']            = marketcapPosition
     
     
 

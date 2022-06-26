@@ -35,11 +35,12 @@ do
 
 done;
 
-#best : ./configs/live/tests/long_static_AU_NObtp.json_XRPUSDT.result.txt
-#second best : ./configs/live/tests/long_recursive_NOAU_btp.json_XRPUSDT.result.txt
+# For XRP
+#best : ./configs/live/tests/long_static_AU_NObtp.json_XRPUSDT.result.txt => 183%
+#second best : ./configs/live/tests/long_recursive_NOAU_btp.json_XRPUSDT.result.txt => 152%
 find ./configs/live/tests/ -name "*XRP*.txt" -print -exec grep "\(Total gain\|noneeded\)" {} \;
 
-
-#best : ./configs/live/tests/long_static_AU_btp.json_DOGEUSDT.result.txt
-#second best : ./configs/live/tests/long_static_AU_NObtp.json_DOGEUSDT.result.txt
+# For DOGE
+#best : ./configs/live/tests/long_static_AU_btp.json_DOGEUSDT.result.txt => 735%
+#second best : ./configs/live/tests/long_static_AU_NObtp.json_DOGEUSDT.result.txt => 530%
 find ./configs/live/tests/ -name "*DOGE*.txt" -print -exec grep "\(Total gain\|noneeded\)" {} \;

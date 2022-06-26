@@ -50,6 +50,12 @@ def arguments_management():
                         help="Force the wallet exposure ratio",
     )
 
+    parser.add_argument("-max-marketcap-pos","--max-marketcap-pos",
+                        type=float,required=False,dest="max_marketcap_pos",default=1000,
+                        help="Max marketcap position accepted",
+    )
+
+
     args = parser.parse_args()
 
     if not os.path.exists(args.live_config_filepath) :
@@ -196,7 +202,40 @@ if (input_datas['platform'] == 'binance'):
 print ("found ", len(bash_symbols), " symbols OK with the grid.")
 print ("Full Wallet exposure with all this symbols is : ", len(bash_symbols) * input_datas['wallet_exposure_limit'])
 
+print ("Symbol List ", json.dumps(bash_symbols))
+
+########## market cap Part
+# find the market cap
+print('Filtering by marketCap !')
+API_KEY = open('config/api.coinmarketcap.com.conf', 'r').read()
+headers = { 'X-CMC_PRO_API_KEY': API_KEY}
+url = 'https://pro-api.coinmarketcap.com/v1/cryptocurrency/listings/latest'
+r = requests.get(url, headers=headers)
+find_ranks = {}
+if r.status_code == 200:
+    data = r.json()
+    # print(data)
+    for d in data['data']:
+        symbol = d['symbol']
+        find_ranks[symbol] = d['cmc_rank']
+
+after_market_cap=[]
+for symbol in bash_symbols:
+    marketcap_symbol = symbol.upper().replace('USDT', '')
+    marketcapPosition = find_ranks[marketcap_symbol] if (marketcap_symbol in find_ranks) else 999
+
+    if (marketcapPosition > args.max_marketcap_pos) :
+        continue
+    after_market_cap.append(symbol)
+
+    print('Coin accepted :', symbol, ' / marketcap position : ', marketcapPosition)
+ 
+
+
+print ("Symbol List ", json.dumps(after_market_cap))
+
+
 saving_data = "./tmp/grid_ok_coins.json"
 print ("Saving list to ", saving_data)
 with open(saving_data, 'w') as outfile:
-    json.dump(bash_symbols, outfile)
+    json.dump(after_market_cap, outfile)

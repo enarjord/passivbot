@@ -6,16 +6,19 @@ live_config="../configs/live/a_pro.json"
 
 
 backtest_config="../configs/backtest/default.hjson"
-nb_best_coin="5"
+nb_best_coin="10"
 starting_balance="10000.0"
 total_wallet_exposure="1"
 start_date="2021-01-01"
 end_date="2022-06-23"
 user="bybit_pro" #bybit_tedy sawyer bybit_pro
+max_market_cap="20"
 
 echo "-------------------------"
 # Update the Starting balance for backtest
 echo "Starting balance          => ${starting_balance}$"
+
+echo "Nb best coin              => ${nb_best_coin}"
 
 # Calculate the 1 bot exposure
 bot_wallet_exposure=$(python3<<<"print(${total_wallet_exposure} / ${nb_best_coin})")
@@ -35,8 +38,7 @@ echo "end_date                  => ${end_date}"
 # set the user
 # user: bybit_tedy
 echo "user                      => ${user}"
-echo "Full wallet exposure      => ${total_wallet_exposure}$"
-echo "Nb best coin              => ${nb_best_coin}$"
+echo "Full wallet exposure      => ${total_wallet_exposure}"
 
 echo "-------------------------"
 
@@ -46,13 +48,13 @@ echo "Using backtest config     => ${backtest_config}"
 echo "Searching nb coins        => ${nb_best_coin}"
 echo "-------------------------"
 
-read -r -p "Are you sure? [y/N] " response
+read -r -p "Are you sure? [Y/n] " response
 case "$response" in
-    [yY][eE][sS]|[yY]) 
-        
+    [nN]) 
+        exit
         ;;
     *)
-        exit
+        
         ;;
 esac
 
@@ -62,14 +64,13 @@ sed -r -i "s/start_date[ ]*:[ ]*[0-9-]+/start_date: ${start_date}/g" ${backtest_
 sed -r -i "s/end_date[ ]*:[ ]*[0-9-]+/end_date: ${end_date}/g" ${backtest_config}
 sed -r -i "s/user[ ]*:[ ]*[a-zA-Z0-9_-]+/user: ${user}/g" ${backtest_config}
 
-python3 0_coin_grid_validator.py ${live_config} ${backtest_config} -mv24 0 -mt24 0
+python3 0_coin_grid_validator.py ${live_config} ${backtest_config} -mv24 0 -mt24 0 -max-marketcap-pos ${max_market_cap}
 python3 1_backtest_looper.py ${live_config} ${backtest_config} -jf tmp/grid_ok_coins.json -oh
 
 
 python3 2_backtest_summary.py ${nb_best_coin} ${live_config} ${backtest_config} \
 -min-days 400 \
--min-gain 100 \
--max-marketcap-pos 20  
+-min-gain 100   
 #-max-stuck-avg 7
 # -max-stuck 200
 
