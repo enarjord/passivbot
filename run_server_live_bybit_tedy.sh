@@ -2,7 +2,7 @@
 current_pwd=`pwd`
 gs=' -gs '
 gs=''
-symbols=(XRPUSDT ADAUSDT DOGEUSDT )
+symbols=(XRPUSDT MATICUSDT DOGEUSDT )
 for i in "${symbols[@]}"
 do
     :
