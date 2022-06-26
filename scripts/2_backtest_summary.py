@@ -232,6 +232,7 @@ print("- global gain % : ", int(global_gain_pct), "%")
 
 global_gain_dollard     = global_gain_pct * args.starting_balance / 100
 print("- global gain $ : ", int(global_gain_dollard), "$")
+print("- Starting balance $ : ", int(args.starting_balance) , "$")
 print("- Final amount $ : ", (int(args.starting_balance) + int(global_gain_dollard)), "$")
 
 print("--------------------------------------------------------------")

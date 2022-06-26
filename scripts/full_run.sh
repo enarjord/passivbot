@@ -6,7 +6,7 @@ live_config="../configs/live/a_pro.json"
 
 
 backtest_config="../configs/backtest/default.hjson"
-nb_best_coin="10"
+nb_best_coin="5"
 starting_balance="10000.0"
 total_wallet_exposure="1"
 start_date="2021-01-01"

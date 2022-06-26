@@ -1,0 +1,141 @@
+using numba
+using numba
+fetching market_specific_settings...
+linear perpetual
+
+exchange                bybit
+spot                    False
+symbol                  DOGEUSDT
+market_type             futures
+starting_balance        1000
+start_date              2021-01-01
+end_date                2022-06-23
+latency_simulation_ms   1000
+base_dir                backtests
+
+{'config_name': 'recursive_grid_125_symbols_300days_AUdisabled',
+ 'logging_level': 0,
+ 'long': {'auto_unstuck_ema_dist': 0,
+          'auto_unstuck_wallet_exposure_threshold': 0,
+          'backwards_tp': False,
+          'ddown_factor': 0.2836942996599674,
+          'ema_span_0': 3573.707148465803,
+          'ema_span_1': 9371.238150453562,
+          'enabled': True,
+          'initial_eprice_ema_dist': 0,
+          'initial_qty_pct': 0.01234914998889527,
+          'markup_range': 0.0458465437558736,
+          'min_markup': 0.013348131482672233,
+          'n_close_orders': 8,
+          'rentry_pprice_dist': 0.023239053434194266,
+          'rentry_pprice_dist_wallet_exposure_weighting': 11.95394791078704,
+          'wallet_exposure_limit': 1.0},
+ 'short': {'auto_unstuck_ema_dist': 0,
+           'auto_unstuck_wallet_exposure_threshold': 0,
+           'backwards_tp': False,
+           'ddown_factor': 2.7565718262412333,
+           'ema_span_0': 360,
+           'ema_span_1': 7498.585832673125,
+           'enabled': False,
+           'initial_eprice_ema_dist': -0.026302949421201358,
+           'initial_qty_pct': 0.0219911723842904,
+           'markup_range': 0.01645520103514452,
+           'min_markup': 0.007048929135811168,
+           'n_close_orders': 5,
+           'rentry_pprice_dist': 0.038052554084690327,
+           'rentry_pprice_dist_wallet_exposure_weighting': 3.901535888984564,
+           'wallet_exposure_limit': 1.0}}
+n_days 538.0
+starting_balance 1000
+backtesting...
+29.08 seconds elapsed
+dumping plots...
+writing backtest_result.txt...
+
++-----------------------------------------+
+|                 Summary                 |
++-----------------------------+-----------+
+| Metric                      | Value     |
++-----------------------------+-----------+
+| Exchange                    | bybit     |
+| Market type                 | futures   |
+| Symbol                      | DOGEUSDT  |
+| No. days                    | 537.998   |
+| Starting balance            | 1000.0    |
+|                             |           |
+| Long                        | True      |
+| ADG realized per exposure   | 0.137%    |
+| Final balance               | 2091.34   |
+| Final equity                | 2091.34   |
+| Net PNL + fees              | 1091.34   |
+| Total gain                  | 110.2%    |
+| Average daily gain          | 0.144%    |
+| DG mean std ratio           | 0.123     |
+| Price action distance mean  | 0.0129576 |
+| Price action distance std   | 0.0159969 |
+| Price action distance max   | 0.640925  |
+| Closest bankruptcy          | 99.82%    |
+| Lowest equity/balance ratio | 0.609     |
+| Equity/balance ratio std    | 0.006726  |
+| No. fills                   | 17716     |
+| No. entries                 | 3860      |
+| No. closes                  | 13856     |
+| No. initial entries         | 1831      |
+| No. reentries               | 2029      |
+| No. unstuck entries         | 0         |
+| No. unstuck closes          | 0         |
+| No. normal closes           | 13856     |
+| Average n fills per day     | 32.9      |
+| Mean hours stuck            | 0.85357   |
+| Max hours stuck             | 306.217   |
+| PNL sum                     | 1102.0    |
+| Profit sum                  | 1102.0    |
+| Loss sum                    | 0.0       |
+| Fee sum                     | -10.41    |
+| Biggest pos size            | 43674.0   |
+| Biggest pos cost            | 1669.0    |
+| Volume quote                | 104059.0  |
++-----------------------------+-----------+
+
+plotting balance and equity long...
+long 0 of 39 0.00% to 2.56%
+long 1 of 39 2.56% to 5.13%
+long 2 of 39 5.13% to 7.69%
+long 3 of 39 7.69% to 10.26%
+long 4 of 39 10.26% to 12.82%
+long 5 of 39 12.82% to 15.38%
+long 6 of 39 15.38% to 17.95%
+long 7 of 39 17.95% to 20.51%
+long 8 of 39 20.51% to 23.08%
+long 9 of 39 23.08% to 25.64%
+long 10 of 39 25.64% to 28.21%
+long 11 of 39 28.21% to 30.77%
+long 12 of 39 30.77% to 33.33%
+long 13 of 39 33.33% to 35.90%
+long 14 of 39 35.90% to 38.46%
+long 15 of 39 38.46% to 41.03%
+long 16 of 39 41.03% to 43.59%
+long 17 of 39 43.59% to 46.15%
+long 18 of 39 46.15% to 48.72%
+long 19 of 39 48.72% to 51.28%
+long 20 of 39 51.28% to 53.85%
+long 21 of 39 53.85% to 56.41%
+long 22 of 39 56.41% to 58.97%
+long 23 of 39 58.97% to 61.54%
+long 24 of 39 61.54% to 64.10%
+long 25 of 39 64.10% to 66.67%
+long 26 of 39 66.67% to 69.23%
+long 27 of 39 69.23% to 71.79%
+long 28 of 39 71.79% to 74.36%
+long 29 of 39 74.36% to 76.92%
+long 30 of 39 76.92% to 79.49%
+long 31 of 39 79.49% to 82.05%
+long 32 of 39 82.05% to 84.62%
+long 33 of 39 84.62% to 87.18%
+long 34 of 39 87.18% to 89.74%
+long 35 of 39 89.74% to 92.31%
+long 36 of 39 92.31% to 94.87%
+long 37 of 39 94.87% to 97.44%
+long 38 of 39 97.44% to 100.00%
+plotting long initial entry band
+plotting pos sizes...

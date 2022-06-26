@@ -1,0 +1,148 @@
+using numba
+using numba
+fetching market_specific_settings...
+linear perpetual
+
+exchange                bybit
+spot                    False
+symbol                  XRPUSDT
+market_type             futures
+starting_balance        1000
+start_date              2021-01-01
+end_date                2022-06-23
+latency_simulation_ms   1000
+base_dir                backtests
+
+{'config_name': 'static_grid_125_symbols_300days',
+ 'logging_level': 0,
+ 'long': {'auto_unstuck_ema_dist': 0.05070953610814623,
+          'auto_unstuck_wallet_exposure_threshold': 0.6722077702999611,
+          'backwards_tp': True,
+          'ema_span_0': 1351.0501771821905,
+          'ema_span_1': 1444.815397030421,
+          'enabled': True,
+          'eprice_exp_base': 1.0381543933378048,
+          'eprice_pprice_diff': 0.039732093769580555,
+          'grid_span': 0.47831503832736966,
+          'initial_eprice_ema_dist': -0.07196269003119887,
+          'initial_qty_pct': 0.010376041465319156,
+          'markup_range': 0.05598771329140069,
+          'max_n_entry_orders': 10,
+          'min_markup': 0.04688353879965964,
+          'n_close_orders': 6,
+          'secondary_allocation': 0.14568550324525736,
+          'secondary_pprice_diff': 0.2998323039442074,
+          'wallet_exposure_limit': 1.0},
+ 'short': {'auto_unstuck_ema_dist': 0.029554753810196455,
+           'auto_unstuck_wallet_exposure_threshold': 0.9266879327378665,
+           'backwards_tp': True,
+           'ema_span_0': 2056.3711531607564,
+           'ema_span_1': 1488.2746753489837,
+           'enabled': False,
+           'eprice_exp_base': 2.0481490641956337,
+           'eprice_pprice_diff': 0.022063563358067362,
+           'grid_span': 0.31367331041410446,
+           'initial_eprice_ema_dist': -0.07621676235543176,
+           'initial_qty_pct': 0.016978000469196664,
+           'markup_range': 0.011805979665924199,
+           'max_n_entry_orders': 10,
+           'min_markup': 0.030613429762428288,
+           'n_close_orders': 9,
+           'secondary_allocation': 0.469251394373749,
+           'secondary_pprice_diff': 0.4092147638835546,
+           'wallet_exposure_limit': 1.0}}
+n_days 538.0
+starting_balance 1000
+backtesting...
+44.45 seconds elapsed
+dumping plots...
+writing backtest_result.txt...
+
++-----------------------------------------+
+|                 Summary                 |
++-----------------------------+-----------+
+| Metric                      | Value     |
++-----------------------------+-----------+
+| Exchange                    | bybit     |
+| Market type                 | futures   |
+| Symbol                      | XRPUSDT   |
+| No. days                    | 537.999   |
+| Starting balance            | 1000.0    |
+|                             |           |
+| Long                        | True      |
+| ADG realized per exposure   | 0.108%    |
+| Final balance               | 1791.13   |
+| Final equity                | 1783.05   |
+| Net PNL + fees              | 791.134   |
+| Total gain                  | 80.13%    |
+| Average daily gain          | 0.144%    |
+| DG mean std ratio           | 0.05283   |
+| Price action distance mean  | 0.0378892 |
+| Price action distance std   | 0.0499546 |
+| Price action distance max   | 0.772543  |
+| Closest bankruptcy          | 99.93%    |
+| Lowest equity/balance ratio | 0.564     |
+| Equity/balance ratio std    | 0.03308   |
+| No. fills                   | 741       |
+| No. entries                 | 376       |
+| No. closes                  | 365       |
+| No. initial entries         | 90        |
+| No. reentries               | 193       |
+| No. unstuck entries         | 93        |
+| No. unstuck closes          | 189       |
+| No. normal closes           | 176       |
+| Average n fills per day     | 1.38      |
+| Mean hours stuck            | 18.0083   |
+| Max hours stuck             | 337.7     |
+| PNL sum                     | 801.3     |
+| Profit sum                  | 2185.0    |
+| Loss sum                    | -1384.0   |
+| Fee sum                     | -10.15    |
+| Biggest pos size            | 5471.0    |
+| Biggest pos cost            | 2394.0    |
+| Volume quote                | 101496.0  |
++-----------------------------+-----------+
+
+plotting balance and equity long...
+long 0 of 39 0.00% to 2.56%
+long 1 of 39 2.56% to 5.13%
+long 2 of 39 5.13% to 7.69%
+long 3 of 39 7.69% to 10.26%
+long 4 of 39 10.26% to 12.82%
+long 5 of 39 12.82% to 15.38%
+long 6 of 39 15.38% to 17.95%
+long 7 of 39 17.95% to 20.51%
+long 8 of 39 20.51% to 23.08%
+long 9 of 39 23.08% to 25.64%
+long 10 of 39 25.64% to 28.21%
+long 11 of 39 28.21% to 30.77%
+long 12 of 39 30.77% to 33.33%
+long 13 of 39 33.33% to 35.90%
+long 14 of 39 35.90% to 38.46%
+long 15 of 39 38.46% to 41.03%
+long 16 of 39 41.03% to 43.59%
+long 17 of 39 43.59% to 46.15%
+long 18 of 39 46.15% to 48.72%
+long 19 of 39 48.72% to 51.28%
+long 20 of 39 51.28% to 53.85%
+long 21 of 39 53.85% to 56.41%
+long 22 of 39 56.41% to 58.97%
+long 23 of 39 58.97% to 61.54%
+long 24 of 39 61.54% to 64.10%
+long 25 of 39 64.10% to 66.67%
+long 26 of 39 66.67% to 69.23%
+long 27 of 39 69.23% to 71.79%
+long 28 of 39 71.79% to 74.36%
+long 29 of 39 74.36% to 76.92%
+long 30 of 39 76.92% to 79.49%
+long 31 of 39 79.49% to 82.05%
+long 32 of 39 82.05% to 84.62%
+long 33 of 39 84.62% to 87.18%
+long 34 of 39 87.18% to 89.74%
+long 35 of 39 89.74% to 92.31%
+long 36 of 39 92.31% to 94.87%
+long 37 of 39 94.87% to 97.44%
+long 38 of 39 97.44% to 100.00%
+plotting long initial entry band
+plotting long unstucking bands...
+plotting pos sizes...
