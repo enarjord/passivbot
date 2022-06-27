@@ -16,7 +16,7 @@
              "n_close_orders": 5.776377910206165,
              "secondary_allocation": 0.14568550324525736,
              "secondary_pprice_diff": 0.2998323039442074,
-             "wallet_exposure_limit": 0.1},
+             "wallet_exposure_limit": 0.2},
     "short": {"auto_unstuck_ema_dist": 0.029554753810196455,
               "auto_unstuck_wallet_exposure_threshold": 0.9266879327378665,
               "ema_span_0": 2056.3711531607564,
@@ -33,5 +33,5 @@
               "n_close_orders": 8.957725372066655,
               "secondary_allocation": 0.469251394373749,
               "secondary_pprice_diff": 0.4092147638835546,
-              "wallet_exposure_limit": 0.1}}
+              "wallet_exposure_limit": 0.2}}
    
