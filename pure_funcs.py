@@ -1092,6 +1092,8 @@ def make_compatible(live_config_: dict) -> dict:
         if "backwards_tp" not in live_config[side]:
             live_config[side]["backwards_tp"] = False
         live_config[side]["n_close_orders"] = int(round(live_config[side]["n_close_orders"]))
+        if "max_n_entry_orders" in live_config[side]:
+            live_config[side]["max_n_entry_orders"] = int(round(live_config[side]["max_n_entry_orders"]))
     if all(k in live_config["long"] for k in template_recurv["long"]):
         return sort_dict_keys(live_config)
     elif all(k in live_config["long"] for k in get_template_live_config("neat_grid")["long"]):
