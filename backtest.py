@@ -1,6 +1,6 @@
 import os
 
-os.environ["NOJIT"] = "false"
+# os.environ["NOJIT"] = "false"
 
 import argparse
 import asyncio
@@ -13,6 +13,7 @@ import pandas as pd
 from downloader import Downloader, load_hlc_cache
 from njit_funcs import backtest_static_grid, round_
 from njit_funcs_recursive_grid import backtest_recursive_grid
+from njit_funcs_neat_grid import backtest_neat_grid
 from plotting import dump_plots
 from procedures import (
     prepare_backtest_config,
@@ -42,6 +43,14 @@ def backtest(config: dict, data: np.ndarray, do_print=False) -> (list, bool):
             config["maker_fee"],
             **xk,
         )
+    elif passivbot_mode == "neat_grid":
+        return backtest_neat_grid(
+        data,
+        config["starting_balance"],
+        config["latency_simulation_ms"],
+        config["maker_fee"],
+        **xk,
+    )
     return backtest_static_grid(
         data,
         config["starting_balance"],
