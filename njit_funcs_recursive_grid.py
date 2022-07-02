@@ -1,4 +1,5 @@
 import os
+import numpy as np
 
 from njit_funcs import (
     round_dn,
