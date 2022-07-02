@@ -84,3 +84,9 @@ and assuming partial node fills if the guessed grid is not a close match.
 
 It is called recursive grid mode because the grid is defined recusively by computing each node as if the previous node were filled.
 
+## Neat Grid Mode Parameters
+
+- eqty_exp_base
+	- if 1.0, qtys will increase linearly deeper in the grid
+	- if > 1.0, qtys will increase exponentially deeper in the grid
+- see static grid mode for the remaining parameters
