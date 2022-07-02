@@ -39,6 +39,10 @@ from njit_funcs import (
     calc_emas_last,
     calc_ema,
 )
+from njit_funcs_neat_grid import (
+    calc_neat_grid_long,
+    calc_neat_grid_short,
+)
 from njit_funcs_recursive_grid import (
     calc_recursive_entries_long,
     calc_recursive_entries_short,
@@ -488,6 +492,30 @@ class Bot:
                         self.xk["auto_unstuck_wallet_exposure_threshold"][0],
                         self.xk["auto_unstuck_ema_dist"][0],
                     )
+                elif self.passivbot_mode == "neat_grid":
+                    entries_long = calc_neat_grid_long(
+                        balance,
+                        psize_long,
+                        pprice_long,
+                        self.ob[0],
+                        min(self.emas_long),
+                        self.xk["inverse"],
+                        self.xk["do_long"],
+                        self.xk["qty_step"],
+                        self.xk["price_step"],
+                        self.xk["min_qty"],
+                        self.xk["min_cost"],
+                        self.xk["c_mult"],
+                        self.xk["grid_span"][0],
+                        self.xk["wallet_exposure_limit"][0],
+                        self.xk["max_n_entry_orders"][0],
+                        self.xk["initial_qty_pct"][0],
+                        self.xk["initial_eprice_ema_dist"][0],
+                        self.xk["eqty_exp_base"][0],
+                        self.xk["eprice_exp_base"][0],
+                        self.xk["auto_unstuck_wallet_exposure_threshold"][0],
+                        self.xk["auto_unstuck_ema_dist"][0],
+                    )
                 else:
                     raise Exception(f"unknown passivbot mode {self.passivbot_mode}")
                 orders += [
@@ -573,6 +601,30 @@ class Bot:
                         self.xk["wallet_exposure_limit"][1],
                         self.xk["auto_unstuck_ema_dist"][1],
                         self.xk["auto_unstuck_wallet_exposure_threshold"][1],
+                    )
+                elif self.passivbot_mode == "neat_grid":
+                    entries_short = calc_neat_grid_short(
+                        balance,
+                        psize_short,
+                        pprice_short,
+                        self.ob[1],
+                        max(self.emas_short),
+                        self.xk["inverse"],
+                        self.xk["do_short"],
+                        self.xk["qty_step"],
+                        self.xk["price_step"],
+                        self.xk["min_qty"],
+                        self.xk["min_cost"],
+                        self.xk["c_mult"],
+                        self.xk["grid_span"][1],
+                        self.xk["wallet_exposure_limit"][1],
+                        self.xk["max_n_entry_orders"][1],
+                        self.xk["initial_qty_pct"][1],
+                        self.xk["initial_eprice_ema_dist"][1],
+                        self.xk["eqty_exp_base"][1],
+                        self.xk["eprice_exp_base"][1],
+                        self.xk["auto_unstuck_wallet_exposure_threshold"][1],
+                        self.xk["auto_unstuck_ema_dist"][1],
                     )
                 elif self.passivbot_mode == "static_grid":
                     entries_short = calc_entry_grid_short(
