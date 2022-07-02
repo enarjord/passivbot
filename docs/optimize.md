@@ -45,7 +45,7 @@ as a range. For a description of each of those individual parameters, please see
 
 !!! Info
     If you find that an optimize execution is taking longer than you expected, you can kill it using `ctrl+c` from the command-line.
-    After doing so, you can still find the best result the optimize achieved so far by looking in `results_harmony_search_{recursive/static}`.
+    After doing so, you can still find the best result the optimize achieved so far by looking in `results_harmony_search_{recursive/static/neat}`.
 
 ### Command-line arguments
 
