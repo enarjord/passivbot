@@ -4,6 +4,7 @@ from actions.pumpdump import pumpdump
 from actions.long_short import long_short
 from actions.chart import chart
 from actions.wallet import wallet
+from actions.positions import positions
 from functions.functions import get_channel_id, get_bot_commands_enabled_channels, send_slack_message
 
 import os
@@ -59,6 +60,7 @@ class MyClient(discord.Client):
     !hello => just say hello :)\n\
     !chart => show a chart\n\
     !ls => longshort ratio\n\
+    !p => positions\n\
     !w user => Show Wallet user=[tedy, jojo]\n\
         ')
 
@@ -73,6 +75,9 @@ class MyClient(discord.Client):
 
             if a_message[0] == '!w':
                 await wallet(message)
+
+            if a_message[0] == '!p':
+                await positions(message)
 
             # Garé pour les infos
             # await message.channel.send('Hello {0.author.mention}'.format(message))
