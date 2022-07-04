@@ -138,8 +138,8 @@ async def trader_alert(d_message):
             # r = requests.post(webhook, data={'content': info})  # envoie les info
     # time.sleep(20)  # attend 20sec pour pas spam bybit
 
-    discord_message += "\n Positions : " + str(total_position) + "$"
-    discord_message += "\n Gain : " + str(total_gain) + "$"
+    discord_message += "\n Positions : " + (f"{total_position:.2f}$").rjust(20)  + "$"
+    discord_message += "\n Gain : " + (f"{total_gain:.2f}$").rjust(20)  + "$"
 
 
     await d_message.channel.send("```" + discord_message + "```")
