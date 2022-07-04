@@ -7,16 +7,20 @@ import os
 import hjson
 
 
-async def print_trade_info(info: dict, d_message) -> None:
+def print_trade_info(info: dict, d_message) -> None:
     sens = info["side"]
     if info["side"] == "Buy":
         sens = "🟢"
     elif info["side"] == "Sell":
         sens = "🔴"
     # message = f"=================\n" \
-    message = f"{sens} {int(info['position_value'])}$ {info['symbol']} @{info['entry_price']}" \
-              f" Gain {info['unrealised_pnl']:.2f}$ (Liqu. : {info['liq_price']})\n" \
-              f"" 
+    message =   (f"{sens} ") \
+              + (f"{int(info['position_value'])}$ ").rjust(5) \
+              + (f"{info['symbol']}").ljust(10) \
+              + (f"{info['entry_price']}").rjust(15) \
+              + (f"{info['unrealised_pnl']:.2f}$").rjust(8) \
+              + (f" (Liqu. : {info['liq_price']})\n").rjust(6) \
+              + (f"") 
             #   f"-\n" 
             #   f"⚠ Levier : X{info['leverage']}\n" 
             #   f"👁️ Paires : {info['symbol']}\n" \
@@ -25,7 +29,8 @@ async def print_trade_info(info: dict, d_message) -> None:
             #   f"🎯 TP 1 : {info['take_profit']}$\n" \
             #   f"🛑 SL : {info['stop_loss']}$" \
             #   f"\n================="
-    await d_message.channel.send(message)
+    # await d_message.channel.send(message)
+    return message
 
 
 async def trader_alert(d_message):
@@ -98,6 +103,9 @@ async def trader_alert(d_message):
     # "position_idx":1,
     # "mode":"BothSide"
     # print(x)
+    discord_message = ""
+    total_position = 0
+    total_gain = 0
     for i in x["result"]:
         i = i["data"]
         pair = i["symbol"]
@@ -112,8 +120,10 @@ async def trader_alert(d_message):
             elif i["position_idx"] == position[pair]["position_idx"] and \
                     dictfilt(i, keys_to_monitor) != dictfilt(position[pair], keys_to_monitor):
                 # await d_message.channel.send(f'\nPosition (n° {i["position_idx"]}) modifiée sur {pair}')
-                await print_trade_info(i, d_message)
+                discord_message += print_trade_info(i, d_message)
                 position[pair] = dictfilt(i, keys_to_monitor)
+                total_position += i['position_value']
+                total_gain += i['unrealised_pnl']
                 # print(position)
             else:
                 # print("do nothing")
@@ -122,11 +132,17 @@ async def trader_alert(d_message):
             # print("position touvé")
             position[pair] = dictfilt(i, keys_to_monitor)
             # await d_message.channel.send(f"\nNouvelle position (n° {i['position_idx']}) ouverte")
-            await print_trade_info(i, d_message)
+            discord_message += print_trade_info(i, d_message)
+            total_position += i['position_value']
+            total_gain += i['unrealised_pnl']
             # r = requests.post(webhook, data={'content': info})  # envoie les info
     # time.sleep(20)  # attend 20sec pour pas spam bybit
 
+    discord_message += "\n Positions : " + str(total_position) + "$"
+    discord_message += "\n Gain : " + str(total_gain) + "$"
 
+
+    await d_message.channel.send("```" + discord_message + "```")
 
 async def positions(d_message):
     await trader_alert(d_message)
