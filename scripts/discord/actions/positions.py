@@ -14,13 +14,15 @@ def print_trade_info(info: dict, d_message) -> None:
     elif info["side"] == "Sell":
         sens = "🔴"
     # message = f"=================\n" \
-    message =   (f"{sens} ") \
-              + (f"{int(info['position_value'])}$ ").rjust(5) \
+    # Mobile affiche 25 caractères sur une ligne
+    message =   (f"{sens}") \
+              + (f"{int(info['position_value'])}$ ").rjust(7) \
               + (f"{info['symbol']}").ljust(10) \
-              + (f"{info['entry_price']}").rjust(15) \
-              + (f"{info['unrealised_pnl']:.2f}$").rjust(8) \
-              + (f" (Liqu. : {info['liq_price']})\n").rjust(6) \
-              + (f"") 
+              + (f"{info['entry_price']}").rjust(10) \
+              + "\n" \
+              + (f"{info['unrealised_pnl']:.2f}$").rjust(17) \
+              + (f"{info['liq_price']}").rjust(12) \
+              + (f"\n") 
             #   f"-\n" 
             #   f"⚠ Levier : X{info['leverage']}\n" 
             #   f"👁️ Paires : {info['symbol']}\n" \
@@ -138,8 +140,8 @@ async def trader_alert(d_message):
             # r = requests.post(webhook, data={'content': info})  # envoie les info
     # time.sleep(20)  # attend 20sec pour pas spam bybit
 
-    discord_message += "\n Positions : " + (f"{total_position:.2f}$").rjust(20)  
-    discord_message += "\n Gain :      " + (f"{total_gain:.2f}$").rjust(20)  
+    discord_message += "\nPositions : " + (f"{total_position:.2f}$").rjust(17)  
+    discord_message += "\nGain      : " + (f"{total_gain:.2f}$").rjust(17)  
 
 
     await d_message.channel.send("```" + discord_message + "```")
