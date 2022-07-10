@@ -800,6 +800,8 @@ async def main():
                     cfg = load_live_config(os.path.join(args.starting_configs, fname))
                     assert determine_passivbot_mode(cfg) == passivbot_mode, "wrong passivbot mode"
                     cfgs.append(cfg)
+                    logging.info(f"successfully loaded config {fname}")
+
                 except Exception as e:
                     logging.error(f"error loading config {fname}: {e}")
         elif os.path.exists(args.starting_configs):
