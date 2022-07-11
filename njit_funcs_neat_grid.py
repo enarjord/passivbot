@@ -580,11 +580,14 @@ def find_last_entry_qty_long(
     eqty_exp_base,
     eprice_exp_base,
 ):
-    guess0 = cost_to_qty(
-        balance * wallet_exposure_limit * 0.5,
-        initial_entry_price,
-        inverse,
-        c_mult,
+    guess0 = max(
+        calc_min_entry_qty(initial_entry_price, inverse, qty_step, min_qty, min_cost),
+        cost_to_qty(
+            balance * wallet_exposure_limit * 0.5,
+            initial_entry_price,
+            inverse,
+            c_mult,
+        ),
     )
     val0 = eval_neat_entry_grid_long(
         balance,
@@ -622,6 +625,25 @@ def find_last_entry_qty_long(
         eprice_exp_base,
         guess1,
     )[-1][-1]
+    if val0 == val1:
+        guess1 = guess0 * 10
+        val1 = eval_neat_entry_grid_long(
+            balance,
+            initial_entry_price,
+            inverse,
+            qty_step,
+            price_step,
+            min_qty,
+            min_cost,
+            c_mult,
+            grid_span,
+            wallet_exposure_limit,
+            max_n_entry_orders,
+            initial_qty_pct,
+            eqty_exp_base,
+            eprice_exp_base,
+            guess1,
+        )[-1][-1]
     eval1 = abs(val0 - wallet_exposure_limit) / wallet_exposure_limit
     return round_(
         interpolate(wallet_exposure_limit, np.array([val0, val1]), np.array([guess0, guess1])),
@@ -646,11 +668,14 @@ def find_last_entry_qty_short(
     eqty_exp_base,
     eprice_exp_base,
 ):
-    guess0 = cost_to_qty(
-        balance * wallet_exposure_limit * 0.5,
-        initial_entry_price,
-        inverse,
-        c_mult,
+    guess0 = max(
+        calc_min_entry_qty(initial_entry_price, inverse, qty_step, min_qty, min_cost),
+        cost_to_qty(
+            balance * wallet_exposure_limit * 0.5,
+            initial_entry_price,
+            inverse,
+            c_mult,
+        ),
     )
     val0 = eval_neat_entry_grid_short(
         balance,
@@ -688,6 +713,25 @@ def find_last_entry_qty_short(
         eprice_exp_base,
         guess1,
     )[-1][-1]
+    if val0 == val1:
+        guess1 = guess0 * 10
+        val1 = eval_neat_entry_grid_short(
+            balance,
+            initial_entry_price,
+            inverse,
+            qty_step,
+            price_step,
+            min_qty,
+            min_cost,
+            c_mult,
+            grid_span,
+            wallet_exposure_limit,
+            max_n_entry_orders,
+            initial_qty_pct,
+            eqty_exp_base,
+            eprice_exp_base,
+            guess1,
+        )[-1][-1]
     eval1 = abs(val0 - wallet_exposure_limit) / wallet_exposure_limit
     return round_(
         interpolate(wallet_exposure_limit, np.array([val0, val1]), np.array([guess0, guess1])),
