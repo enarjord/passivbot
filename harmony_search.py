@@ -706,6 +706,8 @@ async def main():
             "adg_mean",
             "adg_min",
             "adg_PAD_std_min",
+            "adg_realized_PAD_mean",
+            "adg_realized_PAD_std",
         ]:
             logging.error(f"unknown score formula {args.score_formula}")
             logging.error(f"using score formula {config['score_formula']}")
