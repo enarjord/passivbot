@@ -676,7 +676,7 @@ async def main():
         required=False,
         dest="passivbot_mode",
         default=None,
-        help="passivbot mode options: [s/static_grid, r/recursive_grid]",
+        help="passivbot mode options: [s/static_grid, r/recursive_grid, n/neat_grid]",
     )
     parser.add_argument(
         "-sf",
@@ -718,12 +718,15 @@ async def main():
             config["passivbot_mode"] = "static_grid"
         elif args.passivbot_mode in ["r", "recursive_grid", "recursive"]:
             config["passivbot_mode"] = "recursive_grid"
+        elif args.passivbot_mode in ["n", "neat_grid", "neat"]:
+            config["passivbot_mode"] = "neat_grid"
         else:
             raise Exception(f"unknown passivbot mode {args.passivbot_mode}")
     passivbot_mode = config["passivbot_mode"]
     assert passivbot_mode in [
         "recursive_grid",
         "static_grid",
+        "neat_grid",
     ], f"unknown passivbot mode {passivbot_mode}"
     config.update(get_template_live_config(passivbot_mode))
     config["long"]["backwards_tp"] = config["backwards_tp_long"]
@@ -799,6 +802,8 @@ async def main():
                     cfg = load_live_config(os.path.join(args.starting_configs, fname))
                     assert determine_passivbot_mode(cfg) == passivbot_mode, "wrong passivbot mode"
                     cfgs.append(cfg)
+                    logging.info(f"successfully loaded config {fname}")
+
                 except Exception as e:
                     logging.error(f"error loading config {fname}: {e}")
         elif os.path.exists(args.starting_configs):

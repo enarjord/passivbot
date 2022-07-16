@@ -9,12 +9,12 @@ import numpy as np
 try:
     import hjson
 except:
-    print('hjson not found, trying without...')
+    print("hjson not found, trying without...")
     pass
 try:
     import pandas as pd
 except:
-    print('pandas not found, trying without...')
+    print("pandas not found, trying without...")
     pass
 
 from njit_funcs import calc_samples

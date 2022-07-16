@@ -72,6 +72,32 @@ def get_xk_keys(passivbot_mode="static_grid"):
             "auto_unstuck_wallet_exposure_threshold",
             "auto_unstuck_ema_dist",
         ]
+    elif passivbot_mode == "neat_grid":
+        return [
+            "inverse",
+            "do_long",
+            "do_short",
+            "backwards_tp",
+            "qty_step",
+            "price_step",
+            "min_qty",
+            "min_cost",
+            "c_mult",
+            "grid_span",
+            "wallet_exposure_limit",
+            "max_n_entry_orders",
+            "initial_qty_pct",
+            "eqty_exp_base",
+            "eprice_exp_base",
+            "min_markup",
+            "markup_range",
+            "n_close_orders",
+            "ema_span_0",
+            "ema_span_1",
+            "initial_eprice_ema_dist",
+            "auto_unstuck_wallet_exposure_threshold",
+            "auto_unstuck_ema_dist",
+        ]
     return [
         "inverse",
         "do_long",
@@ -104,6 +130,8 @@ def get_xk_keys(passivbot_mode="static_grid"):
 def determine_passivbot_mode(config: dict) -> str:
     if all(k in config["long"] for k in get_template_live_config("recursive_grid")["long"]):
         return "recursive_grid"
+    if all(k in config["long"] for k in get_template_live_config("neat_grid")["long"]):
+        return "neat_grid"
     elif all(k in config["long"] for k in get_template_live_config("static_grid")["long"]):
         return "static_grid"
     else:
@@ -123,7 +151,7 @@ def create_xk(config: dict) -> dict:
     keys = get_xk_keys(config["passivbot_mode"])
     config_["long"]["n_close_orders"] = int(round(config_["long"]["n_close_orders"]))
     config_["short"]["n_close_orders"] = int(round(config_["short"]["n_close_orders"]))
-    if config["passivbot_mode"] == "static_grid":
+    if config["passivbot_mode"] in ["static_grid", "neat_grid"]:
         config_["long"]["max_n_entry_orders"] = int(round(config_["long"]["max_n_entry_orders"]))
         config_["short"]["max_n_entry_orders"] = int(round(config_["short"]["max_n_entry_orders"]))
     for k in keys:
@@ -232,8 +260,8 @@ def candidate_to_live_config(candidate_: dict) -> dict:
             for k in live_config[side]:
                 live_config[side][k] = candidate[side][k]
             live_config[side]["n_close_orders"] = int(round(live_config[side]["n_close_orders"]))
-    elif passivbot_mode == "static_grid":
-        live_config = get_template_live_config("static_grid")
+    elif passivbot_mode in ["static_grid", "neat_grid"]:
+        live_config = get_template_live_config(passivbot_mode)
         sides = ["long", "short"]
         for side in sides:
             for k in live_config[side]:
@@ -425,6 +453,51 @@ def get_template_live_config(passivbot_mode="static_grid"):
                 },
             }
         )
+    elif passivbot_mode == "neat_grid":
+        return sort_dict_keys(
+            {
+                "config_name": "template",
+                "logging_level": 0,
+                "long": {
+                    "enabled": True,
+                    "ema_span_0": 1440,  # in minutes
+                    "ema_span_1": 4320,
+                    "grid_span": 0.16,
+                    "wallet_exposure_limit": 1.6,
+                    "max_n_entry_orders": 10,
+                    "initial_qty_pct": 0.01,
+                    "initial_eprice_ema_dist": -0.01,  # negative is closer; positive is further away
+                    "eqty_exp_base": 1.8,
+                    "eprice_exp_base": 1.618034,
+                    "min_markup": 0.0045,
+                    "markup_range": 0.0075,
+                    "n_close_orders": 7,
+                    "auto_unstuck_wallet_exposure_threshold": 0.1,  # percentage of wallet_exposure_limit to trigger soft stop.
+                    # e.g. wallet_exposure_limit=0.06 and auto_unstuck_wallet_exposure_threshold=0.1: soft stop when wallet_exposure > 0.06 * (1 - 0.1) == 0.054
+                    "auto_unstuck_ema_dist": 0.02,
+                    "backwards_tp": False,
+                },
+                "short": {
+                    "enabled": True,
+                    "ema_span_0": 1440,  # in minutes
+                    "ema_span_1": 4320,
+                    "grid_span": 0.16,
+                    "wallet_exposure_limit": 1.6,
+                    "max_n_entry_orders": 10,
+                    "initial_qty_pct": 0.01,
+                    "initial_eprice_ema_dist": -0.01,  # negative is closer; positive is further away
+                    "eqty_exp_base": 1.8,
+                    "eprice_exp_base": 1.618034,
+                    "min_markup": 0.0045,
+                    "markup_range": 0.0075,
+                    "n_close_orders": 7,
+                    "auto_unstuck_wallet_exposure_threshold": 0.1,  # percentage of wallet_exposure_limit to trigger soft stop.
+                    # e.g. wallet_exposure_limit=0.06 and auto_unstuck_wallet_exposure_threshold=0.1: soft stop when wallet_exposure > 0.06 * (1 - 0.1) == 0.054
+                    "auto_unstuck_ema_dist": 0.02,
+                    "backwards_tp": False,
+                },
+            }
+        )
     return sort_dict_keys(
         {
             "config_name": "template",
@@ -586,7 +659,9 @@ def analyze_fills(
         daily_gains_long = daily_equity_long / daily_equity_long.shift(1) - 1
         adg_long = daily_gains_long.mean()
         DGstd_long = daily_gains_long.std()
-        adg_DGstd_ratio_long = adg_long / DGstd_long if (len(daily_gains_long) > 0 and DGstd_long != 0.0) else 0.0
+        adg_DGstd_ratio_long = (
+            adg_long / DGstd_long if (len(daily_gains_long) > 0 and DGstd_long != 0.0) else 0.0
+        )
         if any("bankruptcy" in e for e in longs.type.unique()):
             adg_long = 0.01 ** (1 / n_days) - 1  # reward bankrupt runs lasting longer
         adg_realized_long = (sdf.iloc[-1].balance_long / sdf.iloc[0].balance_long) ** (1 / n_days) - 1
@@ -599,7 +674,9 @@ def analyze_fills(
         daily_gains_short = daily_equity_short / daily_equity_short.shift(1) - 1
         adg_short = daily_gains_short.mean()
         DGstd_short = daily_gains_short.std()
-        adg_DGstd_ratio_short = adg_short / DGstd_short if (len(daily_gains_short) > 0 and DGstd_short != 0.0) else 0.0
+        adg_DGstd_ratio_short = (
+            adg_short / DGstd_short if (len(daily_gains_short) > 0 and DGstd_short != 0.0) else 0.0
+        )
         if any("bankruptcy" in e for e in shorts.type.unique()):
             adg_short = 0.01 ** (1 / n_days) - 1  # reward bankrupt runs lasting longer
         gain_realized_short = sdf.iloc[-1].balance_short / sdf.iloc[0].balance_short
@@ -1015,7 +1092,11 @@ def make_compatible(live_config_: dict) -> dict:
         if "backwards_tp" not in live_config[side]:
             live_config[side]["backwards_tp"] = False
         live_config[side]["n_close_orders"] = int(round(live_config[side]["n_close_orders"]))
+        if "max_n_entry_orders" in live_config[side]:
+            live_config[side]["max_n_entry_orders"] = int(round(live_config[side]["max_n_entry_orders"]))
     if all(k in live_config["long"] for k in template_recurv["long"]):
+        return sort_dict_keys(live_config)
+    elif all(k in live_config["long"] for k in get_template_live_config("neat_grid")["long"]):
         return sort_dict_keys(live_config)
     assert all(k in live_config["long"] for k in get_template_live_config()["long"])
     return live_config

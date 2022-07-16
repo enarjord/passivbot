@@ -13,11 +13,11 @@
 
   # format YYYY-MM-DD
   start_date: 2021-05-01
-  end_date: 2022-02-03
+  end_date: 2022-07-01
 
   # non default historical data path
   # defaults to local dir if unspecified
-  # historical_data_path: "/mnt/d/"
+  # historical_data_path: "/media/e/Samsung_T5/"
 
   # backtests path
   base_dir: backtests

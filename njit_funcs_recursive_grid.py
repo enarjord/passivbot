@@ -1,7 +1,4 @@
 import os
-
-# os.environ["NOJIT"] = "true"
-
 import numpy as np
 
 from njit_funcs import (
