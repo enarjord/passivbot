@@ -711,17 +711,21 @@ def analyze_fills(
         if len(shorts) > 0
         else 0.0
     )
+    pa_distance_std_long = pa_distance_long.std()
+    pa_distance_std_short = pa_distance_short.std()
+    pa_distance_mean_long = pa_distance_long.mean()
+    pa_distance_mean_short = pa_distance_short.mean()
 
     analysis = {
         "exchange": config["exchange"] if "exchange" in config else "unknown",
         "symbol": config["symbol"] if "symbol" in config else "unknown",
         "starting_balance": sdf.balance_long.iloc[0],
-        "pa_distance_mean_long": pa_distance_long.mean(),
+        "pa_distance_mean_long": pa_distance_long_mean if pa_distance_long_mean == pa_distance_long_mean else 1.0,
         "pa_distance_max_long": pa_distance_long.max(),
-        "pa_distance_std_long": pa_distance_long.std(),
-        "pa_distance_mean_short": pa_distance_short.mean(),
+        "pa_distance_std_long": pa_distance_std_long if pa_distance_std_long == pa_distance_std_long else 1.0,
+        "pa_distance_mean_short": pa_distance_short_mean if pa_distance_short_mean == pa_distance_short_mean else 1.0,
         "pa_distance_max_short": pa_distance_short.max(),
-        "pa_distance_std_short": pa_distance_short.std(),
+        "pa_distance_std_short": pa_distance_std_short if pa_distance_std_short == pa_distance_std_short else 1.0,
         "equity_balance_ratio_mean_long": (sdf.equity_long / sdf.balance_long).mean(),
         "equity_balance_ratio_std_long": (sdf.equity_long / sdf.balance_long).std(),
         "equity_balance_ratio_mean_short": (sdf.equity_short / sdf.balance_short).mean(),
