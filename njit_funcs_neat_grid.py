@@ -547,7 +547,7 @@ def eval_neat_entry_grid_short(
     grid[0][2] = psize = grid[0][0]
     grid[0][3] = pprice = grid[0][1]
     grid[0][4] = qty_to_cost(psize, pprice, inverse, c_mult) / balance
-    qtys = basespace(grid[0][0], last_entry_qty, eqty_exp_base, max_n_entry_orders)
+    qtys = basespace(abs(grid[0][0]), last_entry_qty, eqty_exp_base, max_n_entry_orders)
     for i in range(1, max_n_entry_orders):
         qty = -max(
             calc_min_entry_qty(grid[i][1], inverse, qty_step, min_qty, min_cost),
