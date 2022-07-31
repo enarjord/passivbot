@@ -720,12 +720,20 @@ def analyze_fills(
         "exchange": config["exchange"] if "exchange" in config else "unknown",
         "symbol": config["symbol"] if "symbol" in config else "unknown",
         "starting_balance": sdf.balance_long.iloc[0],
-        "pa_distance_mean_long": pa_distance_mean_long if pa_distance_mean_long == pa_distance_mean_long else 1.0,
+        "pa_distance_mean_long": pa_distance_mean_long
+        if pa_distance_mean_long == pa_distance_mean_long
+        else 1.0,
         "pa_distance_max_long": pa_distance_long.max(),
-        "pa_distance_std_long": pa_distance_std_long if pa_distance_std_long == pa_distance_std_long else 1.0,
-        "pa_distance_mean_short": pa_distance_mean_short if pa_distance_mean_short == pa_distance_mean_short else 1.0,
+        "pa_distance_std_long": pa_distance_std_long
+        if pa_distance_std_long == pa_distance_std_long
+        else 1.0,
+        "pa_distance_mean_short": pa_distance_mean_short
+        if pa_distance_mean_short == pa_distance_mean_short
+        else 1.0,
         "pa_distance_max_short": pa_distance_short.max(),
-        "pa_distance_std_short": pa_distance_std_short if pa_distance_std_short == pa_distance_std_short else 1.0,
+        "pa_distance_std_short": pa_distance_std_short
+        if pa_distance_std_short == pa_distance_std_short
+        else 1.0,
         "equity_balance_ratio_mean_long": (sdf.equity_long / sdf.balance_long).mean(),
         "equity_balance_ratio_std_long": (sdf.equity_long / sdf.balance_long).std(),
         "equity_balance_ratio_mean_short": (sdf.equity_short / sdf.balance_short).mean(),
@@ -785,7 +793,9 @@ def analyze_fills(
         "pnl_sum_long": (pnl_sum_long := longs.pnl.sum()),
         "pnl_sum_short": (pnl_sum_short := shorts.pnl.sum()),
         "loss_profit_ratio_long": (abs(loss_sum_long) / profit_sum_long) if profit_sum_long else 1.0,
-        "loss_profit_ratio_short": (abs(loss_sum_short) / profit_sum_short) if profit_sum_short else 1.0,
+        "loss_profit_ratio_short": (abs(loss_sum_short) / profit_sum_short)
+        if profit_sum_short
+        else 1.0,
         "fee_sum_long": (fee_sum_long := longs.fee_paid.sum()),
         "fee_sum_short": (fee_sum_short := shorts.fee_paid.sum()),
         "net_pnl_plus_fees_long": pnl_sum_long + fee_sum_long,
@@ -1099,7 +1109,9 @@ def make_compatible(live_config_: dict) -> dict:
             live_config[side]["backwards_tp"] = False
         live_config[side]["n_close_orders"] = int(round(live_config[side]["n_close_orders"]))
         if "max_n_entry_orders" in live_config[side]:
-            live_config[side]["max_n_entry_orders"] = int(round(live_config[side]["max_n_entry_orders"]))
+            live_config[side]["max_n_entry_orders"] = int(
+                round(live_config[side]["max_n_entry_orders"])
+            )
     if all(k in live_config["long"] for k in template_recurv["long"]):
         return sort_dict_keys(live_config)
     elif all(k in live_config["long"] for k in get_template_live_config("neat_grid")["long"]):
