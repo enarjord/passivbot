@@ -210,6 +210,18 @@ class HarmonySearch:
             adgs_realized_short = [v["adg_realized_per_exposure_short"] for v in results.values()]
             adg_realized_long_mean = np.mean(adgs_realized_long)
             adg_realized_short_mean = np.mean(adgs_realized_short)
+            loss_profit_ratio_long_mean = np.mean(
+                [
+                    max(self.config["maximum_loss_profit_ratio_long"], v["loss_profit_ratio_long"])
+                    for v in results.values()
+                ]
+            )
+            loss_profit_ratio_short_mean = np.mean(
+                [
+                    max(self.config["maximum_loss_profit_ratio_short"], v["loss_profit_ratio_short"])
+                    for v in results.values()
+                ]
+            )
 
             if self.config["score_formula"] == "adg_PAD_mean":
                 score_long = -adg_mean_long * min(
@@ -232,6 +244,7 @@ class HarmonySearch:
                 score_short = -adg_realized_short_mean / max(
                     self.config["maximum_pa_distance_std_short"], pa_distance_std_short
                 )
+
             elif self.config["score_formula"] == "adg_PAD_std":
                 score_long = -adg_mean_long / max(
                     self.config["maximum_pa_distance_std_long"], pa_distance_std_long
@@ -264,6 +277,13 @@ class HarmonySearch:
                 score_short = -min(scores_short)
             else:
                 raise Exception(f"unknown score formula {self.config['score_formula']}")
+
+            score_long *= self.config["maximum_loss_profit_ratio_long"] / max(
+                loss_profit_ratio_long_mean, self.config["maximum_loss_profit_ratio_long"]
+            )
+            score_short *= self.config["maximum_loss_profit_ratio_short"] / max(
+                loss_profit_ratio_short_mean, self.config["maximum_loss_profit_ratio_short"]
+            )
 
             line = f"completed multisymbol iter {cfg['config_no']} "
             if self.do_long:
