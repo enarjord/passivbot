@@ -36,6 +36,11 @@
   maximum_pa_distance_mean_long: 0.015
   maximum_pa_distance_mean_short: 0.015
 
+  # profit_loss_ratio = abs(sum(loss)) / sum(profit)
+  # set to high value (e.g. 100.0) to disable
+  maximum_loss_profit_ratio_long: 0.5
+  maximum_loss_profit_ratio_short: 0.5
+
   # adg_DGstd_ratio:
   # mean([dg_mean_std_ratio]) / std(dg_mean_std_ratio)
 
