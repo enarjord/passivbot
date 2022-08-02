@@ -71,8 +71,32 @@ def main():
         maximum_loss_profit_ratio_long = args.profit_loss_ratio_max
         maximum_loss_profit_ratio_short = args.profit_loss_ratio_max
 
+    keys_ = [
+        "adg",
+        "adg_realized_per_exposure",
+        "pa_distance_mean",
+        "pa_distance_std",
+        "loss_profit_ratio",
+        "profit_sum",
+        "loss_sum",
+    ]
+    keys = [k + "_long" for k in keys_] + [k + "_short" for k in keys_]
     with open(args.results_fpath) as f:
-        results = [json.loads(x) for x in f.readlines()]
+        results = []
+        for x in f.readlines():
+            j = json.loads(x)
+            rsl = {
+                "results": {
+                    s: {k: j["results"][s][k] for k in keys if k in j["results"][s]}
+                    for s in j["results"]
+                    if s != "config_no"
+                }
+            }
+            rsl["results"]["config_no"] = j["results"]["config_no"]
+            rsl["config"] = j["config"]
+            results.append(rsl)
+            # results.append({'results': {k: j['results'][k] for k in keys}, 'config': j['config']})
+        # results = [{k:json.loads(x)} for x in f.readlines()]
 
     print(
         "n results",
