@@ -95,7 +95,6 @@ def main():
             rsl["results"]["config_no"] = j["results"]["config_no"]
             rsl["config"] = j["config"]
             results.append(rsl)
-            # results.append({'results': {k: j['results'][k] for k in keys}, 'config': j['config']})
         # results = [{k:json.loads(x)} for x in f.readlines()]
 
     print(
