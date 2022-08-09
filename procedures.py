@@ -89,7 +89,7 @@ async def prepare_backtest_config(args) -> dict:
         config["spot"] = args.market_type == "spot"
     config["start_date"] = ts_to_date_utc(date_to_ts(config["start_date"]))[:10]
     config["end_date"] = ts_to_date_utc(date_to_ts(config["end_date"]))[:10]
-    config["exchange"], _, _ = load_exchange_key_secret(config["user"])
+    config["exchange"], _, _ = load_exchange_key_secret_passphrase(config["user"])
     config["session_name"] = (
         f"{config['start_date'].replace(' ', '').replace(':', '').replace('.', '')}_"
         f"{config['end_date'].replace(' ', '').replace(':', '').replace('.', '')}"
@@ -151,7 +151,7 @@ def make_get_filepath(filepath: str) -> str:
     return filepath
 
 
-def load_exchange_key_secret(user: str) -> (str, str, str):
+def load_exchange_key_secret_passphrase(user: str) -> (str, str, str, str):
     try:
         keyfile = json.load(open("api-keys.json"))
         if user in keyfile:
@@ -159,6 +159,7 @@ def load_exchange_key_secret(user: str) -> (str, str, str):
                 keyfile[user]["exchange"],
                 keyfile[user]["key"],
                 keyfile[user]["secret"],
+                keyfile[user]["passphrase"] if "passphrase" in keyfile[user] else "",
             )
         else:
             print("Looks like the keys aren't configured yet, or you entered the wrong username!")

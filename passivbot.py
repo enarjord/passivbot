@@ -14,7 +14,7 @@ from time import time
 from procedures import (
     load_live_config,
     make_get_filepath,
-    load_exchange_key_secret,
+    load_exchange_key_secret_passphrase,
     numpyize,
 )
 from pure_funcs import (
@@ -107,7 +107,7 @@ class Bot:
 
         self.log_filepath = make_get_filepath(f"logs/{self.exchange}/{config['config_name']}.log")
 
-        _, self.key, self.secret = load_exchange_key_secret(self.user)
+        _, self.key, self.secret, self.passphrase = load_exchange_key_secret_passphrase(self.user)
 
         self.log_level = 0
 

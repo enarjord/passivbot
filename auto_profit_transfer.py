@@ -11,7 +11,7 @@ from procedures import (
     create_binance_bot,
     create_bybit_bot,
     make_get_filepath,
-    load_exchange_key_secret,
+    load_exchange_key_secret_passphrase,
 )
 from pure_funcs import get_template_live_config, flatten
 from njit_funcs import round_dynamic
@@ -54,7 +54,7 @@ async def main():
     config["user"] = args.user
     config["symbol"] = "BTCUSDT"  # dummy symbol
     config["market_type"] = "futures"
-    exchange, _, _ = load_exchange_key_secret(args.user)
+    exchange = load_exchange_key_secret_passphrase(args.user)[0]
     if exchange == "binance":
         bot = await create_binance_bot(config)
     elif exchange == "bybit":

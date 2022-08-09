@@ -29,7 +29,7 @@ from procedures import (
     prepare_optimize_config,
     load_live_config,
     make_get_filepath,
-    load_exchange_key_secret,
+    load_exchange_key_secret_passphrase,
     prepare_backtest_config,
     dump_live_config,
 )
@@ -751,7 +751,7 @@ async def main():
     config.update(get_template_live_config(passivbot_mode))
     config["long"]["backwards_tp"] = config["backwards_tp_long"]
     config["short"]["backwards_tp"] = config["backwards_tp_short"]
-    config["exchange"], _, _ = load_exchange_key_secret(config["user"])
+    config["exchange"] = load_exchange_key_secret_passphrase(config["user"])[0]
     args = parser.parse_args()
     if args.long_enabled is None:
         config["long"]["enabled"] = config["do_long"]
