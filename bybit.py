@@ -38,7 +38,7 @@ def determine_pos_side(o: dict) -> str:
             return "both"
 
 
-class Bybit(Bot):
+class BybitBot(Bot):
     def __init__(self, config: dict):
         self.exchange = "bybit"
         self.min_notional = 0.0
