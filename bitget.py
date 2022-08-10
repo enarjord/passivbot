@@ -9,6 +9,7 @@ from urllib.parse import urlencode
 from uuid import uuid4
 
 import aiohttp
+import base64
 import numpy as np
 
 from njit_funcs import round_
@@ -26,14 +27,14 @@ class BitgetBot(Bot):
         self.exchange = "bitget"
         self.min_notional = 5.0
         super().__init__(config)
-        self.base_endpoint = "https://api.bybit.com"
+        self.base_endpoint = "https://api.bitget.com"
         self.endpoints = {
-            "balance": "/v2/private/wallet/balance",
-            "exchange_info": "/v2/public/symbols",
+            "balance": "/api/mix/v1/account/accounts",
+            "exchange_info": "/api/mix/v1/market/contracts",
             "ticker": "/v2/public/tickers",
             "funds_transfer": "/asset/v1/private/transfer",
         }
-        self.session = aiohttp.ClientSession(headers={"referer": "passivbotbybit"})
+        self.session = aiohttp.ClientSession()
 
     def init_market_type(self):
         if self.symbol.endswith("USDT"):
@@ -118,6 +119,10 @@ class BitgetBot(Bot):
         await self.init_order_book()
         await self.update_position()
 
+    async def get_exchange_info(self):
+        info = await self.public_get(self.endpoints["exchange_info"], params={"productType": "umcbl"})
+        return info
+
     async def init_order_book(self):
         ticker = await self.private_get(self.endpoints["ticker"], {"symbol": self.symbol})
         self.ob = [
@@ -145,29 +150,35 @@ class BitgetBot(Bot):
     async def public_get(self, url: str, params: dict = {}) -> dict:
         async with self.session.get(self.base_endpoint + url, params=params) as response:
             result = await response.text()
+            print(result)
         return json.loads(result)
 
     async def private_(
         self, type_: str, base_endpoint: str, url: str, params: dict = {}, json_: bool = False
     ) -> dict:
+
         timestamp = int(time() * 1000)
-        params.update({"api_key": self.key, "timestamp": timestamp})
-        for k in params:
-            if type(params[k]) == bool:
-                params[k] = "true" if params[k] else "false"
-            elif type(params[k]) == float:
-                params[k] = str(params[k])
-        params["sign"] = hmac.new(
-            self.secret.encode("utf-8"),
-            urlencode(sort_dict_keys(params)).encode("utf-8"),
-            hashlib.sha256,
-        ).hexdigest()
-        if json_:
-            async with getattr(self.session, type_)(base_endpoint + url, json=params) as response:
-                result = await response.text()
-        else:
-            async with getattr(self.session, type_)(base_endpoint + url, params=params) as response:
-                result = await response.text()
+        params = {
+            k: ("true" if v else "false") if type(v) == bool else str(v) for k, v in params.items()
+        }
+        url = url + "?" + urlencode(sort_dict_keys(params))
+        to_sign = str(timestamp) + type_.upper() + url
+        signature = base64.b64encode(
+            hmac.new(
+                self.secret.encode("utf-8"),
+                to_sign.encode("utf-8"),
+                digestmod="sha256",
+            ).digest()
+        ).decode('utf-8')
+        header = {
+            "Content-Type": "application/json",
+            "ACCESS-KEY": self.key,
+            "ACCESS-SIGN": signature,
+            "ACCESS-TIMESTAMP": str(timestamp),
+            "ACCESS-PASSPHRASE": self.passphrase,
+        }
+        async with getattr(self.session, type_)(base_endpoint + url, headers=header) as response:
+            result = await response.text()
         return json.loads(result)
 
     async def private_get(self, url: str, params: dict = {}, base_endpoint: str = None) -> dict:
