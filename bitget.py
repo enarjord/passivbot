@@ -25,37 +25,38 @@ def first_capitalized(s: str):
 class BitgetBot(Bot):
     def __init__(self, config: dict):
         self.exchange = "bitget"
-        self.min_notional = 5.0
+        self.min_notional = 5.0  # to remove
         super().__init__(config)
+        self.symbol = self.symbol + "_UMCBL"
         self.base_endpoint = "https://api.bitget.com"
         self.endpoints = {
-            "balance": "/api/mix/v1/account/accounts",
             "exchange_info": "/api/mix/v1/market/contracts",
-            "position": "/api/mix/v1/position/singlePosition",
-            "ticker": "/v2/public/tickers",
             "funds_transfer": "/asset/v1/private/transfer",
         }
-        self.quote = "USDT"  # to be determined dynamically
         self.session = aiohttp.ClientSession()
 
     def init_market_type(self):
-        if self.symbol.endswith("USDT"):
+        if self.symbol.endswith("USDT_UMCBL"):
             print("linear perpetual")
             self.market_type += "_linear_perpetual"
             self.inverse = self.config["inverse"] = False
-            self.endpoints = {
-                "position": "/private/linear/position/list",
-                "open_orders": "/private/linear/order/search",
-                "create_order": "/private/linear/order/create",
-                "cancel_order": "/private/linear/order/cancel",
-                "ticks": "/public/linear/recent-trading-records",
-                "fills": "/private/linear/trade/execution/list",
-                "ohlcvs": "/public/linear/kline",
-                "websocket_market": "wss://stream.bybit.com/realtime_public",
-                "websocket_user": "wss://stream.bybit.com/realtime_private",
-                "income": "/private/linear/trade/closed-pnl/list",
-                "created_at_key": "created_time",
-            }
+            self.endpoints.update(
+                {
+                    "position": "/api/mix/v1/position/singlePosition",
+                    "balance": "/api/mix/v1/account/accounts",
+                    "ticker": "/api/mix/v1/market/ticker",
+                    "open_orders": "/private/linear/order/search",
+                    "create_order": "/private/linear/order/create",
+                    "cancel_order": "/private/linear/order/cancel",
+                    "ticks": "/public/linear/recent-trading-records",
+                    "fills": "/private/linear/trade/execution/list",
+                    "ohlcvs": "/public/linear/kline",
+                    "websocket_market": "wss://stream.bybit.com/realtime_public",
+                    "websocket_user": "wss://stream.bybit.com/realtime_private",
+                    "income": "/private/linear/trade/closed-pnl/list",
+                    "created_at_key": "created_time",
+                }
+            )
 
         else:
             self.inverse = self.config["inverse"] = True
@@ -94,44 +95,52 @@ class BitgetBot(Bot):
                     "created_at_key": "created_at",
                 }
 
-        self.spot_base_endpoint = "https://api.bybit.com"
-        self.endpoints["spot_balance"] = "/spot/v1/account"
-        self.endpoints["balance"] = "/v2/private/wallet/balance"
-        self.endpoints["exchange_info"] = "/v2/public/symbols"
-        self.endpoints["ticker"] = "/v2/public/tickers"
-        self.endpoints["funds_transfer"] = "/asset/v1/private/transfer"
-
     async def _init(self):
-        info = await self.public_get(self.endpoints["exchange_info"])
-        for e in info["result"]:
-            if e["name"] == self.symbol:
+        info = await self.fetch_exchange_info()
+        print("debug")
+        for e in info["data"]:
+            if e["symbol"] == self.symbol:
                 break
         else:
             raise Exception(f"symbol missing {self.symbol}")
-        self.max_leverage = e["leverage_filter"]["max_leverage"]
-        self.coin = e["base_currency"]
-        self.quote = e["quote_currency"]
-        self.price_step = self.config["price_step"] = float(e["price_filter"]["tick_size"])
-        self.qty_step = self.config["qty_step"] = float(e["lot_size_filter"]["qty_step"])
-        self.min_qty = self.config["min_qty"] = float(e["lot_size_filter"]["min_trading_qty"])
-        self.min_cost = self.config["min_cost"] = 0.0
+        print(e)
+        self.coin = e["baseCoin"]
+        self.quote = e["quoteCoin"]
+        self.price_step = self.config["price_step"] = (10 ** (-int(e["pricePlace"]))) * int(
+            e["priceEndStep"]
+        )
+        self.qty_step = self.config["qty_step"] = 10 ** (-int(e["volumePlace"]))
+        self.min_qty = self.config["min_qty"] = float(e["minTradeNum"])
+        self.min_cost = self.config["min_cost"] = 5.0
         self.init_market_type()
         self.margin_coin = self.coin if self.inverse else self.quote
         await super()._init()
         await self.init_order_book()
         await self.update_position()
 
-    async def get_exchange_info(self):
+    async def fetch_exchange_info(self):
         info = await self.public_get(self.endpoints["exchange_info"], params={"productType": "umcbl"})
         return info
 
+    async def fetch_ticker(self, symbol=None):
+        self.endpoints["ticker"] = "/api/mix/v1/market/ticker"
+        ticker = await self.public_get(
+            self.endpoints["ticker"], params={"symbol": self.symbol if symbol is None else symbol}
+        )
+        return {
+            "symbol": ticker["data"]["symbol"],
+            "bid": float(ticker["data"]["bestBid"]),
+            "ask": float(ticker["data"]["bestAsk"]),
+            "last": float(ticker["data"]["last"]),
+        }
+
     async def init_order_book(self):
-        ticker = await self.private_get(self.endpoints["ticker"], {"symbol": self.symbol})
+        ticker = await self.fetch_ticker()
         self.ob = [
-            float(ticker["result"][0]["bid_price"]),
-            float(ticker["result"][0]["ask_price"]),
+            ticker["bid"],
+            ticker["ask"],
         ]
-        self.price = float(ticker["result"][0]["last_price"])
+        self.price = ticker["last"]
 
     async def fetch_open_orders(self) -> [dict]:
         fetched = await self.private_get(self.endpoints["open_orders"], {"symbol": self.symbol})
@@ -150,9 +159,9 @@ class BitgetBot(Bot):
         ]
 
     async def public_get(self, url: str, params: dict = {}) -> dict:
+        print(self.base_endpoint + url)
         async with self.session.get(self.base_endpoint + url, params=params) as response:
             result = await response.text()
-            print(result)
         return json.loads(result)
 
     async def private_(
@@ -227,7 +236,7 @@ class BitgetBot(Bot):
             "wallet_balance": 0.0,
         }
         fetched_pos = await self.private_get(
-            self.endpoints["position"], {"symbol": self.symbol + "_UMCBL", "marginCoin": "USDT"}
+            self.endpoints["position"], {"symbol": self.symbol, "marginCoin": "USDT"}
         )
         fetched_balance = await self.private_get(self.endpoints["balance"], {"productType": "umcbl"})
         for elm in fetched_pos["data"]:
