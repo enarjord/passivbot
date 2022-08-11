@@ -89,7 +89,7 @@ async def prepare_backtest_config(args) -> dict:
         config["spot"] = args.market_type == "spot"
     config["start_date"] = ts_to_date_utc(date_to_ts(config["start_date"]))[:10]
     config["end_date"] = ts_to_date_utc(date_to_ts(config["end_date"]))[:10]
-    config["exchange"], _, _ = load_exchange_key_secret_passphrase(config["user"])
+    config["exchange"] = load_exchange_key_secret_passphrase(config["user"])[0]
     config["session_name"] = (
         f"{config['start_date'].replace(' ', '').replace(':', '').replace('.', '')}_"
         f"{config['end_date'].replace(' ', '').replace(':', '').replace('.', '')}"
