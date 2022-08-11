@@ -31,9 +31,11 @@ class BitgetBot(Bot):
         self.endpoints = {
             "balance": "/api/mix/v1/account/accounts",
             "exchange_info": "/api/mix/v1/market/contracts",
+            "position": "/api/mix/v1/position/singlePosition",
             "ticker": "/v2/public/tickers",
             "funds_transfer": "/asset/v1/private/transfer",
         }
+        self.quote = "USDT"  # to be determined dynamically
         self.session = aiohttp.ClientSession()
 
     def init_market_type(self):
@@ -108,13 +110,13 @@ class BitgetBot(Bot):
             raise Exception(f"symbol missing {self.symbol}")
         self.max_leverage = e["leverage_filter"]["max_leverage"]
         self.coin = e["base_currency"]
-        self.quot = e["quote_currency"]
+        self.quote = e["quote_currency"]
         self.price_step = self.config["price_step"] = float(e["price_filter"]["tick_size"])
         self.qty_step = self.config["qty_step"] = float(e["lot_size_filter"]["qty_step"])
         self.min_qty = self.config["min_qty"] = float(e["lot_size_filter"]["min_trading_qty"])
         self.min_cost = self.config["min_cost"] = 0.0
         self.init_market_type()
-        self.margin_coin = self.coin if self.inverse else self.quot
+        self.margin_coin = self.coin if self.inverse else self.quote
         await super()._init()
         await self.init_order_book()
         await self.update_position()
@@ -169,7 +171,7 @@ class BitgetBot(Bot):
                 to_sign.encode("utf-8"),
                 digestmod="sha256",
             ).digest()
-        ).decode('utf-8')
+        ).decode("utf-8")
         header = {
             "Content-Type": "application/json",
             "ACCESS-KEY": self.key,
@@ -214,46 +216,38 @@ class BitgetBot(Bot):
         return float(now["time_now"]) * 1000
 
     async def fetch_position(self) -> dict:
-        position = {}
-        if "linear_perpetual" in self.market_type:
-            fetched, bal = await asyncio.gather(
-                self.private_get(self.endpoints["position"], {"symbol": self.symbol}),
-                self.private_get(self.endpoints["balance"], {"coin": self.quot}),
-            )
-            long_pos = [e for e in fetched["result"] if e["side"] == "Buy"][0]
-            short_pos = [e for e in fetched["result"] if e["side"] == "Sell"][0]
-            position["wallet_balance"] = float(bal["result"][self.quot]["wallet_balance"])
-        else:
-            fetched, bal = await asyncio.gather(
-                self.private_get(self.endpoints["position"], {"symbol": self.symbol}),
-                self.private_get(self.endpoints["balance"], {"coin": self.coin}),
-            )
-            position["wallet_balance"] = float(bal["result"][self.coin]["wallet_balance"])
-            if "inverse_perpetual" in self.market_type:
-                if fetched["result"]["side"] == "Buy":
-                    long_pos = fetched["result"]
-                    short_pos = {"size": 0.0, "entry_price": 0.0, "liq_price": 0.0}
-                else:
-                    long_pos = {"size": 0.0, "entry_price": 0.0, "liq_price": 0.0}
-                    short_pos = fetched["result"]
-            elif "inverse_futures" in self.market_type:
-                long_pos = [e["data"] for e in fetched["result"] if e["data"]["position_idx"] == 1][0]
-                short_pos = [e["data"] for e in fetched["result"] if e["data"]["position_idx"] == 2][
-                    0
-                ]
-            else:
-                raise Exception("unknown market type")
+        """
+        returns {"long": {"size": float, "price": float, "liquidation_price": float},
+                 "short": {...},
+                 "wallet_balance": float}
+        """
+        position = {
+            "long": {"size": 0.0, "price": 0.0, "liquidation_price": 0.0},
+            "short": {"size": 0.0, "price": 0.0, "liquidation_price": 0.0},
+            "wallet_balance": 0.0,
+        }
+        fetched_pos = await self.private_get(
+            self.endpoints["position"], {"symbol": self.symbol + "_UMCBL", "marginCoin": "USDT"}
+        )
+        fetched_balance = await self.private_get(self.endpoints["balance"], {"productType": "umcbl"})
+        for elm in fetched_pos["data"]:
+            if elm["holdSide"] == "long":
+                position["long"] = {
+                    "size": round_(float(elm["total"]), self.qty_step),
+                    "price": float(elm["averageOpenPrice"]),
+                    "liquidation_price": float(elm["liquidationPrice"]),
+                }
+            elif elm["holdSide"] == "short":
+                position["short"] = {
+                    "size": -abs(round_(float(elm["total"]), self.qty_step)),
+                    "price": float(elm["averageOpenPrice"]),
+                    "liquidation_price": float(elm["liquidationPrice"]),
+                }
+        for elm in fetched_balance["data"]:
+            if elm["marginCoin"] == self.quote:
+                position["wallet_balance"] = float(elm["available"])
+                break
 
-        position["long"] = {
-            "size": round_(float(long_pos["size"]), self.qty_step),
-            "price": float(long_pos["entry_price"]),
-            "liquidation_price": float(long_pos["liq_price"]),
-        }
-        position["short"] = {
-            "size": -round_(float(short_pos["size"]), self.qty_step),
-            "price": float(short_pos["entry_price"]),
-            "liquidation_price": float(short_pos["liq_price"]),
-        }
         return position
 
     async def execute_order(self, order: dict) -> dict:
