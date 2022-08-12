@@ -11,6 +11,7 @@ from uuid import uuid4
 import aiohttp
 import base64
 import numpy as np
+import pprint
 
 from njit_funcs import round_
 from passivbot import Bot
@@ -27,11 +28,15 @@ class BitgetBot(Bot):
         self.exchange = "bitget"
         self.min_notional = 5.0  # to remove
         super().__init__(config)
-        self.symbol = self.symbol + "_UMCBL"
+        self.symbol = self.symbol
         self.base_endpoint = "https://api.bitget.com"
         self.endpoints = {
             "exchange_info": "/api/mix/v1/market/contracts",
             "funds_transfer": "/asset/v1/private/transfer",
+        }
+        self.order_side_map = {
+            "buy": {"long": "open_long", "short": "close_short"},
+            "sell": {"long": "close_long", "short": "open_short"},
         }
         self.session = aiohttp.ClientSession()
 
@@ -45,8 +50,8 @@ class BitgetBot(Bot):
                     "position": "/api/mix/v1/position/singlePosition",
                     "balance": "/api/mix/v1/account/accounts",
                     "ticker": "/api/mix/v1/market/ticker",
-                    "open_orders": "/private/linear/order/search",
-                    "create_order": "/private/linear/order/create",
+                    "open_orders": "/api/mix/v1/order/current",
+                    "create_order": "/api/mix/v1/order/placeOrder",
                     "cancel_order": "/private/linear/order/cancel",
                     "ticks": "/public/linear/recent-trading-records",
                     "fills": "/private/linear/trade/execution/list",
@@ -57,8 +62,10 @@ class BitgetBot(Bot):
                     "created_at_key": "created_time",
                 }
             )
-
         else:
+            raise NotImplementedError("not yet implemented")
+            ### TODO
+            """
             self.inverse = self.config["inverse"] = True
             if self.symbol.endswith("USD"):
                 print("inverse perpetual")
@@ -94,6 +101,7 @@ class BitgetBot(Bot):
                     "income": "/futures/private/trade/closed-pnl/list",
                     "created_at_key": "created_at",
                 }
+            """
 
     async def _init(self):
         info = await self.fetch_exchange_info()
@@ -106,10 +114,10 @@ class BitgetBot(Bot):
         print(e)
         self.coin = e["baseCoin"]
         self.quote = e["quoteCoin"]
-        self.price_step = self.config["price_step"] = (10 ** (-int(e["pricePlace"]))) * int(
-            e["priceEndStep"]
+        self.price_step = self.config["price_step"] = round_(
+            (10 ** (-int(e["pricePlace"]))) * int(e["priceEndStep"]), 0.00000001
         )
-        self.qty_step = self.config["qty_step"] = 10 ** (-int(e["volumePlace"]))
+        self.qty_step = self.config["qty_step"] = round_(10 ** (-int(e["volumePlace"])), 0.00000001)
         self.min_qty = self.config["min_qty"] = float(e["minTradeNum"])
         self.min_cost = self.config["min_cost"] = 5.0
         self.init_market_type()
@@ -123,7 +131,6 @@ class BitgetBot(Bot):
         return info
 
     async def fetch_ticker(self, symbol=None):
-        self.endpoints["ticker"] = "/api/mix/v1/market/ticker"
         ticker = await self.public_get(
             self.endpoints["ticker"], params={"symbol": self.symbol if symbol is None else symbol}
         )
@@ -146,20 +153,19 @@ class BitgetBot(Bot):
         fetched = await self.private_get(self.endpoints["open_orders"], {"symbol": self.symbol})
         return [
             {
-                "order_id": elm["order_id"],
-                "custom_id": elm["order_link_id"],
+                "order_id": elm["orderId"],
+                "custom_id": elm["clientOid"],
                 "symbol": elm["symbol"],
                 "price": float(elm["price"]),
-                "qty": float(elm["qty"]),
-                "side": elm["side"].lower(),
-                "position_side": determine_pos_side(elm),
-                "timestamp": date_to_ts(elm[self.endpoints["created_at_key"]]),
+                "qty": float(elm["size"]),
+                "side": "buy" if elm["side"] in ["close_short", "open_long"] else "sell",
+                "position_side": elm["posSide"],
+                "timestamp": float(elm["cTime"]),
             }
-            for elm in fetched["result"]
+            for elm in fetched["data"]
         ]
 
     async def public_get(self, url: str, params: dict = {}) -> dict:
-        print(self.base_endpoint + url)
         async with self.session.get(self.base_endpoint + url, params=params) as response:
             result = await response.text()
         return json.loads(result)
@@ -172,8 +178,12 @@ class BitgetBot(Bot):
         params = {
             k: ("true" if v else "false") if type(v) == bool else str(v) for k, v in params.items()
         }
-        url = url + "?" + urlencode(sort_dict_keys(params))
-        to_sign = str(timestamp) + type_.upper() + url
+        if type_ == "get":
+            url = url + "?" + urlencode(sort_dict_keys(params))
+            to_sign = str(timestamp) + type_.upper() + url
+        elif type_ == "post":
+            to_sign = str(timestamp) + type_.upper() + url + json.dumps(params)
+        # print('debug sign', to_sign)
         signature = base64.b64encode(
             hmac.new(
                 self.secret.encode("utf-8"),
@@ -183,32 +193,41 @@ class BitgetBot(Bot):
         ).decode("utf-8")
         header = {
             "Content-Type": "application/json",
+            "locale": "en-US",
             "ACCESS-KEY": self.key,
             "ACCESS-SIGN": signature,
             "ACCESS-TIMESTAMP": str(timestamp),
             "ACCESS-PASSPHRASE": self.passphrase,
         }
-        async with getattr(self.session, type_)(base_endpoint + url, headers=header) as response:
-            result = await response.text()
+        # pprint.pprint(['debug', base_endpoint + url, header, params])
+        if type_ == "post":
+            async with getattr(self.session, type_)(
+                base_endpoint + url, headers=header, data=json.dumps(params)
+            ) as response:
+                result = await response.text()
+        elif type_ == "get":
+            async with getattr(self.session, type_)(base_endpoint + url, headers=header) as response:
+                result = await response.text()
         return json.loads(result)
 
     async def private_get(self, url: str, params: dict = {}, base_endpoint: str = None) -> dict:
         return await self.private_(
-            "get",
-            self.base_endpoint if base_endpoint is None else base_endpoint,
-            url,
-            params,
+            type_="get",
+            base_endpoint=self.base_endpoint if base_endpoint is None else base_endpoint,
+            url=url,
+            params=params,
         )
 
     async def private_post(self, url: str, params: dict = {}, base_endpoint: str = None) -> dict:
         return await self.private_(
-            "post",
-            self.base_endpoint if base_endpoint is None else base_endpoint,
-            url,
-            params,
+            type_="post",
+            base_endpoint=self.base_endpoint if base_endpoint is None else base_endpoint,
+            url=url,
+            params=params,
         )
 
     async def transfer_from_derivatives_to_spot(self, coin: str, amount: float):
+        raise NotImplementedError("not implemented")
         params = {
             "coin": coin,
             "amount": str(amount),
@@ -221,8 +240,8 @@ class BitgetBot(Bot):
         )
 
     async def get_server_time(self):
-        now = await self.public_get("/v2/public/time")
-        return float(now["time_now"]) * 1000
+        now = await self.public_get("/api/spot/v1/public/time")
+        return float(now["data"])
 
     async def fetch_position(self) -> dict:
         """
@@ -264,38 +283,32 @@ class BitgetBot(Bot):
         try:
             params = {
                 "symbol": self.symbol,
-                "side": first_capitalized(order["side"]),
-                "order_type": first_capitalized(order["type"]),
-                "qty": float(order["qty"])
-                if "linear_perpetual" in self.market_type
-                else int(order["qty"]),
-                "close_on_trigger": False,
+                "marginCoin": self.quote,
+                "size": str(order["qty"]),
+                "side": self.order_side_map[order["side"]][order["position_side"]],
+                "orderType": order["type"],
+                "presetTakeProfitPrice": "",
+                "presetStopLossPrice": "",
             }
-            if self.hedge_mode:
-                params["position_idx"] = 1 if order["position_side"] == "long" else 2
-                if "linear_perpetual" in self.market_type:
-                    params["reduce_only"] = "close" in order["custom_id"]
-            else:
-                params["position_idx"] = 0
-                params["reduce_only"] = "close" in order["custom_id"]
-            if params["order_type"] == "Limit":
-                params["time_in_force"] = "PostOnly"
+            if params["orderType"] == "limit":
+                params["timeInForceValue"] = "post_only"
                 params["price"] = str(order["price"])
             else:
-                params["time_in_force"] = "GoodTillCancel"
-            params[
-                "order_link_id"
-            ] = f"{order['custom_id']}_{str(int(time() * 1000))[8:]}_{int(np.random.random() * 1000)}"
+                params["timeInForceValue"] = "normal"
+            if "custom_id" in order:
+                params[
+                    "clientOid"
+                ] = f"{order['custom_id']}_{str(int(time() * 1000))[8:]}_{int(np.random.random() * 1000)}"
             o = await self.private_post(self.endpoints["create_order"], params)
-            if o["result"]:
+            if o["data"]:
                 return {
-                    "symbol": o["result"]["symbol"],
-                    "side": o["result"]["side"].lower(),
-                    "order_id": o["result"]["order_id"],
+                    "symbol": order["symbol"],
+                    "side": order["side"],
+                    "order_id": o["data"]["orderId"],
                     "position_side": order["position_side"],
-                    "type": o["result"]["order_type"].lower(),
-                    "qty": o["result"]["qty"],
-                    "price": o["result"]["price"],
+                    "type": order["type"],
+                    "qty": order["qty"],
+                    "price": order["price"],
                 }
             else:
                 return o, order
