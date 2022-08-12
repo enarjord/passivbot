@@ -10,6 +10,7 @@ from time import time
 import numpy as np
 import pandas as pd
 
+import interactive_plot
 from downloader import Downloader, load_hlc_cache
 from njit_funcs import backtest_static_grid, round_
 from njit_funcs_recursive_grid import backtest_recursive_grid
@@ -81,6 +82,10 @@ def plot_wrap(config, data):
     df = pd.DataFrame({**{"timestamp": data[:, 0], "qty": data[:, 1], "price": data[:, 2]}, **{}})
     print("dumping plots...")
     dump_plots(config, longs, shorts, sdf, df, n_parts=config["n_parts"])
+    print("dumping interactive plot...")
+    sts = time()
+    interactive_plot.dump_interactive_plot(config, data, longs, shorts)
+    print(f"{time() - sts:.2f} seconds spent on dumping interactive plot")
 
 
 async def main():

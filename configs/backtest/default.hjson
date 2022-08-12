@@ -21,4 +21,8 @@
 
   # backtests path
   base_dir: backtests
+
+  # interactive plot configs:
+  plot_theme: dark
+  plot_candles_interval: 1m
 }
