@@ -38,6 +38,23 @@ class BitgetBot(Bot):
             "buy": {"long": "open_long", "short": "close_short"},
             "sell": {"long": "close_long", "short": "open_short"},
         }
+        self.fill_side_map = {
+            "close_long": "sell",
+            "open_long": "buy",
+            "close_short": "buy",
+            "open_short": "sell",
+        }
+        self.interval_map = {
+            "1m": "60",
+            "5m": "300",
+            "15m": "900",
+            "30m": "1800",
+            "1h": "3600",
+            "4h": "14400",
+            "12h": "43200",
+            "1d": "86400",
+            "1w": "604800",
+        }
         self.session = aiohttp.ClientSession()
 
     def init_market_type(self):
@@ -52,14 +69,15 @@ class BitgetBot(Bot):
                     "ticker": "/api/mix/v1/market/ticker",
                     "open_orders": "/api/mix/v1/order/current",
                     "create_order": "/api/mix/v1/order/placeOrder",
-                    "cancel_order": "/private/linear/order/cancel",
-                    "ticks": "/public/linear/recent-trading-records",
-                    "fills": "/private/linear/trade/execution/list",
-                    "ohlcvs": "/public/linear/kline",
+                    "cancel_order": "/api/mix/v1/order/cancel-order",
+                    "ticks": "/api/mix/v1/market/fills",
+                    "fills": "/api/mix/v1/order/fills",
+                    "ohlcvs": "/api/mix/v1/market/candles",
                     "websocket_market": "wss://stream.bybit.com/realtime_public",
                     "websocket_user": "wss://stream.bybit.com/realtime_private",
                     "income": "/private/linear/trade/closed-pnl/list",
-                    "created_at_key": "created_time",
+                    "set_margin_mode": "/api/mix/v1/account/setMarginMode",
+                    "set_leverage": "/api/mix/v1/account/setLeverage",
                 }
             )
         else:
@@ -105,18 +123,17 @@ class BitgetBot(Bot):
 
     async def _init(self):
         info = await self.fetch_exchange_info()
-        print("debug")
         for e in info["data"]:
             if e["symbol"] == self.symbol:
                 break
         else:
             raise Exception(f"symbol missing {self.symbol}")
-        print(e)
         self.coin = e["baseCoin"]
         self.quote = e["quoteCoin"]
         self.price_step = self.config["price_step"] = round_(
             (10 ** (-int(e["pricePlace"]))) * int(e["priceEndStep"]), 0.00000001
         )
+        print(e)
         self.qty_step = self.config["qty_step"] = round_(10 ** (-int(e["volumePlace"])), 0.00000001)
         self.min_qty = self.config["min_qty"] = float(e["minTradeNum"])
         self.min_cost = self.config["min_cost"] = 5.0
@@ -183,7 +200,6 @@ class BitgetBot(Bot):
             to_sign = str(timestamp) + type_.upper() + url
         elif type_ == "post":
             to_sign = str(timestamp) + type_.upper() + url + json.dumps(params)
-        # print('debug sign', to_sign)
         signature = base64.b64encode(
             hmac.new(
                 self.secret.encode("utf-8"),
@@ -199,7 +215,6 @@ class BitgetBot(Bot):
             "ACCESS-TIMESTAMP": str(timestamp),
             "ACCESS-PASSPHRASE": self.passphrase,
         }
-        # pprint.pprint(['debug', base_endpoint + url, header, params])
         if type_ == "post":
             async with getattr(self.session, type_)(
                 base_endpoint + url, headers=header, data=json.dumps(params)
@@ -323,12 +338,12 @@ class BitgetBot(Bot):
         try:
             cancellation = await self.private_post(
                 self.endpoints["cancel_order"],
-                {"symbol": self.symbol, "order_id": order["order_id"]},
+                {"symbol": self.symbol, "marginCoin": self.quote, "orderId": order["order_id"]},
             )
             return {
                 "symbol": self.symbol,
                 "side": order["side"],
-                "order_id": cancellation["result"]["order_id"],
+                "order_id": cancellation["data"]["orderId"],
                 "position_side": order["position_side"],
                 "qty": order["qty"],
                 "price": order["price"],
@@ -341,6 +356,7 @@ class BitgetBot(Bot):
             return {}
 
     async def fetch_account(self):
+        raise NotImplementedError("not implemented")
         try:
             resp = await self.private_get(
                 self.endpoints["spot_balance"], base_endpoint=self.spot_base_endpoint
@@ -351,9 +367,7 @@ class BitgetBot(Bot):
             return {"balances": []}
 
     async def fetch_ticks(self, from_id: int = None, do_print: bool = True):
-        params = {"symbol": self.symbol, "limit": 1000}
-        if from_id is not None:
-            params["from"] = max(0, from_id)
+        params = {"symbol": self.symbol, "limit": 100}
         try:
             ticks = await self.public_get(self.endpoints["ticks"], params)
         except Exception as e:
@@ -362,13 +376,13 @@ class BitgetBot(Bot):
         try:
             trades = [
                 {
-                    "trade_id": int(tick["id"]),
+                    "trade_id": int(tick["tradeId"]),
                     "price": float(tick["price"]),
-                    "qty": float(tick["qty"]),
-                    "timestamp": date_to_ts(tick["time"]),
-                    "is_buyer_maker": tick["side"] == "Sell",
+                    "qty": float(tick["size"]),
+                    "timestamp": float(tick["timestamp"]),
+                    "is_buyer_maker": tick["side"] == "sell",
                 }
-                for tick in ticks["result"]
+                for tick in ticks["data"]
             ]
             if do_print:
                 print_(
@@ -385,47 +399,32 @@ class BitgetBot(Bot):
                 print_(["fetched no new trades", self.symbol])
         return trades
 
-    async def fetch_ohlcvs(
-        self, symbol: str = None, start_time: int = None, interval="1m", limit=200
-    ):
-        # m -> minutes; h -> hours; d -> days; w -> weeks; M -> months
-        interval_map = {
-            "1m": 1,
-            "3m": 3,
-            "5m": 5,
-            "15m": 15,
-            "30m": 30,
-            "1h": 60,
-            "2h": 120,
-            "4h": 240,
-            "6h": 360,
-            "12h": 720,
-            "1d": "D",
-            "1w": "W",
-            "1M": "M",
-        }
-        assert interval in interval_map
+    async def fetch_ohlcvs(self, symbol: str = None, start_time: int = None, interval="1m"):
+        # m -> minutes, h -> hours, d -> days, w -> weeks
+        assert interval in self.interval_map, f"unsupported interval {interval}"
         params = {
             "symbol": self.symbol if symbol is None else symbol,
-            "interval": interval_map[interval],
-            "limit": limit,
+            "granularity": self.interval_map[interval],
         }
+        limit = 100
+        seconds = float(self.interval_map[interval])
         if start_time is None:
-            server_time = await self.public_get("/v2/public/time")
-            if type(interval_map[interval]) == str:
-                minutes = {"D": 1, "W": 7, "M": 30}[interval_map[interval]] * 60 * 24
-            else:
-                minutes = interval_map[interval]
-            params["from"] = int(round(float(server_time["time_now"]))) - 60 * minutes * limit
+            server_time = await self.get_server_time()
+            params["startTime"] = int(round(float(server_time)) - 1000 * seconds * limit)
         else:
-            params["from"] = int(start_time / 1000)
+            params["startTime"] = int(round(start_time))
+        params["endTime"] = int(round(params["startTime"] + 1000 * seconds * limit))
         fetched = await self.public_get(self.endpoints["ohlcvs"], params)
         return [
             {
-                **{"timestamp": e["open_time"] * 1000},
-                **{k: float(e[k]) for k in ["open", "high", "low", "close", "volume"]},
+                "timestamp": float(e[0]),
+                "open": float(e[1]),
+                "high": float(e[2]),
+                "low": float(e[3]),
+                "close": float(e[4]),
+                "volume": float(e[5]),
             }
-            for e in fetched["result"]
+            for e in fetched
         ]
 
     async def get_all_income(
@@ -435,6 +434,7 @@ class BitgetBot(Bot):
         income_type: str = "Trade",
         end_time: int = None,
     ):
+        raise NotImplementedError("not implemented")
         if symbol is None:
             all_income = []
             all_positions = await self.private_get(self.endpoints["position"], params={"symbol": ""})
@@ -484,6 +484,7 @@ class BitgetBot(Bot):
         end_time: int = None,
         page=None,
     ):
+        raise NotImplementedError("not implemented")
         params = {"limit": limit, "symbol": self.symbol if symbol is None else symbol}
         if start_time is not None:
             params["start_time"] = int(start_time / 1000)
@@ -522,101 +523,63 @@ class BitgetBot(Bot):
 
     async def fetch_fills(
         self,
-        limit: int = 200,
+        symbol=None,
+        limit: int = 100,
         from_id: int = None,
         start_time: int = None,
         end_time: int = None,
     ):
-        return []
-        ffills, fpnls = await asyncio.gather(
-            self.private_get(self.endpoints["fills"], {"symbol": self.symbol, "limit": limit}),
-            self.private_get(self.endpoints["pnls"], {"symbol": self.symbol, "limit": 50}),
-        )
-        return ffills, fpnls
+        params = {"symbol": self.symbol if symbol is None else symbol}
+        if from_id is not None:
+            params["lastEndId"] = max(0, from_id - 1)
+        if start_time is None:
+            server_time = await self.get_server_time()
+            params["startTime"] = int(round(server_time - 1000 * 60 * 60 * 24))
+        else:
+            params["startTime"] = int(round(start_time))
+
+        # always fetch as many fills as possible
+        params["endTime"] = int(round(time() + 60 * 60 * 24) * 1000)
         try:
-            fills = []
-            for x in fetched["result"]["data"][::-1]:
-                qty, price = float(x["order_qty"]), float(x["price"])
-                if not qty or not price:
-                    continue
-                fill = {
+            fetched = await self.private_get(self.endpoints["fills"], params)
+            fills = [
+                {
                     "symbol": x["symbol"],
-                    "id": str(x["exec_id"]),
-                    "order_id": str(x["order_id"]),
-                    "side": x["side"].lower(),
-                    "price": price,
-                    "qty": qty,
-                    "realized_pnl": 0.0,
-                    "cost": (cost := qty / price if self.inverse else qty * price),
-                    "fee_paid": float(x["exec_fee"]),
-                    "fee_token": self.margin_coin,
-                    "timestamp": int(x["trade_time_ms"]),
-                    "position_side": determine_pos_side(x),
-                    "is_maker": x["fee_rate"] < 0.0,
+                    "id": int(x["tradeId"]),
+                    "order_id": int(x["orderId"]),
+                    "side": self.fill_side_map[x["side"]],
+                    "price": float(x["price"]),
+                    "qty": float(x["sizeQty"]),
+                    "realized_pnl": float(x["profit"]),
+                    "cost": float(x["fillAmount"]),
+                    "fee_paid": float(x["fee"]),
+                    "fee_token": self.quote,
+                    "timestamp": int(x["cTime"]),
+                    "position_side": "long" if "long" in x["side"] else "short",
+                    "is_maker": "unknown",
                 }
-                fills.append(fill)
-            return fills
+                for x in fetched["data"]
+            ]
         except Exception as e:
             print("error fetching fills", e)
+            traceback.print_exc()
             return []
-        print("ntufnt")
-        return fetched
-        print("fetch_fills not implemented for Bybit")
-        return []
+        return fills
 
     async def init_exchange_config(self):
         try:
-            # set cross mode
-            if "inverse_futures" in self.market_type:
-                res = await asyncio.gather(
-                    self.private_post(
-                        "/futures/private/position/leverage/save",
-                        {
-                            "symbol": self.symbol,
-                            "position_idx": 1,
-                            "buy_leverage": 0,
-                            "sell_leverage": 0,
-                        },
-                    ),
-                    self.private_post(
-                        "/futures/private/position/leverage/save",
-                        {
-                            "symbol": self.symbol,
-                            "position_idx": 2,
-                            "buy_leverage": 0,
-                            "sell_leverage": 0,
-                        },
-                    ),
-                )
-                print(res)
-                res = await self.private_post(
-                    "/futures/private/position/switch-mode",
-                    {"symbol": self.symbol, "mode": 3},
-                )
-                print(res)
-            elif "linear_perpetual" in self.market_type:
-                res = await self.private_post(
-                    "/private/linear/position/switch-isolated",
-                    {
-                        "symbol": self.symbol,
-                        "is_isolated": False,
-                        "buy_leverage": 7,
-                        "sell_leverage": 7,
-                    },
-                )
-                print(res)
-                res = await self.private_post(
-                    "/private/linear/position/set-leverage",
-                    {"symbol": self.symbol, "buy_leverage": 7, "sell_leverage": 7},
-                )
-                print(res)
-            elif "inverse_perpetual" in self.market_type:
-                res = await self.private_post(
-                    "/v2/private/position/leverage/save",
-                    {"symbol": self.symbol, "leverage": 0},
-                )
-
-                print(res)
+            # set margin mode
+            res = await self.private_post(
+                self.endpoints["set_margin_mode"],
+                params={"symbol": self.symbol, "marginCoin": self.quote, "marginMode": "crossed"},
+            )
+            print(res)
+            # set leverage
+            res = await self.private_post(
+                self.endpoints["set_leverage"],
+                params={"symbol": self.symbol, "marginCoin": self.quote, "leverage": 7},
+            )
+            print(res)
         except Exception as e:
             print(e)
 
