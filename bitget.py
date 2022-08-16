@@ -73,8 +73,8 @@ class BitgetBot(Bot):
                     "ticks": "/api/mix/v1/market/fills",
                     "fills": "/api/mix/v1/order/fills",
                     "ohlcvs": "/api/mix/v1/market/candles",
-                    "websocket_market": "wss://stream.bybit.com/realtime_public",
-                    "websocket_user": "wss://stream.bybit.com/realtime_private",
+                    "websocket_market": "wss://ws.bitget.com/mix/v1/stream",
+                    "websocket_user": "wss://ws.bitget.com/mix/v1/stream",
                     "income": "/private/linear/trade/closed-pnl/list",
                     "set_margin_mode": "/api/mix/v1/account/setMarginMode",
                     "set_leverage": "/api/mix/v1/account/setLeverage",
@@ -584,15 +584,17 @@ class BitgetBot(Bot):
             print(e)
 
     def standardize_market_stream_event(self, data: dict) -> [dict]:
+        if data["action"] != 'update':
+            return []
         ticks = []
         for e in data["data"]:
             try:
                 ticks.append(
                     {
-                        "timestamp": int(e["trade_time_ms"]),
-                        "price": float(e["price"]),
-                        "qty": float(e["size"]),
-                        "is_buyer_maker": e["side"] == "Sell",
+                        "timestamp": int(e[0]),
+                        "price": float(e[1]),
+                        "qty": float(e[2]),
+                        "is_buyer_maker": e[3] == "sell",
                     }
                 )
             except Exception as ex:
@@ -609,7 +611,20 @@ class BitgetBot(Bot):
                 print_(["error sending heartbeat", e])
 
     async def subscribe_to_market_stream(self, ws):
-        await ws.send(json.dumps({"op": "subscribe", "args": ["trade." + self.symbol]}))
+        await ws.send(
+            json.dumps(
+                {
+                    "op": "subscribe",
+                    "args": [
+                        {
+                            "instType": "mc",
+                            "channel": "trade",
+                            "instId": self.symbol.replace("_UMCBL", ""),
+                        }
+                    ],
+                }
+            )
+        )
 
     async def subscribe_to_user_stream(self, ws):
         expires = int((time() + 1) * 1000)
