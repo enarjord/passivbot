@@ -45,12 +45,12 @@ def backtest(config: dict, data: np.ndarray, do_print=False) -> (list, bool):
         )
     elif passivbot_mode == "neat_grid":
         return backtest_neat_grid(
-        data,
-        config["starting_balance"],
-        config["latency_simulation_ms"],
-        config["maker_fee"],
-        **xk,
-    )
+            data,
+            config["starting_balance"],
+            config["latency_simulation_ms"],
+            config["maker_fee"],
+            **xk,
+        )
     return backtest_static_grid(
         data,
         config["starting_balance"],
@@ -81,6 +81,13 @@ def plot_wrap(config, data):
     df = pd.DataFrame({**{"timestamp": data[:, 0], "qty": data[:, 1], "price": data[:, 2]}, **{}})
     print("dumping plots...")
     dump_plots(config, longs, shorts, sdf, df, n_parts=config["n_parts"])
+    if config["enable_interactive_plot"]:
+        import interactive_plot
+
+        print("dumping interactive plot...")
+        sts = time()
+        interactive_plot.dump_interactive_plot(config, data, longs, shorts)
+        print(f"{time() - sts:.2f} seconds spent on dumping interactive plot")
 
 
 async def main():
