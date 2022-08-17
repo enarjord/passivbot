@@ -24,6 +24,6 @@
 
   # interactive plot configs:
   enable_interactive_plot: true
-  plot_theme: dark
+  plot_theme: light
   plot_candles_interval: 1m
 }
