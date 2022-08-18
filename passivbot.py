@@ -126,6 +126,8 @@ class Bot:
             config["assigned_balance"] = None
         if "cross_wallet_pct" not in config:
             config["cross_wallet_pct"] = 1.0
+        if "price_distance_threshold" not in config:
+            config["price_distance_threshold"] = 0.5
         self.passivbot_mode = config["passivbot_mode"] = determine_passivbot_mode(config)
         if config["cross_wallet_pct"] > 1.0 or config["cross_wallet_pct"] <= 0.0:
             logging.warning(
@@ -760,9 +762,10 @@ class Bot:
 
             to_cancel = sorted(to_cancel, key=lambda x: calc_diff(x["price"], self.price))
             to_create = sorted(to_create, key=lambda x: calc_diff(x["price"], self.price))
+
             """
-            logging.info(f'to_cancel {to_cancel.values()}')
-            logging.info(f'to create {to_create.values()}')
+            logging.info(f"to_cancel {to_cancel}")
+            logging.info(f"to create {to_create}")
             return
             """
 
@@ -980,7 +983,7 @@ class Bot:
             self.ws = ws
             await self.subscribe_to_user_stream(ws)
             async for msg in ws:
-                if msg is None:
+                if msg is None or msg == "pong":
                     continue
                 try:
                     if self.stop_websocket:
@@ -1247,6 +1250,11 @@ async def main() -> None:
         from procedures import create_bybit_bot
 
         bot = await create_bybit_bot(config)
+    elif account["exchange"] == "bitget":
+        from procedures import create_bitget_bot
+
+        bot = await create_bitget_bot(config)
+
     else:
         raise Exception("unknown exchange", account["exchange"])
 
