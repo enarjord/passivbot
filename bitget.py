@@ -317,7 +317,7 @@ class BitgetBot(Bot):
             o = await self.private_post(self.endpoints["create_order"], params)
             if o["data"]:
                 return {
-                    "symbol": order["symbol"],
+                    "symbol": self.symbol,
                     "side": order["side"],
                     "order_id": o["data"]["orderId"],
                     "position_side": order["position_side"],
@@ -584,7 +584,7 @@ class BitgetBot(Bot):
             print(e)
 
     def standardize_market_stream_event(self, data: dict) -> [dict]:
-        if data["action"] != 'update':
+        if "action" not in data or data["action"] != "update":
             return []
         ticks = []
         for e in data["data"]:
@@ -627,21 +627,50 @@ class BitgetBot(Bot):
         )
 
     async def subscribe_to_user_stream(self, ws):
-        expires = int((time() + 1) * 1000)
-        signature = str(
+        timestamp = int(time())
+        signature = base64.b64encode(
             hmac.new(
-                bytes(self.secret, "utf-8"),
-                bytes(f"GET/realtime{expires}", "utf-8"),
+                self.secret.encode("utf-8"),
+                f"{timestamp}GET/user/verify".encode("utf-8"),
                 digestmod="sha256",
-            ).hexdigest()
+            ).digest()
+        ).decode("utf-8")
+        res = await ws.send(
+            json.dumps(
+                {
+                    "op": "login",
+                    "args": [
+                        {
+                            "apiKey": self.key,
+                            "passphrase": self.passphrase,
+                            "timestamp": timestamp,
+                            "sign": signature,
+                        }
+                    ],
+                }
+            )
         )
-        await ws.send(json.dumps({"op": "auth", "args": [self.key, expires, signature]}))
-        await asyncio.sleep(1)
-        await ws.send(
+        res = await ws.send(
             json.dumps(
                 {
                     "op": "subscribe",
-                    "args": ["position", "execution", "wallet", "order"],
+                    "args": [{"instType": "UMCBL", "channel": "account", "instId": "default"}],
+                }
+            )
+        )
+        res = await ws.send(
+            json.dumps(
+                {
+                    "op": "subscribe",
+                    "args": [{"instType": "UMCBL", "channel": "positions", "instId": "default"}],
+                }
+            )
+        )
+        res = await ws.send(
+            json.dumps(
+                {
+                    "op": "subscribe",
+                    "args": [{"channel": "orders", "instType": "UMCBL", "instId": "default"}],
                 }
             )
         )
@@ -652,112 +681,45 @@ class BitgetBot(Bot):
     def standardize_user_stream_event(
         self, event: Union[List[Dict], Dict]
     ) -> Union[List[Dict], Dict]:
-        events = []
-        if "topic" in event:
-            if event["topic"] == "order":
-                for elm in event["data"]:
-                    if elm["symbol"] == self.symbol:
-                        if elm["order_status"] == "Created":
-                            pass
-                        elif elm["order_status"] == "Rejected":
-                            pass
-                        elif elm["order_status"] == "New":
-                            new_open_order = {
-                                "order_id": elm["order_id"],
-                                "symbol": elm["symbol"],
-                                "price": float(elm["price"]),
-                                "qty": float(elm["qty"]),
-                                "type": elm["order_type"].lower(),
-                                "side": (side := elm["side"].lower()),
-                                "timestamp": date_to_ts(
-                                    elm["timestamp" if self.inverse else "update_time"]
-                                ),
-                            }
-                            if "inverse_perpetual" in self.market_type:
-                                if self.position["long"]["size"] == 0.0:
-                                    if self.position["short"]["size"] == 0.0:
-                                        new_open_order["position_side"] = (
-                                            "long" if new_open_order["side"] == "buy" else "short"
-                                        )
-                                    else:
-                                        new_open_order["position_side"] = "short"
-                                else:
-                                    new_open_order["position_side"] = "long"
-                            elif "inverse_futures" in self.market_type:
-                                new_open_order["position_side"] = determine_pos_side(elm)
-                            else:
-                                new_open_order["position_side"] = (
-                                    "long"
-                                    if (
-                                        (
-                                            new_open_order["side"] == "buy"
-                                            and elm["create_type"] == "CreateByUser"
-                                        )
-                                        or (
-                                            new_open_order["side"] == "sell"
-                                            and elm["create_type"] == "CreateByClosing"
-                                        )
-                                    )
-                                    else "short"
-                                )
-                            events.append({"new_open_order": new_open_order})
-                        elif elm["order_status"] == "PartiallyFilled":
-                            events.append(
-                                {
-                                    "deleted_order_id": elm["order_id"],
-                                    "partially_filled": True,
-                                }
-                            )
-                        elif elm["order_status"] == "Filled":
-                            events.append({"deleted_order_id": elm["order_id"], "filled": True})
-                        elif elm["order_status"] == "Cancelled":
-                            events.append({"deleted_order_id": elm["order_id"]})
-                        elif elm["order_status"] == "PendingCancel":
-                            pass
-                    else:
-                        events.append(
-                            {
-                                "other_symbol": elm["symbol"],
-                                "other_type": event["topic"],
-                            }
-                        )
-            elif event["topic"] == "execution":
-                for elm in event["data"]:
-                    if elm["symbol"] == self.symbol:
-                        if elm["exec_type"] == "Trade":
-                            # already handled by "order"
-                            pass
-                    else:
-                        events.append(
-                            {
-                                "other_symbol": elm["symbol"],
-                                "other_type": event["topic"],
-                            }
-                        )
-            elif event["topic"] == "position":
-                for elm in event["data"]:
-                    if elm["symbol"] == self.symbol:
-                        standardized = {}
-                        if elm["side"] == "Buy":
-                            standardized["psize_long"] = round_(float(elm["size"]), self.qty_step)
-                            standardized["pprice_long"] = float(elm["entry_price"])
-                        elif elm["side"] == "Sell":
-                            standardized["psize_short"] = -round_(
-                                abs(float(elm["size"])), self.qty_step
-                            )
-                            standardized["pprice_short"] = float(elm["entry_price"])
 
-                        events.append(standardized)
-                        if self.inverse:
-                            events.append({"wallet_balance": float(elm["wallet_balance"])})
-                    else:
-                        events.append(
-                            {
-                                "other_symbol": elm["symbol"],
-                                "other_type": event["topic"],
-                            }
-                        )
-            elif not self.inverse and event["topic"] == "wallet":
+        events = []
+        if "arg" in event and "data" in event and "channel" in event["arg"]:
+            if event["arg"]["channel"] == "orders":
                 for elm in event["data"]:
-                    events.append({"wallet_balance": float(elm["wallet_balance"])})
+                    if elm["instId"] == self.symbol and "status" in elm:
+                        standardized = {}
+                        if elm["status"] == "cancelled":
+                            standardized["deleted_order_id"] = elm["ordId"]
+                        elif elm["status"] == "new":
+                            standardized["new_open_order"] = {
+                                "order_id": elm["ordId"],
+                                "symbol": elm["instId"],
+                                "price": float(elm["px"]),
+                                "qty": float(elm["sz"]),
+                                "type": elm["ordType"],
+                                "side": elm["side"],
+                                "position_side": elm["posSide"],
+                                "timestamp": elm["uTime"],
+                            }
+                        elif elm["status"] == "partial-fill":
+                            standardized["deleted_order_id"] = elm["ordId"]
+                            standardized["partially_filled"] = True
+                        elif elm["status"] == "full-fill":
+                            standardized["deleted_order_id"] = elm["ordId"]
+                            standardized["filled"] = True
+                        events.append(standardized)
+            if event["arg"]["channel"] == "positions":
+                for elm in event["data"]:
+                    if elm["instId"] == self.symbol and "averageOpenPrice" in elm:
+                        standardized = {
+                            f"psize_{elm['holdSide']}": abs(float(elm["total"]))
+                            * (-1 if elm["holdSide"] == "short" else 1),
+                            f"pprice_{elm['holdSide']}": float(elm["averageOpenPrice"]),
+                        }
+                        events.append(standardized)
+
+            if event["arg"]["channel"] == "account":
+                for elm in event["data"]:
+                    if elm["marginCoin"] == self.quote:
+                        events.append({"wallet_balance": float(elm["available"])})
         return events
