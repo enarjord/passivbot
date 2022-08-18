@@ -264,6 +264,14 @@ async def create_bybit_bot(config: dict):
     return bot
 
 
+async def create_bitget_bot(config: dict):
+    from bitget import BitgetBot
+
+    bot = BitgetBot(config)
+    await bot._init()
+    return bot
+
+
 def add_argparse_args(parser):
     parser.add_argument("--nojit", help="disable numba", action="store_true")
     parser.add_argument(
