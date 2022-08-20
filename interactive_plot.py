@@ -69,7 +69,7 @@ def dump_interactive_plot(config: collections.OrderedDict,
         theme = config.get("plot_theme", pyecharts_globals.ThemeType.INFOGRAPHIC)
     
     # Creating graph
-    candlesticks = create_graphs(data, candles_interval)
+    candlesticks = create_graphs(data, candles_interval, config["ohlcv"])
     long_entries, long_profits, long_losses = create_positions(longs, True)
     short_entries, short_profits, short_losses = create_positions(shorts, False)
     scatters = [long_entries, long_profits, long_losses, short_entries, short_profits, short_losses]
@@ -95,7 +95,7 @@ def dump_interactive_plot(config: collections.OrderedDict,
     grid_chart.render(config["plots_dirpath"] + "interactive_plot.html")
 
 
-def create_graphs(data, candles_interval):
+def create_graphs(data, candles_interval, is_ohlcv=True):
     # allocating candles data
     candles_date = np.empty((len(data),), dtype=datetime.datetime)
     candles_data = np.empty((len(data),), dtype=object)
@@ -103,7 +103,22 @@ def create_graphs(data, candles_interval):
     # Setting first values
     current_date = CustomDatetime.from_timestamp(data[0][0]).get_minute_rounded()
     candles_date[0] = current_date
-    candles_data[0] = [data[0][1], data[0][3], data[0][2], data[0][1]]
+    if is_ohlcv:  # hlc format
+        if len(data[0]) < 4:
+            raise IOError("Backtest ohlcv data format seems to be invalid.")
+        
+        first_open = data[0][3]  # We set the first open to the first close
+                                 # because the actual open is not given by the data
+        first_high = data[0][1]
+        first_low = data[0][2]
+        first_close = data[0][3]
+    elif len(data[0]) >= 3:  # ticks format
+        # We only have 1 price per tick
+        first_open = first_high = first_low = first_close = data[0][2]
+    else:
+        raise IOError("Backtest data format seems to be invalid.")
+    # The graph expects the data to be in open,close,low,high format
+    candles_data[0] = [first_open, first_close, first_low, first_high]
     
     # Creating candles
     next_date = current_date + candles_interval
@@ -112,6 +127,13 @@ def create_graphs(data, candles_interval):
     for data_row in data:
         current_date = CustomDatetime.from_timestamp(data_row[0])
         
+        if is_ohlcv:
+            high = data_row[1]
+            low = data_row[2]
+            close = data_row[3]
+        else:  # ticks format
+            high = low = close = data_row[2]
+        
         if current_date >= next_date:
             # New candle
             current_date = current_date.get_minute_rounded()
@@ -119,12 +141,12 @@ def create_graphs(data, candles_interval):
             
             candles_index += 1
             candles_date[candles_index] = current_date
-            candles_data[candles_index] = [candles_data[candles_index - 1][1], data_row[3], data_row[2], data_row[1]]
+            candles_data[candles_index] = [candles_data[candles_index - 1][1], close, low, high]
         
         # Update current candle
-        candles_data[candles_index][1] = data_row[3]
-        candles_data[candles_index][2] = min(candles_data[candles_index][2], data_row[2])
-        candles_data[candles_index][3] = max(candles_data[candles_index][3], data_row[1])
+        candles_data[candles_index][1] = close
+        candles_data[candles_index][2] = min(candles_data[candles_index][2], low)
+        candles_data[candles_index][3] = max(candles_data[candles_index][3], high)
     
     candlesticks = pyecharts.charts.Candlestick() \
         .add_xaxis(xaxis_data=CustomDatetime.strings(candles_date[:candles_index])) \
