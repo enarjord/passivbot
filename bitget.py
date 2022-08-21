@@ -55,6 +55,7 @@ class BitgetBot(Bot):
             "1d": "86400",
             "1w": "604800",
         }
+        self.broker_code = "Passivbot"
         self.session = aiohttp.ClientSession()
 
     def init_market_type(self):
@@ -133,7 +134,6 @@ class BitgetBot(Bot):
         self.price_step = self.config["price_step"] = round_(
             (10 ** (-int(e["pricePlace"]))) * int(e["priceEndStep"]), 0.00000001
         )
-        print(e)
         self.qty_step = self.config["qty_step"] = round_(10 ** (-int(e["volumePlace"])), 0.00000001)
         self.min_qty = self.config["min_qty"] = float(e["minTradeNum"])
         self.min_cost = self.config["min_cost"] = 5.0
@@ -310,12 +310,12 @@ class BitgetBot(Bot):
                 params["price"] = str(order["price"])
             else:
                 params["timeInForceValue"] = "normal"
-            if "custom_id" in order:
-                params[
-                    "clientOid"
-                ] = f"{order['custom_id']}_{str(int(time() * 1000))[8:]}_{int(np.random.random() * 1000)}"
+            random_str = f"{str(int(time() * 1000))[-6:]}_{int(np.random.random() * 10000)}"
+            custom_id = order["custom_id"] if "custom_id" in order else "0"
+            params["clientOid"] = f"{self.broker_code}#{custom_id}_{random_str}"
             o = await self.private_post(self.endpoints["create_order"], params)
             if o["data"]:
+                # print('debug execute order', o)
                 return {
                     "symbol": self.symbol,
                     "side": order["side"],
