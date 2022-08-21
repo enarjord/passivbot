@@ -62,7 +62,8 @@ class Bot:
         self.config["max_leverage"] = 25
         self.xk = {}
 
-        self.ws = None
+        self.ws_user = None
+        self.ws_market = None
 
         self.hedge_mode = self.config["hedge_mode"] = True
         self.set_config(self.config)
@@ -972,6 +973,9 @@ class Bot:
     async def beat_heart_user_stream(self) -> None:
         pass
 
+    async def beat_heart_market_stream(self) -> None:
+        pass
+
     async def init_user_stream(self) -> None:
         pass
 
@@ -980,9 +984,10 @@ class Bot:
         asyncio.create_task(self.beat_heart_user_stream())
         logging.info(f"url {self.endpoints['websocket_user']}")
         async with websockets.connect(self.endpoints["websocket_user"]) as ws:
-            self.ws = ws
+            self.ws_user = ws
             await self.subscribe_to_user_stream(ws)
             async for msg in ws:
+                # print('debug user stream', msg)
                 if msg is None or msg == "pong":
                     continue
                 try:
@@ -999,10 +1004,13 @@ class Bot:
 
     async def start_websocket_market_stream(self) -> None:
         k = 1
+        asyncio.create_task(self.beat_heart_market_stream())
         async with websockets.connect(self.endpoints["websocket_market"]) as ws:
+            self.ws_market = ws
             await self.subscribe_to_market_stream(ws)
             async for msg in ws:
-                if msg is None:
+                # print('debug market stream', msg)
+                if msg is None or msg == "pong":
                     continue
                 try:
                     if self.stop_websocket:
