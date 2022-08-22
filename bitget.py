@@ -584,7 +584,7 @@ class BitgetBot(Bot):
             # set leverage
             res = await self.private_post(
                 self.endpoints["set_leverage"],
-                params={"symbol": self.symbol, "marginCoin": self.quote, "leverage": 20},
+                params={"symbol": self.symbol, "marginCoin": self.quote, "leverage": 7},
             )
             print(res)
         except Exception as e:
