@@ -23,6 +23,11 @@ def first_capitalized(s: str):
     return s[0].upper() + s[1:].lower()
 
 
+def truncate_float(x: float, d: int) -> float:
+    xs = str(x)
+    return float(xs[:xs.find('.') + d + 1])
+
+
 class BitgetBot(Bot):
     def __init__(self, config: dict):
         self.exchange = "bitget"
@@ -134,6 +139,7 @@ class BitgetBot(Bot):
         self.price_step = self.config["price_step"] = round_(
             (10 ** (-int(e["pricePlace"]))) * int(e["priceEndStep"]), 0.00000001
         )
+        self.price_rounding = int(e['pricePlace'])
         self.qty_step = self.config["qty_step"] = round_(10 ** (-int(e["volumePlace"])), 0.00000001)
         self.min_qty = self.config["min_qty"] = float(e["minTradeNum"])
         self.min_cost = self.config["min_cost"] = 5.0
@@ -277,13 +283,14 @@ class BitgetBot(Bot):
             if elm["holdSide"] == "long":
                 position["long"] = {
                     "size": round_(float(elm["total"]), self.qty_step),
-                    "price": float(elm["averageOpenPrice"]),
+                    "price": truncate_float(float(elm["averageOpenPrice"]), self.price_rounding),
                     "liquidation_price": float(elm["liquidationPrice"]),
                 }
+
             elif elm["holdSide"] == "short":
                 position["short"] = {
                     "size": -abs(round_(float(elm["total"]), self.qty_step)),
-                    "price": float(elm["averageOpenPrice"]),
+                    "price": truncate_float(float(elm["averageOpenPrice"]), self.price_rounding),
                     "liquidation_price": float(elm["liquidationPrice"]),
                 }
         for elm in fetched_balance["data"]:
@@ -577,7 +584,7 @@ class BitgetBot(Bot):
             # set leverage
             res = await self.private_post(
                 self.endpoints["set_leverage"],
-                params={"symbol": self.symbol, "marginCoin": self.quote, "leverage": 7},
+                params={"symbol": self.symbol, "marginCoin": self.quote, "leverage": 20},
             )
             print(res)
         except Exception as e:
@@ -721,9 +728,9 @@ class BitgetBot(Bot):
                 for elm in event["data"]:
                     if elm["instId"] == self.symbol and "averageOpenPrice" in elm:
                         standardized = {
-                            f"psize_{elm['holdSide']}": abs(float(elm["total"]))
+                            f"psize_{elm['holdSide']}": round_(abs(float(elm["total"])), self.qty_step)
                             * (-1 if elm["holdSide"] == "short" else 1),
-                            f"pprice_{elm['holdSide']}": float(elm["averageOpenPrice"]),
+                            f"pprice_{elm['holdSide']}": truncate_float(float(elm["averageOpenPrice"]), self.price_rounding),
                         }
                         events.append(standardized)
 
