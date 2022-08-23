@@ -31,9 +31,9 @@ def truncate_float(x: float, d: int) -> float:
 class BitgetBot(Bot):
     def __init__(self, config: dict):
         self.exchange = "bitget"
+        self.symbol = self.symbol + "_UMCBL" if self.symbol.endswith("USDT") else self.symbol
         self.min_notional = 5.0  # to remove
         super().__init__(config)
-        self.symbol = self.symbol
         self.base_endpoint = "https://api.bitget.com"
         self.endpoints = {
             "exchange_info": "/api/mix/v1/market/contracts",
