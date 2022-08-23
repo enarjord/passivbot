@@ -13,5 +13,11 @@
         "exchange": "bybit",
         "key": "key",
         "secret": "secret"
+    },
+    "bitget_01" : {
+        "exchange": "bitget",
+        "key": "key",
+        "secret": "secret",
+        "passphrase": "passphrase"
     }
 }
