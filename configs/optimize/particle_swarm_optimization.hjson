@@ -1,0 +1,203 @@
+{
+  # particle swarm optimization parameters
+  n_particles: 24
+  w: 0.7298
+  c0: 1.0 # 1.4962
+  c1: 1.0 # 1.4962
+
+  n_cpus: 4
+  iters: 8000
+
+  # score formula choices:
+  #  adg_PAD_mean
+  #  adg_PAD_std
+  #  adg_PAD_std_min
+  #  adg_DGstd_ratio
+  #  adg_mean
+  #  adg_min
+  #  adg_realized_PAD_mean
+  #  adg_realized_PAD_std
+  score_formula: adg_realized_PAD_std
+
+  # adg_PAD_std:
+  # adg / max(max_pa_dist_std, mean([max(max_pa_dist_std, PAD_std) for PAD_std in results]))
+  maximum_pa_distance_std_long: 0.05
+  maximum_pa_distance_std_short: 0.05
+
+  # adg_PAD_std_min:
+  # min([adg / max(max_pa_dist_std, mean([max(max_pa_dist_std, PAD_std) for adg, PAD_std in results])))
+
+  # adg_PAD_mean:
+  # adg * min(1, max_pa_dist_mean / mean([max(max_pa_dist_mean, pa_dist) for pa_dist in results]))
+
+  # adg_realized_PAD_mean:
+  # adg_realized / max(max_pa_dist_mean, mean([max(max_pa_dist_mean, PAD_mean) for PAD_mean in results]))
+  
+  maximum_pa_distance_mean_long: 0.015
+  maximum_pa_distance_mean_short: 0.015
+
+  # profit_loss_ratio = abs(sum(loss)) / sum(profit)
+  # set to high value (e.g. 100.0) to disable
+  maximum_loss_profit_ratio_long: 0.2
+  maximum_loss_profit_ratio_short: 0.2
+
+  # adg_DGstd_ratio:
+  # mean([dg_mean_std_ratio]) / std(dg_mean_std_ratio)
+
+  # adg_mean:
+  # mean(adgs)
+
+  # adg_min:
+  # min(adgs)
+
+  # will override starting configs' parameters
+  do_long: true
+  do_short: true
+  backwards_tp_long: true
+  backwards_tp_short: true
+
+  # choices: [recursive_grid, static_grid, neat_grid]
+  passivbot_mode: neat_grid
+
+  # sorted highest to lowest vol last 250 days
+  symbols: [
+    "BTCUSDT", "ETHUSDT", "BCHUSDT", "XRPUSDT", "EOSUSDT",
+    "LTCUSDT", "TRXUSDT", "ETCUSDT", "LINKUSDT", "XLMUSDT",
+    "ADAUSDT", "XMRUSDT", "DASHUSDT", "ZECUSDT", "XTZUSDT",
+    "BNBUSDT", "ATOMUSDT", "ONTUSDT", "IOTAUSDT", "BATUSDT",
+    "VETUSDT", "NEOUSDT", "QTUMUSDT", "IOSTUSDT", "THETAUSDT",
+    "ALGOUSDT", "ZILUSDT", "KNCUSDT", "ZRXUSDT", "COMPUSDT",
+    "OMGUSDT", "DOGEUSDT", "SXPUSDT", "KAVAUSDT", "BANDUSDT",
+    "RLCUSDT", "WAVESUSDT", "MKRUSDT", "SNXUSDT", "DOTUSDT",
+    "DEFIUSDT", "YFIUSDT", "BALUSDT", "CRVUSDT", "TRBUSDT",
+    "RUNEUSDT", "SUSHIUSDT", "SRMUSDT", "EGLDUSDT", "SOLUSDT",
+    "ICXUSDT", "STORJUSDT", "BLZUSDT", "UNIUSDT", "AVAXUSDT",
+    "FTMUSDT", "HNTUSDT", "ENJUSDT", "FLMUSDT", "TOMOUSDT",
+    "RENUSDT", "KSMUSDT", "NEARUSDT", "AAVEUSDT", "FILUSDT",
+    "RSRUSDT", "LRCUSDT", "MATICUSDT", "OCEANUSDT", "CVCUSDT",
+    "BELUSDT", "CTKUSDT", "AXSUSDT", "ALPHAUSDT", "ZENUSDT",
+    "SKLUSDT", "GRTUSDT", "1INCHUSDT", "CHZUSDT", "SANDUSDT",
+    "ANKRUSDT", "BTSUSDT", "LITUSDT", "UNFIUSDT", "REEFUSDT",
+    "RVNUSDT", "SFPUSDT", "XEMUSDT", "COTIUSDT", "CHRUSDT",
+    "MANAUSDT", "ALICEUSDT", "HBARUSDT", "ONEUSDT", "LINAUSDT",
+    "STMXUSDT", "DENTUSDT", "CELRUSDT", "HOTUSDT", "MTLUSDT",
+    "OGNUSDT", "NKNUSDT", "DGBUSDT", "1000SHIBUSDT", "BAKEUSDT",
+    "GTCUSDT", "BTCDOMUSDT", "IOTXUSDT", "AUDIOUSDT", "RAYUSDT",
+    "C98USDT", "MASKUSDT", "ATAUSDT", "DYDXUSDT", "1000XECUSDT",
+    "GALAUSDT", "CELOUSDT", "ARUSDT", "KLAYUSDT",
+  ]
+
+  bounds_static_grid:
+  {
+    long:
+    {
+      grid_span: [0.1, 0.7]
+      ema_span_0: [120, 4320]
+      ema_span_1: [120, 10080]
+      wallet_exposure_limit: [0.1, 0.1]
+      max_n_entry_orders: [7, 13]
+      initial_qty_pct: [0.007, 0.05]
+      initial_eprice_ema_dist: [-0.1, 0.0]
+      eprice_pprice_diff: [0.002, 0.05]
+      secondary_allocation: [0.0, 0.7]
+      secondary_pprice_diff: [0.05, 0.5]
+      eprice_exp_base: [1.0, 2.1]
+      min_markup: [0.002, 0.02]
+      markup_range: [0.0, 0.04]
+      n_close_orders: [5, 20]
+      auto_unstuck_wallet_exposure_threshold: [0.0, 0.6]
+      auto_unstuck_ema_dist: [0.0, 0.1]
+    }
+    short:
+    {
+      grid_span: [0.1, 0.7]
+      ema_span_0: [120, 4320]
+      ema_span_1: [120, 10080]
+      wallet_exposure_limit: [0.1, 0.1]
+      max_n_entry_orders: [7, 13]
+      initial_qty_pct: [0.007, 0.05]
+      initial_eprice_ema_dist: [-0.1, 0.0]
+      eprice_pprice_diff: [0.002, 0.05]
+      secondary_allocation: [0.0, 0.7]
+      secondary_pprice_diff: [0.05, 0.5]
+      eprice_exp_base: [1.0, 2.1]
+      min_markup: [0.002, 0.02]
+      markup_range: [0.0, 0.04]
+      n_close_orders: [5, 20]
+      auto_unstuck_wallet_exposure_threshold: [0.0, 0.6]
+      auto_unstuck_ema_dist: [0.0, 0.1]
+    }
+  }
+  bounds_recursive_grid:
+  {
+    long:
+    {
+      ema_span_0: [120, 4320]
+      ema_span_1: [120, 10080]
+      initial_qty_pct: [0.007, 0.05]
+      initial_eprice_ema_dist: [-0.1, 0.0]
+      wallet_exposure_limit: [0.1, 0.1]
+      ddown_factor: [0.05, 3.0]
+      rentry_pprice_dist: [0.005, 0.05]
+      rentry_pprice_dist_wallet_exposure_weighting: [0.0, 90.0]
+      min_markup: [0.002, 0.02]
+      markup_range: [0.0, 0.04]
+      n_close_orders: [5, 20]
+      auto_unstuck_wallet_exposure_threshold: [0.0, 0.6]
+      auto_unstuck_ema_dist: [0.0, 0.1]
+    }
+    short:
+    {
+      ema_span_0: [120, 4320]
+      ema_span_1: [120, 10080]
+      initial_qty_pct: [0.007, 0.05]
+      initial_eprice_ema_dist: [-0.1, 0.0]
+      wallet_exposure_limit: [0.1, 0.1]
+      ddown_factor: [0.05, 3.0]
+      rentry_pprice_dist: [0.005, 0.05]
+      rentry_pprice_dist_wallet_exposure_weighting: [0.0, 90.0]
+      min_markup: [0.002, 0.02]
+      markup_range: [0.0, 0.04]
+      n_close_orders: [5, 20]
+      auto_unstuck_wallet_exposure_threshold: [0.0, 0.6]
+      auto_unstuck_ema_dist: [0.0, 0.1]
+    }
+  }
+  bounds_neat_grid:
+  {
+    long:
+    {
+      grid_span: [0.05, 0.6]
+      ema_span_0: [120, 4320]
+      ema_span_1: [120, 10080]
+      wallet_exposure_limit: [0.1, 0.1]
+      max_n_entry_orders: [5, 20]
+      initial_qty_pct: [0.015, 0.015]
+      initial_eprice_ema_dist: [-0.1, 0.0]
+      eqty_exp_base: [1.0, 3.2]
+      eprice_exp_base: [1.0, 3.2]
+      min_markup: [0.002, 0.01]
+      markup_range: [0.0, 0.04]
+      n_close_orders: [5, 20]
+      auto_unstuck_wallet_exposure_threshold: [0.001, 0.1]
+      auto_unstuck_ema_dist: [0.0, 0.04]
+    }
+    short:
+    {
+      grid_span: [0.05, 0.6]
+      ema_span_0: [120, 4320]
+      ema_span_1: [120, 10080]
+      wallet_exposure_limit: [0.1, 0.1]
+      max_n_entry_orders: [5, 20]
+      initial_qty_pct: [0.015, 0.015]
+      initial_eprice_ema_dist: [-0.1, 0.0]
+      eqty_exp_base: [1.0, 3.2]
+      eprice_exp_base: [1.0, 3.2]
+      min_markup: [0.002, 0.01]
+      markup_range: [0.0, 0.04]
+      n_close_orders: [5, 20]
+      auto_unstuck_wallet_exposure_threshold: [0.001, 0.1]
+      auto_unstuck_ema_dist: [0.0, 0.04]
+    }
+  }
+}
