@@ -25,15 +25,14 @@ def first_capitalized(s: str):
 
 def truncate_float(x: float, d: int) -> float:
     xs = str(x)
-    return float(xs[:xs.find('.') + d + 1])
+    return float(xs[: xs.find(".") + d + 1])
 
 
 class BitgetBot(Bot):
     def __init__(self, config: dict):
         self.exchange = "bitget"
-        self.symbol = self.symbol + "_UMCBL" if self.symbol.endswith("USDT") else self.symbol
-        self.min_notional = 5.0  # to remove
         super().__init__(config)
+        self.symbol = self.symbol + "_UMCBL" if self.symbol.endswith("USDT") else self.symbol
         self.base_endpoint = "https://api.bitget.com"
         self.endpoints = {
             "exchange_info": "/api/mix/v1/market/contracts",
@@ -139,12 +138,13 @@ class BitgetBot(Bot):
         self.price_step = self.config["price_step"] = round_(
             (10 ** (-int(e["pricePlace"]))) * int(e["priceEndStep"]), 0.00000001
         )
-        self.price_rounding = int(e['pricePlace'])
+        self.price_rounding = int(e["pricePlace"])
         self.qty_step = self.config["qty_step"] = round_(10 ** (-int(e["volumePlace"])), 0.00000001)
         self.min_qty = self.config["min_qty"] = float(e["minTradeNum"])
         self.min_cost = self.config["min_cost"] = 5.0
         self.init_market_type()
         self.margin_coin = self.coin if self.inverse else self.quote
+        self.min_notional = 5.0  # USDT margined contracts
         await super()._init()
         await self.init_order_book()
         await self.update_position()
@@ -728,9 +728,13 @@ class BitgetBot(Bot):
                 for elm in event["data"]:
                     if elm["instId"] == self.symbol and "averageOpenPrice" in elm:
                         standardized = {
-                            f"psize_{elm['holdSide']}": round_(abs(float(elm["total"])), self.qty_step)
+                            f"psize_{elm['holdSide']}": round_(
+                                abs(float(elm["total"])), self.qty_step
+                            )
                             * (-1 if elm["holdSide"] == "short" else 1),
-                            f"pprice_{elm['holdSide']}": truncate_float(float(elm["averageOpenPrice"]), self.price_rounding),
+                            f"pprice_{elm['holdSide']}": truncate_float(
+                                float(elm["averageOpenPrice"]), self.price_rounding
+                            ),
                         }
                         events.append(standardized)
 
