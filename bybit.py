@@ -44,6 +44,8 @@ class Bybit(Bot):
         self.min_notional = 0.0
         super().__init__(config)
         self.base_endpoint = "https://api.bybit.com"
+        if self.test_mode:
+            self.base_endpoint = "https://api-testnet.bybit.com"
         self.endpoints = {
             "balance": "/v2/private/wallet/balance",
             "exchange_info": "/v2/public/symbols",
@@ -53,6 +55,10 @@ class Bybit(Bot):
         self.session = aiohttp.ClientSession(headers={"referer": "passivbotbybit"})
 
     def init_market_type(self):
+        websockets_base_endpoint = "wss://stream.bybit.com"
+        if self.test_mode:
+            websockets_base_endpoint = "wss://stream-testnet.bybit.com"
+        
         if self.symbol.endswith("USDT"):
             print("linear perpetual")
             self.market_type += "_linear_perpetual"
@@ -65,8 +71,8 @@ class Bybit(Bot):
                 "ticks": "/public/linear/recent-trading-records",
                 "fills": "/private/linear/trade/execution/list",
                 "ohlcvs": "/public/linear/kline",
-                "websocket_market": "wss://stream.bybit.com/realtime_public",
-                "websocket_user": "wss://stream.bybit.com/realtime_private",
+                "websocket_market": f"{websockets_base_endpoint}/realtime_public",
+                "websocket_user": f"{websockets_base_endpoint}/realtime_private",
                 "income": "/private/linear/trade/closed-pnl/list",
                 "created_at_key": "created_time",
             }
@@ -84,8 +90,8 @@ class Bybit(Bot):
                     "ticks": "/v2/public/trading-records",
                     "fills": "/v2/private/execution/list",
                     "ohlcvs": "/v2/public/kline/list",
-                    "websocket_market": "wss://stream.bybit.com/realtime",
-                    "websocket_user": "wss://stream.bybit.com/realtime",
+                    "websocket_market": f"{websockets_base_endpoint}/realtime",
+                    "websocket_user": f"{websockets_base_endpoint}/realtime",
                     "income": "/v2/private/trade/closed-pnl/list",
                     "created_at_key": "created_at",
                 }
@@ -102,13 +108,16 @@ class Bybit(Bot):
                     "ticks": "/v2/public/trading-records",
                     "fills": "/futures/private/execution/list",
                     "ohlcvs": "/v2/public/kline/list",
-                    "websocket_market": "wss://stream.bybit.com/realtime",
-                    "websocket_user": "wss://stream.bybit.com/realtime",
+                    "websocket_market": f"{websockets_base_endpoint}/realtime",
+                    "websocket_user": f"{websockets_base_endpoint}/realtime",
                     "income": "/futures/private/trade/closed-pnl/list",
                     "created_at_key": "created_at",
                 }
 
         self.spot_base_endpoint = "https://api.bybit.com"
+        if self.test_mode:
+            self.spot_base_endpoint = "https://api-testnet.bybit.com"
+        
         self.endpoints["spot_balance"] = "/spot/v1/account"
         self.endpoints["balance"] = "/v2/private/wallet/balance"
         self.endpoints["exchange_info"] = "/v2/public/symbols"

@@ -52,11 +52,14 @@ from typing import Union, Dict, List
 import websockets
 import logging
 
+TEST_MODE_SUPPORTED_EXCHANGES = ["bybit"]
+
 
 class Bot:
     def __init__(self, config: dict):
         self.spot = False
         self.config = config
+        self.test_mode = config["test_mode"]
         self.config["do_long"] = config["long"]["enabled"]
         self.config["do_short"] = config["short"]["enabled"]
         self.config["max_leverage"] = 25
@@ -1109,6 +1112,12 @@ async def main() -> None:
         default="api-keys.json",
         help="File containing users/accounts and api-keys for each exchanges",
     )
+    parser.add_argument(
+        "-tm",
+        "--test_mode",
+        action="store_true",
+        help=f"if true, run on the test net instead of normal exchange. Supported exchanges: {TEST_MODE_SUPPORTED_EXCHANGES}",
+    )
 
     float_kwargs = [
         ("-lmm", "--long_min_markup", "--long-min-markup", "long_min_markup"),
@@ -1158,6 +1167,9 @@ async def main() -> None:
         return
     config["user"] = args.user
     config["exchange"] = account["exchange"]
+    config["test_mode"] = args.test_mode
+    if config["test_mode"] and config["exchange"] not in TEST_MODE_SUPPORTED_EXCHANGES:
+        raise IOError(f"Exchange {config['exchange']} is not supported in test mode.")
     config["symbol"] = args.symbol
     config["market_type"] = args.market_type if args.market_type is not None else "futures"
     config["passivbot_mode"] = determine_passivbot_mode(config)
