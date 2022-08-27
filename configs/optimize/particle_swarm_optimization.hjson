@@ -1,9 +1,9 @@
 {
   # particle swarm optimization parameters
   n_particles: 24
-  w: 0.7298
-  c0: 1.0
-  c1: 1.0
+  w: 0.7298  # weight of previous velocity
+  c0: 1.0  # attraction to local best
+  c1: 0.5  # attraction to global best
 
   n_cpus: 7
   iters: 8000
@@ -171,14 +171,14 @@
       ema_span_0: [120, 4320]
       ema_span_1: [120, 10080]
       wallet_exposure_limit: [0.1, 0.1]
-      max_n_entry_orders: [5, 20]
+      max_n_entry_orders: [5, 30]
       initial_qty_pct: [0.015, 0.015]
       initial_eprice_ema_dist: [-0.1, 0.0]
       eqty_exp_base: [0.1, 5.0]
       eprice_exp_base: [0.1, 5.0]
       min_markup: [0.0015, 0.01]
       markup_range: [0.0, 0.06]
-      n_close_orders: [5, 20]
+      n_close_orders: [5, 30]
       auto_unstuck_wallet_exposure_threshold: [0.0, 0.1]
       auto_unstuck_ema_dist: [0.0, 0.04]
     }
@@ -188,14 +188,14 @@
       ema_span_0: [120, 4320]
       ema_span_1: [120, 10080]
       wallet_exposure_limit: [0.1, 0.1]
-      max_n_entry_orders: [5, 20]
+      max_n_entry_orders: [5, 30]
       initial_qty_pct: [0.015, 0.015]
       initial_eprice_ema_dist: [-0.1, 0.0]
       eqty_exp_base: [0.1, 5.0]
       eprice_exp_base: [0.1, 5.0]
       min_markup: [0.0015, 0.01]
       markup_range: [0.0, 0.06]
-      n_close_orders: [5, 20]
+      n_close_orders: [5, 30]
       auto_unstuck_wallet_exposure_threshold: [0.0, 0.1]
       auto_unstuck_ema_dist: [0.0, 0.04]
     }
