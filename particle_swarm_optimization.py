@@ -574,6 +574,8 @@ class ParticleSwarmOptimization:
             }
             self.lbests_long[swarm_key] = deepcopy(self.swarm[swarm_key]["long"])
             self.lbests_short[swarm_key] = deepcopy(self.swarm[swarm_key]["short"])
+        self.gbest_long = deepcopy({"config": cfg_long, "score": np.inf})
+        self.gbest_short = deepcopy({"config": cfg_short, "score": np.inf})
         self.swarm_keys = sorted(self.swarm)
 
         # add starting configs
@@ -835,30 +837,13 @@ async def main():
                 except Exception as e:
                     logging.error(f"error loading config {fname}: {e}")
         elif os.path.exists(args.starting_configs):
-            swarm_load_failed = True
-            if "swarm_" in args.starting_configs:
-                try:
-                    swarm = json.load(open(args.starting_configs))
-                    for k in swarm:
-                        cfg = {
-                            "long": swarm[k]["long"]["config"],
-                            "short": swarm[k]["short"]["config"],
-                        }
-                        assert (
-                            determine_passivbot_mode(cfg) == passivbot_mode
-                        ), "wrong passivbot mode in swarm"
-                        cfgs.append(cfg)
-                    logging.info(f"loaded swarm {args.starting_configs}")
-                    swarm_load_failed = False
-                except Exception as e:
-                    logging.error(f"error loading swarm {args.starting_configs}: {e}")
-            if swarm_load_failed:
-                try:
-                    cfg = load_live_config(args.starting_configs)
-                    assert determine_passivbot_mode(cfg) == passivbot_mode, "wrong passivbot mode"
-                    cfgs.append(cfg)
-                except Exception as e:
-                    logging.error(f"error loading config {args.starting_configs}: {e}")
+            try:
+                cfg = load_live_config(args.starting_configs)
+                assert determine_passivbot_mode(cfg) == passivbot_mode, "wrong passivbot mode"
+                cfgs.append(cfg)
+                logging.info(f"successfully loaded config {args.starting_configs}")
+            except Exception as e:
+                logging.error(f"error loading config {args.starting_configs}: {e}")
     config["starting_configs"] = cfgs
     particle_swarm_optimization = ParticleSwarmOptimization(config)
     particle_swarm_optimization.run()
