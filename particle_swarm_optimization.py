@@ -66,7 +66,7 @@ def backtest_wrap(config_: dict, ticks_caches: dict):
         fills_long, fills_short, stats = backtest(config, ticks)
         longs, shorts, sdf, analysis = analyze_fills(fills_long, fills_short, stats, config)
         """
-        with open("logs/debug_harmonysearch.txt", "a") as f:
+        with open("logs/debug_pso.txt", "a") as f:
             f.write(json.dumps({"config": denumpyize(config), "analysis": analysis}) + "\n")
         """
         logging.debug(
@@ -169,6 +169,11 @@ class ParticleSwarmOptimization:
         self.unfinished_evals[id_key]["single_results"][symbol] = self.workers[wi]["task"].get()
         self.unfinished_evals[id_key]["in_progress"].remove(symbol)
         results = deepcopy(self.unfinished_evals[id_key]["single_results"])
+        with open(self.results_fpath + "positions.txt", "a") as f:
+            f.write(
+                json.dumps({"long": cfg["long"], "short": cfg["short"], "swarm_key": swarm_key})
+                + "\n"
+            )
         if set(results) == set(self.symbols):
             # completed multisymbol iter
             adgs_long = [v["adg_long"] for v in results.values()]
@@ -306,48 +311,18 @@ class ParticleSwarmOptimization:
             self.swarm[swarm_key]["short"]["score"] = score_short
             # check whether initial eval or new particle position
             if "initial_eval_key" in cfg:
-                self.lbests_long[swarm_key]['score'] = score_long
-                self.lbests_short[swarm_key]['score'] = score_short
+                self.lbests_long[swarm_key]["score"] = score_long
+                self.lbests_short[swarm_key]["score"] = score_short
             else:
                 # check if better than lbest long
                 if score_long < self.lbests_long[swarm_key]["score"]:
                     self.lbests_long[swarm_key] = deepcopy(
                         {"config": cfg["long"], "score": score_long}
                     )
-                    json.dump(
-                        {
-                            "long": {
-                                "particle_positions": self.lbests_long,
-                                "velocities": self.velocities_long,
-                            },
-                            "short": {
-                                "particle_positions": self.lbests_short,
-                                "velocities": self.velocities_short,
-                            },
-                        },
-                        open(f"{self.results_fpath}swarm_{cfg['config_no']:06}.json", "w"),
-                        indent=4,
-                        sort_keys=True,
-                    )
                 # check if better than lbest short
                 if score_short < self.lbests_short[swarm_key]["score"]:
                     self.lbests_short[swarm_key] = deepcopy(
                         {"config": cfg["short"], "score": score_short}
-                    )
-                    json.dump(
-                        {
-                            "long": {
-                                "particle_positions": self.lbests_long,
-                                "velocities": self.velocities_long,
-                            },
-                            "short": {
-                                "particle_positions": self.lbests_short,
-                                "velocities": self.velocities_short,
-                            },
-                        },
-                        open(f"{self.results_fpath}swarm_{cfg['config_no']:06}.json", "w"),
-                        indent=4,
-                        sort_keys=True,
                     )
 
             tmp_fname = f"{self.results_fpath}{cfg['config_no']:06}_best_config"
@@ -432,22 +407,23 @@ class ParticleSwarmOptimization:
             new_position[side]["enabled"] = getattr(self, f"do_{side}")
             new_position[side]["backwards_tp"] = self.config[f"backwards_tp_{side}"]
         for key in self.long_bounds:
-            # get new position coordinate from gbest and lbest
+            # get new velocities from gbest and lbest
             self.velocities_long[swarm_key][key] = (
                 self.w * self.velocities_long[swarm_key][key]
                 + self.c0
-                * np.random.uniform(0, 1)
+                * np.random.random()
                 * (
                     self.lbests_long[swarm_key]["config"][key]
                     - self.swarm[swarm_key]["long"]["config"][key]
                 )
                 + self.c1
-                * np.random.uniform(0, 1)
+                * np.random.random()
                 * (self.gbest_long["config"][key] - self.swarm[swarm_key]["long"]["config"][key])
             )
             new_position["long"][key] = max(
                 min(
-                    self.swarm[swarm_key]["long"]["config"][key] + self.velocities_long[swarm_key][key],
+                    self.swarm[swarm_key]["long"]["config"][key]
+                    + self.velocities_long[swarm_key][key],
                     self.long_bounds[key][1],
                 ),
                 self.long_bounds[key][0],
@@ -455,13 +431,13 @@ class ParticleSwarmOptimization:
             self.velocities_short[swarm_key][key] = (
                 self.w * self.velocities_short[swarm_key][key]
                 + self.c0
-                * np.random.uniform(0, 1)
+                * np.random.random()
                 * (
                     self.lbests_short[swarm_key]["config"][key]
                     - self.swarm[swarm_key]["short"]["config"][key]
                 )
                 + self.c1
-                * np.random.uniform(0, 1)
+                * np.random.random()
                 * (self.gbest_short["config"][key] - self.swarm[swarm_key]["short"]["config"][key])
             )
             new_position["short"][key] = max(
@@ -472,10 +448,16 @@ class ParticleSwarmOptimization:
                 ),
                 self.short_bounds[key][0],
             )
-        self.swarm[swarm_key]["long"] = {"config": new_position["long"], "score": 'in_progress'}
-        self.swarm[swarm_key]["short"] = {"config": new_position["short"], "score": 'in_progress'}
+        self.swarm[swarm_key]["long"] = {
+            "config": deepcopy(new_position["long"]),
+            "score": "in_progress",
+        }
+        self.swarm[swarm_key]["short"] = {
+            "config": deepcopy(new_position["short"]),
+            "score": "in_progress",
+        }
         logging.debug(
-            f"starting new harmony {new_position['config_no']} - long "
+            f"starting new position {new_position['config_no']} - long "
             + " ".join([str(round_dynamic(e[1], 3)) for e in sorted(new_position["long"].items())])
             + " - short: "
             + " ".join([str(round_dynamic(e[1], 3)) for e in sorted(new_position["short"].items())])
@@ -488,7 +470,7 @@ class ParticleSwarmOptimization:
             "ticks_cache_fname"
         ] = f"{self.bt_dir}/{new_position['symbol']}/{self.ticks_cache_fname}"
         new_position["passivbot_mode"] = self.config["passivbot_mode"]
-        new_position['swarm_key'] = swarm_key
+        new_position["swarm_key"] = swarm_key
         self.workers[wi] = {
             "config": deepcopy(new_position),
             "task": self.pool.apply_async(
@@ -656,7 +638,7 @@ class ParticleSwarmOptimization:
                                 self.start_new_initial_eval(wi, swarm_key)
                                 break
                         else:
-                            # means initial evals are done; start new harmony
+                            # means initial evals are done; start new position
                             self.start_new_particle_position(wi)
                         sleep(0.25)
 
@@ -801,6 +783,11 @@ async def main():
     config["ohlcv"] = args.ohlcv
     print()
     lines = [(k, getattr(args, k)) for k in args.__dict__ if args.__dict__[k] is not None]
+    lines += [
+        (k, config[k])
+        for k in ["start_date", "end_date", "w", "c0", "c1"]
+        if k not in [z[0] for z in lines]
+    ]
     for line in lines:
         logging.info(f"{line[0]: <{max([len(x[0]) for x in lines]) + 2}} {line[1]}")
     print()
