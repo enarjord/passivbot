@@ -700,7 +700,12 @@ def calc_bankruptcy_price(
 def basespace(start, end, base, n):
     if base == 1.0:
         return np.linspace(start, end, n)
-    a = np.array([base ** i for i in range(n)])
+    elif base <= 0.0:
+        raise Exception('not defined for base <= 0.0')
+    elif base < 1.0:
+        a = -np.array([base ** i for i in range(n)])
+    else:
+        a = np.array([base ** i for i in range(n)])
     a = (a - a.min()) / (a.max() - a.min())
     return a * (end - start) + start
 
