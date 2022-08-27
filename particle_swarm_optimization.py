@@ -309,21 +309,20 @@ class ParticleSwarmOptimization:
             logging.debug(line)
             self.swarm[swarm_key]["long"]["score"] = score_long
             self.swarm[swarm_key]["short"]["score"] = score_short
-            # check whether initial eval or new particle position
-            if "initial_eval_key" in cfg:
-                self.lbests_long[swarm_key]["score"] = score_long
-                self.lbests_short[swarm_key]["score"] = score_short
-            else:
-                # check if better than lbest long
-                if score_long < self.lbests_long[swarm_key]["score"]:
-                    self.lbests_long[swarm_key] = deepcopy(
-                        {"config": cfg["long"], "score": score_long}
-                    )
-                # check if better than lbest short
-                if score_short < self.lbests_short[swarm_key]["score"]:
-                    self.lbests_short[swarm_key] = deepcopy(
-                        {"config": cfg["short"], "score": score_short}
-                    )
+            # check if better than lbest long
+            if (
+                type(self.lbests_long[swarm_key]["score"]) == str
+                or score_long < self.lbests_long[swarm_key]["score"]
+            ):
+                self.lbests_long[swarm_key] = deepcopy({"config": cfg["long"], "score": score_long})
+            # check if better than lbest short
+            if (
+                type(self.lbests_short[swarm_key]["score"]) == str
+                or score_short < self.lbests_short[swarm_key]["score"]
+            ):
+                self.lbests_short[swarm_key] = deepcopy(
+                    {"config": cfg["short"], "score": score_short}
+                )
 
             tmp_fname = f"{self.results_fpath}{cfg['config_no']:06}_best_config"
             is_better = False
