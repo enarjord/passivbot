@@ -2,10 +2,10 @@
   # particle swarm optimization parameters
   n_particles: 24
   w: 0.7298
-  c0: 1.0 # 1.4962
-  c1: 1.0 # 1.4962
+  c0: 1.0
+  c1: 1.0
 
-  n_cpus: 4
+  n_cpus: 7
   iters: 8000
 
   # score formula choices:
@@ -21,8 +21,8 @@
 
   # adg_PAD_std:
   # adg / max(max_pa_dist_std, mean([max(max_pa_dist_std, PAD_std) for PAD_std in results]))
-  maximum_pa_distance_std_long: 0.05
-  maximum_pa_distance_std_short: 0.05
+  maximum_pa_distance_std_long: 0.01
+  maximum_pa_distance_std_short: 0.01
 
   # adg_PAD_std_min:
   # min([adg / max(max_pa_dist_std, mean([max(max_pa_dist_std, PAD_std) for adg, PAD_std in results])))
@@ -33,13 +33,13 @@
   # adg_realized_PAD_mean:
   # adg_realized / max(max_pa_dist_mean, mean([max(max_pa_dist_mean, PAD_mean) for PAD_mean in results]))
   
-  maximum_pa_distance_mean_long: 0.015
-  maximum_pa_distance_mean_short: 0.015
+  maximum_pa_distance_mean_long: 0.01
+  maximum_pa_distance_mean_short: 0.01
 
   # profit_loss_ratio = abs(sum(loss)) / sum(profit)
   # set to high value (e.g. 100.0) to disable
-  maximum_loss_profit_ratio_long: 0.2
-  maximum_loss_profit_ratio_short: 0.2
+  maximum_loss_profit_ratio_long: 0.1
+  maximum_loss_profit_ratio_short: 0.1
 
   # adg_DGstd_ratio:
   # mean([dg_mean_std_ratio]) / std(dg_mean_std_ratio)
@@ -77,7 +77,7 @@
     "RSRUSDT", "LRCUSDT", "MATICUSDT", "OCEANUSDT", "CVCUSDT",
     "BELUSDT", "CTKUSDT", "AXSUSDT", "ALPHAUSDT", "ZENUSDT",
     "SKLUSDT", "GRTUSDT", "1INCHUSDT", "CHZUSDT", "SANDUSDT",
-    "ANKRUSDT", "BTSUSDT", "LITUSDT", "UNFIUSDT", "REEFUSDT",
+    "ANKRUSDT", "LITUSDT", "UNFIUSDT", "REEFUSDT",
     "RVNUSDT", "SFPUSDT", "XEMUSDT", "COTIUSDT", "CHRUSDT",
     "MANAUSDT", "ALICEUSDT", "HBARUSDT", "ONEUSDT", "LINAUSDT",
     "STMXUSDT", "DENTUSDT", "CELRUSDT", "HOTUSDT", "MTLUSDT",
@@ -167,36 +167,36 @@
   {
     long:
     {
-      grid_span: [0.05, 0.6]
+      grid_span: [0.01, 0.7]
       ema_span_0: [120, 4320]
       ema_span_1: [120, 10080]
       wallet_exposure_limit: [0.1, 0.1]
       max_n_entry_orders: [5, 20]
       initial_qty_pct: [0.015, 0.015]
       initial_eprice_ema_dist: [-0.1, 0.0]
-      eqty_exp_base: [1.0, 3.2]
-      eprice_exp_base: [1.0, 3.2]
-      min_markup: [0.002, 0.01]
-      markup_range: [0.0, 0.04]
+      eqty_exp_base: [0.1, 5.0]
+      eprice_exp_base: [0.1, 5.0]
+      min_markup: [0.0015, 0.01]
+      markup_range: [0.0, 0.06]
       n_close_orders: [5, 20]
-      auto_unstuck_wallet_exposure_threshold: [0.001, 0.1]
+      auto_unstuck_wallet_exposure_threshold: [0.0, 0.1]
       auto_unstuck_ema_dist: [0.0, 0.04]
     }
     short:
     {
-      grid_span: [0.05, 0.6]
+      grid_span: [0.01, 0.7]
       ema_span_0: [120, 4320]
       ema_span_1: [120, 10080]
       wallet_exposure_limit: [0.1, 0.1]
       max_n_entry_orders: [5, 20]
       initial_qty_pct: [0.015, 0.015]
       initial_eprice_ema_dist: [-0.1, 0.0]
-      eqty_exp_base: [1.0, 3.2]
-      eprice_exp_base: [1.0, 3.2]
-      min_markup: [0.002, 0.01]
-      markup_range: [0.0, 0.04]
+      eqty_exp_base: [0.1, 5.0]
+      eprice_exp_base: [0.1, 5.0]
+      min_markup: [0.0015, 0.01]
+      markup_range: [0.0, 0.06]
       n_close_orders: [5, 20]
-      auto_unstuck_wallet_exposure_threshold: [0.001, 0.1]
+      auto_unstuck_wallet_exposure_threshold: [0.0, 0.1]
       auto_unstuck_ema_dist: [0.0, 0.04]
     }
   }
