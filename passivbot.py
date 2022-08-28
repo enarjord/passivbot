@@ -108,7 +108,7 @@ class Bot:
 
         self.log_filepath = make_get_filepath(f"logs/{self.exchange}/{config['config_name']}.log")
 
-        _, self.key, self.secret, self.passphrase = load_exchange_key_secret_passphrase(self.user)
+        _, self.key, self.secret, self.passphrase = load_exchange_key_secret_passphrase(self.user, config["api_keys"])
 
         self.log_level = 0
 
@@ -1114,11 +1114,11 @@ async def main() -> None:
         "-ak",
         "--api-keys",
         "--api_keys",
-        type=open,
+        type=str,
         required=False,
         dest="api_keys",
         default="api-keys.json",
-        help="File containing users/accounts and api-keys for each exchanges",
+        help="File containing users/accounts and api-keys for each exchange",
     )
 
     float_kwargs = [
@@ -1153,14 +1153,9 @@ async def main() -> None:
 
     args = parser.parse_args()
     try:
-        accounts = json.load(args.api_keys)
+        exchange = load_exchange_key_secret(args.user, args.api_keys)[0]
     except Exception as e:
         logging.error(f"{e} failed to load api-keys.json file")
-        return
-    try:
-        account = accounts[args.user]
-    except Exception as e:
-        logging.error(f"unrecognized account name {args.user} {e}")
         return
     try:
         config = load_live_config(args.live_config_path)
@@ -1168,7 +1163,8 @@ async def main() -> None:
         logging.error(f"{e} failed to load config {args.live_config_path}")
         return
     config["user"] = args.user
-    config["exchange"] = account["exchange"]
+    config["api_keys"] = args.api_keys
+    config["exchange"] = exchange
     config["symbol"] = args.symbol
     config["market_type"] = args.market_type if args.market_type is not None else "futures"
     config["passivbot_mode"] = determine_passivbot_mode(config)
@@ -1241,7 +1237,7 @@ async def main() -> None:
     if "spot" in config["market_type"]:
         config = spotify_config(config)
 
-    if account["exchange"] == "binance":
+    if config["exchange"] == "binance":
         if "spot" in config["market_type"]:
             from procedures import create_binance_bot_spot
 
@@ -1250,11 +1246,11 @@ async def main() -> None:
             from procedures import create_binance_bot
 
             bot = await create_binance_bot(config)
-    elif account["exchange"] == "binance_us":
+    elif config["exchange"] == "binance_us":
         from procedures import create_binance_bot_spot
 
         bot = await create_binance_bot_spot(config)
-    elif account["exchange"] == "bybit":
+    elif config["exchange"] == "bybit":
         from procedures import create_bybit_bot
 
         bot = await create_bybit_bot(config)
@@ -1264,7 +1260,7 @@ async def main() -> None:
         bot = await create_bitget_bot(config)
 
     else:
-        raise Exception("unknown exchange", account["exchange"])
+        raise Exception("unknown exchange", config["exchange"])
 
     logging.info(f"using config \n{config_pretty_str(denumpyize(config))}")
     signal.signal(signal.SIGINT, bot.stop)
