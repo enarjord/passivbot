@@ -780,6 +780,7 @@ async def main():
     config["ohlcv"] = args.ohlcv
     print()
     lines = [(k, getattr(args, k)) for k in args.__dict__ if args.__dict__[k] is not None]
+    lines += [(k, config[k]) for k in ["start_date", "end_date"] if k not in [z[0] for z in lines]]
     for line in lines:
         logging.info(f"{line[0]: <{max([len(x[0]) for x in lines]) + 2}} {line[1]}")
     print()
