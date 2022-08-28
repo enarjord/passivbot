@@ -108,7 +108,9 @@ class Bot:
 
         self.log_filepath = make_get_filepath(f"logs/{self.exchange}/{config['config_name']}.log")
 
-        _, self.key, self.secret, self.passphrase = load_exchange_key_secret_passphrase(self.user, config["api_keys"])
+        _, self.key, self.secret, self.passphrase = load_exchange_key_secret_passphrase(
+            self.user, config["api_keys"]
+        )
 
         self.log_level = 0
 
@@ -1153,7 +1155,7 @@ async def main() -> None:
 
     args = parser.parse_args()
     try:
-        exchange = load_exchange_key_secret(args.user, args.api_keys)[0]
+        exchange = load_exchange_key_secret_passphrase(args.user, args.api_keys)[0]
     except Exception as e:
         logging.error(f"{e} failed to load api-keys.json file")
         return
