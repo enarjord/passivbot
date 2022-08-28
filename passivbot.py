@@ -1069,7 +1069,7 @@ async def main() -> None:
         "-gs",
         "--graceful_stop",
         action="store_true",
-        help="if true, disable long and short",
+        help="if passed, set graceful stop to both long and short",
     )
     parser.add_argument(
         "-sm",
