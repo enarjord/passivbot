@@ -151,9 +151,9 @@ def make_get_filepath(filepath: str) -> str:
     return filepath
 
 
-def load_exchange_key_secret(user: str) -> (str, str, str):
+def load_exchange_key_secret(user: str, api_keys_path="api-keys.json") -> (str, str, str):
     try:
-        keyfile = json.load(open("api-keys.json"))
+        keyfile = json.load(open(api_keys_path))
         if user in keyfile:
             return (
                 keyfile[user]["exchange"],
