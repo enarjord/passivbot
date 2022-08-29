@@ -106,8 +106,8 @@ class Bot:
         self.c_mult = self.config["c_mult"] = 1.0
 
         self.log_filepath = make_get_filepath(f"logs/{self.exchange}/{config['config_name']}.log")
-
-        _, self.key, self.secret = load_exchange_key_secret(self.user, config["api_keys"])
+        self.api_keys = config["api_keys"] if "api_keys" in config else None
+        _, self.key, self.secret = load_exchange_key_secret(self.user, self.api_keys)
 
         self.log_level = 0
 
