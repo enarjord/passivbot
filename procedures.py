@@ -152,6 +152,8 @@ def make_get_filepath(filepath: str) -> str:
 
 
 def load_exchange_key_secret(user: str, api_keys_path="api-keys.json") -> (str, str, str):
+    if api_keys_path is None:
+        api_keys_path = "api-keys.json"
     try:
         keyfile = json.load(open(api_keys_path))
         if user in keyfile:
