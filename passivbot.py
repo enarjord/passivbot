@@ -108,6 +108,7 @@ class Bot:
 
         self.log_filepath = make_get_filepath(f"logs/{self.exchange}/{config['config_name']}.log")
 
+        self.api_keys = config["api_keys"] if "api_keys" in config else None
         _, self.key, self.secret, self.passphrase = load_exchange_key_secret_passphrase(
             self.user, config["api_keys"]
         )
