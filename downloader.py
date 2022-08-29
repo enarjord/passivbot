@@ -647,7 +647,7 @@ class Downloader:
                     month = day[:7]
                     if month in months_done:
                         continue
-                    if True:  # month in months_failed:
+                    if month in months_failed:
                         tf = self.get_zip(self.daily_base_url, self.config["symbol"], day)
                         if tf.empty:
                             print_(["failed to fetch daily", day])
@@ -957,7 +957,6 @@ def download_ohlcvs(symbol, start_date, end_date, download_only=False) -> pd.Dat
     end_ts = date_to_ts(end_date)
     days = [ts_to_date_utc(x)[:10] for x in list(range(start_ts, end_ts, 1000 * 60 * 60 * 24))]
     months = sorted(set([x[:7] for x in days]))
-    months = [m for m in months if m not in ["2022-07", "2022-08"]]
     months_done = set()
     dfs = []
     for month in months:
