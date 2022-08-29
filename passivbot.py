@@ -1257,7 +1257,7 @@ async def main() -> None:
         from procedures import create_bybit_bot
 
         bot = await create_bybit_bot(config)
-    elif account["exchange"] == "bitget":
+    elif config["exchange"] == "bitget":
         from procedures import create_bitget_bot
 
         bot = await create_bitget_bot(config)
