@@ -110,7 +110,7 @@ class Bot:
 
         self.api_keys = config["api_keys"] if "api_keys" in config else None
         _, self.key, self.secret, self.passphrase = load_exchange_key_secret_passphrase(
-            self.user, config["api_keys"]
+            self.user, self.api_keys
         )
 
         self.log_level = 0
