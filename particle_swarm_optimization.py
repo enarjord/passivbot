@@ -786,8 +786,20 @@ async def main():
     lines = [(k, getattr(args, k)) for k in args.__dict__ if args.__dict__[k] is not None]
     lines += [
         (k, config[k])
-        for k in ["start_date", "end_date", "w", "c0", "c1"]
-        if k not in [z[0] for z in lines]
+        for k in [
+            "start_date",
+            "end_date",
+            "w",
+            "c0",
+            "c1",
+            "maximum_pa_distance_std_long",
+            "maximum_pa_distance_std_short",
+            "maximum_pa_distance_mean_long",
+            "maximum_pa_distance_mean_short",
+            "maximum_loss_profit_ratio_long",
+            "maximum_loss_profit_ratio_short",
+        ]
+        if k in config and k not in [z[0] for z in lines]
     ]
     for line in lines:
         logging.info(f"{line[0]: <{max([len(x[0]) for x in lines]) + 2}} {line[1]}")
