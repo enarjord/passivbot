@@ -551,7 +551,7 @@ def calc_close_grid_backwards_short(
             closes.append((unstuck_close_qty, unstuck_close_price, "short_unstuck_close"))
     if len(close_prices) == 1:
         if psize_ >= calc_min_entry_qty(close_prices[0], inverse, qty_step, min_qty, min_cost):
-            closes.append((-psize_, close_prices[0], "short_nclose"))
+            closes.append((psize_, close_prices[0], "short_nclose"))
         return closes
     qty_per_close = max(min_qty, round_up(full_psize / len(close_prices_all), qty_step))
     for price in close_prices[::-1]:
