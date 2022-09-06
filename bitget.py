@@ -32,11 +32,23 @@ class BitgetBot(Bot):
     def __init__(self, config: dict):
         self.exchange = "bitget"
         super().__init__(config)
-        self.symbol = self.symbol + "_UMCBL" if self.symbol.endswith("USDT") else self.symbol
         self.base_endpoint = "https://api.bitget.com"
         self.endpoints = {
             "exchange_info": "/api/mix/v1/market/contracts",
             "funds_transfer": "/asset/v1/private/transfer",
+            "position": "/api/mix/v1/position/singlePosition",
+            "balance": "/api/mix/v1/account/accounts",
+            "ticker": "/api/mix/v1/market/ticker",
+            "open_orders": "/api/mix/v1/order/current",
+            "create_order": "/api/mix/v1/order/placeOrder",
+            "cancel_order": "/api/mix/v1/order/cancel-order",
+            "ticks": "/api/mix/v1/market/fills",
+            "fills": "/api/mix/v1/order/fills",
+            "ohlcvs": "/api/mix/v1/market/candles",
+            "websocket_market": "wss://ws.bitget.com/mix/v1/stream",
+            "websocket_user": "wss://ws.bitget.com/mix/v1/stream",
+            "set_margin_mode": "/api/mix/v1/account/setMarginMode",
+            "set_leverage": "/api/mix/v1/account/setLeverage",
         }
         self.order_side_map = {
             "buy": {"long": "open_long", "short": "close_short"},
@@ -63,70 +75,24 @@ class BitgetBot(Bot):
         self.session = aiohttp.ClientSession()
 
     def init_market_type(self):
-        if self.symbol.endswith("USDT_UMCBL"):
+        self.symbol_stripped = self.symbol
+        if self.symbol.endswith("USDT"):
             print("linear perpetual")
+            self.symbol += "_UMCBL"
             self.market_type += "_linear_perpetual"
+            self.product_type = "umcbl"
             self.inverse = self.config["inverse"] = False
-            self.endpoints.update(
-                {
-                    "position": "/api/mix/v1/position/singlePosition",
-                    "balance": "/api/mix/v1/account/accounts",
-                    "ticker": "/api/mix/v1/market/ticker",
-                    "open_orders": "/api/mix/v1/order/current",
-                    "create_order": "/api/mix/v1/order/placeOrder",
-                    "cancel_order": "/api/mix/v1/order/cancel-order",
-                    "ticks": "/api/mix/v1/market/fills",
-                    "fills": "/api/mix/v1/order/fills",
-                    "ohlcvs": "/api/mix/v1/market/candles",
-                    "websocket_market": "wss://ws.bitget.com/mix/v1/stream",
-                    "websocket_user": "wss://ws.bitget.com/mix/v1/stream",
-                    "income": "/private/linear/trade/closed-pnl/list",
-                    "set_margin_mode": "/api/mix/v1/account/setMarginMode",
-                    "set_leverage": "/api/mix/v1/account/setLeverage",
-                }
-            )
+        elif self.symbol.endswith("USD"):
+            print("inverse perpetual")
+            self.symbol += "_DMCBL"
+            self.market_type += "_inverse_perpetual"
+            self.product_type = "dmcbl"
+            self.inverse = self.config["inverse"] = False
         else:
             raise NotImplementedError("not yet implemented")
-            ### TODO
-            """
-            self.inverse = self.config["inverse"] = True
-            if self.symbol.endswith("USD"):
-                print("inverse perpetual")
-                self.market_type += "_inverse_perpetual"
-                self.endpoints = {
-                    "position": "/v2/private/position/list",
-                    "open_orders": "/v2/private/order",
-                    "create_order": "/v2/private/order/create",
-                    "cancel_order": "/v2/private/order/cancel",
-                    "ticks": "/v2/public/trading-records",
-                    "fills": "/v2/private/execution/list",
-                    "ohlcvs": "/v2/public/kline/list",
-                    "websocket_market": "wss://stream.bybit.com/realtime",
-                    "websocket_user": "wss://stream.bybit.com/realtime",
-                    "income": "/v2/private/trade/closed-pnl/list",
-                    "created_at_key": "created_at",
-                }
-
-                self.hedge_mode = self.config["hedge_mode"] = False
-            else:
-                print("inverse futures")
-                self.market_type += "_inverse_futures"
-                self.endpoints = {
-                    "position": "/futures/private/position/list",
-                    "open_orders": "/futures/private/order",
-                    "create_order": "/futures/private/order/create",
-                    "cancel_order": "/futures/private/order/cancel",
-                    "ticks": "/v2/public/trading-records",
-                    "fills": "/futures/private/execution/list",
-                    "ohlcvs": "/v2/public/kline/list",
-                    "websocket_market": "wss://stream.bybit.com/realtime",
-                    "websocket_user": "wss://stream.bybit.com/realtime",
-                    "income": "/futures/private/trade/closed-pnl/list",
-                    "created_at_key": "created_at",
-                }
-            """
 
     async def _init(self):
+        self.init_market_type()
         info = await self.fetch_exchange_info()
         for e in info["data"]:
             if e["symbol"] == self.symbol:
@@ -142,15 +108,16 @@ class BitgetBot(Bot):
         self.qty_step = self.config["qty_step"] = round_(10 ** (-int(e["volumePlace"])), 0.00000001)
         self.min_qty = self.config["min_qty"] = float(e["minTradeNum"])
         self.min_cost = self.config["min_cost"] = 5.0
-        self.init_market_type()
-        self.margin_coin = self.coin if self.inverse else self.quote
+        self.margin_coin = self.coin if self.product_type == "dmcbl" else self.quote
         self.min_notional = 5.0  # USDT margined contracts
         await super()._init()
         await self.init_order_book()
         await self.update_position()
 
     async def fetch_exchange_info(self):
-        info = await self.public_get(self.endpoints["exchange_info"], params={"productType": "umcbl"})
+        info = await self.public_get(
+            self.endpoints["exchange_info"], params={"productType": self.product_type}
+        )
         return info
 
     async def fetch_ticker(self, symbol=None):
@@ -275,10 +242,12 @@ class BitgetBot(Bot):
             "short": {"size": 0.0, "price": 0.0, "liquidation_price": 0.0},
             "wallet_balance": 0.0,
         }
-        fetched_pos = await self.private_get(
-            self.endpoints["position"], {"symbol": self.symbol, "marginCoin": "USDT"}
+        fetched_pos, fetched_balance = await asyncio.gather(
+            self.private_get(
+                self.endpoints["position"], {"symbol": self.symbol, "marginCoin": self.margin_coin}
+            ),
+            self.private_get(self.endpoints["balance"], {"productType": self.product_type}),
         )
-        fetched_balance = await self.private_get(self.endpoints["balance"], {"productType": "umcbl"})
         for elm in fetched_pos["data"]:
             if elm["holdSide"] == "long":
                 position["long"] = {
@@ -294,8 +263,16 @@ class BitgetBot(Bot):
                     "liquidation_price": float(elm["liquidationPrice"]),
                 }
         for elm in fetched_balance["data"]:
-            if elm["marginCoin"] == self.quote:
-                position["wallet_balance"] = float(elm["available"])
+            if elm["marginCoin"] == self.margin_coin:
+                if self.product_type == "dmcbl":
+                    # convert balance to usd using mean of emas as price
+                    all_emas = list(self.emas_long) + list(self.emas_short)
+                    if any(ema == 0.0 for ema in all_emas):
+                        # catch case where any ema is zero
+                        all_emas = self.ob
+                    position["wallet_balance"] = float(elm["available"]) * np.mean(all_emas)
+                else:
+                    position["wallet_balance"] = float(elm["available"])
                 break
 
         return position
@@ -305,7 +282,7 @@ class BitgetBot(Bot):
         try:
             params = {
                 "symbol": self.symbol,
-                "marginCoin": self.quote,
+                "marginCoin": self.margin_coin,
                 "size": str(order["qty"]),
                 "side": self.order_side_map[order["side"]][order["position_side"]],
                 "orderType": order["type"],
@@ -345,7 +322,7 @@ class BitgetBot(Bot):
         try:
             cancellation = await self.private_post(
                 self.endpoints["cancel_order"],
-                {"symbol": self.symbol, "marginCoin": self.quote, "orderId": order["order_id"]},
+                {"symbol": self.symbol, "marginCoin": self.margin_coin, "orderId": order["order_id"]},
             )
             return {
                 "symbol": self.symbol,
@@ -578,13 +555,17 @@ class BitgetBot(Bot):
             # set margin mode
             res = await self.private_post(
                 self.endpoints["set_margin_mode"],
-                params={"symbol": self.symbol, "marginCoin": self.quote, "marginMode": "crossed"},
+                params={
+                    "symbol": self.symbol,
+                    "marginCoin": self.margin_coin,
+                    "marginMode": "crossed",
+                },
             )
             print(res)
             # set leverage
             res = await self.private_post(
                 self.endpoints["set_leverage"],
-                params={"symbol": self.symbol, "marginCoin": self.quote, "leverage": 7},
+                params={"symbol": self.symbol, "marginCoin": self.margin_coin, "leverage": 20},
             )
             print(res)
         except Exception as e:
@@ -635,7 +616,7 @@ class BitgetBot(Bot):
                         {
                             "instType": "mc",
                             "channel": "trade",
-                            "instId": self.symbol.replace("_UMCBL", ""),
+                            "instId": self.symbol_stripped,
                         }
                     ],
                 }
@@ -666,30 +647,52 @@ class BitgetBot(Bot):
                 }
             )
         )
+        print(res)
         res = await ws.send(
             json.dumps(
                 {
                     "op": "subscribe",
-                    "args": [{"instType": "UMCBL", "channel": "account", "instId": "default"}],
+                    "args": [
+                        {
+                            "instType": self.product_type.upper(),
+                            "channel": "account",
+                            "instId": "default",
+                        }
+                    ],
                 }
             )
         )
+        print(res)
         res = await ws.send(
             json.dumps(
                 {
                     "op": "subscribe",
-                    "args": [{"instType": "UMCBL", "channel": "positions", "instId": "default"}],
+                    "args": [
+                        {
+                            "instType": self.product_type.upper(),
+                            "channel": "positions",
+                            "instId": "default",
+                        }
+                    ],
                 }
             )
         )
+        print(res)
         res = await ws.send(
             json.dumps(
                 {
                     "op": "subscribe",
-                    "args": [{"channel": "orders", "instType": "UMCBL", "instId": "default"}],
+                    "args": [
+                        {
+                            "channel": "orders",
+                            "instType": self.product_type.upper(),
+                            "instId": "default",
+                        }
+                    ],
                 }
             )
         )
+        print(res)
 
     async def transfer(self, type_: str, amount: float, asset: str = "USDT"):
         return {"code": "-1", "msg": "Transferring funds not supported for Bybit"}
