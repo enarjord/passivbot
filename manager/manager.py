@@ -15,23 +15,22 @@ class Manager:
         self.sync_config()
 
     def sync_config(self):
-        '''Sync manger with config file'''
+        """Sync manger with config file"""
         self.instances = []
 
         if not os.path.exists(MANAGER_CONFIG_PATH):
-            logging.error('No such file: {}'.format(MANAGER_CONFIG_PATH))
+            logging.error("No such file: {}".format(MANAGER_CONFIG_PATH))
             sys.exit(1)
 
-        with open(MANAGER_CONFIG_PATH, 'r') as f:
+        with open(MANAGER_CONFIG_PATH, "r") as f:
             config = yaml.load(f, Loader=yaml.FullLoader)
-        self.defaults = config['defaults']
+        self.defaults = config["defaults"]
 
-        if 'instances' not in config or not isinstance(config['instances'], list):
+        if "instances" not in config or not isinstance(config["instances"], list):
             return
 
-        for instance in config['instances']:
-            self.instances.extend(instances_from_config(
-                instance, self.defaults))
+        for instance in config["instances"]:
+            self.instances.extend(instances_from_config(instance, self.defaults))
 
     def get_instances(self) -> List[Instance]:
         return self.instances
@@ -55,7 +54,7 @@ class Manager:
         return running_instances
 
     def query_instances(self, query: List[str]) -> List[Instance]:
-        '''Query instances by query string'''
+        """Query instances by query string"""
         instances = []
         for instance in self.instances:
             if instance.match(query):
@@ -64,9 +63,9 @@ class Manager:
         return instances
 
     def get_all_passivbot_instances(self) -> List[Instance]:
-        '''Get all passivbot instances running on this machine'''
+        """Get all passivbot instances running on this machine"""
         pm = ProcessManager()
-        signature = '^{}'.format(' '.join(INSTANCE_SIGNATURE_BASE))
+        signature = "^{}".format(" ".join(INSTANCE_SIGNATURE_BASE))
         pids = pm.get_pid(signature, all_matches=True)
         if len(pids) == 0:
             return []
@@ -74,7 +73,7 @@ class Manager:
         instances_cmds = [pm.info(pid) for pid in pids]
         instanaces = []
         for cmd in instances_cmds:
-            args = cmd.split(' ')
+            args = cmd.split(" ")
             if len(args) > 3:
                 args = args[3:]
             else:
@@ -84,9 +83,9 @@ class Manager:
             symbol = args[1]
             live_config_path = args[2]
             cfg = self.defaults.copy()
-            cfg['user'] = user
-            cfg['symbol'] = symbol
-            cfg['live_config_path'] = live_config_path
+            cfg["user"] = user
+            cfg["symbol"] = symbol
+            cfg["live_config_path"] = live_config_path
             instance = Instance(cfg)
             if instance.is_running():
                 instanaces.append(instance)
