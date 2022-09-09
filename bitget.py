@@ -89,7 +89,9 @@ class BitgetBot(Bot):
             self.market_type += "_inverse_perpetual"
             self.product_type = "dmcbl"
             self.inverse = self.config["inverse"] = False
-            self.min_cost = self.config["min_cost"] = 6.0 # will complain with $5 even if order cost > $5
+            self.min_cost = self.config[
+                "min_cost"
+            ] = 6.0  # will complain with $5 even if order cost > $5
         else:
             raise NotImplementedError("not yet implemented")
 
