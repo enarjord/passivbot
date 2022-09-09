@@ -215,7 +215,9 @@ def main():
         if len(r["results"]) < 3:
             for symbol in r["results"]:
                 if type(r["results"][symbol]) == dict:
-                    pprint.pprint({k: v for k, v in r["results"][symbol].items() if other_side not in k})
+                    pprint.pprint(
+                        {k: v for k, v in r["results"][symbol].items() if other_side not in k}
+                    )
     live_config = candidate_to_live_config(best_config)
     if args.dump_live_config:
         lc_fpath = make_get_filepath(f"{args.results_fpath.replace('.txt', '_best_config.json')}")
