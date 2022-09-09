@@ -82,12 +82,14 @@ class BitgetBot(Bot):
             self.market_type += "_linear_perpetual"
             self.product_type = "umcbl"
             self.inverse = self.config["inverse"] = False
+            self.min_cost = self.config["min_cost"] = 5.0
         elif self.symbol.endswith("USD"):
             print("inverse perpetual")
             self.symbol += "_DMCBL"
             self.market_type += "_inverse_perpetual"
             self.product_type = "dmcbl"
             self.inverse = self.config["inverse"] = False
+            self.min_cost = self.config["min_cost"] = 6.0 # will complain with $5 even if order cost > $5
         else:
             raise NotImplementedError("not yet implemented")
 
@@ -107,9 +109,7 @@ class BitgetBot(Bot):
         self.price_rounding = int(e["pricePlace"])
         self.qty_step = self.config["qty_step"] = round_(10 ** (-int(e["volumePlace"])), 0.00000001)
         self.min_qty = self.config["min_qty"] = float(e["minTradeNum"])
-        self.min_cost = self.config["min_cost"] = 5.0
         self.margin_coin = self.coin if self.product_type == "dmcbl" else self.quote
-        self.min_notional = 5.0  # USDT margined contracts
         await super()._init()
         await self.init_order_book()
         await self.update_position()
