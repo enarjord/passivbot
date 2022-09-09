@@ -456,7 +456,7 @@ def get_template_live_config(passivbot_mode="static_grid"):
     elif passivbot_mode == "neat_grid":
         return sort_dict_keys(
             {
-                "config_name": "template",
+                "config_name": "neat_template",
                 "logging_level": 0,
                 "long": {
                     "enabled": True,
@@ -500,7 +500,7 @@ def get_template_live_config(passivbot_mode="static_grid"):
         )
     return sort_dict_keys(
         {
-            "config_name": "template",
+            "config_name": "static_template",
             "logging_level": 0,
             "long": {
                 "enabled": True,
@@ -1118,3 +1118,12 @@ def make_compatible(live_config_: dict) -> dict:
         return sort_dict_keys(live_config)
     assert all(k in live_config["long"] for k in get_template_live_config()["long"])
     return live_config
+
+
+def strip_config(cfg: dict) -> dict:
+    pm = determine_passivbot_mode(cfg)
+    template = get_template_live_config(pm)
+    for k in template["long"]:
+        template["long"][k] = cfg["long"][k]
+        template["short"][k] = cfg["short"][k]
+    return template
