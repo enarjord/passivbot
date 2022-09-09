@@ -221,6 +221,13 @@ async def fetch_market_specific_settings(config: dict):
         settings_from_exchange["maker_fee"] = 0.0001
         settings_from_exchange["taker_fee"] = 0.0006
         settings_from_exchange["exchange"] = "bybit"
+    elif exchange == "bitget":
+        if "spot" in config["market_type"]:
+            raise Exception("spot not implemented on bitget")
+        bot = await create_bitget_bot(tmp_live_settings)
+        settings_from_exchange["maker_fee"] = 0.0002
+        settings_from_exchange["taker_fee"] = 0.0006
+        settings_from_exchange["exchange"] = "bitget"
     else:
         raise Exception(f"unknown exchange {exchange}")
     await bot.session.close()
