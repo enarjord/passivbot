@@ -81,8 +81,8 @@ def dump_plots(
             )
             table.add_row(
                 [
-                    "DG mean std ratio",
-                    f"{round_dynamic(result['result'][f'adg_DGstd_ratio_{side}'], 4)}",
+                    "Loss to profit ratio",
+                    f"{round_dynamic(result['result'][f'loss_profit_ratio_{side}'], 4)}",
                 ]
             )
             table.add_row(

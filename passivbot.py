@@ -14,7 +14,7 @@ from time import time
 from procedures import (
     load_live_config,
     make_get_filepath,
-    load_exchange_key_secret,
+    load_exchange_key_secret_passphrase,
     numpyize,
 )
 from pure_funcs import (
@@ -62,7 +62,8 @@ class Bot:
         self.config["max_leverage"] = 25
         self.xk = {}
 
-        self.ws = None
+        self.ws_user = None
+        self.ws_market = None
 
         self.hedge_mode = self.config["hedge_mode"] = True
         self.set_config(self.config)
@@ -106,8 +107,11 @@ class Bot:
         self.c_mult = self.config["c_mult"] = 1.0
 
         self.log_filepath = make_get_filepath(f"logs/{self.exchange}/{config['config_name']}.log")
+
         self.api_keys = config["api_keys"] if "api_keys" in config else None
-        _, self.key, self.secret = load_exchange_key_secret(self.user, self.api_keys)
+        _, self.key, self.secret, self.passphrase = load_exchange_key_secret_passphrase(
+            self.user, self.api_keys
+        )
 
         self.log_level = 0
 
@@ -126,6 +130,8 @@ class Bot:
             config["assigned_balance"] = None
         if "cross_wallet_pct" not in config:
             config["cross_wallet_pct"] = 1.0
+        if "price_distance_threshold" not in config:
+            config["price_distance_threshold"] = 0.5
         self.passivbot_mode = config["passivbot_mode"] = determine_passivbot_mode(config)
         if config["cross_wallet_pct"] > 1.0 or config["cross_wallet_pct"] <= 0.0:
             logging.warning(
@@ -760,9 +766,10 @@ class Bot:
 
             to_cancel = sorted(to_cancel, key=lambda x: calc_diff(x["price"], self.price))
             to_create = sorted(to_create, key=lambda x: calc_diff(x["price"], self.price))
+
             """
-            logging.info(f'to_cancel {to_cancel.values()}')
-            logging.info(f'to create {to_create.values()}')
+            logging.info(f"to_cancel {to_cancel}")
+            logging.info(f"to create {to_create}")
             return
             """
 
@@ -969,6 +976,9 @@ class Bot:
     async def beat_heart_user_stream(self) -> None:
         pass
 
+    async def beat_heart_market_stream(self) -> None:
+        pass
+
     async def init_user_stream(self) -> None:
         pass
 
@@ -977,10 +987,11 @@ class Bot:
         asyncio.create_task(self.beat_heart_user_stream())
         logging.info(f"url {self.endpoints['websocket_user']}")
         async with websockets.connect(self.endpoints["websocket_user"]) as ws:
-            self.ws = ws
+            self.ws_user = ws
             await self.subscribe_to_user_stream(ws)
             async for msg in ws:
-                if msg is None:
+                # print('debug user stream', msg)
+                if msg is None or msg == "pong":
                     continue
                 try:
                     if self.stop_websocket:
@@ -996,10 +1007,13 @@ class Bot:
 
     async def start_websocket_market_stream(self) -> None:
         k = 1
+        asyncio.create_task(self.beat_heart_market_stream())
         async with websockets.connect(self.endpoints["websocket_market"]) as ws:
+            self.ws_market = ws
             await self.subscribe_to_market_stream(ws)
             async for msg in ws:
-                if msg is None:
+                # print('debug market stream', msg)
+                if msg is None or msg == "pong":
                     continue
                 try:
                     if self.stop_websocket:
@@ -1058,7 +1072,7 @@ async def main() -> None:
         "-gs",
         "--graceful_stop",
         action="store_true",
-        help="if true, disable long and short",
+        help="if passed, set graceful stop to both long and short",
     )
     parser.add_argument(
         "-sm",
@@ -1142,7 +1156,7 @@ async def main() -> None:
 
     args = parser.parse_args()
     try:
-        exchange = load_exchange_key_secret(args.user, args.api_keys)[0]
+        exchange = load_exchange_key_secret_passphrase(args.user, args.api_keys)[0]
     except Exception as e:
         logging.error(f"{e} failed to load api-keys.json file")
         return
@@ -1243,6 +1257,11 @@ async def main() -> None:
         from procedures import create_bybit_bot
 
         bot = await create_bybit_bot(config)
+    elif config["exchange"] == "bitget":
+        from procedures import create_bitget_bot
+
+        bot = await create_bitget_bot(config)
+
     else:
         raise Exception("unknown exchange", config["exchange"])
 

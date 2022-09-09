@@ -89,7 +89,7 @@ async def prepare_backtest_config(args) -> dict:
         config["spot"] = args.market_type == "spot"
     config["start_date"] = ts_to_date_utc(date_to_ts(config["start_date"]))[:10]
     config["end_date"] = ts_to_date_utc(date_to_ts(config["end_date"]))[:10]
-    config["exchange"], _, _ = load_exchange_key_secret(config["user"])
+    config["exchange"] = load_exchange_key_secret_passphrase(config["user"])[0]
     config["session_name"] = (
         f"{config['start_date'].replace(' ', '').replace(':', '').replace('.', '')}_"
         f"{config['end_date'].replace(' ', '').replace(':', '').replace('.', '')}"
@@ -151,7 +151,9 @@ def make_get_filepath(filepath: str) -> str:
     return filepath
 
 
-def load_exchange_key_secret(user: str, api_keys_path="api-keys.json") -> (str, str, str):
+def load_exchange_key_secret_passphrase(
+    user: str, api_keys_path="api-keys.json"
+) -> (str, str, str, str):
     if api_keys_path is None:
         api_keys_path = "api-keys.json"
     try:
@@ -161,6 +163,7 @@ def load_exchange_key_secret(user: str, api_keys_path="api-keys.json") -> (str, 
                 keyfile[user]["exchange"],
                 keyfile[user]["key"],
                 keyfile[user]["secret"],
+                keyfile[user]["passphrase"] if "passphrase" in keyfile[user] else "",
             )
         else:
             print("Looks like the keys aren't configured yet, or you entered the wrong username!")
@@ -218,6 +221,13 @@ async def fetch_market_specific_settings(config: dict):
         settings_from_exchange["maker_fee"] = 0.0001
         settings_from_exchange["taker_fee"] = 0.0006
         settings_from_exchange["exchange"] = "bybit"
+    elif exchange == "bitget":
+        if "spot" in config["market_type"]:
+            raise Exception("spot not implemented on bitget")
+        bot = await create_bitget_bot(tmp_live_settings)
+        settings_from_exchange["maker_fee"] = 0.0002
+        settings_from_exchange["taker_fee"] = 0.0006
+        settings_from_exchange["exchange"] = "bitget"
     else:
         raise Exception(f"unknown exchange {exchange}")
     await bot.session.close()
@@ -258,9 +268,17 @@ async def create_binance_bot_spot(config: dict):
 
 
 async def create_bybit_bot(config: dict):
-    from bybit import Bybit
+    from bybit import BybitBot
 
-    bot = Bybit(config)
+    bot = BybitBot(config)
+    await bot._init()
+    return bot
+
+
+async def create_bitget_bot(config: dict):
+    from bitget import BitgetBot
+
+    bot = BitgetBot(config)
     await bot._init()
     return bot
 

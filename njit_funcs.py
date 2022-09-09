@@ -551,7 +551,7 @@ def calc_close_grid_backwards_short(
             closes.append((unstuck_close_qty, unstuck_close_price, "short_unstuck_close"))
     if len(close_prices) == 1:
         if psize_ >= calc_min_entry_qty(close_prices[0], inverse, qty_step, min_qty, min_cost):
-            closes.append((-psize_, close_prices[0], "short_nclose"))
+            closes.append((psize_, close_prices[0], "short_nclose"))
         return closes
     qty_per_close = max(min_qty, round_up(full_psize / len(close_prices_all), qty_step))
     for price in close_prices[::-1]:
@@ -700,7 +700,12 @@ def calc_bankruptcy_price(
 def basespace(start, end, base, n):
     if base == 1.0:
         return np.linspace(start, end, n)
-    a = np.array([base ** i for i in range(n)])
+    elif base <= 0.0:
+        raise Exception("not defined for base <= 0.0")
+    elif base < 1.0:
+        a = -np.array([base ** i for i in range(n)])
+    else:
+        a = np.array([base ** i for i in range(n)])
     a = (a - a.min()) / (a.max() - a.min())
     return a * (end - start) + start
 
