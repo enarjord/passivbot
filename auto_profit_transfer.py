@@ -38,7 +38,7 @@ async def main():
         required=False,
         default=0.5,
         dest="percentage",
-        help="per uno, i.e. 0.02==2%.  default=0.5",
+        help="per uno, i.e. 0.02==2 per cent.  default=0.5",
     )
     parser.add_argument(
         "-q",
