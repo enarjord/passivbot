@@ -76,7 +76,7 @@ async def main():
             income = await bot.get_all_income(start_time=now - 1000 * 60 * 60 * 24)
         except Exception as e:
             logging.error(f"failed fetching income {e}")
-            traceback.print_exc()
+            # traceback.print_exc()
             income = []
         income = [e for e in income if e["transaction_id"] not in already_transferred_ids]
         income = [e for e in income if e["token"] == args.quote]
