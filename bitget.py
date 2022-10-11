@@ -82,7 +82,7 @@ class BitgetBot(Bot):
             self.market_type += "_linear_perpetual"
             self.product_type = "umcbl"
             self.inverse = self.config["inverse"] = False
-            self.min_cost = self.config["min_cost"] = 5.0
+            self.min_cost = self.config["min_cost"] = 5.1
         elif self.symbol.endswith("USD"):
             print("inverse perpetual")
             self.symbol += "_DMCBL"
