@@ -735,7 +735,6 @@ class Bot:
                 ideal_orders,
                 keys=["side", "position_side", "qty", "price"],
             )
-
             to_cancel, to_create = [], []
             for elm in to_cancel_:
                 if elm["position_side"] == "long":
@@ -750,6 +749,8 @@ class Bot:
                             to_cancel.append(elm)
                     elif self.short_mode != "manual":
                         to_cancel.append(elm)
+                else:
+                    to_cancel.append(elm)
             for elm in to_create_:
                 if elm["position_side"] == "long":
                     if self.long_mode == "tp_only":
