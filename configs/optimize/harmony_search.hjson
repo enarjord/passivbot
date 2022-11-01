@@ -8,47 +8,26 @@
   n_cpus: 4
   iters: 8000
 
-  # score formula choices:
-  #  adg_PAD_mean
-  #  adg_PAD_std
-  #  adg_PAD_std_min
-  #  adg_DGstd_ratio
-  #  adg_mean
-  #  adg_min
-  #  adg_realized_PAD_mean
-  #  adg_realized_PAD_std
-  score_formula: adg_realized_PAD_std
+  # score = adg_realized_per_exposure
 
-  # adg_PAD_std:
-  # adg / max(max_pa_dist_std, mean([max(max_pa_dist_std, PAD_std) for PAD_std in results]))
-  maximum_pa_distance_std_long: 0.015
-  maximum_pa_distance_std_short: 0.015
+  # score weights
+  # set any to -1 (less than zero) to disable
 
-  # adg_PAD_std_min:
-  # min([adg / max(max_pa_dist_std, mean([max(max_pa_dist_std, PAD_std) for adg, PAD_std in results])))
+  # score /= max(maximum_pa_distance_std, pa_distance_std)
+  maximum_pa_distance_std_long: 0.01
+  maximum_pa_distance_std_short: 0.01
 
-  # adg_PAD_mean:
-  # adg * min(1, max_pa_dist_mean / mean([max(max_pa_dist_mean, pa_dist) for pa_dist in results]))
+  # score /= max(maximum_pa_distance_mean, pa_distance_mean)
+  maximum_pa_distance_mean_long: 0.01
+  maximum_pa_distance_mean_short: 0.01
 
-  # adg_realized_PAD_mean:
-  # adg_realized / max(max_pa_dist_mean, mean([max(max_pa_dist_mean, PAD_mean) for PAD_mean in results]))
-  
-  maximum_pa_distance_mean_long: 0.015
-  maximum_pa_distance_mean_short: 0.015
-
-  # profit_loss_ratio = abs(sum(loss)) / sum(profit)
-  # set to high value (e.g. 100.0) to disable
+  # score /= max(maximum_loss_profit_ratio, loss_profit_ratio)
   maximum_loss_profit_ratio_long: 0.1
   maximum_loss_profit_ratio_short: 0.1
 
-  # adg_DGstd_ratio:
-  # mean([dg_mean_std_ratio]) / std(dg_mean_std_ratio)
-
-  # adg_mean:
-  # mean(adgs)
-
-  # adg_min:
-  # min(adgs)
+  # score /= max(maximum_hrs_stuck_max, hrs_stuck_max)
+  maximum_hrs_stuck_max_long: -1
+  maximum_hrs_stuck_max_short: -1
 
   # will override starting configs' parameters
   do_long: true
@@ -56,7 +35,7 @@
   backwards_tp_long: true
   backwards_tp_short: true
 
-  # choices: [recursive_grid, static_grid, neat_grid]
+  # choices: [r/recursive_grid, s/static_grid, n/neat_grid]
   passivbot_mode: neat_grid
 
   # sorted highest to lowest vol last 250 days
@@ -132,72 +111,72 @@
   {
     long:
     {
-      ema_span_0: [120, 4320]
-      ema_span_1: [120, 10080]
-      initial_qty_pct: [0.007, 0.05]
-      initial_eprice_ema_dist: [-0.1, 0.0]
+      ema_span_0: [240, 4320]
+      ema_span_1: [240, 10080]
+      initial_qty_pct: [0.015, 0.015]
+      initial_eprice_ema_dist: [-0.1, 0.01]
       wallet_exposure_limit: [0.1, 0.1]
       ddown_factor: [0.05, 3.0]
       rentry_pprice_dist: [0.005, 0.05]
       rentry_pprice_dist_wallet_exposure_weighting: [0.0, 90.0]
-      min_markup: [0.002, 0.02]
-      markup_range: [0.0, 0.04]
-      n_close_orders: [5, 20]
-      auto_unstuck_wallet_exposure_threshold: [0.0, 0.6]
-      auto_unstuck_ema_dist: [0.0, 0.1]
+      min_markup: [0.001, 0.004]
+      markup_range: [0.0, 0.03]
+      n_close_orders: [4, 20]
+      auto_unstuck_wallet_exposure_threshold: [0.01, 0.1]
+      auto_unstuck_ema_dist: [0.001, 0.1]
     }
     short:
     {
-      ema_span_0: [120, 4320]
-      ema_span_1: [120, 10080]
-      initial_qty_pct: [0.007, 0.05]
-      initial_eprice_ema_dist: [-0.1, 0.0]
+      ema_span_0: [240, 4320]
+      ema_span_1: [240, 10080]
+      initial_qty_pct: [0.015, 0.015]
+      initial_eprice_ema_dist: [-0.1, 0.01]
       wallet_exposure_limit: [0.1, 0.1]
       ddown_factor: [0.05, 3.0]
       rentry_pprice_dist: [0.005, 0.05]
       rentry_pprice_dist_wallet_exposure_weighting: [0.0, 90.0]
-      min_markup: [0.002, 0.02]
-      markup_range: [0.0, 0.04]
-      n_close_orders: [5, 20]
-      auto_unstuck_wallet_exposure_threshold: [0.0, 0.6]
-      auto_unstuck_ema_dist: [0.0, 0.1]
+      min_markup: [0.001, 0.004]
+      markup_range: [0.0, 0.03]
+      n_close_orders: [4, 20]
+      auto_unstuck_wallet_exposure_threshold: [0.01, 0.1]
+      auto_unstuck_ema_dist: [0.001, 0.1]
     }
   }
   bounds_neat_grid:
   {
     long:
     {
-      grid_span: [0.1, 0.7]
-      ema_span_0: [120, 4320]
-      ema_span_1: [120, 10080]
+      grid_span: [0.34, 0.7]
+      ema_span_0: [240, 4320]
+      ema_span_1: [240, 10080]
       wallet_exposure_limit: [0.1, 0.1]
-      max_n_entry_orders: [5, 20]
+      max_n_entry_orders: [7, 30]
       initial_qty_pct: [0.015, 0.015]
-      initial_eprice_ema_dist: [-0.1, 0.0]
-      eqty_exp_base: [0.1, 5.0]
-      eprice_exp_base: [0.1, 5.0]
-      min_markup: [0.0015, 0.01]
-      markup_range: [0.0, 0.06]
-      n_close_orders: [5, 20]
-      auto_unstuck_wallet_exposure_threshold: [0.0, 0.6]
-      auto_unstuck_ema_dist: [0.0, 0.1]
+      initial_eprice_ema_dist: [-0.1, 0.01]
+      eqty_exp_base: [0.9, 4.0]
+      eprice_exp_base: [0.9, 4.0]
+      min_markup: [0.001, 0.003]
+      markup_range: [0.0, 0.04]
+      n_close_orders: [7, 30]
+      auto_unstuck_wallet_exposure_threshold: [0.01, 0.1]
+      auto_unstuck_ema_dist: [0.0, 0.02]
     }
     short:
     {
-      grid_span: [0.1, 0.7]
-      ema_span_0: [120, 4320]
-      ema_span_1: [120, 10080]
+      grid_span: [0.34, 0.7]
+      ema_span_0: [240, 4320]
+      ema_span_1: [240, 10080]
       wallet_exposure_limit: [0.1, 0.1]
-      max_n_entry_orders: [5, 20]
+      max_n_entry_orders: [7, 30]
       initial_qty_pct: [0.015, 0.015]
-      initial_eprice_ema_dist: [-0.1, 0.0]
-      eqty_exp_base: [0.1, 5.0]
-      eprice_exp_base: [0.1, 5.0]
-      min_markup: [0.0015, 0.01]
-      markup_range: [0.0, 0.06]
-      n_close_orders: [5, 20]
-      auto_unstuck_wallet_exposure_threshold: [0.0, 0.6]
-      auto_unstuck_ema_dist: [0.0, 0.1]
+      initial_eprice_ema_dist: [-0.1, 0.01]
+      eqty_exp_base: [0.9, 4.0]
+      eprice_exp_base: [0.9, 4.0]
+      min_markup: [0.001, 0.003]
+      markup_range: [0.0, 0.04]
+      n_close_orders: [7, 30]
+      auto_unstuck_wallet_exposure_threshold: [0.01, 0.1]
+      auto_unstuck_ema_dist: [0.0, 0.02]
     }
   }
 }
