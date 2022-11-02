@@ -198,7 +198,7 @@ class ParticleSwarmOptimization:
                                 max(self.config[max_key], v[f"{key}_{side}"])
                                 for v in results.values()
                             ]
-                            means[side][key] = max(np.mean(ms), self.config[max_key])
+                            means[side][key] = max(self.config[max_key], np.mean(ms))
                         else:
                             means[side][key] = 1.0
                     else:
