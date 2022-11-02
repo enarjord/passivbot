@@ -6,45 +6,46 @@ if "NOJIT" not in os.environ:
 import json
 import pprint
 import numpy as np
+from prettytable import PrettyTable
 import argparse
 import hjson
 from procedures import load_live_config, dump_live_config, make_get_filepath
 from pure_funcs import config_pretty_str, candidate_to_live_config
+from njit_funcs import round_dynamic
 
 
 def main():
 
     parser = argparse.ArgumentParser(prog="view conf", description="inspect conf")
     parser.add_argument("results_fpath", type=str, help="path to results file")
+    weights_keys = [
+        ("psl", "maximum_pa_distance_std_long"),
+        ("pss", "maximum_pa_distance_std_short"),
+        ("pml", "maximum_pa_distance_mean_long"),
+        ("pms", "maximum_pa_distance_mean_short"),
+        ("pll", "maximum_loss_profit_ratio_long"),
+        ("pls", "maximum_loss_profit_ratio_short"),
+        ("hsl", "maximum_hrs_stuck_max_long"),
+        ("hss", "maximum_hrs_stuck_max_short"),
+    ]
+    for k0, k1 in weights_keys:
+        parser.add_argument(
+            f"-{k0}",
+            f"--{k1}",
+            dest=k1,
+            type=float,
+            required=False,
+            default=None,
+            help=f"max {k1}",
+        )
     parser.add_argument(
-        "-p",
-        "--PAD",
-        "--pad",
-        dest="PAD_max",
-        type=float,
+        "-i",
+        "--index",
+        dest="index",
+        type=int,
         required=False,
-        default=None,
-        help="max pa dist",
-    )
-    parser.add_argument(
-        "-l",
-        "--profit_loss_ratio",
-        dest="profit_loss_ratio_max",
-        type=float,
-        required=False,
-        default=None,
-        help="max profit loss ratio",
-    )
-    parser.add_argument(
-        "-i", "--index", dest="index", type=int, required=False, default=1, help="best conf index"
-    )
-    parser.add_argument(
-        "-sf",
-        dest="score_formula",
-        type=str,
-        required=False,
-        default="adgrealizedPADstd",
-        help="choices: [adgPADstd, adg_mean, adg_min, adgPADmean, adgrealizedPADmean, adgrealizedPADstd]",
+        default=0,
+        help="best conf index, default=0",
     )
     parser.add_argument(
         "-d",
@@ -55,178 +56,95 @@ def main():
 
     args = parser.parse_args()
 
+    # attempt guessing whether harmony search or particle swarm
     opt_config_path = (
         "configs/optimize/harmony_search.hjson"
         if "harmony" in args.results_fpath
         else "configs/optimize/particle_swarm_optimization.hjson"
     )
 
-    if args.PAD_max is None:
-        opt_config = hjson.load(open(opt_config_path))
-        PAD_max_long = opt_config["maximum_pa_distance_std_long"]
-        PAD_max_short = opt_config["maximum_pa_distance_std_short"]
-    else:
-        PAD_max_long = args.PAD_max
-        PAD_max_short = args.PAD_max
+    opt_config = hjson.load(open(opt_config_path))
+    maximums = {}
+    for _, k1 in weights_keys:
+        maximums[k1] = opt_config[k1] if getattr(args, k1) is None else getattr(args, k1)
+    klen = max([len(k) for k in maximums])
+    for k, v in maximums.items():
+        print(f"{k: <{klen}} {v}")
 
-    if args.profit_loss_ratio_max is None:
-        opt_config = hjson.load(open(opt_config_path))
-        maximum_loss_profit_ratio_long = opt_config["maximum_loss_profit_ratio_long"]
-        maximum_loss_profit_ratio_short = opt_config["maximum_loss_profit_ratio_short"]
-    else:
-        maximum_loss_profit_ratio_long = args.profit_loss_ratio_max
-        maximum_loss_profit_ratio_short = args.profit_loss_ratio_max
-
-    keys_ = [
-        "adg",
-        "adg_realized_per_exposure",
-        "pa_distance_mean",
-        "pa_distance_std",
-        "loss_profit_ratio",
-        "profit_sum",
-        "loss_sum",
-    ]
-    keys = [k + "_long" for k in keys_] + [k + "_short" for k in keys_]
     with open(args.results_fpath) as f:
-        """
-        results = []
-        for x in f.readlines():
-            j = json.loads(x)
-            rsl = {
-                "results": {
-                    s: {k: j["results"][s][k] for k in keys if k in j["results"][s]}
-                    for s in j["results"]
-                    if s != "config_no"
-                }
-            }
-            rsl["results"]["config_no"] = j["results"]["config_no"]
-            rsl["config"] = j["config"]
-            results.append(rsl)
-        """
         results = [json.loads(x) for x in f.readlines()]
+    print(f"{'n results': <{klen}} {len(results)}")
 
-    print(
-        "n results",
-        len(results),
-        f"score formula: {args.score_formula}, PAD max:",
-        [PAD_max_long, PAD_max_short],
-        f"loss_profit_ratio max:",
-        [maximum_loss_profit_ratio_long, maximum_loss_profit_ratio_short],
-    )
-    best_config = {}
-    adgs_sides = {"long": {}, "short": {}}
-    PAD_max = {"long": PAD_max_long, "short": PAD_max_short}
-    maximum_loss_profit_ratio = {
-        "long": maximum_loss_profit_ratio_long,
-        "short": maximum_loss_profit_ratio_short,
-    }
     sides = ["long", "short"]
-    for side in sides:
-        stats = []
-        for r in results:
-            adgs, adgs_realized, PAD_stds, PAD_means, loss_profit_ratios = [], [], [], [], []
-            for s in (rs := r["results"]):
-                try:
-                    adgs.append(rs[s][f"adg_{side}"])
-                    adgs_realized.append(rs[s][f"adg_realized_per_exposure_{side}"])
-                    PAD_stds.append(rs[s][f"pa_distance_std_{side}"])
-                    PAD_means.append(rs[s][f"pa_distance_mean_{side}"])
-                    if f"loss_profit_ratio_{side}" in rs[s]:
-                        loss_profit_ratios.append(rs[s][f"loss_profit_ratio_{side}"])
+    keys = [
+        ("adg_realized_per_exposure", True),
+        ("pa_distance_std", False),
+        ("pa_distance_mean", False),
+        ("hrs_stuck_max", False),
+        ("loss_profit_ratio", False),
+    ]
+    all_scores = []
+    symbols = [s for s in results[0]["results"] if s != "config_no"]
+    for r in results:
+        cfg = r["config"]
+        ress = r["results"]
+
+        means = {s: {} for s in sides}  # adjusted means
+        scores = {s: -1.0 for s in sides}
+        raws = {s: {} for s in sides}  # unadjusted means
+        all_scores.append({})
+        for side in sides:
+            for key, mult in keys:
+                max_key = f"maximum_{key}_{side}"
+                raws[side][key] = np.mean([ress[s][f"{key}_{side}"] for s in symbols])
+                if max_key in maximums:
+                    if maximums[max_key] >= 0.0:
+                        ms = [max(maximums[max_key], ress[s][f"{key}_{side}"]) for s in symbols]
+                        means[side][key] = max(maximums[max_key], np.mean(ms))
                     else:
-                        # for backwards compatibility
-                        lpr = (
-                            (abs(rs[s][f"loss_sum_{side}"]) / rs[s][f"profit_sum_{side}"])
-                            if rs[s][f"profit_sum_{side}"]
-                            else 1.0
-                        )
-                        rs[s][f"loss_profit_ratio_{side}"] = lpr
-                        loss_profit_ratios.append(lpr)
-                except Exception as e:
-                    pass
-            adg_mean = np.mean(adgs)
-            adg_realized_mean = np.mean(adgs_realized)
-            PAD_std_mean_raw = np.mean(PAD_stds)
-            PAD_std_mean = np.mean([max(PAD_max[side], x) for x in PAD_stds])
-            PAD_mean_mean_raw = np.mean(PAD_means)
-            PAD_mean_mean = np.mean([max(PAD_max[side], x) for x in PAD_means])
-            loss_profit_ratio_mean = np.mean(
-                [max(maximum_loss_profit_ratio[side], x) for x in loss_profit_ratios]
-            )
-            loss_profit_ratio_mean_raw = np.mean(loss_profit_ratios)
-            if args.score_formula.lower() == "adgpadstd":
-                score = adg_mean / max(PAD_max[side], PAD_std_mean)
-            elif args.score_formula.lower() == "adg_mean":
-                score = adg_mean
-            elif args.score_formula.lower() == "adg_min":
-                score = min(adgs)
-            elif args.score_formula.lower() == "adgpadmean":
-                score = adg_mean * min(1, PAD_max[side] / PAD_mean_mean)
-            elif args.score_formula.lower() == "adgrealizedpadmean":
-                score = adg_realized_mean / max(PAD_max[side], PAD_mean_mean)
-            elif args.score_formula.lower() == "adgrealizedpadstd":
-                score = adg_realized_mean / max(PAD_max[side], PAD_std_mean)
-            else:
-                raise Exception("unknown score formula")
-
-            score *= maximum_loss_profit_ratio[side] / max(
-                loss_profit_ratio_mean, maximum_loss_profit_ratio[side]
-            )
-
-            stats.append(
-                {
-                    "config": r["config"],
-                    "adg_mean": adg_mean,
-                    "adg_realized_mean": adg_realized_mean,
-                    "PAD_std_mean": PAD_std_mean,
-                    "PAD_std_mean_raw": PAD_std_mean_raw,
-                    "PAD_mean_mean": PAD_mean_mean,
-                    "PAD_mean_mean_raw": PAD_mean_mean_raw,
-                    "loss_profit_ratio_mean_raw": loss_profit_ratio_mean_raw,
-                    "score": score,
-                    "config_no": r["results"]["config_no"],
-                }
-            )
-        ss = sorted(stats, key=lambda x: x["score"])
-        bc = ss[-args.index]
-        best_config[side] = bc["config"][side]
-        for r in results:
-            if r["results"]["config_no"] == bc["config_no"]:
-                rs = r["results"]
-                syms = [s for s in rs if "config" not in s]
-                print(f"results {side} best config no {bc['config_no']}")
-                print("symbol               adg      PADmean  PADstd   lp_ratio score")
-                for s in sorted(syms, key=lambda x: rs[x][f"adg_realized_per_exposure_{side}"]):
-                    adgs_sides[side][s] = rs[s][f"adg_realized_per_exposure_{side}"]
-                    print(
-                        f"{s: <20} {rs[s][f'adg_realized_per_exposure_{side}']:.6f} "
-                        + f"{rs[s][f'pa_distance_std_{side}']:.6f} {rs[s][f'pa_distance_mean_{side}']:.6f} "
-                        + f"{rs[s][f'loss_profit_ratio_{side}']:.6f} "
-                        + f"{bc['score']:.6f}"
-                    )
-                print(
-                    f"{'means': <20} {bc['adg_realized_mean']:.6f} "
-                    + f"{bc['PAD_std_mean_raw']:.6f} "
-                    + f"{bc['PAD_mean_mean_raw']:.6f} "
-                    + f"{bc['loss_profit_ratio_mean_raw']:.6f} "
-                )
-                bcstats = r
-        other_side = [x for x in sides if x != side][0]
-        if len(r["results"]) < 3:
-            for symbol in r["results"]:
-                if type(r["results"][symbol]) == dict:
-                    pprint.pprint(
-                        {k: v for k, v in r["results"][symbol].items() if other_side not in k}
-                    )
+                        means[side][key] = 1.0
+                else:
+                    means[side][key] = np.mean([ress[s][f"{key}_{side}"] for s in symbols])
+                if mult:
+                    scores[side] *= means[side][key]
+                else:
+                    scores[side] /= means[side][key]
+            all_scores[-1][side] = {
+                "config": cfg[side],
+                "score": scores[side],
+                "stats": {s: {k: v for k, v in ress[s].items() if side in k} for s in symbols},
+            }
+    best_candidate = {}
+    for side in sides:
+        scoress = sorted([sc[side] for sc in all_scores], key=lambda x: x["score"])
+        best_candidate[side] = scoress[args.index]
+    best_config = {
+        "long": best_candidate["long"]["config"],
+        "short": best_candidate["short"]["config"],
+    }
+    for side in sides:
+        row_headers = ["symbol"] + [k[0] for k in keys]
+        table = PrettyTable(row_headers)
+        for rh in row_headers:
+            table.align[rh] = "l"
+        table.title = side
+        for s in sorted(
+            symbols,
+            key=lambda x: best_candidate[side]["stats"][x][f"adg_realized_per_exposure_{side}"],
+        ):
+            xs = [best_candidate[side]["stats"][s][f"{k[0]}_{side}"] for k in keys]
+            table.add_row([s] + [round_dynamic(x, 4) for x in xs])
+        means = [
+            np.mean([best_candidate[side]["stats"][s_][f"{k[0]}_{side}"] for s_ in symbols])
+            for k in keys
+        ]
+        table.add_row(["mean"] + [round_dynamic(m, 4) for m in means])
+        print(table)
     live_config = candidate_to_live_config(best_config)
     if args.dump_live_config:
         lc_fpath = make_get_filepath(f"{args.results_fpath.replace('.txt', '_best_config.json')}")
         print(f"dump_live_config {lc_fpath}")
         dump_live_config(live_config, lc_fpath)
-    adgs_sums = {s: adgs_sides["long"][s] + adgs_sides["short"][s] for s in adgs_sides["long"]}
-    print("\nsum adgs")
-    for k, v in sorted(adgs_sums.items(), key=lambda x: x[1]):
-        print(f"{k: <12} {v:.6f}")
     print(config_pretty_str(live_config))
 
 
