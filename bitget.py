@@ -697,7 +697,7 @@ class BitgetBot(Bot):
         print(res)
 
     async def transfer(self, type_: str, amount: float, asset: str = "USDT"):
-        return {"code": "-1", "msg": "Transferring funds not supported for Bybit"}
+        return {"code": "-1", "msg": "Transferring funds not supported for Bitget"}
 
     def standardize_user_stream_event(
         self, event: Union[List[Dict], Dict]
