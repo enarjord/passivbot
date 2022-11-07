@@ -549,7 +549,6 @@ class BybitBot(Bot):
         except Exception as e:
             print("error fetching fills", e)
             return []
-        print("ntufnt")
         return fetched
         print("fetch_fills not implemented for Bybit")
         return []
@@ -563,18 +562,17 @@ class BybitBot(Bot):
                         "/futures/private/position/leverage/save",
                         {
                             "symbol": self.symbol,
-                            "position_idx": 1,
-                            "buy_leverage": 0,
-                            "sell_leverage": 0,
+                            "buy_leverage": 7,
+                            "sell_leverage": 7,
                         },
                     ),
                     self.private_post(
-                        "/futures/private/position/leverage/save",
+                        "/futures/private/position/switch-isolated",
                         {
                             "symbol": self.symbol,
-                            "position_idx": 2,
-                            "buy_leverage": 0,
-                            "sell_leverage": 0,
+                            "is_isolated": False,
+                            "buy_leverage": 7,
+                            "sell_leverage": 7,
                         },
                     ),
                 )
@@ -602,11 +600,16 @@ class BybitBot(Bot):
                 print(res)
             elif "inverse_perpetual" in self.market_type:
                 res = await self.private_post(
-                    "/v2/private/position/leverage/save",
-                    {"symbol": self.symbol, "leverage": 0},
+                    "/v2/private/position/switch-isolated",
+                    {"symbol": self.symbol, "is_isolated": False,
+                     "buy_leverage": 7, "sell_leverage": 7},
                 )
-
-                print(res)
+                print('1', res)
+                res = await self.private_post(
+                    "/v2/private/position/leverage/save",
+                    {"symbol": self.symbol, "leverage": 7, "leverage_only": True},
+                )
+                print('2', res)
         except Exception as e:
             print(e)
 
