@@ -30,6 +30,7 @@ def truncate_float(x: float, d: int) -> float:
 
 class BitgetBot(Bot):
     def __init__(self, config: dict):
+        self.is_logged_into_user_stream = False
         self.exchange = "bitget"
         super().__init__(config)
         self.base_endpoint = "https://api.bitget.com"
@@ -610,7 +611,7 @@ class BitgetBot(Bot):
                 print_(["error sending heartbeat market", e])
 
     async def subscribe_to_market_stream(self, ws):
-        await ws.send(
+        res = await ws.send(
             json.dumps(
                 {
                     "op": "subscribe",
@@ -625,31 +626,7 @@ class BitgetBot(Bot):
             )
         )
 
-    async def subscribe_to_user_stream(self, ws):
-        timestamp = int(time())
-        signature = base64.b64encode(
-            hmac.new(
-                self.secret.encode("utf-8"),
-                f"{timestamp}GET/user/verify".encode("utf-8"),
-                digestmod="sha256",
-            ).digest()
-        ).decode("utf-8")
-        res = await ws.send(
-            json.dumps(
-                {
-                    "op": "login",
-                    "args": [
-                        {
-                            "apiKey": self.key,
-                            "passphrase": self.passphrase,
-                            "timestamp": timestamp,
-                            "sign": signature,
-                        }
-                    ],
-                }
-            )
-        )
-        print(res)
+    async def subscribe_to_user_streams(self, ws):
         res = await ws.send(
             json.dumps(
                 {
@@ -696,6 +673,38 @@ class BitgetBot(Bot):
         )
         print(res)
 
+    async def subscribe_to_user_stream(self, ws):
+        if self.is_logged_into_user_stream:
+            await self.subscribe_to_user_streams(ws)
+        else:
+            await self.login_to_user_stream(ws)
+
+    async def login_to_user_stream(self, ws):
+        timestamp = int(time())
+        signature = base64.b64encode(
+            hmac.new(
+                self.secret.encode("utf-8"),
+                f"{timestamp}GET/user/verify".encode("utf-8"),
+                digestmod="sha256",
+            ).digest()
+        ).decode("utf-8")
+        res = await ws.send(
+            json.dumps(
+                {
+                    "op": "login",
+                    "args": [
+                        {
+                            "apiKey": self.key,
+                            "passphrase": self.passphrase,
+                            "timestamp": timestamp,
+                            "sign": signature,
+                        }
+                    ],
+                }
+            )
+        )
+        print(res)
+
     async def transfer(self, type_: str, amount: float, asset: str = "USDT"):
         return {"code": "-1", "msg": "Transferring funds not supported for Bitget"}
 
@@ -704,6 +713,10 @@ class BitgetBot(Bot):
     ) -> Union[List[Dict], Dict]:
 
         events = []
+        if "event" in event and event["event"] == "login":
+            self.is_logged_into_user_stream = True
+            return {'logged_in': True}
+        # print('debug 0', event)
         if "arg" in event and "data" in event and "channel" in event["arg"]:
             if event["arg"]["channel"] == "orders":
                 for elm in event["data"]:
