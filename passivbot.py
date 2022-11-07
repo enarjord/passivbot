@@ -887,6 +887,9 @@ class Bot:
 
     async def on_user_stream_event(self, event: dict) -> None:
         try:
+            if "logged_in" in event:
+                # bitget needs to login before sending subscribe requests
+                await self.subscribe_to_user_stream(self.ws_user)
             pos_change = False
             if "wallet_balance" in event:
                 new_wallet_balance = self.adjust_wallet_balance(event["wallet_balance"])
@@ -969,9 +972,9 @@ class Bot:
         await self.init_exchange_config()
         await self.init_order_book()
         await self.init_emas()
+        logging.info("starting websockets...")
         self.user_stream_task = asyncio.create_task(self.start_websocket_user_stream())
         self.market_stream_task = asyncio.create_task(self.start_websocket_market_stream())
-        logging.info("starting websockets...")
         await asyncio.gather(self.user_stream_task, self.market_stream_task)
 
     async def beat_heart_user_stream(self) -> None:
