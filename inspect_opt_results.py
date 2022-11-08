@@ -27,6 +27,8 @@ def main():
         ("pls", "maximum_loss_profit_ratio_short"),
         ("hsl", "maximum_hrs_stuck_max_long"),
         ("hss", "maximum_hrs_stuck_max_short"),
+        ("erl", "minimum_eqbal_ratio_min_long"),
+        ("ers", "minimum_eqbal_ratio_min_short"),
     ]
     for k0, k1 in weights_keys:
         parser.add_argument(
@@ -64,11 +66,11 @@ def main():
     )
 
     opt_config = hjson.load(open(opt_config_path))
-    maximums = {}
+    minsmaxs = {}
     for _, k1 in weights_keys:
-        maximums[k1] = opt_config[k1] if getattr(args, k1) is None else getattr(args, k1)
-    klen = max([len(k) for k in maximums])
-    for k, v in maximums.items():
+        minsmaxs[k1] = opt_config[k1] if getattr(args, k1) is None else getattr(args, k1)
+    klen = max([len(k) for k in minsmaxs])
+    for k, v in minsmaxs.items():
         print(f"{k: <{klen}} {v}")
 
     with open(args.results_fpath) as f:
@@ -82,6 +84,7 @@ def main():
         ("pa_distance_mean", False),
         ("hrs_stuck_max", False),
         ("loss_profit_ratio", False),
+        ("eqbal_ratio_min", True),
     ]
     all_scores = []
     symbols = [s for s in results[0]["results"] if s != "config_no"]
@@ -95,12 +98,17 @@ def main():
         all_scores.append({})
         for side in sides:
             for key, mult in keys:
-                max_key = f"maximum_{key}_{side}"
                 raws[side][key] = np.mean([ress[s][f"{key}_{side}"] for s in symbols])
-                if max_key in maximums:
-                    if maximums[max_key] >= 0.0:
-                        ms = [max(maximums[max_key], ress[s][f"{key}_{side}"]) for s in symbols]
-                        means[side][key] = max(maximums[max_key], np.mean(ms))
+                if (max_key := f"maximum_{key}_{side}") in minsmaxs:
+                    if minsmaxs[max_key] >= 0.0:
+                        ms = [max(minsmaxs[max_key], ress[s][f"{key}_{side}"]) for s in symbols]
+                        means[side][key] = max(minsmaxs[max_key], np.mean(ms))
+                    else:
+                        means[side][key] = 1.0
+                elif (min_key := f"maximum_{key}_{side}") in minsmaxs:
+                    if minsmaxs[min_key] >= 0.0:
+                        ms = [min(minsmaxs[min_key], ress[s][f"{key}_{side}"]) for s in symbols]
+                        means[side][key] = min(minsmaxs[min_key], np.mean(ms))
                     else:
                         means[side][key] = 1.0
                 else:
