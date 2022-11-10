@@ -16,6 +16,8 @@ from passivbot import Bot
 from procedures import print_async_exception, print_
 from pure_funcs import ts_to_date, sort_dict_keys, date_to_ts
 
+exchange_leverage = 7
+
 
 def first_capitalized(s: str):
     return s[0].upper() + s[1:].lower()
@@ -244,9 +246,7 @@ class BybitBot(Bot):
                     short_pos = fetched["result"]
             elif "inverse_futures" in self.market_type:
                 long_pos = [e["data"] for e in fetched["result"] if e["data"]["position_idx"] == 1][0]
-                short_pos = [e["data"] for e in fetched["result"] if e["data"]["position_idx"] == 2][
-                    0
-                ]
+                short_pos = [e["data"] for e in fetched["result"] if e["data"]["position_idx"] == 2][0]
             else:
                 raise Exception("unknown market type")
 
@@ -315,6 +315,8 @@ class BybitBot(Bot):
                 self.endpoints["cancel_order"],
                 {"symbol": self.symbol, "order_id": order["order_id"]},
             )
+            if cancellation["result"] is None:
+                return {}
             return {
                 "symbol": self.symbol,
                 "side": order["side"],
@@ -456,7 +458,7 @@ class BybitBot(Bot):
             if len(fetched) == 0:
                 break
             print_(["fetched income", symbol, ts_to_date(fetched[0]["timestamp"])])
-            if fetched == income[-len(fetched) :]:
+            if fetched == income[-len(fetched):]:
                 break
             income += fetched
             if len(fetched) < limit:
@@ -562,8 +564,8 @@ class BybitBot(Bot):
                         "/futures/private/position/leverage/save",
                         {
                             "symbol": self.symbol,
-                            "buy_leverage": 7,
-                            "sell_leverage": 7,
+                            "buy_leverage": exchange_leverage,
+                            "sell_leverage": exchange_leverage,
                         },
                     ),
                     self.private_post(
@@ -571,8 +573,8 @@ class BybitBot(Bot):
                         {
                             "symbol": self.symbol,
                             "is_isolated": False,
-                            "buy_leverage": 7,
-                            "sell_leverage": 7,
+                            "buy_leverage": exchange_leverage,
+                            "sell_leverage": exchange_leverage,
                         },
                     ),
                 )
@@ -588,26 +590,27 @@ class BybitBot(Bot):
                     {
                         "symbol": self.symbol,
                         "is_isolated": False,
-                        "buy_leverage": 7,
-                        "sell_leverage": 7,
+                        "buy_leverage": exchange_leverage,
+                        "sell_leverage": exchange_leverage,
                     },
                 )
                 print(res)
                 res = await self.private_post(
                     "/private/linear/position/set-leverage",
-                    {"symbol": self.symbol, "buy_leverage": 7, "sell_leverage": 7},
+                    {"symbol": self.symbol, "buy_leverage": exchange_leverage,
+                        "sell_leverage": exchange_leverage},
                 )
                 print(res)
             elif "inverse_perpetual" in self.market_type:
                 res = await self.private_post(
                     "/v2/private/position/switch-isolated",
                     {"symbol": self.symbol, "is_isolated": False,
-                     "buy_leverage": 7, "sell_leverage": 7},
+                     "buy_leverage": exchange_leverage, "sell_leverage": exchange_leverage},
                 )
                 print('1', res)
                 res = await self.private_post(
                     "/v2/private/position/leverage/save",
-                    {"symbol": self.symbol, "leverage": 7, "leverage_only": True},
+                    {"symbol": self.symbol, "leverage": exchange_leverage, "leverage_only": True},
                 )
                 print('2', res)
         except Exception as e:
