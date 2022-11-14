@@ -1,10 +1,7 @@
 from typing import Any, Dict, List, Callable
-from constants import MANAGER_PATH
 from instance import Instance
 from manager import Manager
-from shutil import copyfile
 from sys import argv
-from os import path
 import logging
 import sys
 
@@ -18,7 +15,6 @@ class CLI:
             "start": self.start,
             "stop": self.stop,
             "restart": self.restart,
-            "init": self.init,
             "help": self.help,
         }
 
@@ -49,7 +45,7 @@ class CLI:
             },
         }
 
-        self.manager = None
+        self.manager = Manager()
         self.args = []
         self.flags = {}
 
@@ -65,17 +61,15 @@ class CLI:
         on all instances. See help for those
         commands to understand consequences.
         Args:  [ query ]
-        Flags: [ -y ] [ -s ]"""
-
-        self.flags["all"] = True
-        self.flags["force"] = True
+        Flags: [ -a ] [ -y ] [ -s ] [ -f ]"""
 
         delimiter = "-" * 20
+
         logging.info("Syncing instances...")
         logging.info(delimiter)
         self.stop()
         logging.info(delimiter)
-        self.access_manager().sync_instances()
+        self.manager.sync_instances()
         self.start()
 
         logging.info(delimiter)
@@ -89,8 +83,8 @@ class CLI:
         will be shown.
         Args:  [ query ]"""
 
-        instances_synced = self.access_manager().get_synced_instances()
-        instances_unsynced = self.access_manager().get_unsynced_instances()
+        instances_synced = self.manager.get_synced_instances()
+        instances_unsynced = self.manager.get_unsynced_instances()
 
         if len(instances_synced) > 0:
             self.print_instances(instances_synced, title="Instances:")
@@ -219,18 +213,6 @@ class CLI:
         for instance_id in restarted_instances:
             logging.info("- {}".format(instance_id))
 
-    def init(self):
-        """Create config file"""
-        source = path.join(MANAGER_PATH, "config.example.yaml")
-        target = path.join(MANAGER_PATH, "config.yaml")
-
-        if path.exists(target):
-            logging.info("Config file already exists -> {}".format(target))
-            return
-
-        copyfile(source, target)
-        logging.info("Created a config file -> {}".format(target))
-
     def help(self):
         """Show help
         Args:  [ command ]"""
@@ -293,12 +275,6 @@ class CLI:
     # ---------------------------------------------------------------------------- #
     #                                    helpers                                   #
     # ---------------------------------------------------------------------------- #
-
-    def access_manager(self) -> Manager:
-        if self.manager is None:
-            self.manager = Manager()
-        
-        return self.manager
 
     def print_instances(self, instances, **kwargs):
         if len(instances) == 0:
@@ -363,16 +339,16 @@ class CLI:
                 return False
 
     def get_instances_for_action(self, filter: Callable = None) -> List[Instance]:
-        if self.access_manager().get_instances_length() == 0:
+        if self.manager.get_instances_length() == 0:
             logging.warn("You have no instances configured")
             return []
 
         if self.flags.get("all", False):
-            instances = self.access_manager().get_instances()
+            instances = self.manager.get_instances()
         elif self.flags.get("unsynced", False):
-            instances = self.access_manager().get_unsynced_instances()
+            instances = self.manager.get_unsynced_instances()
         else:
-            instances = self.access_manager().query_instances(self.args)
+            instances = self.manager.query_instances(self.args)
 
         if callable(filter):
             instances = [
@@ -441,7 +417,8 @@ class CLI:
             logging.info("No such command: {}".format(args[0]))
             return
 
-        parsed_args = self.parse_args(args[1:])
+        args = args[1:]
+        parsed_args = self.parse_args(args)
         self.flags = parsed_args["flags"]
         self.args = parsed_args["args"]
 

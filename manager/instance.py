@@ -1,47 +1,39 @@
+from constants import INSTANCE_SIGNATURE_BASE, PASSIVBOT_PATH
+from pm import ProcessManager
+from typing import Dict, List
 import logging
 import os
-import sys
-from typing import Dict, List
-from constants import CONFIGS_PATH, INSTANCE_SIGNATURE_BASE, PASSIVBOT_PATH
-from pm import ProcessManager
 
 
 class Instance:
-    def __init__(self, config):
-        self.user = str(config["user"])
-        self.symbol = str(config["symbol"])
+    def __init__(self, config: Dict):
+        self.user = str(config.get("user"))
+        self.symbol = str(config.get("symbol"))
+        self.config = str(config.get("config"))
 
-        live_config_path = config["live_config_path"]
-        if type(live_config_path) == str and len(live_config_path) > 0:
-            self.live_config_path = live_config_path
-        else:
-            self.live_config_path = os.path.join(CONFIGS_PATH, config["live_config_name"])
+        self.market_type = str(config.get("market_type", "futures"))
+        self.long_exposure = float(config.get("long_exposure", 0.0))
+        self.short_exposure = float(config.get("short_exposure", 0.0))
+        self.assigned_balance = float(config.get("assigned_balance", 0))
+        self.long_mpde = str(config.get("long_mode", "n"))
+        self.short_mode = str(config.get("short_mode", "m"))
 
-        if not os.path.exists(self.live_config_path):
-            self.say("Config file does not exist: {}".format(self.live_config_path))
-            sys.exit(1)
-
-        self.market_type = str(config["market_type"]) or "futures"
-        self.lw = float(config["long_wallet_exposure_limit"]) or 0.0
-        self.sw = float(config["short_wallet_exposure_limit"]) or 0.0
-        self.ab = float(config["assigned_balance"]) or 0
-        self.lm = str(config["long_mode"]) or "n"
-        self.sm = str(config["short_mode"]) or "m"
+        self.is_in_config_ = bool(config.get("is_in_config", True))
 
     def say(self, message) -> None:
         logging.info("[{}] {}".format(self.get_id(), message))
 
     def get_args(self) -> List[str]:
-        return [self.user, self.symbol, self.live_config_path]
+        return [self.user, self.symbol, self.config]
 
     def get_flags(self) -> List[str]:
         flags = {
             "-m": {"value": self.market_type, "valid": self.market_type != "futures"},
-            "-lw": {"value": self.lw, "valid": self.lw > 0.0},
-            "-sw": {"value": self.sw, "valid": self.sw > 0.0},
-            "-ab": {"value": self.ab, "valid": self.ab > 0.0},
-            "-lm": {"value": self.lm, "valid": self.lm != "n"},
-            "-sm": {"value": self.sm, "valid": self.sm != "m"},
+            "-lw": {"value": self.long_exposure, "valid": self.long_exposure > 0.0},
+            "-sw": {"value": self.short_exposure, "valid": self.short_exposure > 0.0},
+            "-ab": {"value": self.assigned_balance, "valid": self.assigned_balance > 0.0},
+            "-lm": {"value": self.long_mpde, "valid": self.long_mpde != "n"},
+            "-sm": {"value": self.short_mode, "valid": self.short_mode != "m"},
         }
 
         valid_flags = []
@@ -67,8 +59,7 @@ class Instance:
         return "^{}".format(" ".join(signature))
 
     def get_pid(self) -> int:
-        pm = ProcessManager()
-        return pm.get_pid(self.get_pid_signature())
+        return ProcessManager.get_pid(self.get_pid_signature())
 
     def get_pid_str(self) -> str:
         pid = self.get_pid()
@@ -84,8 +75,12 @@ class Instance:
         return "running" if self.is_running() else "stopped"
 
     def is_running(self) -> bool:
-        pm = ProcessManager()
-        return pm.is_running(self.get_pid_signature())
+        return ProcessManager.is_running(self.get_pid_signature())
+
+    def is_in_config(self, value=None) -> bool:
+        if value is not None:
+            self.is_in_config_ = bool(value)
+        return self.is_in_config_
 
     def match(self, query: List[str], exact: bool = False) -> bool:
         parameters = {
@@ -118,7 +113,8 @@ class Instance:
     # ---------------------------------------------------------------------------- #
 
     def start(self, silent=False) -> bool:
-        log_file = os.path.join(PASSIVBOT_PATH, "logs/{}/{}.log".format(self.user, self.symbol))
+        log_file = os.path.join(
+            PASSIVBOT_PATH, "logs/{}/{}.log".format(self.user, self.symbol))
         if not os.path.exists(os.path.dirname(log_file)):
             os.makedirs(os.path.dirname(log_file))
 
@@ -127,11 +123,11 @@ class Instance:
         if silent is True:
             log_file = "/dev/null"
 
-        pm = ProcessManager()
-        pm.add_nohup_process(cmd, log_file)
-        self.proc_id = pm.get_pid(self.get_pid_signature(), retries=10)
+        ProcessManager.add_nohup_process(cmd, log_file)
+        self.proc_id = ProcessManager.get_pid(self.get_pid_signature(), retries=10)
         if self.proc_id is None:
-            self.say("Failed to get process id. See {} for more info.".format(log_file))
+            self.say(
+                "Failed to get process id. See {} for more info.".format(log_file))
             return False
 
         return True
@@ -140,12 +136,11 @@ class Instance:
         if not self.is_running():
             return False
 
-        pm = ProcessManager()
-        pid = pm.get_pid(self.get_pid_signature())
+        pid = ProcessManager.get_pid(self.get_pid_signature())
         if pid is None:
             return False
 
-        pm.kill(pid, force)
+        ProcessManager.kill(pid, force)
         return True
 
     def restart(self, force=False, silent=False) -> bool:
@@ -155,17 +150,3 @@ class Instance:
                 return False
 
         return self.start(silent)
-
-
-def instances_from_config(config: Dict, defaults: Dict) -> List[Instance]:
-    instances = []
-    for symbol in config["symbols"]:
-        cfg = defaults.copy()
-        cfg["symbol"] = symbol
-        cfg["user"] = config["user"]
-        for k, v in config.items():
-            if k in cfg:
-                cfg[k] = v
-        instances.append(Instance(cfg))
-
-    return instances

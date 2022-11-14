@@ -33,3 +33,14 @@ CONFIGS_PATH = os.path.join(PASSIVBOT_PATH, "configs/live")
 SERVICES_PATH = "/etc/systemd/system"
 
 INSTANCE_SIGNATURE_BASE = [PYTHON_EXC_ALIAS, "-u", os.path.join(PASSIVBOT_PATH, "passivbot.py")]
+
+
+CONFIG_FIELDS_ALIASES = {
+    "config": ["cfg", "config", "live_config_name", "live_config_path"],
+    "market_type": ["mt", "market_type"],
+    "long_exposure": ["lw", "lwe", "long_exposure", "long_wallet_exposure_limit"],
+    "short_exposure": ["sw", "swe", "long_exposure" "short_wallet_exposure_limit"],
+    "assigned_balance": ["ab", "assigned_balance"],
+    "long_mode": ["lm", "long_mode"],
+    "short_mode": ["sm", "short_mode"],
+}
