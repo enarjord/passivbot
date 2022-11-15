@@ -7,16 +7,11 @@ import os
 
 class Instance:
     def __init__(self, config: Dict):
-        self.user = str(config.get("user"))
-        self.symbol = str(config.get("symbol"))
-        self.config = str(config.get("config"))
+        self.user = config.get("user")
+        self.symbol = config.get("symbol")
+        self.config = config.get("config")
 
-        self.market_type = str(config.get("market_type", "futures"))
-        self.long_exposure = float(config.get("long_exposure", 0.0))
-        self.short_exposure = float(config.get("short_exposure", 0.0))
-        self.assigned_balance = float(config.get("assigned_balance", 0))
-        self.long_mpde = str(config.get("long_mode", "n"))
-        self.short_mode = str(config.get("short_mode", "m"))
+        self.flags = config.get("flags", {})
 
         self.is_in_config_ = bool(config.get("is_in_config", True))
 
@@ -27,22 +22,12 @@ class Instance:
         return [self.user, self.symbol, self.config]
 
     def get_flags(self) -> List[str]:
-        flags = {
-            "-m": {"value": self.market_type, "valid": self.market_type != "futures"},
-            "-lw": {"value": self.long_exposure, "valid": self.long_exposure > 0.0},
-            "-sw": {"value": self.short_exposure, "valid": self.short_exposure > 0.0},
-            "-ab": {"value": self.assigned_balance, "valid": self.assigned_balance > 0.0},
-            "-lm": {"value": self.long_mpde, "valid": self.long_mpde != "n"},
-            "-sm": {"value": self.short_mode, "valid": self.short_mode != "m"},
-        }
+        flags = []
+        for k, v in self.flags.items():
+            if v is not None:
+                flags.extend([k, str(v)])
 
-        valid_flags = []
-        for k, v in flags.items():
-            if v["valid"] is True:
-                valid_flags.append(k)
-                valid_flags.append(str(v["value"]))
-
-        return valid_flags
+        return flags
 
     def get_id(self) -> str:
         return "{}-{}".format(self.user, self.symbol)
@@ -124,7 +109,8 @@ class Instance:
             log_file = "/dev/null"
 
         ProcessManager.add_nohup_process(cmd, log_file)
-        self.proc_id = ProcessManager.get_pid(self.get_pid_signature(), retries=10)
+        self.proc_id = ProcessManager.get_pid(
+            self.get_pid_signature(), retries=10)
         if self.proc_id is None:
             self.say(
                 "Failed to get process id. See {} for more info.".format(log_file))

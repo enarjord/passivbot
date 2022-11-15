@@ -78,8 +78,18 @@ class Manager:
             user = args[0]
             symbol = args[1]
             config = args[2]
-            instance = Instance(
-                {"user": user, "symbol": symbol, "config": config})
+            flags = {}
+
+            if len(args[3:]) > 0:
+                it = iter(args[3:])
+                flags = dict(zip(it, it))
+
+            instance = Instance({
+                "user": user,
+                "symbol": symbol,
+                "config": config,
+                "flags": flags
+            })
             if instance.is_running():
                 instanaces.append(instance)
 

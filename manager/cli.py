@@ -173,10 +173,7 @@ class CLI:
 
         logging.info("Seeking for running instances...")
 
-        def filter(i):
-            return i.is_running()
-
-        instances_to_stop = self.get_instances_for_action(filter)
+        instances_to_stop = self.get_instances_for_action(lambda i: i.is_running())
         if len(instances_to_stop) == 0:
             return
 
@@ -297,7 +294,7 @@ class CLI:
     def access_manager(self) -> Manager:
         if self.manager is None:
             self.manager = Manager()
-        
+
         return self.manager
 
     def print_instances(self, instances, **kwargs):
@@ -358,7 +355,7 @@ class CLI:
             elif answer in ["list", "l"]:
                 self.print_instances(
                     instances, title="\n{}".format(action_message("these instances:")))
-            elif answer == 'exit':
+            elif answer == "exit":
                 logging.info("Aborted")
                 return False
 

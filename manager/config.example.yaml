@@ -1,27 +1,25 @@
 defaults:
   # name of a file in the config/live directory
   # or an absolute path to a config file
-  # aliases: cfg
   config: latest.json
 
-  # following settings are ignored if set to 0
-  # aliases: lw, lwe
-  long_exposure: 0
-  # aliases: sw, swe
-  short_exposure: 0
-  # aliases: ab
-  assigned_balance: 0
+  # uncomment settings to enable them
 
-  # modes info: https://www.passivbot.com/en/latest/live/#controlling-the-bot
-  # aliases: lm
-  long_mode: n
+  # absolute path to a config file
+  # api_keys: /home/ubuntu/passivbot/api-keys.json
 
-  # aliases: sm
-  short_mode: m
+  # assigned_balance: 0
+  # market_type: futures
 
-  # futures or spot
-  # default is futures
-  market_type: futures
+  # long_mode: n
+  # long_exposure: 0
+  # long_min_markup: 0
+  # long_markup_range: 0
+
+  # short_mode: m
+  # short_exposure: 0
+  # short_min_markup: 0
+  # short_markup_range: 0
 
 # it is highly recommended to read the docs/manager.md
 # for the advanced instances configuration
