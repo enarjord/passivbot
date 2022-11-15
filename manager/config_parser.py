@@ -1,5 +1,5 @@
 from constants import MANAGER_CONFIG_PATH, CONFIGS_PATH, PASSIVBOT_PATH, MANAGER_CONFIG_SETTINGS_PATH
-from typing import Dict, List, Union, Tuple
+from typing import Dict, List, Union
 from yaml import load, FullLoader
 from logging import error, info
 from instance import Instance
@@ -11,6 +11,7 @@ class ConfigParser:
     def __init__(self) -> None:
         self.config_file = None
         self.config_settings = None
+        self.defaults = None
         self.existing_config_paths = {}
 
     def get_config(self) -> Dict:
@@ -48,13 +49,20 @@ class ConfigParser:
         return self.get_config_settings().get("flags")
 
     def get_defaults(self) -> Dict:
-        return self.parse_scoped_settings(self.get_config().get("defaults")).copy()
+        if self.defaults is None:
+            self.defaults = self.parse_scoped_settings(
+                self.get_config().get("defaults"))
+
+        return self.defaults.copy()
 
     def get_narrow_config(self, scoped_config: Dict, source=None) -> Dict:
         if type(source) is not dict:
             source = self.get_defaults()
 
-        return dict(source, **self.parse_scoped_settings(scoped_config))
+        scoped_settings = self.parse_scoped_settings(scoped_config)
+        scoped_settings["flags"] = dict(source.get(
+            "flags"), **scoped_settings.get("flags"))
+        return dict(source, **scoped_settings)
 
     def get_instances(self) -> Dict[str, Instance]:
         result = {}
