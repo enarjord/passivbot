@@ -2,6 +2,7 @@ from constants import INSTANCE_SIGNATURE_BASE
 from config_parser import ConfigParser
 from instance import Instance
 from pm import ProcessManager
+from logging import error
 from typing import List
 
 
@@ -21,6 +22,8 @@ class Manager:
             if self.instances.get(iid) is None:
                 instance.is_in_config(False)
                 self.instances[iid] = instance
+            else:
+                error("There are multiple instances with id: {}. Try running 'manager stop {}' to resolve the issue".format(iid, iid))
 
     def get_instances(self) -> List[Instance]:
         return self.instances.values()
