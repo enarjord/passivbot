@@ -121,6 +121,7 @@ def main():
                 "config": cfg[side],
                 "score": scores[side],
                 "stats": {s: {k: v for k, v in ress[s].items() if side in k} for s in symbols},
+                "config_no": ress["config_no"],
             }
     best_candidate = {}
     for side in sides:
@@ -135,7 +136,7 @@ def main():
         table = PrettyTable(row_headers)
         for rh in row_headers:
             table.align[rh] = "l"
-        table.title = side
+        table.title = f"{side} (config no. {best_candidate[side]['config_no']})"
         for s in sorted(
             symbols,
             key=lambda x: best_candidate[side]["stats"][x][f"adg_realized_per_exposure_{side}"],
