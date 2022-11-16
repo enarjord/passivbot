@@ -105,7 +105,7 @@ def main():
                         means[side][key] = max(minsmaxs[max_key], np.mean(ms))
                     else:
                         means[side][key] = 1.0
-                elif (min_key := f"maximum_{key}_{side}") in minsmaxs:
+                elif (min_key := f"minimum_{key}_{side}") in minsmaxs:
                     if minsmaxs[min_key] >= 0.0:
                         ms = [min(minsmaxs[min_key], ress[s][f"{key}_{side}"]) for s in symbols]
                         means[side][key] = min(minsmaxs[min_key], np.mean(ms))
@@ -136,7 +136,10 @@ def main():
         table = PrettyTable(row_headers)
         for rh in row_headers:
             table.align[rh] = "l"
-        table.title = f"{side} (config no. {best_candidate[side]['config_no']})"
+        table.title = (
+            f"{side} (config no. {best_candidate[side]['config_no']},"
+            + f" score {round_dynamic(best_candidate[side]['score'], 6)})"
+        )
         for s in sorted(
             symbols,
             key=lambda x: best_candidate[side]["stats"][x][f"adg_realized_per_exposure_{side}"],
