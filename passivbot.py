@@ -16,6 +16,7 @@ from procedures import (
     make_get_filepath,
     load_exchange_key_secret_passphrase,
     numpyize,
+    print_async_exception,
 )
 from pure_funcs import (
     filter_orders,
@@ -390,11 +391,9 @@ class Bot:
                         self.open_orders = [
                             oo for oo in self.open_orders if oo["order_id"] != o["order_id"]
                         ]
-
-                    else:
-                        logging.error(f"error cancelling order {o}")
                 except Exception as e:
-                    logging.error(f"error cancelling order {oc} {c.exception()} {e}")
+                    logging.error(f"error cancelling order {oc} {e}")
+                    print_async_exception(c)
             return cancelled_orders
         finally:
             self.ts_released["cancel_orders"] = time()
@@ -1127,6 +1126,15 @@ async def main() -> None:
         default="api-keys.json",
         help="File containing users/accounts and api-keys for each exchange",
     )
+    parser.add_argument(
+        "-lev",
+        "--leverage",
+        type=int,
+        required=False,
+        dest="leverage",
+        default=7,
+        help="Leverage set on exchange, if applicable.  Default is 7.",
+    )
 
     float_kwargs = [
         ("-lmm", "--long_min_markup", "--long-min-markup", "long_min_markup"),
@@ -1169,20 +1177,21 @@ async def main() -> None:
     except Exception as e:
         logging.error(f"{e} failed to load config {args.live_config_path}")
         return
-    config["user"] = args.user
-    config["api_keys"] = args.api_keys
     config["exchange"] = exchange
-    config["symbol"] = args.symbol
+    for k in ["user", "api_keys", "symbol", "leverage", "price_distance_threshold"]:
+        config[k] = getattr(args, k)
     config["market_type"] = args.market_type if args.market_type is not None else "futures"
     config["passivbot_mode"] = determine_passivbot_mode(config)
-    config["price_distance_threshold"] = args.price_distance_threshold
     if args.assigned_balance is not None:
         logging.info(f"assigned balance set to {args.assigned_balance}")
         config["assigned_balance"] = args.assigned_balance
 
     if args.long_mode is None:
-        if not config["long"]["enabled"]:
+        if config["long"]["enabled"]:
+            logging.info("long normal mode")
+        else:
             config["long_mode"] = "manual"
+            logging.info("long manual mode enabled; will neither cancel nor create long orders")
     else:
         if args.long_mode in ["gs", "graceful_stop", "graceful-stop"]:
             logging.info(
@@ -1202,9 +1211,13 @@ async def main() -> None:
         elif args.long_mode.lower() in ["t", "tp_only", "tp-only"]:
             logging.info("long tp only mode enabled")
             config["long_mode"] = "tp_only"
+
     if args.short_mode is None:
-        if not config["short"]["enabled"]:
+        if config["short"]["enabled"]:
+            logging.info("short normal mode")
+        else:
             config["short_mode"] = "manual"
+            logging.info("short manual mode enabled; will neither cancel nor create short orders")
     else:
         if args.short_mode in ["gs", "graceful_stop", "graceful-stop"]:
             logging.info(
