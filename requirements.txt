@@ -3,7 +3,7 @@ matplotlib==3.5.1
 prospector==1.6.0
 prettytable==3.0.0
 colorama==0.4.4
-mkdocs==1.2.3
+mkdocs==1.4.0
 mkdocs-material==8.1.8
 pymdown-extensions==9.1
 tqdm==4.62.3

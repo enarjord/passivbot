@@ -1,7 +1,7 @@
 # Passivbot Modes
 
-Passivbot has two different ways of generating the grid of entry orders:  
-Recursive Grid Mode and Static Grid Mode
+Passivbot has three different ways of generating the grid of entry orders:  
+Recursive Grid Mode, Static Grid Mode and Neat Grid Mode
 
 
 ## Common Parameters
@@ -90,3 +90,6 @@ It is called recursive grid mode because the grid is defined recusively by compu
 	- if 1.0, qtys will increase linearly deeper in the grid
 	- if > 1.0, qtys will increase exponentially deeper in the grid
 - see static grid mode for the remaining parameters
+- parameters secondary_allocation, secondary_pprice_diff and eprice_pprice_diff aren't used in neat grid mode
+
+It is called neat grid mode because the grid is made in a "neater" way than in static grid mode.

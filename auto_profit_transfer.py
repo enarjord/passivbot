@@ -11,7 +11,7 @@ from procedures import (
     create_binance_bot,
     create_bybit_bot,
     make_get_filepath,
-    load_exchange_key_secret,
+    load_exchange_key_secret_passphrase,
 )
 from pure_funcs import get_template_live_config, flatten
 from njit_funcs import round_dynamic
@@ -38,7 +38,7 @@ async def main():
         required=False,
         default=0.5,
         dest="percentage",
-        help="per uno, i.e. 0.02==2%.  default=0.5",
+        help="per uno, i.e. 0.02==2 per cent.  default=0.5",
     )
     parser.add_argument(
         "-q",
@@ -54,7 +54,7 @@ async def main():
     config["user"] = args.user
     config["symbol"] = "BTCUSDT"  # dummy symbol
     config["market_type"] = "futures"
-    exchange, _, _ = load_exchange_key_secret(args.user)
+    exchange = load_exchange_key_secret_passphrase(args.user)[0]
     if exchange == "binance":
         bot = await create_binance_bot(config)
     elif exchange == "bybit":
@@ -76,7 +76,7 @@ async def main():
             income = await bot.get_all_income(start_time=now - 1000 * 60 * 60 * 24)
         except Exception as e:
             logging.error(f"failed fetching income {e}")
-            traceback.print_exc()
+            # traceback.print_exc()
             income = []
         income = [e for e in income if e["transaction_id"] not in already_transferred_ids]
         income = [e for e in income if e["token"] == args.quote]

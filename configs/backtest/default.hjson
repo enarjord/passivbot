@@ -12,8 +12,8 @@
   starting_balance: 100000.0
 
   # format YYYY-MM-DD
-  start_date: 2021-05-01
-  end_date: 2022-07-01
+  start_date: 2020-01-01
+  end_date: 2022-09-01
 
   # non default historical data path
   # defaults to local dir if unspecified

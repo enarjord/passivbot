@@ -55,8 +55,14 @@ def main():
 
     args = parser.parse_args()
 
+    opt_config_path = (
+        "configs/optimize/harmony_search.hjson"
+        if "harmony" in args.results_fpath
+        else "configs/optimize/particle_swarm_optimization.hjson"
+    )
+
     if args.PAD_max is None:
-        opt_config = hjson.load(open("configs/optimize/harmony_search.hjson"))
+        opt_config = hjson.load(open(opt_config_path))
         PAD_max_long = opt_config["maximum_pa_distance_std_long"]
         PAD_max_short = opt_config["maximum_pa_distance_std_short"]
     else:
@@ -64,7 +70,7 @@ def main():
         PAD_max_short = args.PAD_max
 
     if args.profit_loss_ratio_max is None:
-        opt_config = hjson.load(open("configs/optimize/harmony_search.hjson"))
+        opt_config = hjson.load(open(opt_config_path))
         maximum_loss_profit_ratio_long = opt_config["maximum_loss_profit_ratio_long"]
         maximum_loss_profit_ratio_short = opt_config["maximum_loss_profit_ratio_short"]
     else:
@@ -82,6 +88,7 @@ def main():
     ]
     keys = [k + "_long" for k in keys_] + [k + "_short" for k in keys_]
     with open(args.results_fpath) as f:
+        """
         results = []
         for x in f.readlines():
             j = json.loads(x)
@@ -95,7 +102,8 @@ def main():
             rsl["results"]["config_no"] = j["results"]["config_no"]
             rsl["config"] = j["config"]
             results.append(rsl)
-        # results = [{k:json.loads(x)} for x in f.readlines()]
+        """
+        results = [json.loads(x) for x in f.readlines()]
 
     print(
         "n results",
@@ -112,7 +120,8 @@ def main():
         "long": maximum_loss_profit_ratio_long,
         "short": maximum_loss_profit_ratio_short,
     }
-    for side in ["long", "short"]:
+    sides = ["long", "short"]
+    for side in sides:
         stats = []
         for r in results:
             adgs, adgs_realized, PAD_stds, PAD_means, loss_profit_ratios = [], [], [], [], []
@@ -201,6 +210,14 @@ def main():
                     + f"{bc['PAD_mean_mean_raw']:.6f} "
                     + f"{bc['loss_profit_ratio_mean_raw']:.6f} "
                 )
+                bcstats = r
+        other_side = [x for x in sides if x != side][0]
+        if len(r["results"]) < 3:
+            for symbol in r["results"]:
+                if type(r["results"][symbol]) == dict:
+                    pprint.pprint(
+                        {k: v for k, v in r["results"][symbol].items() if other_side not in k}
+                    )
     live_config = candidate_to_live_config(best_config)
     if args.dump_live_config:
         lc_fpath = make_get_filepath(f"{args.results_fpath.replace('.txt', '_best_config.json')}")
