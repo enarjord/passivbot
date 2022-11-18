@@ -1,6 +1,6 @@
 # Welcome to Passivbot!
 
-![Passivbot](images/logo_pbot_dark.png)
+![Passivbot](images/pbot_logo_full.svg)
 
 <a class="github-button" href="https://github.com/enarjord/passivbot" data-icon="octicon-star" data-size="large" aria-label="Star enarjord/passivbot on GitHub">Star</a>
 <a class="github-button" href="https://github.com/enarjord/passivbot/fork" data-icon="octicon-repo-forked" data-size="large" aria-label="Fork enarjord/passivbot on GitHub">Fork</a>
@@ -24,10 +24,10 @@ It provides support for automatically optimize configurations, backtest using hi
 
 ## Supported exchanges
 
-Currently the exchanges **Binance Futures**, **Binance Spot**, **Binance US**, and **Bybit Futures** are implemented and supported.  
+Currently the exchanges **Binance Futures**, **Binance Spot**, **Binance US**, **Bitget USDT and Coin margined Futures**, and **Bybit Futures** are implemented and supported.  
 The bot does not use [ccxt](https://github.com/ccxt/ccxt), so other exchanges cannot be used.
 
-Not all functionality is supported on both exchanges, depending on the APIs that exchanges expose and development efforts.
+Not all functionality is supported on all exchanges, depending on the APIs that exchanges expose and development efforts.
 
 !!! Info
     If you would like to have support added for an exchange not supported yet, 
@@ -38,7 +38,7 @@ Not all functionality is supported on both exchanges, depending on the APIs that
 The following requirements are applicable for installing Passivbot:
 
 - Git 2.17 or above
-- Python 3.8.x (newer versions aren't supported yet)
+- Python 3.8.x and higher
 - Supported OS: 
     - Mac
     - Linux

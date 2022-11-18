@@ -38,7 +38,7 @@ def determine_pos_side(o: dict) -> str:
             return "both"
 
 
-class Bybit(Bot):
+class BybitBot(Bot):
     def __init__(self, config: dict):
         self.exchange = "bybit"
         self.min_notional = 0.0
@@ -630,10 +630,10 @@ class Bybit(Bot):
         while True:
             await asyncio.sleep(27)
             try:
-                await self.ws.send(json.dumps({"op": "ping"}))
+                await self.ws_user.send(json.dumps({"op": "ping"}))
             except Exception as e:
                 traceback.print_exc()
-                print_(["error sending heartbeat", e])
+                print_(["error sending heartbeat user", e])
 
     async def subscribe_to_market_stream(self, ws):
         await ws.send(json.dumps({"op": "subscribe", "args": ["trade." + self.symbol]}))

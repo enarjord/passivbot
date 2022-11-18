@@ -1,10 +1,10 @@
 ![Passivbot](docs/images/pbot_logo_full.svg)
 
-# Trading bot running on Bybit and Binance Futures
+# Trading bot running on Bybit, Binance and Bitget
 
 :warning: **Use at own risk** :warning:
 
-v5.7.1  
+v5.8.0
 
 
 ## Overview

@@ -66,7 +66,7 @@ def backtest_wrap(config_: dict, ticks_caches: dict):
         fills_long, fills_short, stats = backtest(config, ticks)
         longs, shorts, sdf, analysis = analyze_fills(fills_long, fills_short, stats, config)
         """
-        with open("logs/debug_harmonysearch.txt", "a") as f:
+        with open("logs/debug_pso.txt", "a") as f:
             f.write(json.dumps({"config": denumpyize(config), "analysis": analysis}) + "\n")
         """
         logging.debug(
@@ -80,21 +80,21 @@ def backtest_wrap(config_: dict, ticks_caches: dict):
         logging.error(f'error with {config["symbol"]} {e}')
         logging.error("config")
         traceback.print_exc()
-        with open(make_get_filepath("tmp/harmony_search_errors.txt"), "a") as f:
+        with open(make_get_filepath("tmp/particle_swarm_optimization_errors.txt"), "a") as f:
             f.write(json.dumps([time(), "error", str(e), denumpyize(config)]) + "\n")
     return analysis
 
 
-class HarmonySearch:
+class ParticleSwarmOptimization:
     def __init__(self, config: dict):
         self.config = config
         self.do_long = config["long"]["enabled"]
         self.do_short = config["short"]["enabled"]
-        self.n_harmonies = max(config["n_harmonies"], len(config["starting_configs"]))
+        self.n_particles = max(config["n_particles"], len(config["starting_configs"]))
+        self.w = config["w"]
+        self.c0 = config["c0"]
+        self.c1 = config["c1"]
         self.starting_configs = config["starting_configs"]
-        self.hm_considering_rate = config["hm_considering_rate"]
-        self.bandwidth = config["bandwidth"]
-        self.pitch_adjusting_rate = config["pitch_adjusting_rate"]
         self.iters = config["iters"]
         self.n_cpus = config["n_cpus"]
         self.pool = Pool(processes=config["n_cpus"])
@@ -106,7 +106,7 @@ class HarmonySearch:
         )
         self.now_date = ts_to_date(time())[:19].replace(":", "-")
         self.results_fpath = make_get_filepath(
-            f"results_harmony_search_{self.config['passivbot_mode']}/{self.now_date}_{self.identifying_name}/"
+            f"results_particle_swarm_optimization_{self.config['passivbot_mode']}/{self.now_date}_{self.identifying_name}/"
         )
         self.exchange_name = config["exchange"] + ("_spot" if config["market_type"] == "spot" else "")
         self.market_specific_settings = {
@@ -131,19 +131,27 @@ class HarmonySearch:
         """
         self.ticks_caches = (
             {s: np.load(f"{self.bt_dir}/{s}/{self.ticks_cache_fname}") for s in self.symbols}
-            if self.n_harmonies > len(self.symbols)
+            if self.n_particles > len(self.symbols)
             else {}
         )
         """
         self.ticks_caches = {}
-        self.shms = {}  # shared memories
         self.current_best_config = None
 
         # [{'config': dict, 'task': process, 'id_key': tuple}]
         self.workers = [None for _ in range(self.n_cpus)]
 
-        # hm = {hm_key: str: {'long': {'score': float, 'config': dict}, 'short': {...}}}
-        self.hm = {}
+        # swarm = {swarm_key: str: {'long': {'score': float, 'config': dict}, 'short': {...}}}
+        self.swarm = {}
+
+        # velocities_long/short = {swarm_key: {k: for k in bounds}}
+        self.velocities_long = {}
+        self.velocities_short = {}
+        # lbests_long/short = {swarm_key: {'config': dict, 'score': float}}
+        self.lbests_long = {}
+        self.lbests_short = {}
+        self.gbest_long = None
+        self.gbest_short = None
 
         # {identifier: {'config': dict,
         #               'single_results': {symbol_finished: single_backtest_result},
@@ -156,10 +164,16 @@ class HarmonySearch:
         # a worker has finished a job; process it
         cfg = deepcopy(self.workers[wi]["config"])
         id_key = self.workers[wi]["id_key"]
+        swarm_key = cfg["swarm_key"]
         symbol = cfg["symbol"]
         self.unfinished_evals[id_key]["single_results"][symbol] = self.workers[wi]["task"].get()
         self.unfinished_evals[id_key]["in_progress"].remove(symbol)
         results = deepcopy(self.unfinished_evals[id_key]["single_results"])
+        with open(self.results_fpath + "positions.txt", "a") as f:
+            f.write(
+                json.dumps({"long": cfg["long"], "short": cfg["short"], "swarm_key": swarm_key})
+                + "\n"
+            )
         if set(results) == set(self.symbols):
             # completed multisymbol iter
             adgs_long = [v["adg_long"] for v in results.values()]
@@ -293,83 +307,28 @@ class HarmonySearch:
                 line += f"- adg short {adg_mean_short:.6f} PAD short {PAD_mean_short:.6f} std short "
                 line += f"{pa_distance_std_short:.5f} score short {score_short:.7f}"
             logging.debug(line)
-            # check whether initial eval or new harmony
-            if "initial_eval_key" in cfg:
-                self.hm[cfg["initial_eval_key"]]["long"]["score"] = score_long
-                self.hm[cfg["initial_eval_key"]]["short"]["score"] = score_short
-            else:
-                # check if better than worst in harmony memory
-                worst_key_long = sorted(
-                    self.hm,
-                    key=lambda x: self.hm[x]["long"]["score"]
-                    if type(self.hm[x]["long"]["score"]) != str
-                    else -np.inf,
-                )[-1]
-                if self.do_long and score_long < self.hm[worst_key_long]["long"]["score"]:
-                    logging.debug(
-                        f"improved long harmony, prev score "
-                        + f"{self.hm[worst_key_long]['long']['score']:.7f} new score {score_long:.7f} - "
-                        + " ".join([str(round_dynamic(e[1], 3)) for e in sorted(cfg["long"].items())])
-                    )
-                    self.hm[worst_key_long]["long"] = {
-                        "config": deepcopy(cfg["long"]),
-                        "score": score_long,
-                    }
-                    json.dump(
-                        self.hm,
-                        open(f"{self.results_fpath}hm_{cfg['config_no']:06}.json", "w"),
-                        indent=4,
-                        sort_keys=True,
-                    )
-                worst_key_short = sorted(
-                    self.hm,
-                    key=lambda x: self.hm[x]["short"]["score"]
-                    if type(self.hm[x]["short"]["score"]) != str
-                    else -np.inf,
-                )[-1]
-                if self.do_short and score_short < self.hm[worst_key_short]["short"]["score"]:
-                    logging.debug(
-                        f"improved short harmony, prev score "
-                        + f"{self.hm[worst_key_short]['short']['score']:.7f} new score {score_short:.7f} - "
-                        + " ".join(
-                            [str(round_dynamic(e[1], 3)) for e in sorted(cfg["short"].items())]
-                        ),
-                    )
-                    self.hm[worst_key_short]["short"] = {
-                        "config": deepcopy(cfg["short"]),
-                        "score": score_short,
-                    }
-                    json.dump(
-                        self.hm,
-                        open(f"{self.results_fpath}hm_{cfg['config_no']:06}.json", "w"),
-                        indent=4,
-                        sort_keys=True,
-                    )
-            best_key_long = sorted(
-                self.hm,
-                key=lambda x: self.hm[x]["long"]["score"]
-                if type(self.hm[x]["long"]["score"]) != str
-                else np.inf,
-            )[0]
-            best_key_short = sorted(
-                self.hm,
-                key=lambda x: self.hm[x]["short"]["score"]
-                if type(self.hm[x]["short"]["score"]) != str
-                else np.inf,
-            )[0]
-            best_config = {
-                "long": deepcopy(self.hm[best_key_long]["long"]["config"]),
-                "short": deepcopy(self.hm[best_key_short]["short"]["config"]),
-            }
-            best_config["result"] = {
-                "symbol": f"{len(self.symbols)}_symbols",
-                "exchange": self.config["exchange"],
-                "start_date": self.config["start_date"],
-                "end_date": self.config["end_date"],
-            }
+            self.swarm[swarm_key]["long"]["score"] = score_long
+            self.swarm[swarm_key]["short"]["score"] = score_short
+            # check if better than lbest long
+            if (
+                type(self.lbests_long[swarm_key]["score"]) == str
+                or score_long < self.lbests_long[swarm_key]["score"]
+            ):
+                self.lbests_long[swarm_key] = deepcopy({"config": cfg["long"], "score": score_long})
+            # check if better than lbest short
+            if (
+                type(self.lbests_short[swarm_key]["score"]) == str
+                or score_short < self.lbests_short[swarm_key]["score"]
+            ):
+                self.lbests_short[swarm_key] = deepcopy(
+                    {"config": cfg["short"], "score": score_short}
+                )
+
             tmp_fname = f"{self.results_fpath}{cfg['config_no']:06}_best_config"
             is_better = False
-            if self.do_long and score_long <= self.hm[best_key_long]["long"]["score"]:
+            # check if better than gbest long
+            if self.gbest_long is None or score_long < self.gbest_long["score"]:
+                self.gbest_long = deepcopy({"config": cfg["long"], "score": score_long})
                 is_better = True
                 logging.info(
                     f"i{cfg['config_no']} - new best config long, score {score_long:.7f} "
@@ -385,7 +344,9 @@ class HarmonySearch:
                     indent=4,
                     sort_keys=True,
                 )
-            if self.do_short and score_short <= self.hm[best_key_short]["short"]["score"]:
+            # check if better than gbest short
+            if self.gbest_short is None or score_short < self.gbest_short["score"]:
+                self.gbest_short = deepcopy({"config": cfg["short"], "score": score_short})
                 is_better = True
                 logging.info(
                     f"i{cfg['config_no']} - new best config short, score {score_short:.7f} "
@@ -402,6 +363,16 @@ class HarmonySearch:
                     sort_keys=True,
                 )
             if is_better:
+                best_config = {
+                    "long": deepcopy(self.gbest_long["config"]),
+                    "short": deepcopy(self.gbest_short["config"]),
+                }
+                best_config["result"] = {
+                    "symbol": f"{len(self.symbols)}_symbols",
+                    "exchange": self.config["exchange"],
+                    "start_date": self.config["start_date"],
+                    "end_date": self.config["end_date"],
+                }
                 dump_live_config(best_config, tmp_fname + ".json")
             elif cfg["config_no"] % 25 == 0:
                 logging.info(f"i{cfg['config_no']}")
@@ -416,10 +387,11 @@ class HarmonySearch:
             del self.unfinished_evals[id_key]
         self.workers[wi] = None
 
-    def start_new_harmony(self, wi: int):
+    def start_new_particle_position(self, wi: int):
         self.iter_counter += 1  # up iter counter on each new config started
+        swarm_key = self.swarm_keys[self.iter_counter % self.n_particles]
         template = get_template_live_config(self.config["passivbot_mode"])
-        new_harmony = {
+        new_position = {
             **{
                 "long": deepcopy(template["long"]),
                 "short": deepcopy(template["short"]),
@@ -431,87 +403,117 @@ class HarmonySearch:
             **{"symbol": self.symbols[0], "config_no": self.iter_counter},
         }
         for side in ["long", "short"]:
-            new_harmony[side]["enabled"] = getattr(self, f"do_{side}")
-            new_harmony[side]["backwards_tp"] = self.config[f"backwards_tp_{side}"]
+            new_position[side]["enabled"] = getattr(self, f"do_{side}")
+            new_position[side]["backwards_tp"] = self.config[f"backwards_tp_{side}"]
         for key in self.long_bounds:
-            if np.random.random() < self.hm_considering_rate:
-                # take note randomly from harmony memory
-                new_note_long = self.hm[np.random.choice(list(self.hm))]["long"]["config"][key]
-                new_note_short = self.hm[np.random.choice(list(self.hm))]["short"]["config"][key]
-                if np.random.random() < self.pitch_adjusting_rate:
-                    # tweak note
-                    new_note_long = new_note_long + self.bandwidth * (np.random.random() - 0.5) * abs(
-                        self.long_bounds[key][0] - self.long_bounds[key][1]
-                    )
-                    new_note_short = new_note_short + self.bandwidth * (
-                        np.random.random() - 0.5
-                    ) * abs(self.short_bounds[key][0] - self.short_bounds[key][1])
-                # ensure note is within bounds
-                new_note_long = max(
-                    self.long_bounds[key][0], min(self.long_bounds[key][1], new_note_long)
+            # get new velocities from gbest and lbest
+            self.velocities_long[swarm_key][key] = (
+                self.w * self.velocities_long[swarm_key][key]
+                + self.c0
+                * np.random.random()
+                * (
+                    self.lbests_long[swarm_key]["config"][key]
+                    - self.swarm[swarm_key]["long"]["config"][key]
                 )
-                new_note_short = max(
-                    self.short_bounds[key][0], min(self.short_bounds[key][1], new_note_short)
+                + self.c1
+                * np.random.random()
+                * (self.gbest_long["config"][key] - self.swarm[swarm_key]["long"]["config"][key])
+            )
+            new_position["long"][key] = max(
+                min(
+                    self.swarm[swarm_key]["long"]["config"][key]
+                    + self.velocities_long[swarm_key][key],
+                    self.long_bounds[key][1],
+                ),
+                self.long_bounds[key][0],
+            )
+            self.velocities_short[swarm_key][key] = (
+                self.w * self.velocities_short[swarm_key][key]
+                + self.c0
+                * np.random.random()
+                * (
+                    self.lbests_short[swarm_key]["config"][key]
+                    - self.swarm[swarm_key]["short"]["config"][key]
                 )
-            else:
-                # new random note
-                new_note_long = np.random.uniform(self.long_bounds[key][0], self.long_bounds[key][1])
-                new_note_short = np.random.uniform(
-                    self.short_bounds[key][0], self.short_bounds[key][1]
-                )
-            new_harmony["long"][key] = new_note_long
-            new_harmony["short"][key] = new_note_short
+                + self.c1
+                * np.random.random()
+                * (self.gbest_short["config"][key] - self.swarm[swarm_key]["short"]["config"][key])
+            )
+            new_position["short"][key] = max(
+                min(
+                    self.swarm[swarm_key]["short"]["config"][key]
+                    + self.velocities_short[swarm_key][key],
+                    self.short_bounds[key][1],
+                ),
+                self.short_bounds[key][0],
+            )
+        self.swarm[swarm_key]["long"] = {
+            "config": deepcopy(new_position["long"]),
+            "score": "in_progress",
+        }
+        self.swarm[swarm_key]["short"] = {
+            "config": deepcopy(new_position["short"]),
+            "score": "in_progress",
+        }
         logging.debug(
-            f"starting new harmony {new_harmony['config_no']} - long "
-            + " ".join([str(round_dynamic(e[1], 3)) for e in sorted(new_harmony["long"].items())])
+            f"starting new position {new_position['config_no']} - long "
+            + " ".join([str(round_dynamic(e[1], 3)) for e in sorted(new_position["long"].items())])
             + " - short: "
-            + " ".join([str(round_dynamic(e[1], 3)) for e in sorted(new_harmony["short"].items())])
+            + " ".join([str(round_dynamic(e[1], 3)) for e in sorted(new_position["short"].items())])
         )
 
-        new_harmony["market_specific_settings"] = self.market_specific_settings[new_harmony["symbol"]]
-        new_harmony[
+        new_position["market_specific_settings"] = self.market_specific_settings[
+            new_position["symbol"]
+        ]
+        new_position[
             "ticks_cache_fname"
-        ] = f"{self.bt_dir}/{new_harmony['symbol']}/{self.ticks_cache_fname}"
-        new_harmony["passivbot_mode"] = self.config["passivbot_mode"]
+        ] = f"{self.bt_dir}/{new_position['symbol']}/{self.ticks_cache_fname}"
+        new_position["passivbot_mode"] = self.config["passivbot_mode"]
+        new_position["swarm_key"] = swarm_key
         self.workers[wi] = {
-            "config": deepcopy(new_harmony),
+            "config": deepcopy(new_position),
             "task": self.pool.apply_async(
-                backtest_wrap, args=(deepcopy(new_harmony), self.ticks_caches)
+                backtest_wrap, args=(deepcopy(new_position), self.ticks_caches)
             ),
-            "id_key": new_harmony["config_no"],
+            "id_key": new_position["config_no"],
         }
-        self.unfinished_evals[new_harmony["config_no"]] = {
-            "config": deepcopy(new_harmony),
+        self.unfinished_evals[new_position["config_no"]] = {
+            "config": deepcopy(new_position),
             "single_results": {},
             "in_progress": set([self.symbols[0]]),
         }
 
-    def start_new_initial_eval(self, wi: int, hm_key: str):
+    def start_new_initial_eval(self, wi: int, swarm_key: str):
         self.iter_counter += 1  # up iter counter on each new config started
         config = {
             **{
-                "long": deepcopy(self.hm[hm_key]["long"]["config"]),
-                "short": deepcopy(self.hm[hm_key]["short"]["config"]),
+                "long": deepcopy(self.swarm[swarm_key]["long"]["config"]),
+                "short": deepcopy(self.swarm[swarm_key]["short"]["config"]),
             },
             **{
                 k: self.config[k]
                 for k in ["starting_balance", "latency_simulation_ms", "market_type"]
             },
-            **{"symbol": self.symbols[0], "initial_eval_key": hm_key, "config_no": self.iter_counter},
+            **{
+                "symbol": self.symbols[0],
+                "initial_eval_key": swarm_key,
+                "config_no": self.iter_counter,
+                "swarm_key": swarm_key,
+            },
         }
-        line = f"starting new initial eval {config['config_no']} of {self.n_harmonies} "
+        line = f"starting new initial eval {config['config_no']} of {self.n_particles} "
         if self.do_long:
             line += " - long: " + " ".join(
                 [
                     f"{e[0][:2]}{e[0][-2:]}" + str(round_dynamic(e[1], 3))
-                    for e in sorted(self.hm[hm_key]["long"]["config"].items())
+                    for e in sorted(self.swarm[swarm_key]["long"]["config"].items())
                 ]
             )
         if self.do_short:
             line += " - short: " + " ".join(
                 [
                     f"{e[0][:2]}{e[0][-2:]}" + str(round_dynamic(e[1], 3))
-                    for e in sorted(self.hm[hm_key]["short"]["config"].items())
+                    for e in sorted(self.swarm[swarm_key]["short"]["config"].items())
                 ]
             )
         logging.info(line)
@@ -530,16 +532,14 @@ class HarmonySearch:
             "single_results": {},
             "in_progress": set([self.symbols[0]]),
         }
-        self.hm[hm_key]["long"]["score"] = "in_progress"
-        self.hm[hm_key]["short"]["score"] = "in_progress"
+        self.swarm[swarm_key]["long"]["score"] = "in_progress"
+        self.swarm[swarm_key]["short"]["score"] = "in_progress"
 
     def run(self):
         try:
             self.run_()
         finally:
-            for s in self.shms:
-                self.shms[s].close()
-                self.shms[s].unlink()
+            pass
 
     def run_(self):
 
@@ -549,40 +549,44 @@ class HarmonySearch:
             "cache_ticks" in self.config and self.config["cache_ticks"]
         ):
         """
-        if False:
-            for s in self.symbols:
-                ticks = np.load(f"{self.bt_dir}/{s}/{self.ticks_cache_fname}")
-                self.shms[s] = shared_memory.SharedMemory(create=True, size=ticks.nbytes)
-                self.ticks_caches[s] = np.ndarray(
-                    ticks.shape, dtype=ticks.dtype, buffer=self.shms[s].buf
-                )
-                self.ticks_caches[s][:] = ticks[:]
-                del ticks
-                logging.info(f"loaded {s} ticks into shared memory")
-
-        # initialize harmony memory
-        for _ in range(self.n_harmonies):
+        # initialize swarm
+        for _ in range(self.n_particles):
             cfg_long = deepcopy(self.config["long"])
             cfg_short = deepcopy(self.config["short"])
+            swarm_key = str(time()) + str(np.random.random())
+            self.velocities_long[swarm_key] = {}
+            self.velocities_short[swarm_key] = {}
             for k in self.long_bounds:
                 cfg_long[k] = np.random.uniform(self.long_bounds[k][0], self.long_bounds[k][1])
                 cfg_short[k] = np.random.uniform(self.short_bounds[k][0], self.short_bounds[k][1])
-            hm_key = str(time()) + str(np.random.random())
-            self.hm[hm_key] = {
+                self.velocities_long[swarm_key][k] = np.random.uniform(
+                    -abs(self.long_bounds[k][0] - self.long_bounds[k][1]),
+                    abs(self.long_bounds[k][0] - self.long_bounds[k][1]),
+                )
+                self.velocities_short[swarm_key][k] = np.random.uniform(
+                    -abs(self.short_bounds[k][0] - self.short_bounds[k][1]),
+                    abs(self.short_bounds[k][0] - self.short_bounds[k][1]),
+                )
+            self.swarm[swarm_key] = {
                 "long": {"score": "not_started", "config": cfg_long},
                 "short": {"score": "not_started", "config": cfg_short},
             }
+            self.lbests_long[swarm_key] = deepcopy(self.swarm[swarm_key]["long"])
+            self.lbests_short[swarm_key] = deepcopy(self.swarm[swarm_key]["short"])
+        self.gbest_long = deepcopy({"config": cfg_long, "score": np.inf})
+        self.gbest_short = deepcopy({"config": cfg_short, "score": np.inf})
+        self.swarm_keys = sorted(self.swarm)
 
         # add starting configs
         for side in ["long", "short"]:
-            hm_keys = list(self.hm)
+            swarm_keys = sorted(self.swarm)
             bounds = getattr(self, f"{side}_bounds")
             for cfg in self.starting_configs:
                 cfg = {k: max(bounds[k][0], min(bounds[k][1], cfg[side][k])) for k in bounds}
                 cfg["enabled"] = getattr(self, f"do_{side}")
                 cfg["backwards_tp"] = self.config[f"backwards_tp_{side}"]
-                if cfg not in [self.hm[k][side]["config"] for k in self.hm]:
-                    self.hm[hm_keys.pop()][side]["config"] = deepcopy(cfg)
+                if cfg not in [self.swarm[k][side]["config"] for k in self.swarm]:
+                    self.swarm[swarm_keys.pop()][side]["config"] = deepcopy(cfg)
 
         # start main loop
         while True:
@@ -590,7 +594,7 @@ class HarmonySearch:
             for wi in range(len(self.workers)):
                 if self.workers[wi] is not None and self.workers[wi]["task"].ready():
                     self.post_process(wi)
-            if self.iter_counter >= self.iters + self.n_harmonies:
+            if self.iter_counter >= self.iters + self.n_particles:
                 if all(worker is None for worker in self.workers):
                     # break when all work is finished
                     break
@@ -629,14 +633,14 @@ class HarmonySearch:
                             break
                     else:
                         # means all symbols are accounted for in all unfinished evals; start new eval
-                        for hm_key in self.hm:
-                            if self.hm[hm_key]["long"]["score"] == "not_started":
+                        for swarm_key in self.swarm:
+                            if self.swarm[swarm_key]["long"]["score"] == "not_started":
                                 # means initial evals not yet done
-                                self.start_new_initial_eval(wi, hm_key)
+                                self.start_new_initial_eval(wi, swarm_key)
                                 break
                         else:
-                            # means initial evals are done; start new harmony
-                            self.start_new_harmony(wi)
+                            # means initial evals are done; start new position
+                            self.start_new_particle_position(wi)
                         sleep(0.25)
 
 
@@ -652,7 +656,7 @@ async def main():
         type=str,
         required=False,
         dest="optimize_config_path",
-        default="configs/optimize/harmony_search.hjson",
+        default="configs/optimize/particle_swarm_optimization.hjson",
         help="optimize config hjson file",
     )
     parser.add_argument(
@@ -780,7 +784,23 @@ async def main():
     config["ohlcv"] = args.ohlcv
     print()
     lines = [(k, getattr(args, k)) for k in args.__dict__ if args.__dict__[k] is not None]
-    lines += [(k, config[k]) for k in ["start_date", "end_date"] if k not in [z[0] for z in lines]]
+    lines += [
+        (k, config[k])
+        for k in [
+            "start_date",
+            "end_date",
+            "w",
+            "c0",
+            "c1",
+            "maximum_pa_distance_std_long",
+            "maximum_pa_distance_std_short",
+            "maximum_pa_distance_mean_long",
+            "maximum_pa_distance_mean_short",
+            "maximum_loss_profit_ratio_long",
+            "maximum_loss_profit_ratio_short",
+        ]
+        if k in config and k not in [z[0] for z in lines]
+    ]
     for line in lines:
         logging.info(f"{line[0]: <{max([len(x[0]) for x in lines]) + 2}} {line[1]}")
     print()
@@ -828,30 +848,16 @@ async def main():
                 except Exception as e:
                     logging.error(f"error loading config {fname}: {e}")
         elif os.path.exists(args.starting_configs):
-            hm_load_failed = True
-            if "hm_" in args.starting_configs:
-                try:
-                    hm = json.load(open(args.starting_configs))
-                    for k in hm:
-                        cfg = {"long": hm[k]["long"]["config"], "short": hm[k]["short"]["config"]}
-                        assert (
-                            determine_passivbot_mode(cfg) == passivbot_mode
-                        ), "wrong passivbot mode in harmony memory"
-                        cfgs.append(cfg)
-                    logging.info(f"loaded harmony memory {args.starting_configs}")
-                    hm_load_failed = False
-                except Exception as e:
-                    logging.error(f"error loading harmony memory {args.starting_configs}: {e}")
-            if hm_load_failed:
-                try:
-                    cfg = load_live_config(args.starting_configs)
-                    assert determine_passivbot_mode(cfg) == passivbot_mode, "wrong passivbot mode"
-                    cfgs.append(cfg)
-                except Exception as e:
-                    logging.error(f"error loading config {args.starting_configs}: {e}")
+            try:
+                cfg = load_live_config(args.starting_configs)
+                assert determine_passivbot_mode(cfg) == passivbot_mode, "wrong passivbot mode"
+                cfgs.append(cfg)
+                logging.info(f"successfully loaded config {args.starting_configs}")
+            except Exception as e:
+                logging.error(f"error loading config {args.starting_configs}: {e}")
     config["starting_configs"] = cfgs
-    harmony_search = HarmonySearch(config)
-    harmony_search.run()
+    particle_swarm_optimization = ParticleSwarmOptimization(config)
+    particle_swarm_optimization.run()
 
 
 if __name__ == "__main__":

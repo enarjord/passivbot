@@ -39,7 +39,7 @@ class Downloader:
         self.config = config
         # use binance data for bybit
         self.config["exchange"] = (
-            "binance" if self.config["exchange"] == "bybit" else self.config["exchange"]
+            "binance" if self.config["exchange"] in ["bybit", "bitget"] else self.config["exchange"]
         )
         self.spot = "spot" in config and config["spot"]
         self.tick_filepath = os.path.join(
@@ -345,6 +345,16 @@ class Downloader:
             with ZipFile(file_tmp) as my_zip_file:
                 for contained_file in my_zip_file.namelist():
                     tf = pd.read_csv(my_zip_file.open(contained_file), names=column_names)
+                    if tf.trade_id.iloc[0] == 'agg_trade_id':
+                        # catch cases where header is included as first row
+                        print('header in first row: attempting fix...')
+                        tf = tf.iloc[1:].reset_index()
+                        tf.is_buyer_maker = tf.is_buyer_maker == 'true'
+                        tf.drop(
+                            errors="ignore",
+                            columns=["index"],
+                            inplace=True,
+                        )
                     tf.drop(
                         errors="ignore",
                         columns=["first", "last", "best_match"],
