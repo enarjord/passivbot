@@ -53,11 +53,14 @@ from typing import Union, Dict, List
 import websockets
 import logging
 
+TEST_MODE_SUPPORTED_EXCHANGES = ["bybit"]
+
 
 class Bot:
     def __init__(self, config: dict):
         self.spot = False
         self.config = config
+        self.test_mode = config["test_mode"]
         self.config["do_long"] = config["long"]["enabled"]
         self.config["do_short"] = config["short"]["enabled"]
         self.config["max_leverage"] = 25
@@ -1135,6 +1138,12 @@ async def main() -> None:
         default=7,
         help="Leverage set on exchange, if applicable.  Default is 7.",
     )
+    parser.add_argument(
+        "-tm",
+        "--test_mode",
+        action="store_true",
+        help=f"if true, run on the test net instead of normal exchange. Supported exchanges: {TEST_MODE_SUPPORTED_EXCHANGES}",
+    )
 
     float_kwargs = [
         ("-lmm", "--long_min_markup", "--long-min-markup", "long_min_markup"),
@@ -1180,6 +1189,9 @@ async def main() -> None:
     config["exchange"] = exchange
     for k in ["user", "api_keys", "symbol", "leverage", "price_distance_threshold"]:
         config[k] = getattr(args, k)
+    config["test_mode"] = args.test_mode
+    if config["test_mode"] and config["exchange"] not in TEST_MODE_SUPPORTED_EXCHANGES:
+        raise IOError(f"Exchange {config['exchange']} is not supported in test mode.")
     config["market_type"] = args.market_type if args.market_type is not None else "futures"
     config["passivbot_mode"] = determine_passivbot_mode(config)
     if args.assigned_balance is not None:
