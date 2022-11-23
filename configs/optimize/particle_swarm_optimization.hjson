@@ -74,7 +74,7 @@
   {
     long:
     {
-      grid_span: [0.35, 0.7]
+      grid_span: [0.34, 0.7]
       ema_span_0: [240, 4320]
       ema_span_1: [240, 10080]
       wallet_exposure_limit: [0.1, 0.1]
@@ -85,15 +85,15 @@
       secondary_allocation: [0.0, 0.7]
       secondary_pprice_diff: [0.05, 0.5]
       eprice_exp_base: [1.0, 2.1]
-      min_markup: [0.001, 0.003]
+      min_markup: [0.001, 0.004]
       markup_range: [0.0, 0.04]
       n_close_orders: [7, 20]
       auto_unstuck_wallet_exposure_threshold: [0.01, 0.1]
-      auto_unstuck_ema_dist: [0.001, 0.1]
+      auto_unstuck_ema_dist: [0.001, 0.02]
     }
     short:
     {
-      grid_span: [0.35, 0.7]
+      grid_span: [0.34, 0.7]
       ema_span_0: [240, 4320]
       ema_span_1: [240, 10080]
       wallet_exposure_limit: [0.1, 0.1]
@@ -104,11 +104,11 @@
       secondary_allocation: [0.0, 0.7]
       secondary_pprice_diff: [0.05, 0.5]
       eprice_exp_base: [1.0, 2.1]
-      min_markup: [0.001, 0.003]
+      min_markup: [0.001, 0.004]
       markup_range: [0.0, 0.04]
       n_close_orders: [7, 20]
       auto_unstuck_wallet_exposure_threshold: [0.01, 0.1]
-      auto_unstuck_ema_dist: [0.001, 0.1]
+      auto_unstuck_ema_dist: [0.001, 0.02]
     }
   }
   bounds_recursive_grid:
@@ -127,7 +127,7 @@
       markup_range: [0.0, 0.04]
       n_close_orders: [4, 20]
       auto_unstuck_wallet_exposure_threshold: [0.01, 0.1]
-      auto_unstuck_ema_dist: [0.001, 0.1]
+      auto_unstuck_ema_dist: [0.001, 0.02]
     }
     short:
     {
@@ -143,7 +143,7 @@
       markup_range: [0.0, 0.04]
       n_close_orders: [4, 20]
       auto_unstuck_wallet_exposure_threshold: [0.01, 0.1]
-      auto_unstuck_ema_dist: [0.001, 0.1]
+      auto_unstuck_ema_dist: [0.001, 0.02]
     }
   }
   bounds_neat_grid:
@@ -159,11 +159,11 @@
       initial_eprice_ema_dist: [-0.1, 0.01]
       eqty_exp_base: [0.9, 4.0]
       eprice_exp_base: [0.9, 4.0]
-      min_markup: [0.001, 0.003]
+      min_markup: [0.001, 0.004]
       markup_range: [0.0, 0.04]
       n_close_orders: [7, 30]
       auto_unstuck_wallet_exposure_threshold: [0.01, 0.1]
-      auto_unstuck_ema_dist: [0.0, 0.02]
+      auto_unstuck_ema_dist: [0.001, 0.02]
     }
     short:
     {
@@ -176,11 +176,11 @@
       initial_eprice_ema_dist: [-0.1, 0.01]
       eqty_exp_base: [0.9, 4.0]
       eprice_exp_base: [0.9, 4.0]
-      min_markup: [0.001, 0.003]
+      min_markup: [0.001, 0.004]
       markup_range: [0.0, 0.04]
       n_close_orders: [7, 30]
       auto_unstuck_wallet_exposure_threshold: [0.01, 0.1]
-      auto_unstuck_ema_dist: [0.0, 0.02]
+      auto_unstuck_ema_dist: [0.001, 0.02]
     }
   }
 }
