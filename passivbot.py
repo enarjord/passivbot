@@ -369,20 +369,22 @@ class Bot:
             self.ts_released["create_orders"] = time()
 
     async def cancel_orders(self, orders_to_cancel: [dict]) -> [dict]:
-        if not orders_to_cancel:
-            return
         if self.ts_locked["cancel_orders"] > self.ts_released["cancel_orders"]:
             return
         self.ts_locked["cancel_orders"] = time()
         try:
-            deletions = []
-            oo_ids = {o["order_id"] for o in self.open_orders}
-            for oc in orders_to_cancel:
-                if oc["order_id"] in oo_ids:  # only try cancellation if order in self.open_orders
-                    try:
-                        deletions.append((oc, asyncio.create_task(self.execute_cancellation(oc))))
-                    except Exception as e:
-                        logging.error(f"error cancelling order c {oc} {e}")
+            if not orders_to_cancel:
+                return
+            deletions, orders_to_cancel_dedup, oo_ids = [], [], set()
+            for o in orders_to_cancel:
+                if o["order_id"] not in oo_ids:
+                    oo_ids.add(o["order_id"])
+                    orders_to_cancel_dedup.append(o)
+            for oc in orders_to_cancel_dedup:
+                try:
+                    deletions.append((oc, asyncio.create_task(self.execute_cancellation(oc))))
+                except Exception as e:
+                    logging.error(f"error cancelling order c {oc} {e}")
             cancelled_orders = []
             for oc, c in deletions:
                 try:
@@ -716,14 +718,14 @@ class Bot:
     async def cancel_and_create(self):
         if self.ts_locked["cancel_and_create"] > self.ts_released["cancel_and_create"]:
             return
-        if any(self.error_halt.values()):
-            logging.warning(
-                f"warning:  error in rest api fetch {self.error_halt}, "
-                + "halting order creations/cancellations"
-            )
-            return
         self.ts_locked["cancel_and_create"] = time()
         try:
+            if any(self.error_halt.values()):
+                logging.warning(
+                    f"warning:  error in rest api fetch {self.error_halt}, "
+                    + "halting order creations/cancellations"
+                )
+                return []
             ideal_orders = []
             all_orders = self.calc_orders()
             for o in all_orders:
@@ -800,9 +802,9 @@ class Bot:
                 )  # sleep 10 ms between sending cancellations and sending creations
             if to_create:
                 results.append(await self.create_orders(to_create[: self.n_orders_per_execution]))
-            await asyncio.sleep(self.delay_between_executions)  # sleep before releasing lock
             return results
         finally:
+            await asyncio.sleep(self.delay_between_executions)  # sleep before releasing lock
             self.ts_released["cancel_and_create"] = time()
 
     async def on_market_stream_event(self, ticks: [dict]):
@@ -818,7 +820,7 @@ class Bot:
         now = time()
         if now - self.ts_released["force_update"] > self.force_update_interval:
             self.ts_released["force_update"] = now
-            # force update pos and open orders thru rest API every 30 sec
+            # force update pos and open orders thru rest API every x sec (default 30)
             await asyncio.gather(self.update_position(), self.update_open_orders())
         if now - self.heartbeat_ts > self.heartbeat_interval_seconds:
             # print heartbeat once an hour
