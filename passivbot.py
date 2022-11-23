@@ -60,7 +60,6 @@ class Bot:
     def __init__(self, config: dict):
         self.spot = False
         self.config = config
-        self.test_mode = config["test_mode"]
         self.config["do_long"] = config["long"]["enabled"]
         self.config["do_short"] = config["short"]["enabled"]
         self.config["max_leverage"] = 25
@@ -130,6 +129,8 @@ class Bot:
             config["long_mode"] = None
         if "short_mode" not in config:
             config["short_mode"] = None
+        if "test_mode" not in config:
+            config["test_mode"] = False
         if "assigned_balance" not in config:
             config["assigned_balance"] = None
         if "cross_wallet_pct" not in config:
