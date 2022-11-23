@@ -14,7 +14,7 @@ import numpy as np
 import pprint
 
 from njit_funcs import round_
-from passivbot import Bot
+from passivbot import Bot, logging
 from procedures import print_async_exception, print_
 from pure_funcs import ts_to_date, sort_dict_keys, date_to_ts
 
@@ -83,7 +83,7 @@ class BitgetBot(Bot):
             self.market_type += "_linear_perpetual"
             self.product_type = "umcbl"
             self.inverse = self.config["inverse"] = False
-            self.min_cost = self.config["min_cost"] = 5.1
+            self.min_cost = self.config["min_cost"] = 5.5
         elif self.symbol.endswith("USD"):
             print("inverse perpetual")
             self.symbol += "_DMCBL"
@@ -568,7 +568,11 @@ class BitgetBot(Bot):
             # set leverage
             res = await self.private_post(
                 self.endpoints["set_leverage"],
-                params={"symbol": self.symbol, "marginCoin": self.margin_coin, "leverage": 20},
+                params={
+                    "symbol": self.symbol,
+                    "marginCoin": self.margin_coin,
+                    "leverage": self.leverage,
+                },
             )
             print(res)
         except Exception as e:
@@ -715,8 +719,8 @@ class BitgetBot(Bot):
         events = []
         if "event" in event and event["event"] == "login":
             self.is_logged_into_user_stream = True
-            return {'logged_in': True}
-        # print('debug 0', event)
+            return {"logged_in": True}
+        # logging.info(f"debug 0 {event}")
         if "arg" in event and "data" in event and "channel" in event["arg"]:
             if event["arg"]["channel"] == "orders":
                 for elm in event["data"]:
@@ -743,18 +747,23 @@ class BitgetBot(Bot):
                             standardized["filled"] = True
                         events.append(standardized)
             if event["arg"]["channel"] == "positions":
+                long_pos = {"psize_long": 0.0, "pprice_long": 0.0}
+                short_pos = {"psize_short": 0.0, "pprice_short": 0.0}
                 for elm in event["data"]:
                     if elm["instId"] == self.symbol and "averageOpenPrice" in elm:
-                        standardized = {
-                            f"psize_{elm['holdSide']}": round_(
-                                abs(float(elm["total"])), self.qty_step
-                            )
-                            * (-1 if elm["holdSide"] == "short" else 1),
-                            f"pprice_{elm['holdSide']}": truncate_float(
+                        if elm["holdSide"] == "long":
+                            long_pos["psize_long"] = round_(abs(float(elm["total"])), self.qty_step)
+                            long_pos["pprice_long"] = truncate_float(
                                 float(elm["averageOpenPrice"]), self.price_rounding
-                            ),
-                        }
-                        events.append(standardized)
+                            )
+                        elif elm["holdSide"] == "short":
+                            short_pos["psize_short"] = -abs(round_(abs(float(elm["total"])), self.qty_step))
+                            short_pos["pprice_short"] = truncate_float(
+                                float(elm["averageOpenPrice"]), self.price_rounding
+                            )
+                # absence of elemet means no pos
+                events.append(long_pos)
+                events.append(short_pos)
 
             if event["arg"]["channel"] == "account":
                 for elm in event["data"]:
