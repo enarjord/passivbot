@@ -9,7 +9,7 @@ from urllib.parse import urlencode
 import aiohttp
 import numpy as np
 
-from passivbot import Bot
+from passivbot import Bot, logging
 from procedures import print_, print_async_exception
 from pure_funcs import ts_to_date, sort_dict_keys, format_float
 
@@ -209,7 +209,7 @@ class BinanceBot(Bot):
         )
 
     async def execute_leverage_change(self):
-        lev = 7  # arbitrary
+        lev = self.leverage
         return await self.private_post(
             self.endpoints["leverage"], {"symbol": self.symbol, "leverage": lev}
         )
@@ -362,9 +362,12 @@ class BinanceBot(Bot):
                 "price": float(cancellation["price"]),
             }
         except Exception as e:
-            print(f"error cancelling order {order} {e}")
-            print_async_exception(cancellation)
-            traceback.print_exc()
+            if cancellation is not None and "code" in cancellation and cancellation["code"] == -2011:
+                logging.error(f"error cancelling order {cancellation} {order}")  # neater error message
+            else:
+                print(f"error cancelling order {order} {e}")
+                print_async_exception(cancellation)
+                traceback.print_exc()
             self.ts_released["force_update"] = 0.0
             return {}
 

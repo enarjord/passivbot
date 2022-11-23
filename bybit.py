@@ -12,7 +12,7 @@ import aiohttp
 import numpy as np
 
 from njit_funcs import round_
-from passivbot import Bot
+from passivbot import Bot, logging
 from procedures import print_async_exception, print_
 from pure_funcs import ts_to_date, sort_dict_keys, date_to_ts
 
@@ -333,9 +333,13 @@ class BybitBot(Bot):
                 "price": order["price"],
             }
         except Exception as e:
-            print(f"error cancelling order {order} {e}")
-            print_async_exception(cancellation)
-            traceback.print_exc()
+            if cancellation is not None and "ret_code" in cancellation and cancellation["ret_code"] == 20001:
+                error_cropped = {k: v for k, v in cancellation.items() if k in ["ret_msg", "ret_code"]}
+                logging.error(f"error cancelling order {error_cropped} {order}")  # neater error message
+            else:
+                print(f"error cancelling order {order} {e}")
+                print_async_exception(cancellation)
+                traceback.print_exc()
             self.ts_released["force_update"] = 0.0
             return {}
 
@@ -558,7 +562,6 @@ class BybitBot(Bot):
         except Exception as e:
             print("error fetching fills", e)
             return []
-        print("ntufnt")
         return fetched
         print("fetch_fills not implemented for Bybit")
         return []
@@ -572,18 +575,17 @@ class BybitBot(Bot):
                         "/futures/private/position/leverage/save",
                         {
                             "symbol": self.symbol,
-                            "position_idx": 1,
-                            "buy_leverage": 0,
-                            "sell_leverage": 0,
+                            "buy_leverage": self.leverage,
+                            "sell_leverage": self.leverage,
                         },
                     ),
                     self.private_post(
-                        "/futures/private/position/leverage/save",
+                        "/futures/private/position/switch-isolated",
                         {
                             "symbol": self.symbol,
-                            "position_idx": 2,
-                            "buy_leverage": 0,
-                            "sell_leverage": 0,
+                            "is_isolated": False,
+                            "buy_leverage": self.leverage,
+                            "sell_leverage": self.leverage,
                         },
                     ),
                 )
@@ -599,23 +601,28 @@ class BybitBot(Bot):
                     {
                         "symbol": self.symbol,
                         "is_isolated": False,
-                        "buy_leverage": 7,
-                        "sell_leverage": 7,
+                        "buy_leverage": self.leverage,
+                        "sell_leverage": self.leverage,
                     },
                 )
                 print(res)
                 res = await self.private_post(
                     "/private/linear/position/set-leverage",
-                    {"symbol": self.symbol, "buy_leverage": 7, "sell_leverage": 7},
+                    {"symbol": self.symbol, "buy_leverage": self.leverage, "sell_leverage": self.leverage},
                 )
                 print(res)
             elif "inverse_perpetual" in self.market_type:
                 res = await self.private_post(
-                    "/v2/private/position/leverage/save",
-                    {"symbol": self.symbol, "leverage": 0},
+                    "/v2/private/position/switch-isolated",
+                    {"symbol": self.symbol, "is_isolated": False,
+                     "buy_leverage": self.leverage, "sell_leverage": self.leverage},
                 )
-
-                print(res)
+                print('1', res)
+                res = await self.private_post(
+                    "/v2/private/position/leverage/save",
+                    {"symbol": self.symbol, "leverage": self.leverage, "leverage_only": True},
+                )
+                print('2', res)
         except Exception as e:
             print(e)
 

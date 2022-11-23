@@ -16,6 +16,7 @@ from procedures import (
     make_get_filepath,
     load_exchange_key_secret_passphrase,
     numpyize,
+    print_async_exception,
 )
 from pure_funcs import (
     filter_orders,
@@ -369,14 +370,18 @@ class Bot:
             self.ts_released["create_orders"] = time()
 
     async def cancel_orders(self, orders_to_cancel: [dict]) -> [dict]:
-        if not orders_to_cancel:
-            return
         if self.ts_locked["cancel_orders"] > self.ts_released["cancel_orders"]:
             return
         self.ts_locked["cancel_orders"] = time()
         try:
-            deletions = []
-            for oc in orders_to_cancel:
+            if not orders_to_cancel:
+                return
+            deletions, orders_to_cancel_dedup, oo_ids = [], [], set()
+            for o in orders_to_cancel:
+                if o["order_id"] not in oo_ids:
+                    oo_ids.add(o["order_id"])
+                    orders_to_cancel_dedup.append(o)
+            for oc in orders_to_cancel_dedup:
                 try:
                     deletions.append((oc, asyncio.create_task(self.execute_cancellation(oc))))
                 except Exception as e:
@@ -394,11 +399,9 @@ class Bot:
                         self.open_orders = [
                             oo for oo in self.open_orders if oo["order_id"] != o["order_id"]
                         ]
-
-                    else:
-                        logging.error(f"error cancelling order {o}")
                 except Exception as e:
-                    logging.error(f"error cancelling order {oc} {c.exception()} {e}")
+                    logging.error(f"error cancelling order {oc} {e}")
+                    print_async_exception(c)
             return cancelled_orders
         finally:
             self.ts_released["cancel_orders"] = time()
@@ -716,16 +719,25 @@ class Bot:
     async def cancel_and_create(self):
         if self.ts_locked["cancel_and_create"] > self.ts_released["cancel_and_create"]:
             return
-        if any(self.error_halt.values()):
-            logging.warning(
-                f"warning:  error in rest api fetch {self.error_halt}, "
-                + "halting order creations/cancellations"
-            )
-            return
         self.ts_locked["cancel_and_create"] = time()
         try:
+            if any(self.error_halt.values()):
+                logging.warning(
+                    f"warning:  error in rest api fetch {self.error_halt}, "
+                    + "halting order creations/cancellations"
+                )
+                return []
             ideal_orders = []
-            for o in self.calc_orders():
+            all_orders = self.calc_orders()
+            for o in all_orders:
+                if "ientry" in o["custom_id"] and calc_diff(o["price"], self.price) < 0.002:
+                    # call update_position() before making initial entry orders
+                    # in case websocket has failed
+                    logging.info("update_position with REST API before creating initial entries")
+                    await self.update_position()
+                    all_orders = self.calc_orders()
+                    break
+            for o in all_orders:
                 if any(x in o["custom_id"] for x in ["ientry", "unstuck"]):
                     if calc_diff(o["price"], self.price) < 0.01:
                         # EMA based orders must be closer than 1% of current price
@@ -791,9 +803,9 @@ class Bot:
                 )  # sleep 10 ms between sending cancellations and sending creations
             if to_create:
                 results.append(await self.create_orders(to_create[: self.n_orders_per_execution]))
-            await asyncio.sleep(self.delay_between_executions)  # sleep before releasing lock
             return results
         finally:
+            await asyncio.sleep(self.delay_between_executions)  # sleep before releasing lock
             self.ts_released["cancel_and_create"] = time()
 
     async def on_market_stream_event(self, ticks: [dict]):
@@ -809,7 +821,7 @@ class Bot:
         now = time()
         if now - self.ts_released["force_update"] > self.force_update_interval:
             self.ts_released["force_update"] = now
-            # force update pos and open orders thru rest API every 30 sec
+            # force update pos and open orders thru rest API every x sec (default 30)
             await asyncio.gather(self.update_position(), self.update_open_orders())
         if now - self.heartbeat_ts > self.heartbeat_interval_seconds:
             # print heartbeat once an hour
@@ -891,6 +903,9 @@ class Bot:
 
     async def on_user_stream_event(self, event: dict) -> None:
         try:
+            if "logged_in" in event:
+                # bitget needs to login before sending subscribe requests
+                await self.subscribe_to_user_stream(self.ws_user)
             pos_change = False
             if "wallet_balance" in event:
                 new_wallet_balance = self.adjust_wallet_balance(event["wallet_balance"])
@@ -973,9 +988,9 @@ class Bot:
         await self.init_exchange_config()
         await self.init_order_book()
         await self.init_emas()
+        logging.info("starting websockets...")
         self.user_stream_task = asyncio.create_task(self.start_websocket_user_stream())
         self.market_stream_task = asyncio.create_task(self.start_websocket_market_stream())
-        logging.info("starting websockets...")
         await asyncio.gather(self.user_stream_task, self.market_stream_task)
 
     async def beat_heart_user_stream(self) -> None:
@@ -1129,6 +1144,15 @@ async def main() -> None:
         help="File containing users/accounts and api-keys for each exchange",
     )
     parser.add_argument(
+        "-lev",
+        "--leverage",
+        type=int,
+        required=False,
+        dest="leverage",
+        default=7,
+        help="Leverage set on exchange, if applicable.  Default is 7.",
+    )
+    parser.add_argument(
         "-tm",
         "--test_mode",
         action="store_true",
@@ -1176,23 +1200,24 @@ async def main() -> None:
     except Exception as e:
         logging.error(f"{e} failed to load config {args.live_config_path}")
         return
-    config["user"] = args.user
-    config["api_keys"] = args.api_keys
     config["exchange"] = exchange
+    for k in ["user", "api_keys", "symbol", "leverage", "price_distance_threshold"]:
+        config[k] = getattr(args, k)
     config["test_mode"] = args.test_mode
     if config["test_mode"] and config["exchange"] not in TEST_MODE_SUPPORTED_EXCHANGES:
         raise IOError(f"Exchange {config['exchange']} is not supported in test mode.")
-    config["symbol"] = args.symbol
     config["market_type"] = args.market_type if args.market_type is not None else "futures"
     config["passivbot_mode"] = determine_passivbot_mode(config)
-    config["price_distance_threshold"] = args.price_distance_threshold
     if args.assigned_balance is not None:
         logging.info(f"assigned balance set to {args.assigned_balance}")
         config["assigned_balance"] = args.assigned_balance
 
     if args.long_mode is None:
-        if not config["long"]["enabled"]:
+        if config["long"]["enabled"]:
+            logging.info("long normal mode")
+        else:
             config["long_mode"] = "manual"
+            logging.info("long manual mode enabled; will neither cancel nor create long orders")
     else:
         if args.long_mode in ["gs", "graceful_stop", "graceful-stop"]:
             logging.info(
@@ -1212,9 +1237,13 @@ async def main() -> None:
         elif args.long_mode.lower() in ["t", "tp_only", "tp-only"]:
             logging.info("long tp only mode enabled")
             config["long_mode"] = "tp_only"
+
     if args.short_mode is None:
-        if not config["short"]["enabled"]:
+        if config["short"]["enabled"]:
+            logging.info("short normal mode")
+        else:
             config["short_mode"] = "manual"
+            logging.info("short manual mode enabled; will neither cancel nor create short orders")
     else:
         if args.short_mode in ["gs", "graceful_stop", "graceful-stop"]:
             logging.info(

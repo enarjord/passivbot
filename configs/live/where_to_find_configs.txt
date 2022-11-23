@@ -1,3 +1,7 @@
 https://github.com/JohnKearney1/PassivBot-Configurations
 
 https://github.com/hoeckxer/passivbot_configs
+
+https://github.com/donewiththedollar/passivbot_v5.8.0/tree/main/configs
+
+https://github.com/tedyptedto/pbos

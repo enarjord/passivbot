@@ -176,167 +176,75 @@ class ParticleSwarmOptimization:
             )
         if set(results) == set(self.symbols):
             # completed multisymbol iter
-            adgs_long = [v["adg_long"] for v in results.values()]
-            adg_mean_long = np.mean(adgs_long)
-            pa_distance_std_long_raw = np.mean([v["pa_distance_std_long"] for v in results.values()])
-            pa_distance_std_long = np.mean(
-                [
-                    max(self.config["maximum_pa_distance_std_long"], v["pa_distance_std_long"])
-                    for v in results.values()
-                ]
-            )
-            PAD_mean_long_raw = np.mean([v["pa_distance_mean_long"] for v in results.values()])
-            PAD_mean_long = np.mean(
-                [
-                    max(self.config["maximum_pa_distance_mean_long"], v["pa_distance_mean_long"])
-                    for v in results.values()
-                ]
-            )
-            adg_DGstd_ratios_long = [v["adg_DGstd_ratio_long"] for v in results.values()]
-            adg_DGstd_ratios_long_mean = np.mean(adg_DGstd_ratios_long)
-            adgs_short = [v["adg_short"] for v in results.values()]
-            adg_mean_short = np.mean(adgs_short)
-            pa_distance_std_short_raw = np.mean(
-                [v["pa_distance_std_short"] for v in results.values()]
-            )
+            sides = ["long", "short"]
+            keys = [
+                ("adg_realized_per_exposure", True),
+                ("pa_distance_std", False),
+                ("pa_distance_mean", False),
+                ("hrs_stuck_max", False),
+                ("loss_profit_ratio", False),
+                ("eqbal_ratio_min", True),
+            ]
+            means = {s: {} for s in sides}  # adjusted means
+            scores = {s: -1.0 for s in sides}
+            raws = {s: {} for s in sides}  # unadjusted means
+            for side in sides:
+                for key, mult in keys:
+                    raws[side][key] = np.mean([v[f"{key}_{side}"] for v in results.values()])
+                    if (max_key := f"maximum_{key}_{side}") in self.config:
+                        if self.config[max_key] >= 0.0:
+                            ms = [
+                                max(self.config[max_key], v[f"{key}_{side}"])
+                                for v in results.values()
+                            ]
+                            means[side][key] = max(np.mean(ms), self.config[max_key])
+                        else:
+                            means[side][key] = 1.0
+                    elif (min_key := f"minimum_{key}_{side}") in self.config:
+                        if self.config[min_key] >= 0.0:
+                            ms = [
+                                min(self.config[min_key], v[f"{key}_{side}"])
+                                for v in results.values()
+                            ]
+                            means[side][key] = min(np.mean(ms), self.config[min_key])
+                        else:
+                            means[side][key] = 1.0
+                    else:
+                        means[side][key] = np.mean([v[f"{key}_{side}"] for v in results.values()])
+                    if mult:
+                        scores[side] *= means[side][key]
+                    else:
+                        scores[side] /= means[side][key]
 
-            pa_distance_std_short = np.mean(
-                [
-                    max(self.config["maximum_pa_distance_std_short"], v["pa_distance_std_short"])
-                    for v in results.values()
-                ]
-            )
-            PAD_mean_short_raw = np.mean([v["pa_distance_mean_short"] for v in results.values()])
-
-            PAD_mean_short = np.mean(
-                [
-                    max(self.config["maximum_pa_distance_mean_short"], v["pa_distance_mean_short"])
-                    for v in results.values()
-                ]
-            )
-            adg_DGstd_ratios_short = [v["adg_DGstd_ratio_short"] for v in results.values()]
-            adg_DGstd_ratios_short_mean = np.mean(adg_DGstd_ratios_short)
-            eqbal_ratios_std_long = [v["equity_balance_ratio_std_long"] for v in results.values()]
-            eqbal_ratios_std_short = [v["equity_balance_ratio_std_short"] for v in results.values()]
-            eqbal_ratio_std_long_mean = np.mean(eqbal_ratios_std_long)
-            eqbal_ratio_std_short_mean = np.mean(eqbal_ratios_std_short)
-            adgs_realized_long = [v["adg_realized_per_exposure_long"] for v in results.values()]
-            adgs_realized_short = [v["adg_realized_per_exposure_short"] for v in results.values()]
-            adg_realized_long_mean = np.mean(adgs_realized_long)
-            adg_realized_short_mean = np.mean(adgs_realized_short)
-            loss_profit_ratio_long_mean = np.mean(
-                [
-                    max(self.config["maximum_loss_profit_ratio_long"], v["loss_profit_ratio_long"])
-                    for v in results.values()
-                ]
-            )
-            loss_profit_ratio_short_mean = np.mean(
-                [
-                    max(self.config["maximum_loss_profit_ratio_short"], v["loss_profit_ratio_short"])
-                    for v in results.values()
-                ]
-            )
-
-            if self.config["score_formula"] == "adg_PAD_mean":
-                score_long = -adg_mean_long * min(
-                    1.0, self.config["maximum_pa_distance_mean_long"] / PAD_mean_long
-                )
-                score_short = -adg_mean_short * min(
-                    1.0, self.config["maximum_pa_distance_mean_short"] / PAD_mean_short
-                )
-            elif self.config["score_formula"] == "adg_realized_PAD_mean":
-                score_long = -adg_realized_long_mean / max(
-                    self.config["maximum_pa_distance_mean_long"], PAD_mean_long
-                )
-                score_short = -adg_realized_short_mean / max(
-                    self.config["maximum_pa_distance_mean_short"], PAD_mean_short
-                )
-            elif self.config["score_formula"] == "adg_realized_PAD_std":
-                score_long = -adg_realized_long_mean / max(
-                    self.config["maximum_pa_distance_std_long"], pa_distance_std_long
-                )
-                score_short = -adg_realized_short_mean / max(
-                    self.config["maximum_pa_distance_std_short"], pa_distance_std_short
-                )
-
-            elif self.config["score_formula"] == "adg_PAD_std":
-                score_long = -adg_mean_long / max(
-                    self.config["maximum_pa_distance_std_long"], pa_distance_std_long
-                )
-                score_short = -adg_mean_short / max(
-                    self.config["maximum_pa_distance_std_short"], pa_distance_std_short
-                )
-            elif self.config["score_formula"] == "adg_DGstd_ratio":
-                score_long = -adg_DGstd_ratios_long_mean
-                score_short = -adg_DGstd_ratios_short_mean
-            elif self.config["score_formula"] == "adg_mean":
-                score_long = -adg_mean_long
-                score_short = -adg_mean_short
-            elif self.config["score_formula"] == "adg_min":
-                score_long = -min(adgs_long)
-                score_short = -min(adgs_short)
-            elif self.config["score_formula"] == "adg_PAD_std_min":
-                # best worst score
-                scores_long = [
-                    v["adg_long"]
-                    / max(v["pa_distance_std_long"], self.config["maximum_pa_distance_std_long"])
-                    for v in results.values()
-                ]
-                score_long = -min(scores_long)
-                scores_short = [
-                    v["adg_short"]
-                    / max(v["pa_distance_std_short"], self.config["maximum_pa_distance_std_short"])
-                    for v in results.values()
-                ]
-                score_short = -min(scores_short)
-            else:
-                raise Exception(f"unknown score formula {self.config['score_formula']}")
-
-            score_long *= self.config["maximum_loss_profit_ratio_long"] / max(
-                loss_profit_ratio_long_mean, self.config["maximum_loss_profit_ratio_long"]
-            )
-            score_short *= self.config["maximum_loss_profit_ratio_short"] / max(
-                loss_profit_ratio_short_mean, self.config["maximum_loss_profit_ratio_short"]
-            )
-
-            line = f"completed multisymbol iter {cfg['config_no']} "
-            if self.do_long:
-                line += f"- adg long {adg_mean_long:.6f} PAD long {PAD_mean_long:.6f} std long "
-                line += f"{pa_distance_std_long:.5f} score long {score_long:.7f} "
-            if self.do_short:
-                line += f"- adg short {adg_mean_short:.6f} PAD short {PAD_mean_short:.6f} std short "
-                line += f"{pa_distance_std_short:.5f} score short {score_short:.7f}"
-            logging.debug(line)
-            self.swarm[swarm_key]["long"]["score"] = score_long
-            self.swarm[swarm_key]["short"]["score"] = score_short
+            self.swarm[swarm_key]["long"]["score"] = scores["long"]
+            self.swarm[swarm_key]["short"]["score"] = scores["short"]
             # check if better than lbest long
             if (
                 type(self.lbests_long[swarm_key]["score"]) == str
-                or score_long < self.lbests_long[swarm_key]["score"]
+                or scores["long"] < self.lbests_long[swarm_key]["score"]
             ):
-                self.lbests_long[swarm_key] = deepcopy({"config": cfg["long"], "score": score_long})
+                self.lbests_long[swarm_key] = deepcopy(
+                    {"config": cfg["long"], "score": scores["long"]}
+                )
             # check if better than lbest short
             if (
                 type(self.lbests_short[swarm_key]["score"]) == str
-                or score_short < self.lbests_short[swarm_key]["score"]
+                or scores["short"] < self.lbests_short[swarm_key]["score"]
             ):
                 self.lbests_short[swarm_key] = deepcopy(
-                    {"config": cfg["short"], "score": score_short}
+                    {"config": cfg["short"], "score": scores["short"]}
                 )
 
             tmp_fname = f"{self.results_fpath}{cfg['config_no']:06}_best_config"
             is_better = False
             # check if better than gbest long
-            if self.gbest_long is None or score_long < self.gbest_long["score"]:
-                self.gbest_long = deepcopy({"config": cfg["long"], "score": score_long})
+            if self.gbest_long is None or scores["long"] < self.gbest_long["score"]:
+                self.gbest_long = deepcopy({"config": cfg["long"], "score": scores["long"]})
                 is_better = True
-                logging.info(
-                    f"i{cfg['config_no']} - new best config long, score {score_long:.7f} "
-                    + f"adg {adg_realized_long_mean:.6f} "
-                    + f"PAD mean {PAD_mean_long_raw:.6f} "
-                    + f"PAD std {pa_distance_std_long_raw:.5f} "
-                    + f"eqbal ratio std {eqbal_ratio_std_long_mean:.6f}"
-                )
+                line = f"i{cfg['config_no']} - new best config long, score {round_dynamic(scores['long'], 4)} "
+                for key, _ in keys:
+                    line += f"{key} {round_dynamic(raws['long'][key], 4)} "
+                logging.info(line)
                 tmp_fname += "_long"
                 json.dump(
                     results,
@@ -345,16 +253,13 @@ class ParticleSwarmOptimization:
                     sort_keys=True,
                 )
             # check if better than gbest short
-            if self.gbest_short is None or score_short < self.gbest_short["score"]:
-                self.gbest_short = deepcopy({"config": cfg["short"], "score": score_short})
+            if self.gbest_short is None or scores["short"] < self.gbest_short["score"]:
+                self.gbest_short = deepcopy({"config": cfg["short"], "score": scores["short"]})
                 is_better = True
-                logging.info(
-                    f"i{cfg['config_no']} - new best config short, score {score_short:.7f} "
-                    + f"adg {adg_realized_short_mean:.6f} "
-                    + f"PAD mean {PAD_mean_short_raw:.6f} "
-                    + f"PAD std {pa_distance_std_short_raw:.5f} "
-                    + f"eqbal ratio std {eqbal_ratio_std_short_mean:.6f}"
-                )
+                line = f"i{cfg['config_no']} - new best config short, score {round_dynamic(scores['short'], 4)} "
+                for key, _ in keys:
+                    line += f"{key} {round_dynamic(raws['short'][key], 4)} "
+                logging.info(line)
                 tmp_fname += "_short"
                 json.dump(
                     results,

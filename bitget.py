@@ -14,7 +14,7 @@ import numpy as np
 import pprint
 
 from njit_funcs import round_
-from passivbot import Bot
+from passivbot import Bot, logging
 from procedures import print_async_exception, print_
 from pure_funcs import ts_to_date, sort_dict_keys, date_to_ts
 
@@ -24,12 +24,15 @@ def first_capitalized(s: str):
 
 
 def truncate_float(x: float, d: int) -> float:
+    if x is None:
+        return 0.0
     xs = str(x)
     return float(xs[: xs.find(".") + d + 1])
 
 
 class BitgetBot(Bot):
     def __init__(self, config: dict):
+        self.is_logged_into_user_stream = False
         self.exchange = "bitget"
         super().__init__(config)
         self.base_endpoint = "https://api.bitget.com"
@@ -82,7 +85,7 @@ class BitgetBot(Bot):
             self.market_type += "_linear_perpetual"
             self.product_type = "umcbl"
             self.inverse = self.config["inverse"] = False
-            self.min_cost = self.config["min_cost"] = 5.1
+            self.min_cost = self.config["min_cost"] = 5.5
         elif self.symbol.endswith("USD"):
             print("inverse perpetual")
             self.symbol += "_DMCBL"
@@ -254,15 +257,19 @@ class BitgetBot(Bot):
             if elm["holdSide"] == "long":
                 position["long"] = {
                     "size": round_(float(elm["total"]), self.qty_step),
-                    "price": truncate_float(float(elm["averageOpenPrice"]), self.price_rounding),
-                    "liquidation_price": float(elm["liquidationPrice"]),
+                    "price": truncate_float(elm["averageOpenPrice"], self.price_rounding),
+                    "liquidation_price": 0.0
+                    if elm["liquidationPrice"] is None
+                    else float(elm["liquidationPrice"]),
                 }
 
             elif elm["holdSide"] == "short":
                 position["short"] = {
                     "size": -abs(round_(float(elm["total"]), self.qty_step)),
-                    "price": truncate_float(float(elm["averageOpenPrice"]), self.price_rounding),
-                    "liquidation_price": float(elm["liquidationPrice"]),
+                    "price": truncate_float(elm["averageOpenPrice"], self.price_rounding),
+                    "liquidation_price": 0.0
+                    if elm["liquidationPrice"] is None
+                    else float(elm["liquidationPrice"]),
                 }
         for elm in fetched_balance["data"]:
             if elm["marginCoin"] == self.margin_coin:
@@ -567,7 +574,11 @@ class BitgetBot(Bot):
             # set leverage
             res = await self.private_post(
                 self.endpoints["set_leverage"],
-                params={"symbol": self.symbol, "marginCoin": self.margin_coin, "leverage": 20},
+                params={
+                    "symbol": self.symbol,
+                    "marginCoin": self.margin_coin,
+                    "leverage": self.leverage,
+                },
             )
             print(res)
         except Exception as e:
@@ -610,7 +621,7 @@ class BitgetBot(Bot):
                 print_(["error sending heartbeat market", e])
 
     async def subscribe_to_market_stream(self, ws):
-        await ws.send(
+        res = await ws.send(
             json.dumps(
                 {
                     "op": "subscribe",
@@ -625,31 +636,7 @@ class BitgetBot(Bot):
             )
         )
 
-    async def subscribe_to_user_stream(self, ws):
-        timestamp = int(time())
-        signature = base64.b64encode(
-            hmac.new(
-                self.secret.encode("utf-8"),
-                f"{timestamp}GET/user/verify".encode("utf-8"),
-                digestmod="sha256",
-            ).digest()
-        ).decode("utf-8")
-        res = await ws.send(
-            json.dumps(
-                {
-                    "op": "login",
-                    "args": [
-                        {
-                            "apiKey": self.key,
-                            "passphrase": self.passphrase,
-                            "timestamp": timestamp,
-                            "sign": signature,
-                        }
-                    ],
-                }
-            )
-        )
-        print(res)
+    async def subscribe_to_user_streams(self, ws):
         res = await ws.send(
             json.dumps(
                 {
@@ -696,14 +683,50 @@ class BitgetBot(Bot):
         )
         print(res)
 
+    async def subscribe_to_user_stream(self, ws):
+        if self.is_logged_into_user_stream:
+            await self.subscribe_to_user_streams(ws)
+        else:
+            await self.login_to_user_stream(ws)
+
+    async def login_to_user_stream(self, ws):
+        timestamp = int(time())
+        signature = base64.b64encode(
+            hmac.new(
+                self.secret.encode("utf-8"),
+                f"{timestamp}GET/user/verify".encode("utf-8"),
+                digestmod="sha256",
+            ).digest()
+        ).decode("utf-8")
+        res = await ws.send(
+            json.dumps(
+                {
+                    "op": "login",
+                    "args": [
+                        {
+                            "apiKey": self.key,
+                            "passphrase": self.passphrase,
+                            "timestamp": timestamp,
+                            "sign": signature,
+                        }
+                    ],
+                }
+            )
+        )
+        print(res)
+
     async def transfer(self, type_: str, amount: float, asset: str = "USDT"):
-        return {"code": "-1", "msg": "Transferring funds not supported for Bybit"}
+        return {"code": "-1", "msg": "Transferring funds not supported for Bitget"}
 
     def standardize_user_stream_event(
         self, event: Union[List[Dict], Dict]
     ) -> Union[List[Dict], Dict]:
 
         events = []
+        if "event" in event and event["event"] == "login":
+            self.is_logged_into_user_stream = True
+            return {"logged_in": True}
+        # logging.info(f"debug 0 {event}")
         if "arg" in event and "data" in event and "channel" in event["arg"]:
             if event["arg"]["channel"] == "orders":
                 for elm in event["data"]:
@@ -730,18 +753,25 @@ class BitgetBot(Bot):
                             standardized["filled"] = True
                         events.append(standardized)
             if event["arg"]["channel"] == "positions":
+                long_pos = {"psize_long": 0.0, "pprice_long": 0.0}
+                short_pos = {"psize_short": 0.0, "pprice_short": 0.0}
                 for elm in event["data"]:
                     if elm["instId"] == self.symbol and "averageOpenPrice" in elm:
-                        standardized = {
-                            f"psize_{elm['holdSide']}": round_(
-                                abs(float(elm["total"])), self.qty_step
+                        if elm["holdSide"] == "long":
+                            long_pos["psize_long"] = round_(abs(float(elm["total"])), self.qty_step)
+                            long_pos["pprice_long"] = truncate_float(
+                                elm["averageOpenPrice"], self.price_rounding
                             )
-                            * (-1 if elm["holdSide"] == "short" else 1),
-                            f"pprice_{elm['holdSide']}": truncate_float(
-                                float(elm["averageOpenPrice"]), self.price_rounding
-                            ),
-                        }
-                        events.append(standardized)
+                        elif elm["holdSide"] == "short":
+                            short_pos["psize_short"] = -abs(
+                                round_(abs(float(elm["total"])), self.qty_step)
+                            )
+                            short_pos["pprice_short"] = truncate_float(
+                                elm["averageOpenPrice"], self.price_rounding
+                            )
+                # absence of elemet means no pos
+                events.append(long_pos)
+                events.append(short_pos)
 
             if event["arg"]["channel"] == "account":
                 for elm in event["data"]:
