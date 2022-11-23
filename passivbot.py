@@ -723,7 +723,16 @@ class Bot:
         self.ts_locked["cancel_and_create"] = time()
         try:
             ideal_orders = []
-            for o in self.calc_orders():
+            all_orders = self.calc_orders()
+            for o in all_orders:
+                if "ientry" in o["custom_id"] and calc_diff(o["price"], self.price) < 0.01:
+                    # call update_position() before making initial entry orders
+                    # in case websocket has failed
+                    logging.info("update_position with REST API before creating initial entries")
+                    await self.update_position()
+                    all_orders = self.calc_orders()
+                    break
+            for o in all_orders:
                 if any(x in o["custom_id"] for x in ["ientry", "unstuck"]):
                     if calc_diff(o["price"], self.price) < 0.01:
                         # EMA based orders must be closer than 1% of current price
