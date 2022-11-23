@@ -24,6 +24,8 @@ def first_capitalized(s: str):
 
 
 def truncate_float(x: float, d: int) -> float:
+    if x is None:
+        return 0.0
     xs = str(x)
     return float(xs[: xs.find(".") + d + 1])
 
@@ -255,15 +257,19 @@ class BitgetBot(Bot):
             if elm["holdSide"] == "long":
                 position["long"] = {
                     "size": round_(float(elm["total"]), self.qty_step),
-                    "price": truncate_float(float(elm["averageOpenPrice"]), self.price_rounding),
-                    "liquidation_price": float(elm["liquidationPrice"]),
+                    "price": truncate_float(elm["averageOpenPrice"], self.price_rounding),
+                    "liquidation_price": 0.0
+                    if elm["liquidationPrice"] is None
+                    else float(elm["liquidationPrice"]),
                 }
 
             elif elm["holdSide"] == "short":
                 position["short"] = {
                     "size": -abs(round_(float(elm["total"]), self.qty_step)),
-                    "price": truncate_float(float(elm["averageOpenPrice"]), self.price_rounding),
-                    "liquidation_price": float(elm["liquidationPrice"]),
+                    "price": truncate_float(elm["averageOpenPrice"], self.price_rounding),
+                    "liquidation_price": 0.0
+                    if elm["liquidationPrice"] is None
+                    else float(elm["liquidationPrice"]),
                 }
         for elm in fetched_balance["data"]:
             if elm["marginCoin"] == self.margin_coin:
@@ -754,12 +760,14 @@ class BitgetBot(Bot):
                         if elm["holdSide"] == "long":
                             long_pos["psize_long"] = round_(abs(float(elm["total"])), self.qty_step)
                             long_pos["pprice_long"] = truncate_float(
-                                float(elm["averageOpenPrice"]), self.price_rounding
+                                elm["averageOpenPrice"], self.price_rounding
                             )
                         elif elm["holdSide"] == "short":
-                            short_pos["psize_short"] = -abs(round_(abs(float(elm["total"])), self.qty_step))
+                            short_pos["psize_short"] = -abs(
+                                round_(abs(float(elm["total"])), self.qty_step)
+                            )
                             short_pos["pprice_short"] = truncate_float(
-                                float(elm["averageOpenPrice"]), self.price_rounding
+                                elm["averageOpenPrice"], self.price_rounding
                             )
                 # absence of elemet means no pos
                 events.append(long_pos)
