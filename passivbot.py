@@ -378,7 +378,7 @@ class Bot:
             deletions = []
             oo_ids = {o["order_id"] for o in self.open_orders}
             for oc in orders_to_cancel:
-                if oc["order_id"] not in oo_ids:
+                if oc["order_id"] in oo_ids:  # only try cancellation if order in self.open_orders
                     try:
                         deletions.append((oc, asyncio.create_task(self.execute_cancellation(oc))))
                     except Exception as e:
@@ -727,7 +727,7 @@ class Bot:
             ideal_orders = []
             all_orders = self.calc_orders()
             for o in all_orders:
-                if "ientry" in o["custom_id"] and calc_diff(o["price"], self.price) < 0.003:
+                if "ientry" in o["custom_id"] and calc_diff(o["price"], self.price) < 0.002:
                     # call update_position() before making initial entry orders
                     # in case websocket has failed
                     logging.info("update_position with REST API before creating initial entries")
