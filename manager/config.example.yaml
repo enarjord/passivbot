@@ -1,7 +1,9 @@
+version: 2
+
 defaults:
   # name of a file in the config/live directory
   # or an absolute path to a config file
-  config: latest.json
+  config: "latest.json"
 
   # uncomment settings to enable them
 
@@ -9,14 +11,14 @@ defaults:
   # api_keys: /home/ubuntu/passivbot/api-keys.json
 
   # assigned_balance: 0
-  # market_type: futures
+  # market_type: "futures"
 
-  # long_mode: n
+  # long_mode: "n"
   # long_exposure: 0
   # long_min_markup: 0
   # long_markup_range: 0
 
-  # short_mode: m
+  # short_mode: "m"
   # short_exposure: 0
   # short_min_markup: 0
   # short_markup_range: 0
@@ -24,7 +26,7 @@ defaults:
 # it is highly recommended to read the docs/manager.md
 # for the advanced instances configuration
 instances:
-  - user: binance_0x
+  - user: "binance_0x"
     symbols:
-      - BTCUSDT
-      - ETHUSDT
+      - "BTCUSDT"
+      - "ETHUSDT"
