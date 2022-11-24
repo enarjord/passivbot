@@ -6,7 +6,8 @@ from constants import USER
 
 
 class ProcessManager:
-    def add(self, command: List[str]) -> int:
+    @staticmethod
+    def add(command: List[str]) -> int:
         """
         Launch a new process with the given command.
         :param command: The command to run.
@@ -14,7 +15,8 @@ class ProcessManager:
         """
         return os.system(" ".join(command))
 
-    def add_nohup_process(self, command: List[str], log_file_path: str = None) -> int:
+    @staticmethod
+    def add_nohup_process(command: List[str], log_file_path: str = None) -> int:
         """
         Launch a new no hang up process with the given target script path.
         :param target_script_path: The path to the target script.
@@ -29,9 +31,10 @@ class ProcessManager:
             nohup_command.extend([">", log_file_path, "2>&1", "&"])
         else:
             nohup_command.extend([">", "/dev/null", "2>&1", "&"])
-        return self.add(nohup_command)
+        return ProcessManager.add(nohup_command)
 
-    def get_pid(self, signature: str, all_matches: bool = False, retries: int = 5) -> List[int]:
+    @staticmethod
+    def get_pid(signature: str, all_matches: bool = False, retries: int = 5) -> List[int]:
         """
         Use pgrep to get the process id of the process with the given query string.
         :param signature: The signature to search for.
@@ -61,15 +64,17 @@ class ProcessManager:
         else:
             return int(matches[0])
 
-    def is_running(self, signature: str) -> bool:
+    @staticmethod
+    def is_running(signature: str) -> bool:
         """
         Check if the process with the given signature is running.
         :param signature: The signature to check.
         :return: True if the process with the given signature is running.
         """
-        return self.get_pid(signature) is not None
+        return ProcessManager.get_pid(signature) is not None
 
-    def info(self, pid: int) -> str:
+    @staticmethod
+    def info(pid: int) -> str:
         """
         Get the info of the process with the given pid.
         :param pid: The process id of the process to get the info of.
@@ -81,7 +86,8 @@ class ProcessManager:
         except subprocess.CalledProcessError:
             return None
 
-    def kill(self, pid: int, force: bool = False):
+    @staticmethod
+    def kill(pid: int, force: bool = False):
         """
         Kill the process with the given pid.
         :param pid: The process id of the process to kill.
@@ -97,7 +103,7 @@ class ProcessManager:
         os.system(cmd)
         retries = 10
         while retries > 0:
-            if not self.info(pid):
+            if not ProcessManager.info(pid):
                 break
             sleep(0.2)
             retries -= 1

@@ -1,0 +1,90 @@
+arguments:
+  - name: config
+    aliases:
+      - cfg
+      - config
+      - live_config_name
+      - live_config_path
+
+flags:
+  # ----------------------------------- misc ----------------------------------- #
+
+  - name: assigned_balance
+    flag: -ab
+    aliases:
+      - ab
+      - assigned_balance
+
+  - name: market_type
+    flag: -m
+    aliases:
+      - m
+      - mt
+      - market_type
+
+  - name: price_distance_threshold
+    flag: -pt
+    aliases:
+      - pt
+      - price_distance_threshold
+  - name: api_keys
+    flag: -ak
+    aliases:
+      - ak
+      - api_keys
+
+  # ----------------------------------- longs ---------------------------------- #
+
+  - name: long_mode
+    flag: -lm
+    aliases:
+      - lm
+      - long_mode
+
+  - name: long_exposure
+    flag: -lw
+    aliases:
+      - lw
+      - lwe
+      - long_exposure
+      - long_wallet_exposure_limit
+
+  - name: long_min_markup
+    flag: -lmm
+    aliases:
+      - lmm
+      - long_min_markup
+
+  - name: long_markup_range
+    flag: -lmr
+    aliases:
+      - lmr
+      - long_markup_range
+
+  # ---------------------------------- shorts ---------------------------------- #
+
+  - name: short_mode
+    flag: -sm
+    aliases:
+      - sm
+      - short_mode
+
+  - name: short_exposure
+    flag: -sw
+    aliases:
+      - sw
+      - swe
+      - short_exposure
+      - short_wallet_exposure_limit
+
+  - name: short_min_markup
+    flag: -smm
+    aliases:
+      - smm
+      - short_min_markup
+
+  - name: short_markup_range
+    flag: -smr
+    aliases:
+      - smr
+      - short_markup_range

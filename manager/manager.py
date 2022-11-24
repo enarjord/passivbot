@@ -1,62 +1,63 @@
-import logging
-import os
-import sys
-import yaml
-from constants import INSTANCE_SIGNATURE_BASE, MANAGER_CONFIG_PATH
-from instance import Instance, instances_from_config
+from constants import INSTANCE_SIGNATURE_BASE
+from config_parser import ConfigParser
+from instance import Instance
 from pm import ProcessManager
+from logging import error
 from typing import List
 
 
 class Manager:
     def __init__(self):
-        self.defaults = {}
-        self.instances = []
-        self.sync_config()
+        self.instances = {}
+        self.sync_instances()
 
-    def sync_config(self):
-        """Sync manger with config file"""
-        self.instances = []
+    def sync_instances(self):
+        """Sync manger with instances in the config and unsynced ones"""
+        cp = ConfigParser()
+        cp.get_config()
+        self.instances = cp.get_instances()
 
-        if not os.path.exists(MANAGER_CONFIG_PATH):
-            logging.error("No such file: {}".format(MANAGER_CONFIG_PATH))
-            sys.exit(1)
-
-        with open(MANAGER_CONFIG_PATH, "r") as f:
-            config = yaml.load(f, Loader=yaml.FullLoader)
-        self.defaults = config["defaults"]
-
-        if "instances" not in config or not isinstance(config["instances"], list):
-            return
-
-        for instance in config["instances"]:
-            self.instances.extend(instances_from_config(instance, self.defaults))
+        for instance in self.get_all_passivbot_instances():
+            iid = instance.get_id()
+            if self.instances.get(iid) is None:
+                instance.is_in_config(False)
+                self.instances[iid] = instance
+            else:
+                error("There are multiple instances with id: {}. Try running 'manager stop {}' to resolve the issue".format(iid, iid))
 
     def get_instances(self) -> List[Instance]:
-        return self.instances
+        return self.instances.values()
 
     def get_instances_length(self) -> int:
-        return len(self.instances)
+        return len(self.get_instances())
 
     def get_instance_by_id(self, instance_id) -> Instance:
-        for instance in self.instances:
-            if instance.get_id() == instance_id:
-                return instance
+        return self.instances[instance_id]
 
-        return None
+    def filter_instances(self, filter) -> List[Instance]:
+        if not callable(filter):
+            return []
+
+        instances = []
+        for instance in self.get_instances():
+            if filter(instance):
+                instances.append(instance)
+
+        return instances
 
     def get_running_instances(self) -> List[Instance]:
-        running_instances = []
-        for instance in self.instances:
-            if instance.is_running():
-                running_instances.append(instance)
+        return self.filter_instances(lambda i: i.is_running())
 
-        return running_instances
+    def get_synced_instances(self) -> List[Instance]:
+        return self.filter_instances(lambda i: i.is_in_config())
+
+    def get_unsynced_instances(self) -> List[Instance]:
+        return self.filter_instances(lambda i: not i.is_in_config())
 
     def query_instances(self, query: List[str]) -> List[Instance]:
         """Query instances by query string"""
         instances = []
-        for instance in self.instances:
+        for instance in self.get_instances():
             if instance.match(query):
                 instances.append(instance)
 
@@ -64,29 +65,34 @@ class Manager:
 
     def get_all_passivbot_instances(self) -> List[Instance]:
         """Get all passivbot instances running on this machine"""
-        pm = ProcessManager()
         signature = "^{}".format(" ".join(INSTANCE_SIGNATURE_BASE))
-        pids = pm.get_pid(signature, all_matches=True)
+        pids = ProcessManager.get_pid(signature, all_matches=True)
         if len(pids) == 0:
             return []
 
-        instances_cmds = [pm.info(pid) for pid in pids]
+        instances_cmds = [ProcessManager.info(pid) for pid in pids]
         instanaces = []
         for cmd in instances_cmds:
             args = cmd.split(" ")
-            if len(args) > 3:
-                args = args[3:]
-            else:
+            if len(args) <= 3:
                 continue
 
+            args = args[3:]
             user = args[0]
             symbol = args[1]
-            live_config_path = args[2]
-            cfg = self.defaults.copy()
-            cfg["user"] = user
-            cfg["symbol"] = symbol
-            cfg["live_config_path"] = live_config_path
-            instance = Instance(cfg)
+            config = args[2]
+            flags = {}
+
+            if len(args[3:]) > 0:
+                it = iter(args[3:])
+                flags = dict(zip(it, it))
+
+            instance = Instance({
+                "user": user,
+                "symbol": symbol,
+                "config": config,
+                "flags": flags
+            })
             if instance.is_running():
                 instanaces.append(instance)
 
