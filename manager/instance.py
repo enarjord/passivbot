@@ -1,5 +1,5 @@
-from constants import INSTANCE_SIGNATURE_BASE, PASSIVBOT_PATH
-from pm import ProcessManager
+from .constants import INSTANCE_SIGNATURE_BASE, PASSIVBOT_PATH
+from .pm import ProcessManager
 from typing import Dict, List
 import logging
 import os

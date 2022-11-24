@@ -1,0 +1,43 @@
+#
+# copy this to manager/config.yaml and edit
+# structure:
+#
+defaults:
+  # name of a file in the config/live directory
+  live_config_name: "matic.json"
+
+  # absolute path. Will be auto-generated if empty
+  live_config_path: ""
+  market_type: "futures" # futures | spot
+
+  # 0 means no limit
+  assigned_balance: 0
+
+  long_wallet_exposure_limit: 0
+  long_min_markup: 0
+  long_markup_range: 0
+
+  short_wallet_exposure_limit: 0
+  short_min_markup: 0
+  short_markup_range: 0
+
+  # modes:  # n | m | gs | p | t
+  # modes info: https://www.passivbot.com/en/latest/live/#controlling-the-bot
+  long_mode: "n"
+  short_mode: "m"
+
+instances:
+  - user: "binance_01"
+    symbols:
+      - "ALICEUSDT"
+      - "HBARUSDT"
+      - "GTCUSDT"
+    # all default settings may be overridden:
+    live_config_name: "risky.json"
+    # ...
+
+  # you may have multiple entries for the same user
+  - user: "binance_01"
+    symbols:
+      - "ETHUSDT"
+      - "BTCUSDT"

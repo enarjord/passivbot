@@ -1,7 +1,7 @@
-from constants import INSTANCE_SIGNATURE_BASE
-from config_parser import ConfigParser
-from instance import Instance
-from pm import ProcessManager
+from .constants import INSTANCE_SIGNATURE_BASE
+from .config_parser import ConfigParser
+from .instance import Instance
+from .pm import ProcessManager
 from logging import error
 from typing import List
 

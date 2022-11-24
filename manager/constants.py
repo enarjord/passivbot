@@ -11,8 +11,7 @@ logging.basicConfig(stream=sys.stdout, level=logging.INFO,
 def get_python_executable():
     if sys.version_info[0] == 3:
         return "python3"
-    else:
-        return None
+    return None
 
 
 PYTHON_EXC_ALIAS = get_python_executable()

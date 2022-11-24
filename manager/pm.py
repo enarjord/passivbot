@@ -1,8 +1,8 @@
-import os
-from time import sleep
+from .constants import USER
 from typing import List
+from time import sleep
 import subprocess
-from constants import USER
+import os
 
 
 class ProcessManager:
