@@ -1,9 +1,12 @@
-from .v_base import ConfigParserVersion
-from instance import Instance
+from .v import ConfigParserVersion
 from typing import Dict, List
+from instance import Instance
 
 
-class ConfigParserV1(ConfigParserVersion):
+class ConfigParserV2(ConfigParserVersion):
+    def __init__(self, config: Dict) -> None:
+        super().__init__(config)
+
     def get_instances(self) -> Dict[str, Instance]:
         result = {}
         for user in self.get_config().get("instances", []):

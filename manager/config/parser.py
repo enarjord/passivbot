@@ -1,5 +1,5 @@
-from constants import MANAGER_CONFIG_PATH
-from yaml import load, FullLoader
+from constants import MANAGER_CONFIG_PATH, logger
+from yaml import load, FullLoader, YAMLError
 from .v2 import ConfigParserV2
 from .v1 import ConfigParserV1
 from instance import Instance
@@ -22,8 +22,21 @@ class ConfigParser:
                 MANAGER_CONFIG_PATH))
             exit(1)
 
-        with open(MANAGER_CONFIG_PATH, "r") as f:
-            self.config = load(f, Loader=FullLoader)
+        try:
+            with open(MANAGER_CONFIG_PATH, "r") as f:
+                self.config = load(f, Loader=FullLoader)
+        except YAMLError as error:
+            logger.error("Error while parsing YAML file:")
+            logger.error("  {}".format(str(error.problem_mark)))
+
+            if not hasattr(error, 'problem_mark'):
+                exit(1)
+
+            context = ""
+            if error.context is not None:
+                context = error.context
+            logger.error("  {} {}".format(str(error.problem), context))
+            exit(1)
 
         return self.config
 

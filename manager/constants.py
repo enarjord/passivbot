@@ -4,8 +4,9 @@ import sys
 import os
 
 
-logging.basicConfig(stream=sys.stdout, level=logging.INFO,
-                    format="%(message)s")
+logger = logging
+logger.basicConfig(stream=sys.stdout, level=logging.INFO,
+                   format="%(message)s")
 
 
 def get_python_executable():

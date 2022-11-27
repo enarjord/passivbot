@@ -1,4 +1,4 @@
-from .constants import USER
+from constants import USER
 from typing import List
 from time import sleep
 import subprocess

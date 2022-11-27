@@ -1,5 +1,5 @@
-from .constants import INSTANCE_SIGNATURE_BASE, PASSIVBOT_PATH
-from .pm import ProcessManager
+from constants import INSTANCE_SIGNATURE_BASE, PASSIVBOT_PATH
+from pm import ProcessManager
 from typing import Dict, List
 import logging
 import os
@@ -14,6 +14,8 @@ class Instance:
         self.flags = config.get("flags", {})
 
         self.is_in_config_ = bool(config.get("is_in_config", True))
+        self.is_running_ = None
+        self.pid_ = None
 
     def say(self, message) -> None:
         logging.info("[{}] {}".format(self.get_id(), message))
@@ -38,13 +40,19 @@ class Instance:
     def get_user(self) -> str:
         return self.user
 
+    def get_config(self) -> str:
+        return self.config
+
     def get_pid_signature(self) -> str:
         signature = INSTANCE_SIGNATURE_BASE.copy()
         signature.extend([self.user, self.symbol])
         return "^{}".format(" ".join(signature))
 
     def get_pid(self) -> int:
-        return ProcessManager.get_pid(self.get_pid_signature())
+        if self.pid_ is None:
+            self.pid_ = ProcessManager.get_pid(self.get_pid_signature())
+
+        return self.pid_
 
     def get_pid_str(self) -> str:
         pid = self.get_pid()
@@ -60,11 +68,16 @@ class Instance:
         return "running" if self.is_running() else "stopped"
 
     def is_running(self) -> bool:
-        return ProcessManager.is_running(self.get_pid_signature())
+        if self.is_running_ is None:
+            self.is_running_ = ProcessManager.is_running(
+                self.get_pid_signature())
+
+        return self.is_running_
 
     def is_in_config(self, value=None) -> bool:
         if value is not None:
             self.is_in_config_ = bool(value)
+
         return self.is_in_config_
 
     def match(self, query: List[str], exact: bool = False) -> bool:
@@ -97,7 +110,12 @@ class Instance:
     #                                 state methods                                #
     # ---------------------------------------------------------------------------- #
 
+    def reset_state(self):
+        self.is_running_ = None
+        self.pid_ = None
+
     def start(self, silent=False) -> bool:
+        self.reset_state()
         log_file = os.path.join(
             PASSIVBOT_PATH, "logs/{}/{}.log".format(self.user, self.symbol))
         if not os.path.exists(os.path.dirname(log_file)):
@@ -119,6 +137,7 @@ class Instance:
         return True
 
     def stop(self, force=False) -> bool:
+        self.reset_state()
         if not self.is_running():
             return False
 
@@ -130,6 +149,7 @@ class Instance:
         return True
 
     def restart(self, force=False, silent=False) -> bool:
+        self.reset_state()
         if self.is_running():
             stopped = self.stop(force)
             if not stopped:

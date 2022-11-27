@@ -1,9 +1,9 @@
-from .constants import INSTANCE_SIGNATURE_BASE
-from .config_parser import ConfigParser
-from .instance import Instance
-from .pm import ProcessManager
-from logging import error
-from typing import List
+from manager.constants import INSTANCE_SIGNATURE_BASE
+from manager.config.parser import ConfigParser
+from manager.instance import Instance
+from manager.pm import ProcessManager
+from typing import List, Dict, Union
+from itertools import groupby
 
 
 class Manager:
@@ -14,16 +14,13 @@ class Manager:
     def sync_instances(self):
         """Sync manger with instances in the config and unsynced ones"""
         cp = ConfigParser()
-        cp.get_config()
         self.instances = cp.get_instances()
 
-        for instance in self.get_all_passivbot_instances():
+        for instance in self.find_unsynced_instances():
             iid = instance.get_id()
             if self.instances.get(iid) is None:
                 instance.is_in_config(False)
                 self.instances[iid] = instance
-            else:
-                error("There are multiple instances with id: {}. Try running 'manager stop {}' to resolve the issue".format(iid, iid))
 
     def get_instances(self) -> List[Instance]:
         return self.instances.values()
@@ -48,6 +45,18 @@ class Manager:
     def get_running_instances(self) -> List[Instance]:
         return self.filter_instances(lambda i: i.is_running())
 
+    def count_running(self, instnaces: List[Instance]=None, format=False) -> Union[int, str]:
+        iterable = instnaces
+        if iterable is None:
+            iterable = self.get_instances()
+        
+        running = list(filter(lambda i: i.is_running(), iterable))
+        if format == False:
+            return len(running)
+
+        return "{}/{} running".format(len(running), len(iterable))
+
+
     def get_synced_instances(self) -> List[Instance]:
         return self.filter_instances(lambda i: i.is_in_config())
 
@@ -63,7 +72,7 @@ class Manager:
 
         return instances
 
-    def get_all_passivbot_instances(self) -> List[Instance]:
+    def find_unsynced_instances(self) -> List[Instance]:
         """Get all passivbot instances running on this machine"""
         signature = "^{}".format(" ".join(INSTANCE_SIGNATURE_BASE))
         pids = ProcessManager.get_pid(signature, all_matches=True)
@@ -97,3 +106,9 @@ class Manager:
                 instanaces.append(instance)
 
         return instanaces
+
+    def group_instances_by_user(self, instances: List[Instance]) -> Dict[str, List[Instance]]:
+        groups = {}
+        for key, group in groupby(instances, lambda i: i.get_user()):
+            groups[key] = list(group)
+        return groups
