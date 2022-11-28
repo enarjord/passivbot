@@ -1,5 +1,5 @@
+from typing import List, Union
 from constants import USER
-from typing import List
 from time import sleep
 import subprocess
 import os
@@ -34,7 +34,7 @@ class ProcessManager:
         return ProcessManager.add(nohup_command)
 
     @staticmethod
-    def get_pid(signature: str, all_matches: bool = False, retries: int = 5) -> List[int]:
+    def get_pid(signature: str, all_matches: bool = False) -> Union[int, None, List[int]]:
         """
         Use pgrep to get the process id of the process with the given query string.
         :param signature: The signature to search for.
@@ -42,27 +42,37 @@ class ProcessManager:
 
         man: https://man7.org/linux/man-pages/man1/pgrep.1.html
         """
-        for i in range(retries):
-            try:
-                cmd = ["pgrep", "-U", USER, "-f", signature]
-                pids = subprocess.check_output(cmd).decode("utf-8").strip()
-                if len(pids) > 0:
-                    break
-                else:
-                    sleep(0.2)
-            except subprocess.CalledProcessError:
-                if i == retries - 1:
-                    if all_matches:
-                        return []
-                    return None
-                else:
-                    continue
+        try:
+            cmd = ["pgrep", "-U", USER, "-f", signature]
+            pids = subprocess.check_output(cmd).decode("utf-8").strip()
+        except subprocess.CalledProcessError:
+            if all_matches:
+                return []
+
+            return None
 
         matches = pids.split("\n")
+        if len(matches) == 0:
+            if all_matches:
+                return []
+
+            return None
+
         if all_matches:
             return [int(pid) for pid in matches]
         else:
             return int(matches[0])
+
+    @staticmethod
+    def wait_pid_start(signature: str, retries: int = 5, cooldown: float = 0.5) -> Union[int, None]:
+        for i in range(0, retries):
+            pid = ProcessManager.get_pid(signature)
+            if pid is not None:
+                return pid
+
+            sleep(cooldown)
+
+        return None
 
     @staticmethod
     def is_running(signature: str) -> bool:
@@ -87,23 +97,23 @@ class ProcessManager:
             return None
 
     @staticmethod
-    def kill(pid: int, force: bool = False):
+    def kill(pid: int, force: bool = False, max_retries: int = -1) -> bool:
         """
         Kill the process with the given pid.
         :param pid: The process id of the process to kill.
         :param force: If True, kill the process with the given pid with SIGKILL.
         :return: The error code of the kill command.
         """
+        cmd = ["kill"]
         if force:
-            cmd_arr = ["kill", "-9", str(pid)]
-        else:
-            cmd_arr = ["kill", str(pid)]
+            cmd.append("-9")
 
-        cmd = " ".join(cmd_arr)
-        os.system(cmd)
-        retries = 10
-        while retries > 0:
-            if not ProcessManager.info(pid):
-                break
-            sleep(0.2)
-            retries -= 1
+        cmd.append(str(pid))
+        os.system(" ".join(cmd))
+        while ProcessManager.info(pid) is not None:
+            sleep(0.15)
+            max_retries -= 1
+            if max_retries == 0:
+                return False
+
+        return True

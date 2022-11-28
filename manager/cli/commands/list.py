@@ -22,6 +22,7 @@ class List(CLICommand):
                 instances_unsynced, title="\nUnsynced"))
 
         lines.append("\n{}".format(cli.manager.count_running(format=True)))
+        lines.append("{}".format(cli.manager.count_unsynced(format=True)))
         lines.append(
             '\nUse "manager info" to get more info about a particular instance')
 

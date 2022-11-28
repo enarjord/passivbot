@@ -1,3 +1,4 @@
+from manager.cli.progress import Progress
 from manager.cli.cli import CLICommand
 from manager.constants import logger
 
@@ -21,16 +22,23 @@ class Stop(CLICommand):
         if cli.confirm_action("stop", instances_to_stop) != True:
             return
 
-        logger.info("Stopping instances. This may take a while...")
+        logger.info("Stopping instances. It may take a while...")
         stopped_instances = []
         failed = []
+        progress = cli.add_progress(
+            "stopped 0/{}".format(len(instances_to_stop)))
         for instance in instances_to_stop:
             if instance.stop(force):
                 stopped_instances.append(instance.get_id())
             else:
                 failed.append(instance.get_id())
 
-        logger.info("Stopped {} instance(s)".format(len(stopped_instances)))
+            progress.update(
+                "stopped {}/{}".format(len(stopped_instances), len(instances_to_stop)))
+
+        progress.finish("Stopped {} instance(s)".format(
+            len(stopped_instances)))
+
         if len(failed) > 0:
             logger.info("Failed to stop {} instances:".format(len(failed)))
             for id in failed:

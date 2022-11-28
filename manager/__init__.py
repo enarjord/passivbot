@@ -1,8 +1,8 @@
 from manager.constants import INSTANCE_SIGNATURE_BASE
+from typing import List, Dict, Union, Callable, Tuple
 from manager.config.parser import ConfigParser
 from manager.instance import Instance
 from manager.pm import ProcessManager
-from typing import List, Dict, Union
 from itertools import groupby
 
 
@@ -45,17 +45,30 @@ class Manager:
     def get_running_instances(self) -> List[Instance]:
         return self.filter_instances(lambda i: i.is_running())
 
-    def count_running(self, instnaces: List[Instance]=None, format=False) -> Union[int, str]:
-        iterable = instnaces
+    def count(self, filter_fn: Callable, instances: List[Instance] = None) -> Tuple[int, int]:
+        iterable = instances
         if iterable is None:
             iterable = self.get_instances()
-        
-        running = list(filter(lambda i: i.is_running(), iterable))
-        if format == False:
-            return len(running)
 
-        return "{}/{} running".format(len(running), len(iterable))
+        return len(list(filter(filter_fn, iterable))), len(iterable)
 
+    def count_running(self, instances: List[Instance] = None, format=False) -> Union[int, str]:
+        def filter(i): return i.is_running()
+        running, total = self.count(filter, instances)
+
+        if not format:
+            return running
+
+        return "{}/{} running".format(running, total)
+
+    def count_unsynced(self, instances: List[Instance] = None, format: bool = False) -> Union[int, str]:
+        def filter(i): return not i.is_in_config()
+        unsynced, total = self.count(filter, instances)
+
+        if not format:
+            return unsynced
+
+        return "{}/{} unsynced".format(unsynced, total)
 
     def get_synced_instances(self) -> List[Instance]:
         return self.filter_instances(lambda i: i.is_in_config())

@@ -1,9 +1,11 @@
-from typing import Dict, List, Any, Callable
+from typing import Dict, List, Any, Callable, Union
+from traceback import format_exc as traceback
+from manager.cli.progress import Progress
 from manager.instance import Instance
 from manager.constants import logger
 from manager.cli.color import Color
 from manager import Manager
-from sys import exit
+from threading import Event
 
 
 class CLI:
@@ -14,7 +16,8 @@ class CLI:
         self.args = []
         self.flags = {}
 
-        self.manager_ = None
+        self.threads_: List[Progress] = []
+        self.manager_: Union[Manager, None] = None
 
     def parse_input(self, args=[]) -> Dict[str, Any]:
         def flag_key(arg):
@@ -65,6 +68,11 @@ class CLI:
             "doc": doc
         }
 
+    def add_progress(self, initial_message: str = "") -> Progress:
+        thread = Progress(Event(), initial_message)
+        self.threads_.append(thread)
+        return thread
+
     def run_command(self, command: str):
         executor = self.commands_available.get(command)
         if executor is None:
@@ -74,7 +82,11 @@ class CLI:
         try:
             executor.run(self)
         except KeyboardInterrupt:
+            self.on_exit()
             logger.info("\nAborted")
+        except:
+            self.on_exit()
+            logger.error("\n{}".format(traceback()))
 
     def run(self, args: List):
         if len(args) == 0:
@@ -84,6 +96,14 @@ class CLI:
         self.flags = parsed_input.get("flags")
         self.args = parsed_input.get("args")
         self.run_command(args[0])
+
+    def on_exit(self):
+        for thread in self.threads_:
+            if not thread.is_alive():
+                continue
+
+            thread.finished.set()
+            thread.join()
 
     # ---------------------------------------------------------------------------- #
     #                                   utilities                                  #

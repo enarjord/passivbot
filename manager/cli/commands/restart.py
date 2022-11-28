@@ -19,17 +19,23 @@ class Restart(CLICommand):
         if cli.confirm_action("restart", instances_to_restart) != True:
             return
 
-        logger.info("Restarting instances. This may take a while...")
+        logger.info("Restarting instances. It may take a while...")
         restarted_instances = []
         failed = []
+        progress = cli.add_progress(
+            "restarted 0/{}".format(len(instances_to_restart)))
         for instance in instances_to_restart:
             if instance.restart(force, silent):
                 restarted_instances.append(instance.get_id())
             else:
                 failed.append(instance.get_id())
 
-        logger.info("Restarted {} instance(s)".format(
+            progress.update(
+                "restarted {}/{}".format(len(restarted_instances), len(instances_to_restart)))
+
+        progress.finish("Restarted {} instance(s)".format(
             len(restarted_instances)))
+
         if len(failed) > 0:
             logger.info("Failed to restart {} instances:".format(len(failed)))
             for id in failed:

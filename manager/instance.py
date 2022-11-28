@@ -17,9 +17,6 @@ class Instance:
         self.is_running_ = None
         self.pid_ = None
 
-    def say(self, message) -> None:
-        logging.info("[{}] {}".format(self.get_id(), message))
-
     def get_args(self) -> List[str]:
         return [self.user, self.symbol, self.config]
 
@@ -114,12 +111,17 @@ class Instance:
         self.is_running_ = None
         self.pid_ = None
 
-    def start(self, silent=False) -> bool:
+    def start(self, silent: bool = False) -> bool:
         self.reset_state()
+
         log_file = os.path.join(
             PASSIVBOT_PATH, "logs/{}/{}.log".format(self.user, self.symbol))
-        if not os.path.exists(os.path.dirname(log_file)):
-            os.makedirs(os.path.dirname(log_file))
+
+        try:
+            if not os.path.exists(os.path.dirname(log_file)):
+                os.makedirs(os.path.dirname(log_file))
+        except:
+            return False
 
         cmd = self.get_cmd()
 
@@ -127,11 +129,8 @@ class Instance:
             log_file = "/dev/null"
 
         ProcessManager.add_nohup_process(cmd, log_file)
-        self.proc_id = ProcessManager.get_pid(
-            self.get_pid_signature(), retries=10)
+        self.proc_id = ProcessManager.wait_pid_start(self.get_pid_signature())
         if self.proc_id is None:
-            self.say(
-                "Failed to get process id. See {} for more info.".format(log_file))
             return False
 
         return True
