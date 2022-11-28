@@ -1,15 +1,13 @@
-from constants import CONFIGS_PATH, PASSIVBOT_PATH, MANAGER_CONFIG_SETTINGS_PATH
+from constants import CONFIGS_PATH, PASSIVBOT_PATH, logger
 from typing import Dict, List, Union
-from yaml import load, FullLoader
-from logging import error, info
 from instance import Instance
 from os import path
 
 
 class ConfigParserVersion:
-    def __init__(self, config: Dict) -> None:
+    def __init__(self, config: Dict, settings: Dict) -> None:
         self.config = config
-        self.config_settings = None
+        self.config_settings = settings
         self.defaults = None
         self.system_paths_cache = {}
 
@@ -17,17 +15,6 @@ class ConfigParserVersion:
         return self.config
 
     def get_config_settings(self) -> Dict:
-        if self.config_settings is not None:
-            return self.config_settings
-
-        if not path.exists(MANAGER_CONFIG_SETTINGS_PATH):
-            info("Could not load config fields. No such file: {}".format(
-                MANAGER_CONFIG_SETTINGS_PATH))
-            return {}
-
-        with open(MANAGER_CONFIG_SETTINGS_PATH, "r") as f:
-            self.config_settings = load(f, Loader=FullLoader)
-
         return self.config_settings
 
     def get_config_available_arguments(self) -> List[Dict]:
@@ -110,7 +97,7 @@ class ConfigParserVersion:
         full_config_path = self.validate_path(
             config.get("config"), CONFIGS_PATH)
         if full_config_path is None:
-            error(
+            logger.error(
                 "{}-{}: config does not exist".format(config.get("user"), config.get("symbol")))
         else:
             config["config"] = full_config_path

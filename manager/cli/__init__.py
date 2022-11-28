@@ -37,6 +37,12 @@ class ManagerCLI(CLI):
 
         self.add_flag("force", ["-f", "--force"], "force an action")
 
+        self.add_flag("modifiers", ["-m", "--modify"],
+                      "modify flags of affected instances", type=str)
+
+        self.add_flag("config_path", ["-c", "--config"],
+                      "specify an absolute path to a manager config", type=str)
+
         self.add_flag("help", ["-h", "--help"], "show help for a command")
 
 

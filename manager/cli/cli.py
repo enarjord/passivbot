@@ -1,9 +1,9 @@
-from typing import Dict, List, Any, Callable, Union
-from traceback import format_exc as traceback
+from typing import Dict, List, Any, Callable, Union, Type
 from manager.cli.progress import Progress
 from manager.instance import Instance
 from manager.constants import logger
 from manager.cli.color import Color
+from argparse import ArgumentParser
 from manager import Manager
 from threading import Event
 
@@ -19,53 +19,45 @@ class CLI:
         self.threads_: List[Progress] = []
         self.manager_: Union[Manager, None] = None
 
-    def parse_input(self, args=[]) -> Dict[str, Any]:
-        def flag_key(arg):
-            if "=" in arg:
-                arg = arg.split("=")[0]
-            return arg
+    def parse_input(self, input=[]) -> Dict[str, Any]:
 
-        def flag_value(arg):
-            if "=" not in arg:
-                return True
-            return arg.split("=")[1]
+        def base_parser() -> ArgumentParser:
+            parser = ArgumentParser(add_help=False, allow_abbrev=False)
+            return parser
 
-        passed_flags = {}
-        clean_args = []
-        for arg in args:
-            if len(arg) < 2 or arg[0] != "-":
-                clean_args.append(arg)
+        parser = base_parser()
+        parser.add_argument("args", nargs="*")
+        parsed_args = vars(parser.parse_known_args()[0])
+        parsed_args = parsed_args.get("args")
+
+        args = []
+        if len(parsed_args) > 1:
+            args = parsed_args[1:]
+
+        parser = base_parser()
+        for name, flag in self.flags_available.items():
+            variants = flag.get("variants", [])
+            if len(variants) == 0:
                 continue
 
-            value = flag_value(arg)
-            arg = flag_key(arg)
+            type = flag.get("type")
+            if type:
+                parser.add_argument(*variants, type=type, dest=name)
+            else:
+                parser.add_argument(*variants, action="store_true", dest=name)
 
-            if arg[1] == "-":
-                passed_flags[arg] = value
-                continue
+        flags = parser.parse_known_args()[0]
 
-            for flag in list(arg[1:]):
-                passed_flags["-" + flag] = value
-            continue
-
-        flags = {}
-        for flag_name in self.flags_available.keys():
-            flag = self.flags_available[flag_name]
-            for variant in flag["variants"]:
-                passed = passed_flags.get(variant, False)
-                if passed:
-                    flags[flag_name] = passed
-                    break
-
-        return {"flags": flags, "args": clean_args}
+        return {"args": args, "flags": vars(flags)}
 
     def add_command(self, command: str, executor: "CLICommand"):
         self.commands_available[command] = executor
 
-    def add_flag(self, name: str, variants: List[str], doc: str):
+    def add_flag(self, name: str, variants: List[str], doc: str, type: Type = None):
         self.flags_available[name] = {
             "variants": variants,
-            "doc": doc
+            "doc": doc,
+            "type": type,
         }
 
     def add_progress(self, initial_message: str = "") -> Progress:
@@ -86,7 +78,7 @@ class CLI:
             logger.info("\nAborted")
         except:
             self.on_exit()
-            logger.error("\n{}".format(traceback()))
+            logger.error("\nSomething went wrong, there should be possible reasons above")
 
     def run(self, args: List):
         if len(args) == 0:
@@ -142,8 +134,8 @@ class CLI:
         return self.format_instance_like(status, symbol)
 
     def get_instances_for_action(self, filter: Callable = None) -> List[Instance]:
-        if self.manager.get_instances_length() == 0:
-            logger.warn("You have no instances configured")
+        if len(self.manager.get_instances()) == 0:
+            logger.info("You have no instances configured")
             return []
 
         if self.flags.get("all", False):
@@ -158,7 +150,7 @@ class CLI:
                 instance for instance in instances if filter(instance)]
 
         if len(instances) == 0:
-            logger.warn("No instances matched the given arguments")
+            logger.warn("No instances matched the given arguments: {}".format(" ".join(self.args)))
 
         return instances
 
@@ -210,9 +202,19 @@ class CLI:
     @property
     def manager(self) -> Manager:
         if self.manager_ is None:
-            self.manager_ = Manager()
+            config_path = self.flags.get("config_path", None)
+            self.manager_ = Manager(config_path)
 
         return self.manager_
+
+    @property
+    def modifiers(self) -> Dict[str, Any]:
+        flag_value = self.flags.get("modifiers")
+        if flag_value is None:
+            return {}
+
+        it = iter(flag_value.split(" "))
+        return dict(zip(it, it))
 
 
 class CLICommand:

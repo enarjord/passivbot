@@ -5,7 +5,7 @@ from manager.constants import logger
 class Start(CLICommand):
     doc = """Start instances that match the arguments."""
     args_optional = ["query"]
-    flags = ["-a", "-s", "-y"]
+    flags = ["-a", "-s", "-y", "-m"]
 
     @staticmethod
     def run(cli):
@@ -25,6 +25,7 @@ class Start(CLICommand):
         started_instances = []
         failed = []
         for instance in instances_to_start:
+            instance.apply_flags(cli.modifiers)
             started = instance.start(silent)
             if started:
                 started_instances.append(instance.get_id())

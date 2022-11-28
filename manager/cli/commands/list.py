@@ -9,9 +9,19 @@ class List(CLICommand):
 
     @staticmethod
     def run(cli):
-        instances_synced = cli.manager.get_synced_instances()
-        instances_unsynced = cli.manager.get_unsynced_instances()
+        instances = cli.get_instances_for_action()
         lines = []
+
+        if len(instances) == 0:
+            return
+
+        instances_synced = []
+        instances_unsynced = []
+        for instance in instances:
+            if instance.is_in_config():
+                instances_synced.append(instance)
+            else:
+                instances_unsynced.append(instance)
 
         if len(instances_synced) > 0:
             lines.extend(cli.format_instnaces(
@@ -21,8 +31,10 @@ class List(CLICommand):
             lines.extend(cli.format_instnaces(
                 instances_unsynced, title="\nUnsynced"))
 
-        lines.append("\n{}".format(cli.manager.count_running(format=True)))
-        lines.append("{}".format(cli.manager.count_unsynced(format=True)))
+        lines.append("\n{}".format(
+            cli.manager.count_running(instances, format=True)))
+        lines.append("{}".format(
+            cli.manager.count_unsynced(instances, format=True)))
         lines.append(
             '\nUse "manager info" to get more info about a particular instance')
 

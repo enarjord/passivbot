@@ -5,12 +5,14 @@ from manager.constants import logger
 class Restart(CLICommand):
     doc = """Restart instances that match the arguments."""
     args_optional = ["query"]
-    flags = ["-a", "-u", "-s", "-y", "-f"]
+    flags = ["-a", "-u", "-s", "-y", "-f", "-m"]
 
     @staticmethod
     def run(cli):
         force = cli.flags.get("force", False)
         silent = cli.flags.get("silent", False)
+
+        logger.info("Looking for matching instances...")
 
         instances_to_restart = cli.get_instances_for_action()
         if len(instances_to_restart) == 0:
@@ -25,6 +27,7 @@ class Restart(CLICommand):
         progress = cli.add_progress(
             "restarted 0/{}".format(len(instances_to_restart)))
         for instance in instances_to_restart:
+            instance.apply_flags(cli.modifiers)
             if instance.restart(force, silent):
                 restarted_instances.append(instance.get_id())
             else:

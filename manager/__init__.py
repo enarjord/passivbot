@@ -7,14 +7,14 @@ from itertools import groupby
 
 
 class Manager:
-    def __init__(self):
-        self.instances = {}
-        self.sync_instances()
+    def __init__(self, config_path: str = None):
+        self.instances = None
+        self.config_path = config_path
+        self.config_parser = ConfigParser(self.config_path)
 
-    def sync_instances(self):
+    def load_instances(self):
         """Sync manger with instances in the config and unsynced ones"""
-        cp = ConfigParser()
-        self.instances = cp.get_instances()
+        self.instances = self.config_parser.get_instances()
 
         for instance in self.find_unsynced_instances():
             iid = instance.get_id()
@@ -23,13 +23,10 @@ class Manager:
                 self.instances[iid] = instance
 
     def get_instances(self) -> List[Instance]:
+        if self.instances is None:
+            self.load_instances()
+
         return self.instances.values()
-
-    def get_instances_length(self) -> int:
-        return len(self.get_instances())
-
-    def get_instance_by_id(self, instance_id) -> Instance:
-        return self.instances[instance_id]
 
     def filter_instances(self, filter) -> List[Instance]:
         if not callable(filter):

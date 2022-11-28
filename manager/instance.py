@@ -1,7 +1,6 @@
 from constants import INSTANCE_SIGNATURE_BASE, PASSIVBOT_PATH
+from typing import Dict, List, Any
 from pm import ProcessManager
-from typing import Dict, List
-import logging
 import os
 
 
@@ -102,6 +101,13 @@ class Instance:
                 matches += 1
 
         return matches == len(query)
+
+    def apply_flags(self, flags: Dict[str, Any]):
+        if flags is None:
+            return
+
+        for key, value in flags.items():
+            self.flags[key] = value
 
     # ---------------------------------------------------------------------------- #
     #                                 state methods                                #

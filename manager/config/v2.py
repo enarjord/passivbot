@@ -4,8 +4,8 @@ from instance import Instance
 
 
 class ConfigParserV2(ConfigParserVersion):
-    def __init__(self, config: Dict) -> None:
-        super().__init__(config)
+    def __init__(self, config: Dict, settings: Dict) -> None:
+        super().__init__(config, settings)
 
     def get_instances(self) -> Dict[str, Instance]:
         result = {}

@@ -35,7 +35,7 @@ class Sync(CLICommand):
         logger.info(delimiter)
         cli.run_command("stop")
         logger.info(delimiter)
-        cli.manager.sync_instances()
+        cli.manager.load_instances()
         cli.run_command("start")
 
         logger.info(delimiter)

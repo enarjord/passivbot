@@ -1,30 +1,33 @@
-from constants import MANAGER_CONFIG_PATH, logger
+from constants import MANAGER_CONFIG_PATH, MANAGER_CONFIG_SETTINGS_PATH, logger
 from yaml import load, FullLoader, YAMLError
 from .v2 import ConfigParserV2
 from .v1 import ConfigParserV1
 from instance import Instance
-from logging import error
 from typing import Dict
 from sys import exit
 from os import path
 
 
 class ConfigParser:
-    def __init__(self) -> None:
+    def __init__(self, config_path: str = None) -> None:
         self.config = None
+        self.config_settings = None
+        self.config_path = MANAGER_CONFIG_PATH
+        if config_path is not None:
+            self.config_path = config_path
 
-    def get_config(self) -> Dict:
-        if self.config is not None:
-            return self.config
+    def preload(self):
+        self.get_config()
+        self.get_config_settings()
 
-        if not path.exists(MANAGER_CONFIG_PATH):
-            error("Could not load config. No such file: {}".format(
-                MANAGER_CONFIG_PATH))
+    def load_yaml(self, filepath: str) -> Dict:
+        if not path.exists(filepath):
+            logger.error("Path does not exist: {}".format(filepath))
             exit(1)
 
         try:
-            with open(MANAGER_CONFIG_PATH, "r") as f:
-                self.config = load(f, Loader=FullLoader)
+            with open(filepath, "r") as f:
+                yaml = load(f, Loader=FullLoader)
         except YAMLError as error:
             logger.error("Error while parsing YAML file:")
             logger.error("  {}".format(str(error.problem_mark)))
@@ -38,15 +41,27 @@ class ConfigParser:
             logger.error("  {} {}".format(str(error.problem), context))
             exit(1)
 
+        return yaml
+
+    def get_config(self) -> Dict:
+        if self.config is None:
+            self.config = self.load_yaml(self.config_path)
+
         return self.config
+
+    def get_config_settings(self) -> Dict:
+        if self.config_settings is None:
+            self.config_settings = self.load_yaml(MANAGER_CONFIG_SETTINGS_PATH)
+
+        return self.config_settings
 
     def get_instances(self) -> Dict[str, Instance]:
         config = self.get_config()
+        settings = self.get_config_settings()
         version = config.get("version")
-        parser = None
-        if version == 2:
-            parser = ConfigParserV2(config)
-        else:
-            parser = ConfigParserV1(config)
 
-        return parser.get_instances()
+        parser = ConfigParserV1
+        if version == 2:
+            parser = ConfigParserV2
+
+        return parser(config, settings).get_instances()

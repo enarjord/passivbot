@@ -4,8 +4,8 @@ from typing import Dict, List
 
 
 class ConfigParserV1(ConfigParserVersion):
-    def __init__(self, config: Dict) -> None:
-        super().__init__(config)
+    def __init__(self, config: Dict, settings: Dict) -> None:
+        super().__init__(config, settings)
 
     def get_instances(self) -> Dict[str, Instance]:
         result = {}
@@ -19,6 +19,7 @@ class ConfigParserV1(ConfigParserVersion):
             return {}
 
         config = self.narrow_config(user_config)
+        config = self.make_backwards_compatible(config)
         config["user"] = user_config.get("user")
 
         instances = {}
@@ -27,16 +28,6 @@ class ConfigParserV1(ConfigParserVersion):
         return instances
 
     def parse_symbols(self, symbols: List, user_config: Dict) -> Dict[str, Instance]:
-        symbols_type = type(symbols)
-        if symbols_type is list:
-            return self.parse_symbols_list(symbols, user_config)
-
-        if symbols_type is dict:
-            return self.parse_symbols_dict(symbols, user_config)
-
-        return {}
-
-    def parse_symbols_list(self, symbols: List, user_config: Dict) -> Dict[str, Instance]:
         instances = {}
         for symbol in symbols:
             config = user_config.copy()
@@ -46,20 +37,27 @@ class ConfigParserV1(ConfigParserVersion):
 
         return instances
 
-    def parse_symbols_dict(self, symbols: Dict, user_config: Dict) -> Dict[str, Instance]:
-        instances = {}
-        for symbol, scoped_config in symbols.items():
-            config = user_config.copy()
+    def make_backwards_compatible(self, config: Dict) -> Dict:
+        def not_zero(v): return v > 0.0
+        rules = {
+            "-m": lambda v:  v != "futures",
+            "-lm": lambda v: v != "n",
+            "-sm": lambda v: v != "m",
+            "-lw": not_zero,
+            "-sw": not_zero,
+            "-ab": not_zero,
+            "-lmm": not_zero,
+            "-lmr": not_zero,
+            "-smm": not_zero,
+            "-smr": not_zero,
+        }
 
-            scoped_config_type = type(scoped_config)
-            if scoped_config_type is str:
-                config["config"] = scoped_config
+        flags = {}
+        for key, value in config.get("flags").items():
+            rule = rules.get(key)
+            if rule is not None and rule(value):
+                flags[key] = value
 
-            elif scoped_config_type is dict:
-                config.update(self.narrow_config(scoped_config, config))
+        config["flags"] = flags
 
-            config["symbol"] = symbol
-            instance = self.generate_instance(config)
-            instances[instance.get_id()] = instance
-
-        return instances
+        return config
