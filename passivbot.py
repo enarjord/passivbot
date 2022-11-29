@@ -125,18 +125,18 @@ class Bot:
         self.process_websocket_ticks = True
 
     def set_config(self, config):
-        if "long_mode" not in config:
-            config["long_mode"] = None
-        if "short_mode" not in config:
-            config["short_mode"] = None
-        if "test_mode" not in config:
-            config["test_mode"] = False
-        if "assigned_balance" not in config:
-            config["assigned_balance"] = None
-        if "cross_wallet_pct" not in config:
-            config["cross_wallet_pct"] = 1.0
-        if "price_distance_threshold" not in config:
-            config["price_distance_threshold"] = 0.5
+        for k, v in [
+            ("long_mode", None),
+            ("short_mode", None),
+            ("test_mode", False),
+            ("assigned_balance", None),
+            ("cross_wallet_pct", 1.0),
+            ("price_distance_threshold", 0.5),
+            ("c_mult", 1.0),
+            ("leverage", 7.0),
+        ]:
+            if k not in config:
+                config[k] = v
         self.passivbot_mode = config["passivbot_mode"] = determine_passivbot_mode(config)
         if config["cross_wallet_pct"] > 1.0 or config["cross_wallet_pct"] <= 0.0:
             logging.warning(
@@ -1056,17 +1056,23 @@ class Bot:
     async def subscribe_to_user_stream(self, ws):
         pass
 
+    async def start_ohlcv_mode(self):
+        pass
+
 
 async def start_bot(bot):
-    while not bot.stop_websocket:
-        try:
-            await bot.start_websocket()
-        except Exception as e:
-            logging.warning(
-                "Websocket connection has been lost, attempting to reinitialize the bot... {e}",
-            )
-            traceback.print_exc()
-            await asyncio.sleep(10)
+    if bot.ohlcv:
+        await bot.start_ohlcv_mode()
+    else:
+        while not bot.stop_websocket:
+            try:
+                await bot.start_websocket()
+            except Exception as e:
+                logging.warning(
+                    "Websocket connection has been lost, attempting to reinitialize the bot... {e}",
+                )
+                traceback.print_exc()
+                await asyncio.sleep(10)
 
 
 async def main() -> None:
@@ -1158,6 +1164,12 @@ async def main() -> None:
         action="store_true",
         help=f"if true, run on the test net instead of normal exchange. Supported exchanges: {TEST_MODE_SUPPORTED_EXCHANGES}",
     )
+    parser.add_argument(
+        "-oh",
+        "--ohlcv",
+        action="store_true",
+        help=f"if true, execute to exchange only on each minute mark instead of continuously",
+    )
 
     float_kwargs = [
         ("-lmm", "--long_min_markup", "--long-min-markup", "long_min_markup"),
@@ -1201,13 +1213,13 @@ async def main() -> None:
         logging.error(f"{e} failed to load config {args.live_config_path}")
         return
     config["exchange"] = exchange
-    for k in ["user", "api_keys", "symbol", "leverage", "price_distance_threshold"]:
+    for k in ["user", "api_keys", "symbol", "leverage", "price_distance_threshold", "ohlcv", "test_mode"]:
         config[k] = getattr(args, k)
-    config["test_mode"] = args.test_mode
     if config["test_mode"] and config["exchange"] not in TEST_MODE_SUPPORTED_EXCHANGES:
         raise IOError(f"Exchange {config['exchange']} is not supported in test mode.")
     config["market_type"] = args.market_type if args.market_type is not None else "futures"
     config["passivbot_mode"] = determine_passivbot_mode(config)
+    logging.info(f"using config \n{config_pretty_str(denumpyize(config))}")
     if args.assigned_balance is not None:
         logging.info(f"assigned balance set to {args.assigned_balance}")
         config["assigned_balance"] = args.assigned_balance
@@ -1308,7 +1320,9 @@ async def main() -> None:
     else:
         raise Exception("unknown exchange", config["exchange"])
 
-    logging.info(f"using config \n{config_pretty_str(denumpyize(config))}")
+    if args.ohlcv:
+        logging.info("starting passivbot in ohlcv mode, using REST API only and updating once a minute")
+
     signal.signal(signal.SIGINT, bot.stop)
     signal.signal(signal.SIGTERM, bot.stop)
     await start_bot(bot)
