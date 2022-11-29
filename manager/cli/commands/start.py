@@ -32,9 +32,9 @@ class Start(CLICommand):
             else:
                 failed.append(instance.get_id())
 
-        logger.info("Started {} instance(s)".format(len(started_instances)))
+        logger.info(f"Started {len(started_instances)} instance(s)")
 
         if len(failed) > 0:
-            logger.info("Failed to start {} instances:".format(len(failed)))
+            logger.info(f"Failed to start {len(failed)} instances:")
             for id in failed:
-                logger.info("- {}".format(id))
+                logger.info(f"- {id}")

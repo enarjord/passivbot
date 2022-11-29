@@ -15,11 +15,10 @@ class Help(CLICommand):
         if len(cli.args) > 0:
             name = cli.commands_available.get(cli.args[0])
             if name is None:
-                logger.info(
-                    "There is no available command: {}".format(cli.args[0]))
+                logger.info(f"There is no available command: {cli.args[0]}")
                 return
 
-            logger.info("Help for {}:".format(cli.args[0]))
+            logger.info(f"Help for {cli.args[0]}:")
             for line in Help.get_docs():
                 logger.info(line)
             return
@@ -35,19 +34,14 @@ class Help(CLICommand):
         for name, command in cli.commands_available.items():
             doc_lines = command.get_docs()
 
-            lines.append("  {:<8} - {}".format(name, doc_lines[0]))
+            lines.append(f"  {name:<8} - {doc_lines[0]}")
             for line in doc_lines[1:]:
-                lines.append("  {:<10} {}".format("", line))
+                lines.append(f"  {'':<10} {line}")
 
         lines.append("\nFlags:")
         for flag in cli.flags_available.values():
             variants = ", ".join(flag["variants"])
-            lines.append(
-                "  {:<15} - {}".format(
-                    variants,
-                    flag.get("doc"),
-                )
-            )
+            lines.append(f"  {variants:<15} - {flag.get('doc')}")
 
         for line in lines:
             logger.info(line)

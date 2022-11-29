@@ -56,7 +56,7 @@ class Manager:
         if not format:
             return running
 
-        return "{}/{} running".format(running, total)
+        return f"{running}/{total} running"
 
     def count_unsynced(self, instances: List[Instance] = None, format: bool = False) -> Union[int, str]:
         def filter(i): return not i.is_in_config()
@@ -65,7 +65,7 @@ class Manager:
         if not format:
             return unsynced
 
-        return "{}/{} unsynced".format(unsynced, total)
+        return f"{unsynced}/{total} unsynced"
 
     def get_synced_instances(self) -> List[Instance]:
         return self.filter_instances(lambda i: i.is_in_config())
@@ -84,7 +84,7 @@ class Manager:
 
     def find_unsynced_instances(self) -> List[Instance]:
         """Get all passivbot instances running on this machine"""
-        signature = "^{}".format(" ".join(INSTANCE_SIGNATURE_BASE))
+        signature = f"^{' '.join(INSTANCE_SIGNATURE_BASE)}"
         pids = ProcessManager.get_pid(signature, all_matches=True)
         if len(pids) == 0:
             return []

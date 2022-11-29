@@ -20,7 +20,7 @@ class Progress(Thread):
             if self.finished.is_set():
                 break
 
-            stdout.write("\r{} {}".format(char, self.message))
+            stdout.write(f"\r{char} {self.message}")
             stdout.flush()
             sleep(0.2)
 
@@ -32,5 +32,5 @@ class Progress(Thread):
 
     def finish(self, message: str = "Finished"):
         self.finished.set()
-        stdout.write("\r{}\n".format(message))
+        stdout.write(f"\r{message}\n")
         stdout.flush()

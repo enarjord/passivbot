@@ -68,7 +68,7 @@ class CLI:
     def run_command(self, command: str):
         executor = self.commands_available.get(command)
         if executor is None:
-            logger.info("Unknown command: {}".format(command))
+            logger.info(f"Unknown command: {command}")
             return
 
         try:
@@ -78,7 +78,8 @@ class CLI:
             logger.info("\nAborted")
         except:
             self.on_exit()
-            logger.error("\nSomething went wrong, there should be possible reasons above")
+            logger.error(
+                "\nSomething went wrong, there should be possible reasons above")
 
     def run(self, args: List):
         if len(args) == 0:
@@ -109,13 +110,13 @@ class CLI:
         title = kwargs.get("title")
 
         if title:
-            lines.append("{}:".format(title))
+            lines.append(f"{title}:")
 
         groups = self.manager.group_instances_by_user(instances)
         for user, group in groups.items():
             running = self.manager.count_running(group, format=True)
             user = Color.apply(Color.CYAN, user)
-            lines.append("- {} ({})".format(user, running))
+            lines.append(f"- {user} ({running})")
             lines.extend([self.format_instance(instance)
                           for instance in group])
 
@@ -150,7 +151,8 @@ class CLI:
                 instance for instance in instances if filter(instance)]
 
         if len(instances) == 0:
-            logger.warn("No instances matched the given arguments: {}".format(" ".join(self.args)))
+            logger.warn(
+                f"No instances matched the given arguments: {' '.join(self.args)}")
 
         return instances
 
@@ -162,20 +164,19 @@ class CLI:
             return True
 
         def action_message(message):
-            return 'Action "{}" will be perfromed on {}'.format(action, message)
+            return f"Action \"{action}\" will be perfromed on {message}"
 
-        logger.info(action_message(
-            '{} instance(s). Continue?'.format(len(instances))))
+        logger.info(action_message(f"{len(instances)} instance(s). Continue?"))
+
+        def variant(text: str) -> str:
+            return Color.apply(Color.LIGHT_PURPLE, text)
 
         while True:
             try:
                 prompts = [
-                    '{} or {} to confirm'.format(
-                        *Color.apply(Color.LIGHT_PURPLE, "yes", "y")),
-                    '{} or {} to see affected instances'.format(
-                        *Color.apply(Color.LIGHT_PURPLE, "list", "l")),
-                    '{}, {} or Ctrl+C to abort:'.format(
-                        *Color.apply(Color.LIGHT_PURPLE, "no", "n")),
+                    f"{variant('yes')} or {variant('y')} to confirm",
+                    f"{variant('list')} or {variant('l')} to see affected instances",
+                    f"{variant('no')}, {variant('n')} or Ctrl+C to abort:",
                 ]
                 raw_answer = input("\n".join(prompts))
             except KeyboardInterrupt:
@@ -188,7 +189,7 @@ class CLI:
                 return True
             elif answer in ["list", "l"]:
                 lines = self.format_instnaces(
-                    instances,  title="\n{}".format(action_message("these instances")))
+                    instances,  title=f"\n{action_message('these instances')}")
                 for line in lines:
                     logger.info(line)
             elif answer in ["no", "n"]:
@@ -232,22 +233,22 @@ class CLICommand:
         lines = []
 
         if self.doc != "":
-            lines.extend(["{}".format(line.strip())
+            lines.extend([f"{line.strip()}"
                          for line in self.doc.split("\n")])
 
         args_line = []
         if hasattr(self, "args_required") and len(self.args_required) > 0:
-            args_line.extend(["<{}>".format(arg.strip())
+            args_line.extend([f"<{arg.strip()}>"
                               for arg in self.args_required])
 
         if hasattr(self, "args_optional") and len(self.args_optional) > 0:
-            args_line.extend(["[ {} ]".format(arg.strip())
+            args_line.extend([f"[ {arg.strip()} ]"
                               for arg in self.args_optional])
 
         if len(args_line) > 0:
-            lines.append("Args: {}".format(" ".join(args_line)))
+            lines.append(f"Args: {' '.join(args_line)}")
 
         if hasattr(self, "flags") and len(self.flags) > 0:
-            lines.append("Flags: [ {} ]".format(" ] [ ".join(self.flags)))
+            lines.append(f"Flags: [ {' ] [ '.join(self.flags)} ]")
 
         return lines

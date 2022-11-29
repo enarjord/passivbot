@@ -4,14 +4,12 @@ from manager.cli.color import Color
 
 
 class Sync(CLICommand):
-    doc = """Sync instances with config.
-    {}
-    {} instances that are currently running will be
+    doc = f"""Sync instances with config.
+    {Color.apply(Color.YELLOW, "CAUTION:")}
+    {Color.apply(Color.UNDERLINE, "all")} instances that are currently running will be
     forcefully stopped, and only the ones that are
-    currently in the config will be started again.""".format(
-        Color.apply(Color.YELLOW, "CAUTION:"),
-        Color.apply(Color.UNDERLINE, "all")
-    )
+    currently in the config will be started again."""
+
     args_optional = ["query"]
     flags = ["-y", "-s"]
 
@@ -20,7 +18,7 @@ class Sync(CLICommand):
         cli.flags["all"] = True
         cli.flags["force"] = True
 
-        logger.info("{}".format(Color.apply(Color.YELLOW, "CAUTION:")))
+        logger.info(f"{Color.apply(Color.YELLOW, 'CAUTION:')}")
         logger.info(
             "you are about to stop all instances that are currently running.")
         logger.info(

@@ -25,8 +25,7 @@ class Stop(CLICommand):
         logger.info("Stopping instances. It may take a while...")
         stopped_instances = []
         failed = []
-        progress = cli.add_progress(
-            "stopped 0/{}".format(len(instances_to_stop)))
+        progress = cli.add_progress(f"stopped 0/{len(instances_to_stop)}")
         for instance in instances_to_stop:
             if instance.stop(force):
                 stopped_instances.append(instance.get_id())
@@ -34,12 +33,11 @@ class Stop(CLICommand):
                 failed.append(instance.get_id())
 
             progress.update(
-                "stopped {}/{}".format(len(stopped_instances), len(instances_to_stop)))
+                f"stopped {len(stopped_instances)}/{len(instances_to_stop)}")
 
-        progress.finish("Stopped {} instance(s)".format(
-            len(stopped_instances)))
+        progress.finish(f"Stopped {len(stopped_instances)} instance(s)")
 
         if len(failed) > 0:
-            logger.info("Failed to stop {} instances:".format(len(failed)))
+            logger.info(f"Failed to stop {len(failed)} instances:")
             for id in failed:
-                logger.info("- {}".format(id))
+                logger.info(f"- {id}")

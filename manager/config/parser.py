@@ -22,7 +22,7 @@ class ConfigParser:
 
     def load_yaml(self, filepath: str) -> Dict:
         if not path.exists(filepath):
-            logger.error("Path does not exist: {}".format(filepath))
+            logger.error(f"Path does not exist: {filepath}")
             exit(1)
 
         try:
@@ -30,15 +30,16 @@ class ConfigParser:
                 yaml = load(f, Loader=FullLoader)
         except YAMLError as error:
             logger.error("Error while parsing YAML file:")
-            logger.error("  {}".format(str(error.problem_mark)))
 
             if not hasattr(error, 'problem_mark'):
                 exit(1)
 
-            context = ""
+            logger.error(f"  {str(error.problem_mark)}")
+
             if error.context is not None:
-                context = error.context
-            logger.error("  {} {}".format(str(error.problem), context))
+                logger.error(f"  {str(error.problem)} {str(error.context)}")
+
+            logger.error(f"  {str(error.problem)}")
             exit(1)
 
         return yaml

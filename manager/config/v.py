@@ -98,7 +98,7 @@ class ConfigParserVersion:
             config.get("config"), CONFIGS_PATH)
         if full_config_path is None:
             logger.error(
-                "{}-{}: config does not exist".format(config.get("user"), config.get("symbol")))
+                f"{config.get('user')}-{config.get('symbol')}: config does not exist")
         else:
             config["config"] = full_config_path
 

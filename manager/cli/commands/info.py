@@ -28,18 +28,18 @@ class Info(CLICommand):
         lines = []
         lines.extend(
             [
-                "id: {}:".format(instance.get_id()),
-                "user: {}".format(instance.get_user()),
-                "symbol: {}".format(instance.get_symbol()),
-                "status: {}".format(status),
-                "pid: {}".format(instance.get_pid_str()),
-                "config: {}".format(instance.get_config()),
+                f"id: {instance.get_id()}:",
+                f"user: {instance.get_user()}",
+                f"symbol: {instance.get_symbol()}",
+                f"status: {status}",
+                f"pid: {instance.get_pid_str()}",
+                f"config: {instance.get_config()}",
             ]
         )
 
         if len(flags) > 0:
             lines.append("\nFlags:")
-            lines.extend(["  {}: {}".format(flags[i], flags[i + 1])
+            lines.extend([f"  {flags[i]}: { flags[i + 1]}"
                           for i in range(0, len(flags), 2)])
 
         for line in lines:

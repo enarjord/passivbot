@@ -28,7 +28,7 @@ class Instance:
         return flags
 
     def get_id(self) -> str:
-        return "{}-{}".format(self.user, self.symbol)
+        return f"{self.get_user()}-{self.get_symbol()}"
 
     def get_symbol(self) -> str:
         return self.symbol
@@ -42,7 +42,7 @@ class Instance:
     def get_pid_signature(self) -> str:
         signature = INSTANCE_SIGNATURE_BASE.copy()
         signature.extend([self.user, self.symbol])
-        return "^{}".format(" ".join(signature))
+        return f"^{' '.join(signature)}"
 
     def get_pid(self) -> int:
         if self.pid_ is None:
@@ -121,7 +121,7 @@ class Instance:
         self.reset_state()
 
         log_file = os.path.join(
-            PASSIVBOT_PATH, "logs/{}/{}.log".format(self.user, self.symbol))
+            PASSIVBOT_PATH, f"logs/{self.get_user()}/{self.get_symbol()}.log")
 
         try:
             if not os.path.exists(os.path.dirname(log_file)):
