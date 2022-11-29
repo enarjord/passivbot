@@ -375,17 +375,13 @@ class Bot:
             self.ts_released["create_orders"] = time()
 
     async def create_batch_orders(self, orders_to_create: [dict]) -> [dict]:
-        print('debug a', orders_to_create)
         if not orders_to_create:
             return []
-        print('debug b')
         if self.ts_locked["create_batch_orders"] > self.ts_released["create_batch_orders"]:
             return []
-        print('debug c')
         self.ts_locked["create_batch_orders"] = time()
         try:
             orders = await self.execute_batch_orders(orders_to_create)
-            print('debug d', orders)
             for order in sorted(orders, key=lambda x: calc_diff(x['price'], self.price)):
                 if "side" in order:
                     logging.info(
