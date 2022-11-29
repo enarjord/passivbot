@@ -733,7 +733,7 @@ class Bot:
                 if "ientry" in o["custom_id"] and calc_diff(o["price"], self.price) < 0.002:
                     # call update_position() before making initial entry orders
                     # in case websocket has failed
-                    logging.info("update_position with REST API before creating initial entries")
+                    logging.info(f"update_position with REST API before creating initial entries.  Last price {self.price}")
                     await self.update_position()
                     all_orders = self.calc_orders()
                     break
