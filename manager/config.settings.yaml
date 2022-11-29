@@ -33,6 +33,12 @@ flags:
       - ak
       - api_keys
 
+  - name: leverage
+    flag: -lev
+    aliases:
+      - lev
+      - leverage
+
   # ----------------------------------- longs ---------------------------------- #
 
   - name: long_mode

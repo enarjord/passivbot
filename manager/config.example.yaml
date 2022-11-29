@@ -7,11 +7,12 @@ defaults:
 
   # uncomment settings to enable them
 
-  # absolute path to a config file
+  # absolute path to a keys file
   # api_keys: /home/ubuntu/passivbot/api-keys.json
 
   # assigned_balance: 0
   # market_type: "futures"
+  # leverage: 7
 
   # long_mode: "n"
   # long_exposure: 0

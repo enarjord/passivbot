@@ -5,7 +5,9 @@ from os import path
 
 
 class Init(CLICommand):
-    doc = """Create a config file"""
+    doc = """Create a config file.
+    Provide a filename argument to create
+    a config file with non-default name"""
     args_optional = ["filename"]
 
     @staticmethod
