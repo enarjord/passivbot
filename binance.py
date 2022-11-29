@@ -3,9 +3,10 @@ import hashlib
 import hmac
 import json
 import traceback
-from time import time
+from time import time, time_ns
 from urllib.parse import urlencode
 
+import requests
 import aiohttp
 import numpy as np
 
@@ -36,16 +37,20 @@ class BinanceBot(Bot):
             traceback.print_exc()
             return {}
 
-    async def private_(self, type_: str, base_endpoint: str, url: str, params: dict = {}) -> dict:
+    async def private_(
+        self, type_: str, base_endpoint: str, url: str, params: dict = {}, data_: bool = False
+    ) -> dict:
         def stringify(x):
             if type(x) == bool:
                 return "true" if x else "false"
             elif type(x) == float:
                 return format_float(x)
+            elif type(x) == int:
+                return str(x)
             elif type(x) == list:
-                return [stringify(y) for y in x]
+                return json.dumps([stringify(y) for y in x]).replace(' ', '')
             elif type(x) == dict:
-                return json.dumps(x)
+                return json.dumps({k: stringify(v) for k, v in x.items()}).replace(" ", "")
             else:
                 return x
 
@@ -55,16 +60,23 @@ class BinanceBot(Bot):
             for k in params:
                 params[k] = stringify(params[k])
             params = sort_dict_keys(params)
-            print('debug private post', params)
             params["signature"] = hmac.new(
                 self.secret.encode("utf-8"),
                 urlencode(params).encode("utf-8"),
                 hashlib.sha256,
             ).hexdigest()
-            async with getattr(self.session, type_)(
-                base_endpoint + url, params=params, headers=self.headers
-            ) as response:
-                result = await response.text()
+            if data_:
+                async with getattr(self.session, type_)(
+                    base_endpoint + url, data=params, headers=self.headers
+                ) as response:
+                    result = await response.text()
+            else:
+                params_encoded = urlencode(params)
+                async with getattr(self.session, type_)(
+                    base_endpoint + url, params=params_encoded, headers=self.headers
+                ) as response:
+                    result = await response.text()
+
             return json.loads(result)
         except Exception as e:
             print(f"error with private {type_} {base_endpoint} {url} {params}")
@@ -79,12 +91,11 @@ class BinanceBot(Bot):
             params,
         )
 
-    async def private_post(self, url: str, params: dict = {}, base_endpoint: str = None) -> dict:
+    async def private_post(
+        self, url: str, params: dict = {}, base_endpoint: str = None, data_: bool = False
+    ) -> dict:
         return await self.private_(
-            "post",
-            self.base_endpoint if base_endpoint is None else base_endpoint,
-            url,
-            params,
+            "post", self.base_endpoint if base_endpoint is None else base_endpoint, url, params, data_
         )
 
     async def private_put(self, url: str, params: dict = {}, base_endpoint: str = None) -> dict:
@@ -384,8 +395,9 @@ class BinanceBot(Bot):
                         "newClientOrderId"
                     ] = f"{order['custom_id']}_{str(int(time() * 1000))[8:]}_{int(np.random.random() * 1000)}"
                 to_execute.append(params)
-            print('debug k', encoded)
-            executed = await self.private_post(self.endpoints["batch_orders"], {'batchOrders': to_execute})
+            executed = await self.private_post(
+                self.endpoints["batch_orders"], {"batchOrders": to_execute}, data_=True
+            )
             return executed
         except Exception as e:
             print(f"error executing order {executed} {e}")
@@ -394,7 +406,7 @@ class BinanceBot(Bot):
             return []
 
     async def execute_cancellation(self, order: dict) -> dict:
-        symbol = order['symbol'] if 'symbol' in order else self.symbol
+        symbol = order["symbol"] if "symbol" in order else self.symbol
         cancellation = None
         try:
             cancellation = await self.private_delete(
@@ -412,7 +424,9 @@ class BinanceBot(Bot):
             }
         except Exception as e:
             if cancellation is not None and "code" in cancellation and cancellation["code"] == -2011:
-                logging.error(f"error cancelling order {cancellation} {order}")  # neater error message
+                logging.error(
+                    f"error cancelling order {cancellation} {order}"
+                )  # neater error message
             else:
                 print(f"error cancelling order {order} {e}")
                 print_async_exception(cancellation)
@@ -441,8 +455,10 @@ class BinanceBot(Bot):
                         "newClientOrderId"
                     ] = f"{order['custom_id']}_{str(int(time() * 1000))[8:]}_{int(np.random.random() * 1000)}"
                 to_execute.append(params)
-            orders = await self.private_post(self.endpoints["batch_orders"], {'batchOrders': to_execute})
-            print('debug', orders)
+            orders = await self.private_post(
+                self.endpoints["batch_orders"], {"batchOrders": to_execute}
+            )
+            print("debug", orders)
             return orders
         except Exception as e:
             print(f"error executing order {orders} {e}")
