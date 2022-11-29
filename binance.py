@@ -17,6 +17,7 @@ from pure_funcs import ts_to_date, sort_dict_keys, format_float
 class BinanceBot(Bot):
     def __init__(self, config: dict):
         self.exchange = "binance"
+        self.max_n_orders_per_batch = 5
         super().__init__(config)
         self.session = aiohttp.ClientSession()
         self.base_endpoint = ""
@@ -36,15 +37,25 @@ class BinanceBot(Bot):
             return {}
 
     async def private_(self, type_: str, base_endpoint: str, url: str, params: dict = {}) -> dict:
+        def stringify(x):
+            if type(x) == bool:
+                return "true" if x else "false"
+            elif type(x) == float:
+                return format_float(x)
+            elif type(x) == list:
+                return [stringify(y) for y in x]
+            elif type(x) == dict:
+                return json.dumps(x)
+            else:
+                return x
+
         try:
             timestamp = int(time() * 1000)
             params.update({"timestamp": timestamp, "recvWindow": 5000})
             for k in params:
-                if type(params[k]) == bool:
-                    params[k] = "true" if params[k] else "false"
-                elif type(params[k]) == float:
-                    params[k] = format_float(params[k])
+                params[k] = stringify(params[k])
             params = sort_dict_keys(params)
+            print('debug private post', params)
             params["signature"] = hmac.new(
                 self.secret.encode("utf-8"),
                 urlencode(params).encode("utf-8"),
@@ -124,6 +135,7 @@ class BinanceBot(Bot):
                 "websocket_market": ws + f"{self.symbol.lower()}@aggTrade",
                 "websocket_user": ws,
                 "listen_key": "/fapi/v1/listenKey",
+                "batch_orders": "/fapi/v1/batchOrders",
             }
         else:
             self.exchange_info = await self.public_get(
@@ -155,6 +167,7 @@ class BinanceBot(Bot):
                     "websocket_market": ws + f"{self.symbol.lower()}@aggTrade",
                     "websocket_user": ws,
                     "listen_key": "/dapi/v1/listenKey",
+                    "batch_orders": "/dapi/v1/batchOrders",
                 }
             else:
                 raise Exception(f"unknown symbol {self.symbol}")
@@ -251,9 +264,11 @@ class BinanceBot(Bot):
                 ticker = ticker[0]
             self.ob = [float(ticker["bidPrice"]), float(ticker["askPrice"])]
             self.price = np.random.choice(self.ob)
+            return True
         except Exception as e:
             logging.error(f"error updating order book {e}")
             print_async_exception(ticker)
+            return False
 
     async def fetch_open_orders(self) -> [dict]:
         return [
@@ -349,6 +364,35 @@ class BinanceBot(Bot):
             traceback.print_exc()
             return {}
 
+    async def execute_batch_orders(self, orders: [dict]) -> [dict]:
+        executed = None
+        try:
+            to_execute = []
+            for order in orders:
+                params = {
+                    "symbol": self.symbol,
+                    "side": order["side"].upper(),
+                    "positionSide": order["position_side"].replace("short", "short").upper(),
+                    "type": order["type"].upper(),
+                    "quantity": str(order["qty"]),
+                }
+                if params["type"] == "LIMIT":
+                    params["timeInForce"] = "GTX"
+                    params["price"] = order["price"]
+                if "custom_id" in order:
+                    params[
+                        "newClientOrderId"
+                    ] = f"{order['custom_id']}_{str(int(time() * 1000))[8:]}_{int(np.random.random() * 1000)}"
+                to_execute.append(params)
+            print('debug k', encoded)
+            executed = await self.private_post(self.endpoints["batch_orders"], {'batchOrders': to_execute})
+            return executed
+        except Exception as e:
+            print(f"error executing order {executed} {e}")
+            print_async_exception(executed)
+            traceback.print_exc()
+            return []
+
     async def execute_cancellation(self, order: dict) -> dict:
         symbol = order['symbol'] if 'symbol' in order else self.symbol
         cancellation = None
@@ -375,6 +419,36 @@ class BinanceBot(Bot):
                 traceback.print_exc()
             self.ts_released["force_update"] = 0.0
             return {}
+
+    async def execute_batch_cancellations(self, orders: [dict]) -> [dict]:
+        return
+        orders = None
+        try:
+            to_execute = []
+            for order in orders:
+                params = {
+                    "symbol": self.symbol,
+                    "side": order["side"].upper(),
+                    "positionSide": order["position_side"].replace("short", "short").upper(),
+                    "type": order["type"].upper(),
+                    "quantity": str(order["qty"]),
+                }
+                if params["type"] == "LIMIT":
+                    params["timeInForce"] = "GTX"
+                    params["price"] = order["price"]
+                if "custom_id" in order:
+                    params[
+                        "newClientOrderId"
+                    ] = f"{order['custom_id']}_{str(int(time() * 1000))[8:]}_{int(np.random.random() * 1000)}"
+                to_execute.append(params)
+            orders = await self.private_post(self.endpoints["batch_orders"], {'batchOrders': to_execute})
+            print('debug', orders)
+            return orders
+        except Exception as e:
+            print(f"error executing order {orders} {e}")
+            print_async_exception(orders)
+            traceback.print_exc()
+            return []
 
     async def fetch_fills(
         self,
