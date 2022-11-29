@@ -79,6 +79,7 @@ class Bot:
                 "cancel_and_create",
                 "update_position",
                 "create_orders",
+                "create_batch_orders",
                 "check_fills",
                 "update_fills",
                 "force_update",
@@ -226,11 +227,13 @@ class Bot:
                 self.dump_log({"log_type": "open_orders", "data": open_orders})
             self.open_orders = open_orders
             self.error_halt["update_open_orders"] = False
+            return True
         except Exception as e:
             self.error_halt["update_open_orders"] = True
 
             logging.error(f"error with update open orders {e}")
             traceback.print_exc()
+            return False
         finally:
             self.ts_released["update_open_orders"] = time()
 
@@ -301,10 +304,12 @@ class Bot:
                 self.dump_log({"log_type": "position", "data": position})
             self.position = position
             self.error_halt["update_position"] = False
+            return True
         except Exception as e:
             self.error_halt["update_position"] = True
             logging.error(f"error with update position {e}")
             traceback.print_exc()
+            return False
         finally:
             self.ts_released["update_position"] = time()
 
@@ -369,6 +374,46 @@ class Bot:
         finally:
             self.ts_released["create_orders"] = time()
 
+    async def create_batch_orders(self, orders_to_create: [dict]) -> [dict]:
+        print('debug a', orders_to_create)
+        if not orders_to_create:
+            return []
+        print('debug b')
+        if self.ts_locked["create_batch_orders"] > self.ts_released["create_batch_orders"]:
+            return []
+        print('debug c')
+        self.ts_locked["create_batch_orders"] = time()
+        try:
+            orders = await self.execute_batch_orders(orders_to_create)
+            print('debug d', orders)
+            for order in sorted(orders, key=lambda x: calc_diff(x['price'], self.price)):
+                if "side" in order:
+                    logging.info(
+                        f'  created order {order["symbol"]} {order["side"]: <4} '
+                        + f'{order["position_side"]: <5} {order["qty"]} {order["price"]}'
+                    )
+            return orders
+        finally:
+            self.ts_released["create_batch_orders"] = time()
+
+    async def cancel_batch(self, orders_to_cancel: [dict]) -> [dict]:
+        if not orders_to_create:
+            return []
+        if self.ts_locked["cancel_batch"] > self.ts_released["cancel_batch"]:
+            return []
+        self.ts_locked["cancel_batch"] = time()
+        try:
+            orders = await self.execute_batch_orders(orders_to_create)
+            for order in sorted(orders, key=lambda x: calc_diff(x['price'], self.price)):
+                if "order_id" in order:
+                    logging.info(
+                        f'cancelled order {order["symbol"]} {order["side"]: <4} '
+                        + f'{order["position_side"]: <5} {order["qty"]} {order["price"]}'
+                    )
+            return orders
+        finally:
+            self.ts_released["cancel_batch"] = time()
+
     async def cancel_orders(self, orders_to_cancel: [dict]) -> [dict]:
         if self.ts_locked["cancel_orders"] > self.ts_released["cancel_orders"]:
             return
@@ -408,14 +453,14 @@ class Bot:
 
     def stop(self, signum=None, frame=None) -> None:
         logging.info("Stopping passivbot, please wait...")
-        try:
-
-            self.stop_websocket = True
-            self.user_stream_task.cancel()
-            self.market_stream_task.cancel()
-
-        except Exception as e:
-            logging.error(f"An error occurred during shutdown: {e}")
+        self.stop_websocket = True
+        if not self.ohlcv:
+            try:
+                self.user_stream_task.cancel()
+                self.market_stream_task.cancel()
+    
+            except Exception as e:
+                logging.error(f"An error occurred during shutdown: {e}")
 
     def pause(self) -> None:
         self.process_websocket_ticks = False
@@ -730,7 +775,7 @@ class Bot:
             ideal_orders = []
             all_orders = self.calc_orders()
             for o in all_orders:
-                if "ientry" in o["custom_id"] and calc_diff(o["price"], self.price) < 0.002:
+                if not self.ohlcv and "ientry" in o["custom_id"] and calc_diff(o["price"], self.price) < 0.002:
                     # call update_position() before making initial entry orders
                     # in case websocket has failed
                     logging.info(f"update_position with REST API before creating initial entries.  Last price {self.price}")
@@ -802,7 +847,7 @@ class Bot:
                     0.01
                 )  # sleep 10 ms between sending cancellations and sending creations
             if to_create:
-                results.append(await self.create_orders(to_create[: self.n_orders_per_execution]))
+                results.append(await self.create_batch_orders(to_create[: self.max_n_orders_per_batch]))
             return results
         finally:
             await asyncio.sleep(self.delay_between_executions)  # sleep before releasing lock
@@ -1057,7 +1102,39 @@ class Bot:
         pass
 
     async def start_ohlcv_mode(self):
-        pass
+        await asyncio.gather(self.update_position(), self.update_open_orders())
+        await self.init_exchange_config()
+        await self.init_order_book()
+        await self.init_emas()
+        while True:
+            now = time()
+            #print('secs until next', ((now + 60) - now % 60) - now)
+            while int(now) % 60 != 0:
+                if self.stop_websocket:
+                    break
+                await asyncio.sleep(0.5)
+                now = time()
+                print(f"\rcountdown: {((now + 60) - now % 60) - now:.1f}      ", end=' ')
+            if self.stop_websocket:
+                break
+            await self.on_minute_mark()
+            await asyncio.sleep(1.0)
+
+    async def on_minute_mark(self):
+        # called each whole minute
+        print('calling on minute mark', time())
+        try:
+            self.prev_price = self.ob[0]
+            res = await asyncio.gather(self.update_position(), self.update_open_orders(), self.init_order_book())
+            # TODO catch when res != [True, True, True]
+            print(res)
+            print('prev_price, price', self.prev_price, self.ob[0])
+            self.update_emas(self.ob[0], self.prev_price)
+            await self.cancel_and_create()
+        except Exception as e:
+            print(e)
+        #orders = self.calc_orders()
+        #self.execute_to_exchange(orders)
 
 
 async def start_bot(bot):
