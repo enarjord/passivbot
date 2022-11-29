@@ -190,7 +190,6 @@ class BinanceBot(Bot):
                     self.min_cost = self.config["min_cost"] = 0.0
                 break
 
-        self.max_leverage = self.config["max_leverage"] = 25
         await super()._init()
         await self.init_order_book()
         await self.update_position()
@@ -245,11 +244,16 @@ class BinanceBot(Bot):
                 raise Exception("failed to set hedge mode")
 
     async def init_order_book(self):
-        ticker = await self.public_get(self.endpoints["ticker"], {"symbol": self.symbol})
-        if "inverse_coin_margined" in self.market_type:
-            ticker = ticker[0]
-        self.ob = [float(ticker["bidPrice"]), float(ticker["askPrice"])]
-        self.price = np.random.choice(self.ob)
+        ticker = None
+        try:
+            ticker = await self.public_get(self.endpoints["ticker"], {"symbol": self.symbol})
+            if "inverse_coin_margined" in self.market_type:
+                ticker = ticker[0]
+            self.ob = [float(ticker["bidPrice"]), float(ticker["askPrice"])]
+            self.price = np.random.choice(self.ob)
+        except Exception as e:
+            logging.error(f"error updating order book {e}")
+            print_async_exception(ticker)
 
     async def fetch_open_orders(self) -> [dict]:
         return [
@@ -346,15 +350,16 @@ class BinanceBot(Bot):
             return {}
 
     async def execute_cancellation(self, order: dict) -> dict:
+        symbol = order['symbol'] if 'symbol' in order else self.symbol
         cancellation = None
         try:
             cancellation = await self.private_delete(
                 self.endpoints["cancel_order"],
-                {"symbol": self.symbol, "orderId": order["order_id"]},
+                {"symbol": symbol, "orderId": order["order_id"]},
             )
 
             return {
-                "symbol": self.symbol,
+                "symbol": symbol,
                 "side": cancellation["side"].lower(),
                 "order_id": int(cancellation["orderId"]),
                 "position_side": cancellation["positionSide"].lower().replace("short", "short"),
