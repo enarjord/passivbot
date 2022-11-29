@@ -398,7 +398,15 @@ class BinanceBot(Bot):
             executed = await self.private_post(
                 self.endpoints["batch_orders"], {"batchOrders": to_execute}, data_=True
             )
-            return executed
+            return [{
+                "symbol": self.symbol,
+                "side": ex["side"].lower(),
+                "position_side": ex["positionSide"].lower().replace("short", "short"),
+                "type": ex["type"].lower(),
+                "qty": float(ex["origQty"]),
+                "order_id": int(ex["orderId"]),
+                "price": float(ex["price"]),
+            } for ex in executed]
         except Exception as e:
             print(f"error executing order {executed} {e}")
             print_async_exception(executed)
@@ -458,7 +466,6 @@ class BinanceBot(Bot):
             orders = await self.private_post(
                 self.endpoints["batch_orders"], {"batchOrders": to_execute}
             )
-            print("debug", orders)
             return orders
         except Exception as e:
             print(f"error executing order {orders} {e}")
