@@ -19,6 +19,7 @@ class BinanceBot(Bot):
     def __init__(self, config: dict):
         self.exchange = "binance"
         self.max_n_orders_per_batch = 5
+        self.max_n_cancellations_per_batch = 10
         super().__init__(config)
         self.session = aiohttp.ClientSession()
         self.base_endpoint = ""
@@ -48,7 +49,7 @@ class BinanceBot(Bot):
             elif type(x) == int:
                 return str(x)
             elif type(x) == list:
-                return json.dumps([stringify(y) for y in x]).replace(' ', '')
+                return json.dumps([stringify(y) for y in x]).replace(" ", "")
             elif type(x) == dict:
                 return json.dumps({k: stringify(v) for k, v in x.items()}).replace(" ", "")
             else:
@@ -106,12 +107,15 @@ class BinanceBot(Bot):
             params,
         )
 
-    async def private_delete(self, url: str, params: dict = {}, base_endpoint: str = None) -> dict:
+    async def private_delete(
+        self, url: str, params: dict = {}, base_endpoint: str = None, data_: bool = False
+    ) -> dict:
         return await self.private_(
             "delete",
             self.base_endpoint if base_endpoint is None else base_endpoint,
             url,
             params,
+            data_,
         )
 
     async def init_market_type(self):
@@ -342,6 +346,13 @@ class BinanceBot(Bot):
                 break
         return position
 
+    async def execute_orders(self, orders: [dict]) -> [dict]:
+        if len(orders) == 0:
+            return []
+        if len(orders) == 1:
+            return [await self.execute_order(orders[0])]
+        return await self.execute_batch_orders(orders)
+
     async def execute_order(self, order: dict) -> dict:
         o = None
         try:
@@ -398,78 +409,49 @@ class BinanceBot(Bot):
             executed = await self.private_post(
                 self.endpoints["batch_orders"], {"batchOrders": to_execute}, data_=True
             )
-            return [{
-                "symbol": self.symbol,
-                "side": ex["side"].lower(),
-                "position_side": ex["positionSide"].lower().replace("short", "short"),
-                "type": ex["type"].lower(),
-                "qty": float(ex["origQty"]),
-                "order_id": int(ex["orderId"]),
-                "price": float(ex["price"]),
-            } for ex in executed]
+            return [
+                {
+                    "symbol": self.symbol,
+                    "side": ex["side"].lower(),
+                    "position_side": ex["positionSide"].lower().replace("short", "short"),
+                    "type": ex["type"].lower(),
+                    "qty": float(ex["origQty"]),
+                    "order_id": int(ex["orderId"]),
+                    "price": float(ex["price"]),
+                }
+                for ex in executed
+            ]
         except Exception as e:
             print(f"error executing order {executed} {e}")
             print_async_exception(executed)
             traceback.print_exc()
             return []
 
-    async def execute_cancellation(self, order: dict) -> dict:
-        symbol = order["symbol"] if "symbol" in order else self.symbol
-        cancellation = None
+    async def execute_cancellations(self, orders: [dict]) -> [dict]:
+        if not orders:
+            return []
+        cancellations = []
+        symbol = orders[0]["symbol"] if "symbol" in orders[0] else self.symbol
         try:
-            cancellation = await self.private_delete(
-                self.endpoints["cancel_order"],
-                {"symbol": symbol, "orderId": order["order_id"]},
+            cancellations = await self.private_delete(
+                self.endpoints["batch_orders"],
+                {"symbol": symbol, "orderIdList": [order["order_id"] for order in orders]},
+                data_=True,
             )
-
-            return {
-                "symbol": symbol,
-                "side": cancellation["side"].lower(),
-                "order_id": int(cancellation["orderId"]),
-                "position_side": cancellation["positionSide"].lower().replace("short", "short"),
-                "qty": float(cancellation["origQty"]),
-                "price": float(cancellation["price"]),
-            }
-        except Exception as e:
-            if cancellation is not None and "code" in cancellation and cancellation["code"] == -2011:
-                logging.error(
-                    f"error cancelling order {cancellation} {order}"
-                )  # neater error message
-            else:
-                print(f"error cancelling order {order} {e}")
-                print_async_exception(cancellation)
-                traceback.print_exc()
-            self.ts_released["force_update"] = 0.0
-            return {}
-
-    async def execute_batch_cancellations(self, orders: [dict]) -> [dict]:
-        return
-        orders = None
-        try:
-            to_execute = []
-            for order in orders:
-                params = {
-                    "symbol": self.symbol,
-                    "side": order["side"].upper(),
-                    "positionSide": order["position_side"].replace("short", "short").upper(),
-                    "type": order["type"].upper(),
-                    "quantity": str(order["qty"]),
+            return [
+                {
+                    "symbol": symbol,
+                    "side": cancellation["side"].lower(),
+                    "order_id": int(cancellation["orderId"]),
+                    "position_side": cancellation["positionSide"].lower().replace("short", "short"),
+                    "qty": float(cancellation["origQty"]),
+                    "price": float(cancellation["price"]),
                 }
-                if params["type"] == "LIMIT":
-                    params["timeInForce"] = "GTX"
-                    params["price"] = order["price"]
-                if "custom_id" in order:
-                    params[
-                        "newClientOrderId"
-                    ] = f"{order['custom_id']}_{str(int(time() * 1000))[8:]}_{int(np.random.random() * 1000)}"
-                to_execute.append(params)
-            orders = await self.private_post(
-                self.endpoints["batch_orders"], {"batchOrders": to_execute}
-            )
-            return orders
+                for cancellation in cancellations
+            ]
         except Exception as e:
-            print(f"error executing order {orders} {e}")
-            print_async_exception(orders)
+            logging.error(f"error cancelling orders {orders} {e}")
+            print_async_exception(cancellations)
             traceback.print_exc()
             return []
 
