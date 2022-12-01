@@ -79,7 +79,6 @@ class Bot:
                 "cancel_and_create",
                 "update_position",
                 "create_orders",
-                "create_batch_orders",
                 "check_fills",
                 "update_fills",
                 "force_update",
@@ -348,41 +347,8 @@ class Bot:
             return []
         self.ts_locked["create_orders"] = time()
         try:
-            creations = []
-            for oc in sorted(orders_to_create, key=lambda x: calc_diff(x["price"], self.price)):
-                try:
-                    creations.append((oc, asyncio.create_task(self.execute_order(oc))))
-                except Exception as e:
-                    logging.error(f"error creating order a {oc} {e}")
-            created_orders = []
-            for oc, c in creations:
-                try:
-                    o = await c
-                    created_orders.append(o)
-                    if "side" in o:
-                        logging.info(
-                            f'  created order {o["symbol"]} {o["side"]: <4} '
-                            + f'{o["position_side"]: <5} {o["qty"]} {o["price"]}'
-                        )
-                        if o["order_id"] not in {x["order_id"] for x in self.open_orders}:
-                            self.open_orders.append(o)
-                    else:
-                        logging.error(f"error creating order b {o} {oc}")
-                except Exception as e:
-                    logging.error(f"error creating order c {oc} {c.exception()} {e}")
-            return created_orders
-        finally:
-            self.ts_released["create_orders"] = time()
-
-    async def create_batch_orders(self, orders_to_create: [dict]) -> [dict]:
-        if not orders_to_create:
-            return []
-        if self.ts_locked["create_batch_orders"] > self.ts_released["create_batch_orders"]:
-            return []
-        self.ts_locked["create_batch_orders"] = time()
-        try:
-            orders = await self.execute_batch_orders(orders_to_create)
-            for order in sorted(orders, key=lambda x: calc_diff(x['price'], self.price)):
+            orders = await self.execute_orders(orders_to_create)
+            for order in sorted(orders, key=lambda x: calc_diff(x["price"], self.price)):
                 if "side" in order:
                     logging.info(
                         f'  created order {order["symbol"]} {order["side"]: <4} '
@@ -390,25 +356,7 @@ class Bot:
                     )
             return orders
         finally:
-            self.ts_released["create_batch_orders"] = time()
-
-    async def cancel_batch(self, orders_to_cancel: [dict]) -> [dict]:
-        if not orders_to_create:
-            return []
-        if self.ts_locked["cancel_batch"] > self.ts_released["cancel_batch"]:
-            return []
-        self.ts_locked["cancel_batch"] = time()
-        try:
-            orders = await self.execute_batch_orders(orders_to_create)
-            for order in sorted(orders, key=lambda x: calc_diff(x['price'], self.price)):
-                if "order_id" in order:
-                    logging.info(
-                        f'cancelled order {order["symbol"]} {order["side"]: <4} '
-                        + f'{order["position_side"]: <5} {order["qty"]} {order["price"]}'
-                    )
-            return orders
-        finally:
-            self.ts_released["cancel_batch"] = time()
+            self.ts_released["create_orders"] = time()
 
     async def cancel_orders(self, orders_to_cancel: [dict]) -> [dict]:
         if self.ts_locked["cancel_orders"] > self.ts_released["cancel_orders"]:
@@ -422,28 +370,25 @@ class Bot:
                 if o["order_id"] not in oo_ids:
                     oo_ids.add(o["order_id"])
                     orders_to_cancel_dedup.append(o)
-            for oc in orders_to_cancel_dedup:
-                try:
-                    deletions.append((oc, asyncio.create_task(self.execute_cancellation(oc))))
-                except Exception as e:
-                    logging.error(f"error cancelling order c {oc} {e}")
-            cancelled_orders = []
-            for oc, c in deletions:
-                try:
-                    o = await c
-                    cancelled_orders.append(o)
-                    if "order_id" in o:
+            cancellations = None
+            try:
+                cancellations = await self.execute_cancellations(orders_to_cancel_dedup)
+                for cancellation in cancellations:
+                    if "order_id" in cancellation:
                         logging.info(
-                            f'cancelled order {o["symbol"]} {o["side"]: <4} '
-                            + f'{o["position_side"]: <5} {o["qty"]} {o["price"]}'
+                            f'cancelled order {cancellation["symbol"]} {cancellation["side"]: <4} '
+                            + f'{cancellation["position_side"]: <5} {cancellation["qty"]} {cancellation["price"]}'
                         )
                         self.open_orders = [
-                            oo for oo in self.open_orders if oo["order_id"] != o["order_id"]
+                            oo
+                            for oo in self.open_orders
+                            if oo["order_id"] != cancellation["order_id"]
                         ]
-                except Exception as e:
-                    logging.error(f"error cancelling order {oc} {e}")
-                    print_async_exception(c)
-            return cancelled_orders
+                return cancellations
+            except Exception as e:
+                logging.error(f"error cancelling orders {cancellations} {e}")
+                print_async_exception(cancellations)
+                return []
         finally:
             self.ts_released["cancel_orders"] = time()
 
@@ -454,7 +399,7 @@ class Bot:
             try:
                 self.user_stream_task.cancel()
                 self.market_stream_task.cancel()
-    
+
             except Exception as e:
                 logging.error(f"An error occurred during shutdown: {e}")
 
@@ -771,10 +716,16 @@ class Bot:
             ideal_orders = []
             all_orders = self.calc_orders()
             for o in all_orders:
-                if not self.ohlcv and "ientry" in o["custom_id"] and calc_diff(o["price"], self.price) < 0.002:
+                if (
+                    not self.ohlcv
+                    and "ientry" in o["custom_id"]
+                    and calc_diff(o["price"], self.price) < 0.002
+                ):
                     # call update_position() before making initial entry orders
                     # in case websocket has failed
-                    logging.info(f"update_position with REST API before creating initial entries.  Last price {self.price}")
+                    logging.info(
+                        f"update_position with REST API before creating initial entries.  Last price {self.price}"
+                    )
                     await self.update_position()
                     all_orders = self.calc_orders()
                     break
@@ -833,17 +784,16 @@ class Bot:
 
             results = []
             if to_cancel:
-                # to avoid building backlog, cancel n+1 orders, create n orders
                 results.append(
                     asyncio.create_task(
-                        self.cancel_orders(to_cancel[: self.n_orders_per_execution + 1])
+                        self.cancel_orders(to_cancel[: self.max_n_cancellations_per_batch])
                     )
                 )
                 await asyncio.sleep(
                     0.01
                 )  # sleep 10 ms between sending cancellations and sending creations
             if to_create:
-                results.append(await self.create_batch_orders(to_create[: self.max_n_orders_per_batch]))
+                results.append(await self.create_orders(to_create[: self.max_n_orders_per_batch]))
             return results
         finally:
             await asyncio.sleep(self.delay_between_executions)  # sleep before releasing lock
@@ -1104,13 +1054,13 @@ class Bot:
         await self.init_emas()
         while True:
             now = time()
-            #print('secs until next', ((now + 60) - now % 60) - now)
+            # print('secs until next', ((now + 60) - now % 60) - now)
             while int(now) % 60 != 0:
                 if self.stop_websocket:
                     break
                 await asyncio.sleep(0.5)
                 now = time()
-                print(f"\rcountdown: {((now + 60) - now % 60) - now:.1f}      ", end=' ')
+                print(f"\rcountdown: {((now + 60) - now % 60) - now:.1f}      ", end=" ")
             if self.stop_websocket:
                 break
             await self.on_minute_mark()
@@ -1118,19 +1068,21 @@ class Bot:
 
     async def on_minute_mark(self):
         # called each whole minute
-        print('calling on minute mark', time())
+        print("calling on minute mark", time())
         try:
             self.prev_price = self.ob[0]
-            res = await asyncio.gather(self.update_position(), self.update_open_orders(), self.init_order_book())
+            res = await asyncio.gather(
+                self.update_position(), self.update_open_orders(), self.init_order_book()
+            )
             # TODO catch when res != [True, True, True]
             print(res)
-            print('prev_price, price', self.prev_price, self.ob[0])
+            print("prev_price, price", self.prev_price, self.ob[0])
             self.update_emas(self.ob[0], self.prev_price)
             await self.cancel_and_create()
         except Exception as e:
             print(e)
-        #orders = self.calc_orders()
-        #self.execute_to_exchange(orders)
+        # orders = self.calc_orders()
+        # self.execute_to_exchange(orders)
 
 
 async def start_bot(bot):
@@ -1286,7 +1238,15 @@ async def main() -> None:
         logging.error(f"{e} failed to load config {args.live_config_path}")
         return
     config["exchange"] = exchange
-    for k in ["user", "api_keys", "symbol", "leverage", "price_distance_threshold", "ohlcv", "test_mode"]:
+    for k in [
+        "user",
+        "api_keys",
+        "symbol",
+        "leverage",
+        "price_distance_threshold",
+        "ohlcv",
+        "test_mode",
+    ]:
         config[k] = getattr(args, k)
     if config["test_mode"] and config["exchange"] not in TEST_MODE_SUPPORTED_EXCHANGES:
         raise IOError(f"Exchange {config['exchange']} is not supported in test mode.")
@@ -1394,7 +1354,9 @@ async def main() -> None:
         raise Exception("unknown exchange", config["exchange"])
 
     if args.ohlcv:
-        logging.info("starting passivbot in ohlcv mode, using REST API only and updating once a minute")
+        logging.info(
+            "starting passivbot in ohlcv mode, using REST API only and updating once a minute"
+        )
 
     signal.signal(signal.SIGINT, bot.stop)
     signal.signal(signal.SIGTERM, bot.stop)
