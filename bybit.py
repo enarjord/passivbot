@@ -11,7 +11,7 @@ from uuid import uuid4
 import aiohttp
 import numpy as np
 
-from njit_funcs import round_
+from njit_funcs import round_, calc_diff
 from passivbot import Bot, logging
 from procedures import print_async_exception, print_
 from pure_funcs import ts_to_date, sort_dict_keys, date_to_ts
@@ -41,7 +41,9 @@ def determine_pos_side(o: dict) -> str:
 class BybitBot(Bot):
     def __init__(self, config: dict):
         self.exchange = "bybit"
-        self.min_notional = 0.0
+        self.min_notional = 1.0
+        self.max_n_orders_per_batch = 5
+        self.max_n_cancellations_per_batch = 10
         super().__init__(config)
         self.base_endpoint = "https://api.bybit.com"
         if self.test_mode:
@@ -58,7 +60,7 @@ class BybitBot(Bot):
         websockets_base_endpoint = "wss://stream.bybit.com"
         if self.test_mode:
             websockets_base_endpoint = "wss://stream-testnet.bybit.com"
-        
+
         if self.symbol.endswith("USDT"):
             print("linear perpetual")
             self.market_type += "_linear_perpetual"
@@ -117,7 +119,7 @@ class BybitBot(Bot):
         self.spot_base_endpoint = "https://api.bybit.com"
         if self.test_mode:
             self.spot_base_endpoint = "https://api-testnet.bybit.com"
-        
+
         self.endpoints["spot_balance"] = "/spot/v1/account"
         self.endpoints["balance"] = "/v2/private/wallet/balance"
         self.endpoints["exchange_info"] = "/v2/public/symbols"
@@ -271,6 +273,31 @@ class BybitBot(Bot):
         }
         return position
 
+    async def execute_orders(self, orders: [dict]) -> [dict]:
+        if not orders:
+            return []
+        creations = []
+        for order in sorted(orders, key=lambda x: calc_diff(x["price"], self.price)):
+            creation = None
+            try:
+                creation = asyncio.create_task(self.execute_order(order))
+                creations.append((order, creation))
+            except Exception as e:
+                print(f"error creating order {order} {e}")
+                print_async_exception(creation)
+                traceback.print_exc()
+        results = []
+        for creation in creations:
+            result = None
+            try:
+                result = await creation[1]
+                results.append(result)
+            except Exception as e:
+                print(f"error creating order {creation} {e}")
+                print_async_exception(result)
+                traceback.print_exc()
+        return results
+
     async def execute_order(self, order: dict) -> dict:
         o = None
         try:
@@ -317,6 +344,31 @@ class BybitBot(Bot):
             traceback.print_exc()
             return {}
 
+    async def execute_cancellations(self, orders: [dict]) -> [dict]:
+        if not orders:
+            return []
+        cancellations = []
+        for order in sorted(orders, key=lambda x: calc_diff(x["price"], self.price)):
+            cancellation = None
+            try:
+                cancellation = asyncio.create_task(self.execute_cancellation(order))
+                cancellations.append((order, cancellation))
+            except Exception as e:
+                print(f"error cancelling order {order} {e}")
+                print_async_exception(cancellation)
+                traceback.print_exc()
+        results = []
+        for cancellation in cancellations:
+            result = None
+            try:
+                result = await cancellation[1]
+                results.append(result)
+            except Exception as e:
+                print(f"error cancelling order {cancellation} {e}")
+                print_async_exception(result)
+                traceback.print_exc()
+        return results
+
     async def execute_cancellation(self, order: dict) -> dict:
         cancellation = None
         try:
@@ -333,9 +385,17 @@ class BybitBot(Bot):
                 "price": order["price"],
             }
         except Exception as e:
-            if cancellation is not None and "ret_code" in cancellation and cancellation["ret_code"] == 20001:
-                error_cropped = {k: v for k, v in cancellation.items() if k in ["ret_msg", "ret_code"]}
-                logging.error(f"error cancelling order {error_cropped} {order}")  # neater error message
+            if (
+                cancellation is not None
+                and "ret_code" in cancellation
+                and cancellation["ret_code"] == 20001
+            ):
+                error_cropped = {
+                    k: v for k, v in cancellation.items() if k in ["ret_msg", "ret_code"]
+                }
+                logging.error(
+                    f"error cancelling order {error_cropped} {order}"
+                )  # neater error message
             else:
                 print(f"error cancelling order {order} {e}")
                 print_async_exception(cancellation)
@@ -608,21 +668,29 @@ class BybitBot(Bot):
                 print(res)
                 res = await self.private_post(
                     "/private/linear/position/set-leverage",
-                    {"symbol": self.symbol, "buy_leverage": self.leverage, "sell_leverage": self.leverage},
+                    {
+                        "symbol": self.symbol,
+                        "buy_leverage": self.leverage,
+                        "sell_leverage": self.leverage,
+                    },
                 )
                 print(res)
             elif "inverse_perpetual" in self.market_type:
                 res = await self.private_post(
                     "/v2/private/position/switch-isolated",
-                    {"symbol": self.symbol, "is_isolated": False,
-                     "buy_leverage": self.leverage, "sell_leverage": self.leverage},
+                    {
+                        "symbol": self.symbol,
+                        "is_isolated": False,
+                        "buy_leverage": self.leverage,
+                        "sell_leverage": self.leverage,
+                    },
                 )
-                print('1', res)
+                print("1", res)
                 res = await self.private_post(
                     "/v2/private/position/leverage/save",
                     {"symbol": self.symbol, "leverage": self.leverage, "leverage_only": True},
                 )
-                print('2', res)
+                print("2", res)
         except Exception as e:
             print(e)
 
