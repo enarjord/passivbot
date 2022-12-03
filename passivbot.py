@@ -816,23 +816,27 @@ class Bot:
             await asyncio.gather(self.update_position(), self.update_open_orders())
         if now - self.heartbeat_ts > self.heartbeat_interval_seconds:
             # print heartbeat once an hour
-            logging.info(f"heartbeat {self.symbol}")
-            self.log_position_long()
-            self.log_position_short()
-            liq_price = self.position["long"]["liquidation_price"]
-            if calc_diff(self.position["short"]["liquidation_price"], self.price) < calc_diff(
-                liq_price, self.price
-            ):
-                liq_price = self.position["short"]["liquidation_price"]
-            logging.info(
-                f'balance: {round_dynamic(self.position["wallet_balance"], 6)}'
-                + f' equity: {round_dynamic(self.position["equity"], 6)} last price: {self.price}'
-                + f" liq: {round_(liq_price, self.price_step)}"
-            )
+            self.heartbeat_print()
             self.heartbeat_ts = time()
         await self.cancel_and_create()
 
-    def log_position_long(self):
+    def heartbeat_print(self):
+        logging.info(f"heartbeat {self.symbol}")
+        self.log_position_long()
+        self.log_position_short()
+        liq_price = self.position["long"]["liquidation_price"]
+        if calc_diff(self.position["short"]["liquidation_price"], self.price) < calc_diff(
+            liq_price, self.price
+        ):
+            liq_price = self.position["short"]["liquidation_price"]
+        logging.info(
+            f'balance: {round_dynamic(self.position["wallet_balance"], 6)}'
+            + f' equity: {round_dynamic(self.position["equity"], 6)} last price: {self.price}'
+            + f" liq: {round_(liq_price, self.price_step)}"
+        )
+
+
+    def log_position_long(self, prev_pos=None):
         closes_long = sorted(
             [o for o in self.open_orders if o["side"] == "sell" and o["position_side"] == "long"],
             key=lambda x: x["price"],
@@ -847,16 +851,25 @@ class Bot:
         lcqty, lcprice = (
             (closes_long[0]["qty"], closes_long[0]["price"]) if closes_long else (0.0, 0.0)
         )
+        prev_pos_line = (
+            (
+                f'long: {prev_pos["long"]["size"]} @'
+                + f' {round_(prev_pos["long"]["price"], self.price_step)} -> '
+            )
+            if prev_pos
+            else ""
+        )
         logging.info(
+            prev_pos_line + 
             f'long: {self.position["long"]["size"]} @'
-            + f' {round_dynamic(self.position["long"]["price"], 5)}'
+            + f' {round_(self.position["long"]["price"], self.price_step)}'
             + f' lWE: {self.position["long"]["wallet_exposure"]:.4f}'
             + f' pprc diff {self.position["long"]["price"] / self.price - 1:.3f}'
             + f" EMAs: {[round_dynamic(e, 5) for e in self.emas_long]}"
             + f" e {leqty} @ {leprice} | c {lcqty} @ {lcprice}"
         )
 
-    def log_position_short(self):
+    def log_position_short(self, prev_pos=None):
         closes_short = sorted(
             [o for o in self.open_orders if o["side"] == "buy" and o["position_side"] == "short"],
             key=lambda x: x["price"],
@@ -876,11 +889,20 @@ class Bot:
             if self.position["short"]["price"] != 0.0
             else 1.0
         )
+        prev_pos_line = (
+            (
+                f'short: {prev_pos["short"]["size"]} @'
+                + f' {round_(prev_pos["short"]["price"], self.price_step)} -> '
+            )
+            if prev_pos
+            else ""
+        )
         logging.info(
+            prev_pos_line + 
             f'short: {self.position["short"]["size"]} @'
-            + f' {round_dynamic(self.position["short"]["price"], 5)}'
+            + f' {round_(self.position["short"]["price"], self.price_step)}'
             + f' sWE: {self.position["short"]["wallet_exposure"]:.4f}'
-            + f" pprc diff {pprice_diff:.3f}"
+            + f' pprc diff {self.position["short"]["price"] / self.price - 1:.3f}'
             + f" EMAs: {[round_dynamic(e, 5) for e in self.emas_short]}"
             + f" e {leqty} @ {leprice} | c {lcqty} @ {lcprice}"
         )
@@ -1052,6 +1074,7 @@ class Bot:
         await self.init_exchange_config()
         await self.init_order_book()
         await self.init_emas()
+        logging.info('starting bot...')
         while True:
             now = time()
             # print('secs until next', ((now + 60) - now % 60) - now)
@@ -1068,21 +1091,45 @@ class Bot:
 
     async def on_minute_mark(self):
         # called each whole minute
-        print("calling on minute mark", time())
         try:
+            print('\r', end='')
+            if time() - self.heartbeat_ts > self.heartbeat_interval_seconds:
+                # print heartbeat once an hour
+                self.heartbeat_print()
+                self.heartbeat_ts = time()
             self.prev_price = self.ob[0]
+            prev_pos = self.position.copy()
             res = await asyncio.gather(
                 self.update_position(), self.update_open_orders(), self.init_order_book()
             )
             # TODO catch when res != [True, True, True]
-            print(res)
-            print("prev_price, price", self.prev_price, self.ob[0])
             self.update_emas(self.ob[0], self.prev_price)
             await self.cancel_and_create()
+            if prev_pos["wallet_balance"] != self.position["wallet_balance"]:
+                logging.info(
+                    f"balance: {round_dynamic(prev_pos['wallet_balance'], 7)}"
+                    + f" -> {round_dynamic(self.position['wallet_balance'], 7)}"
+                )
+            if (
+                prev_pos["long"]["size"] != self.position["long"]["size"]
+                or prev_pos["long"]["price"] != self.position["long"]["price"]
+            ):
+                plp = prev_pos["long"]["size"], round_(prev_pos["long"]["price"], self.price_step)
+                clp = self.position["long"]["size"], round_(
+                    self.position["long"]["price"], self.price_step
+                )
+                self.log_position_long(prev_pos)
+            if (
+                prev_pos["short"]["size"] != self.position["short"]["size"]
+                or prev_pos["short"]["price"] != self.position["short"]["price"]
+            ):
+                psp = prev_pos["short"]["size"], round_(prev_pos["short"]["price"], self.price_step)
+                csp = self.position["short"]["size"], round_(
+                    self.position["short"]["price"], self.price_step
+                )
+                self.log_position_short(prev_pos)
         except Exception as e:
             print(e)
-        # orders = self.calc_orders()
-        # self.execute_to_exchange(orders)
 
 
 async def start_bot(bot):
@@ -1252,7 +1299,6 @@ async def main() -> None:
         raise IOError(f"Exchange {config['exchange']} is not supported in test mode.")
     config["market_type"] = args.market_type if args.market_type is not None else "futures"
     config["passivbot_mode"] = determine_passivbot_mode(config)
-    logging.info(f"using config \n{config_pretty_str(denumpyize(config))}")
     if args.assigned_balance is not None:
         logging.info(f"assigned balance set to {args.assigned_balance}")
         config["assigned_balance"] = args.assigned_balance
@@ -1327,6 +1373,7 @@ async def main() -> None:
 
     if "spot" in config["market_type"]:
         config = spotify_config(config)
+    logging.info(f"using config \n{config_pretty_str(denumpyize(config))}")
 
     if config["exchange"] == "binance":
         if "spot" in config["market_type"]:
