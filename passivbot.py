@@ -901,7 +901,7 @@ class Bot:
             + f'short: {self.position["short"]["size"]} @'
             + f' {round_(self.position["short"]["price"], self.price_step)}'
             + f' sWE: {self.position["short"]["wallet_exposure"]:.4f}'
-            + f' pprc diff {self.price / self.position["short"]["price"] - 1:.3f}'
+            + f' pprc diff {pprice_diff:.3f}'
             + f" EMAs: {[round_dynamic(e, 5) for e in self.emas_short]}"
             + f" e {leqty} @ {leprice} | c {lcqty} @ {lcprice}"
         )
@@ -1109,19 +1109,13 @@ class Bot:
                     f"balance: {round_dynamic(prev_pos['wallet_balance'], 7)}"
                     + f" -> {round_dynamic(self.position['wallet_balance'], 7)}"
                 )
-            if (
-                prev_pos["long"]["size"] != self.position["long"]["size"]
-                or prev_pos["long"]["price"] != self.position["long"]["price"]
-            ):
+            if prev_pos["long"]["size"] != self.position["long"]["size"]:
                 plp = prev_pos["long"]["size"], round_(prev_pos["long"]["price"], self.price_step)
                 clp = self.position["long"]["size"], round_(
                     self.position["long"]["price"], self.price_step
                 )
                 self.log_position_long(prev_pos)
-            if (
-                prev_pos["short"]["size"] != self.position["short"]["size"]
-                or prev_pos["short"]["price"] != self.position["short"]["price"]
-            ):
+            if prev_pos["short"]["size"] != self.position["short"]["size"]:
                 psp = prev_pos["short"]["size"], round_(prev_pos["short"]["price"], self.price_step)
                 csp = self.position["short"]["size"], round_(
                     self.position["short"]["price"], self.price_step
