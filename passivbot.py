@@ -1128,7 +1128,8 @@ class Bot:
                 )
                 self.log_position_short(prev_pos)
         except Exception as e:
-            print(e)
+            logging.error(f'error on minute mark {e}')
+            traceback.print_exc()
 
 
 async def start_bot(bot):
