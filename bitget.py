@@ -369,7 +369,7 @@ class BitgetBot(Bot):
                 random_str = f"{str(int(time() * 1000))[-6:]}_{int(np.random.random() * 10000)}"
                 custom_id = order["custom_id"] if "custom_id" in order else "0"
                 params["clientOid"] = order['custom_id'] = f"{self.broker_code}#{custom_id}_{random_str}"
-                orders_with_custom_ids.append(order)
+                orders_with_custom_ids.append({**order, **{'symbol': self.symbol}})
                 to_execute.append(params)
             executed = await self.private_post(
                 self.endpoints["batch_orders"],
@@ -649,7 +649,7 @@ class BitgetBot(Bot):
             )
             print(res)
         except Exception as e:
-            print(e)
+            print('error initiating exchange config', e)
 
     def standardize_market_stream_event(self, data: dict) -> [dict]:
         if "action" not in data or data["action"] != "update":
