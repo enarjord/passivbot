@@ -301,50 +301,59 @@ class BinanceBot(Bot):
         ]
 
     async def fetch_position(self) -> dict:
-        positions, balance = await asyncio.gather(
-            self.private_get(
-                self.endpoints["position"],
-                (
-                    {"symbol": self.symbol}
-                    if "linear_perpetual" in self.market_type
-                    else {"pair": self.pair}
+        positions, balance = None, None
+        try:
+            positions, balance = await asyncio.gather(
+                self.private_get(
+                    self.endpoints["position"],
+                    (
+                        {"symbol": self.symbol}
+                        if "linear_perpetual" in self.market_type
+                        else {"pair": self.pair}
+                    ),
                 ),
-            ),
-            self.private_get(self.endpoints["balance"], {}),
-        )
-        assert all(
-            key in positions[0] for key in ["symbol", "positionAmt", "entryPrice"]
-        ), "bogus position fetch"
-        assert all(
-            key in balance[0] for key in ["asset", "balance", "crossUnPnl"]
-        ), "bogus balance fetch"
-        positions = [e for e in positions if e["symbol"] == self.symbol]
-        position = {
-            "long": {"size": 0.0, "price": 0.0, "liquidation_price": 0.0},
-            "short": {"size": 0.0, "price": 0.0, "liquidation_price": 0.0},
-            "wallet_balance": 0.0,
-            "equity": 0.0,
-        }
-        if positions:
-            for p in positions:
-                if p["positionSide"] == "LONG":
-                    position["long"] = {
-                        "size": float(p["positionAmt"]),
-                        "price": float(p["entryPrice"]),
-                        "liquidation_price": float(p["liquidationPrice"]),
-                    }
-                elif p["positionSide"] == "SHORT":
-                    position["short"] = {
-                        "size": float(p["positionAmt"]),
-                        "price": float(p["entryPrice"]),
-                        "liquidation_price": float(p["liquidationPrice"]),
-                    }
-        for e in balance:
-            if e["asset"] == (self.quot if "linear_perpetual" in self.market_type else self.coin):
-                position["wallet_balance"] = float(e["balance"])
-                position["equity"] = position["wallet_balance"] + float(e["crossUnPnl"])
-                break
-        return position
+                self.private_get(self.endpoints["balance"], {}),
+            )
+            assert all(
+                key in positions[0] for key in ["symbol", "positionAmt", "entryPrice"]
+            ), "bogus position fetch"
+            assert all(
+                key in balance[0] for key in ["asset", "balance", "crossUnPnl"]
+            ), "bogus balance fetch"
+            positions = [e for e in positions if e["symbol"] == self.symbol]
+            position = {
+                "long": {"size": 0.0, "price": 0.0, "liquidation_price": 0.0},
+                "short": {"size": 0.0, "price": 0.0, "liquidation_price": 0.0},
+                "wallet_balance": 0.0,
+                "equity": 0.0,
+            }
+            if positions:
+                for p in positions:
+                    if p["positionSide"] == "LONG":
+                        position["long"] = {
+                            "size": float(p["positionAmt"]),
+                            "price": float(p["entryPrice"]),
+                            "liquidation_price": float(p["liquidationPrice"]),
+                        }
+                    elif p["positionSide"] == "SHORT":
+                        position["short"] = {
+                            "size": float(p["positionAmt"]),
+                            "price": float(p["entryPrice"]),
+                            "liquidation_price": float(p["liquidationPrice"]),
+                        }
+            for e in balance:
+                if e["asset"] == (self.quot if "linear_perpetual" in self.market_type else self.coin):
+                    position["wallet_balance"] = float(e["balance"])
+                    position["equity"] = position["wallet_balance"] + float(e["crossUnPnl"])
+                    break
+            return position
+        except Exception as e:
+            logging.error(f"error fetching pos or balance {e}")
+            print_async_exception(positions)
+            print_async_exception(balance)
+            traceback.print_exc()
+            
+
 
     async def execute_orders(self, orders: [dict]) -> [dict]:
         if len(orders) == 0:
