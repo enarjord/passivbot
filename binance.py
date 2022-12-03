@@ -352,8 +352,6 @@ class BinanceBot(Bot):
             print_async_exception(positions)
             print_async_exception(balance)
             traceback.print_exc()
-            
-
 
     async def execute_orders(self, orders: [dict]) -> [dict]:
         if len(orders) == 0:
