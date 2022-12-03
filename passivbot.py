@@ -835,7 +835,6 @@ class Bot:
             + f" liq: {round_(liq_price, self.price_step)}"
         )
 
-
     def log_position_long(self, prev_pos=None):
         closes_long = sorted(
             [o for o in self.open_orders if o["side"] == "sell" and o["position_side"] == "long"],
@@ -860,8 +859,8 @@ class Bot:
             else ""
         )
         logging.info(
-            prev_pos_line + 
-            f'long: {self.position["long"]["size"]} @'
+            prev_pos_line
+            + f'long: {self.position["long"]["size"]} @'
             + f' {round_(self.position["long"]["price"], self.price_step)}'
             + f' lWE: {self.position["long"]["wallet_exposure"]:.4f}'
             + f' pprc diff {self.position["long"]["price"] / self.price - 1:.3f}'
@@ -898,11 +897,11 @@ class Bot:
             else ""
         )
         logging.info(
-            prev_pos_line + 
-            f'short: {self.position["short"]["size"]} @'
+            prev_pos_line
+            + f'short: {self.position["short"]["size"]} @'
             + f' {round_(self.position["short"]["price"], self.price_step)}'
             + f' sWE: {self.position["short"]["wallet_exposure"]:.4f}'
-            + f' pprc diff {self.position["short"]["price"] / self.price - 1:.3f}'
+            + f' pprc diff {self.price / self.position["short"]["price"] - 1:.3f}'
             + f" EMAs: {[round_dynamic(e, 5) for e in self.emas_short]}"
             + f" e {leqty} @ {leprice} | c {lcqty} @ {lcprice}"
         )
@@ -1074,7 +1073,7 @@ class Bot:
         await self.init_exchange_config()
         await self.init_order_book()
         await self.init_emas()
-        logging.info('starting bot...')
+        logging.info("starting bot...")
         while True:
             now = time()
             # print('secs until next', ((now + 60) - now % 60) - now)
@@ -1092,7 +1091,7 @@ class Bot:
     async def on_minute_mark(self):
         # called each whole minute
         try:
-            print('\r', end='')
+            print("\r", end="")
             if time() - self.heartbeat_ts > self.heartbeat_interval_seconds:
                 # print heartbeat once an hour
                 self.heartbeat_print()
