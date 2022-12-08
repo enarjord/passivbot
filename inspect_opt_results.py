@@ -125,12 +125,18 @@ def main():
         ):
             xs = [best_candidate[side]["stats"][sym][f"{k[0]}_{side}"] for k in keys]
             table.add_row(
-                [("-> " if sym in scores_res["symbols_to_include"][side] else "") + sym]
+                [("-> " if sym in best_candidate[side]["symbols_to_include"] else "") + sym]
                 + [round_dynamic(x, 4) for x in xs]
                 + [best_candidate[side]["individual_scores"][sym]]
             )
         means = [
-            np.mean([best_candidate[side]["stats"][s_][f"{k[0]}_{side}"] for s_ in symbols])
+            np.mean(
+                [
+                    best_candidate[side]["stats"][s_][f"{k[0]}_{side}"]
+                    for s_ in symbols
+                    if s_ in best_candidate[side]["symbols_to_include"]
+                ]
+            )
             for k in keys
         ]
         ind_scores_mean = np.mean([best_candidate[side]["individual_scores"][sym] for sym in symbols])
