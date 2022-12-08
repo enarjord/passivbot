@@ -23,6 +23,7 @@ from pure_funcs import (
     sort_dict_keys,
     determine_passivbot_mode,
     get_empty_analysis,
+    calc_scores,
 )
 from procedures import (
     add_argparse_args,
@@ -176,45 +177,7 @@ class ParticleSwarmOptimization:
             )
         if set(results) == set(self.symbols):
             # completed multisymbol iter
-            sides = ["long", "short"]
-            keys = [
-                ("adg_realized_per_exposure", True),
-                ("pa_distance_std", False),
-                ("pa_distance_mean", False),
-                ("hrs_stuck_max", False),
-                ("loss_profit_ratio", False),
-                ("eqbal_ratio_min", True),
-            ]
-            means = {s: {} for s in sides}  # adjusted means
-            scores = {s: -1.0 for s in sides}
-            raws = {s: {} for s in sides}  # unadjusted means
-            for side in sides:
-                for key, mult in keys:
-                    raws[side][key] = np.mean([v[f"{key}_{side}"] for v in results.values()])
-                    if (max_key := f"maximum_{key}_{side}") in self.config:
-                        if self.config[max_key] >= 0.0:
-                            ms = [
-                                max(self.config[max_key], v[f"{key}_{side}"])
-                                for v in results.values()
-                            ]
-                            means[side][key] = max(np.mean(ms), self.config[max_key])
-                        else:
-                            means[side][key] = 1.0
-                    elif (min_key := f"minimum_{key}_{side}") in self.config:
-                        if self.config[min_key] >= 0.0:
-                            ms = [
-                                min(self.config[min_key], v[f"{key}_{side}"])
-                                for v in results.values()
-                            ]
-                            means[side][key] = min(np.mean(ms), self.config[min_key])
-                        else:
-                            means[side][key] = 1.0
-                    else:
-                        means[side][key] = np.mean([v[f"{key}_{side}"] for v in results.values()])
-                    if mult:
-                        scores[side] *= means[side][key]
-                    else:
-                        scores[side] /= means[side][key]
+            scores, means, raws, keys = calc_scores(self.config, results)
 
             self.swarm[swarm_key]["long"]["score"] = scores["long"]
             self.swarm[swarm_key]["short"]["score"] = scores["short"]
