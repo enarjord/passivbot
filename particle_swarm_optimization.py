@@ -672,6 +672,7 @@ async def main():
             "maximum_pa_distance_mean_short",
             "maximum_loss_profit_ratio_long",
             "maximum_loss_profit_ratio_short",
+            "clip_threshold",
         ]
         if k in config and k not in [z[0] for z in lines]
     ]
