@@ -29,6 +29,7 @@ def main():
         ("hss", "maximum_hrs_stuck_max_short"),
         ("erl", "minimum_eqbal_ratio_min_long"),
         ("ers", "minimum_eqbal_ratio_min_short"),
+        ("ct", "clip_threshold"),
     ]
     for k0, k1 in weights_keys:
         parser.add_argument(
@@ -85,12 +86,19 @@ def main():
         cfg.update(minsmaxs)
         ress = r["results"]
         all_scores.append({})
-        scores, means, raws, keys = calc_scores(cfg, {s: r["results"][s] for s in symbols})
+        scores_res = calc_scores(cfg, {s: r["results"][s] for s in symbols})
+        scores, individual_scores, keys = (
+            scores_res["scores"],
+            scores_res["individual_scores"],
+            scores_res["keys"],
+        )
         for side in sides:
             all_scores[-1][side] = {
                 "config": cfg[side],
                 "score": scores[side],
-                "stats": {s: {k: v for k, v in ress[s].items() if side in k} for s in symbols},
+                "individual_scores": individual_scores[side],
+                "symbols_to_include": scores_res["symbols_to_include"][side],
+                "stats": {sym: {k: v for k, v in ress[sym].items() if side in k} for sym in symbols},
                 "config_no": ress["config_no"],
             }
     best_candidate = {}
@@ -102,7 +110,7 @@ def main():
         "short": best_candidate["short"]["config"],
     }
     for side in sides:
-        row_headers = ["symbol"] + [k[0] for k in keys]
+        row_headers = ["symbol"] + [k[0] for k in keys] + ["score"]
         table = PrettyTable(row_headers)
         for rh in row_headers:
             table.align[rh] = "l"
@@ -110,17 +118,23 @@ def main():
             f"{side} (config no. {best_candidate[side]['config_no']},"
             + f" score {round_dynamic(best_candidate[side]['score'], 6)})"
         )
-        for s in sorted(
+        for sym in sorted(
             symbols,
-            key=lambda x: best_candidate[side]["stats"][x][f"adg_realized_per_exposure_{side}"],
+            key=lambda x: best_candidate[side]["individual_scores"][x],
+            reverse=True,
         ):
-            xs = [best_candidate[side]["stats"][s][f"{k[0]}_{side}"] for k in keys]
-            table.add_row([s] + [round_dynamic(x, 4) for x in xs])
+            xs = [best_candidate[side]["stats"][sym][f"{k[0]}_{side}"] for k in keys]
+            table.add_row(
+                [("-> " if sym in scores_res["symbols_to_include"][side] else "") + sym]
+                + [round_dynamic(x, 4) for x in xs]
+                + [best_candidate[side]["individual_scores"][sym]]
+            )
         means = [
             np.mean([best_candidate[side]["stats"][s_][f"{k[0]}_{side}"] for s_ in symbols])
             for k in keys
         ]
-        table.add_row(["mean"] + [round_dynamic(m, 4) for m in means])
+        ind_scores_mean = np.mean([best_candidate[side]["individual_scores"][sym] for sym in symbols])
+        table.add_row(["mean"] + [round_dynamic(m, 4) for m in means] + [ind_scores_mean])
         print(table)
     live_config = candidate_to_live_config(best_config)
     if args.dump_live_config:
