@@ -1127,3 +1127,46 @@ def strip_config(cfg: dict) -> dict:
         template["long"][k] = cfg["long"][k]
         template["short"][k] = cfg["short"][k]
     return template
+
+
+def calc_scores(config: dict, results: dict):
+    sides = ["long", "short"]
+    keys = [
+        ("adg_realized_per_exposure", True),
+        ("pa_distance_std", False),
+        ("pa_distance_mean", False),
+        ("hrs_stuck_max", False),
+        ("loss_profit_ratio", False),
+        ("eqbal_ratio_min", True),
+    ]
+    means = {s: {} for s in sides}  # adjusted means
+    scores = {s: -1.0 for s in sides}
+    raws = {s: {} for s in sides}  # unadjusted means
+    for side in sides:
+        for key, mult in keys:
+            raws[side][key] = np.mean([v[f"{key}_{side}"] for v in results.values()])
+            if (max_key := f"maximum_{key}_{side}") in config:
+                if config[max_key] >= 0.0:
+                    ms = [
+                        max(config[max_key], v[f"{key}_{side}"])
+                        for v in results.values()
+                    ]
+                    means[side][key] = max(np.mean(ms), config[max_key])
+                else:
+                    means[side][key] = 1.0
+            elif (min_key := f"minimum_{key}_{side}") in config:
+                if config[min_key] >= 0.0:
+                    ms = [
+                        min(config[min_key], v[f"{key}_{side}"])
+                        for v in results.values()
+                    ]
+                    means[side][key] = min(np.mean(ms), config[min_key])
+                else:
+                    means[side][key] = 1.0
+            else:
+                means[side][key] = np.mean([v[f"{key}_{side}"] for v in results.values()])
+            if mult:
+                scores[side] *= means[side][key]
+            else:
+                scores[side] /= means[side][key]
+    return scores, means, raws, keys
