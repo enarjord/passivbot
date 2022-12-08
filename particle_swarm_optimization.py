@@ -177,7 +177,13 @@ class ParticleSwarmOptimization:
             )
         if set(results) == set(self.symbols):
             # completed multisymbol iter
-            scores, means, raws, keys = calc_scores(self.config, results)
+            scores_res = calc_scores(self.config, results)
+            scores, means, raws, keys = (
+                scores_res["scores"],
+                scores_res["means"],
+                scores_res["raws"],
+                scores_res["keys"],
+            )
 
             self.swarm[swarm_key]["long"]["score"] = scores["long"]
             self.swarm[swarm_key]["short"]["score"] = scores["short"]
