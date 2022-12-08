@@ -901,7 +901,7 @@ class Bot:
             + f'short: {self.position["short"]["size"]} @'
             + f' {round_(self.position["short"]["price"], self.price_step)}'
             + f' sWE: {self.position["short"]["wallet_exposure"]:.4f}'
-            + f' pprc diff {pprice_diff:.3f}'
+            + f" pprc diff {pprice_diff:.3f}"
             + f" EMAs: {[round_dynamic(e, 5) for e in self.emas_short]}"
             + f" e {leqty} @ {leprice} | c {lcqty} @ {lcprice}"
         )
@@ -1082,7 +1082,10 @@ class Bot:
                     break
                 await asyncio.sleep(0.5)
                 now = time()
-                print(f"\rcountdown: {((now + 60) - now % 60) - now:.1f} last price: {self.price}      ", end=" ")
+                print(
+                    f"\rcountdown: {((now + 60) - now % 60) - now:.1f} last price: {self.price}      ",
+                    end=" ",
+                )
             if self.stop_websocket:
                 break
             await self.on_minute_mark()
@@ -1122,7 +1125,7 @@ class Bot:
                 )
                 self.log_position_short(prev_pos)
         except Exception as e:
-            logging.error(f'error on minute mark {e}')
+            logging.error(f"error on minute mark {e}")
             traceback.print_exc()
 
 
