@@ -329,6 +329,7 @@ class BitgetBot(Bot):
             custom_id = order["custom_id"] if "custom_id" in order else "0"
             params["clientOid"] = f"{self.broker_code}#{custom_id}_{random_str}"
             o = await self.private_post(self.endpoints["create_order"], params)
+            # print('debug create order', o, order)
             if o["data"]:
                 # print('debug execute order', o)
                 return {
@@ -368,21 +369,24 @@ class BitgetBot(Bot):
                     params["timeInForceValue"] = "normal"
                 random_str = f"{str(int(time() * 1000))[-6:]}_{int(np.random.random() * 10000)}"
                 custom_id = order["custom_id"] if "custom_id" in order else "0"
-                params["clientOid"] = order['custom_id'] = f"{self.broker_code}#{custom_id}_{random_str}"
-                orders_with_custom_ids.append({**order, **{'symbol': self.symbol}})
+                params["clientOid"] = order[
+                    "custom_id"
+                ] = f"{self.broker_code}#{custom_id}_{random_str}"
+                orders_with_custom_ids.append({**order, **{"symbol": self.symbol}})
                 to_execute.append(params)
             executed = await self.private_post(
                 self.endpoints["batch_orders"],
                 {"symbol": self.symbol, "marginCoin": self.margin_coin, "orderDataList": to_execute},
             )
             formatted = []
-            for ex in executed['data']['orderInfo']:
-                to_add = {'order_id': ex['orderId'], 'custom_id': ex['clientOid']}
+            for ex in executed["data"]["orderInfo"]:
+                to_add = {"order_id": ex["orderId"], "custom_id": ex["clientOid"]}
                 for elm in orders_with_custom_ids:
-                    if elm['custom_id'] == ex['clientOid']:
+                    if elm["custom_id"] == ex["clientOid"]:
                         to_add.update(elm)
                         formatted.append(to_add)
                         break
+            # print('debug execute batch orders', executed, orders, formatted)
             return formatted
         except Exception as e:
             print(f"error executing order {executed} {e}")
@@ -398,16 +402,22 @@ class BitgetBot(Bot):
         try:
             cancellations = await self.private_post(
                 self.endpoints["batch_cancel_orders"],
-                {"symbol": symbol, "marginCoin": self.margin_coin, "orderIds": [order["order_id"] for order in orders]},
+                {
+                    "symbol": symbol,
+                    "marginCoin": self.margin_coin,
+                    "orderIds": [order["order_id"] for order in orders],
+                },
             )
+
             formatted = []
-            for oid in cancellations['data']['order_ids']:
-                to_add = {'order_id': oid}
+            for oid in cancellations["data"]["order_ids"]:
+                to_add = {"order_id": oid}
                 for order in orders:
-                    if order['order_id'] == oid:
+                    if order["order_id"] == oid:
                         to_add.update(order)
                         formatted.append(to_add)
                         break
+            # print('debug cancel batch orders', cancellations, orders, formatted)
             return formatted
         except Exception as e:
             logging.error(f"error cancelling orders {orders} {e}")
@@ -649,7 +659,7 @@ class BitgetBot(Bot):
             )
             print(res)
         except Exception as e:
-            print('error initiating exchange config', e)
+            print("error initiating exchange config", e)
 
     def standardize_market_stream_event(self, data: dict) -> [dict]:
         if "action" not in data or data["action"] != "update":
