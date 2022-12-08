@@ -285,6 +285,15 @@ def candidate_to_live_config(candidate_: dict) -> dict:
         n_days = (date_to_ts(result_dict["end_date"]) - date_to_ts(result_dict["start_date"])) / (
             1000 * 60 * 60 * 24
         )
+    elif "config_name" in candidate and "days" in candidate["config_name"]:
+        try:
+            cn = candidate["config_name"]
+            for i in range(len(cn) - 1, -1, -1):
+                if cn[i] == "_":
+                    break
+            n_days = int(cn[i + 1 : cn.find("days")])
+        except:
+            n_days = 0
     else:
         n_days = 0
     name += f"_{n_days:.0f}days"
@@ -1139,34 +1148,55 @@ def calc_scores(config: dict, results: dict):
         ("loss_profit_ratio", False),
         ("eqbal_ratio_min", True),
     ]
-    means = {s: {} for s in sides}  # adjusted means
-    scores = {s: -1.0 for s in sides}
-    raws = {s: {} for s in sides}  # unadjusted means
+    means = {side: {} for side in sides}  # adjusted means
+    scores = {side: -1.0 for side in sides}
+    raws = {side: {} for side in sides}  # unadjusted means
+    individual_raws = {side: {sym: {} for sym in results} for side in sides}
+    individual_vals = {side: {sym: {} for sym in results} for side in sides}
+    individual_scores = {side: {sym: -1.0 for sym in results} for side in sides}
+    symbols_to_include = {side: [] for side in sides}
     for side in sides:
+        for sym in results:
+            for key, mult in keys:
+                individual_raws[side][sym][key] = results[sym][f"{key}_{side}"]
+                if (max_key := f"maximum_{key}_{side}") in config:
+                    if config[max_key] >= 0.0:
+                        val = max(config[max_key], results[sym][f"{key}_{side}"])
+                    else:
+                        val = 1.0
+                elif (min_key := f"minimum_{key}_{side}") in config:
+                    if config[min_key] >= 0.0:
+                        val = min(config[min_key], results[sym][f"{key}_{side}"])
+                    else:
+                        val = 1.0
+                else:
+                    val = results[sym][f"{key}_{side}"]
+                individual_vals[side][sym][key] = val
+                if mult:
+                    individual_scores[side][sym] *= val
+                else:
+                    individual_scores[side][sym] /= val
+        raws[side] = {
+            key: np.mean([individual_raws[side][sym][key] for sym in results]) for key, _ in keys
+        }
+        symbols_to_include[side] = sorted(
+            individual_scores[side], key=lambda x: individual_scores[side][x]
+        )[: int(len(individual_scores[side]) * (1 - config["clip_threshold"]))]
+        # print(symbols_to_include, individual_scores[side], config["clip_threshold"])
+        means[side] = {
+            key: np.mean([individual_vals[side][sym][key] for sym in symbols_to_include[side]])
+            for key, _ in keys
+        }
         for key, mult in keys:
-            raws[side][key] = np.mean([v[f"{key}_{side}"] for v in results.values()])
-            if (max_key := f"maximum_{key}_{side}") in config:
-                if config[max_key] >= 0.0:
-                    ms = [
-                        max(config[max_key], v[f"{key}_{side}"])
-                        for v in results.values()
-                    ]
-                    means[side][key] = max(np.mean(ms), config[max_key])
-                else:
-                    means[side][key] = 1.0
-            elif (min_key := f"minimum_{key}_{side}") in config:
-                if config[min_key] >= 0.0:
-                    ms = [
-                        min(config[min_key], v[f"{key}_{side}"])
-                        for v in results.values()
-                    ]
-                    means[side][key] = min(np.mean(ms), config[min_key])
-                else:
-                    means[side][key] = 1.0
-            else:
-                means[side][key] = np.mean([v[f"{key}_{side}"] for v in results.values()])
             if mult:
                 scores[side] *= means[side][key]
             else:
                 scores[side] /= means[side][key]
-    return scores, means, raws, keys
+    return {
+        "scores": scores,
+        "means": means,
+        "raws": raws,
+        "individual_scores": individual_scores,
+        "keys": keys,
+        "symbols_to_include": symbols_to_include,
+    }
