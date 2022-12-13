@@ -138,9 +138,13 @@ class BinanceBotSpot(Bot):
                         self.price_step = self.config["price_step"] = float(q["tickSize"])
                         self.min_price = float(q["minPrice"])
                         self.max_price = float(q["maxPrice"])
-                    elif q["filterType"] == "PERCENT_PRICE":
-                        self.price_multiplier_up = float(q["multiplierUp"])
-                        self.price_multiplier_dn = float(q["multiplierDown"])
+                    elif q["filterType"] == "PERCENT_PRICE_BY_SIDE":
+                        self.price_multiplier_up = min(
+                            float(q["bidMultiplierUp"]), float(q["askMultiplierUp"])
+                        )
+                        self.price_multiplier_dn = max(
+                            float(q["bidMultiplierDown"]), float(q["askMultiplierDown"])
+                        )
                     elif q["filterType"] == "MIN_NOTIONAL":
                         self.min_cost = self.config["min_cost"] = float(q["minNotional"])
                 try:
