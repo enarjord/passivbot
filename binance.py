@@ -6,7 +6,6 @@ import traceback
 from time import time, time_ns
 from urllib.parse import urlencode
 
-import requests
 import aiohttp
 import numpy as np
 
@@ -121,71 +120,78 @@ class BinanceBot(Bot):
     async def init_market_type(self):
         fapi_endpoint = "https://fapi.binance.com"
         dapi_endpoint = "https://dapi.binance.com"
-        self.exchange_info = await self.public_get(
-            "/fapi/v1/exchangeInfo", base_endpoint=fapi_endpoint
-        )
-        if self.symbol in {e["symbol"] for e in self.exchange_info["symbols"]}:
-            print("linear perpetual")
-            self.market_type += "_linear_perpetual"
-            self.inverse = self.config["inverse"] = False
-            self.base_endpoint = fapi_endpoint
-            self.endpoints = {
-                "time": "/fapi/v1/time",
-                "position": "/fapi/v2/positionRisk",
-                "balance": "/fapi/v2/balance",
-                "exchange_info": "/fapi/v1/exchangeInfo",
-                "leverage_bracket": "/fapi/v1/leverageBracket",
-                "open_orders": "/fapi/v1/openOrders",
-                "ticker": "/fapi/v1/ticker/bookTicker",
-                "fills": "/fapi/v1/userTrades",
-                "income": "/fapi/v1/income",
-                "create_order": "/fapi/v1/order",
-                "cancel_order": "/fapi/v1/order",
-                "ticks": "/fapi/v1/aggTrades",
-                "ohlcvs": "/fapi/v1/klines",
-                "margin_type": "/fapi/v1/marginType",
-                "leverage": "/fapi/v1/leverage",
-                "position_side": "/fapi/v1/positionSide/dual",
-                "websocket": (ws := f"wss://fstream.binance.com/ws/"),
-                "websocket_market": ws + f"{self.symbol.lower()}@aggTrade",
-                "websocket_user": ws,
-                "listen_key": "/fapi/v1/listenKey",
-                "batch_orders": "/fapi/v1/batchOrders",
-            }
-        else:
+        self.exchange_info = None
+        try:
             self.exchange_info = await self.public_get(
-                "/dapi/v1/exchangeInfo", base_endpoint=dapi_endpoint
+                "/fapi/v1/exchangeInfo", base_endpoint=fapi_endpoint
             )
             if self.symbol in {e["symbol"] for e in self.exchange_info["symbols"]}:
-                print("inverse coin margined")
-                self.base_endpoint = dapi_endpoint
-                self.market_type += "_inverse_coin_margined"
-                self.inverse = self.config["inverse"] = True
+                print("linear perpetual")
+                self.market_type += "_linear_perpetual"
+                self.inverse = self.config["inverse"] = False
+                self.base_endpoint = fapi_endpoint
                 self.endpoints = {
-                    "time": "/dapi/v1/time",
-                    "position": "/dapi/v1/positionRisk",
-                    "balance": "/dapi/v1/balance",
-                    "exchange_info": "/dapi/v1/exchangeInfo",
-                    "leverage_bracket": "/dapi/v1/leverageBracket",
-                    "open_orders": "/dapi/v1/openOrders",
-                    "ticker": "/dapi/v1/ticker/bookTicker",
-                    "fills": "/dapi/v1/userTrades",
-                    "income": "/dapi/v1/income",
-                    "create_order": "/dapi/v1/order",
-                    "cancel_order": "/dapi/v1/order",
-                    "ticks": "/dapi/v1/aggTrades",
-                    "ohlcvs": "/dapi/v1/klines",
-                    "margin_type": "/dapi/v1/marginType",
-                    "leverage": "/dapi/v1/leverage",
-                    "position_side": "/dapi/v1/positionSide/dual",
-                    "websocket": (ws := f"wss://dstream.binance.com/ws/"),
+                    "time": "/fapi/v1/time",
+                    "position": "/fapi/v2/positionRisk",
+                    "balance": "/fapi/v2/balance",
+                    "exchange_info": "/fapi/v1/exchangeInfo",
+                    "leverage_bracket": "/fapi/v1/leverageBracket",
+                    "open_orders": "/fapi/v1/openOrders",
+                    "ticker": "/fapi/v1/ticker/bookTicker",
+                    "fills": "/fapi/v1/userTrades",
+                    "income": "/fapi/v1/income",
+                    "create_order": "/fapi/v1/order",
+                    "cancel_order": "/fapi/v1/order",
+                    "ticks": "/fapi/v1/aggTrades",
+                    "ohlcvs": "/fapi/v1/klines",
+                    "margin_type": "/fapi/v1/marginType",
+                    "leverage": "/fapi/v1/leverage",
+                    "position_side": "/fapi/v1/positionSide/dual",
+                    "websocket": (ws := f"wss://fstream.binance.com/ws/"),
                     "websocket_market": ws + f"{self.symbol.lower()}@aggTrade",
                     "websocket_user": ws,
-                    "listen_key": "/dapi/v1/listenKey",
-                    "batch_orders": "/dapi/v1/batchOrders",
+                    "listen_key": "/fapi/v1/listenKey",
+                    "batch_orders": "/fapi/v1/batchOrders",
                 }
             else:
-                raise Exception(f"unknown symbol {self.symbol}")
+                self.exchange_info = await self.public_get(
+                    "/dapi/v1/exchangeInfo", base_endpoint=dapi_endpoint
+                )
+                if self.symbol in {e["symbol"] for e in self.exchange_info["symbols"]}:
+                    print("inverse coin margined")
+                    self.base_endpoint = dapi_endpoint
+                    self.market_type += "_inverse_coin_margined"
+                    self.inverse = self.config["inverse"] = True
+                    self.endpoints = {
+                        "time": "/dapi/v1/time",
+                        "position": "/dapi/v1/positionRisk",
+                        "balance": "/dapi/v1/balance",
+                        "exchange_info": "/dapi/v1/exchangeInfo",
+                        "leverage_bracket": "/dapi/v1/leverageBracket",
+                        "open_orders": "/dapi/v1/openOrders",
+                        "ticker": "/dapi/v1/ticker/bookTicker",
+                        "fills": "/dapi/v1/userTrades",
+                        "income": "/dapi/v1/income",
+                        "create_order": "/dapi/v1/order",
+                        "cancel_order": "/dapi/v1/order",
+                        "ticks": "/dapi/v1/aggTrades",
+                        "ohlcvs": "/dapi/v1/klines",
+                        "margin_type": "/dapi/v1/marginType",
+                        "leverage": "/dapi/v1/leverage",
+                        "position_side": "/dapi/v1/positionSide/dual",
+                        "websocket": (ws := f"wss://dstream.binance.com/ws/"),
+                        "websocket_market": ws + f"{self.symbol.lower()}@aggTrade",
+                        "websocket_user": ws,
+                        "listen_key": "/dapi/v1/listenKey",
+                        "batch_orders": "/dapi/v1/batchOrders",
+                    }
+                else:
+                    raise Exception(f"unknown symbol {self.symbol}")
+        except Exception as e:
+            logging.error(f"error initiating market type {e}")
+            print_async_exception(self.exchange_info)
+            traceback.print_exc()
+            raise Exception("stopping bot")
 
         self.spot_base_endpoint = "https://api.binance.com"
         self.endpoints["transfer"] = "/sapi/v1/asset/transfer"
@@ -286,19 +292,29 @@ class BinanceBot(Bot):
             return False
 
     async def fetch_open_orders(self) -> [dict]:
-        return [
-            {
-                "order_id": int(e["orderId"]),
-                "symbol": e["symbol"],
-                "price": float(e["price"]),
-                "qty": float(e["origQty"]),
-                "type": e["type"].lower(),
-                "side": e["side"].lower(),
-                "position_side": e["positionSide"].lower().replace("short", "short"),
-                "timestamp": int(e["time"]),
-            }
-            for e in await self.private_get(self.endpoints["open_orders"], {"symbol": self.symbol})
-        ]
+        open_orders = None
+        try:
+            open_orders = await self.private_get(
+                self.endpoints["open_orders"], {"symbol": self.symbol}
+            )
+            return [
+                {
+                    "order_id": int(e["orderId"]),
+                    "symbol": e["symbol"],
+                    "price": float(e["price"]),
+                    "qty": float(e["origQty"]),
+                    "type": e["type"].lower(),
+                    "side": e["side"].lower(),
+                    "position_side": e["positionSide"].lower().replace("short", "short"),
+                    "timestamp": int(e["time"]),
+                }
+                for e in open_orders
+            ]
+        except Exception as e:
+            logging.error(f"error fetching open orders {e}")
+            print_async_exception(open_orders)
+            traceback.print_exc()
+            return False
 
     async def fetch_position(self) -> dict:
         positions, balance = None, None
