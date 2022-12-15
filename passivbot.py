@@ -730,9 +730,9 @@ class Bot:
                     all_orders = self.calc_orders()
                     break
             for o in all_orders:
-                if any(x in o["custom_id"] for x in ["ientry", "unstuck"]):
+                if any(x in o["custom_id"] for x in ["ientry", "unstuck"]) and not self.ohlcv:
                     if calc_diff(o["price"], self.price) < 0.01:
-                        # EMA based orders must be closer than 1% of current price
+                        # EMA based orders must be closer than 1% of current price unless ohlcv mode
                         ideal_orders.append(o)
                 else:
                     if calc_diff(o["price"], self.price) < self.price_distance_threshold:
