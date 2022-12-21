@@ -3,7 +3,7 @@ import hashlib
 import hmac
 import json
 import traceback
-from time import time
+from time import time, time_ns
 from urllib.parse import urlencode
 
 import aiohttp
@@ -17,6 +17,8 @@ from pure_funcs import ts_to_date, sort_dict_keys, format_float
 class BinanceBot(Bot):
     def __init__(self, config: dict):
         self.exchange = "binance"
+        self.max_n_orders_per_batch = 5
+        self.max_n_cancellations_per_batch = 10
         super().__init__(config)
         self.session = aiohttp.ClientSession()
         self.base_endpoint = ""
@@ -35,25 +37,46 @@ class BinanceBot(Bot):
             traceback.print_exc()
             return {}
 
-    async def private_(self, type_: str, base_endpoint: str, url: str, params: dict = {}) -> dict:
+    async def private_(
+        self, type_: str, base_endpoint: str, url: str, params: dict = {}, data_: bool = False
+    ) -> dict:
+        def stringify(x):
+            if type(x) == bool:
+                return "true" if x else "false"
+            elif type(x) == float:
+                return format_float(x)
+            elif type(x) == int:
+                return str(x)
+            elif type(x) == list:
+                return json.dumps([stringify(y) for y in x]).replace(" ", "")
+            elif type(x) == dict:
+                return json.dumps({k: stringify(v) for k, v in x.items()}).replace(" ", "")
+            else:
+                return x
+
         try:
             timestamp = int(time() * 1000)
             params.update({"timestamp": timestamp, "recvWindow": 5000})
             for k in params:
-                if type(params[k]) == bool:
-                    params[k] = "true" if params[k] else "false"
-                elif type(params[k]) == float:
-                    params[k] = format_float(params[k])
+                params[k] = stringify(params[k])
             params = sort_dict_keys(params)
             params["signature"] = hmac.new(
                 self.secret.encode("utf-8"),
                 urlencode(params).encode("utf-8"),
                 hashlib.sha256,
             ).hexdigest()
-            async with getattr(self.session, type_)(
-                base_endpoint + url, params=params, headers=self.headers
-            ) as response:
-                result = await response.text()
+            if data_:
+                async with getattr(self.session, type_)(
+                    base_endpoint + url, data=params, headers=self.headers
+                ) as response:
+                    result = await response.text()
+            else:
+                params_encoded = urlencode(params)
+                async with getattr(self.session, type_)(
+                    base_endpoint + url, params=params_encoded, headers=self.headers
+                ) as response:
+                    result = await response.text()
+
             return json.loads(result)
         except Exception as e:
             print(f"error with private {type_} {base_endpoint} {url} {params}")
@@ -68,12 +91,11 @@ class BinanceBot(Bot):
             params,
         )
 
-    async def private_post(self, url: str, params: dict = {}, base_endpoint: str = None) -> dict:
+    async def private_post(
+        self, url: str, params: dict = {}, base_endpoint: str = None, data_: bool = False
+    ) -> dict:
         return await self.private_(
-            "post",
-            self.base_endpoint if base_endpoint is None else base_endpoint,
-            url,
-            params,
+            "post", self.base_endpoint if base_endpoint is None else base_endpoint, url, params, data_
         )
 
     async def private_put(self, url: str, params: dict = {}, base_endpoint: str = None) -> dict:
@@ -84,80 +106,92 @@ class BinanceBot(Bot):
             params,
         )
 
-    async def private_delete(self, url: str, params: dict = {}, base_endpoint: str = None) -> dict:
+    async def private_delete(
+        self, url: str, params: dict = {}, base_endpoint: str = None, data_: bool = False
+    ) -> dict:
         return await self.private_(
             "delete",
             self.base_endpoint if base_endpoint is None else base_endpoint,
             url,
             params,
+            data_,
         )
 
     async def init_market_type(self):
         fapi_endpoint = "https://fapi.binance.com"
         dapi_endpoint = "https://dapi.binance.com"
-        self.exchange_info = await self.public_get(
-            "/fapi/v1/exchangeInfo", base_endpoint=fapi_endpoint
-        )
-        if self.symbol in {e["symbol"] for e in self.exchange_info["symbols"]}:
-            print("linear perpetual")
-            self.market_type += "_linear_perpetual"
-            self.inverse = self.config["inverse"] = False
-            self.base_endpoint = fapi_endpoint
-            self.endpoints = {
-                "time": "/fapi/v1/time",
-                "position": "/fapi/v2/positionRisk",
-                "balance": "/fapi/v2/balance",
-                "exchange_info": "/fapi/v1/exchangeInfo",
-                "leverage_bracket": "/fapi/v1/leverageBracket",
-                "open_orders": "/fapi/v1/openOrders",
-                "ticker": "/fapi/v1/ticker/bookTicker",
-                "fills": "/fapi/v1/userTrades",
-                "income": "/fapi/v1/income",
-                "create_order": "/fapi/v1/order",
-                "cancel_order": "/fapi/v1/order",
-                "ticks": "/fapi/v1/aggTrades",
-                "ohlcvs": "/fapi/v1/klines",
-                "margin_type": "/fapi/v1/marginType",
-                "leverage": "/fapi/v1/leverage",
-                "position_side": "/fapi/v1/positionSide/dual",
-                "websocket": (ws := f"wss://fstream.binance.com/ws/"),
-                "websocket_market": ws + f"{self.symbol.lower()}@aggTrade",
-                "websocket_user": ws,
-                "listen_key": "/fapi/v1/listenKey",
-            }
-        else:
+        self.exchange_info = None
+        try:
             self.exchange_info = await self.public_get(
-                "/dapi/v1/exchangeInfo", base_endpoint=dapi_endpoint
+                "/fapi/v1/exchangeInfo", base_endpoint=fapi_endpoint
             )
             if self.symbol in {e["symbol"] for e in self.exchange_info["symbols"]}:
-                print("inverse coin margined")
-                self.base_endpoint = dapi_endpoint
-                self.market_type += "_inverse_coin_margined"
-                self.inverse = self.config["inverse"] = True
+                print("linear perpetual")
+                self.market_type += "_linear_perpetual"
+                self.inverse = self.config["inverse"] = False
+                self.base_endpoint = fapi_endpoint
                 self.endpoints = {
-                    "time": "/dapi/v1/time",
-                    "position": "/dapi/v1/positionRisk",
-                    "balance": "/dapi/v1/balance",
-                    "exchange_info": "/dapi/v1/exchangeInfo",
-                    "leverage_bracket": "/dapi/v1/leverageBracket",
-                    "open_orders": "/dapi/v1/openOrders",
-                    "ticker": "/dapi/v1/ticker/bookTicker",
-                    "fills": "/dapi/v1/userTrades",
-                    "income": "/dapi/v1/income",
-                    "create_order": "/dapi/v1/order",
-                    "cancel_order": "/dapi/v1/order",
-                    "ticks": "/dapi/v1/aggTrades",
-                    "ohlcvs": "/dapi/v1/klines",
-                    "margin_type": "/dapi/v1/marginType",
-                    "leverage": "/dapi/v1/leverage",
-                    "position_side": "/dapi/v1/positionSide/dual",
-                    "websocket": (ws := f"wss://dstream.binance.com/ws/"),
+                    "time": "/fapi/v1/time",
+                    "position": "/fapi/v2/positionRisk",
+                    "balance": "/fapi/v2/balance",
+                    "exchange_info": "/fapi/v1/exchangeInfo",
+                    "leverage_bracket": "/fapi/v1/leverageBracket",
+                    "open_orders": "/fapi/v1/openOrders",
+                    "ticker": "/fapi/v1/ticker/bookTicker",
+                    "fills": "/fapi/v1/userTrades",
+                    "income": "/fapi/v1/income",
+                    "create_order": "/fapi/v1/order",
+                    "cancel_order": "/fapi/v1/order",
+                    "ticks": "/fapi/v1/aggTrades",
+                    "ohlcvs": "/fapi/v1/klines",
+                    "margin_type": "/fapi/v1/marginType",
+                    "leverage": "/fapi/v1/leverage",
+                    "position_side": "/fapi/v1/positionSide/dual",
+                    "websocket": (ws := f"wss://fstream.binance.com/ws/"),
                     "websocket_market": ws + f"{self.symbol.lower()}@aggTrade",
                     "websocket_user": ws,
-                    "listen_key": "/dapi/v1/listenKey",
+                    "listen_key": "/fapi/v1/listenKey",
+                    "batch_orders": "/fapi/v1/batchOrders",
                 }
             else:
-                raise Exception(f"unknown symbol {self.symbol}")
+                self.exchange_info = await self.public_get(
+                    "/dapi/v1/exchangeInfo", base_endpoint=dapi_endpoint
+                )
+                if self.symbol in {e["symbol"] for e in self.exchange_info["symbols"]}:
+                    print("inverse coin margined")
+                    self.base_endpoint = dapi_endpoint
+                    self.market_type += "_inverse_coin_margined"
+                    self.inverse = self.config["inverse"] = True
+                    self.endpoints = {
+                        "time": "/dapi/v1/time",
+                        "position": "/dapi/v1/positionRisk",
+                        "balance": "/dapi/v1/balance",
+                        "exchange_info": "/dapi/v1/exchangeInfo",
+                        "leverage_bracket": "/dapi/v1/leverageBracket",
+                        "open_orders": "/dapi/v1/openOrders",
+                        "ticker": "/dapi/v1/ticker/bookTicker",
+                        "fills": "/dapi/v1/userTrades",
+                        "income": "/dapi/v1/income",
+                        "create_order": "/dapi/v1/order",
+                        "cancel_order": "/dapi/v1/order",
+                        "ticks": "/dapi/v1/aggTrades",
+                        "ohlcvs": "/dapi/v1/klines",
+                        "margin_type": "/dapi/v1/marginType",
+                        "leverage": "/dapi/v1/leverage",
+                        "position_side": "/dapi/v1/positionSide/dual",
+                        "websocket": (ws := f"wss://dstream.binance.com/ws/"),
+                        "websocket_market": ws + f"{self.symbol.lower()}@aggTrade",
+                        "websocket_user": ws,
+                        "listen_key": "/dapi/v1/listenKey",
+                        "batch_orders": "/dapi/v1/batchOrders",
+                    }
+                else:
+                    raise Exception(f"unknown symbol {self.symbol}")
+        except Exception as e:
+            logging.error(f"error initiating market type {e}")
+            print_async_exception(self.exchange_info)
+            traceback.print_exc()
+            raise Exception("stopping bot")
 
         self.spot_base_endpoint = "https://api.binance.com"
         self.endpoints["transfer"] = "/sapi/v1/asset/transfer"
@@ -190,7 +224,6 @@ class BinanceBot(Bot):
                     self.min_cost = self.config["min_cost"] = 0.0
                 break
 
-        self.max_leverage = self.config["max_leverage"] = 25
         await super()._init()
         await self.init_order_book()
         await self.update_position()
@@ -245,72 +278,103 @@ class BinanceBot(Bot):
                 raise Exception("failed to set hedge mode")
 
     async def init_order_book(self):
-        ticker = await self.public_get(self.endpoints["ticker"], {"symbol": self.symbol})
-        if "inverse_coin_margined" in self.market_type:
-            ticker = ticker[0]
-        self.ob = [float(ticker["bidPrice"]), float(ticker["askPrice"])]
-        self.price = np.random.choice(self.ob)
+        ticker = None
+        try:
+            ticker = await self.public_get(self.endpoints["ticker"], {"symbol": self.symbol})
+            if "inverse_coin_margined" in self.market_type:
+                ticker = ticker[0]
+            self.ob = [float(ticker["bidPrice"]), float(ticker["askPrice"])]
+            self.price = np.random.choice(self.ob)
+            return True
+        except Exception as e:
+            logging.error(f"error updating order book {e}")
+            print_async_exception(ticker)
+            return False
 
     async def fetch_open_orders(self) -> [dict]:
-        return [
-            {
-                "order_id": int(e["orderId"]),
-                "symbol": e["symbol"],
-                "price": float(e["price"]),
-                "qty": float(e["origQty"]),
-                "type": e["type"].lower(),
-                "side": e["side"].lower(),
-                "position_side": e["positionSide"].lower().replace("short", "short"),
-                "timestamp": int(e["time"]),
-            }
-            for e in await self.private_get(self.endpoints["open_orders"], {"symbol": self.symbol})
-        ]
+        open_orders = None
+        try:
+            open_orders = await self.private_get(
+                self.endpoints["open_orders"], {"symbol": self.symbol}
+            )
+            return [
+                {
+                    "order_id": int(e["orderId"]),
+                    "symbol": e["symbol"],
+                    "price": float(e["price"]),
+                    "qty": float(e["origQty"]),
+                    "type": e["type"].lower(),
+                    "side": e["side"].lower(),
+                    "position_side": e["positionSide"].lower().replace("short", "short"),
+                    "timestamp": int(e["time"]),
+                }
+                for e in open_orders
+            ]
+        except Exception as e:
+            logging.error(f"error fetching open orders {e}")
+            print_async_exception(open_orders)
+            traceback.print_exc()
+            return False
 
     async def fetch_position(self) -> dict:
-        positions, balance = await asyncio.gather(
-            self.private_get(
-                self.endpoints["position"],
-                (
-                    {"symbol": self.symbol}
-                    if "linear_perpetual" in self.market_type
-                    else {"pair": self.pair}
+        positions, balance = None, None
+        try:
+            positions, balance = await asyncio.gather(
+                self.private_get(
+                    self.endpoints["position"],
+                    (
+                        {"symbol": self.symbol}
+                        if "linear_perpetual" in self.market_type
+                        else {"pair": self.pair}
+                    ),
                 ),
-            ),
-            self.private_get(self.endpoints["balance"], {}),
-        )
-        assert all(
-            key in positions[0] for key in ["symbol", "positionAmt", "entryPrice"]
-        ), "bogus position fetch"
-        assert all(
-            key in balance[0] for key in ["asset", "balance", "crossUnPnl"]
-        ), "bogus balance fetch"
-        positions = [e for e in positions if e["symbol"] == self.symbol]
-        position = {
-            "long": {"size": 0.0, "price": 0.0, "liquidation_price": 0.0},
-            "short": {"size": 0.0, "price": 0.0, "liquidation_price": 0.0},
-            "wallet_balance": 0.0,
-            "equity": 0.0,
-        }
-        if positions:
-            for p in positions:
-                if p["positionSide"] == "LONG":
-                    position["long"] = {
-                        "size": float(p["positionAmt"]),
-                        "price": float(p["entryPrice"]),
-                        "liquidation_price": float(p["liquidationPrice"]),
-                    }
-                elif p["positionSide"] == "SHORT":
-                    position["short"] = {
-                        "size": float(p["positionAmt"]),
-                        "price": float(p["entryPrice"]),
-                        "liquidation_price": float(p["liquidationPrice"]),
-                    }
-        for e in balance:
-            if e["asset"] == (self.quot if "linear_perpetual" in self.market_type else self.coin):
-                position["wallet_balance"] = float(e["balance"])
-                position["equity"] = position["wallet_balance"] + float(e["crossUnPnl"])
-                break
-        return position
+                self.private_get(self.endpoints["balance"], {}),
+            )
+            assert all(
+                key in positions[0] for key in ["symbol", "positionAmt", "entryPrice"]
+            ), "bogus position fetch"
+            assert all(
+                key in balance[0] for key in ["asset", "balance", "crossUnPnl"]
+            ), "bogus balance fetch"
+            positions = [e for e in positions if e["symbol"] == self.symbol]
+            position = {
+                "long": {"size": 0.0, "price": 0.0, "liquidation_price": 0.0},
+                "short": {"size": 0.0, "price": 0.0, "liquidation_price": 0.0},
+                "wallet_balance": 0.0,
+                "equity": 0.0,
+            }
+            if positions:
+                for p in positions:
+                    if p["positionSide"] == "LONG":
+                        position["long"] = {
+                            "size": float(p["positionAmt"]),
+                            "price": float(p["entryPrice"]),
+                            "liquidation_price": float(p["liquidationPrice"]),
+                        }
+                    elif p["positionSide"] == "SHORT":
+                        position["short"] = {
+                            "size": float(p["positionAmt"]),
+                            "price": float(p["entryPrice"]),
+                            "liquidation_price": float(p["liquidationPrice"]),
+                        }
+            for e in balance:
+                if e["asset"] == (self.quot if "linear_perpetual" in self.market_type else self.coin):
+                    position["wallet_balance"] = float(e["balance"])
+                    position["equity"] = position["wallet_balance"] + float(e["crossUnPnl"])
+                    break
+            return position
+        except Exception as e:
+            logging.error(f"error fetching pos or balance {e}")
+            print_async_exception(positions)
+            print_async_exception(balance)
+            traceback.print_exc()
+
+    async def execute_orders(self, orders: [dict]) -> [dict]:
+        if len(orders) == 0:
+            return []
+        if len(orders) == 1:
+            return [await self.execute_order(orders[0])]
+        return await self.execute_batch_orders(orders)
 
     async def execute_order(self, order: dict) -> dict:
         o = None
@@ -345,31 +409,74 @@ class BinanceBot(Bot):
             traceback.print_exc()
             return {}
 
-    async def execute_cancellation(self, order: dict) -> dict:
-        cancellation = None
+    async def execute_batch_orders(self, orders: [dict]) -> [dict]:
+        executed = None
         try:
-            cancellation = await self.private_delete(
-                self.endpoints["cancel_order"],
-                {"symbol": self.symbol, "orderId": order["order_id"]},
+            to_execute = []
+            for order in orders:
+                params = {
+                    "symbol": self.symbol,
+                    "side": order["side"].upper(),
+                    "positionSide": order["position_side"].replace("short", "short").upper(),
+                    "type": order["type"].upper(),
+                    "quantity": str(order["qty"]),
+                }
+                if params["type"] == "LIMIT":
+                    params["timeInForce"] = "GTX"
+                    params["price"] = order["price"]
+                if "custom_id" in order:
+                    params[
+                        "newClientOrderId"
+                    ] = f"{order['custom_id']}_{str(int(time() * 1000))[8:]}_{int(np.random.random() * 1000)}"
+                to_execute.append(params)
+            executed = await self.private_post(
+                self.endpoints["batch_orders"], {"batchOrders": to_execute}, data_=True
             )
-
-            return {
-                "symbol": self.symbol,
-                "side": cancellation["side"].lower(),
-                "order_id": int(cancellation["orderId"]),
-                "position_side": cancellation["positionSide"].lower().replace("short", "short"),
-                "qty": float(cancellation["origQty"]),
-                "price": float(cancellation["price"]),
-            }
+            return [
+                {
+                    "symbol": self.symbol,
+                    "side": ex["side"].lower(),
+                    "position_side": ex["positionSide"].lower().replace("short", "short"),
+                    "type": ex["type"].lower(),
+                    "qty": float(ex["origQty"]),
+                    "order_id": int(ex["orderId"]),
+                    "price": float(ex["price"]),
+                }
+                for ex in executed
+            ]
         except Exception as e:
-            if cancellation is not None and "code" in cancellation and cancellation["code"] == -2011:
-                logging.error(f"error cancelling order {cancellation} {order}")  # neater error message
-            else:
-                print(f"error cancelling order {order} {e}")
-                print_async_exception(cancellation)
-                traceback.print_exc()
-            self.ts_released["force_update"] = 0.0
-            return {}
+            print(f"error executing order {executed} {e}")
+            print_async_exception(executed)
+            traceback.print_exc()
+            return []
+
+    async def execute_cancellations(self, orders: [dict]) -> [dict]:
+        if not orders:
+            return []
+        cancellations = []
+        symbol = orders[0]["symbol"] if "symbol" in orders[0] else self.symbol
+        try:
+            cancellations = await self.private_delete(
+                self.endpoints["batch_orders"],
+                {"symbol": symbol, "orderIdList": [order["order_id"] for order in orders]},
+                data_=True,
+            )
+            return [
+                {
+                    "symbol": symbol,
+                    "side": cancellation["side"].lower(),
+                    "order_id": int(cancellation["orderId"]),
+                    "position_side": cancellation["positionSide"].lower().replace("short", "short"),
+                    "qty": float(cancellation["origQty"]),
+                    "price": float(cancellation["price"]),
+                }
+                for cancellation in cancellations
+            ]
+        except Exception as e:
+            logging.error(f"error cancelling orders {orders} {e}")
+            print_async_exception(cancellations)
+            traceback.print_exc()
+            return []
 
     async def fetch_fills(
         self,

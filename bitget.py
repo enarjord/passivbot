@@ -34,6 +34,8 @@ class BitgetBot(Bot):
     def __init__(self, config: dict):
         self.is_logged_into_user_stream = False
         self.exchange = "bitget"
+        self.max_n_orders_per_batch = 50
+        self.max_n_cancellations_per_batch = 60
         super().__init__(config)
         self.base_endpoint = "https://api.bitget.com"
         self.endpoints = {
@@ -44,6 +46,8 @@ class BitgetBot(Bot):
             "ticker": "/api/mix/v1/market/ticker",
             "open_orders": "/api/mix/v1/order/current",
             "create_order": "/api/mix/v1/order/placeOrder",
+            "batch_orders": "/api/mix/v1/order/batch-orders",
+            "batch_cancel_orders": "/api/mix/v1/order/cancel-batch-orders",
             "cancel_order": "/api/mix/v1/order/cancel-order",
             "ticks": "/api/mix/v1/market/fills",
             "fills": "/api/mix/v1/order/fills",
@@ -168,11 +172,22 @@ class BitgetBot(Bot):
     async def private_(
         self, type_: str, base_endpoint: str, url: str, params: dict = {}, json_: bool = False
     ) -> dict:
+        def stringify(x):
+            if type(x) == bool:
+                return "true" if x else "false"
+            elif type(x) == float:
+                return format_float(x)
+            elif type(x) == int:
+                return str(x)
+            elif type(x) == list:
+                return [stringify(y) for y in x]
+            elif type(x) == dict:
+                return {k: stringify(v) for k, v in x.items()}
+            else:
+                return x
 
         timestamp = int(time() * 1000)
-        params = {
-            k: ("true" if v else "false") if type(v) == bool else str(v) for k, v in params.items()
-        }
+        params = {k: stringify(v) for k, v in params.items()}
         if type_ == "get":
             url = url + "?" + urlencode(sort_dict_keys(params))
             to_sign = str(timestamp) + type_.upper() + url
@@ -286,6 +301,13 @@ class BitgetBot(Bot):
 
         return position
 
+    async def execute_orders(self, orders: [dict]) -> [dict]:
+        if len(orders) == 0:
+            return []
+        if len(orders) == 1:
+            return [await self.execute_order(orders[0])]
+        return await self.execute_batch_orders(orders)
+
     async def execute_order(self, order: dict) -> dict:
         o = None
         try:
@@ -307,6 +329,7 @@ class BitgetBot(Bot):
             custom_id = order["custom_id"] if "custom_id" in order else "0"
             params["clientOid"] = f"{self.broker_code}#{custom_id}_{random_str}"
             o = await self.private_post(self.endpoints["create_order"], params)
+            # print('debug create order', o, order)
             if o["data"]:
                 # print('debug execute order', o)
                 return {
@@ -326,27 +349,81 @@ class BitgetBot(Bot):
             traceback.print_exc()
             return {}
 
-    async def execute_cancellation(self, order: dict) -> dict:
-        cancellation = None
+    async def execute_batch_orders(self, orders: [dict]) -> [dict]:
+        executed = None
         try:
-            cancellation = await self.private_post(
-                self.endpoints["cancel_order"],
-                {"symbol": self.symbol, "marginCoin": self.margin_coin, "orderId": order["order_id"]},
+            to_execute = []
+            orders_with_custom_ids = []
+            for order in orders:
+                params = {
+                    "size": str(order["qty"]),
+                    "side": self.order_side_map[order["side"]][order["position_side"]],
+                    "orderType": order["type"],
+                    "presetTakeProfitPrice": "",
+                    "presetStopLossPrice": "",
+                }
+                if params["orderType"] == "limit":
+                    params["timeInForceValue"] = "post_only"
+                    params["price"] = str(order["price"])
+                else:
+                    params["timeInForceValue"] = "normal"
+                random_str = f"{str(int(time() * 1000))[-6:]}_{int(np.random.random() * 10000)}"
+                custom_id = order["custom_id"] if "custom_id" in order else "0"
+                params["clientOid"] = order[
+                    "custom_id"
+                ] = f"{self.broker_code}#{custom_id}_{random_str}"
+                orders_with_custom_ids.append({**order, **{"symbol": self.symbol}})
+                to_execute.append(params)
+            executed = await self.private_post(
+                self.endpoints["batch_orders"],
+                {"symbol": self.symbol, "marginCoin": self.margin_coin, "orderDataList": to_execute},
             )
-            return {
-                "symbol": self.symbol,
-                "side": order["side"],
-                "order_id": cancellation["data"]["orderId"],
-                "position_side": order["position_side"],
-                "qty": order["qty"],
-                "price": order["price"],
-            }
+            formatted = []
+            for ex in executed["data"]["orderInfo"]:
+                to_add = {"order_id": ex["orderId"], "custom_id": ex["clientOid"]}
+                for elm in orders_with_custom_ids:
+                    if elm["custom_id"] == ex["clientOid"]:
+                        to_add.update(elm)
+                        formatted.append(to_add)
+                        break
+            # print('debug execute batch orders', executed, orders, formatted)
+            return formatted
         except Exception as e:
-            print(f"error cancelling order {order} {e}")
-            print_async_exception(cancellation)
+            print(f"error executing order {executed} {e}")
+            print_async_exception(executed)
             traceback.print_exc()
-            self.ts_released["force_update"] = 0.0
-            return {}
+            return []
+
+    async def execute_cancellations(self, orders: [dict]) -> [dict]:
+        if not orders:
+            return []
+        cancellations = []
+        symbol = orders[0]["symbol"] if "symbol" in orders[0] else self.symbol
+        try:
+            cancellations = await self.private_post(
+                self.endpoints["batch_cancel_orders"],
+                {
+                    "symbol": symbol,
+                    "marginCoin": self.margin_coin,
+                    "orderIds": [order["order_id"] for order in orders],
+                },
+            )
+
+            formatted = []
+            for oid in cancellations["data"]["order_ids"]:
+                to_add = {"order_id": oid}
+                for order in orders:
+                    if order["order_id"] == oid:
+                        to_add.update(order)
+                        formatted.append(to_add)
+                        break
+            # print('debug cancel batch orders', cancellations, orders, formatted)
+            return formatted
+        except Exception as e:
+            logging.error(f"error cancelling orders {orders} {e}")
+            print_async_exception(cancellations)
+            traceback.print_exc()
+            return []
 
     async def fetch_account(self):
         raise NotImplementedError("not implemented")
@@ -582,7 +659,7 @@ class BitgetBot(Bot):
             )
             print(res)
         except Exception as e:
-            print(e)
+            print("error initiating exchange config", e)
 
     def standardize_market_stream_event(self, data: dict) -> [dict]:
         if "action" not in data or data["action"] != "update":

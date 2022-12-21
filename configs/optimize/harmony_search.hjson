@@ -33,6 +33,10 @@
   minimum_eqbal_ratio_min_long: -1
   minimum_eqbal_ratio_min_short: -1
 
+  # clip results: compute score on top performers only
+  # clip_threshold=0.1 means drop 10% worst performers; clip_threshold=0.0 means include all
+  clip_threshold: 0.4
+
   # will override starting configs' parameters
   do_long: true
   do_short: true
