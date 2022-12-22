@@ -139,7 +139,7 @@ class BybitBot(Bot):
         self.price_step = self.config["price_step"] = float(e["price_filter"]["tick_size"])
         self.qty_step = self.config["qty_step"] = float(e["lot_size_filter"]["qty_step"])
         self.min_qty = self.config["min_qty"] = float(e["lot_size_filter"]["min_trading_qty"])
-        self.min_cost = self.config["min_cost"] = 0.0
+        self.min_cost = self.config["min_cost"] = 1.0
         self.init_market_type()
         self.margin_coin = self.coin if self.inverse else self.quot
         await super()._init()
