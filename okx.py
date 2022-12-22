@@ -19,17 +19,20 @@ class OKXBot(Bot):
     def __init__(self, config: dict):
         self.exchange = "okx"
         super().__init__(config)
-        self.okx = getattr(ccxt, 'okx')({'apiKey': self.key, 'secret': self.secret, 'password': self.passphrase})
+        self.okx = getattr(ccxt, "okx")(
+            {"apiKey": self.key, "secret": self.secret, "password": self.passphrase}
+        )
 
     async def init_market_type(self):
         self.markets = None
         try:
             self.markets = await self.okx.fetch_markets()
-            self.market_type = 'swap'
+            self.market_type = "linear perpetual swap"
             if self.symbol.endswith("USDT"):
                 self.symbol = f"{self.symbol[:-4]}/USDT:USDT"
             else:
-                raise NotImplementedError(f'not implemented for {self.symbol}')
+                # TODO implement inverse
+                raise NotImplementedError(f"not implemented for {self.symbol}")
         except Exception as e:
             logging.error(f"error initiating market type {e}")
             print_async_exception(self.exchange_info)
@@ -39,29 +42,30 @@ class OKXBot(Bot):
     async def _init(self):
         await self.init_market_type()
         for elm in self.markets:
-            if elm['symbol'] == self.symbol:
+            if elm["symbol"] == self.symbol:
                 break
         else:
-            raise Exception(f'symbol {self.symbol} not found')
-        self.coin = elm['base']
-        self.quote = elm['quote']
-        self.margin_coin = elm['quote']
-        self.c_mult = self.config['c_mult'] = elm['contractSize']
-        self.min_qty = self.config['min_qty'] = elm['limits']['amount']['min'] if elm['limits']['amount']['min'] else 0.0
-        self.min_cost = self.config['min_cost'] = elm['limits']['cost']['min'] if elm['limits']['cost']['min'] else 0.0
-        self.qty_step = self.config['qty_step'] = elm['precision']['amount']
-        self.price_step = self.config['price_step'] = elm['precision']['price']
-        self.inverse = self.config['inverse'] = False
+            raise Exception(f"symbol {self.symbol} not found")
+        self.coin = elm["base"]
+        self.quote = elm["quote"]
+        self.margin_coin = elm["quote"]
+        self.c_mult = self.config["c_mult"] = elm["contractSize"]
+        self.min_qty = self.config["min_qty"] = (
+            elm["limits"]["amount"]["min"] if elm["limits"]["amount"]["min"] else 0.0
+        )
+        self.min_cost = self.config["min_cost"] = (
+            elm["limits"]["cost"]["min"] if elm["limits"]["cost"]["min"] else 0.0
+        )
+        self.qty_step = self.config["qty_step"] = elm["precision"]["amount"]
+        self.price_step = self.config["price_step"] = elm["precision"]["price"]
+        self.inverse = self.config["inverse"] = False
         await super()._init()
         await self.init_order_book()
         await self.update_position()
 
     async def get_server_time(self):
-        return
-        now = await self.public_get(
-            self.endpoints["server_time"], base_endpoint=self.spot_base_endpoint
-        )
-        return now["serverTime"]
+        # millis
+        return await self.okx.fetch_time()
 
     async def transfer_from_derivatives_to_spot(self, coin: str, amount: float):
         return
@@ -72,42 +76,27 @@ class OKXBot(Bot):
         )
 
     async def execute_leverage_change(self):
-        return
-        lev = self.leverage
-        return await self.private_post(
-            self.endpoints["leverage"], {"symbol": self.symbol, "leverage": lev}
-        )
+        return await self.okx.set_leverage(self.leverage, symbol=self.symbol)
 
     async def init_exchange_config(self) -> bool:
-        return
         try:
-            print_(
-                [
-                    await self.private_post(
-                        self.endpoints["margin_type"],
-                        {"symbol": self.symbol, "marginType": "CROSSED"},
+            logging.info(
+                str(
+                    await self.okx.set_margin_mode(
+                        "cross", symbol=self.symbol, params={"lever": self.leverage}
                     )
-                ]
+                )
             )
         except Exception as e:
             print(e)
         try:
-            print_([await self.execute_leverage_change()])
+            logging.info(str(await self.execute_leverage_change()))
         except Exception as e:
             print(e)
         try:
-            print_(
-                [
-                    await self.private_post(
-                        self.endpoints["position_side"], {"dualSidePosition": "true"}
-                    )
-                ]
-            )
+            logging.info(str(await self.okx.set_position_mode(True)))
         except Exception as e:
-            if '"code":-4059' not in e.args[0]:
-                print(e)
-                print("unable to set hedge mode, aborting")
-                raise Exception("failed to set hedge mode")
+            print(e)
 
     async def init_order_book(self):
         ticker = None
@@ -124,19 +113,17 @@ class OKXBot(Bot):
     async def fetch_open_orders(self) -> [dict]:
         open_orders = None
         try:
-            open_orders = await self.private_get(
-                self.endpoints["open_orders"], {"symbol": self.symbol}
-            )
+            open_orders = await self.okx.fetch_open_orders(symbol=self.symbol)
             return [
                 {
-                    "order_id": int(e["orderId"]),
+                    "order_id": e["id"],
                     "symbol": e["symbol"],
-                    "price": float(e["price"]),
-                    "qty": float(e["origQty"]),
-                    "type": e["type"].lower(),
-                    "side": e["side"].lower(),
-                    "position_side": e["positionSide"].lower().replace("short", "short"),
-                    "timestamp": int(e["time"]),
+                    "price": e["price"],
+                    "qty": e["amount"],
+                    "type": e["type"],
+                    "side": e["side"],
+                    "position_side": e["info"]["posSide"],
+                    "timestamp": e["timestamp"],
                 }
                 for e in open_orders
             ]
@@ -166,15 +153,19 @@ class OKXBot(Bot):
                         position["long"] = {
                             "size": p["contracts"],
                             "price": p["entryPrice"],
-                            "liquidation_price": p["liquidationPrice"] if p['liquidationPrice'] else 0.0,
+                            "liquidation_price": p["liquidationPrice"]
+                            if p["liquidationPrice"]
+                            else 0.0,
                         }
                     elif p["positionSide"] == "SHORT":
                         position["short"] = {
                             "size": p["contracts"],
                             "price": p["entryPrice"],
-                            "liquidation_price": p["liquidationPrice"] if p['liquidationPrice'] else 0.0,
+                            "liquidation_price": p["liquidationPrice"]
+                            if p["liquidationPrice"]
+                            else 0.0,
                         }
-            position['wallet_balance'] = balance[self.quote]['total']
+            position["wallet_balance"] = balance[self.quote]["total"]
             return position
         except Exception as e:
             logging.error(f"error fetching pos or balance {e}")
@@ -190,35 +181,32 @@ class OKXBot(Bot):
         return await self.execute_batch_orders(orders)
 
     async def execute_order(self, order: dict) -> dict:
-        o = None
+        executed = None
         try:
-            params = {
-                "symbol": self.symbol,
-                "side": order["side"].upper(),
-                "positionSide": order["position_side"].replace("short", "short").upper(),
-                "type": order["type"].upper(),
-                "quantity": str(order["qty"]),
-            }
-            if params["type"] == "LIMIT":
-                params["timeInForce"] = "GTX"
-                params["price"] = order["price"]
-            if "custom_id" in order:
-                params[
-                    "newClientOrderId"
-                ] = f"{order['custom_id']}_{str(int(time() * 1000))[8:]}_{int(np.random.random() * 1000)}"
-            o = await self.private_post(self.endpoints["create_order"], params)
+            executed = await getattr(self.okx, f"create_limit {order['side']}_order")(
+                symbol=self.symbol,
+                price=order["price"],
+                amount=order["qty"],
+                params={
+                    "posSide": order["position_side"],
+                    "ordType": "post_only",
+                    "reduceOnly": "close" in order["custom_id"],
+                    "clOrdId": f"{order['custom_id']}_{str(int(time() * 1000))[8:]}_{int(np.random.random() * 1000)}",
+                },
+            )
+            return executed
             return {
                 "symbol": self.symbol,
-                "side": o["side"].lower(),
-                "position_side": o["positionSide"].lower().replace("short", "short"),
-                "type": o["type"].lower(),
-                "qty": float(o["origQty"]),
-                "order_id": int(o["orderId"]),
-                "price": float(o["price"]),
+                "side": executed["side"].lower(),
+                "position_side": executed["positionSide"].lower().replace("short", "short"),
+                "type": executed["type"].lower(),
+                "qty": float(executed["origQty"]),
+                "order_id": int(executed["orderId"]),
+                "price": float(executed["price"]),
             }
         except Exception as e:
             print(f"error executing order {order} {e}")
-            print_async_exception(o)
+            print_async_exception(executed)
             traceback.print_exc()
             return {}
 
@@ -459,8 +447,26 @@ class OKXBot(Bot):
         return await self.fetch_ticks(start_time=start_time, end_time=end_time, do_print=do_print)
 
     async def fetch_ohlcvs(
-        self, symbol: str = None, start_time: int = None, interval="1m", limit=1500
+        self, symbol: str = None, start_time: int = None, interval="1m", limit=300
     ):
+
+        intervals = ['1m', '3m', '5m', '15m', '30m', '1H', '2H', '4H']
+        assert interval in intervals
+        params={'bar': interval, 'limit': limit}
+        if start_time is not None:
+            params['after'] = str(start_time)
+        print(params)
+        fetched = await self.okx.fetch_ohlcv(symbol=self.symbol, params=params)
+        return [
+            {
+                **{"timestamp": int(e[0])},
+                **{
+                    k: float(e[i + 1])
+                    for i, k in enumerate(["open", "high", "low", "close", "volume"])
+                },
+            }
+            for e in fetched
+        ]
         # m -> minutes; h -> hours; d -> days; w -> weeks; M -> months
         interval_map = {
             "1m": 1,
