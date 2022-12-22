@@ -724,7 +724,7 @@ class Bot:
                     # call update_position() before making initial entry orders
                     # in case websocket has failed
                     logging.info(
-                        f"update_position with REST API before creating initial entries.  Last price {self.price}"
+                        f"updating position with REST API before creating initial entries.  Last price {self.price}"
                     )
                     await self.update_position()
                     all_orders = self.calc_orders()
