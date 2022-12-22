@@ -35,7 +35,7 @@
 
   # clip results: compute score on top performers only
   # clip_threshold=0.1 means drop 10% worst performers; clip_threshold=0.0 means include all
-  clip_threshold: 0.4
+  clip_threshold: 0.0
 
   # will override starting configs' parameters
   do_long: true
