@@ -19,5 +19,11 @@
         "key": "key",
         "secret": "secret",
         "passphrase": "passphrase"
+    },
+    "okx_01" : {
+        "exchange": "okx",
+        "key": "key",
+        "secret": "secret",
+        "passphrase": "passphrase"
     }
 }
