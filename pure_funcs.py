@@ -1181,7 +1181,7 @@ def calc_scores(config: dict, results: dict):
         }
         symbols_to_include[side] = sorted(
             individual_scores[side], key=lambda x: individual_scores[side][x]
-        )[: int(len(individual_scores[side]) * (1 - config["clip_threshold"]))]
+        )[: max(1, int(len(individual_scores[side]) * (1 - config["clip_threshold"])))]
         # print(symbols_to_include, individual_scores[side], config["clip_threshold"])
         means[side] = {
             key: np.mean([individual_vals[side][sym][key] for sym in symbols_to_include[side]])
