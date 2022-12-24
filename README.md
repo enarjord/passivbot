@@ -42,6 +42,24 @@ See also https://www.futuresboard.xyz/guides.html
 
 [![Telegram](https://img.shields.io/badge/Telegram-2CA5E0?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/passivbot_futures)
 
+## Referrals and Tip Jar
+
+https://accounts.binance.me/en/register?ref=TII4B07C  
+https://www.bybit.com/en-US/register?affiliate_id=16464  
+https://partner.bitget.com/bg/Y8FU1W  
+https://www.okx.com/join/15429595  
+
+https://www.buymeacoffee.com/enarjord  
+
+Solana Tether USD (USDT):  
+9hUCHBQA261PU6rUSbwgMoxn8nrdcXPAYgbASRgA8dtm
+
+Monero (XMR):  
+49gUQ1jasDK23tJTMCvP4mQUUwndeLWAwSgdCFn6ovmRKXZAjQnVp2JZ2K4UuDDdYMNam1HE8ELZoWdeJPRfYEa9QSEK6XZ
+
+Bitcoin (BTC):  
+bc1qcc3kr9gudg35gnsljg64zeaurt0y24pfej36w6
+
 ## License
 
 Released freely without conditions.
