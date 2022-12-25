@@ -18,6 +18,9 @@ from pure_funcs import ts_to_date, sort_dict_keys, format_float
 class OKXBot(Bot):
     def __init__(self, config: dict):
         self.exchange = "okx"
+        self.ohlcv = True # no websocket
+        self.max_n_orders_per_batch = 20
+        self.max_n_cancellations_per_batch = 20
         super().__init__(config)
         self.okx = getattr(ccxt, "okx")(
             {"apiKey": self.key, "secret": self.secret, "password": self.passphrase}
@@ -46,6 +49,7 @@ class OKXBot(Bot):
                 break
         else:
             raise Exception(f"symbol {self.symbol} not found")
+        self.inst_id = elm['info']['instId']
         self.coin = elm["base"]
         self.quote = elm["quote"]
         self.margin_coin = elm["quote"]
@@ -157,7 +161,7 @@ class OKXBot(Bot):
                             if p["liquidationPrice"]
                             else 0.0,
                         }
-                    elif p["positionSide"] == "SHORT":
+                    elif p["side"] == "short":
                         position["short"] = {
                             "size": p["contracts"],
                             "price": p["entryPrice"],
@@ -176,9 +180,8 @@ class OKXBot(Bot):
     async def execute_orders(self, orders: [dict]) -> [dict]:
         if len(orders) == 0:
             return []
-        if len(orders) == 1:
-            return [await self.execute_order(orders[0])]
-        return await self.execute_batch_orders(orders)
+        else:
+            return await self.execute_batch_orders(orders)
 
     async def execute_order(self, order: dict) -> dict:
         executed = None
@@ -403,6 +406,7 @@ class OKXBot(Bot):
         end_time: int = None,
         do_print: bool = True,
     ):
+        raise NotImplementedError
         params = {"symbol": self.symbol, "limit": 1000}
         if from_id is not None:
             params["fromId"] = max(0, from_id)
@@ -444,71 +448,36 @@ class OKXBot(Bot):
         return ticks
 
     async def fetch_ticks_time(self, start_time: int, end_time: int = None, do_print: bool = True):
+        raise NotImplementedError
         return await self.fetch_ticks(start_time=start_time, end_time=end_time, do_print=do_print)
 
     async def fetch_ohlcvs(
-        self, symbol: str = None, start_time: int = None, interval="1m", limit=300
+        self, symbol: str = None, start_time: int = None, interval="1m", limit=100
     ):
-
+        interval = interval.replace('h', 'H')
         intervals = ['1m', '3m', '5m', '15m', '30m', '1H', '2H', '4H']
-        assert interval in intervals
-        params={'bar': interval, 'limit': limit}
+        assert interval in intervals, f"{interval} {intervals}"
+        params={'instId': self.inst_id, 'bar': interval, 'limit': limit}
         if start_time is not None:
             params['after'] = str(start_time)
-        print(params)
-        fetched = await self.okx.fetch_ohlcv(symbol=self.symbol, params=params)
-        return [
-            {
-                **{"timestamp": int(e[0])},
-                **{
-                    k: float(e[i + 1])
-                    for i, k in enumerate(["open", "high", "low", "close", "volume"])
-                },
-            }
-            for e in fetched
-        ]
-        # m -> minutes; h -> hours; d -> days; w -> weeks; M -> months
-        interval_map = {
-            "1m": 1,
-            "3m": 3,
-            "5m": 5,
-            "15m": 15,
-            "30m": 30,
-            "1h": 60,
-            "2h": 120,
-            "4h": 240,
-            "6h": 360,
-            "12h": 720,
-            "1d": 60 * 60 * 24,
-            "1w": 60 * 60 * 24 * 7,
-            "1M": 60 * 60 * 24 * 30,
-        }
-        assert interval in interval_map
-        params = {
-            "symbol": self.symbol if symbol is None else symbol,
-            "interval": interval,
-            "limit": limit,
-        }
-        if start_time is not None:
-            params["startTime"] = int(start_time)
-            params["endTime"] = params["startTime"] + interval_map[interval] * 60 * 1000 * limit
         try:
-            fetched = await self.public_get(self.endpoints["ohlcvs"], params)
+            fetched = await self.okx.public_get_market_history_candles(params)
             return [
                 {
-                    **{"timestamp": int(e[0])},
+                    **{"timestamp": int(elm[0])},
                     **{
-                        k: float(e[i + 1])
+                        k: float(elm[i + 1])
                         for i, k in enumerate(["open", "high", "low", "close", "volume"])
                     },
                 }
-                for e in fetched
+                for elm in fetched['data']
             ]
         except Exception as e:
             print("error fetching ohlcvs", fetched, e)
             traceback.print_exc()
 
     async def transfer(self, type_: str, amount: float, asset: str = "USDT"):
+        raise NotImplementedError
         params = {"type": type_.upper(), "amount": amount, "asset": asset}
         return await self.private_post(
             self.endpoints["transfer"], params, base_endpoint=self.spot_base_endpoint
