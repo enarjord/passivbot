@@ -967,6 +967,8 @@ def download_ohlcvs(symbol, start_date, end_date, download_only=False) -> pd.Dat
     end_ts = date_to_ts(end_date)
     days = [ts_to_date_utc(x)[:10] for x in list(range(start_ts, end_ts, 1000 * 60 * 60 * 24))]
     months = sorted(set([x[:7] for x in days]))
+    month_now = ts_to_date(time())[:7]
+    months = [m for m in months if m != month_now]
     months_done = set()
     dfs = []
     for month in months:
