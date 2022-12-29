@@ -1393,11 +1393,14 @@ async def main() -> None:
         from procedures import create_bitget_bot
 
         bot = await create_bitget_bot(config)
-
+    elif config["exchange"] == "okx":
+        from procedures import create_okx_bot
+        config['ohlcv'] = True
+        bot = await create_okx_bot(config)
     else:
         raise Exception("unknown exchange", config["exchange"])
 
-    if args.ohlcv:
+    if config['ohlcv']:
         logging.info(
             "starting passivbot in ohlcv mode, using REST API only and updating once a minute"
         )
@@ -1405,7 +1408,8 @@ async def main() -> None:
     signal.signal(signal.SIGINT, bot.stop)
     signal.signal(signal.SIGTERM, bot.stop)
     await start_bot(bot)
-    await bot.session.close()
+    if hasattr(bot, 'session'):
+        await bot.session.close()
 
 
 if __name__ == "__main__":
