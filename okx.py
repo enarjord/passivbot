@@ -9,6 +9,7 @@ from urllib.parse import urlencode
 import aiohttp
 import numpy as np
 import ccxt.async_support as ccxt
+import uuid
 
 from passivbot import Bot, logging
 from procedures import print_, print_async_exception
@@ -18,7 +19,7 @@ from pure_funcs import ts_to_date, sort_dict_keys, format_float
 class OKXBot(Bot):
     def __init__(self, config: dict):
         self.exchange = "okx"
-        self.ohlcv = True # no websocket
+        self.ohlcv = True  # TODO implement websocket
         self.max_n_orders_per_batch = 20
         self.max_n_cancellations_per_batch = 20
         super().__init__(config)
@@ -32,7 +33,7 @@ class OKXBot(Bot):
             self.markets = await self.okx.fetch_markets()
             self.market_type = "linear perpetual swap"
             if self.symbol.endswith("USDT"):
-                self.symbol = f"{self.symbol[:-4]}/USDT:USDT"
+                self.symbol = f"{self.symbol[:self.symbol.find('USDT')]}/USDT:USDT"
             else:
                 # TODO implement inverse
                 raise NotImplementedError(f"not implemented for {self.symbol}")
@@ -49,7 +50,7 @@ class OKXBot(Bot):
                 break
         else:
             raise Exception(f"symbol {self.symbol} not found")
-        self.inst_id = elm['info']['instId']
+        self.inst_id = elm["info"]["instId"]
         self.coin = elm["base"]
         self.quote = elm["quote"]
         self.margin_coin = elm["quote"]
@@ -169,7 +170,12 @@ class OKXBot(Bot):
                             if p["liquidationPrice"]
                             else 0.0,
                         }
-            position["wallet_balance"] = balance[self.quote]["total"]
+            if balance:
+                for elm in balance['info']['data']:
+                    for elm2 in elm['details']:
+                        if elm2['ccy'] == self.quote:
+                            position["wallet_balance"] = float(elm2['cashBal'])
+                            break
             return position
         except Exception as e:
             logging.error(f"error fetching pos or balance {e}")
@@ -180,74 +186,47 @@ class OKXBot(Bot):
     async def execute_orders(self, orders: [dict]) -> [dict]:
         if len(orders) == 0:
             return []
-        else:
-            return await self.execute_batch_orders(orders)
-
-    async def execute_order(self, order: dict) -> dict:
-        executed = None
-        try:
-            executed = await getattr(self.okx, f"create_limit {order['side']}_order")(
-                symbol=self.symbol,
-                price=order["price"],
-                amount=order["qty"],
-                params={
-                    "posSide": order["position_side"],
-                    "ordType": "post_only",
-                    "reduceOnly": "close" in order["custom_id"],
-                    "clOrdId": f"{order['custom_id']}_{str(int(time() * 1000))[8:]}_{int(np.random.random() * 1000)}",
-                },
-            )
-            return executed
-            return {
-                "symbol": self.symbol,
-                "side": executed["side"].lower(),
-                "position_side": executed["positionSide"].lower().replace("short", "short"),
-                "type": executed["type"].lower(),
-                "qty": float(executed["origQty"]),
-                "order_id": int(executed["orderId"]),
-                "price": float(executed["price"]),
-            }
-        except Exception as e:
-            print(f"error executing order {order} {e}")
-            print_async_exception(executed)
-            traceback.print_exc()
-            return {}
-
-    async def execute_batch_orders(self, orders: [dict]) -> [dict]:
         executed = None
         try:
             to_execute = []
             for order in orders:
                 params = {
-                    "symbol": self.symbol,
-                    "side": order["side"].upper(),
-                    "positionSide": order["position_side"].replace("short", "short").upper(),
-                    "type": order["type"].upper(),
-                    "quantity": str(order["qty"]),
+                    "instId": self.inst_id,
+                    "tdMode": "cross",
+                    "side": order["side"],
+                    "posSide": order["position_side"],
+                    "sz": int(order["qty"]),
+                    "reduceOnly": order["reduce_only"],
                 }
-                if params["type"] == "LIMIT":
-                    params["timeInForce"] = "GTX"
-                    params["price"] = order["price"]
+                if order["type"] == "limit":
+                    params["ordType"] = "post_only"
+                    params["px"] = order["price"]
                 if "custom_id" in order:
-                    params[
-                        "newClientOrderId"
-                    ] = f"{order['custom_id']}_{str(int(time() * 1000))[8:]}_{int(np.random.random() * 1000)}"
+                    params["clOrdId"] = f"{order['custom_id']}_{uuid.uuid4().hex}".replace("_", "")[
+                        :32
+                    ]
+                else:
+                    params["clOrdId"] = f"{uuid.uuid4().hex}".replace("_", "")[:32]
                 to_execute.append(params)
-            executed = await self.private_post(
-                self.endpoints["batch_orders"], {"batchOrders": to_execute}, data_=True
-            )
-            return [
-                {
-                    "symbol": self.symbol,
-                    "side": ex["side"].lower(),
-                    "position_side": ex["positionSide"].lower().replace("short", "short"),
-                    "type": ex["type"].lower(),
-                    "qty": float(ex["origQty"]),
-                    "order_id": int(ex["orderId"]),
-                    "price": float(ex["price"]),
-                }
-                for ex in executed
-            ]
+            executed = await self.okx.private_post_trade_batch_orders(params=to_execute)
+            to_return = []
+            for elm in executed["data"]:
+                for to_ex in to_execute:
+                    if elm["clOrdId"] == to_ex["clOrdId"] and elm["sCode"] == '0':
+                        to_return.append(
+                            {
+                                "symbol": self.symbol,
+                                "side": to_ex["side"],
+                                "position_side": to_ex["posSide"],
+                                "type": to_ex["ordType"],
+                                "qty": to_ex["sz"],
+                                "order_id": int(elm["ordId"]),
+                                "custom_id": elm["clOrdId"],
+                                "price": to_ex["px"],
+                            }
+                        )
+                        break
+            return to_return
         except Exception as e:
             print(f"error executing order {executed} {e}")
             print_async_exception(executed)
@@ -258,24 +237,27 @@ class OKXBot(Bot):
         if not orders:
             return []
         cancellations = []
-        symbol = orders[0]["symbol"] if "symbol" in orders[0] else self.symbol
         try:
-            cancellations = await self.private_delete(
-                self.endpoints["batch_orders"],
-                {"symbol": symbol, "orderIdList": [order["order_id"] for order in orders]},
-                data_=True,
+            cancellations = await self.okx.private_post_trade_cancel_batch_orders(
+                params=[{"instId": self.inst_id, "ordId": str(order["order_id"])} for order in orders]
             )
-            return [
-                {
-                    "symbol": symbol,
-                    "side": cancellation["side"].lower(),
-                    "order_id": int(cancellation["orderId"]),
-                    "position_side": cancellation["positionSide"].lower().replace("short", "short"),
-                    "qty": float(cancellation["origQty"]),
-                    "price": float(cancellation["price"]),
-                }
-                for cancellation in cancellations
-            ]
+            to_return = []
+            for elm in cancellations["data"]:
+                for order in orders:
+                    if elm["ordId"] == order["order_id"] and elm["sCode"] == '0':
+                        to_return.append(
+                            {
+                                "symbol": self.symbol,
+                                "side": order["side"],
+                                "position_side": order["position_side"],
+                                "type": order["type"],
+                                "qty": order["qty"],
+                                "order_id": int(elm["ordId"]),
+                                "price": order["price"],
+                            }
+                        )
+                        break
+            return to_return
         except Exception as e:
             logging.error(f"error cancelling orders {orders} {e}")
             print_async_exception(cancellations)
@@ -454,12 +436,12 @@ class OKXBot(Bot):
     async def fetch_ohlcvs(
         self, symbol: str = None, start_time: int = None, interval="1m", limit=100
     ):
-        interval = interval.replace('h', 'H')
-        intervals = ['1m', '3m', '5m', '15m', '30m', '1H', '2H', '4H']
+        interval = interval.replace("h", "H")
+        intervals = ["1m", "3m", "5m", "15m", "30m", "1H", "2H", "4H"]
         assert interval in intervals, f"{interval} {intervals}"
-        params={'instId': self.inst_id, 'bar': interval, 'limit': limit}
+        params = {"instId": self.inst_id, "bar": interval, "limit": limit}
         if start_time is not None:
-            params['after'] = str(start_time)
+            params["after"] = str(start_time)
         try:
             fetched = await self.okx.public_get_market_history_candles(params)
             return [
@@ -470,7 +452,7 @@ class OKXBot(Bot):
                         for i, k in enumerate(["open", "high", "low", "close", "volume"])
                     },
                 }
-                for elm in fetched['data']
+                for elm in fetched["data"]
             ]
         except Exception as e:
             print("error fetching ohlcvs", fetched, e)
