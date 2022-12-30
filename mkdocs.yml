@@ -13,6 +13,10 @@ nav:
   - Optimizer: optimize.md
   - Tuning by hand: handtuning.md
   - Analysis: analysis.md
+  - Auto Profit Transfer Script: auto_profit_transfer.md
+  - Auto Unstuck: auto_unstuck.md
+  - Live Bot Manager: manager.md
+  - Different Passivbot Modes: passivbot_modes.md
   - First-time users: walkthrough.md
   - Developers: developers.md
   - FAQ: faq.md
