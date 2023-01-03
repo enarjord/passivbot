@@ -664,7 +664,11 @@ def analyze_fills_emas(fills: np.array, stats: list, config: dict):
     else:
         we_max_long = ((longs.psize * longs.pprice) / longs.balance).max() * config["c_mult"]
         we_max_short = ((shorts.psize * shorts.pprice) / shorts.balance).max() * config["c_mult"]
-    adg_realized = (sdf.balance.iloc[-1] / sdf.balance.iloc[0]) ** (1 / n_days) - 1 if n_days > 0.0 else 0.0
+    if sdf.balance.iloc[-1] < 0.0:
+        adg_realized = sdf.balance.iloc[-1]
+    else:
+        adg_realized = (sdf.balance.iloc[-1] / sdf.balance.iloc[0]) ** (1 / n_days) - 1
+    # print("debug adg_realized", sdf.balance.iloc[-1], sdf.balance.iloc[0], n_days, adg_realized)
     adg_realized_per_exposure_long = adg_realized / config["wallet_exposure_limit_long"]
     adg_realized_per_exposure_short = adg_realized / config["wallet_exposure_limit_short"]
     eqbal_ratios_fdf = fdf.equity / fdf.balance
@@ -672,7 +676,7 @@ def analyze_fills_emas(fills: np.array, stats: list, config: dict):
     profit_sum = fdf[fdf.pnl > 0.0].pnl.sum()
     loss_sum = fdf[fdf.pnl < 0.0].pnl.sum()
     pnl_sum = profit_sum + loss_sum
-    loss_profit_ratio = abs(loss_sum / profit_sum)
+    loss_profit_ratio = abs(loss_sum / max(sdf.balance.iloc[0] * 0.0001, profit_sum))
 
     pprices = np.where(sdf.psize_long > sdf.psize_short, sdf.pprice_long, sdf.pprice_short)
     pa_dists = (sdf.price - pprices).abs() / sdf.price
@@ -1364,7 +1368,6 @@ def calc_scores(config: dict, results: dict):
         "keys": keys,
         "symbols_to_include": symbols_to_include,
     }
-
 
 
 def calc_scores_old(config: dict, results: dict):
