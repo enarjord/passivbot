@@ -41,7 +41,6 @@ import logging.config
 
 logging.config.dictConfig({"version": 1, "disable_existing_loggers": True})
 
-BT_TIMES = []
 
 def backtest_wrap(config_: dict, ticks_caches: dict):
     """
@@ -71,9 +70,8 @@ def backtest_wrap(config_: dict, ticks_caches: dict):
     try:
         sts = time()
         fills_long, fills_short, stats = backtest(config, ticks)
-        BT_TIMES.append(time() - sts)
-        print('mean bttimes', np.mean(BT_TIMES))
         longs, shorts, sdf, analysis = analyze_fills(fills_long, fills_short, stats, config)
+        analysis["backtest_time"] = time() - sts
         """
         with open("logs/debug_pso.txt", "a") as f:
             f.write(json.dumps({"config": denumpyize(config), "analysis": analysis}) + "\n")
@@ -99,6 +97,7 @@ class ParticleSwarmOptimization:
         self.c0 = config["c0"]
         self.c1 = config["c1"]
         self.starting_configs = config["starting_configs"]
+        self.backtest_times = []
         self.iters = config["iters"]
         self.n_cpus = config["n_cpus"]
         self.pool = Pool(processes=config["n_cpus"])
@@ -171,6 +170,10 @@ class ParticleSwarmOptimization:
         swarm_key = cfg["swarm_key"]
         symbol = cfg["symbol"]
         self.unfinished_evals[id_key]["single_results"][symbol] = self.workers[wi]["task"].get()
+        self.backtest_times.append(
+            self.unfinished_evals[id_key]["single_results"][symbol]["backtest_time"]
+        )
+        #print(f"backtest_time mean {np.mean(self.backtest_times)} last {self.backtest_times[-1]}")
         self.unfinished_evals[id_key]["in_progress"].remove(symbol)
         results = deepcopy(self.unfinished_evals[id_key]["single_results"])
         with open(self.results_fpath + "positions.txt", "a") as f:
@@ -277,8 +280,8 @@ class ParticleSwarmOptimization:
         self.iter_counter += 1  # up iter counter on each new config started
         swarm_key = self.swarm_keys[self.iter_counter % self.n_particles]
         template = get_template_live_config(self.config["passivbot_mode"])
-        if self.passivbot_mode == 'emas':
-            template = {'long': template.copy(), 'short': template.copy()}
+        if self.passivbot_mode == "emas":
+            template = {"long": template.copy(), "short": template.copy()}
         new_position = {
             **{
                 "long": deepcopy(template["long"]),
