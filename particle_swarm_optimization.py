@@ -33,6 +33,7 @@ from procedures import (
     load_exchange_key_secret_passphrase,
     prepare_backtest_config,
     dump_live_config,
+    init_optimizer,
 )
 from time import sleep, time
 import logging
@@ -40,6 +41,7 @@ import logging.config
 
 logging.config.dictConfig({"version": 1, "disable_existing_loggers": True})
 
+BT_TIMES = []
 
 def backtest_wrap(config_: dict, ticks_caches: dict):
     """
@@ -56,6 +58,7 @@ def backtest_wrap(config_: dict, ticks_caches: dict):
                 "market_type",
                 "config_no",
             ]
+            if k in config_
         },
         **{k: v for k, v in config_["market_specific_settings"].items()},
     }
@@ -63,19 +66,18 @@ def backtest_wrap(config_: dict, ticks_caches: dict):
         ticks = ticks_caches[config["symbol"]]
     else:
         ticks = np.load(config_["ticks_cache_fname"])
+    if config_["passivbot_mode"] == "emas":
+        config.update(config["long"])
     try:
+        sts = time()
         fills_long, fills_short, stats = backtest(config, ticks)
+        BT_TIMES.append(time() - sts)
+        print('mean bttimes', np.mean(BT_TIMES))
         longs, shorts, sdf, analysis = analyze_fills(fills_long, fills_short, stats, config)
         """
         with open("logs/debug_pso.txt", "a") as f:
             f.write(json.dumps({"config": denumpyize(config), "analysis": analysis}) + "\n")
         """
-        logging.debug(
-            f"backtested {config['symbol']: <12} pa distance long {analysis['pa_distance_mean_long']:.6f} "
-            + f"pa distance short {analysis['pa_distance_mean_short']:.6f} adg long {analysis['adg_long']:.6f} "
-            + f"adg short {analysis['adg_short']:.6f} std long {analysis['pa_distance_std_long']:.5f} "
-            + f"std short {analysis['pa_distance_std_short']:.5f}"
-        )
     except Exception as e:
         analysis = get_empty_analysis()
         logging.error(f'error with {config["symbol"]} {e}')
@@ -91,6 +93,7 @@ class ParticleSwarmOptimization:
         self.config = config
         self.do_long = config["long"]["enabled"]
         self.do_short = config["short"]["enabled"]
+        self.passivbot_mode = config["passivbot_mode"]
         self.n_particles = max(config["n_particles"], len(config["starting_configs"]))
         self.w = config["w"]
         self.c0 = config["c0"]
@@ -210,19 +213,25 @@ class ParticleSwarmOptimization:
             if self.gbest_long is None or scores["long"] < self.gbest_long["score"]:
                 self.gbest_long = deepcopy({"config": cfg["long"], "score": scores["long"]})
                 is_better = True
-                line = f"i{cfg['config_no']} - new best config long, score {round_dynamic(scores['long'], 4)} "
+                if self.passivbot_mode == "emas":
+                    long_ = ""
+                else:
+                    long_ = "_long"
+                    tmp_fname += long_
+                line = f"i{cfg['config_no']} - new best config {long_[1:]}, score {round_dynamic(scores['long'], 4)} "
                 for key, _ in keys:
                     line += f"{key} {round_dynamic(raws['long'][key], 4)} "
                 logging.info(line)
-                tmp_fname += "_long"
                 json.dump(
                     results,
-                    open(f"{self.results_fpath}{cfg['config_no']:06}_result_long.json", "w"),
+                    open(f"{self.results_fpath}{cfg['config_no']:06}_result{long_}.json", "w"),
                     indent=4,
                     sort_keys=True,
                 )
             # check if better than gbest short
-            if self.gbest_short is None or scores["short"] < self.gbest_short["score"]:
+            if self.passivbot_mode != "emas" and (
+                self.gbest_short is None or scores["short"] < self.gbest_short["score"]
+            ):
                 self.gbest_short = deepcopy({"config": cfg["short"], "score": scores["short"]})
                 is_better = True
                 line = f"i{cfg['config_no']} - new best config short, score {round_dynamic(scores['short'], 4)} "
@@ -247,7 +256,10 @@ class ParticleSwarmOptimization:
                     "start_date": self.config["start_date"],
                     "end_date": self.config["end_date"],
                 }
-                dump_live_config(best_config, tmp_fname + ".json")
+                dump_live_config(
+                    best_config["long"] if self.passivbot_mode == "emas" else best_config,
+                    tmp_fname + ".json",
+                )
             elif cfg["config_no"] % 25 == 0:
                 logging.info(f"i{cfg['config_no']}")
             results["config_no"] = cfg["config_no"]
@@ -265,6 +277,8 @@ class ParticleSwarmOptimization:
         self.iter_counter += 1  # up iter counter on each new config started
         swarm_key = self.swarm_keys[self.iter_counter % self.n_particles]
         template = get_template_live_config(self.config["passivbot_mode"])
+        if self.passivbot_mode == 'emas':
+            template = {'long': template.copy(), 'short': template.copy()}
         new_position = {
             **{
                 "long": deepcopy(template["long"]),
@@ -455,9 +469,13 @@ class ParticleSwarmOptimization:
         for side in ["long", "short"]:
             swarm_keys = sorted(self.swarm)
             bounds = getattr(self, f"{side}_bounds")
-            for cfg in self.starting_configs:
-                cfg = {k: max(bounds[k][0], min(bounds[k][1], cfg[side][k])) for k in bounds}
+            for scfg in self.starting_configs:
+                tcfg = get_template_live_config(self.passivbot_mode)
+                cfg = tcfg if self.passivbot_mode == "emas" else tcfg[side]
+                cfg.update({k: max(bounds[k][0], min(bounds[k][1], scfg[side][k])) for k in bounds})
                 cfg["enabled"] = getattr(self, f"do_{side}")
+                cfg[f"do_long"] = self.do_long
+                cfg[f"do_short"] = self.do_short
                 cfg["backwards_tp"] = self.config[f"backwards_tp_{side}"]
                 if cfg not in [self.swarm[k][side]["config"] for k in self.swarm]:
                     self.swarm[swarm_keys.pop()][side]["config"] = deepcopy(cfg)
@@ -520,217 +538,12 @@ class ParticleSwarmOptimization:
 
 async def main():
     logging.basicConfig(format="", level=os.environ.get("LOGLEVEL", "INFO"))
-
-    parser = argparse.ArgumentParser(
-        prog="Optimize multi symbol", description="Optimize passivbot config multi symbol"
-    )
-    parser.add_argument(
-        "-o",
-        "--optimize_config",
-        type=str,
-        required=False,
-        dest="optimize_config_path",
-        default="configs/optimize/particle_swarm_optimization.hjson",
-        help="optimize config hjson file",
-    )
-    parser.add_argument(
-        "-t",
-        "--start",
-        type=str,
-        required=False,
-        dest="starting_configs",
-        default=None,
-        help="start with given live configs.  single json file or dir with multiple json files",
-    )
-    parser.add_argument(
-        "-i", "--iters", type=int, required=False, dest="iters", default=None, help="n optimize iters"
-    )
-    parser.add_argument(
-        "-c", "--n_cpus", type=int, required=False, dest="n_cpus", default=None, help="n cpus"
-    )
-    parser.add_argument(
-        "-le",
-        "--long",
-        type=str,
-        required=False,
-        dest="long_enabled",
-        default=None,
-        help="long enabled: [y/n]",
-    )
-    parser.add_argument(
-        "-se",
-        "--short",
-        type=str,
-        required=False,
-        dest="short_enabled",
-        default=None,
-        help="short enabled: [y/n]",
-    )
-    parser.add_argument(
-        "-pm",
-        "--passivbot_mode",
-        "--passivbot-mode",
-        type=str,
-        required=False,
-        dest="passivbot_mode",
-        default=None,
-        help="passivbot mode options: [s/static_grid, r/recursive_grid, n/neat_grid]",
-    )
-    parser.add_argument(
-        "-sf",
-        "--score_formula",
-        "--score-formula",
-        type=str,
-        required=False,
-        dest="score_formula",
-        default=None,
-        help="passivbot score formula options: [adg_PAD_mean, adg_PAD_std, adg_DGstd_ratio, adg_mean, adg_min, adg_PAD_std_min]",
-    )
-    parser.add_argument(
-        "-oh",
-        "--ohlcv",
-        help="use 1m ohlcv instead of 1s ticks",
-        action="store_true",
-    )
-    parser = add_argparse_args(parser)
-    args = parser.parse_args()
-    args.symbol = "BTCUSDT"  # dummy symbol
-    config = await prepare_optimize_config(args)
-    if args.score_formula is not None:
-        if args.score_formula not in [
-            "adg_PAD_mean",
-            "adg_PAD_std",
-            "adg_DGstd_ratio",
-            "adg_mean",
-            "adg_min",
-            "adg_PAD_std_min",
-            "adg_realized_PAD_mean",
-            "adg_realized_PAD_std",
-        ]:
-            logging.error(f"unknown score formula {args.score_formula}")
-            logging.error(f"using score formula {config['score_formula']}")
-        else:
-            config["score_formula"] = args.score_formula
-    if args.passivbot_mode is not None:
-        if args.passivbot_mode in ["s", "static_grid", "static"]:
-            config["passivbot_mode"] = "static_grid"
-        elif args.passivbot_mode in ["r", "recursive_grid", "recursive"]:
-            config["passivbot_mode"] = "recursive_grid"
-        elif args.passivbot_mode in ["n", "neat_grid", "neat"]:
-            config["passivbot_mode"] = "neat_grid"
-        else:
-            raise Exception(f"unknown passivbot mode {args.passivbot_mode}")
-    passivbot_mode = config["passivbot_mode"]
-    assert passivbot_mode in [
-        "recursive_grid",
-        "static_grid",
-        "neat_grid",
-    ], f"unknown passivbot mode {passivbot_mode}"
-    config.update(get_template_live_config(passivbot_mode))
-    config["long"]["backwards_tp"] = config["backwards_tp_long"]
-    config["short"]["backwards_tp"] = config["backwards_tp_short"]
-    config["exchange"] = load_exchange_key_secret_passphrase(config["user"])[0]
-    args = parser.parse_args()
-    if args.long_enabled is None:
-        config["long"]["enabled"] = config["do_long"]
-    else:
-        if "y" in args.long_enabled.lower():
-            config["long"]["enabled"] = config["do_long"] = True
-        elif "n" in args.long_enabled.lower():
-            config["long"]["enabled"] = config["do_long"] = False
-        else:
-            raise Exception("please specify y/n with kwarg -le/--long")
-    if args.short_enabled is None:
-        config["short"]["enabled"] = config["do_short"]
-    else:
-        if "y" in args.short_enabled.lower():
-            config["short"]["enabled"] = config["do_short"] = True
-        elif "n" in args.short_enabled.lower():
-            config["short"]["enabled"] = config["do_short"] = False
-        else:
-            raise Exception("please specify y/n with kwarg -le/--short")
-    if args.symbol is not None:
-        config["symbols"] = args.symbol.split(",")
-    if args.n_cpus is not None:
-        config["n_cpus"] = args.n_cpus
-    if args.base_dir is not None:
-        config["base_dir"] = args.base_dir
-    config["ohlcv"] = args.ohlcv
-    print()
-    lines = [(k, getattr(args, k)) for k in args.__dict__ if args.__dict__[k] is not None]
-    lines += [
-        (k, config[k])
-        for k in [
-            "start_date",
-            "end_date",
-            "w",
-            "c0",
-            "c1",
-            "maximum_pa_distance_std_long",
-            "maximum_pa_distance_std_short",
-            "maximum_pa_distance_mean_long",
-            "maximum_pa_distance_mean_short",
-            "maximum_loss_profit_ratio_long",
-            "maximum_loss_profit_ratio_short",
-            "clip_threshold",
-        ]
-        if k in config and k not in [z[0] for z in lines]
-    ]
-    for line in lines:
-        logging.info(f"{line[0]: <{max([len(x[0]) for x in lines]) + 2}} {line[1]}")
-    print()
-
-    # download ticks .npy file if missing
-    if config["ohlcv"]:
-        cache_fname = f"{config['start_date']}_{config['end_date']}_ohlcv_cache.npy"
-    else:
-        cache_fname = f"{config['start_date']}_{config['end_date']}_ticks_cache.npy"
-    exchange_name = config["exchange"] + ("_spot" if config["market_type"] == "spot" else "")
-    config["symbols"] = sorted(config["symbols"])
-    for symbol in config["symbols"]:
-        cache_dirpath = os.path.join(config["base_dir"], exchange_name, symbol, "caches", "")
-        if not os.path.exists(cache_dirpath + cache_fname) or not os.path.exists(
-            cache_dirpath + "market_specific_settings.json"
-        ):
-            logging.info(f"fetching data {symbol}")
-            args.symbol = symbol
-            tmp_cfg = await prepare_backtest_config(args)
-            if config["ohlcv"]:
-                data = load_hlc_cache(
-                    symbol,
-                    config["start_date"],
-                    config["end_date"],
-                    base_dir=config["base_dir"],
-                    spot=config["spot"],
-                    exchange=config["exchange"],
-                )
-            else:
-                downloader = Downloader({**config, **tmp_cfg})
-                await downloader.get_sampled_ticks()
-
-    # prepare starting configs
-    cfgs = []
-    if args.starting_configs is not None:
-        logging.info("preparing starting configs...")
-        if os.path.isdir(args.starting_configs):
-            for fname in os.listdir(args.starting_configs):
-                try:
-                    cfg = load_live_config(os.path.join(args.starting_configs, fname))
-                    assert determine_passivbot_mode(cfg) == passivbot_mode, "wrong passivbot mode"
-                    cfgs.append(cfg)
-                    logging.info(f"successfully loaded config {fname}")
-
-                except Exception as e:
-                    logging.error(f"error loading config {fname}: {e}")
-        elif os.path.exists(args.starting_configs):
-            try:
-                cfg = load_live_config(args.starting_configs)
-                assert determine_passivbot_mode(cfg) == passivbot_mode, "wrong passivbot mode"
-                cfgs.append(cfg)
-                logging.info(f"successfully loaded config {args.starting_configs}")
-            except Exception as e:
-                logging.error(f"error loading config {args.starting_configs}: {e}")
-    config["starting_configs"] = cfgs
+    config = await init_optimizer(logging)
+    """
+    import pprint
+    pprint.pprint(config)
+    return
+    """
     particle_swarm_optimization = ParticleSwarmOptimization(config)
     particle_swarm_optimization.run()
 
