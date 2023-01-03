@@ -19,14 +19,26 @@ def dump_plots_emas(
     closes: pd.DataFrame,
     disable_plotting: bool = False,
 ):
+    # (text, mul, precision, suffix)
+    formatting = {
+        "adg_realized_per_exposure_long": ("ADG realized per exposure long", 100, 3, "%"),
+        "adg_realized_per_exposure_short": ("ADG realized per exposure short", 100, 3, "%"),
+        "eqbal_ratio_min": ("Equity to Balance Ratio min", 1, 4, ""),
+    }
+    exclude = {'adg_realized'}
     for key in result["result"]:
+        if key in exclude:
+            continue
         try:
-            table.add_row(
-                [
-                    " ".join([x.capitalize() for x in key.split("_")]),
-                    round_dynamic(result["result"][key], 4),
-                ]
-            )
+            if key in formatting:
+                table.add_row(
+                    [
+                        formatting[key][0],
+                        f'{round_dynamic(result["result"][key] * formatting[key][1], formatting[key][2])}{formatting[key][3]}',
+                    ]
+                )
+            else:
+                table.add_row([key, round_dynamic(result["result"][key], 4)])
         except:
             pass
     print("writing backtest_result.txt...\n")
