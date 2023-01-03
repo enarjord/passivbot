@@ -46,6 +46,8 @@ class BinanceBotSpot(Bot):
         self.headers = {"X-MBX-APIKEY": self.key}
         self.base_endpoint = ""
         self.force_update_interval = 40
+        self.max_n_orders_per_batch = 5
+        self.max_n_cancellations_per_batch = 10
 
     async def public_get(self, url: str, params: dict = {}) -> dict:
         async with self.session.get(self.base_endpoint + url, params=params) as response:
@@ -262,6 +264,31 @@ class BinanceBotSpot(Bot):
             + balance[self.coin]["onhand"] * pprice_long,
         }
         return position
+
+    async def execute_orders(self, orders: [dict]) -> [dict]:
+        if not orders:
+            return []
+        creations = []
+        for order in sorted(orders, key=lambda x: calc_diff(x["price"], self.price)):
+            creation = None
+            try:
+                creation = asyncio.create_task(self.execute_order(order))
+                creations.append((order, creation))
+            except Exception as e:
+                print(f"error creating order {order} {e}")
+                print_async_exception(creation)
+                traceback.print_exc()
+        results = []
+        for creation in creations:
+            result = None
+            try:
+                result = await creation[1]
+                results.append(result)
+            except Exception as e:
+                print(f"error creating order {creation} {e}")
+                print_async_exception(result)
+                traceback.print_exc()
+        return results
 
     async def execute_order(self, order: dict) -> dict:
         params = {
