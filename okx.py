@@ -171,10 +171,10 @@ class OKXBot(Bot):
                             else 0.0,
                         }
             if balance:
-                for elm in balance['info']['data']:
-                    for elm2 in elm['details']:
-                        if elm2['ccy'] == self.quote:
-                            position["wallet_balance"] = float(elm2['cashBal'])
+                for elm in balance["info"]["data"]:
+                    for elm2 in elm["details"]:
+                        if elm2["ccy"] == self.quote:
+                            position["wallet_balance"] = float(elm2["cashBal"])
                             break
             return position
         except Exception as e:
@@ -212,7 +212,7 @@ class OKXBot(Bot):
             to_return = []
             for elm in executed["data"]:
                 for to_ex in to_execute:
-                    if elm["clOrdId"] == to_ex["clOrdId"] and elm["sCode"] == '0':
+                    if elm["clOrdId"] == to_ex["clOrdId"] and elm["sCode"] == "0":
                         to_return.append(
                             {
                                 "symbol": self.symbol,
@@ -244,7 +244,7 @@ class OKXBot(Bot):
             to_return = []
             for elm in cancellations["data"]:
                 for order in orders:
-                    if elm["ordId"] == order["order_id"] and elm["sCode"] == '0':
+                    if elm["ordId"] == order["order_id"] and elm["sCode"] == "0":
                         to_return.append(
                             {
                                 "symbol": self.symbol,
@@ -466,6 +466,7 @@ class OKXBot(Bot):
         )
 
     def standardize_market_stream_event(self, data: dict) -> [dict]:
+        raise NotImplementedError
         try:
             return [
                 {
@@ -480,11 +481,13 @@ class OKXBot(Bot):
         return []
 
     async def beat_heart_user_stream(self) -> None:
+        raise NotImplementedError
         while True:
             await asyncio.sleep(60 + np.random.randint(60 * 9, 60 * 14))
             await self.init_user_stream()
 
     async def init_user_stream(self) -> None:
+        raise NotImplementedError
         try:
             response = await self.private_post(self.endpoints["listen_key"])
             self.listen_key = response["listenKey"]
@@ -494,6 +497,7 @@ class OKXBot(Bot):
             print_(["error fetching listen key", e])
 
     def standardize_user_stream_event(self, event: dict) -> dict:
+        raise NotImplementedError
         standardized = {}
         if "e" in event:
             if event["e"] == "ACCOUNT_UPDATE":
