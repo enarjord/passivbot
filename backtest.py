@@ -1,6 +1,6 @@
 import os
 
-# os.environ["NOJIT"] = "false"
+# os.environ["NOJIT"] = "true"
 
 import argparse
 import asyncio
@@ -14,6 +14,7 @@ from downloader import Downloader, load_hlc_cache
 from njit_funcs import backtest_static_grid, round_
 from njit_funcs_recursive_grid import backtest_recursive_grid
 from njit_funcs_neat_grid import backtest_neat_grid
+from njit_emas import backtest_emas
 from plotting import dump_plots
 from procedures import (
     prepare_backtest_config,
@@ -51,6 +52,14 @@ def backtest(config: dict, data: np.ndarray, do_print=False) -> (list, bool):
             config["maker_fee"],
             **xk,
         )
+    elif passivbot_mode == "emas":
+        res = backtest_emas(
+            data,
+            config["starting_balance"],
+            config["maker_fee"],
+            **xk,
+        )
+        return res[0], [], res[1]
     return backtest_static_grid(
         data,
         config["starting_balance"],
@@ -70,6 +79,24 @@ def plot_wrap(config, data):
     if not fills_long and not fills_short:
         print("no fills")
         return
+    if config["passivbot_mode"] == "emas":
+        fdf, _, sdf, analysis = analyze_fills(fills_long, fills_short, stats, config)
+        config["result"] = analysis
+        config["plots_dirpath"] = make_get_filepath(
+            os.path.join(config["plots_dirpath"], f"{ts_to_date(time())[:19].replace(':', '')}", "")
+        )
+        fdf.to_csv(config["plots_dirpath"] + "fills.csv")
+        sdf.to_csv(config["plots_dirpath"] + "stats.csv")
+        dump_plots(
+            config,
+            fdf,
+            None,
+            sdf,
+            pd.DataFrame(data[:, [0, 3]], columns=["timestamp", "close"]),
+            disable_plotting=config["disable_plotting"],
+        )
+        return
+
     longs, shorts, sdf, result = analyze_fills(fills_long, fills_short, stats, config)
     config["result"] = result
     config["plots_dirpath"] = make_get_filepath(
@@ -80,8 +107,16 @@ def plot_wrap(config, data):
     sdf.to_csv(config["plots_dirpath"] + "stats.csv")
     df = pd.DataFrame({**{"timestamp": data[:, 0], "qty": data[:, 1], "price": data[:, 2]}, **{}})
     print("dumping plots...")
-    dump_plots(config, longs, shorts, sdf, df, n_parts=config["n_parts"])
-    if config["enable_interactive_plot"]:
+    dump_plots(
+        config,
+        longs,
+        shorts,
+        sdf,
+        df,
+        n_parts=config["n_parts"],
+        disable_plotting=config["disable_plotting"],
+    )
+    if not config["disable_plotting"] and config["enable_interactive_plot"]:
         import interactive_plot
 
         print("dumping interactive plot...")
@@ -145,6 +180,13 @@ async def main():
         help="set n backtest slices to plot",
     )
     parser.add_argument(
+        "-dp",
+        "--disable_plotting",
+        "--disable-plotting",
+        action="store_true",
+        help="disable plotting",
+    )
+    parser.add_argument(
         "-oh",
         "--ohlcv",
         help="use 1m ohlcv instead of 1s ticks",
@@ -184,8 +226,8 @@ async def main():
             config["short"]["enabled"] = "y" in args.short_enabled.lower()
         if "spot" in config["market_type"]:
             live_config = spotify_config(live_config)
-        config["ohlcv"] = args.ohlcv
-
+        config["ohlcv"] = args.ohlcv if determine_passivbot_mode(config) != "emas" else True
+        config["disable_plotting"] = args.disable_plotting
         print()
         for k in (
             keys := [
