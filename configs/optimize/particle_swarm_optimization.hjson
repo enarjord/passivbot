@@ -5,7 +5,7 @@
   c0: 1.0  # attraction to local best
   c1: 0.5  # attraction to global best
 
-  n_cpus: 6
+  n_cpus: 3
   iters: 2000
 
   # score = adg_realized_per_exposure
@@ -14,12 +14,12 @@
   # set any to -1 (less than zero) to disable
 
   # score /= max(maximum_pa_distance_std, pa_distance_std)
-  maximum_pa_distance_std_long: 0.01
-  maximum_pa_distance_std_short: 0.01
+  maximum_pa_distance_std_long: -0.01
+  maximum_pa_distance_std_short: -0.01
 
   # score /= max(maximum_pa_distance_mean, pa_distance_mean)
-  maximum_pa_distance_mean_long: 0.01
-  maximum_pa_distance_mean_short: 0.01
+  maximum_pa_distance_mean_long: -0.01
+  maximum_pa_distance_mean_short: -0.01
 
   # score /= max(maximum_loss_profit_ratio, loss_profit_ratio)
   maximum_loss_profit_ratio_long: 0.1
@@ -29,9 +29,10 @@
   maximum_hrs_stuck_max_long: -1
   maximum_hrs_stuck_max_short: -1
 
+
   # score *= min(minimum_eqbal_ratio_min, eqbal_ratio_min)
-  minimum_eqbal_ratio_min_long: -1
-  minimum_eqbal_ratio_min_short: -1
+  minimum_eqbal_ratio_min_long: 0.9
+  minimum_eqbal_ratio_min_short: 0.9
 
   # clip results: compute score on top performers only
   # clip_threshold=0.1 means drop 10% worst performers; clip_threshold=0.0 means include all
@@ -43,7 +44,7 @@
   backwards_tp_long: true
   backwards_tp_short: true
 
-  # choices: [recursive_grid, static_grid, neat_grid]
+  # choices: [recursive_grid, static_grid, neat_grid, emas]
   passivbot_mode: neat_grid
 
   # sorted highest to lowest vol last 250 days
@@ -186,5 +187,23 @@
       auto_unstuck_wallet_exposure_threshold: [0.01, 0.1]
       auto_unstuck_ema_dist: [0.001, 0.02]
     }
+  }
+  bounds_emas:
+  {
+    ema_span_0: [50.0, 1000.0]
+    ema_span_1: [500.0, 10000.0]
+    ema_dist_lower: [0.0, 0.03]
+    ema_dist_upper: [0.0, 0.03]
+    qty_pct_entry: [0.005, 0.1]
+    qty_pct_close: [0.005, 0.1]
+    we_multiplier_entry: [0.0, 50.0]
+    we_multiplier_close: [0.0, 50.0]
+    delay_weight: [0.0, 50.0]
+    delay_between_fills_minutes: [1.0, 4000.0]
+    min_markup: [0.0015, 0.02]
+    markup_range: [0.0, 0.08]
+    n_close_orders: [4, 30]
+    wallet_exposure_limit_long: [1.0, 1.0]
+    wallet_exposure_limit_short: [1.0, 1.0]
   }
 }
