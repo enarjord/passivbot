@@ -30,6 +30,7 @@ from pure_funcs import (
     analyze_fills,
     spotify_config,
     determine_passivbot_mode,
+    candidate_to_live_config,
 )
 
 
@@ -206,27 +207,38 @@ async def main():
         config = await prepare_backtest_config(args)
         config["n_parts"] = args.n_parts
         live_config = load_live_config(args.live_config_path)
+        if "spot" in config["market_type"]:
+            live_config = spotify_config(live_config)
         config.update(live_config)
+        passivbot_mode = determine_passivbot_mode(config)
 
         if args.long_wallet_exposure_limit is not None:
+            if passivbot_mode == "emas":
+                old_val = config["wallet_exposure_limit_long"]
+                config["wallet_exposure_limit_long"] = args.long_wallet_exposure_limit
+            else:
+                old_val = config["long"]["wallet_exposure_limit"]
+                config["long"]["wallet_exposure_limit"] = args.long_wallet_exposure_limit
             print(
-                f"overriding long wallet exposure limit ({config['long']['wallet_exposure_limit']}) "
+                f"overriding long wallet exposure limit ({old_val}) "
                 f"with new value: {args.long_wallet_exposure_limit}"
             )
-            config["long"]["wallet_exposure_limit"] = args.long_wallet_exposure_limit
         if args.short_wallet_exposure_limit is not None:
+            if passivbot_mode == "emas":
+                old_val = config["wallet_exposure_limit_short"]
+                config["wallet_exposure_limit_short"] = args.short_wallet_exposure_limit
+            else:
+                old_val = config["short"]["wallet_exposure_limit"]
+                config["short"]["wallet_exposure_limit"] = args.short_wallet_exposure_limit
             print(
-                f"overriding short wallet exposure limit ({config['short']['wallet_exposure_limit']}) "
+                f"overriding short wallet exposure limit ({old_val}) "
                 f"with new value: {args.short_wallet_exposure_limit}"
             )
-            config["short"]["wallet_exposure_limit"] = args.short_wallet_exposure_limit
         if args.long_enabled is not None:
             config["long"]["enabled"] = "y" in args.long_enabled.lower()
         if args.short_enabled is not None:
             config["short"]["enabled"] = "y" in args.short_enabled.lower()
-        if "spot" in config["market_type"]:
-            live_config = spotify_config(live_config)
-        config["ohlcv"] = args.ohlcv if determine_passivbot_mode(config) != "emas" else True
+        config["ohlcv"] = args.ohlcv if passivbot_mode != "emas" else True
         config["disable_plotting"] = args.disable_plotting
         print()
         for k in (
@@ -260,7 +272,7 @@ async def main():
             downloader = Downloader(config)
             data = await downloader.get_sampled_ticks()
         config["n_days"] = round_((data[-1][0] - data[0][0]) / (1000 * 60 * 60 * 24), 0.1)
-        pprint.pprint(denumpyize(live_config))
+        pprint.pprint(denumpyize(candidate_to_live_config(config)))
         plot_wrap(config, data)
 
 
