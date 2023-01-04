@@ -305,6 +305,7 @@ def backtest_emas(
                             0.0,
                             0.0,
                         )
+                        continue
                 if do_long:
                     wallet_exposure_long = (
                         qty_to_cost(psize_long, pprice_long, inverse, c_mult) / balance
@@ -368,8 +369,7 @@ def backtest_emas(
                             0.0,
                             0.0,
                         )
-
-                continue
+                        continue
         if timestamps[k] - prev_ema_fill_ts_ask > calc_delay_between_fills_ms(
             delay_between_fills_ms_ask, pprice_diff, delay_weight_ask
         ):
@@ -437,6 +437,7 @@ def backtest_emas(
                             0.0,
                             0.0,
                         )
+                        continue
                 if do_short:
                     wallet_exposure_short = (
                         qty_to_cost(psize_short, pprice_short, inverse, c_mult) / balance
