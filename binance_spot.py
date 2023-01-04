@@ -290,6 +290,31 @@ class BinanceBotSpot(Bot):
                 traceback.print_exc()
         return results
 
+    async def execute_cancellations(self, orders: [dict]) -> [dict]:
+        if not orders:
+            return []
+        cancellations = []
+        for order in sorted(orders, key=lambda x: calc_diff(x["price"], self.price)):
+            cancellation = None
+            try:
+                cancellation = asyncio.create_task(self.execute_cancellation(order))
+                cancellations.append((order, cancellation))
+            except Exception as e:
+                print(f"error cancelling order {order} {e}")
+                print_async_exception(cancellation)
+                traceback.print_exc()
+        results = []
+        for cancellation in cancellations:
+            result = None
+            try:
+                result = await cancellation[1]
+                results.append(result)
+            except Exception as e:
+                print(f"error cancelling order {cancellation} {e}")
+                print_async_exception(result)
+                traceback.print_exc()
+        return results
+
     async def execute_order(self, order: dict) -> dict:
         params = {
             "symbol": self.symbol,
