@@ -116,8 +116,10 @@ def get_xk_keys(passivbot_mode="static_grid"):
             "qty_pct_close",
             "we_multiplier_entry",
             "we_multiplier_close",
-            "delay_weight",
-            "delay_between_fills_minutes",
+            "delay_weight_bid",
+            "delay_weight_ask",
+            "delay_between_fills_minutes_bid",
+            "delay_between_fills_minutes_ask",
             "min_markup",
             "markup_range",
             "n_close_orders",
@@ -159,9 +161,11 @@ def determine_passivbot_mode(config: dict) -> str:
     if all(
         k in config
         for k in get_template_live_config("emas")
-        if k not in ["logging_level", "config_name"]
+        if k != "config_name"
     ):
         return "emas"
+    elif all(k in config['long'] for k in get_template_live_config('emas') if k != 'config_name'):
+        return 'emas'
     elif all(k in config["long"] for k in get_template_live_config("recursive_grid")["long"]):
         return "recursive_grid"
     if all(k in config["long"] for k in get_template_live_config("neat_grid")["long"]):
@@ -565,8 +569,10 @@ def get_template_live_config(passivbot_mode="static_grid"):
                 "qty_pct_close": 0.03,
                 "we_multiplier_entry": 1.0,
                 "we_multiplier_close": 6.0,
-                "delay_weight": 0.0,
-                "delay_between_fills_minutes": 2000.0,
+                "delay_weight_bid": 0.0,
+                "delay_weight_ask": 0.0,
+                "delay_between_fills_minutes_bid": 2000.0,
+                "delay_between_fills_minutes_ask": 2000.0,
                 "min_markup": 0.0075,
                 "markup_range": 0.03,
                 "n_close_orders": 4,

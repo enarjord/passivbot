@@ -22,8 +22,8 @@
   maximum_pa_distance_mean_short: 0.03
 
   # score /= max(maximum_loss_profit_ratio, loss_profit_ratio)
-  maximum_loss_profit_ratio_long: 0.15
-  maximum_loss_profit_ratio_short: 0.15
+  maximum_loss_profit_ratio_long: 0.2
+  maximum_loss_profit_ratio_short: 0.2
 
   # score /= max(maximum_hrs_stuck_max, hrs_stuck_max)
   maximum_hrs_stuck_max_long: 300.0
@@ -31,8 +31,8 @@
 
 
   # score *= min(minimum_eqbal_ratio_min, eqbal_ratio_min)
-  minimum_eqbal_ratio_min_long: 0.85
-  minimum_eqbal_ratio_min_short: 0.85
+  minimum_eqbal_ratio_min_long: 0.75
+  minimum_eqbal_ratio_min_short: 0.75
 
   # clip results: compute score on top performers only
   # clip_threshold=0.1 means drop 10% worst performers; clip_threshold=0.0 means include all
@@ -194,15 +194,17 @@
     ema_span_1: [500.0, 10000.0]
     ema_dist_lower: [0.0, 0.02]
     ema_dist_upper: [0.0, 0.02]
-    qty_pct_entry: [0.005, 0.1]
-    qty_pct_close: [0.005, 0.1]
+    qty_pct_entry: [0.005, 0.07]
+    qty_pct_close: [0.005, 0.07]
     we_multiplier_entry: [0.0, 50.0]
     we_multiplier_close: [0.0, 50.0]
-    delay_weight: [0.0, 50.0]
-    delay_between_fills_minutes: [1.0, 15000.0]
+    delay_weight_bid: [0.0, 50.0]
+    delay_weight_ask: [0.0, 50.0]
+    delay_between_fills_minutes_bid: [1.0, 5000.0]
+    delay_between_fills_minutes_ask: [1.0, 5000.0]
     min_markup: [0.0015, 0.03]
     markup_range: [0.0, 0.07]
-    n_close_orders: [4, 30]
+    n_close_orders: [5, 20]
     wallet_exposure_limit_long: [1.0, 1.0]
     wallet_exposure_limit_short: [1.0, 1.0]
   }
