@@ -120,8 +120,10 @@ def get_xk_keys(passivbot_mode="static_grid"):
             "delay_weight_ask",
             "delay_between_fills_minutes_bid",
             "delay_between_fills_minutes_ask",
-            "min_markup",
-            "markup_range",
+            "min_markup_long",
+            "min_markup_short",
+            "markup_range_long",
+            "markup_range_short",
             "n_close_orders",
             "wallet_exposure_limit_long",
             "wallet_exposure_limit_short",
@@ -158,14 +160,10 @@ def get_xk_keys(passivbot_mode="static_grid"):
 def determine_passivbot_mode(config: dict) -> str:
     # print('dpm devbug',config)
     # print([(k, k in config) for k in get_template_live_config("emas")])
-    if all(
-        k in config
-        for k in get_template_live_config("emas")
-        if k != "config_name"
-    ):
+    if all(k in config for k in get_template_live_config("emas") if k != "config_name"):
         return "emas"
-    elif all(k in config['long'] for k in get_template_live_config('emas') if k != 'config_name'):
-        return 'emas'
+    elif all(k in config["long"] for k in get_template_live_config("emas") if k != "config_name"):
+        return "emas"
     elif all(k in config["long"] for k in get_template_live_config("recursive_grid")["long"]):
         return "recursive_grid"
     if all(k in config["long"] for k in get_template_live_config("neat_grid")["long"]):
@@ -573,8 +571,10 @@ def get_template_live_config(passivbot_mode="static_grid"):
                 "delay_weight_ask": 0.0,
                 "delay_between_fills_minutes_bid": 2000.0,
                 "delay_between_fills_minutes_ask": 2000.0,
-                "min_markup": 0.0075,
-                "markup_range": 0.03,
+                "min_markup_long": 0.0075,
+                "min_markup_short": 0.0075,
+                "markup_range_long": 0.03,
+                "markup_range_short": 0.03,
                 "n_close_orders": 4,
             }
         )
