@@ -675,8 +675,16 @@ def analyze_fills_emas(fills: np.array, stats: list, config: dict):
     else:
         adg_realized = (sdf.balance.iloc[-1] / sdf.balance.iloc[0]) ** (1 / n_days) - 1
     # print("debug adg_realized", sdf.balance.iloc[-1], sdf.balance.iloc[0], n_days, adg_realized)
-    adg_realized_per_exposure_long = adg_realized / config["wallet_exposure_limit_long"]
-    adg_realized_per_exposure_short = adg_realized / config["wallet_exposure_limit_short"]
+    adg_realized_per_exposure_long = (
+        (adg_realized / config["wallet_exposure_limit_long"])
+        if config["wallet_exposure_limit_long"] > 0.0
+        else 0.0
+    )
+    adg_realized_per_exposure_short = (
+        (adg_realized / config["wallet_exposure_limit_short"])
+        if config["wallet_exposure_limit_short"] > 0.0
+        else 0.0
+    )
     eqbal_ratios_fdf = fdf.equity / fdf.balance
     eqbal_ratios_sdf = sdf.equity / sdf.balance
     profit_sum = fdf[fdf.pnl > 0.0].pnl.sum()
