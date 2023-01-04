@@ -613,7 +613,6 @@ async def init_optimizer(logging):
             "minimum_eqbal_ratio_min_short",
             "maximum_hrs_stuck_max_long",
             "maximum_hrs_stuck_max_short",
-
             "clip_threshold",
         ]
         if k in config and k not in [z[0] for z in lines]
