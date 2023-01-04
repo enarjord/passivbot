@@ -597,6 +597,7 @@ async def init_optimizer(logging):
     lines += [
         (k, config[k])
         for k in [
+            "starting_balance",
             "start_date",
             "end_date",
             "w",
@@ -610,6 +611,9 @@ async def init_optimizer(logging):
             "maximum_loss_profit_ratio_short",
             "minimum_eqbal_ratio_min_long",
             "minimum_eqbal_ratio_min_short",
+            "maximum_hrs_stuck_max_long",
+            "maximum_hrs_stuck_max_short",
+
             "clip_threshold",
         ]
         if k in config and k not in [z[0] for z in lines]
