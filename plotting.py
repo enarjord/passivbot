@@ -25,7 +25,7 @@ def dump_plots_emas(
         "adg_realized_per_exposure_short": ("ADG realized per exposure short", 100, 3, "%"),
         "eqbal_ratio_min": ("Equity to Balance Ratio min", 1, 4, ""),
     }
-    exclude = {'adg_realized'}
+    exclude = {"adg_realized"}
     for key in result["result"]:
         if key in exclude:
             continue
@@ -46,6 +46,7 @@ def dump_plots_emas(
         output = table.get_string(border=True, padding_width=1)
         print(output)
         f.write(re.sub("\033\\[([0-9]+)(;[0-9]+)*m", "", output))
+    dump_live_config(result, result["plots_dirpath"] + "live_config.json")
     if disable_plotting:
         return
     print(f"\nplotting balance and equity...")
