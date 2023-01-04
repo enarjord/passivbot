@@ -197,7 +197,8 @@ def backtest_emas(
                         )
                         balance += pnl
                         fee_paid = (
-                            -qty_to_cost(close_qty, close_grid_long[0][1], inverse, c_mult) * maker_fee
+                            -qty_to_cost(close_qty, close_grid_long[0][1], inverse, c_mult)
+                            * maker_fee
                         )
                         psize_long = max(0.0, round_(psize_long - close_qty, qty_step))
                         if psize_long == 0.0:
@@ -256,7 +257,8 @@ def backtest_emas(
                         )
                         balance += pnl
                         fee_paid = (
-                            -qty_to_cost(close_qty, close_grid_short[0][1], inverse, c_mult) * maker_fee
+                            -qty_to_cost(close_qty, close_grid_short[0][1], inverse, c_mult)
+                            * maker_fee
                         )
                         psize_short = max(0.0, round_(psize_short - close_qty, qty_step))
                         if psize_short == 0.0:
@@ -294,7 +296,7 @@ def backtest_emas(
             bid_price = calc_ema_price_bid(emas.min(), closes[k - 1], ema_dist_lower, price_step)
             if lows[k] < bid_price:
                 # bid filled
-                if do_short:
+                if do_short and psize_short > 0.0:
                     wallet_exposure_short = (
                         qty_to_cost(psize_short, pprice_short, inverse, c_mult) / balance
                     )
@@ -389,7 +391,7 @@ def backtest_emas(
             ask_price = calc_ema_price_ask(emas.max(), closes[k - 1], ema_dist_upper, price_step)
             if highs[k] > ask_price:
                 # ask filled
-                if do_long:
+                if do_long and psize_long > 0.0:
                     wallet_exposure_long = (
                         qty_to_cost(psize_long, pprice_long, inverse, c_mult) / balance
                     )
