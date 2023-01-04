@@ -173,7 +173,7 @@ class ParticleSwarmOptimization:
         self.backtest_times.append(
             self.unfinished_evals[id_key]["single_results"][symbol]["backtest_time"]
         )
-        #print(f"backtest_time mean {np.mean(self.backtest_times)} last {self.backtest_times[-1]}")
+        # print(f"backtest_time mean {np.mean(self.backtest_times)} last {self.backtest_times[-1]}")
         self.unfinished_evals[id_key]["in_progress"].remove(symbol)
         results = deepcopy(self.unfinished_evals[id_key]["single_results"])
         with open(self.results_fpath + "positions.txt", "a") as f:
@@ -221,7 +221,7 @@ class ParticleSwarmOptimization:
                 else:
                     long_ = "_long"
                     tmp_fname += long_
-                line = f"i{cfg['config_no']} - new best config {long_[1:]}, score {round_dynamic(scores['long'], 4)} "
+                line = f"i{cfg['config_no']} - new best config {long_[1:]}, score {round_dynamic(scores['long'], 12)} "
                 for key, _ in keys:
                     line += f"{key} {round_dynamic(raws['long'][key], 4)} "
                 logging.info(line)
@@ -237,7 +237,7 @@ class ParticleSwarmOptimization:
             ):
                 self.gbest_short = deepcopy({"config": cfg["short"], "score": scores["short"]})
                 is_better = True
-                line = f"i{cfg['config_no']} - new best config short, score {round_dynamic(scores['short'], 4)} "
+                line = f"i{cfg['config_no']} - new best config short, score {round_dynamic(scores['short'], 12)} "
                 for key, _ in keys:
                     line += f"{key} {round_dynamic(raws['short'][key], 4)} "
                 logging.info(line)
@@ -393,20 +393,6 @@ class ParticleSwarmOptimization:
             },
         }
         line = f"starting new initial eval {config['config_no']} of {self.n_particles} "
-        if self.do_long:
-            line += " - long: " + " ".join(
-                [
-                    f"{e[0][:2]}{e[0][-2:]}" + str(round_dynamic(e[1], 3))
-                    for e in sorted(self.swarm[swarm_key]["long"]["config"].items())
-                ]
-            )
-        if self.do_short:
-            line += " - short: " + " ".join(
-                [
-                    f"{e[0][:2]}{e[0][-2:]}" + str(round_dynamic(e[1], 3))
-                    for e in sorted(self.swarm[swarm_key]["short"]["config"].items())
-                ]
-            )
         logging.info(line)
 
         config["market_specific_settings"] = self.market_specific_settings[config["symbol"]]
