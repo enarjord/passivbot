@@ -697,8 +697,16 @@ def analyze_fills_emas(fills: np.array, stats: list, config: dict):
         if config["wallet_exposure_limit_short"] > 0.0
         else 0.0
     )
+    sdf_long = sdf[sdf.psize_long > sdf.psize_short.abs()]
+    sdf_short = sdf[sdf.psize_long < sdf.psize_short.abs()]
+
     eqbal_ratios_fdf = fdf.equity / fdf.balance
     eqbal_ratios_sdf = sdf.equity / sdf.balance
+    eqbal_ratios_fdf_long = longs.equity / longs.balance
+    eqbal_ratios_sdf_long = sdf_long.equity / sdf_short.balance
+    eqbal_ratios_fdf_short = shorts.equity / shorts.balance
+    eqbal_ratios_sdf_short = sdf_short.equity / sdf_short.balance
+
     profit_sum = fdf[fdf.pnl > 0.0].pnl.sum()
     loss_sum = fdf[fdf.pnl < 0.0].pnl.sum()
     pnl_sum = profit_sum + loss_sum
@@ -738,6 +746,8 @@ def analyze_fills_emas(fills: np.array, stats: list, config: dict):
         "adg_realized_per_exposure_long": adg_realized_per_exposure_long,
         "adg_realized_per_exposure_short": adg_realized_per_exposure_short,
         "eqbal_ratio_min": min(eqbal_ratios_fdf.min(), eqbal_ratios_sdf.min()),
+        "eqbal_ratio_min_long": min(eqbal_ratios_fdf_long.min(), eqbal_ratios_sdf_long.min()),
+        "eqbal_ratio_min_short": min(eqbal_ratios_fdf_short.min(), eqbal_ratios_sdf_short.min()),
         "pnl_sum": fdf.pnl.sum(),
         "profit_sum": profit_sum,
         "loss_sum": loss_sum,
