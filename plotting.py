@@ -3,6 +3,7 @@ import re
 
 import matplotlib.pyplot as plt
 import pandas as pd
+import numpy as np
 from colorama import init, Fore
 from prettytable import PrettyTable
 
@@ -16,13 +17,15 @@ def dump_plots_emas(
     result: dict,
     fdf: pd.DataFrame,
     sdf: pd.DataFrame,
-    closes: pd.DataFrame,
+    df: pd.DataFrame,
+    n_parts: int,
     disable_plotting: bool = False,
 ):
     # (text, mul, precision, suffix)
     formatting = {
         "adg_realized_per_exposure_long": ("ADG realized per exposure long", 100, 3, "%"),
         "adg_realized": ("ADG realized", 100, 3, "%"),
+        "adg_realized_per_exposure": ("ADG realized per exposure", 100, 3, "%"),
         "adg_realized_per_exposure_short": ("ADG realized per exposure short", 100, 3, "%"),
         "eqbal_ratio_min": ("Equity to Balance Ratio min", 1, 4, ""),
     }
@@ -32,10 +35,11 @@ def dump_plots_emas(
             continue
         try:
             if key in formatting:
+                val = round_dynamic(result["result"][key] * formatting[key][1], formatting[key][2])
                 table.add_row(
                     [
                         formatting[key][0],
-                        f'{round_dynamic(result["result"][key] * formatting[key][1], formatting[key][2])}{formatting[key][3]}',
+                        f"{val}{formatting[key][3]}",
                     ]
                 )
             else:
@@ -51,21 +55,56 @@ def dump_plots_emas(
     if disable_plotting:
         return
     print(f"\nplotting balance and equity...")
+    sdf = sdf.set_index("timestamp")
+    fdf = fdf.set_index("timestamp")
     plt.clf()
     sdf.balance.plot()
     sdf.equity.plot(title=f"Balance and equity", xlabel="Time", ylabel="Balance")
     plt.savefig(f"{result['plots_dirpath']}balance_and_equity_sampled.png")
+    print("plotting whole backtest")
     plt.clf()
-    eqnorm = sdf.set_index("timestamp").equity
+    eqnorm = sdf.equity
     eqnorm = (eqnorm - eqnorm.min()) / (eqnorm.max() - eqnorm.min())
     eqnorm = eqnorm * sdf.price.max() + sdf.price.min()
     eqnorm.plot()
-    buys = fdf[fdf.qty > 0.0].set_index("timestamp")
-    sells = fdf[fdf.qty < 0.0].set_index("timestamp")
-    sdf.set_index("timestamp").price.plot(style="y-")
+    buys = fdf[fdf.qty > 0.0]
+    sells = fdf[fdf.qty < 0.0]
+    sdf.price.plot(style="y-")
     buys.price.plot(style="bo")
     sells.price.plot(style="ro", title="Whole backtest with eq", xlabel="Time", ylabel="Fills")
     plt.savefig(f"{result['plots_dirpath']}whole_backtest.png")
+    spans = sorted(
+        [
+            result["ema_span_0"],
+            (result["ema_span_0"] * result["ema_span_1"]) ** 0.5,
+            result["ema_span_1"],
+        ]
+    )
+    price_1m = df.set_index('timestamp').close
+    emas = pd.DataFrame(
+        {f"ema_{span}": price_1m.ewm(span=span, adjust=False).mean() for span in spans},
+        index=price_1m.index
+    )
+    eb_lower = emas.min(axis=1) * (1 - result["ema_dist_lower"])
+    eb_upper = emas.max(axis=1) * (1 + result["ema_dist_upper"])
+    print("plotting backtest slices")
+    if n_parts is None:
+        n_parts = 5
+    for i in range(n_parts):
+        start_idx = int(sdf.index[0] + (sdf.index[-1] - sdf.index[0]) * (i / n_parts))
+        end_idx = int(sdf.index[0] + (sdf.index[-1] - sdf.index[0]) * ((i + 1) / n_parts))
+        plt.clf()
+        fdf_slice = fdf[(fdf.index >= start_idx) & (fdf.index <= end_idx)]
+        sdf_slice = sdf[(sdf.index >= start_idx) & (sdf.index <= end_idx)]
+        buys = fdf_slice[fdf_slice.qty > 0.0]
+        sells = fdf_slice[fdf_slice.qty < 0.0]
+        sdf_slice.price.plot(style="y-")
+        eb_lower[(eb_lower.index >= start_idx) & (eb_lower.index <= end_idx)].plot(style="b--")
+        eb_upper[(eb_upper.index >= start_idx) & (eb_upper.index <= end_idx)].plot(style="r--")
+        buys.price.plot(style="bo")
+        title = f"Whole backtest {i + 1}/{n_parts}"
+        sells.price.plot(style="ro", title=title, xlabel="Time", ylabel="Fills")
+        plt.savefig(f"{result['plots_dirpath']}whole_backtest_{i + 1}_of_{n_parts}.png")
 
 
 def dump_plots(
@@ -94,7 +133,7 @@ def dump_plots(
     table.add_row(["No. days", round_dynamic(result["result"]["n_days"], 2)])
     table.add_row(["Starting balance", round_dynamic(result["result"]["starting_balance"], 6)])
     if result["passivbot_mode"] == "emas":
-        return dump_plots_emas(table, result, longs, sdf, df, disable_plotting)
+        return dump_plots_emas(table, result, longs, sdf, df, n_parts, disable_plotting)
     for side in ["long", "short"]:
         if side not in result:
             result[side] = {"enabled": result[f"do_{side}"]}
@@ -183,7 +222,9 @@ def dump_plots(
 
     if disable_plotting:
         return
-    n_parts = n_parts if n_parts is not None else max(3, int(round_up(result["n_days"] / 14, 1.0)))
+    n_parts = (
+        n_parts if n_parts is not None else min(12, max(3, int(round_up(result["n_days"] / 14, 1.0))))
+    )
     for side, fdf in [("long", longs), ("short", shorts)]:
         if result[side]["enabled"]:
             plt.clf()
