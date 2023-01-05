@@ -1026,7 +1026,7 @@ def find_entry_qty_bringing_wallet_exposure_to_target(
     guesses = []
     vals = []
     evals = []
-    guesses.append(round_(abs(psize) * wallet_exposure_target / wallet_exposure, qty_step))
+    guesses.append(round_(abs(psize) * wallet_exposure_target / max(0.01, wallet_exposure), qty_step))
     vals.append(
         calc_wallet_exposure_if_filled(
             balance, psize, pprice, guesses[-1], entry_price, inverse, c_mult, qty_step
