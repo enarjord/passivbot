@@ -22,10 +22,11 @@ def dump_plots_emas(
     # (text, mul, precision, suffix)
     formatting = {
         "adg_realized_per_exposure_long": ("ADG realized per exposure long", 100, 3, "%"),
+        "adg_realized": ("ADG realized", 100, 3, "%"),
         "adg_realized_per_exposure_short": ("ADG realized per exposure short", 100, 3, "%"),
         "eqbal_ratio_min": ("Equity to Balance Ratio min", 1, 4, ""),
     }
-    exclude = {"adg_realized"}
+    exclude = {}
     for key in result["result"]:
         if key in exclude:
             continue
