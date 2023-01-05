@@ -112,10 +112,14 @@ def get_xk_keys(passivbot_mode="static_grid"):
             "ema_span_1",
             "ema_dist_lower",
             "ema_dist_upper",
-            "qty_pct_entry",
-            "qty_pct_close",
-            "we_multiplier_entry",
-            "we_multiplier_close",
+            "qty_pct_entry_long",
+            "qty_pct_entry_short",
+            "qty_pct_close_long",
+            "qty_pct_close_short",
+            "we_multiplier_entry_long",
+            "we_multiplier_entry_short",
+            "we_multiplier_close_long",
+            "we_multiplier_close_short",
             "delay_weight_bid",
             "delay_weight_ask",
             "delay_between_fills_minutes_bid",
@@ -563,10 +567,14 @@ def get_template_live_config(passivbot_mode="static_grid"):
                 "ema_span_1": 5300.0,
                 "ema_dist_lower": 0.0045,
                 "ema_dist_upper": 0.0039,
-                "qty_pct_entry": 0.013,
-                "qty_pct_close": 0.03,
-                "we_multiplier_entry": 1.0,
-                "we_multiplier_close": 6.0,
+                "qty_pct_entry_long": 0.013,
+                "qty_pct_entry_short": 0.013,
+                "qty_pct_close_long": 0.03,
+                "qty_pct_close_short": 0.03,
+                "we_multiplier_entry_long": 1.0,
+                "we_multiplier_entry_short": 1.0,
+                "we_multiplier_close_long": 6.0,
+                "we_multiplier_close_short": 6.0,
                 "delay_weight_bid": 0.0,
                 "delay_weight_ask": 0.0,
                 "delay_between_fills_minutes_bid": 2000.0,
@@ -666,10 +674,14 @@ def analyze_fills_emas(fills: np.array, stats: list, config: dict):
     shorts = fdf[fdf.type.str.contains("short")]
     if config["inverse"]:
         we_max_long = ((longs.psize / longs.pprice) / longs.balance).max() * config["c_mult"]
-        we_max_short = ((shorts.psize.abs() / shorts.pprice) / shorts.balance).max() * config["c_mult"]
+        we_max_short = ((shorts.psize.abs() / shorts.pprice) / shorts.balance).max() * config[
+            "c_mult"
+        ]
     else:
         we_max_long = ((longs.psize * longs.pprice) / longs.balance).max() * config["c_mult"]
-        we_max_short = ((shorts.psize.abs() * shorts.pprice) / shorts.balance).max() * config["c_mult"]
+        we_max_short = ((shorts.psize.abs() * shorts.pprice) / shorts.balance).max() * config[
+            "c_mult"
+        ]
     if sdf.balance.iloc[-1] < 0.0:
         adg_realized = sdf.balance.iloc[-1]
     else:
@@ -701,7 +713,9 @@ def analyze_fills_emas(fills: np.array, stats: list, config: dict):
     profit_sum_short = shorts[shorts.pnl > 0.0].pnl.sum()
     loss_sum_short = shorts[shorts.pnl < 0.0].pnl.sum()
     pnl_sum_short = profit_sum_short + loss_sum_short
-    loss_profit_ratio_short = abs(loss_sum_short / max(sdf.balance.iloc[0] * 0.0001, profit_sum_short))
+    loss_profit_ratio_short = abs(
+        loss_sum_short / max(sdf.balance.iloc[0] * 0.0001, profit_sum_short)
+    )
     volume_sum_short = shorts.qty.abs().sum()
 
     pprices = np.where(sdf.psize_long > sdf.psize_short, sdf.pprice_long, sdf.pprice_short)
