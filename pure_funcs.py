@@ -666,10 +666,10 @@ def analyze_fills_emas(fills: np.array, stats: list, config: dict):
     shorts = fdf[fdf.type.str.contains("short")]
     if config["inverse"]:
         we_max_long = ((longs.psize / longs.pprice) / longs.balance).max() * config["c_mult"]
-        we_max_short = ((shorts.psize / shorts.pprice) / sdf.balance).max() * config["c_mult"]
+        we_max_short = ((shorts.psize.abs() / shorts.pprice) / shorts.balance).max() * config["c_mult"]
     else:
         we_max_long = ((longs.psize * longs.pprice) / longs.balance).max() * config["c_mult"]
-        we_max_short = ((shorts.psize * shorts.pprice) / shorts.balance).max() * config["c_mult"]
+        we_max_short = ((shorts.psize.abs() * shorts.pprice) / shorts.balance).max() * config["c_mult"]
     if sdf.balance.iloc[-1] < 0.0:
         adg_realized = sdf.balance.iloc[-1]
     else:
@@ -691,6 +691,18 @@ def analyze_fills_emas(fills: np.array, stats: list, config: dict):
     loss_sum = fdf[fdf.pnl < 0.0].pnl.sum()
     pnl_sum = profit_sum + loss_sum
     loss_profit_ratio = abs(loss_sum / max(sdf.balance.iloc[0] * 0.0001, profit_sum))
+
+    profit_sum_long = longs[longs.pnl > 0.0].pnl.sum()
+    loss_sum_long = longs[longs.pnl < 0.0].pnl.sum()
+    pnl_sum_long = profit_sum_long + loss_sum_long
+    loss_profit_ratio_long = abs(loss_sum_long / max(sdf.balance.iloc[0] * 0.0001, profit_sum_long))
+    volume_sum_long = longs.qty.abs().sum()
+
+    profit_sum_short = shorts[shorts.pnl > 0.0].pnl.sum()
+    loss_sum_short = shorts[shorts.pnl < 0.0].pnl.sum()
+    pnl_sum_short = profit_sum_short + loss_sum_short
+    loss_profit_ratio_short = abs(loss_sum_short / max(sdf.balance.iloc[0] * 0.0001, profit_sum_short))
+    volume_sum_short = shorts.qty.abs().sum()
 
     pprices = np.where(sdf.psize_long > sdf.psize_short, sdf.pprice_long, sdf.pprice_short)
     pa_dists = (sdf.price - pprices).abs() / sdf.price
@@ -717,6 +729,19 @@ def analyze_fills_emas(fills: np.array, stats: list, config: dict):
         "pa_distance_std": pa_dists.std(),
         "hrs_stuck_max": ms_diffs.max() / 1000 / 60 / 60,
         "fee_sum": fdf.fee_paid.sum(),
+        "volume_sum": volume_sum_long + volume_sum_short,
+        "volume_sum_long": volume_sum_long,
+        "volume_sum_short": volume_sum_short,
+        "pnl_sum_long": longs.pnl.sum(),
+        "pnl_sum_short": shorts.pnl.sum(),
+        "profit_sum_long": profit_sum_long,
+        "loss_sum_long": loss_sum_long,
+        "pnl_sum_long": pnl_sum_long,
+        "loss_profit_ratio_long": loss_profit_ratio_long,
+        "profit_sum_short": profit_sum_short,
+        "loss_sum_short": loss_sum_short,
+        "pnl_sum_short": pnl_sum_short,
+        "loss_profit_ratio_short": loss_profit_ratio_short,
     }
     return fdf, None, sdf, sort_dict_keys(analysis)
 
