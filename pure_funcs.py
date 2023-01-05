@@ -732,6 +732,9 @@ def analyze_fills_emas(fills: np.array, stats: list, config: dict):
         "we_max_long": we_max_long,
         "we_max_short": we_max_short,
         "adg_realized": adg_realized,
+        "adg_realized_per_exposure": min(
+            adg_realized_per_exposure_long, adg_realized_per_exposure_short
+        ),
         "adg_realized_per_exposure_long": adg_realized_per_exposure_long,
         "adg_realized_per_exposure_short": adg_realized_per_exposure_short,
         "eqbal_ratio_min": min(eqbal_ratios_fdf.min(), eqbal_ratios_sdf.min()),
@@ -1375,7 +1378,9 @@ def calc_scores(config: dict, results: dict):
         for sym in results:
             for i, (key, higher_is_better) in enumerate(keys):
                 key_side = f"{key}_{side}"
-                if key_side not in results[sym]:
+                if key in results[sym]:
+                    key_side = key
+                elif key_side not in results[sym]:
                     results[sym][key_side] = results[sym][key]
                 individual_raws[side][sym][key] = results[sym][key_side]
                 if (max_key := f"maximum_{key}_{side}") in config:
