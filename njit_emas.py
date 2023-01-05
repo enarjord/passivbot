@@ -59,8 +59,10 @@ def calc_ema_qty(
     c_mult,
     qty_pct,
     we_multiplier,
+    wallet_exposure_limit,
 ):
-    cost = balance * qty_pct * (1 + wallet_exposure * we_multiplier)
+    ratio = wallet_exposure / wallet_exposure_limit
+    cost = balance * wallet_exposure_limit * qty_pct * (1 + ratio * we_multiplier)
     return max(
         calc_min_entry_qty(entry_price, inverse, qty_step, min_qty, min_cost),
         round_(cost_to_qty(cost, entry_price, inverse, c_mult), qty_step),
@@ -112,6 +114,10 @@ def backtest_emas(
     highs = hlc[:, 1]
     lows = hlc[:, 2]
     closes = hlc[:, 3]
+    if wallet_exposure_limit_long == 0.0:
+        do_long = False
+    if wallet_exposure_limit_short == 0.0:
+        do_short = False
     delay_between_fills_ms_bid = delay_between_fills_minutes_bid * 60 * 1000
     delay_between_fills_ms_ask = delay_between_fills_minutes_ask * 60 * 1000
     spans = np.array(sorted([ema_span_0, (ema_span_0 * ema_span_1) ** 0.5, ema_span_1]))
@@ -311,6 +317,7 @@ def backtest_emas(
                         c_mult,
                         qty_pct_close,
                         we_multiplier_close,
+                        wallet_exposure_limit_short,
                     )
                     if qty_short <= psize_short:
                         prev_ema_fill_ts_bid = timestamps[k]
@@ -358,6 +365,7 @@ def backtest_emas(
                             c_mult,
                             qty_pct_entry,
                             we_multiplier_entry,
+                            wallet_exposure_limit_long,
                         )
                         psize_long, pprice_long = calc_new_psize_pprice(
                             psize_long, pprice_long, qty_long, bid_price, qty_step
@@ -406,6 +414,7 @@ def backtest_emas(
                         c_mult,
                         qty_pct_close,
                         we_multiplier_close,
+                        wallet_exposure_limit_long,
                     )
                     if qty_long <= psize_long:
                         prev_ema_fill_ts_ask = timestamps[k]
@@ -452,6 +461,7 @@ def backtest_emas(
                             c_mult,
                             qty_pct_entry,
                             we_multiplier_entry,
+                            wallet_exposure_limit_short,
                         )
                         psize_short, pprice_short = calc_new_psize_pprice(
                             psize_short, pprice_short, qty_short, ask_price, qty_step
