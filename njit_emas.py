@@ -77,7 +77,7 @@ def calc_delay_between_fills_ms(delay_between_fills_ms, pprice_diff, delay_weigh
     return max(60000.0, delay_between_fills_ms * (1 - pprice_diff * delay_weight))
 
 
-# @njit
+@njit
 def backtest_emas(
     hlc,
     starting_balance,
