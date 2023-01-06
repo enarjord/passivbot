@@ -724,7 +724,7 @@ class Bot:
                     # call update_position() before making initial entry orders
                     # in case websocket has failed
                     logging.info(
-                        f"update_position with REST API before creating initial entries.  Last price {self.price}"
+                        f"updating position with REST API before creating initial entries.  Last price {self.price}"
                     )
                     await self.update_position()
                     all_orders = self.calc_orders()
@@ -1363,10 +1363,9 @@ async def main() -> None:
     for _, _, _, dest in float_kwargs:
         if getattr(args, dest) is not None:
             side, key = dest[: dest.find("_")], dest[dest.find("_") + 1 :]
-            logging.info(
-                f"overriding {dest} {config[side][key]} " + f"with new value: {getattr(args, dest)}"
-            )
+            old_val = config[side][key]
             config[side][key] = getattr(args, dest)
+            logging.info(f"overriding {dest} {old_val} " + f"with new value: {getattr(args, dest)}")
 
     if "spot" in config["market_type"]:
         config = spotify_config(config)
@@ -1393,11 +1392,15 @@ async def main() -> None:
         from procedures import create_bitget_bot
 
         bot = await create_bitget_bot(config)
+    elif config["exchange"] == "okx":
+        from procedures import create_okx_bot
 
+        config["ohlcv"] = True
+        bot = await create_okx_bot(config)
     else:
         raise Exception("unknown exchange", config["exchange"])
 
-    if args.ohlcv:
+    if config["ohlcv"]:
         logging.info(
             "starting passivbot in ohlcv mode, using REST API only and updating once a minute"
         )
@@ -1405,7 +1408,8 @@ async def main() -> None:
     signal.signal(signal.SIGINT, bot.stop)
     signal.signal(signal.SIGTERM, bot.stop)
     await start_bot(bot)
-    await bot.session.close()
+    if hasattr(bot, "session"):
+        await bot.session.close()
 
 
 if __name__ == "__main__":
