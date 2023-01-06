@@ -256,10 +256,12 @@ class BybitBot(Bot):
                         long_pos = {"size": 0.0, "entry_price": 0.0, "liq_price": 0.0}
                         short_pos = fetched["result"]
                 elif "inverse_futures" in self.market_type:
-                    long_pos = [e["data"] for e in fetched["result"] if e["data"]["position_idx"] == 1][0]
-                    short_pos = [e["data"] for e in fetched["result"] if e["data"]["position_idx"] == 2][
-                        0
-                    ]
+                    long_pos = [
+                        e["data"] for e in fetched["result"] if e["data"]["position_idx"] == 1
+                    ][0]
+                    short_pos = [
+                        e["data"] for e in fetched["result"] if e["data"]["position_idx"] == 2
+                    ][0]
                 else:
                     raise Exception("unknown market type")
 
