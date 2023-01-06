@@ -81,7 +81,9 @@ class OKXBot(Bot):
         )
 
     async def execute_leverage_change(self):
-        return await self.okx.set_leverage(self.leverage, symbol=self.symbol)
+        return await self.okx.set_leverage(
+            self.leverage, symbol=self.symbol, params={"mgnMode": "cross"}
+        )
 
     async def init_exchange_config(self) -> bool:
         try:

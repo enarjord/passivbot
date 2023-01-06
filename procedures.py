@@ -238,7 +238,8 @@ async def fetch_market_specific_settings(config: dict):
         settings_from_exchange["exchange"] = "okx"
     else:
         raise Exception(f"unknown exchange {exchange}")
-    await bot.session.close()
+    if hasattr(bot, "session"):
+        await bot.session.close()
     if "inverse" in bot.market_type:
         settings_from_exchange["inverse"] = True
     elif any(x in bot.market_type for x in ["linear", "spot"]):

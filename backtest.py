@@ -239,8 +239,14 @@ async def main():
             config["long"]["enabled"] = "y" in args.long_enabled.lower()
         if args.short_enabled is not None:
             config["short"]["enabled"] = "y" in args.short_enabled.lower()
-        config["ohlcv"] = args.ohlcv if passivbot_mode != "emas" else True
+        if passivbot_mode == 'emas' or config['exchange'] == 'okx':
+            config['ohlcv'] = True
+        else:
+            config['ohlcv'] = args.ohlcv
         config["disable_plotting"] = args.disable_plotting
+        if "spot" in config["market_type"]:
+            live_config = spotify_config(live_config)
+        config["passivbot_mode"] = determine_passivbot_mode(config)
         print()
         for k in (
             keys := [
@@ -253,7 +259,9 @@ async def main():
                 "starting_balance",
                 "start_date",
                 "end_date",
-                "latency_simulation_ms",
+                "maker_fee",
+                "min_qty",
+                "min_cost",
                 "base_dir",
             ]
         ):
