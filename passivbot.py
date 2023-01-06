@@ -60,8 +60,6 @@ class Bot:
     def __init__(self, config: dict):
         self.spot = False
         self.config = config
-        self.config["do_long"] = config["long"]["enabled"]
-        self.config["do_short"] = config["short"]["enabled"]
         self.config["max_leverage"] = 25
         self.xk = {}
 
@@ -144,17 +142,28 @@ class Bot:
                 + "It must be greater than zero and less than or equal to one.  Defaulting to 1.0."
             )
             config["cross_wallet_pct"] = 1.0
-        self.ema_spans_long = [
-            config["long"]["ema_span_0"],
-            (config["long"]["ema_span_0"] * config["long"]["ema_span_1"]) ** 0.5,
-            config["long"]["ema_span_1"],
-        ]
-        self.ema_spans_short = [
-            config["short"]["ema_span_0"],
-            (config["short"]["ema_span_0"] * config["short"]["ema_span_1"]) ** 0.5,
-            config["short"]["ema_span_1"],
-        ]
-        self.config = config
+        if self.passivbot_mode == 'emas':
+            self.config["do_long"] = config["long_enabled"]
+            self.config["do_short"] = config["short_enabled"]
+            self.ema_spans = self.ema_spans_long = self.ema_spans_short = np.array(sorted([
+                config["ema_span_0"],
+                (config["ema_span_0"] * config["ema_span_1"]) ** 0.5,
+                config["ema_span_1"],
+            ]))
+        else:
+            self.config["do_long"] = config["long"]["enabled"]
+            self.config["do_short"] = config["short"]["enabled"]
+            self.ema_spans_long = [
+                config["long"]["ema_span_0"],
+                (config["long"]["ema_span_0"] * config["long"]["ema_span_1"]) ** 0.5,
+                config["long"]["ema_span_1"],
+            ]
+            self.ema_spans_short = [
+                config["short"]["ema_span_0"],
+                (config["short"]["ema_span_0"] * config["short"]["ema_span_1"]) ** 0.5,
+                config["short"]["ema_span_1"],
+            ]
+            self.config = config
         for key in config:
             setattr(self, key, config[key])
             if key in self.xk:
@@ -169,11 +178,27 @@ class Bot:
         await self.init_fills()
 
     def dump_log(self, data) -> None:
-        if self.config["logging_level"] > 0:
+        if "logging_level" in self.config and self.config["logging_level"] > 0:
             with open(self.log_filepath, "a") as f:
                 f.write(
                     json.dumps({**{"log_timestamp": time(), "symbol": self.symbol}, **data}) + "\n"
                 )
+
+    async def init_emas_emas_mode(self, ohlcvs: dict) -> None:
+        samples1m = calc_samples(
+            numpyize(
+                [
+                    [o["timestamp"], o["volume"], o["close"]]
+                    for o in sorted(ohlcvs.values(), key=lambda x: x["timestamp"])
+                ]
+            ),
+            60000
+        )
+        self.emas = calc_emas_last(samples1m[:, 2], self.ema_spans)
+        self.alpha = 2 / (self.ema_spans + 1)
+        self.alpha_ = 1 - self.alpha
+        self.ema_min = int(round(time() // 60 * 60))
+        return samples1m
 
     async def init_emas(self) -> None:
         ohlcvs1m = await self.fetch_ohlcvs(interval="1m")
@@ -183,6 +208,8 @@ class Bot:
                 break
         ohlcvs = await self.fetch_ohlcvs(interval=interval)
         ohlcvs = {ohlcv["timestamp"]: ohlcv for ohlcv in ohlcvs + ohlcvs1m}
+        if self.passivbot_mode == 'emas':
+            return await self.init_emas_emas_mode(ohlcvs)
         samples1s = calc_samples(
             numpyize(
                 [
@@ -202,7 +229,19 @@ class Bot:
         self.ema_sec = int(time())
         # return samples1s
 
+    def update_emas_emas_mode(self, price: float, prev_price: float) -> None:
+        now_min = int(round(time() // 60 * 60))
+        if now_min <= self.ema_min:
+            return
+        while self.ema_min < int(round(now_min - 60)):
+            self.emas = calc_ema(self.alpha, self.alpha_, self.emas, prev_price)
+            self.ema_min += 60
+        self.emas = calc_ema(self.alpha, self.alpha_, self.emas, price)
+        self.ema_min = now_min
+
     def update_emas(self, price: float, prev_price: float) -> None:
+        if self.passivbot_mode == 'emas':
+            return self.update_emas_emas_mode(price, prev_price)
         now_sec = int(time())
         if now_sec <= self.ema_sec:
             return
@@ -311,6 +350,9 @@ class Bot:
             return False
         finally:
             self.ts_released["update_position"] = time()
+
+    async def get_latest_fills(self) -> []:
+        self.latest_fills = await self.fetch_fills()
 
     async def init_fills(self, n_days_limit=60):
         self.fills = await self.fetch_fills()
@@ -1088,6 +1130,7 @@ class Bot:
                 )
             if self.stop_websocket:
                 break
+            await asyncio.sleep(1.0)
             await self.on_minute_mark()
             await asyncio.sleep(1.0)
 
@@ -1296,8 +1339,10 @@ async def main() -> None:
         raise IOError(f"Exchange {config['exchange']} is not supported in test mode.")
     config["market_type"] = args.market_type if args.market_type is not None else "futures"
     config["passivbot_mode"] = determine_passivbot_mode(config)
-    if config["passivbot_mode"] == "emas":
-        config["ohlcv"] = True
+    if config['passivbot_mode'] == 'emas':
+        config['ohlcv'] = True
+        config['long'] = {'enabled': config['long_enabled']}
+        config['short'] = {'enabled': config['short_enabled']}
     if args.assigned_balance is not None:
         logging.info(f"assigned balance set to {args.assigned_balance}")
         config["assigned_balance"] = args.assigned_balance
@@ -1365,7 +1410,7 @@ async def main() -> None:
     for _, _, _, dest in float_kwargs:
         if getattr(args, dest) is not None:
             side, key = dest[: dest.find("_")], dest[dest.find("_") + 1 :]
-            if passivbot_mode == "emas":
+            if config['passivbot_mode'] == 'emas':
                 old_val = config[f"{key}_{side}"]
                 config[f"{key}_{side}"] = getattr(args, dest)
             else:
@@ -1377,8 +1422,6 @@ async def main() -> None:
         config = spotify_config(config)
     logging.info(f"using config \n{config_pretty_str(denumpyize(config))}")
 
-    print(config)
-    return
     if config["exchange"] == "binance":
         if "spot" in config["market_type"]:
             from procedures import create_binance_bot_spot
@@ -1415,6 +1458,8 @@ async def main() -> None:
 
     signal.signal(signal.SIGINT, bot.stop)
     signal.signal(signal.SIGTERM, bot.stop)
+    print(config)
+    return
     await start_bot(bot)
     if hasattr(bot, "session"):
         await bot.session.close()
