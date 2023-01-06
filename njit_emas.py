@@ -83,8 +83,8 @@ def backtest_emas(
     starting_balance,
     maker_fee,
     inverse,
-    do_long,
-    do_short,
+    long_enabled,
+    short_enabled,
     qty_step,
     price_step,
     min_qty,
@@ -120,9 +120,9 @@ def backtest_emas(
     lows = hlc[:, 2]
     closes = hlc[:, 3]
     if wallet_exposure_limit_long == 0.0:
-        do_long = False
+        long_enabled = False
     if wallet_exposure_limit_short == 0.0:
-        do_short = False
+        short_enabled = False
     delay_between_fills_ms_bid = delay_between_fills_minutes_bid * 60 * 1000
     delay_between_fills_ms_ask = delay_between_fills_minutes_ask * 60 * 1000
     spans = np.array(sorted([ema_span_0, (ema_span_0 * ema_span_1) ** 0.5, ema_span_1]))
@@ -307,7 +307,7 @@ def backtest_emas(
             bid_price = calc_ema_price_bid(emas.min(), closes[k - 1], ema_dist_lower, price_step)
             if lows[k] < bid_price:
                 # bid filled
-                if do_short and psize_short > 0.0:
+                if short_enabled and psize_short > 0.0:
                     wallet_exposure_short = (
                         qty_to_cost(psize_short, pprice_short, inverse, c_mult) / balance
                     )
@@ -355,7 +355,7 @@ def backtest_emas(
                         )
                     )
                     continue
-                if do_long:
+                if long_enabled:
                     wallet_exposure_long = (
                         qty_to_cost(psize_long, pprice_long, inverse, c_mult) / balance
                     )
@@ -426,7 +426,7 @@ def backtest_emas(
             ask_price = calc_ema_price_ask(emas.max(), closes[k - 1], ema_dist_upper, price_step)
             if highs[k] > ask_price:
                 # ask filled
-                if do_long and psize_long > 0.0:
+                if long_enabled and psize_long > 0.0:
                     wallet_exposure_long = (
                         qty_to_cost(psize_long, pprice_long, inverse, c_mult) / balance
                     )
@@ -474,7 +474,7 @@ def backtest_emas(
                         )
                     )
                     continue
-                if do_short:
+                if short_enabled:
                     wallet_exposure_short = (
                         qty_to_cost(psize_short, pprice_short, inverse, c_mult) / balance
                     )
