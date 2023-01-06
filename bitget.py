@@ -15,8 +15,8 @@ import pprint
 
 from njit_funcs import round_
 from passivbot import Bot, logging
-from procedures import print_async_exception, print_
-from pure_funcs import ts_to_date, sort_dict_keys, date_to_ts
+from procedures import print_async_exception, print_, utc_ms
+from pure_funcs import ts_to_date, sort_dict_keys, date_to_ts, format_float
 
 
 def first_capitalized(s: str):
@@ -51,6 +51,7 @@ class BitgetBot(Bot):
             "cancel_order": "/api/mix/v1/order/cancel-order",
             "ticks": "/api/mix/v1/market/fills",
             "fills": "/api/mix/v1/order/fills",
+            "fills_detailed": "/api/mix/v1/order/history",
             "ohlcvs": "/api/mix/v1/market/candles",
             "websocket_market": "wss://ws.bitget.com/mix/v1/stream",
             "websocket_user": "wss://ws.bitget.com/mix/v1/stream",
@@ -590,6 +591,44 @@ class BitgetBot(Bot):
             traceback.print_exc()
             print_async_exception(fetched)
             return []
+
+
+
+
+    async def fetch_latest_fills(self):
+        fetched = None
+        try:
+            params = {'symbol': self.symbol, 'startTime': int(utc_ms() - 1000 * 60 * 60 * 24 * 6),
+                      'endTime': int(utc_ms()  + 1000 * 60 * 60 * 2), 'pageSize': 100}
+            fetched = await self.private_get(self.endpoints["fills_detailed"], params)
+            fills = [
+                {
+                    "order_id": elm["orderId"],
+                    "symbol": elm["symbol"],
+                    "status": elm["state"],
+                    "custom_id": elm["clientOid"],
+                    "price": float(elm["priceAvg"]),
+                    "qty": float(elm["filledQty"]),
+                    "original_qty": float(elm["size"]),
+                    "type": elm["orderType"],
+                    "reduce_only": elm['reduceOnly'],
+                    "side": "buy" if elm["side"] in ["close_short", "open_long"] else "sell",
+                    "position_side": elm['posSide'],
+                    "timestamp": elm["cTime"],
+                }
+                for elm in fetched["data"]["orderList"]
+                if 'filled' in elm["state"]
+            ]
+        except Exception as e:
+            print("error fetching latest fills", e)
+            print_async_exception(fetched)
+            traceback.print_exc()
+            return []
+        return fills
+
+
+
+
 
     async def fetch_fills(
         self,
