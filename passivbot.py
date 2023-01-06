@@ -1296,6 +1296,8 @@ async def main() -> None:
         raise IOError(f"Exchange {config['exchange']} is not supported in test mode.")
     config["market_type"] = args.market_type if args.market_type is not None else "futures"
     config["passivbot_mode"] = determine_passivbot_mode(config)
+    if config["passivbot_mode"] == "emas":
+        config["ohlcv"] = True
     if args.assigned_balance is not None:
         logging.info(f"assigned balance set to {args.assigned_balance}")
         config["assigned_balance"] = args.assigned_balance
@@ -1363,15 +1365,20 @@ async def main() -> None:
     for _, _, _, dest in float_kwargs:
         if getattr(args, dest) is not None:
             side, key = dest[: dest.find("_")], dest[dest.find("_") + 1 :]
-            logging.info(
-                f"overriding {dest} {config[side][key]} " + f"with new value: {getattr(args, dest)}"
-            )
-            config[side][key] = getattr(args, dest)
+            if passivbot_mode == "emas":
+                old_val = config[f"{key}_{side}"]
+                config[f"{key}_{side}"] = getattr(args, dest)
+            else:
+                old_val = config[side][key]
+                config[side][key] = getattr(args, dest)
+            logging.info(f"overriding {dest} {old_val} " + f"with new value: {getattr(args, dest)}")
 
     if "spot" in config["market_type"]:
         config = spotify_config(config)
     logging.info(f"using config \n{config_pretty_str(denumpyize(config))}")
 
+    print(config)
+    return
     if config["exchange"] == "binance":
         if "spot" in config["market_type"]:
             from procedures import create_binance_bot_spot
@@ -1395,12 +1402,13 @@ async def main() -> None:
         bot = await create_bitget_bot(config)
     elif config["exchange"] == "okx":
         from procedures import create_okx_bot
-        config['ohlcv'] = True
+
+        config["ohlcv"] = True
         bot = await create_okx_bot(config)
     else:
         raise Exception("unknown exchange", config["exchange"])
 
-    if config['ohlcv']:
+    if config["ohlcv"]:
         logging.info(
             "starting passivbot in ohlcv mode, using REST API only and updating once a minute"
         )
@@ -1408,7 +1416,7 @@ async def main() -> None:
     signal.signal(signal.SIGINT, bot.stop)
     signal.signal(signal.SIGTERM, bot.stop)
     await start_bot(bot)
-    if hasattr(bot, 'session'):
+    if hasattr(bot, "session"):
         await bot.session.close()
 
 
