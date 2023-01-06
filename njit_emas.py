@@ -359,7 +359,7 @@ def backtest_emas(
                     wallet_exposure_long = (
                         qty_to_cost(psize_long, pprice_long, inverse, c_mult) / balance
                     )
-                    if wallet_exposure_long < wallet_exposure_limit_long:
+                    if wallet_exposure_long < wallet_exposure_limit_long * 0.99:
                         prev_ema_fill_ts_bid = timestamps[k]
                         # entry long
                         qty_long = calc_ema_qty(
@@ -395,30 +395,31 @@ def backtest_emas(
                             new_psize_long, new_pprice_long = calc_new_psize_pprice(
                                 psize_long, pprice_long, qty_long, bid_price, qty_step
                             )
-                        psize_long, pprice_long = new_psize_long, new_pprice_long
-                        upnl = calc_pnl_long(
-                            pprice_long, closes[k], psize_long, inverse, c_mult
-                        ) + calc_pnl_short(pprice_short, closes[k], psize_short, inverse, c_mult)
-                        equity = balance + upnl
-                        pnl = 0.0
-                        fee_paid = -qty_to_cost(qty_long, bid_price, inverse, c_mult) * maker_fee
-                        balance += fee_paid
-                        fills.append(
-                            (
-                                k,
-                                timestamps[k],
-                                pnl,
-                                fee_paid,
-                                balance,
-                                equity,
-                                qty_long,
-                                bid_price,
-                                psize_long,
-                                pprice_long,
-                                "entry_ema_long",
+                        if qty_long > 0.0:
+                            psize_long, pprice_long = new_psize_long, new_pprice_long
+                            upnl = calc_pnl_long(
+                                pprice_long, closes[k], psize_long, inverse, c_mult
+                            ) + calc_pnl_short(pprice_short, closes[k], psize_short, inverse, c_mult)
+                            equity = balance + upnl
+                            pnl = 0.0
+                            fee_paid = -qty_to_cost(qty_long, bid_price, inverse, c_mult) * maker_fee
+                            balance += fee_paid
+                            fills.append(
+                                (
+                                    k,
+                                    timestamps[k],
+                                    pnl,
+                                    fee_paid,
+                                    balance,
+                                    equity,
+                                    qty_long,
+                                    bid_price,
+                                    psize_long,
+                                    pprice_long,
+                                    "entry_ema_long",
+                                )
                             )
-                        )
-                        continue
+                            continue
         if timestamps[k] - prev_ema_fill_ts_ask > calc_delay_between_fills_ms(
             delay_between_fills_ms_ask, pprice_diff, delay_weight_ask
         ):
@@ -477,7 +478,7 @@ def backtest_emas(
                     wallet_exposure_short = (
                         qty_to_cost(psize_short, pprice_short, inverse, c_mult) / balance
                     )
-                    if wallet_exposure_short < wallet_exposure_limit_short:
+                    if wallet_exposure_short < wallet_exposure_limit_short * 0.99:
                         prev_ema_fill_ts_ask = timestamps[k]
                         # entry short
                         qty_short = calc_ema_qty(
@@ -494,7 +495,7 @@ def backtest_emas(
                             wallet_exposure_limit_short,
                         )
                         new_psize_short, new_pprice_short = calc_new_psize_pprice(
-                            psize_short, pprice_short, qty_short, bid_price, qty_step
+                            psize_short, pprice_short, qty_short, ask_price, qty_step
                         )
                         wallet_exposure_after_fill = (
                             qty_to_cost(new_psize_short, new_pprice_short, inverse, c_mult) / balance
@@ -511,29 +512,30 @@ def backtest_emas(
                                 c_mult,
                             )
                             new_psize_short, new_pprice_short = calc_new_psize_pprice(
-                                psize_short, pprice_short, qty_short, bid_price, qty_step
+                                psize_short, pprice_short, qty_short, ask_price, qty_step
                             )
-                        psize_short, pprice_short = new_psize_short, new_pprice_short
-                        upnl = calc_pnl_long(
-                            pprice_long, closes[k], psize_long, inverse, c_mult
-                        ) + calc_pnl_short(pprice_short, closes[k], psize_short, inverse, c_mult)
-                        equity = balance + upnl
-                        pnl = 0.0
-                        fee_paid = -qty_to_cost(qty_short, ask_price, inverse, c_mult) * maker_fee
-                        balance += fee_paid
-                        fills.append(
-                            (
-                                k,
-                                timestamps[k],
-                                pnl,
-                                fee_paid,
-                                balance,
-                                equity,
-                                -qty_short,
-                                ask_price,
-                                -psize_short,
-                                pprice_short,
-                                "entry_ema_short",
+                        if qty_short > 0.0:
+                            psize_short, pprice_short = new_psize_short, new_pprice_short
+                            upnl = calc_pnl_long(
+                                pprice_long, closes[k], psize_long, inverse, c_mult
+                            ) + calc_pnl_short(pprice_short, closes[k], psize_short, inverse, c_mult)
+                            equity = balance + upnl
+                            pnl = 0.0
+                            fee_paid = -qty_to_cost(qty_short, ask_price, inverse, c_mult) * maker_fee
+                            balance += fee_paid
+                            fills.append(
+                                (
+                                    k,
+                                    timestamps[k],
+                                    pnl,
+                                    fee_paid,
+                                    balance,
+                                    equity,
+                                    -qty_short,
+                                    ask_price,
+                                    -psize_short,
+                                    pprice_short,
+                                    "entry_ema_short",
+                                )
                             )
-                        )
     return fills, stats
