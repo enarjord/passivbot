@@ -593,6 +593,35 @@ class BybitBot(Bot):
             print_async_exception(fetched)
             return []
 
+    async def fetch_latest_fills(self):
+        fetched = None
+        try:
+            fetched = await self.private_get(self.endpoints["fills"], {"symbol": self.symbol})
+            fills = [
+                {
+                    "order_id": elm["order_id"],
+                    "symbol": elm["symbol"],
+                    "status": elm["exec_type"].lower(),
+                    "custom_id": elm["order_link_id"],
+                    "price": float(elm["exec_price"]),
+                    "qty": float(elm["exec_qty"]),
+                    "original_qty": float(elm["order_qty"]),
+                    "type": elm["order_type"].lower(),
+                    "reduce_only": None,
+                    "side": elm["side"].lower(),
+                    "position_side": determine_pos_side(elm),
+                    "timestamp": elm["trade_time_ms"],
+                }
+                for elm in fetched["result"]["data"]
+                if elm["exec_type"] == "Trade"
+            ]
+        except Exception as e:
+            print("error fetching latest fills", e)
+            print_async_exception(fetched)
+            traceback.print_exc()
+            return []
+        return fills
+
     async def fetch_fills(
         self,
         limit: int = 200,
