@@ -101,8 +101,8 @@ def get_xk_keys(passivbot_mode="static_grid"):
     elif passivbot_mode == "emas":
         return [
             "inverse",
-            "do_long",
-            "do_short",
+            "long_enabled",
+            "short_enabled",
             "qty_step",
             "price_step",
             "min_qty",
@@ -559,8 +559,8 @@ def get_template_live_config(passivbot_mode="static_grid"):
         return sort_dict_keys(
             {
                 # "config_name": "emas_template",
-                "do_long": True,
-                "do_short": True,
+                "long_enabled": True,
+                "short_enabled": True,
                 "wallet_exposure_limit_long": 1.0,
                 "wallet_exposure_limit_short": 1.0,
                 "ema_span_0": 700.0,
