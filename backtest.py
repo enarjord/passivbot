@@ -94,6 +94,7 @@ def plot_wrap(config, data):
             None,
             sdf,
             pd.DataFrame(data[:, [0, 3]], columns=["timestamp", "close"]),
+            n_parts=config["n_parts"],
             disable_plotting=config["disable_plotting"],
         )
         return
