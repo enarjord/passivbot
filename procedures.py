@@ -29,6 +29,7 @@ from pure_funcs import (
     get_template_live_config,
     sort_dict_keys,
     make_compatible,
+    determine_passivbot_mode,
 )
 
 
@@ -228,6 +229,13 @@ async def fetch_market_specific_settings(config: dict):
         settings_from_exchange["maker_fee"] = 0.0002
         settings_from_exchange["taker_fee"] = 0.0006
         settings_from_exchange["exchange"] = "bitget"
+    elif exchange == "okx":
+        if "spot" in config["market_type"]:
+            raise Exception("spot not implemented on okx")
+        bot = await create_okx_bot(tmp_live_settings)
+        settings_from_exchange["maker_fee"] = 0.0002
+        settings_from_exchange["taker_fee"] = 0.0005
+        settings_from_exchange["exchange"] = "okx"
     else:
         raise Exception(f"unknown exchange {exchange}")
     await bot.session.close()
@@ -279,6 +287,14 @@ async def create_bitget_bot(config: dict):
     from bitget import BitgetBot
 
     bot = BitgetBot(config)
+    await bot._init()
+    return bot
+
+
+async def create_okx_bot(config: dict):
+    from okx import OKXBot
+
+    bot = OKXBot(config)
     await bot._init()
     return bot
 
