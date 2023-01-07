@@ -197,9 +197,7 @@ async def main():
     args = parser.parse_args()
     if args.symbol is None:
         tmp_cfg = load_hjson_config(args.backtest_config_path)
-        symbols = (
-            tmp_cfg["symbol"] if type(tmp_cfg["symbol"]) == list else tmp_cfg["symbol"].split(",")
-        )
+        symbols = tmp_cfg["symbol"] if type(tmp_cfg["symbol"]) == list else tmp_cfg["symbol"].split(",")
     else:
         symbols = args.symbol.split(",")
     for symbol in symbols:
@@ -239,10 +237,10 @@ async def main():
             config["long"]["enabled"] = "y" in args.long_enabled.lower()
         if args.short_enabled is not None:
             config["short"]["enabled"] = "y" in args.short_enabled.lower()
-        if passivbot_mode == 'emas' or config['exchange'] == 'okx':
-            config['ohlcv'] = True
+        if passivbot_mode == "emas" or config["exchange"] == "okx":
+            config["ohlcv"] = True
         else:
-            config['ohlcv'] = args.ohlcv
+            config["ohlcv"] = args.ohlcv
         config["disable_plotting"] = args.disable_plotting
         if "spot" in config["market_type"]:
             live_config = spotify_config(live_config)
