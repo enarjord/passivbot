@@ -68,9 +68,7 @@ class BinanceBotSpot(Bot):
             urlencode(params).encode("utf-8"),
             hashlib.sha256,
         ).hexdigest()
-        async with getattr(self.session, type_)(
-            base_endpoint + url, params=params, headers=self.headers
-        ) as response:
+        async with getattr(self.session, type_)(base_endpoint + url, params=params, headers=self.headers) as response:
             result = await response.text()
         return json.loads(result)
 
@@ -120,9 +118,7 @@ class BinanceBotSpot(Bot):
         else:
             self.base_endpoint = "https://api.binance.com"
             self.endpoints["websocket"] = "wss://stream.binance.com/ws/"
-        self.endpoints["websocket_market"] = (
-            self.endpoints["websocket"] + f"{self.symbol.lower()}@aggTrade"
-        )
+        self.endpoints["websocket_market"] = self.endpoints["websocket"] + f"{self.symbol.lower()}@aggTrade"
         self.endpoints["websocket_user"] = self.endpoints["websocket"]
 
     async def _init(self):
@@ -131,7 +127,7 @@ class BinanceBotSpot(Bot):
         for e in exchange_info["symbols"]:
             if e["symbol"] == self.symbol:
                 self.coin = e["baseAsset"]
-                self.quot = self.margin_coin = e["quoteAsset"]
+                self.quote = self.margin_coin = e["quoteAsset"]
                 for q in e["filters"]:
                     if q["filterType"] == "LOT_SIZE":
                         self.min_qty = self.config["min_qty"] = float(q["minQty"])
@@ -141,12 +137,8 @@ class BinanceBotSpot(Bot):
                         self.min_price = float(q["minPrice"])
                         self.max_price = float(q["maxPrice"])
                     elif q["filterType"] == "PERCENT_PRICE_BY_SIDE":
-                        self.price_multiplier_up = min(
-                            float(q["bidMultiplierUp"]), float(q["askMultiplierUp"])
-                        )
-                        self.price_multiplier_dn = max(
-                            float(q["bidMultiplierDown"]), float(q["askMultiplierDown"])
-                        )
+                        self.price_multiplier_up = min(float(q["bidMultiplierUp"]), float(q["askMultiplierUp"]))
+                        self.price_multiplier_dn = max(float(q["bidMultiplierDown"]), float(q["askMultiplierDown"]))
                     elif q["filterType"] == "MIN_NOTIONAL":
                         self.min_cost = self.config["min_cost"] = float(q["minNotional"])
                 try:
@@ -162,7 +154,7 @@ class BinanceBotSpot(Bot):
     def calc_orders(self):
         default_orders = super().calc_orders()
         orders = []
-        remaining_cost = self.balance[self.quot]["onhand"]
+        remaining_cost = self.balance[self.quote]["onhand"]
         for order in sorted(default_orders, key=lambda x: calc_diff(x["price"], self.price)):
             if order["price"] > min(
                 self.max_price,
@@ -228,16 +220,12 @@ class BinanceBotSpot(Bot):
         ]
 
     async def fetch_position(self) -> dict:
-        balances, _ = await asyncio.gather(
-            self.private_get(self.endpoints["balance"]), self.update_fills()
-        )
+        balances, _ = await asyncio.gather(self.private_get(self.endpoints["balance"]), self.update_fills())
         balance = {}
         for elm in balances["balances"]:
             balance[elm["asset"]] = {"free": float(elm["free"])}
             balance[elm["asset"]]["locked"] = float(elm["locked"])
-            balance[elm["asset"]]["onhand"] = (
-                balance[elm["asset"]]["free"] + balance[elm["asset"]]["locked"]
-            )
+            balance[elm["asset"]]["onhand"] = balance[elm["asset"]]["free"] + balance[elm["asset"]]["locked"]
         if "BNB" in balance:
             balance["BNB"]["onhand"] = max(0.0, balance["BNB"]["onhand"] - 0.01)
         self.balance = balance
@@ -260,8 +248,7 @@ class BinanceBotSpot(Bot):
                 "liquidation_price": 0.0,
             },
             "short": {"size": 0.0, "price": 0.0, "liquidation_price": 0.0},
-            "wallet_balance": balance[self.quot]["onhand"]
-            + balance[self.coin]["onhand"] * pprice_long,
+            "wallet_balance": balance[self.quote]["onhand"] + balance[self.coin]["onhand"] * pprice_long,
         }
         return position
 
@@ -406,7 +393,7 @@ class BinanceBotSpot(Bot):
                         "symbol": fill["symbol"],
                         "income_type": "realized_pnl",
                         "income": calc_pnl_long(pprice, fill["price"], fill["qty"], False, 1.0),
-                        "token": self.quot,
+                        "token": self.quote,
                         "timestamp": fill["timestamp"],
                         "info": 0,
                         "transaction_id": fill["id"],
@@ -527,9 +514,7 @@ class BinanceBotSpot(Bot):
     async def fetch_ticks_time(self, start_time: int, end_time: int = None, do_print: bool = True):
         return await self.fetch_ticks(start_time=start_time, end_time=end_time, do_print=do_print)
 
-    async def fetch_ohlcvs(
-        self, symbol: str = None, start_time: int = None, interval="1m", limit=1000
-    ):
+    async def fetch_ohlcvs(self, symbol: str = None, start_time: int = None, interval="1m", limit=1000):
         # m -> minutes; h -> hours; d -> days; w -> weeks; M -> months
         interval_map = {
             "1m": 1,
@@ -560,10 +545,7 @@ class BinanceBotSpot(Bot):
             return [
                 {
                     **{"timestamp": int(e[0])},
-                    **{
-                        k: float(e[i + 1])
-                        for i, k in enumerate(["open", "high", "low", "close", "volume"])
-                    },
+                    **{k: float(e[i + 1]) for i, k in enumerate(["open", "high", "low", "close", "volume"])},
                 }
                 for e in fetched
             ]
@@ -612,7 +594,7 @@ class BinanceBotSpot(Bot):
                     self.balance[token]["free"] = event["balance"][token]["free"]
                     self.balance[token]["locked"] = event["balance"][token]["locked"]
                     onhand = event["balance"][token]["free"] + event["balance"][token]["locked"]
-                    if token in [self.quot, self.coin] and (
+                    if token in [self.quote, self.coin] and (
                         "onhand" not in self.balance[token] or self.balance[token]["onhand"] != onhand
                     ):
                         onhand_change = True
@@ -621,18 +603,14 @@ class BinanceBotSpot(Bot):
                     self.balance[token]["onhand"] = onhand
                 if onhand_change:
                     self.position = self.calc_simulated_position(self.balance, self.fills)
-                    self.position["wallet_balance"] = self.adjust_wallet_balance(
-                        self.position["wallet_balance"]
-                    )
+                    self.position["wallet_balance"] = self.adjust_wallet_balance(self.position["wallet_balance"])
                     self.position = self.add_wallet_exposures_to_pos(self.position)
                     pos_change = True
             if "filled" in event:
                 if event["filled"]["order_id"] not in {fill["order_id"] for fill in self.fills}:
                     self.fills = sorted(self.fills + [event["filled"]], key=lambda x: x["order_id"])
                 self.position = self.calc_simulated_position(self.balance, self.fills)
-                self.position["wallet_balance"] = self.adjust_wallet_balance(
-                    self.position["wallet_balance"]
-                )
+                self.position["wallet_balance"] = self.adjust_wallet_balance(self.position["wallet_balance"])
                 self.position = self.add_wallet_exposures_to_pos(self.position)
                 pos_change = True
             elif "partially_filled" in event:
@@ -640,9 +618,7 @@ class BinanceBotSpot(Bot):
                 await asyncio.gather(self.update_position(), self.update_open_orders())
                 pos_change = True
             if "new_open_order" in event:
-                if event["new_open_order"]["order_id"] not in {
-                    x["order_id"] for x in self.open_orders
-                }:
+                if event["new_open_order"]["order_id"] not in {x["order_id"] for x in self.open_orders}:
                     self.open_orders.append(event["new_open_order"])
             elif "deleted_order_id" in event:
                 for i, o in enumerate(self.open_orders):
@@ -659,9 +635,7 @@ class BinanceBotSpot(Bot):
                     self.inverse,
                     self.c_mult,
                 )
-                await asyncio.sleep(
-                    0.01
-                )  # sleep 10 ms to catch both pos update and open orders update
+                await asyncio.sleep(0.01)  # sleep 10 ms to catch both pos update and open orders update
                 await self.cancel_and_create()
         except Exception as e:
             print(["error handling user stream event", e])
@@ -729,9 +703,7 @@ class BinanceBotSpot(Bot):
                             "position_side": "long",
                             "timestamp": int(event["T"]),
                         }
-                        standardized["deleted_order_id"] = standardized["partially_filled"][
-                            "order_id"
-                        ]
+                        standardized["deleted_order_id"] = standardized["partially_filled"]["order_id"]
                     else:
                         standardized["other_symbol"] = event["s"]
                         standardized["other_type"] = "partially_filled"
