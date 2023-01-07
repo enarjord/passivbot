@@ -673,13 +673,13 @@ def analyze_fills_emas(fills: np.array, stats: list, config: dict):
     longs = fdf[fdf.type.str.contains("long")]
     shorts = fdf[fdf.type.str.contains("short")]
     if config["inverse"]:
-        fdf.loc[:, 'wallet_exposure'] = (fdf.psize / fdf.pprice / fdf.balance).abs()
+        fdf.loc[:, "wallet_exposure"] = (fdf.psize / fdf.pprice / fdf.balance).abs()
         we_max_long = ((longs.psize / longs.pprice) / longs.balance).max() * config["c_mult"]
         we_max_short = ((shorts.psize.abs() / shorts.pprice) / shorts.balance).max() * config[
             "c_mult"
         ]
     else:
-        fdf.loc[:, 'wallet_exposure'] = (fdf.psize * fdf.pprice / fdf.balance).abs()
+        fdf.loc[:, "wallet_exposure"] = (fdf.psize * fdf.pprice / fdf.balance).abs()
         we_max_long = ((longs.psize * longs.pprice) / longs.balance).max() * config["c_mult"]
         we_max_short = ((shorts.psize.abs() * shorts.pprice) / shorts.balance).max() * config[
             "c_mult"
