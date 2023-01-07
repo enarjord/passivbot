@@ -97,9 +97,7 @@ class BitgetBot(Bot):
             self.market_type += "_inverse_perpetual"
             self.product_type = "dmcbl"
             self.inverse = self.config["inverse"] = False
-            self.min_cost = self.config[
-                "min_cost"
-            ] = 6.0  # will complain with $5 even if order cost > $5
+            self.min_cost = self.config["min_cost"] = 6.0  # will complain with $5 even if order cost > $5
         else:
             raise NotImplementedError("not yet implemented")
 
@@ -125,9 +123,7 @@ class BitgetBot(Bot):
         await self.update_position()
 
     async def fetch_exchange_info(self):
-        info = await self.public_get(
-            self.endpoints["exchange_info"], params={"productType": self.product_type}
-        )
+        info = await self.public_get(self.endpoints["exchange_info"], params={"productType": self.product_type})
         return info
 
     async def fetch_ticker(self, symbol=None):
@@ -170,9 +166,7 @@ class BitgetBot(Bot):
             result = await response.text()
         return json.loads(result)
 
-    async def private_(
-        self, type_: str, base_endpoint: str, url: str, params: dict = {}, json_: bool = False
-    ) -> dict:
+    async def private_(self, type_: str, base_endpoint: str, url: str, params: dict = {}, json_: bool = False) -> dict:
         def stringify(x):
             if type(x) == bool:
                 return "true" if x else "false"
@@ -264,9 +258,7 @@ class BitgetBot(Bot):
             "wallet_balance": 0.0,
         }
         fetched_pos, fetched_balance = await asyncio.gather(
-            self.private_get(
-                self.endpoints["position"], {"symbol": self.symbol, "marginCoin": self.margin_coin}
-            ),
+            self.private_get(self.endpoints["position"], {"symbol": self.symbol, "marginCoin": self.margin_coin}),
             self.private_get(self.endpoints["balance"], {"productType": self.product_type}),
         )
         for elm in fetched_pos["data"]:
@@ -274,18 +266,14 @@ class BitgetBot(Bot):
                 position["long"] = {
                     "size": round_(float(elm["total"]), self.qty_step),
                     "price": truncate_float(elm["averageOpenPrice"], self.price_rounding),
-                    "liquidation_price": 0.0
-                    if elm["liquidationPrice"] is None
-                    else float(elm["liquidationPrice"]),
+                    "liquidation_price": 0.0 if elm["liquidationPrice"] is None else float(elm["liquidationPrice"]),
                 }
 
             elif elm["holdSide"] == "short":
                 position["short"] = {
                     "size": -abs(round_(float(elm["total"]), self.qty_step)),
                     "price": truncate_float(elm["averageOpenPrice"], self.price_rounding),
-                    "liquidation_price": 0.0
-                    if elm["liquidationPrice"] is None
-                    else float(elm["liquidationPrice"]),
+                    "liquidation_price": 0.0 if elm["liquidationPrice"] is None else float(elm["liquidationPrice"]),
                 }
         for elm in fetched_balance["data"]:
             if elm["marginCoin"] == self.margin_coin:
@@ -370,9 +358,7 @@ class BitgetBot(Bot):
                     params["timeInForceValue"] = "normal"
                 random_str = f"{str(int(time() * 1000))[-6:]}_{int(np.random.random() * 10000)}"
                 custom_id = order["custom_id"] if "custom_id" in order else "0"
-                params["clientOid"] = order[
-                    "custom_id"
-                ] = f"{self.broker_code}#{custom_id}_{random_str}"
+                params["clientOid"] = order["custom_id"] = f"{self.broker_code}#{custom_id}_{random_str}"
                 orders_with_custom_ids.append({**order, **{"symbol": self.symbol}})
                 to_execute.append(params)
             executed = await self.private_post(
@@ -429,9 +415,7 @@ class BitgetBot(Bot):
     async def fetch_account(self):
         raise NotImplementedError("not implemented")
         try:
-            resp = await self.private_get(
-                self.endpoints["spot_balance"], base_endpoint=self.spot_base_endpoint
-            )
+            resp = await self.private_get(self.endpoints["spot_balance"], base_endpoint=self.spot_base_endpoint)
             return resp["result"]
         except Exception as e:
             print("error fetching account: ", e)
@@ -510,13 +494,7 @@ class BitgetBot(Bot):
             all_income = []
             all_positions = await self.private_get(self.endpoints["position"], params={"symbol": ""})
             symbols = sorted(
-                set(
-                    [
-                        x["data"]["symbol"]
-                        for x in all_positions["result"]
-                        if float(x["data"]["size"]) > 0
-                    ]
-                )
+                set([x["data"]["symbol"] for x in all_positions["result"] if float(x["data"]["size"]) > 0])
             )
             for symbol in symbols:
                 all_income += await self.get_all_income(
@@ -592,14 +570,15 @@ class BitgetBot(Bot):
             print_async_exception(fetched)
             return []
 
-
-
-
     async def fetch_latest_fills(self):
         fetched = None
         try:
-            params = {'symbol': self.symbol, 'startTime': int(utc_ms() - 1000 * 60 * 60 * 24 * 6),
-                      'endTime': int(utc_ms()  + 1000 * 60 * 60 * 2), 'pageSize': 100}
+            params = {
+                "symbol": self.symbol,
+                "startTime": int(utc_ms() - 1000 * 60 * 60 * 24 * 6),
+                "endTime": int(utc_ms() + 1000 * 60 * 60 * 2),
+                "pageSize": 100,
+            }
             fetched = await self.private_get(self.endpoints["fills_detailed"], params)
             fills = [
                 {
@@ -611,13 +590,13 @@ class BitgetBot(Bot):
                     "qty": float(elm["filledQty"]),
                     "original_qty": float(elm["size"]),
                     "type": elm["orderType"],
-                    "reduce_only": elm['reduceOnly'],
+                    "reduce_only": elm["reduceOnly"],
                     "side": "buy" if elm["side"] in ["close_short", "open_long"] else "sell",
-                    "position_side": elm['posSide'],
+                    "position_side": elm["posSide"],
                     "timestamp": elm["cTime"],
                 }
                 for elm in fetched["data"]["orderList"]
-                if 'filled' in elm["state"]
+                if "filled" in elm["state"]
             ]
         except Exception as e:
             print("error fetching latest fills", e)
@@ -625,10 +604,6 @@ class BitgetBot(Bot):
             traceback.print_exc()
             return []
         return fills
-
-
-
-
 
     async def fetch_fills(
         self,
@@ -834,9 +809,7 @@ class BitgetBot(Bot):
     async def transfer(self, type_: str, amount: float, asset: str = "USDT"):
         return {"code": "-1", "msg": "Transferring funds not supported for Bitget"}
 
-    def standardize_user_stream_event(
-        self, event: Union[List[Dict], Dict]
-    ) -> Union[List[Dict], Dict]:
+    def standardize_user_stream_event(self, event: Union[List[Dict], Dict]) -> Union[List[Dict], Dict]:
 
         events = []
         if "event" in event and event["event"] == "login":
@@ -875,16 +848,10 @@ class BitgetBot(Bot):
                     if elm["instId"] == self.symbol and "averageOpenPrice" in elm:
                         if elm["holdSide"] == "long":
                             long_pos["psize_long"] = round_(abs(float(elm["total"])), self.qty_step)
-                            long_pos["pprice_long"] = truncate_float(
-                                elm["averageOpenPrice"], self.price_rounding
-                            )
+                            long_pos["pprice_long"] = truncate_float(elm["averageOpenPrice"], self.price_rounding)
                         elif elm["holdSide"] == "short":
-                            short_pos["psize_short"] = -abs(
-                                round_(abs(float(elm["total"])), self.qty_step)
-                            )
-                            short_pos["pprice_short"] = truncate_float(
-                                elm["averageOpenPrice"], self.price_rounding
-                            )
+                            short_pos["psize_short"] = -abs(round_(abs(float(elm["total"])), self.qty_step))
+                            short_pos["pprice_short"] = truncate_float(elm["averageOpenPrice"], self.price_rounding)
                 # absence of elemet means no pos
                 events.append(long_pos)
                 events.append(short_pos)
