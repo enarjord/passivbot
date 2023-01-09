@@ -198,7 +198,13 @@ def backtest_emas(
                 )
                 if not close_grid_long:
                     # close remainder
-                    close_grid_long = [(-psize_long, closes[k - 1], "close_markup_long")]
+                    close_grid_long = [
+                        (
+                            -psize_long,
+                            round_up(pprice_long * (1 + min_markup_long), price_step),
+                            "close_markup_long",
+                        )
+                    ]
                 if highs[k] > close_grid_long[0][1]:
                     while close_grid_long and highs[k] > close_grid_long[0][1]:
                         # close long pos
@@ -258,7 +264,13 @@ def backtest_emas(
                 )
                 if not close_grid_short:
                     # close remainder
-                    close_grid_short = [(psize_short, closes[k - 1], "close_markup_short")]
+                    close_grid_short = [
+                        (
+                            psize_short,
+                            round_dn(pprice_short * (1 - min_markup_short), price_step),
+                            "close_markup_short",
+                        )
+                    ]
                 if lows[k] < close_grid_short[0][1]:
                     while close_grid_short and lows[k] < close_grid_short[0][1]:
                         # close short pos
