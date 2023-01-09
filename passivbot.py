@@ -79,6 +79,7 @@ class Bot:
                 "create_orders",
                 "check_fills",
                 "update_fills",
+                "update_last_fills_timestamps",
                 "force_update",
             ]
         }
@@ -95,6 +96,12 @@ class Bot:
         self.position = {}
         self.open_orders = []
         self.fills = []
+        self.last_fills_timestamps = {
+            "entry_ema_long": 0,
+            "entry_ema_short": 0,
+            "close_ema_long": 0,
+            "close_ema_short": 0,
+        }
         self.price = 0.0
         self.ob = [0.0, 0.0]
         self.emas_long = np.zeros(3)
@@ -142,14 +149,18 @@ class Bot:
                 + "It must be greater than zero and less than or equal to one.  Defaulting to 1.0."
             )
             config["cross_wallet_pct"] = 1.0
-        if self.passivbot_mode == 'emas':
+        if self.passivbot_mode == "emas":
             self.config["do_long"] = config["long_enabled"]
             self.config["do_short"] = config["short_enabled"]
-            self.ema_spans = self.ema_spans_long = self.ema_spans_short = np.array(sorted([
-                config["ema_span_0"],
-                (config["ema_span_0"] * config["ema_span_1"]) ** 0.5,
-                config["ema_span_1"],
-            ]))
+            self.ema_spans = self.ema_spans_long = self.ema_spans_short = np.array(
+                sorted(
+                    [
+                        config["ema_span_0"],
+                        (config["ema_span_0"] * config["ema_span_1"]) ** 0.5,
+                        config["ema_span_1"],
+                    ]
+                )
+            )
         else:
             self.config["do_long"] = config["long"]["enabled"]
             self.config["do_short"] = config["short"]["enabled"]
@@ -192,7 +203,7 @@ class Bot:
                     for o in sorted(ohlcvs.values(), key=lambda x: x["timestamp"])
                 ]
             ),
-            60000
+            60000,
         )
         self.emas = calc_emas_last(samples1m[:, 2], self.ema_spans)
         self.alpha = 2 / (self.ema_spans + 1)
@@ -208,7 +219,7 @@ class Bot:
                 break
         ohlcvs = await self.fetch_ohlcvs(interval=interval)
         ohlcvs = {ohlcv["timestamp"]: ohlcv for ohlcv in ohlcvs + ohlcvs1m}
-        if self.passivbot_mode == 'emas':
+        if self.passivbot_mode == "emas":
             return await self.init_emas_emas_mode(ohlcvs)
         samples1s = calc_samples(
             numpyize(
@@ -240,7 +251,7 @@ class Bot:
         self.ema_min = now_min
 
     def update_emas(self, price: float, prev_price: float) -> None:
-        if self.passivbot_mode == 'emas':
+        if self.passivbot_mode == "emas":
             return self.update_emas_emas_mode(price, prev_price)
         now_sec = int(time())
         if now_sec <= self.ema_sec:
@@ -350,9 +361,6 @@ class Bot:
             return False
         finally:
             self.ts_released["update_position"] = time()
-
-    async def get_latest_fills(self) -> []:
-        self.latest_fills = await self.fetch_fills()
 
     async def init_fills(self, n_days_limit=60):
         self.fills = await self.fetch_fills()
@@ -1110,6 +1118,33 @@ class Bot:
     async def subscribe_to_user_stream(self, ws):
         pass
 
+    async def update_last_fills_timestamps(self):
+        if (
+            self.ts_locked["update_last_fills_timestamps"]
+            > self.ts_released["update_last_fills_timestamps"]
+        ):
+            return
+        self.ts_locked["update_last_fills_timestamps"] = time()
+        try:
+            fills = await self.fetch_latest_fills()
+            keys_done = set()
+            all_keys = set(self.last_fills_timestamps)
+            for fill in sorted(fills, lambda x: x["timestamp"], reverse=True):
+                print(fill["custom_id"])
+                for key in all_keys - keys_done:
+                    if key in fill["custom_id"]:
+                        self.last_fills_timestamps[key] = fill["timestamp"]
+                        keys_done.add(key)
+                        if all_keys == keys_done:
+                            break
+            return True
+        except Exception as e:
+            logging.error(f"error with update last fills timestamps {e}")
+            traceback.print_exc()
+            return False
+        finally:
+            self.ts_released["update_last_fills_timestamps"] = time()
+
     async def start_ohlcv_mode(self):
         await asyncio.gather(self.update_position(), self.update_open_orders())
         await self.init_exchange_config()
@@ -1144,11 +1179,16 @@ class Bot:
                 self.heartbeat_ts = time()
             self.prev_price = self.ob[0]
             prev_pos = self.position.copy()
-            res = await asyncio.gather(
-                self.update_position(), self.update_open_orders(), self.init_order_book()
-            )
-            # TODO catch when res != [True, True, True]
+            to_update = [self.update_position(), self.update_open_orders(), self.init_order_book()]
+            if self.passivbot_mode == "emas":
+                to_update.append(self.update_last_fills_timestamps())
+            res = await asyncio.gather(*to_update)
             self.update_emas(self.ob[0], self.prev_price)
+            print(res)
+            print(self.last_fills_timestamps)
+            return
+            if not all(res):
+                return
             await self.cancel_and_create()
             if prev_pos["wallet_balance"] != self.position["wallet_balance"]:
                 logging.info(
@@ -1339,10 +1379,10 @@ async def main() -> None:
         raise IOError(f"Exchange {config['exchange']} is not supported in test mode.")
     config["market_type"] = args.market_type if args.market_type is not None else "futures"
     config["passivbot_mode"] = determine_passivbot_mode(config)
-    if config['passivbot_mode'] == 'emas':
-        config['ohlcv'] = True
-        config['long'] = {'enabled': config['long_enabled']}
-        config['short'] = {'enabled': config['short_enabled']}
+    if config["passivbot_mode"] == "emas":
+        config["ohlcv"] = True
+        config["long"] = {"enabled": config["long_enabled"]}
+        config["short"] = {"enabled": config["short_enabled"]}
     if args.assigned_balance is not None:
         logging.info(f"assigned balance set to {args.assigned_balance}")
         config["assigned_balance"] = args.assigned_balance
@@ -1410,7 +1450,7 @@ async def main() -> None:
     for _, _, _, dest in float_kwargs:
         if getattr(args, dest) is not None:
             side, key = dest[: dest.find("_")], dest[dest.find("_") + 1 :]
-            if config['passivbot_mode'] == 'emas':
+            if config["passivbot_mode"] == "emas":
                 old_val = config[f"{key}_{side}"]
                 config[f"{key}_{side}"] = getattr(args, dest)
             else:
@@ -1458,8 +1498,6 @@ async def main() -> None:
 
     signal.signal(signal.SIGINT, bot.stop)
     signal.signal(signal.SIGTERM, bot.stop)
-    print(config)
-    return
     await start_bot(bot)
     if hasattr(bot, "session"):
         await bot.session.close()
