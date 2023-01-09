@@ -37,7 +37,9 @@ class BinanceBot(Bot):
             traceback.print_exc()
             return {}
 
-    async def private_(self, type_: str, base_endpoint: str, url: str, params: dict = {}, data_: bool = False) -> dict:
+    async def private_(
+        self, type_: str, base_endpoint: str, url: str, params: dict = {}, data_: bool = False
+    ) -> dict:
         def stringify(x):
             if type(x) == bool:
                 return "true" if x else "false"
@@ -89,7 +91,9 @@ class BinanceBot(Bot):
             params,
         )
 
-    async def private_post(self, url: str, params: dict = {}, base_endpoint: str = None, data_: bool = False) -> dict:
+    async def private_post(
+        self, url: str, params: dict = {}, base_endpoint: str = None, data_: bool = False
+    ) -> dict:
         return await self.private_(
             "post", self.base_endpoint if base_endpoint is None else base_endpoint, url, params, data_
         )
@@ -102,7 +106,9 @@ class BinanceBot(Bot):
             params,
         )
 
-    async def private_delete(self, url: str, params: dict = {}, base_endpoint: str = None, data_: bool = False) -> dict:
+    async def private_delete(
+        self, url: str, params: dict = {}, base_endpoint: str = None, data_: bool = False
+    ) -> dict:
         return await self.private_(
             "delete",
             self.base_endpoint if base_endpoint is None else base_endpoint,
@@ -116,7 +122,9 @@ class BinanceBot(Bot):
         dapi_endpoint = "https://dapi.binance.com"
         self.exchange_info = None
         try:
-            self.exchange_info = await self.public_get("/fapi/v1/exchangeInfo", base_endpoint=fapi_endpoint)
+            self.exchange_info = await self.public_get(
+                "/fapi/v1/exchangeInfo", base_endpoint=fapi_endpoint
+            )
             if self.symbol in {e["symbol"] for e in self.exchange_info["symbols"]}:
                 print("linear perpetual")
                 self.market_type += "_linear_perpetual"
@@ -147,7 +155,9 @@ class BinanceBot(Bot):
                     "batch_orders": "/fapi/v1/batchOrders",
                 }
             else:
-                self.exchange_info = await self.public_get("/dapi/v1/exchangeInfo", base_endpoint=dapi_endpoint)
+                self.exchange_info = await self.public_get(
+                    "/dapi/v1/exchangeInfo", base_endpoint=dapi_endpoint
+                )
                 if self.symbol in {e["symbol"] for e in self.exchange_info["symbols"]}:
                     print("inverse coin margined")
                     self.base_endpoint = dapi_endpoint
@@ -220,7 +230,9 @@ class BinanceBot(Bot):
         await self.update_position()
 
     async def get_server_time(self):
-        now = await self.public_get(self.endpoints["server_time"], base_endpoint=self.spot_base_endpoint)
+        now = await self.public_get(
+            self.endpoints["server_time"], base_endpoint=self.spot_base_endpoint
+        )
         return now["serverTime"]
 
     async def transfer_from_derivatives_to_spot(self, coin: str, amount: float):
@@ -232,7 +244,9 @@ class BinanceBot(Bot):
 
     async def execute_leverage_change(self):
         lev = self.leverage
-        return await self.private_post(self.endpoints["leverage"], {"symbol": self.symbol, "leverage": lev})
+        return await self.private_post(
+            self.endpoints["leverage"], {"symbol": self.symbol, "leverage": lev}
+        )
 
     async def init_exchange_config(self) -> bool:
         try:
@@ -251,7 +265,13 @@ class BinanceBot(Bot):
         except Exception as e:
             print(e)
         try:
-            print_([await self.private_post(self.endpoints["position_side"], {"dualSidePosition": "true"})])
+            print_(
+                [
+                    await self.private_post(
+                        self.endpoints["position_side"], {"dualSidePosition": "true"}
+                    )
+                ]
+            )
         except Exception as e:
             if '"code":-4059' not in e.args[0]:
                 print(e)
@@ -275,7 +295,9 @@ class BinanceBot(Bot):
     async def fetch_open_orders(self) -> [dict]:
         open_orders = None
         try:
-            open_orders = await self.private_get(self.endpoints["open_orders"], {"symbol": self.symbol})
+            open_orders = await self.private_get(
+                self.endpoints["open_orders"], {"symbol": self.symbol}
+            )
             return [
                 {
                     "order_id": int(e["orderId"]),
@@ -301,12 +323,20 @@ class BinanceBot(Bot):
             positions, balance = await asyncio.gather(
                 self.private_get(
                     self.endpoints["position"],
-                    ({"symbol": self.symbol} if "linear_perpetual" in self.market_type else {"pair": self.pair}),
+                    (
+                        {"symbol": self.symbol}
+                        if "linear_perpetual" in self.market_type
+                        else {"pair": self.pair}
+                    ),
                 ),
                 self.private_get(self.endpoints["balance"], {}),
             )
-            assert all(key in positions[0] for key in ["symbol", "positionAmt", "entryPrice"]), "bogus position fetch"
-            assert all(key in balance[0] for key in ["asset", "balance", "crossUnPnl"]), "bogus balance fetch"
+            assert all(
+                key in positions[0] for key in ["symbol", "positionAmt", "entryPrice"]
+            ), "bogus position fetch"
+            assert all(
+                key in balance[0] for key in ["asset", "balance", "crossUnPnl"]
+            ), "bogus balance fetch"
             positions = [e for e in positions if e["symbol"] == self.symbol]
             position = {
                 "long": {"size": 0.0, "price": 0.0, "liquidation_price": 0.0},
@@ -400,7 +430,9 @@ class BinanceBot(Bot):
                         "newClientOrderId"
                     ] = f"{order['custom_id']}_{str(int(time() * 1000))[8:]}_{int(np.random.random() * 1000)}"
                 to_execute.append(params)
-            executed = await self.private_post(self.endpoints["batch_orders"], {"batchOrders": to_execute}, data_=True)
+            executed = await self.private_post(
+                self.endpoints["batch_orders"], {"batchOrders": to_execute}, data_=True
+            )
             return [
                 {
                     "symbol": self.symbol,
@@ -586,7 +618,9 @@ class BinanceBot(Bot):
 
     async def fetch_account(self):
         try:
-            return await self.private_get(self.endpoints["account"], base_endpoint=self.spot_base_endpoint)
+            return await self.private_get(
+                self.endpoints["account"], base_endpoint=self.spot_base_endpoint
+            )
         except Exception as e:
             print("error fetching account: ", e)
             return {"balances": []}
@@ -641,7 +675,9 @@ class BinanceBot(Bot):
     async def fetch_ticks_time(self, start_time: int, end_time: int = None, do_print: bool = True):
         return await self.fetch_ticks(start_time=start_time, end_time=end_time, do_print=do_print)
 
-    async def fetch_ohlcvs(self, symbol: str = None, start_time: int = None, interval="1m", limit=1500):
+    async def fetch_ohlcvs(
+        self, symbol: str = None, start_time: int = None, interval="1m", limit=1500
+    ):
         # m -> minutes; h -> hours; d -> days; w -> weeks; M -> months
         interval_map = {
             "1m": 1,
@@ -672,7 +708,10 @@ class BinanceBot(Bot):
             return [
                 {
                     **{"timestamp": int(e[0])},
-                    **{k: float(e[i + 1]) for i, k in enumerate(["open", "high", "low", "close", "volume"])},
+                    **{
+                        k: float(e[i + 1])
+                        for i, k in enumerate(["open", "high", "low", "close", "volume"])
+                    },
                 }
                 for e in fetched
             ]
@@ -682,7 +721,9 @@ class BinanceBot(Bot):
 
     async def transfer(self, type_: str, amount: float, asset: str = "USDT"):
         params = {"type": type_.upper(), "amount": amount, "asset": asset}
-        return await self.private_post(self.endpoints["transfer"], params, base_endpoint=self.spot_base_endpoint)
+        return await self.private_post(
+            self.endpoints["transfer"], params, base_endpoint=self.spot_base_endpoint
+        )
 
     def standardize_market_stream_event(self, data: dict) -> [dict]:
         try:
