@@ -80,16 +80,16 @@ def dump_plots_emas(
             result["ema_span_1"],
         ]
     )
-    price_1m = df.set_index('timestamp').close
+    price_1m = df.set_index("timestamp").close
     emas = pd.DataFrame(
         {f"ema_{span}": price_1m.ewm(span=span, adjust=False).mean() for span in spans},
-        index=price_1m.index
+        index=price_1m.index,
     )
     eb_lower = emas.min(axis=1) * (1 - result["ema_dist_lower"])
     eb_upper = emas.max(axis=1) * (1 + result["ema_dist_upper"])
     print("plotting backtest slices")
     if n_parts is None:
-        n_parts = 5
+        n_parts = 10
     for i in range(n_parts):
         start_idx = int(sdf.index[0] + (sdf.index[-1] - sdf.index[0]) * (i / n_parts))
         end_idx = int(sdf.index[0] + (sdf.index[-1] - sdf.index[0]) * ((i + 1) / n_parts))
@@ -98,13 +98,19 @@ def dump_plots_emas(
         sdf_slice = sdf[(sdf.index >= start_idx) & (sdf.index <= end_idx)]
         buys = fdf_slice[fdf_slice.qty > 0.0]
         sells = fdf_slice[fdf_slice.qty < 0.0]
+        """
+        eqnorm = sdf_slice.equity
+        eqnorm = (eqnorm - eqnorm.min()) / (eqnorm.max() - eqnorm.min())
+        eqnorm = eqnorm * sdf_slice.price.max() + sdf_slice.price.min()
+        eqnorm.plot(style="k-")
+        """
         sdf_slice.price.plot(style="y-")
         eb_lower[(eb_lower.index >= start_idx) & (eb_lower.index <= end_idx)].plot(style="b--")
         eb_upper[(eb_upper.index >= start_idx) & (eb_upper.index <= end_idx)].plot(style="r--")
         buys.price.plot(style="bo")
-        title = f"Whole backtest {i + 1}/{n_parts}"
+        title = f"backtest {i + 1}/{n_parts}"
         sells.price.plot(style="ro", title=title, xlabel="Time", ylabel="Fills")
-        plt.savefig(f"{result['plots_dirpath']}whole_backtest_{i + 1}_of_{n_parts}.png")
+        plt.savefig(f"{result['plots_dirpath']}backtest_{i + 1}_of_{n_parts}.png")
 
 
 def dump_plots(
