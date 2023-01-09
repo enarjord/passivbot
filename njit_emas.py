@@ -198,7 +198,7 @@ def backtest_emas(
                 )
                 if not close_grid_long:
                     # close remainder
-                    close_grid_long = [(-psize_long, closes[k - 1], "long_nclose")]
+                    close_grid_long = [(-psize_long, closes[k - 1], "close_markup_long")]
                 if highs[k] > close_grid_long[0][1]:
                     while close_grid_long and highs[k] > close_grid_long[0][1]:
                         # close long pos
@@ -258,7 +258,7 @@ def backtest_emas(
                 )
                 if not close_grid_short:
                     # close remainder
-                    close_grid_short = [(psize_short, closes[k - 1], "short_nclose")]
+                    close_grid_short = [(psize_short, closes[k - 1], "close_markup_short")]
                 if lows[k] < close_grid_short[0][1]:
                     while close_grid_short and lows[k] < close_grid_short[0][1]:
                         # close short pos
@@ -307,7 +307,8 @@ def backtest_emas(
             bid_price = calc_ema_price_bid(emas.min(), closes[k - 1], ema_dist_lower, price_step)
             if lows[k] < bid_price:
                 # bid filled
-                if short_enabled and psize_short > 0.0:
+                if psize_short > 0.0:
+                    # close short
                     wallet_exposure_short = (
                         qty_to_cost(psize_short, pprice_short, inverse, c_mult) / balance
                     )
@@ -328,7 +329,6 @@ def backtest_emas(
                         ),
                     )
                     prev_ema_fill_ts_bid = timestamps[k]
-                    # close short
                     psize_short = round_(psize_short - qty_short, qty_step)
                     pnl = calc_pnl_short(pprice_short, bid_price, qty_short, inverse, c_mult)
                     fee_paid = -qty_to_cost(qty_short, bid_price, inverse, c_mult) * maker_fee
@@ -360,8 +360,8 @@ def backtest_emas(
                         qty_to_cost(psize_long, pprice_long, inverse, c_mult) / balance
                     )
                     if wallet_exposure_long < wallet_exposure_limit_long * 0.99:
-                        prev_ema_fill_ts_bid = timestamps[k]
                         # entry long
+                        prev_ema_fill_ts_bid = timestamps[k]
                         qty_long = calc_ema_qty(
                             balance,
                             wallet_exposure_long,
@@ -381,7 +381,7 @@ def backtest_emas(
                         wallet_exposure_after_fill = (
                             qty_to_cost(new_psize_long, new_pprice_long, inverse, c_mult) / balance
                         )
-                        if wallet_exposure_after_fill > wallet_exposure_limit_long * 1.05:
+                        if wallet_exposure_after_fill > wallet_exposure_limit_long * 1.01:
                             qty_long = find_entry_qty_bringing_wallet_exposure_to_target(
                                 balance,
                                 psize_long,
@@ -426,7 +426,7 @@ def backtest_emas(
             ask_price = calc_ema_price_ask(emas.max(), closes[k - 1], ema_dist_upper, price_step)
             if highs[k] > ask_price:
                 # ask filled
-                if long_enabled and psize_long > 0.0:
+                if psize_long > 0.0:
                     wallet_exposure_long = (
                         qty_to_cost(psize_long, pprice_long, inverse, c_mult) / balance
                     )
@@ -500,7 +500,7 @@ def backtest_emas(
                         wallet_exposure_after_fill = (
                             qty_to_cost(new_psize_short, new_pprice_short, inverse, c_mult) / balance
                         )
-                        if wallet_exposure_after_fill > wallet_exposure_limit_short * 1.05:
+                        if wallet_exposure_after_fill > wallet_exposure_limit_short * 1.01:
                             qty_short = find_entry_qty_bringing_wallet_exposure_to_target(
                                 balance,
                                 psize_short,
