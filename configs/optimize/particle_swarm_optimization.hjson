@@ -6,7 +6,7 @@
   c1: 0.5  # attraction to global best
 
   n_cpus: 6
-  iters: 4000
+  iters: 3500
 
   # score = adg_realized_per_exposure
 
@@ -22,13 +22,12 @@
   maximum_pa_distance_mean_short: 0.04
 
   # score /= max(maximum_loss_profit_ratio, loss_profit_ratio)
-  maximum_loss_profit_ratio_long: 0.25
-  maximum_loss_profit_ratio_short: 0.25
+  maximum_loss_profit_ratio_long: 0.5
+  maximum_loss_profit_ratio_short: 0.5
 
   # score /= max(maximum_hrs_stuck_max, hrs_stuck_max)
   maximum_hrs_stuck_max_long: 250.0
   maximum_hrs_stuck_max_short: 250.0
-
 
   # score *= min(minimum_eqbal_ratio_min, eqbal_ratio_min)
   minimum_eqbal_ratio_min_long: 0.75
@@ -190,27 +189,27 @@
   }
   bounds_emas:
   {
-    ema_span_0: [100.0, 1000.0]
-    ema_span_1: [500.0, 10000.0]
+    ema_span_0: [120.0, 1440.0]
+    ema_span_1: [240.0, 10080.0]
     ema_dist_lower: [0.0, 0.02]
     ema_dist_upper: [0.0, 0.02]
-    qty_pct_entry_long: [0.005, 0.1]
-    qty_pct_entry_short: [0.005, 0.1]
-    qty_pct_close_long: [0.005, 0.1]
-    qty_pct_close_short: [0.005, 0.1]
-    we_multiplier_entry_long: [0.0, 70.0]
-    we_multiplier_entry_short: [0.0, 70.0]
-    we_multiplier_close_long: [0.0, 70.0]
-    we_multiplier_close_short: [0.0, 70.0]
+    qty_pct_entry_long: [0.005, 0.05]
+    qty_pct_entry_short: [0.005, 0.05]
+    qty_pct_close_long: [0.005, 0.05]
+    qty_pct_close_short: [0.005, 0.05]
+    we_multiplier_entry_long: [0.0, 50.0]
+    we_multiplier_entry_short: [0.0, 50.0]
+    we_multiplier_close_long: [0.0, 50.0]
+    we_multiplier_close_short: [0.0, 50.0]
     delay_weight_bid: [0.0, 50.0]
     delay_weight_ask: [0.0, 50.0]
-    delay_between_fills_minutes_bid: [1.0, 5000.0]
-    delay_between_fills_minutes_ask: [1.0, 5000.0]
-    min_markup_long: [0.0015, 0.03]
-    min_markup_short: [0.0015, 0.03]
+    delay_between_fills_minutes_bid: [1.0, 4320.0]
+    delay_between_fills_minutes_ask: [1.0, 4320.0]
+    min_markup_long: [0.0015, 0.01]
+    min_markup_short: [0.0015, 0.01]
     markup_range_long: [0.0, 0.07]
     markup_range_short: [0.0, 0.07]
-    n_close_orders: [5, 20]
+    n_close_orders: [7, 16]
     wallet_exposure_limit_long: [1.0, 1.0]
     wallet_exposure_limit_short: [1.0, 1.0]
   }
