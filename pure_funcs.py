@@ -120,10 +120,14 @@ def get_xk_keys(passivbot_mode="static_grid"):
             "we_multiplier_entry_short",
             "we_multiplier_close_long",
             "we_multiplier_close_short",
-            "delay_weight_bid",
-            "delay_weight_ask",
-            "delay_between_fills_minutes_bid",
-            "delay_between_fills_minutes_ask",
+            "delay_weight_entry_long",
+            "delay_weight_close_long",
+            "delay_weight_entry_short",
+            "delay_weight_close_short",
+            "delay_between_fills_minutes_entry_long",
+            "delay_between_fills_minutes_close_long",
+            "delay_between_fills_minutes_entry_short",
+            "delay_between_fills_minutes_close_short",
             "min_markup_long",
             "min_markup_short",
             "markup_range_long",
@@ -575,10 +579,14 @@ def get_template_live_config(passivbot_mode="static_grid"):
                 "we_multiplier_entry_short": 1.0,
                 "we_multiplier_close_long": 6.0,
                 "we_multiplier_close_short": 6.0,
-                "delay_weight_bid": 0.0,
-                "delay_weight_ask": 0.0,
-                "delay_between_fills_minutes_bid": 2000.0,
-                "delay_between_fills_minutes_ask": 2000.0,
+                "delay_weight_entry_long" : 0.0,
+                "delay_weight_close_long" : 0.0,
+                "delay_weight_entry_short" : 0.0,
+                "delay_weight_close_short" : 0.0,
+                "delay_between_fills_minutes_entry_long" : 2000.0,
+                "delay_between_fills_minutes_close_long" : 2000.0,
+                "delay_between_fills_minutes_entry_short" : 2000.0,
+                "delay_between_fills_minutes_close_short" : 2000.0,
                 "min_markup_long": 0.0075,
                 "min_markup_short": 0.0075,
                 "markup_range_long": 0.03,
@@ -732,6 +740,7 @@ def analyze_fills_emas(fills: np.array, stats: list, config: dict):
     pa_dists = (sdf.price - pprices).abs() / sdf.price
     pa_dists = pa_dists[pa_dists < 1.0]
     ms_diffs = fdf.timestamp.diff()
+    fdf.loc[:,'mins_since_prev_fill'] = ms_diffs / 1000.0 / 60.0
 
     analysis = {
         "n_days": n_days,
