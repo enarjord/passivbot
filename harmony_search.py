@@ -558,16 +558,6 @@ async def main():
         help="passivbot mode options: [s/static_grid, r/recursive_grid, n/neat_grid]",
     )
     parser.add_argument(
-        "-sf",
-        "--score_formula",
-        "--score-formula",
-        type=str,
-        required=False,
-        dest="score_formula",
-        default=None,
-        help="passivbot score formula options: [adg_PAD_mean, adg_PAD_std, adg_DGstd_ratio, adg_mean, adg_min, adg_PAD_std_min]",
-    )
-    parser.add_argument(
         "-oh",
         "--ohlcv",
         help="use 1m ohlcv instead of 1s ticks",
@@ -577,21 +567,6 @@ async def main():
     args = parser.parse_args()
     args.symbol = "BTCUSDT"  # dummy symbol
     config = await prepare_optimize_config(args)
-    if args.score_formula is not None:
-        if args.score_formula not in [
-            "adg_PAD_mean",
-            "adg_PAD_std",
-            "adg_DGstd_ratio",
-            "adg_mean",
-            "adg_min",
-            "adg_PAD_std_min",
-            "adg_realized_PAD_mean",
-            "adg_realized_PAD_std",
-        ]:
-            logging.error(f"unknown score formula {args.score_formula}")
-            logging.error(f"using score formula {config['score_formula']}")
-        else:
-            config["score_formula"] = args.score_formula
     if args.passivbot_mode is not None:
         if args.passivbot_mode in ["s", "static_grid", "static"]:
             config["passivbot_mode"] = "static_grid"
@@ -599,6 +574,8 @@ async def main():
             config["passivbot_mode"] = "recursive_grid"
         elif args.passivbot_mode in ["n", "neat_grid", "neat"]:
             config["passivbot_mode"] = "neat_grid"
+        elif args.passivbot_mode in ["e", "emas"]:
+            config["passivbot_mode"] = "emas"
         else:
             raise Exception(f"unknown passivbot mode {args.passivbot_mode}")
     passivbot_mode = config["passivbot_mode"]
@@ -606,6 +583,7 @@ async def main():
         "recursive_grid",
         "static_grid",
         "neat_grid",
+        "emas",
     ], f"unknown passivbot mode {passivbot_mode}"
     config.update(get_template_live_config(passivbot_mode))
     config["long"]["backwards_tp"] = config["backwards_tp_long"]
@@ -636,7 +614,7 @@ async def main():
         config["n_cpus"] = args.n_cpus
     if args.base_dir is not None:
         config["base_dir"] = args.base_dir
-    config["ohlcv"] = args.ohlcv
+    config["ohlcv"] = True if passivbot_mode == "emas" else args.ohlcv
     print()
     lines = [(k, getattr(args, k)) for k in args.__dict__ if args.__dict__[k] is not None]
     lines += [(k, config[k]) for k in ["start_date", "end_date"] if k not in [z[0] for z in lines]]
