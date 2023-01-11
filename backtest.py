@@ -54,13 +54,12 @@ def backtest(config: dict, data: np.ndarray, do_print=False) -> (list, bool):
             **xk,
         )
     elif passivbot_mode == "emas":
-        res = backtest_emas(
+        return backtest_emas(
             data,
             config["starting_balance"],
             config["maker_fee"],
             **xk,
         )
-        return res[0], [], res[1]
     return backtest_static_grid(
         data,
         config["starting_balance"],
