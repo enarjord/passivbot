@@ -1134,7 +1134,6 @@ def make_compatible(live_config_: dict) -> dict:
             live_config[side]["max_n_entry_orders"] = int(
                 round(live_config[side]["max_n_entry_orders"])
             )
-    assert all(k in live_config["long"] for k in get_template_live_config()["long"])
     return sort_dict_keys(live_config)
 
 
