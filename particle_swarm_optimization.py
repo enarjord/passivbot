@@ -633,7 +633,7 @@ async def main():
         config["n_cpus"] = args.n_cpus
     if args.base_dir is not None:
         config["base_dir"] = args.base_dir
-    config["ohlcv"] = True if passivbot_mode == 'emas' else args.ohlcv
+    config["ohlcv"] = True if passivbot_mode == "emas" else args.ohlcv
     print()
     lines = [(k, getattr(args, k)) for k in args.__dict__ if args.__dict__[k] is not None]
     lines += [
