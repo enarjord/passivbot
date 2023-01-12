@@ -210,7 +210,7 @@ class ParticleSwarmOptimization:
             if self.gbest_long is None or scores["long"] < self.gbest_long["score"]:
                 self.gbest_long = deepcopy({"config": cfg["long"], "score": scores["long"]})
                 is_better = True
-                line = f"i{cfg['config_no']} - new best config long, score {round_dynamic(scores['long'], 4)} "
+                line = f"i{cfg['config_no']} - new best config long, score {round_dynamic(scores['long'], 12)} "
                 for key, _ in keys:
                     line += f"{key} {round_dynamic(raws['long'][key], 4)} "
                 logging.info(line)
@@ -225,7 +225,7 @@ class ParticleSwarmOptimization:
             if self.gbest_short is None or scores["short"] < self.gbest_short["score"]:
                 self.gbest_short = deepcopy({"config": cfg["short"], "score": scores["short"]})
                 is_better = True
-                line = f"i{cfg['config_no']} - new best config short, score {round_dynamic(scores['short'], 4)} "
+                line = f"i{cfg['config_no']} - new best config short, score {round_dynamic(scores['short'], 12)} "
                 for key, _ in keys:
                     line += f"{key} {round_dynamic(raws['short'][key], 4)} "
                 logging.info(line)
@@ -376,20 +376,6 @@ class ParticleSwarmOptimization:
             },
         }
         line = f"starting new initial eval {config['config_no']} of {self.n_particles} "
-        if self.do_long:
-            line += " - long: " + " ".join(
-                [
-                    f"{e[0][:2]}{e[0][-2:]}" + str(round_dynamic(e[1], 3))
-                    for e in sorted(self.swarm[swarm_key]["long"]["config"].items())
-                ]
-            )
-        if self.do_short:
-            line += " - short: " + " ".join(
-                [
-                    f"{e[0][:2]}{e[0][-2:]}" + str(round_dynamic(e[1], 3))
-                    for e in sorted(self.swarm[swarm_key]["short"]["config"].items())
-                ]
-            )
         logging.info(line)
 
         config["market_specific_settings"] = self.market_specific_settings[config["symbol"]]
