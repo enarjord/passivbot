@@ -231,7 +231,7 @@ class OKXBot(Bot):
                         break
             return to_return
         except Exception as e:
-            print(f"error executing order {executed} {e}")
+            print(f"error executing order {executed} {orders} {e}")
             print_async_exception(executed)
             traceback.print_exc()
             return []

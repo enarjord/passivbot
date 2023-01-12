@@ -24,7 +24,14 @@ It provides support for automatically optimize configurations, backtest using hi
 
 ## Supported exchanges
 
-Currently the exchanges **Binance Futures**, **Binance Spot**, **Binance US**, **Bitget USDT and Coin margined Futures**, **OKX** and **Bybit Futures** are implemented and supported.  
+Currently the exchanges  
+**Binance USDT and Coin margined Futures**  
+**Binance Spot**  
+**Binance US**  
+**Bitget USDT and Coin margined Futures**  
+**OKX USDT margined perpetuals**  
+**Bybit Derivatives**  
+are implemented and supported.  
 
 Not all functionality is supported on all exchanges, depending on the APIs that exchanges expose and development efforts.
 
