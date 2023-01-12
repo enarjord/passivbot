@@ -18,7 +18,6 @@ from njit_emas import backtest_emas
 from plotting import dump_plots
 from procedures import (
     prepare_backtest_config,
-    make_get_filepath,
     load_live_config,
     load_hjson_config,
     add_argparse_args,
@@ -79,33 +78,9 @@ def plot_wrap(config, data):
     if not fills_long and not fills_short:
         print("no fills")
         return
-    if config["passivbot_mode"] == "emas":
-        fdf, _, sdf, analysis = analyze_fills(fills_long, fills_short, stats, config)
-        config["result"] = analysis
-        config["plots_dirpath"] = make_get_filepath(
-            os.path.join(config["plots_dirpath"], f"{ts_to_date(time())[:19].replace(':', '')}", "")
-        )
-        fdf.to_csv(config["plots_dirpath"] + "fills.csv")
-        sdf.to_csv(config["plots_dirpath"] + "stats.csv")
-        dump_plots(
-            config,
-            fdf,
-            None,
-            sdf,
-            pd.DataFrame(data[:, [0, 3]], columns=["timestamp", "close"]),
-            n_parts=config["n_parts"],
-            disable_plotting=config["disable_plotting"],
-        )
-        return
-
     longs, shorts, sdf, result = analyze_fills(fills_long, fills_short, stats, config)
     config["result"] = result
-    config["plots_dirpath"] = make_get_filepath(
-        os.path.join(config["plots_dirpath"], f"{ts_to_date(time())[:19].replace(':', '')}", "")
-    )
-    longs.to_csv(config["plots_dirpath"] + "fills_long.csv")
-    shorts.to_csv(config["plots_dirpath"] + "fills_short.csv")
-    sdf.to_csv(config["plots_dirpath"] + "stats.csv")
+
     df = pd.DataFrame({**{"timestamp": data[:, 0], "qty": data[:, 1], "price": data[:, 2]}, **{}})
     print("dumping plots...")
     dump_plots(
