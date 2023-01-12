@@ -228,7 +228,7 @@ def backtest_emas(
                     bkr_price_short,
                     psize_long,
                     pprice_long,
-                    psize_short,
+                    -psize_short,
                     pprice_short,
                     closes[k],
                     closest_bkr_long,
@@ -366,7 +366,9 @@ def backtest_emas(
                             upnl = calc_pnl_long(pprice_long, closes[k], psize_long, inverse, c_mult)
                             equity_long = balance_long + upnl
                             pnl = 0.0
-                            fee_paid = -qty_to_cost(qty_long, bid_price_long, inverse, c_mult) * maker_fee
+                            fee_paid = (
+                                -qty_to_cost(qty_long, bid_price_long, inverse, c_mult) * maker_fee
+                            )
                             balance_long += fee_paid
                             fills_long.append(
                                 (
@@ -476,8 +478,7 @@ def backtest_emas(
                         pprice_short, close_grid_short[0][1], close_qty, inverse, c_mult
                     )
                     fee_paid = (
-                        -qty_to_cost(close_qty, close_grid_short[0][1], inverse, c_mult)
-                        * maker_fee
+                        -qty_to_cost(close_qty, close_grid_short[0][1], inverse, c_mult) * maker_fee
                     )
                     balance_short += pnl + fee_paid
                     psize_short = max(0.0, round_(psize_short - close_qty, qty_step))
@@ -558,7 +559,9 @@ def backtest_emas(
                             )
                             equity_short = balance_short + upnl
                             pnl = 0.0
-                            fee_paid = -qty_to_cost(qty_short, ask_price_short, inverse, c_mult) * maker_fee
+                            fee_paid = (
+                                -qty_to_cost(qty_short, ask_price_short, inverse, c_mult) * maker_fee
+                            )
                             balance_short += fee_paid
                             fills_short.append(
                                 (
