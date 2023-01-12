@@ -555,7 +555,7 @@ async def main():
         required=False,
         dest="passivbot_mode",
         default=None,
-        help="passivbot mode options: [s/static_grid, r/recursive_grid, n/neat_grid]",
+        help="passivbot mode options: [s/static_grid, r/recursive_grid, n/neat_grid, e/emas]",
     )
     parser.add_argument(
         "-oh",
