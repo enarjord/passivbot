@@ -184,7 +184,8 @@ async def main():
             config["short"]["enabled"] = "y" in args.short_enabled.lower()
         if "spot" in config["market_type"]:
             live_config = spotify_config(live_config)
-        config["ohlcv"] = args.ohlcv
+        config["ohlcv"] = args.ohlcv if config["exchange"] != "okx" else True
+        config["passivbot_mode"] = determine_passivbot_mode(config)
 
         print()
         for k in (
@@ -198,7 +199,9 @@ async def main():
                 "starting_balance",
                 "start_date",
                 "end_date",
-                "latency_simulation_ms",
+                "maker_fee",
+                "min_qty",
+                "min_cost",
                 "base_dir",
             ]
         ):

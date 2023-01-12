@@ -64,12 +64,12 @@ def calc_min_entry_qty(price, inverse, qty_step, min_qty, min_cost) -> float:
 
 @njit
 def cost_to_qty(cost, price, inverse, c_mult):
-    return cost * price / c_mult if inverse else (cost / price if price > 0.0 else 0.0)
+    return (cost * price if inverse else (cost / price if price > 0.0 else 0.0)) / c_mult
 
 
 @njit
 def qty_to_cost(qty, price, inverse, c_mult) -> float:
-    return (abs(qty / price) if price > 0.0 else 0.0) * c_mult if inverse else abs(qty * price)
+    return ((abs(qty / price) if price > 0.0 else 0.0) if inverse else abs(qty * price)) * c_mult
 
 
 @njit
@@ -124,7 +124,7 @@ def calc_pnl_long(entry_price, close_price, qty, inverse, c_mult) -> float:
             return 0.0
         return abs(qty) * c_mult * (1.0 / entry_price - 1.0 / close_price)
     else:
-        return abs(qty) * (close_price - entry_price)
+        return abs(qty) * c_mult * (close_price - entry_price)
 
 
 @njit
@@ -134,7 +134,7 @@ def calc_pnl_short(entry_price, close_price, qty, inverse, c_mult) -> float:
             return 0.0
         return abs(qty) * c_mult * (1.0 / close_price - 1.0 / entry_price)
     else:
-        return abs(qty) * (entry_price - close_price)
+        return abs(qty) * c_mult * (entry_price - close_price)
 
 
 @njit
@@ -326,10 +326,7 @@ def calc_close_grid_backwards_long(
     if psize == 0.0:
         return [(0.0, 0.0, "")]
     minm = pprice * (1 + min_markup)
-    if inverse:
-        full_psize = (wallet_exposure_limit * balance / c_mult) * pprice
-    else:
-        full_psize = (wallet_exposure_limit * balance) / pprice
+    full_psize = cost_to_qty(balance * wallet_exposure_limit, pprice, inverse, c_mult)
     n_close_orders = min(
         n_close_orders,
         full_psize / calc_min_entry_qty(pprice, inverse, qty_step, min_qty, min_cost),
@@ -502,10 +499,7 @@ def calc_close_grid_backwards_short(
     if psize == 0.0:
         return [(0.0, 0.0, "")]
     minm = pprice * (1 - min_markup)
-    if inverse:
-        full_psize = (wallet_exposure_limit * balance / c_mult) * pprice
-    else:
-        full_psize = (wallet_exposure_limit * balance) / pprice
+    full_psize = cost_to_qty(balance * wallet_exposure_limit, pprice, inverse, c_mult)
     n_close_orders = min(
         n_close_orders,
         full_psize / calc_min_entry_qty(pprice, inverse, qty_step, min_qty, min_cost),
@@ -730,6 +724,10 @@ def calc_m_b(x0, x1, y0, y1):
 
 @njit
 def calc_entry_qty_long(psize, pprice, entry_price, eprice_pprice_diff):
+    if entry_price == 0.0:
+        print("error entry_price", entry_price)
+    if eprice_pprice_diff == 0.0:
+        print("error eprice_pprice_diff", eprice_pprice_diff)
     return -(
         psize
         * (entry_price * eprice_pprice_diff + entry_price - pprice)
@@ -1028,7 +1026,7 @@ def find_entry_qty_bringing_wallet_exposure_to_target(
     guesses = []
     vals = []
     evals = []
-    guesses.append(round_(abs(psize) * wallet_exposure_target / wallet_exposure, qty_step))
+    guesses.append(round_(abs(psize) * wallet_exposure_target / max(0.01, wallet_exposure), qty_step))
     vals.append(
         calc_wallet_exposure_if_filled(
             balance, psize, pprice, guesses[-1], entry_price, inverse, c_mult, qty_step
@@ -1232,7 +1230,7 @@ def eval_entry_grid_long(
     if eprices is None:
         grid = np.zeros((max_n_entry_orders, 5))
         grid[:, 1] = [
-            round_dn(p, price_step)
+            max(price_step, round_dn(p, price_step))
             for p in basespace(
                 initial_entry_price,
                 initial_entry_price * (1 - grid_span),

@@ -177,7 +177,9 @@ def dump_plots(
         print(output)
         f.write(re.sub("\033\\[([0-9]+)(;[0-9]+)*m", "", output))
 
-    n_parts = n_parts if n_parts is not None else max(3, int(round_up(result["n_days"] / 14, 1.0)))
+    n_parts = (
+        n_parts if n_parts is not None else min(12, max(3, int(round_up(result["n_days"] / 14, 1.0))))
+    )
     for side, fdf in [("long", longs), ("short", shorts)]:
         if result[side]["enabled"]:
             plt.clf()
