@@ -1,21 +1,24 @@
 import json
 import re
+import os
 
 import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
+import time
 from colorama import init, Fore
 from prettytable import PrettyTable
 
 from njit_funcs import round_up
-from procedures import dump_live_config
-from pure_funcs import round_dynamic, denumpyize
+from procedures import dump_live_config, make_get_filepath
+from pure_funcs import round_dynamic, denumpyize, ts_to_date
 
 
 def dump_plots_emas(
     table,
     result: dict,
-    fdf: pd.DataFrame,
+    longs: pd.DataFrame,
+    shorts: pd.DataFrame,
     sdf: pd.DataFrame,
     df: pd.DataFrame,
     n_parts: int,
@@ -56,7 +59,8 @@ def dump_plots_emas(
         return
     print(f"\nplotting balance and equity...")
     sdf = sdf.set_index("timestamp")
-    fdf = fdf.set_index("timestamp")
+    longs = longs.set_index("timestamp")
+    shorts = shorts.set_index("timestamp")
     plt.clf()
     sdf.balance.plot()
     sdf.equity.plot(title=f"Balance and equity", xlabel="Time", ylabel="Balance")
@@ -128,6 +132,14 @@ def dump_plots(
         pd.set_option("display.precision", 10)
     except Exception as e:
         print("error setting pandas precision", e)
+
+    result["plots_dirpath"] = make_get_filepath(
+        os.path.join(result["plots_dirpath"], f"{ts_to_date(time.time())[:19].replace(':', '')}", "")
+    )
+    longs.to_csv(result["plots_dirpath"] + "fills_long.csv")
+    shorts.to_csv(result["plots_dirpath"] + "fills_short.csv")
+    sdf.to_csv(result["plots_dirpath"] + "stats.csv")
+
     table = PrettyTable(["Metric", "Value"])
     table.align["Metric"] = "l"
     table.align["Value"] = "l"
@@ -138,8 +150,6 @@ def dump_plots(
     table.add_row(["Symbol", result["symbol"] if "symbol" in result else "unknown"])
     table.add_row(["No. days", round_dynamic(result["result"]["n_days"], 2)])
     table.add_row(["Starting balance", round_dynamic(result["result"]["starting_balance"], 6)])
-    if result["passivbot_mode"] == "emas":
-        return dump_plots_emas(table, result, longs, sdf, df, n_parts, disable_plotting)
     for side in ["long", "short"]:
         if side not in result:
             result[side] = {"enabled": result[f"do_{side}"]}
@@ -238,7 +248,7 @@ def dump_plots(
             if not fig:
                 continue
             fig.savefig(f"{result['plots_dirpath']}whole_backtest_{side}.png")
-            print(f"\nplotting balance and equity {side}...")
+            print(f"\nplotting balance and equity {side} {result['plots_dirpath']}...")
             plt.clf()
             sdf[f"balance_{side}"].plot()
             sdf[f"equity_{side}"].plot(
@@ -260,54 +270,6 @@ def dump_plots(
                 else:
                     print(f"no {side} fills...")
 
-            print(f"plotting {side} initial entry band")
-            if "timestamp" in df.columns:
-                tick_interval = df.timestamp.iloc[1] - df.timestamp.iloc[0]
-            else:
-                tick_interval = df.index[1] - df.index[0]
-            try:
-                spans_multiplier = 60 / (tick_interval / 1000)
-                spans = [
-                    result[side]["ema_span_0"] * spans_multiplier,
-                    ((result[side]["ema_span_0"] * result[side]["ema_span_1"]) ** 0.5)
-                    * spans_multiplier,
-                    result[side]["ema_span_1"] * spans_multiplier,
-                ]
-                emas = pd.DataFrame(
-                    {
-                        str(span): df.iloc[::100]
-                        .price.ewm(span=max(1.0, span / 100), adjust=False)
-                        .mean()
-                        for span in spans
-                    }
-                )
-                ema_band_lower = emas.min(axis=1)
-                ema_band_upper = emas.max(axis=1)
-                if side == "long":
-                    ientry_band = ema_band_lower * (1 - result[side]["initial_eprice_ema_dist"])
-                else:
-                    ientry_band = ema_band_upper * (1 + result[side]["initial_eprice_ema_dist"])
-                plt.clf()
-                df.price.iloc[::100].plot(style="y-", title=f"{side.capitalize()} Initial Entry Band")
-                ientry_band.plot(style=f"{('b' if side == 'long' else 'r')}-.")
-                plt.savefig(f"{result['plots_dirpath']}initial_entry_band_{side}.png")
-                if result[side]["auto_unstuck_wallet_exposure_threshold"] != 0.0:
-                    print(f"plotting {side} unstucking bands...")
-                    unstucking_band_lower = ema_band_lower * (
-                        1 - result[side]["auto_unstuck_ema_dist"]
-                    )
-                    unstucking_band_upper = ema_band_upper * (
-                        1 + result[side]["auto_unstuck_ema_dist"]
-                    )
-                    plt.clf()
-                    df.price.iloc[::100].plot(
-                        style="y-", title=f"{side.capitalize()} Auto Unstucking Bands"
-                    )
-                    unstucking_band_lower.plot(style="b-.")
-                    unstucking_band_upper.plot(style="r-.")
-                    plt.savefig(f"{result['plots_dirpath']}auto_unstuck_bands_{side}.png")
-            except:
-                print("skipping ema bands")
     print("plotting pos sizes...")
     plt.clf()
 
@@ -323,7 +285,7 @@ def plot_fills(df, fdf_, side: int = 0, plot_whole_df: bool = False, title=""):
     if fdf_.empty:
         return
     plt.clf()
-    fdf = fdf_.set_index("timestamp")
+    fdf = fdf_.set_index("timestamp") if fdf_.index.name != "timestamp" else fdf_
     dfc = df  # .iloc[::max(1, int(len(df) * 0.00001))]
     if dfc.index.name != "timestamp":
         dfc = dfc.set_index("timestamp")
@@ -333,20 +295,28 @@ def plot_fills(df, fdf_, side: int = 0, plot_whole_df: bool = False, title=""):
     dfc.price.plot(style="y-", title=title, xlabel="Time", ylabel="Price + Fills")
     if side >= 0:
         longs = fdf[fdf.type.str.contains("long")]
-        lentry = longs[
-            longs.type.str.contains("rentry")
-            | longs.type.str.contains("ientry")
-            | (longs.type == "entry_long")
-        ]
-        lnclose = longs[longs.type.str.contains("nclose") | (longs.type == "close_long")]
-        luentry = longs[longs.type.str.contains("unstuck_entry")]
-        luclose = longs[longs.type.str.contains("unstuck_close")]
-        ldca = longs[longs.type.str.contains("secondary")]
-        lentry.price.plot(style="b.")
-        lnclose.price.plot(style="r.")
-        ldca.price.plot(style="go")
-        luentry.price.plot(style="bx")
-        luclose.price.plot(style="rx")
+        types = longs.type.unique()
+        if any(x in types for x in ["entry_ema_long", "close_ema_long", "close_markup_long"]):
+            # emas mode
+            longs[longs.type == "entry_ema_long"].price.plot(style="bo")
+            longs[longs.type == "close_ema_long"].price.plot(style="ro")
+            longs[longs.type == "close_markup_long"].price.plot(style="rx")
+        else:
+            lentry = longs[
+                longs.type.str.contains("rentry")
+                | longs.type.str.contains("ientry")
+                | (longs.type == "entry_long")
+                | (longs.type == "entry_ema_long")
+            ]
+            lnclose = longs[longs.type.str.contains("nclose") | (longs.type == "close_long")]
+            luentry = longs[longs.type.str.contains("unstuck_entry")]
+            luclose = longs[longs.type.str.contains("unstuck_close")]
+            ldca = longs[longs.type.str.contains("secondary")]
+            lentry.price.plot(style="b.")
+            lnclose.price.plot(style="r.")
+            ldca.price.plot(style="go")
+            luentry.price.plot(style="bx")
+            luclose.price.plot(style="rx")
 
         # longs.where(longs.pprice != 0.0).pprice.fillna(method="ffill").plot(style="b--")
         lppu = longs[(longs.pprice != longs.pprice.shift(1)) & (longs.pprice != 0.0)]
@@ -356,20 +326,27 @@ def plot_fills(df, fdf_, side: int = 0, plot_whole_df: bool = False, title=""):
             )
     if side <= 0:
         shorts = fdf[fdf.type.str.contains("short")]
-        sentry = shorts[
-            shorts.type.str.contains("rentry")
-            | shorts.type.str.contains("ientry")
-            | (shorts.type == "entry_short")
-        ]
-        snclose = shorts[shorts.type.str.contains("nclose") | (shorts.type == "close_short")]
-        suentry = shorts[shorts.type.str.contains("unstuck_entry")]
-        suclose = shorts[shorts.type.str.contains("unstuck_close")]
-        sdca = shorts[shorts.type.str.contains("secondary")]
-        sentry.price.plot(style="r.")
-        snclose.price.plot(style="b.")
-        sdca.price.plot(style="go")
-        suentry.price.plot(style="rx")
-        suclose.price.plot(style="bx")
+        types = shorts.type.unique()
+        if any(x in types for x in ["entry_ema_short", "close_ema_short", "close_markup_short"]):
+            # emas mode
+            shorts[shorts.type == "entry_ema_short"].price.plot(style="ro")
+            shorts[shorts.type == "close_ema_short"].price.plot(style="bo")
+            shorts[shorts.type == "close_markup_short"].price.plot(style="bx")
+        else:
+            sentry = shorts[
+                shorts.type.str.contains("rentry")
+                | shorts.type.str.contains("ientry")
+                | (shorts.type == "entry_short")
+            ]
+            snclose = shorts[shorts.type.str.contains("nclose") | (shorts.type == "close_short")]
+            suentry = shorts[shorts.type.str.contains("unstuck_entry")]
+            suclose = shorts[shorts.type.str.contains("unstuck_close")]
+            sdca = shorts[shorts.type.str.contains("secondary")]
+            sentry.price.plot(style="r.")
+            snclose.price.plot(style="b.")
+            sdca.price.plot(style="go")
+            suentry.price.plot(style="rx")
+            suclose.price.plot(style="bx")
         # shorts.where(shorts.pprice != 0.0).pprice.fillna(method="ffill").plot(style="r--")
         sppu = shorts[(shorts.pprice != shorts.pprice.shift(1)) & (shorts.pprice != 0.0)]
         for i in range(len(sppu) - 1):
