@@ -74,49 +74,257 @@ def calc_ema_qty(
 def calc_delay_between_fills_ms(delay_between_fills_ms, pprice_diff, delay_weight):
     # lowest delay is 1 minute
     # reduce trade delay in some proportion to pprice diff
+    # pprice diff is positive if upnl is negative
     return max(60000.0, delay_between_fills_ms * (1 - pprice_diff * delay_weight))
 
 
-def calc_orders_emas(
-    inverse,
-    do_long,
-    do_short,
-    qty_step,
-    price_step,
-    min_qty,
-    min_cost,
-    c_mult,
-    highest_bid,
-    lowest_ask,
-    emas,
-    ema_dist_lower,
-    ema_dist_upper,
-    qty_pct_entry_long,
-    qty_pct_entry_short,
-    qty_pct_close_long,
-    qty_pct_close_short,
-    we_multiplier_entry_long,
-    we_multiplier_entry_short,
-    we_multiplier_close_long,
-    we_multiplier_close_short,
-    delay_weight_entry_long,
-    delay_weight_close_long,
-    delay_weight_entry_short,
-    delay_weight_close_short,
-    delay_between_fills_minutes_entry_long,
-    delay_between_fills_minutes_close_long,
-    delay_between_fills_minutes_entry_short,
-    delay_between_fills_minutes_close_short,
-    min_markup_long,
-    min_markup_short,
-    markup_range_long,
-    markup_range_short,
-    n_close_orders,
-    wallet_exposure_limit_long,
-    wallet_exposure_limit_short,
+@njit
+def calc_ema_entry_long(
+    balance: float,
+    psize_long: float,
+    pprice_long: float,
+    highest_bid: float,
+    ema_band_lower: float,
+    utc_now_ms: float,
+    prev_ema_fill_ts_entry: float,
+    inverse: bool,
+    qty_step: float,
+    price_step: float,
+    min_qty: float,
+    min_cost: float,
+    c_mult: float,
+    ema_dist_lower: float,
+    qty_pct_entry: float,
+    we_multiplier_entry: float,
+    delay_weight_entry: float,
+    delay_between_fills_ms_entry: float,
+    wallet_exposure_limit: float,
+) -> (float, float, str, float, float):
+    if psize_long == 0.0 or utc_now_ms - prev_ema_fill_ts_entry > calc_delay_between_fills_ms(
+        delay_between_fills_ms_entry,
+        ((pprice_long / highest_bid - 1) if pprice_long > 0.0 else 0.0),
+        delay_weight_entry,
+    ):
+        wallet_exposure_long = qty_to_cost(psize_long, pprice_long, inverse, c_mult) / balance
+        if wallet_exposure_long < wallet_exposure_limit * 0.99:
+            # entry long
+            bid_price_long = calc_ema_price_bid(
+                ema_band_lower, highest_bid, ema_dist_lower, price_step
+            )
+            qty_long = calc_ema_qty(
+                balance,
+                wallet_exposure_long,
+                bid_price_long,
+                inverse,
+                qty_step,
+                min_qty,
+                min_cost,
+                c_mult,
+                qty_pct_entry,
+                we_multiplier_entry,
+                wallet_exposure_limit,
+            )
+            new_psize_long, new_pprice_long = calc_new_psize_pprice(
+                psize_long, pprice_long, qty_long, bid_price_long, qty_step
+            )
+            wallet_exposure_after_fill = (
+                qty_to_cost(new_psize_long, new_pprice_long, inverse, c_mult) / balance
+            )
+            if wallet_exposure_after_fill > wallet_exposure_limit * 1.01:
+                qty_long = find_entry_qty_bringing_wallet_exposure_to_target(
+                    balance,
+                    psize_long,
+                    pprice_long,
+                    wallet_exposure_limit,
+                    bid_price_long,
+                    inverse,
+                    qty_step,
+                    c_mult,
+                )
+                new_psize_long, new_pprice_long = calc_new_psize_pprice(
+                    psize_long, pprice_long, qty_long, bid_price_long, qty_step
+                )
+            if qty_long > 0.0:
+                return (qty_long, bid_price_long, "entry_ema_long", new_psize_long, new_pprice_long)
+    return (0.0, 0.0, "entry_ema_long", 0.0, 0.0)
+
+
+@njit
+def calc_ema_close_long(
+    balance: float,
+    psize_long: float,
+    pprice_long: float,
+    lowest_ask: float,
+    emas: float,
+    utc_now_ms: float,
+    prev_ema_fill_ts_close: float,
+    inverse: bool,
+    qty_step: float,
+    price_step: float,
+    min_qty: float,
+    min_cost: float,
+    c_mult: float,
+    ema_dist_upper: float,
+    qty_pct_close: float,
+    we_multiplier_close: float,
+    delay_weight_close: float,
+    delay_between_fills_ms_close: float,
+    wallet_exposure_limit: float,
 ):
-    bid_price = calc_ema_price_bid(emas.min(), highest_bid, ema_dist_lower, price_step)
-    ask_price = calc_ema_price_ask(emas.max(), lowest_ask, ema_dist_upper, price_step)
+    if psize_long > 0.0:
+        pprice_diff_long = (pprice_long / lowest_ask - 1) if pprice_long > 0.0 else 0.0
+        delay = calc_delay_between_fills_ms(
+            delay_between_fills_ms_close, pprice_diff_long, delay_weight_close
+        )
+        if utc_now_ms - prev_ema_fill_ts_close > delay:
+            ask_price_long = calc_ema_price_ask(emas.max(), lowest_ask, ema_dist_upper, price_step)
+            wallet_exposure_long = qty_to_cost(psize_long, pprice_long, inverse, c_mult) / balance
+            qty_long = min(
+                psize_long,
+                calc_ema_qty(
+                    balance,
+                    wallet_exposure_long,
+                    ask_price_long,
+                    inverse,
+                    qty_step,
+                    min_qty,
+                    min_cost,
+                    c_mult,
+                    qty_pct_close,
+                    we_multiplier_close,
+                    wallet_exposure_limit,
+                ),
+            )
+            if qty_long > 0.0:
+                return (-qty_long, ask_price_long, "close_ema_long")
+    return (0.0, 0.0, "close_ema_long")
+
+
+@njit
+def calc_ema_entry_short(
+    balance: float,
+    psize_short: float,
+    pprice_short: float,
+    lowest_ask: float,
+    emas: float,
+    utc_now_ms: float,
+    prev_ema_fill_ts_entry: float,
+    inverse: bool,
+    qty_step: float,
+    price_step: float,
+    min_qty: float,
+    min_cost: float,
+    c_mult: float,
+    ema_dist_upper: float,
+    qty_pct_entry: float,
+    we_multiplier_entry: float,
+    delay_weight_entry: float,
+    delay_between_fills_ms_entry: float,
+    wallet_exposure_limit: float,
+) -> (float, float, str, float, float):
+    if psize_short == 0.0 or utc_now_ms - prev_ema_fill_ts_entry > calc_delay_between_fills_ms(
+        delay_between_fills_ms_entry,
+        ((lowest_ask / pprice_short - 1) if pprice_short > 0.0 else 0.0),
+        delay_weight_entry,
+    ):
+        wallet_exposure_short = qty_to_cost(psize_short, pprice_short, inverse, c_mult) / balance
+        if wallet_exposure_short < wallet_exposure_limit * 0.99:
+            # entry short
+            ask_price_short = calc_ema_price_ask(emas.max(), lowest_ask, ema_dist_upper, price_step)
+            qty_short = calc_ema_qty(
+                balance,
+                wallet_exposure_short,
+                ask_price_short,
+                inverse,
+                qty_step,
+                min_qty,
+                min_cost,
+                c_mult,
+                qty_pct_entry,
+                we_multiplier_entry,
+                wallet_exposure_limit,
+            )
+            new_psize_short, new_pprice_short = calc_new_psize_pprice(
+                psize_short, pprice_short, qty_short, ask_price_short, qty_step
+            )
+            wallet_exposure_after_fill = (
+                qty_to_cost(new_psize_short, new_pprice_short, inverse, c_mult) / balance
+            )
+            if wallet_exposure_after_fill > wallet_exposure_limit * 1.01:
+                qty_short = find_entry_qty_bringing_wallet_exposure_to_target(
+                    balance,
+                    psize_short,
+                    pprice_short,
+                    wallet_exposure_limit,
+                    ask_price_short,
+                    inverse,
+                    qty_step,
+                    c_mult,
+                )
+                new_psize_short, new_pprice_short = calc_new_psize_pprice(
+                    psize_short, pprice_short, qty_short, ask_price_short, qty_step
+                )
+            if qty_short > 0.0:
+                return (
+                    -qty_short,
+                    ask_price_short,
+                    "entry_ema_short",
+                    -abs(new_psize_short),
+                    new_pprice_short,
+                )
+    return (0.0, 0.0, "entry_ema_short", 0.0, 0.0)
+
+
+@njit
+def calc_ema_close_short(
+    inverse: bool,
+    qty_step: float,
+    price_step: float,
+    min_qty: float,
+    min_cost: float,
+    c_mult: float,
+    balance: float,
+    psize_short: float,
+    pprice_short: float,
+    highest_bid: float,
+    emas: float,
+    utc_now_ms: float,
+    prev_ema_fill_ts_close: float,
+    ema_dist_lower: float,
+    qty_pct_close: float,
+    we_multiplier_close: float,
+    delay_weight_close: float,
+    delay_between_fills_ms_close: float,
+    wallet_exposure_limit: float,
+):
+    psize_short = abs(psize_short)
+    if psize_short > 0.0:
+        pprice_diff_short = (highest_bid / pprice_short - 1) if pprice_short > 0.0 else 0.0
+        delay = calc_delay_between_fills_ms(
+            delay_between_fills_ms_close, pprice_diff_short, delay_weight_close
+        )
+        if utc_now_ms - prev_ema_fill_ts_close > delay:
+            bid_price_short = calc_ema_price_ask(emas.min(), highest_bid, ema_dist_lower, price_step)
+            wallet_exposure_short = qty_to_cost(psize_short, pprice_short, inverse, c_mult) / balance
+            qty_short = min(
+                psize_short,
+                calc_ema_qty(
+                    balance,
+                    wallet_exposure_short,
+                    bid_price_short,
+                    inverse,
+                    qty_step,
+                    min_qty,
+                    min_cost,
+                    c_mult,
+                    qty_pct_close,
+                    we_multiplier_close,
+                    wallet_exposure_limit,
+                ),
+            )
+            if qty_short > 0.0:
+                return (qty_short, bid_price_short, "close_ema_short")
+    return (0.0, 0.0, "close_ema_short")
 
 
 @njit
@@ -256,7 +464,7 @@ def backtest_emas(
                     psize_long,
                     pprice_long,
                     closes[k - 1],
-                    emas_long.max(),
+                    0.0,
                     inverse,
                     qty_step,
                     price_step,
@@ -270,15 +478,6 @@ def backtest_emas(
                     0.0,
                     0.0,
                 )
-                if not close_grid_long:
-                    # close remainder
-                    close_grid_long = [
-                        (
-                            -psize_long,
-                            round_up(pprice_long * (1 + min_markup[0]), price_step),
-                            "close_markup_long",
-                        )
-                    ]
                 while close_grid_long and highs[k] > close_grid_long[0][1]:
                     # close long pos
                     close_qty = abs(close_grid_long[0][0])
@@ -292,7 +491,7 @@ def backtest_emas(
                     psize_long = max(0.0, round_(psize_long - close_qty, qty_step))
                     if psize_long == 0.0:
                         pprice_long = 0.0
-                        prev_ema_fill_ts_entry_long, prev_ema_fill_ts_close_long = 0, 0
+                        prev_ema_fill_ts_entry_long = 0
                     upnl = calc_pnl_long(pprice_long, closes[k], psize_long, inverse, c_mult)
                     equity_long = balance_long + upnl
                     fills_long.append(
@@ -311,119 +510,93 @@ def backtest_emas(
                         )
                     )
                     close_grid_long = close_grid_long[1:]
-            # check if ema entry long
-            pprice_diff_long = (pprice_long / closes[k - 1] - 1) if pprice_long > 0.0 else 0.0
-            if timestamps[k - 1] - prev_ema_fill_ts_entry_long > calc_delay_between_fills_ms(
-                delay_between_fills_ms_entry[0], pprice_diff_long, delay_weight_entry[0]
-            ):
-                bid_price_long = calc_ema_price_bid(
-                    emas_long.min(), closes[k - 1], ema_dist_lower[0], price_step
-                )
-                if lows[k] < bid_price_long:
-                    # long ema entry
-                    wallet_exposure_long = (
-                        qty_to_cost(psize_long, pprice_long, inverse, c_mult) / balance_long
-                    )
-                    if wallet_exposure_long < wallet_exposure_limit[0] * 0.99:
-                        # entry long
-                        prev_ema_fill_ts_entry_long = timestamps[k]
-                        qty_long = calc_ema_qty(
-                            balance_long,
-                            wallet_exposure_long,
-                            bid_price_long,
-                            inverse,
-                            qty_step,
-                            min_qty,
-                            min_cost,
-                            c_mult,
-                            qty_pct_entry[0],
-                            we_multiplier_entry[0],
-                            wallet_exposure_limit[0],
-                        )
-                        new_psize_long, new_pprice_long = calc_new_psize_pprice(
-                            psize_long, pprice_long, qty_long, bid_price_long, qty_step
-                        )
-                        wallet_exposure_after_fill = (
-                            qty_to_cost(new_psize_long, new_pprice_long, inverse, c_mult)
-                            / balance_long
-                        )
-                        if wallet_exposure_after_fill > wallet_exposure_limit[0] * 1.01:
-                            qty_long = find_entry_qty_bringing_wallet_exposure_to_target(
-                                balance_long,
-                                psize_long,
-                                pprice_long,
-                                wallet_exposure_limit[0],
-                                bid_price_long,
-                                inverse,
-                                qty_step,
-                                c_mult,
-                            )
-                            new_psize_long, new_pprice_long = calc_new_psize_pprice(
-                                psize_long, pprice_long, qty_long, bid_price_long, qty_step
-                            )
-                        if qty_long > 0.0:
-                            psize_long, pprice_long = new_psize_long, new_pprice_long
-                            upnl = calc_pnl_long(pprice_long, closes[k], psize_long, inverse, c_mult)
-                            equity_long = balance_long + upnl
-                            pnl = 0.0
-                            fee_paid = (
-                                -qty_to_cost(qty_long, bid_price_long, inverse, c_mult) * maker_fee
-                            )
-                            balance_long += fee_paid
-                            fills_long.append(
-                                (
-                                    k,
-                                    timestamps[k],
-                                    pnl,
-                                    fee_paid,
-                                    balance_long,
-                                    equity_long,
-                                    qty_long,
-                                    bid_price_long,
-                                    psize_long,
-                                    pprice_long,
-                                    "entry_ema_long",
-                                )
-                            )
-            # check if ema close long
-            delay = calc_delay_between_fills_ms(
-                delay_between_fills_ms_close[0], pprice_diff_long, delay_weight_close[0]
+            bid_price_long = calc_ema_price_bid(
+                emas_long.min(), closes[k - 1], ema_dist_lower[0], price_step
             )
-            if psize_long > 0.0 and timestamps[k - 1] - prev_ema_fill_ts_close_long > delay:
-                ask_price_long = calc_ema_price_ask(
-                    emas_long.max(), closes[k - 1], ema_dist_upper[0], price_step
+            if lows[k] < bid_price_long:
+                # ema entry long
+                ema_entry_long = calc_ema_entry_long(
+                    balance_long,
+                    psize_long,
+                    pprice_long,
+                    closes[k - 1],
+                    emas_long.min(),
+                    timestamps[k - 1],
+                    prev_ema_fill_ts_entry_long,
+                    inverse,
+                    qty_step,
+                    price_step,
+                    min_qty,
+                    min_cost,
+                    c_mult,
+                    ema_dist_lower[0],
+                    qty_pct_entry[0],
+                    we_multiplier_entry[0],
+                    delay_weight_entry[0],
+                    delay_between_fills_ms_entry[0],
+                    wallet_exposure_limit[0],
                 )
-                if highs[k] > ask_price_long:
-                    # close long
-                    prev_ema_fill_ts_close_long = timestamps[k]
-                    wallet_exposure_long = (
-                        qty_to_cost(psize_long, pprice_long, inverse, c_mult) / balance_long
-                    )
-                    qty_long = min(
-                        psize_long,
-                        calc_ema_qty(
+                if ema_entry_long[0] > 0.0:
+                    prev_ema_fill_ts_entry_long = timestamps[k]
+                    psize_long, pprice_long = ema_entry_long[3], ema_entry_long[4]
+                    upnl = calc_pnl_long(pprice_long, closes[k], psize_long, inverse, c_mult)
+                    equity_long = balance_long + upnl
+                    pnl = 0.0
+                    fee_paid = -qty_to_cost(ema_entry_long[0], ema_entry_long[1], inverse, c_mult) * maker_fee
+                    balance_long += fee_paid
+                    fills_long.append(
+                        (
+                            k,
+                            timestamps[k],
+                            pnl,
+                            fee_paid,
                             balance_long,
-                            wallet_exposure_long,
-                            ask_price_long,
-                            inverse,
-                            qty_step,
-                            min_qty,
-                            min_cost,
-                            c_mult,
-                            qty_pct_close[0],
-                            we_multiplier_close[0],
-                            wallet_exposure_limit[0],
-                        ),
+                            equity_long,
+                            ema_entry_long[0],
+                            ema_entry_long[1],
+                            psize_long,
+                            pprice_long,
+                            "entry_ema_long",
+                        )
                     )
+            ask_price_long = calc_ema_price_ask(
+                emas_long.max(), closes[k - 1], ema_dist_upper[0], price_step
+            )
+            if highs[k] > ask_price_long:
+                # ema close long
+                ema_close_long = calc_ema_close_long(
+                    balance_long,
+                    psize_long,
+                    pprice_long,
+                    closes[k - 1],
+                    emas_long,
+                    timestamps[k - 1],
+                    prev_ema_fill_ts_close_long,
+                    inverse,
+                    qty_step,
+                    price_step,
+                    min_qty,
+                    min_cost,
+                    c_mult,
+                    ema_dist_upper[0],
+                    qty_pct_close[0],
+                    we_multiplier_close[0],
+                    delay_weight_close[0],
+                    delay_between_fills_ms_close[0],
+                    wallet_exposure_limit[0],
+                )
+                if ema_close_long[0] != 0.0:
+                    prev_ema_fill_ts_close_long = timestamps[k]
+                    qty_long = abs(ema_close_long[0])
                     psize_long = round_(psize_long - qty_long, qty_step)
-                    pnl = calc_pnl_long(pprice_long, ask_price_long, qty_long, inverse, c_mult)
-                    fee_paid = -qty_to_cost(qty_long, ask_price_long, inverse, c_mult) * maker_fee
+                    pnl = calc_pnl_long(pprice_long, ema_close_long[1], qty_long, inverse, c_mult)
+                    fee_paid = -qty_to_cost(qty_long, ema_close_long[1], inverse, c_mult) * maker_fee
                     balance_long += pnl + fee_paid
                     upnl = calc_pnl_long(pprice_long, closes[k], psize_long, inverse, c_mult)
                     equity_long = balance_long + upnl
                     if psize_long == 0.0:
                         pprice_long = 0.0
-                        prev_ema_fill_ts_entry_long, prev_ema_fill_ts_close_long = 0, 0
+                        prev_ema_fill_ts_entry_long = 0
                     fills_long.append(
                         (
                             k,
@@ -433,7 +606,7 @@ def backtest_emas(
                             balance_long,
                             equity_long,
                             -qty_long,
-                            ask_price_long,
+                            ema_close_long[1],
                             psize_long,
                             pprice_long,
                             "close_ema_long",
@@ -448,7 +621,7 @@ def backtest_emas(
                     psize_short,
                     pprice_short,
                     closes[k - 1],
-                    emas_short.min(),
+                    0.0,
                     inverse,
                     qty_step,
                     price_step,
@@ -462,15 +635,6 @@ def backtest_emas(
                     0.0,
                     0.0,
                 )
-                if not close_grid_short:
-                    # close remainder
-                    close_grid_short = [
-                        (
-                            psize_short,
-                            round_dn(pprice_short * (1 - min_markup[1]), price_step),
-                            "close_markup_short",
-                        )
-                    ]
                 while close_grid_short and lows[k] < close_grid_short[0][1]:
                     # close short pos
                     close_qty = abs(close_grid_short[0][0])
@@ -484,7 +648,7 @@ def backtest_emas(
                     psize_short = max(0.0, round_(psize_short - close_qty, qty_step))
                     if psize_short == 0.0:
                         pprice_short = 0.0
-                        prev_ema_fill_ts_entry_short, prev_ema_fill_ts_close_short = 0, 0
+                        prev_ema_fill_ts_entry_short = 0
                     upnl = calc_pnl_short(pprice_short, closes[k], psize_short, inverse, c_mult)
                     equity_short = balance_short + upnl
                     fills_short.append(
@@ -503,119 +667,41 @@ def backtest_emas(
                         )
                     )
                     close_grid_short = close_grid_short[1:]
-
-            pprice_diff_short = (closes[k - 1] / pprice_short - 1) if pprice_short > 0.0 else 0.0
-            if timestamps[k] - prev_ema_fill_ts_entry_short > calc_delay_between_fills_ms(
-                delay_between_fills_ms_entry[1], pprice_diff_short, delay_weight_entry[1]
-            ):
-                ask_price_short = calc_ema_price_ask(
-                    emas_short.max(), closes[k - 1], ema_dist_upper[1], price_step
-                )
-                if highs[k] > ask_price_short:
-                    wallet_exposure_short = (
-                        qty_to_cost(psize_short, pprice_short, inverse, c_mult) / balance_short
-                    )
-                    if wallet_exposure_short < wallet_exposure_limit[1] * 0.99:
-                        # entry ema short
-                        prev_ema_fill_ts_entry_short = timestamps[k]
-                        qty_short = calc_ema_qty(
-                            balance_short,
-                            wallet_exposure_short,
-                            ask_price_short,
-                            inverse,
-                            qty_step,
-                            min_qty,
-                            min_cost,
-                            c_mult,
-                            qty_pct_entry[1],
-                            we_multiplier_entry[1],
-                            wallet_exposure_limit[1],
-                        )
-                        new_psize_short, new_pprice_short = calc_new_psize_pprice(
-                            psize_short, pprice_short, qty_short, ask_price_short, qty_step
-                        )
-                        wallet_exposure_after_fill = (
-                            qty_to_cost(new_psize_short, new_pprice_short, inverse, c_mult)
-                            / balance_short
-                        )
-                        if wallet_exposure_after_fill > wallet_exposure_limit[1] * 1.01:
-                            qty_short = find_entry_qty_bringing_wallet_exposure_to_target(
-                                balance_short,
-                                psize_short,
-                                pprice_short,
-                                wallet_exposure_limit[1],
-                                ask_price_short,
-                                inverse,
-                                qty_step,
-                                c_mult,
-                            )
-                            new_psize_short, new_pprice_short = calc_new_psize_pprice(
-                                psize_short, pprice_short, qty_short, ask_price_short, qty_step
-                            )
-                        if qty_short > 0.0:
-                            psize_short, pprice_short = new_psize_short, new_pprice_short
-                            upnl = calc_pnl_short(
-                                pprice_short, closes[k], psize_short, inverse, c_mult
-                            )
-                            equity_short = balance_short + upnl
-                            pnl = 0.0
-                            fee_paid = (
-                                -qty_to_cost(qty_short, ask_price_short, inverse, c_mult) * maker_fee
-                            )
-                            balance_short += fee_paid
-                            fills_short.append(
-                                (
-                                    k,
-                                    timestamps[k],
-                                    pnl,
-                                    fee_paid,
-                                    balance_short,
-                                    equity_short,
-                                    -qty_short,
-                                    ask_price_short,
-                                    -psize_short,
-                                    pprice_short,
-                                    "entry_ema_short",
-                                )
-                            )
-            delay = calc_delay_between_fills_ms(
-                delay_between_fills_ms_close[1], pprice_diff_short, delay_weight_close[1]
+            ask_price_short = calc_ema_price_ask(
+                emas_short.max(), closes[k - 1], ema_dist_upper[1], price_step
             )
-            if psize_short > 0.0 and timestamps[k] - prev_ema_fill_ts_close_short > delay:
-                bid_price_short = calc_ema_price_bid(
-                    emas_short.min(), closes[k - 1], ema_dist_lower[1], price_step
+            if highs[k] > ask_price_short:
+                ema_entry_short = calc_ema_entry_short(
+                    balance_short,
+                    psize_short,
+                    pprice_short,
+                    closes[k - 1],
+                    emas_short,
+                    timestamps[k - 1],
+                    prev_ema_fill_ts_entry_short,
+                    inverse,
+                    qty_step,
+                    price_step,
+                    min_qty,
+                    min_cost,
+                    c_mult,
+                    ema_dist_upper[1],
+                    qty_pct_entry[1],
+                    we_multiplier_entry[1],
+                    delay_weight_entry[1],
+                    delay_between_fills_ms_entry[1],
+                    wallet_exposure_limit[1],
                 )
-                if lows[k] < bid_price_short:
-                    # close short
-                    prev_ema_fill_ts_close_short = timestamps[k]
-                    wallet_exposure_short = (
-                        qty_to_cost(psize_short, pprice_short, inverse, c_mult) / balance_short
-                    )
-                    qty_short = min(
-                        psize_short,
-                        calc_ema_qty(
-                            balance_short,
-                            wallet_exposure_short,
-                            bid_price_short,
-                            inverse,
-                            qty_step,
-                            min_qty,
-                            min_cost,
-                            c_mult,
-                            qty_pct_close[1],
-                            we_multiplier_close[1],
-                            wallet_exposure_limit[1],
-                        ),
-                    )
-                    psize_short = round_(psize_short - qty_short, qty_step)
-                    pnl = calc_pnl_short(pprice_short, bid_price_short, qty_short, inverse, c_mult)
-                    fee_paid = -qty_to_cost(qty_short, bid_price_short, inverse, c_mult) * maker_fee
-                    balance_short += pnl + fee_paid
+                if ema_entry_short[0] != 0.0:
+                    psize_short, pprice_short = abs(ema_entry_short[3]), ema_entry_short[4]
                     upnl = calc_pnl_short(pprice_short, closes[k], psize_short, inverse, c_mult)
                     equity_short = balance_short + upnl
-                    if psize_short == 0.0:
-                        pprice_short = 0.0
-                        prev_ema_fill_ts_entry_short, prev_ema_fill_ts_close_short = 0, 0
+                    pnl = 0.0
+                    fee_paid = (
+                        -qty_to_cost(ema_entry_short[0], ema_entry_short[0], inverse, c_mult)
+                        * maker_fee
+                    )
+                    balance_short += fee_paid
                     fills_short.append(
                         (
                             k,
@@ -624,12 +710,67 @@ def backtest_emas(
                             fee_paid,
                             balance_short,
                             equity_short,
-                            qty_short,
-                            bid_price_short,
+                            -ema_entry_short[0],
+                            ema_entry_short[0],
+                            -psize_short,
+                            pprice_short,
+                            "entry_ema_short",
+                        )
+                    )
+            bid_price_short = calc_ema_price_bid(
+                emas_short.min(), closes[k - 1], ema_dist_lower[1], price_step
+            )
+            if lows[k] < bid_price_short:
+                ema_close_short = calc_ema_close_short(
+                    inverse,
+                    qty_step,
+                    price_step,
+                    min_qty,
+                    min_cost,
+                    c_mult,
+                    balance_short,
+                    psize_short,
+                    pprice_short,
+                    closes[k - 1],
+                    emas_short,
+                    timestamps[k - 1],
+                    prev_ema_fill_ts_close_short,
+                    ema_dist_lower[1],
+                    qty_pct_close[1],
+                    we_multiplier_close[1],
+                    delay_weight_close[1],
+                    delay_between_fills_ms_close[1],
+                    wallet_exposure_limit[1],
+                )
+                if ema_close_short[0] != 0.0:
+                    prev_ema_fill_ts_close_short = timestamps[k]
+                    psize_short = round_(psize_short - ema_close_short[0], qty_step)
+                    pnl = calc_pnl_short(
+                        pprice_short, ema_close_short[1], ema_close_short[0], inverse, c_mult
+                    )
+                    fee_paid = (
+                        -qty_to_cost(ema_close_short[0], ema_close_short[1], inverse, c_mult)
+                        * maker_fee
+                    )
+                    balance_short += pnl + fee_paid
+                    upnl = calc_pnl_short(pprice_short, closes[k], psize_short, inverse, c_mult)
+                    equity_short = balance_short + upnl
+                    if psize_short == 0.0:
+                        pprice_short = 0.0
+                        prev_ema_fill_ts_entry_short = 0
+                    fills_short.append(
+                        (
+                            k,
+                            timestamps[k],
+                            pnl,
+                            fee_paid,
+                            balance_short,
+                            equity_short,
+                            ema_close_short[0],
+                            ema_close_short[1],
                             -psize_short,
                             pprice_short,
                             "close_ema_short",
                         )
                     )
-
     return fills_long, fills_short, stats
