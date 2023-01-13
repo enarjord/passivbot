@@ -157,7 +157,7 @@ def get_xk_keys(passivbot_mode="static_grid"):
 def determine_passivbot_mode(config: dict) -> str:
     # print('dpm devbug',config)
     # print([(k, k in config) for k in get_template_live_config("emas")])
-    if all(k in config["long"] for k in get_template_live_config("emas")['long']):
+    if all(k in config["long"] for k in get_template_live_config("emas")["long"]):
         return "emas"
     elif all(k in config["long"] for k in get_template_live_config("recursive_grid")["long"]):
         return "recursive_grid"
@@ -293,7 +293,9 @@ def candidate_to_live_config(candidate_: dict) -> dict:
             if k in candidate[side]:
                 live_config[side][k] = candidate[side][k]
             else:
-                print(f'warning: {side} {k} missing in config; using default value {live_config[side][k]}')
+                print(
+                    f"warning: {side} {k} missing in config; using default value {live_config[side][k]}"
+                )
         for k in live_config:
             if k not in sides and k in candidate:
                 live_config[k] = candidate[k]
@@ -547,10 +549,10 @@ def get_template_live_config(passivbot_mode="static_grid"):
                     "qty_pct_close": 0.01,
                     "we_multiplier_entry": 30.0,
                     "we_multiplier_close": 30.0,
-                    "delay_weight_entry" : 30.0,
-                    "delay_weight_close" : 30.0,
-                    "delay_between_fills_minutes_entry" : 2000.0,
-                    "delay_between_fills_minutes_close" : 2000.0,
+                    "delay_weight_entry": 30.0,
+                    "delay_weight_close": 30.0,
+                    "delay_between_fills_minutes_entry": 2000.0,
+                    "delay_between_fills_minutes_close": 2000.0,
                     "min_markup": 0.0075,
                     "markup_range": 0.03,
                     "n_close_orders": 10,
@@ -566,10 +568,10 @@ def get_template_live_config(passivbot_mode="static_grid"):
                     "qty_pct_close": 0.03,
                     "we_multiplier_entry": 20.0,
                     "we_multiplier_close": 20.0,
-                    "delay_weight_entry" : 20.0,
-                    "delay_weight_close" : 20.0,
-                    "delay_between_fills_minutes_entry" : 2000.0,
-                    "delay_between_fills_minutes_close" : 2000.0,
+                    "delay_weight_entry": 20.0,
+                    "delay_weight_close": 20.0,
+                    "delay_between_fills_minutes_entry": 2000.0,
+                    "delay_between_fills_minutes_close": 2000.0,
                     "min_markup": 0.0075,
                     "markup_range": 0.03,
                     "n_close_orders": 10,
@@ -684,22 +686,30 @@ def analyze_fills(
     shorts.index = shorts.timestamp
     n_days = (sdf.timestamp.iloc[-1] - sdf.timestamp.iloc[0]) / 1000 / 60 / 60 / 24.0
     if config["inverse"]:
-        longs.loc[:, "pcost"] = (longs.psize / longs.pprice).abs() * config['c_mult']
-        shorts.loc[:, "pcost"] = (shorts.psize / shorts.pprice).abs() * config['c_mult']
-        sdf.loc[:,'wallet_exposure_long'] = (sdf.psize_long / sdf.pprice_long / sdf.balance_long).abs() * config['c_mult']
-        sdf.loc[:,'wallet_exposure_short'] = (sdf.psize_short / sdf.pprice_short / sdf.balance_short).abs() * config['c_mult']
+        longs.loc[:, "pcost"] = (longs.psize / longs.pprice).abs() * config["c_mult"]
+        shorts.loc[:, "pcost"] = (shorts.psize / shorts.pprice).abs() * config["c_mult"]
+        sdf.loc[:, "wallet_exposure_long"] = (
+            sdf.psize_long / sdf.pprice_long / sdf.balance_long
+        ).abs() * config["c_mult"]
+        sdf.loc[:, "wallet_exposure_short"] = (
+            sdf.psize_short / sdf.pprice_short / sdf.balance_short
+        ).abs() * config["c_mult"]
     else:
-        longs.loc[:, "pcost"] = (longs.psize * longs.pprice).abs() * config['c_mult']
-        shorts.loc[:, "pcost"] = (shorts.psize * shorts.pprice).abs() * config['c_mult']
-        sdf.loc[:,'wallet_exposure_long'] = (sdf.psize_long * sdf.pprice_long / sdf.balance_long).abs() * config['c_mult']
-        sdf.loc[:,'wallet_exposure_short'] = (sdf.psize_short * sdf.pprice_short / sdf.balance_short).abs() * config['c_mult']
+        longs.loc[:, "pcost"] = (longs.psize * longs.pprice).abs() * config["c_mult"]
+        shorts.loc[:, "pcost"] = (shorts.psize * shorts.pprice).abs() * config["c_mult"]
+        sdf.loc[:, "wallet_exposure_long"] = (
+            sdf.psize_long * sdf.pprice_long / sdf.balance_long
+        ).abs() * config["c_mult"]
+        sdf.loc[:, "wallet_exposure_short"] = (
+            sdf.psize_short * sdf.pprice_short / sdf.balance_short
+        ).abs() * config["c_mult"]
     longs.loc[:, "wallet_exposure"] = longs.pcost / longs.balance
     shorts.loc[:, "wallet_exposure"] = shorts.pcost / shorts.balance
 
     ms_diffs_long = longs.timestamp.diff()
     ms_diffs_short = shorts.timestamp.diff()
-    longs.loc[:,'mins_since_prev_fill'] = ms_diffs_long / 1000.0 / 60.0
-    shorts.loc[:,'mins_since_prev_fill'] = ms_diffs_short / 1000.0 / 60.0
+    longs.loc[:, "mins_since_prev_fill"] = ms_diffs_long / 1000.0 / 60.0
+    shorts.loc[:, "mins_since_prev_fill"] = ms_diffs_short / 1000.0 / 60.0
 
     profit_sum_long = longs[longs.pnl > 0.0].pnl.sum()
     loss_sum_long = longs[longs.pnl < 0.0].pnl.sum()
@@ -718,21 +728,22 @@ def analyze_fills(
     if sdf.balance_short.iloc[-1] <= 0.0:
         adg_realized_short = sdf.balance_short.iloc[-1]
     else:
-        adg_realized_short = (sdf.balance_short.iloc[-1] / sdf.balance_short.iloc[0]) ** (1 / n_days) - 1
+        adg_realized_short = (sdf.balance_short.iloc[-1] / sdf.balance_short.iloc[0]) ** (
+            1 / n_days
+        ) - 1
     adg_realized_per_exposure_long = (
-        (adg_realized_long / config['long']["wallet_exposure_limit"])
-        if config['long']["wallet_exposure_limit"] > 0.0
+        (adg_realized_long / config["long"]["wallet_exposure_limit"])
+        if config["long"]["wallet_exposure_limit"] > 0.0
         else 0.0
     )
     adg_realized_per_exposure_short = (
-        (adg_realized_short / config['short']["wallet_exposure_limit"])
-        if config['short']["wallet_exposure_limit"] > 0.0
+        (adg_realized_short / config["short"]["wallet_exposure_limit"])
+        if config["short"]["wallet_exposure_limit"] > 0.0
         else 0.0
     )
 
     volume_quote_long = longs.pcost.sum()
     volume_quote_short = shorts.pcost.sum()
-
 
     lpprices = sdf[sdf.psize_long != 0.0]
     spprices = sdf[sdf.psize_short != 0.0]
@@ -1116,7 +1127,7 @@ def make_compatible(live_config_: dict) -> dict:
         live_config = json.loads(json.dumps(live_config).replace(src, dst))
     passivbot_mode = determine_passivbot_mode(live_config)
     for side in ["long", "short"]:
-        if passivbot_mode in ['static', 'recursive_grid', 'static_grid', 'neat_grid']:
+        if passivbot_mode in ["recursive_grid", "static_grid", "neat_grid"]:
             if "initial_eprice_ema_dist" not in live_config[side]:
                 live_config[side]["initial_eprice_ema_dist"] = -10.0
             if "auto_unstuck_wallet_exposure_threshold" not in live_config[side]:
