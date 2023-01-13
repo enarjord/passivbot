@@ -1179,10 +1179,6 @@ def calc_scores(config: dict, results: dict):
         for sym in results:
             for i, (key, higher_is_better) in enumerate(keys):
                 key_side = f"{key}_{side}"
-                if key in results[sym]:
-                    key_side = key
-                elif key_side not in results[sym]:
-                    results[sym][key_side] = results[sym][key]
                 individual_raws[side][sym][key] = results[sym][key_side]
                 if (max_key := f"maximum_{key}_{side}") in config:
                     if config[max_key] >= 0.0:
