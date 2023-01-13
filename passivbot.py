@@ -54,8 +54,6 @@ from njit_emas import (
     calc_ema_entry_short,
     calc_ema_close_long,
     calc_ema_close_short,
-    calc_close_grid_emas_long,
-    calc_close_grid_emas_short,
 )
 from typing import Union, Dict, List
 
@@ -106,10 +104,10 @@ class Bot:
         self.open_orders = []
         self.fills = []
         self.last_fills_timestamps = {
-            "entry_ema_long": 0,
-            "entry_ema_short": 0,
-            "close_ema_long": 0,
-            "close_ema_short": 0,
+            "ema_entry_long": 0,
+            "ema_entry_short": 0,
+            "ema_close_long": 0,
+            "ema_close_short": 0,
         }
         self.price = 0.0
         self.ob = [0.0, 0.0]
@@ -170,13 +168,6 @@ class Bot:
             (config["short"]["ema_span_0"] * config["short"]["ema_span_1"]) ** 0.5,
             config["short"]["ema_span_1"],
         ]
-        if self.passivbot_mode == "emas":
-            config["long"]["auto_unstuck_ema_dist"] = 0.0
-            config["short"]["auto_unstuck_ema_dist"] = 0.0
-            config["long"]["auto_unstuck_wallet_exposure_threshold"] = 0.0
-            config["short"]["auto_unstuck_wallet_exposure_threshold"] = 0.0
-            config["long"]["backwards_tp"] = True
-            config["short"]["backwards_tp"] = True
         self.config = config
         for key in config:
             setattr(self, key, config[key])
@@ -189,6 +180,18 @@ class Bot:
 
     async def _init(self):
         self.xk = create_xk(self.config)
+        if self.passivbot_mode == "emas":
+            self.xk["auto_unstuck_ema_dist"] = (0.0, 0.0)
+            self.xk["auto_unstuck_wallet_exposure_threshold"] = (0.0, 0.0)
+            self.xk["delay_between_fills_ms_entry"] = (
+                self.config["long"]["delay_between_fills_minutes_entry"] * 60 * 1000.0,
+                self.config["short"]["delay_between_fills_minutes_entry"] * 60 * 1000.0,
+            )
+            self.xk["delay_between_fills_ms_close"] = (
+                self.config["long"]["delay_between_fills_minutes_close"] * 60 * 1000.0,
+                self.config["short"]["delay_between_fills_minutes_close"] * 60 * 1000.0,
+            )
+            self.xk["backwards_tp"] = (True, True)
         await self.init_fills()
 
     def dump_log(self, data) -> None:
@@ -209,11 +212,11 @@ class Bot:
             ),
             60000,
         )
-        self.emas_long = calc_emas_last(samples1m[:, 2], self.ema_spans_long)
-        self.emas_short = calc_emas_last(samples1m[:, 2], self.ema_spans_short)
-        self.alpha_long = 2 / (spans1s_long + 1)
+        self.emas_long = calc_emas_last(samples1m[:, 2], np.array(self.ema_spans_long))
+        self.emas_short = calc_emas_last(samples1m[:, 2], np.array(self.ema_spans_short))
+        self.alpha_long = 2 / (self.emas_long + 1)
         self.alpha__long = 1 - self.alpha_long
-        self.alpha_short = 2 / (spans1s_short + 1)
+        self.alpha_short = 2 / (self.emas_short + 1)
         self.alpha__short = 1 - self.alpha_short
         self.ema_min = int(round(time.time() // 60 * 60))
         return samples1m
@@ -663,7 +666,7 @@ class Bot:
                     ):
                         closes_long = [ema_close_long]
                         closes_long += calc_close_grid_long(
-                            self.xk["backwards_tp"][0],
+                            True,
                             balance,
                             max(0.0, round_(psize_long - abs(ema_close_long[0]), self.qty_step)),
                             pprice_long,
@@ -871,7 +874,7 @@ class Bot:
                     ):
                         closes_short = [ema_close_short]
                         closes_short += calc_close_grid_short(
-                            self.xk["backwards_tp"][1],
+                            True,
                             balance,
                             -max(
                                 0.0, round_(abs(psize_short) - abs(ema_close_long[0]), self.qty_step)
@@ -1284,8 +1287,8 @@ class Bot:
             fills = await self.fetch_latest_fills()
             keys_done = set()
             all_keys = set(self.last_fills_timestamps)
-            for fill in sorted(fills, lambda x: x["timestamp"], reverse=True):
-                print(fill["custom_id"])
+            for fill in sorted(fills, key=lambda x: x["timestamp"], reverse=True):
+                print("debug fills", fill["custom_id"])
                 for key in all_keys - keys_done:
                     if key in fill["custom_id"]:
                         self.last_fills_timestamps[key] = fill["timestamp"]
@@ -1299,89 +1302,6 @@ class Bot:
             return False
         finally:
             self.ts_released["update_last_fills_timestamps"] = time.time()
-
-    def calc_orders_emas(self):
-        balance = self.position["wallet_balance"]
-        psize_long = self.position["long"]["size"]
-        pprice_long = self.position["long"]["price"]
-        psize_short = abs(self.position["short"]["size"])
-        pprice_short = self.position["short"]["price"]
-
-        orders = []
-        if psize_long > psize_short:
-            pprice_diff = abs(pprice_long - self.price) / self.price
-        elif psize_long < psize_short:
-            pprice_diff = abs(pprice_short - self.price) / self.price
-        else:
-            pprice_diff = 0.0
-        if psize_long > 0.0:
-            closes_long = calc_close_grid_long(
-                True,
-                balance,
-                psize_long,
-                pprice_long,
-                self.ob[1],
-                max(self.emas_long),
-                self.xk["inverse"],
-                self.xk["qty_step"],
-                self.xk["price_step"],
-                self.xk["min_qty"],
-                self.xk["min_cost"],
-                self.xk["c_mult"],
-                self.xk["wallet_exposure_limit_long"],
-                self.xk["min_markup_long"],
-                self.xk["markup_range_long"],
-                self.xk["n_close_orders"],
-                0.0,
-                0.0,
-            )
-            if not closes_long:
-                closes_long = [
-                    (
-                        -psize_long,
-                        round_up(pprice_long * (1 + self.xk["min_markup_long"]), self.price_step),
-                        "close_markup_long",
-                    )
-                ]
-            if closes_long[0][1] <= ask_price:
-                orders += closes_long
-            else:
-                delay = calc_delay_between_fills_ms(
-                    self.xk["delay_between_fills_minutes_ask"],
-                    pprice_diff,
-                    self.xk["delay_weight_ask"],
-                )
-                if utc_ms() - delay > max(
-                    self.last_fills_timestamps["ema_close_long"],
-                    self.last_fills_timestamps["ema_entry_short"],
-                ):
-                    ask_qty = min(
-                        psize_long,
-                        calc_ema_qty(
-                            balance,
-                            self.position["long"]["wallet_exposure"],
-                            ask_price,
-                            self.xk["inverse"],
-                            self.xk["qty_step"],
-                            self.xk["min_qty"],
-                            self.xk["min_cost"],
-                            self.xk["c_mult"],
-                            self.xk["qty_pct_close_long"],
-                            self.xk["we_multiplier_close_long"],
-                            self.xk["wallet_exposure_limit_long"],
-                        ),
-                    )
-                    orders.append(
-                        {
-                            "qty": -ask_qty,
-                            "price": ask_price,
-                            "custom_id": "ema_close_long",
-                            "type": "limit",
-                            "reduce_only": True,
-                            "position_side": "long",
-                            "side": "sell",
-                        }
-                    )
 
     async def start_ohlcv_mode(self):
         await asyncio.gather(self.update_position(), self.update_open_orders())
@@ -1424,7 +1344,10 @@ class Bot:
             self.update_emas(self.ob[0], self.prev_price)
             print(res)
             print(self.last_fills_timestamps)
-            return
+            print(self.emas_long)
+            print(self.emas_short)
+            orders = self.calc_orders()
+            print(orders)
             if not all(res):
                 return
             await self.cancel_and_create()
@@ -1619,8 +1542,6 @@ async def main() -> None:
     config["passivbot_mode"] = determine_passivbot_mode(config)
     if config["passivbot_mode"] == "emas":
         config["ohlcv"] = True
-        config["long"] = {"enabled": config["long_enabled"]}
-        config["short"] = {"enabled": config["short_enabled"]}
     if args.assigned_balance is not None:
         logging.info(f"assigned balance set to {args.assigned_balance}")
         config["assigned_balance"] = args.assigned_balance
@@ -1688,12 +1609,8 @@ async def main() -> None:
     for _, _, _, dest in float_kwargs:
         if getattr(args, dest) is not None:
             side, key = dest[: dest.find("_")], dest[dest.find("_") + 1 :]
-            if config["passivbot_mode"] == "emas":
-                old_val = config[f"{key}_{side}"]
-                config[f"{key}_{side}"] = getattr(args, dest)
-            else:
-                old_val = config[side][key]
-                config[side][key] = getattr(args, dest)
+            old_val = config[side][key]
+            config[side][key] = getattr(args, dest)
             logging.info(f"overriding {dest} {old_val} " + f"with new value: {getattr(args, dest)}")
 
     if "spot" in config["market_type"]:
