@@ -92,7 +92,7 @@ def plot_wrap(config, data):
         n_parts=config["n_parts"],
         disable_plotting=config["disable_plotting"],
     )
-    if not config["disable_plotting"] and config["enable_interactive_plot"]:
+    if not config["disable_plotting"] and config["enable_interactive_plot"] and config['passivbot_mode'] != 'emas':
         import interactive_plot
 
         print("dumping interactive plot...")
