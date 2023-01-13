@@ -145,8 +145,8 @@ def calc_ema_entry_long(
                     psize_long, pprice_long, qty_long, bid_price_long, qty_step
                 )
             if qty_long > 0.0:
-                return (qty_long, bid_price_long, "entry_ema_long", new_psize_long, new_pprice_long)
-    return (0.0, 0.0, "entry_ema_long", 0.0, 0.0)
+                return (qty_long, bid_price_long, "ema_entry_long", new_psize_long, new_pprice_long)
+    return (0.0, 0.0, "ema_entry_long", 0.0, 0.0)
 
 
 @njit
@@ -196,8 +196,8 @@ def calc_ema_close_long(
                 ),
             )
             if qty_long > 0.0:
-                return (-qty_long, ask_price_long, "close_ema_long")
-    return (0.0, 0.0, "close_ema_long")
+                return (-qty_long, ask_price_long, "ema_close_long")
+    return (0.0, 0.0, "ema_close_long")
 
 
 @njit
@@ -268,11 +268,11 @@ def calc_ema_entry_short(
                 return (
                     -qty_short,
                     ask_price_short,
-                    "entry_ema_short",
+                    "ema_entry_short",
                     -abs(new_psize_short),
                     new_pprice_short,
                 )
-    return (0.0, 0.0, "entry_ema_short", 0.0, 0.0)
+    return (0.0, 0.0, "ema_entry_short", 0.0, 0.0)
 
 
 @njit
@@ -323,8 +323,8 @@ def calc_ema_close_short(
                 ),
             )
             if qty_short > 0.0:
-                return (qty_short, bid_price_short, "close_ema_short")
-    return (0.0, 0.0, "close_ema_short")
+                return (qty_short, bid_price_short, "ema_close_short")
+    return (0.0, 0.0, "ema_close_short")
 
 
 @njit
@@ -542,7 +542,10 @@ def backtest_emas(
                     upnl = calc_pnl_long(pprice_long, closes[k], psize_long, inverse, c_mult)
                     equity_long = balance_long + upnl
                     pnl = 0.0
-                    fee_paid = -qty_to_cost(ema_entry_long[0], ema_entry_long[1], inverse, c_mult) * maker_fee
+                    fee_paid = (
+                        -qty_to_cost(ema_entry_long[0], ema_entry_long[1], inverse, c_mult)
+                        * maker_fee
+                    )
                     balance_long += fee_paid
                     fills_long.append(
                         (
@@ -556,7 +559,7 @@ def backtest_emas(
                             ema_entry_long[1],
                             psize_long,
                             pprice_long,
-                            "entry_ema_long",
+                            "ema_entry_long",
                         )
                     )
             ask_price_long = calc_ema_price_ask(
@@ -609,7 +612,7 @@ def backtest_emas(
                             ema_close_long[1],
                             psize_long,
                             pprice_long,
-                            "close_ema_long",
+                            "ema_close_long",
                         )
                     )
         if do_short:
@@ -714,7 +717,7 @@ def backtest_emas(
                             ema_entry_short[0],
                             -psize_short,
                             pprice_short,
-                            "entry_ema_short",
+                            "ema_entry_short",
                         )
                     )
             bid_price_short = calc_ema_price_bid(
@@ -770,7 +773,7 @@ def backtest_emas(
                             ema_close_short[1],
                             -psize_short,
                             pprice_short,
-                            "close_ema_short",
+                            "ema_close_short",
                         )
                     )
     return fills_long, fills_short, stats
