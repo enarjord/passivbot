@@ -451,9 +451,6 @@ def backtest_emas(
                 do_long = False
             if equity_short <= 0.05:
                 do_short = False
-            if not (do_long and do_short):
-                # bankruptcy
-                return fills_long, fills_short, stats
             next_stats_update = min(timestamps[-1], timestamps[k] + 1000 * 60 * 60)  # hourly
         if do_long:
             emas_long = calc_ema(alphas_long, alphas__long, emas_long, closes[k - 1])
