@@ -50,10 +50,12 @@ from njit_funcs_recursive_grid import (
     calc_recursive_entries_short,
 )
 from njit_emas import (
-    calc_ema_price_bid,
-    calc_ema_price_ask,
-    calc_ema_qty,
-    calc_delay_between_fills_ms,
+    calc_ema_entry_long,
+    calc_ema_entry_short,
+    calc_ema_close_long,
+    calc_ema_close_short,
+    calc_close_grid_emas_long,
+    calc_close_grid_emas_short,
 )
 from typing import Union, Dict, List
 
@@ -156,32 +158,26 @@ class Bot:
                 + "It must be greater than zero and less than or equal to one.  Defaulting to 1.0."
             )
             config["cross_wallet_pct"] = 1.0
+        self.config["do_long"] = config["long"]["enabled"]
+        self.config["do_short"] = config["short"]["enabled"]
+        self.ema_spans_long = [
+            config["long"]["ema_span_0"],
+            (config["long"]["ema_span_0"] * config["long"]["ema_span_1"]) ** 0.5,
+            config["long"]["ema_span_1"],
+        ]
+        self.ema_spans_short = [
+            config["short"]["ema_span_0"],
+            (config["short"]["ema_span_0"] * config["short"]["ema_span_1"]) ** 0.5,
+            config["short"]["ema_span_1"],
+        ]
         if self.passivbot_mode == "emas":
-            self.config["do_long"] = config["long_enabled"]
-            self.config["do_short"] = config["short_enabled"]
-            self.ema_spans = self.ema_spans_long = self.ema_spans_short = np.array(
-                sorted(
-                    [
-                        config["ema_span_0"],
-                        (config["ema_span_0"] * config["ema_span_1"]) ** 0.5,
-                        config["ema_span_1"],
-                    ]
-                )
-            )
-        else:
-            self.config["do_long"] = config["long"]["enabled"]
-            self.config["do_short"] = config["short"]["enabled"]
-            self.ema_spans_long = [
-                config["long"]["ema_span_0"],
-                (config["long"]["ema_span_0"] * config["long"]["ema_span_1"]) ** 0.5,
-                config["long"]["ema_span_1"],
-            ]
-            self.ema_spans_short = [
-                config["short"]["ema_span_0"],
-                (config["short"]["ema_span_0"] * config["short"]["ema_span_1"]) ** 0.5,
-                config["short"]["ema_span_1"],
-            ]
-            self.config = config
+            config["long"]["auto_unstuck_ema_dist"] = 0.0
+            config["short"]["auto_unstuck_ema_dist"] = 0.0
+            config["long"]["auto_unstuck_wallet_exposure_threshold"] = 0.0
+            config["short"]["auto_unstuck_wallet_exposure_threshold"] = 0.0
+            config["long"]["backwards_tp"] = True
+            config["short"]["backwards_tp"] = True
+        self.config = config
         for key in config:
             setattr(self, key, config[key])
             if key in self.xk:
@@ -203,7 +199,7 @@ class Bot:
                     + "\n"
                 )
 
-    async def init_emas_emas_mode(self, ohlcvs: dict) -> None:
+    async def init_emas_1m(self, ohlcvs: dict) -> None:
         samples1m = calc_samples(
             numpyize(
                 [
@@ -213,9 +209,12 @@ class Bot:
             ),
             60000,
         )
-        self.emas = calc_emas_last(samples1m[:, 2], self.ema_spans)
-        self.alpha = 2 / (self.ema_spans + 1)
-        self.alpha_ = 1 - self.alpha
+        self.emas_long = calc_emas_last(samples1m[:, 2], self.ema_spans_long)
+        self.emas_short = calc_emas_last(samples1m[:, 2], self.ema_spans_short)
+        self.alpha_long = 2 / (spans1s_long + 1)
+        self.alpha__long = 1 - self.alpha_long
+        self.alpha_short = 2 / (spans1s_short + 1)
+        self.alpha__short = 1 - self.alpha_short
         self.ema_min = int(round(time.time() // 60 * 60))
         return samples1m
 
@@ -227,8 +226,8 @@ class Bot:
                 break
         ohlcvs = await self.fetch_ohlcvs(interval=interval)
         ohlcvs = {ohlcv["timestamp"]: ohlcv for ohlcv in ohlcvs + ohlcvs1m}
-        if self.passivbot_mode == "emas":
-            return await self.init_emas_emas_mode(ohlcvs)
+        if self.ohlcv:
+            return await self.init_emas_1m(ohlcvs)
         samples1s = calc_samples(
             numpyize(
                 [
@@ -248,19 +247,23 @@ class Bot:
         self.ema_sec = int(time.time())
         # return samples1s
 
-    def update_emas_emas_mode(self, price: float, prev_price: float) -> None:
+    def update_emas_1m(self, price: float, prev_price: float) -> None:
         now_min = int(round(time.time() // 60 * 60))
         if now_min <= self.ema_min:
             return
         while self.ema_min < int(round(now_min - 60)):
-            self.emas = calc_ema(self.alpha, self.alpha_, self.emas, prev_price)
+            self.emas_long = calc_ema(self.alpha_long, self.alpha__long, self.emas_long, prev_price)
+            self.emas_short = calc_ema(
+                self.alpha_short, self.alpha__short, self.emas_short, prev_price
+            )
             self.ema_min += 60
-        self.emas = calc_ema(self.alpha, self.alpha_, self.emas, price)
+        self.emas_long = calc_ema(self.alpha_long, self.alpha__long, self.emas_long, price)
+        self.emas_short = calc_ema(self.alpha_short, self.alpha__short, self.emas_short, price)
         self.ema_min = now_min
 
     def update_emas(self, price: float, prev_price: float) -> None:
-        if self.passivbot_mode == "emas":
-            return self.update_emas_emas_mode(price, prev_price)
+        if self.ohlcv:
+            return self.update_emas_1m(price, prev_price)
         now_sec = int(time.time())
         if now_sec <= self.ema_sec:
             return
@@ -573,6 +576,30 @@ class Bot:
                         self.xk["auto_unstuck_wallet_exposure_threshold"][0],
                         self.xk["auto_unstuck_ema_dist"][0],
                     )
+                elif self.passivbot_mode == "emas":
+                    entries_long = [
+                        calc_ema_entry_long(
+                            balance,
+                            psize_long,
+                            pprice_long,
+                            self.ob[0],
+                            min(self.emas_long),
+                            utc_ms(),
+                            0 if psize_long == 0.0 else self.last_fills_timestamps["ema_entry_long"],
+                            self.xk["inverse"],
+                            self.xk["qty_step"],
+                            self.xk["price_step"],
+                            self.xk["min_qty"],
+                            self.xk["min_cost"],
+                            self.xk["c_mult"],
+                            self.xk["ema_dist_lower"][0],
+                            self.xk["qty_pct_entry"][0],
+                            self.xk["we_multiplier_entry"][0],
+                            self.xk["delay_weight_entry"][0],
+                            self.xk["delay_between_fills_ms_entry"][0],
+                            self.xk["wallet_exposure_limit"][0],
+                        )
+                    ]
                 else:
                     raise Exception(f"unknown passivbot mode {self.passivbot_mode}")
                 orders += [
@@ -609,6 +636,52 @@ class Bot:
                     self.xk["auto_unstuck_wallet_exposure_threshold"][0],
                     self.xk["auto_unstuck_ema_dist"][0],
                 )
+                if self.passivbot_mode == "emas":
+                    ema_close_long = calc_ema_close_long(
+                        balance,
+                        psize_long,
+                        pprice_long,
+                        self.ob[1],
+                        max(self.emas_long),
+                        utc_ms(),
+                        self.last_fills_timestamps["ema_close_long"],
+                        self.xk["inverse"],
+                        self.xk["qty_step"],
+                        self.xk["price_step"],
+                        self.xk["min_qty"],
+                        self.xk["min_cost"],
+                        self.xk["c_mult"],
+                        self.xk["ema_dist_upper"][0],
+                        self.xk["qty_pct_close"][0],
+                        self.xk["we_multiplier_close"][0],
+                        self.xk["delay_weight_close"][0],
+                        self.xk["delay_between_fills_ms_close"][0],
+                        self.xk["wallet_exposure_limit"][0],
+                    )
+                    if ema_close_long[0] != 0.0 and (
+                        not closes_long or ema_close_long[1] < closes_long[0][1]
+                    ):
+                        closes_long = [ema_close_long]
+                        closes_long += calc_close_grid_long(
+                            self.xk["backwards_tp"][0],
+                            balance,
+                            max(0.0, round_(psize_long - abs(ema_close_long[0]), self.qty_step)),
+                            pprice_long,
+                            self.ob[1],
+                            max(self.emas_long),
+                            self.xk["inverse"],
+                            self.xk["qty_step"],
+                            self.xk["price_step"],
+                            self.xk["min_qty"],
+                            self.xk["min_cost"],
+                            self.xk["c_mult"],
+                            self.xk["wallet_exposure_limit"][0],
+                            self.xk["min_markup"][0],
+                            self.xk["markup_range"][0],
+                            self.xk["n_close_orders"][0],
+                            self.xk["auto_unstuck_wallet_exposure_threshold"][0],
+                            self.xk["auto_unstuck_ema_dist"][0],
+                        )
                 orders += [
                     {
                         "side": "sell",
@@ -709,6 +782,32 @@ class Bot:
                         self.xk["auto_unstuck_wallet_exposure_threshold"][1],
                         self.xk["auto_unstuck_ema_dist"][1],
                     )
+                elif self.passivbot_mode == "emas":
+                    entries_short = [
+                        calc_ema_entry_short(
+                            balance,
+                            psize_short,
+                            pprice_short,
+                            self.ob[1],
+                            max(self.emas_short),
+                            utc_ms(),
+                            0
+                            if psize_short == 0.0
+                            else self.last_fills_timestamps["ema_entry_short"],
+                            self.xk["inverse"],
+                            self.xk["qty_step"],
+                            self.xk["price_step"],
+                            self.xk["min_qty"],
+                            self.xk["min_cost"],
+                            self.xk["c_mult"],
+                            self.xk["ema_dist_lower"][1],
+                            self.xk["qty_pct_entry"][1],
+                            self.xk["we_multiplier_entry"][1],
+                            self.xk["delay_weight_entry"][1],
+                            self.xk["delay_between_fills_ms_entry"][1],
+                            self.xk["wallet_exposure_limit"][1],
+                        )
+                    ]
                 else:
                     raise Exception(f"unknown passivbot mode {self.passivbot_mode}")
                 orders += [
@@ -745,6 +844,54 @@ class Bot:
                     self.xk["auto_unstuck_wallet_exposure_threshold"][1],
                     self.xk["auto_unstuck_ema_dist"][1],
                 )
+                if self.passivbot_mode == "emas":
+                    ema_close_short = calc_ema_close_short(
+                        balance,
+                        psize_short,
+                        pprice_short,
+                        self.ob[0],
+                        min(self.emas_short),
+                        utc_ms(),
+                        self.last_fills_timestamps["ema_close_short"],
+                        self.xk["inverse"],
+                        self.xk["qty_step"],
+                        self.xk["price_step"],
+                        self.xk["min_qty"],
+                        self.xk["min_cost"],
+                        self.xk["c_mult"],
+                        self.xk["ema_dist_lower"][1],
+                        self.xk["qty_pct_close"][1],
+                        self.xk["we_multiplier_close"][1],
+                        self.xk["delay_weight_close"][1],
+                        self.xk["delay_between_fills_ms_close"][1],
+                        self.xk["wallet_exposure_limit"][1],
+                    )
+                    if ema_close_short[0] != 0.0 and (
+                        not closes_short or ema_close_short[1] < closes_short[0][1]
+                    ):
+                        closes_short = [ema_close_short]
+                        closes_short += calc_close_grid_short(
+                            self.xk["backwards_tp"][1],
+                            balance,
+                            -max(
+                                0.0, round_(abs(psize_short) - abs(ema_close_long[0]), self.qty_step)
+                            ),
+                            pprice_short,
+                            self.ob[0],
+                            min(self.emas_short),
+                            self.xk["inverse"],
+                            self.xk["qty_step"],
+                            self.xk["price_step"],
+                            self.xk["min_qty"],
+                            self.xk["min_cost"],
+                            self.xk["c_mult"],
+                            self.xk["wallet_exposure_limit"][1],
+                            self.xk["min_markup"][1],
+                            self.xk["markup_range"][1],
+                            self.xk["n_close_orders"][1],
+                            self.xk["auto_unstuck_wallet_exposure_threshold"][1],
+                            self.xk["auto_unstuck_ema_dist"][1],
+                        )
                 orders += [
                     {
                         "side": "buy",
@@ -1159,12 +1306,7 @@ class Bot:
         pprice_long = self.position["long"]["price"]
         psize_short = abs(self.position["short"]["size"])
         pprice_short = self.position["short"]["price"]
-        bid_price = calc_ema_price_bid(
-            min(self.emas), self.ob[0], self.xk["ema_dist_lower"], self.xk["price_step"]
-        )
-        ask_price = calc_ema_price_ask(
-            max(self.emas), self.ob[1], self.xk["ema_dist_upper"], self.xk["price_step"]
-        )
+
         orders = []
         if psize_long > psize_short:
             pprice_diff = abs(pprice_long - self.price) / self.price
