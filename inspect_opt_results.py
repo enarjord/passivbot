@@ -83,11 +83,11 @@ def main():
         results = [json.loads(x) for x in f.readlines()]
     print(f"{'n results': <{klen}} {len(results)}")
     passivbot_mode = determine_passivbot_mode(results[-1]["config"])
-    sides = ["long", "short"] if passivbot_mode != "emas" else ["long"]
     all_scores = []
     symbols = [s for s in results[0]["results"] if s != "config_no"]
     starting_balance = results[-1]["results"][symbols[0]]["starting_balance"]
     print(f"{'starting_balance': <{klen}} {starting_balance}")
+    sides = ['long', 'short']
     for r in results:
         cfg = r["config"].copy()
         cfg.update(minsmaxs)
@@ -118,8 +118,6 @@ def main():
             "long": best_candidate["long"]["config"],
             "short": best_candidate["short"]["config"],
         }
-        if passivbot_mode != "emas"
-        else best_candidate["long"]["config"]
     )
     for side in sides:
         row_headers = ["symbol"] + [k[0] for k in keys] + ["score"]
@@ -127,7 +125,7 @@ def main():
         for rh in row_headers:
             table.align[rh] = "l"
         table.title = (
-            f"{side if passivbot_mode != 'emas' else ''} (config no. {best_candidate[side]['config_no']},"
+            f"{side} (config no. {best_candidate[side]['config_no']},"
             + f" score {round_dynamic(best_candidate[side]['score'], 6)})"
         )
         for sym in sorted(
