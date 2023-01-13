@@ -14,20 +14,20 @@
   # set any to -1 (less than zero) to disable
 
   # score /= max(maximum_pa_distance_std, pa_distance_std)
-  maximum_pa_distance_std_long: 0.01
-  maximum_pa_distance_std_short: 0.01
+  maximum_pa_distance_std_long: 0.04
+  maximum_pa_distance_std_short: 0.04
 
   # score /= max(maximum_pa_distance_mean, pa_distance_mean)
-  maximum_pa_distance_mean_long: 0.01
-  maximum_pa_distance_mean_short: 0.01
+  maximum_pa_distance_mean_long: 0.04
+  maximum_pa_distance_mean_short: 0.04
 
   # score /= max(maximum_loss_profit_ratio, loss_profit_ratio)
-  maximum_loss_profit_ratio_long: 0.1
-  maximum_loss_profit_ratio_short: 0.1
+  maximum_loss_profit_ratio_long: 0.5
+  maximum_loss_profit_ratio_short: 0.5
 
   # score /= max(maximum_hrs_stuck_max, hrs_stuck_max)
-  maximum_hrs_stuck_max_long: -1
-  maximum_hrs_stuck_max_short: -1
+  maximum_hrs_stuck_max_long: 250.0
+  maximum_hrs_stuck_max_short: 250.0
 
   # score *= min(minimum_eqbal_ratio_min, eqbal_ratio_min)
   minimum_eqbal_ratio_min_long: 0.75
@@ -43,7 +43,7 @@
   backwards_tp_long: true
   backwards_tp_short: true
 
-  # choices: [r/recursive_grid, s/static_grid, n/neat_grid]
+  # choices: [r/recursive_grid, s/static_grid, n/neat_grid, e/emas]
   passivbot_mode: neat_grid
 
   # sorted highest to lowest vol last 250 days
