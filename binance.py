@@ -359,7 +359,9 @@ class BinanceBot(Bot):
                             "liquidation_price": float(p["liquidationPrice"]),
                         }
             for e in balance:
-                if e["asset"] == (self.quote if "linear_perpetual" in self.market_type else self.coin):
+                if e["asset"] == (
+                    self.quote if "linear_perpetual" in self.market_type else self.coin
+                ):
                     position["wallet_balance"] = float(e["balance"])
                     position["equity"] = position["wallet_balance"] + float(e["crossUnPnl"])
                     break
