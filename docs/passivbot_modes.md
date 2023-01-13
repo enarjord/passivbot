@@ -1,22 +1,17 @@
 # Passivbot Modes
 
 Passivbot has three different ways of generating the grid of entry orders:  
-Recursive Grid Mode, Static Grid Mode and Neat Grid Mode
+Recursive Grid Mode, Static Grid Mode, Neat Grid Mode and EMAs Mode
+
+Static and Neat grid modes are similar, building a grid with a pre specified span.
+
+Recursive grid mode builds the grid recursively, based on expected new position after previous grid node fill
+
+EMAs mode is not a grid bot, but waits a duration of time between entries.
 
 
 ## Common Parameters
 
-- auto_unstuck_ema_dist: float
-	- per uno distance from EMA band to place auto unstuck orders.
-	- `auto_unstuck_bid_price = lower_EMA_band * (1 - auto_unstuck_ema_dist)`
-	- `auto_unstuck_ask_price = upper_EMA_band * (1 + auto_unstuck_ema_dist)`
-	- See more in `docs/auto_unstuck.md`
-- auto_unstuck_wallet_exposure_threshold: float
-	- if set to 0, auto unstuck is disabled
-	- auto unstuck mode is triggered when `wallet_exposure >= wallet_exposure_limit * (1 - auto_unstuck_wallet_exposure_threshold)`
-	- auto unstuck entry qty will bring wallet_exposure to wallet_exposure_limit
-	- auto unstuck close qty will bring wallet_exposure to `wallet_exposure_limit * (1 - auto_unstuck_wallet_exposure_threshold)`
-	- See more in `docs/auto_unstuck.md`
 - ema_span_0: float
 - ema_span_1: float
 	- spans are given in minutes
@@ -25,12 +20,6 @@ Recursive Grid Mode, Static Grid Mode and Neat Grid Mode
 	- `ema_band_lower = min(emas)`
 	- `ema_band_upper = max(emas)`
 - enabled: bool
-- initial_eprice_ema_dist: float
-	- if no pos, initial entry price is
-		- `ema_band_lower * (1 - initial_eprice_ema_dist)` for long
-		- `ema_band_upper * (1 + initial_eprice_ema_dist)` for short
-- initial_qty_pct: float
-	- `initial_entry_cost = balance * wallet_exposure_limit * initial_qty_pct`
 - min_markup: float
 - markup_range: float
 - n_close_orders: int (if float: int(round(x)))
@@ -43,6 +32,27 @@ Recursive Grid Mode, Static Grid Mode and Neat Grid Mode
 - wallet_exposure_limit: float
 	- bot limits pos size to `wallet_balance_in_contracts * wallet_exposure_limit`
 	- See more in `docs/risk_management.md`
+
+
+## Parameters common to Neat, Static and Recursive grid modes
+- initial_eprice_ema_dist: float
+	- if no pos, initial entry price is
+		- `ema_band_lower * (1 - initial_eprice_ema_dist)` for long
+		- `ema_band_upper * (1 + initial_eprice_ema_dist)` for short
+- initial_qty_pct: float
+	- `initial_entry_cost = balance * wallet_exposure_limit * initial_qty_pct`
+- auto_unstuck_ema_dist: float
+	- per uno distance from EMA band to place auto unstuck orders.
+	- `auto_unstuck_bid_price = lower_EMA_band * (1 - auto_unstuck_ema_dist)`
+	- `auto_unstuck_ask_price = upper_EMA_band * (1 + auto_unstuck_ema_dist)`
+	- See more in `docs/auto_unstuck.md`
+- auto_unstuck_wallet_exposure_threshold: float
+	- if set to 0, auto unstuck is disabled
+	- auto unstuck mode is triggered when `wallet_exposure >= wallet_exposure_limit * (1 - auto_unstuck_wallet_exposure_threshold)`
+	- auto unstuck entry qty will bring wallet_exposure to wallet_exposure_limit
+	- auto unstuck close qty will bring wallet_exposure to `wallet_exposure_limit * (1 - auto_unstuck_wallet_exposure_threshold)`
+	- See more in `docs/auto_unstuck.md`
+
 
 ## Static Grid Mode Parameters
 
@@ -93,3 +103,27 @@ It is called recursive grid mode because the grid is defined recusively by compu
 - parameters secondary_allocation, secondary_pprice_diff and eprice_pprice_diff aren't used in neat grid mode
 
 It is called neat grid mode because the grid is made in a "neater" way than in static grid mode.
+
+
+## EMAs Mode Parameters
+
+- delay_between_fills_minutes_entry/close
+	- delay between entries/closes given in minutes
+	- resets after full pos close
+- delay_weight_entry/close
+	- delay between orders is modified according to: 
+	- `max(1, delay_between_fills_mins * (1 - pprice_diff * delay_weight))`
+	- where pprice_diff is diff between pos price and market price
+- ema_dist_lower/upper
+	- offset lower/upper ema band.  See ema_span_0/ema_span_1
+- qty_pct_entry/close
+	- entry cost = `balance * wallet_exposure_limit * qty_pct`
+- we_multiplier_entry/close
+	- entry cost is modified according to:
+	- `balance * wallet_exposure_limit * qty_pct * (1 + ratio * we_multiplier)`
+	- where `ratio = wallet_exposure / wallet_exposure_limit`
+
+EMAs mode uses the pos close logic common to all passivbot modes.  There is no entry grid.
+It is called EMAs mode because all entry and close prices are based on EMAs.
+
+
