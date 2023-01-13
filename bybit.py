@@ -696,6 +696,14 @@ class BybitBot(Bot):
                 print(res)
             elif "linear_perpetual" in self.market_type:
                 res = await self.private_post(
+                    "/private/linear/position/switch-mode",
+                    {
+                        "symbol": self.symbol,
+                        "mode": "BothSide",
+                    },
+                )
+                print(res)
+                res = await self.private_post(
                     "/private/linear/position/switch-isolated",
                     {
                         "symbol": self.symbol,
