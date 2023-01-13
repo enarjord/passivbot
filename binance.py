@@ -205,7 +205,7 @@ class BinanceBot(Bot):
         for e in self.exchange_info["symbols"]:
             if e["symbol"] == self.symbol:
                 self.coin = e["baseAsset"]
-                self.quot = e["quoteAsset"]
+                self.quote = e["quoteAsset"]
                 self.margin_coin = e["marginAsset"]
                 self.pair = e["pair"]
                 if "inverse_coin_margined" in self.market_type:
@@ -359,7 +359,7 @@ class BinanceBot(Bot):
                             "liquidation_price": float(p["liquidationPrice"]),
                         }
             for e in balance:
-                if e["asset"] == (self.quot if "linear_perpetual" in self.market_type else self.coin):
+                if e["asset"] == (self.quote if "linear_perpetual" in self.market_type else self.coin):
                     position["wallet_balance"] = float(e["balance"])
                     position["equity"] = position["wallet_balance"] + float(e["crossUnPnl"])
                     break
