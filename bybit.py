@@ -232,46 +232,56 @@ class BybitBot(Bot):
 
     async def fetch_position(self) -> dict:
         position = {}
-        if "linear_perpetual" in self.market_type:
-            fetched, bal = await asyncio.gather(
-                self.private_get(self.endpoints["position"], {"symbol": self.symbol}),
-                self.private_get(self.endpoints["balance"], {"coin": self.quot}),
-            )
-            long_pos = [e for e in fetched["result"] if e["side"] == "Buy"][0]
-            short_pos = [e for e in fetched["result"] if e["side"] == "Sell"][0]
-            position["wallet_balance"] = float(bal["result"][self.quot]["wallet_balance"])
-        else:
-            fetched, bal = await asyncio.gather(
-                self.private_get(self.endpoints["position"], {"symbol": self.symbol}),
-                self.private_get(self.endpoints["balance"], {"coin": self.coin}),
-            )
-            position["wallet_balance"] = float(bal["result"][self.coin]["wallet_balance"])
-            if "inverse_perpetual" in self.market_type:
-                if fetched["result"]["side"] == "Buy":
-                    long_pos = fetched["result"]
-                    short_pos = {"size": 0.0, "entry_price": 0.0, "liq_price": 0.0}
-                else:
-                    long_pos = {"size": 0.0, "entry_price": 0.0, "liq_price": 0.0}
-                    short_pos = fetched["result"]
-            elif "inverse_futures" in self.market_type:
-                long_pos = [e["data"] for e in fetched["result"] if e["data"]["position_idx"] == 1][0]
-                short_pos = [e["data"] for e in fetched["result"] if e["data"]["position_idx"] == 2][
-                    0
-                ]
+        fetched, bal = None, None
+        try:
+            if "linear_perpetual" in self.market_type:
+                fetched, bal = await asyncio.gather(
+                    self.private_get(self.endpoints["position"], {"symbol": self.symbol}),
+                    self.private_get(self.endpoints["balance"], {"coin": self.quot}),
+                )
+                long_pos = [e for e in fetched["result"] if e["side"] == "Buy"][0]
+                short_pos = [e for e in fetched["result"] if e["side"] == "Sell"][0]
+                position["wallet_balance"] = float(bal["result"][self.quot]["wallet_balance"])
             else:
-                raise Exception("unknown market type")
+                fetched, bal = await asyncio.gather(
+                    self.private_get(self.endpoints["position"], {"symbol": self.symbol}),
+                    self.private_get(self.endpoints["balance"], {"coin": self.coin}),
+                )
+                position["wallet_balance"] = float(bal["result"][self.coin]["wallet_balance"])
+                if "inverse_perpetual" in self.market_type:
+                    if fetched["result"]["side"] == "Buy":
+                        long_pos = fetched["result"]
+                        short_pos = {"size": 0.0, "entry_price": 0.0, "liq_price": 0.0}
+                    else:
+                        long_pos = {"size": 0.0, "entry_price": 0.0, "liq_price": 0.0}
+                        short_pos = fetched["result"]
+                elif "inverse_futures" in self.market_type:
+                    long_pos = [
+                        e["data"] for e in fetched["result"] if e["data"]["position_idx"] == 1
+                    ][0]
+                    short_pos = [
+                        e["data"] for e in fetched["result"] if e["data"]["position_idx"] == 2
+                    ][0]
+                else:
+                    raise Exception("unknown market type")
 
-        position["long"] = {
-            "size": round_(float(long_pos["size"]), self.qty_step),
-            "price": float(long_pos["entry_price"]),
-            "liquidation_price": float(long_pos["liq_price"]),
-        }
-        position["short"] = {
-            "size": -round_(float(short_pos["size"]), self.qty_step),
-            "price": float(short_pos["entry_price"]),
-            "liquidation_price": float(short_pos["liq_price"]),
-        }
-        return position
+            position["long"] = {
+                "size": round_(float(long_pos["size"]), self.qty_step),
+                "price": float(long_pos["entry_price"]),
+                "liquidation_price": float(long_pos["liq_price"]),
+            }
+            position["short"] = {
+                "size": -round_(float(short_pos["size"]), self.qty_step),
+                "price": float(short_pos["entry_price"]),
+                "liquidation_price": float(short_pos["liq_price"]),
+            }
+            return position
+        except Exception as e:
+            logging.error(f"error fetching pos or balance {e}")
+            print_async_exception(fetched)
+            print_async_exception(bal)
+            traceback.print_exc()
+            return None
 
     async def execute_orders(self, orders: [dict]) -> [dict]:
         if not orders:
@@ -656,6 +666,14 @@ class BybitBot(Bot):
                 )
                 print(res)
             elif "linear_perpetual" in self.market_type:
+                res = await self.private_post(
+                    "/private/linear/position/switch-mode",
+                    {
+                        "symbol": self.symbol,
+                        "mode": "BothSide",
+                    },
+                )
+                print(res)
                 res = await self.private_post(
                     "/private/linear/position/switch-isolated",
                     {
