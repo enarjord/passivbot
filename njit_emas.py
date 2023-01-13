@@ -608,7 +608,7 @@ def backtest_emas(
                             close_grid_long[0][1],
                             psize_long,
                             pprice_long,
-                            "close_markup_long",
+                            "long_nclose",
                         )
                     )
                     close_grid_long = close_grid_long[1:]
@@ -769,7 +769,7 @@ def backtest_emas(
                             close_grid_short[0][1],
                             -psize_short,
                             pprice_short,
-                            "close_markup_short",
+                            "short_nclose",
                         )
                     )
                     close_grid_short = close_grid_short[1:]

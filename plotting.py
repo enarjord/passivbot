@@ -296,11 +296,11 @@ def plot_fills(df, fdf_, side: int = 0, plot_whole_df: bool = False, title=""):
     if side >= 0:
         longs = fdf[fdf.type.str.contains("long")]
         types = longs.type.unique()
-        if any(x in types for x in ["ema_entry_long", "ema_close_long", "close_markup_long"]):
+        if any(x in types for x in ["ema_entry_long", "ema_close_long", "long_nclose"]):
             # emas mode
             longs[longs.type == "ema_entry_long"].price.plot(style="bo")
             longs[longs.type == "ema_close_long"].price.plot(style="ro")
-            longs[longs.type == "close_markup_long"].price.plot(style="rx")
+            longs[longs.type == "long_nclose"].price.plot(style="rx")
         else:
             lentry = longs[
                 longs.type.str.contains("rentry")
@@ -327,11 +327,11 @@ def plot_fills(df, fdf_, side: int = 0, plot_whole_df: bool = False, title=""):
     if side <= 0:
         shorts = fdf[fdf.type.str.contains("short")]
         types = shorts.type.unique()
-        if any(x in types for x in ["ema_entry_short", "ema_close_short", "close_markup_short"]):
+        if any(x in types for x in ["ema_entry_short", "ema_close_short", "short_nclose"]):
             # emas mode
             shorts[shorts.type == "ema_entry_short"].price.plot(style="ro")
             shorts[shorts.type == "ema_close_short"].price.plot(style="bo")
-            shorts[shorts.type == "close_markup_short"].price.plot(style="bx")
+            shorts[shorts.type == "short_nclose"].price.plot(style="bx")
         else:
             sentry = shorts[
                 shorts.type.str.contains("rentry")
