@@ -457,59 +457,6 @@ def backtest_emas(
             next_stats_update = min(timestamps[-1], timestamps[k] + 1000 * 60 * 60)  # hourly
         if do_long:
             emas_long = calc_ema(alphas_long, alphas__long, emas_long, closes[k - 1])
-            # check if markup close
-            if psize_long > 0.0 and highs[k] > pprice_long:
-                close_grid_long = calc_close_grid_backwards_long(
-                    balance_long,
-                    psize_long,
-                    pprice_long,
-                    closes[k - 1],
-                    0.0,
-                    inverse,
-                    qty_step,
-                    price_step,
-                    min_qty,
-                    min_cost,
-                    c_mult,
-                    wallet_exposure_limit[0],
-                    min_markup[0],
-                    markup_range[0],
-                    n_close_orders[0],
-                    0.0,
-                    0.0,
-                )
-                while close_grid_long and highs[k] > close_grid_long[0][1]:
-                    # close long pos
-                    close_qty = abs(close_grid_long[0][0])
-                    pnl = calc_pnl_long(
-                        pprice_long, close_grid_long[0][1], close_qty, inverse, c_mult
-                    )
-                    fee_paid = (
-                        -qty_to_cost(close_qty, close_grid_long[0][1], inverse, c_mult) * maker_fee
-                    )
-                    balance_long += pnl + fee_paid
-                    psize_long = max(0.0, round_(psize_long - close_qty, qty_step))
-                    if psize_long == 0.0:
-                        pprice_long = 0.0
-                        prev_ema_fill_ts_entry_long = 0
-                    upnl = calc_pnl_long(pprice_long, closes[k], psize_long, inverse, c_mult)
-                    equity_long = balance_long + upnl
-                    fills_long.append(
-                        (
-                            k,
-                            timestamps[k],
-                            pnl,
-                            fee_paid,
-                            balance_long,
-                            equity_long,
-                            -close_qty,
-                            close_grid_long[0][1],
-                            psize_long,
-                            pprice_long,
-                            "close_markup_long",
-                        )
-                    )
-                    close_grid_long = close_grid_long[1:]
             bid_price_long = calc_ema_price_bid(
                 emas_long.min(), closes[k - 1], ema_dist_lower[0], price_step
             )
@@ -615,14 +562,12 @@ def backtest_emas(
                             "ema_close_long",
                         )
                     )
-        if do_short:
-            emas_short = calc_ema(alphas_short, alphas__short, emas_short, closes[k - 1])
             # check if markup close
-            if psize_short > 0.0 and lows[k] < pprice_short:
-                close_grid_short = calc_close_grid_backwards_short(
-                    balance_short,
-                    psize_short,
-                    pprice_short,
+            if psize_long > 0.0 and highs[k] > pprice_long:
+                close_grid_long = calc_close_grid_backwards_long(
+                    balance_long,
+                    psize_long,
+                    pprice_long,
                     closes[k - 1],
                     0.0,
                     inverse,
@@ -631,45 +576,47 @@ def backtest_emas(
                     min_qty,
                     min_cost,
                     c_mult,
-                    wallet_exposure_limit[1],
-                    min_markup[1],
-                    markup_range[1],
-                    n_close_orders[1],
+                    wallet_exposure_limit[0],
+                    min_markup[0],
+                    markup_range[0],
+                    n_close_orders[0],
                     0.0,
                     0.0,
                 )
-                while close_grid_short and lows[k] < close_grid_short[0][1]:
-                    # close short pos
-                    close_qty = abs(close_grid_short[0][0])
-                    pnl = calc_pnl_short(
-                        pprice_short, close_grid_short[0][1], close_qty, inverse, c_mult
+                while close_grid_long and highs[k] > close_grid_long[0][1]:
+                    # close long pos
+                    close_qty = abs(close_grid_long[0][0])
+                    pnl = calc_pnl_long(
+                        pprice_long, close_grid_long[0][1], close_qty, inverse, c_mult
                     )
                     fee_paid = (
-                        -qty_to_cost(close_qty, close_grid_short[0][1], inverse, c_mult) * maker_fee
+                        -qty_to_cost(close_qty, close_grid_long[0][1], inverse, c_mult) * maker_fee
                     )
-                    balance_short += pnl + fee_paid
-                    psize_short = max(0.0, round_(psize_short - close_qty, qty_step))
-                    if psize_short == 0.0:
-                        pprice_short = 0.0
-                        prev_ema_fill_ts_entry_short = 0
-                    upnl = calc_pnl_short(pprice_short, closes[k], psize_short, inverse, c_mult)
-                    equity_short = balance_short + upnl
-                    fills_short.append(
+                    balance_long += pnl + fee_paid
+                    psize_long = max(0.0, round_(psize_long - close_qty, qty_step))
+                    if psize_long == 0.0:
+                        pprice_long = 0.0
+                        prev_ema_fill_ts_entry_long = 0
+                    upnl = calc_pnl_long(pprice_long, closes[k], psize_long, inverse, c_mult)
+                    equity_long = balance_long + upnl
+                    fills_long.append(
                         (
                             k,
                             timestamps[k],
                             pnl,
                             fee_paid,
-                            balance_short,
-                            equity_short,
-                            close_qty,
-                            close_grid_short[0][1],
-                            -psize_short,
-                            pprice_short,
-                            "close_markup_short",
+                            balance_long,
+                            equity_long,
+                            -close_qty,
+                            close_grid_long[0][1],
+                            psize_long,
+                            pprice_long,
+                            "close_markup_long",
                         )
                     )
-                    close_grid_short = close_grid_short[1:]
+                    close_grid_long = close_grid_long[1:]
+        if do_short:
+            emas_short = calc_ema(alphas_short, alphas__short, emas_short, closes[k - 1])
             ask_price_short = calc_ema_price_ask(
                 emas_short.max(), closes[k - 1], ema_dist_upper[1], price_step
             )
@@ -776,4 +723,57 @@ def backtest_emas(
                             "ema_close_short",
                         )
                     )
+            # check if markup close
+            if psize_short > 0.0 and lows[k] < pprice_short:
+                close_grid_short = calc_close_grid_backwards_short(
+                    balance_short,
+                    psize_short,
+                    pprice_short,
+                    closes[k - 1],
+                    0.0,
+                    inverse,
+                    qty_step,
+                    price_step,
+                    min_qty,
+                    min_cost,
+                    c_mult,
+                    wallet_exposure_limit[1],
+                    min_markup[1],
+                    markup_range[1],
+                    n_close_orders[1],
+                    0.0,
+                    0.0,
+                )
+                while close_grid_short and lows[k] < close_grid_short[0][1]:
+                    # close short pos
+                    close_qty = abs(close_grid_short[0][0])
+                    pnl = calc_pnl_short(
+                        pprice_short, close_grid_short[0][1], close_qty, inverse, c_mult
+                    )
+                    fee_paid = (
+                        -qty_to_cost(close_qty, close_grid_short[0][1], inverse, c_mult) * maker_fee
+                    )
+                    balance_short += pnl + fee_paid
+                    psize_short = max(0.0, round_(psize_short - close_qty, qty_step))
+                    if psize_short == 0.0:
+                        pprice_short = 0.0
+                        prev_ema_fill_ts_entry_short = 0
+                    upnl = calc_pnl_short(pprice_short, closes[k], psize_short, inverse, c_mult)
+                    equity_short = balance_short + upnl
+                    fills_short.append(
+                        (
+                            k,
+                            timestamps[k],
+                            pnl,
+                            fee_paid,
+                            balance_short,
+                            equity_short,
+                            close_qty,
+                            close_grid_short[0][1],
+                            -psize_short,
+                            pprice_short,
+                            "close_markup_short",
+                        )
+                    )
+                    close_grid_short = close_grid_short[1:]
     return fills_long, fills_short, stats
