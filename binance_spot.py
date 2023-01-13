@@ -194,6 +194,7 @@ class BinanceBotSpot(Bot):
                     orders.append(order)
                     remaining_cost -= cost
             else:
+                # TODO: ensure sell qty is greater than min qty
                 orders.append(order)
         return orders
 
