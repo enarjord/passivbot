@@ -241,6 +241,7 @@ async def main():
                 "min_qty",
                 "min_cost",
                 "base_dir",
+                "c_mult",
             ]
         ):
             if k in config:
