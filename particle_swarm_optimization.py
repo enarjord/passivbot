@@ -570,7 +570,7 @@ async def main():
     )
     parser = add_argparse_args(parser)
     args = parser.parse_args()
-    args.symbol = "BTCUSDT"  # dummy symbol
+    #args.symbol = "BTCUSDT"  # dummy symbol
     config = await prepare_optimize_config(args)
     if args.passivbot_mode is not None:
         if args.passivbot_mode in ["s", "static_grid", "static"]:
