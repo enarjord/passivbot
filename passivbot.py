@@ -1288,7 +1288,7 @@ class Bot:
             keys_done = set()
             all_keys = set(self.last_fills_timestamps)
             for fill in sorted(fills, key=lambda x: x["timestamp"], reverse=True):
-                print("debug fills", fill["custom_id"])
+                #print("debug fills", fill["custom_id"])
                 for key in all_keys - keys_done:
                     if key in fill["custom_id"]:
                         self.last_fills_timestamps[key] = fill["timestamp"]
@@ -1342,12 +1342,14 @@ class Bot:
                 to_update.append(self.update_last_fills_timestamps())
             res = await asyncio.gather(*to_update)
             self.update_emas(self.ob[0], self.prev_price)
+            '''
             print(res)
             print(self.last_fills_timestamps)
             print(self.emas_long)
             print(self.emas_short)
             orders = self.calc_orders()
             print(orders)
+            '''
             if not all(res):
                 return
             await self.cancel_and_create()
