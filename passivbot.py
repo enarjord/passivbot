@@ -870,7 +870,7 @@ class Bot:
                         self.xk["wallet_exposure_limit"][1],
                     )
                     if ema_close_short[0] != 0.0 and (
-                        not closes_short or ema_close_short[1] < closes_short[0][1]
+                        not closes_short or ema_close_short[1] > closes_short[0][1]
                     ):
                         closes_short = [ema_close_short]
                         closes_short += calc_close_grid_short(
