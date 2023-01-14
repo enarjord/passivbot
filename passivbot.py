@@ -869,6 +869,8 @@ class Bot:
                         self.xk["delay_between_fills_ms_close"][1],
                         self.xk["wallet_exposure_limit"][1],
                     )
+                    # print('debug ema close short', ema_close_short)
+                    # print('debug ncloses short', closes_short)
                     if ema_close_short[0] != 0.0 and (
                         not closes_short or ema_close_short[1] > closes_short[0][1]
                     ):
@@ -877,7 +879,7 @@ class Bot:
                             True,
                             balance,
                             -max(
-                                0.0, round_(abs(psize_short) - abs(ema_close_long[0]), self.qty_step)
+                                0.0, round_(abs(psize_short) - abs(ema_close_short[0]), self.qty_step)
                             ),
                             pprice_short,
                             self.ob[0],
