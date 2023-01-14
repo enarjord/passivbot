@@ -256,6 +256,26 @@ def dump_plots(
             )
             plt.savefig(f"{result['plots_dirpath']}balance_and_equity_sampled_{side}.png")
 
+            if result["passivbot_mode"] == "emas":
+                spans = sorted(
+                    [
+                        result[side]["ema_span_0"],
+                        (result[side]["ema_span_0"] * result[side]["ema_span_1"]) ** 0.5,
+                        result[side]["ema_span_1"],
+                    ]
+                )
+                emas = pd.DataFrame(
+                    {f"ema_{span}": df.price.ewm(span=span, adjust=False).mean() for span in spans},
+                    index=df.index,
+                )
+                ema_bands = pd.DataFrame(
+                    {
+                        "ema_band_lower": emas.min(axis=1) * (1 - result[side]["ema_dist_lower"]),
+                        "ema_band_upper": emas.max(axis=1) * (1 + result[side]["ema_dist_upper"]),
+                    },
+                    index=df.index,
+                )
+                df = df.join(ema_bands)
             for z in range(n_parts):
                 start_ = z / n_parts
                 end_ = (z + 1) / n_parts
@@ -269,6 +289,8 @@ def dump_plots(
                     fig.savefig(f"{result['plots_dirpath']}backtest_{side}{z + 1}of{n_parts}.png")
                 else:
                     print(f"no {side} fills...")
+            if result["passivbot_mode"] == "emas":
+                df = df.drop(["ema_band_lower", "ema_band_upper"], axis=1)
 
     print("plotting pos sizes...")
     plt.clf()
@@ -293,6 +315,9 @@ def plot_fills(df, fdf_, side: int = 0, plot_whole_df: bool = False, title=""):
         dfc = dfc[(dfc.index > fdf.index[0]) & (dfc.index < fdf.index[-1])]
         dfc = dfc.loc[fdf.index[0] : fdf.index[-1]]
     dfc.price.plot(style="y-", title=title, xlabel="Time", ylabel="Price + Fills")
+    if "ema_band_lower" in dfc.columns and "ema_band_upper" in dfc.columns:
+        dfc.ema_band_lower.plot(style="b--")
+        dfc.ema_band_upper.plot(style="r--")
     if side >= 0:
         longs = fdf[fdf.type.str.contains("long")]
         types = longs.type.unique()
