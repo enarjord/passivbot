@@ -134,7 +134,7 @@ def main():
             xs = [best_candidate[side]["stats"][sym][f"{k[0]}_{side}"] for k in keys]
             table.add_row(
                 [("-> " if sym in best_candidate[side]["symbols_to_include"] else "") + sym]
-                + [round_dynamic(x, 4) for x in xs]
+                + [round_dynamic(x, 4) if x == x else np.nan for x in xs]
                 + [best_candidate[side]["individual_scores"][sym]]
             )
         means = [
