@@ -285,7 +285,7 @@ class OKXBot(Bot):
                     "reduce_only": None,
                     "side": elm["side"],
                     "position_side": elm["posSide"],
-                    "timestamp": elm["ts"],
+                    "timestamp": float(elm["ts"]),
                 }
                 for elm in fetched["data"]
             ]
