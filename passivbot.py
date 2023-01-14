@@ -416,7 +416,7 @@ class Bot:
                 if "side" in order:
                     logging.info(
                         f'  created order {order["symbol"]} {order["side"]: <4} '
-                        + f'{order["position_side"]: <5} {order["qty"]} {order["price"]}'
+                        + f'{order["position_side"]: <5} {float(order["qty"])} {float(order["price"])}'
                     )
             return orders
         finally:
@@ -1288,7 +1288,7 @@ class Bot:
             keys_done = set()
             all_keys = set(self.last_fills_timestamps)
             for fill in sorted(fills, key=lambda x: x["timestamp"], reverse=True):
-                #print("debug fills", fill["custom_id"])
+                # print("debug fills", fill["custom_id"])
                 for key in all_keys - keys_done:
                     if any(k in fill["custom_id"] for k in [key, key.replace("_", "")]):
                         self.last_fills_timestamps[key] = fill["timestamp"]
