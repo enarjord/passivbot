@@ -192,23 +192,15 @@ async def main():
         passivbot_mode = determine_passivbot_mode(config)
 
         if args.long_wallet_exposure_limit is not None:
-            if passivbot_mode == "emas":
-                old_val = config["wallet_exposure_limit_long"]
-                config["wallet_exposure_limit_long"] = args.long_wallet_exposure_limit
-            else:
-                old_val = config["long"]["wallet_exposure_limit"]
-                config["long"]["wallet_exposure_limit"] = args.long_wallet_exposure_limit
+            old_val = config["long"]["wallet_exposure_limit"]
+            config["long"]["wallet_exposure_limit"] = args.long_wallet_exposure_limit
             print(
                 f"overriding long wallet exposure limit ({old_val}) "
                 f"with new value: {args.long_wallet_exposure_limit}"
             )
         if args.short_wallet_exposure_limit is not None:
-            if passivbot_mode == "emas":
-                old_val = config["wallet_exposure_limit_short"]
-                config["wallet_exposure_limit_short"] = args.short_wallet_exposure_limit
-            else:
-                old_val = config["short"]["wallet_exposure_limit"]
-                config["short"]["wallet_exposure_limit"] = args.short_wallet_exposure_limit
+            old_val = config["short"]["wallet_exposure_limit"]
+            config["short"]["wallet_exposure_limit"] = args.short_wallet_exposure_limit
             print(
                 f"overriding short wallet exposure limit ({old_val}) "
                 f"with new value: {args.short_wallet_exposure_limit}"
