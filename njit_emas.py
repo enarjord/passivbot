@@ -277,12 +277,6 @@ def calc_ema_entry_short(
 
 @njit
 def calc_ema_close_short(
-    inverse: bool,
-    qty_step: float,
-    price_step: float,
-    min_qty: float,
-    min_cost: float,
-    c_mult: float,
     balance: float,
     psize_short: float,
     pprice_short: float,
@@ -290,6 +284,12 @@ def calc_ema_close_short(
     emas: float,
     utc_now_ms: float,
     prev_ema_fill_ts_close: float,
+    inverse: bool,
+    qty_step: float,
+    price_step: float,
+    min_qty: float,
+    min_cost: float,
+    c_mult: float,
     ema_dist_lower: float,
     qty_pct_close: float,
     we_multiplier_close: float,
@@ -669,12 +669,6 @@ def backtest_emas(
             )
             if lows[k] < bid_price_short:
                 ema_close_short = calc_ema_close_short(
-                    inverse,
-                    qty_step,
-                    price_step,
-                    min_qty,
-                    min_cost,
-                    c_mult,
                     balance_short,
                     psize_short,
                     pprice_short,
@@ -682,6 +676,12 @@ def backtest_emas(
                     emas_short,
                     timestamps[k - 1],
                     prev_ema_fill_ts_close_short,
+                    inverse,
+                    qty_step,
+                    price_step,
+                    min_qty,
+                    min_cost,
+                    c_mult,
                     ema_dist_lower[1],
                     qty_pct_close[1],
                     we_multiplier_close[1],
