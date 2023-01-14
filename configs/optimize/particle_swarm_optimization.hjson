@@ -14,20 +14,20 @@
   # set any to -1 (less than zero) to disable
 
   # score /= max(maximum_pa_distance_std, pa_distance_std)
-  maximum_pa_distance_std_long: 0.04
-  maximum_pa_distance_std_short: 0.04
+  maximum_pa_distance_std_long: 0.03
+  maximum_pa_distance_std_short: 0.03
 
   # score /= max(maximum_pa_distance_mean, pa_distance_mean)
-  maximum_pa_distance_mean_long: 0.04
-  maximum_pa_distance_mean_short: 0.04
+  maximum_pa_distance_mean_long: 0.03
+  maximum_pa_distance_mean_short: 0.03
 
   # score /= max(maximum_loss_profit_ratio, loss_profit_ratio)
-  maximum_loss_profit_ratio_long: 0.5
-  maximum_loss_profit_ratio_short: 0.5
+  maximum_loss_profit_ratio_long: 0.25
+  maximum_loss_profit_ratio_short: 0.25
 
   # score /= max(maximum_hrs_stuck_max, hrs_stuck_max)
-  maximum_hrs_stuck_max_long: 300.0
-  maximum_hrs_stuck_max_short: 300.0
+  maximum_hrs_stuck_max_long: 240.0
+  maximum_hrs_stuck_max_short: 240.0
 
   # score *= min(minimum_eqbal_ratio_min, eqbal_ratio_min)
   minimum_eqbal_ratio_min_long: 0.75
@@ -200,10 +200,10 @@
       we_multiplier_entry: [0.0, 50.0]
       we_multiplier_close: [0.0, 50.0]
       delay_weight_entry: [0.0, 50.0]
-      delay_weight_close: [0.0, 50.0]
-      delay_between_fills_minutes_entry: [60.0, 4320.0]
-      delay_between_fills_minutes_close: [60.0, 4320.0]
-      min_markup: [0.0015, 0.01]
+      delay_weight_close: [-50.0, 50.0]
+      delay_between_fills_minutes_entry: [1.0, 4320.0]
+      delay_between_fills_minutes_close: [1.0, 4320.0]
+      min_markup: [0.002, 0.01]
       markup_range: [0.0, 0.07]
       n_close_orders: [7, 16]
       wallet_exposure_limit: [1.0, 1.0]
@@ -219,10 +219,10 @@
       we_multiplier_entry: [0.0, 50.0]
       we_multiplier_close: [0.0, 50.0]
       delay_weight_entry: [0.0, 50.0]
-      delay_weight_close: [0.0, 50.0]
-      delay_between_fills_minutes_entry: [60.0, 4320.0]
-      delay_between_fills_minutes_close: [60.0, 4320.0]
-      min_markup: [0.0015, 0.01]
+      delay_weight_close: [-50.0, 50.0]
+      delay_between_fills_minutes_entry: [1.0, 4320.0]
+      delay_between_fills_minutes_close: [1.0, 4320.0]
+      min_markup: [0.002, 0.01]
       markup_range: [0.0, 0.07]
       n_close_orders: [7, 16]
       wallet_exposure_limit: [1.0, 1.0]
