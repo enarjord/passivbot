@@ -1082,10 +1082,12 @@ class Bot:
                     break
                 await asyncio.sleep(0.5)
                 now = time()
+                """
                 print(
                     f"\rcountdown: {((now + 60) - now % 60) - now:.1f} last price: {self.price}      ",
                     end=" ",
                 )
+                """
             if self.stop_websocket:
                 break
             await self.on_minute_mark()
