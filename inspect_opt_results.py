@@ -87,7 +87,7 @@ def main():
     symbols = [s for s in results[0]["results"] if s != "config_no"]
     starting_balance = results[-1]["results"][symbols[0]]["starting_balance"]
     print(f"{'starting_balance': <{klen}} {starting_balance}")
-    sides = ['long', 'short']
+    sides = ["long", "short"]
     for r in results:
         cfg = r["config"].copy()
         cfg.update(minsmaxs)
@@ -113,12 +113,10 @@ def main():
         scoress = sorted([sc[side] for sc in all_scores], key=lambda x: x["score"])
         best_candidate[side] = scoress[args.index]
     best_config = {side: best_candidate[side]["config"] for side in sides}
-    best_config = (
-        {
-            "long": best_candidate["long"]["config"],
-            "short": best_candidate["short"]["config"],
-        }
-    )
+    best_config = {
+        "long": best_candidate["long"]["config"],
+        "short": best_candidate["short"]["config"],
+    }
     for side in sides:
         row_headers = ["symbol"] + [k[0] for k in keys] + ["score"]
         table = PrettyTable(row_headers)
