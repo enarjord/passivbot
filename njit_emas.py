@@ -304,7 +304,7 @@ def calc_ema_close_short(
             delay_between_fills_ms_close, pprice_diff_short, delay_weight_close
         )
         if utc_now_ms - prev_ema_fill_ts_close > delay:
-            bid_price_short = calc_ema_price_ask(emas.min(), highest_bid, ema_dist_lower, price_step)
+            bid_price_short = calc_ema_price_bid(emas.min(), highest_bid, ema_dist_lower, price_step)
             wallet_exposure_short = qty_to_cost(psize_short, pprice_short, inverse, c_mult) / balance
             qty_short = min(
                 psize_short,
