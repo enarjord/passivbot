@@ -1319,12 +1319,11 @@ class Bot:
                     break
                 await asyncio.sleep(0.5)
                 now = time.time()
-                """
-                print(
-                    f"\rcountdown: {((now + 60) - now % 60) - now:.1f} last price: {self.price}      ",
-                    end=" ",
-                )
-                """
+                if self.countdown:
+                    print(
+                        f"\rcountdown: {((now + 60) - now % 60) - now:.1f} last price: {self.price}      ",
+                        end=" ",
+                    )
             if self.stop_websocket:
                 break
             await asyncio.sleep(1.0)
@@ -1489,6 +1488,12 @@ async def main() -> None:
         action="store_true",
         help=f"if true, execute to exchange only on each minute mark instead of continuously",
     )
+    parser.add_argument(
+        "-cd",
+        "--countdown",
+        action="store_true",
+        help=f"if true, print a countdown in ohlcv mode",
+    )
 
     float_kwargs = [
         ("-lmm", "--long_min_markup", "--long-min-markup", "long_min_markup"),
@@ -1540,6 +1545,7 @@ async def main() -> None:
         "price_distance_threshold",
         "ohlcv",
         "test_mode",
+        "countdown",
     ]:
         config[k] = getattr(args, k)
     if config["test_mode"] and config["exchange"] not in TEST_MODE_SUPPORTED_EXCHANGES:
