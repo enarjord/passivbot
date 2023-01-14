@@ -26,8 +26,8 @@
   maximum_loss_profit_ratio_short: 0.5
 
   # score /= max(maximum_hrs_stuck_max, hrs_stuck_max)
-  maximum_hrs_stuck_max_long: 250.0
-  maximum_hrs_stuck_max_short: 250.0
+  maximum_hrs_stuck_max_long: 300.0
+  maximum_hrs_stuck_max_short: 300.0
 
   # score *= min(minimum_eqbal_ratio_min, eqbal_ratio_min)
   minimum_eqbal_ratio_min_long: 0.75
