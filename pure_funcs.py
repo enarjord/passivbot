@@ -812,10 +812,18 @@ def analyze_fills(
         "n_ientries_short": len(shorts[shorts.type.str.contains("ientry")]),
         "n_rentries_long": len(longs[longs.type.str.contains("rentry")]),
         "n_rentries_short": len(shorts[shorts.type.str.contains("rentry")]),
-        "n_unstuck_closes_long": len(longs[longs.type.str.contains("unstuck_close")]),
-        "n_unstuck_closes_short": len(shorts[shorts.type.str.contains("unstuck_close")]),
-        "n_unstuck_entries_long": len(longs[longs.type.str.contains("unstuck_entry")]),
-        "n_unstuck_entries_short": len(shorts[shorts.type.str.contains("unstuck_entry")]),
+        "n_unstuck_closes_long": len(
+            longs[longs.type.str.contains("unstuck_close") | longs.type.str.contains("ema_close")]
+        ),
+        "n_unstuck_closes_short": len(
+            shorts[shorts.type.str.contains("unstuck_close") | shorts.type.str.contains("ema_close")]
+        ),
+        "n_unstuck_entries_long": len(
+            longs[longs.type.str.contains("unstuck_entry") | longs.type.str.contains("ema_entry")]
+        ),
+        "n_unstuck_entries_short": len(
+            shorts[shorts.type.str.contains("unstuck_entry") | shorts.type.str.contains("ema_entry")]
+        ),
         "avg_fills_per_day_long": len(longs) / n_days,
         "avg_fills_per_day_short": len(shorts) / n_days,
         "hrs_stuck_max_long": ms_diffs_long.max() / (1000.0 * 60 * 60),
