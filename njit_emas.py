@@ -562,7 +562,7 @@ def backtest_emas(
             # check if markup close
             if (
                 psize_long > 0.0
-                and highs[k] > pprice_long
+                and highs[k] > pprice_long * (1 + min_markup[0])
                 and timestamps[k] > prev_ema_fill_ts_entry_long
             ):
                 close_grid_long = calc_close_grid_backwards_long(
@@ -728,7 +728,7 @@ def backtest_emas(
             # check if markup close
             if (
                 psize_short > 0.0
-                and lows[k] < pprice_short
+                and lows[k] < pprice_short * (1 - min_markup[1])
                 and timestamps[k] > prev_ema_fill_ts_entry_short
             ):
                 close_grid_short = calc_close_grid_backwards_short(
