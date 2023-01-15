@@ -192,7 +192,10 @@ class Bot:
                 self.config["short"]["delay_between_fills_minutes_close"] * 60 * 1000.0,
             )
             self.xk["backwards_tp"] = (True, True)
-        if self.config["price_precision_multiplier"] is not None:
+        if (
+            "price_precision_multiplier" in self.config
+            and self.config["price_precision_multiplier"] is not None
+        ):
             await self.init_order_book()
             new_price_step = max(
                 self.price_step,
