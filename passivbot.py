@@ -192,6 +192,18 @@ class Bot:
                 self.config["short"]["delay_between_fills_minutes_close"] * 60 * 1000.0,
             )
             self.xk["backwards_tp"] = (True, True)
+        if (
+            "price_precision_multiplier" in self.config
+            and self.config["price_precision_multiplier"] is not None
+        ):
+            await self.init_order_book()
+            new_price_step = max(
+                self.price_step,
+                round_dynamic(self.ob[0] * self.config["price_precision_multiplier"], 1),
+            )
+            if new_price_step != self.price_step:
+                logging.info(f"changing price step from {self.price_step} to {new_price_step}")
+                self.price_step = self.config["price_step"] = self.xk["price_step"] = new_price_step
         await self.init_fills()
 
     def dump_log(self, data) -> None:
@@ -1500,6 +1512,16 @@ async def main() -> None:
         action="store_true",
         help=f"if true, print a countdown in ohlcv mode",
     )
+    parser.add_argument(
+        "-pp",
+        "--price-precision",
+        "--price_precision",
+        type=float,
+        required=False,
+        dest="price_precision_multiplier",
+        default=None,
+        help="Override price step with round_dynamic(market_price * price_precision, 1).  Suggested val 0.0001",
+    )
 
     float_kwargs = [
         ("-lmm", "--long_min_markup", "--long-min-markup", "long_min_markup"),
@@ -1552,6 +1574,7 @@ async def main() -> None:
         "ohlcv",
         "test_mode",
         "countdown",
+        "price_precision_multiplier",
     ]:
         config[k] = getattr(args, k)
     if config["test_mode"] and config["exchange"] not in TEST_MODE_SUPPORTED_EXCHANGES:
