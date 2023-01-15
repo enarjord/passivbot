@@ -142,12 +142,19 @@ class BitgetBot(Bot):
         }
 
     async def init_order_book(self):
-        ticker = await self.fetch_ticker()
-        self.ob = [
-            ticker["bid"],
-            ticker["ask"],
-        ]
-        self.price = ticker["last"]
+        ticker = None
+        try:
+            ticker = await self.fetch_ticker()
+            self.ob = [
+                ticker["bid"],
+                ticker["ask"],
+            ]
+            self.price = ticker["last"]
+            return True
+        except Exception as e:
+            logging.error(f"error updating order book {e}")
+            print_async_exception(ticker)
+            return False
 
     async def fetch_open_orders(self) -> [dict]:
         fetched = await self.private_get(self.endpoints["open_orders"], {"symbol": self.symbol})
@@ -615,7 +622,7 @@ class BitgetBot(Bot):
                     "reduce_only": elm["reduceOnly"],
                     "side": "buy" if elm["side"] in ["close_short", "open_long"] else "sell",
                     "position_side": elm["posSide"],
-                    "timestamp": elm["cTime"],
+                    "timestamp": float(elm["cTime"]),
                 }
                 for elm in fetched["data"]["orderList"]
                 if "filled" in elm["state"]
