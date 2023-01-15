@@ -148,6 +148,9 @@ def dump_plots(
     table.add_row(["Exchange", result["exchange"] if "exchange" in result else "unknown"])
     table.add_row(["Market type", result["market_type"] if "market_type" in result else "unknown"])
     table.add_row(["Symbol", result["symbol"] if "symbol" in result else "unknown"])
+    table.add_row(
+        ["Passivbot mode", result["passivbot_mode"] if "passivbot_mode" in result else "unknown"]
+    )
     table.add_row(["No. days", round_dynamic(result["result"]["n_days"], 2)])
     table.add_row(["Starting balance", round_dynamic(result["result"]["starting_balance"], 6)])
     for side in ["long", "short"]:
@@ -193,8 +196,8 @@ def dump_plots(
                 ("No. closes", f"n_closes_{side}"),
                 ("No. initial entries", f"n_ientries_{side}"),
                 ("No. reentries", f"n_rentries_{side}"),
-                ("No. unstuck entries", f"n_unstuck_entries_{side}"),
-                ("No. unstuck closes", f"n_unstuck_closes_{side}"),
+                ("No. unstuck/EMA entries", f"n_unstuck_entries_{side}"),
+                ("No. unstuck/EMA closes", f"n_unstuck_closes_{side}"),
                 ("No. normal closes", f"n_normal_closes_{side}"),
             ]:
                 if key in result["result"]:
