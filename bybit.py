@@ -147,12 +147,19 @@ class BybitBot(Bot):
         await self.update_position()
 
     async def init_order_book(self):
-        ticker = await self.private_get(self.endpoints["ticker"], {"symbol": self.symbol})
-        self.ob = [
-            float(ticker["result"][0]["bid_price"]),
-            float(ticker["result"][0]["ask_price"]),
-        ]
-        self.price = float(ticker["result"][0]["last_price"])
+        ticker = None
+        try:
+            ticker = await self.private_get(self.endpoints["ticker"], {"symbol": self.symbol})
+            self.ob = [
+                float(ticker["result"][0]["bid_price"]),
+                float(ticker["result"][0]["ask_price"]),
+            ]
+            self.price = float(ticker["result"][0]["last_price"])
+            return True
+        except Exception as e:
+            logging.error(f"error updating order book {e}")
+            print_async_exception(ticker)
+            return False
 
     async def fetch_open_orders(self) -> [dict]:
         fetched = await self.private_get(self.endpoints["open_orders"], {"symbol": self.symbol})
