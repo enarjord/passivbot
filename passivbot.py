@@ -1347,13 +1347,19 @@ class Bot:
             self.update_emas(self.ob[0], self.prev_price)
             """
             print(self.last_fills_timestamps)
-            print(res)
             print(self.emas_long)
             print(self.emas_short)
             orders = self.calc_orders()
             print(orders)
+            print(res)
             """
             if not all(res):
+                reskeys = ["pos", "open orders", "order book", "last fills"]
+                line = "error with "
+                for i in range(len(to_update)):
+                    if not to_update[i]:
+                        line += reskeys[i]
+                logging.error(line)
                 return
             await self.cancel_and_create()
             if prev_pos["wallet_balance"] != self.position["wallet_balance"]:
