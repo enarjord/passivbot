@@ -154,16 +154,23 @@ def get_xk_keys(passivbot_mode="static_grid"):
     ]
 
 
-def determine_passivbot_mode(config: dict) -> str:
+def determine_passivbot_mode(config: dict, skip=[]) -> str:
     # print('dpm devbug',config)
-    # print([(k, k in config) for k in get_template_live_config("emas")])
-    if all(k in config["long"] for k in get_template_live_config("emas")["long"]):
+    if all(k in config["long"] for k in get_template_live_config("emas")["long"] if k not in skip):
         return "emas"
-    elif all(k in config["long"] for k in get_template_live_config("recursive_grid")["long"]):
+    elif all(
+        k in config["long"]
+        for k in get_template_live_config("recursive_grid")["long"]
+        if k not in skip
+    ):
         return "recursive_grid"
-    if all(k in config["long"] for k in get_template_live_config("neat_grid")["long"]):
+    if all(
+        k in config["long"] for k in get_template_live_config("neat_grid")["long"] if k not in skip
+    ):
         return "neat_grid"
-    elif all(k in config["long"] for k in get_template_live_config("static_grid")["long"]):
+    elif all(
+        k in config["long"] for k in get_template_live_config("static_grid")["long"] if k not in skip
+    ):
         return "static_grid"
     else:
         raise Exception("unable to determine passivbot mode")
@@ -1133,7 +1140,7 @@ def make_compatible(live_config_: dict) -> dict:
         ("ema_span_max", "ema_span_1"),
     ]:
         live_config = json.loads(json.dumps(live_config).replace(src, dst))
-    passivbot_mode = determine_passivbot_mode(live_config)
+    passivbot_mode = determine_passivbot_mode(live_config, skip=["backwards_tp"])
     for side in ["long", "short"]:
         if passivbot_mode in ["recursive_grid", "static_grid", "neat_grid"]:
             if "initial_eprice_ema_dist" not in live_config[side]:
