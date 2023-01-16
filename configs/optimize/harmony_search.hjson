@@ -5,8 +5,8 @@
   bandwidth: 0.07
   pitch_adjusting_rate: 0.24
 
-  n_cpus: 4
-  iters: 8000
+  n_cpus: 6
+  iters: 10000
 
   # score = adg_realized_per_exposure
 
@@ -26,12 +26,12 @@
   maximum_loss_profit_ratio_short: 0.25
 
   # score /= max(maximum_hrs_stuck_max, hrs_stuck_max)
-  maximum_hrs_stuck_max_long: 240.0
-  maximum_hrs_stuck_max_short: 240.0
+  maximum_hrs_stuck_max_long: 96.0
+  maximum_hrs_stuck_max_short: 96.0
 
   # score *= min(minimum_eqbal_ratio_min, eqbal_ratio_min)
-  minimum_eqbal_ratio_min_long: 0.75
-  minimum_eqbal_ratio_min_short: 0.75
+  minimum_eqbal_ratio_min_long: 0.5
+  minimum_eqbal_ratio_min_short: 0.5
 
   # clip results: compute score on top performers only
   # clip_threshold=0.1 means drop 10% worst performers; clip_threshold=0.0 means include all
@@ -191,40 +191,40 @@
   {
     long:
     {
-      ema_span_0: [120.0, 1440.0]
-      ema_span_1: [240.0, 10080.0]
+      ema_span_0: [10.0, 1440.0]
+      ema_span_1: [10.0, 4320.0]
       ema_dist_lower: [0.0, 0.02]
       ema_dist_upper: [0.0, 0.02]
       qty_pct_entry: [0.005, 0.075]
       qty_pct_close: [0.005, 0.075]
-      we_multiplier_entry: [0.0, 50.0]
-      we_multiplier_close: [0.0, 50.0]
-      delay_weight_entry: [0.0, 50.0]
-      delay_weight_close: [-50.0, 50.0]
+      we_multiplier_entry: [0.0, 70.0]
+      we_multiplier_close: [0.0, 70.0]
+      delay_weight_entry: [0.0, 70.0]
+      delay_weight_close: [-70.0, 70.0]
       delay_between_fills_minutes_entry: [1.0, 4320.0]
       delay_between_fills_minutes_close: [1.0, 4320.0]
-      min_markup: [0.002, 0.01]
+      min_markup: [0.002, 0.07]
       markup_range: [0.0, 0.07]
-      n_close_orders: [7, 16]
+      n_close_orders: [2, 16]
       wallet_exposure_limit: [1.0, 1.0]
     }
     short:
     {
-      ema_span_0: [120.0, 1440.0]
-      ema_span_1: [240.0, 10080.0]
+      ema_span_0: [10.0, 1440.0]
+      ema_span_1: [10.0, 4320.0]
       ema_dist_lower: [0.0, 0.02]
       ema_dist_upper: [0.0, 0.02]
       qty_pct_entry: [0.005, 0.075]
       qty_pct_close: [0.005, 0.075]
-      we_multiplier_entry: [0.0, 50.0]
-      we_multiplier_close: [0.0, 50.0]
-      delay_weight_entry: [0.0, 50.0]
-      delay_weight_close: [-50.0, 50.0]
+      we_multiplier_entry: [0.0, 70.0]
+      we_multiplier_close: [0.0, 70.0]
+      delay_weight_entry: [0.0, 70.0]
+      delay_weight_close: [-70.0, 70.0]
       delay_between_fills_minutes_entry: [1.0, 4320.0]
       delay_between_fills_minutes_close: [1.0, 4320.0]
-      min_markup: [0.002, 0.01]
+      min_markup: [0.002, 0.07]
       markup_range: [0.0, 0.07]
-      n_close_orders: [7, 16]
+      n_close_orders: [2, 16]
       wallet_exposure_limit: [1.0, 1.0]
     }
   }
