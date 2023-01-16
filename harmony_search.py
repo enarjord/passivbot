@@ -236,7 +236,7 @@ class HarmonySearch:
             is_better = False
             if self.do_long and scores["long"] <= self.hm[best_key_long]["long"]["score"]:
                 is_better = True
-                line = f"i{cfg['config_no']} - new best config long, score {round_dynamic(scores['long'], 4)} "
+                line = f"i{cfg['config_no']} - new best config long, score {round_dynamic(scores['long'], 12)} "
                 for key, _ in keys:
                     line += f"{key} {round_dynamic(raws['long'][key], 4)} "
                 logging.info(line)
@@ -249,7 +249,7 @@ class HarmonySearch:
                 )
             if self.do_short and scores["short"] <= self.hm[best_key_short]["short"]["score"]:
                 is_better = True
-                line = f"i{cfg['config_no']} - new best config short, score {round_dynamic(scores['short'], 4)} "
+                line = f"i{cfg['config_no']} - new best config short, score {round_dynamic(scores['short'], 12)} "
                 for key, _ in keys:
                     line += f"{key} {round_dynamic(raws['short'][key], 4)} "
                 logging.info(line)
@@ -359,20 +359,6 @@ class HarmonySearch:
             **{"symbol": self.symbols[0], "initial_eval_key": hm_key, "config_no": self.iter_counter},
         }
         line = f"starting new initial eval {config['config_no']} of {self.n_harmonies} "
-        if self.do_long:
-            line += " - long: " + " ".join(
-                [
-                    f"{e[0][:2]}{e[0][-2:]}" + str(round_dynamic(e[1], 3))
-                    for e in sorted(self.hm[hm_key]["long"]["config"].items())
-                ]
-            )
-        if self.do_short:
-            line += " - short: " + " ".join(
-                [
-                    f"{e[0][:2]}{e[0][-2:]}" + str(round_dynamic(e[1], 3))
-                    for e in sorted(self.hm[hm_key]["short"]["config"].items())
-                ]
-            )
         logging.info(line)
 
         config["market_specific_settings"] = self.market_specific_settings[config["symbol"]]
