@@ -650,7 +650,7 @@ def backtest_emas(
                     equity_short = balance_short + upnl
                     pnl = 0.0
                     fee_paid = (
-                        -qty_to_cost(ema_entry_short[0], ema_entry_short[0], inverse, c_mult)
+                        -qty_to_cost(ema_entry_short[0], ema_entry_short[1], inverse, c_mult)
                         * maker_fee
                     )
                     balance_short += fee_paid
