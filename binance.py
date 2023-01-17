@@ -172,6 +172,7 @@ class BinanceBot(Bot):
                         "open_orders": "/dapi/v1/openOrders",
                         "ticker": "/dapi/v1/ticker/bookTicker",
                         "fills": "/dapi/v1/userTrades",
+                        "fills_detailed": "/dapi/v1/allOrders",
                         "income": "/dapi/v1/income",
                         "create_order": "/dapi/v1/order",
                         "cancel_order": "/dapi/v1/order",
@@ -482,7 +483,7 @@ class BinanceBot(Bot):
             return []
 
     async def fetch_latest_fills(self):
-        params = {"symbol": self.symbol}
+        params = {"symbol": self.symbol, "limit": 100}
         fetched = None
         try:
             fetched = await self.private_get(self.endpoints["fills_detailed"], params)
