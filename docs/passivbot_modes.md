@@ -109,7 +109,7 @@ It is called neat grid mode because the grid is made in a "neater" way than in s
 
 - delay_between_fills_minutes_entry/close
 	- delay between entries/closes given in minutes
-	- resets after full pos close
+	- entry delay resets after full pos close
 - delay_weight_entry/close
 	- delay between orders is modified according to: 
 	- `max(1, delay_between_fills_mins * (1 - pprice_diff * delay_weight))`
@@ -117,13 +117,13 @@ It is called neat grid mode because the grid is made in a "neater" way than in s
 - ema_dist_lower/upper
 	- offset lower/upper ema band.  See ema_span_0/ema_span_1
 - qty_pct_entry/close
-	- entry cost = `balance * wallet_exposure_limit * qty_pct`
+	- `entry_cost = balance * wallet_exposure_limit * qty_pct`
 - we_multiplier_entry/close
 	- entry cost is modified according to:
-	- `balance * wallet_exposure_limit * qty_pct * (1 + ratio * we_multiplier)`
+	- `entry_cost = balance * wallet_exposure_limit * qty_pct * (1 + ratio * we_multiplier)`
 	- where `ratio = wallet_exposure / wallet_exposure_limit`
 
 EMAs mode uses the pos close logic common to all passivbot modes.  There is no entry grid.
-It is called EMAs mode because all entry and close prices are based on EMAs.
+It is called EMAs mode because entry and close prices are based on EMAs.
 
 
