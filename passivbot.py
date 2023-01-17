@@ -423,6 +423,7 @@ class Bot:
             return []
         self.ts_locked["create_orders"] = time.time()
         try:
+            orders = None
             orders = await self.execute_orders(orders_to_create)
             for order in sorted(orders, key=lambda x: calc_diff(x["price"], self.price)):
                 if "side" in order:
@@ -431,6 +432,11 @@ class Bot:
                         + f'{order["position_side"]: <5} {float(order["qty"])} {float(order["price"])}'
                     )
             return orders
+        except Exception as e:
+            print(f"error creating orders {e}")
+            print_async_exception(orders)
+            traceback.print_exc()
+            return []
         finally:
             self.ts_released["create_orders"] = time.time()
 
