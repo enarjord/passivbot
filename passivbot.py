@@ -158,16 +158,20 @@ class Bot:
             config["cross_wallet_pct"] = 1.0
         self.config["do_long"] = config["long"]["enabled"]
         self.config["do_short"] = config["short"]["enabled"]
-        self.ema_spans_long = [
-            config["long"]["ema_span_0"],
-            (config["long"]["ema_span_0"] * config["long"]["ema_span_1"]) ** 0.5,
-            config["long"]["ema_span_1"],
-        ]
-        self.ema_spans_short = [
-            config["short"]["ema_span_0"],
-            (config["short"]["ema_span_0"] * config["short"]["ema_span_1"]) ** 0.5,
-            config["short"]["ema_span_1"],
-        ]
+        self.ema_spans_long = sorted(
+            [
+                config["long"]["ema_span_0"],
+                (config["long"]["ema_span_0"] * config["long"]["ema_span_1"]) ** 0.5,
+                config["long"]["ema_span_1"],
+            ]
+        )
+        self.ema_spans_short = sorted(
+            [
+                config["short"]["ema_span_0"],
+                (config["short"]["ema_span_0"] * config["short"]["ema_span_1"]) ** 0.5,
+                config["short"]["ema_span_1"],
+            ]
+        )
         self.config = config
         for key in config:
             setattr(self, key, config[key])
