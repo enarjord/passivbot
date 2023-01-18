@@ -117,6 +117,7 @@ def main():
         "long": best_candidate["long"]["config"],
         "short": best_candidate["short"]["config"],
     }
+    nans = [np.inf, -np.inf, np.nan]
     for side in sides:
         row_headers = ["symbol"] + [k[0] for k in keys] + ["score"]
         table = PrettyTable(row_headers)
@@ -134,7 +135,7 @@ def main():
             xs = [best_candidate[side]["stats"][sym][f"{k[0]}_{side}"] for k in keys]
             table.add_row(
                 [("-> " if sym in best_candidate[side]["symbols_to_include"] else "") + sym]
-                + [round_dynamic(x, 4) if x == x else np.nan for x in xs]
+                + [x if x in nans else round_dynamic(x, 4) for x in xs]
                 + [best_candidate[side]["individual_scores"][sym]]
             )
         means = [
@@ -152,7 +153,9 @@ def main():
                 for sym in best_candidate[side]["symbols_to_include"]
             ]
         )
-        table.add_row(["mean"] + [round_dynamic(m, 4) for m in means] + [ind_scores_mean])
+        table.add_row(
+            ["mean"] + [m if m in nans else round_dynamic(m, 4) for m in means] + [ind_scores_mean]
+        )
         print(table)
     live_config = candidate_to_live_config(best_config)
     if args.dump_live_config:
