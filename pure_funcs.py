@@ -1305,3 +1305,21 @@ def calc_scores_old(config: dict, results: dict):
         "keys": keys,
         "symbols_to_include": symbols_to_include,
     }
+
+
+def configs_are_equal(cfg0, cfg1) -> bool:
+    try:
+        cfg0 = candidate_to_live_config(cfg0)
+        cfg1 = candidate_to_live_config(cfg1)
+        pm0 = determine_passivbot_mode(cfg0)
+        pm1 = determine_passivbot_mode(cfg1)
+        if pm0 != pm1:
+            return False
+        for side in ["long", "short"]:
+            for key in cfg0[side]:
+                if cfg0[side][key] != cfg1[side][key]:
+                    return False
+        return True
+    except Exception as e:
+        print(f"error checking whether configs are equal {e}")
+        return False
