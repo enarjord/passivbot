@@ -158,19 +158,23 @@ class Bot:
             config["cross_wallet_pct"] = 1.0
         self.config["do_long"] = config["long"]["enabled"]
         self.config["do_short"] = config["short"]["enabled"]
-        self.ema_spans_long = sorted(
-            [
-                config["long"]["ema_span_0"],
-                (config["long"]["ema_span_0"] * config["long"]["ema_span_1"]) ** 0.5,
-                config["long"]["ema_span_1"],
-            ]
+        self.ema_spans_long = np.array(
+            sorted(
+                [
+                    config["long"]["ema_span_0"],
+                    (config["long"]["ema_span_0"] * config["long"]["ema_span_1"]) ** 0.5,
+                    config["long"]["ema_span_1"],
+                ]
+            )
         )
-        self.ema_spans_short = sorted(
-            [
-                config["short"]["ema_span_0"],
-                (config["short"]["ema_span_0"] * config["short"]["ema_span_1"]) ** 0.5,
-                config["short"]["ema_span_1"],
-            ]
+        self.ema_spans_short = np.array(
+            sorted(
+                [
+                    config["short"]["ema_span_0"],
+                    (config["short"]["ema_span_0"] * config["short"]["ema_span_1"]) ** 0.5,
+                    config["short"]["ema_span_1"],
+                ]
+            )
         )
         self.config = config
         for key in config:
@@ -228,11 +232,11 @@ class Bot:
             ),
             60000,
         )
-        self.emas_long = calc_emas_last(samples1m[:, 2], np.array(self.ema_spans_long))
-        self.emas_short = calc_emas_last(samples1m[:, 2], np.array(self.ema_spans_short))
-        self.alpha_long = 2 / (self.emas_long + 1)
+        self.emas_long = calc_emas_last(samples1m[:, 2], self.ema_spans_long)
+        self.emas_short = calc_emas_last(samples1m[:, 2], self.ema_spans_short)
+        self.alpha_long = 2 / (self.ema_spans_long + 1)
         self.alpha__long = 1 - self.alpha_long
-        self.alpha_short = 2 / (self.emas_short + 1)
+        self.alpha_short = 2 / (self.ema_spans_short + 1)
         self.alpha__short = 1 - self.alpha_short
         self.ema_min = int(round(time.time() // 60 * 60))
         return samples1m
