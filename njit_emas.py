@@ -71,11 +71,19 @@ def calc_ema_qty(
 
 
 @njit
-def calc_delay_between_fills_ms(delay_between_fills_ms, pprice_diff, delay_weight):
+def calc_delay_between_fills_ms_entry(delay_between_fills_ms, pprice_diff, delay_weight):
     # lowest delay is 1 minute
-    # reduce trade delay in some proportion to pprice diff
+    # reduce entry delay in some proportion to positive pprice diff
     # pprice diff is positive if upnl is negative
-    return max(60000.0, delay_between_fills_ms * (1 - pprice_diff * delay_weight))
+    return max(60000.0, delay_between_fills_ms * (1 - max(0.0, pprice_diff) * delay_weight))
+
+
+@njit
+def calc_delay_between_fills_ms_close(delay_between_fills_ms, pprice_diff, delay_weight):
+    # lowest delay is 1 minute
+    # reduce close delay in some proportion to negative pprice diff
+    # pprice diff is positive if upnl is negative
+    return max(60000.0, delay_between_fills_ms * (1 - min(0.0, pprice_diff) * delay_weight))
 
 
 @njit
@@ -100,7 +108,7 @@ def calc_ema_entry_long(
     delay_between_fills_ms_entry: float,
     wallet_exposure_limit: float,
 ) -> (float, float, str, float, float):
-    if psize_long == 0.0 or utc_now_ms - prev_ema_fill_ts_entry > calc_delay_between_fills_ms(
+    if psize_long == 0.0 or utc_now_ms - prev_ema_fill_ts_entry > calc_delay_between_fills_ms_entry(
         delay_between_fills_ms_entry,
         ((pprice_long / highest_bid - 1) if pprice_long > 0.0 else 0.0),
         delay_weight_entry,
@@ -173,7 +181,7 @@ def calc_ema_close_long(
 ):
     if psize_long > 0.0:
         pprice_diff_long = (pprice_long / lowest_ask - 1) if pprice_long > 0.0 else 0.0
-        delay = calc_delay_between_fills_ms(
+        delay = calc_delay_between_fills_ms_close(
             delay_between_fills_ms_close, pprice_diff_long, delay_weight_close
         )
         if utc_now_ms - prev_ema_fill_ts_close > delay:
@@ -222,7 +230,7 @@ def calc_ema_entry_short(
     delay_between_fills_ms_entry: float,
     wallet_exposure_limit: float,
 ) -> (float, float, str, float, float):
-    if psize_short == 0.0 or utc_now_ms - prev_ema_fill_ts_entry > calc_delay_between_fills_ms(
+    if psize_short == 0.0 or utc_now_ms - prev_ema_fill_ts_entry > calc_delay_between_fills_ms_entry(
         delay_between_fills_ms_entry,
         ((lowest_ask / pprice_short - 1) if pprice_short > 0.0 else 0.0),
         delay_weight_entry,
@@ -300,7 +308,7 @@ def calc_ema_close_short(
     psize_short = abs(psize_short)
     if psize_short > 0.0:
         pprice_diff_short = (highest_bid / pprice_short - 1) if pprice_short > 0.0 else 0.0
-        delay = calc_delay_between_fills_ms(
+        delay = calc_delay_between_fills_ms_close(
             delay_between_fills_ms_close, pprice_diff_short, delay_weight_close
         )
         if utc_now_ms - prev_ema_fill_ts_close > delay:
