@@ -270,8 +270,8 @@ class OKXBot(Bot):
     async def fetch_latest_fills(self):
         fetched = None
         try:
-            params = {"instType": self.inst_type, "instId": self.inst_id, "state": "filled"}
-            fetched = await self.okx.private_get_trade_fills_history(params=params)
+            params = {"instType": self.inst_type, "instId": self.inst_id}
+            fetched = await self.okx.private_get_trade_fills(params=params)
             fills = [
                 {
                     "order_id": elm["ordId"],
