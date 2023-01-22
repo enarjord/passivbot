@@ -608,7 +608,22 @@ class BitgetBot(Bot):
                 "endTime": int(utc_ms() + 1000 * 60 * 60 * 2),
                 "pageSize": 100,
             }
-            fetched = await self.private_get(self.endpoints["fills_detailed"], params)
+            fetched = (await self.private_get(self.endpoints["fills_detailed"], params))["data"][
+                "orderList"
+            ]
+            k = 0
+            while fetched and float(fetched[-1]["cTime"]) > utc_ms() - 1000 * 60 * 60 * 24 * 3:
+                k += 1
+                if k > 15:
+                    break
+                params["endTime"] = int(float(fetched[-1]["cTime"]))
+                fetched2 = (await self.private_get(self.endpoints["fills_detailed"], params))["data"][
+                    "orderList"
+                ]
+                if fetched2[-1] == fetched[-1]:
+                    break
+                fetched_d = {x["orderId"]: x for x in fetched + fetched2}
+                fetched = sorted(fetched_d.values(), key=lambda x: float(x["cTime"]), reverse=True)
             fills = [
                 {
                     "order_id": elm["orderId"],
@@ -624,7 +639,7 @@ class BitgetBot(Bot):
                     "position_side": elm["posSide"],
                     "timestamp": float(elm["cTime"]),
                 }
-                for elm in fetched["data"]["orderList"]
+                for elm in fetched
                 if "filled" in elm["state"]
             ]
         except Exception as e:
