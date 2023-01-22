@@ -1026,7 +1026,7 @@ class Bot:
                     )
                 )
                 await asyncio.sleep(
-                    0.01
+                    0.1
                 )  # sleep 10 ms between sending cancellations and sending creations
             if to_create:
                 results.append(await self.create_orders(to_create[: self.max_n_orders_per_batch]))
