@@ -614,7 +614,7 @@ class BitgetBot(Bot):
             k = 0
             while fetched and float(fetched[-1]["cTime"]) > utc_ms() - 1000 * 60 * 60 * 24 * 3:
                 k += 1
-                if k > 15:
+                if k > 5:
                     break
                 params["endTime"] = int(float(fetched[-1]["cTime"]))
                 fetched2 = (await self.private_get(self.endpoints["fills_detailed"], params))["data"][
