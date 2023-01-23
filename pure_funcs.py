@@ -1151,6 +1151,8 @@ def make_compatible(live_config_: dict) -> dict:
                 live_config[side]["auto_unstuck_ema_dist"] = 0.0
             if "backwards_tp" not in live_config[side]:
                 live_config[side]["backwards_tp"] = False
+        if passivbot_mode == "emas":
+            live_config[side]["delay_weight_close"] = abs(live_config[side]["delay_weight_close"])
         if "ema_span_0" not in live_config[side]:
             live_config[side]["ema_span_0"] = 1
         if "ema_span_1" not in live_config[side]:
