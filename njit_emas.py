@@ -71,19 +71,19 @@ def calc_ema_qty(
 
 
 @njit
-def calc_delay_between_fills_ms_entry(delay_between_fills_ms, pprice_diff, delay_weight):
+def calc_delay_between_fills_ms_bid(pprice, price, delay_between_fills_ms, delay_weight):
     # lowest delay is 1 minute
-    # reduce entry delay in some proportion to positive pprice diff
-    # pprice diff is positive if upnl is negative
-    return max(60000.0, delay_between_fills_ms * (1 - max(0.0, pprice_diff) * delay_weight))
+    # reduce delay between bids in some proportion to diff between pos price and market price
+    pprice_diff = (pprice / price - 1) if price > 0.0 else 0.0
+    return max(60000.0, delay_between_fills_ms * min(1.0, (1 - pprice_diff * delay_weight)))
 
 
 @njit
-def calc_delay_between_fills_ms_close(delay_between_fills_ms, pprice_diff, delay_weight):
+def calc_delay_between_fills_ms_ask(pprice, price, delay_between_fills_ms, delay_weight):
     # lowest delay is 1 minute
-    # reduce close delay in some proportion to negative pprice diff
-    # pprice diff is positive if upnl is negative
-    return max(60000.0, delay_between_fills_ms * (1 - min(0.0, pprice_diff) * delay_weight))
+    # reduce delay between asks in some proportion to diff between pos price and market price
+    pprice_diff = (price / pprice - 1) if pprice > 0.0 else 0.0
+    return max(60000.0, delay_between_fills_ms * min(1.0, (1 - pprice_diff * delay_weight)))
 
 
 @njit
@@ -108,9 +108,10 @@ def calc_ema_entry_long(
     delay_between_fills_ms_entry: float,
     wallet_exposure_limit: float,
 ) -> (float, float, str, float, float):
-    if psize_long == 0.0 or utc_now_ms - prev_ema_fill_ts_entry > calc_delay_between_fills_ms_entry(
+    if psize_long == 0.0 or utc_now_ms - prev_ema_fill_ts_entry > calc_delay_between_fills_ms_bid(
+        pprice_long,
+        highest_bid,
         delay_between_fills_ms_entry,
-        ((pprice_long / highest_bid - 1) if pprice_long > 0.0 else 0.0),
         delay_weight_entry,
     ):
         wallet_exposure_long = qty_to_cost(psize_long, pprice_long, inverse, c_mult) / balance
@@ -180,9 +181,8 @@ def calc_ema_close_long(
     wallet_exposure_limit: float,
 ):
     if psize_long > 0.0:
-        pprice_diff_long = (pprice_long / lowest_ask - 1) if pprice_long > 0.0 else 0.0
-        delay = calc_delay_between_fills_ms_close(
-            delay_between_fills_ms_close, pprice_diff_long, delay_weight_close
+        delay = calc_delay_between_fills_ms_ask(
+            pprice_long, lowest_ask, delay_between_fills_ms_close, delay_weight_close
         )
         if utc_now_ms - prev_ema_fill_ts_close > delay:
             ask_price_long = calc_ema_price_ask(emas.max(), lowest_ask, ema_dist_upper, price_step)
@@ -230,10 +230,8 @@ def calc_ema_entry_short(
     delay_between_fills_ms_entry: float,
     wallet_exposure_limit: float,
 ) -> (float, float, str, float, float):
-    if psize_short == 0.0 or utc_now_ms - prev_ema_fill_ts_entry > calc_delay_between_fills_ms_entry(
-        delay_between_fills_ms_entry,
-        ((lowest_ask / pprice_short - 1) if pprice_short > 0.0 else 0.0),
-        delay_weight_entry,
+    if psize_short == 0.0 or utc_now_ms - prev_ema_fill_ts_entry > calc_delay_between_fills_ms_ask(
+        pprice_short, lowest_ask, delay_between_fills_ms_entry, delay_weight_entry
     ):
         wallet_exposure_short = qty_to_cost(psize_short, pprice_short, inverse, c_mult) / balance
         if wallet_exposure_short < wallet_exposure_limit * 0.99:
@@ -308,8 +306,8 @@ def calc_ema_close_short(
     psize_short = abs(psize_short)
     if psize_short > 0.0:
         pprice_diff_short = (highest_bid / pprice_short - 1) if pprice_short > 0.0 else 0.0
-        delay = calc_delay_between_fills_ms_close(
-            delay_between_fills_ms_close, pprice_diff_short, delay_weight_close
+        delay = calc_delay_between_fills_ms_bid(
+            pprice_short, highest_bid, delay_between_fills_ms_close, delay_weight_close
         )
         if utc_now_ms - prev_ema_fill_ts_close > delay:
             bid_price_short = calc_ema_price_bid(emas.min(), highest_bid, ema_dist_lower, price_step)
