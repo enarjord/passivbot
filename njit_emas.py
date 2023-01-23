@@ -386,6 +386,10 @@ def backtest_emas(
     close_grid_short = [(0.0, 0.0, "")]
     balance_long, balance_short = starting_balance, starting_balance
 
+    # older versions sometimes had negative delay weights
+    delay_weight_entry = (abs(delay_weight_entry[0]), abs(delay_weight_entry[1]))
+    delay_weight_close = (abs(delay_weight_close[0]), abs(delay_weight_close[1]))
+
     spans_long = [ema_span_0[0], (ema_span_0[0] * ema_span_1[0]) ** 0.5, ema_span_1[0]]
     spans_long = np.array(sorted(spans_long)) if do_long else np.ones(3)
     spans_short = [ema_span_0[1], (ema_span_0[1] * ema_span_1[1]) ** 0.5, ema_span_1[1]]
