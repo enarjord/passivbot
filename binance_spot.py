@@ -106,6 +106,7 @@ class BinanceBotSpot(Bot):
             "open_orders": "/api/v3/openOrders",
             "ticker": "/api/v3/ticker/bookTicker",
             "fills": "/api/v3/myTrades",
+            "fills_detailed": "/api/v3/allOrders",
             "create_order": "/api/v3/order",
             "cancel_order": "/api/v3/order",
             "ticks": "/api/v3/aggTrades",
@@ -209,14 +210,22 @@ class BinanceBotSpot(Bot):
         await self.check_if_other_positions()
 
     async def init_order_book(self):
-        ticker = await self.public_get(self.endpoints["ticker"], {"symbol": self.symbol})
-        self.ob = [float(ticker["bidPrice"]), float(ticker["askPrice"])]
-        self.price = np.random.choice(self.ob)
+        ticker = None
+        try:
+            ticker = await self.public_get(self.endpoints["ticker"], {"symbol": self.symbol})
+            self.ob = [float(ticker["bidPrice"]), float(ticker["askPrice"])]
+            self.price = np.random.choice(self.ob)
+            return True
+        except Exception as e:
+            logging.error(f"error updating order book {e}")
+            print_async_exception(ticker)
+            return False
 
     async def fetch_open_orders(self) -> [dict]:
         return [
             {
                 "order_id": int(e["orderId"]),
+                "custom_id": e["clientOrderId"],
                 "symbol": e["symbol"],
                 "price": float(e["price"]),
                 "qty": float(e["origQty"]),
@@ -458,6 +467,36 @@ class BinanceBotSpot(Bot):
             ]
         except Exception as e:
             print("error fetching fills a", e)
+            traceback.print_exc()
+            return []
+        return fills
+
+    async def fetch_latest_fills(self):
+        params = {"symbol": self.symbol, "limit": 100}
+        fetched = None
+        try:
+            fetched = await self.private_get(self.endpoints["fills_detailed"], params)
+            fills = [
+                {
+                    "order_id": elm["orderId"],
+                    "symbol": elm["symbol"],
+                    "status": elm["status"].lower(),
+                    "custom_id": elm["clientOrderId"],
+                    "price": float(elm["price"]),
+                    "qty": float(elm["executedQty"]),
+                    "original_qty": float(elm["origQty"]),
+                    "type": elm["type"].lower(),
+                    "reduce_only": None,
+                    "side": elm["side"].lower(),
+                    "position_side": "long",
+                    "timestamp": elm["time"],
+                }
+                for elm in fetched
+                if "FILLED" in elm["status"]
+            ]
+        except Exception as e:
+            print("error fetching latest fills", e)
+            print_async_exception(fetched)
             traceback.print_exc()
             return []
         return fills
