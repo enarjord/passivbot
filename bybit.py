@@ -603,7 +603,7 @@ class BybitBot(Bot):
     async def fetch_latest_fills(self):
         fetched = None
         try:
-            fetched = await self.private_get(self.endpoints["fills"], {"symbol": self.symbol})
+            fetched = await self.private_get(self.endpoints["fills"], {"symbol": self.symbol, 'limit': 200})
             fills = [
                 {
                     "order_id": elm["order_id"],
