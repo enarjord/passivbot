@@ -146,6 +146,7 @@ class Bot:
             ("price_distance_threshold", 0.5),
             ("c_mult", 1.0),
             ("leverage", 7.0),
+            ("countdown", False),
         ]:
             if k not in config:
                 config[k] = v
@@ -200,11 +201,20 @@ class Bot:
                 self.config["short"]["delay_between_fills_minutes_close"] * 60 * 1000.0,
             )
             self.xk["backwards_tp"] = (True, True)
+        print("initiating position, open orders, fills, exchange config, order book, and emas...")
+        await asyncio.gather(
+            self.update_position(),
+            self.update_open_orders(),
+            self.init_fills(),
+            self.init_exchange_config(),
+            self.init_order_book(),
+            self.init_emas(),
+        )
+        print("done")
         if (
             "price_precision_multiplier" in self.config
             and self.config["price_precision_multiplier"] is not None
         ):
-            await self.init_order_book()
             new_price_step = max(
                 self.price_step,
                 round_dynamic(self.ob[0] * self.config["price_precision_multiplier"], 1),
@@ -212,7 +222,6 @@ class Bot:
             if new_price_step != self.price_step:
                 logging.info(f"changing price step from {self.price_step} to {new_price_step}")
                 self.price_step = self.config["price_step"] = self.xk["price_step"] = new_price_step
-        await self.init_fills()
 
     def dump_log(self, data) -> None:
         if "logging_level" in self.config and self.config["logging_level"] > 0:
@@ -1232,10 +1241,6 @@ class Bot:
     async def start_websocket(self) -> None:
         self.stop_websocket = False
         self.process_websocket_ticks = True
-        await asyncio.gather(self.update_position(), self.update_open_orders())
-        await self.init_exchange_config()
-        await self.init_order_book()
-        await self.init_emas()
         logging.info("starting websockets...")
         self.user_stream_task = asyncio.create_task(self.start_websocket_user_stream())
         self.market_stream_task = asyncio.create_task(self.start_websocket_market_stream())
@@ -1332,10 +1337,6 @@ class Bot:
             self.ts_released["update_last_fills_timestamps"] = time.time()
 
     async def start_ohlcv_mode(self):
-        await asyncio.gather(self.update_position(), self.update_open_orders())
-        await self.init_exchange_config()
-        await self.init_order_book()
-        await self.init_emas()
         logging.info("starting bot...")
         while True:
             now = time.time()
@@ -1359,7 +1360,8 @@ class Bot:
     async def on_minute_mark(self):
         # called each whole minute
         try:
-            print("\r", end="")
+            if self.countdown:
+                print("\r", end="")
             if time.time() - self.heartbeat_ts > self.heartbeat_interval_seconds:
                 # print heartbeat once an hour
                 self.heartbeat_print()
