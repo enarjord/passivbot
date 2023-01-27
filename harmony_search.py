@@ -33,6 +33,7 @@ from procedures import (
     load_exchange_key_secret_passphrase,
     prepare_backtest_config,
     dump_live_config,
+    utc_ms,
 )
 from time import sleep, time
 import logging
@@ -161,6 +162,8 @@ class HarmonySearch:
         self.unfinished_evals[id_key]["single_results"][symbol] = self.workers[wi]["task"].get()
         self.unfinished_evals[id_key]["in_progress"].remove(symbol)
         results = deepcopy(self.unfinished_evals[id_key]["single_results"])
+        for s in results:
+            results[s]["timestamp_finished"] = utc_ms()
         if set(results) == set(self.symbols):
             # completed multisymbol iter
             scores_res = calc_scores(self.config, results)
@@ -551,7 +554,8 @@ async def main():
     )
     parser = add_argparse_args(parser)
     args = parser.parse_args()
-    args.symbol = "BTCUSDT"  # dummy symbol
+    if args.symbol is None or "," in args.symbol:
+        args.symbol = "BTCUSDT"  # dummy symbol
     config = await prepare_optimize_config(args)
     if args.passivbot_mode is not None:
         if args.passivbot_mode in ["s", "static_grid", "static"]:
