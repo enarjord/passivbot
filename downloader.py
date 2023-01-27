@@ -1022,6 +1022,26 @@ def download_ohlcvs(symbol, start_date, end_date, download_only=False) -> pd.Dat
         )
 
 
+def count_longest_identical_data(hlc, symbol):
+    line = f"checking ohlcv integrity of {symbol}"
+    diffs = (np.diff(hlc[:, 1:], axis=0) == [0.0, 0.0, 0.0]).all(axis=1)
+    longest_consecutive = 0
+    counter = 0
+    i_ = 0
+    for i, x in enumerate(diffs):
+        if x:
+            counter += 1
+        else:
+            if counter > longest_consecutive:
+                longest_consecutive = counter
+                i_ = i
+            counter = 0
+    print(
+        f"{symbol} most n minutes of consecutive identical ohlcvs: {longest_consecutive}, index last: {i_}"
+    )
+    return longest_consecutive
+
+
 def load_hlc_cache(
     symbol, start_date, end_date, base_dir="backtests", spot=False, exchange="binance"
 ):
@@ -1034,12 +1054,17 @@ def load_hlc_cache(
         os.path.join(base_dir, exchange + ("_spot" if spot else ""), symbol, "caches", cache_fname)
     )
     if os.path.exists(filepath):
-        return np.load(filepath)
-    df = download_ohlcvs(symbol, start_date, end_date)
-    df = df[df.timestamp >= date_to_ts(start_date)]
-    df = df[df.timestamp <= date_to_ts(end_date)]
-    data = df[["timestamp", "high", "low", "close"]].values
-    np.save(filepath, data)
+        data = np.load(filepath)
+    else:
+        df = download_ohlcvs(symbol, start_date, end_date)
+        df = df[df.timestamp >= date_to_ts(start_date)]
+        df = df[df.timestamp <= date_to_ts(end_date)]
+        data = df[["timestamp", "high", "low", "close"]].values
+        np.save(filepath, data)
+    try:
+        count_longest_identical_data(data, symbol)
+    except Exception as e:
+        print("error checking integrity", e)
     return data
 
 
