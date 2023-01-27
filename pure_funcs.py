@@ -178,18 +178,18 @@ def determine_passivbot_mode(config: dict, skip=[]) -> str:
 
 def create_xk(config: dict) -> dict:
     xk = {}
-    config_ = config.copy()
-    config["passivbot_mode"] = determine_passivbot_mode(config)
+    config_ = make_compatible(config.copy())
+    config_["passivbot_mode"] = determine_passivbot_mode(config_)
     if "spot" in config_["market_type"]:
         config_ = spotify_config(config_)
     else:
         config_["spot"] = False
-        config_["do_long"] = config["long"]["enabled"]
-        config_["do_short"] = config["short"]["enabled"]
-    keys = get_xk_keys(config["passivbot_mode"])
+        config_["do_long"] = config_["long"]["enabled"]
+        config_["do_short"] = config_["short"]["enabled"]
+    keys = get_xk_keys(config_["passivbot_mode"])
     config_["long"]["n_close_orders"] = int(round(config_["long"]["n_close_orders"]))
     config_["short"]["n_close_orders"] = int(round(config_["short"]["n_close_orders"]))
-    if config["passivbot_mode"] in ["static_grid", "neat_grid"]:
+    if config_["passivbot_mode"] in ["static_grid", "neat_grid"]:
         config_["long"]["max_n_entry_orders"] = int(round(config_["long"]["max_n_entry_orders"]))
         config_["short"]["max_n_entry_orders"] = int(round(config_["short"]["max_n_entry_orders"]))
     for k in keys:
@@ -1142,6 +1142,43 @@ def make_compatible(live_config_: dict) -> dict:
         live_config = json.loads(json.dumps(live_config).replace(src, dst))
     passivbot_mode = determine_passivbot_mode(live_config, skip=["backwards_tp"])
     for side in ["long", "short"]:
+        for k0, lb, ub in [
+            ("delay_weight_close", 0.0, 1000000.0),
+            ("delay_weight_entry", 0.0, 1000000.0),
+            ("we_multiplier_close", 0.0, 1000000.0),
+            ("we_multiplier_entry", 0.0, 1000000.0),
+            ("auto_unstuck_wallet_exposure_threshold", 0.0, 1.0),
+            ("auto_unstuck_ema_dist", -10.0, 10.0),
+            ("ema_span_0", 1.0, 1000000.0),
+            ("ema_span_1", 1.0, 1000000.0),
+            ("max_n_entry_orders", 1.0, 100.0),  # don't let's spam the exchange
+            ("n_close_orders", 1.0, 100.0),
+            ("initial_eprice_ema_dist", -10.0, 10.0),
+            ("ema_dist_lower", -10.0, 10.0),
+            ("ema_dist_upper", -10.0, 10.0),
+            ("grid_span", 0.0, 10.0),
+            ("delay_between_fills_minutes_entry", 1.0, 1000000.0),  # one million minutes...
+            ("delay_between_fills_minutes_close", 1.0, 1000000.0),  #  ...is almost two years
+            ("min_markup", 0.0, 10.0),
+            ("markup_range", 0.0, 10.0),
+            ("wallet_exposure_limit", 0.0, 10000.0),  # 10000x leverage
+            ("qty_pct_entry", 0.0, 1.0),  # cannot enter more than whole balance
+            ("qty_pct_close", 0.0, 1.0),
+            ("initial_qty_pct", 0.0, 1.0),
+            ("eqty_exp_base", 0.0, 100.0),
+            ("eprice_exp_base", 0.0, 100.0),
+            ("ddown_factor", 0.0, 1000.0),
+            ("rentry_pprice_dist", 0.0, 100.0),
+            ("rentry_pprice_dist_wallet_exposure_weighting", 0.0, 1000000.0),
+            ("eprice_pprice_diff", 0.0, 100.0),
+            ("eprice_exp_base", 0.0, 100.0),
+            ("secondary_allocation", 0.0, 1.0),
+            ("secondary_pprice_diff", 0.0, 100.0),
+        ]:
+            # absolute bounds
+            if k0 in live_config[side]:
+                live_config[side][k0] = min(ub, max(lb, live_config[side][k0]))
+
         if passivbot_mode in ["recursive_grid", "static_grid", "neat_grid"]:
             if "initial_eprice_ema_dist" not in live_config[side]:
                 live_config[side]["initial_eprice_ema_dist"] = -10.0
@@ -1151,12 +1188,10 @@ def make_compatible(live_config_: dict) -> dict:
                 live_config[side]["auto_unstuck_ema_dist"] = 0.0
             if "backwards_tp" not in live_config[side]:
                 live_config[side]["backwards_tp"] = False
-        if passivbot_mode == "emas":
-            live_config[side]["delay_weight_close"] = abs(live_config[side]["delay_weight_close"])
         if "ema_span_0" not in live_config[side]:
-            live_config[side]["ema_span_0"] = 1
+            live_config[side]["ema_span_0"] = 1.0
         if "ema_span_1" not in live_config[side]:
-            live_config[side]["ema_span_1"] = 1
+            live_config[side]["ema_span_1"] = 1.0
         live_config[side]["n_close_orders"] = int(round(live_config[side]["n_close_orders"]))
         if "max_n_entry_orders" in live_config[side]:
             live_config[side]["max_n_entry_orders"] = int(
