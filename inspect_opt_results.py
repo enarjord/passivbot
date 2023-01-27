@@ -108,6 +108,7 @@ def main():
                 "symbols_to_include": scores_res["symbols_to_include"][side],
                 "stats": {sym: {k: v for k, v in ress[sym].items() if side in k} for sym in symbols},
                 "config_no": ress["config_no"],
+                "n_days": {sym: ress[sym]["n_days"] for sym in symbols},
             }
     best_candidate = {}
     for side in sides:
@@ -120,7 +121,7 @@ def main():
     }
 
     for side in sides:
-        row_headers = ["symbol"] + [k[0] for k in keys] + ["score"]
+        row_headers = ["symbol"] + [k[0] for k in keys] + ["n_days", "score"]
         table = PrettyTable(row_headers)
         for rh in row_headers:
             table.align[rh] = "l"
@@ -137,6 +138,7 @@ def main():
             table.add_row(
                 [("-> " if sym in best_candidate[side]["symbols_to_include"] else "") + sym]
                 + [round_dynamic(x, 4) if np.isfinite(x) else x for x in xs]
+                + [round(best_candidate[side]["n_days"][sym], 2)]
                 + [best_candidate[side]["individual_scores"][sym]]
             )
         means = [
@@ -157,6 +159,7 @@ def main():
         table.add_row(
             ["mean"]
             + [round_dynamic(m, 4) if np.isfinite(m) else m for m in means]
+            + [round(np.mean(list(best_candidate[side]["n_days"].values())), 2)]
             + [ind_scores_mean]
         )
         with open(
