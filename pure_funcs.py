@@ -1143,10 +1143,10 @@ def make_compatible(live_config_: dict) -> dict:
     passivbot_mode = determine_passivbot_mode(live_config, skip=["backwards_tp"])
     for side in ["long", "short"]:
         for k0 in [
-            ("delay_weight_close"),
-            ("delay_weight_entry"),
-            ("we_multiplier_close"),
-            ("we_multiplier_entry"),
+            "delay_weight_close",
+            "delay_weight_entry",
+            "we_multiplier_close",
+            "we_multiplier_entry",
         ]:
             if k0 in live_config[side]:
                 # apply abs()
