@@ -147,6 +147,7 @@ class Bot:
             ("c_mult", 1.0),
             ("leverage", 7.0),
             ("countdown", False),
+            ("ohlcv", True),
         ]:
             if k not in config:
                 config[k] = v
