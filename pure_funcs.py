@@ -1142,11 +1142,16 @@ def make_compatible(live_config_: dict) -> dict:
         live_config = json.loads(json.dumps(live_config).replace(src, dst))
     passivbot_mode = determine_passivbot_mode(live_config, skip=["backwards_tp"])
     for side in ["long", "short"]:
+        for k0 in [
+            ("delay_weight_close"),
+            ("delay_weight_entry"),
+            ("we_multiplier_close"),
+            ("we_multiplier_entry"),
+        ]:
+            if k0 in live_config[side]:
+                # apply abs()
+                live_config[side][k0] = abs(live_config[side][k0])
         for k0, lb, ub in [
-            ("delay_weight_close", 0.0, 1000000.0),
-            ("delay_weight_entry", 0.0, 1000000.0),
-            ("we_multiplier_close", 0.0, 1000000.0),
-            ("we_multiplier_entry", 0.0, 1000000.0),
             ("auto_unstuck_wallet_exposure_threshold", 0.0, 1.0),
             ("auto_unstuck_ema_dist", -10.0, 10.0),
             ("ema_span_0", 1.0, 1000000.0),
@@ -1175,7 +1180,7 @@ def make_compatible(live_config_: dict) -> dict:
             ("secondary_allocation", 0.0, 1.0),
             ("secondary_pprice_diff", 0.0, 100.0),
         ]:
-            # absolute bounds
+            # keep within bounds
             if k0 in live_config[side]:
                 live_config[side][k0] = min(ub, max(lb, live_config[side][k0]))
 
