@@ -4,6 +4,7 @@ if "NOJIT" not in os.environ:
     os.environ["NOJIT"] = "true"
 
 import json
+import re
 import pprint
 import numpy as np
 from prettytable import PrettyTable
@@ -157,7 +158,15 @@ def main():
             + [round_dynamic(m, 4) if np.isfinite(m) else m for m in means]
             + [ind_scores_mean]
         )
-        print(table)
+        with open(
+            make_get_filepath(
+                f"{args.results_fpath.replace('all_results.txt', '')}table_best_config.txt"
+            ),
+            "w",
+        ) as f:
+            output = table.get_string(border=True, padding_width=1)
+            print(output)
+            f.write(re.sub("\033\\[([0-9]+)(;[0-9]+)*m", "", output))
     live_config = candidate_to_live_config(best_config)
     if args.dump_live_config:
         lc_fpath = make_get_filepath(f"{args.results_fpath.replace('.txt', '_best_config.json')}")
