@@ -118,6 +118,7 @@ def main():
         "long": best_candidate["long"]["config"],
         "short": best_candidate["short"]["config"],
     }
+
     for side in sides:
         row_headers = ["symbol"] + [k[0] for k in keys] + ["score"]
         table = PrettyTable(row_headers)
@@ -162,11 +163,11 @@ def main():
             make_get_filepath(
                 f"{args.results_fpath.replace('all_results.txt', '')}table_best_config.txt"
             ),
-            "w",
+            "a",
         ) as f:
             output = table.get_string(border=True, padding_width=1)
             print(output)
-            f.write(re.sub("\033\\[([0-9]+)(;[0-9]+)*m", "", output))
+            f.write(re.sub("\033\\[([0-9]+)(;[0-9]+)*m", "", output) + "\n\n")
     live_config = candidate_to_live_config(best_config)
     if args.dump_live_config:
         lc_fpath = make_get_filepath(f"{args.results_fpath.replace('.txt', '_best_config.json')}")
