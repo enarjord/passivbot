@@ -33,6 +33,7 @@ from procedures import (
     load_exchange_key_secret_passphrase,
     prepare_backtest_config,
     dump_live_config,
+    utc_ms,
 )
 from time import sleep, time
 import logging
@@ -170,6 +171,8 @@ class ParticleSwarmOptimization:
         self.unfinished_evals[id_key]["single_results"][symbol] = self.workers[wi]["task"].get()
         self.unfinished_evals[id_key]["in_progress"].remove(symbol)
         results = deepcopy(self.unfinished_evals[id_key]["single_results"])
+        for s in results:
+            results[s]["timestamp_finished"] = utc_ms()
         with open(self.results_fpath + "positions.txt", "a") as f:
             f.write(
                 json.dumps({"long": cfg["long"], "short": cfg["short"], "swarm_key": swarm_key})
@@ -203,7 +206,6 @@ class ParticleSwarmOptimization:
                 self.lbests_short[swarm_key] = deepcopy(
                     {"config": cfg["short"], "score": scores["short"]}
                 )
-
             tmp_fname = f"{self.results_fpath}{cfg['config_no']:06}_best_config"
             is_better = False
             # check if better than gbest long
@@ -570,7 +572,7 @@ async def main():
     )
     parser = add_argparse_args(parser)
     args = parser.parse_args()
-    if args.symbol is None:
+    if args.symbol is None or "," in args.symbol:
         args.symbol = "BTCUSDT"  # dummy symbol
     config = await prepare_optimize_config(args)
     if args.passivbot_mode is not None:
@@ -688,6 +690,11 @@ async def main():
         if os.path.isdir(args.starting_configs):
             for fname in os.listdir(args.starting_configs):
                 try:
+                    """
+                    if config['symbols'][0] not in os.path.join(args.starting_configs, fname):
+                        print('skipping', os.path.join(args.starting_configs, fname))
+                        continue
+                    """
                     cfg = load_live_config(os.path.join(args.starting_configs, fname))
                     assert determine_passivbot_mode(cfg) == passivbot_mode, "wrong passivbot mode"
                     cfgs.append(cfg)
