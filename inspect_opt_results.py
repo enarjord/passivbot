@@ -126,7 +126,7 @@ def main():
             table.align[rh] = "l"
         table.title = (
             f"{side} (config no. {best_candidate[side]['config_no']},"
-            + f" score {round_dynamic(best_candidate[side]['score'], 6)})"
+            + f" score {round_dynamic(best_candidate[side]['score'], 15)})"
         )
         for sym in sorted(
             symbols,
