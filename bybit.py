@@ -23,6 +23,16 @@ def first_capitalized(s: str):
 
 def determine_pos_side(o: dict) -> str:
     if o["side"].lower() == "buy":
+        if "reduce_only" in o:
+            if o["reduce_only"]:
+                return "short"
+            else:
+                return "long"
+        if "closed_size" in o:
+            if o["closed_size"] != 0.0:
+                return "short"
+            else:
+                return "long"
         if "entry" in o["order_link_id"]:
             return "long"
         elif "close" in o["order_link_id"]:
@@ -30,6 +40,16 @@ def determine_pos_side(o: dict) -> str:
         else:
             return "both"
     else:
+        if "reduce_only" in o:
+            if o["reduce_only"]:
+                return "long"
+            else:
+                return "short"
+        if "closed_size" in o:
+            if o["closed_size"] != 0.0:
+                return "long"
+            else:
+                return "short"
         if "entry" in o["order_link_id"]:
             return "short"
         elif "close" in o["order_link_id"]:
