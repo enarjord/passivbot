@@ -606,6 +606,12 @@ class BybitBot(Bot):
             fetched = await self.private_get(
                 self.endpoints["fills"], {"symbol": self.symbol, "limit": 200}
             )
+            if (
+                fetched["result"]["data"] is None
+                and fetched["ret_code"] == 0
+                and fetched["ret_msg"] == "OK"
+            ):
+                return []
             fills = [
                 {
                     "order_id": elm["order_id"],
