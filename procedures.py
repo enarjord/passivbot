@@ -542,7 +542,7 @@ async def init_optimizer(logging):
             config["passivbot_mode"] = "recursive_grid"
         elif args.passivbot_mode in ["n", "neat_grid", "neat"]:
             config["passivbot_mode"] = "neat_grid"
-        elif args.passivbot_mode in ["e", "clock"]:
+        elif args.passivbot_mode in ["c", "clock"]:
             config["passivbot_mode"] = "clock"
         else:
             raise Exception(f"unknown passivbot mode {args.passivbot_mode}")
@@ -579,8 +579,8 @@ async def init_optimizer(logging):
         template_config["do_short"] = do_short
         config["long"] = template_config.copy()
         config["short"] = template_config.copy()
-        bounds = config["bounds_emas"].copy()
-        config["bounds_emas"] = {"long": bounds, "short": bounds}
+        bounds = config["bounds_clock"].copy()
+        config["bounds_clock"] = {"long": bounds, "short": bounds}
     config.update(template_config)
     config["long"]["enabled"], config["short"]["enabled"] = do_long, do_short
     config["long"]["backwards_tp"] = config["backwards_tp_long"]
