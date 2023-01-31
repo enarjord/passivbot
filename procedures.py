@@ -523,7 +523,7 @@ async def init_optimizer(logging):
         required=False,
         dest="passivbot_mode",
         default=None,
-        help="passivbot mode options: [s/static_grid, r/recursive_grid, n/neat_grid, e/emas]",
+        help="passivbot mode options: [s/static_grid, r/recursive_grid, n/neat_grid, c/clock]",
     )
     parser.add_argument(
         "-oh",
@@ -542,8 +542,8 @@ async def init_optimizer(logging):
             config["passivbot_mode"] = "recursive_grid"
         elif args.passivbot_mode in ["n", "neat_grid", "neat"]:
             config["passivbot_mode"] = "neat_grid"
-        elif args.passivbot_mode in ["e", "emas"]:
-            config["passivbot_mode"] = "emas"
+        elif args.passivbot_mode in ["e", "clock"]:
+            config["passivbot_mode"] = "clock"
         else:
             raise Exception(f"unknown passivbot mode {args.passivbot_mode}")
     passivbot_mode = config["passivbot_mode"]
@@ -551,7 +551,7 @@ async def init_optimizer(logging):
         "recursive_grid",
         "static_grid",
         "neat_grid",
-        "emas",
+        "clock",
     ], f"unknown passivbot mode {passivbot_mode}"
     config["exchange"] = load_exchange_key_secret_passphrase(config["user"])[0]
     args = parser.parse_args()
@@ -574,7 +574,7 @@ async def init_optimizer(logging):
         else:
             raise Exception("please specify y/n with kwarg -le/--short")
     template_config = get_template_live_config(passivbot_mode)
-    if passivbot_mode == "emas":
+    if passivbot_mode == "clock":
         template_config["do_long"] = do_long
         template_config["do_short"] = do_short
         config["long"] = template_config.copy()
@@ -592,7 +592,7 @@ async def init_optimizer(logging):
         config["n_cpus"] = args.n_cpus
     if args.base_dir is not None:
         config["base_dir"] = args.base_dir
-    config["ohlcv"] = args.ohlcv if config["passivbot_mode"] != "emas" else True
+    config["ohlcv"] = args.ohlcv if config["passivbot_mode"] != "clock" else True
     print()
     lines = [(k, getattr(args, k)) for k in args.__dict__ if args.__dict__[k] is not None]
     lines += [
@@ -672,7 +672,7 @@ async def init_optimizer(logging):
                 logging.info(f"successfully loaded config {args.starting_configs}")
             except Exception as e:
                 logging.error(f"error loading config {args.starting_configs}: {e}")
-    if passivbot_mode == "emas":
+    if passivbot_mode == "clock":
         cfgs = [{"long": cfg.copy(), "short": cfg.copy()} for cfg in cfgs]
     config["starting_configs"] = cfgs
     return config
