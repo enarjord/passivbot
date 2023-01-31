@@ -564,7 +564,7 @@ async def main():
             config["passivbot_mode"] = "recursive_grid"
         elif args.passivbot_mode in ["n", "neat_grid", "neat"]:
             config["passivbot_mode"] = "neat_grid"
-        elif args.passivbot_mode in ["e", "clock"]:
+        elif args.passivbot_mode in ["c", "clock"]:
             config["passivbot_mode"] = "clock"
         else:
             raise Exception(f"unknown passivbot mode {args.passivbot_mode}")
