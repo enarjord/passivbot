@@ -49,11 +49,11 @@ from njit_funcs_recursive_grid import (
     calc_recursive_entries_long,
     calc_recursive_entries_short,
 )
-from njit_emas import (
-    calc_ema_entry_long,
-    calc_ema_entry_short,
-    calc_ema_close_long,
-    calc_ema_close_short,
+from njit_clock import (
+    calc_clock_entry_long,
+    calc_clock_entry_short,
+    calc_clock_close_long,
+    calc_clock_close_short,
 )
 from typing import Union, Dict, List
 
@@ -104,10 +104,10 @@ class Bot:
         self.open_orders = []
         self.fills = []
         self.last_fills_timestamps = {
-            "ema_entry_long": 0,
-            "ema_entry_short": 0,
-            "ema_close_long": 0,
-            "ema_close_short": 0,
+            "clock_entry_long": 0,
+            "clock_entry_short": 0,
+            "clock_close_long": 0,
+            "clock_close_short": 0,
         }
         self.price = 0.0
         self.ob = [0.0, 0.0]
@@ -190,7 +190,7 @@ class Bot:
 
     async def _init(self):
         self.xk = create_xk(self.config)
-        if self.passivbot_mode == "emas":
+        if self.passivbot_mode == "clock":
             self.xk["auto_unstuck_ema_dist"] = (0.0, 0.0)
             self.xk["auto_unstuck_wallet_exposure_threshold"] = (0.0, 0.0)
             self.xk["delay_between_fills_ms_entry"] = (
@@ -615,16 +615,16 @@ class Bot:
                         self.xk["auto_unstuck_wallet_exposure_threshold"][0],
                         self.xk["auto_unstuck_ema_dist"][0],
                     )
-                elif self.passivbot_mode == "emas":
+                elif self.passivbot_mode == "clock":
                     entries_long = [
-                        calc_ema_entry_long(
+                        calc_clock_entry_long(
                             balance,
                             psize_long,
                             pprice_long,
                             self.ob[0],
                             min(self.emas_long),
                             utc_ms(),
-                            0 if psize_long == 0.0 else self.last_fills_timestamps["ema_entry_long"],
+                            0 if psize_long == 0.0 else self.last_fills_timestamps["clock_entry_long"],
                             self.xk["inverse"],
                             self.xk["qty_step"],
                             self.xk["price_step"],
@@ -675,15 +675,15 @@ class Bot:
                     self.xk["auto_unstuck_wallet_exposure_threshold"][0],
                     self.xk["auto_unstuck_ema_dist"][0],
                 )
-                if self.passivbot_mode == "emas":
-                    ema_close_long = calc_ema_close_long(
+                if self.passivbot_mode == "clock":
+                    clock_close_long = calc_clock_close_long(
                         balance,
                         psize_long,
                         pprice_long,
                         self.ob[1],
                         max(self.emas_long),
                         utc_ms(),
-                        self.last_fills_timestamps["ema_close_long"],
+                        self.last_fills_timestamps["clock_close_long"],
                         self.xk["inverse"],
                         self.xk["qty_step"],
                         self.xk["price_step"],
@@ -697,14 +697,14 @@ class Bot:
                         self.xk["delay_between_fills_ms_close"][0],
                         self.xk["wallet_exposure_limit"][0],
                     )
-                    if ema_close_long[0] != 0.0 and (
-                        not closes_long or ema_close_long[1] < closes_long[0][1]
+                    if clock_close_long[0] != 0.0 and (
+                        not closes_long or clock_close_long[1] < closes_long[0][1]
                     ):
-                        closes_long = [ema_close_long]
+                        closes_long = [clock_close_long]
                         closes_long += calc_close_grid_long(
                             True,
                             balance,
-                            max(0.0, round_(psize_long - abs(ema_close_long[0]), self.qty_step)),
+                            max(0.0, round_(psize_long - abs(clock_close_long[0]), self.qty_step)),
                             pprice_long,
                             self.ob[1],
                             max(self.emas_long),
@@ -821,9 +821,9 @@ class Bot:
                         self.xk["auto_unstuck_wallet_exposure_threshold"][1],
                         self.xk["auto_unstuck_ema_dist"][1],
                     )
-                elif self.passivbot_mode == "emas":
+                elif self.passivbot_mode == "clock":
                     entries_short = [
-                        calc_ema_entry_short(
+                        calc_clock_entry_short(
                             balance,
                             psize_short,
                             pprice_short,
@@ -832,7 +832,7 @@ class Bot:
                             utc_ms(),
                             0
                             if psize_short == 0.0
-                            else self.last_fills_timestamps["ema_entry_short"],
+                            else self.last_fills_timestamps["clock_entry_short"],
                             self.xk["inverse"],
                             self.xk["qty_step"],
                             self.xk["price_step"],
@@ -883,15 +883,15 @@ class Bot:
                     self.xk["auto_unstuck_wallet_exposure_threshold"][1],
                     self.xk["auto_unstuck_ema_dist"][1],
                 )
-                if self.passivbot_mode == "emas":
-                    ema_close_short = calc_ema_close_short(
+                if self.passivbot_mode == "clock":
+                    clock_close_short = calc_clock_close_short(
                         balance,
                         psize_short,
                         pprice_short,
                         self.ob[0],
                         min(self.emas_short),
                         utc_ms(),
-                        self.last_fills_timestamps["ema_close_short"],
+                        self.last_fills_timestamps["clock_close_short"],
                         self.xk["inverse"],
                         self.xk["qty_step"],
                         self.xk["price_step"],
@@ -905,17 +905,17 @@ class Bot:
                         self.xk["delay_between_fills_ms_close"][1],
                         self.xk["wallet_exposure_limit"][1],
                     )
-                    # print('debug ema close short', ema_close_short)
+                    # print('debug ema close short', clock_close_short)
                     # print('debug ncloses short', closes_short)
-                    if ema_close_short[0] != 0.0 and (
-                        not closes_short or ema_close_short[1] > closes_short[0][1]
+                    if clock_close_short[0] != 0.0 and (
+                        not closes_short or clock_close_short[1] > closes_short[0][1]
                     ):
-                        closes_short = [ema_close_short]
+                        closes_short = [clock_close_short]
                         closes_short += calc_close_grid_short(
                             True,
                             balance,
                             -max(
-                                0.0, round_(abs(psize_short) - abs(ema_close_short[0]), self.qty_step)
+                                0.0, round_(abs(psize_short) - abs(clock_close_short[0]), self.qty_step)
                             ),
                             pprice_short,
                             self.ob[0],
@@ -1370,7 +1370,7 @@ class Bot:
             self.prev_price = self.ob[0]
             prev_pos = self.position.copy()
             to_update = [self.update_position(), self.update_open_orders(), self.init_order_book()]
-            if self.passivbot_mode == "emas":
+            if self.passivbot_mode == "clock":
                 to_update.append(self.update_last_fills_timestamps())
             res = await asyncio.gather(*to_update)
             self.update_emas(self.ob[0], self.prev_price)
@@ -1598,7 +1598,7 @@ async def main() -> None:
         raise IOError(f"Exchange {config['exchange']} is not supported in test mode.")
     config["market_type"] = args.market_type if args.market_type is not None else "futures"
     config["passivbot_mode"] = determine_passivbot_mode(config)
-    if config["passivbot_mode"] == "emas":
+    if config["passivbot_mode"] == "clock":
         config["ohlcv"] = True
     if args.assigned_balance is not None:
         logging.info(f"assigned balance set to {args.assigned_balance}")

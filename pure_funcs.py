@@ -98,7 +98,7 @@ def get_xk_keys(passivbot_mode="static_grid"):
             "auto_unstuck_wallet_exposure_threshold",
             "auto_unstuck_ema_dist",
         ]
-    elif passivbot_mode == "emas":
+    elif passivbot_mode == "clock":
         return [
             "inverse",
             "do_long",
@@ -156,8 +156,8 @@ def get_xk_keys(passivbot_mode="static_grid"):
 
 def determine_passivbot_mode(config: dict, skip=[]) -> str:
     # print('dpm devbug',config)
-    if all(k in config["long"] for k in get_template_live_config("emas")["long"] if k not in skip):
-        return "emas"
+    if all(k in config["long"] for k in get_template_live_config("clock")["long"] if k not in skip):
+        return "clock"
     elif all(
         k in config["long"]
         for k in get_template_live_config("recursive_grid")["long"]
@@ -541,10 +541,10 @@ def get_template_live_config(passivbot_mode="static_grid"):
                 },
             }
         )
-    elif passivbot_mode == "emas":
+    elif passivbot_mode == "clock":
         return sort_dict_keys(
             {
-                "config_name": "emas_template",
+                "config_name": "clock_template",
                 "long": {
                     "enabled": True,
                     "wallet_exposure_limit": 1.0,
@@ -820,16 +820,16 @@ def analyze_fills(
         "n_rentries_long": len(longs[longs.type.str.contains("rentry")]),
         "n_rentries_short": len(shorts[shorts.type.str.contains("rentry")]),
         "n_unstuck_closes_long": len(
-            longs[longs.type.str.contains("unstuck_close") | longs.type.str.contains("ema_close")]
+            longs[longs.type.str.contains("unstuck_close") | longs.type.str.contains("clock_close")]
         ),
         "n_unstuck_closes_short": len(
-            shorts[shorts.type.str.contains("unstuck_close") | shorts.type.str.contains("ema_close")]
+            shorts[shorts.type.str.contains("unstuck_close") | shorts.type.str.contains("clock_close")]
         ),
         "n_unstuck_entries_long": len(
-            longs[longs.type.str.contains("unstuck_entry") | longs.type.str.contains("ema_entry")]
+            longs[longs.type.str.contains("unstuck_entry") | longs.type.str.contains("clock_entry")]
         ),
         "n_unstuck_entries_short": len(
-            shorts[shorts.type.str.contains("unstuck_entry") | shorts.type.str.contains("ema_entry")]
+            shorts[shorts.type.str.contains("unstuck_entry") | shorts.type.str.contains("clock_entry")]
         ),
         "avg_fills_per_day_long": len(longs) / n_days,
         "avg_fills_per_day_short": len(shorts) / n_days,

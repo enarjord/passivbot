@@ -14,7 +14,7 @@ from downloader import Downloader, load_hlc_cache
 from njit_funcs import backtest_static_grid, round_
 from njit_funcs_recursive_grid import backtest_recursive_grid
 from njit_funcs_neat_grid import backtest_neat_grid
-from njit_emas import backtest_emas
+from njit_clock import backtest_clock
 from plotting import dump_plots
 from procedures import (
     prepare_backtest_config,
@@ -52,8 +52,8 @@ def backtest(config: dict, data: np.ndarray, do_print=False) -> (list, bool):
             config["maker_fee"],
             **xk,
         )
-    elif passivbot_mode == "emas":
-        return backtest_emas(
+    elif passivbot_mode == "clock":
+        return backtest_clock(
             data,
             config["starting_balance"],
             config["maker_fee"],
@@ -95,7 +95,7 @@ def plot_wrap(config, data):
     if (
         not config["disable_plotting"]
         and config["enable_interactive_plot"]
-        and config["passivbot_mode"] != "emas"
+        and config["passivbot_mode"] != "clock"
     ):
         import interactive_plot
 
@@ -209,7 +209,7 @@ async def main():
             config["long"]["enabled"] = "y" in args.long_enabled.lower()
         if args.short_enabled is not None:
             config["short"]["enabled"] = "y" in args.short_enabled.lower()
-        if passivbot_mode == "emas" or config["exchange"] == "okx":
+        if passivbot_mode == "clock" or config["exchange"] == "okx":
             config["ohlcv"] = True
         else:
             config["ohlcv"] = args.ohlcv

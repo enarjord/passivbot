@@ -1,11 +1,11 @@
 # Passivbot Modes
 
 Passivbot has four different ways of calculating entries:  
-Recursive Grid Mode, Static Grid Mode, Neat Grid Mode and EMAs Mode.
+Recursive Grid Mode, Static Grid Mode, Neat Grid Mode and Clock Mode.
 
 Static and Neat grid modes are similar, building a grid with a pre-specified span.  
 Recursive grid mode builds the grid recursively, based on expected new position after previous grid node fill.  
-EMAs mode builds no grids, but instead waits a duration of time between entries.
+Clock mode builds no grids, but instead waits a duration of time between entries.
 
 
 ## Common Parameters
@@ -108,7 +108,7 @@ It is called neat grid mode because the grid is made in a "neater" way than in s
 It is called recursive grid mode because the grid is defined recusively by computing each node as if the previous node were filled.
 
 
-## EMAs Mode Parameters
+## Clock Mode Parameters
 
 - delay_between_fills_minutes_entry/close
 	- delay between entries/closes given in minutes
@@ -151,8 +151,8 @@ It is called recursive grid mode because the grid is defined recusively by compu
 	- `entry_cost = balance * wallet_exposure_limit * qty_pct * (1 + ratio * we_multiplier)`
 	- where `ratio = wallet_exposure / wallet_exposure_limit`
 
-EMAs mode uses the pos close logic common to all passivbot modes.  
+Clock mode uses the pos close logic common to all passivbot modes.  
 There is no entry grid and no separate auto unstucking mechanism (auto unstuck is on all the time, as it were).  
-It is called EMAs mode because entry and close prices are based on EMAs.
+It is called Clock Mode because entries and cloces are on a timer.
 
 

@@ -14,109 +14,6 @@ from procedures import dump_live_config, make_get_filepath
 from pure_funcs import round_dynamic, denumpyize, ts_to_date
 
 
-def dump_plots_emas(
-    table,
-    result: dict,
-    longs: pd.DataFrame,
-    shorts: pd.DataFrame,
-    sdf: pd.DataFrame,
-    df: pd.DataFrame,
-    n_parts: int,
-    disable_plotting: bool = False,
-):
-    # (text, mul, precision, suffix)
-    formatting = {
-        "adg_realized_per_exposure_long": ("ADG realized per exposure long", 100, 3, "%"),
-        "adg_realized": ("ADG realized", 100, 3, "%"),
-        "adg_realized_per_exposure": ("ADG realized per exposure", 100, 3, "%"),
-        "adg_realized_per_exposure_short": ("ADG realized per exposure short", 100, 3, "%"),
-        "eqbal_ratio_min": ("Equity to Balance Ratio min", 1, 4, ""),
-    }
-    exclude = {}
-    for key in result["result"]:
-        if key in exclude:
-            continue
-        try:
-            if key in formatting:
-                val = round_dynamic(result["result"][key] * formatting[key][1], formatting[key][2])
-                table.add_row(
-                    [
-                        formatting[key][0],
-                        f"{val}{formatting[key][3]}",
-                    ]
-                )
-            else:
-                table.add_row([key, round_dynamic(result["result"][key], 4)])
-        except:
-            pass
-    print("writing backtest_result.txt...\n")
-    with open(f"{result['plots_dirpath']}backtest_result.txt", "w") as f:
-        output = table.get_string(border=True, padding_width=1)
-        print(output)
-        f.write(re.sub("\033\\[([0-9]+)(;[0-9]+)*m", "", output))
-    dump_live_config(result, result["plots_dirpath"] + "live_config.json")
-    if disable_plotting:
-        return
-    print(f"\nplotting balance and equity...")
-    sdf = sdf.set_index("timestamp")
-    longs = longs.set_index("timestamp")
-    shorts = shorts.set_index("timestamp")
-    plt.clf()
-    sdf.balance.plot()
-    sdf.equity.plot(title=f"Balance and equity", xlabel="Time", ylabel="Balance")
-    plt.savefig(f"{result['plots_dirpath']}balance_and_equity_sampled.png")
-    print("plotting whole backtest")
-    plt.clf()
-    eqnorm = sdf.equity
-    eqnorm = (eqnorm - eqnorm.min()) / (eqnorm.max() - eqnorm.min())
-    eqnorm = eqnorm * sdf.price.max() + sdf.price.min()
-    eqnorm.plot()
-    buys = fdf[fdf.qty > 0.0]
-    sells = fdf[fdf.qty < 0.0]
-    sdf.price.plot(style="y-")
-    buys.price.plot(style="bo")
-    sells.price.plot(style="ro", title="Whole backtest with eq", xlabel="Time", ylabel="Fills")
-    plt.savefig(f"{result['plots_dirpath']}whole_backtest.png")
-    spans = sorted(
-        [
-            result["ema_span_0"],
-            (result["ema_span_0"] * result["ema_span_1"]) ** 0.5,
-            result["ema_span_1"],
-        ]
-    )
-    price_1m = df.set_index("timestamp").close
-    emas = pd.DataFrame(
-        {f"ema_{span}": price_1m.ewm(span=span, adjust=False).mean() for span in spans},
-        index=price_1m.index,
-    )
-    eb_lower = emas.min(axis=1) * (1 - result["ema_dist_lower"])
-    eb_upper = emas.max(axis=1) * (1 + result["ema_dist_upper"])
-    print("plotting backtest slices")
-    if n_parts is None:
-        n_parts = 10
-    for i in range(n_parts):
-        start_idx = int(sdf.index[0] + (sdf.index[-1] - sdf.index[0]) * (i / n_parts))
-        end_idx = int(sdf.index[0] + (sdf.index[-1] - sdf.index[0]) * ((i + 1) / n_parts))
-        plt.clf()
-        fdf_slice = fdf[(fdf.index >= start_idx) & (fdf.index <= end_idx)]
-        sdf_slice = sdf[(sdf.index >= start_idx) & (sdf.index <= end_idx)]
-        buys = fdf_slice[fdf_slice.qty > 0.0]
-        sells = fdf_slice[fdf_slice.qty < 0.0]
-        """
-        eqnorm = sdf_slice.equity
-        eqnorm = (eqnorm - eqnorm.min()) / (eqnorm.max() - eqnorm.min())
-        eqnorm = eqnorm * sdf_slice.price.max() + sdf_slice.price.min()
-        eqnorm.plot(style="k-")
-        """
-        sdf_slice.price.plot(style="y-")
-        eb_lower[(eb_lower.index >= start_idx) & (eb_lower.index <= end_idx)].plot(style="b--")
-        eb_upper[(eb_upper.index >= start_idx) & (eb_upper.index <= end_idx)].plot(style="r--")
-        buys.price.plot(style="bo")
-        title = f"backtest {i + 1}/{n_parts}"
-        sells.price.plot(style="ro", title=title, xlabel="Time", ylabel="Fills")
-        plt.savefig(f"{result['plots_dirpath']}backtest_{i + 1}_of_{n_parts}.png")
-
-
 def dump_plots(
     result: dict,
     longs: pd.DataFrame,
@@ -259,7 +156,7 @@ def dump_plots(
             )
             plt.savefig(f"{result['plots_dirpath']}balance_and_equity_sampled_{side}.png")
 
-            if result["passivbot_mode"] == "emas":
+            if result["passivbot_mode"] == "clock":
                 spans = sorted(
                     [
                         result[side]["ema_span_0"],
@@ -292,7 +189,7 @@ def dump_plots(
                     fig.savefig(f"{result['plots_dirpath']}backtest_{side}{z + 1}of{n_parts}.png")
                 else:
                     print(f"no {side} fills...")
-            if result["passivbot_mode"] == "emas":
+            if result["passivbot_mode"] == "clock":
                 df = df.drop(["ema_band_lower", "ema_band_upper"], axis=1)
 
     print("plotting pos sizes...")
@@ -324,17 +221,17 @@ def plot_fills(df, fdf_, side: int = 0, plot_whole_df: bool = False, title=""):
     if side >= 0:
         longs = fdf[fdf.type.str.contains("long")]
         types = longs.type.unique()
-        if any(x in types for x in ["ema_entry_long", "ema_close_long", "long_nclose"]):
-            # emas mode
-            longs[longs.type == "ema_entry_long"].price.plot(style="bo")
-            longs[longs.type == "ema_close_long"].price.plot(style="ro")
+        if any(x in types for x in ["clock_entry_long", "clock_close_long", "long_nclose"]):
+            # clock mode
+            longs[longs.type == "clock_entry_long"].price.plot(style="bo")
+            longs[longs.type == "clock_close_long"].price.plot(style="ro")
             longs[longs.type == "long_nclose"].price.plot(style="rx")
         else:
             lentry = longs[
                 longs.type.str.contains("rentry")
                 | longs.type.str.contains("ientry")
                 | (longs.type == "entry_long")
-                | (longs.type == "ema_entry_long")
+                | (longs.type == "clock_entry_long")
             ]
             lnclose = longs[longs.type.str.contains("nclose") | (longs.type == "close_long")]
             luentry = longs[longs.type.str.contains("unstuck_entry")]
@@ -355,10 +252,10 @@ def plot_fills(df, fdf_, side: int = 0, plot_whole_df: bool = False, title=""):
     if side <= 0:
         shorts = fdf[fdf.type.str.contains("short")]
         types = shorts.type.unique()
-        if any(x in types for x in ["ema_entry_short", "ema_close_short", "short_nclose"]):
-            # emas mode
-            shorts[shorts.type == "ema_entry_short"].price.plot(style="ro")
-            shorts[shorts.type == "ema_close_short"].price.plot(style="bo")
+        if any(x in types for x in ["clock_entry_short", "clock_close_short", "short_nclose"]):
+            # clock mode
+            shorts[shorts.type == "clock_entry_short"].price.plot(style="ro")
+            shorts[shorts.type == "clock_close_short"].price.plot(style="bo")
             shorts[shorts.type == "short_nclose"].price.plot(style="bx")
         else:
             sentry = shorts[

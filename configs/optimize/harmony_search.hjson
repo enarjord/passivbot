@@ -43,7 +43,7 @@
   backwards_tp_long: true
   backwards_tp_short: true
 
-  # choices: [r/recursive_grid, s/static_grid, n/neat_grid, e/emas]
+  # choices: [r/recursive_grid, s/static_grid, n/neat_grid, c/clock]
   passivbot_mode: neat_grid
 
   # sorted highest to lowest vol last 250 days

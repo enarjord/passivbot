@@ -544,7 +544,7 @@ async def main():
         required=False,
         dest="passivbot_mode",
         default=None,
-        help="passivbot mode options: [s/static_grid, r/recursive_grid, n/neat_grid, e/emas]",
+        help="passivbot mode options: [s/static_grid, r/recursive_grid, n/neat_grid, c/clock]",
     )
     parser.add_argument(
         "-oh",
@@ -564,8 +564,8 @@ async def main():
             config["passivbot_mode"] = "recursive_grid"
         elif args.passivbot_mode in ["n", "neat_grid", "neat"]:
             config["passivbot_mode"] = "neat_grid"
-        elif args.passivbot_mode in ["e", "emas"]:
-            config["passivbot_mode"] = "emas"
+        elif args.passivbot_mode in ["e", "clock"]:
+            config["passivbot_mode"] = "clock"
         else:
             raise Exception(f"unknown passivbot mode {args.passivbot_mode}")
     passivbot_mode = config["passivbot_mode"]
@@ -573,7 +573,7 @@ async def main():
         "recursive_grid",
         "static_grid",
         "neat_grid",
-        "emas",
+        "clock",
     ], f"unknown passivbot mode {passivbot_mode}"
     config.update(get_template_live_config(passivbot_mode))
     config["long"]["backwards_tp"] = config["backwards_tp_long"]
@@ -604,7 +604,7 @@ async def main():
         config["n_cpus"] = args.n_cpus
     if args.base_dir is not None:
         config["base_dir"] = args.base_dir
-    config["ohlcv"] = True if passivbot_mode == "emas" else args.ohlcv
+    config["ohlcv"] = True if passivbot_mode == "clock" else args.ohlcv
     print()
     lines = [(k, getattr(args, k)) for k in args.__dict__ if args.__dict__[k] is not None]
     lines += [(k, config[k]) for k in ["start_date", "end_date"] if k not in [z[0] for z in lines]]

@@ -39,17 +39,17 @@ else:
 
 
 @njit
-def calc_ema_price_bid(lower_ema_band, highest_bid, ema_dist_lower, price_step):
+def calc_clock_price_bid(lower_ema_band, highest_bid, ema_dist_lower, price_step):
     return min(highest_bid, round_dn(lower_ema_band * (1 - ema_dist_lower), price_step))
 
 
 @njit
-def calc_ema_price_ask(upper_ema_band, lowest_ask, ema_dist_upper, price_step):
+def calc_clock_price_ask(upper_ema_band, lowest_ask, ema_dist_upper, price_step):
     return max(lowest_ask, round_up(upper_ema_band * (1 + ema_dist_upper), price_step))
 
 
 @njit
-def calc_ema_qty(
+def calc_clock_qty(
     balance,
     wallet_exposure,
     entry_price,
@@ -87,14 +87,14 @@ def calc_delay_between_fills_ms_ask(pprice, price, delay_between_fills_ms, delay
 
 
 @njit
-def calc_ema_entry_long(
+def calc_clock_entry_long(
     balance: float,
     psize_long: float,
     pprice_long: float,
     highest_bid: float,
     ema_band_lower: float,
     utc_now_ms: float,
-    prev_ema_fill_ts_entry: float,
+    prev_clock_fill_ts_entry: float,
     inverse: bool,
     qty_step: float,
     price_step: float,
@@ -108,7 +108,7 @@ def calc_ema_entry_long(
     delay_between_fills_ms_entry: float,
     wallet_exposure_limit: float,
 ) -> (float, float, str, float, float):
-    if psize_long == 0.0 or utc_now_ms - prev_ema_fill_ts_entry > calc_delay_between_fills_ms_bid(
+    if psize_long == 0.0 or utc_now_ms - prev_clock_fill_ts_entry > calc_delay_between_fills_ms_bid(
         pprice_long,
         highest_bid,
         delay_between_fills_ms_entry,
@@ -117,10 +117,10 @@ def calc_ema_entry_long(
         wallet_exposure_long = qty_to_cost(psize_long, pprice_long, inverse, c_mult) / balance
         if wallet_exposure_long < wallet_exposure_limit * 0.99:
             # entry long
-            bid_price_long = calc_ema_price_bid(
+            bid_price_long = calc_clock_price_bid(
                 ema_band_lower, highest_bid, ema_dist_lower, price_step
             )
-            qty_long = calc_ema_qty(
+            qty_long = calc_clock_qty(
                 balance,
                 wallet_exposure_long,
                 bid_price_long,
@@ -154,19 +154,19 @@ def calc_ema_entry_long(
                     psize_long, pprice_long, qty_long, bid_price_long, qty_step
                 )
             if qty_long > 0.0:
-                return (qty_long, bid_price_long, "ema_entry_long", new_psize_long, new_pprice_long)
-    return (0.0, 0.0, "ema_entry_long", 0.0, 0.0)
+                return (qty_long, bid_price_long, "clock_entry_long", new_psize_long, new_pprice_long)
+    return (0.0, 0.0, "clock_entry_long", 0.0, 0.0)
 
 
 @njit
-def calc_ema_close_long(
+def calc_clock_close_long(
     balance: float,
     psize_long: float,
     pprice_long: float,
     lowest_ask: float,
     emas: float,
     utc_now_ms: float,
-    prev_ema_fill_ts_close: float,
+    prev_clock_fill_ts_close: float,
     inverse: bool,
     qty_step: float,
     price_step: float,
@@ -184,12 +184,12 @@ def calc_ema_close_long(
         delay = calc_delay_between_fills_ms_ask(
             pprice_long, lowest_ask, delay_between_fills_ms_close, delay_weight_close
         )
-        if utc_now_ms - prev_ema_fill_ts_close > delay:
-            ask_price_long = calc_ema_price_ask(emas.max(), lowest_ask, ema_dist_upper, price_step)
+        if utc_now_ms - prev_clock_fill_ts_close > delay:
+            ask_price_long = calc_clock_price_ask(emas.max(), lowest_ask, ema_dist_upper, price_step)
             wallet_exposure_long = qty_to_cost(psize_long, pprice_long, inverse, c_mult) / balance
             qty_long = min(
                 psize_long,
-                calc_ema_qty(
+                calc_clock_qty(
                     balance,
                     wallet_exposure_long,
                     ask_price_long,
@@ -204,19 +204,19 @@ def calc_ema_close_long(
                 ),
             )
             if qty_long > 0.0:
-                return (-qty_long, ask_price_long, "ema_close_long")
-    return (0.0, 0.0, "ema_close_long")
+                return (-qty_long, ask_price_long, "clock_close_long")
+    return (0.0, 0.0, "clock_close_long")
 
 
 @njit
-def calc_ema_entry_short(
+def calc_clock_entry_short(
     balance: float,
     psize_short: float,
     pprice_short: float,
     lowest_ask: float,
     emas: float,
     utc_now_ms: float,
-    prev_ema_fill_ts_entry: float,
+    prev_clock_fill_ts_entry: float,
     inverse: bool,
     qty_step: float,
     price_step: float,
@@ -230,14 +230,14 @@ def calc_ema_entry_short(
     delay_between_fills_ms_entry: float,
     wallet_exposure_limit: float,
 ) -> (float, float, str, float, float):
-    if psize_short == 0.0 or utc_now_ms - prev_ema_fill_ts_entry > calc_delay_between_fills_ms_ask(
+    if psize_short == 0.0 or utc_now_ms - prev_clock_fill_ts_entry > calc_delay_between_fills_ms_ask(
         pprice_short, lowest_ask, delay_between_fills_ms_entry, delay_weight_entry
     ):
         wallet_exposure_short = qty_to_cost(psize_short, pprice_short, inverse, c_mult) / balance
         if wallet_exposure_short < wallet_exposure_limit * 0.99:
             # entry short
-            ask_price_short = calc_ema_price_ask(emas.max(), lowest_ask, ema_dist_upper, price_step)
-            qty_short = calc_ema_qty(
+            ask_price_short = calc_clock_price_ask(emas.max(), lowest_ask, ema_dist_upper, price_step)
+            qty_short = calc_clock_qty(
                 balance,
                 wallet_exposure_short,
                 ask_price_short,
@@ -274,22 +274,22 @@ def calc_ema_entry_short(
                 return (
                     -qty_short,
                     ask_price_short,
-                    "ema_entry_short",
+                    "clock_entry_short",
                     -abs(new_psize_short),
                     new_pprice_short,
                 )
-    return (0.0, 0.0, "ema_entry_short", 0.0, 0.0)
+    return (0.0, 0.0, "clock_entry_short", 0.0, 0.0)
 
 
 @njit
-def calc_ema_close_short(
+def calc_clock_close_short(
     balance: float,
     psize_short: float,
     pprice_short: float,
     highest_bid: float,
     emas: float,
     utc_now_ms: float,
-    prev_ema_fill_ts_close: float,
+    prev_clock_fill_ts_close: float,
     inverse: bool,
     qty_step: float,
     price_step: float,
@@ -309,12 +309,12 @@ def calc_ema_close_short(
         delay = calc_delay_between_fills_ms_bid(
             pprice_short, highest_bid, delay_between_fills_ms_close, delay_weight_close
         )
-        if utc_now_ms - prev_ema_fill_ts_close > delay:
-            bid_price_short = calc_ema_price_bid(emas.min(), highest_bid, ema_dist_lower, price_step)
+        if utc_now_ms - prev_clock_fill_ts_close > delay:
+            bid_price_short = calc_clock_price_bid(emas.min(), highest_bid, ema_dist_lower, price_step)
             wallet_exposure_short = qty_to_cost(psize_short, pprice_short, inverse, c_mult) / balance
             qty_short = min(
                 psize_short,
-                calc_ema_qty(
+                calc_clock_qty(
                     balance,
                     wallet_exposure_short,
                     bid_price_short,
@@ -329,12 +329,12 @@ def calc_ema_close_short(
                 ),
             )
             if qty_short > 0.0:
-                return (qty_short, bid_price_short, "ema_close_short")
-    return (0.0, 0.0, "ema_close_short")
+                return (qty_short, bid_price_short, "clock_close_short")
+    return (0.0, 0.0, "clock_close_short")
 
 
 @njit
-def backtest_emas(
+def backtest_clock(
     hlc,
     starting_balance,
     maker_fee,
@@ -406,8 +406,8 @@ def backtest_emas(
     alphas_short = 2.0 / (spans_short + 1.0)
     alphas__short = 1.0 - alphas_short
 
-    prev_ema_fill_ts_entry_long, prev_ema_fill_ts_close_long = 0, 0
-    prev_ema_fill_ts_entry_short, prev_ema_fill_ts_close_short = 0, 0
+    prev_clock_fill_ts_entry_long, prev_clock_fill_ts_close_long = 0, 0
+    prev_clock_fill_ts_entry_short, prev_clock_fill_ts_close_short = 0, 0
     fills_long, fills_short, stats = [], [], []
     next_stats_update = 0
     closest_bkr_long, closest_bkr_short = 1.0, 1.0
@@ -464,19 +464,19 @@ def backtest_emas(
             next_stats_update = min(timestamps[-1], timestamps[k] + 1000 * 60 * 60)  # hourly
         if do_long:
             emas_long = calc_ema(alphas_long, alphas__long, emas_long, closes[k - 1])
-            ask_price_long = calc_ema_price_ask(
+            ask_price_long = calc_clock_price_ask(
                 emas_long.max(), closes[k - 1], ema_dist_upper[0], price_step
             )
             if highs[k] > ask_price_long:
-                # ema close long
-                ema_close_long = calc_ema_close_long(
+                # clock close long
+                clock_close_long = calc_clock_close_long(
                     balance_long,
                     psize_long,
                     pprice_long,
                     closes[k - 1],
                     emas_long,
                     timestamps[k - 1],
-                    prev_ema_fill_ts_close_long,
+                    prev_clock_fill_ts_close_long,
                     inverse,
                     qty_step,
                     price_step,
@@ -490,18 +490,18 @@ def backtest_emas(
                     delay_between_fills_ms_close[0],
                     wallet_exposure_limit[0],
                 )
-                if ema_close_long[0] != 0.0:
-                    prev_ema_fill_ts_close_long = timestamps[k]
-                    qty_long = abs(ema_close_long[0])
+                if clock_close_long[0] != 0.0:
+                    prev_clock_fill_ts_close_long = timestamps[k]
+                    qty_long = abs(clock_close_long[0])
                     psize_long = round_(psize_long - qty_long, qty_step)
-                    pnl = calc_pnl_long(pprice_long, ema_close_long[1], qty_long, inverse, c_mult)
-                    fee_paid = -qty_to_cost(qty_long, ema_close_long[1], inverse, c_mult) * maker_fee
+                    pnl = calc_pnl_long(pprice_long, clock_close_long[1], qty_long, inverse, c_mult)
+                    fee_paid = -qty_to_cost(qty_long, clock_close_long[1], inverse, c_mult) * maker_fee
                     balance_long += pnl + fee_paid
                     upnl = calc_pnl_long(pprice_long, closes[k], psize_long, inverse, c_mult)
                     equity_long = balance_long + upnl
                     if psize_long == 0.0:
                         pprice_long = 0.0
-                        prev_ema_fill_ts_entry_long = 0
+                        prev_clock_fill_ts_entry_long = 0
                     fills_long.append(
                         (
                             k,
@@ -511,25 +511,25 @@ def backtest_emas(
                             balance_long,
                             equity_long,
                             -abs(qty_long),
-                            ema_close_long[1],
+                            clock_close_long[1],
                             psize_long,
                             pprice_long,
-                            "ema_close_long",
+                            "clock_close_long",
                         )
                     )
-            bid_price_long = calc_ema_price_bid(
+            bid_price_long = calc_clock_price_bid(
                 emas_long.min(), closes[k - 1], ema_dist_lower[0], price_step
             )
             if lows[k] < bid_price_long:
-                # ema entry long
-                ema_entry_long = calc_ema_entry_long(
+                # clock entry long
+                clock_entry_long = calc_clock_entry_long(
                     balance_long,
                     psize_long,
                     pprice_long,
                     closes[k - 1],
                     emas_long.min(),
                     timestamps[k - 1],
-                    prev_ema_fill_ts_entry_long,
+                    prev_clock_fill_ts_entry_long,
                     inverse,
                     qty_step,
                     price_step,
@@ -543,14 +543,14 @@ def backtest_emas(
                     delay_between_fills_ms_entry[0],
                     wallet_exposure_limit[0],
                 )
-                if ema_entry_long[0] > 0.0:
-                    prev_ema_fill_ts_entry_long = timestamps[k]
-                    psize_long, pprice_long = ema_entry_long[3], ema_entry_long[4]
+                if clock_entry_long[0] > 0.0:
+                    prev_clock_fill_ts_entry_long = timestamps[k]
+                    psize_long, pprice_long = clock_entry_long[3], clock_entry_long[4]
                     upnl = calc_pnl_long(pprice_long, closes[k], psize_long, inverse, c_mult)
                     equity_long = balance_long + upnl
                     pnl = 0.0
                     fee_paid = (
-                        -qty_to_cost(ema_entry_long[0], ema_entry_long[1], inverse, c_mult)
+                        -qty_to_cost(clock_entry_long[0], clock_entry_long[1], inverse, c_mult)
                         * maker_fee
                     )
                     balance_long += fee_paid
@@ -562,18 +562,18 @@ def backtest_emas(
                             fee_paid,
                             balance_long,
                             equity_long,
-                            ema_entry_long[0],
-                            ema_entry_long[1],
+                            clock_entry_long[0],
+                            clock_entry_long[1],
                             psize_long,
                             pprice_long,
-                            "ema_entry_long",
+                            "clock_entry_long",
                         )
                     )
             # check if markup close
             if (
                 psize_long > 0.0
                 and highs[k] > pprice_long * (1 + min_markup[0])
-                and timestamps[k] > prev_ema_fill_ts_entry_long
+                and timestamps[k] > prev_clock_fill_ts_entry_long
             ):
                 close_grid_long = calc_close_grid_backwards_long(
                     balance_long,
@@ -607,7 +607,7 @@ def backtest_emas(
                     psize_long = max(0.0, round_(psize_long - close_qty, qty_step))
                     if psize_long == 0.0:
                         pprice_long = 0.0
-                        prev_ema_fill_ts_entry_long = 0
+                        prev_clock_fill_ts_entry_long = 0
                     upnl = calc_pnl_long(pprice_long, closes[k], psize_long, inverse, c_mult)
                     equity_long = balance_long + upnl
                     fills_long.append(
@@ -628,18 +628,18 @@ def backtest_emas(
                     close_grid_long = close_grid_long[1:]
         if do_short:
             emas_short = calc_ema(alphas_short, alphas__short, emas_short, closes[k - 1])
-            bid_price_short = calc_ema_price_bid(
+            bid_price_short = calc_clock_price_bid(
                 emas_short.min(), closes[k - 1], ema_dist_lower[1], price_step
             )
             if lows[k] < bid_price_short:
-                ema_close_short = calc_ema_close_short(
+                clock_close_short = calc_clock_close_short(
                     balance_short,
                     psize_short,
                     pprice_short,
                     closes[k - 1],
                     emas_short,
                     timestamps[k - 1],
-                    prev_ema_fill_ts_close_short,
+                    prev_clock_fill_ts_close_short,
                     inverse,
                     qty_step,
                     price_step,
@@ -653,14 +653,14 @@ def backtest_emas(
                     delay_between_fills_ms_close[1],
                     wallet_exposure_limit[1],
                 )
-                if ema_close_short[0] != 0.0:
-                    prev_ema_fill_ts_close_short = timestamps[k]
-                    psize_short = round_(psize_short - ema_close_short[0], qty_step)
+                if clock_close_short[0] != 0.0:
+                    prev_clock_fill_ts_close_short = timestamps[k]
+                    psize_short = round_(psize_short - clock_close_short[0], qty_step)
                     pnl = calc_pnl_short(
-                        pprice_short, ema_close_short[1], ema_close_short[0], inverse, c_mult
+                        pprice_short, clock_close_short[1], clock_close_short[0], inverse, c_mult
                     )
                     fee_paid = (
-                        -qty_to_cost(ema_close_short[0], ema_close_short[1], inverse, c_mult)
+                        -qty_to_cost(clock_close_short[0], clock_close_short[1], inverse, c_mult)
                         * maker_fee
                     )
                     balance_short += pnl + fee_paid
@@ -668,7 +668,7 @@ def backtest_emas(
                     equity_short = balance_short + upnl
                     if psize_short == 0.0:
                         pprice_short = 0.0
-                        prev_ema_fill_ts_entry_short = 0
+                        prev_clock_fill_ts_entry_short = 0
                     fills_short.append(
                         (
                             k,
@@ -677,25 +677,25 @@ def backtest_emas(
                             fee_paid,
                             balance_short,
                             equity_short,
-                            abs(ema_close_short[0]),
-                            ema_close_short[1],
+                            abs(clock_close_short[0]),
+                            clock_close_short[1],
                             -psize_short,
                             pprice_short,
-                            "ema_close_short",
+                            "clock_close_short",
                         )
                     )
-            ask_price_short = calc_ema_price_ask(
+            ask_price_short = calc_clock_price_ask(
                 emas_short.max(), closes[k - 1], ema_dist_upper[1], price_step
             )
             if highs[k] > ask_price_short:
-                ema_entry_short = calc_ema_entry_short(
+                clock_entry_short = calc_clock_entry_short(
                     balance_short,
                     psize_short,
                     pprice_short,
                     closes[k - 1],
                     emas_short,
                     timestamps[k - 1],
-                    prev_ema_fill_ts_entry_short,
+                    prev_clock_fill_ts_entry_short,
                     inverse,
                     qty_step,
                     price_step,
@@ -709,14 +709,14 @@ def backtest_emas(
                     delay_between_fills_ms_entry[1],
                     wallet_exposure_limit[1],
                 )
-                if ema_entry_short[0] != 0.0:
-                    prev_ema_fill_ts_entry_short = timestamps[k]
-                    psize_short, pprice_short = abs(ema_entry_short[3]), ema_entry_short[4]
+                if clock_entry_short[0] != 0.0:
+                    prev_clock_fill_ts_entry_short = timestamps[k]
+                    psize_short, pprice_short = abs(clock_entry_short[3]), clock_entry_short[4]
                     upnl = calc_pnl_short(pprice_short, closes[k], psize_short, inverse, c_mult)
                     equity_short = balance_short + upnl
                     pnl = 0.0
                     fee_paid = (
-                        -qty_to_cost(ema_entry_short[0], ema_entry_short[1], inverse, c_mult)
+                        -qty_to_cost(clock_entry_short[0], clock_entry_short[1], inverse, c_mult)
                         * maker_fee
                     )
                     balance_short += fee_paid
@@ -728,18 +728,18 @@ def backtest_emas(
                             fee_paid,
                             balance_short,
                             equity_short,
-                            -abs(ema_entry_short[0]),
-                            ema_entry_short[1],
+                            -abs(clock_entry_short[0]),
+                            clock_entry_short[1],
                             -psize_short,
                             pprice_short,
-                            "ema_entry_short",
+                            "clock_entry_short",
                         )
                     )
             # check if markup close
             if (
                 psize_short > 0.0
                 and lows[k] < pprice_short * (1 - min_markup[1])
-                and timestamps[k] > prev_ema_fill_ts_entry_short
+                and timestamps[k] > prev_clock_fill_ts_entry_short
             ):
                 close_grid_short = calc_close_grid_backwards_short(
                     balance_short,
@@ -773,7 +773,7 @@ def backtest_emas(
                     psize_short = max(0.0, round_(psize_short - close_qty, qty_step))
                     if psize_short == 0.0:
                         pprice_short = 0.0
-                        prev_ema_fill_ts_entry_short = 0
+                        prev_clock_fill_ts_entry_short = 0
                     upnl = calc_pnl_short(pprice_short, closes[k], psize_short, inverse, c_mult)
                     equity_short = balance_short + upnl
                     fills_short.append(
