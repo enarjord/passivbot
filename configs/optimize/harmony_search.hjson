@@ -190,7 +190,7 @@
       auto_unstuck_ema_dist: [0.0, 0.02]
     }
   }
-  bounds_emas:
+  bounds_clock:
   {
     long:
     {
