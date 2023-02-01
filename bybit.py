@@ -155,13 +155,13 @@ class BybitBot(Bot):
             raise Exception(f"symbol missing {self.symbol}")
         self.max_leverage = e["leverage_filter"]["max_leverage"]
         self.coin = e["base_currency"]
-        self.quot = e["quote_currency"]
+        self.quote = e["quote_currency"]
         self.price_step = self.config["price_step"] = float(e["price_filter"]["tick_size"])
         self.qty_step = self.config["qty_step"] = float(e["lot_size_filter"]["qty_step"])
         self.min_qty = self.config["min_qty"] = float(e["lot_size_filter"]["min_trading_qty"])
         self.min_cost = self.config["min_cost"] = 1.0
         self.init_market_type()
-        self.margin_coin = self.coin if self.inverse else self.quot
+        self.margin_coin = self.coin if self.inverse else self.quote
         await super()._init()
         await self.init_order_book()
         await self.update_position()
@@ -264,11 +264,11 @@ class BybitBot(Bot):
             if "linear_perpetual" in self.market_type:
                 fetched, bal = await asyncio.gather(
                     self.private_get(self.endpoints["position"], {"symbol": self.symbol}),
-                    self.private_get(self.endpoints["balance"], {"coin": self.quot}),
+                    self.private_get(self.endpoints["balance"], {"coin": self.quote}),
                 )
                 long_pos = [e for e in fetched["result"] if e["side"] == "Buy"][0]
                 short_pos = [e for e in fetched["result"] if e["side"] == "Sell"][0]
-                position["wallet_balance"] = float(bal["result"][self.quot]["wallet_balance"])
+                position["wallet_balance"] = float(bal["result"][self.quote]["wallet_balance"])
             else:
                 fetched, bal = await asyncio.gather(
                     self.private_get(self.endpoints["position"], {"symbol": self.symbol}),
