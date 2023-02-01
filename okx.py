@@ -39,7 +39,7 @@ class OKXBot(Bot):
                 raise NotImplementedError(f"not implemented for {self.symbol}")
         except Exception as e:
             logging.error(f"error initiating market type {e}")
-            print_async_exception(self.exchange_info)
+            print_async_exception(self.markets)
             traceback.print_exc()
             raise Exception("stopping bot")
 
