@@ -44,6 +44,7 @@ class BitgetBot(Bot):
             "position": "/api/mix/v1/position/singlePosition",
             "balance": "/api/mix/v1/account/accounts",
             "ticker": "/api/mix/v1/market/ticker",
+            "tickers": "/api/mix/v1/market/tickers",
             "open_orders": "/api/mix/v1/order/current",
             "create_order": "/api/mix/v1/order/placeOrder",
             "batch_orders": "/api/mix/v1/order/batch-orders",
@@ -140,6 +141,21 @@ class BitgetBot(Bot):
             "ask": float(ticker["data"]["bestAsk"]),
             "last": float(ticker["data"]["last"]),
         }
+
+    async def fetch_tickers(self, product_type=None):
+        tickers = await self.public_get(
+            self.endpoints["tickers"],
+            params={"productType": self.product_type if product_type is None else product_type},
+        )
+        return [
+            {
+                "symbol": ticker["symbol"],
+                "bid": 0.0 if ticker["bestBid"] is None else float(ticker["bestBid"]),
+                "ask": 0.0 if ticker["bestAsk"] is None else float(ticker["bestAsk"]),
+                "last": 0.0 if ticker["last"] is None else float(ticker["last"]),
+            }
+            for ticker in tickers["data"]
+        ]
 
     async def init_order_book(self):
         ticker = None
