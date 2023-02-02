@@ -192,15 +192,15 @@ def dump_plots(
             if result["passivbot_mode"] == "clock":
                 df = df.drop(["ema_band_lower", "ema_band_upper"], axis=1)
 
-    print("plotting pos sizes...")
+    print("plotting wallet exposures...")
     plt.clf()
-
-    sdf[["psize_long", "psize_short"]].plot(
-        title="Position size in terms of contracts",
+    sdf.wallet_exposure_short = sdf.wallet_exposure_short.abs() * -1
+    sdf[["wallet_exposure_long", "wallet_exposure_short"]].plot(
+        title="Wallet exposures: +long, -short",
         xlabel="Time",
-        ylabel="Position size",
+        ylabel="Wallet Exposure",
     )
-    plt.savefig(f"{result['plots_dirpath']}psizes_plot.png")
+    plt.savefig(f"{result['plots_dirpath']}wallet_exposures_plot.png")
 
 
 def plot_fills(df, fdf_, side: int = 0, plot_whole_df: bool = False, title=""):
