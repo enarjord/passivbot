@@ -249,8 +249,9 @@ def calc_clock_entry_short(
                 we_multiplier_entry,
                 wallet_exposure_limit,
             )
+
             new_psize_short, new_pprice_short = calc_new_psize_pprice(
-                psize_short, pprice_short, qty_short, ask_price_short, qty_step
+                -abs(psize_short), pprice_short, qty_short, ask_price_short, qty_step
             )
             wallet_exposure_after_fill = (
                 qty_to_cost(new_psize_short, new_pprice_short, inverse, c_mult) / balance
@@ -267,12 +268,11 @@ def calc_clock_entry_short(
                     c_mult,
                 )
                 new_psize_short, new_pprice_short = calc_new_psize_pprice(
-                    psize_short, pprice_short, qty_short, ask_price_short, qty_step
+                    -abs(psize_short), pprice_short, qty_short, ask_price_short, qty_step
                 )
-            abs_qty_short = abs(qty_short)
-            if abs_qty_short > 0.0:
+            if qty_short != 0.0:
                 return (
-                    -abs_qty_short,
+                    -abs(qty_short),
                     ask_price_short,
                     "clock_entry_short",
                     -abs(new_psize_short),
@@ -310,7 +310,9 @@ def calc_clock_close_short(
             pprice_short, highest_bid, delay_between_fills_ms_close, delay_weight_close
         )
         if utc_now_ms - prev_clock_fill_ts_close > delay:
-            bid_price_short = calc_clock_price_bid(emas.min(), highest_bid, ema_dist_lower, price_step)
+            bid_price_short = calc_clock_price_bid(
+                emas.min(), highest_bid, ema_dist_lower, price_step
+            )
             wallet_exposure_short = qty_to_cost(psize_short, pprice_short, inverse, c_mult) / balance
             qty_short = min(
                 psize_short,
@@ -495,7 +497,9 @@ def backtest_clock(
                     qty_long = abs(clock_close_long[0])
                     psize_long = round_(psize_long - qty_long, qty_step)
                     pnl = calc_pnl_long(pprice_long, clock_close_long[1], qty_long, inverse, c_mult)
-                    fee_paid = -qty_to_cost(qty_long, clock_close_long[1], inverse, c_mult) * maker_fee
+                    fee_paid = (
+                        -qty_to_cost(qty_long, clock_close_long[1], inverse, c_mult) * maker_fee
+                    )
                     balance_long += pnl + fee_paid
                     upnl = calc_pnl_long(pprice_long, closes[k], psize_long, inverse, c_mult)
                     equity_long = balance_long + upnl
