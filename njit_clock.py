@@ -236,7 +236,7 @@ def calc_clock_entry_short(
         if wallet_exposure_short < wallet_exposure_limit * 0.99:
             # entry short
             ask_price_short = calc_clock_price_ask(emas.max(), lowest_ask, ema_dist_upper, price_step)
-            qty_short = calc_clock_qty(
+            qty_short = -calc_clock_qty(
                 balance,
                 wallet_exposure_short,
                 ask_price_short,
@@ -256,7 +256,7 @@ def calc_clock_entry_short(
                 qty_to_cost(new_psize_short, new_pprice_short, inverse, c_mult) / balance
             )
             if wallet_exposure_after_fill > wallet_exposure_limit * 1.01:
-                qty_short = find_entry_qty_bringing_wallet_exposure_to_target(
+                qty_short = -find_entry_qty_bringing_wallet_exposure_to_target(
                     balance,
                     psize_short,
                     pprice_short,
