@@ -269,9 +269,10 @@ def calc_clock_entry_short(
                 new_psize_short, new_pprice_short = calc_new_psize_pprice(
                     psize_short, pprice_short, qty_short, ask_price_short, qty_step
                 )
-            if qty_short > 0.0:
+            abs_qty_short = abs(qty_short)
+            if abs_qty_short > 0.0:
                 return (
-                    -qty_short,
+                    -abs_qty_short,
                     ask_price_short,
                     "clock_entry_short",
                     -abs(new_psize_short),
