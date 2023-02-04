@@ -4,6 +4,8 @@ import datetime
 import gzip
 import os
 import sys
+import requests
+import json
 from io import BytesIO
 from time import time
 from typing import Tuple
@@ -961,11 +963,26 @@ def get_zip(url: str):
         print(e)
 
 
+def get_first_ohlcv_ts(symbol: str) -> int:
+    try:
+        url = "https://fapi.binance.com/fapi/v1/klines"
+        res = requests.get(
+            url, params={"symbol": symbol, "startTime": 0, "limit": 100, "interval": "1m"}
+        )
+        first_ohlcvs = json.loads(res.text)
+        first_ts = first_ohlcvs[0][0]
+        print(f"first ohlcv at {ts_to_date(first_ts)}")
+        return first_ts
+    except Exception as e:
+        print(f"error getting first ohlcv ts {e}, returning 0")
+        return 0
+
+
 def download_ohlcvs(symbol, start_date, end_date, download_only=False) -> pd.DataFrame:
     dirpath = make_get_filepath(f"historical_data/ohlcvs_futures/{symbol}/")
     base_url = f"https://data.binance.vision/data/futures/um/"
     col_names = ["timestamp", "open", "high", "low", "close", "volume"]
-    start_ts = date_to_ts(start_date)
+    start_ts = max(get_first_ohlcv_ts(symbol), date_to_ts(start_date))
     end_ts = date_to_ts(end_date)
     days = [ts_to_date_utc(x)[:10] for x in list(range(start_ts, end_ts, 1000 * 60 * 60 * 24))]
     months = sorted(set([x[:7] for x in days]))
@@ -1037,7 +1054,7 @@ def count_longest_identical_data(hlc, symbol):
                 i_ = i
             counter = 0
     print(
-        f"{symbol} most n minutes of consecutive identical ohlcvs: {longest_consecutive}, index last: {i_}"
+        f"{symbol} most n days of consecutive identical ohlcvs: {longest_consecutive / 60 / 24:.3f}, index last: {i_}"
     )
     return longest_consecutive
 
