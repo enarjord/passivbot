@@ -35,7 +35,7 @@
 
   # clip results: compute score on top performers only
   # clip_threshold=0.1 means drop 10% worst performers; clip_threshold=0.0 means include all
-  clip_threshold: 0.0
+  clip_threshold: 0.5
 
   # will override starting configs' parameters
   do_long: true
@@ -198,16 +198,16 @@
       ema_span_1: [10.0, 2880.0]
       ema_dist_lower: [0.0, 0.02]
       ema_dist_upper: [0.0, 0.02]
-      qty_pct_entry: [0.01, 0.1]
-      qty_pct_close: [0.01, 0.1]
+      qty_pct_entry: [0.02, 0.1]
+      qty_pct_close: [0.02, 0.1]
       we_multiplier_entry: [0.0, 70.0]
-      we_multiplier_close: [0.0, 10.0] // prefer gradually chip away; don't close all at once
+      we_multiplier_close: [0.0, 10.0] // prefer gradually chipping away; don't close all at once
       delay_weight_entry: [0.0, 20.0]
       delay_weight_close: [0.0, 20.0]
       delay_between_fills_minutes_entry: [1.0, 1440.0] // wait max one day
       delay_between_fills_minutes_close: [1.0, 1440.0]
-      min_markup: [0.002, 0.07]
-      markup_range: [0.0, 0.07]
+      min_markup: [0.002, 0.1]
+      markup_range: [0.0, 0.1]
       n_close_orders: [2, 16]
       wallet_exposure_limit: [1.0, 1.0]
     }
@@ -217,16 +217,16 @@
       ema_span_1: [10.0, 2880.0]
       ema_dist_lower: [0.0, 0.02]
       ema_dist_upper: [0.0, 0.02]
-      qty_pct_entry: [0.01, 0.1]
-      qty_pct_close: [0.01, 0.1]
+      qty_pct_entry: [0.02, 0.1]
+      qty_pct_close: [0.02, 0.1]
       we_multiplier_entry: [0.0, 70.0]
       we_multiplier_close: [0.0, 10.0]
       delay_weight_entry: [0.0, 20.0]
       delay_weight_close: [0.0, 20.0]
       delay_between_fills_minutes_entry: [1.0, 1440.0]
       delay_between_fills_minutes_close: [1.0, 1440.0]
-      min_markup: [0.002, 0.07]
-      markup_range: [0.0, 0.07]
+      min_markup: [0.002, 0.1]
+      markup_range: [0.0, 0.1]
       n_close_orders: [2, 16]
       wallet_exposure_limit: [1.0, 1.0]
     }
