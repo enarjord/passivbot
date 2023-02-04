@@ -65,26 +65,27 @@ def dump_plots(
                 if result["result"][f"final_balance_{side}"] < result["result"]["starting_balance"]
                 else Fore.RESET
             )
-            for title, key, precision, mul in [
-                ("Final balance", f"final_balance_{side}", 6, 1),
-                ("Final equity", f"final_equity_{side}", 6, 1),
-                ("Net PNL + fees", f"net_pnl_plus_fees_{side}", 6, 1),
-                ("Total gain", f"gain_{side}", 4, 100),
-                ("Average daily gain", f"adg_{side}", 3, 100),
-                ("Net PNL + fees", f"net_pnl_plus_fees_{side}", 6, 1),
-                ("Loss to profit ratio", f"loss_profit_ratio_{side}", 4, 1),
-                (f"Price action distance mean", f"pa_distance_mean_{side}", 6, 1),
-                (f"Price action distance std", f"pa_distance_std_{side}", 6, 1),
-                (f"Price action distance max", f"pa_distance_max_{side}", 6, 1),
-                ("Closest bankruptcy", f"closest_bkr_{side}", 4, 100),
-                ("Lowest equity/balance ratio", f"eqbal_ratio_min_{side}", 4, 1),
-                ("Equity/balance ratio std", f"equity_balance_ratio_std_{side}", 4, 1),
+            for title, key, precision, mul, suffix in [
+                ("Final balance", f"final_balance_{side}", 6, 1, ""),
+                ("Final equity", f"final_equity_{side}", 6, 1, ""),
+                ("Net PNL + fees", f"net_pnl_plus_fees_{side}", 6, 1, ""),
+                ("Total gain", f"gain_{side}", 4, 100, "%"),
+                ("Average daily gain", f"adg_{side}", 3, 100, "%"),
+                ("Net PNL + fees", f"net_pnl_plus_fees_{side}", 6, 1, ""),
+                ("Loss to profit ratio", f"loss_profit_ratio_{side}", 4, 1, ""),
+                (f"Price action distance mean", f"pa_distance_mean_{side}", 6, 1, ""),
+                (f"Price action distance std", f"pa_distance_std_{side}", 6, 1, ""),
+                (f"Price action distance max", f"pa_distance_max_{side}", 6, 1, ""),
+                ("Closest bankruptcy", f"closest_bkr_{side}", 4, 100, "%"),
+                ("Lowest equity/balance ratio", f"eqbal_ratio_min_{side}", 4, 1, ""),
+                ("Equity/balance ratio std", f"equity_balance_ratio_std_{side}", 4, 1, ""),
             ]:
                 if key in result["result"]:
+                    val = round_dynamic(result["result"][key] * mul, precision)
                     table.add_row(
                         [
                             title,
-                            f"{profit_color}{round_dynamic(result['result'][key] * mul, precision)}{Fore.RESET}",
+                            f"{profit_color}{val}{suffix}{Fore.RESET}",
                         ]
                     )
             for title, key in [
