@@ -27,6 +27,7 @@ flags:
     aliases:
       - pt
       - price_distance_threshold
+
   - name: api_keys
     flag: -ak
     aliases:
@@ -38,6 +39,24 @@ flags:
     aliases:
       - lev
       - leverage
+
+  - name: ohlcv
+    flag: -oh
+    aliases:
+      - oh
+      - ohlcv
+
+  - name: countdown
+    flag: -cd
+    aliases:
+      - cd
+      - countdown
+
+  - name: price_precision
+    flag: -pp
+    aliases:
+      - pp
+      - price_precision
 
   # ----------------------------------- longs ---------------------------------- #
 
