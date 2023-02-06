@@ -147,6 +147,7 @@ class Bot:
             ("c_mult", 1.0),
             ("leverage", 7.0),
             ("countdown", False),
+            ("countdown_offset", 0),
             ("ohlcv", True),
         ]:
             if k not in config:
@@ -624,7 +625,9 @@ class Bot:
                             self.ob[0],
                             min(self.emas_long),
                             utc_ms(),
-                            0 if psize_long == 0.0 else self.last_fills_timestamps["clock_entry_long"],
+                            0
+                            if psize_long == 0.0
+                            else self.last_fills_timestamps["clock_entry_long"],
                             self.xk["inverse"],
                             self.xk["qty_step"],
                             self.xk["price_step"],
@@ -905,8 +908,6 @@ class Bot:
                         self.xk["delay_between_fills_ms_close"][1],
                         self.xk["wallet_exposure_limit"][1],
                     )
-                    # print('debug ema close short', clock_close_short)
-                    # print('debug ncloses short', closes_short)
                     if clock_close_short[0] != 0.0 and (
                         not closes_short or clock_close_short[1] > closes_short[0][1]
                     ):
@@ -915,7 +916,8 @@ class Bot:
                             True,
                             balance,
                             -max(
-                                0.0, round_(abs(psize_short) - abs(clock_close_short[0]), self.qty_step)
+                                0.0,
+                                round_(abs(psize_short) - abs(clock_close_short[0]), self.qty_step),
                             ),
                             pprice_short,
                             self.ob[0],
@@ -1342,7 +1344,7 @@ class Bot:
         while True:
             now = time.time()
             # print('secs until next', ((now + 60) - now % 60) - now)
-            while int(now) % 60 != 0:
+            while int(now) % 60 != self.countdown_offset:
                 if self.stop_websocket:
                     break
                 await asyncio.sleep(0.5)
@@ -1539,6 +1541,16 @@ async def main() -> None:
         default=None,
         help="Override price step with round_dynamic(market_price * price_precision, 1).  Suggested val 0.0001",
     )
+    parser.add_argument(
+        "-co",
+        "--countdown-offset",
+        "--countdown_offset",
+        type=int,
+        required=False,
+        dest="countdown_offset",
+        default=0,
+        help="when in ohlcv mode, offset execution cycle in seconds from whole minute",
+    )
 
     float_kwargs = [
         ("-lmm", "--long_min_markup", "--long-min-markup", "long_min_markup"),
@@ -1591,6 +1603,7 @@ async def main() -> None:
         "ohlcv",
         "test_mode",
         "countdown",
+        "countdown_offset",
         "price_precision_multiplier",
     ]:
         config[k] = getattr(args, k)
