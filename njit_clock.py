@@ -469,6 +469,7 @@ def backtest_clock(
             ask_price_long = calc_clock_price_ask(
                 emas_long.max(), closes[k - 1], ema_dist_upper[0], price_step
             )
+            # simulate what orders were placed previous minute
             if highs[k] > ask_price_long:
                 # clock close long
                 clock_close_long = calc_clock_close_long(
@@ -492,35 +493,56 @@ def backtest_clock(
                     delay_between_fills_ms_close[0],
                     wallet_exposure_limit[0],
                 )
-                if clock_close_long[0] != 0.0:
-                    prev_clock_fill_ts_close_long = timestamps[k]
-                    qty_long = abs(clock_close_long[0])
-                    psize_long = round_(psize_long - qty_long, qty_step)
-                    pnl = calc_pnl_long(pprice_long, clock_close_long[1], qty_long, inverse, c_mult)
-                    fee_paid = (
-                        -qty_to_cost(qty_long, clock_close_long[1], inverse, c_mult) * maker_fee
+            else:
+                clock_close_long = (0.0, 0.0, '')
+            # check if markup close
+            if (
+                psize_long > 0.0
+                and highs[k] > pprice_long * (1 + min_markup[0])
+            ):
+                close_grid_long = calc_close_grid_backwards_long(
+                    balance_long,
+                    psize_long,
+                    pprice_long,
+                    closes[k - 1],
+                    0.0,
+                    inverse,
+                    qty_step,
+                    price_step,
+                    min_qty,
+                    min_cost,
+                    c_mult,
+                    wallet_exposure_limit[0],
+                    min_markup[0],
+                    markup_range[0],
+                    n_close_orders[0],
+                    0.0,
+                    0.0,
+                )
+                # check if clock close long price is lower than markup close grid
+                if close_grid_long and clock_close_long[0] != 0.0 and clock_close_long[1] < close_grid_long[0][1]:
+                    close_grid_long = calc_close_grid_backwards_long(
+                        balance_long,
+                        max(0.0, round_(psize_long - abs(clock_close_long[0]), qty_step)),
+                        pprice_long,
+                        closes[k - 1],
+                        0.0,
+                        inverse,
+                        qty_step,
+                        price_step,
+                        min_qty,
+                        min_cost,
+                        c_mult,
+                        wallet_exposure_limit[0],
+                        min_markup[0],
+                        markup_range[0],
+                        n_close_orders[0],
+                        0.0,
+                        0.0,
                     )
-                    balance_long += pnl + fee_paid
-                    upnl = calc_pnl_long(pprice_long, closes[k], psize_long, inverse, c_mult)
-                    equity_long = balance_long + upnl
-                    if psize_long == 0.0:
-                        pprice_long = 0.0
-                        prev_clock_fill_ts_entry_long = 0
-                    fills_long.append(
-                        (
-                            k,
-                            timestamps[k],
-                            pnl,
-                            fee_paid,
-                            balance_long,
-                            equity_long,
-                            -abs(qty_long),
-                            clock_close_long[1],
-                            psize_long,
-                            pprice_long,
-                            "clock_close_long",
-                        )
-                    )
+            else:
+                close_grid_long = [(0.0, np.inf, "")]
+
             bid_price_long = calc_clock_price_bid(
                 emas_long.min(), closes[k - 1], ema_dist_lower[0], price_step
             )
@@ -547,7 +569,7 @@ def backtest_clock(
                     delay_between_fills_ms_entry[0],
                     wallet_exposure_limit[0],
                 )
-                if clock_entry_long[0] > 0.0:
+                if clock_entry_long[0] != 0.0:
                     prev_clock_fill_ts_entry_long = timestamps[k]
                     psize_long, pprice_long = clock_entry_long[3], clock_entry_long[4]
                     upnl = calc_pnl_long(pprice_long, closes[k], psize_long, inverse, c_mult)
@@ -573,32 +595,37 @@ def backtest_clock(
                             "clock_entry_long",
                         )
                     )
-            # check if markup close
-            if (
-                psize_long > 0.0
-                and highs[k] > pprice_long * (1 + min_markup[0])
-                and timestamps[k] > prev_clock_fill_ts_entry_long
-            ):
-                close_grid_long = calc_close_grid_backwards_long(
-                    balance_long,
-                    psize_long,
-                    pprice_long,
-                    closes[k - 1],
-                    0.0,
-                    inverse,
-                    qty_step,
-                    price_step,
-                    min_qty,
-                    min_cost,
-                    c_mult,
-                    wallet_exposure_limit[0],
-                    min_markup[0],
-                    markup_range[0],
-                    n_close_orders[0],
-                    0.0,
-                    0.0,
+            if clock_close_long[0] != 0.0:
+                prev_clock_fill_ts_close_long = timestamps[k]
+                qty_long = abs(clock_close_long[0])
+                psize_long = round_(psize_long - qty_long, qty_step)
+                pnl = calc_pnl_long(pprice_long, clock_close_long[1], qty_long, inverse, c_mult)
+                fee_paid = (
+                    -qty_to_cost(qty_long, clock_close_long[1], inverse, c_mult) * maker_fee
                 )
-                while close_grid_long and highs[k] > close_grid_long[0][1]:
+                balance_long += pnl + fee_paid
+                upnl = calc_pnl_long(pprice_long, closes[k], psize_long, inverse, c_mult)
+                equity_long = balance_long + upnl
+                if psize_long == 0.0:
+                    pprice_long = 0.0
+                    prev_clock_fill_ts_entry_long = 0
+                fills_long.append(
+                    (
+                        k,
+                        timestamps[k],
+                        pnl,
+                        fee_paid,
+                        balance_long,
+                        equity_long,
+                        -abs(qty_long),
+                        clock_close_long[1],
+                        psize_long,
+                        pprice_long,
+                        "clock_close_long",
+                    )
+                )
+            if close_grid_long:
+                while close_grid_long and close_grid_long[0][0] != 0.0 and highs[k] > close_grid_long[0][1]:
                     # close long pos
                     close_qty = abs(close_grid_long[0][0])
                     pnl = calc_pnl_long(
@@ -626,7 +653,7 @@ def backtest_clock(
                             close_grid_long[0][1],
                             psize_long,
                             pprice_long,
-                            "long_nclose",
+                            close_grid_long[0][2],
                         )
                     )
                     close_grid_long = close_grid_long[1:]
@@ -657,41 +684,58 @@ def backtest_clock(
                     delay_between_fills_ms_close[1],
                     wallet_exposure_limit[1],
                 )
-                if clock_close_short[0] != 0.0:
-                    prev_clock_fill_ts_close_short = timestamps[k]
-                    psize_short = round_(psize_short - clock_close_short[0], qty_step)
-                    pnl = calc_pnl_short(
-                        pprice_short, clock_close_short[1], clock_close_short[0], inverse, c_mult
+            else:
+                clock_close_short = (0.0, 0.0, '')
+            # check if markup close
+            if (
+                psize_short > 0.0
+                and lows[k] < pprice_short * (1 - min_markup[1])
+            ):
+                close_grid_short = calc_close_grid_backwards_short(
+                    balance_short,
+                    psize_short,
+                    pprice_short,
+                    closes[k - 1],
+                    0.0,
+                    inverse,
+                    qty_step,
+                    price_step,
+                    min_qty,
+                    min_cost,
+                    c_mult,
+                    wallet_exposure_limit[1],
+                    min_markup[1],
+                    markup_range[1],
+                    n_close_orders[1],
+                    0.0,
+                    0.0,
+                )
+                if close_grid_short and clock_close_short[0] != 0.0 and clock_close_short[1] > close_grid_short[0][1]:
+                   close_grid_short = calc_close_grid_backwards_short(
+                        balance_short,
+                        -max(0.0, round_(abs(psize_short) - abs(clock_close_short[0]), qty_step)),
+                        pprice_short,
+                        closes[k - 1],
+                        0.0,
+                        inverse,
+                        qty_step,
+                        price_step,
+                        min_qty,
+                        min_cost,
+                        c_mult,
+                        wallet_exposure_limit[1],
+                        min_markup[1],
+                        markup_range[1],
+                        n_close_orders[1],
+                        0.0,
+                        0.0,
                     )
-                    fee_paid = (
-                        -qty_to_cost(clock_close_short[0], clock_close_short[1], inverse, c_mult)
-                        * maker_fee
-                    )
-                    balance_short += pnl + fee_paid
-                    upnl = calc_pnl_short(pprice_short, closes[k], psize_short, inverse, c_mult)
-                    equity_short = balance_short + upnl
-                    if psize_short == 0.0:
-                        pprice_short = 0.0
-                        prev_clock_fill_ts_entry_short = 0
-                    fills_short.append(
-                        (
-                            k,
-                            timestamps[k],
-                            pnl,
-                            fee_paid,
-                            balance_short,
-                            equity_short,
-                            abs(clock_close_short[0]),
-                            clock_close_short[1],
-                            -psize_short,
-                            pprice_short,
-                            "clock_close_short",
-                        )
-                    )
+            else:
+                close_grid_short = [(0.0, 0.0, '')]
             ask_price_short = calc_clock_price_ask(
                 emas_short.max(), closes[k - 1], ema_dist_upper[1], price_step
             )
-            if highs[k] > ask_price_short:
+            if prev_clock_fill_ts_close_short != timestamps[k] and highs[k] > ask_price_short:
                 clock_entry_short = calc_clock_entry_short(
                     balance_short,
                     psize_short,
@@ -739,33 +783,42 @@ def backtest_clock(
                             "clock_entry_short",
                         )
                     )
-            # check if markup close
-            if (
-                psize_short > 0.0
-                and lows[k] < pprice_short * (1 - min_markup[1])
-                and timestamps[k] > prev_clock_fill_ts_entry_short
-            ):
-                close_grid_short = calc_close_grid_backwards_short(
-                    balance_short,
-                    psize_short,
-                    pprice_short,
-                    closes[k - 1],
-                    0.0,
-                    inverse,
-                    qty_step,
-                    price_step,
-                    min_qty,
-                    min_cost,
-                    c_mult,
-                    wallet_exposure_limit[1],
-                    min_markup[1],
-                    markup_range[1],
-                    n_close_orders[1],
-                    0.0,
-                    0.0,
+            if clock_close_short[0] != 0.0:
+                prev_clock_fill_ts_close_short = timestamps[k]
+                psize_short = round_(psize_short - clock_close_short[0], qty_step)
+                pnl = calc_pnl_short(
+                    pprice_short, clock_close_short[1], clock_close_short[0], inverse, c_mult
                 )
-                while close_grid_short and lows[k] < close_grid_short[0][1]:
+                fee_paid = (
+                    -qty_to_cost(clock_close_short[0], clock_close_short[1], inverse, c_mult)
+                    * maker_fee
+                )
+                balance_short += pnl + fee_paid
+                upnl = calc_pnl_short(pprice_short, closes[k], psize_short, inverse, c_mult)
+                equity_short = balance_short + upnl
+                if psize_short == 0.0:
+                    pprice_short = 0.0
+                    prev_clock_fill_ts_entry_short = 0
+                fills_short.append(
+                    (
+                        k,
+                        timestamps[k],
+                        pnl,
+                        fee_paid,
+                        balance_short,
+                        equity_short,
+                        abs(clock_close_short[0]),
+                        clock_close_short[1],
+                        -psize_short,
+                        pprice_short,
+                        "clock_close_short",
+                    )
+                )
+            if close_grid_short:
+                while close_grid_short and close_grid_short[0][0] != 0.0 and lows[k] < close_grid_short[0][1]:
                     # close short pos
+                    if 'clock' in close_grid_short[0][2]:
+                        prev_clock_fill_ts_close_short = timestamps[k]
                     close_qty = abs(close_grid_short[0][0])
                     pnl = calc_pnl_short(
                         pprice_short, close_grid_short[0][1], close_qty, inverse, c_mult
@@ -792,7 +845,7 @@ def backtest_clock(
                             close_grid_short[0][1],
                             -psize_short,
                             pprice_short,
-                            "short_nclose",
+                            close_grid_short[0][2],
                         )
                     )
                     close_grid_short = close_grid_short[1:]
