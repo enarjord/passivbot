@@ -701,7 +701,7 @@ class Bot:
                         self.xk["wallet_exposure_limit"][0],
                     )
                     if clock_close_long[0] != 0.0 and (
-                        not closes_long or clock_close_long[1] < closes_long[0][1]
+                        not closes_long or clock_close_long[1] <= closes_long[0][1]
                     ):
                         closes_long = [clock_close_long]
                         closes_long += calc_close_grid_long(
@@ -909,7 +909,7 @@ class Bot:
                         self.xk["wallet_exposure_limit"][1],
                     )
                     if clock_close_short[0] != 0.0 and (
-                        not closes_short or clock_close_short[1] > closes_short[0][1]
+                        not closes_short or clock_close_short[1] >= closes_short[0][1]
                     ):
                         closes_short = [clock_close_short]
                         closes_short += calc_close_grid_short(
