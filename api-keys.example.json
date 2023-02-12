@@ -31,5 +31,11 @@
         "key": "key",
         "secret": "secret",
         "passphrase": "passphrase"
+    },
+    "kucoin_01" : {
+        "exchange": "kucoin",
+        "key": "key",
+        "secret": "secret",
+        "passphrase": "passphrase"
     }
 }

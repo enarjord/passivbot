@@ -178,7 +178,9 @@ class Bot:
     async def init_emas(self) -> None:
         ohlcvs1m = await self.fetch_ohlcvs(interval="1m")
         max_span = max(list(self.ema_spans_long) + list(self.ema_spans_short))
-        for mins, interval in zip([5, 15, 30, 60, 60 * 4], ["5m", "15m", "30m", "1h", "4h"]):
+        for mins, interval in zip(
+            [5, 15, 30, 60, 60 * 4], ["5m", "15m", "30m", "1h", "4h"]
+        ):
             if max_span <= len(ohlcvs1m) * mins:
                 break
         ohlcvs = await self.fetch_ohlcvs(interval=interval)
@@ -1025,6 +1027,8 @@ class Bot:
                 # print('debug user stream', msg)
                 if msg is None or msg == "pong":
                     continue
+                if "type" in msg and "welcome" in msg or "ack" in msg:
+                    continue
                 try:
                     if self.stop_websocket:
                         break
@@ -1046,6 +1050,8 @@ class Bot:
             async for msg in ws:
                 # print('debug market stream', msg)
                 if msg is None or msg == "pong":
+                    continue
+                if "type" in msg and "welcome" in msg or "ack" in msg:
                     continue
                 try:
                     if self.stop_websocket:
@@ -1399,6 +1405,10 @@ async def main() -> None:
 
         config["ohlcv"] = True
         bot = await create_okx_bot(config)
+    elif config["exchange"] == "kucoin":
+        from procedures import create_kucoin_bot
+
+        bot = await create_kucoin_bot(config)
     else:
         raise Exception("unknown exchange", config["exchange"])
 

@@ -299,6 +299,12 @@ async def create_okx_bot(config: dict):
     await bot._init()
     return bot
 
+async def create_kucoin_bot(config: dict):
+    from kucoin import KuCoinBot
+
+    bot = KuCoinBot(config)
+    await bot._init()
+    return bot
 
 def add_argparse_args(parser):
     parser.add_argument("--nojit", help="disable numba", action="store_true")
