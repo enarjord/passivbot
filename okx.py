@@ -26,6 +26,7 @@ class OKXBot(Bot):
         self.okx = getattr(ccxt, "okx")(
             {"apiKey": self.key, "secret": self.secret, "password": self.passphrase}
         )
+        self.broker_code = "0fe0667832d7BCDE"
 
     async def init_market_type(self):
         self.markets = None
@@ -200,6 +201,7 @@ class OKXBot(Bot):
                     "posSide": order["position_side"],
                     "sz": int(order["qty"]),
                     "reduceOnly": order["reduce_only"],
+                    "tag": self.broker_code,
                 }
                 if order["type"] == "limit":
                     params["ordType"] = "post_only"
