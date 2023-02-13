@@ -624,18 +624,19 @@ class BybitBot(Bot):
         fetched = None
         try:
             fetched = await self.private_get(
-                self.endpoints["fills"], {"symbol": self.symbol, "limit": 200}
+                self.endpoints["fills"],
+                {
+                    "symbol": self.symbol,
+                    "limit": 200,
+                    "start_time": int((time() - 60 * 60 * 24) * 1000),
+                },
             )
             if "inverse_perpetual" in self.market_type:
                 fetched_data = fetched["result"]["trade_list"]
             elif "linear_perpetual" in self.market_type:
                 fetched_data = fetched["result"]["data"]
-                if (
-                    fetched["result"]["data"] is None
-                    and fetched["ret_code"] == 0
-                    and fetched["ret_msg"] == "OK"
-                ):
-                    return []
+            if fetched_data is None and fetched["ret_code"] == 0 and fetched["ret_msg"] == "OK":
+                return []
             fills = [
                 {
                     "order_id": elm["order_id"],
