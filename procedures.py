@@ -116,7 +116,7 @@ async def prepare_backtest_config(args) -> dict:
 async def prepare_optimize_config(args) -> dict:
     config = await prepare_backtest_config(args)
     config.update(load_hjson_config(args.optimize_config_path))
-    for key in ["starting_configs", "iters"]:
+    for key in ["starting_configs", "iters", "algorithm"]:
         if hasattr(args, key) and getattr(args, key) is not None:
             config[key] = getattr(args, key)
         elif key not in config:
@@ -186,6 +186,73 @@ def print_(args, r=False, n=False):
     else:
         print(line)
     return line
+
+
+def fetch_market_specific_settings_new(exchange, symbol, market_type):
+    import ccxt
+    settings_from_exchange = {}
+    if exchange == 'binance':
+        if symbol.endswith("USDT") or symbol.endswith("BUSD"):
+            cc = ccxt.binanceusdm()
+            markets = cc.fetch_markets()
+            for elm in markets:
+                if elm['id'] == symbol:
+                    break
+            else:
+                raise Exception(f"unknown symbol {symbol}")
+            settings_from_exchange['exchange'] = 'binance'
+            settings_from_exchange['hedge_mode'] = True
+            settings_from_exchange['spot'] = False
+            settings_from_exchange['maker_fee'] = elm['maker']
+            settings_from_exchange['taker_fee'] = elm['taker']
+            settings_from_exchange['min_qty'] = elm['limits']['amount']['min']
+            settings_from_exchange['min_cost'] = elm['limits']['cost']['min']
+            settings_from_exchange['c_mult'] = elm['contractSize']
+            for elm1 in elm['info']['filters']:
+                if elm1['filterType'] == 'LOT_SIZE':
+                    settings_from_exchange['qty_step'] = float(elm1['stepSize'])
+                if elm1['filterType'] == 'PRICE_FILTER':
+                    settings_from_exchange['price_step'] = float(elm1['tickSize'])
+        elif symbol.endswith("USD"):
+            # inverse, TODO
+            pass
+
+    elif exchange == 'binance_spot':
+        cc = ccxt.binance()
+        markets = cc.fetch_markets()
+    elif exchange == 'bitget':
+        cc = ccxt.bitget()
+        markets = cc.fetch_markets()
+    elif exchange == 'okx':
+        cc = ccxt.okx()
+        markets = cc.fetch_markets()
+    elif exchange == 'bybit':
+        if not symbol.endswith('USDT'):
+            raise NotImplementedError("only linear USDT as of now")
+        cc = ccxt.bybit()
+        markets = cc.fetch_markets()
+        for elm in markets:
+            if elm['id'] == symbol:
+                break
+        else:
+            raise Exception(f"unknown symbol {symbol}")
+        settings_from_exchange['exchange'] = 'bybit'
+        settings_from_exchange['hedge_mode'] = True
+        settings_from_exchange['spot'] = False
+        settings_from_exchange['maker_fee'] = 0.0001
+        settings_from_exchange['taker_fee'] = 0.0006
+        settings_from_exchange['min_qty'] = elm['limits']['amount']['min']
+        settings_from_exchange['min_cost'] = 0.0 if elm['limits']['cost']['min'] is None else elm['limits']['cost']['min']
+        settings_from_exchange['c_mult'] = elm['contractSize']
+        settings_from_exchange['qty_step'] = float(elm['info']['lotSizeFilter']['qtyStep'])
+        settings_from_exchange['price_step'] = float(elm['info']['priceFilter']['tickSize'])
+
+        import pprint
+        pprint.pprint(elm)
+    else:
+        raise Exception(f"unknown exchange {exchange}")
+    return settings_from_exchange
+    return
 
 
 async def fetch_market_specific_settings(config: dict):
@@ -676,3 +743,9 @@ async def init_optimizer(logging):
         cfgs = [{"long": cfg.copy(), "short": cfg.copy()} for cfg in cfgs]
     config["starting_configs"] = cfgs
     return config
+
+
+if __name__ == '__main__':
+    mss = fetch_market_specific_settings_new('bybit', 'BTCUSDT', 'futures')
+    print(mss)
+
