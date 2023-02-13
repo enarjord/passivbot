@@ -728,16 +728,27 @@ def analyze_fills(
     pnl_sum_short = profit_sum_short + loss_sum_short
     gain_short = pnl_sum_short / sdf.balance_short.iloc[0]
 
+    if 'adg_n_subdivisions' not in config:
+        config['adg_n_subdivisions'] = 1
+
     if sdf.balance_long.iloc[-1] <= 0.0:
         adg_realized_long = sdf.balance_long.iloc[-1]
     else:
-        adg_realized_long = (sdf.balance_long.iloc[-1] / sdf.balance_long.iloc[0]) ** (1 / n_days) - 1
+        adgs_long = []
+        for i in range(config['adg_n_subdivisions']):
+            idx = round(int(len(sdf) * (1 - 1 / (i + 1))))
+            n_days = (sdf.timestamp.iloc[-1] - sdf.timestamp.iloc[idx]) / (1000 * 60 * 60 * 24)
+            adgs_long.append((sdf.balance_long.iloc[-1] / sdf.balance_long.iloc[idx]) ** (1 / n_days) - 1)
+        adg_realized_long = np.mean(adgs_long)
     if sdf.balance_short.iloc[-1] <= 0.0:
         adg_realized_short = sdf.balance_short.iloc[-1]
     else:
-        adg_realized_short = (sdf.balance_short.iloc[-1] / sdf.balance_short.iloc[0]) ** (
-            1 / n_days
-        ) - 1
+        adgs_short = []
+        for i in range(config['adg_n_subdivisions']):
+            idx = round(int(len(sdf) * (1 - 1 / (i + 1))))
+            n_days = (sdf.timestamp.iloc[-1] - sdf.timestamp.iloc[idx]) / (1000 * 60 * 60 * 24)
+            adgs_short.append((sdf.balance_short.iloc[-1] / sdf.balance_short.iloc[idx]) ** (1 / n_days) - 1)
+        adg_realized_short = np.mean(adgs_short)
     adg_realized_per_exposure_long = (
         (adg_realized_long / config["long"]["wallet_exposure_limit"])
         if config["long"]["wallet_exposure_limit"] > 0.0
