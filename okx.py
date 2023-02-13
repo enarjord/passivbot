@@ -26,6 +26,7 @@ class OKXBot(Bot):
         self.okx = getattr(ccxt, "okx")(
             {"apiKey": self.key, "secret": self.secret, "password": self.passphrase}
         )
+        self.broker_code = "0fe0667832d7BCDE"
 
     async def init_market_type(self):
         self.markets = None
@@ -39,7 +40,7 @@ class OKXBot(Bot):
                 raise NotImplementedError(f"not implemented for {self.symbol}")
         except Exception as e:
             logging.error(f"error initiating market type {e}")
-            print_async_exception(self.exchange_info)
+            print_async_exception(self.markets)
             traceback.print_exc()
             raise Exception("stopping bot")
 
@@ -199,6 +200,7 @@ class OKXBot(Bot):
                     "posSide": order["position_side"],
                     "sz": int(order["qty"]),
                     "reduceOnly": order["reduce_only"],
+                    "tag": self.broker_code,
                 }
                 if order["type"] == "limit":
                     params["ordType"] = "post_only"
