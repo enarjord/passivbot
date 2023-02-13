@@ -65,14 +65,7 @@ def main():
 
     args = parser.parse_args()
 
-    # attempt guessing whether harmony search or particle swarm
-    opt_config_path = (
-        "configs/optimize/harmony_search.hjson"
-        if "harmony" in args.results_fpath
-        else "configs/optimize/particle_swarm_optimization.hjson"
-    )
-
-    opt_config = hjson.load(open(opt_config_path))
+    opt_config = hjson.load(open("configs/optimize/default.hjson"))
     minsmaxs = {}
     for _, k1 in weights_keys:
         minsmaxs[k1] = opt_config[k1] if getattr(args, k1) is None else getattr(args, k1)
