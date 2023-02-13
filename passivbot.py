@@ -218,6 +218,17 @@ class Bot:
             if new_price_step != self.price_step:
                 logging.info(f"changing price step from {self.price_step} to {new_price_step}")
                 self.price_step = self.config["price_step"] = self.xk["price_step"] = new_price_step
+        elif (
+            "price_precision_multiplier" in self.config
+            and self.config["price_precision_multiplier"] is not None
+        ):
+            new_price_step = max(
+                self.price_step,
+                round_dynamic(self.ob[0] * self.config["price_precision_multiplier"], 1),
+            )
+            if new_price_step != self.price_step:
+                logging.info(f"changing price step from {self.price_step} to {new_price_step}")
+                self.price_step = self.config["price_step"] = self.xk["price_step"] = new_price_step
 
     def dump_log(self, data) -> None:
         if "logging_level" in self.config and self.config["logging_level"] > 0:
@@ -1526,6 +1537,16 @@ async def main() -> None:
         help=f"if true, print a countdown in ohlcv mode",
     )
     parser.add_argument(
+        "-pp",
+        "--price-precision",
+        "--price_precision",
+        type=float,
+        required=False,
+        dest="price_precision_multiplier",
+        default=None,
+        help="Override price step with round_dynamic(market_price * price_precision, 1).  Suggested val 0.0001",
+    )
+    parser.add_argument(
         "-ps",
         "--price-step",
         "--price_step",
@@ -1533,7 +1554,7 @@ async def main() -> None:
         required=False,
         dest="price_step_custom",
         default=None,
-        help="Override price step with custom price step",
+        help="Override price step with custom price step.  Takes precedence over -pp",
     )
     parser.add_argument(
         "-co",
@@ -1598,6 +1619,7 @@ async def main() -> None:
         "test_mode",
         "countdown",
         "countdown_offset",
+        "price_precision_multiplier",
         "price_step_custom",
     ]:
         config[k] = getattr(args, k)
