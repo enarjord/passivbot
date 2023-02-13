@@ -128,7 +128,7 @@ async def add_market_specific_settings(config):
     mss = config["caches_dirpath"] + "market_specific_settings.json"
     try:
         print("fetching market_specific_settings...")
-        market_specific_settings = await fetch_market_specific_settings(config)
+        market_specific_settings = fetch_market_specific_settings(config)
         json.dump(market_specific_settings, open(mss, "w"), indent=4)
     except Exception as e:
         traceback.print_exc()
@@ -188,7 +188,7 @@ def print_(args, r=False, n=False):
     return line
 
 
-async def fetch_market_specific_settings(config: dict):
+async def fetch_market_specific_settings_old(config: dict):
     user = config["user"]
     exchange = config["exchange"]
     symbol = config["symbol"]
@@ -466,8 +466,12 @@ def print_async_exception(coro):
         pass
 
 
-def fetch_market_specific_settings_new(exchange, symbol, market_type):
+def fetch_market_specific_settings(config: dict):
     import ccxt
+
+    exchange = config["exchange"]
+    symbol = config["symbol"]
+    market_type = config["market_type"]
 
     settings_from_exchange = {"exchange": exchange}
     if exchange == "binance":
