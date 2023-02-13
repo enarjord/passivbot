@@ -626,12 +626,16 @@ class BybitBot(Bot):
             fetched = await self.private_get(
                 self.endpoints["fills"], {"symbol": self.symbol, "limit": 200}
             )
-            if (
-                fetched["result"]["data"] is None
-                and fetched["ret_code"] == 0
-                and fetched["ret_msg"] == "OK"
-            ):
-                return []
+            if "inverse_perpetual" in self.market_type:
+                fetched_data = fetched["result"]["trade_list"]
+            elif "linear_perpetual" in self.market_type:
+                fetched_data = fetched["result"]["data"]
+                if (
+                    fetched["result"]["data"] is None
+                    and fetched["ret_code"] == 0
+                    and fetched["ret_msg"] == "OK"
+                ):
+                    return []
             fills = [
                 {
                     "order_id": elm["order_id"],
@@ -647,7 +651,7 @@ class BybitBot(Bot):
                     "position_side": determine_pos_side(elm),
                     "timestamp": elm["trade_time_ms"],
                 }
-                for elm in fetched["result"]["data"]
+                for elm in fetched_data
                 if elm["exec_type"] == "Trade"
             ]
         except Exception as e:
