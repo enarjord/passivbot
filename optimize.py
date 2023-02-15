@@ -87,7 +87,7 @@ def backtest_wrap(config_: dict, ticks_caches: dict):
     return analysis
 
 
-async def main():
+async def main(algorithm=None):
     logging.basicConfig(format="", level=os.environ.get("LOGLEVEL", "INFO"))
 
     parser = argparse.ArgumentParser(
@@ -166,6 +166,8 @@ async def main():
     )
     parser = add_argparse_args(parser)
     args = parser.parse_args()
+    if algorithm is not None:
+        args.algorithm = algorithm
     if args.symbol is None or "," in args.symbol:
         args.symbol = "BTCUSDT"  # dummy symbol
     config = await prepare_optimize_config(args)
@@ -178,6 +180,8 @@ async def main():
             await run_opt(args, config)
     else:
         args = parser.parse_args()
+        if algorithm is not None:
+            args.algorithm = algorithm
         await run_opt(args, config)
 
 
@@ -288,11 +292,9 @@ async def run_opt(args, config):
             if os.path.isdir(args.starting_configs):
                 for fname in os.listdir(args.starting_configs):
                     try:
-                        """
                         if config['symbols'][0] not in os.path.join(args.starting_configs, fname):
                             print('skipping', os.path.join(args.starting_configs, fname))
                             continue
-                        """
                         cfg = load_live_config(os.path.join(args.starting_configs, fname))
                         assert determine_passivbot_mode(cfg) == passivbot_mode, "wrong passivbot mode"
                         cfgs.append(cfg)

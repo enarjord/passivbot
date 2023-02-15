@@ -460,3 +460,9 @@ class HarmonySearch:
                             # means initial evals are done; start new harmony
                             self.start_new_harmony(wi)
                         sleep(0.25)
+
+
+if __name__ == "__main__":
+    from optimize import main as main_
+
+    asyncio.run(main_(algorithm="harmony_search"))

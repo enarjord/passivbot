@@ -462,3 +462,9 @@ class ParticleSwarmOptimization:
                             # means initial evals are done; start new position
                             self.start_new_particle_position(wi)
                         sleep(0.25)
+
+
+if __name__ == "__main__":
+    from optimize import main as main_
+
+    asyncio.run(main_(algorithm="particle_swarm_optimization"))
