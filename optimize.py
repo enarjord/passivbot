@@ -161,11 +161,27 @@ async def main():
         help="use 1m ohlcv instead of 1s ticks",
         action="store_true",
     )
+    parser.add_argument(
+        "-ser", "--serial", help="optimize symbols singly, not multi opt", action="store_true"
+    )
     parser = add_argparse_args(parser)
     args = parser.parse_args()
     if args.symbol is None or "," in args.symbol:
         args.symbol = "BTCUSDT"  # dummy symbol
     config = await prepare_optimize_config(args)
+    if args.serial:
+        print("running single coin optimizations serially")
+        all_symbols = config["symbols"].copy()
+        for symbol in all_symbols:
+            args.symbol = symbol
+            config = await prepare_optimize_config(args)
+            await run_opt(args, config)
+    else:
+        args = parser.parse_args()
+        await run_opt(args, config)
+
+
+async def run_opt(args, config):
     if args.passivbot_mode is not None:
         if args.passivbot_mode in ["s", "static_grid", "static"]:
             config["passivbot_mode"] = "static_grid"
@@ -200,7 +216,6 @@ async def main():
     config["long"]["backwards_tp"] = config["backwards_tp_long"]
     config["short"]["backwards_tp"] = config["backwards_tp_short"]
     config["exchange"] = load_exchange_key_secret_passphrase(config["user"])[0]
-    args = parser.parse_args()
     if args.long_enabled is None:
         config["long"]["enabled"] = config["do_long"]
     else:
