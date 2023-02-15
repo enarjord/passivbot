@@ -213,7 +213,12 @@ class Bot:
             self.init_emas(),
         )
         print("done")
-        if (
+        if "price_step_custom" in self.config and self.config["price_step_custom"] is not None:
+            new_price_step = max(self.price_step, self.config["price_step_custom"])
+            if new_price_step != self.price_step:
+                logging.info(f"changing price step from {self.price_step} to {new_price_step}")
+                self.price_step = self.config["price_step"] = self.xk["price_step"] = new_price_step
+        elif (
             "price_precision_multiplier" in self.config
             and self.config["price_precision_multiplier"] is not None
         ):
@@ -1542,6 +1547,16 @@ async def main() -> None:
         help="Override price step with round_dynamic(market_price * price_precision, 1).  Suggested val 0.0001",
     )
     parser.add_argument(
+        "-ps",
+        "--price-step",
+        "--price_step",
+        type=float,
+        required=False,
+        dest="price_step_custom",
+        default=None,
+        help="Override price step with custom price step.  Takes precedence over -pp",
+    )
+    parser.add_argument(
         "-co",
         "--countdown-offset",
         "--countdown_offset",
@@ -1605,6 +1620,7 @@ async def main() -> None:
         "countdown",
         "countdown_offset",
         "price_precision_multiplier",
+        "price_step_custom",
     ]:
         config[k] = getattr(args, k)
     if config["test_mode"] and config["exchange"] not in TEST_MODE_SUPPORTED_EXCHANGES:
