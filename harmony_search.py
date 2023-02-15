@@ -201,7 +201,11 @@ class HarmonySearch:
             }
             tmp_fname = f"{self.results_fpath}{cfg['config_no']:06}_best_config"
             is_better = False
-            if self.do_long and scores["long"] <= self.hm[best_key_long]["long"]["score"]:
+            if (
+                self.do_long
+                and not isinstance(self.hm[best_key_long]["long"]["score"], str)
+                and scores["long"] <= self.hm[best_key_long]["long"]["score"]
+            ):
                 is_better = True
                 line = f"i{cfg['config_no']} - new best config long, score {round_dynamic(scores['long'], 12)} "
                 for key, _ in keys:
@@ -214,7 +218,11 @@ class HarmonySearch:
                     indent=4,
                     sort_keys=True,
                 )
-            if self.do_short and scores["short"] <= self.hm[best_key_short]["short"]["score"]:
+            if (
+                self.do_short
+                and not isinstance(self.hm[best_key_short]["short"]["score"], str)
+                and scores["short"] <= self.hm[best_key_short]["short"]["score"]
+            ):
                 is_better = True
                 line = f"i{cfg['config_no']} - new best config short, score {round_dynamic(scores['short'], 12)} "
                 for key, _ in keys:
