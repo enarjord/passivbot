@@ -170,8 +170,8 @@ async def main():
         args.symbol = "BTCUSDT"  # dummy symbol
     config = await prepare_optimize_config(args)
     if args.serial:
-        print("running single coin optimizations serially")
         all_symbols = config["symbols"].copy()
+        print(f"running single coin optimizations serially for symbols {all_symbols}")
         for symbol in all_symbols:
             args.symbol = symbol
             config = await prepare_optimize_config(args)
