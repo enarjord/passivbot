@@ -141,7 +141,11 @@ class HarmonySearch:
                     if type(self.hm[x]["long"]["score"]) != str
                     else -np.inf,
                 )[-1]
-                if self.do_long and scores["long"] < self.hm[worst_key_long]["long"]["score"]:
+                if (
+                    self.do_long
+                    and not isinstance(self.hm[worst_key_long]["long"]["score"], str)
+                    and scores["long"] < self.hm[worst_key_long]["long"]["score"]
+                ):
                     self.hm[worst_key_long]["long"] = {
                         "config": deepcopy(cfg["long"]),
                         "score": scores["long"],
@@ -158,7 +162,11 @@ class HarmonySearch:
                     if type(self.hm[x]["short"]["score"]) != str
                     else -np.inf,
                 )[-1]
-                if self.do_short and scores["short"] < self.hm[worst_key_short]["short"]["score"]:
+                if (
+                    self.do_short
+                    and not isinstance(self.hm[worst_key_short]["short"]["score"], str)
+                    and scores["short"] < self.hm[worst_key_short]["short"]["score"]
+                ):
                     self.hm[worst_key_short]["short"] = {
                         "config": deepcopy(cfg["short"]),
                         "score": scores["short"],
