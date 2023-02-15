@@ -126,19 +126,22 @@ async def prepare_optimize_config(args) -> dict:
 
 async def add_market_specific_settings(config):
     mss = config["caches_dirpath"] + "market_specific_settings.json"
+    symbol = config["symbol"]
     try:
-        print("fetching market_specific_settings...")
+        print(f"fetching market_specific_settings for {symbol}...")
         market_specific_settings = fetch_market_specific_settings(config)
         json.dump(market_specific_settings, open(mss, "w"), indent=4)
     except Exception as e:
         traceback.print_exc()
-        print("\nfailed to fetch market_specific_settings", e, "\n")
+        print(f"\nfailed to fetch market_specific_settings for symbol {symbol}", e, "\n")
         try:
             if os.path.exists(mss):
                 market_specific_settings = json.load(open(mss))
-            print("using cached market_specific_settings")
-        except Exception:
-            raise Exception("failed to load cached market_specific_settings")
+                print("using cached market_specific_settings")
+            else:
+                raise Exception(f"no cached market_specific_settings for symbol {symbol}")
+        except:
+            raise Exception(f"failed to load cached market_specific_settings for symbol {symbol}")
     config.update(market_specific_settings)
 
 
