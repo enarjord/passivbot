@@ -262,10 +262,13 @@ async def run_opt(args, config):
         cache_fname = f"{config['start_date']}_{config['end_date']}_ticks_cache.npy"
     exchange_name = config["exchange"] + ("_spot" if config["market_type"] == "spot" else "")
     config["symbols"] = sorted(config["symbols"])
+    config["ticks_caches"] = {}
+    config["shared_memories"] = {}
     for symbol in config["symbols"]:
         cache_dirpath = os.path.join(config["base_dir"], exchange_name, symbol, "caches", "")
-        if not os.path.exists(cache_dirpath + cache_fname) or not os.path.exists(
-            cache_dirpath + "market_specific_settings.json"
+        if config["ohlcv"] or (
+            not os.path.exists(cache_dirpath + cache_fname)
+            or not os.path.exists(cache_dirpath + "market_specific_settings.json")
         ):
             logging.info(f"fetching data {symbol}")
             args.symbol = symbol
@@ -279,6 +282,9 @@ async def run_opt(args, config):
                     spot=config["spot"],
                     exchange=config["exchange"],
                 )
+                config["shared_memories"][symbol] = shared_memory.SharedMemory(create=True, size=data.nbytes)
+                config["ticks_caches"][symbol] = np.ndarray(data.shape, dtype=data.dtype, buffer=config["shared_memories"][symbol].buf)
+                config["ticks_caches"][symbol][:] = data[:]
             else:
                 downloader = Downloader({**config, **tmp_cfg})
                 await downloader.get_sampled_ticks()
@@ -292,9 +298,11 @@ async def run_opt(args, config):
             if os.path.isdir(args.starting_configs):
                 for fname in os.listdir(args.starting_configs):
                     try:
-                        if config['symbols'][0] not in os.path.join(args.starting_configs, fname):
-                            print('skipping', os.path.join(args.starting_configs, fname))
+                        """
+                        if config["symbols"][0] not in os.path.join(args.starting_configs, fname):
+                            print("skipping", os.path.join(args.starting_configs, fname))
                             continue
+                        """
                         cfg = load_live_config(os.path.join(args.starting_configs, fname))
                         assert determine_passivbot_mode(cfg) == passivbot_mode, "wrong passivbot mode"
                         cfgs.append(cfg)
@@ -355,6 +363,9 @@ async def run_opt(args, config):
         config["starting_configs"] = cfgs
         harmony_search = HarmonySearch(config, backtest_wrap)
         harmony_search.run()
+    for symbol in config["shared_memories"]:
+        config["shared_memories"][symbol].close()
+        config["shared_memories"][symbol].unlink()
 
 
 if __name__ == "__main__":
