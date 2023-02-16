@@ -207,9 +207,8 @@ class OKXBot(Bot):
                     params["ordType"] = "post_only"
                     params["px"] = order["price"]
                 if "custom_id" in order:
-                    params["clOrdId"] = f"{order['custom_id']}_{uuid.uuid4().hex}".replace("_", "")[
-                        :32
-                    ]
+                    custom_id_ = f"{self.broker_code}{order['custom_id']}{uuid.uuid4().hex}"
+                    params["clOrdId"] = custom_id_.replace("_", "")[:32]
                 else:
                     params["clOrdId"] = f"{uuid.uuid4().hex}".replace("_", "")[:32]
                 to_execute.append(params)
