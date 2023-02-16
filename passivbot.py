@@ -18,6 +18,7 @@ from procedures import (
     numpyize,
     print_async_exception,
     utc_ms,
+    load_broker_code,
 )
 from pure_funcs import (
     filter_orders,
@@ -127,6 +128,7 @@ class Bot:
         _, self.key, self.secret, self.passphrase = load_exchange_key_secret_passphrase(
             self.user, self.api_keys
         )
+        self.broker_code = load_broker_code(self.exchange)
 
         self.log_level = 0
 
