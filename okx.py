@@ -26,7 +26,6 @@ class OKXBot(Bot):
         self.okx = getattr(ccxt, "okx")(
             {"apiKey": self.key, "secret": self.secret, "password": self.passphrase}
         )
-        self.broker_code = "0fe0667832d7BCDE"
 
     async def init_market_type(self):
         self.markets = None
