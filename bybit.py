@@ -74,7 +74,7 @@ class BybitBot(Bot):
             "ticker": "/v2/public/tickers",
             "funds_transfer": "/asset/v1/private/transfer",
         }
-        self.session = aiohttp.ClientSession(headers={"referer": "passivbotbybit"})
+        self.session = aiohttp.ClientSession(headers=({"referer": self.broker_code} if self.broker_code else {}))
 
     def init_market_type(self):
         websockets_base_endpoint = "wss://stream.bybit.com"
