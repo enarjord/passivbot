@@ -103,6 +103,7 @@ def get_xk_keys(passivbot_mode="static_grid"):
             "inverse",
             "do_long",
             "do_short",
+            "backwards_tp",
             "qty_step",
             "price_step",
             "min_qty",
@@ -125,33 +126,36 @@ def get_xk_keys(passivbot_mode="static_grid"):
             "n_close_orders",
             "wallet_exposure_limit",
         ]
-    return [
-        "inverse",
-        "do_long",
-        "do_short",
-        "backwards_tp",
-        "qty_step",
-        "price_step",
-        "min_qty",
-        "min_cost",
-        "c_mult",
-        "grid_span",
-        "wallet_exposure_limit",
-        "max_n_entry_orders",
-        "initial_qty_pct",
-        "eprice_pprice_diff",
-        "secondary_allocation",
-        "secondary_pprice_diff",
-        "eprice_exp_base",
-        "min_markup",
-        "markup_range",
-        "n_close_orders",
-        "ema_span_0",
-        "ema_span_1",
-        "initial_eprice_ema_dist",
-        "auto_unstuck_wallet_exposure_threshold",
-        "auto_unstuck_ema_dist",
-    ]
+    elif passivbot_mode == "static_grid":
+        return [
+            "inverse",
+            "do_long",
+            "do_short",
+            "backwards_tp",
+            "qty_step",
+            "price_step",
+            "min_qty",
+            "min_cost",
+            "c_mult",
+            "grid_span",
+            "wallet_exposure_limit",
+            "max_n_entry_orders",
+            "initial_qty_pct",
+            "eprice_pprice_diff",
+            "secondary_allocation",
+            "secondary_pprice_diff",
+            "eprice_exp_base",
+            "min_markup",
+            "markup_range",
+            "n_close_orders",
+            "ema_span_0",
+            "ema_span_1",
+            "initial_eprice_ema_dist",
+            "auto_unstuck_wallet_exposure_threshold",
+            "auto_unstuck_ema_dist",
+        ]
+    else:
+        raise Exception(f"unknown passivbot mode {passivbot_mode}")
 
 
 def determine_passivbot_mode(config: dict, skip=[]) -> str:
@@ -563,6 +567,7 @@ def get_template_live_config(passivbot_mode="static_grid"):
                     "min_markup": 0.0075,
                     "markup_range": 0.03,
                     "n_close_orders": 10,
+                    "backwards_tp": True,
                 },
                 "short": {
                     "enabled": True,
@@ -582,57 +587,61 @@ def get_template_live_config(passivbot_mode="static_grid"):
                     "min_markup": 0.0075,
                     "markup_range": 0.03,
                     "n_close_orders": 10,
+                    "backwards_tp": True,
                 },
             }
         )
-    return sort_dict_keys(
-        {
-            "config_name": "static_template",
-            "logging_level": 0,
-            "long": {
-                "enabled": True,
-                "ema_span_0": 1440,  # in minutes
-                "ema_span_1": 4320,
-                "grid_span": 0.16,
-                "wallet_exposure_limit": 1.6,
-                "max_n_entry_orders": 10,
-                "initial_qty_pct": 0.01,
-                "initial_eprice_ema_dist": -0.01,  # negative is closer; positive is further away
-                "eprice_pprice_diff": 0.0025,
-                "secondary_allocation": 0.5,
-                "secondary_pprice_diff": 0.35,
-                "eprice_exp_base": 1.618034,
-                "min_markup": 0.0045,
-                "markup_range": 0.0075,
-                "n_close_orders": 7,
-                "auto_unstuck_wallet_exposure_threshold": 0.1,  # percentage of wallet_exposure_limit to trigger soft stop.
-                # e.g. wallet_exposure_limit=0.06 and auto_unstuck_wallet_exposure_threshold=0.1: soft stop when wallet_exposure > 0.06 * (1 - 0.1) == 0.054
-                "auto_unstuck_ema_dist": 0.02,
-                "backwards_tp": False,
-            },
-            "short": {
-                "enabled": True,
-                "ema_span_0": 1440,  # in minutes
-                "ema_span_1": 4320,
-                "grid_span": 0.16,
-                "wallet_exposure_limit": 1.6,
-                "max_n_entry_orders": 10,
-                "initial_qty_pct": 0.01,
-                "initial_eprice_ema_dist": -0.01,  # negative is closer; positive is further away
-                "eprice_pprice_diff": 0.0025,
-                "secondary_allocation": 0.5,
-                "secondary_pprice_diff": 0.35,
-                "eprice_exp_base": 1.618034,
-                "min_markup": 0.0045,
-                "markup_range": 0.0075,
-                "n_close_orders": 7,
-                "auto_unstuck_wallet_exposure_threshold": 0.1,  # percentage of wallet_exposure_limit to trigger soft stop.
-                # e.g. wallet_exposure_limit=0.06 and auto_unstuck_wallet_exposure_threshold=0.1: soft stop when wallet_exposure > 0.06 * (1 - 0.1) == 0.054
-                "auto_unstuck_ema_dist": 0.02,
-                "backwards_tp": False,
-            },
-        }
-    )
+    elif passivbot_mode == "static_grid":
+        return sort_dict_keys(
+            {
+                "config_name": "static_template",
+                "logging_level": 0,
+                "long": {
+                    "enabled": True,
+                    "ema_span_0": 1440,  # in minutes
+                    "ema_span_1": 4320,
+                    "grid_span": 0.16,
+                    "wallet_exposure_limit": 1.6,
+                    "max_n_entry_orders": 10,
+                    "initial_qty_pct": 0.01,
+                    "initial_eprice_ema_dist": -0.01,  # negative is closer; positive is further away
+                    "eprice_pprice_diff": 0.0025,
+                    "secondary_allocation": 0.5,
+                    "secondary_pprice_diff": 0.35,
+                    "eprice_exp_base": 1.618034,
+                    "min_markup": 0.0045,
+                    "markup_range": 0.0075,
+                    "n_close_orders": 7,
+                    "auto_unstuck_wallet_exposure_threshold": 0.1,  # percentage of wallet_exposure_limit to trigger soft stop.
+                    # e.g. wallet_exposure_limit=0.06 and auto_unstuck_wallet_exposure_threshold=0.1: soft stop when wallet_exposure > 0.06 * (1 - 0.1) == 0.054
+                    "auto_unstuck_ema_dist": 0.02,
+                    "backwards_tp": False,
+                },
+                "short": {
+                    "enabled": True,
+                    "ema_span_0": 1440,  # in minutes
+                    "ema_span_1": 4320,
+                    "grid_span": 0.16,
+                    "wallet_exposure_limit": 1.6,
+                    "max_n_entry_orders": 10,
+                    "initial_qty_pct": 0.01,
+                    "initial_eprice_ema_dist": -0.01,  # negative is closer; positive is further away
+                    "eprice_pprice_diff": 0.0025,
+                    "secondary_allocation": 0.5,
+                    "secondary_pprice_diff": 0.35,
+                    "eprice_exp_base": 1.618034,
+                    "min_markup": 0.0045,
+                    "markup_range": 0.0075,
+                    "n_close_orders": 7,
+                    "auto_unstuck_wallet_exposure_threshold": 0.1,  # percentage of wallet_exposure_limit to trigger soft stop.
+                    # e.g. wallet_exposure_limit=0.06 and auto_unstuck_wallet_exposure_threshold=0.1: soft stop when wallet_exposure > 0.06 * (1 - 0.1) == 0.054
+                    "auto_unstuck_ema_dist": 0.02,
+                    "backwards_tp": False,
+                },
+            }
+        )
+    else:
+        raise Exception(f"unknown passivbot mode {passivbot_mode}")
 
 
 def analyze_fills(
@@ -1204,6 +1213,9 @@ def make_compatible(live_config_: dict) -> dict:
                 live_config[side]["auto_unstuck_ema_dist"] = 0.0
             if "backwards_tp" not in live_config[side]:
                 live_config[side]["backwards_tp"] = False
+        elif passivbot_mode == "clock":
+            if "backwards_tp" not in live_config[side]:
+                live_config[side]["backwards_tp"] = True
         if "ema_span_0" not in live_config[side]:
             live_config[side]["ema_span_0"] = 1.0
         if "ema_span_1" not in live_config[side]:
