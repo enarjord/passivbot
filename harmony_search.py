@@ -431,7 +431,7 @@ class HarmonySearch:
                         else:
                             # means initial evals are done; start new harmony
                             self.start_new_harmony(wi)
-                        sleep(0.25)
+                        sleep(0.0001)
 
 
 if __name__ == "__main__":
