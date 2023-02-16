@@ -177,6 +177,15 @@ def load_exchange_key_secret_passphrase(
         raise Exception("API KeyFile Missing!")
 
 
+def load_broker_code(exchange: str) -> str:
+    try:
+        return hjson.load(open("broker_codes.hjson"))[exchange]
+    except Exception as e:
+        print(f"failed to load broker code", e)
+        traceback.print_exc()
+        return ""
+
+
 def print_(args, r=False, n=False):
     line = ts_to_date(utc_ms())[:19] + "  "
     # line = ts_to_date(local_time())[:19] + '  '
