@@ -80,7 +80,6 @@ class BitgetBot(Bot):
             "1d": "86400",
             "1w": "604800",
         }
-        self.broker_code = "Passivbot"
         self.session = aiohttp.ClientSession()
 
     def init_market_type(self):
