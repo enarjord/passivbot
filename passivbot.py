@@ -202,7 +202,6 @@ class Bot:
                 self.config["long"]["delay_between_fills_minutes_close"] * 60 * 1000.0,
                 self.config["short"]["delay_between_fills_minutes_close"] * 60 * 1000.0,
             )
-            self.xk["backwards_tp"] = (True, True)
         print("initiating position, open orders, fills, exchange config, order book, and emas...")
         await asyncio.gather(
             self.update_position(),
