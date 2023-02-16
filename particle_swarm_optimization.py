@@ -453,7 +453,7 @@ class ParticleSwarmOptimization:
                         else:
                             # means initial evals are done; start new position
                             self.start_new_particle_position(wi)
-                        sleep(0.25)
+                        sleep(0.0001)
 
 
 if __name__ == "__main__":
