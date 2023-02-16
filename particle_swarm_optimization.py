@@ -30,7 +30,6 @@ from procedures import (
     prepare_optimize_config,
     load_live_config,
     make_get_filepath,
-    load_exchange_key_secret_passphrase,
     prepare_backtest_config,
     dump_live_config,
     utc_ms,
@@ -86,14 +85,7 @@ class ParticleSwarmOptimization:
         self.ticks_cache_fname = (
             f"caches/{self.date_range}{'_ohlcv_cache.npy' if config['ohlcv'] else '_ticks_cache.npy'}"
         )
-        """
-        self.ticks_caches = (
-            {s: np.load(f"{self.bt_dir}/{s}/{self.ticks_cache_fname}") for s in self.symbols}
-            if self.n_particles > len(self.symbols)
-            else {}
-        )
-        """
-        self.ticks_caches = {}
+        self.ticks_caches = config["ticks_caches"]
         self.current_best_config = None
 
         # [{'config': dict, 'task': process, 'id_key': tuple}]

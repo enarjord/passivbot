@@ -30,7 +30,6 @@ from procedures import (
     prepare_optimize_config,
     load_live_config,
     make_get_filepath,
-    load_exchange_key_secret_passphrase,
     prepare_backtest_config,
     dump_live_config,
     utc_ms,
@@ -93,8 +92,7 @@ class HarmonySearch:
             else {}
         )
         """
-        self.ticks_caches = {}
-        self.shms = {}  # shared memories
+        self.ticks_caches = config["ticks_caches"]
         self.current_best_config = None
 
         # [{'config': dict, 'task': process, 'id_key': tuple}]
@@ -356,32 +354,6 @@ class HarmonySearch:
         self.hm[hm_key]["short"]["score"] = "in_progress"
 
     def run(self):
-        try:
-            self.run_()
-        finally:
-            for s in self.shms:
-                self.shms[s].close()
-                self.shms[s].unlink()
-
-    def run_(self):
-
-        # initialize ticks cache
-        """
-        if self.n_cpus >= len(self.symbols) or (
-            "cache_ticks" in self.config and self.config["cache_ticks"]
-        ):
-        """
-        if False:
-            for s in self.symbols:
-                ticks = np.load(f"{self.bt_dir}/{s}/{self.ticks_cache_fname}")
-                self.shms[s] = shared_memory.SharedMemory(create=True, size=ticks.nbytes)
-                self.ticks_caches[s] = np.ndarray(
-                    ticks.shape, dtype=ticks.dtype, buffer=self.shms[s].buf
-                )
-                self.ticks_caches[s][:] = ticks[:]
-                del ticks
-                logging.info(f"loaded {s} ticks into shared memory")
-
         # initialize harmony memory
         for _ in range(self.n_harmonies):
             cfg_long = deepcopy(self.config["long"])
