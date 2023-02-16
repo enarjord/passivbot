@@ -14,8 +14,8 @@ from njit_funcs import (
     round_up,
     round_,
     calc_bankruptcy_price,
-    calc_close_grid_backwards_long,
-    calc_close_grid_backwards_short,
+    calc_close_grid_long,
+    calc_close_grid_short,
     calc_min_entry_qty,
     find_entry_qty_bringing_wallet_exposure_to_target,
 )
@@ -343,6 +343,7 @@ def backtest_clock(
     inverse,
     do_long,
     do_short,
+    backwards_tp,
     qty_step,
     price_step,
     min_qty,
@@ -499,7 +500,8 @@ def backtest_clock(
                     clock_close_long = (0.0, 0.0, "")
                 # check if markup close
                 if psize_long > 0.0 and highs[k] > pprice_long * (1 + min_markup[0]):
-                    close_grid_long = calc_close_grid_backwards_long(
+                    close_grid_long = calc_close_grid_long(
+                        backwards_tp[0],
                         balance_long,
                         psize_long,
                         pprice_long,
@@ -521,7 +523,8 @@ def backtest_clock(
                     # check whether to modify close grid
                     if close_grid_long and close_grid_long[0][0] != 0.0:
                         if clock_close_long[1] <= close_grid_long[0][1]:
-                            close_grid_long = calc_close_grid_backwards_long(
+                            close_grid_long = calc_close_grid_long(
+                                backwards_tp[0],
                                 balance_long,
                                 max(0.0, round_(psize_long - abs(clock_close_long[0]), qty_step)),
                                 pprice_long,
@@ -664,7 +667,8 @@ def backtest_clock(
                     clock_close_short = (0.0, 0.0, "")
                 # check if markup close
                 if psize_short > 0.0 and lows[k] < pprice_short * (1 - min_markup[1]):
-                    close_grid_short = calc_close_grid_backwards_short(
+                    close_grid_short = calc_close_grid_short(
+                        backwards_tp[1],
                         balance_short,
                         psize_short,
                         pprice_short,
@@ -685,7 +689,8 @@ def backtest_clock(
                     )
                     if close_grid_short and clock_close_short[0] != 0.0:
                         if clock_close_short[1] >= close_grid_short[0][1]:
-                            close_grid_short = calc_close_grid_backwards_short(
+                            close_grid_short = calc_close_grid_short(
+                                backwards_tp[1],
                                 balance_short,
                                 -max(
                                     0.0,
