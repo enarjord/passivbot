@@ -186,186 +186,188 @@ async def main(algorithm=None):
 
 
 async def run_opt(args, config):
-    if args.passivbot_mode is not None:
-        if args.passivbot_mode in ["s", "static_grid", "static"]:
-            config["passivbot_mode"] = "static_grid"
-        elif args.passivbot_mode in ["r", "recursive_grid", "recursive"]:
-            config["passivbot_mode"] = "recursive_grid"
-        elif args.passivbot_mode in ["n", "neat_grid", "neat"]:
-            config["passivbot_mode"] = "neat_grid"
-        elif args.passivbot_mode in ["c", "clock"]:
-            config["passivbot_mode"] = "clock"
-        else:
-            raise Exception(f"unknown passivbot mode {args.passivbot_mode}")
-    algorithm = config["algorithm"] if args.algorithm is None else args.algorithm
-    if algorithm in [
-        "p",
-        "pso",
-        "particle_swarm_optimization",
-        "particle-swarm-optimization",
-    ]:
-        config["algorithm"] = "particle_swarm_optimization"
-    elif algorithm in ["h", "hs", "harmony_search", "harmony-search"]:
-        config["algorithm"] = "harmony_search"
-    else:
-        raise Exception(f"unknown optimization algorithm {algorithm}")
-    passivbot_mode = config["passivbot_mode"]
-    assert passivbot_mode in [
-        "recursive_grid",
-        "static_grid",
-        "neat_grid",
-        "clock",
-    ], f"unknown passivbot mode {passivbot_mode}"
-    config.update(get_template_live_config(passivbot_mode))
-    config["long"]["backwards_tp"] = config["backwards_tp_long"]
-    config["short"]["backwards_tp"] = config["backwards_tp_short"]
-    config["exchange"] = load_exchange_key_secret_passphrase(config["user"])[0]
-    if args.long_enabled is None:
-        config["long"]["enabled"] = config["do_long"]
-    else:
-        if "y" in args.long_enabled.lower():
-            config["long"]["enabled"] = config["do_long"] = True
-        elif "n" in args.long_enabled.lower():
-            config["long"]["enabled"] = config["do_long"] = False
-        else:
-            raise Exception("please specify y/n with kwarg -le/--long")
-    if args.short_enabled is None:
-        config["short"]["enabled"] = config["do_short"]
-    else:
-        if "y" in args.short_enabled.lower():
-            config["short"]["enabled"] = config["do_short"] = True
-        elif "n" in args.short_enabled.lower():
-            config["short"]["enabled"] = config["do_short"] = False
-        else:
-            raise Exception("please specify y/n with kwarg -le/--short")
-    if args.symbol is not None:
-        config["symbols"] = args.symbol.split(",")
-    if args.n_cpus is not None:
-        config["n_cpus"] = args.n_cpus
-    if args.base_dir is not None:
-        config["base_dir"] = args.base_dir
-    config["ohlcv"] = True if passivbot_mode == "clock" else args.ohlcv
-    print()
-    lines = [
-        (k, config[k])
-        for k in config
-        if any(isinstance(config[k], type_) for type_ in [str, float, int])
-    ]
-    for line in lines:
-        logging.info(f"{line[0]: <{max([len(x[0]) for x in lines]) + 2}} {line[1]}")
-    print()
-
-    # download ticks .npy file if missing
-    if config["ohlcv"]:
-        cache_fname = f"{config['start_date']}_{config['end_date']}_ohlcv_cache.npy"
-    else:
-        cache_fname = f"{config['start_date']}_{config['end_date']}_ticks_cache.npy"
-    exchange_name = config["exchange"] + ("_spot" if config["market_type"] == "spot" else "")
-    config["symbols"] = sorted(config["symbols"])
-    config["ticks_caches"] = {}
-    config["shared_memories"] = {}
-    for symbol in config["symbols"]:
-        cache_dirpath = os.path.join(config["base_dir"], exchange_name, symbol, "caches", "")
-        if config["ohlcv"] or (
-            not os.path.exists(cache_dirpath + cache_fname)
-            or not os.path.exists(cache_dirpath + "market_specific_settings.json")
-        ):
-            logging.info(f"fetching data {symbol}")
-            args.symbol = symbol
-            tmp_cfg = await prepare_backtest_config(args)
-            if config["ohlcv"]:
-                data = load_hlc_cache(
-                    symbol,
-                    config["start_date"],
-                    config["end_date"],
-                    base_dir=config["base_dir"],
-                    spot=config["spot"],
-                    exchange=config["exchange"],
-                )
-                config["shared_memories"][symbol] = shared_memory.SharedMemory(create=True, size=data.nbytes)
-                config["ticks_caches"][symbol] = np.ndarray(data.shape, dtype=data.dtype, buffer=config["shared_memories"][symbol].buf)
-                config["ticks_caches"][symbol][:] = data[:]
+    try:
+        if args.passivbot_mode is not None:
+            if args.passivbot_mode in ["s", "static_grid", "static"]:
+                config["passivbot_mode"] = "static_grid"
+            elif args.passivbot_mode in ["r", "recursive_grid", "recursive"]:
+                config["passivbot_mode"] = "recursive_grid"
+            elif args.passivbot_mode in ["n", "neat_grid", "neat"]:
+                config["passivbot_mode"] = "neat_grid"
+            elif args.passivbot_mode in ["c", "clock"]:
+                config["passivbot_mode"] = "clock"
             else:
-                downloader = Downloader({**config, **tmp_cfg})
-                await downloader.get_sampled_ticks()
-    if config["algorithm"] == "particle_swarm_optimization":
-        from particle_swarm_optimization import ParticleSwarmOptimization
+                raise Exception(f"unknown passivbot mode {args.passivbot_mode}")
+        algorithm = config["algorithm"] if args.algorithm is None else args.algorithm
+        if algorithm in [
+            "p",
+            "pso",
+            "particle_swarm_optimization",
+            "particle-swarm-optimization",
+        ]:
+            config["algorithm"] = "particle_swarm_optimization"
+        elif algorithm in ["h", "hs", "harmony_search", "harmony-search"]:
+            config["algorithm"] = "harmony_search"
+        else:
+            raise Exception(f"unknown optimization algorithm {algorithm}")
+        passivbot_mode = config["passivbot_mode"]
+        assert passivbot_mode in [
+            "recursive_grid",
+            "static_grid",
+            "neat_grid",
+            "clock",
+        ], f"unknown passivbot mode {passivbot_mode}"
+        config.update(get_template_live_config(passivbot_mode))
+        config["long"]["backwards_tp"] = config["backwards_tp_long"]
+        config["short"]["backwards_tp"] = config["backwards_tp_short"]
+        config["exchange"] = load_exchange_key_secret_passphrase(config["user"])[0]
+        if args.long_enabled is None:
+            config["long"]["enabled"] = config["do_long"]
+        else:
+            if "y" in args.long_enabled.lower():
+                config["long"]["enabled"] = config["do_long"] = True
+            elif "n" in args.long_enabled.lower():
+                config["long"]["enabled"] = config["do_long"] = False
+            else:
+                raise Exception("please specify y/n with kwarg -le/--long")
+        if args.short_enabled is None:
+            config["short"]["enabled"] = config["do_short"]
+        else:
+            if "y" in args.short_enabled.lower():
+                config["short"]["enabled"] = config["do_short"] = True
+            elif "n" in args.short_enabled.lower():
+                config["short"]["enabled"] = config["do_short"] = False
+            else:
+                raise Exception("please specify y/n with kwarg -le/--short")
+        if args.symbol is not None:
+            config["symbols"] = args.symbol.split(",")
+        if args.n_cpus is not None:
+            config["n_cpus"] = args.n_cpus
+        if args.base_dir is not None:
+            config["base_dir"] = args.base_dir
+        config["ohlcv"] = True if passivbot_mode == "clock" else args.ohlcv
+        print()
+        lines = [
+            (k, config[k])
+            for k in config
+            if any(isinstance(config[k], type_) for type_ in [str, float, int])
+        ]
+        for line in lines:
+            logging.info(f"{line[0]: <{max([len(x[0]) for x in lines]) + 2}} {line[1]}")
+        print()
 
-        # prepare starting configs
-        cfgs = []
-        if args.starting_configs is not None:
-            logging.info("preparing starting configs...")
-            if os.path.isdir(args.starting_configs):
-                for fname in os.listdir(args.starting_configs):
-                    try:
-                        """
-                        if config["symbols"][0] not in os.path.join(args.starting_configs, fname):
-                            print("skipping", os.path.join(args.starting_configs, fname))
-                            continue
-                        """
-                        cfg = load_live_config(os.path.join(args.starting_configs, fname))
-                        assert determine_passivbot_mode(cfg) == passivbot_mode, "wrong passivbot mode"
-                        cfgs.append(cfg)
-                        logging.info(f"successfully loaded config {fname}")
+        # download ticks .npy file if missing
+        if config["ohlcv"]:
+            cache_fname = f"{config['start_date']}_{config['end_date']}_ohlcv_cache.npy"
+        else:
+            cache_fname = f"{config['start_date']}_{config['end_date']}_ticks_cache.npy"
+        exchange_name = config["exchange"] + ("_spot" if config["market_type"] == "spot" else "")
+        config["symbols"] = sorted(config["symbols"])
+        config["ticks_caches"] = {}
+        config["shared_memories"] = {}
+        for symbol in config["symbols"]:
+            cache_dirpath = os.path.join(config["base_dir"], exchange_name, symbol, "caches", "")
+            if config["ohlcv"] or (
+                not os.path.exists(cache_dirpath + cache_fname)
+                or not os.path.exists(cache_dirpath + "market_specific_settings.json")
+            ):
+                logging.info(f"fetching data {symbol}")
+                args.symbol = symbol
+                tmp_cfg = await prepare_backtest_config(args)
+                if config["ohlcv"]:
+                    data = load_hlc_cache(
+                        symbol,
+                        config["start_date"],
+                        config["end_date"],
+                        base_dir=config["base_dir"],
+                        spot=config["spot"],
+                        exchange=config["exchange"],
+                    )
+                    config["shared_memories"][symbol] = shared_memory.SharedMemory(create=True, size=data.nbytes)
+                    config["ticks_caches"][symbol] = np.ndarray(data.shape, dtype=data.dtype, buffer=config["shared_memories"][symbol].buf)
+                    config["ticks_caches"][symbol][:] = data[:]
+                else:
+                    downloader = Downloader({**config, **tmp_cfg})
+                    await downloader.get_sampled_ticks()
+        if config["algorithm"] == "particle_swarm_optimization":
+            from particle_swarm_optimization import ParticleSwarmOptimization
 
-                    except Exception as e:
-                        logging.error(f"error loading config {fname}: {e}")
-            elif os.path.exists(args.starting_configs):
-                try:
-                    cfg = load_live_config(args.starting_configs)
-                    assert determine_passivbot_mode(cfg) == passivbot_mode, "wrong passivbot mode"
-                    cfgs.append(cfg)
-                    logging.info(f"successfully loaded config {args.starting_configs}")
-                except Exception as e:
-                    logging.error(f"error loading config {args.starting_configs}: {e}")
-        config["starting_configs"] = cfgs
-        particle_swarm_optimization = ParticleSwarmOptimization(config, backtest_wrap)
-        particle_swarm_optimization.run()
-    elif config["algorithm"] == "harmony_search":
-        from harmony_search import HarmonySearch
-
-        # prepare starting configs
-        cfgs = []
-        if args.starting_configs is not None:
-            logging.info("preparing starting configs...")
-            if os.path.isdir(args.starting_configs):
-                for fname in os.listdir(args.starting_configs):
-                    try:
-                        cfg = load_live_config(os.path.join(args.starting_configs, fname))
-                        assert determine_passivbot_mode(cfg) == passivbot_mode, "wrong passivbot mode"
-                        cfgs.append(cfg)
-                        logging.info(f"successfully loaded config {fname}")
-
-                    except Exception as e:
-                        logging.error(f"error loading config {fname}: {e}")
-            elif os.path.exists(args.starting_configs):
-                hm_load_failed = True
-                if "hm_" in args.starting_configs:
-                    try:
-                        hm = json.load(open(args.starting_configs))
-                        for k in hm:
-                            cfg = {"long": hm[k]["long"]["config"], "short": hm[k]["short"]["config"]}
-                            assert (
-                                determine_passivbot_mode(cfg) == passivbot_mode
-                            ), "wrong passivbot mode in harmony memory"
+            # prepare starting configs
+            cfgs = []
+            if args.starting_configs is not None:
+                logging.info("preparing starting configs...")
+                if os.path.isdir(args.starting_configs):
+                    for fname in os.listdir(args.starting_configs):
+                        try:
+                            """
+                            if config["symbols"][0] not in os.path.join(args.starting_configs, fname):
+                                print("skipping", os.path.join(args.starting_configs, fname))
+                                continue
+                            """
+                            cfg = load_live_config(os.path.join(args.starting_configs, fname))
+                            assert determine_passivbot_mode(cfg) == passivbot_mode, "wrong passivbot mode"
                             cfgs.append(cfg)
-                        logging.info(f"loaded harmony memory {args.starting_configs}")
-                        hm_load_failed = False
-                    except Exception as e:
-                        logging.error(f"error loading harmony memory {args.starting_configs}: {e}")
-                if hm_load_failed:
+                            logging.info(f"successfully loaded config {fname}")
+
+                        except Exception as e:
+                            logging.error(f"error loading config {fname}: {e}")
+                elif os.path.exists(args.starting_configs):
                     try:
                         cfg = load_live_config(args.starting_configs)
                         assert determine_passivbot_mode(cfg) == passivbot_mode, "wrong passivbot mode"
                         cfgs.append(cfg)
+                        logging.info(f"successfully loaded config {args.starting_configs}")
                     except Exception as e:
                         logging.error(f"error loading config {args.starting_configs}: {e}")
-        config["starting_configs"] = cfgs
-        harmony_search = HarmonySearch(config, backtest_wrap)
-        harmony_search.run()
-    for symbol in config["shared_memories"]:
-        config["shared_memories"][symbol].close()
-        config["shared_memories"][symbol].unlink()
+            config["starting_configs"] = cfgs
+            particle_swarm_optimization = ParticleSwarmOptimization(config, backtest_wrap)
+            particle_swarm_optimization.run()
+        elif config["algorithm"] == "harmony_search":
+            from harmony_search import HarmonySearch
+
+            # prepare starting configs
+            cfgs = []
+            if args.starting_configs is not None:
+                logging.info("preparing starting configs...")
+                if os.path.isdir(args.starting_configs):
+                    for fname in os.listdir(args.starting_configs):
+                        try:
+                            cfg = load_live_config(os.path.join(args.starting_configs, fname))
+                            assert determine_passivbot_mode(cfg) == passivbot_mode, "wrong passivbot mode"
+                            cfgs.append(cfg)
+                            logging.info(f"successfully loaded config {fname}")
+
+                        except Exception as e:
+                            logging.error(f"error loading config {fname}: {e}")
+                elif os.path.exists(args.starting_configs):
+                    hm_load_failed = True
+                    if "hm_" in args.starting_configs:
+                        try:
+                            hm = json.load(open(args.starting_configs))
+                            for k in hm:
+                                cfg = {"long": hm[k]["long"]["config"], "short": hm[k]["short"]["config"]}
+                                assert (
+                                    determine_passivbot_mode(cfg) == passivbot_mode
+                                ), "wrong passivbot mode in harmony memory"
+                                cfgs.append(cfg)
+                            logging.info(f"loaded harmony memory {args.starting_configs}")
+                            hm_load_failed = False
+                        except Exception as e:
+                            logging.error(f"error loading harmony memory {args.starting_configs}: {e}")
+                    if hm_load_failed:
+                        try:
+                            cfg = load_live_config(args.starting_configs)
+                            assert determine_passivbot_mode(cfg) == passivbot_mode, "wrong passivbot mode"
+                            cfgs.append(cfg)
+                        except Exception as e:
+                            logging.error(f"error loading config {args.starting_configs}: {e}")
+            config["starting_configs"] = cfgs
+            harmony_search = HarmonySearch(config, backtest_wrap)
+            harmony_search.run()
+    finally:
+        for symbol in config["shared_memories"]:
+            config["shared_memories"][symbol].close()
+            config["shared_memories"][symbol].unlink()
 
 
 if __name__ == "__main__":
