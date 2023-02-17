@@ -100,7 +100,7 @@ def calc_clock_entry_long(
     min_qty: float,
     min_cost: float,
     c_mult: float,
-    ema_dist_lower: float,
+    ema_dist_entry: float,
     qty_pct_entry: float,
     we_multiplier_entry: float,
     delay_weight_entry: float,
@@ -117,7 +117,7 @@ def calc_clock_entry_long(
         if wallet_exposure_long < wallet_exposure_limit * 0.99:
             # entry long
             bid_price_long = calc_clock_price_bid(
-                ema_band_lower, highest_bid, ema_dist_lower, price_step
+                ema_band_lower, highest_bid, ema_dist_entry, price_step
             )
             qty_long = calc_clock_qty(
                 balance,
@@ -172,7 +172,7 @@ def calc_clock_close_long(
     min_qty: float,
     min_cost: float,
     c_mult: float,
-    ema_dist_upper: float,
+    ema_dist_close: float,
     qty_pct_close: float,
     we_multiplier_close: float,
     delay_weight_close: float,
@@ -184,7 +184,7 @@ def calc_clock_close_long(
             pprice_long, lowest_ask, delay_between_fills_ms_close, delay_weight_close
         )
         if utc_now_ms - prev_clock_fill_ts_close > delay:
-            ask_price_long = calc_clock_price_ask(emas.max(), lowest_ask, ema_dist_upper, price_step)
+            ask_price_long = calc_clock_price_ask(emas.max(), lowest_ask, ema_dist_close, price_step)
             wallet_exposure_long = qty_to_cost(psize_long, pprice_long, inverse, c_mult) / balance
             qty_long = min(
                 psize_long,
@@ -222,7 +222,7 @@ def calc_clock_entry_short(
     min_qty: float,
     min_cost: float,
     c_mult: float,
-    ema_dist_upper: float,
+    ema_dist_entry: float,
     qty_pct_entry: float,
     we_multiplier_entry: float,
     delay_weight_entry: float,
@@ -235,7 +235,7 @@ def calc_clock_entry_short(
         wallet_exposure_short = qty_to_cost(psize_short, pprice_short, inverse, c_mult) / balance
         if wallet_exposure_short < wallet_exposure_limit * 0.99:
             # entry short
-            ask_price_short = calc_clock_price_ask(emas.max(), lowest_ask, ema_dist_upper, price_step)
+            ask_price_short = calc_clock_price_ask(emas.max(), lowest_ask, ema_dist_entry, price_step)
             qty_short = -calc_clock_qty(
                 balance,
                 wallet_exposure_short,
@@ -296,7 +296,7 @@ def calc_clock_close_short(
     min_qty: float,
     min_cost: float,
     c_mult: float,
-    ema_dist_lower: float,
+    ema_dist_close: float,
     qty_pct_close: float,
     we_multiplier_close: float,
     delay_weight_close: float,
@@ -311,7 +311,7 @@ def calc_clock_close_short(
         )
         if utc_now_ms - prev_clock_fill_ts_close > delay:
             bid_price_short = calc_clock_price_bid(
-                emas.min(), highest_bid, ema_dist_lower, price_step
+                emas.min(), highest_bid, ema_dist_close, price_step
             )
             wallet_exposure_short = qty_to_cost(psize_short, pprice_short, inverse, c_mult) / balance
             qty_short = min(
@@ -351,8 +351,8 @@ def backtest_clock(
     c_mult,
     ema_span_0,
     ema_span_1,
-    ema_dist_lower,
-    ema_dist_upper,
+    ema_dist_entry,
+    ema_dist_close,
     qty_pct_entry,
     qty_pct_close,
     we_multiplier_entry,
@@ -471,7 +471,7 @@ def backtest_clock(
             closes_long = [(0.0, np.inf, "")]
             if psize_long != 0.0:
                 ask_price_long = calc_clock_price_ask(
-                    emas_long.max(), closes[k - 1], ema_dist_upper[0], price_step
+                    emas_long.max(), closes[k - 1], ema_dist_close[0], price_step
                 )
                 if highs[k] > ask_price_long:
                     # clock close long
@@ -489,7 +489,7 @@ def backtest_clock(
                         min_qty,
                         min_cost,
                         c_mult,
-                        ema_dist_upper[0],
+                        ema_dist_close[0],
                         qty_pct_close[0],
                         we_multiplier_close[0],
                         delay_weight_close[0],
@@ -550,7 +550,7 @@ def backtest_clock(
                     closes_long = [clock_close_long]
 
             bid_price_long = calc_clock_price_bid(
-                emas_long.min(), closes[k - 1], ema_dist_lower[0], price_step
+                emas_long.min(), closes[k - 1], ema_dist_entry[0], price_step
             )
             if lows[k] < bid_price_long:
                 # clock entry long
@@ -568,7 +568,7 @@ def backtest_clock(
                     min_qty,
                     min_cost,
                     c_mult,
-                    ema_dist_lower[0],
+                    ema_dist_entry[0],
                     qty_pct_entry[0],
                     we_multiplier_entry[0],
                     delay_weight_entry[0],
@@ -639,7 +639,7 @@ def backtest_clock(
             closes_short = [(0.0, 0.0, "")]
             if psize_short != 0.0:
                 bid_price_short = calc_clock_price_bid(
-                    emas_short.min(), closes[k - 1], ema_dist_lower[1], price_step
+                    emas_short.min(), closes[k - 1], ema_dist_close[1], price_step
                 )
                 if lows[k] < bid_price_short:
                     clock_close_short = calc_clock_close_short(
@@ -656,7 +656,7 @@ def backtest_clock(
                         min_qty,
                         min_cost,
                         c_mult,
-                        ema_dist_lower[1],
+                        ema_dist_close[1],
                         qty_pct_close[1],
                         we_multiplier_close[1],
                         delay_weight_close[1],
@@ -718,7 +718,7 @@ def backtest_clock(
                 elif clock_close_short[0] != 0.0:
                     closes_short = [clock_close_short]
             ask_price_short = calc_clock_price_ask(
-                emas_short.max(), closes[k - 1], ema_dist_upper[1], price_step
+                emas_short.max(), closes[k - 1], ema_dist_entry[1], price_step
             )
             if highs[k] > ask_price_short:
                 clock_entry_short = calc_clock_entry_short(
@@ -735,7 +735,7 @@ def backtest_clock(
                     min_qty,
                     min_cost,
                     c_mult,
-                    ema_dist_upper[1],
+                    ema_dist_entry[1],
                     qty_pct_entry[1],
                     we_multiplier_entry[1],
                     delay_weight_entry[1],
