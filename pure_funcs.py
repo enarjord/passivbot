@@ -111,8 +111,8 @@ def get_xk_keys(passivbot_mode="static_grid"):
             "c_mult",
             "ema_span_0",
             "ema_span_1",
-            "ema_dist_lower",
-            "ema_dist_upper",
+            "ema_dist_entry",
+            "ema_dist_close",
             "qty_pct_entry",
             "qty_pct_close",
             "we_multiplier_entry",
@@ -554,8 +554,8 @@ def get_template_live_config(passivbot_mode="static_grid"):
                     "wallet_exposure_limit": 1.0,
                     "ema_span_0": 700.0,
                     "ema_span_1": 5300.0,
-                    "ema_dist_lower": 0.005,
-                    "ema_dist_upper": 0.005,
+                    "ema_dist_entry": 0.005,
+                    "ema_dist_close": 0.005,
                     "qty_pct_entry": 0.01,
                     "qty_pct_close": 0.01,
                     "we_multiplier_entry": 30.0,
@@ -574,8 +574,8 @@ def get_template_live_config(passivbot_mode="static_grid"):
                     "wallet_exposure_limit": 1.0,
                     "ema_span_0": 700.0,
                     "ema_span_1": 5300.0,
-                    "ema_dist_lower": 0.0045,
-                    "ema_dist_upper": 0.0039,
+                    "ema_dist_entry": 0.0039,
+                    "ema_dist_close": 0.0045,
                     "qty_pct_entry": 0.013,
                     "qty_pct_close": 0.03,
                     "we_multiplier_entry": 20.0,
@@ -737,26 +737,30 @@ def analyze_fills(
     pnl_sum_short = profit_sum_short + loss_sum_short
     gain_short = pnl_sum_short / sdf.balance_short.iloc[0]
 
-    if 'adg_n_subdivisions' not in config:
-        config['adg_n_subdivisions'] = 1
+    if "adg_n_subdivisions" not in config:
+        config["adg_n_subdivisions"] = 1
 
     if sdf.balance_long.iloc[-1] <= 0.0:
         adg_realized_long = sdf.balance_long.iloc[-1]
     else:
         adgs_long = []
-        for i in range(config['adg_n_subdivisions']):
+        for i in range(config["adg_n_subdivisions"]):
             idx = round(int(len(sdf) * (1 - 1 / (i + 1))))
             n_days = (sdf.timestamp.iloc[-1] - sdf.timestamp.iloc[idx]) / (1000 * 60 * 60 * 24)
-            adgs_long.append((sdf.balance_long.iloc[-1] / sdf.balance_long.iloc[idx]) ** (1 / n_days) - 1)
+            adgs_long.append(
+                (sdf.balance_long.iloc[-1] / sdf.balance_long.iloc[idx]) ** (1 / n_days) - 1
+            )
         adg_realized_long = np.mean(adgs_long)
     if sdf.balance_short.iloc[-1] <= 0.0:
         adg_realized_short = sdf.balance_short.iloc[-1]
     else:
         adgs_short = []
-        for i in range(config['adg_n_subdivisions']):
+        for i in range(config["adg_n_subdivisions"]):
             idx = round(int(len(sdf) * (1 - 1 / (i + 1))))
             n_days = (sdf.timestamp.iloc[-1] - sdf.timestamp.iloc[idx]) / (1000 * 60 * 60 * 24)
-            adgs_short.append((sdf.balance_short.iloc[-1] / sdf.balance_short.iloc[idx]) ** (1 / n_days) - 1)
+            adgs_short.append(
+                (sdf.balance_short.iloc[-1] / sdf.balance_short.iloc[idx]) ** (1 / n_days) - 1
+            )
         adg_realized_short = np.mean(adgs_short)
     adg_realized_per_exposure_long = (
         (adg_realized_long / config["long"]["wallet_exposure_limit"])
@@ -843,13 +847,17 @@ def analyze_fills(
             longs[longs.type.str.contains("unstuck_close") | longs.type.str.contains("clock_close")]
         ),
         "n_unstuck_closes_short": len(
-            shorts[shorts.type.str.contains("unstuck_close") | shorts.type.str.contains("clock_close")]
+            shorts[
+                shorts.type.str.contains("unstuck_close") | shorts.type.str.contains("clock_close")
+            ]
         ),
         "n_unstuck_entries_long": len(
             longs[longs.type.str.contains("unstuck_entry") | longs.type.str.contains("clock_entry")]
         ),
         "n_unstuck_entries_short": len(
-            shorts[shorts.type.str.contains("unstuck_entry") | shorts.type.str.contains("clock_entry")]
+            shorts[
+                shorts.type.str.contains("unstuck_entry") | shorts.type.str.contains("clock_entry")
+            ]
         ),
         "avg_fills_per_day_long": len(longs) / n_days,
         "avg_fills_per_day_short": len(shorts) / n_days,
@@ -1160,6 +1168,14 @@ def make_compatible(live_config_: dict) -> dict:
         ("ema_span_max", "ema_span_1"),
     ]:
         live_config = json.loads(json.dumps(live_config).replace(src, dst))
+    for side, src, dst in [
+        ("long", "ema_dist_lower", "ema_dist_entry"),
+        ("long", "ema_dist_upper", "ema_dist_close"),
+        ("short", "ema_dist_upper", "ema_dist_entry"),
+        ("short", "ema_dist_lower", "ema_dist_close"),
+    ]:
+        if src in live_config[side]:
+            live_config[side][dst] = live_config[side].pop(src)
     passivbot_mode = determine_passivbot_mode(live_config, skip=["backwards_tp"])
     for side in ["long", "short"]:
         for k0 in [
@@ -1179,8 +1195,8 @@ def make_compatible(live_config_: dict) -> dict:
             ("max_n_entry_orders", 1.0, 100.0),  # don't let's spam the exchange
             ("n_close_orders", 1.0, 100.0),
             ("initial_eprice_ema_dist", -10.0, 10.0),
-            ("ema_dist_lower", -10.0, 10.0),
-            ("ema_dist_upper", -10.0, 10.0),
+            ("ema_dist_entry", -10.0, 10.0),
+            ("ema_dist_close", -10.0, 10.0),
             ("grid_span", 0.0, 10.0),
             ("delay_between_fills_minutes_entry", 1.0, 1000000.0),  # one million minutes...
             ("delay_between_fills_minutes_close", 1.0, 1000000.0),  #  ...is almost two years
@@ -1216,6 +1232,7 @@ def make_compatible(live_config_: dict) -> dict:
         elif passivbot_mode == "clock":
             if "backwards_tp" not in live_config[side]:
                 live_config[side]["backwards_tp"] = True
+
         if "ema_span_0" not in live_config[side]:
             live_config[side]["ema_span_0"] = 1.0
         if "ema_span_1" not in live_config[side]:
