@@ -567,9 +567,9 @@ def fetch_market_specific_settings(config: dict):
         settings_from_exchange["maker_fee"] = 0.0001
         settings_from_exchange["taker_fee"] = 0.0006
         settings_from_exchange["c_mult"] = elm["contractSize"]
-        settings_from_exchange["qty_step"] = float(elm["info"]["lotSizeFilter"]["qtyStep"])
-        settings_from_exchange["price_step"] = float(elm["info"]["priceFilter"]["tickSize"])
-        settings_from_exchange["spot"] == elm["spot"]
+        settings_from_exchange["qty_step"] = float(elm["info"]["lot_size_filter"]["qty_step"])
+        settings_from_exchange["price_step"] = float(elm["info"]["price_filter"]["tick_size"])
+        settings_from_exchange["spot"] = False
         settings_from_exchange["inverse"] = not elm["linear"]
     else:
         raise Exception(f"unknown exchange {exchange}")
@@ -597,5 +597,6 @@ def fetch_market_specific_settings(config: dict):
 
 
 if __name__ == "__main__":
-    mss = fetch_market_specific_settings_new("binance", "AAVEUSDT", "spot")
+    cfg = {'exchange': 'bybit', 'symbol': 'AAVEUSDT', 'market_type': 'futures'}
+    mss = fetch_market_specific_settings(cfg)
     print(mss)
