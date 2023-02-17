@@ -848,7 +848,7 @@ class Bot:
                             self.xk["min_qty"],
                             self.xk["min_cost"],
                             self.xk["c_mult"],
-                            self.xk["ema_dist_lower"][1],
+                            self.xk["ema_dist_upper"][1],
                             self.xk["qty_pct_entry"][1],
                             self.xk["we_multiplier_entry"][1],
                             self.xk["delay_weight_entry"][1],
