@@ -16,6 +16,7 @@ from pure_funcs import (
     candidate_to_live_config,
     calc_scores,
     determine_passivbot_mode,
+    make_compatible,
 )
 from njit_funcs import round_dynamic
 
@@ -76,7 +77,7 @@ def main():
     with open(args.results_fpath) as f:
         results = [json.loads(x) for x in f.readlines()]
     print(f"{'n results': <{klen}} {len(results)}")
-    passivbot_mode = determine_passivbot_mode(results[-1]["config"])
+    passivbot_mode = determine_passivbot_mode(make_compatible(results[-1]["config"]))
     all_scores = []
     symbols = [s for s in results[0]["results"] if s != "config_no"]
     starting_balance = results[-1]["results"][symbols[0]]["starting_balance"]
