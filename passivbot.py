@@ -215,7 +215,7 @@ class Bot:
         )
         print("done")
         if "price_step_custom" in self.config and self.config["price_step_custom"] is not None:
-            new_price_step = max(self.price_step, self.config["price_step_custom"])
+            new_price_step = max(self.price_step, round_(self.config["price_step_custom"], self.price_step))
             if new_price_step != self.price_step:
                 logging.info(f"changing price step from {self.price_step} to {new_price_step}")
                 self.price_step = self.config["price_step"] = self.xk["price_step"] = new_price_step
@@ -225,7 +225,7 @@ class Bot:
         ):
             new_price_step = max(
                 self.price_step,
-                round_dynamic(self.ob[0] * self.config["price_precision_multiplier"], 1),
+                round_(self.ob[0] * self.config["price_precision_multiplier"], self.price_step),
             )
             if new_price_step != self.price_step:
                 logging.info(f"changing price step from {self.price_step} to {new_price_step}")
