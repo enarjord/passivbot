@@ -169,10 +169,12 @@ def dump_plots(
                     {f"ema_{span}": df.price.ewm(span=span, adjust=False).mean() for span in spans},
                     index=df.index,
                 )
+                ema_dist_lower = result[side]["ema_dist_entry" if side == "long" else "ema_dist_close"]
+                ema_dist_upper = result[side]["ema_dist_entry" if side == "short" else "ema_dist_close"]
                 ema_bands = pd.DataFrame(
                     {
-                        "ema_band_lower": emas.min(axis=1) * (1 - result[side]["ema_dist_lower"]),
-                        "ema_band_upper": emas.max(axis=1) * (1 + result[side]["ema_dist_upper"]),
+                        "ema_band_lower": emas.min(axis=1) * (1 - ema_dist_lower),
+                        "ema_band_upper": emas.max(axis=1) * (1 + ema_dist_upper),
                     },
                     index=df.index,
                 )

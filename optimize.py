@@ -166,11 +166,14 @@ async def main(algorithm=None):
     )
     parser = add_argparse_args(parser)
     args = parser.parse_args()
-    if algorithm is not None:
-        args.algorithm = algorithm
     if args.symbol is None or "," in args.symbol:
         args.symbol = "BTCUSDT"  # dummy symbol
     config = await prepare_optimize_config(args)
+    args = parser.parse_args()
+    if algorithm is not None:
+        args.algorithm = algorithm
+    if args.symbol is not None:
+        config["symbols"] = args.symbol.split(",")
     if args.serial:
         all_symbols = config["symbols"].copy()
         print(f"running single coin optimizations serially for symbols {all_symbols}")
@@ -179,9 +182,6 @@ async def main(algorithm=None):
             config = await prepare_optimize_config(args)
             await run_opt(args, config)
     else:
-        args = parser.parse_args()
-        if algorithm is not None:
-            args.algorithm = algorithm
         await run_opt(args, config)
 
 
@@ -283,8 +283,12 @@ async def run_opt(args, config):
                         spot=config["spot"],
                         exchange=config["exchange"],
                     )
-                    config["shared_memories"][symbol] = shared_memory.SharedMemory(create=True, size=data.nbytes)
-                    config["ticks_caches"][symbol] = np.ndarray(data.shape, dtype=data.dtype, buffer=config["shared_memories"][symbol].buf)
+                    config["shared_memories"][symbol] = shared_memory.SharedMemory(
+                        create=True, size=data.nbytes
+                    )
+                    config["ticks_caches"][symbol] = np.ndarray(
+                        data.shape, dtype=data.dtype, buffer=config["shared_memories"][symbol].buf
+                    )
                     config["ticks_caches"][symbol][:] = data[:]
                 else:
                     downloader = Downloader({**config, **tmp_cfg})
@@ -305,7 +309,9 @@ async def run_opt(args, config):
                                 continue
                             """
                             cfg = load_live_config(os.path.join(args.starting_configs, fname))
-                            assert determine_passivbot_mode(cfg) == passivbot_mode, "wrong passivbot mode"
+                            assert (
+                                determine_passivbot_mode(cfg) == passivbot_mode
+                            ), "wrong passivbot mode"
                             cfgs.append(cfg)
                             logging.info(f"successfully loaded config {fname}")
 
@@ -333,7 +339,9 @@ async def run_opt(args, config):
                     for fname in os.listdir(args.starting_configs):
                         try:
                             cfg = load_live_config(os.path.join(args.starting_configs, fname))
-                            assert determine_passivbot_mode(cfg) == passivbot_mode, "wrong passivbot mode"
+                            assert (
+                                determine_passivbot_mode(cfg) == passivbot_mode
+                            ), "wrong passivbot mode"
                             cfgs.append(cfg)
                             logging.info(f"successfully loaded config {fname}")
 
@@ -345,7 +353,10 @@ async def run_opt(args, config):
                         try:
                             hm = json.load(open(args.starting_configs))
                             for k in hm:
-                                cfg = {"long": hm[k]["long"]["config"], "short": hm[k]["short"]["config"]}
+                                cfg = {
+                                    "long": hm[k]["long"]["config"],
+                                    "short": hm[k]["short"]["config"],
+                                }
                                 assert (
                                     determine_passivbot_mode(cfg) == passivbot_mode
                                 ), "wrong passivbot mode in harmony memory"
@@ -353,11 +364,15 @@ async def run_opt(args, config):
                             logging.info(f"loaded harmony memory {args.starting_configs}")
                             hm_load_failed = False
                         except Exception as e:
-                            logging.error(f"error loading harmony memory {args.starting_configs}: {e}")
+                            logging.error(
+                                f"error loading harmony memory {args.starting_configs}: {e}"
+                            )
                     if hm_load_failed:
                         try:
                             cfg = load_live_config(args.starting_configs)
-                            assert determine_passivbot_mode(cfg) == passivbot_mode, "wrong passivbot mode"
+                            assert (
+                                determine_passivbot_mode(cfg) == passivbot_mode
+                            ), "wrong passivbot mode"
                             cfgs.append(cfg)
                         except Exception as e:
                             logging.error(f"error loading config {args.starting_configs}: {e}")

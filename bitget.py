@@ -623,9 +623,14 @@ class BitgetBot(Bot):
                 "endTime": int(utc_ms() + 1000 * 60 * 60 * 2),
                 "pageSize": 100,
             }
-            fetched = (await self.private_get(self.endpoints["fills_detailed"], params))["data"][
-                "orderList"
-            ]
+            fetched = await self.private_get(self.endpoints["fills_detailed"], params)
+            if (
+                fetched["code"] == "00000"
+                and fetched["msg"] == "success"
+                and fetched["data"]["orderList"] is None
+            ):
+                return []
+            fetched = fetched["data"]["orderList"]
             k = 0
             while fetched and float(fetched[-1]["cTime"]) > utc_ms() - 1000 * 60 * 60 * 24 * 3:
                 k += 1
