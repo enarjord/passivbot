@@ -533,11 +533,14 @@ def fetch_market_specific_settings(config: dict):
         settings_from_exchange["maker_fee"] = elm["maker"]
         settings_from_exchange["taker_fee"] = elm["taker"]
         settings_from_exchange["c_mult"] = 1.0
+        settings_from_exchange["price_step"] = round_(
+            (10 ** (-int(elm["info"]["pricePlace"]))) * int(elm["info"]["priceEndStep"]), 1e-12
+        )
         settings_from_exchange["qty_step"] = round_(
             10 ** (-int(elm["info"]["volumePlace"])), 0.00000001
         )
         settings_from_exchange["min_qty"] = float(elm["info"]["minTradeNum"])
-        settings_from_exchange["spot"] == elm["spot"]
+        settings_from_exchange["spot"] = elm["spot"]
         settings_from_exchange["inverse"] = not elm["linear"]
     elif exchange == "okx":
         cc = ccxt.okx()
@@ -590,13 +593,13 @@ def fetch_market_specific_settings(config: dict):
         "spot",
         "taker_fee",
     ]:
-        assert key in settings_from_exchange
+        assert key in settings_from_exchange, f"missing {key}"
     # import pprint
     # pprint.pprint(elm)
     return sort_dict_keys(settings_from_exchange)
 
 
 if __name__ == "__main__":
-    cfg = {'exchange': 'bybit', 'symbol': 'AAVEUSDT', 'market_type': 'futures'}
+    cfg = {"exchange": "bitget", "symbol": "YFIUSDT", "market_type": "futures"}
     mss = fetch_market_specific_settings(cfg)
     print(mss)
