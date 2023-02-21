@@ -28,6 +28,7 @@ from pure_funcs import (
     spotify_config,
     determine_passivbot_mode,
     config_pretty_str,
+    shorten_custom_id,
 )
 from njit_funcs import (
     qty_to_cost,
@@ -215,7 +216,9 @@ class Bot:
         )
         print("done")
         if "price_step_custom" in self.config and self.config["price_step_custom"] is not None:
-            new_price_step = max(self.price_step, round_(self.config["price_step_custom"], self.price_step))
+            new_price_step = max(
+                self.price_step, round_(self.config["price_step_custom"], self.price_step)
+            )
             if new_price_step != self.price_step:
                 logging.info(f"changing price step from {self.price_step} to {new_price_step}")
                 self.price_step = self.config["price_step"] = self.xk["price_step"] = new_price_step
@@ -1332,7 +1335,7 @@ class Bot:
             for fill in sorted(fills, key=lambda x: x["timestamp"], reverse=True):
                 # print("debug fills", fill["custom_id"])
                 for key in all_keys - keys_done:
-                    if any(k in fill["custom_id"] for k in [key, key.replace("_", "")]):
+                    if any(k in fill["custom_id"] for k in [key, shorten_custom_id(key)]):
                         self.last_fills_timestamps[key] = fill["timestamp"]
                         keys_done.add(key)
                         if all_keys == keys_done:

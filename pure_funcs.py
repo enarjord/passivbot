@@ -1405,3 +1405,10 @@ def configs_are_equal(cfg0, cfg1) -> bool:
     except Exception as e:
         print(f"error checking whether configs are equal {e}")
         return False
+
+
+def shorten_custom_id(id_: str) -> str:
+    id0 = id_
+    for k_, r_ in [("clock", "clk"), ("close", "cls"), ("entry", "etr"), ("_", "")]:
+        id0 = id0.replace(k_, r_)
+    return id0

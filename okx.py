@@ -13,7 +13,7 @@ import uuid
 
 from passivbot import Bot, logging
 from procedures import print_, print_async_exception
-from pure_funcs import ts_to_date, sort_dict_keys, format_float
+from pure_funcs import ts_to_date, sort_dict_keys, format_float, shorten_custom_id
 
 
 class OKXBot(Bot):
@@ -205,11 +205,10 @@ class OKXBot(Bot):
                 if order["type"] == "limit":
                     params["ordType"] = "post_only"
                     params["px"] = order["price"]
+                custom_id_ = self.broker_code
                 if "custom_id" in order:
-                    custom_id_ = f"{self.broker_code}{order['custom_id']}{uuid.uuid4().hex}"
-                    params["clOrdId"] = custom_id_.replace("_", "")[:32]
-                else:
-                    params["clOrdId"] = f"{uuid.uuid4().hex}".replace("_", "")[:32]
+                    custom_id_ += order["custom_id"]
+                params["clOrdId"] = shorten_custom_id(f"{custom_id_}{uuid.uuid4().hex}")[:32]
                 to_execute.append(params)
             executed = await self.okx.private_post_trade_batch_orders(params=to_execute)
             to_return = []
