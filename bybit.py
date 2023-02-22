@@ -74,7 +74,9 @@ class BybitBot(Bot):
             "ticker": "/v2/public/tickers",
             "funds_transfer": "/asset/v1/private/transfer",
         }
-        self.session = aiohttp.ClientSession(headers=({"referer": self.broker_code} if self.broker_code else {}))
+        self.session = aiohttp.ClientSession(
+            headers=({"referer": self.broker_code} if self.broker_code else {})
+        )
 
     def init_market_type(self):
         websockets_base_endpoint = "wss://stream.bybit.com"
@@ -669,6 +671,66 @@ class BybitBot(Bot):
         start_time: int = None,
         end_time: int = None,
     ):
+        fetched = None
+        try:
+            if start_time is None:
+                start_time = int((time() - 60 * 60 * 24) * 1000)
+            if end_time is None:
+                end_time = int((time() + 60 * 60 * 2) * 1000)
+            fills = []
+            page = 1
+            last_order = None
+            while True:
+                fetched = await self.private_get(
+                    self.endpoints["fills"],
+                    {
+                        "symbol": self.symbol,
+                        "limit": 200,
+                        "start_time": start_time,
+                        "end_time": end_time,
+                        "exec_type": "Trade",
+                        "page": page,
+                    },
+                )
+                fetched = fetched["result"]["data"]
+                if fetched is None:
+                    break
+                if fetched == []:
+                    break
+                if fetched[-1] == last_order:
+                    break
+                fills += fetched
+                if fetched[-1]["trade_time_ms"] >= end_time:
+                    break
+                last_order = fetched[-1]
+                page += 1
+                print(last_order)
+            fills_f = []
+            for k, elm in {x["order_id"]: x for x in fills}.items():
+                fills_f.append(
+                    {
+                        "order_id": elm["order_id"],
+                        "symbol": elm["symbol"],
+                        "status": elm["exec_type"].lower(),
+                        "custom_id": elm["order_link_id"],
+                        "price": float(elm["exec_price"]),
+                        "qty": float(elm["exec_qty"]),
+                        "original_qty": float(elm["order_qty"]),
+                        "type": elm["order_type"].lower(),
+                        "reduce_only": None,
+                        "side": elm["side"].lower(),
+                        "position_side": determine_pos_side(elm),
+                        "timestamp": elm["trade_time_ms"],
+                    }
+                )
+            return sorted(fills_f, key=lambda x: x["timestamp"], reverse=False)
+        except Exception as e:
+            print("error fetching latest fills", e)
+            print_async_exception(fetched)
+            traceback.print_exc()
+            return []
+        return fills
+
         return []
         ffills, fpnls = await asyncio.gather(
             self.private_get(self.endpoints["fills"], {"symbol": self.symbol, "limit": limit}),
