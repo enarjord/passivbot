@@ -233,12 +233,12 @@ def plot_fills(df, fdf_, side: int = 0, plot_whole_df: bool = False, title=""):
         )
         longs[longs.type.str.contains("secondary")].price.plot(style="go")
         longs[longs.type == "long_nclose"].price.plot(style="ro")
-        longs[(longs.type == "unstuck_entry") | (longs.type == "clock_entry_long")].price.plot(
-            style="bx"
-        )
-        longs[(longs.type == "unstuck_close") | (longs.type == "clock_close_long")].price.plot(
-            style="rx"
-        )
+        longs[
+            (longs.type.str.contains("unstuck_entry")) | (longs.type == "clock_entry_long")
+        ].price.plot(style="bx")
+        longs[
+            (longs.type.str.contains("unstuck_close")) | (longs.type == "clock_close_long")
+        ].price.plot(style="rx")
 
         lppu = longs[(longs.pprice != longs.pprice.shift(1)) & (longs.pprice != 0.0)]
         for i in range(len(lppu) - 1):
@@ -253,12 +253,12 @@ def plot_fills(df, fdf_, side: int = 0, plot_whole_df: bool = False, title=""):
         )
         shorts[shorts.type.str.contains("secondary")].price.plot(style="go")
         shorts[shorts.type == "short_nclose"].price.plot(style="bo")
-        shorts[(shorts.type == "unstuck_entry") | (shorts.type == "clock_entry_short")].price.plot(
-            style="rx"
-        )
-        shorts[(shorts.type == "unstuck_close") | (shorts.type == "clock_close_short")].price.plot(
-            style="bx"
-        )
+        shorts[
+            (shorts.type.str.contains("unstuck_entry")) | (shorts.type == "clock_entry_short")
+        ].price.plot(style="rx")
+        shorts[
+            (shorts.type.str.contains("unstuck_close")) | (shorts.type == "clock_close_short")
+        ].price.plot(style="bx")
 
         sppu = shorts[(shorts.pprice != shorts.pprice.shift(1)) & (shorts.pprice != 0.0)]
         for i in range(len(sppu) - 1):
