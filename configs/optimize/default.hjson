@@ -212,8 +212,8 @@
     {
       ema_span_0: [10.0, 720.0]
       ema_span_1: [10.0, 1440.0]
-      ema_dist_lower: [-0.02, 0.02]
-      ema_dist_upper: [-0.02, 0.02]
+      ema_dist_entry: [-0.02, 0.02]
+      ema_dist_close: [-0.02, 0.02]
       qty_pct_entry: [0.01, 1.0]
       qty_pct_close: [0.01, 1.0]
       we_multiplier_entry: [0.0, 70.0]
@@ -231,8 +231,8 @@
     {
       ema_span_0: [10.0, 720.0]
       ema_span_1: [10.0, 1440.0]
-      ema_dist_lower: [-0.02, 0.02]
-      ema_dist_upper: [-0.02, 0.02]
+      ema_dist_entry: [-0.02, 0.02]
+      ema_dist_close: [-0.02, 0.02]
       qty_pct_entry: [0.01, 1.0]
       qty_pct_close: [0.01, 1.0]
       we_multiplier_entry: [0.0, 70.0]
