@@ -169,8 +169,12 @@ def dump_plots(
                     {f"ema_{span}": df.price.ewm(span=span, adjust=False).mean() for span in spans},
                     index=df.index,
                 )
-                ema_dist_lower = result[side]["ema_dist_entry" if side == "long" else "ema_dist_close"]
-                ema_dist_upper = result[side]["ema_dist_entry" if side == "short" else "ema_dist_close"]
+                ema_dist_lower = result[side][
+                    "ema_dist_entry" if side == "long" else "ema_dist_close"
+                ]
+                ema_dist_upper = result[side][
+                    "ema_dist_entry" if side == "short" else "ema_dist_close"
+                ]
                 ema_bands = pd.DataFrame(
                     {
                         "ema_band_lower": emas.min(axis=1) * (1 - ema_dist_lower),
@@ -223,30 +227,19 @@ def plot_fills(df, fdf_, side: int = 0, plot_whole_df: bool = False, title=""):
         dfc.ema_band_upper.plot(style="r--")
     if side >= 0:
         longs = fdf[fdf.type.str.contains("long")]
-        types = longs.type.unique()
-        if any(x in types for x in ["clock_entry_long", "clock_close_long", "long_nclose"]):
-            # clock mode
-            longs[longs.type == "clock_entry_long"].price.plot(style="bo")
-            longs[longs.type == "clock_close_long"].price.plot(style="ro")
-            longs[longs.type == "long_nclose"].price.plot(style="rx")
-        else:
-            lentry = longs[
-                longs.type.str.contains("rentry")
-                | longs.type.str.contains("ientry")
-                | (longs.type == "entry_long")
-                | (longs.type == "clock_entry_long")
-            ]
-            lnclose = longs[longs.type.str.contains("nclose") | (longs.type == "close_long")]
-            luentry = longs[longs.type.str.contains("unstuck_entry")]
-            luclose = longs[longs.type.str.contains("unstuck_close")]
-            ldca = longs[longs.type.str.contains("secondary")]
-            lentry.price.plot(style="b.")
-            lnclose.price.plot(style="r.")
-            ldca.price.plot(style="go")
-            luentry.price.plot(style="bx")
-            luclose.price.plot(style="rx")
 
-        # longs.where(longs.pprice != 0.0).pprice.fillna(method="ffill").plot(style="b--")
+        longs[longs.type.str.contains("rentry") | longs.type.str.contains("ientry")].price.plot(
+            style="bo"
+        )
+        longs[longs.type.str.contains("secondary")].price.plot(style="go")
+        longs[longs.type == "long_nclose"].price.plot(style="ro")
+        longs[(longs.type == "unstuck_entry") | (longs.type == "clock_entry_long")].price.plot(
+            style="bx"
+        )
+        longs[(longs.type == "unstuck_close") | (longs.type == "clock_close_long")].price.plot(
+            style="rx"
+        )
+
         lppu = longs[(longs.pprice != longs.pprice.shift(1)) & (longs.pprice != 0.0)]
         for i in range(len(lppu) - 1):
             plt.plot(
@@ -254,28 +247,19 @@ def plot_fills(df, fdf_, side: int = 0, plot_whole_df: bool = False, title=""):
             )
     if side <= 0:
         shorts = fdf[fdf.type.str.contains("short")]
-        types = shorts.type.unique()
-        if any(x in types for x in ["clock_entry_short", "clock_close_short", "short_nclose"]):
-            # clock mode
-            shorts[shorts.type == "clock_entry_short"].price.plot(style="ro")
-            shorts[shorts.type == "clock_close_short"].price.plot(style="bo")
-            shorts[shorts.type == "short_nclose"].price.plot(style="bx")
-        else:
-            sentry = shorts[
-                shorts.type.str.contains("rentry")
-                | shorts.type.str.contains("ientry")
-                | (shorts.type == "entry_short")
-            ]
-            snclose = shorts[shorts.type.str.contains("nclose") | (shorts.type == "close_short")]
-            suentry = shorts[shorts.type.str.contains("unstuck_entry")]
-            suclose = shorts[shorts.type.str.contains("unstuck_close")]
-            sdca = shorts[shorts.type.str.contains("secondary")]
-            sentry.price.plot(style="r.")
-            snclose.price.plot(style="b.")
-            sdca.price.plot(style="go")
-            suentry.price.plot(style="rx")
-            suclose.price.plot(style="bx")
-        # shorts.where(shorts.pprice != 0.0).pprice.fillna(method="ffill").plot(style="r--")
+
+        shorts[shorts.type.str.contains("rentry") | shorts.type.str.contains("ientry")].price.plot(
+            style="ro"
+        )
+        shorts[shorts.type.str.contains("secondary")].price.plot(style="go")
+        shorts[shorts.type == "short_nclose"].price.plot(style="bo")
+        shorts[(shorts.type == "unstuck_entry") | (shorts.type == "clock_entry_short")].price.plot(
+            style="rx"
+        )
+        shorts[(shorts.type == "unstuck_close") | (shorts.type == "clock_close_short")].price.plot(
+            style="bx"
+        )
+
         sppu = shorts[(shorts.pprice != shorts.pprice.shift(1)) & (shorts.pprice != 0.0)]
         for i in range(len(sppu) - 1):
             plt.plot(
