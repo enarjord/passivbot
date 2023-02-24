@@ -78,7 +78,6 @@ async def prepare_backtest_config(args) -> dict:
         "starting_balance",
         "market_type",
         "base_dir",
-        "ohlcv",
     ]:
         if hasattr(args, key) and getattr(args, key) is not None:
             config[key] = getattr(args, key)
@@ -95,6 +94,19 @@ async def prepare_backtest_config(args) -> dict:
         f"{config['start_date'].replace(' ', '').replace(':', '').replace('.', '')}_"
         f"{config['end_date'].replace(' ', '').replace(':', '').replace('.', '')}"
     )
+    if config["exchange"] in ["okx"]:
+        config["ohlcv"] = True
+    elif hasattr(args, "ohlcv"):
+        if args.ohlcv is None:
+            if "ohlcv" not in config:
+                config["ohlcv"] = True
+        else:
+            if args.ohlcv.lower() in ["y", "t", "yes", "true"]:
+                config["ohlcv"] = True
+            else:
+                config["ohlcv"] = False
+    elif "ohlcv" not in config:
+        config["ohlcv"] = True
 
     if config["base_dir"].startswith("~"):
         raise Exception("error: using the ~ to indicate the user's home directory is not supported")
@@ -109,7 +121,6 @@ async def prepare_backtest_config(args) -> dict:
     config["plots_dirpath"] = make_get_filepath(os.path.join(base_dirpath, "plots", ""))
 
     await add_market_specific_settings(config)
-
     return config
 
 
@@ -388,7 +399,15 @@ def add_argparse_args(parser):
         default=None,
         help="specify the base output directory for the results",
     )
-
+    parser.add_argument(
+        "-oh",
+        "--ohlcv",
+        type=str,
+        required=False,
+        dest="ohlcv",
+        default=None,
+        help="if [y/yes], use 1m ohlcv instead of 1s ticks, overriding param ohlcv from config/backtest/default.hjson",
+    )
     return parser
 
 
