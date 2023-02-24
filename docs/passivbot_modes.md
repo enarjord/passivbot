@@ -60,7 +60,7 @@ Clock mode builds no grids, but instead waits a duration of time between entries
 
 ## Parameters common to Static and Neat modes
 - eprice_exp_base
-	- if 1.0 spacing between all nodes' prices is equal
+	- if 1.0, spacing between all nodes' prices is equal
 	- higher than 1.0 and spacing will increase deeper in the grid
 - grid_span
 	- per uno distance from initial entry price to last node's price
@@ -140,18 +140,19 @@ It is called recursive grid mode because the grid is defined recusively by compu
 	    entry_delay is reduced and close_delay is unchanged
 	```
 
-- ema_dist_lower/upper
+- ema_dist_entry/close
 	- offset lower/upper ema band.  
+	- long entry is lower ema band; short entry is upper ema band.  
 	- `ema_band_lower = min(emas) * (1 - ema_dist_lower)`  
 	- `ema_band_upper = max(emas) * (1 + ema_dist_upper)`  
 	- See ema_span_0/ema_span_1
 - qty_pct_entry/close  
 - we_multiplier_entry/close
-	- entry cost is modified according to:
+	- entry cost is computed according to:
 	- `entry_cost = balance * wallet_exposure_limit * qty_pct * (1 + ratio * we_multiplier)`
 	- where `ratio = wallet_exposure / wallet_exposure_limit`
 
-Clock mode uses the pos close logic common to all passivbot modes.  
+Clock mode uses the TP grid common to all passivbot modes.  
 There is no entry grid and no separate auto unstucking mechanism (auto unstuck is on all the time, as it were).  
 It is called Clock Mode because entries and cloces are on a timer.
 
