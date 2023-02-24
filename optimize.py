@@ -156,12 +156,6 @@ async def main(algorithm=None):
         help="optimization algorithm options: [p/pso/particle_swarm_optimization, h/hs/harmony_search]",
     )
     parser.add_argument(
-        "-oh",
-        "--ohlcv",
-        help="use 1m ohlcv instead of 1s ticks",
-        action="store_true",
-    )
-    parser.add_argument(
         "-ser", "--serial", help="optimize symbols singly, not multi opt", action="store_true"
     )
     parser = add_argparse_args(parser)
@@ -245,7 +239,8 @@ async def run_opt(args, config):
             config["n_cpus"] = args.n_cpus
         if args.base_dir is not None:
             config["base_dir"] = args.base_dir
-        config["ohlcv"] = True if passivbot_mode == "clock" else args.ohlcv
+        if passivbot_mode == "clock":
+            config["ohlcv"] = True
         print()
         lines = [
             (k, config[k])
