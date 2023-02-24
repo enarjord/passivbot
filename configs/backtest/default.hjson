@@ -22,6 +22,9 @@
   # backtests path
   base_dir: backtests
 
+  # use 1m ohlcvs instead of 1s ticks
+  ohlcv: true
+
   # interactive plot configs:
   enable_interactive_plot: true
   plot_theme: light
