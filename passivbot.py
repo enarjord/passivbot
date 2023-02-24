@@ -1529,12 +1529,6 @@ async def main() -> None:
         help=f"if true, run on the test net instead of normal exchange. Supported exchanges: {TEST_MODE_SUPPORTED_EXCHANGES}",
     )
     parser.add_argument(
-        "-oh",
-        "--ohlcv",
-        action="store_true",
-        help=f"if true, execute to exchange only on each minute mark instead of continuously",
-    )
-    parser.add_argument(
         "-cd",
         "--countdown",
         action="store_true",
@@ -1569,6 +1563,15 @@ async def main() -> None:
         dest="countdown_offset",
         default=0,
         help="when in ohlcv mode, offset execution cycle in seconds from whole minute",
+    )
+    parser.add_argument(
+        "-oh",
+        "--ohlcv",
+        type=str,
+        required=False,
+        dest="ohlcv",
+        default=None,
+        help="if [y/yes], use 1m ohlcv instead of 1s ticks, overriding param ohlcv from config/backtest/default.hjson",
     )
 
     float_kwargs = [
@@ -1619,7 +1622,6 @@ async def main() -> None:
         "symbol",
         "leverage",
         "price_distance_threshold",
-        "ohlcv",
         "test_mode",
         "countdown",
         "countdown_offset",
@@ -1632,6 +1634,16 @@ async def main() -> None:
     config["market_type"] = args.market_type if args.market_type is not None else "futures"
     config["passivbot_mode"] = determine_passivbot_mode(config)
     if config["passivbot_mode"] == "clock":
+        config["ohlcv"] = True
+    elif hasattr(args, "ohlcv"):
+        if args.ohlcv is None:
+            config["ohlcv"] = True
+        else:
+            if args.ohlcv.lower() in ["y", "yes", "t", "true"]:
+                config["ohlcv"] = True
+            else:
+                config["ohlcv"] = False
+    else:
         config["ohlcv"] = True
     if args.assigned_balance is not None:
         logging.info(f"assigned balance set to {args.assigned_balance}")
