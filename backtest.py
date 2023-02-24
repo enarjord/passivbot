@@ -166,12 +166,6 @@ async def main():
         action="store_true",
         help="disable plotting",
     )
-    parser.add_argument(
-        "-oh",
-        "--ohlcv",
-        help="use 1m ohlcv instead of 1s ticks",
-        action="store_true",
-    )
     args = parser.parse_args()
     if args.symbol is None:
         tmp_cfg = load_hjson_config(args.backtest_config_path)
@@ -211,8 +205,6 @@ async def main():
             config["short"]["enabled"] = "y" in args.short_enabled.lower()
         if passivbot_mode == "clock" or config["exchange"] == "okx":
             config["ohlcv"] = True
-        else:
-            config["ohlcv"] = args.ohlcv
         config["disable_plotting"] = args.disable_plotting
         if "spot" in config["market_type"]:
             live_config = spotify_config(live_config)
