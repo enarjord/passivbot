@@ -178,9 +178,7 @@ class Bot:
     async def init_emas(self) -> None:
         ohlcvs1m = await self.fetch_ohlcvs(interval="1m")
         max_span = max(list(self.ema_spans_long) + list(self.ema_spans_short))
-        for mins, interval in zip(
-            [5, 15, 30, 60, 60 * 4], ["5m", "15m", "30m", "1h", "4h"]
-        ):
+        for mins, interval in zip([5, 15, 30, 60, 60 * 4], ["5m", "15m", "30m", "1h", "4h"]):
             if max_span <= len(ohlcvs1m) * mins:
                 break
         ohlcvs = await self.fetch_ohlcvs(interval=interval)
@@ -1016,6 +1014,9 @@ class Bot:
     async def init_user_stream(self) -> None:
         pass
 
+    async def init_market_stream(self) -> None:
+        pass
+
     async def start_websocket_user_stream(self) -> None:
         await self.init_user_stream()
         asyncio.create_task(self.beat_heart_user_stream())
@@ -1042,6 +1043,7 @@ class Bot:
                     traceback.print_exc()
 
     async def start_websocket_market_stream(self) -> None:
+        await self.init_market_stream()
         k = 1
         asyncio.create_task(self.beat_heart_market_stream())
         async with websockets.connect(self.endpoints["websocket_market"]) as ws:
