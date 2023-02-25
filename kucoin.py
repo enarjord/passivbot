@@ -3,17 +3,16 @@ import base64
 import hashlib
 import hmac
 import json
-import logging
 import traceback
 from time import time
 from typing import Union, List, Dict
-from uuid import uuid4
+import uuid
 
 import aiohttp
 import numpy as np
 
 from njit_funcs import round_, calc_diff
-from passivbot import Bot
+from passivbot import Bot, logging
 from procedures import print_async_exception, print_
 from pure_funcs import ts_to_date
 
@@ -23,7 +22,17 @@ def first_capitalized(s: str):
 
 
 def determine_pos_side(o: dict) -> str:
-    if o["side"].lower() == "buy":
+    if o["side"] == "buy":
+        if "reduceOnly" in o:
+            if o["reduceOnly"]:
+                return "short"
+            else:
+                return "long"
+        if "closeOrder" in o:
+            if o["closeOrder"]:
+                return "short"
+            else:
+                return "long"
         if "entry" in o["clientOid"]:
             return "long"
         elif "close" in o["clientOid"]:
@@ -31,6 +40,16 @@ def determine_pos_side(o: dict) -> str:
         else:
             return "both"
     else:
+        if "reduceOnly" in o:
+            if o["reduceOnly"]:
+                return "long"
+            else:
+                return "short"
+        if "closeOrder" in o:
+            if o["closeOrder"]:
+                return "long"
+            else:
+                return "short"
         if "entry" in o["clientOid"]:
             return "short"
         elif "close" in o["clientOid"]:
@@ -42,7 +61,6 @@ def determine_pos_side(o: dict) -> str:
 class KuCoinBot(Bot):
     def __init__(self, config: dict):
         self.exchange = "kucoin"
-        self.min_notional = 1.0
         self.max_n_orders_per_batch = 5
         self.max_n_cancellations_per_batch = 10
         super().__init__(config)
@@ -56,57 +74,24 @@ class KuCoinBot(Bot):
         self.session = aiohttp.ClientSession()
 
     def init_market_type(self):
-        if self.symbol.endswith("USDTM"):
-            print("linear perpetual")
+        if self.symbol.endswith("USDT"):
+            self.symbol += "M"
+            logging.info("linear perpetual")
             self.market_type += "_linear_perpetual"
             self.inverse = self.config["inverse"] = False
             self.endpoints = {
                 "position": "/api/v1/position",
                 "open_orders": "/api/v1/orders",
                 "create_order": "/api/v1/orders",
-                "cancel_order": "/api/v1/orders/{order-id}",
-                "ticks": "/public/linear/recent-trading-records",
-                "fills": "/private/linear/trade/execution/list",
+                "cancel_order": "/api/v1/orders",
                 "ohlcvs": "/api/v1/kline/query",
                 "public_token_ws": "/api/v1/bullet-public",
                 "private_token_ws": "/api/v1/bullet-private",
                 "income": "/api/v1/recentFills",
-                "created_at_key": "createdAt",
             }
             self.hedge_mode = self.config["hedge_mode"] = False
         else:
             raise "Not implemented"
-            self.inverse = self.config["inverse"] = True
-            if self.symbol.endswith("USDM"):
-                print("inverse perpetual")
-                self.market_type += "_inverse_perpetual"
-                self.endpoints = {
-                    "position": "/api/v1/position",
-                    "open_orders": "/api/v1/orders",
-                    "create_order": "/api/v1/orders",
-                    "cancel_order": "/api/v1/orders/{order-id}",
-                    "ticks": "/public/linear/recent-trading-records",
-                    "fills": "/private/linear/trade/execution/list",
-                    "ohlcvs": "/api/v1/kline/query",
-                    "income": "/api/v1/recentFills",
-                    "created_at_key": "createdAt",
-                }
-
-                self.hedge_mode = self.config["hedge_mode"] = False
-            else:
-                print("inverse futures")
-                self.market_type += "_inverse_futures"
-                self.endpoints = {
-                    "position": "/api/v1/position",
-                    "open_orders": "/api/v1/orders",
-                    "create_order": "/api/v1/orders",
-                    "cancel_order": "/api/v1/orders",
-                    "ticks": "/public/linear/recent-trading-records",
-                    "fills": "/private/linear/trade/execution/list",
-                    "ohlcvs": "/api/v1/kline/query",
-                    "income": "/api/v1/recentFills",
-                    "created_at_key": "createdAt",
-                }
 
         self.endpoints["spot_balance"] = "/api/v1/accounts"
         self.endpoints["balance"] = "/api/v1/account-overview"
@@ -115,31 +100,27 @@ class KuCoinBot(Bot):
         self.endpoints["funds_transfer"] = "/asset/v1/private/transfer"  # TODO
 
     async def _init(self):
+        self.init_market_type()
         info = await self.public_get(self.endpoints["exchange_info"])
-        for e in info["data"]:
-            if e["symbol"] == self.symbol:
+        for elm in info["data"]:
+            if elm["symbol"] == self.symbol:
                 break
         else:
             raise Exception(f"symbol missing {self.symbol}")
-        self.max_leverage = e["maxLeverage"]
-        self.coin = e["baseCurrency"]
-        self.quot = e["quoteCurrency"]
-        self.price_step = self.config["price_step"] = float(e["tickSize"])
-        self.qty_step = self.config["qty_step"] = float(e["lotSize"])
-        self.min_qty = self.config["min_qty"] = float(e["lotSize"])
+        self.coin = elm["baseCurrency"]
+        self.quote = elm["quoteCurrency"]
+        self.price_step = self.config["price_step"] = float(elm["tickSize"])
+        self.qty_step = self.config["qty_step"] = float(elm["lotSize"])
+        self.min_qty = self.config["min_qty"] = 1.0
         self.min_cost = self.config["min_cost"] = 0.0
-        self.c_mult = self.config["c_mult"] = float(e["multiplier"])
-        self.init_market_type()
-        self.margin_coin = self.coin if self.inverse else self.quot
+        self.c_mult = self.config["c_mult"] = float(elm["multiplier"])
+        self.leverage = 5  # cannot be greater than 5
         await super()._init()
         await self.init_order_book()
         await self.update_position()
 
     async def init_order_book(self):
-        ticker = await self.private_get(
-            self.endpoints["ticker"], {"symbol": self.symbol}
-        )
-        print()
+        ticker = await self.private_get(self.endpoints["ticker"], {"symbol": self.symbol})
         self.ob = [
             float(ticker["data"]["bestBidPrice"]),
             float(ticker["data"]["bestAskPrice"]),
@@ -147,29 +128,34 @@ class KuCoinBot(Bot):
         self.price = float(ticker["data"]["price"])
 
     async def fetch_open_orders(self) -> [dict]:
-        fetched = await self.private_get(
-            self.endpoints["open_orders"], {"symbol": self.symbol, "status": "active"}
-        )
-        return [
-            {
-                "order_id": elm["id"],
-                "custom_id": elm["clientOid"],
-                "symbol": elm["symbol"],
-                "price": float(elm["price"]),
-                "qty": float(elm["size"]),
-                "side": elm["side"].lower(),
-                "position_side": determine_pos_side(elm),
-                "timestamp": elm[self.endpoints["created_at_key"]],
-            }
-            for elm in fetched["data"]["items"]
-        ]
+        open_orders = None
+        try:
+            open_orders = await self.private_get(
+                self.endpoints["open_orders"], {"symbol": self.symbol, "status": "active"}
+            )
+            return [
+                {
+                    "order_id": elm["id"],
+                    "custom_id": elm["clientOid"],
+                    "symbol": elm["symbol"],
+                    "price": float(elm["price"]),
+                    "qty": float(elm["size"]),
+                    "side": elm["side"],
+                    "position_side": determine_pos_side(elm),
+                    "timestamp": elm["createdAt"],
+                }
+                for elm in open_orders["data"]["items"]
+            ]
+        except Exception as e:
+            logging.error(f"error fetching open orders {e}")
+            print_async_exception(open_orders)
+            traceback.print_exc()
+            return False
 
     async def public_get(self, url: str, params=None) -> dict:
         if params is None:
             params = {}
-        async with self.session.get(
-            self.base_endpoint + url, params=params
-        ) as response:
+        async with self.session.get(self.base_endpoint + url, params=params) as response:
             result = await response.text()
         return json.loads(result)
 
@@ -194,7 +180,7 @@ class KuCoinBot(Bot):
             data_json = json.dumps(params, separators=(",", ":"), ensure_ascii=False)
             str_to_sign = f"{str(timestamp)}{type_.upper()}{url}{data_json}"
         else:
-            print(f"not implemented")
+            logging.error(f"not implemented")
             return
 
         signature = base64.b64encode(
@@ -219,9 +205,7 @@ class KuCoinBot(Bot):
         }
 
         if "get" in type_ or "delete" in type_:
-            async with getattr(self.session, type_)(
-                base_endpoint + url, headers=headers
-            ) as response:
+            async with getattr(self.session, type_)(base_endpoint + url, headers=headers) as response:
                 result = await response.text()
                 return json.loads(result)
 
@@ -233,9 +217,7 @@ class KuCoinBot(Bot):
                 result = await response.text()
                 return json.loads(result)
 
-    async def private_get(
-        self, url: str, params=None, base_endpoint: str = None
-    ) -> dict:
+    async def private_get(self, url: str, params=None, base_endpoint: str = None) -> dict:
         if params is None:
             params = {}
         return await self.private_(
@@ -245,9 +227,7 @@ class KuCoinBot(Bot):
             params,
         )
 
-    async def private_delete(
-        self, url: str, params=None, base_endpoint: str = None
-    ) -> dict:
+    async def private_delete(self, url: str, params=None, base_endpoint: str = None) -> dict:
         if params is None:
             params = {}
         return await self.private_(
@@ -257,9 +237,7 @@ class KuCoinBot(Bot):
             params,
         )
 
-    async def private_post(
-        self, url: str, params=None, base_endpoint: str = None
-    ) -> dict:
+    async def private_post(self, url: str, params=None, base_endpoint: str = None) -> dict:
         if params is None:
             params = {}
         return await self.private_(
@@ -271,94 +249,39 @@ class KuCoinBot(Bot):
 
     async def transfer_from_derivatives_to_spot(self, coin: str, amount: float):
         raise "Not implemented"
-        params = {
-            "coin": coin,
-            "amount": str(amount),
-            "from_account_type": "CONTRACT",
-            "to_account_type": "SPOT",
-            "transfer_id": str(uuid4()),
-        }
-        return await self.private_(
-            "post",
-            self.base_endpoint,
-            self.endpoints["funds_transfer"],
-            params=params,
-            json_=True,
-        )
 
     async def get_server_time(self):
-        now = await self.public_get("/v2/public/time")
-        return float(now["time_now"]) * 1000
+        raise "Not implemented"
 
     async def fetch_position(self) -> dict:
-        position = {}
-        long_pos = None
-        short_pos = None
-        if "linear_perpetual" in self.market_type:
-            fetched, bal = await asyncio.gather(
+        positions, balance = None, None
+        try:
+
+            positions, balance = await asyncio.gather(
                 self.private_get(self.endpoints["position"], {"symbol": self.symbol}),
-                self.private_get(self.endpoints["balance"], {"currency": self.quot}),
+                self.private_get(self.endpoints["balance"], {"currency": self.quote}),
             )
-            if fetched["data"]["isOpen"]:
-                if fetched["data"]["currentQty"] > 0:
-                    long_pos = fetched["data"]
-                else:
-                    short_pos = fetched["data"]
-            position["wallet_balance"] = float(bal["data"]["accountEquity"])
-        # TODO
-        # else:
-        # fetched, bal = await asyncio.gather(
-        #     self.private_get(self.endpoints["position"], {"symbol": self.symbol}),
-        #     self.private_get(self.endpoints["balance"], {"currency": self.coin}),
-        # )
-        # position["wallet_balance"] = float(bal["data"]["availableBalance"])
-        # if "inverse_perpetual" in self.market_type:
-        #     if fetched["result"]["side"] == "Buy":
-        #         long_pos = fetched["data"]
-        #         short_pos = {"size": 0.0, "entry_price": 0.0, "liq_price": 0.0}
-        #     else:
-        #         long_pos = {"size": 0.0, "entry_price": 0.0, "liq_price": 0.0}
-        #         short_pos = fetched["data"]
-        # elif "inverse_futures" in self.market_type:
-        #     long_pos = [
-        #         e["data"]
-        #         for e in fetched["result"]
-        #         if e["data"]["position_idx"] == 1
-        #     ][0]
-        #     short_pos = [
-        #         e["data"]
-        #         for e in fetched["result"]
-        #         if e["data"]["position_idx"] == 2
-        #     ][0]
-        # else:
-        #     raise Exception("unknown market type")
-
-        if long_pos is not None and long_pos["currentQty"] > 0:
-            position["long"] = {
-                "size": round_(float(long_pos["currentQty"]), self.qty_step),
-                "price": float(long_pos["avgEntryPrice"]),
-                "liquidation_price": float(long_pos["liquidationPrice"]),
+            position = {
+                "long": {"size": 0.0, "price": 0.0, "liquidation_price": 0.0},
+                "short": {"size": 0.0, "price": 0.0, "liquidation_price": 0.0},
+                "wallet_balance": 0.0,
+                "equity": 0.0,
             }
-        else:
-            position["long"] = {
-                "size": round_(float(0), self.qty_step),
-                "price": float(0),
-                "liquidation_price": float(0),
-            }
-
-        if short_pos is not None and short_pos["currentQty"] < 0:
-            position["short"] = {
-                "size": round_(float(short_pos["currentQty"]), self.qty_step),
-                "price": float(short_pos["avgEntryPrice"]),
-                "liquidation_price": float(short_pos["liquidationPrice"]),
-            }
-        else:
-            position["short"] = {
-                "size": round_(float(0), self.qty_step),
-                "price": float(0),
-                "liquidation_price": float(0),
-            }
-        return position
+            if positions["data"]["currentQty"] > 0.0:
+                position["long"]["size"] = positions["data"]["currentQty"]
+                position["long"]["price"] = positions["data"]["avgEntryPrice"]
+                position["long"]["liquidation_price"] = positions["data"]["liquidationPrice"]
+            elif positions["data"]["currentQty"] < 0.0:
+                position["short"]["size"] = positions["data"]["currentQty"]
+                position["short"]["price"] = positions["data"]["avgEntryPrice"]
+                position["short"]["liquidation_price"] = positions["data"]["liquidationPrice"]
+            position["wallet_balance"] = balance["data"]["marginBalance"]
+            return position
+        except Exception as e:
+            logging.error(f"error fetching pos or balance {e}")
+            print_async_exception(positions)
+            print_async_exception(balance)
+            traceback.print_exc()
 
     async def execute_orders(self, orders: [dict]) -> [dict]:
         if not orders:
@@ -370,7 +293,7 @@ class KuCoinBot(Bot):
                 creation = asyncio.create_task(self.execute_order(order))
                 creations.append((order, creation))
             except Exception as e:
-                print(f"error creating order {order} {e}")
+                longging.error(f"error creating order {order} {e}")
                 print_async_exception(creation)
                 traceback.print_exc()
         results = []
@@ -380,50 +303,45 @@ class KuCoinBot(Bot):
                 result = await creation[1]
                 results.append(result)
             except Exception as e:
-                print(f"error creating order {creation} {e}")
+                logging.error(f"error creating order {creation} {e}")
                 print_async_exception(result)
                 traceback.print_exc()
         return results
 
     async def execute_order(self, order: dict) -> dict:
-        o = None
+        executed = None
         try:
             params = {
                 "symbol": self.symbol,
                 "side": order["side"],
                 "type": order["type"],
                 "leverage": str(self.leverage),
+                "size": int(order["qty"]),
+                "reduceOnly": order["reduce_only"],
             }
-            size = int(order["qty"])
-            params["size"] = size
-            params["reduceOnly"] = "close" in order["custom_id"]
-
-            if params["type"] == "limit":
-                params["timeInForce"] = "GTC"
-                # params["postOnly"] = False
-                params["price"] = "{:.8f}".format(order["price"])
-
+            if order["type"] == "limit":
+                params["postOnly"] = True
+                params["price"] = str(order["price"])
             params[
                 "clientOid"
-            ] = f"{order['custom_id']}_{str(int(time() * 1000))[8:]}_{int(np.random.random() * 1000)}"
-            o = await self.private_post(self.endpoints["create_order"], params)
-            if o["data"]["orderId"]:
+            ] = f"{(order['custom_id'] if 'custom_id' in order else '')}{uuid.uuid4().hex}"[:32]
+            executed = await self.private_post(self.endpoints["create_order"], params)
+            if "code" in executed and executed["code"] == "200000":
                 return {
                     "symbol": self.symbol,
-                    "side": order["side"].lower(),
-                    "order_id": o["data"]["orderId"],
+                    "side": order["side"],
+                    "order_id": executed["data"]["orderId"],
                     "position_side": order["position_side"],
-                    "type": order["type"].lower(),
+                    "type": order["type"],
                     "qty": int(order["qty"]),
                     "price": order["price"],
                 }
-            else:
-                return o, order
+            raise Exception
         except Exception as e:
-            print(f"error executing order {order} {e}")
-            print_async_exception(o)
+            logging.error(f"error executing order {executed} {order} {e}")
+            print_async_exception(executed)
             traceback.print_exc()
-            return {}
+            return None
 
     async def execute_cancellations(self, orders: [dict]) -> [dict]:
         if not orders:
@@ -435,7 +353,7 @@ class KuCoinBot(Bot):
                 cancellation = asyncio.create_task(self.execute_cancellation(order))
                 cancellations.append((order, cancellation))
             except Exception as e:
-                print(f"error cancelling order {order} {e}")
+                logging.error(f"error cancelling order {order} {e}")
                 print_async_exception(cancellation)
                 traceback.print_exc()
         results = []
@@ -445,7 +363,7 @@ class KuCoinBot(Bot):
                 result = await cancellation[1]
                 results.append(result)
             except Exception as e:
-                print(f"error cancelling order {cancellation} {e}")
+                logging.error(f"error cancelling order {cancellation} {e}")
                 print_async_exception(result)
                 traceback.print_exc()
         return results
@@ -456,41 +374,18 @@ class KuCoinBot(Bot):
             cancellation = await self.private_delete(
                 f"{self.endpoints['cancel_order']}/{order['order_id']}", {}
             )
-            print(cancellation)
-            if (
-                cancellation is not None
-                and "code" in cancellation
-                and cancellation["code"] == 100004
-                or cancellation["code"] == 404
-            ):
-                raise
             return {
                 "symbol": self.symbol,
                 "side": order["side"],
-                "order_id": order["order_id"],
+                "order_id": cancellation["data"]["cancelledOrderIds"][0],
                 "position_side": order["position_side"],
                 "qty": order["qty"],
                 "price": order["price"],
             }
         except Exception as e:
-            if (
-                cancellation is not None
-                and "code" in cancellation
-                and cancellation["code"] == 100004
-                or cancellation["code"] == 404
-            ):
-                error_cropped = {
-                    k: v
-                    for k, v in cancellation.items()
-                    if k in ["ret_msg", "ret_code"]
-                }
-                logging.error(
-                    f"error cancelling order {error_cropped} {order}"
-                )  # neater error message
-            else:
-                print(f"error cancelling order {order} {e}")
-                print_async_exception(cancellation)
-                traceback.print_exc()
+            logging.error(f"error cancelling order {order} {e}")
+            print_async_exception(cancellation)
+            traceback.print_exc()
             self.ts_released["force_update"] = 0.0
             return {}
 
@@ -519,17 +414,17 @@ class KuCoinBot(Bot):
             "granularity": interval_map[interval],
         }
         fetched = await self.public_get(self.endpoints["ohlcvs"], params)
-        ticks = []
+        ohlcvs = []
         for e in fetched["data"]:
-            tick = {
+            ohlcv = {
                 "timestamp": float(e[0]),
                 "high": float(e[1]),
                 "low": float(e[2]),
                 "close": float(e[3]),
                 "volume": float(e[4]),
             }
-            ticks.append(tick)
-        return ticks
+            ohlcvs.append(ohlcv)
+        return ohlcvs
 
     async def get_all_income(
         self,
@@ -539,50 +434,6 @@ class KuCoinBot(Bot):
         end_time: int = None,
     ):
         raise "Not implemented"
-        if symbol is None:
-            all_income = []
-            all_positions = await self.private_get(
-                self.endpoints["position"], params={"symbol": ""}
-            )
-            symbols = sorted(
-                set(
-                    [
-                        x["data"]["symbol"]
-                        for x in all_positions["result"]
-                        if float(x["data"]["size"]) > 0
-                    ]
-                )
-            )
-            for symbol in symbols:
-                all_income += await self.get_all_income(
-                    symbol=symbol,
-                    start_time=start_time,
-                    income_type=income_type,
-                    end_time=end_time,
-                )
-            return sorted(all_income, key=lambda x: x["timestamp"])
-        limit = 50
-        income = []
-        page = 1
-        while True:
-            fetched = await self.fetch_income(
-                symbol=symbol,
-                start_time=start_time,
-                income_type=income_type,
-                limit=limit,
-                page=page,
-            )
-            if len(fetched) == 0:
-                break
-            print_(["fetched income", symbol, ts_to_date(fetched[0]["timestamp"])])
-            if fetched == income[-len(fetched) :]:
-                break
-            income += fetched
-            if len(fetched) < limit:
-                break
-            page += 1
-        income_d = {e["transaction_id"]: e for e in income}
-        return sorted(income_d.values(), key=lambda x: x["timestamp"])
 
     async def fetch_income(
         self,
@@ -594,41 +445,6 @@ class KuCoinBot(Bot):
         page=None,
     ):
         raise "Not implemented"
-        params = {"limit": limit, "symbol": self.symbol if symbol is None else symbol}
-        if start_time is not None:
-            params["start_time"] = int(start_time / 1000)
-        if end_time is not None:
-            params["end_time"] = int(end_time / 1000)
-        if income_type is not None:
-            params["exec_type"] = first_capitalized(income_type)
-        if page is not None:
-            params["page"] = page
-        fetched = None
-        try:
-            fetched = await self.private_get(self.endpoints["income"], params)
-            if fetched["result"]["data"] is None:
-                return []
-            return sorted(
-                [
-                    {
-                        "symbol": e["symbol"],
-                        "income_type": e["exec_type"].lower(),
-                        "income": float(e["closed_pnl"]),
-                        "token": self.margin_coin,
-                        "timestamp": float(e["created_at"]) * 1000,
-                        "info": {"page": fetched["result"]["current_page"]},
-                        "transaction_id": float(e["id"]),
-                        "trade_id": e["order_id"],
-                    }
-                    for e in fetched["result"]["data"]
-                ],
-                key=lambda x: x["timestamp"],
-            )
-        except Exception as e:
-            print("error fetching income: ", e)
-            traceback.print_exc()
-            print_async_exception(fetched)
-            return []
 
     async def fetch_fills(
         self,
@@ -638,77 +454,13 @@ class KuCoinBot(Bot):
         end_time: int = None,
     ):
         return []
-        ffills, fpnls = await asyncio.gather(
-            self.private_get(
-                self.endpoints["fills"], {"symbol": self.symbol, "limit": limit}
-            ),
-            self.private_get(
-                self.endpoints["pnls"], {"symbol": self.symbol, "limit": 50}
-            ),
-        )
-        return ffills, fpnls
-        try:
-            fills = []
-            for x in fetched["result"]["data"][::-1]:
-                qty, price = float(x["order_qty"]), float(x["price"])
-                if not qty or not price:
-                    continue
-                fill = {
-                    "symbol": x["symbol"],
-                    "id": str(x["exec_id"]),
-                    "order_id": str(x["order_id"]),
-                    "side": x["side"].lower(),
-                    "price": price,
-                    "qty": qty,
-                    "realized_pnl": 0.0,
-                    "cost": (cost := qty / price if self.inverse else qty * price),
-                    "fee_paid": float(x["exec_fee"]),
-                    "fee_token": self.margin_coin,
-                    "timestamp": int(x["trade_time_ms"]),
-                    "position_side": determine_pos_side(x),
-                    "is_maker": x["fee_rate"] < 0.0,
-                }
-                fills.append(fill)
-            return fills
-        except Exception as e:
-            print("error fetching fills", e)
-            return []
-        return fetched
-        print("fetch_fills not implemented for KuCoin")
-        return []
 
     async def init_exchange_config(self):
         try:
             # set cross mode
             if "inverse_futures" in self.market_type:
                 raise "Not implemented"
-                res = await asyncio.gather(
-                    self.private_post(
-                        "/futures/private/position/leverage/save",
-                        {
-                            "symbol": self.symbol,
-                            "buy_leverage": self.leverage,
-                            "sell_leverage": self.leverage,
-                        },
-                    ),
-                    self.private_post(
-                        "/futures/private/position/switch-isolated",
-                        {
-                            "symbol": self.symbol,
-                            "is_isolated": False,
-                            "buy_leverage": self.leverage,
-                            "sell_leverage": self.leverage,
-                        },
-                    ),
-                )
-                print(res)
-                res = await self.private_post(
-                    "/futures/private/position/switch-mode",
-                    {"symbol": self.symbol, "mode": 3},
-                )
-                print(res)
             elif "linear_perpetual" in self.market_type:
-                self.leverage = 5
                 res = await self.private_post(
                     "/api/v1/position/risk-limit-level/change",
                     {
@@ -716,44 +468,12 @@ class KuCoinBot(Bot):
                         "level": self.leverage,
                     },
                 )
-                print(res)
-
-                res = await self.private_post(self.endpoints["public_token_ws"], {})
-                print(res)
-
-                self.endpoints[
-                    "websocket_market"
-                ] = f"{res['data']['instanceServers'][0]['endpoint']}?token={res['data']['token']}"
-
-                res = await self.private_post(self.endpoints["private_token_ws"], {})
-                print(res)
-                self.endpoints[
-                    "websocket_user"
-                ] = f"{res['data']['instanceServers'][0]['endpoint']}?token={res['data']['token']}"
+                logging.info(f"setting risk level {res}")
 
             elif "inverse_perpetual" in self.market_type:
                 raise "Not implemented"
-                res = await self.private_post(
-                    "/v2/private/position/switch-isolated",
-                    {
-                        "symbol": self.symbol,
-                        "is_isolated": False,
-                        "buy_leverage": self.leverage,
-                        "sell_leverage": self.leverage,
-                    },
-                )
-                print("1", res)
-                res = await self.private_post(
-                    "/v2/private/position/leverage/save",
-                    {
-                        "symbol": self.symbol,
-                        "leverage": self.leverage,
-                        "leverage_only": True,
-                    },
-                )
-                print("2", res)
         except Exception as e:
-            print(e)
+            logging.error(f"error with init_exchange_config {e}")
 
     def standardize_market_stream_event(self, data: dict) -> [dict]:
         ticks = []
@@ -770,7 +490,7 @@ class KuCoinBot(Bot):
                 }
             )
         except Exception as ex:
-            print("error in websocket tick", ex)
+            logging.error(f"error in websocket tick {ex}")
         return ticks
 
     async def beat_heart_user_stream(self) -> None:
@@ -780,7 +500,21 @@ class KuCoinBot(Bot):
                 await self.ws_user.send(json.dumps({"type": "ping"}))
             except Exception as e:
                 traceback.print_exc()
-                print_(["error sending heartbeat user", e])
+                logging.error(f"error sending heartbeat user {e}")
+
+    async def init_user_stream(self) -> None:
+        res = await self.private_post(self.endpoints["private_token_ws"], {})
+        logging.info(f"init user stream {res}")
+        self.endpoints[
+            "websocket_user"
+        ] = f"{res['data']['instanceServers'][0]['endpoint']}?token={res['data']['token']}"
+
+    async def init_market_stream(self):
+        res = await self.private_post(self.endpoints["public_token_ws"], {})
+        logging.info(f"init market stream {res}")
+        self.endpoints[
+            "websocket_market"
+        ] = f"{res['data']['instanceServers'][0]['endpoint']}?token={res['data']['token']}"
 
     async def subscribe_to_market_stream(self, ws):
         await ws.send(
@@ -794,19 +528,9 @@ class KuCoinBot(Bot):
         )
 
     async def subscribe_to_user_stream(self, ws):
-        await ws.send(
-            json.dumps({"type": "openTunnel", "newTunnelId": "order", "response": True})
-        )
-        await ws.send(
-            json.dumps(
-                {"type": "openTunnel", "newTunnelId": "wallet", "response": True}
-            )
-        )
-        await ws.send(
-            json.dumps(
-                {"type": "openTunnel", "newTunnelId": "position", "response": True}
-            )
-        )
+        await ws.send(json.dumps({"type": "openTunnel", "newTunnelId": "order", "response": True}))
+        await ws.send(json.dumps({"type": "openTunnel", "newTunnelId": "wallet", "response": True}))
+        await ws.send(json.dumps({"type": "openTunnel", "newTunnelId": "position", "response": True}))
 
         await ws.send(
             json.dumps(
@@ -873,18 +597,14 @@ class KuCoinBot(Bot):
                     events.append({"new_open_order": new_open_order})
 
                 elif event["data"]["type"] == "match":
-                    events.append(
-                        {"deleted_order_id": event["data"]["orderId"], "filled": True}
-                    )
+                    events.append({"deleted_order_id": event["data"]["orderId"], "filled": True})
                 elif event["data"]["type"] == "filled":
-                    print(f"order---filled{event}")
-                    events.append(
-                        {"deleted_order_id": event["data"]["orderId"], "filled": True}
-                    )
+                    print(f"debug order---filled{event}")
+                    events.append({"deleted_order_id": event["data"]["orderId"], "filled": True})
                 elif event["data"]["type"] == "canceled":
                     events.append({"deleted_order_id": event["data"]["orderId"]})
                 elif event["data"]["type"] == "update":
-                    print(f"order---update{event}")
+                    print(f"debug order---update{event}")
                     events.append(
                         {
                             "other_symbol": event["data"]["symbol"],
@@ -905,9 +625,7 @@ class KuCoinBot(Bot):
                                     float(int(event["data"]["currentQty"])),
                                     self.qty_step,
                                 )
-                                standardized["pprice_long"] = float(
-                                    event["data"]["avgEntryPrice"]
-                                )
+                                standardized["pprice_long"] = float(event["data"]["avgEntryPrice"])
                             else:
                                 standardized["psize_short"] = -round_(
                                     abs(
@@ -915,23 +633,19 @@ class KuCoinBot(Bot):
                                     ),
                                     self.qty_step,
                                 )
-                                standardized["pprice_short"] = float(
-                                    event["data"]["avgEntryPrice"]
-                                )
+                                standardized["pprice_short"] = float(event["data"]["avgEntryPrice"])
                         else:
                             standardized["psize_long"] = round_(
                                 float(event["data"]["currentQty"]),
                                 self.qty_step,
                             )
-                            standardized["pprice_long"] = float(
-                                event["data"]["avgEntryPrice"]
-                            )
+                            standardized["pprice_long"] = float(event["data"]["avgEntryPrice"])
                     events.append(standardized)
 
             elif event["tunnelId"] == "account":
-                wallet_balance = float(
-                    event["data"]["holdBalancexecute_orderse"]
-                ) + float(event["data"]["availableBalance"])
+                wallet_balance = float(event["data"]["holdBalancexecute_orderse"]) + float(
+                    event["data"]["availableBalance"]
+                )
                 events.append({"wallet_balance": wallet_balance})
 
         return events
