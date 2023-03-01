@@ -692,7 +692,9 @@ class BybitBot(Bot):
                         "page": page,
                     },
                 )
-                fetched = fetched["result"]["data"]
+                fetched = fetched["result"][
+                    "data" if "linear_perpetual" in self.market_type else "trade_list"
+                ]
                 if fetched is None:
                     break
                 if fetched == []:
@@ -730,42 +732,6 @@ class BybitBot(Bot):
             traceback.print_exc()
             return []
         return fills
-
-        return []
-        ffills, fpnls = await asyncio.gather(
-            self.private_get(self.endpoints["fills"], {"symbol": self.symbol, "limit": limit}),
-            self.private_get(self.endpoints["pnls"], {"symbol": self.symbol, "limit": 50}),
-        )
-        return ffills, fpnls
-        try:
-            fills = []
-            for x in fetched["result"]["data"][::-1]:
-                qty, price = float(x["order_qty"]), float(x["price"])
-                if not qty or not price:
-                    continue
-                fill = {
-                    "symbol": x["symbol"],
-                    "id": str(x["exec_id"]),
-                    "order_id": str(x["order_id"]),
-                    "side": x["side"].lower(),
-                    "price": price,
-                    "qty": qty,
-                    "realized_pnl": 0.0,
-                    "cost": (cost := qty / price if self.inverse else qty * price),
-                    "fee_paid": float(x["exec_fee"]),
-                    "fee_token": self.margin_coin,
-                    "timestamp": int(x["trade_time_ms"]),
-                    "position_side": determine_pos_side(x),
-                    "is_maker": x["fee_rate"] < 0.0,
-                }
-                fills.append(fill)
-            return fills
-        except Exception as e:
-            print("error fetching fills", e)
-            return []
-        return fetched
-        print("fetch_fills not implemented for Bybit")
-        return []
 
     async def init_exchange_config(self):
         try:
