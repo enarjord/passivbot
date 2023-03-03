@@ -619,11 +619,16 @@ class KuCoinBot(Bot):
                 events.append(standardized)
 
         elif event["tunnelId"] == "wallet" and event["subject"] == "availableBalance.change":
+
+            '''
             events.append(
                 {
                     "wallet_balance": float(event["data"]["availableBalance"])
                     + float(event["data"]["holdBalance"])
                 }
             )
+            '''
+            # updates too often, would cause spam to exchange, will work without
+            pass
 
         return events
