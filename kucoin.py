@@ -9,16 +9,10 @@ from typing import Union, List, Dict
 import uuid
 
 import aiohttp
-import numpy as np
 
 from njit_funcs import round_, calc_diff
 from passivbot import Bot, logging
 from procedures import print_async_exception, print_
-from pure_funcs import ts_to_date
-
-
-def first_capitalized(s: str):
-    return s[0].upper() + s[1:].lower()
 
 
 def determine_pos_side(o: dict) -> str:
@@ -476,22 +470,18 @@ class KuCoinBot(Bot):
             logging.error(f"error with init_exchange_config {e}")
 
     def standardize_market_stream_event(self, data: dict) -> [dict]:
-        ticks = []
         try:
-            price = data["data"]["change"].split(",")[0]
-            side = data["data"]["change"].split(",")[1]
-            quantity = data["data"]["change"].split(",")[2]
-            ticks.append(
+            return [
                 {
-                    "timestamp": int(data["data"]["timestamp"]),
-                    "price": float(price),
-                    "qty": float(quantity),
-                    "is_buyer_maker": side == "sell",
+                    "timestamp": int(data["data"]["ts"]),
+                    "price": float(data["data"]["price"]),
+                    "qty": float(data["data"]["size"]),
+                    "is_buyer_maker": data["data"]["side"] == "sell",
                 }
-            )
+            ]
         except Exception as ex:
             logging.error(f"error in websocket tick {ex}")
-        return ticks
+        return []
 
     async def beat_heart_user_stream(self) -> None:
         while True:
@@ -521,7 +511,7 @@ class KuCoinBot(Bot):
             json.dumps(
                 {
                     "type": "subscribe",
-                    "topic": f"/contractMarket/level2:{self.symbol}",
+                    "topic": f"/contractMarket/execution:{self.symbol}",
                     "response": True,
                 }
             )
@@ -575,18 +565,18 @@ class KuCoinBot(Bot):
         events = []
         if "tunnelId" not in event:
             return events
-        if "tunnelId" in event:
-            if event["tunnelId"] == "order":
-                if event["data"]["type"] == "open":
-                    new_open_order = {
-                        "order_id": event["data"]["orderId"],
-                        "symbol": event["data"]["symbol"],
-                        "price": float(event["data"]["price"]),
-                        "qty": float(int(event["data"]["size"])),
-                        "type": "limit",
-                        "side": event["data"]["side"].lower(),
-                        "timestamp": event["data"]["orderTime"],
-                    }
+        if event["tunnelId"] == "order":
+            if event["data"]["type"] == "open":
+                new_open_order = {
+                    "order_id": event["data"]["orderId"],
+                    "symbol": event["data"]["symbol"],
+                    "price": float(event["data"]["price"]),
+                    "qty": float(int(event["data"]["size"])),
+                    "type": "limit",
+                    "side": event["data"]["side"].lower(),
+                    "timestamp": event["data"]["orderTime"],
+                }
+                if new_open_order["side"] == "buy":
                     if self.position["long"]["size"] == 0.0:
                         if self.position["short"]["size"] == 0.0:
                             new_open_order["position_side"] = "long"
@@ -594,58 +584,46 @@ class KuCoinBot(Bot):
                             new_open_order["position_side"] = "short"
                     else:
                         new_open_order["position_side"] = "long"
-                    events.append({"new_open_order": new_open_order})
-
-                elif event["data"]["type"] == "match":
-                    events.append({"deleted_order_id": event["data"]["orderId"], "filled": True})
-                elif event["data"]["type"] == "filled":
-                    print(f"debug order---filled{event}")
-                    events.append({"deleted_order_id": event["data"]["orderId"], "filled": True})
-                elif event["data"]["type"] == "canceled":
-                    events.append({"deleted_order_id": event["data"]["orderId"]})
-                elif event["data"]["type"] == "update":
-                    print(f"debug order---update{event}")
-                    events.append(
-                        {
-                            "other_symbol": event["data"]["symbol"],
-                            "other_type": "order_update",
-                        }
-                    )
-
-            elif event["tunnelId"] == "position":
-                if (
-                    event["data"]["symbol"] == self.symbol
-                    and event["data"]["changeReason"] != "markPriceChange"
-                ):
-                    standardized = {}
-                    if event["data"]["changeReason"] == "positionChange":
+                elif new_open_order["side"] == "sell":
+                    if self.position["short"]["size"] == 0.0:
                         if self.position["long"]["size"] == 0.0:
-                            if self.position["short"]["size"] == 0.0:
-                                standardized["psize_long"] = round_(
-                                    float(int(event["data"]["currentQty"])),
-                                    self.qty_step,
-                                )
-                                standardized["pprice_long"] = float(event["data"]["avgEntryPrice"])
-                            else:
-                                standardized["psize_short"] = -round_(
-                                    abs(
-                                        float(event["data"]["currentQty"]),
-                                    ),
-                                    self.qty_step,
-                                )
-                                standardized["pprice_short"] = float(event["data"]["avgEntryPrice"])
+                            new_open_order["position_side"] = "short"
                         else:
-                            standardized["psize_long"] = round_(
-                                float(event["data"]["currentQty"]),
-                                self.qty_step,
-                            )
-                            standardized["pprice_long"] = float(event["data"]["avgEntryPrice"])
-                    events.append(standardized)
+                            new_open_order["position_side"] = "long"
+                    else:
+                        new_open_order["position_side"] = "short"
+                else:
+                    raise Exception(f"unknown pos side {event}")
+                events.append({"new_open_order": new_open_order})
+            elif event["data"]["type"] in ["match", "filled"]:
+                events.append({"deleted_order_id": event["data"]["orderId"], "filled": True})
+            elif event["data"]["type"] in ["canceled", "update"]:
+                events.append({"deleted_order_id": event["data"]["orderId"]})
+        elif event["tunnelId"] == "position":
+            if (
+                event["data"]["symbol"] == self.symbol
+                and event["data"]["changeReason"] != "markPriceChange"
+            ):
+                standardized = {}
+                if event["data"]["changeReason"] == "positionChange":
+                    standardized["psize_long"] = 0.0
+                    standardized["pprice_long"] = 0.0
+                    standardized["psize_short"] = 0.0
+                    standardized["pprice_short"] = 0.0
+                    if event["data"]["currentQty"] > 0.0:
+                        standardized["psize_long"] = event["data"]["currentQty"]
+                        standardized["pprice_long"] = event["data"]["avgEntryPrice"]
+                    elif event["data"]["currentQty"] < 0.0:
+                        standardized["psize_short"] = event["data"]["currentQty"]
+                        standardized["pprice_short"] = event["data"]["avgEntryPrice"]
+                events.append(standardized)
 
-            elif event["tunnelId"] == "account":
-                wallet_balance = float(event["data"]["holdBalancexecute_orderse"]) + float(
-                    event["data"]["availableBalance"]
-                )
-                events.append({"wallet_balance": wallet_balance})
+        elif event["tunnelId"] == "wallet" and event["subject"] == "availableBalance.change":
+            events.append(
+                {
+                    "wallet_balance": float(event["data"]["availableBalance"])
+                    + float(event["data"]["holdBalance"])
+                }
+            )
 
         return events
