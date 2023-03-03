@@ -1409,7 +1409,7 @@ async def main() -> None:
         bot = await create_okx_bot(config)
     elif config["exchange"] == "kucoin":
         from procedures import create_kucoin_bot
-
+        config["ohlcv"] = True
         bot = await create_kucoin_bot(config)
     else:
         raise Exception("unknown exchange", config["exchange"])
