@@ -1095,12 +1095,6 @@ async def main():
         help="download only, do not dump ticks caches",
         action="store_true",
     )
-    parser.add_argument(
-        "-oh",
-        "--ohlcv",
-        help="use 1m ohlcv instead of 1s ticks",
-        action="store_true",
-    )
     parser = add_argparse_args(parser)
 
     args = parser.parse_args()
