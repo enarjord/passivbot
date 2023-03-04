@@ -1,6 +1,6 @@
 ![Passivbot](docs/images/pbot_logo_full.svg)
 
-# Trading bot running on Bybit, Binance, OKX and Bitget
+# Trading bot running on Bybit, Binance, OKX, Kucoin and Bitget
 
 :warning: **Use at own risk** :warning:
 

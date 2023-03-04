@@ -30,6 +30,7 @@ Currently the exchanges
 **Binance US**  
 **Bitget USDT and Coin margined Futures**  
 **OKX USDT margined perpetuals**  
+**Kucoin USDT margined perpetuals**  
 **Bybit Derivatives**  
 are implemented and supported.  
 
