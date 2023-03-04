@@ -270,6 +270,20 @@ class KuCoinBot(Bot):
                 position["short"]["price"] = positions["data"]["avgEntryPrice"]
                 position["short"]["liquidation_price"] = positions["data"]["liquidationPrice"]
             position["wallet_balance"] = balance["data"]["marginBalance"]
+            # if false, enable auto margin deposit
+            if not positions["data"]["autoDeposit"]:
+                logging.info("enabling auto margin deposit")
+                ret = None
+                try:
+                    ret = await self.private_post(
+                        "/api/v1/position/margin/auto-deposit-status",
+                        {"symbol": self.symbol, "status": True},
+                    )
+                    logging.info(f"{ret}")
+                except Exception as exx:
+                    logging.error(f"failed to enable auto margin deposit {exx}")
+                    print_async_exception(ret)
+                    traceback.print_exc()
             return position
         except Exception as e:
             logging.error(f"error fetching pos or balance {e}")
@@ -320,6 +334,7 @@ class KuCoinBot(Bot):
                 "clientOid"
             ] = f"{(order['custom_id'] if 'custom_id' in order else '')}{uuid.uuid4().hex}"[:32]
             executed = await self.private_post(self.endpoints["create_order"], params)
+            print("debug execution", executed)
             if "code" in executed and executed["code"] == "200000":
                 return {
                     "symbol": self.symbol,
@@ -620,14 +635,14 @@ class KuCoinBot(Bot):
 
         elif event["tunnelId"] == "wallet" and event["subject"] == "availableBalance.change":
 
-            '''
+            """
             events.append(
                 {
                     "wallet_balance": float(event["data"]["availableBalance"])
                     + float(event["data"]["holdBalance"])
                 }
             )
-            '''
+            """
             # updates too often, would cause spam to exchange, will work without
             pass
 
