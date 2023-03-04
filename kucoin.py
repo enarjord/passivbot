@@ -334,7 +334,6 @@ class KuCoinBot(Bot):
                 "clientOid"
             ] = f"{(order['custom_id'] if 'custom_id' in order else '')}{uuid.uuid4().hex}"[:32]
             executed = await self.private_post(self.endpoints["create_order"], params)
-            print("debug execution", executed)
             if "code" in executed and executed["code"] == "200000":
                 return {
                     "symbol": self.symbol,
