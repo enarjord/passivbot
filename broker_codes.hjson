@@ -4,4 +4,5 @@
 	bybit: "passivbotbybit"
 	bitget: "Passivbot"
 	okx: "0fe0667832d7BCDE"
+	kucoin: ""
 }
