@@ -406,7 +406,9 @@ def add_argparse_args(parser):
         required=False,
         dest="ohlcv",
         default=None,
-        help="if [y/yes], use 1m ohlcv instead of 1s ticks, overriding param ohlcv from config/backtest/default.hjson",
+        nargs="?",
+        const="y",
+        help="if no arg or [y/yes], use 1m ohlcv instead of 1s ticks, overriding param ohlcv from config/backtest/default.hjson",
     )
     return parser
 
