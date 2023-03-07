@@ -1267,6 +1267,9 @@ class Bot:
     async def init_user_stream(self) -> None:
         pass
 
+    async def init_market_stream(self) -> None:
+        pass
+
     async def start_websocket_user_stream(self) -> None:
         await self.init_user_stream()
         asyncio.create_task(self.beat_heart_user_stream())
@@ -1277,6 +1280,8 @@ class Bot:
             async for msg in ws:
                 # print('debug user stream', msg)
                 if msg is None or msg == "pong":
+                    continue
+                if "type" in msg and "welcome" in msg or "ack" in msg:
                     continue
                 try:
                     if self.stop_websocket:
@@ -1291,6 +1296,7 @@ class Bot:
                     traceback.print_exc()
 
     async def start_websocket_market_stream(self) -> None:
+        await self.init_market_stream()
         k = 1
         asyncio.create_task(self.beat_heart_market_stream())
         async with websockets.connect(self.endpoints["websocket_market"]) as ws:
@@ -1299,6 +1305,8 @@ class Bot:
             async for msg in ws:
                 # print('debug market stream', msg)
                 if msg is None or msg == "pong":
+                    continue
+                if "type" in msg and "welcome" in msg or "ack" in msg:
                     continue
                 try:
                     if self.stop_websocket:
@@ -1746,6 +1754,10 @@ async def main() -> None:
 
         config["ohlcv"] = True
         bot = await create_okx_bot(config)
+    elif config["exchange"] == "kucoin":
+        from procedures import create_kucoin_bot
+        config["ohlcv"] = True
+        bot = await create_kucoin_bot(config)
     else:
         raise Exception("unknown exchange", config["exchange"])
 

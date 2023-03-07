@@ -42,7 +42,7 @@ class Downloader:
         # use binance data for bybit
         self.config["exchange"] = (
             "binance"
-            if self.config["exchange"] in ["bybit", "bitget", "okx"]
+            if self.config["exchange"] in ["bybit", "bitget", "okx", "kucoin"]
             else self.config["exchange"]
         )
         self.spot = "spot" in config and config["spot"]
