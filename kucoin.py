@@ -82,6 +82,7 @@ class KuCoinBot(Bot):
                 "public_token_ws": "/api/v1/bullet-public",
                 "private_token_ws": "/api/v1/bullet-private",
                 "income": "/api/v1/recentFills",
+                "recent_orders": "/api/v1/recentDoneOrders",
             }
             self.hedge_mode = self.config["hedge_mode"] = False
         else:
@@ -462,6 +463,35 @@ class KuCoinBot(Bot):
         end_time: int = None,
     ):
         return []
+
+    async def fetch_latest_fills(self):
+        fetched = None
+        try:
+            fetched = await self.private_get(self.endpoints["recent_orders"])
+            return [
+                {
+                    "order_id": elm["id"],
+                    "symbol": elm["symbol"],
+                    "type": elm["type"],
+                    "status": elm["status"],
+                    "custom_id": elm["clientOid"],
+                    "price": float(elm["price"]),
+                    "qty": float(elm["filledSize"]),
+                    "original_qty": float(elm["size"]),
+                    "reduce_only": elm["reduceOnly"],
+                    "side": elm["side"],
+                    "position_side": determine_pos_side(elm),
+                    "timestamp": float(elm["updatedAt"]),
+                }
+                for elm in fetched["data"]
+                if elm["symbol"] == self.symbol and not elm["cancelExist"] and not elm["isActive"]
+            ]
+        except Exception as e:
+            print("error fetching latest fills", e)
+            print_async_exception(fetched)
+            traceback.print_exc()
+            return []
+        return fills
 
     async def init_exchange_config(self):
         try:
