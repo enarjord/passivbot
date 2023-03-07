@@ -30,10 +30,12 @@ from pure_funcs import (
     spotify_config,
     determine_passivbot_mode,
     candidate_to_live_config,
+    make_compatible,
 )
 
 
 def backtest(config: dict, data: np.ndarray, do_print=False) -> (list, bool):
+    config.update(make_compatible(config))
     passivbot_mode = determine_passivbot_mode(config)
     xk = create_xk(config)
     if passivbot_mode == "recursive_grid":
@@ -59,13 +61,16 @@ def backtest(config: dict, data: np.ndarray, do_print=False) -> (list, bool):
             config["maker_fee"],
             **xk,
         )
-    return backtest_static_grid(
-        data,
-        config["starting_balance"],
-        config["latency_simulation_ms"],
-        config["maker_fee"],
-        **xk,
-    )
+    elif passivbot_mode == "static_grid":
+        return backtest_static_grid(
+            data,
+            config["starting_balance"],
+            config["latency_simulation_ms"],
+            config["maker_fee"],
+            **xk,
+        )
+    else:
+        raise Exception(f"unknown passivbot mode {passivbot_mode}")
 
 
 def plot_wrap(config, data):
