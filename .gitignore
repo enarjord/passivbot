@@ -343,7 +343,7 @@ backtests/
 !config/backtest/default.hjson
 config/
 historical_data/
-results_harmony_search/*
+results*
 
 # Config files
 api-keys.json
