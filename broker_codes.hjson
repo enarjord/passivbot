@@ -1,0 +1,8 @@
+{
+	// Broker codes to exchanges with which Passivbot has a broker agreement.
+	binance: ""
+	bybit: "passivbotbybit"
+	bitget: "Passivbot"
+	okx: "0fe0667832d7BCDE"
+	kucoin: ""
+}

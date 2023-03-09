@@ -15,8 +15,8 @@ import pprint
 
 from njit_funcs import round_
 from passivbot import Bot, logging
-from procedures import print_async_exception, print_
-from pure_funcs import ts_to_date, sort_dict_keys, date_to_ts
+from procedures import print_async_exception, print_, utc_ms
+from pure_funcs import ts_to_date, sort_dict_keys, date_to_ts, format_float
 
 
 def first_capitalized(s: str):
@@ -44,6 +44,7 @@ class BitgetBot(Bot):
             "position": "/api/mix/v1/position/singlePosition",
             "balance": "/api/mix/v1/account/accounts",
             "ticker": "/api/mix/v1/market/ticker",
+            "tickers": "/api/mix/v1/market/tickers",
             "open_orders": "/api/mix/v1/order/current",
             "create_order": "/api/mix/v1/order/placeOrder",
             "batch_orders": "/api/mix/v1/order/batch-orders",
@@ -51,6 +52,7 @@ class BitgetBot(Bot):
             "cancel_order": "/api/mix/v1/order/cancel-order",
             "ticks": "/api/mix/v1/market/fills",
             "fills": "/api/mix/v1/order/fills",
+            "fills_detailed": "/api/mix/v1/order/history",
             "ohlcvs": "/api/mix/v1/market/candles",
             "websocket_market": "wss://ws.bitget.com/mix/v1/stream",
             "websocket_user": "wss://ws.bitget.com/mix/v1/stream",
@@ -78,7 +80,6 @@ class BitgetBot(Bot):
             "1d": "86400",
             "1w": "604800",
         }
-        self.broker_code = "Passivbot"
         self.session = aiohttp.ClientSession()
 
     def init_market_type(self):
@@ -113,10 +114,10 @@ class BitgetBot(Bot):
         self.coin = e["baseCoin"]
         self.quote = e["quoteCoin"]
         self.price_step = self.config["price_step"] = round_(
-            (10 ** (-int(e["pricePlace"]))) * int(e["priceEndStep"]), 0.00000001
+            (10 ** (-int(e["pricePlace"]))) * int(e["priceEndStep"]), 1e-12
         )
         self.price_rounding = int(e["pricePlace"])
-        self.qty_step = self.config["qty_step"] = round_(10 ** (-int(e["volumePlace"])), 0.00000001)
+        self.qty_step = self.config["qty_step"] = round_(10 ** (-int(e["volumePlace"])), 1e-12)
         self.min_qty = self.config["min_qty"] = float(e["minTradeNum"])
         self.margin_coin = self.coin if self.product_type == "dmcbl" else self.quote
         await super()._init()
@@ -140,13 +141,35 @@ class BitgetBot(Bot):
             "last": float(ticker["data"]["last"]),
         }
 
-    async def init_order_book(self):
-        ticker = await self.fetch_ticker()
-        self.ob = [
-            ticker["bid"],
-            ticker["ask"],
+    async def fetch_tickers(self, product_type=None):
+        tickers = await self.public_get(
+            self.endpoints["tickers"],
+            params={"productType": self.product_type if product_type is None else product_type},
+        )
+        return [
+            {
+                "symbol": ticker["symbol"],
+                "bid": 0.0 if ticker["bestBid"] is None else float(ticker["bestBid"]),
+                "ask": 0.0 if ticker["bestAsk"] is None else float(ticker["bestAsk"]),
+                "last": 0.0 if ticker["last"] is None else float(ticker["last"]),
+            }
+            for ticker in tickers["data"]
         ]
-        self.price = ticker["last"]
+
+    async def init_order_book(self):
+        ticker = None
+        try:
+            ticker = await self.fetch_ticker()
+            self.ob = [
+                ticker["bid"],
+                ticker["ask"],
+            ]
+            self.price = ticker["last"]
+            return True
+        except Exception as e:
+            logging.error(f"error updating order book {e}")
+            print_async_exception(ticker)
+            return False
 
     async def fetch_open_orders(self) -> [dict]:
         fetched = await self.private_get(self.endpoints["open_orders"], {"symbol": self.symbol})
@@ -590,6 +613,61 @@ class BitgetBot(Bot):
             traceback.print_exc()
             print_async_exception(fetched)
             return []
+
+    async def fetch_latest_fills(self):
+        fetched = None
+        try:
+            params = {
+                "symbol": self.symbol,
+                "startTime": int(utc_ms() - 1000 * 60 * 60 * 24 * 6),
+                "endTime": int(utc_ms() + 1000 * 60 * 60 * 2),
+                "pageSize": 100,
+            }
+            fetched = await self.private_get(self.endpoints["fills_detailed"], params)
+            if (
+                fetched["code"] == "00000"
+                and fetched["msg"] == "success"
+                and fetched["data"]["orderList"] is None
+            ):
+                return []
+            fetched = fetched["data"]["orderList"]
+            k = 0
+            while fetched and float(fetched[-1]["cTime"]) > utc_ms() - 1000 * 60 * 60 * 24 * 3:
+                k += 1
+                if k > 5:
+                    break
+                params["endTime"] = int(float(fetched[-1]["cTime"]))
+                fetched2 = (await self.private_get(self.endpoints["fills_detailed"], params))["data"][
+                    "orderList"
+                ]
+                if fetched2[-1] == fetched[-1]:
+                    break
+                fetched_d = {x["orderId"]: x for x in fetched + fetched2}
+                fetched = sorted(fetched_d.values(), key=lambda x: float(x["cTime"]), reverse=True)
+            fills = [
+                {
+                    "order_id": elm["orderId"],
+                    "symbol": elm["symbol"],
+                    "status": elm["state"],
+                    "custom_id": elm["clientOid"],
+                    "price": float(elm["priceAvg"]),
+                    "qty": float(elm["filledQty"]),
+                    "original_qty": float(elm["size"]),
+                    "type": elm["orderType"],
+                    "reduce_only": elm["reduceOnly"],
+                    "side": "buy" if elm["side"] in ["close_short", "open_long"] else "sell",
+                    "position_side": elm["posSide"],
+                    "timestamp": float(elm["cTime"]),
+                }
+                for elm in fetched
+                if "filled" in elm["state"]
+            ]
+        except Exception as e:
+            print("error fetching latest fills", e)
+            print_async_exception(fetched)
+            traceback.print_exc()
+            return []
+        return fills
 
     async def fetch_fills(
         self,

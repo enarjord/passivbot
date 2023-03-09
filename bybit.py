@@ -74,7 +74,9 @@ class BybitBot(Bot):
             "ticker": "/v2/public/tickers",
             "funds_transfer": "/asset/v1/private/transfer",
         }
-        self.session = aiohttp.ClientSession(headers={"referer": "passivbotbybit"})
+        self.session = aiohttp.ClientSession(
+            headers=({"referer": self.broker_code} if self.broker_code else {})
+        )
 
     def init_market_type(self):
         websockets_base_endpoint = "wss://stream.bybit.com"
@@ -155,24 +157,31 @@ class BybitBot(Bot):
             raise Exception(f"symbol missing {self.symbol}")
         self.max_leverage = e["leverage_filter"]["max_leverage"]
         self.coin = e["base_currency"]
-        self.quot = e["quote_currency"]
+        self.quote = e["quote_currency"]
         self.price_step = self.config["price_step"] = float(e["price_filter"]["tick_size"])
         self.qty_step = self.config["qty_step"] = float(e["lot_size_filter"]["qty_step"])
         self.min_qty = self.config["min_qty"] = float(e["lot_size_filter"]["min_trading_qty"])
-        self.min_cost = self.config["min_cost"] = 0.0
+        self.min_cost = self.config["min_cost"] = 1.0
         self.init_market_type()
-        self.margin_coin = self.coin if self.inverse else self.quot
+        self.margin_coin = self.coin if self.inverse else self.quote
         await super()._init()
         await self.init_order_book()
         await self.update_position()
 
     async def init_order_book(self):
-        ticker = await self.private_get(self.endpoints["ticker"], {"symbol": self.symbol})
-        self.ob = [
-            float(ticker["result"][0]["bid_price"]),
-            float(ticker["result"][0]["ask_price"]),
-        ]
-        self.price = float(ticker["result"][0]["last_price"])
+        ticker = None
+        try:
+            ticker = await self.private_get(self.endpoints["ticker"], {"symbol": self.symbol})
+            self.ob = [
+                float(ticker["result"][0]["bid_price"]),
+                float(ticker["result"][0]["ask_price"]),
+            ]
+            self.price = float(ticker["result"][0]["last_price"])
+            return True
+        except Exception as e:
+            logging.error(f"error updating order book {e}")
+            print_async_exception(ticker)
+            return False
 
     async def fetch_open_orders(self) -> [dict]:
         fetched = await self.private_get(self.endpoints["open_orders"], {"symbol": self.symbol})
@@ -257,11 +266,11 @@ class BybitBot(Bot):
             if "linear_perpetual" in self.market_type:
                 fetched, bal = await asyncio.gather(
                     self.private_get(self.endpoints["position"], {"symbol": self.symbol}),
-                    self.private_get(self.endpoints["balance"], {"coin": self.quot}),
+                    self.private_get(self.endpoints["balance"], {"coin": self.quote}),
                 )
                 long_pos = [e for e in fetched["result"] if e["side"] == "Buy"][0]
                 short_pos = [e for e in fetched["result"] if e["side"] == "Sell"][0]
-                position["wallet_balance"] = float(bal["result"][self.quot]["wallet_balance"])
+                position["wallet_balance"] = float(bal["result"][self.quote]["wallet_balance"])
             else:
                 fetched, bal = await asyncio.gather(
                     self.private_get(self.endpoints["position"], {"symbol": self.symbol}),
@@ -613,6 +622,48 @@ class BybitBot(Bot):
             print_async_exception(fetched)
             return []
 
+    async def fetch_latest_fills(self):
+        fetched = None
+        try:
+            fetched = await self.private_get(
+                self.endpoints["fills"],
+                {
+                    "symbol": self.symbol,
+                    "limit": 200,
+                    "start_time": int((time() - 60 * 60 * 24) * 1000),
+                },
+            )
+            if "inverse_perpetual" in self.market_type:
+                fetched_data = fetched["result"]["trade_list"]
+            elif "linear_perpetual" in self.market_type:
+                fetched_data = fetched["result"]["data"]
+            if fetched_data is None and fetched["ret_code"] == 0 and fetched["ret_msg"] == "OK":
+                return []
+            fills = [
+                {
+                    "order_id": elm["order_id"],
+                    "symbol": elm["symbol"],
+                    "status": elm["exec_type"].lower(),
+                    "custom_id": elm["order_link_id"],
+                    "price": float(elm["exec_price"]),
+                    "qty": float(elm["exec_qty"]),
+                    "original_qty": float(elm["order_qty"]),
+                    "type": elm["order_type"].lower(),
+                    "reduce_only": None,
+                    "side": elm["side"].lower(),
+                    "position_side": determine_pos_side(elm),
+                    "timestamp": elm["trade_time_ms"],
+                }
+                for elm in fetched_data
+                if elm["exec_type"] == "Trade"
+            ]
+        except Exception as e:
+            print("error fetching latest fills", e)
+            print_async_exception(fetched)
+            traceback.print_exc()
+            return []
+        return fills
+
     async def fetch_fills(
         self,
         limit: int = 200,
@@ -620,41 +671,67 @@ class BybitBot(Bot):
         start_time: int = None,
         end_time: int = None,
     ):
-        return []
-        ffills, fpnls = await asyncio.gather(
-            self.private_get(self.endpoints["fills"], {"symbol": self.symbol, "limit": limit}),
-            self.private_get(self.endpoints["pnls"], {"symbol": self.symbol, "limit": 50}),
-        )
-        return ffills, fpnls
+        fetched = None
         try:
+            if start_time is None:
+                start_time = int((time() - 60 * 60 * 24) * 1000)
+            if end_time is None:
+                end_time = int((time() + 60 * 60 * 2) * 1000)
             fills = []
-            for x in fetched["result"]["data"][::-1]:
-                qty, price = float(x["order_qty"]), float(x["price"])
-                if not qty or not price:
-                    continue
-                fill = {
-                    "symbol": x["symbol"],
-                    "id": str(x["exec_id"]),
-                    "order_id": str(x["order_id"]),
-                    "side": x["side"].lower(),
-                    "price": price,
-                    "qty": qty,
-                    "realized_pnl": 0.0,
-                    "cost": (cost := qty / price if self.inverse else qty * price),
-                    "fee_paid": float(x["exec_fee"]),
-                    "fee_token": self.margin_coin,
-                    "timestamp": int(x["trade_time_ms"]),
-                    "position_side": determine_pos_side(x),
-                    "is_maker": x["fee_rate"] < 0.0,
-                }
-                fills.append(fill)
-            return fills
+            page = 1
+            last_order = None
+            while True:
+                fetched = await self.private_get(
+                    self.endpoints["fills"],
+                    {
+                        "symbol": self.symbol,
+                        "limit": 200,
+                        "start_time": start_time,
+                        "end_time": end_time,
+                        "exec_type": "Trade",
+                        "page": page,
+                    },
+                )
+                fetched = fetched["result"][
+                    "data" if "linear_perpetual" in self.market_type else "trade_list"
+                ]
+                if fetched is None:
+                    break
+                if fetched == []:
+                    break
+                if fetched[-1] == last_order:
+                    break
+                fills += fetched
+                if fetched[-1]["trade_time_ms"] >= end_time:
+                    break
+                last_order = fetched[-1]
+                page += 1
+                print(last_order)
+            fills_f = []
+            for k, elm in {x["order_id"]: x for x in fills}.items():
+                fills_f.append(
+                    {
+                        "order_id": elm["order_id"],
+                        "symbol": elm["symbol"],
+                        "status": elm["exec_type"].lower(),
+                        "custom_id": elm["order_link_id"],
+                        "price": float(elm["exec_price"]),
+                        "qty": float(elm["exec_qty"]),
+                        "original_qty": float(elm["order_qty"]),
+                        "type": elm["order_type"].lower(),
+                        "reduce_only": None,
+                        "side": elm["side"].lower(),
+                        "position_side": determine_pos_side(elm),
+                        "timestamp": elm["trade_time_ms"],
+                    }
+                )
+            return sorted(fills_f, key=lambda x: x["timestamp"], reverse=False)
         except Exception as e:
-            print("error fetching fills", e)
+            print("error fetching latest fills", e)
+            print_async_exception(fetched)
+            traceback.print_exc()
             return []
-        return fetched
-        print("fetch_fills not implemented for Bybit")
-        return []
+        return fills
 
     async def init_exchange_config(self):
         try:

@@ -106,6 +106,7 @@ class BinanceBotSpot(Bot):
             "open_orders": "/api/v3/openOrders",
             "ticker": "/api/v3/ticker/bookTicker",
             "fills": "/api/v3/myTrades",
+            "fills_detailed": "/api/v3/allOrders",
             "create_order": "/api/v3/order",
             "cancel_order": "/api/v3/order",
             "ticks": "/api/v3/aggTrades",
@@ -131,7 +132,7 @@ class BinanceBotSpot(Bot):
         for e in exchange_info["symbols"]:
             if e["symbol"] == self.symbol:
                 self.coin = e["baseAsset"]
-                self.quot = self.margin_coin = e["quoteAsset"]
+                self.quote = self.margin_coin = e["quoteAsset"]
                 for q in e["filters"]:
                     if q["filterType"] == "LOT_SIZE":
                         self.min_qty = self.config["min_qty"] = float(q["minQty"])
@@ -162,7 +163,7 @@ class BinanceBotSpot(Bot):
     def calc_orders(self):
         default_orders = super().calc_orders()
         orders = []
-        remaining_cost = self.balance[self.quot]["onhand"]
+        remaining_cost = self.balance[self.quote]["onhand"]
         for order in sorted(default_orders, key=lambda x: calc_diff(x["price"], self.price)):
             if order["price"] > min(
                 self.max_price,
@@ -194,6 +195,7 @@ class BinanceBotSpot(Bot):
                     orders.append(order)
                     remaining_cost -= cost
             else:
+                # TODO: ensure sell qty is greater than min qty
                 orders.append(order)
         return orders
 
@@ -208,14 +210,22 @@ class BinanceBotSpot(Bot):
         await self.check_if_other_positions()
 
     async def init_order_book(self):
-        ticker = await self.public_get(self.endpoints["ticker"], {"symbol": self.symbol})
-        self.ob = [float(ticker["bidPrice"]), float(ticker["askPrice"])]
-        self.price = np.random.choice(self.ob)
+        ticker = None
+        try:
+            ticker = await self.public_get(self.endpoints["ticker"], {"symbol": self.symbol})
+            self.ob = [float(ticker["bidPrice"]), float(ticker["askPrice"])]
+            self.price = np.random.choice(self.ob)
+            return True
+        except Exception as e:
+            logging.error(f"error updating order book {e}")
+            print_async_exception(ticker)
+            return False
 
     async def fetch_open_orders(self) -> [dict]:
         return [
             {
                 "order_id": int(e["orderId"]),
+                "custom_id": e["clientOrderId"],
                 "symbol": e["symbol"],
                 "price": float(e["price"]),
                 "qty": float(e["origQty"]),
@@ -260,7 +270,7 @@ class BinanceBotSpot(Bot):
                 "liquidation_price": 0.0,
             },
             "short": {"size": 0.0, "price": 0.0, "liquidation_price": 0.0},
-            "wallet_balance": balance[self.quot]["onhand"]
+            "wallet_balance": balance[self.quote]["onhand"]
             + balance[self.coin]["onhand"] * pprice_long,
         }
         return position
@@ -406,7 +416,7 @@ class BinanceBotSpot(Bot):
                         "symbol": fill["symbol"],
                         "income_type": "realized_pnl",
                         "income": calc_pnl_long(pprice, fill["price"], fill["qty"], False, 1.0),
-                        "token": self.quot,
+                        "token": self.quote,
                         "timestamp": fill["timestamp"],
                         "info": 0,
                         "transaction_id": fill["id"],
@@ -457,6 +467,36 @@ class BinanceBotSpot(Bot):
             ]
         except Exception as e:
             print("error fetching fills a", e)
+            traceback.print_exc()
+            return []
+        return fills
+
+    async def fetch_latest_fills(self):
+        params = {"symbol": self.symbol, "limit": 100}
+        fetched = None
+        try:
+            fetched = await self.private_get(self.endpoints["fills_detailed"], params)
+            fills = [
+                {
+                    "order_id": elm["orderId"],
+                    "symbol": elm["symbol"],
+                    "status": elm["status"].lower(),
+                    "custom_id": elm["clientOrderId"],
+                    "price": float(elm["price"]),
+                    "qty": float(elm["executedQty"]),
+                    "original_qty": float(elm["origQty"]),
+                    "type": elm["type"].lower(),
+                    "reduce_only": None,
+                    "side": elm["side"].lower(),
+                    "position_side": "long",
+                    "timestamp": elm["time"],
+                }
+                for elm in fetched
+                if "FILLED" in elm["status"]
+            ]
+        except Exception as e:
+            print("error fetching latest fills", e)
+            print_async_exception(fetched)
             traceback.print_exc()
             return []
         return fills
@@ -612,7 +652,7 @@ class BinanceBotSpot(Bot):
                     self.balance[token]["free"] = event["balance"][token]["free"]
                     self.balance[token]["locked"] = event["balance"][token]["locked"]
                     onhand = event["balance"][token]["free"] + event["balance"][token]["locked"]
-                    if token in [self.quot, self.coin] and (
+                    if token in [self.quote, self.coin] and (
                         "onhand" not in self.balance[token] or self.balance[token]["onhand"] != onhand
                     ):
                         onhand_change = True

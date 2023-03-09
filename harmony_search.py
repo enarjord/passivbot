@@ -30,9 +30,9 @@ from procedures import (
     prepare_optimize_config,
     load_live_config,
     make_get_filepath,
-    load_exchange_key_secret_passphrase,
     prepare_backtest_config,
     dump_live_config,
+    utc_ms,
 )
 from time import sleep, time
 import logging
@@ -41,53 +41,9 @@ import logging.config
 logging.config.dictConfig({"version": 1, "disable_existing_loggers": True})
 
 
-def backtest_wrap(config_: dict, ticks_caches: dict):
-    """
-    loads historical data from disk, runs backtest and returns relevant metrics
-    """
-    config = {
-        **{"long": deepcopy(config_["long"]), "short": deepcopy(config_["short"])},
-        **{
-            k: config_[k]
-            for k in [
-                "starting_balance",
-                "latency_simulation_ms",
-                "symbol",
-                "market_type",
-                "config_no",
-            ]
-        },
-        **{k: v for k, v in config_["market_specific_settings"].items()},
-    }
-    if config["symbol"] in ticks_caches:
-        ticks = ticks_caches[config["symbol"]]
-    else:
-        ticks = np.load(config_["ticks_cache_fname"])
-    try:
-        fills_long, fills_short, stats = backtest(config, ticks)
-        longs, shorts, sdf, analysis = analyze_fills(fills_long, fills_short, stats, config)
-        """
-        with open("logs/debug_harmonysearch.txt", "a") as f:
-            f.write(json.dumps({"config": denumpyize(config), "analysis": analysis}) + "\n")
-        """
-        logging.debug(
-            f"backtested {config['symbol']: <12} pa distance long {analysis['pa_distance_mean_long']:.6f} "
-            + f"pa distance short {analysis['pa_distance_mean_short']:.6f} adg long {analysis['adg_long']:.6f} "
-            + f"adg short {analysis['adg_short']:.6f} std long {analysis['pa_distance_std_long']:.5f} "
-            + f"std short {analysis['pa_distance_std_short']:.5f}"
-        )
-    except Exception as e:
-        analysis = get_empty_analysis()
-        logging.error(f'error with {config["symbol"]} {e}')
-        logging.error("config")
-        traceback.print_exc()
-        with open(make_get_filepath("tmp/harmony_search_errors.txt"), "a") as f:
-            f.write(json.dumps([time(), "error", str(e), denumpyize(config)]) + "\n")
-    return analysis
-
-
 class HarmonySearch:
-    def __init__(self, config: dict):
+    def __init__(self, config: dict, backtest_wrap):
+        self.backtest_wrap = backtest_wrap
         self.config = config
         self.do_long = config["long"]["enabled"]
         self.do_short = config["short"]["enabled"]
@@ -136,8 +92,7 @@ class HarmonySearch:
             else {}
         )
         """
-        self.ticks_caches = {}
-        self.shms = {}  # shared memories
+        self.ticks_caches = config["ticks_caches"]
         self.current_best_config = None
 
         # [{'config': dict, 'task': process, 'id_key': tuple}]
@@ -161,6 +116,8 @@ class HarmonySearch:
         self.unfinished_evals[id_key]["single_results"][symbol] = self.workers[wi]["task"].get()
         self.unfinished_evals[id_key]["in_progress"].remove(symbol)
         results = deepcopy(self.unfinished_evals[id_key]["single_results"])
+        for s in results:
+            results[s]["timestamp_finished"] = utc_ms()
         if set(results) == set(self.symbols):
             # completed multisymbol iter
             scores_res = calc_scores(self.config, results)
@@ -182,7 +139,11 @@ class HarmonySearch:
                     if type(self.hm[x]["long"]["score"]) != str
                     else -np.inf,
                 )[-1]
-                if self.do_long and scores["long"] < self.hm[worst_key_long]["long"]["score"]:
+                if (
+                    self.do_long
+                    and not isinstance(self.hm[worst_key_long]["long"]["score"], str)
+                    and scores["long"] < self.hm[worst_key_long]["long"]["score"]
+                ):
                     self.hm[worst_key_long]["long"] = {
                         "config": deepcopy(cfg["long"]),
                         "score": scores["long"],
@@ -199,7 +160,11 @@ class HarmonySearch:
                     if type(self.hm[x]["short"]["score"]) != str
                     else -np.inf,
                 )[-1]
-                if self.do_short and scores["short"] < self.hm[worst_key_short]["short"]["score"]:
+                if (
+                    self.do_short
+                    and not isinstance(self.hm[worst_key_short]["short"]["score"], str)
+                    and scores["short"] < self.hm[worst_key_short]["short"]["score"]
+                ):
                     self.hm[worst_key_short]["short"] = {
                         "config": deepcopy(cfg["short"]),
                         "score": scores["short"],
@@ -234,9 +199,13 @@ class HarmonySearch:
             }
             tmp_fname = f"{self.results_fpath}{cfg['config_no']:06}_best_config"
             is_better = False
-            if self.do_long and scores["long"] <= self.hm[best_key_long]["long"]["score"]:
+            if (
+                self.do_long
+                and not isinstance(self.hm[best_key_long]["long"]["score"], str)
+                and scores["long"] <= self.hm[best_key_long]["long"]["score"]
+            ):
                 is_better = True
-                line = f"i{cfg['config_no']} - new best config long, score {round_dynamic(scores['long'], 4)} "
+                line = f"i{cfg['config_no']} - new best config long, score {round_dynamic(scores['long'], 12)} "
                 for key, _ in keys:
                     line += f"{key} {round_dynamic(raws['long'][key], 4)} "
                 logging.info(line)
@@ -247,9 +216,13 @@ class HarmonySearch:
                     indent=4,
                     sort_keys=True,
                 )
-            if self.do_short and scores["short"] <= self.hm[best_key_short]["short"]["score"]:
+            if (
+                self.do_short
+                and not isinstance(self.hm[best_key_short]["short"]["score"], str)
+                and scores["short"] <= self.hm[best_key_short]["short"]["score"]
+            ):
                 is_better = True
-                line = f"i{cfg['config_no']} - new best config short, score {round_dynamic(scores['short'], 4)} "
+                line = f"i{cfg['config_no']} - new best config short, score {round_dynamic(scores['short'], 12)} "
                 for key, _ in keys:
                     line += f"{key} {round_dynamic(raws['short'][key], 4)} "
                 logging.info(line)
@@ -335,7 +308,7 @@ class HarmonySearch:
         self.workers[wi] = {
             "config": deepcopy(new_harmony),
             "task": self.pool.apply_async(
-                backtest_wrap, args=(deepcopy(new_harmony), self.ticks_caches)
+                self.backtest_wrap, args=(deepcopy(new_harmony), self.ticks_caches)
             ),
             "id_key": new_harmony["config_no"],
         }
@@ -359,20 +332,6 @@ class HarmonySearch:
             **{"symbol": self.symbols[0], "initial_eval_key": hm_key, "config_no": self.iter_counter},
         }
         line = f"starting new initial eval {config['config_no']} of {self.n_harmonies} "
-        if self.do_long:
-            line += " - long: " + " ".join(
-                [
-                    f"{e[0][:2]}{e[0][-2:]}" + str(round_dynamic(e[1], 3))
-                    for e in sorted(self.hm[hm_key]["long"]["config"].items())
-                ]
-            )
-        if self.do_short:
-            line += " - short: " + " ".join(
-                [
-                    f"{e[0][:2]}{e[0][-2:]}" + str(round_dynamic(e[1], 3))
-                    for e in sorted(self.hm[hm_key]["short"]["config"].items())
-                ]
-            )
         logging.info(line)
 
         config["market_specific_settings"] = self.market_specific_settings[config["symbol"]]
@@ -381,7 +340,9 @@ class HarmonySearch:
 
         self.workers[wi] = {
             "config": deepcopy(config),
-            "task": self.pool.apply_async(backtest_wrap, args=(deepcopy(config), self.ticks_caches)),
+            "task": self.pool.apply_async(
+                self.backtest_wrap, args=(deepcopy(config), self.ticks_caches)
+            ),
             "id_key": config["config_no"],
         }
         self.unfinished_evals[config["config_no"]] = {
@@ -393,32 +354,6 @@ class HarmonySearch:
         self.hm[hm_key]["short"]["score"] = "in_progress"
 
     def run(self):
-        try:
-            self.run_()
-        finally:
-            for s in self.shms:
-                self.shms[s].close()
-                self.shms[s].unlink()
-
-    def run_(self):
-
-        # initialize ticks cache
-        """
-        if self.n_cpus >= len(self.symbols) or (
-            "cache_ticks" in self.config and self.config["cache_ticks"]
-        ):
-        """
-        if False:
-            for s in self.symbols:
-                ticks = np.load(f"{self.bt_dir}/{s}/{self.ticks_cache_fname}")
-                self.shms[s] = shared_memory.SharedMemory(create=True, size=ticks.nbytes)
-                self.ticks_caches[s] = np.ndarray(
-                    ticks.shape, dtype=ticks.dtype, buffer=self.shms[s].buf
-                )
-                self.ticks_caches[s][:] = ticks[:]
-                del ticks
-                logging.info(f"loaded {s} ticks into shared memory")
-
         # initialize harmony memory
         for _ in range(self.n_harmonies):
             cfg_long = deepcopy(self.config["long"])
@@ -480,7 +415,7 @@ class HarmonySearch:
                             self.workers[wi] = {
                                 "config": config,
                                 "task": self.pool.apply_async(
-                                    backtest_wrap, args=(config, self.ticks_caches)
+                                    self.backtest_wrap, args=(config, self.ticks_caches)
                                 ),
                                 "id_key": id_key,
                             }
@@ -496,222 +431,10 @@ class HarmonySearch:
                         else:
                             # means initial evals are done; start new harmony
                             self.start_new_harmony(wi)
-                        sleep(0.25)
-
-
-async def main():
-    logging.basicConfig(format="", level=os.environ.get("LOGLEVEL", "INFO"))
-
-    parser = argparse.ArgumentParser(
-        prog="Optimize multi symbol", description="Optimize passivbot config multi symbol"
-    )
-    parser.add_argument(
-        "-o",
-        "--optimize_config",
-        type=str,
-        required=False,
-        dest="optimize_config_path",
-        default="configs/optimize/harmony_search.hjson",
-        help="optimize config hjson file",
-    )
-    parser.add_argument(
-        "-t",
-        "--start",
-        type=str,
-        required=False,
-        dest="starting_configs",
-        default=None,
-        help="start with given live configs.  single json file or dir with multiple json files",
-    )
-    parser.add_argument(
-        "-i", "--iters", type=int, required=False, dest="iters", default=None, help="n optimize iters"
-    )
-    parser.add_argument(
-        "-c", "--n_cpus", type=int, required=False, dest="n_cpus", default=None, help="n cpus"
-    )
-    parser.add_argument(
-        "-le",
-        "--long",
-        type=str,
-        required=False,
-        dest="long_enabled",
-        default=None,
-        help="long enabled: [y/n]",
-    )
-    parser.add_argument(
-        "-se",
-        "--short",
-        type=str,
-        required=False,
-        dest="short_enabled",
-        default=None,
-        help="short enabled: [y/n]",
-    )
-    parser.add_argument(
-        "-pm",
-        "--passivbot_mode",
-        "--passivbot-mode",
-        type=str,
-        required=False,
-        dest="passivbot_mode",
-        default=None,
-        help="passivbot mode options: [s/static_grid, r/recursive_grid, n/neat_grid]",
-    )
-    parser.add_argument(
-        "-sf",
-        "--score_formula",
-        "--score-formula",
-        type=str,
-        required=False,
-        dest="score_formula",
-        default=None,
-        help="passivbot score formula options: [adg_PAD_mean, adg_PAD_std, adg_DGstd_ratio, adg_mean, adg_min, adg_PAD_std_min]",
-    )
-    parser.add_argument(
-        "-oh",
-        "--ohlcv",
-        help="use 1m ohlcv instead of 1s ticks",
-        action="store_true",
-    )
-    parser = add_argparse_args(parser)
-    args = parser.parse_args()
-    args.symbol = "BTCUSDT"  # dummy symbol
-    config = await prepare_optimize_config(args)
-    if args.score_formula is not None:
-        if args.score_formula not in [
-            "adg_PAD_mean",
-            "adg_PAD_std",
-            "adg_DGstd_ratio",
-            "adg_mean",
-            "adg_min",
-            "adg_PAD_std_min",
-            "adg_realized_PAD_mean",
-            "adg_realized_PAD_std",
-        ]:
-            logging.error(f"unknown score formula {args.score_formula}")
-            logging.error(f"using score formula {config['score_formula']}")
-        else:
-            config["score_formula"] = args.score_formula
-    if args.passivbot_mode is not None:
-        if args.passivbot_mode in ["s", "static_grid", "static"]:
-            config["passivbot_mode"] = "static_grid"
-        elif args.passivbot_mode in ["r", "recursive_grid", "recursive"]:
-            config["passivbot_mode"] = "recursive_grid"
-        elif args.passivbot_mode in ["n", "neat_grid", "neat"]:
-            config["passivbot_mode"] = "neat_grid"
-        else:
-            raise Exception(f"unknown passivbot mode {args.passivbot_mode}")
-    passivbot_mode = config["passivbot_mode"]
-    assert passivbot_mode in [
-        "recursive_grid",
-        "static_grid",
-        "neat_grid",
-    ], f"unknown passivbot mode {passivbot_mode}"
-    config.update(get_template_live_config(passivbot_mode))
-    config["long"]["backwards_tp"] = config["backwards_tp_long"]
-    config["short"]["backwards_tp"] = config["backwards_tp_short"]
-    config["exchange"] = load_exchange_key_secret_passphrase(config["user"])[0]
-    args = parser.parse_args()
-    if args.long_enabled is None:
-        config["long"]["enabled"] = config["do_long"]
-    else:
-        if "y" in args.long_enabled.lower():
-            config["long"]["enabled"] = config["do_long"] = True
-        elif "n" in args.long_enabled.lower():
-            config["long"]["enabled"] = config["do_long"] = False
-        else:
-            raise Exception("please specify y/n with kwarg -le/--long")
-    if args.short_enabled is None:
-        config["short"]["enabled"] = config["do_short"]
-    else:
-        if "y" in args.short_enabled.lower():
-            config["short"]["enabled"] = config["do_short"] = True
-        elif "n" in args.short_enabled.lower():
-            config["short"]["enabled"] = config["do_short"] = False
-        else:
-            raise Exception("please specify y/n with kwarg -le/--short")
-    if args.symbol is not None:
-        config["symbols"] = args.symbol.split(",")
-    if args.n_cpus is not None:
-        config["n_cpus"] = args.n_cpus
-    if args.base_dir is not None:
-        config["base_dir"] = args.base_dir
-    config["ohlcv"] = args.ohlcv
-    print()
-    lines = [(k, getattr(args, k)) for k in args.__dict__ if args.__dict__[k] is not None]
-    lines += [(k, config[k]) for k in ["start_date", "end_date"] if k not in [z[0] for z in lines]]
-    for line in lines:
-        logging.info(f"{line[0]: <{max([len(x[0]) for x in lines]) + 2}} {line[1]}")
-    print()
-
-    # download ticks .npy file if missing
-    if config["ohlcv"]:
-        cache_fname = f"{config['start_date']}_{config['end_date']}_ohlcv_cache.npy"
-    else:
-        cache_fname = f"{config['start_date']}_{config['end_date']}_ticks_cache.npy"
-    exchange_name = config["exchange"] + ("_spot" if config["market_type"] == "spot" else "")
-    config["symbols"] = sorted(config["symbols"])
-    for symbol in config["symbols"]:
-        cache_dirpath = os.path.join(config["base_dir"], exchange_name, symbol, "caches", "")
-        if not os.path.exists(cache_dirpath + cache_fname) or not os.path.exists(
-            cache_dirpath + "market_specific_settings.json"
-        ):
-            logging.info(f"fetching data {symbol}")
-            args.symbol = symbol
-            tmp_cfg = await prepare_backtest_config(args)
-            if config["ohlcv"]:
-                data = load_hlc_cache(
-                    symbol,
-                    config["start_date"],
-                    config["end_date"],
-                    base_dir=config["base_dir"],
-                    spot=config["spot"],
-                    exchange=config["exchange"],
-                )
-            else:
-                downloader = Downloader({**config, **tmp_cfg})
-                await downloader.get_sampled_ticks()
-
-    # prepare starting configs
-    cfgs = []
-    if args.starting_configs is not None:
-        logging.info("preparing starting configs...")
-        if os.path.isdir(args.starting_configs):
-            for fname in os.listdir(args.starting_configs):
-                try:
-                    cfg = load_live_config(os.path.join(args.starting_configs, fname))
-                    assert determine_passivbot_mode(cfg) == passivbot_mode, "wrong passivbot mode"
-                    cfgs.append(cfg)
-                    logging.info(f"successfully loaded config {fname}")
-
-                except Exception as e:
-                    logging.error(f"error loading config {fname}: {e}")
-        elif os.path.exists(args.starting_configs):
-            hm_load_failed = True
-            if "hm_" in args.starting_configs:
-                try:
-                    hm = json.load(open(args.starting_configs))
-                    for k in hm:
-                        cfg = {"long": hm[k]["long"]["config"], "short": hm[k]["short"]["config"]}
-                        assert (
-                            determine_passivbot_mode(cfg) == passivbot_mode
-                        ), "wrong passivbot mode in harmony memory"
-                        cfgs.append(cfg)
-                    logging.info(f"loaded harmony memory {args.starting_configs}")
-                    hm_load_failed = False
-                except Exception as e:
-                    logging.error(f"error loading harmony memory {args.starting_configs}: {e}")
-            if hm_load_failed:
-                try:
-                    cfg = load_live_config(args.starting_configs)
-                    assert determine_passivbot_mode(cfg) == passivbot_mode, "wrong passivbot mode"
-                    cfgs.append(cfg)
-                except Exception as e:
-                    logging.error(f"error loading config {args.starting_configs}: {e}")
-    config["starting_configs"] = cfgs
-    harmony_search = HarmonySearch(config)
-    harmony_search.run()
+                        sleep(0.0001)
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    from optimize import main as main_
+
+    asyncio.run(main_(algorithm="harmony_search"))

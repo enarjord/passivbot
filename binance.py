@@ -139,6 +139,7 @@ class BinanceBot(Bot):
                     "open_orders": "/fapi/v1/openOrders",
                     "ticker": "/fapi/v1/ticker/bookTicker",
                     "fills": "/fapi/v1/userTrades",
+                    "fills_detailed": "/fapi/v1/allOrders",
                     "income": "/fapi/v1/income",
                     "create_order": "/fapi/v1/order",
                     "cancel_order": "/fapi/v1/order",
@@ -171,6 +172,7 @@ class BinanceBot(Bot):
                         "open_orders": "/dapi/v1/openOrders",
                         "ticker": "/dapi/v1/ticker/bookTicker",
                         "fills": "/dapi/v1/userTrades",
+                        "fills_detailed": "/dapi/v1/allOrders",
                         "income": "/dapi/v1/income",
                         "create_order": "/dapi/v1/order",
                         "cancel_order": "/dapi/v1/order",
@@ -204,7 +206,7 @@ class BinanceBot(Bot):
         for e in self.exchange_info["symbols"]:
             if e["symbol"] == self.symbol:
                 self.coin = e["baseAsset"]
-                self.quot = e["quoteAsset"]
+                self.quote = e["quoteAsset"]
                 self.margin_coin = e["marginAsset"]
                 self.pair = e["pair"]
                 if "inverse_coin_margined" in self.market_type:
@@ -358,7 +360,9 @@ class BinanceBot(Bot):
                             "liquidation_price": float(p["liquidationPrice"]),
                         }
             for e in balance:
-                if e["asset"] == (self.quot if "linear_perpetual" in self.market_type else self.coin):
+                if e["asset"] == (
+                    self.quote if "linear_perpetual" in self.market_type else self.coin
+                ):
                     position["wallet_balance"] = float(e["balance"])
                     position["equity"] = position["wallet_balance"] + float(e["crossUnPnl"])
                     break
@@ -477,6 +481,36 @@ class BinanceBot(Bot):
             print_async_exception(cancellations)
             traceback.print_exc()
             return []
+
+    async def fetch_latest_fills(self):
+        params = {"symbol": self.symbol, "limit": 100}
+        fetched = None
+        try:
+            fetched = await self.private_get(self.endpoints["fills_detailed"], params)
+            fills = [
+                {
+                    "order_id": elm["orderId"],
+                    "symbol": elm["symbol"],
+                    "status": elm["status"].lower(),
+                    "custom_id": elm["clientOrderId"],
+                    "price": float(elm["avgPrice"]),
+                    "qty": float(elm["executedQty"]),
+                    "original_qty": float(elm["origQty"]),
+                    "type": elm["type"].lower(),
+                    "reduce_only": elm["reduceOnly"],
+                    "side": elm["side"].lower(),
+                    "position_side": elm["positionSide"].lower(),
+                    "timestamp": elm["time"],
+                }
+                for elm in fetched
+                if "FILLED" in elm["status"]
+            ]
+        except Exception as e:
+            print("error fetching latest fills", e)
+            print_async_exception(fetched)
+            traceback.print_exc()
+            return []
+        return fills
 
     async def fetch_fills(
         self,

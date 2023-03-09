@@ -4,13 +4,20 @@ if "NOJIT" not in os.environ:
     os.environ["NOJIT"] = "true"
 
 import json
+import re
 import pprint
 import numpy as np
 from prettytable import PrettyTable
 import argparse
 import hjson
 from procedures import load_live_config, dump_live_config, make_get_filepath
-from pure_funcs import config_pretty_str, candidate_to_live_config, calc_scores
+from pure_funcs import (
+    config_pretty_str,
+    candidate_to_live_config,
+    calc_scores,
+    determine_passivbot_mode,
+    make_compatible,
+)
 from njit_funcs import round_dynamic
 
 
@@ -59,14 +66,7 @@ def main():
 
     args = parser.parse_args()
 
-    # attempt guessing whether harmony search or particle swarm
-    opt_config_path = (
-        "configs/optimize/harmony_search.hjson"
-        if "harmony" in args.results_fpath
-        else "configs/optimize/particle_swarm_optimization.hjson"
-    )
-
-    opt_config = hjson.load(open(opt_config_path))
+    opt_config = hjson.load(open("configs/optimize/default.hjson"))
     minsmaxs = {}
     for _, k1 in weights_keys:
         minsmaxs[k1] = opt_config[k1] if getattr(args, k1) is None else getattr(args, k1)
@@ -77,10 +77,12 @@ def main():
     with open(args.results_fpath) as f:
         results = [json.loads(x) for x in f.readlines()]
     print(f"{'n results': <{klen}} {len(results)}")
-
-    sides = ["long", "short"]
+    passivbot_mode = determine_passivbot_mode(make_compatible(results[-1]["config"]))
     all_scores = []
     symbols = [s for s in results[0]["results"] if s != "config_no"]
+    starting_balance = results[-1]["results"][symbols[0]]["starting_balance"]
+    print(f"{'starting_balance': <{klen}} {starting_balance}")
+    sides = ["long", "short"]
     for r in results:
         cfg = r["config"].copy()
         cfg.update(minsmaxs)
@@ -100,23 +102,28 @@ def main():
                 "symbols_to_include": scores_res["symbols_to_include"][side],
                 "stats": {sym: {k: v for k, v in ress[sym].items() if side in k} for sym in symbols},
                 "config_no": ress["config_no"],
+                "n_days": {sym: ress[sym]["n_days"] for sym in symbols},
             }
     best_candidate = {}
     for side in sides:
         scoress = sorted([sc[side] for sc in all_scores], key=lambda x: x["score"])
         best_candidate[side] = scoress[args.index]
+    best_config = {side: best_candidate[side]["config"] for side in sides}
     best_config = {
         "long": best_candidate["long"]["config"],
         "short": best_candidate["short"]["config"],
     }
+    table_filepath = f"{args.results_fpath.replace('all_results.txt', '')}table_best_config.txt"
+    if os.path.exists(table_filepath):
+        os.remove(table_filepath)
     for side in sides:
-        row_headers = ["symbol"] + [k[0] for k in keys] + ["score"]
+        row_headers = ["symbol"] + [k[0] for k in keys] + ["n_days", "score"]
         table = PrettyTable(row_headers)
         for rh in row_headers:
             table.align[rh] = "l"
         table.title = (
             f"{side} (config no. {best_candidate[side]['config_no']},"
-            + f" score {round_dynamic(best_candidate[side]['score'], 6)})"
+            + f" score {round_dynamic(best_candidate[side]['score'], 15)})"
         )
         for sym in sorted(
             symbols,
@@ -126,22 +133,35 @@ def main():
             xs = [best_candidate[side]["stats"][sym][f"{k[0]}_{side}"] for k in keys]
             table.add_row(
                 [("-> " if sym in best_candidate[side]["symbols_to_include"] else "") + sym]
-                + [round_dynamic(x, 4) for x in xs]
+                + [round_dynamic(x, 4) if np.isfinite(x) else x for x in xs]
+                + [round(best_candidate[side]["n_days"][sym], 2)]
                 + [best_candidate[side]["individual_scores"][sym]]
             )
         means = [
             np.mean(
                 [
                     best_candidate[side]["stats"][s_][f"{k[0]}_{side}"]
-                    for s_ in symbols
-                    if s_ in best_candidate[side]["symbols_to_include"]
+                    for s_ in best_candidate[side]["symbols_to_include"]
                 ]
             )
             for k in keys
         ]
-        ind_scores_mean = np.mean([best_candidate[side]["individual_scores"][sym] for sym in symbols])
-        table.add_row(["mean"] + [round_dynamic(m, 4) for m in means] + [ind_scores_mean])
-        print(table)
+        ind_scores_mean = np.mean(
+            [
+                best_candidate[side]["individual_scores"][sym]
+                for sym in best_candidate[side]["symbols_to_include"]
+            ]
+        )
+        table.add_row(
+            ["mean"]
+            + [round_dynamic(m, 4) if np.isfinite(m) else m for m in means]
+            + [round(np.mean(list(best_candidate[side]["n_days"].values())), 2)]
+            + [ind_scores_mean]
+        )
+        with open(make_get_filepath(table_filepath), "a") as f:
+            output = table.get_string(border=True, padding_width=1)
+            print(output)
+            f.write(re.sub("\033\\[([0-9]+)(;[0-9]+)*m", "", output) + "\n\n")
     live_config = candidate_to_live_config(best_config)
     if args.dump_live_config:
         lc_fpath = make_get_filepath(f"{args.results_fpath.replace('.txt', '_best_config.json')}")

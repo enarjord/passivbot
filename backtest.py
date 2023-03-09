@@ -1,6 +1,6 @@
 import os
 
-# os.environ["NOJIT"] = "false"
+# os.environ["NOJIT"] = "true"
 
 import argparse
 import asyncio
@@ -14,10 +14,10 @@ from downloader import Downloader, load_hlc_cache
 from njit_funcs import backtest_static_grid, round_
 from njit_funcs_recursive_grid import backtest_recursive_grid
 from njit_funcs_neat_grid import backtest_neat_grid
+from njit_clock import backtest_clock
 from plotting import dump_plots
 from procedures import (
     prepare_backtest_config,
-    make_get_filepath,
     load_live_config,
     load_hjson_config,
     add_argparse_args,
@@ -29,10 +29,13 @@ from pure_funcs import (
     analyze_fills,
     spotify_config,
     determine_passivbot_mode,
+    candidate_to_live_config,
+    make_compatible,
 )
 
 
 def backtest(config: dict, data: np.ndarray, do_print=False) -> (list, bool):
+    config.update(make_compatible(config))
     passivbot_mode = determine_passivbot_mode(config)
     xk = create_xk(config)
     if passivbot_mode == "recursive_grid":
@@ -51,13 +54,23 @@ def backtest(config: dict, data: np.ndarray, do_print=False) -> (list, bool):
             config["maker_fee"],
             **xk,
         )
-    return backtest_static_grid(
-        data,
-        config["starting_balance"],
-        config["latency_simulation_ms"],
-        config["maker_fee"],
-        **xk,
-    )
+    elif passivbot_mode == "clock":
+        return backtest_clock(
+            data,
+            config["starting_balance"],
+            config["maker_fee"],
+            **xk,
+        )
+    elif passivbot_mode == "static_grid":
+        return backtest_static_grid(
+            data,
+            config["starting_balance"],
+            config["latency_simulation_ms"],
+            config["maker_fee"],
+            **xk,
+        )
+    else:
+        raise Exception(f"unknown passivbot mode {passivbot_mode}")
 
 
 def plot_wrap(config, data):
@@ -72,16 +85,23 @@ def plot_wrap(config, data):
         return
     longs, shorts, sdf, result = analyze_fills(fills_long, fills_short, stats, config)
     config["result"] = result
-    config["plots_dirpath"] = make_get_filepath(
-        os.path.join(config["plots_dirpath"], f"{ts_to_date(time())[:19].replace(':', '')}", "")
-    )
-    longs.to_csv(config["plots_dirpath"] + "fills_long.csv")
-    shorts.to_csv(config["plots_dirpath"] + "fills_short.csv")
-    sdf.to_csv(config["plots_dirpath"] + "stats.csv")
+
     df = pd.DataFrame({**{"timestamp": data[:, 0], "qty": data[:, 1], "price": data[:, 2]}, **{}})
     print("dumping plots...")
-    dump_plots(config, longs, shorts, sdf, df, n_parts=config["n_parts"])
-    if config["enable_interactive_plot"]:
+    dump_plots(
+        config,
+        longs,
+        shorts,
+        sdf,
+        df,
+        n_parts=config["n_parts"],
+        disable_plotting=config["disable_plotting"],
+    )
+    if (
+        not config["disable_plotting"]
+        and config["enable_interactive_plot"]
+        and config["passivbot_mode"] != "clock"
+    ):
         import interactive_plot
 
         print("dumping interactive plot...")
@@ -145,10 +165,11 @@ async def main():
         help="set n backtest slices to plot",
     )
     parser.add_argument(
-        "-oh",
-        "--ohlcv",
-        help="use 1m ohlcv instead of 1s ticks",
+        "-dp",
+        "--disable_plotting",
+        "--disable-plotting",
         action="store_true",
+        help="disable plotting",
     )
     args = parser.parse_args()
     if args.symbol is None:
@@ -164,29 +185,35 @@ async def main():
         config = await prepare_backtest_config(args)
         config["n_parts"] = args.n_parts
         live_config = load_live_config(args.live_config_path)
+        if "spot" in config["market_type"]:
+            live_config = spotify_config(live_config)
         config.update(live_config)
+        passivbot_mode = determine_passivbot_mode(config)
 
         if args.long_wallet_exposure_limit is not None:
+            old_val = config["long"]["wallet_exposure_limit"]
+            config["long"]["wallet_exposure_limit"] = args.long_wallet_exposure_limit
             print(
-                f"overriding long wallet exposure limit ({config['long']['wallet_exposure_limit']}) "
+                f"overriding long wallet exposure limit ({old_val}) "
                 f"with new value: {args.long_wallet_exposure_limit}"
             )
-            config["long"]["wallet_exposure_limit"] = args.long_wallet_exposure_limit
         if args.short_wallet_exposure_limit is not None:
+            old_val = config["short"]["wallet_exposure_limit"]
+            config["short"]["wallet_exposure_limit"] = args.short_wallet_exposure_limit
             print(
-                f"overriding short wallet exposure limit ({config['short']['wallet_exposure_limit']}) "
+                f"overriding short wallet exposure limit ({old_val}) "
                 f"with new value: {args.short_wallet_exposure_limit}"
             )
-            config["short"]["wallet_exposure_limit"] = args.short_wallet_exposure_limit
         if args.long_enabled is not None:
             config["long"]["enabled"] = "y" in args.long_enabled.lower()
         if args.short_enabled is not None:
             config["short"]["enabled"] = "y" in args.short_enabled.lower()
+        if passivbot_mode == "clock" or config["exchange"] == "okx":
+            config["ohlcv"] = True
+        config["disable_plotting"] = args.disable_plotting
         if "spot" in config["market_type"]:
             live_config = spotify_config(live_config)
-        config["ohlcv"] = args.ohlcv if config["exchange"] not in ["okx", "kucoin"] else True
         config["passivbot_mode"] = determine_passivbot_mode(config)
-
         print()
         for k in (
             keys := [
@@ -203,6 +230,7 @@ async def main():
                 "min_qty",
                 "min_cost",
                 "base_dir",
+                "c_mult",
             ]
         ):
             if k in config:
@@ -221,7 +249,7 @@ async def main():
             downloader = Downloader(config)
             data = await downloader.get_sampled_ticks()
         config["n_days"] = round_((data[-1][0] - data[0][0]) / (1000 * 60 * 60 * 24), 0.1)
-        pprint.pprint(denumpyize(live_config))
+        pprint.pprint(denumpyize(candidate_to_live_config(config)))
         plot_wrap(config, data)
 
 

@@ -10,13 +10,15 @@ import json
 import signal
 import pprint
 import numpy as np
-from time import time
+import time
 from procedures import (
     load_live_config,
     make_get_filepath,
     load_exchange_key_secret_passphrase,
     numpyize,
     print_async_exception,
+    utc_ms,
+    load_broker_code,
 )
 from pure_funcs import (
     filter_orders,
@@ -26,6 +28,7 @@ from pure_funcs import (
     spotify_config,
     determine_passivbot_mode,
     config_pretty_str,
+    shorten_custom_id,
 )
 from njit_funcs import (
     qty_to_cost,
@@ -48,6 +51,12 @@ from njit_funcs_recursive_grid import (
     calc_recursive_entries_long,
     calc_recursive_entries_short,
 )
+from njit_clock import (
+    calc_clock_entry_long,
+    calc_clock_entry_short,
+    calc_clock_close_long,
+    calc_clock_close_short,
+)
 from typing import Union, Dict, List
 
 import websockets
@@ -60,8 +69,6 @@ class Bot:
     def __init__(self, config: dict):
         self.spot = False
         self.config = config
-        self.config["do_long"] = config["long"]["enabled"]
-        self.config["do_short"] = config["short"]["enabled"]
         self.config["max_leverage"] = 25
         self.xk = {}
 
@@ -81,6 +88,7 @@ class Bot:
                 "create_orders",
                 "check_fills",
                 "update_fills",
+                "update_last_fills_timestamps",
                 "force_update",
             ]
         }
@@ -97,6 +105,12 @@ class Bot:
         self.position = {}
         self.open_orders = []
         self.fills = []
+        self.last_fills_timestamps = {
+            "clock_entry_long": 0,
+            "clock_entry_short": 0,
+            "clock_close_long": 0,
+            "clock_close_short": 0,
+        }
         self.price = 0.0
         self.ob = [0.0, 0.0]
         self.emas_long = np.zeros(3)
@@ -115,6 +129,7 @@ class Bot:
         _, self.key, self.secret, self.passphrase = load_exchange_key_secret_passphrase(
             self.user, self.api_keys
         )
+        self.broker_code = load_broker_code(self.exchange)
 
         self.log_level = 0
 
@@ -134,6 +149,9 @@ class Bot:
             ("price_distance_threshold", 0.5),
             ("c_mult", 1.0),
             ("leverage", 7.0),
+            ("countdown", False),
+            ("countdown_offset", 0),
+            ("ohlcv", True),
         ]:
             if k not in config:
                 config[k] = v
@@ -144,16 +162,26 @@ class Bot:
                 + "It must be greater than zero and less than or equal to one.  Defaulting to 1.0."
             )
             config["cross_wallet_pct"] = 1.0
-        self.ema_spans_long = [
-            config["long"]["ema_span_0"],
-            (config["long"]["ema_span_0"] * config["long"]["ema_span_1"]) ** 0.5,
-            config["long"]["ema_span_1"],
-        ]
-        self.ema_spans_short = [
-            config["short"]["ema_span_0"],
-            (config["short"]["ema_span_0"] * config["short"]["ema_span_1"]) ** 0.5,
-            config["short"]["ema_span_1"],
-        ]
+        self.config["do_long"] = config["long"]["enabled"]
+        self.config["do_short"] = config["short"]["enabled"]
+        self.ema_spans_long = np.array(
+            sorted(
+                [
+                    config["long"]["ema_span_0"],
+                    (config["long"]["ema_span_0"] * config["long"]["ema_span_1"]) ** 0.5,
+                    config["long"]["ema_span_1"],
+                ]
+            )
+        )
+        self.ema_spans_short = np.array(
+            sorted(
+                [
+                    config["short"]["ema_span_0"],
+                    (config["short"]["ema_span_0"] * config["short"]["ema_span_1"]) ** 0.5,
+                    config["short"]["ema_span_1"],
+                ]
+            )
+        )
         self.config = config
         for key in config:
             setattr(self, key, config[key])
@@ -166,14 +194,72 @@ class Bot:
 
     async def _init(self):
         self.xk = create_xk(self.config)
-        await self.init_fills()
+        if self.passivbot_mode == "clock":
+            self.xk["auto_unstuck_ema_dist"] = (0.0, 0.0)
+            self.xk["auto_unstuck_wallet_exposure_threshold"] = (0.0, 0.0)
+            self.xk["delay_between_fills_ms_entry"] = (
+                self.config["long"]["delay_between_fills_minutes_entry"] * 60 * 1000.0,
+                self.config["short"]["delay_between_fills_minutes_entry"] * 60 * 1000.0,
+            )
+            self.xk["delay_between_fills_ms_close"] = (
+                self.config["long"]["delay_between_fills_minutes_close"] * 60 * 1000.0,
+                self.config["short"]["delay_between_fills_minutes_close"] * 60 * 1000.0,
+            )
+        print("initiating position, open orders, fills, exchange config, order book, and emas...")
+        await asyncio.gather(
+            self.update_position(),
+            self.update_open_orders(),
+            self.init_fills(),
+            self.init_exchange_config(),
+            self.init_order_book(),
+            self.init_emas(),
+        )
+        print("done")
+        if "price_step_custom" in self.config and self.config["price_step_custom"] is not None:
+            new_price_step = max(
+                self.price_step, round_(self.config["price_step_custom"], self.price_step)
+            )
+            if new_price_step != self.price_step:
+                logging.info(f"changing price step from {self.price_step} to {new_price_step}")
+                self.price_step = self.config["price_step"] = self.xk["price_step"] = new_price_step
+        elif (
+            "price_precision_multiplier" in self.config
+            and self.config["price_precision_multiplier"] is not None
+        ):
+            new_price_step = max(
+                self.price_step,
+                round_(self.ob[0] * self.config["price_precision_multiplier"], self.price_step),
+            )
+            if new_price_step != self.price_step:
+                logging.info(f"changing price step from {self.price_step} to {new_price_step}")
+                self.price_step = self.config["price_step"] = self.xk["price_step"] = new_price_step
 
     def dump_log(self, data) -> None:
-        if self.config["logging_level"] > 0:
+        if "logging_level" in self.config and self.config["logging_level"] > 0:
             with open(self.log_filepath, "a") as f:
                 f.write(
-                    json.dumps({**{"log_timestamp": time(), "symbol": self.symbol}, **data}) + "\n"
+                    json.dumps({**{"log_timestamp": time.time(), "symbol": self.symbol}, **data})
+                    + "\n"
                 )
+
+    async def init_emas_1m(self, ohlcvs: dict) -> None:
+        samples1m = calc_samples(
+            numpyize(
+                [
+                    [o["timestamp"], o["volume"], o["close"]]
+                    for o in sorted(ohlcvs.values(), key=lambda x: x["timestamp"])
+                ]
+            ),
+            60000,
+        )
+        self.emas_long = calc_emas_last(samples1m[:, 2], self.ema_spans_long)
+        self.emas_short = calc_emas_last(samples1m[:, 2], self.ema_spans_short)
+        self.alpha_long = 2 / (self.ema_spans_long + 1)
+        self.alpha__long = 1 - self.alpha_long
+        self.alpha_short = 2 / (self.ema_spans_short + 1)
+        self.alpha__short = 1 - self.alpha_short
+        self.ema_min = int(round(time.time() // 60 * 60))
+        return samples1m
 
     async def init_emas(self) -> None:
         ohlcvs1m = await self.fetch_ohlcvs(interval="1m")
@@ -183,6 +269,8 @@ class Bot:
                 break
         ohlcvs = await self.fetch_ohlcvs(interval=interval)
         ohlcvs = {ohlcv["timestamp"]: ohlcv for ohlcv in ohlcvs + ohlcvs1m}
+        if self.ohlcv:
+            return await self.init_emas_1m(ohlcvs)
         samples1s = calc_samples(
             numpyize(
                 [
@@ -199,11 +287,27 @@ class Bot:
         self.alpha__long = 1 - self.alpha_long
         self.alpha_short = 2 / (spans1s_short + 1)
         self.alpha__short = 1 - self.alpha_short
-        self.ema_sec = int(time())
+        self.ema_sec = int(time.time())
         # return samples1s
 
+    def update_emas_1m(self, price: float, prev_price: float) -> None:
+        now_min = int(round(time.time() // 60 * 60))
+        if now_min <= self.ema_min:
+            return
+        while self.ema_min < int(round(now_min - 60)):
+            self.emas_long = calc_ema(self.alpha_long, self.alpha__long, self.emas_long, prev_price)
+            self.emas_short = calc_ema(
+                self.alpha_short, self.alpha__short, self.emas_short, prev_price
+            )
+            self.ema_min += 60
+        self.emas_long = calc_ema(self.alpha_long, self.alpha__long, self.emas_long, price)
+        self.emas_short = calc_ema(self.alpha_short, self.alpha__short, self.emas_short, price)
+        self.ema_min = now_min
+
     def update_emas(self, price: float, prev_price: float) -> None:
-        now_sec = int(time())
+        if self.ohlcv:
+            return self.update_emas_1m(price, prev_price)
+        now_sec = int(time.time())
         if now_sec <= self.ema_sec:
             return
         while self.ema_sec < int(round(now_sec - 1)):
@@ -234,7 +338,7 @@ class Bot:
             traceback.print_exc()
             return False
         finally:
-            self.ts_released["update_open_orders"] = time()
+            self.ts_released["update_open_orders"] = time.time()
 
     def adjust_wallet_balance(self, balance: float) -> float:
         return (
@@ -274,7 +378,7 @@ class Bot:
     async def update_position(self) -> None:
         if self.ts_locked["update_position"] > self.ts_released["update_position"]:
             return
-        self.ts_locked["update_position"] = time()
+        self.ts_locked["update_position"] = time.time()
         try:
             position = await self.fetch_position()
             position["wallet_balance"] = self.adjust_wallet_balance(position["wallet_balance"])
@@ -310,7 +414,7 @@ class Bot:
             traceback.print_exc()
             return False
         finally:
-            self.ts_released["update_position"] = time()
+            self.ts_released["update_position"] = time.time()
 
     async def init_fills(self, n_days_limit=60):
         self.fills = await self.fetch_fills()
@@ -322,7 +426,7 @@ class Bot:
         """
         if self.ts_locked["update_fills"] > self.ts_released["update_fills"]:
             return
-        self.ts_locked["update_fills"] = time()
+        self.ts_locked["update_fills"] = time.time()
         try:
             fetched = await self.fetch_fills()
             seen = set()
@@ -338,30 +442,36 @@ class Bot:
             logging.error(f"error with update fills {e}")
             traceback.print_exc()
         finally:
-            self.ts_released["update_fills"] = time()
+            self.ts_released["update_fills"] = time.time()
 
     async def create_orders(self, orders_to_create: [dict]) -> [dict]:
         if not orders_to_create:
             return []
         if self.ts_locked["create_orders"] > self.ts_released["create_orders"]:
             return []
-        self.ts_locked["create_orders"] = time()
+        self.ts_locked["create_orders"] = time.time()
         try:
+            orders = None
             orders = await self.execute_orders(orders_to_create)
             for order in sorted(orders, key=lambda x: calc_diff(x["price"], self.price)):
                 if "side" in order:
                     logging.info(
                         f'  created order {order["symbol"]} {order["side"]: <4} '
-                        + f'{order["position_side"]: <5} {order["qty"]} {order["price"]}'
+                        + f'{order["position_side"]: <5} {float(order["qty"])} {float(order["price"])}'
                     )
             return orders
+        except Exception as e:
+            print(f"error creating orders {e}")
+            print_async_exception(orders)
+            traceback.print_exc()
+            return []
         finally:
-            self.ts_released["create_orders"] = time()
+            self.ts_released["create_orders"] = time.time()
 
     async def cancel_orders(self, orders_to_cancel: [dict]) -> [dict]:
         if self.ts_locked["cancel_orders"] > self.ts_released["cancel_orders"]:
             return
-        self.ts_locked["cancel_orders"] = time()
+        self.ts_locked["cancel_orders"] = time.time()
         try:
             if not orders_to_cancel:
                 return
@@ -390,7 +500,7 @@ class Bot:
                 print_async_exception(cancellations)
                 return []
         finally:
-            self.ts_released["cancel_orders"] = time()
+            self.ts_released["cancel_orders"] = time.time()
 
     def stop(self, signum=None, frame=None) -> None:
         logging.info("Stopping passivbot, please wait...")
@@ -515,6 +625,32 @@ class Bot:
                         self.xk["auto_unstuck_wallet_exposure_threshold"][0],
                         self.xk["auto_unstuck_ema_dist"][0],
                     )
+                elif self.passivbot_mode == "clock":
+                    entries_long = [
+                        calc_clock_entry_long(
+                            balance,
+                            psize_long,
+                            pprice_long,
+                            self.ob[0],
+                            min(self.emas_long),
+                            utc_ms(),
+                            0
+                            if psize_long == 0.0
+                            else self.last_fills_timestamps["clock_entry_long"],
+                            self.xk["inverse"],
+                            self.xk["qty_step"],
+                            self.xk["price_step"],
+                            self.xk["min_qty"],
+                            self.xk["min_cost"],
+                            self.xk["c_mult"],
+                            self.xk["ema_dist_entry"][0],
+                            self.xk["qty_pct_entry"][0],
+                            self.xk["we_multiplier_entry"][0],
+                            self.xk["delay_weight_entry"][0],
+                            self.xk["delay_between_fills_ms_entry"][0],
+                            self.xk["wallet_exposure_limit"][0],
+                        )
+                    ]
                 else:
                     raise Exception(f"unknown passivbot mode {self.passivbot_mode}")
                 orders += [
@@ -551,6 +687,52 @@ class Bot:
                     self.xk["auto_unstuck_wallet_exposure_threshold"][0],
                     self.xk["auto_unstuck_ema_dist"][0],
                 )
+                if self.passivbot_mode == "clock":
+                    clock_close_long = calc_clock_close_long(
+                        balance,
+                        psize_long,
+                        pprice_long,
+                        self.ob[1],
+                        max(self.emas_long),
+                        utc_ms(),
+                        self.last_fills_timestamps["clock_close_long"],
+                        self.xk["inverse"],
+                        self.xk["qty_step"],
+                        self.xk["price_step"],
+                        self.xk["min_qty"],
+                        self.xk["min_cost"],
+                        self.xk["c_mult"],
+                        self.xk["ema_dist_close"][0],
+                        self.xk["qty_pct_close"][0],
+                        self.xk["we_multiplier_close"][0],
+                        self.xk["delay_weight_close"][0],
+                        self.xk["delay_between_fills_ms_close"][0],
+                        self.xk["wallet_exposure_limit"][0],
+                    )
+                    if clock_close_long[0] != 0.0 and (
+                        not closes_long or clock_close_long[1] <= closes_long[0][1]
+                    ):
+                        closes_long = [clock_close_long]
+                        closes_long += calc_close_grid_long(
+                            True,
+                            balance,
+                            max(0.0, round_(psize_long - abs(clock_close_long[0]), self.qty_step)),
+                            pprice_long,
+                            self.ob[1],
+                            max(self.emas_long),
+                            self.xk["inverse"],
+                            self.xk["qty_step"],
+                            self.xk["price_step"],
+                            self.xk["min_qty"],
+                            self.xk["min_cost"],
+                            self.xk["c_mult"],
+                            self.xk["wallet_exposure_limit"][0],
+                            self.xk["min_markup"][0],
+                            self.xk["markup_range"][0],
+                            self.xk["n_close_orders"][0],
+                            self.xk["auto_unstuck_wallet_exposure_threshold"][0],
+                            self.xk["auto_unstuck_ema_dist"][0],
+                        )
                 orders += [
                     {
                         "side": "sell",
@@ -651,6 +833,32 @@ class Bot:
                         self.xk["auto_unstuck_wallet_exposure_threshold"][1],
                         self.xk["auto_unstuck_ema_dist"][1],
                     )
+                elif self.passivbot_mode == "clock":
+                    entries_short = [
+                        calc_clock_entry_short(
+                            balance,
+                            psize_short,
+                            pprice_short,
+                            self.ob[1],
+                            max(self.emas_short),
+                            utc_ms(),
+                            0
+                            if psize_short == 0.0
+                            else self.last_fills_timestamps["clock_entry_short"],
+                            self.xk["inverse"],
+                            self.xk["qty_step"],
+                            self.xk["price_step"],
+                            self.xk["min_qty"],
+                            self.xk["min_cost"],
+                            self.xk["c_mult"],
+                            self.xk["ema_dist_entry"][1],
+                            self.xk["qty_pct_entry"][1],
+                            self.xk["we_multiplier_entry"][1],
+                            self.xk["delay_weight_entry"][1],
+                            self.xk["delay_between_fills_ms_entry"][1],
+                            self.xk["wallet_exposure_limit"][1],
+                        )
+                    ]
                 else:
                     raise Exception(f"unknown passivbot mode {self.passivbot_mode}")
                 orders += [
@@ -687,6 +895,55 @@ class Bot:
                     self.xk["auto_unstuck_wallet_exposure_threshold"][1],
                     self.xk["auto_unstuck_ema_dist"][1],
                 )
+                if self.passivbot_mode == "clock":
+                    clock_close_short = calc_clock_close_short(
+                        balance,
+                        psize_short,
+                        pprice_short,
+                        self.ob[0],
+                        min(self.emas_short),
+                        utc_ms(),
+                        self.last_fills_timestamps["clock_close_short"],
+                        self.xk["inverse"],
+                        self.xk["qty_step"],
+                        self.xk["price_step"],
+                        self.xk["min_qty"],
+                        self.xk["min_cost"],
+                        self.xk["c_mult"],
+                        self.xk["ema_dist_close"][1],
+                        self.xk["qty_pct_close"][1],
+                        self.xk["we_multiplier_close"][1],
+                        self.xk["delay_weight_close"][1],
+                        self.xk["delay_between_fills_ms_close"][1],
+                        self.xk["wallet_exposure_limit"][1],
+                    )
+                    if clock_close_short[0] != 0.0 and (
+                        not closes_short or clock_close_short[1] >= closes_short[0][1]
+                    ):
+                        closes_short = [clock_close_short]
+                        closes_short += calc_close_grid_short(
+                            True,
+                            balance,
+                            -max(
+                                0.0,
+                                round_(abs(psize_short) - abs(clock_close_short[0]), self.qty_step),
+                            ),
+                            pprice_short,
+                            self.ob[0],
+                            min(self.emas_short),
+                            self.xk["inverse"],
+                            self.xk["qty_step"],
+                            self.xk["price_step"],
+                            self.xk["min_qty"],
+                            self.xk["min_cost"],
+                            self.xk["c_mult"],
+                            self.xk["wallet_exposure_limit"][1],
+                            self.xk["min_markup"][1],
+                            self.xk["markup_range"][1],
+                            self.xk["n_close_orders"][1],
+                            self.xk["auto_unstuck_wallet_exposure_threshold"][1],
+                            self.xk["auto_unstuck_ema_dist"][1],
+                        )
                 orders += [
                     {
                         "side": "buy",
@@ -705,7 +962,7 @@ class Bot:
     async def cancel_and_create(self):
         if self.ts_locked["cancel_and_create"] > self.ts_released["cancel_and_create"]:
             return
-        self.ts_locked["cancel_and_create"] = time()
+        self.ts_locked["cancel_and_create"] = time.time()
         try:
             if any(self.error_halt.values()):
                 logging.warning(
@@ -790,14 +1047,14 @@ class Bot:
                     )
                 )
                 await asyncio.sleep(
-                    0.01
+                    0.1
                 )  # sleep 10 ms between sending cancellations and sending creations
             if to_create:
                 results.append(await self.create_orders(to_create[: self.max_n_orders_per_batch]))
             return results
         finally:
             await asyncio.sleep(self.delay_between_executions)  # sleep before releasing lock
-            self.ts_released["cancel_and_create"] = time()
+            self.ts_released["cancel_and_create"] = time.time()
 
     async def on_market_stream_event(self, ticks: [dict]):
         if ticks:
@@ -809,7 +1066,7 @@ class Bot:
             self.update_emas(ticks[-1]["price"], self.price)
             self.price = ticks[-1]["price"]
 
-        now = time()
+        now = time.time()
         if now - self.ts_released["force_update"] > self.force_update_interval:
             self.ts_released["force_update"] = now
             # force update pos and open orders thru rest API every x sec (default 30)
@@ -817,7 +1074,7 @@ class Bot:
         if now - self.heartbeat_ts > self.heartbeat_interval_seconds:
             # print heartbeat once an hour
             self.heartbeat_print()
-            self.heartbeat_ts = time()
+            self.heartbeat_ts = time.time()
         await self.cancel_and_create()
 
     def heartbeat_print(self):
@@ -986,7 +1243,7 @@ class Bot:
 
     def flush_stuck_locks(self, timeout: float = 5.0) -> None:
         timeout = max(timeout, self.delay_between_executions + 1)
-        now = time()
+        now = time.time()
         for key in self.ts_locked:
             if self.ts_locked[key] > self.ts_released[key]:
                 if now - self.ts_locked[key] > timeout:
@@ -996,10 +1253,6 @@ class Bot:
     async def start_websocket(self) -> None:
         self.stop_websocket = False
         self.process_websocket_ticks = True
-        await asyncio.gather(self.update_position(), self.update_open_orders())
-        await self.init_exchange_config()
-        await self.init_order_book()
-        await self.init_emas()
         logging.info("starting websockets...")
         self.user_stream_task = asyncio.create_task(self.start_websocket_user_stream())
         self.market_stream_task = asyncio.create_task(self.start_websocket_market_stream())
@@ -1076,46 +1329,86 @@ class Bot:
     async def subscribe_to_user_stream(self, ws):
         pass
 
+    async def update_last_fills_timestamps(self):
+        if (
+            self.ts_locked["update_last_fills_timestamps"]
+            > self.ts_released["update_last_fills_timestamps"]
+        ):
+            return
+        self.ts_locked["update_last_fills_timestamps"] = time.time()
+        try:
+            fills = await self.fetch_latest_fills()
+            keys_done = set()
+            all_keys = set(self.last_fills_timestamps)
+            for fill in sorted(fills, key=lambda x: x["timestamp"], reverse=True):
+                # print("debug fills", fill["custom_id"])
+                for key in all_keys - keys_done:
+                    if any(k in fill["custom_id"] for k in [key, shorten_custom_id(key)]):
+                        self.last_fills_timestamps[key] = fill["timestamp"]
+                        keys_done.add(key)
+                        if all_keys == keys_done:
+                            break
+            return True
+        except Exception as e:
+            logging.error(f"error with update last fills timestamps {e}")
+            traceback.print_exc()
+            return False
+        finally:
+            self.ts_released["update_last_fills_timestamps"] = time.time()
+
     async def start_ohlcv_mode(self):
-        await asyncio.gather(self.update_position(), self.update_open_orders())
-        await self.init_exchange_config()
-        await self.init_order_book()
-        await self.init_emas()
         logging.info("starting bot...")
         while True:
-            now = time()
+            now = time.time()
             # print('secs until next', ((now + 60) - now % 60) - now)
-            while int(now) % 60 != 0:
+            while int(now) % 60 != self.countdown_offset:
                 if self.stop_websocket:
                     break
                 await asyncio.sleep(0.5)
-                now = time()
-                """
-                print(
-                    f"\rcountdown: {((now + 60) - now % 60) - now:.1f} last price: {self.price}      ",
-                    end=" ",
-                )
-                """
+                now = time.time()
+                if self.countdown:
+                    print(
+                        f"\rcountdown: {((now + 60) - now % 60) - now:.1f} last price: {self.price}      ",
+                        end=" ",
+                    )
             if self.stop_websocket:
                 break
+            await asyncio.sleep(1.0)
             await self.on_minute_mark()
             await asyncio.sleep(1.0)
 
     async def on_minute_mark(self):
         # called each whole minute
         try:
-            print("\r", end="")
-            if time() - self.heartbeat_ts > self.heartbeat_interval_seconds:
+            if self.countdown:
+                print("\r", end="")
+            if time.time() - self.heartbeat_ts > self.heartbeat_interval_seconds:
                 # print heartbeat once an hour
                 self.heartbeat_print()
-                self.heartbeat_ts = time()
+                self.heartbeat_ts = time.time()
             self.prev_price = self.ob[0]
             prev_pos = self.position.copy()
-            res = await asyncio.gather(
-                self.update_position(), self.update_open_orders(), self.init_order_book()
-            )
-            # TODO catch when res != [True, True, True]
+            to_update = [self.update_position(), self.update_open_orders(), self.init_order_book()]
+            if self.passivbot_mode == "clock":
+                to_update.append(self.update_last_fills_timestamps())
+            res = await asyncio.gather(*to_update)
             self.update_emas(self.ob[0], self.prev_price)
+            """
+            print(self.last_fills_timestamps)
+            print(self.emas_long)
+            print(self.emas_short)
+            orders = self.calc_orders()
+            print(orders)
+            print(res)
+            """
+            if not all(res):
+                reskeys = ["pos", "open orders", "order book", "last fills"]
+                line = "error with "
+                for i in range(len(to_update)):
+                    if not to_update[i]:
+                        line += reskeys[i]
+                logging.error(line)
+                return
             await self.cancel_and_create()
             if prev_pos["wallet_balance"] != self.position["wallet_balance"]:
                 logging.info(
@@ -1244,10 +1537,49 @@ async def main() -> None:
         help=f"if true, run on the test net instead of normal exchange. Supported exchanges: {TEST_MODE_SUPPORTED_EXCHANGES}",
     )
     parser.add_argument(
+        "-cd",
+        "--countdown",
+        action="store_true",
+        help=f"if true, print a countdown in ohlcv mode",
+    )
+    parser.add_argument(
+        "-pp",
+        "--price-precision",
+        "--price_precision",
+        type=float,
+        required=False,
+        dest="price_precision_multiplier",
+        default=None,
+        help="Override price step with round_dynamic(market_price * price_precision, 1).  Suggested val 0.0001",
+    )
+    parser.add_argument(
+        "-ps",
+        "--price-step",
+        "--price_step",
+        type=float,
+        required=False,
+        dest="price_step_custom",
+        default=None,
+        help="Override price step with custom price step.  Takes precedence over -pp",
+    )
+    parser.add_argument(
+        "-co",
+        "--countdown-offset",
+        "--countdown_offset",
+        type=int,
+        required=False,
+        dest="countdown_offset",
+        default=0,
+        help="when in ohlcv mode, offset execution cycle in seconds from whole minute",
+    )
+    parser.add_argument(
         "-oh",
         "--ohlcv",
-        action="store_true",
-        help=f"if true, execute to exchange only on each minute mark instead of continuously",
+        type=str,
+        required=False,
+        dest="ohlcv",
+        default=None,
+        help="if [y/yes], use 1m ohlcv instead of 1s ticks, overriding param ohlcv from config/backtest/default.hjson",
     )
 
     float_kwargs = [
@@ -1298,14 +1630,29 @@ async def main() -> None:
         "symbol",
         "leverage",
         "price_distance_threshold",
-        "ohlcv",
         "test_mode",
+        "countdown",
+        "countdown_offset",
+        "price_precision_multiplier",
+        "price_step_custom",
     ]:
         config[k] = getattr(args, k)
     if config["test_mode"] and config["exchange"] not in TEST_MODE_SUPPORTED_EXCHANGES:
         raise IOError(f"Exchange {config['exchange']} is not supported in test mode.")
     config["market_type"] = args.market_type if args.market_type is not None else "futures"
     config["passivbot_mode"] = determine_passivbot_mode(config)
+    if config["passivbot_mode"] == "clock":
+        config["ohlcv"] = True
+    elif hasattr(args, "ohlcv"):
+        if args.ohlcv is None:
+            config["ohlcv"] = True
+        else:
+            if args.ohlcv.lower() in ["y", "yes", "t", "true"]:
+                config["ohlcv"] = True
+            else:
+                config["ohlcv"] = False
+    else:
+        config["ohlcv"] = True
     if args.assigned_balance is not None:
         logging.info(f"assigned balance set to {args.assigned_balance}")
         config["assigned_balance"] = args.assigned_balance

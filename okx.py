@@ -13,7 +13,7 @@ import uuid
 
 from passivbot import Bot, logging
 from procedures import print_, print_async_exception
-from pure_funcs import ts_to_date, sort_dict_keys, format_float
+from pure_funcs import ts_to_date, sort_dict_keys, format_float, shorten_custom_id
 
 
 class OKXBot(Bot):
@@ -26,7 +26,6 @@ class OKXBot(Bot):
         self.okx = getattr(ccxt, "okx")(
             {"apiKey": self.key, "secret": self.secret, "password": self.passphrase}
         )
-        self.broker_code = "0fe0667832d7BCDE"
 
     async def init_market_type(self):
         self.markets = None
@@ -52,6 +51,7 @@ class OKXBot(Bot):
         else:
             raise Exception(f"symbol {self.symbol} not found")
         self.inst_id = elm["info"]["instId"]
+        self.inst_type = elm["info"]["instType"]
         self.coin = elm["base"]
         self.quote = elm["quote"]
         self.margin_coin = elm["quote"]
@@ -205,12 +205,10 @@ class OKXBot(Bot):
                 if order["type"] == "limit":
                     params["ordType"] = "post_only"
                     params["px"] = order["price"]
+                custom_id_ = self.broker_code
                 if "custom_id" in order:
-                    params["clOrdId"] = f"{order['custom_id']}_{uuid.uuid4().hex}".replace("_", "")[
-                        :32
-                    ]
-                else:
-                    params["clOrdId"] = f"{uuid.uuid4().hex}".replace("_", "")[:32]
+                    custom_id_ += order["custom_id"]
+                params["clOrdId"] = shorten_custom_id(f"{custom_id_}{uuid.uuid4().hex}")[:32]
                 to_execute.append(params)
             executed = await self.okx.private_post_trade_batch_orders(params=to_execute)
             to_return = []
@@ -267,6 +265,35 @@ class OKXBot(Bot):
             print_async_exception(cancellations)
             traceback.print_exc()
             return []
+
+    async def fetch_latest_fills(self):
+        fetched = None
+        try:
+            params = {"instType": self.inst_type, "instId": self.inst_id}
+            fetched = await self.okx.private_get_trade_fills(params=params)
+            fills = [
+                {
+                    "order_id": elm["ordId"],
+                    "symbol": self.symbol,
+                    "status": None,
+                    "custom_id": elm["clOrdId"],
+                    "price": float(elm["fillPx"]),
+                    "qty": float(elm["fillSz"]),
+                    "original_qty": None,
+                    "type": None,
+                    "reduce_only": None,
+                    "side": elm["side"],
+                    "position_side": elm["posSide"],
+                    "timestamp": float(elm["ts"]),
+                }
+                for elm in fetched["data"]
+            ]
+        except Exception as e:
+            print("error fetching latest fills", e)
+            print_async_exception(fetched)
+            traceback.print_exc()
+            return []
+        return fills
 
     async def fetch_fills(
         self,

@@ -4,6 +4,8 @@ import datetime
 import gzip
 import os
 import sys
+import requests
+import json
 from io import BytesIO
 from time import time
 from typing import Tuple
@@ -961,14 +963,31 @@ def get_zip(url: str):
         print(e)
 
 
+def get_first_ohlcv_ts(symbol: str) -> int:
+    try:
+        url = "https://fapi.binance.com/fapi/v1/klines"
+        res = requests.get(
+            url, params={"symbol": symbol, "startTime": 0, "limit": 100, "interval": "1m"}
+        )
+        first_ohlcvs = json.loads(res.text)
+        first_ts = first_ohlcvs[0][0]
+        print(f"first ohlcv at {ts_to_date(first_ts)}")
+        return first_ts
+    except Exception as e:
+        print(f"error getting first ohlcv ts {e}, returning 0")
+        return 0
+
+
 def download_ohlcvs(symbol, start_date, end_date, download_only=False) -> pd.DataFrame:
     dirpath = make_get_filepath(f"historical_data/ohlcvs_futures/{symbol}/")
     base_url = f"https://data.binance.vision/data/futures/um/"
     col_names = ["timestamp", "open", "high", "low", "close", "volume"]
-    start_ts = date_to_ts(start_date)
+    start_ts = max(get_first_ohlcv_ts(symbol), date_to_ts(start_date))
     end_ts = date_to_ts(end_date)
     days = [ts_to_date_utc(x)[:10] for x in list(range(start_ts, end_ts, 1000 * 60 * 60 * 24))]
     months = sorted(set([x[:7] for x in days]))
+    month_now = ts_to_date(time())[:7]
+    months = [m for m in months if m != month_now]
     months_done = set()
     dfs = []
     for month in months:
@@ -1020,6 +1039,26 @@ def download_ohlcvs(symbol, start_date, end_date, download_only=False) -> pd.Dat
         )
 
 
+def count_longest_identical_data(hlc, symbol):
+    line = f"checking ohlcv integrity of {symbol}"
+    diffs = (np.diff(hlc[:, 1:], axis=0) == [0.0, 0.0, 0.0]).all(axis=1)
+    longest_consecutive = 0
+    counter = 0
+    i_ = 0
+    for i, x in enumerate(diffs):
+        if x:
+            counter += 1
+        else:
+            if counter > longest_consecutive:
+                longest_consecutive = counter
+                i_ = i
+            counter = 0
+    print(
+        f"{symbol} most n days of consecutive identical ohlcvs: {longest_consecutive / 60 / 24:.3f}, index last: {i_}"
+    )
+    return longest_consecutive
+
+
 def load_hlc_cache(
     symbol, start_date, end_date, base_dir="backtests", spot=False, exchange="binance"
 ):
@@ -1032,12 +1071,17 @@ def load_hlc_cache(
         os.path.join(base_dir, exchange + ("_spot" if spot else ""), symbol, "caches", cache_fname)
     )
     if os.path.exists(filepath):
-        return np.load(filepath)
-    df = download_ohlcvs(symbol, start_date, end_date)
-    df = df[df.timestamp >= date_to_ts(start_date)]
-    df = df[df.timestamp <= date_to_ts(end_date)]
-    data = df[["timestamp", "high", "low", "close"]].values
-    np.save(filepath, data)
+        data = np.load(filepath)
+    else:
+        df = download_ohlcvs(symbol, start_date, end_date)
+        df = df[df.timestamp >= date_to_ts(start_date)]
+        df = df[df.timestamp <= date_to_ts(end_date)]
+        data = df[["timestamp", "high", "low", "close"]].values
+        np.save(filepath, data)
+    try:
+        count_longest_identical_data(data, symbol)
+    except Exception as e:
+        print("error checking integrity", e)
     return data
 
 
@@ -1049,12 +1093,6 @@ async def main():
         "-d",
         "--download-only",
         help="download only, do not dump ticks caches",
-        action="store_true",
-    )
-    parser.add_argument(
-        "-oh",
-        "--ohlcv",
-        help="use 1m ohlcv instead of 1s ticks",
         action="store_true",
     )
     parser = add_argparse_args(parser)
