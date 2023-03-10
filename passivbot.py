@@ -1579,7 +1579,9 @@ async def main() -> None:
         required=False,
         dest="ohlcv",
         default=None,
-        help="if [y/yes], use 1m ohlcv instead of 1s ticks, overriding param ohlcv from config/backtest/default.hjson",
+        nargs="?",
+        const="y",
+        help="if no arg or [y/yes], use 1m ohlcv instead of 1s ticks, overriding param ohlcv from config/backtest/default.hjson",
     )
 
     float_kwargs = [
@@ -1756,6 +1758,7 @@ async def main() -> None:
         bot = await create_okx_bot(config)
     elif config["exchange"] == "kucoin":
         from procedures import create_kucoin_bot
+
         config["ohlcv"] = True
         bot = await create_kucoin_bot(config)
     else:
