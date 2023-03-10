@@ -93,7 +93,7 @@
     long:
     {
       grid_span: [0.1, 0.7]
-      wallet_exposure_limit: [1.0, 1.0]
+      wallet_exposure_limit: [2.0, 2.0]
       max_n_entry_orders: [3, 13]
       ema_span_0: [10.0, 360.0]
       ema_span_1: [10.0, 720.0]
@@ -171,7 +171,7 @@
       grid_span: [0.1, 0.7]
       ema_span_0: [10.0, 360.0]
       ema_span_1: [10.0, 720.0]
-      wallet_exposure_limit: [1.0, 1.0]
+      wallet_exposure_limit: [2.0, 2.0]
       max_n_entry_orders: [3, 20]
       initial_qty_pct: [0.01, 0.1]
       initial_eprice_ema_dist: [-0.1, 0.01]
@@ -220,7 +220,7 @@
       min_markup: [0.001, 0.1]
       markup_range: [0.0, 0.1]
       n_close_orders: [1, 16]
-      wallet_exposure_limit: [1.0, 1.0]
+      wallet_exposure_limit: [2.0, 2.0]
     }
     short:
     {
