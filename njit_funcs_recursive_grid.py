@@ -617,6 +617,8 @@ def backtest_recursive_grid(
                         auto_unstuck_ema_dist[0],
                         auto_unstuck_wallet_exposure_threshold[0],
                     )
+                    if entry_long[2] == "long_unstuck_entry":
+                        break
 
                 # check if long closes filled
                 while (
@@ -858,6 +860,8 @@ def backtest_recursive_grid(
                         auto_unstuck_ema_dist[1],
                         auto_unstuck_wallet_exposure_threshold[1],
                     )
+                    if entry_short[2] == "short_unstuck_entry":
+                        break
                 # check if short closes filled
                 while (
                     psize_short < 0.0
