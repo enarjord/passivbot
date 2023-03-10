@@ -1441,7 +1441,7 @@ def backtest_neat_grid(
                     equity_short,
                 )
             )
-            next_stats_update = round(timestamps[k] + 60 * 1000)
+            next_stats_update = round(timestamps[k] + 60 * 60 * 1000)
 
     stats.append(
         (
