@@ -14,29 +14,10 @@ from procedures import dump_live_config, make_get_filepath
 from pure_funcs import round_dynamic, denumpyize, ts_to_date
 
 
-def dump_plots(
-    result: dict,
-    longs: pd.DataFrame,
-    shorts: pd.DataFrame,
-    sdf: pd.DataFrame,
-    df: pd.DataFrame,
-    n_parts: int = None,
-    disable_plotting: bool = False,
-):
-    init(autoreset=True)
-    plt.rcParams["figure.figsize"] = [29, 18]
-    try:
-        pd.set_option("display.precision", 10)
-    except Exception as e:
-        print("error setting pandas precision", e)
-
-    result["plots_dirpath"] = make_get_filepath(
-        os.path.join(result["plots_dirpath"], f"{ts_to_date(time.time())[:19].replace(':', '')}", "")
-    )
-    longs.to_csv(result["plots_dirpath"] + "fills_long.csv")
-    shorts.to_csv(result["plots_dirpath"] + "fills_short.csv")
-    sdf.to_csv(result["plots_dirpath"] + "stats.csv")
-
+def make_table(result_):
+    result = result_.copy()
+    if "result" not in result:
+        result["result"] = result
     table = PrettyTable(["Metric", "Value"])
     table.align["Metric"] = "l"
     table.align["Value"] = "l"
@@ -127,6 +108,32 @@ def dump_plots(
             ]:
                 if key in result["result"]:
                     table.add_row([title, round_dynamic(result["result"][key], precision)])
+    return table
+
+
+def dump_plots(
+    result: dict,
+    longs: pd.DataFrame,
+    shorts: pd.DataFrame,
+    sdf: pd.DataFrame,
+    df: pd.DataFrame,
+    n_parts: int = None,
+    disable_plotting: bool = False,
+):
+    init(autoreset=True)
+    plt.rcParams["figure.figsize"] = [29, 18]
+    try:
+        pd.set_option("display.precision", 10)
+    except Exception as e:
+        print("error setting pandas precision", e)
+
+    result["plots_dirpath"] = make_get_filepath(
+        os.path.join(result["plots_dirpath"], f"{ts_to_date(time.time())[:19].replace(':', '')}", "")
+    )
+    longs.to_csv(result["plots_dirpath"] + "fills_long.csv")
+    shorts.to_csv(result["plots_dirpath"] + "fills_short.csv")
+    sdf.to_csv(result["plots_dirpath"] + "stats.csv")
+    table = make_table(result)
 
     dump_live_config(result, result["plots_dirpath"] + "live_config.json")
     json.dump(denumpyize(result), open(result["plots_dirpath"] + "result.json", "w"), indent=4)
