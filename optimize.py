@@ -56,6 +56,7 @@ def backtest_wrap(config_: dict, ticks_caches: dict):
                 "symbol",
                 "market_type",
                 "config_no",
+                "adg_n_subdivisions",
             ]
         },
         **{k: v for k, v in config_["market_specific_settings"].items()},
@@ -65,12 +66,9 @@ def backtest_wrap(config_: dict, ticks_caches: dict):
     else:
         ticks = np.load(config_["ticks_cache_fname"])
     try:
+        assert "adg_n_subdivisions" in config
         fills_long, fills_short, stats = backtest(config, ticks)
         longs, shorts, sdf, analysis = analyze_fills(fills_long, fills_short, stats, config)
-        """
-        with open("logs/debug_pso.txt", "a") as f:
-            f.write(json.dumps({"config": denumpyize(config), "analysis": analysis}) + "\n")
-        """
         logging.debug(
             f"backtested {config['symbol']: <12} pa distance long {analysis['pa_distance_mean_long']:.6f} "
             + f"pa distance short {analysis['pa_distance_mean_short']:.6f} adg long {analysis['adg_long']:.6f} "
@@ -262,9 +260,9 @@ async def run_opt(args, config):
         config["shared_memories"] = {}
         for symbol in config["symbols"]:
             cache_dirpath = os.path.join(config["base_dir"], exchange_name, symbol, "caches", "")
-            if config["ohlcv"] or (
-                not os.path.exists(cache_dirpath + cache_fname)
-                or not os.path.exists(cache_dirpath + "market_specific_settings.json")
+            # if config["ohlcv"] or (
+            if not os.path.exists(cache_dirpath + cache_fname) or not os.path.exists(
+                cache_dirpath + "market_specific_settings.json"
             ):
                 logging.info(f"fetching data {symbol}")
                 args.symbol = symbol
@@ -278,6 +276,7 @@ async def run_opt(args, config):
                         spot=config["spot"],
                         exchange=config["exchange"],
                     )
+                    """
                     config["shared_memories"][symbol] = shared_memory.SharedMemory(
                         create=True, size=data.nbytes
                     )
@@ -285,6 +284,7 @@ async def run_opt(args, config):
                         data.shape, dtype=data.dtype, buffer=config["shared_memories"][symbol].buf
                     )
                     config["ticks_caches"][symbol][:] = data[:]
+                    """
                 else:
                     downloader = Downloader({**config, **tmp_cfg})
                     await downloader.get_sampled_ticks()
