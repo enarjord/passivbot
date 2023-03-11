@@ -258,7 +258,12 @@ class HarmonySearch:
             },
             **{
                 k: self.config[k]
-                for k in ["starting_balance", "latency_simulation_ms", "market_type"]
+                for k in [
+                    "starting_balance",
+                    "latency_simulation_ms",
+                    "market_type",
+                    "adg_n_subdivisions",
+                ]
             },
             **{"symbol": self.symbols[0], "config_no": self.iter_counter},
         }
@@ -327,7 +332,12 @@ class HarmonySearch:
             },
             **{
                 k: self.config[k]
-                for k in ["starting_balance", "latency_simulation_ms", "market_type"]
+                for k in [
+                    "starting_balance",
+                    "latency_simulation_ms",
+                    "market_type",
+                    "adg_n_subdivisions",
+                ]
             },
             **{"symbol": self.symbols[0], "initial_eval_key": hm_key, "config_no": self.iter_counter},
         }
@@ -337,7 +347,6 @@ class HarmonySearch:
         config["market_specific_settings"] = self.market_specific_settings[config["symbol"]]
         config["ticks_cache_fname"] = f"{self.bt_dir}/{config['symbol']}/{self.ticks_cache_fname}"
         config["passivbot_mode"] = self.config["passivbot_mode"]
-
         self.workers[wi] = {
             "config": deepcopy(config),
             "task": self.pool.apply_async(
