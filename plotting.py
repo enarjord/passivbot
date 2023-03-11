@@ -54,7 +54,7 @@ def make_table(result_):
                 ("Final balance", f"final_balance_{side}", 6, 1, ""),
                 ("Final equity", f"final_equity_{side}", 6, 1, ""),
                 ("Net PNL + fees", f"net_pnl_plus_fees_{side}", 6, 1, ""),
-                ("Total gain", f"gain_{side}", 4, 100, "%"),
+                ("Net Total gain", f"gain_{side}", 4, 100, "%"),
                 ("Average daily gain", f"adg_{side}", 3, 100, "%"),
                 ("Average daily gain whole", f"adg_{side}_whole", 3, 100, "%"),
                 ("Loss to profit ratio", f"loss_profit_ratio_{side}", 4, 1, ""),
