@@ -730,7 +730,7 @@ def analyze_fills(
     profit_sum_long = longs[longs.pnl > 0.0].pnl.sum()
     loss_sum_long = longs[longs.pnl < 0.0].pnl.sum()
     pnl_sum_long = profit_sum_long + loss_sum_long
-    gain_long = pnl_sum_long / sdf.balance_long.iloc[0]
+    gain_long = sdf.balance_long.iloc[-1] / sdf.balance_long.iloc[0] - 1
 
     profit_sum_short = shorts[shorts.pnl > 0.0].pnl.sum()
     loss_sum_short = shorts[shorts.pnl < 0.0].pnl.sum()
