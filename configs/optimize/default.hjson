@@ -46,7 +46,7 @@
   maximum_hrs_stuck_max_short: 96.0
 
   # score *= min(minimum_eqbal_ratio_min, eqbal_ratio_min)
-  minimum_eqbal_ratio_min_long: 0.5
+  minimum_eqbal_ratio_min_long: 0.75  # max 25% drawdown
   minimum_eqbal_ratio_min_short: 0.5
 
   # clip results: compute score on top performers only
@@ -93,7 +93,7 @@
     long:
     {
       grid_span: [0.1, 0.7]
-      wallet_exposure_limit: [2.0, 2.0]
+      wallet_exposure_limit: [1.0, 1.0]
       max_n_entry_orders: [3, 13]
       ema_span_0: [10.0, 360.0]
       ema_span_1: [10.0, 720.0]
@@ -137,7 +137,7 @@
       ema_span_1: [10.0, 720.0]
       initial_qty_pct: [0.01, 0.1]
       initial_eprice_ema_dist: [-0.1, 0.01]
-      wallet_exposure_limit: [2.0, 2.0]
+      wallet_exposure_limit: [1.0, 1.0]
       ddown_factor: [1.0, 3.0]
       rentry_pprice_dist: [0.005, 0.05]
       rentry_pprice_dist_wallet_exposure_weighting: [0.0, 40.0]
@@ -171,7 +171,7 @@
       grid_span: [0.1, 0.7]
       ema_span_0: [10.0, 360.0]
       ema_span_1: [10.0, 720.0]
-      wallet_exposure_limit: [2.0, 2.0]
+      wallet_exposure_limit: [1.0, 1.0]
       max_n_entry_orders: [3, 20]
       initial_qty_pct: [0.01, 0.1]
       initial_eprice_ema_dist: [-0.1, 0.01]
@@ -220,7 +220,7 @@
       min_markup: [0.001, 0.1]
       markup_range: [0.0, 0.1]
       n_close_orders: [1, 16]
-      wallet_exposure_limit: [2.0, 2.0]
+      wallet_exposure_limit: [1.0, 1.0]
     }
     short:
     {
