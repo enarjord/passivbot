@@ -37,21 +37,26 @@ def make_table(result_):
         if result[side]["enabled"]:
             table.add_row([" ", " "])
             table.add_row([side.capitalize(), True])
-            adg_realized_per_exp = result["result"][f"adg_realized_per_exposure_{side}"]
-            table.add_row(
-                ["ADG realized per exposure", f"{round_dynamic(adg_realized_per_exp * 100, 3)}%"]
-            )
             profit_color = (
                 Fore.RED
                 if result["result"][f"final_balance_{side}"] < result["result"]["starting_balance"]
                 else Fore.RESET
             )
             for title, key, precision, mul, suffix in [
+                ("ADG realized per exposure", f"adg_realized_per_exposure_{side}", 3, 100, "%"),
+                (
+                    "ADG realized per exposure whole",
+                    f"adg_realized_per_exposure_{side}_whole",
+                    3,
+                    100,
+                    "%",
+                ),
                 ("Final balance", f"final_balance_{side}", 6, 1, ""),
                 ("Final equity", f"final_equity_{side}", 6, 1, ""),
                 ("Net PNL + fees", f"net_pnl_plus_fees_{side}", 6, 1, ""),
                 ("Total gain", f"gain_{side}", 4, 100, "%"),
                 ("Average daily gain", f"adg_{side}", 3, 100, "%"),
+                ("Average daily gain whole", f"adg_{side}_whole", 3, 100, "%"),
                 ("Net PNL + fees", f"net_pnl_plus_fees_{side}", 6, 1, ""),
                 ("Loss to profit ratio", f"loss_profit_ratio_{side}", 4, 1, ""),
                 (f"Price action distance mean", f"pa_distance_mean_{side}", 6, 1, ""),
