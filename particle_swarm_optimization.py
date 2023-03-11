@@ -222,7 +222,12 @@ class ParticleSwarmOptimization:
             },
             **{
                 k: self.config[k]
-                for k in ["starting_balance", "latency_simulation_ms", "market_type", "adg_n_subdivisions"]
+                for k in [
+                    "starting_balance",
+                    "latency_simulation_ms",
+                    "market_type",
+                    "adg_n_subdivisions",
+                ]
             },
             **{"symbol": self.symbols[0], "config_no": self.iter_counter},
         }
@@ -316,7 +321,12 @@ class ParticleSwarmOptimization:
             },
             **{
                 k: self.config[k]
-                for k in ["starting_balance", "latency_simulation_ms", "market_type", "adg_n_subdivisions"]
+                for k in [
+                    "starting_balance",
+                    "latency_simulation_ms",
+                    "market_type",
+                    "adg_n_subdivisions",
+                ]
             },
             **{
                 "symbol": self.symbols[0],
