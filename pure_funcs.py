@@ -735,7 +735,7 @@ def analyze_fills(
     profit_sum_short = shorts[shorts.pnl > 0.0].pnl.sum()
     loss_sum_short = shorts[shorts.pnl < 0.0].pnl.sum()
     pnl_sum_short = profit_sum_short + loss_sum_short
-    gain_short = pnl_sum_short / sdf.balance_short.iloc[0]
+    gain_short = sdf.balance_short.iloc[-1] / sdf.balance_short.iloc[0] - 1
 
     if "adg_n_subdivisions" not in config:
         config["adg_n_subdivisions"] = 1
