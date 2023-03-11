@@ -741,7 +741,7 @@ def analyze_fills(
         config["adg_n_subdivisions"] = 1
 
     if sdf.balance_long.iloc[-1] <= 0.0:
-        adg_realized_long = sdf.balance_long.iloc[-1]
+        adg_realized_long = adg_realized_long_whole = sdf.balance_long.iloc[-1]
     else:
         adgs_long = []
         for i in range(config["adg_n_subdivisions"]):
@@ -751,8 +751,9 @@ def analyze_fills(
                 (sdf.balance_long.iloc[-1] / sdf.balance_long.iloc[idx]) ** (1 / n_days) - 1
             )
         adg_realized_long = np.mean(adgs_long)
+        adg_realized_long_whole = adgs_long[0]
     if sdf.balance_short.iloc[-1] <= 0.0:
-        adg_realized_short = sdf.balance_short.iloc[-1]
+        adg_realized_short = adg_realized_short_whole = sdf.balance_short.iloc[-1]
     else:
         adgs_short = []
         for i in range(config["adg_n_subdivisions"]):
@@ -762,6 +763,7 @@ def analyze_fills(
                 (sdf.balance_short.iloc[-1] / sdf.balance_short.iloc[idx]) ** (1 / n_days) - 1
             )
         adg_realized_short = np.mean(adgs_short)
+        adg_realized_short_whole = adgs_short[0]
     adg_realized_per_exposure_long = (
         (adg_realized_long / config["long"]["wallet_exposure_limit"])
         if config["long"]["wallet_exposure_limit"] > 0.0
@@ -769,6 +771,16 @@ def analyze_fills(
     )
     adg_realized_per_exposure_short = (
         (adg_realized_short / config["short"]["wallet_exposure_limit"])
+        if config["short"]["wallet_exposure_limit"] > 0.0
+        else 0.0
+    )
+    adg_realized_per_exposure_long_whole = (
+        (adg_realized_long_whole / config["long"]["wallet_exposure_limit"])
+        if config["long"]["wallet_exposure_limit"] > 0.0
+        else 0.0
+    )
+    adg_realized_per_exposure_short_whole = (
+        (adg_realized_short_whole / config["short"]["wallet_exposure_limit"])
         if config["short"]["wallet_exposure_limit"] > 0.0
         else 0.0
     )
@@ -822,14 +834,26 @@ def analyze_fills(
         "equity_balance_ratio_std_short": (sdf.equity_short / sdf.balance_short).std(),
         "gain_long": gain_long,
         "adg_long": adg_realized_long if adg_realized_long == adg_realized_long else -1.0,
+        "adg_long_whole": adg_realized_long_whole
+        if adg_realized_long_whole == adg_realized_long_whole
+        else -1.0,
         "adg_per_exposure_long": adg_realized_per_exposure_long,
+        "adg_per_exposure_long_whole": adg_realized_per_exposure_long_whole,
         "adg_realized_per_exposure_long": adg_realized_per_exposure_long,
+        "adg_realized_per_exposure_long_whole": adg_realized_per_exposure_long_whole,
         "gain_short": gain_short,
         "adg_short": adg_realized_short if adg_realized_short == adg_realized_short else -1.0,
+        "adg_short_whole": adg_realized_short_whole
+        if adg_realized_short_whole == adg_realized_short_whole
+        else -1.0,
         "adg_per_exposure_short": adg_realized_per_exposure_short,
+        "adg_per_exposure_short_whole": adg_realized_per_exposure_short_whole,
         "adg_realized_per_exposure_short": adg_realized_per_exposure_short,
+        "adg_realized_per_exposure_short_whole": adg_realized_per_exposure_short_whole,
         "adg_realized_long": adg_realized_long,
+        "adg_realized_long_whole": adg_realized_long_whole,
         "adg_realized_short": adg_realized_short,
+        "adg_realized_short_whole": adg_realized_short_whole,
         "n_days": n_days,
         "n_fills_long": len(fills_long),
         "n_fills_short": len(fills_short),
