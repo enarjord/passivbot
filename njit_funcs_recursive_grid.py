@@ -120,40 +120,42 @@ def calc_recursive_entry_long(
             entry_price = min(highest_bid, entry_price)
             min_entry_qty = calc_min_entry_qty(entry_price, inverse, qty_step, min_qty, min_cost)
             entry_qty = max(min_entry_qty, round_(psize * ddown_factor, qty_step))
-
-            # preview next reentry
-            new_psize, new_pprice = calc_new_psize_pprice(
-                psize, pprice, entry_qty, entry_price, qty_step
-            )
-            new_wallet_exposure = qty_to_cost(new_psize, new_pprice, inverse, c_mult) / balance
-            new_ratio = new_wallet_exposure / wallet_exposure_limit
-            new_entry_price = round_dn(
-                new_pprice
-                * (
-                    1
-                    - rentry_pprice_dist
-                    * (1 + new_ratio * rentry_pprice_dist_wallet_exposure_weighting)
-                ),
-                price_step,
-            )
-            new_entry_qty = max(min_entry_qty, round_(new_psize * ddown_factor, qty_step))
-            wallet_exposure_if_next_filled = calc_wallet_exposure_if_filled(
-                balance,
-                new_psize,
-                new_pprice,
-                new_entry_qty,
-                new_entry_price,
-                inverse,
-                c_mult,
-                qty_step,
-            )
             wallet_exposure_if_filled = calc_wallet_exposure_if_filled(
                 balance, psize, pprice, entry_qty, entry_price, inverse, c_mult, qty_step
             )
-            if (
-                wallet_exposure_if_next_filled > wallet_exposure_limit * 1.2
-                or wallet_exposure_if_filled > wallet_exposure_limit * 1.01
-            ):
+            adjust = False
+            if wallet_exposure_if_filled > wallet_exposure_limit * 1.01:
+                adjust = True
+            else:
+                # preview next reentry
+                new_psize, new_pprice = calc_new_psize_pprice(
+                    psize, pprice, entry_qty, entry_price, qty_step
+                )
+                new_wallet_exposure = qty_to_cost(new_psize, new_pprice, inverse, c_mult) / balance
+                new_ratio = new_wallet_exposure / wallet_exposure_limit
+                new_entry_price = round_dn(
+                    new_pprice
+                    * (
+                        1
+                        - rentry_pprice_dist
+                        * (1 + new_ratio * rentry_pprice_dist_wallet_exposure_weighting)
+                    ),
+                    price_step,
+                )
+                new_entry_qty = max(min_entry_qty, round_(new_psize * ddown_factor, qty_step))
+                wallet_exposure_if_next_filled = calc_wallet_exposure_if_filled(
+                    balance,
+                    new_psize,
+                    new_pprice,
+                    new_entry_qty,
+                    new_entry_price,
+                    inverse,
+                    c_mult,
+                    qty_step,
+                )
+                if wallet_exposure_if_next_filled > wallet_exposure_limit * 1.2:
+                    adjust = True
+            if adjust:
                 # increase qty if next reentry is too small
                 # decrease qty if current reentry is too big
                 entry_qty = find_entry_qty_bringing_wallet_exposure_to_target(
@@ -252,40 +254,42 @@ def calc_recursive_entry_short(
             entry_price = max(entry_price, lowest_ask)
             min_entry_qty = calc_min_entry_qty(entry_price, inverse, qty_step, min_qty, min_cost)
             entry_qty = max(min_entry_qty, round_(abs_psize * ddown_factor, qty_step))
-
-            # preview next reentry
-            new_psize, new_pprice = calc_new_psize_pprice(
-                abs_psize, pprice, entry_qty, entry_price, qty_step
-            )
-            new_wallet_exposure = qty_to_cost(new_psize, new_pprice, inverse, c_mult) / balance
-            new_ratio = new_wallet_exposure / wallet_exposure_limit
-            new_entry_price = round_up(
-                new_pprice
-                * (
-                    1
-                    + rentry_pprice_dist
-                    * (1 + new_ratio * rentry_pprice_dist_wallet_exposure_weighting)
-                ),
-                price_step,
-            )
-            new_entry_qty = max(min_entry_qty, round_(new_psize * ddown_factor, qty_step))
-            wallet_exposure_if_next_filled = calc_wallet_exposure_if_filled(
-                balance,
-                new_psize,
-                new_pprice,
-                new_entry_qty,
-                new_entry_price,
-                inverse,
-                c_mult,
-                qty_step,
-            )
             wallet_exposure_if_filled = calc_wallet_exposure_if_filled(
                 balance, abs_psize, pprice, entry_qty, entry_price, inverse, c_mult, qty_step
             )
-            if (
-                wallet_exposure_if_next_filled > wallet_exposure_limit * 1.2
-                or wallet_exposure_if_filled > wallet_exposure_limit * 1.01
-            ):
+            adjust = False
+            if wallet_exposure_if_filled > wallet_exposure_limit * 1.01:
+                adjust = True
+            else:
+                # preview next reentry
+                new_psize, new_pprice = calc_new_psize_pprice(
+                    abs_psize, pprice, entry_qty, entry_price, qty_step
+                )
+                new_wallet_exposure = qty_to_cost(new_psize, new_pprice, inverse, c_mult) / balance
+                new_ratio = new_wallet_exposure / wallet_exposure_limit
+                new_entry_price = round_up(
+                    new_pprice
+                    * (
+                        1
+                        + rentry_pprice_dist
+                        * (1 + new_ratio * rentry_pprice_dist_wallet_exposure_weighting)
+                    ),
+                    price_step,
+                )
+                new_entry_qty = max(min_entry_qty, round_(new_psize * ddown_factor, qty_step))
+                wallet_exposure_if_next_filled = calc_wallet_exposure_if_filled(
+                    balance,
+                    new_psize,
+                    new_pprice,
+                    new_entry_qty,
+                    new_entry_price,
+                    inverse,
+                    c_mult,
+                    qty_step,
+                )
+                if wallet_exposure_if_next_filled > wallet_exposure_limit * 1.2:
+                    adjust = True
+            if adjust:
                 # increase qty if next reentry is too small
                 # or decrease qty if current reentry is too big
                 entry_qty = find_entry_qty_bringing_wallet_exposure_to_target(
