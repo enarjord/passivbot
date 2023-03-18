@@ -18,13 +18,7 @@
   iters: 4000
 
   # score = adg per exposure weighted according to adg subdivisions
-
-  # take mean of adgs of subdivisions of whole period
-  # e.g. if adg_n_subdivisions=1, adg of whole period
-  # e.g. if adg_n_subdivisions=2, mean of adg of whole period and adg of last half
-  # e.g. if adg_n_subdivisions=3, mean of adg of whole period, adg of last half and adg of last third
-  # ...etc.
-  adg_n_subdivisions: 10
+  # (see configs/backtest/default.hjson)
 
   # score weights
   # set any to -1 (less than zero) to disable
