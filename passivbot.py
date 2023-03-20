@@ -11,6 +11,7 @@ import signal
 import pprint
 import numpy as np
 import time
+import random
 from procedures import (
     load_live_config,
     make_get_filepath,
@@ -1569,7 +1570,7 @@ async def main() -> None:
         type=int,
         required=False,
         dest="countdown_offset",
-        default=0,
+        default=random.randrange(60),
         help="when in ohlcv mode, offset execution cycle in seconds from whole minute",
     )
     parser.add_argument(
