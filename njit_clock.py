@@ -119,6 +119,9 @@ def calc_clock_entry_long(
             bid_price_long = calc_clock_price_bid(
                 ema_band_lower, highest_bid, ema_dist_entry, price_step
             )
+            if psize_long != 0.0:
+                # don't enter above long pos price
+                bid_price_long = min(bid_price_long, pprice_long)
             qty_long = calc_clock_qty(
                 balance,
                 wallet_exposure_long,
@@ -236,6 +239,9 @@ def calc_clock_entry_short(
         if wallet_exposure_short < wallet_exposure_limit * 0.99:
             # entry short
             ask_price_short = calc_clock_price_ask(emas.max(), lowest_ask, ema_dist_entry, price_step)
+            if psize_short != 0.0:
+                # don't enter below short pos price
+                ask_price_short = max(ask_price_short, pprice_short)
             qty_short = -calc_clock_qty(
                 balance,
                 wallet_exposure_short,
