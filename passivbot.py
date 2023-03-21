@@ -1500,7 +1500,7 @@ async def main() -> None:
         required=False,
         dest="assigned_balance",
         default=None,
-        help="add assigned_balance to live config",
+        help="add assigned_balance to live config, overriding balance fetched from exchange",
     )
     parser.add_argument(
         "-pt",
@@ -1510,7 +1510,7 @@ async def main() -> None:
         required=False,
         dest="price_distance_threshold",
         default=0.5,
-        help="only create limit orders closer to price than threshold; default=0.5",
+        help="only create limit orders closer to price than threshold.  default=0.5 (50%)",
     )
     parser.add_argument(
         "-ak",
