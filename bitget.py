@@ -40,7 +40,7 @@ class BitgetBot(Bot):
         self.base_endpoint = "https://api.bitget.com"
         self.endpoints = {
             "exchange_info": "/api/mix/v1/market/contracts",
-            "funds_transfer": "/asset/v1/private/transfer",
+            "funds_transfer": "/api/spot/v1/wallet/transfer-v2",
             "position": "/api/mix/v1/position/singlePosition",
             "balance": "/api/mix/v1/account/accounts",
             "ticker": "/api/mix/v1/market/ticker",
@@ -258,13 +258,11 @@ class BitgetBot(Bot):
         )
 
     async def transfer_from_derivatives_to_spot(self, coin: str, amount: float):
-        raise NotImplementedError("not implemented")
         params = {
-            "coin": coin,
+            "coin": 'USDT',
             "amount": str(amount),
-            "from_account_type": "CONTRACT",
-            "to_account_type": "SPOT",
-            "transfer_id": str(uuid4()),
+            "from_account_type": "mix_usdt",
+            "to_account_type": "spot",
         }
         return await self.private_(
             "post", self.base_endpoint, self.endpoints["funds_transfer"], params=params, json_=True
