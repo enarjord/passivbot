@@ -1438,12 +1438,13 @@ class Bot:
         # perform checks to detect abnormal orders
         # such abnormal orders were observed in bitget bots where short entries exceeded exposure limit
 
-        # check if order cost is too big
         try:
             order_good = True
+            fault = ""
             if order["position_side"] == "long":
-                max_cost = self.position["wallet_balance"] * self.xk["wallet_exposure_limit"][0]
                 if order["side"] == "buy":
+                    max_cost = self.position["wallet_balance"] * self.xk["wallet_exposure_limit"][0]
+                    # check if order cost is too big
                     order_cost = qty_to_cost(
                         order["qty"],
                         order["price"],
@@ -1457,19 +1458,15 @@ class Bot:
                         self.xk["c_mult"],
                     )
                     if order_cost + position_cost > max_cost * 1.2:
-                        logging.error(f"invalid order.  Long pos cost would be 20% greater than max allowed {order}")
-                        info = {
-                            "timestamp": utc_ms(),
-                            "fault": "order cost too big",
-                            "order": order,
-                            "open_orders": self.open_orders,
-                            "position": self.position,
-                            "order_book": self.ob,
-                            "emas": self.emas_long,
-                        }
-                        with open(self.log_filepath, "a") as f:
-                            f.write(json.dumps(denumpyize(info)) + "\n")
+                        fault = "Long pos cost would be more than 20% greater than max allowed"
                         order_good = False
+                elif order["side"] == "sell":
+                    # check if price is above pos price
+                    if "n_close" in order["custom_id"]:
+                        if order["price"] < self.position["long"]["price"]:
+                            fault = "long nclose price below pos price"
+                            order_good = False
+
             elif order["position_side"] == "short":
                 max_cost = self.position["wallet_balance"] * self.xk["wallet_exposure_limit"][1]
                 if order["side"] == "sell":
@@ -1486,19 +1483,30 @@ class Bot:
                         self.xk["c_mult"],
                     )
                     if order_cost + position_cost > max_cost * 1.2:
-                        logging.error(f"invalid order.  Short pos cost would be 20% greater than max allowed {order}")
-                        info = {
-                            "timestamp": utc_ms(),
-                            "fault": "order cost too big",
-                            "order": order,
-                            "open_orders": self.open_orders,
-                            "position": self.position,
-                            "order_book": self.ob,
-                            "emas": self.emas_short,
-                        }
-                        with open(self.log_filepath, "a") as f:
-                            f.write(json.dumps(denumpyize(info)) + "\n")
+                        fault = "Short pos cost would be more than 20% greater than max allowed"
                         order_good = False
+                elif order["side"] == "buy":
+                    # check if price is below pos price
+                    if "n_close" in order["custom_id"]:
+                        if order["price"] > self.position["short"]["price"]:
+                            fault = "short nclose price above pos price"
+                            order_good = False
+
+            if not order_good:
+                logging.error(f"invalid order: {fault} {order}")
+                info = {
+                    "timestamp": utc_ms(),
+                    "date": ts_to_date(utc_ms()),
+                    "fault": fault,
+                    "order": order,
+                    "open_orders": self.open_orders,
+                    "position": self.position,
+                    "order_book": self.ob,
+                    "emas_long": self.emas_long,
+                    "emas_short": self.emas_short,
+                }
+                with open(self.log_filepath, "a") as f:
+                    f.write(json.dumps(denumpyize(info)) + "\n")
             return order_good
         except Exception as e:
             logging.error(f"error validating order")
@@ -1824,6 +1832,7 @@ async def main() -> None:
     elif config["exchange"] == "bitget":
         from procedures import create_bitget_bot
 
+        config["ohlcv"] = True
         bot = await create_bitget_bot(config)
     elif config["exchange"] == "okx":
         from procedures import create_okx_bot
