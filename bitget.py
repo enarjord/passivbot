@@ -26,8 +26,8 @@ def first_capitalized(s: str):
 def truncate_float(x: float, d: int) -> float:
     if x is None:
         return 0.0
-    xs = str(x)
-    return float(xs[: xs.find(".") + d + 1])
+    multiplier = 10 ** d
+    return int(x * multiplier) / multiplier
 
 
 class BitgetBot(Bot):
