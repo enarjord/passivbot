@@ -1750,6 +1750,7 @@ async def main() -> None:
     elif config["exchange"] == "bitget":
         from procedures import create_bitget_bot
 
+        config["ohlcv"] = True
         bot = await create_bitget_bot(config)
     elif config["exchange"] == "okx":
         from procedures import create_okx_bot
