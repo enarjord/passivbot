@@ -453,6 +453,7 @@ class Bot:
         self.ts_locked["create_orders"] = time.time()
         try:
             orders = None
+            orders_to_create = [order for order in orders_to_create if self.order_is_valid(order)]
             orders = await self.execute_orders(orders_to_create)
             for order in sorted(orders, key=lambda x: calc_diff(x["price"], self.price)):
                 if "side" in order:
@@ -1431,6 +1432,78 @@ class Bot:
         except Exception as e:
             logging.error(f"error on minute mark {e}")
             traceback.print_exc()
+
+    def order_is_valid(self, order: dict) -> bool:
+
+        # perform checks to detect abnormal orders
+        # such abnormal orders were observed in bitget bots where short entries exceeded exposure limit
+
+        # check if order cost is too big
+        try:
+            order_good = True
+            if order["position_side"] == "long":
+                max_cost = self.position["wallet_balance"] * self.xk["wallet_exposure_limit"][0]
+                if order["side"] == "buy":
+                    order_cost = qty_to_cost(
+                        order["qty"],
+                        order["price"],
+                        self.xk["inverse"],
+                        self.xk["c_mult"],
+                    )
+                    position_cost = qty_to_cost(
+                        self.position["long"]["size"],
+                        self.position["long"]["price"],
+                        self.xk["inverse"],
+                        self.xk["c_mult"],
+                    )
+                    if order_cost + position_cost > max_cost * 1.2:
+                        logging.error(f"invalid order.  Long pos cost would be 20% greater than max allowed {order}")
+                        info = {
+                            "timestamp": utc_ms(),
+                            "fault": "order cost too big",
+                            "order": order,
+                            "open_orders": self.open_orders,
+                            "position": self.position,
+                            "order_book": self.ob,
+                            "emas": self.emas_long,
+                        }
+                        with open(self.log_filepath, "a") as f:
+                            f.write(json.dumps(info) + "\n")
+                        order_good = False
+            elif order["position_side"] == "short":
+                max_cost = self.position["wallet_balance"] * self.xk["wallet_exposure_limit"][1]
+                if order["side"] == "sell":
+                    order_cost = qty_to_cost(
+                        order["qty"],
+                        order["price"],
+                        self.xk["inverse"],
+                        self.xk["c_mult"],
+                    )
+                    position_cost = qty_to_cost(
+                        self.position["short"]["size"],
+                        self.position["short"]["price"],
+                        self.xk["inverse"],
+                        self.xk["c_mult"],
+                    )
+                    if order_cost + position_cost > max_cost * 1.2:
+                        logging.error(f"invalid order.  Short pos cost would be 20% greater than max allowed {order}")
+                        info = {
+                            "timestamp": utc_ms(),
+                            "fault": "order cost too big",
+                            "order": order,
+                            "open_orders": self.open_orders,
+                            "position": self.position,
+                            "order_book": self.ob,
+                            "emas": self.emas_short,
+                        }
+                        with open(self.log_filepath, "a") as f:
+                            f.write(json.dumps(info) + "\n")
+                        order_good = False
+            return order_good
+        except Exception as e:
+            logging.error(f"error validating order")
+            traceback.print_exc()
+            return False
 
 
 async def start_bot(bot):
