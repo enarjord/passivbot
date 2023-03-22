@@ -12,11 +12,12 @@ import aiohttp
 import base64
 import numpy as np
 import pprint
+import os
 
 from njit_funcs import round_
 from passivbot import Bot, logging
-from procedures import print_async_exception, print_, utc_ms
-from pure_funcs import ts_to_date, sort_dict_keys, date_to_ts, format_float
+from procedures import print_async_exception, print_, utc_ms, make_get_filepath
+from pure_funcs import ts_to_date, sort_dict_keys, date_to_ts, format_float, flatten
 
 
 def first_capitalized(s: str):
@@ -26,8 +27,8 @@ def first_capitalized(s: str):
 def truncate_float(x: float, d: int) -> float:
     if x is None:
         return 0.0
-    xs = str(x)
-    return float(xs[: xs.find(".") + d + 1])
+    multiplier = 10 ** d
+    return int(x * multiplier) / multiplier
 
 
 class BitgetBot(Bot):
@@ -295,7 +296,7 @@ class BitgetBot(Bot):
             if elm["holdSide"] == "long":
                 position["long"] = {
                     "size": round_(float(elm["total"]), self.qty_step),
-                    "price": truncate_float(elm["averageOpenPrice"], self.price_rounding),
+                    "price": float(elm["averageOpenPrice"]),
                     "liquidation_price": 0.0
                     if elm["liquidationPrice"] is None
                     else float(elm["liquidationPrice"]),
@@ -304,7 +305,7 @@ class BitgetBot(Bot):
             elif elm["holdSide"] == "short":
                 position["short"] = {
                     "size": -abs(round_(float(elm["total"]), self.qty_step)),
-                    "price": truncate_float(elm["averageOpenPrice"], self.price_rounding),
+                    "price": float(elm["averageOpenPrice"]),
                     "liquidation_price": 0.0
                     if elm["liquidationPrice"] is None
                     else float(elm["liquidationPrice"]),
@@ -613,6 +614,75 @@ class BitgetBot(Bot):
             traceback.print_exc()
             print_async_exception(fetched)
             return []
+
+    async def fetch_latest_fills_new(self):
+        cached = None
+        fname = make_get_filepath(f"logs/fills_cached_bitget/{self.user}_{self.symbol}.json")
+        try:
+            if os.path.exists(fname):
+                cached = json.load(open(fname))
+            else:
+                cached = []
+        except Exception as e:
+            logging.error("error loading fills cache", e)
+            traceback.print_exc()
+            cached = []
+        fetched = None
+        lookback_since = int(
+            utc_ms() - max(flatten([v for k, v in self.xk.items() if "delay_between_fills_ms" in k]))
+        )
+        try:
+            params = {
+                "symbol": self.symbol,
+                "startTime": lookback_since,
+                "endTime": int(utc_ms() + 1000 * 60 * 60 * 2),
+                "pageSize": 100,
+            }
+            fetched = await self.private_get(self.endpoints["fills_detailed"], params)
+            if (
+                fetched["code"] == "00000"
+                and fetched["msg"] == "success"
+                and fetched["data"]["orderList"] is None
+            ):
+                return []
+            fetched = fetched["data"]["orderList"]
+            k = 0
+            while fetched and float(fetched[-1]["cTime"]) > utc_ms() - 1000 * 60 * 60 * 24 * 3:
+                k += 1
+                if k > 5:
+                    break
+                params["endTime"] = int(float(fetched[-1]["cTime"]))
+                fetched2 = (await self.private_get(self.endpoints["fills_detailed"], params))["data"][
+                    "orderList"
+                ]
+                if fetched2[-1] == fetched[-1]:
+                    break
+                fetched_d = {x["orderId"]: x for x in fetched + fetched2}
+                fetched = sorted(fetched_d.values(), key=lambda x: float(x["cTime"]), reverse=True)
+            fills = [
+                {
+                    "order_id": elm["orderId"],
+                    "symbol": elm["symbol"],
+                    "status": elm["state"],
+                    "custom_id": elm["clientOid"],
+                    "price": float(elm["priceAvg"]),
+                    "qty": float(elm["filledQty"]),
+                    "original_qty": float(elm["size"]),
+                    "type": elm["orderType"],
+                    "reduce_only": elm["reduceOnly"],
+                    "side": "buy" if elm["side"] in ["close_short", "open_long"] else "sell",
+                    "position_side": elm["posSide"],
+                    "timestamp": float(elm["cTime"]),
+                }
+                for elm in fetched
+                if "filled" in elm["state"]
+            ]
+        except Exception as e:
+            print("error fetching latest fills", e)
+            print_async_exception(fetched)
+            traceback.print_exc()
+            return []
+        return fills
 
     async def fetch_latest_fills(self):
         fetched = None
