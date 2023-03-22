@@ -1468,7 +1468,7 @@ class Bot:
                             "emas": self.emas_long,
                         }
                         with open(self.log_filepath, "a") as f:
-                            f.write(json.dumps(info) + "\n")
+                            f.write(json.dumps(denumpyize(info)) + "\n")
                         order_good = False
             elif order["position_side"] == "short":
                 max_cost = self.position["wallet_balance"] * self.xk["wallet_exposure_limit"][1]
@@ -1497,7 +1497,7 @@ class Bot:
                             "emas": self.emas_short,
                         }
                         with open(self.log_filepath, "a") as f:
-                            f.write(json.dumps(info) + "\n")
+                            f.write(json.dumps(denumpyize(info)) + "\n")
                         order_good = False
             return order_good
         except Exception as e:
