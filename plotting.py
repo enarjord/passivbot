@@ -29,6 +29,12 @@ def make_table(result_):
     table.add_row(
         ["Passivbot mode", result["passivbot_mode"] if "passivbot_mode" in result else "unknown"]
     )
+    table.add_row(
+        [
+            "ADG n subdivisions",
+            result["adg_n_subdivisions"] if "adg_n_subdivisions" in result else "unknown",
+        ]
+    )
     table.add_row(["No. days", round_dynamic(result["result"]["n_days"], 2)])
     table.add_row(["Starting balance", round_dynamic(result["result"]["starting_balance"], 6)])
     for side in ["long", "short"]:
