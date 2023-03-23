@@ -296,7 +296,9 @@ class BitgetBot(Bot):
             if elm["holdSide"] == "long":
                 position["long"] = {
                     "size": round_(float(elm["total"]), self.qty_step),
-                    "price": float(elm["averageOpenPrice"]),
+                    "price": 0.0
+                    if elm["averageOpenPrice"] is None
+                    else float(elm["averageOpenPrice"]),
                     "liquidation_price": 0.0
                     if elm["liquidationPrice"] is None
                     else float(elm["liquidationPrice"]),
@@ -305,7 +307,9 @@ class BitgetBot(Bot):
             elif elm["holdSide"] == "short":
                 position["short"] = {
                     "size": -abs(round_(float(elm["total"]), self.qty_step)),
-                    "price": float(elm["averageOpenPrice"]),
+                    "price": 0.0
+                    if elm["averageOpenPrice"] is None
+                    else float(elm["averageOpenPrice"]),
                     "liquidation_price": 0.0
                     if elm["liquidationPrice"] is None
                     else float(elm["liquidationPrice"]),
