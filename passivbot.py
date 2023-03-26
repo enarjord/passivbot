@@ -11,6 +11,7 @@ import signal
 import pprint
 import numpy as np
 import time
+import random
 from procedures import (
     load_live_config,
     make_get_filepath,
@@ -452,6 +453,7 @@ class Bot:
         self.ts_locked["create_orders"] = time.time()
         try:
             orders = None
+            orders_to_create = [order for order in orders_to_create if self.order_is_valid(order)]
             orders = await self.execute_orders(orders_to_create)
             for order in sorted(orders, key=lambda x: calc_diff(x["price"], self.price)):
                 if "side" in order:
@@ -1431,6 +1433,86 @@ class Bot:
             logging.error(f"error on minute mark {e}")
             traceback.print_exc()
 
+    def order_is_valid(self, order: dict) -> bool:
+
+        # perform checks to detect abnormal orders
+        # such abnormal orders were observed in bitget bots where short entries exceeded exposure limit
+
+        try:
+            order_good = True
+            fault = ""
+            if order["position_side"] == "long":
+                if order["side"] == "buy":
+                    max_cost = self.position["wallet_balance"] * self.xk["wallet_exposure_limit"][0]
+                    # check if order cost is too big
+                    order_cost = qty_to_cost(
+                        order["qty"],
+                        order["price"],
+                        self.xk["inverse"],
+                        self.xk["c_mult"],
+                    )
+                    position_cost = qty_to_cost(
+                        self.position["long"]["size"],
+                        self.position["long"]["price"],
+                        self.xk["inverse"],
+                        self.xk["c_mult"],
+                    )
+                    if order_cost + position_cost > max_cost * 1.2:
+                        fault = "Long pos cost would be more than 20% greater than max allowed"
+                        order_good = False
+                elif order["side"] == "sell":
+                    # check if price is above pos price
+                    if "n_close" in order["custom_id"]:
+                        if order["price"] < self.position["long"]["price"]:
+                            fault = "long nclose price below pos price"
+                            order_good = False
+
+            elif order["position_side"] == "short":
+                max_cost = self.position["wallet_balance"] * self.xk["wallet_exposure_limit"][1]
+                if order["side"] == "sell":
+                    order_cost = qty_to_cost(
+                        order["qty"],
+                        order["price"],
+                        self.xk["inverse"],
+                        self.xk["c_mult"],
+                    )
+                    position_cost = qty_to_cost(
+                        self.position["short"]["size"],
+                        self.position["short"]["price"],
+                        self.xk["inverse"],
+                        self.xk["c_mult"],
+                    )
+                    if order_cost + position_cost > max_cost * 1.2:
+                        fault = "Short pos cost would be more than 20% greater than max allowed"
+                        order_good = False
+                elif order["side"] == "buy":
+                    # check if price is below pos price
+                    if "n_close" in order["custom_id"]:
+                        if order["price"] > self.position["short"]["price"]:
+                            fault = "short nclose price above pos price"
+                            order_good = False
+
+            if not order_good:
+                logging.error(f"invalid order: {fault} {order}")
+                info = {
+                    "timestamp": utc_ms(),
+                    "date": ts_to_date(utc_ms()),
+                    "fault": fault,
+                    "order": order,
+                    "open_orders": self.open_orders,
+                    "position": self.position,
+                    "order_book": self.ob,
+                    "emas_long": self.emas_long,
+                    "emas_short": self.emas_short,
+                }
+                with open(self.log_filepath, "a") as f:
+                    f.write(json.dumps(denumpyize(info)) + "\n")
+            return order_good
+        except Exception as e:
+            logging.error(f"error validating order")
+            traceback.print_exc()
+            return False
+
 
 async def start_bot(bot):
     if bot.ohlcv:
@@ -1499,7 +1581,7 @@ async def main() -> None:
         required=False,
         dest="assigned_balance",
         default=None,
-        help="add assigned_balance to live config",
+        help="add assigned_balance to live config, overriding balance fetched from exchange",
     )
     parser.add_argument(
         "-pt",
@@ -1509,7 +1591,7 @@ async def main() -> None:
         required=False,
         dest="price_distance_threshold",
         default=0.5,
-        help="only create limit orders closer to price than threshold; default=0.5",
+        help="only create limit orders closer to price than threshold.  default=0.5 (50%)",
     )
     parser.add_argument(
         "-ak",
@@ -1569,7 +1651,7 @@ async def main() -> None:
         type=int,
         required=False,
         dest="countdown_offset",
-        default=0,
+        default=random.randrange(60),
         help="when in ohlcv mode, offset execution cycle in seconds from whole minute",
     )
     parser.add_argument(

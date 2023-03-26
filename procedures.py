@@ -322,12 +322,14 @@ async def create_okx_bot(config: dict):
     await bot._init()
     return bot
 
+
 async def create_kucoin_bot(config: dict):
     from kucoin import KuCoinBot
 
     bot = KuCoinBot(config)
     await bot._init()
     return bot
+
 
 def add_argparse_args(parser):
     parser.add_argument("--nojit", help="disable numba", action="store_true")
@@ -543,6 +545,7 @@ def fetch_market_specific_settings(config: dict):
         settings_from_exchange["maker_fee"] = elm["maker"]
         settings_from_exchange["taker_fee"] = elm["taker"]
         settings_from_exchange["c_mult"] = elm["contractSize"]
+        settings_from_exchange["min_qty"] = elm["limits"]["amount"]["min"]
         for elm1 in elm["info"]["filters"]:
             if elm1["filterType"] == "LOT_SIZE":
                 settings_from_exchange["qty_step"] = float(elm1["stepSize"])
@@ -585,6 +588,7 @@ def fetch_market_specific_settings(config: dict):
         settings_from_exchange["price_step"] = elm["precision"]["price"]
         settings_from_exchange["spot"] = elm["spot"]
         settings_from_exchange["inverse"] = not elm["linear"]
+        settings_from_exchange["min_qty"] = elm["limits"]["amount"]["min"]
     elif exchange == "bybit":
         cc = ccxt.bybit()
         markets = cc.fetch_markets()
@@ -601,9 +605,9 @@ def fetch_market_specific_settings(config: dict):
         settings_from_exchange["price_step"] = float(elm["info"]["price_filter"]["tick_size"])
         settings_from_exchange["spot"] = False
         settings_from_exchange["inverse"] = not elm["linear"]
+        settings_from_exchange["min_qty"] = elm["limits"]["amount"]["min"]
     else:
         raise Exception(f"unknown exchange {exchange}")
-    settings_from_exchange["min_qty"] = elm["limits"]["amount"]["min"]
     settings_from_exchange["min_cost"] = (
         0.0 if elm["limits"]["cost"]["min"] is None else elm["limits"]["cost"]["min"]
     )
@@ -627,6 +631,7 @@ def fetch_market_specific_settings(config: dict):
 
 
 if __name__ == "__main__":
-    cfg = {"exchange": "bitget", "symbol": "YFIUSDT", "market_type": "futures"}
-    mss = fetch_market_specific_settings(cfg)
-    print(mss)
+    for exchange in ["bitget", "binance", "bybit", "okx"]:
+        cfg = {"exchange": exchange, "symbol": "YFIUSDT", "market_type": "futures"}
+        mss = fetch_market_specific_settings(cfg)
+        print(mss)

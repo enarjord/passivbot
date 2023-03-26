@@ -13,7 +13,7 @@
 
   # format YYYY-MM-DD
   start_date: 2020-01-01
-  end_date: 2023-03-01
+  end_date: 2023-03-17
 
   # non default historical data path
   # defaults to local dir if unspecified
@@ -24,6 +24,13 @@
 
   # use 1m ohlcvs instead of 1s ticks
   ohlcv: true
+
+  # take mean of adgs of subdivisions of whole period
+  # e.g. if adg_n_subdivisions=1, adg of whole period
+  # e.g. if adg_n_subdivisions=2, mean of adg of whole period and adg of last half
+  # e.g. if adg_n_subdivisions=3, mean of adg of whole period, adg of last half and adg of last third
+  # ...etc.
+  adg_n_subdivisions: 10
 
   # interactive plot configs:
   enable_interactive_plot: true

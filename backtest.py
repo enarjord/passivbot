@@ -231,6 +231,7 @@ async def main():
                 "min_cost",
                 "base_dir",
                 "c_mult",
+                "adg_n_subdivisions",
             ]
         ):
             if k in config:

@@ -12,11 +12,12 @@ import aiohttp
 import base64
 import numpy as np
 import pprint
+import os
 
 from njit_funcs import round_
 from passivbot import Bot, logging
-from procedures import print_async_exception, print_, utc_ms
-from pure_funcs import ts_to_date, sort_dict_keys, date_to_ts, format_float
+from procedures import print_async_exception, print_, utc_ms, make_get_filepath
+from pure_funcs import ts_to_date, sort_dict_keys, date_to_ts, format_float, flatten
 
 
 def first_capitalized(s: str):
@@ -40,7 +41,7 @@ class BitgetBot(Bot):
         self.base_endpoint = "https://api.bitget.com"
         self.endpoints = {
             "exchange_info": "/api/mix/v1/market/contracts",
-            "funds_transfer": "/asset/v1/private/transfer",
+            "funds_transfer": "/api/spot/v1/wallet/transfer-v2",
             "position": "/api/mix/v1/position/singlePosition",
             "balance": "/api/mix/v1/account/accounts",
             "ticker": "/api/mix/v1/market/ticker",
@@ -64,6 +65,8 @@ class BitgetBot(Bot):
             "sell": {"long": "close_long", "short": "open_short"},
         }
         self.fill_side_map = {
+            "burst_close_long": "sell",
+            "burst_close_short": "buy",
             "close_long": "sell",
             "open_long": "buy",
             "close_short": "buy",
@@ -258,13 +261,11 @@ class BitgetBot(Bot):
         )
 
     async def transfer_from_derivatives_to_spot(self, coin: str, amount: float):
-        raise NotImplementedError("not implemented")
         params = {
-            "coin": coin,
+            "coin": "USDT",
             "amount": str(amount),
-            "from_account_type": "CONTRACT",
-            "to_account_type": "SPOT",
-            "transfer_id": str(uuid4()),
+            "from_account_type": "mix_usdt",
+            "to_account_type": "spot",
         }
         return await self.private_(
             "post", self.base_endpoint, self.endpoints["funds_transfer"], params=params, json_=True
@@ -295,7 +296,9 @@ class BitgetBot(Bot):
             if elm["holdSide"] == "long":
                 position["long"] = {
                     "size": round_(float(elm["total"]), self.qty_step),
-                    "price": float(elm["averageOpenPrice"],
+                    "price": 0.0
+                    if elm["averageOpenPrice"] is None
+                    else float(elm["averageOpenPrice"]),
                     "liquidation_price": 0.0
                     if elm["liquidationPrice"] is None
                     else float(elm["liquidationPrice"]),
@@ -304,7 +307,9 @@ class BitgetBot(Bot):
             elif elm["holdSide"] == "short":
                 position["short"] = {
                     "size": -abs(round_(float(elm["total"]), self.qty_step)),
-                    "price": float(elm["averageOpenPrice"]),
+                    "price": 0.0
+                    if elm["averageOpenPrice"] is None
+                    else float(elm["averageOpenPrice"]),
                     "liquidation_price": 0.0
                     if elm["liquidationPrice"] is None
                     else float(elm["liquidationPrice"]),
@@ -524,95 +529,116 @@ class BitgetBot(Bot):
         self,
         symbol: str = None,
         start_time: int = None,
-        income_type: str = "Trade",
         end_time: int = None,
     ):
-        raise NotImplementedError("not implemented")
-        if symbol is None:
-            all_income = []
-            all_positions = await self.private_get(self.endpoints["position"], params={"symbol": ""})
-            symbols = sorted(
-                set(
-                    [
-                        x["data"]["symbol"]
-                        for x in all_positions["result"]
-                        if float(x["data"]["size"]) > 0
-                    ]
-                )
-            )
-            for symbol in symbols:
-                all_income += await self.get_all_income(
-                    symbol=symbol, start_time=start_time, income_type=income_type, end_time=end_time
-                )
-            return sorted(all_income, key=lambda x: x["timestamp"])
-        limit = 50
-        income = []
-        page = 1
+        if end_time is None:
+            end_time = utc_ms() + 1000 * 60 * 60 * 6
+        if start_time is None:
+            start_time = utc_ms() - 1000 * 60 * 60 * 24 * 3
+        all_fills = []
+        all_fills_ids = set()
         while True:
-            fetched = await self.fetch_income(
-                symbol=symbol,
-                start_time=start_time,
-                income_type=income_type,
-                limit=limit,
-                page=page,
-            )
-            if len(fetched) == 0:
+            fills = await self.fetch_fills(symbol=symbol, start_time=start_time, end_time=end_time)
+            # latest fills returned first
+            if not fills:
                 break
-            print_(["fetched income", symbol, ts_to_date(fetched[0]["timestamp"])])
-            if fetched == income[-len(fetched) :]:
+            new_fills = []
+            for elm in fills:
+                if elm["id"] not in all_fills_ids:
+                    new_fills.append(elm)
+                    all_fills_ids.add(elm["id"])
+            if not new_fills:
                 break
-            income += fetched
-            if len(fetched) < limit:
-                break
-            page += 1
-        income_d = {e["transaction_id"]: e for e in income}
-        return sorted(income_d.values(), key=lambda x: x["timestamp"])
+            end_time = fills[-1]["timestamp"]
+            all_fills += new_fills
+        income = [
+            {
+                "symbol": elm["symbol"],
+                "transaction_id": elm["id"],
+                "income": elm["realized_pnl"],
+                "token": self.quote,
+                "timestamp": elm["timestamp"],
+            }
+            for elm in all_fills
+        ]
+        return sorted([elm for elm in income if elm["income"] != 0.0], key=lambda x: x["timestamp"])
 
     async def fetch_income(
         self,
         symbol: str = None,
-        income_type: str = None,
-        limit: int = 50,
         start_time: int = None,
         end_time: int = None,
-        page=None,
     ):
-        raise NotImplementedError("not implemented")
-        params = {"limit": limit, "symbol": self.symbol if symbol is None else symbol}
-        if start_time is not None:
-            params["start_time"] = int(start_time / 1000)
-        if end_time is not None:
-            params["end_time"] = int(end_time / 1000)
-        if income_type is not None:
-            params["exec_type"] = first_capitalized(income_type)
-        if page is not None:
-            params["page"] = page
-        fetched = None
+        raise NotImplementedError
+
+    async def fetch_latest_fills_new(self):
+        cached = None
+        fname = make_get_filepath(f"logs/fills_cached_bitget/{self.user}_{self.symbol}.json")
         try:
-            fetched = await self.private_get(self.endpoints["income"], params)
-            if fetched["result"]["data"] is None:
-                return []
-            return sorted(
-                [
-                    {
-                        "symbol": e["symbol"],
-                        "income_type": e["exec_type"].lower(),
-                        "income": float(e["closed_pnl"]),
-                        "token": self.margin_coin,
-                        "timestamp": float(e["created_at"]) * 1000,
-                        "info": {"page": fetched["result"]["current_page"]},
-                        "transaction_id": float(e["id"]),
-                        "trade_id": e["order_id"],
-                    }
-                    for e in fetched["result"]["data"]
-                ],
-                key=lambda x: x["timestamp"],
-            )
+            if os.path.exists(fname):
+                cached = json.load(open(fname))
+            else:
+                cached = []
         except Exception as e:
-            print("error fetching income: ", e)
+            logging.error("error loading fills cache", e)
             traceback.print_exc()
+            cached = []
+        fetched = None
+        lookback_since = int(
+            utc_ms() - max(flatten([v for k, v in self.xk.items() if "delay_between_fills_ms" in k]))
+        )
+        try:
+            params = {
+                "symbol": self.symbol,
+                "startTime": lookback_since,
+                "endTime": int(utc_ms() + 1000 * 60 * 60 * 2),
+                "pageSize": 100,
+            }
+            fetched = await self.private_get(self.endpoints["fills_detailed"], params)
+            if (
+                fetched["code"] == "00000"
+                and fetched["msg"] == "success"
+                and fetched["data"]["orderList"] is None
+            ):
+                return []
+            fetched = fetched["data"]["orderList"]
+            k = 0
+            while fetched and float(fetched[-1]["cTime"]) > utc_ms() - 1000 * 60 * 60 * 24 * 3:
+                k += 1
+                if k > 5:
+                    break
+                params["endTime"] = int(float(fetched[-1]["cTime"]))
+                fetched2 = (await self.private_get(self.endpoints["fills_detailed"], params))["data"][
+                    "orderList"
+                ]
+                if fetched2[-1] == fetched[-1]:
+                    break
+                fetched_d = {x["orderId"]: x for x in fetched + fetched2}
+                fetched = sorted(fetched_d.values(), key=lambda x: float(x["cTime"]), reverse=True)
+            fills = [
+                {
+                    "order_id": elm["orderId"],
+                    "symbol": elm["symbol"],
+                    "status": elm["state"],
+                    "custom_id": elm["clientOid"],
+                    "price": float(elm["priceAvg"]),
+                    "qty": float(elm["filledQty"]),
+                    "original_qty": float(elm["size"]),
+                    "type": elm["orderType"],
+                    "reduce_only": elm["reduceOnly"],
+                    "side": "buy" if elm["side"] in ["close_short", "open_long"] else "sell",
+                    "position_side": elm["posSide"],
+                    "timestamp": float(elm["cTime"]),
+                }
+                for elm in fetched
+                if "filled" in elm["state"]
+            ]
+        except Exception as e:
+            print("error fetching latest fills", e)
             print_async_exception(fetched)
+            traceback.print_exc()
             return []
+        return fills
 
     async def fetch_latest_fills(self):
         fetched = None
@@ -686,8 +712,10 @@ class BitgetBot(Bot):
         else:
             params["startTime"] = int(round(start_time))
 
-        # always fetch as many fills as possible
-        params["endTime"] = int(round(time() + 60 * 60 * 24) * 1000)
+        if end_time is None:
+            params["endTime"] = int(round(time() + 60 * 60 * 24) * 1000)
+        else:
+            params["endTime"] = int(round(end_time + 1))
         try:
             fetched = await self.private_get(self.endpoints["fills"], params)
             fills = [

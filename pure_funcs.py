@@ -737,53 +737,52 @@ def analyze_fills(
     pnl_sum_short = profit_sum_short + loss_sum_short
     gain_short = sdf.balance_short.iloc[-1] / sdf.balance_short.iloc[0] - 1
 
+    # adgs:
+    # adg
+    # adg_per_exposure
+    # adg_weighted
+    # adg_weighted_per_exposure
+
     if "adg_n_subdivisions" not in config:
         config["adg_n_subdivisions"] = 1
 
     if sdf.balance_long.iloc[-1] <= 0.0:
-        adg_realized_long = adg_realized_long_whole = sdf.balance_long.iloc[-1]
+        adg_long = adg_weighted_long = sdf.balance_long.iloc[-1]
     else:
         adgs_long = []
         for i in range(config["adg_n_subdivisions"]):
             idx = round(int(len(sdf) * (1 - 1 / (i + 1))))
-            n_days = (sdf.timestamp.iloc[-1] - sdf.timestamp.iloc[idx]) / (1000 * 60 * 60 * 24)
+            n_days_ = (sdf.timestamp.iloc[-1] - sdf.timestamp.iloc[idx]) / (1000 * 60 * 60 * 24)
             adgs_long.append(
-                (sdf.balance_long.iloc[-1] / sdf.balance_long.iloc[idx]) ** (1 / n_days) - 1
+                (sdf.balance_long.iloc[-1] / sdf.balance_long.iloc[idx]) ** (1 / n_days_) - 1
             )
-        adg_realized_long = np.mean(adgs_long)
-        adg_realized_long_whole = adgs_long[0]
+        adg_long = adgs_long[0]
+        adg_weighted_long = np.mean(adgs_long)
     if sdf.balance_short.iloc[-1] <= 0.0:
-        adg_realized_short = adg_realized_short_whole = sdf.balance_short.iloc[-1]
+        adg_short = adg_weighted_short = sdf.balance_short.iloc[-1]
+
     else:
         adgs_short = []
         for i in range(config["adg_n_subdivisions"]):
             idx = round(int(len(sdf) * (1 - 1 / (i + 1))))
-            n_days = (sdf.timestamp.iloc[-1] - sdf.timestamp.iloc[idx]) / (1000 * 60 * 60 * 24)
+            n_days_ = (sdf.timestamp.iloc[-1] - sdf.timestamp.iloc[idx]) / (1000 * 60 * 60 * 24)
             adgs_short.append(
-                (sdf.balance_short.iloc[-1] / sdf.balance_short.iloc[idx]) ** (1 / n_days) - 1
+                (sdf.balance_short.iloc[-1] / sdf.balance_short.iloc[idx]) ** (1 / n_days_) - 1
             )
-        adg_realized_short = np.mean(adgs_short)
-        adg_realized_short_whole = adgs_short[0]
-    adg_realized_per_exposure_long = (
-        (adg_realized_long / config["long"]["wallet_exposure_limit"])
-        if config["long"]["wallet_exposure_limit"] > 0.0
-        else 0.0
-    )
-    adg_realized_per_exposure_short = (
-        (adg_realized_short / config["short"]["wallet_exposure_limit"])
-        if config["short"]["wallet_exposure_limit"] > 0.0
-        else 0.0
-    )
-    adg_realized_per_exposure_long_whole = (
-        (adg_realized_long_whole / config["long"]["wallet_exposure_limit"])
-        if config["long"]["wallet_exposure_limit"] > 0.0
-        else 0.0
-    )
-    adg_realized_per_exposure_short_whole = (
-        (adg_realized_short_whole / config["short"]["wallet_exposure_limit"])
-        if config["short"]["wallet_exposure_limit"] > 0.0
-        else 0.0
-    )
+        adg_short = adgs_short[0]
+        adg_weighted_short = np.mean(adgs_short)
+    if config["long"]["wallet_exposure_limit"] > 0.0:
+        adg_per_exposure_long = adg_long / config["long"]["wallet_exposure_limit"]
+        adg_weighted_per_exposure_long = adg_weighted_long / config["long"]["wallet_exposure_limit"]
+    else:
+        adg_per_exposure_long = adg_weighted_per_exposure_long = 0.0
+    if config["short"]["wallet_exposure_limit"] > 0.0:
+        adg_per_exposure_short = adg_short / config["short"]["wallet_exposure_limit"]
+        adg_weighted_per_exposure_short = (
+            adg_weighted_short / config["short"]["wallet_exposure_limit"]
+        )
+    else:
+        adg_per_exposure_short = adg_weighted_per_exposure_short = 0.0
 
     volume_quote_long = longs.pcost.sum()
     volume_quote_short = shorts.pcost.sum()
@@ -807,8 +806,10 @@ def analyze_fills(
 
     eqbal_ratios_long = longs.equity / longs.balance
     eqbal_ratios_sdf_long = sdf.equity_long / sdf.balance_long
+    eqbal_ratio_std_long = eqbal_ratios_sdf_long.std()
     eqbal_ratios_short = shorts.equity / shorts.balance
     eqbal_ratios_sdf_short = sdf.equity_short / sdf.balance_short
+    eqbal_ratio_std_short = eqbal_ratios_sdf_short.std()
 
     analysis = {
         "exchange": config["exchange"] if "exchange" in config else "unknown",
@@ -829,31 +830,21 @@ def analyze_fills(
         if pa_distance_std_short == pa_distance_std_short
         else 1.0,
         "equity_balance_ratio_mean_long": (sdf.equity_long / sdf.balance_long).mean(),
-        "equity_balance_ratio_std_long": (sdf.equity_long / sdf.balance_long).std(),
+        "equity_balance_ratio_std_long": eqbal_ratio_std_long,
         "equity_balance_ratio_mean_short": (sdf.equity_short / sdf.balance_short).mean(),
-        "equity_balance_ratio_std_short": (sdf.equity_short / sdf.balance_short).std(),
+        "equity_balance_ratio_std_short": eqbal_ratio_std_short,
         "gain_long": gain_long,
-        "adg_long": adg_realized_long if adg_realized_long == adg_realized_long else -1.0,
-        "adg_long_whole": adg_realized_long_whole
-        if adg_realized_long_whole == adg_realized_long_whole
-        else -1.0,
-        "adg_per_exposure_long": adg_realized_per_exposure_long,
-        "adg_per_exposure_long_whole": adg_realized_per_exposure_long_whole,
-        "adg_realized_per_exposure_long": adg_realized_per_exposure_long,
-        "adg_realized_per_exposure_long_whole": adg_realized_per_exposure_long_whole,
+        "adg_long": adg_long if adg_long == adg_long else -1.0,
+        "adg_weighted_long": adg_weighted_long if adg_weighted_long == adg_weighted_long else -1.0,
+        "adg_per_exposure_long": adg_per_exposure_long,
+        "adg_weighted_per_exposure_long": adg_weighted_per_exposure_long,
         "gain_short": gain_short,
-        "adg_short": adg_realized_short if adg_realized_short == adg_realized_short else -1.0,
-        "adg_short_whole": adg_realized_short_whole
-        if adg_realized_short_whole == adg_realized_short_whole
+        "adg_short": adg_short if adg_short == adg_short else -1.0,
+        "adg_weighted_short": adg_weighted_short
+        if adg_weighted_short == adg_weighted_short
         else -1.0,
-        "adg_per_exposure_short": adg_realized_per_exposure_short,
-        "adg_per_exposure_short_whole": adg_realized_per_exposure_short_whole,
-        "adg_realized_per_exposure_short": adg_realized_per_exposure_short,
-        "adg_realized_per_exposure_short_whole": adg_realized_per_exposure_short_whole,
-        "adg_realized_long": adg_realized_long,
-        "adg_realized_long_whole": adg_realized_long_whole,
-        "adg_realized_short": adg_realized_short,
-        "adg_realized_short_whole": adg_realized_short_whole,
+        "adg_per_exposure_short": adg_per_exposure_short,
+        "adg_weighted_per_exposure_short": adg_weighted_per_exposure_short,
         "n_days": n_days,
         "n_fills_long": len(fills_long),
         "n_fills_short": len(fills_short),
@@ -910,9 +901,13 @@ def analyze_fills(
         "closest_bkr_long": sdf.closest_bkr_long.min(),
         "closest_bkr_short": sdf.closest_bkr_short.min(),
         "eqbal_ratio_min_long": min(eqbal_ratios_long.min(), eqbal_ratios_sdf_long.min()),
+        "eqbal_ratio_mean_of_10_worst_long": eqbal_ratios_long.sort_values().iloc[:10].mean(),
         "eqbal_ratio_mean_long": eqbal_ratios_sdf_long.mean(),
+        "eqbal_ratio_std_long": eqbal_ratio_std_long,
         "eqbal_ratio_min_short": min(eqbal_ratios_short.min(), eqbal_ratios_sdf_short.min()),
+        "eqbal_ratio_mean_of_10_worst_short": eqbal_ratios_short.sort_values().iloc[:10].mean(),
         "eqbal_ratio_mean_short": eqbal_ratios_sdf_short.mean(),
+        "eqbal_ratio_std_short": eqbal_ratio_std_short,
         "volume_quote_long": volume_quote_long,
         "volume_quote_short": volume_quote_short,
     }
@@ -1281,13 +1276,15 @@ def strip_config(cfg: dict) -> dict:
 def calc_scores(config: dict, results: dict):
     sides = ["long", "short"]
     # keys are sorted by reverse importance
+    # [(key_name, higher_is_better)]
     keys = [
-        ("adg_realized_per_exposure", True),
+        ("adg_weighted_per_exposure", True),
         ("hrs_stuck_max", False),
         ("pa_distance_mean", False),
         ("pa_distance_std", False),
         ("loss_profit_ratio", False),
-        ("eqbal_ratio_min", True),
+        ("eqbal_ratio_mean_of_10_worst", True),
+        ("eqbal_ratio_std", False),
     ]
     means = {side: {} for side in sides}  # adjusted means
     scores = {side: 0.0 for side in sides}
