@@ -1430,6 +1430,14 @@ def configs_are_equal(cfg0, cfg1) -> bool:
 
 def shorten_custom_id(id_: str) -> str:
     id0 = id_
-    for k_, r_ in [("clock", "clk"), ("close", "cls"), ("entry", "etr"), ("_", "")]:
+    for k_, r_ in [
+        ("clock", "clk"),
+        ("close", "cls"),
+        ("entry", "etr"),
+        ("_", ""),
+        ("normal", "nrml"),
+        ("long", "lng"),
+        ("short", "shrt"),
+    ]:
         id0 = id0.replace(k_, r_)
     return id0
