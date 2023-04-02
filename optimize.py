@@ -270,6 +270,7 @@ async def run_opt(args, config):
                 if config["ohlcv"]:
                     data = load_hlc_cache(
                         symbol,
+                        config['inverse'],
                         config["start_date"],
                         config["end_date"],
                         base_dir=config["base_dir"],
