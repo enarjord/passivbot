@@ -978,9 +978,12 @@ def get_first_ohlcv_ts(symbol: str) -> int:
         return 0
 
 
-def download_ohlcvs(symbol, start_date, end_date, download_only=False) -> pd.DataFrame:
+def download_ohlcvs(symbol, inverse, start_date, end_date, download_only=False) -> pd.DataFrame:
     dirpath = make_get_filepath(f"historical_data/ohlcvs_futures/{symbol}/")
-    base_url = f"https://data.binance.vision/data/futures/um/"
+    if not inverse:
+        base_url = f"https://data.binance.vision/data/futures/um/"
+    else:
+        base_url = f"https://data.binance.vision/data/futures/cm/"
     col_names = ["timestamp", "open", "high", "low", "close", "volume"]
     start_ts = max(get_first_ohlcv_ts(symbol), date_to_ts(start_date))
     end_ts = date_to_ts(end_date)
@@ -1060,7 +1063,7 @@ def count_longest_identical_data(hlc, symbol):
 
 
 def load_hlc_cache(
-    symbol, start_date, end_date, base_dir="backtests", spot=False, exchange="binance"
+    symbol, inverse, start_date, end_date, base_dir="backtests", spot=False, exchange="binance"
 ):
     cache_fname = (
         f"{ts_to_date_utc(date_to_ts(start_date))[:10]}_"
@@ -1073,7 +1076,7 @@ def load_hlc_cache(
     if os.path.exists(filepath):
         data = np.load(filepath)
     else:
-        df = download_ohlcvs(symbol, start_date, end_date)
+        df = download_ohlcvs(symbol, inverse, start_date, end_date)
         df = df[df.timestamp >= date_to_ts(start_date)]
         df = df[df.timestamp <= date_to_ts(end_date)]
         data = df[["timestamp", "high", "low", "close"]].values
