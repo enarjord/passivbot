@@ -30,6 +30,7 @@ from pure_funcs import (
     determine_passivbot_mode,
     config_pretty_str,
     shorten_custom_id,
+    ts_to_date,
 )
 from njit_funcs import (
     qty_to_cost,
@@ -1363,7 +1364,8 @@ class Bot:
         while True:
             now = time.time()
             # print('secs until next', ((now + 60) - now % 60) - now)
-            while int(now) % 60 != self.countdown_offset:
+            refresh_interval = 60
+            while int(now) % refresh_interval != (self.countdown_offset % refresh_interval):
                 if self.stop_websocket:
                     break
                 await asyncio.sleep(0.5)
