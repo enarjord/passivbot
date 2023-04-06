@@ -109,7 +109,7 @@ class KuCoinBot(Bot):
         self.min_qty = self.config["min_qty"] = 1.0
         self.min_cost = self.config["min_cost"] = 0.0
         self.c_mult = self.config["c_mult"] = float(elm["multiplier"])
-        self.leverage = 5  # cannot be greater than 5
+        self.leverage = min(5, self.config["leverage"])  # cannot be greater than 5
         await super()._init()
         await self.init_order_book()
         await self.update_position()
