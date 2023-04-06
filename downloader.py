@@ -1103,7 +1103,9 @@ async def main():
     args = parser.parse_args()
     config = await prepare_backtest_config(args)
     if args.ohlcv:
-        data = load_hlc_cache(config["symbol"], config["start_date"], config["end_date"])
+        data = load_hlc_cache(
+            config["symbol"], config["inverse"], config["start_date"], config["end_date"]
+        )
     else:
         downloader = Downloader(config)
         await downloader.download_ticks()
