@@ -1439,6 +1439,7 @@ def shorten_custom_id(id_: str) -> str:
         ("long", "lng"),
         ("short", "shrt"),
         ("primary", "prm"),
+        ("unstuck", "ustk"),
     ]:
         id0 = id0.replace(k_, r_)
     return id0
