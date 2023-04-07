@@ -284,7 +284,7 @@ async def fetch_market_specific_settings_old(config: dict):
 
 
 async def create_binance_bot(config: dict):
-    from binance import BinanceBot
+    from exchanges.binance import BinanceBot
 
     bot = BinanceBot(config)
     await bot._init()
@@ -292,7 +292,7 @@ async def create_binance_bot(config: dict):
 
 
 async def create_binance_bot_spot(config: dict):
-    from binance_spot import BinanceBotSpot
+    from exchanges.binance_spot import BinanceBotSpot
 
     bot = BinanceBotSpot(config)
     await bot._init()
@@ -300,7 +300,7 @@ async def create_binance_bot_spot(config: dict):
 
 
 async def create_bybit_bot(config: dict):
-    from bybit import BybitBot
+    from exchanges.bybit import BybitBot
 
     bot = BybitBot(config)
     await bot._init()
@@ -308,7 +308,7 @@ async def create_bybit_bot(config: dict):
 
 
 async def create_bitget_bot(config: dict):
-    from bitget import BitgetBot
+    from exchanges.bitget import BitgetBot
 
     bot = BitgetBot(config)
     await bot._init()
@@ -316,7 +316,7 @@ async def create_bitget_bot(config: dict):
 
 
 async def create_okx_bot(config: dict):
-    from okx import OKXBot
+    from exchanges.okx import OKXBot
 
     bot = OKXBot(config)
     await bot._init()
@@ -324,7 +324,7 @@ async def create_okx_bot(config: dict):
 
 
 async def create_kucoin_bot(config: dict):
-    from kucoin import KuCoinBot
+    from exchanges.kucoin import KuCoinBot
 
     bot = KuCoinBot(config)
     await bot._init()

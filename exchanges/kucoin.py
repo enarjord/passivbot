@@ -258,7 +258,6 @@ class KuCoinBot(Bot):
     async def fetch_position(self) -> dict:
         positions, balance = None, None
         try:
-
             positions, balance = await asyncio.gather(
                 self.private_get(self.endpoints["position"], {"symbol": self.symbol}),
                 self.private_get(self.endpoints["balance"], {"currency": self.quote}),
