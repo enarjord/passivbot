@@ -209,8 +209,8 @@ class OKXBot(Bot):
                 if "custom_id" in order:
                     custom_id_ += order["custom_id"]
                 params["clOrdId"] = shorten_custom_id(f"{custom_id_}{uuid.uuid4().hex}")[:32]
-                #print('debug client order id', params['clOrdId'])
-                print('debug execute order', params)
+                # print('debug client order id', params['clOrdId'])
+                # print('debug execute order', params)
                 to_execute.append(params)
             executed = await self.okx.private_post_trade_batch_orders(params=to_execute)
             to_return = []
