@@ -11,7 +11,7 @@ import asyncio
 import time
 import subprocess
 import argparse
-from procedures import load_exchange_key_secret_passphrase
+from procedures import load_exchange_key_secret_passphrase, utc_ms
 
 
 def volatility(ohlcv):
@@ -46,14 +46,15 @@ def generate_yaml(vols, approved, current, config):
             pane += f"-lw {lw} -sw {sw} -lm {lm} -sm {sm} -lev {lev} -cd -pt 0.06"
             yaml += pane + "\n"
             new.append(sym)
-    yaml += (
-        f"- window_name: {config['user']}_gs\n  layout: even-vertical\n  shell_command_before:\n    - cd ~/passivbot\n  panes:"
-        + "\n"
-    )
-    gs_lw = lw if config["gs_lw"] is None else config["gs_lw"]
-    gs_sw = lw if config["gs_sw"] is None else config["gs_sw"]
-    for sym in current:
-        if sym not in new:
+    bots_on_gs = [sym for sym in current if sym not in new]
+    if bots_on_gs:
+        yaml += (
+            f"- window_name: {config['user']}_gs\n  layout: even-vertical\n  shell_command_before:\n    - cd ~/passivbot\n  panes:"
+            + "\n"
+        )
+        gs_lw = lw if config["gs_lw"] is None else config["gs_lw"]
+        gs_sw = lw if config["gs_sw"] is None else config["gs_sw"]
+        for sym in bots_on_gs:
             pane = f"    - shell_command:\n      - python3 passivbot.py {user} {sym} {conf_path} -lw {gs_lw} "
             pane += f"-sw {gs_sw} -lm gs -sm gs -lev {lev} -cd -pt 0.06"
             for k0, k1 in [("lmm", "gs_mm"), ("lmr", "gs_mr")]:
@@ -61,20 +62,24 @@ def generate_yaml(vols, approved, current, config):
                     pane += f" -{k0} {config[k1]}"
             yaml += pane + "\n"
     print("active bots:", new)
-    print("bots on -gs:", [sym for sym in current if sym not in new])
+    print("bots on -gs:", bots_on_gs)
     return yaml
 
 
 async def get_ohlcvs(cc, symbols, config):
     ohs = {}
     n = 5
+    if cc.id == 'bybit':
+        extra_args = {'since': int(utc_ms() - 1000 * 60 * 60 * 25)}
+    else:
+        extra_args = {}
     print("n syms", len(symbols))
     for i in range(0, len(symbols), n):
         js = list(range(i, min(len(symbols), i + n)))
         fetched = await asyncio.gather(
-            *[cc.fetch_ohlcv(symbols[j], timeframe=config["ohlcv_interval"]) for j in js]
+            *[cc.fetch_ohlcv(symbols[j], timeframe=config["ohlcv_interval"], **extra_args) for j in js]
         )
-        print("fetching ohlcvs", [symbols[j] for j in js])
+        print("fetching ohlcvs", [symbols[j] for j in js], f"{i}/{len(symbols)}")
         for k, j in enumerate(js):
             ohs[symbols[j]] = fetched[k]
     return ohs
@@ -82,6 +87,8 @@ async def get_ohlcvs(cc, symbols, config):
 
 async def get_current_symbols(cc):
     poss = await cc.fetch_positions()
+    if cc.id == 'bybit':
+        return sorted(set([elm['info']['symbol'] for elm in poss if float(elm['info']['size']) != 0.0]))
     oos = await cc.fetch_open_orders()
     current = sorted(set([x["symbol"] for x in poss + oos]))
     current = [x.replace("/", "")[:-5] for x in current]
@@ -149,7 +156,7 @@ async def dump_yaml(cc, config):
 
 
 async def main():
-    exchange_map = {'kucoin': 'kucoinfutures', 'okx': 'okx'}
+    exchange_map = {'kucoin': 'kucoinfutures', 'okx': 'okx', 'bybit': 'bybit'}
     parser = argparse.ArgumentParser(prog="forager", description="start forager")
     parser.add_argument("forager_config_path", type=str, help="path to forager config")
     args = parser.parse_args()
