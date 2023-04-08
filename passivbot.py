@@ -1011,7 +1011,7 @@ class Bot:
                             to_cancel.append(elm)
                     elif self.long_mode != "manual":
                         to_cancel.append(elm)
-                if elm["position_side"] == "short":
+                elif elm["position_side"] == "short":
                     if self.short_mode == "tp_only":
                         if elm["side"] == "buy":
                             to_cancel.append(elm)
