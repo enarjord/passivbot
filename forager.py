@@ -20,7 +20,8 @@ def volatility(ohlcv):
 
 
 def generate_yaml(vols, approved, current, config):
-    yaml = f"session_name: {config['user']}\nwindows:\n- window_name: {config['user']}_normal\n  layout: "
+    yaml = f"session_name: {config['user']}\nwindows:"
+    yaml += f"\n- window_name: {config['user']}_normal\n  layout: "
     yaml += f"even-vertical\n  shell_command_before:\n    - cd ~/passivbot\n  panes:\n"
     conf_path = config["conf_path"]
     k = 0
@@ -34,7 +35,7 @@ def generate_yaml(vols, approved, current, config):
     lw = round(twe_long / n_longs, 4) if n_longs > 0 else 0.1
     sw = round(twe_short / n_shorts, 4) if n_shorts > 0 else 0.1
     lm, sm = "gs", "gs"
-    lev = 10 if config['lev'] is None else config['lev']
+    lev = 10 if config["lev"] is None else config["lev"]
     for sym, vol in sorted(vols.items(), key=lambda x: x[1], reverse=True):
         if sym in approved:
             k += 1
@@ -42,6 +43,11 @@ def generate_yaml(vols, approved, current, config):
             sm = "n" if k <= n_shorts else "gs"
             if lm == "gs" and sm == "gs":
                 break
+            conf_path = (
+                config["live_configs_map"][sym]
+                if sym in config["live_configs_map"]
+                else config["conf_path"]
+            )
             pane = f"    - shell_command:\n      - python3 passivbot.py {user} {sym} {conf_path} "
             pane += f"-lw {lw} -sw {sw} -lm {lm} -sm {sm} -lev {lev} -cd -pt 0.06"
             yaml += pane + "\n"
@@ -55,6 +61,11 @@ def generate_yaml(vols, approved, current, config):
         gs_lw = lw if config["gs_lw"] is None else config["gs_lw"]
         gs_sw = lw if config["gs_sw"] is None else config["gs_sw"]
         for sym in bots_on_gs:
+            conf_path = (
+                config["live_configs_map"][sym]
+                if sym in config["live_configs_map"]
+                else config["conf_path"]
+            )
             pane = f"    - shell_command:\n      - python3 passivbot.py {user} {sym} {conf_path} -lw {gs_lw} "
             pane += f"-sw {gs_sw} -lm gs -sm gs -lev {lev} -cd -pt 0.06"
             for k0, k1 in [("lmm", "gs_mm"), ("lmr", "gs_mr")]:
@@ -69,8 +80,8 @@ def generate_yaml(vols, approved, current, config):
 async def get_ohlcvs(cc, symbols, config):
     ohs = {}
     n = 5
-    if cc.id == 'bybit':
-        extra_args = {'since': int(utc_ms() - 1000 * 60 * 60 * 25)}
+    if cc.id == "bybit":
+        extra_args = {"since": int(utc_ms() - 1000 * 60 * 60 * 25)}
     else:
         extra_args = {}
     print("n syms", len(symbols))
@@ -87,13 +98,13 @@ async def get_ohlcvs(cc, symbols, config):
 
 async def get_current_symbols(cc):
     poss = await cc.fetch_positions()
-    if cc.id == 'bybit':
-        return sorted(set([elm['info']['symbol'] for elm in poss if float(elm['info']['size']) != 0.0]))
-    elif cc.id == 'binanceusdm':
+    if cc.id == "bybit":
+        return sorted(set([elm["info"]["symbol"] for elm in poss if float(elm["info"]["size"]) != 0.0]))
+    elif cc.id == "binanceusdm":
         cc.options["warnOnFetchOpenOrdersWithoutSymbol"] = False
         oos = await cc.fetch_open_orders()
-        posss = [elm['info']['symbol'] for elm in poss if float(elm['info']['positionAmt']) != 0.0]
-        ooss = [elm['info']['symbol'] for elm in oos]
+        posss = [elm["info"]["symbol"] for elm in poss if float(elm["info"]["positionAmt"]) != 0.0]
+        ooss = [elm["info"]["symbol"] for elm in oos]
         return sorted(set(posss + ooss))
     oos = await cc.fetch_open_orders()
     current = sorted(set([x["symbol"] for x in poss + oos]))
@@ -131,7 +142,7 @@ async def get_min_costs(cc):
                         )
                     if exchange == "kucoinfutures":
                         last_price = float(tickers[ticker_symbol]["info"]["last"])
-                        min_qty = float(x['info']['multiplier'])
+                        min_qty = float(x["info"]["multiplier"])
                         c_mult = 1.0
                     else:
                         last_price = tickers[ticker_symbol]["last"]
@@ -162,16 +173,39 @@ async def dump_yaml(cc, config):
 
 
 async def main():
-    exchange_map = {'kucoin': 'kucoinfutures', 'okx': 'okx', 'bybit': 'bybit', 'binance': 'binanceusdm'}
+    exchange_map = {
+        "kucoin": "kucoinfutures",
+        "okx": "okx",
+        "bybit": "bybit",
+        "binance": "binanceusdm",
+    }
     parser = argparse.ArgumentParser(prog="forager", description="start forager")
     parser.add_argument("forager_config_path", type=str, help="path to forager config")
+
+    parser.add_argument(
+        "-lp",
+        "--live_config_map_path",
+        "--live-config-map-path",
+        type=str,
+        required=False,
+        dest="live_configs_map_path",
+        default="configs/forager/live_configs_map.hjson",
+        help="Path to live configs map.  Default is configs/forager/live_configs_map.hjson",
+    )
     args = parser.parse_args()
     config = hjson.load(open(args.forager_config_path))
+    try:
+        config["live_configs_map"] = hjson.load(open(args.live_configs_map_path))
+    except Exception as e:
+        print(f"failed to load {args.live_configs_map_path}")
+        config["live_configs_map"] = {}
     config["yaml_filepath"] = f"{config['user']}.yaml"
     # choices: okx, binanceusdm, bitget, bybit, kucoinfutures
     user = config["user"]
     exchange, key, secret, passphrase = load_exchange_key_secret_passphrase(config["user"])
-    cc = getattr(ccxt, exchange_map[exchange])({"apiKey": key, "secret": secret, "password": passphrase})
+    cc = getattr(ccxt, exchange_map[exchange])(
+        {"apiKey": key, "secret": secret, "password": passphrase}
+    )
     while True:
         try:
             await dump_yaml(cc, config)
