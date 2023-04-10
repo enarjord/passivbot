@@ -39,7 +39,7 @@ def generate_yaml(vols, approved, current, config):
         if sym in approved:
             k += 1
             lm = "n" if k <= n_longs else "gs"
-            sm = "gs" if k <= n_shorts else "gs"
+            sm = "n" if k <= n_shorts else "gs"
             if lm == "gs" and sm == "gs":
                 break
             pane = f"    - shell_command:\n      - python3 passivbot.py {user} {sym} {conf_path} "
@@ -89,6 +89,12 @@ async def get_current_symbols(cc):
     poss = await cc.fetch_positions()
     if cc.id == 'bybit':
         return sorted(set([elm['info']['symbol'] for elm in poss if float(elm['info']['size']) != 0.0]))
+    elif cc.id == 'binanceusdm':
+        cc.options["warnOnFetchOpenOrdersWithoutSymbol"] = False
+        oos = await cc.fetch_open_orders()
+        posss = [elm['info']['symbol'] for elm in poss if float(elm['info']['positionAmt']) != 0.0]
+        ooss = [elm['info']['symbol'] for elm in oos]
+        return sorted(set(posss + ooss))
     oos = await cc.fetch_open_orders()
     current = sorted(set([x["symbol"] for x in poss + oos]))
     current = [x.replace("/", "")[:-5] for x in current]
@@ -156,7 +162,7 @@ async def dump_yaml(cc, config):
 
 
 async def main():
-    exchange_map = {'kucoin': 'kucoinfutures', 'okx': 'okx', 'bybit': 'bybit'}
+    exchange_map = {'kucoin': 'kucoinfutures', 'okx': 'okx', 'bybit': 'bybit', 'binance': 'binanceusdm'}
     parser = argparse.ArgumentParser(prog="forager", description="start forager")
     parser.add_argument("forager_config_path", type=str, help="path to forager config")
     args = parser.parse_args()
