@@ -644,6 +644,78 @@ def get_template_live_config(passivbot_mode="static_grid"):
         raise Exception(f"unknown passivbot mode {passivbot_mode}")
 
 
+def analyze_fills_slim(
+    fills_long: list, fills_short: list, stats: list, config: dict
+) -> (pd.DataFrame, pd.DataFrame, dict):
+    # return only what's needed for computing a score
+    #  adg_weighted_per_exposure,
+    #  hrs_stuck_max,
+    #  pa_distance_mean,
+    #  pa_distance_std,
+    #  loss_profit_ratio,
+    #  eqbal_ratio_mean_of_10_worst,
+    #  eqbal_ratio_std,
+
+    if "adg_n_subdivisions" not in config:
+        config["adg_n_subdivisions"] = 1
+
+    ms_per_day = 1000 * 60 * 60 * 24
+
+    if stats[-1][10] <= 0.0:
+        adg_long = adg_weighted_long = stats[-1][10]
+    else:
+        adgs_long = []
+        for i in range(config["adg_n_subdivisions"]):
+            idx = round(int(len(stats) * (1 - 1 / (i + 1))))
+            n_days_ = (sdf.timestamp.iloc[-1] - sdf.timestamp.iloc[idx]) / ms_per_day
+            n_days_ = (stats[-1][0] - stats[idx][0]) / ms_per_day
+            adgs_long.append(
+                (stats[-1][10] / stats[idx][10]) ** (1 / n_days_) - 1
+            )
+        adg_long = adgs_long[0]
+        adg_weighted_long = np.mean(adgs_long)
+    if stats[-1][11] <= 0.0:
+        adg_short = adg_weighted_short = stats[-1][11]
+    else:
+        adgs_short = []
+        for i in range(config["adg_n_subdivisions"]):
+            idx = round(int(len(stats) * (1 - 1 / (i + 1))))
+            n_days_ = (sdf.timestamp.iloc[-1] - sdf.timestamp.iloc[idx]) / ms_per_day
+            n_days_ = (stats[-1][0] - stats[idx][0]) / ms_per_day
+            adgs_short.append(
+                (stats[-1][11] / stats[idx][11]) ** (1 / n_days_) - 1
+            )
+        adg_short = adgs_short[0]
+        adg_weighted_short = np.mean(adgs_short)
+
+    ts_diffs_long = np.diff([x[0] for x in fills_long]) if fills_long else [0.0]
+    hrs_stuck_max_long = ts_diffs_long.max() / ms_per_day
+    ts_diffs_short = np.diff([x[0] for x in fills_short]) if fills_short else [0.0]
+    hrs_stuck_max_short = ts_diffs_short.max() / ms_per_day
+
+    #pa dist
+    lpprices = sdf[sdf.psize_long != 0.0]
+    spprices = sdf[sdf.psize_short != 0.0]
+    pa_dists_long = (
+        ((lpprices.pprice_long - lpprices.price).abs() / lpprices.price)
+        if len(lpprices) > 0
+        else pd.Series([100.0])
+    )
+    pa_dists_short = (
+        ((spprices.pprice_short - spprices.price).abs() / spprices.price)
+        if len(spprices) > 0
+        else pd.Series([100.0])
+    )
+    pa_distance_std_long = pa_dists_long.std()
+    pa_distance_std_short = pa_dists_short.std()
+    pa_distance_mean_long = pa_dists_long.mean()
+    pa_distance_mean_short = pa_dists_short.mean()
+
+
+
+
+
+
 def analyze_fills(
     fills_long: list, fills_short: list, stats: list, config: dict
 ) -> (pd.DataFrame, pd.DataFrame, dict):
