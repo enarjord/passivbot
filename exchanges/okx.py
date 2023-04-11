@@ -297,6 +297,44 @@ class OKXBot(Bot):
             return []
         return fills
 
+    async def fetch_all_fills(
+        self,
+        symbol=None,
+        limit: int = 1000,
+        from_id: int = None,
+        start_time: int = None,
+        end_time: int = None,
+    ):
+        fetched = self.okx.private_get_trade_fills_history({"instType": self.inst_type})
+        fillsd = {}
+        while True:
+            if len(fetched["data"]) == 0:
+                break
+            new_fills = [elm for elm in fetched["data"] if elm["billId"] not in fillsd]
+            if not new_fills:
+                break
+            fillsd.update({elm["billId"]: elm for elm in new_fills})
+            end_time = int(new_fills[-1]["fillTime"])
+            fetched = self.okx.private_get_trade_fills_history(
+                {"instType": self.inst_type, "end": end_time}
+            )
+        return sorted(fillsd.values(), key=lambda x: x["fillTime"])
+
+    def fetch_all_fills_(start_time: int):
+        fetched = okx.private_get_trade_fills_history({"instType": "SWAP"})
+        fillsd = {}
+        while True:
+            if len(fetched["data"]) == 0:
+                break
+            new_fills = [elm for elm in fetched["data"] if elm["billId"] not in fillsd]
+            if not new_fills:
+                break
+            fillsd.update({elm["billId"]: elm for elm in new_fills})
+            end_time = int(new_fills[-1]["fillTime"])
+            fetched = okx.private_get_trade_fills_history({"instType": "SWAP", "end": end_time})
+            print(end_time)
+        return sorted(fillsd.values(), key=lambda x: x["fillTime"])
+
     async def fetch_fills(
         self,
         symbol=None,
