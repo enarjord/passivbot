@@ -1,6 +1,0 @@
-{
-  // will override "conf_path" in forager config
-  BTCUSDT: configs/live/clock_mode.example.json
-  ETHUSDT: configs/live/recursive_grid_mode.example.json
-  EOSUSDT: configs/live/neat_grid_mode.example.json
-}
