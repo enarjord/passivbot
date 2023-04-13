@@ -21,9 +21,6 @@ def volatility(ohlcv):
 
 def generate_yaml(vols, approved, current, config):
     yaml = f"session_name: {config['user']}\nwindows:"
-    yaml += f"\n- window_name: {config['user']}_normal\n  layout: "
-    yaml += f"even-vertical\n  shell_command_before:\n    - cd ~/passivbot\n  panes:\n"
-    conf_path = config["conf_path"]
     k = 0
     new = []
     user = config["user"]
@@ -35,23 +32,26 @@ def generate_yaml(vols, approved, current, config):
     lw = round(twe_long / n_longs, 4) if n_longs > 0 else 0.1
     sw = round(twe_short / n_shorts, 4) if n_shorts > 0 else 0.1
     lm, sm = "gs", "gs"
-    lev = 10 if config["lev"] is None else config["lev"]
-    for sym, vol in sorted(vols.items(), key=lambda x: x[1], reverse=True):
-        if sym in approved:
-            k += 1
-            lm = "n" if k <= n_longs else "gs"
-            sm = "n" if k <= n_shorts else "gs"
-            if lm == "gs" and sm == "gs":
-                break
-            conf_path = (
-                config["live_configs_map"][sym]
-                if sym in config["live_configs_map"]
-                else config["conf_path"]
-            )
-            pane = f"    - shell_command:\n      - python3 passivbot.py {user} {sym} {conf_path} "
-            pane += f"-lw {lw} -sw {sw} -lm {lm} -sm {sm} -lev {lev} -cd -pt 0.06"
-            yaml += pane + "\n"
-            new.append(sym)
+    lev = 10 if config["leverage"] is None else config["leverage"]
+    active_syms = [x[0] for x in sorted(vols.items(), key=lambda x: x[1], reverse=True) if x[0] in approved][:max(n_longs, n_shorts)]
+    if active_syms:
+        yaml += f"\n- window_name: {config['user']}_normal\n  layout: "
+        yaml += f"even-vertical\n  shell_command_before:\n    - cd ~/passivbot\n  panes:\n"
+    for sym in active_syms:
+        k += 1
+        lm = "n" if k <= n_longs else "gs"
+        sm = "n" if k <= n_shorts else "gs"
+        if lm == "gs" and sm == "gs":
+            break
+        conf_path = (
+            config["live_configs_map"][sym]
+            if sym in config["live_configs_map"]
+            else config["default_config_path"]
+        )
+        pane = f"    - shell_command:\n      - python3 passivbot.py {user} {sym} {conf_path} "
+        pane += f"-lw {lw} -sw {sw} -lm {lm} -sm {sm} -lev {lev} -cd -pt 0.06"
+        yaml += pane + "\n"
+        new.append(sym)
     bots_on_gs = [sym for sym in current if sym not in new]
     if bots_on_gs:
         yaml += (
@@ -64,7 +64,7 @@ def generate_yaml(vols, approved, current, config):
             conf_path = (
                 config["live_configs_map"][sym]
                 if sym in config["live_configs_map"]
-                else config["conf_path"]
+                else config["default_config_path"]
             )
             pane = f"    - shell_command:\n      - python3 passivbot.py {user} {sym} {conf_path} -lw {gs_lw} "
             pane += f"-sw {gs_sw} -lm gs -sm gs -lev {lev} -cd -pt 0.06"
@@ -157,8 +157,11 @@ async def dump_yaml(cc, config):
     print("getting min costs...")
     min_costs = await get_min_costs(cc)
     symbols_map = {sym: sym.replace(":USDT", "").replace("/", "") for sym in min_costs}
+    if config['approved_symbols_only']:
+        # only use approved symbols
+        symbols_map = {k: v for k, v in symbols_map.items() if v in config['live_configs_map']}
     symbols_map_inv = {v: k for k, v in symbols_map.items()}
-    approved = [symbols_map[k] for k, v in min_costs.items() if v <= max_min_cost]
+    approved = [symbols_map[k] for k, v in min_costs.items() if v <= max_min_cost and k in symbols_map]
     print("getting current bots...")
     current = await get_current_symbols(cc)
     print("getting ohlcvs...")
@@ -181,26 +184,9 @@ async def main():
     }
     parser = argparse.ArgumentParser(prog="forager", description="start forager")
     parser.add_argument("forager_config_path", type=str, help="path to forager config")
-
-    parser.add_argument(
-        "-lp",
-        "--live_config_map_path",
-        "--live-config-map-path",
-        type=str,
-        required=False,
-        dest="live_configs_map_path",
-        default="configs/forager/live_configs_map.hjson",
-        help="Path to live configs map.  Default is configs/forager/live_configs_map.hjson",
-    )
     args = parser.parse_args()
     config = hjson.load(open(args.forager_config_path))
-    try:
-        config["live_configs_map"] = hjson.load(open(args.live_configs_map_path))
-    except Exception as e:
-        print(f"failed to load {args.live_configs_map_path}")
-        config["live_configs_map"] = {}
     config["yaml_filepath"] = f"{config['user']}.yaml"
-    # choices: okx, binanceusdm, bitget, bybit, kucoinfutures
     user = config["user"]
     exchange, key, secret, passphrase = load_exchange_key_secret_passphrase(config["user"])
     cc = getattr(ccxt, exchange_map[exchange])(
