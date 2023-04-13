@@ -1,0 +1,36 @@
+{
+  // supported exchanges: [kucoin, okx, bybit, binance]
+  user: binance_01
+  twe_long: 3.2
+  twe_short: 1.6
+  n_longs: 6
+  n_shorts: 3
+  conf_path: configs/live/clock_mode.example.json
+  max_min_cost: 5.0
+  n_ohlcvs: 100
+  ohlcv_interval: 15m
+  leverage: 10
+
+
+  // if symbol is missing from live_configs_map, default to this config
+  default_config_path: configs/live/clock_mode.example.json
+
+  // if true, allow only symbols present in live_configs_map
+  // if false, will use default_config_path when symbol is missing from live_configs_map
+  approved_symbols_only: false
+
+  live_configs_map: {
+    BTCUSDT: configs/live/clock_mode.example.json
+    ETHUSDT: configs/live/neat_grid_mode.example.json
+    DOGEUSDT: configs/live/recursive_grid_mode.example.json
+  }
+
+  // min markup when -gs
+  gs_mm: null
+  // markup range when -gs
+  gs_mr: null
+  // long WE_limit when -gs
+  gs_lw: null
+  // short WE_limit when -gs
+  gs_sw: null
+}
