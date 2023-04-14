@@ -33,7 +33,14 @@ def generate_yaml(vols, approved, current, config):
     sw = round(twe_short / n_shorts, 4) if n_shorts > 0 else 0.1
     lm, sm = "gs", "gs"
     lev = 10 if config["leverage"] is None else config["leverage"]
-    active_syms = [x[0] for x in sorted(vols.items(), key=lambda x: x[1], reverse=True) if x[0] in approved][:max(n_longs, n_shorts)]
+    price_distance_threshold = (
+        config["price_distance_threshold"]
+        if "price_distance_threshold" in config and config["price_distance_threshold"] is not None
+        else 0.5
+    )
+    active_syms = [
+        x[0] for x in sorted(vols.items(), key=lambda x: x[1], reverse=True) if x[0] in approved
+    ][: max(n_longs, n_shorts)]
     if active_syms:
         yaml += f"\n- window_name: {config['user']}_normal\n  layout: "
         yaml += f"even-vertical\n  shell_command_before:\n    - cd ~/passivbot\n  panes:\n"
@@ -49,7 +56,7 @@ def generate_yaml(vols, approved, current, config):
             else config["default_config_path"]
         )
         pane = f"    - shell_command:\n      - python3 passivbot.py {user} {sym} {conf_path} "
-        pane += f"-lw {lw} -sw {sw} -lm {lm} -sm {sm} -lev {lev} -cd -pt 0.06"
+        pane += f"-lw {lw} -sw {sw} -lm {lm} -sm {sm} -lev {lev} -cd -pt {price_distance_threshold}"
         yaml += pane + "\n"
         new.append(sym)
     bots_on_gs = [sym for sym in current if sym not in new]
@@ -67,7 +74,7 @@ def generate_yaml(vols, approved, current, config):
                 else config["default_config_path"]
             )
             pane = f"    - shell_command:\n      - python3 passivbot.py {user} {sym} {conf_path} -lw {gs_lw} "
-            pane += f"-sw {gs_sw} -lm gs -sm gs -lev {lev} -cd -pt 0.06"
+            pane += f"-sw {gs_sw} -lm gs -sm gs -lev {lev} -cd -pt {price_distance_threshold}"
             for k0, k1 in [("lmm", "gs_mm"), ("lmr", "gs_mr")]:
                 if config[k1] is not None:
                     pane += f" -{k0} {config[k1]}"
@@ -88,7 +95,10 @@ async def get_ohlcvs(cc, symbols, config):
     for i in range(0, len(symbols), n):
         js = list(range(i, min(len(symbols), i + n)))
         fetched = await asyncio.gather(
-            *[cc.fetch_ohlcv(symbols[j], timeframe=config["ohlcv_interval"], **extra_args) for j in js]
+            *[
+                cc.fetch_ohlcv(symbols[j], timeframe=config["ohlcv_interval"], **extra_args)
+                for j in js
+            ]
         )
         print("fetching ohlcvs", [symbols[j] for j in js], f"{i}/{len(symbols)}")
         for k, j in enumerate(js):
@@ -99,13 +109,26 @@ async def get_ohlcvs(cc, symbols, config):
 async def get_current_symbols(cc):
     poss = await cc.fetch_positions()
     if cc.id == "bybit":
-        return sorted(set([elm["info"]["symbol"] for elm in poss if float(elm["info"]["size"]) != 0.0]))
+        pos_syms = [elm["info"]["symbol"] for elm in poss if float(elm["info"]["size"]) != 0.0]
+        oos = []
+        delay_s = 0.5
+        for symbol in cc.markets:
+            if symbol.endswith("USDT"):
+                sts = time.time()
+                oosf = await cc.fetch_open_orders(symbol=symbol)
+                spent = time.time() - sts
+                print(f"\r fetching open orders for {symbol}     ", end=" ")
+                oos += oosf
+                time.sleep(max(0.0, delay_s - spent))
+        print()
+        oos_syms = sorted(set([elm["symbol"] for elm in oos]))
+        return sorted(set(pos_syms + oos_syms))
     elif cc.id == "binanceusdm":
         cc.options["warnOnFetchOpenOrdersWithoutSymbol"] = False
         oos = await cc.fetch_open_orders()
-        posss = [elm["info"]["symbol"] for elm in poss if float(elm["info"]["positionAmt"]) != 0.0]
-        ooss = [elm["info"]["symbol"] for elm in oos]
-        return sorted(set(posss + ooss))
+        pos_syms = [elm["info"]["symbol"] for elm in poss if float(elm["info"]["positionAmt"]) != 0.0]
+        oos_syms = [elm["info"]["symbol"] for elm in oos]
+        return sorted(set(pos_syms + oos_syms))
     oos = await cc.fetch_open_orders()
     current = sorted(set([x["symbol"] for x in poss + oos]))
     current = [x.replace("/", "")[:-5] for x in current]
@@ -157,11 +180,13 @@ async def dump_yaml(cc, config):
     print("getting min costs...")
     min_costs = await get_min_costs(cc)
     symbols_map = {sym: sym.replace(":USDT", "").replace("/", "") for sym in min_costs}
-    if config['approved_symbols_only']:
+    if config["approved_symbols_only"]:
         # only use approved symbols
-        symbols_map = {k: v for k, v in symbols_map.items() if v in config['live_configs_map']}
+        symbols_map = {k: v for k, v in symbols_map.items() if v in config["live_configs_map"]}
     symbols_map_inv = {v: k for k, v in symbols_map.items()}
-    approved = [symbols_map[k] for k, v in min_costs.items() if v <= max_min_cost and k in symbols_map]
+    approved = [
+        symbols_map[k] for k, v in min_costs.items() if v <= max_min_cost and k in symbols_map
+    ]
     print("getting current bots...")
     current = await get_current_symbols(cc)
     print("getting ohlcvs...")
