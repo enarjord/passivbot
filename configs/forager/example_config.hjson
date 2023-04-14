@@ -10,6 +10,7 @@
   n_ohlcvs: 100
   ohlcv_interval: 15m
   leverage: 10
+  price_distance_threshold: 0.07
 
 
   // if symbol is missing from live_configs_map, default to this config
