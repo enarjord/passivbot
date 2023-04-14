@@ -40,7 +40,7 @@ def generate_yaml(vols, approved, current, config):
     active_syms = [
         x[0] for x in sorted(vols.items(), key=lambda x: x[1], reverse=True) if x[0] in approved
     ][: max(n_longs, n_shorts)]
-    max_n_panes = 8
+    max_n_panes = config["max_n_panes"] if "max_n_panes" in config else 8
     for z in range(0, len(active_syms), max_n_panes):
         active_syms_slice = active_syms[z : z + max_n_panes]
         if active_syms_slice:
