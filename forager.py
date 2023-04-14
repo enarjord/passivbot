@@ -41,44 +41,52 @@ def generate_yaml(vols, approved, current, config):
     active_syms = [
         x[0] for x in sorted(vols.items(), key=lambda x: x[1], reverse=True) if x[0] in approved
     ][: max(n_longs, n_shorts)]
-    if active_syms:
-        yaml += f"\n- window_name: {config['user']}_normal\n  layout: "
-        yaml += f"even-vertical\n  shell_command_before:\n    - cd ~/passivbot\n  panes:\n"
-    for sym in active_syms:
-        k += 1
-        lm = "n" if k <= n_longs else "gs"
-        sm = "n" if k <= n_shorts else "gs"
-        if lm == "gs" and sm == "gs":
-            break
-        conf_path = (
-            config["live_configs_map"][sym]
-            if sym in config["live_configs_map"]
-            else config["default_config_path"]
-        )
-        pane = f"    - shell_command:\n      - python3 passivbot.py {user} {sym} {conf_path} "
-        pane += f"-lw {lw} -sw {sw} -lm {lm} -sm {sm} -lev {lev} -cd -pt {price_distance_threshold}"
-        yaml += pane + "\n"
-        new.append(sym)
-    bots_on_gs = [sym for sym in current if sym not in new]
-    if bots_on_gs:
-        yaml += (
-            f"- window_name: {config['user']}_gs\n  layout: even-vertical\n  shell_command_before:\n    - cd ~/passivbot\n  panes:"
-            + "\n"
-        )
-        gs_lw = lw if config["gs_lw"] is None else config["gs_lw"]
-        gs_sw = lw if config["gs_sw"] is None else config["gs_sw"]
-        for sym in bots_on_gs:
+    max_n_panes = 8
+    for z in range(0, len(active_syms), max_n_panes):
+        active_syms_slice = active_syms[z : z + max_n_panes]
+        if active_syms_slice:
+            yaml += f"\n- window_name: {config['user']}_normal_{z}\n  layout: "
+            yaml += f"even-vertical\n  shell_command_before:\n    - cd ~/passivbot\n  panes:\n"
+        for sym in active_syms_slice:
+            k += 1
+            lm = "n" if k <= n_longs else "gs"
+            sm = "n" if k <= n_shorts else "gs"
+            if lm == "gs" and sm == "gs":
+                break
             conf_path = (
                 config["live_configs_map"][sym]
                 if sym in config["live_configs_map"]
                 else config["default_config_path"]
             )
-            pane = f"    - shell_command:\n      - python3 passivbot.py {user} {sym} {conf_path} -lw {gs_lw} "
-            pane += f"-sw {gs_sw} -lm gs -sm gs -lev {lev} -cd -pt {price_distance_threshold}"
-            for k0, k1 in [("lmm", "gs_mm"), ("lmr", "gs_mr")]:
-                if config[k1] is not None:
-                    pane += f" -{k0} {config[k1]}"
+            pane = f"    - shell_command:\n      - python3 passivbot.py {user} {sym} {conf_path} "
+            pane += (
+                f"-lw {lw} -sw {sw} -lm {lm} -sm {sm} -lev {lev} -cd -pt {price_distance_threshold}"
+            )
             yaml += pane + "\n"
+            new.append(sym)
+    bots_on_gs = [sym for sym in current if sym not in new]
+    if bots_on_gs:
+        for z in range(0, len(bots_on_gs), max_n_panes):
+            bots_on_gs_slice = bots_on_gs[z : z + max_n_panes]
+            yaml += (
+                f"- window_name: {config['user']}_gs_{z}\n  layout: even-vertical\n  shell_command_before:\n    - cd ~/passivbot\n  panes:"
+                + "\n"
+            )
+            gs_lw = lw if config["gs_lw"] is None else config["gs_lw"]
+            gs_sw = lw if config["gs_sw"] is None else config["gs_sw"]
+            for sym in bots_on_gs_slice:
+                conf_path = (
+                    config["live_configs_map"][sym]
+                    if sym in config["live_configs_map"]
+                    else config["default_config_path"]
+                )
+                pane = f"    - shell_command:\n      - python3 passivbot.py {user} {sym} {conf_path} -lw {gs_lw} "
+                pane += f"-sw {gs_sw} -lm gs -sm gs -lev {lev} -cd -pt {price_distance_threshold}"
+                for k0, k1 in [("lmm", "gs_mm"), ("lmr", "gs_mr")]:
+                    if config[k1] is not None:
+                        pane += f" -{k0} {config[k1]}"
+                yaml += pane + "\n"
+            bots_on_gs_slice = bots_on_gs
     print("active bots:", new)
     print("bots on -gs:", bots_on_gs)
     return yaml
@@ -188,7 +196,13 @@ async def dump_yaml(cc, config):
         symbols_map[k] for k, v in min_costs.items() if v <= max_min_cost and k in symbols_map
     ]
     print("getting current bots...")
-    current = await get_current_symbols(cc)
+    current_ = await get_current_symbols(cc)
+    current = []
+    for elm in current_:
+        if elm in symbols_map:
+            current.append(symbols_map[elm])
+        elif elm in symbols_map_inv:
+            current.append(elm)
     print("getting ohlcvs...")
     ohs = await get_ohlcvs(cc, [symbols_map_inv[sym] for sym in approved], config)
     vols = {symbols_map[sym]: volatility(ohs[sym][-n_ohlcvs:]) for sym in ohs}
