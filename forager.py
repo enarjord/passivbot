@@ -22,7 +22,6 @@ def volatility(ohlcv):
 def generate_yaml(vols, approved, current, config):
     yaml = f"session_name: {config['user']}\nwindows:"
     k = 0
-    new = []
     user = config["user"]
     twe_long = config["twe_long"]
     twe_short = config["twe_short"]
@@ -63,8 +62,7 @@ def generate_yaml(vols, approved, current, config):
                 f"-lw {lw} -sw {sw} -lm {lm} -sm {sm} -lev {lev} -cd -pt {price_distance_threshold}"
             )
             yaml += pane + "\n"
-            new.append(sym)
-    bots_on_gs = [sym for sym in current if sym not in new]
+    bots_on_gs = sorted(set([sym for sym in current if sym not in active_syms]))
     if bots_on_gs:
         for z in range(0, len(bots_on_gs), max_n_panes):
             bots_on_gs_slice = bots_on_gs[z : z + max_n_panes]
@@ -87,7 +85,7 @@ def generate_yaml(vols, approved, current, config):
                         pane += f" -{k0} {config[k1]}"
                 yaml += pane + "\n"
             bots_on_gs_slice = bots_on_gs
-    print("active bots:", new)
+    print("active bots:", active_syms)
     print("bots on -gs:", bots_on_gs)
     return yaml
 
