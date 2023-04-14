@@ -12,6 +12,8 @@
   leverage: 10
   price_distance_threshold: 0.07
 
+  max_n_panes: 8
+
 
   // if symbol is missing from live_configs_map, default to this config
   default_config_path: configs/live/clock_mode.example.json
