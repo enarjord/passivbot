@@ -644,9 +644,7 @@ def get_template_live_config(passivbot_mode="static_grid"):
         raise Exception(f"unknown passivbot mode {passivbot_mode}")
 
 
-def analyze_fills_slim(
-    fills_long: list, fills_short: list, stats: list, config: dict
-) -> (pd.DataFrame, pd.DataFrame, dict):
+def analyze_fills_slim(fills_long: list, fills_short: list, stats: list, config: dict) -> dict:
     # return only what's needed for computing a score
     #  adg_weighted_per_exposure,
     #  hrs_stuck_max,
@@ -667,11 +665,8 @@ def analyze_fills_slim(
         adgs_long = []
         for i in range(config["adg_n_subdivisions"]):
             idx = round(int(len(stats) * (1 - 1 / (i + 1))))
-            n_days_ = (sdf.timestamp.iloc[-1] - sdf.timestamp.iloc[idx]) / ms_per_day
             n_days_ = (stats[-1][0] - stats[idx][0]) / ms_per_day
-            adgs_long.append(
-                (stats[-1][10] / stats[idx][10]) ** (1 / n_days_) - 1
-            )
+            adgs_long.append((stats[-1][10] / stats[idx][10]) ** (1 / n_days_) - 1)
         adg_long = adgs_long[0]
         adg_weighted_long = np.mean(adgs_long)
     if stats[-1][11] <= 0.0:
@@ -680,40 +675,67 @@ def analyze_fills_slim(
         adgs_short = []
         for i in range(config["adg_n_subdivisions"]):
             idx = round(int(len(stats) * (1 - 1 / (i + 1))))
-            n_days_ = (sdf.timestamp.iloc[-1] - sdf.timestamp.iloc[idx]) / ms_per_day
             n_days_ = (stats[-1][0] - stats[idx][0]) / ms_per_day
-            adgs_short.append(
-                (stats[-1][11] / stats[idx][11]) ** (1 / n_days_) - 1
-            )
+            adgs_short.append((stats[-1][11] / stats[idx][11]) ** (1 / n_days_) - 1)
         adg_short = adgs_short[0]
         adg_weighted_short = np.mean(adgs_short)
 
-    ts_diffs_long = np.diff([x[0] for x in fills_long]) if fills_long else [0.0]
-    hrs_stuck_max_long = ts_diffs_long.max() / ms_per_day
-    ts_diffs_short = np.diff([x[0] for x in fills_short]) if fills_short else [0.0]
-    hrs_stuck_max_short = ts_diffs_short.max() / ms_per_day
+    ts_diffs_long = np.diff([x[1] for x in fills_long]) if fills_long else [0.0]
+    hrs_stuck_max_long = ts_diffs_long.max() / (1000 * 60 * 60)
+    ts_diffs_short = np.diff([x[1] for x in fills_short]) if fills_short else [0.0]
+    hrs_stuck_max_short = ts_diffs_short.max() / (1000 * 60 * 60)
 
-    #pa dist
-    lpprices = sdf[sdf.psize_long != 0.0]
-    spprices = sdf[sdf.psize_short != 0.0]
-    pa_dists_long = (
-        ((lpprices.pprice_long - lpprices.price).abs() / lpprices.price)
-        if len(lpprices) > 0
-        else pd.Series([100.0])
+    # pa dist
+    pa_dists_long = np.array([abs(elm[4] - elm[7]) / elm[7] for elm in stats if elm[3] != 0])
+    pa_dists_short = np.array([abs(elm[6] - elm[7]) / elm[7] for elm in stats if elm[5] != 0])
+    if len(pa_dists_long) == 0:
+        pa_dists_long = np.array([100.0])
+    if len(pa_dists_short) == 0:
+        pa_dists_short = np.array([100.0])
+    profit_sum_long, loss_sum_long = 0.0, 0.0
+    for elm in fills_long:
+        if elm[2] > 0.0:
+            profit_sum_long += elm[2]
+        elif elm[2] < 0.0:
+            loss_sum_long += elm[2]
+    profit_sum_short, loss_sum_short = 0.0, 0.0
+    for elm in fills_short:
+        if elm[2] > 0.0:
+            profit_sum_short += elm[2]
+        elif elm[2] < 0.0:
+            loss_sum_short += elm[2]
+
+    # loss profit ratio
+    loss_profit_ratio_long = abs(loss_sum_long) / profit_sum_long if profit_sum_long > 0.0 else 1.0
+    loss_profit_ratio_short = (
+        abs(loss_sum_short) / profit_sum_short if profit_sum_short > 0.0 else 1.0
     )
-    pa_dists_short = (
-        ((spprices.pprice_short - spprices.price).abs() / spprices.price)
-        if len(spprices) > 0
-        else pd.Series([100.0])
-    )
-    pa_distance_std_long = pa_dists_long.std()
-    pa_distance_std_short = pa_dists_short.std()
-    pa_distance_mean_long = pa_dists_long.mean()
-    pa_distance_mean_short = pa_dists_short.mean()
 
+    # eqbal ratio
+    eqbal_ratios_long = [elm[12] / elm[10] for elm in stats]
+    eqbal_ratio_std_long = np.std(eqbal_ratios_long)
+    eqbal_ratio_mean_of_10_worst_long = np.mean(sorted(eqbal_ratios_long)[:10])
+    eqbal_ratios_short = [elm[13] / elm[11] for elm in stats]
+    eqbal_ratio_std_short = np.std(eqbal_ratios_short)
+    eqbal_ratio_mean_of_10_worst_short = np.mean(sorted(eqbal_ratios_short)[:10])
 
-
-
+    return {
+        "adg_weighted_per_exposure_long": adg_weighted_long / config["long"]["wallet_exposure_limit"],
+        "adg_weighted_per_exposure_short": adg_weighted_short
+        / config["short"]["wallet_exposure_limit"],
+        "pa_distance_std_long": pa_dists_long.std(),
+        "pa_distance_std_short": pa_dists_short.std(),
+        "pa_distance_mean_long": pa_dists_long.mean(),
+        "pa_distance_mean_short": pa_dists_short.mean(),
+        "hrs_stuck_max_long": hrs_stuck_max_long,
+        "hrs_stuck_max_short": hrs_stuck_max_short,
+        "loss_profit_ratio_long": loss_profit_ratio_long,
+        "loss_profit_ratio_short": loss_profit_ratio_short,
+        "eqbal_ratio_mean_of_10_worst_long": eqbal_ratio_mean_of_10_worst_long,
+        "eqbal_ratio_mean_of_10_worst_short": eqbal_ratio_mean_of_10_worst_short,
+        "eqbal_ratio_std_long": eqbal_ratio_std_long,
+        "eqbal_ratio_std_short": eqbal_ratio_std_short,
+    }
 
 
 def analyze_fills(
@@ -973,11 +995,11 @@ def analyze_fills(
         "closest_bkr_long": sdf.closest_bkr_long.min(),
         "closest_bkr_short": sdf.closest_bkr_short.min(),
         "eqbal_ratio_min_long": min(eqbal_ratios_long.min(), eqbal_ratios_sdf_long.min()),
-        "eqbal_ratio_mean_of_10_worst_long": eqbal_ratios_long.sort_values().iloc[:10].mean(),
+        "eqbal_ratio_mean_of_10_worst_long": eqbal_ratios_sdf_long.sort_values().iloc[:10].mean(),
         "eqbal_ratio_mean_long": eqbal_ratios_sdf_long.mean(),
         "eqbal_ratio_std_long": eqbal_ratio_std_long,
         "eqbal_ratio_min_short": min(eqbal_ratios_short.min(), eqbal_ratios_sdf_short.min()),
-        "eqbal_ratio_mean_of_10_worst_short": eqbal_ratios_short.sort_values().iloc[:10].mean(),
+        "eqbal_ratio_mean_of_10_worst_short": eqbal_ratios_sdf_short.sort_values().iloc[:10].mean(),
         "eqbal_ratio_mean_short": eqbal_ratios_sdf_short.mean(),
         "eqbal_ratio_std_short": eqbal_ratio_std_short,
         "volume_quote_long": volume_quote_long,
