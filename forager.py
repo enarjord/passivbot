@@ -19,9 +19,8 @@ def volatility(ohlcv):
     return closes.std() / closes.mean()
 
 
-def generate_yaml(vols, approved, current, config):
+def generate_yaml(vols, approved, config, current_positions_long, current_positions_short, current_open_orders):
     yaml = f"session_name: {config['user']}\nwindows:"
-    k = 0
     user = config["user"]
     twe_long = config["twe_long"]
     twe_short = config["twe_short"]
@@ -37,21 +36,34 @@ def generate_yaml(vols, approved, current, config):
         if "price_distance_threshold" in config and config["price_distance_threshold"] is not None
         else 0.5
     )
-    active_syms = [
+    syms_sorted_by_volatility = [
         x[0] for x in sorted(vols.items(), key=lambda x: x[1], reverse=True) if x[0] in approved
-    ][: max(n_longs, n_shorts)]
+    ]
+    ideal_longs = syms_sorted_by_volatility[:n_longs]
+    print('ideal_longs', ideal_longs)
+    ideal_shorts = syms_sorted_by_volatility[:n_shorts]
+    print('ideal_shorts', ideal_shorts)
+    longs_on_gs = [x for x in current_positions_long if x not in ideal_longs]
+    print('longs_on_gs', longs_on_gs)
+    shorts_on_gs = [x for x in current_positions_short if x not in ideal_shorts]
+    print('shorts_on_gs', shorts_on_gs)
+    active_longs = ideal_longs[:n_longs - len(longs_on_gs)]
+    print('active_longs', active_longs)
+    active_shorts = ideal_shorts[:n_shorts - len(shorts_on_gs)]
+    print('active_shorts', active_shorts)
+    gs_bots_with_open_orders = sorted(set([x for x in current_open_orders if x not in active_longs + active_shorts + longs_on_gs + shorts_on_gs]))
+    print('gs_bots_with_open_orders', gs_bots_with_open_orders)
+    active_bots = [(sym, sym in active_longs, sym in active_shorts) for sym in sorted(set(active_longs + active_shorts))]
+    print('active_bots', active_bots)
     max_n_panes = config["max_n_panes"] if "max_n_panes" in config else 8
-    for z in range(0, len(active_syms), max_n_panes):
-        active_syms_slice = active_syms[z : z + max_n_panes]
-        if active_syms_slice:
+    for z in range(0, len(active_bots), max_n_panes):
+        active_bots_slice = active_bots[z : z + max_n_panes]
+        if active_bots_slice:
             yaml += f"\n- window_name: {config['user']}_normal_{z}\n  layout: "
             yaml += f"even-vertical\n  shell_command_before:\n    - cd ~/passivbot\n  panes:\n"
-        for sym in active_syms_slice:
-            k += 1
-            lm = "n" if k <= n_longs else "gs"
-            sm = "n" if k <= n_shorts else "gs"
-            if lm == "gs" and sm == "gs":
-                break
+        for sym, lmb, smb in active_bots_slice:
+            lm = "n" if lmb and lw > 0.0 else "gs"
+            sm = "n" if smb and sw > 0.0 else "gs"
             conf_path = (
                 config["live_configs_map"][sym]
                 if sym in config["live_configs_map"]
@@ -62,7 +74,7 @@ def generate_yaml(vols, approved, current, config):
                 f"-lw {lw} -sw {sw} -lm {lm} -sm {sm} -lev {lev} -cd -pt {price_distance_threshold}"
             )
             yaml += pane + "\n"
-    bots_on_gs = sorted(set([sym for sym in current if sym not in active_syms]))
+    bots_on_gs = [sym for sym in sorted(set(longs_on_gs + shorts_on_gs + gs_bots_with_open_orders))]
     if bots_on_gs:
         for z in range(0, len(bots_on_gs), max_n_panes):
             bots_on_gs_slice = bots_on_gs[z : z + max_n_panes]
@@ -85,8 +97,6 @@ def generate_yaml(vols, approved, current, config):
                         pane += f" -{k0} {config[k1]}"
                 yaml += pane + "\n"
             bots_on_gs_slice = bots_on_gs
-    print("active bots:", active_syms)
-    print("bots on -gs:", bots_on_gs)
     return yaml
 
 
@@ -113,9 +123,16 @@ async def get_ohlcvs(cc, symbols, config):
 
 
 async def get_current_symbols(cc):
+    current_positions_long, current_positions_short = [], []
+    current_open_orders = []
     poss = await cc.fetch_positions()
+    for elm in poss:
+        if elm['contracts'] != 0.0:
+            if elm['side'] == 'long':
+                current_positions_long.append(elm['symbol'])
+            elif elm['side'] == 'short':
+                current_positions_short.append(elm['symbol'])
     if cc.id == "bybit":
-        pos_syms = [elm["info"]["symbol"] for elm in poss if float(elm["info"]["size"]) != 0.0]
         oos = []
         delay_s = 0.5
         for symbol in cc.markets:
@@ -127,18 +144,13 @@ async def get_current_symbols(cc):
                 oos += oosf
                 time.sleep(max(0.0, delay_s - spent))
         print()
-        oos_syms = sorted(set([elm["symbol"] for elm in oos]))
-        return sorted(set(pos_syms + oos_syms))
     elif cc.id == "binanceusdm":
         cc.options["warnOnFetchOpenOrdersWithoutSymbol"] = False
         oos = await cc.fetch_open_orders()
-        pos_syms = [elm["info"]["symbol"] for elm in poss if float(elm["info"]["positionAmt"]) != 0.0]
-        oos_syms = [elm["info"]["symbol"] for elm in oos]
-        return sorted(set(pos_syms + oos_syms))
-    oos = await cc.fetch_open_orders()
-    current = sorted(set([x["symbol"] for x in poss + oos]))
-    current = [x.replace("/", "")[:-5] for x in current]
-    return current
+    else:
+        oos = await cc.fetch_open_orders()
+    current_open_orders = sorted(set([elm["symbol"] for elm in oos]))
+    return current_positions_long, current_positions_short, current_open_orders
 
 
 async def get_min_costs(cc):
@@ -194,20 +206,20 @@ async def dump_yaml(cc, config):
         symbols_map[k] for k, v in min_costs.items() if v <= max_min_cost and k in symbols_map
     ]
     print("getting current bots...")
-    current_ = await get_current_symbols(cc)
-    current = []
-    for elm in current_:
-        if elm in symbols_map:
-            current.append(symbols_map[elm])
-        elif elm in symbols_map_inv:
-            current.append(elm)
+    current_positions_long, current_positions_short, current_open_orders = await get_current_symbols(cc)
+    current_positions_long = [symbols_map[s] if s in symbols_map else s for s in current_positions_long]
+    current_positions_short = [symbols_map[s] if s in symbols_map else s for s in current_positions_short]
+    current_open_orders = [symbols_map[s] if s in symbols_map else s for s in current_open_orders]
+    print('current_positions_long', current_positions_long)
+    print('current_positions_short', current_positions_short)
+    print('current_open_orders', current_open_orders)
     print("getting ohlcvs...")
     ohs = await get_ohlcvs(cc, [symbols_map_inv[sym] for sym in approved], config)
     vols = {symbols_map[sym]: volatility(ohs[sym][-n_ohlcvs:]) for sym in ohs}
     for elm in sorted(vols.items(), key=lambda x: x[1]):
         print(elm)
     print(f"generating yaml {config['yaml_filepath']}...")
-    yaml = generate_yaml(vols, approved, current, config)
+    yaml = generate_yaml(vols, approved, config, current_positions_long, current_positions_short, current_open_orders)
     with open(config["yaml_filepath"], "w") as f:
         f.write(yaml)
 
