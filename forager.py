@@ -53,17 +53,15 @@ def generate_yaml(
     ideal_longs = syms_sorted_by_volatility[:n_longs]
     ideal_shorts = syms_sorted_by_volatility[:n_shorts]
 
+    free_slots_long = max(0, n_longs - len(current_positions_long))
     active_longs = [sym for sym in ideal_longs if sym in current_positions_long]
-    longs_on_gs = [sym for sym in current_positions_long if sym not in ideal_longs]
-    free_slots_long = max(0, n_longs - (len(active_longs) + len(longs_on_gs)))
-    new_longs = [sym for sym in ideal_longs if sym not in active_longs][:free_slots_long]
-    active_longs += new_longs
+    active_longs += [sym for sym in ideal_longs if sym not in active_longs][:free_slots_long]
+    longs_on_gs = [sym for sym in current_positions_long if sym not in active_longs]
 
+    free_slots_short = max(0, n_shorts - len(current_positions_short))
     active_shorts = [sym for sym in ideal_shorts if sym in current_positions_short]
-    shorts_on_gs = [sym for sym in current_positions_short if sym not in ideal_shorts]
-    free_slots_short = max(0, n_shorts - (len(active_shorts) + len(shorts_on_gs)))
-    new_shorts = [sym for sym in ideal_shorts if sym not in active_shorts][:free_slots_short]
-    active_shorts += new_shorts
+    active_shorts += [sym for sym in ideal_shorts if sym not in active_shorts][:free_slots_short]
+    shorts_on_gs = [sym for sym in current_positions_short if sym not in active_shorts]
 
     print("ideal_longs", sorted(ideal_longs))
     print("ideal_shorts", sorted(ideal_shorts))
