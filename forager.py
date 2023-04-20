@@ -48,22 +48,32 @@ def generate_yaml(
     syms_sorted_by_volatility = [
         x[0] for x in sorted(vols.items(), key=lambda x: x[1], reverse=True) if x[0] in approved
     ]
-    ideal_longs = syms_sorted_by_volatility[:n_longs]
-    print("ideal_longs", ideal_longs)
-    ideal_shorts = syms_sorted_by_volatility[:n_shorts]
-    print("ideal_shorts", ideal_shorts)
     current_positions_long = sorted(set(current_positions_long + current_open_orders_long))
     current_positions_short = sorted(set(current_positions_short + current_open_orders_short))
-    longs_on_gs = [x for x in current_positions_long if x not in ideal_longs]
-    print("longs_on_gs", longs_on_gs)
-    shorts_on_gs = [x for x in current_positions_short if x not in ideal_shorts]
-    print("shorts_on_gs", shorts_on_gs)
-    active_longs = ideal_longs[: max(0, n_longs - len(longs_on_gs))]
-    print("active_longs", active_longs)
-    active_shorts = ideal_shorts[: max(0, n_shorts - len(shorts_on_gs))]
-    print("active_shorts", active_shorts)
+    ideal_longs = syms_sorted_by_volatility[:n_longs]
+    ideal_shorts = syms_sorted_by_volatility[:n_shorts]
+
+    active_longs = [sym for sym in ideal_longs if sym in current_positions_long]
+    longs_on_gs = [sym for sym in current_positions_long if sym not in ideal_longs]
+    free_slots_long = max(0, n_longs - (len(active_longs) + len(longs_on_gs)))
+    new_longs = [sym for sym in ideal_longs if sym not in active_longs][:free_slots_long]
+    active_longs += new_longs
+
+    active_shorts = [sym for sym in ideal_shorts if sym in current_positions_short]
+    shorts_on_gs = [sym for sym in current_positions_short if sym not in ideal_shorts]
+    free_slots_short = max(0, n_shorts - (len(active_shorts) + len(shorts_on_gs)))
+    new_shorts = [sym for sym in ideal_shorts if sym not in active_shorts][:free_slots_short]
+    active_shorts += new_shorts
+
+    print("ideal_longs", sorted(ideal_longs))
+    print("ideal_shorts", sorted(ideal_shorts))
+    print("longs_on_gs", sorted(longs_on_gs))
+    print("shorts_on_gs", sorted(shorts_on_gs))
+    print("active_longs", sorted(active_longs))
+    print("active_shorts", sorted(active_shorts))
+
     active_bots, bots_on_gs = [], []
-    for sym in sorted(set(active_longs + active_shorts + current_positions_long + current_positions_short)):
+    for sym in sorted(set(active_longs + active_shorts + longs_on_gs + shorts_on_gs)):
         elm = (sym, sym in active_longs, sym in active_shorts)
         if elm[1] or elm[2]:
             active_bots.append(elm)
@@ -104,7 +114,6 @@ def generate_yaml(
                     if config[k1] is not None:
                         pane += f" -{k0} {config[k1]}"
                 yaml += pane + "\n"
-            bots_on_gs_slice = bots_on_gs
     return yaml
 
 
@@ -220,10 +229,10 @@ async def dump_yaml(cc, config):
     current_positions_short = [symbols_map[s] if s in symbols_map else s for s in current_positions_short]
     current_open_orders_long = [symbols_map[s] if s in symbols_map else s for s in current_open_orders_long]
     current_open_orders_short = [symbols_map[s] if s in symbols_map else s for s in current_open_orders_short]
-    print("current_positions_long", current_positions_long)
-    print("current_positions_short", current_positions_short)
-    print("current_open_orders long", current_open_orders_long)
-    print("current_open_orders short", current_open_orders_short)
+    print("current_positions_long", sorted(current_positions_long))
+    print("current_positions_short", sorted(current_positions_short))
+    print("current_open_orders long", sorted(current_open_orders_long))
+    print("current_open_orders short", sorted(current_open_orders_short))
     print("getting ohlcvs...")
     ohs = await get_ohlcvs(cc, [symbols_map_inv[sym] for sym in approved], config)
     vols = {symbols_map[sym]: volatility(ohs[sym][-n_ohlcvs:]) for sym in ohs}
