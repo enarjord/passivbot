@@ -63,7 +63,7 @@ def generate_yaml(
     active_shorts = ideal_shorts[: max(0, n_shorts - len(shorts_on_gs))]
     print("active_shorts", active_shorts)
     active_bots, bots_on_gs = [], []
-    for sym in sorted(set(ideal_longs + ideal_shorts + current_positions_long + current_positions_short)):
+    for sym in sorted(set(active_longs + active_shorts + current_positions_long + current_positions_short)):
         elm = (sym, sym in active_longs, sym in active_shorts)
         if elm[1] or elm[2]:
             active_bots.append(elm)
