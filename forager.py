@@ -211,11 +211,11 @@ async def dump_yaml(cc, config):
     print("getting min costs...")
     min_costs = await get_min_costs(cc)
     symbols_map = {sym: sym.replace(":USDT", "").replace("/", "") for sym in min_costs}
-    if config["approved_symbols_only"]:
-        # only use approved symbols
-        symbols_map = {k: v for k, v in symbols_map.items() if v in config["live_configs_map"]}
     symbols_map_inv = {v: k for k, v in symbols_map.items()}
     approved = [symbols_map[k] for k, v in min_costs.items() if v <= max_min_cost and k in symbols_map]
+    if config["approved_symbols_only"]:
+        # only use approved symbols
+        approved = [k for k in approved if k in config["live_configs_map"]]
     print("getting current bots...")
     (
         current_positions_long,
