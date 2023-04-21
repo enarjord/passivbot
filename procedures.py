@@ -314,6 +314,14 @@ async def create_bybit_bot(config: dict):
     return bot
 
 
+async def create_bybit_bot_spot(config: dict):
+    from exchanges.bybit_spot import BybitBotSpot
+
+    bot = BybitBotSpot(config)
+    await bot._init()
+    return bot
+
+
 async def create_bitget_bot(config: dict):
     from exchanges.bitget import BitgetBot
 
