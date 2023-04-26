@@ -13,16 +13,81 @@ import subprocess
 import argparse
 import traceback
 from procedures import load_exchange_key_secret_passphrase, utc_ms
+from njit_funcs import calc_emas
 
 
-def volatility(ohlcv):
+def score_func_old(ohlcv):
+    highs = np.array(ohlcv)[:, 2]
+    lows = np.array(ohlcv)[:, 3]
     closes = np.array(ohlcv)[:, 4]
-    return closes.std() / closes.mean()
+    range_mean = ((highs - lows) / closes).mean()
+    std_over_mean = closes.std() / closes.mean()
+    return range_mean ** 2 / std_over_mean
+
+
+def score_func(ohlcv):
+    highs = np.array(ohlcv)[:, 2]
+    lows = np.array(ohlcv)[:, 3]
+    closes = np.array(ohlcv)[:, 4]
+    spans = [int(round(len(closes) * i)) for i in np.linspace(0.1, 0.9, 4)]
+    emas = calc_emas(closes, np.array(spans))
+    unilateralness = abs(sum([(1 - emas[:, i] / emas[:, i - 1]).mean() for i in range(1, len(emas[0]))]))
+    range_mean = ((highs - lows) / closes).mean()
+    return range_mean / unilateralness
+
+
+def calc_unilateralness(ohlcv):
+    # higher means more unilateral
+    closes = np.array(ohlcv)[:, 4]
+    spans = [int(round(len(closes) * i)) for i in np.linspace(0.1, 0.9, 4)]
+    emas = calc_emas(closes, np.array(spans))
+    return abs(sum([(1 - emas[:, i] / emas[:, i - 1]).mean() for i in range(1, len(emas[0]))]))
+
+
+def calc_noisiness(ohlcv):
+    # higher is more noisy
+    highs = np.array(ohlcv)[:, 2]
+    lows = np.array(ohlcv)[:, 3]
+    closes = np.array(ohlcv)[:, 4]
+    range_mean = ((highs - lows) / closes).mean()
+    return range_mean
+
+
+def calc_volume_sum(ohlcv):
+    vols = np.array(ohlcv)[:, 5]
+    closes = np.array(ohlcv)[:, 4]
+    return (vols * closes).sum()
+
+
+def sort_symbols(ohlcvs, config):
+    min_n_syms = max(config["n_longs"], config["n_shorts"])
+    print('min_n_syms', min_n_syms)
+    volume_clip_threshold = config["volume_clip_threshold"]
+    unilateralness_clip_threshold = config["unilateralness_clip_threshold"]
+    # select for high volume
+    by_volume = sorted([(calc_volume_sum(ohlcvs[sym]), sym) for sym in ohlcvs], reverse=True)
+    print('sorted by_volume high to low', len(by_volume))
+    for elm in by_volume:
+        print(elm)
+    by_volume = by_volume[:max(min_n_syms, int(round(len(by_volume) * volume_clip_threshold)))]
+
+    # select for low unilateralness
+    by_unilateralness = sorted([(calc_unilateralness(ohlcvs[sym]), sym) for _, sym in by_volume])
+    print('sorted by_unilateralness low to high', len(by_unilateralness))
+    for elm in by_unilateralness:
+        print(elm)
+    by_unilateralness = by_unilateralness[:max(min_n_syms, int(round(len(by_unilateralness) * unilateralness_clip_threshold)))]
+
+    # select for high noisiness
+    by_noisiness = sorted([(calc_noisiness(ohlcvs[sym]), sym) for _, sym in by_unilateralness], reverse=True)
+    print('sorted by_noisiness high to low', len(by_noisiness))
+    for elm in by_noisiness:
+        print(elm)
+    return by_noisiness
 
 
 def generate_yaml(
-    vols,
-    approved,
+    sorted_syms,
     config,
     current_positions_long,
     current_positions_short,
@@ -39,19 +104,11 @@ def generate_yaml(
     lw = round(twe_long / n_longs, 4) if n_longs > 0 else 0.1
     sw = round(twe_short / n_shorts, 4) if n_shorts > 0 else 0.1
     lm, sm = "gs", "gs"
-    lev = 10 if config["leverage"] is None else config["leverage"]
-    price_distance_threshold = (
-        config["price_distance_threshold"]
-        if "price_distance_threshold" in config and config["price_distance_threshold"] is not None
-        else 0.5
-    )
-    syms_sorted_by_volatility = [
-        x[0] for x in sorted(vols.items(), key=lambda x: x[1], reverse=True) if x[0] in approved
-    ]
+    sorted_syms = [x[1] for x in sorted_syms]
     current_positions_long = sorted(set(current_positions_long + current_open_orders_long))
     current_positions_short = sorted(set(current_positions_short + current_open_orders_short))
-    ideal_longs = syms_sorted_by_volatility[:n_longs]
-    ideal_shorts = syms_sorted_by_volatility[:n_shorts]
+    ideal_longs = sorted_syms[:n_longs]
+    ideal_shorts = sorted_syms[:n_shorts]
 
     free_slots_long = max(0, n_longs - len(current_positions_long))
     active_longs = [sym for sym in ideal_longs if sym in current_positions_long]
@@ -77,9 +134,8 @@ def generate_yaml(
             active_bots.append(elm)
         else:
             bots_on_gs.append(elm)
-    max_n_panes = config["max_n_panes"] if "max_n_panes" in config else 8
-    for z in range(0, len(active_bots), max_n_panes):
-        active_bots_slice = active_bots[z : z + max_n_panes]
+    for z in range(0, len(active_bots), config["max_n_panes"]):
+        active_bots_slice = active_bots[z : z + config["max_n_panes"]]
         yaml += f"- window_name: {config['user']}_normal_{z}\n  layout: "
         yaml += f"even-vertical\n  shell_command_before:\n    - cd ~/passivbot\n  panes:\n"
         for sym, long_enabled, short_enabled in active_bots_slice:
@@ -89,11 +145,11 @@ def generate_yaml(
                 config["live_configs_map"][sym] if sym in config["live_configs_map"] else config["default_config_path"]
             )
             pane = f"    - shell_command:\n      - python3 passivbot.py {user} {sym} {conf_path} "
-            pane += f"-lw {lw} -sw {sw} -lm {lm} -sm {sm} -lev {lev} -cd -pt {price_distance_threshold}"
+            pane += f"-lw {lw} -sw {sw} -lm {lm} -sm {sm} -lev {config['leverage']} -cd -pt {config['price_distance_threshold']}"
             yaml += pane + "\n"
     if bots_on_gs:
-        for z in range(0, len(bots_on_gs), max_n_panes):
-            bots_on_gs_slice = bots_on_gs[z : z + max_n_panes]
+        for z in range(0, len(bots_on_gs), config["max_n_panes"]):
+            bots_on_gs_slice = bots_on_gs[z : z + config["max_n_panes"]]
             yaml += (
                 f"- window_name: {config['user']}_gs_{z}\n  layout: even-vertical\n  shell_command_before:\n    - cd ~/passivbot\n  panes:"
                 + "\n"
@@ -107,7 +163,9 @@ def generate_yaml(
                     else config["default_config_path"]
                 )
                 pane = f"    - shell_command:\n      - python3 passivbot.py {user} {sym} {conf_path} -lw {gs_lw} "
-                pane += f"-sw {gs_sw} -lm gs -sm gs -lev {lev} -cd -pt {price_distance_threshold}"
+                pane += (
+                    f"-sw {gs_sw} -lm gs -sm gs -lev {config['leverage']} -cd -pt {config['price_distance_threshold']}"
+                )
                 for k0, k1 in [("lmm", "gs_mm"), ("lmr", "gs_mr")]:
                     if config[k1] is not None:
                         pane += f" -{k0} {config[k1]}"
@@ -119,7 +177,20 @@ async def get_ohlcvs(cc, symbols, config):
     ohs = {}
     n = 5
     if cc.id == "bybit":
-        extra_args = {"since": int(utc_ms() - 1000 * 60 * 60 * 25)}
+        interval_map = {
+            "1m": 60,
+            "5m": 300,
+            "15m": 900,
+            "30m": 1800,
+            "1h": 3600,
+            "4h": 14400,
+            "12h": 43200,
+            "1d": 86400,
+            "1w": 604800,
+        }
+        max_n_ohlcvs = 200
+        since = int(utc_ms() - interval_map[config["ohlcv_interval"]] * max_n_ohlcvs * 1000)
+        extra_args = {"since": since}
     else:
         extra_args = {}
     print("n syms", len(symbols))
@@ -177,6 +248,7 @@ async def get_min_costs(cc):
     info = await cc.fetch_markets()
     tickers = await cc.fetch_tickers()
     min_costs = {}
+    c_mults = {}
     for x in info:
         symbol = x["symbol"]
         if symbol.endswith("USDT"):
@@ -190,26 +262,26 @@ async def get_min_costs(cc):
                         min_cost = 5.0
                         c_mult = 1.0
                         min_qty = float(x["info"]["minTradeNum"])
+                        last_price = tickers[ticker_symbol]["last"]
+                    elif exchange == "kucoinfutures":
+                        min_qty = 1.0
+                        min_cost = 0.0
+                        c_mult = float(x["info"]["multiplier"])
+                        last_price = float(tickers[ticker_symbol]["info"]["last"])
                     else:
                         min_cost = 0.0 if x["limits"]["cost"]["min"] is None else x["limits"]["cost"]["min"]
                         c_mult = 1.0 if x["contractSize"] is None else x["contractSize"]
                         min_qty = 0.0 if x["limits"]["amount"]["min"] is None else x["limits"]["amount"]["min"]
-                    if exchange == "kucoinfutures":
-                        last_price = float(tickers[ticker_symbol]["info"]["last"])
-                        min_qty = float(x["info"]["multiplier"])
-                        c_mult = 1.0
-                    else:
                         last_price = tickers[ticker_symbol]["last"]
                     min_costs[symbol] = max(min_cost, min_qty * c_mult * last_price)
-    return min_costs
+                    c_mults[symbol] = c_mult
+    return min_costs, c_mults
 
 
 async def dump_yaml(cc, config):
     max_min_cost = config["max_min_cost"]
-    ohlcv_interval = config["ohlcv_interval"]
-    n_ohlcvs = config["n_ohlcvs"]
     print("getting min costs...")
-    min_costs = await get_min_costs(cc)
+    min_costs, c_mults = await get_min_costs(cc)
     symbols_map = {sym: sym.replace(":USDT", "").replace("/", "") for sym in min_costs}
     symbols_map_inv = {v: k for k, v in symbols_map.items()}
     approved = [symbols_map[k] for k, v in min_costs.items() if v <= max_min_cost and k in symbols_map]
@@ -233,13 +305,16 @@ async def dump_yaml(cc, config):
     print("current_open_orders short", sorted(current_open_orders_short))
     print("getting ohlcvs...")
     ohs = await get_ohlcvs(cc, [symbols_map_inv[sym] for sym in approved], config)
-    vols = {symbols_map[sym]: volatility(ohs[sym][-n_ohlcvs:]) for sym in ohs}
-    for elm in sorted(vols.items(), key=lambda x: x[1]):
-        print(elm)
+    max_len_ohlcv = max([len(ohs[s]) for s in ohs])
+    print('max_len_ohlcv', max_len_ohlcv)
+    ohs = {symbols_map[k]: v for k, v in ohs.items() if len(v) == max_len_ohlcv}
+    for sym in ohs:
+        for i in range(len(ohs[sym])):
+            ohs[sym][i][5] *= c_mults[symbols_map_inv[sym]]
+    sorted_syms = sort_symbols(ohs, config)  # sorted best to worst
     print(f"generating yaml {config['yaml_filepath']}...")
     yaml = generate_yaml(
-        vols,
-        approved,
+        sorted_syms,
         config,
         current_positions_long,
         current_positions_short,
@@ -263,6 +338,17 @@ async def main():
     config = hjson.load(open(args.forager_config_path))
     config["yaml_filepath"] = f"{config['user']}.yaml"
     user = config["user"]
+    for key, value in [
+        ("volume_clip_threshold", 0.5),
+        ("unilateralness_clip_threshold", 0.5),
+        ("price_distance_threshold", 0.5),
+        ("max_n_panes", 8),
+        ("n_ohlcvs", 100),
+        ("ohlcv_interval", "15m"),
+        ("leverage", 10),
+    ]:
+        if key not in config:
+            config[key] = value
     exchange, key, secret, passphrase = load_exchange_key_secret_passphrase(config["user"])
     cc = getattr(ccxt, exchange_map[exchange])({"apiKey": key, "secret": secret, "password": passphrase})
     max_n_tries_per_hour = 5
