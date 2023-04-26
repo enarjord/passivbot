@@ -39,7 +39,7 @@ In addition to requirements.txt, tmux and tmuxp
 | `n_shorts`						| Number of short bots.
 | `max_min_cost`					| Exclude symbols whose min_cost > max_min_cost.
 | `n_ohlcvs`						| Number of ohlcvs to fetch (100 candles of 15m is 25 hours).
-| `ohlcv_interval`					| Default is 15m.
+| `ohlcv_interval`					| Default is 1h.
 | `leverage`						| Set leverage.
 | `price_distance_threshold`		| Don't make limit orders whose price is further away from market price than price_distance_threshold.
 | `volume_clip_threshold`			| Include x% of the highest volume coins.
