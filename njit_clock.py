@@ -687,7 +687,7 @@ def backtest_clock(
                         0.0,
                         0.0,
                     )
-                    if close_grid_short and clock_close_short[0] != 0.0:
+                    if close_grid_short and close_grid_short[0][0] != 0.0:
                         if clock_close_short[1] >= close_grid_short[0][1]:
                             close_grid_short = calc_close_grid_short(
                                 backwards_tp[1],
