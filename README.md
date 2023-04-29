@@ -28,7 +28,9 @@ The strategy is integrated -- the bot only needs a predefined configuration to r
 
 ## Pre-optimized configurations
 
-Pre-optimized configurations for Passivbot can be found at https://github.com/JohnKearney1/PassivBot-Configurations.
+Pre-optimized configurations for Passivbot can be found at https://github.com/JohnKearney1/PassivBot-Configurations.  
+
+See also https://pbconfigdb.scud.dedyn.io/
 
 ## Documentation:
 
