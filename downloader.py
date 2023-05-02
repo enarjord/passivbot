@@ -980,17 +980,9 @@ def get_first_ohlcv_ts(symbol: str) -> int:
 def download_ohlcvs(
     symbol, inverse, start_date, end_date, spot=False, download_only=False
 ) -> pd.DataFrame:
-    if not spot:
-        dirpath = make_get_filepath(f"historical_data/ohlcvs_futures/{symbol}/")
-    else:
-        dirpath = make_get_filepath(f"historical_data/ohlcvs_spot/{symbol}/")
-    if not spot:
-        if not inverse:
-            base_url = f"https://data.binance.vision/data/futures/um/"
-        else:
-            base_url = f"https://data.binance.vision/data/futures/cm/"
-    else:
-        base_url = f"https://data.binance.vision/data/spot/"
+    dirpath = make_get_filepath(f"historical_data/ohlcvs_{'spot' if spot else 'futures'}/{symbol}/")
+    base_url = "https://data.binance.vision/data/"
+    base_url += "spot/" if spot else f"futures/{'cm' if inverse else 'um'}"
     col_names = ["timestamp", "open", "high", "low", "close", "volume"]
     start_ts = max(get_first_ohlcv_ts(symbol), date_to_ts(start_date))
     end_ts = date_to_ts(end_date)
@@ -1111,7 +1103,11 @@ async def main():
     config = await prepare_backtest_config(args)
     if config["ohlcv"]:
         data = load_hlc_cache(
-            config["symbol"], config["inverse"], config["start_date"], config["end_date"], spot=config["spot"]
+            config["symbol"],
+            config["inverse"],
+            config["start_date"],
+            config["end_date"],
+            spot=config["spot"],
         )
     else:
         downloader = Downloader(config)
