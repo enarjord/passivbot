@@ -962,9 +962,12 @@ def get_zip(url: str):
         print(e)
 
 
-def get_first_ohlcv_ts(symbol: str) -> int:
+def get_first_ohlcv_ts(symbol: str, spot=False) -> int:
     try:
-        url = "https://fapi.binance.com/fapi/v1/klines"
+        if spot:
+            url = "https://api.binance.com/api/v3/klines"
+        else:
+            url = "https://fapi.binance.com/fapi/v1/klines"
         res = requests.get(
             url, params={"symbol": symbol, "startTime": 0, "limit": 100, "interval": "1m"}
         )
@@ -984,7 +987,7 @@ def download_ohlcvs(
     base_url = "https://data.binance.vision/data/"
     base_url += "spot/" if spot else f"futures/{'cm' if inverse else 'um'}"
     col_names = ["timestamp", "open", "high", "low", "close", "volume"]
-    start_ts = max(get_first_ohlcv_ts(symbol), date_to_ts(start_date))
+    start_ts = max(get_first_ohlcv_ts(symbol, spot=spot), date_to_ts(start_date))
     end_ts = date_to_ts(end_date)
     days = [ts_to_date_utc(x)[:10] for x in list(range(start_ts, end_ts, 1000 * 60 * 60 * 24))]
     months = sorted({x[:7] for x in days})
