@@ -567,10 +567,7 @@ def fetch_market_specific_settings(config: dict):
             raise Exception(f"unknown symbol {symbol}")
         settings_from_exchange["maker_fee"] = elm["maker"]
         settings_from_exchange["taker_fee"] = elm["taker"]
-        if "futures" in market_type:
-            settings_from_exchange["c_mult"] = elm["contractSize"]
-        elif "spot" in market_type:
-            settings_from_exchange["c_mult"] = 1.0
+        settings_from_exchange["c_mult"] = 1.0 if elm["contractSize"] is None else elm["contractSize"]
         settings_from_exchange["min_qty"] = elm["limits"]["amount"]["min"]
         for elm1 in elm["info"]["filters"]:
             if elm1["filterType"] == "LOT_SIZE":
