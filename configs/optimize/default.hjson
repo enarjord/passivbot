@@ -24,16 +24,16 @@
   # set any to -1 (less than zero) to disable
 
   # score -= max(maximum_pa_distance_std, pa_distance_std)
-  maximum_pa_distance_std_long: 0.025
-  maximum_pa_distance_std_short: 0.025
+  maximum_pa_distance_std_long: 0.02
+  maximum_pa_distance_std_short: 0.02
 
   # score -= max(maximum_pa_distance_mean, pa_distance_mean)
-  maximum_pa_distance_mean_long: 0.025
-  maximum_pa_distance_mean_short: 0.025
+  maximum_pa_distance_mean_long: 0.02
+  maximum_pa_distance_mean_short: 0.02
 
   # score -= max(maximum_loss_profit_ratio, loss_profit_ratio)
-  maximum_loss_profit_ratio_long: 0.3
-  maximum_loss_profit_ratio_short: 0.3
+  maximum_loss_profit_ratio_long: 0.15
+  maximum_loss_profit_ratio_short: 0.15
 
   # score -= max(maximum_hrs_stuck_max, hrs_stuck_max)
   maximum_hrs_stuck_max_long: 96.0
@@ -45,8 +45,8 @@
   minimum_eqbal_ratio_mean_of_10_worst_short: 0.5
 
   # score += max(maximum_eqbal_ratio_std, eqbal_ratio_std)
-  maximum_eqbal_ratio_std_long: 0.01
-  maximum_eqbal_ratio_std_short: 0.01
+  maximum_eqbal_ratio_std_long: 0.025
+  maximum_eqbal_ratio_std_short: 0.025
 
   # clip results: compute score on top performers only
   # clip_threshold=0.1 means drop 10% worst performers; clip_threshold=0.0 means include all
@@ -93,74 +93,74 @@
     {
       grid_span: [0.1, 0.7]
       wallet_exposure_limit: [1.0, 1.0]
-      max_n_entry_orders: [3, 13]
-      ema_span_0: [10.0, 720.0]
-      ema_span_1: [10.0, 1440.0]
+      max_n_entry_orders: [7, 22]
+      ema_span_0: [5.0, 1440.0]
+      ema_span_1: [5.0, 1440.0]
       initial_qty_pct: [0.01, 0.1]
-      initial_eprice_ema_dist: [-0.1, 0.01]
+      initial_eprice_ema_dist: [-0.1, 0.004]
       eprice_pprice_diff: [0.002, 0.05]
       secondary_allocation: [0.0, 0.7]
       secondary_pprice_diff: [0.05, 0.5]
-      eprice_exp_base: [1.0, 2.1]
+      eprice_exp_base: [1.0, 4.0]
       min_markup: [0.001, 0.01]
       markup_range: [0.0, 0.06]
-      n_close_orders: [1, 16]
+      n_close_orders: [2, 16]
       auto_unstuck_wallet_exposure_threshold: [0.03, 0.1]
-      auto_unstuck_ema_dist: [-0.1, 0.001] // get out of bad positions faster
+      auto_unstuck_ema_dist: [-0.1, 0.003]
     }
     short:
     {
       grid_span: [0.1, 0.7]
       wallet_exposure_limit: [1.0, 1.0]
-      max_n_entry_orders: [3, 13]
-      ema_span_0: [10.0, 720.0]
-      ema_span_1: [10.0, 1440.0]
+      max_n_entry_orders: [7, 22]
+      ema_span_0: [5.0, 1440.0]
+      ema_span_1: [5.0, 1440.0]
       initial_qty_pct: [0.01, 0.1]
-      initial_eprice_ema_dist: [-0.1, 0.01]
+      initial_eprice_ema_dist: [-0.1, 0.004]
       eprice_pprice_diff: [0.002, 0.05]
       secondary_allocation: [0.0, 0.7]
       secondary_pprice_diff: [0.05, 0.5]
-      eprice_exp_base: [1.0, 2.1]
+      eprice_exp_base: [1.0, 4.0]
       min_markup: [0.001, 0.01]
       markup_range: [0.0, 0.06]
-      n_close_orders: [1, 16]
+      n_close_orders: [2, 16]
       auto_unstuck_wallet_exposure_threshold: [0.03, 0.1]
-      auto_unstuck_ema_dist: [-0.1, 0.001] // get out of bad positions faster
+      auto_unstuck_ema_dist: [-0.1, 0.003]
     }
   }
   bounds_recursive_grid:
   {
     long:
     {
-      ema_span_0: [10.0, 720.0]
-      ema_span_1: [10.0, 1440.0]
+      ema_span_0: [5.0, 1440.0]
+      ema_span_1: [5.0, 1440.0]
       initial_qty_pct: [0.01, 0.1]
-      initial_eprice_ema_dist: [-0.1, 0.01]
+      initial_eprice_ema_dist: [-0.1, 0.004]
       wallet_exposure_limit: [1.0, 1.0]
       ddown_factor: [0.1, 3.0]
       rentry_pprice_dist: [0.005, 0.05]
-      rentry_pprice_dist_wallet_exposure_weighting: [0.0, 40.0]
+      rentry_pprice_dist_wallet_exposure_weighting: [0.0, 20.0]
       min_markup: [0.001, 0.01]
       markup_range: [0.0, 0.06]
-      n_close_orders: [1, 16]
+      n_close_orders: [2, 16]
       auto_unstuck_wallet_exposure_threshold: [0.03, 0.1]
-      auto_unstuck_ema_dist: [-0.1, 0.001] // get out of bad positions faster
+      auto_unstuck_ema_dist: [-0.1, 0.003]
     }
     short:
     {
-      ema_span_0: [10.0, 720.0]
-      ema_span_1: [10.0, 1440.0]
+      ema_span_0: [5.0, 1440.0]
+      ema_span_1: [5.0, 1440.0]
       initial_qty_pct: [0.01, 0.1]
-      initial_eprice_ema_dist: [-0.1, 0.01]
+      initial_eprice_ema_dist: [-0.1, 0.004]
       wallet_exposure_limit: [1.0, 1.0]
       ddown_factor: [0.1, 3.0]
       rentry_pprice_dist: [0.005, 0.05]
-      rentry_pprice_dist_wallet_exposure_weighting: [0.0, 40.0]
+      rentry_pprice_dist_wallet_exposure_weighting: [0.0, 20.0]
       min_markup: [0.001, 0.01]
       markup_range: [0.0, 0.06]
-      n_close_orders: [1, 16]
+      n_close_orders: [2, 16]
       auto_unstuck_wallet_exposure_threshold: [0.03, 0.1]
-      auto_unstuck_ema_dist: [-0.1, 0.001] // get out of bad positions faster
+      auto_unstuck_ema_dist: [-0.1, 0.003]
     }
   }
   bounds_neat_grid:
@@ -168,76 +168,76 @@
     long:
     {
       grid_span: [0.1, 0.7]
-      ema_span_0: [10.0, 720.0]
-      ema_span_1: [10.0, 1440.0]
+      ema_span_0: [5.0, 1440.0]
+      ema_span_1: [5.0, 1440.0]
       wallet_exposure_limit: [1.0, 1.0]
-      max_n_entry_orders: [3, 20]
+      max_n_entry_orders: [7, 22]
       initial_qty_pct: [0.01, 0.1]
-      initial_eprice_ema_dist: [-0.1, 0.01]
+      initial_eprice_ema_dist: [-0.1, 0.004]
       eqty_exp_base: [1.0, 4.0]
       eprice_exp_base: [1.0, 4.0]
       min_markup: [0.001, 0.01]
       markup_range: [0.0, 0.06]
-      n_close_orders: [1, 16]
+      n_close_orders: [2, 16]
       auto_unstuck_wallet_exposure_threshold: [0.03, 0.1]
-      auto_unstuck_ema_dist: [-0.1, 0.001] // get out of bad positions faster
+      auto_unstuck_ema_dist: [-0.1, 0.003]
     }
     short:
     {
       grid_span: [0.1, 0.7]
-      ema_span_0: [10.0, 720.0]
-      ema_span_1: [10.0, 1440.0]
+      ema_span_0: [5.0, 1440.0]
+      ema_span_1: [5.0, 1440.0]
       wallet_exposure_limit: [1.0, 1.0]
-      max_n_entry_orders: [3, 20]
+      max_n_entry_orders: [7, 22]
       initial_qty_pct: [0.01, 0.1]
-      initial_eprice_ema_dist: [-0.1, 0.01]
+      initial_eprice_ema_dist: [-0.1, 0.004]
       eqty_exp_base: [1.0, 4.0]
       eprice_exp_base: [1.0, 4.0]
       min_markup: [0.001, 0.01]
       markup_range: [0.0, 0.06]
-      n_close_orders: [1, 16]
+      n_close_orders: [2, 16]
       auto_unstuck_wallet_exposure_threshold: [0.03, 0.1]
-      auto_unstuck_ema_dist: [-0.1, 0.001] // get out of bad positions faster
+      auto_unstuck_ema_dist: [-0.1, 0.003]
     }
   }
   bounds_clock:
   {
     long:
     {
-      ema_span_0: [10.0, 720.0]
-      ema_span_1: [10.0, 1440.0]
-      ema_dist_entry: [-0.05, 0.01]
-      ema_dist_close: [-0.05, 0.01]
-      qty_pct_entry: [0.01, 1.0]
-      qty_pct_close: [0.01, 1.0]
+      ema_span_0: [5.0, 1440.0]
+      ema_span_1: [5.0, 1440.0]
+      ema_dist_entry: [-0.05, 0.004]
+      ema_dist_close: [-0.05, 0.004]
+      qty_pct_entry: [0.01, 0.1]
+      qty_pct_close: [0.01, 0.1]
       we_multiplier_entry: [0.0, 100.0]
-      we_multiplier_close: [0.0, 10.0]
+      we_multiplier_close: [0.0, 100.0]
       delay_weight_entry: [0.0, 100.0]
       delay_weight_close: [0.0, 100.0]
-      delay_between_fills_minutes_entry: [1.0, 1440.0] // wait max one day between entries
-      delay_between_fills_minutes_close: [1.0, 180.0] // get out of pos faster
-      min_markup: [0.001, 0.1]
-      markup_range: [0.0, 0.1]
-      n_close_orders: [1, 16]
+      delay_between_fills_minutes_entry: [1.0, 1440.0]
+      delay_between_fills_minutes_close: [1.0, 1440.0]
+      min_markup: [0.001, 0.01]
+      markup_range: [0.0, 0.06]
+      n_close_orders: [2, 16]
       wallet_exposure_limit: [1.0, 1.0]
     }
     short:
     {
-      ema_span_0: [10.0, 720.0]
-      ema_span_1: [10.0, 1440.0]
-      ema_dist_entry: [-0.05, 0.01]
-      ema_dist_close: [-0.05, 0.01]
-      qty_pct_entry: [0.01, 1.0]
-      qty_pct_close: [0.01, 1.0]
+      ema_span_0: [5.0, 1440.0]
+      ema_span_1: [5.0, 1440.0]
+      ema_dist_entry: [-0.05, 0.004]
+      ema_dist_close: [-0.05, 0.004]
+      qty_pct_entry: [0.01, 0.1]
+      qty_pct_close: [0.01, 0.1]
       we_multiplier_entry: [0.0, 100.0]
-      we_multiplier_close: [0.0, 10.0]
+      we_multiplier_close: [0.0, 100.0]
       delay_weight_entry: [0.0, 100.0]
       delay_weight_close: [0.0, 100.0]
-      delay_between_fills_minutes_entry: [1.0, 1440.0] // wait max one day between entries
-      delay_between_fills_minutes_close: [1.0, 180.0] // get out of pos faster
-      min_markup: [0.001, 0.1]
-      markup_range: [0.0, 0.1]
-      n_close_orders: [1, 16]
+      delay_between_fills_minutes_entry: [1.0, 1440.0]
+      delay_between_fills_minutes_close: [1.0, 1440.0]
+      min_markup: [0.001, 0.01]
+      markup_range: [0.0, 0.06]
+      n_close_orders: [2, 16]
       wallet_exposure_limit: [1.0, 1.0]
     }
   }
