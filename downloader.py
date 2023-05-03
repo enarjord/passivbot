@@ -985,7 +985,7 @@ def download_ohlcvs(
 ) -> pd.DataFrame:
     dirpath = make_get_filepath(f"historical_data/ohlcvs_{'spot' if spot else 'futures'}/{symbol}/")
     base_url = "https://data.binance.vision/data/"
-    base_url += "spot/" if spot else f"futures/{'cm' if inverse else 'um'}"
+    base_url += "spot/" if spot else f"futures/{'cm' if inverse else 'um'}/"
     col_names = ["timestamp", "open", "high", "low", "close", "volume"]
     start_ts = max(get_first_ohlcv_ts(symbol, spot=spot), date_to_ts(start_date))
     end_ts = date_to_ts(end_date)
