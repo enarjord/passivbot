@@ -1,6 +1,6 @@
 # Spot trading
 
-Passivbot works on Binance spot markets.
+Passivbot works on Binance and Bybit spot markets.
 
 Example command:  
 `python3 passivbot.py binance_01 ETHBTC path/to/live_config.json -m spot -ab 0.1`  
