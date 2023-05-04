@@ -18,6 +18,12 @@
 
   max_n_panes: 8
 
+  // Don't create bots with these symbols
+  symbols_to_ignore: [
+    SYM1USDT
+    SYM2USDT
+  ]
+
   // if symbol is missing from live_configs_map, default to this config
   default_config_path: configs/live/clock_mode.example.json
 
