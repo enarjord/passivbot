@@ -232,6 +232,8 @@ async def get_current_symbols(cc):
             current_open_orders_short.append(elm["symbol"])
         else:
             current_open_orders_long.append(elm["symbol"])
+    current_positions_long = sorted(set(current_positions_long))
+    current_positions_short = sorted(set(current_positions_short))
     current_open_orders_long = sorted(set(current_open_orders_long))
     current_open_orders_short = sorted(set(current_open_orders_short))
     return current_positions_long, current_positions_short, current_open_orders_long, current_open_orders_short
@@ -279,9 +281,10 @@ async def dump_yaml(cc, config):
     symbols_map = {sym: sym.replace(":USDT", "").replace("/", "") for sym in min_costs}
     symbols_map_inv = {v: k for k, v in symbols_map.items()}
     approved = [symbols_map[k] for k, v in min_costs.items() if v <= max_min_cost and k in symbols_map]
+    approved = sorted(set(approved) - set(config["symbols_to_ignore"]))
     if config["approved_symbols_only"]:
         # only use approved symbols
-        approved = [k for k in approved if k in config["live_configs_map"]]
+        approved = sorted(set(approved) & set(config["live_configs_map"]))
     print("getting current bots...")
     (
         current_positions_long,
@@ -289,10 +292,18 @@ async def dump_yaml(cc, config):
         current_open_orders_long,
         current_open_orders_short,
     ) = await get_current_symbols(cc)
+
     current_positions_long = [symbols_map[s] if s in symbols_map else s for s in current_positions_long]
     current_positions_short = [symbols_map[s] if s in symbols_map else s for s in current_positions_short]
     current_open_orders_long = [symbols_map[s] if s in symbols_map else s for s in current_open_orders_long]
     current_open_orders_short = [symbols_map[s] if s in symbols_map else s for s in current_open_orders_short]
+
+    current_positions_long = sorted(set(current_positions_long) - set(config["symbols_to_ignore"]))
+    current_positions_short = sorted(set(current_positions_short) - set(config["symbols_to_ignore"]))
+    current_open_orders_long = sorted(set(current_open_orders_long) - set(config["symbols_to_ignore"]))
+    current_open_orders_short = sorted(set(current_open_orders_short) - set(config["symbols_to_ignore"]))
+
+    print("ignoring symbols:", config["symbols_to_ignore"])
     print("current_positions_long", sorted(current_positions_long))
     print("current_positions_short", sorted(current_positions_short))
     print("current_open_orders long", sorted(current_open_orders_long))
@@ -341,6 +352,7 @@ async def main():
         ("n_ohlcvs", 100),
         ("ohlcv_interval", "15m"),
         ("leverage", 10),
+        ("symbols_to_ignore", []),
     ]:
         if key not in config:
             config[key] = value
