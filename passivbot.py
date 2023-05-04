@@ -424,7 +424,6 @@ class Bot:
     async def update_fills(self) -> [dict]:
         """
         fetches recent fills
-        returns list of new fills
         """
         if self.ts_locked["update_fills"] > self.ts_released["update_fills"]:
             return
@@ -1828,9 +1827,14 @@ async def main() -> None:
 
         bot = await create_binance_bot_spot(config)
     elif config["exchange"] == "bybit":
-        from procedures import create_bybit_bot
+        if "spot" in config["market_type"]:
+            from procedures import create_bybit_bot_spot
 
-        bot = await create_bybit_bot(config)
+            bot = await create_bybit_bot_spot(config)
+        else:
+            from procedures import create_bybit_bot
+
+            bot = await create_bybit_bot(config)
     elif config["exchange"] == "bitget":
         from procedures import create_bitget_bot
 
