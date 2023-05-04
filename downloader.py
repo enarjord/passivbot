@@ -107,7 +107,7 @@ class Downloader:
                 )
             )
 
-    def validate_dataframe(self, df: pd.DataFrame) -> Tuple[bool, pd.DataFrame, pd.DataFrame]:
+    def validate_dataframe(self, df: pd.DataFrame) -> tuple[bool, pd.DataFrame, pd.DataFrame]:
         """
         Validates a dataframe and detects gaps in it. Also detects missing trades in the beginning and end.
         @param df: Dataframe to check for gaps.
@@ -323,7 +323,7 @@ class Downloader:
         @return: Dataframe with full day.
         """
         print_(["Fetching", symbol, date])
-        url = "{}{}/{}-aggTrades-{}.zip".format(base_url, symbol.upper(), symbol.upper(), date)
+        url = f"{base_url}{symbol.upper()}/{symbol.upper()}-aggTrades-{date}.zip"
         df = pd.DataFrame(columns=["trade_id", "price", "qty", "timestamp", "is_buyer_maker"])
         column_names = [
             "trade_id",
@@ -467,7 +467,6 @@ class Downloader:
         Downloads any missing data based on the specified time frame.
         @return:
         """
-
         if self.config["exchange"] == "binance":
             if self.spot:
                 self.bot = await create_binance_bot_spot(get_dummy_settings(self.config))
@@ -963,9 +962,12 @@ def get_zip(url: str):
         print(e)
 
 
-def get_first_ohlcv_ts(symbol: str) -> int:
+def get_first_ohlcv_ts(symbol: str, spot=False) -> int:
     try:
-        url = "https://fapi.binance.com/fapi/v1/klines"
+        if spot:
+            url = "https://api.binance.com/api/v3/klines"
+        else:
+            url = "https://fapi.binance.com/fapi/v1/klines"
         res = requests.get(
             url, params={"symbol": symbol, "startTime": 0, "limit": 100, "interval": "1m"}
         )
@@ -978,17 +980,17 @@ def get_first_ohlcv_ts(symbol: str) -> int:
         return 0
 
 
-def download_ohlcvs(symbol, inverse, start_date, end_date, download_only=False) -> pd.DataFrame:
-    dirpath = make_get_filepath(f"historical_data/ohlcvs_futures/{symbol}/")
-    if not inverse:
-        base_url = f"https://data.binance.vision/data/futures/um/"
-    else:
-        base_url = f"https://data.binance.vision/data/futures/cm/"
+def download_ohlcvs(
+    symbol, inverse, start_date, end_date, spot=False, download_only=False
+) -> pd.DataFrame:
+    dirpath = make_get_filepath(f"historical_data/ohlcvs_{'spot' if spot else 'futures'}/{symbol}/")
+    base_url = "https://data.binance.vision/data/"
+    base_url += "spot/" if spot else f"futures/{'cm' if inverse else 'um'}/"
     col_names = ["timestamp", "open", "high", "low", "close", "volume"]
-    start_ts = max(get_first_ohlcv_ts(symbol), date_to_ts(start_date))
+    start_ts = max(get_first_ohlcv_ts(symbol, spot=spot), date_to_ts(start_date))
     end_ts = date_to_ts(end_date)
     days = [ts_to_date_utc(x)[:10] for x in list(range(start_ts, end_ts, 1000 * 60 * 60 * 24))]
-    months = sorted(set([x[:7] for x in days]))
+    months = sorted({x[:7] for x in days})
     month_now = ts_to_date(time())[:7]
     months = [m for m in months if m != month_now]
     months_done = set()
@@ -1076,7 +1078,7 @@ def load_hlc_cache(
     if os.path.exists(filepath):
         data = np.load(filepath)
     else:
-        df = download_ohlcvs(symbol, inverse, start_date, end_date)
+        df = download_ohlcvs(symbol, inverse, start_date, end_date, spot)
         df = df[df.timestamp >= date_to_ts(start_date)]
         df = df[df.timestamp <= date_to_ts(end_date)]
         data = df[["timestamp", "high", "low", "close"]].values
@@ -1102,9 +1104,13 @@ async def main():
 
     args = parser.parse_args()
     config = await prepare_backtest_config(args)
-    if args.ohlcv:
+    if config["ohlcv"]:
         data = load_hlc_cache(
-            config["symbol"], config["inverse"], config["start_date"], config["end_date"]
+            config["symbol"],
+            config["inverse"],
+            config["start_date"],
+            config["end_date"],
+            spot=config["spot"],
         )
     else:
         downloader = Downloader(config)
