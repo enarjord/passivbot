@@ -37,9 +37,7 @@ class BybitBotSpot(Bot):
         self.spot = self.config["spot"] = True
         self.inverse = self.config["inverse"] = False
         self.hedge_mode = self.config["hedge_mode"] = False
-        self.do_short = self.config["do_short"] = self.config["short"][
-            "enabled"
-        ] = False
+        self.do_short = self.config["do_short"] = self.config["short"]["enabled"] = False
         self.session = aiohttp.ClientSession(
             headers=({"referer": self.broker_code} if self.broker_code else {}),
             connector=aiohttp.TCPConnector(resolver=aiohttp.AsyncResolver()),
@@ -53,9 +51,7 @@ class BybitBotSpot(Bot):
     async def public_get(self, url: str, params=None) -> dict:
         if params is None:
             params = {}
-        async with self.session.get(
-            self.base_endpoint + url, params=params
-        ) as response:
+        async with self.session.get(self.base_endpoint + url, params=params) as response:
             result = await response.text()
         return json.loads(result)
 
@@ -70,9 +66,7 @@ class BybitBotSpot(Bot):
         if params is None:
             params = {}
         timestamp = int(time() * 1000)
-        params.update(
-            {"api_key": self.key, "timestamp": timestamp, "recv_window": 10000}
-        )
+        params.update({"api_key": self.key, "timestamp": timestamp, "recv_window": 10000})
         for k in params:
             if type(params[k]) == bool:
                 params[k] = "true" if params[k] else "false"
@@ -84,21 +78,15 @@ class BybitBotSpot(Bot):
             hashlib.sha256,
         ).hexdigest()
         if json_:
-            async with getattr(self.session, type_)(
-                base_endpoint + url, json=params
-            ) as response:
+            async with getattr(self.session, type_)(base_endpoint + url, json=params) as response:
                 result = await response.text()
         else:
-            async with getattr(self.session, type_)(
-                base_endpoint + url, params=params
-            ) as response:
+            async with getattr(self.session, type_)(base_endpoint + url, params=params) as response:
                 result = await response.text()
         result_dict = json.loads(result)
         return result_dict
 
-    async def private_get(
-        self, url: str, params=None, base_endpoint: str = None
-    ) -> dict:
+    async def private_get(self, url: str, params=None, base_endpoint: str = None) -> dict:
         if params is None:
             params = {}
         return await self.private_(
@@ -108,9 +96,7 @@ class BybitBotSpot(Bot):
             params,
         )
 
-    async def private_post(
-        self, url: str, params=None, base_endpoint: str = None
-    ) -> dict:
+    async def private_post(self, url: str, params=None, base_endpoint: str = None) -> dict:
         if params is None:
             params = {}
         return await self.private_(
@@ -152,9 +138,7 @@ class BybitBotSpot(Bot):
                 self.quote = self.margin_coin = e["quoteCoin"]
                 self.min_qty = self.config["min_qty"] = float(e["minTradeQty"])
                 self.qty_step = self.config["qty_step"] = float(e["basePrecision"])
-                self.price_step = self.config["price_step"] = float(
-                    e["minPricePrecision"]
-                )
+                self.price_step = self.config["price_step"] = float(e["minPricePrecision"])
                 self.min_price = 0  # TODO Fix
                 self.max_price = 1000000000  # TODO Fix
                 self.min_cost = self.config["min_cost"] = 0.0
@@ -169,9 +153,7 @@ class BybitBotSpot(Bot):
         default_orders = super().calc_orders()
         orders = []
         remaining_cost = self.balance[self.quote]["onhand"]
-        for order in sorted(
-            default_orders, key=lambda x: calc_diff(x["price"], self.price)
-        ):
+        for order in sorted(default_orders, key=lambda x: calc_diff(x["price"], self.price)):
             if order["price"] > min(
                 self.max_price,
                 round_dn(self.price * self.price_multiplier_up, self.price_step),
@@ -185,13 +167,9 @@ class BybitBotSpot(Bot):
                 print(f'price {order["price"]} too low')
                 continue
             if order["side"] == "buy":
-                cost = qty_to_cost(
-                    order["qty"], order["price"], self.inverse, self.c_mult
-                )
+                cost = qty_to_cost(order["qty"], order["price"], self.inverse, self.c_mult)
                 if cost > remaining_cost:
-                    adjusted_qty = round_dn(
-                        remaining_cost / order["price"], self.qty_step
-                    )
+                    adjusted_qty = round_dn(remaining_cost / order["price"], self.qty_step)
                     min_entry_qty = calc_min_entry_qty(
                         order["price"],
                         self.inverse,
@@ -222,9 +200,7 @@ class BybitBotSpot(Bot):
     async def init_order_book(self):
         ticker = None
         try:
-            ticker = await self.public_get(
-                self.endpoints["ticker"], {"symbol": self.symbol}
-            )
+            ticker = await self.public_get(self.endpoints["ticker"], {"symbol": self.symbol})
             ticker = ticker["result"]
             self.ob = [float(ticker["bidPrice"]), float(ticker["askPrice"])]
             self.price = np.random.choice(self.ob)
@@ -280,14 +256,11 @@ class BybitBotSpot(Bot):
         if self.coin in balance:
             psize_long = round_dn(balance[self.coin]["onhand"], self.qty_step)
             long_pfills, short_pfills = get_position_fills(psize_long, 0.0, self.fills)
-            pprice_long = (
-                calc_pprice_long(psize_long, long_pfills) if psize_long else 0.0
-            )
+            pprice_long = calc_pprice_long(psize_long, long_pfills) if psize_long else 0.0
             if psize_long * pprice_long < self.min_cost:
                 psize_long, pprice_long, long_pfills = 0.0, 0.0, []
             wallet_balance = (
-                balance[self.quote]["onhand"]
-                + balance[self.coin]["onhand"] * pprice_long
+                balance[self.quote]["onhand"] + balance[self.coin]["onhand"] * pprice_long
             )
         else:
             psize_long = 0.0
@@ -439,18 +412,14 @@ class BybitBotSpot(Bot):
         for fill in fills:
             if fill["side"] == "buy":
                 new_psize = psize + fill["qty"]
-                pprice = pprice * (psize / new_psize) + fill["price"] * (
-                    fill["qty"] / new_psize
-                )
+                pprice = pprice * (psize / new_psize) + fill["price"] * (fill["qty"] / new_psize)
                 psize = new_psize
             elif psize > 0.0:
                 income.append(
                     {
                         "symbol": fill["symbol"],
                         "income_type": "realized_pnl",
-                        "income": calc_pnl_long(
-                            pprice, fill["price"], fill["qty"], False, 1.0
-                        ),
+                        "income": calc_pnl_long(pprice, fill["price"], fill["qty"], False, 1.0),
                         "token": self.quote,
                         "timestamp": fill["timestamp"],
                         "info": 0,
@@ -598,12 +567,8 @@ class BybitBotSpot(Bot):
                 print_(["fetched no new ticks", self.symbol])
         return ticks
 
-    async def fetch_ticks_time(
-        self, start_time: int, end_time: int = None, do_print: bool = True
-    ):
-        return await self.fetch_ticks(
-            start_time=start_time, end_time=end_time, do_print=do_print
-        )
+    async def fetch_ticks_time(self, start_time: int, end_time: int = None, do_print: bool = True):
+        return await self.fetch_ticks(start_time=start_time, end_time=end_time, do_print=do_print)
 
     async def fetch_ohlcvs(
         self, symbol: str = None, start_time: int = None, interval="1m", limit=1000
@@ -632,9 +597,7 @@ class BybitBotSpot(Bot):
         }
         if start_time is not None:
             params["startTime"] = int(start_time)
-            params["endTime"] = (
-                params["startTime"] + interval_map[interval] * 60 * 1000 * limit
-            )
+            params["endTime"] = params["startTime"] + interval_map[interval] * 60 * 1000 * limit
         try:
             fetched = await self.public_get(self.endpoints["ohlcvs"], params)
             return [
