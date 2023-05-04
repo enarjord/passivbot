@@ -61,29 +61,23 @@ def calc_volume_sum(ohlcv):
 
 def sort_symbols(ohlcvs, config):
     min_n_syms = max(config["n_longs"], config["n_shorts"])
-    print('min_n_syms', min_n_syms)
-    volume_clip_threshold = config["volume_clip_threshold"]
-    unilateralness_clip_threshold = config["unilateralness_clip_threshold"]
-    # select for high volume
-    by_volume = sorted([(calc_volume_sum(ohlcvs[sym]), sym) for sym in ohlcvs], reverse=True)
-    print('sorted by_volume high to low', len(by_volume))
-    for elm in by_volume:
-        print(elm)
-    by_volume = by_volume[:max(min_n_syms, int(round(len(by_volume) * volume_clip_threshold)))]
-
-    # select for low unilateralness
-    by_unilateralness = sorted([(calc_unilateralness(ohlcvs[sym]), sym) for _, sym in by_volume])
-    print('sorted by_unilateralness low to high', len(by_unilateralness))
-    for elm in by_unilateralness:
-        print(elm)
-    by_unilateralness = by_unilateralness[:max(min_n_syms, int(round(len(by_unilateralness) * unilateralness_clip_threshold)))]
-
-    # select for high noisiness
-    by_noisiness = sorted([(calc_noisiness(ohlcvs[sym]), sym) for _, sym in by_unilateralness], reverse=True)
-    print('sorted by_noisiness high to low', len(by_noisiness))
-    for elm in by_noisiness:
-        print(elm)
-    return by_noisiness
+    print("min_n_syms", min_n_syms)
+    filtered_syms = list(ohlcvs)
+    by_func = [(0.0, sym) for sym in filtered_syms]
+    for title, func, higher_is_better in [
+        ("volume", calc_volume_sum, True),
+        ("unilateralness", calc_unilateralness, False),
+        ("noisiness", calc_noisiness, True),
+    ]:
+        if config[f"{title}_clip_threshold"] == 0.0:
+            continue
+        by_func = sorted([(func(ohlcvs[sym]), sym) for sym in filtered_syms], reverse=higher_is_better)
+        print(f"sorted by {title} {'high to low' if higher_is_better else 'low to high'} n syms: {len(by_func)}")
+        for elm in by_func:
+            print(elm)
+        by_func = by_func[: max(int(round(len(by_func) * config[f"{title}_clip_threshold"])), min_n_syms)]
+        filtered_syms = [elm[1] for elm in by_func]
+    return by_func
 
 
 def generate_yaml(
@@ -306,7 +300,7 @@ async def dump_yaml(cc, config):
     print("getting ohlcvs...")
     ohs = await get_ohlcvs(cc, [symbols_map_inv[sym] for sym in approved], config)
     max_len_ohlcv = max([len(ohs[s]) for s in ohs])
-    print('max_len_ohlcv', max_len_ohlcv)
+    print("max_len_ohlcv", max_len_ohlcv)
     ohs = {symbols_map[k]: v for k, v in ohs.items() if len(v) == max_len_ohlcv}
     for sym in ohs:
         for i in range(len(ohs[sym])):
@@ -341,6 +335,7 @@ async def main():
     for key, value in [
         ("volume_clip_threshold", 0.5),
         ("unilateralness_clip_threshold", 0.5),
+        ("noisiness_clip_threshold", 0.5),
         ("price_distance_threshold", 0.5),
         ("max_n_panes", 8),
         ("n_ohlcvs", 100),
