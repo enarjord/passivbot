@@ -1118,9 +1118,9 @@ def calc_pprice_from_fills(coin_balance, fills, n_fills_limit=100):
 
 def get_position_fills(psize_long: float, psize_short: float, fills: [dict]) -> ([dict], [dict]):
     """
-    assumes fills are sorted old to new
     returns fills since and including initial entry
     """
+    fills = sorted(fills, key=lambda x: x['timestamp']) # sort old to new
     psize_long *= 0.999
     psize_short *= 0.999
     long_qty_sum = 0.0
