@@ -1120,7 +1120,7 @@ def get_position_fills(psize_long: float, psize_short: float, fills: [dict]) -> 
     """
     returns fills since and including initial entry
     """
-    fills = sorted(fills, key=lambda x: x['timestamp']) # sort old to new
+    fills = sorted(fills, key=lambda x: x["timestamp"])  # sort old to new
     psize_long *= 0.999
     psize_short *= 0.999
     long_qty_sum = 0.0
