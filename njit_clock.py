@@ -116,9 +116,7 @@ def calc_clock_entry_long(
         wallet_exposure_long = qty_to_cost(psize_long, pprice_long, inverse, c_mult) / balance
         if wallet_exposure_long < wallet_exposure_limit * 0.99:
             # entry long
-            bid_price_long = calc_clock_price_bid(
-                emas.min(), highest_bid, ema_dist_entry, price_step
-            )
+            bid_price_long = calc_clock_price_bid(emas.min(), highest_bid, ema_dist_entry, price_step)
             qty_long = calc_clock_qty(
                 balance,
                 wallet_exposure_long,
