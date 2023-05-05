@@ -79,6 +79,7 @@ class Bot:
 
         self.hedge_mode = self.config["hedge_mode"] = True
         self.set_config(self.config)
+        self.server_time = utc_ms()
 
         self.ts_locked = {
             k: 0.0
@@ -215,6 +216,7 @@ class Bot:
             self.init_exchange_config(),
             self.init_order_book(),
             self.init_emas(),
+            self.update_server_time(),
         )
         print("done")
         if "price_step_custom" in self.config and self.config["price_step_custom"] is not None:
@@ -634,8 +636,8 @@ class Bot:
                             psize_long,
                             pprice_long,
                             self.ob[0],
-                            min(self.emas_long),
-                            utc_ms(),
+                            self.emas_long,
+                            self.server_time,
                             0
                             if psize_long == 0.0
                             else self.last_fills_timestamps["clock_entry_long"],
@@ -695,8 +697,8 @@ class Bot:
                         psize_long,
                         pprice_long,
                         self.ob[1],
-                        max(self.emas_long),
-                        utc_ms(),
+                        self.emas_long,
+                        self.server_time,
                         self.last_fills_timestamps["clock_close_long"],
                         self.xk["inverse"],
                         self.xk["qty_step"],
@@ -842,8 +844,8 @@ class Bot:
                             psize_short,
                             pprice_short,
                             self.ob[1],
-                            max(self.emas_short),
-                            utc_ms(),
+                            self.emas_short,
+                            self.server_time,
                             0
                             if psize_short == 0.0
                             else self.last_fills_timestamps["clock_entry_short"],
@@ -903,8 +905,8 @@ class Bot:
                         psize_short,
                         pprice_short,
                         self.ob[0],
-                        min(self.emas_short),
-                        utc_ms(),
+                        self.emas_short,
+                        self.server_time,
                         self.last_fills_timestamps["clock_close_short"],
                         self.xk["inverse"],
                         self.xk["qty_step"],
@@ -1358,6 +1360,18 @@ class Bot:
         finally:
             self.ts_released["update_last_fills_timestamps"] = time.time()
 
+    async def update_server_time(self):
+        server_time = None
+        try:
+            server_time = await self.get_server_time()
+            self.server_time = server_time
+            return True
+        except Exception as e:
+            self.server_time = utc_ms()
+            traceback.print_exc()
+            print_async_exception(server_time)
+            return False
+
     async def start_ohlcv_mode(self):
         logging.info("starting bot...")
         while True:
@@ -1391,9 +1405,14 @@ class Bot:
                 self.heartbeat_ts = time.time()
             self.prev_price = self.ob[0]
             prev_pos = self.position.copy()
-            to_update = [self.update_position(), self.update_open_orders(), self.init_order_book()]
+            to_update = [
+                self.update_position(),
+                self.update_open_orders(),
+                self.init_order_book(),
+            ]
             if self.passivbot_mode == "clock":
                 to_update.append(self.update_last_fills_timestamps())
+                to_update.append(self.get_server_time())
             res = await asyncio.gather(*to_update)
             self.update_emas(self.ob[0], self.prev_price)
             """
@@ -1405,7 +1424,7 @@ class Bot:
             print(res)
             """
             if not all(res):
-                reskeys = ["pos", "open orders", "order book", "last fills"]
+                reskeys = ["pos", "open orders", "order book", "last fills", "server_time"]
                 line = "error with "
                 for i in range(len(to_update)):
                     if not to_update[i]:
