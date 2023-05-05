@@ -82,6 +82,7 @@ class KuCoinBot(Bot):
                 "public_token_ws": "/api/v1/bullet-public",
                 "private_token_ws": "/api/v1/bullet-private",
                 "income": "/api/v1/recentFills",
+                "server_time": "/api/v1/timestamp",
                 "recent_orders": "/api/v1/recentDoneOrders",
             }
             self.hedge_mode = self.config["hedge_mode"] = False
@@ -253,7 +254,8 @@ class KuCoinBot(Bot):
         raise "Not implemented"
 
     async def get_server_time(self):
-        raise "Not implemented"
+        server_time = await self.public_get(self.endpoints["server_time"])
+        return server_time["data"]
 
     async def fetch_position(self) -> dict:
         positions, balance = None, None
