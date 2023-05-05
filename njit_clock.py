@@ -91,7 +91,7 @@ def calc_clock_entry_long(
     psize_long: float,
     pprice_long: float,
     highest_bid: float,
-    ema_band_lower: float,
+    emas: float,
     utc_now_ms: float,
     prev_clock_fill_ts_entry: float,
     inverse: bool,
@@ -117,7 +117,7 @@ def calc_clock_entry_long(
         if wallet_exposure_long < wallet_exposure_limit * 0.99:
             # entry long
             bid_price_long = calc_clock_price_bid(
-                ema_band_lower, highest_bid, ema_dist_entry, price_step
+                emas.min(), highest_bid, ema_dist_entry, price_step
             )
             qty_long = calc_clock_qty(
                 balance,
@@ -563,7 +563,7 @@ def backtest_clock(
                     psize_long,
                     pprice_long,
                     closes[k - 1],
-                    emas_long.min(),
+                    emas_long,
                     timestamps[k - 1],
                     prev_clock_fill_ts_entry_long,
                     inverse,
