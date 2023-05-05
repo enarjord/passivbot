@@ -107,7 +107,7 @@ class Downloader:
                 )
             )
 
-    def validate_dataframe(self, df: pd.DataFrame) -> tuple[bool, pd.DataFrame, pd.DataFrame]:
+    def validate_dataframe(self, df: pd.DataFrame) -> Tuple[bool, pd.DataFrame, pd.DataFrame]:
         """
         Validates a dataframe and detects gaps in it. Also detects missing trades in the beginning and end.
         @param df: Dataframe to check for gaps.
