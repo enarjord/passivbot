@@ -37,6 +37,14 @@ class BitgetBot(Bot):
         self.exchange = "bitget"
         self.max_n_orders_per_batch = 50
         self.max_n_cancellations_per_batch = 60
+        self.ema_min = 0
+        self.alpha_long = 0.0
+        self.alpha_short = 0.0
+        self.emas_long = np.zeros(3)
+        self.emas_short = np.zeros(3)
+        self.ema_sec = 0                  
+        self.alpha__long = 0.0
+        self.alpha__short = 0.0
         super().__init__(config)
         self.base_endpoint = "https://api.bitget.com"
         self.endpoints = {
