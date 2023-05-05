@@ -21,6 +21,19 @@ from pure_funcs import (
 from njit_funcs import round_dynamic
 
 
+def shorten(key):
+    key_ = key
+    for src, dst in [
+        ("weighted", "w"),
+        ("exposure", "exp"),
+        ("distance", "dist"),
+        ("ratio", "rt"),
+        ("mean_of_10_worst", "10_worst_mean"),
+    ]:
+        key_ = key_.replace(src, dst)
+    return key_
+
+
 def main():
 
     parser = argparse.ArgumentParser(prog="view conf", description="inspect conf")
@@ -96,6 +109,7 @@ def main():
             scores_res["individual_scores"],
             scores_res["keys"],
         )
+        keys = keys[:1] + [("adg_per_exposure", True)] + keys[1:]
         for side in sides:
             all_scores[-1][side] = {
                 "config": cfg[side],
@@ -121,7 +135,7 @@ def main():
     if os.path.exists(table_filepath):
         os.remove(table_filepath)
     for side in sides:
-        row_headers = ["symbol"] + [k[0] for k in keys] + ["n_days", "score"]
+        row_headers = ["symbol"] + [shorten(k[0]) for k in keys] + ["n_days", "score"]
         table = PrettyTable(row_headers)
         for rh in row_headers:
             table.align[rh] = "l"
@@ -139,7 +153,7 @@ def main():
                 [("-> " if sym in best_candidate[side]["symbols_to_include"] else "") + sym]
                 + [round_dynamic(x, 4) if np.isfinite(x) else x for x in xs]
                 + [round(best_candidate[side]["n_days"][sym], 2)]
-                + [best_candidate[side]["individual_scores"][sym]]
+                + [round_dynamic(best_candidate[side]["individual_scores"][sym], 12)]
             )
         means = [
             np.mean(
@@ -160,7 +174,7 @@ def main():
             ["mean"]
             + [round_dynamic(m, 4) if np.isfinite(m) else m for m in means]
             + [round(np.mean(list(best_candidate[side]["n_days"].values())), 2)]
-            + [ind_scores_mean]
+            + [round_dynamic(ind_scores_mean, 12)]
         )
         with open(make_get_filepath(table_filepath), "a") as f:
             output = table.get_string(border=True, padding_width=1)
