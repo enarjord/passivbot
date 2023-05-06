@@ -654,10 +654,14 @@ def analyze_fills_slim(fills_long: list, fills_short: list, stats: list, config:
     #  eqbal_ratio_mean_of_10_worst,
     #  eqbal_ratio_std,
 
+    #  plus n_days, starting_balance and adg_per_exposure
+
     if "adg_n_subdivisions" not in config:
         config["adg_n_subdivisions"] = 1
 
     ms_per_day = 1000 * 60 * 60 * 24
+
+    n_days = (stats[-1][0] - stats[0][0]) / ms_per_day
 
     if stats[-1][10] <= 0.0:
         adg_long = adg_weighted_long = stats[-1][10]
@@ -723,6 +727,10 @@ def analyze_fills_slim(fills_long: list, fills_short: list, stats: list, config:
         "adg_weighted_per_exposure_long": adg_weighted_long / config["long"]["wallet_exposure_limit"],
         "adg_weighted_per_exposure_short": adg_weighted_short
         / config["short"]["wallet_exposure_limit"],
+        "adg_per_exposure_long": adg_long / config["long"]["wallet_exposure_limit"],
+        "adg_per_exposure_short": adg_short / config["short"]["wallet_exposure_limit"],
+        "n_days": n_days,
+        "starting_balance": stats[0][10],
         "pa_distance_std_long": pa_dists_long.std(),
         "pa_distance_std_short": pa_dists_short.std(),
         "pa_distance_mean_long": pa_dists_long.mean(),

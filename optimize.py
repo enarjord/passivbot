@@ -13,7 +13,7 @@ from backtest import backtest
 from multiprocessing import Pool, shared_memory
 from njit_funcs import round_dynamic
 from pure_funcs import (
-    analyze_fills,
+    analyze_fills_slim,
     denumpyize,
     get_template_live_config,
     ts_to_date,
@@ -68,13 +68,7 @@ def backtest_wrap(config_: dict, ticks_caches: dict):
     try:
         assert "adg_n_subdivisions" in config
         fills_long, fills_short, stats = backtest(config, ticks)
-        longs, shorts, sdf, analysis = analyze_fills(fills_long, fills_short, stats, config)
-        logging.debug(
-            f"backtested {config['symbol']: <12} pa distance long {analysis['pa_distance_mean_long']:.6f} "
-            + f"pa distance short {analysis['pa_distance_mean_short']:.6f} adg long {analysis['adg_long']:.6f} "
-            + f"adg short {analysis['adg_short']:.6f} std long {analysis['pa_distance_std_long']:.5f} "
-            + f"std short {analysis['pa_distance_std_short']:.5f}"
-        )
+        analysis = analyze_fills_slim(fills_long, fills_short, stats, config)
     except Exception as e:
         analysis = get_empty_analysis()
         logging.error(f'error with {config["symbol"]} {e}')
@@ -270,7 +264,7 @@ async def run_opt(args, config):
                 if config["ohlcv"]:
                     data = load_hlc_cache(
                         symbol,
-                        config['inverse'],
+                        config["inverse"],
                         config["start_date"],
                         config["end_date"],
                         base_dir=config["base_dir"],
@@ -300,7 +294,8 @@ async def run_opt(args, config):
                     for fname in os.listdir(args.starting_configs):
                         try:
                             """
-                            if config["symbols"][0] not in os.path.join(args.starting_configs, fname):
+                            #  uncomment to skip single starting configs with wrong symbol
+                            if not any(x in os.path.join(args.starting_configs, fname) for x in [config["symbols"][0], "symbols"]):
                                 print("skipping", os.path.join(args.starting_configs, fname))
                                 continue
                             """
