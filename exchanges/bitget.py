@@ -191,9 +191,19 @@ class BitgetBot(Bot):
         ]
 
     async def public_get(self, url: str, params: dict = {}) -> dict:
-        async with self.session.get(self.base_endpoint + url, params=params) as response:
-            result = await response.text()
-        return json.loads(result)
+        result = None
+        response_ = None
+        try:
+            async with self.session.get(self.base_endpoint + url, params=params) as response:
+                response_ = response
+                result = await response.text()
+            return json.loads(result)
+        except Exception as e:
+            logging.error(f"error with json decoding {url} {params} {e}")
+            traceback.print_exc()
+            print_async_exception(result)
+            print_async_exception(response_)
+            raise Exception
 
     async def private_(
         self, type_: str, base_endpoint: str, url: str, params: dict = {}, json_: bool = False
