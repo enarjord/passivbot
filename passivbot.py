@@ -421,7 +421,16 @@ class Bot:
             self.ts_released["update_position"] = time.time()
 
     async def init_fills(self, n_days_limit=60):
-        self.fills = await self.fetch_fills()
+        fills = None
+        try:
+            fills = await self.fetch_fills()
+            self.fills = fills
+            return True
+        except Exception as e:
+            self.fills = []
+            traceback.print_exc()
+            print_async_exception(fills)
+            return False
 
     async def update_fills(self) -> [dict]:
         """
