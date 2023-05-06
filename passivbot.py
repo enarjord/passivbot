@@ -215,9 +215,9 @@ class Bot:
             self.init_fills(),
             self.init_exchange_config(),
             self.init_order_book(),
-            self.init_emas(),
             self.update_server_time(),
         )
+        await self.init_emas()
         print("done")
         if "price_step_custom" in self.config and self.config["price_step_custom"] is not None:
             new_price_step = max(
@@ -262,51 +262,65 @@ class Bot:
         self.alpha__long = 1 - self.alpha_long
         self.alpha_short = 2 / (self.ema_spans_short + 1)
         self.alpha__short = 1 - self.alpha_short
-        self.ema_min = int(round(time.time() // 60 * 60))
+        self.ema_minute = int(round(time.time() // 60 * 60))
         return samples1m
 
     async def init_emas(self) -> None:
-        ohlcvs1m = await self.fetch_ohlcvs(interval="1m")
-        max_span = max(list(self.ema_spans_long) + list(self.ema_spans_short))
-        for mins, interval in zip([5, 15, 30, 60, 60 * 4], ["5m", "15m", "30m", "1h", "4h"]):
-            if max_span <= len(ohlcvs1m) * mins:
-                break
-        ohlcvs = await self.fetch_ohlcvs(interval=interval)
-        ohlcvs = {ohlcv["timestamp"]: ohlcv for ohlcv in ohlcvs + ohlcvs1m}
-        if self.ohlcv:
-            return await self.init_emas_1m(ohlcvs)
-        samples1s = calc_samples(
-            numpyize(
-                [
-                    [o["timestamp"], o["volume"], o["close"]]
-                    for o in sorted(ohlcvs.values(), key=lambda x: x["timestamp"])
-                ]
+        ohlcvs1m = None
+        try:
+            ohlcvs1m = await self.fetch_ohlcvs(interval="1m")
+            max_span = max(list(self.ema_spans_long) + list(self.ema_spans_short))
+            for mins, interval in zip([5, 15, 30, 60, 60 * 4], ["5m", "15m", "30m", "1h", "4h"]):
+                if max_span <= len(ohlcvs1m) * mins:
+                    break
+            ohlcvs = await self.fetch_ohlcvs(interval=interval)
+            ohlcvs = {ohlcv["timestamp"]: ohlcv for ohlcv in ohlcvs + ohlcvs1m}
+            if self.ohlcv:
+                return await self.init_emas_1m(ohlcvs)
+            samples1s = calc_samples(
+                numpyize(
+                    [
+                        [o["timestamp"], o["volume"], o["close"]]
+                        for o in sorted(ohlcvs.values(), key=lambda x: x["timestamp"])
+                    ]
+                )
             )
-        )
-        spans1s_long = np.array(self.ema_spans_long) * 60
-        spans1s_short = np.array(self.ema_spans_short) * 60
-        self.emas_long = calc_emas_last(samples1s[:, 2], spans1s_long)
-        self.emas_short = calc_emas_last(samples1s[:, 2], spans1s_short)
-        self.alpha_long = 2 / (spans1s_long + 1)
-        self.alpha__long = 1 - self.alpha_long
-        self.alpha_short = 2 / (spans1s_short + 1)
-        self.alpha__short = 1 - self.alpha_short
-        self.ema_sec = int(time.time())
-        # return samples1s
+            spans1s_long = np.array(self.ema_spans_long) * 60
+            spans1s_short = np.array(self.ema_spans_short) * 60
+            self.emas_long = calc_emas_last(samples1s[:, 2], spans1s_long)
+            self.emas_short = calc_emas_last(samples1s[:, 2], spans1s_short)
+            self.alpha_long = 2 / (spans1s_long + 1)
+            self.alpha__long = 1 - self.alpha_long
+            self.alpha_short = 2 / (spans1s_short + 1)
+            self.alpha__short = 1 - self.alpha_short
+            self.ema_sec = int(time.time())
+        except Exception as e:
+            logging.error(f"error with init_emas {e}")
+            traceback.print_exc()
+            print_async_exception(ohlcvs1m)
+
+            self.emas_long = np.repeat(self.price, 3)
+            self.emas_short = np.repeat(self.price, 3)
+            self.alpha_long = 2 / (np.array(self.ema_spans_long) * (1 if self.ohlcv else 60) + 1)
+            self.alpha__long = 1 - self.alpha_long
+            self.alpha_short = 2 / (np.array(self.ema_spans_short) * (1 if self.ohlcv else 60) + 1)
+            self.alpha__short = 1 - self.alpha_short
+            self.ema_sec = int(time.time())
+            self.ema_minute = int(round(time.time() // 60 * 60))
 
     def update_emas_1m(self, price: float, prev_price: float) -> None:
-        now_min = int(round(time.time() // 60 * 60))
-        if now_min <= self.ema_min:
+        now_minute = int(round(time.time() // 60 * 60))
+        if now_minute <= self.ema_minute:
             return
-        while self.ema_min < int(round(now_min - 60)):
+        while self.ema_minute < int(round(now_minute - 60)):
             self.emas_long = calc_ema(self.alpha_long, self.alpha__long, self.emas_long, prev_price)
             self.emas_short = calc_ema(
                 self.alpha_short, self.alpha__short, self.emas_short, prev_price
             )
-            self.ema_min += 60
+            self.ema_minute += 60
         self.emas_long = calc_ema(self.alpha_long, self.alpha__long, self.emas_long, price)
         self.emas_short = calc_ema(self.alpha_short, self.alpha__short, self.emas_short, price)
-        self.ema_min = now_min
+        self.ema_minute = now_minute
 
     def update_emas(self, price: float, prev_price: float) -> None:
         if self.ohlcv:
