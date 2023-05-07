@@ -1397,20 +1397,17 @@ class Bot:
 
     async def start_ohlcv_mode(self):
         logging.info("starting bot...")
+        refresh_interval = 60
+        offset_adjusted = self.countdown_offset % refresh_interval
         while True:
             now = time.time()
-            # print('secs until next', ((now + 60) - now % 60) - now)
-            refresh_interval = 60
-            while int(now) % refresh_interval != (self.countdown_offset % refresh_interval):
+            secs_left = refresh_interval - (int(now) + offset_adjusted) % refresh_interval
+            for i in range(secs_left, -1, -1):
                 if self.stop_websocket:
                     break
-                await asyncio.sleep(0.5)
-                now = time.time()
                 if self.countdown:
-                    print(
-                        f"\rcountdown: {((now + 60) - now % 60) - now:.1f} last price: {self.price}      ",
-                        end=" ",
-                    )
+                    print(f"\rcountdown: {i} last price: {self.price}      ", end=" ")
+                await asyncio.sleep(1)
             if self.stop_websocket:
                 break
             await asyncio.sleep(1.0)
