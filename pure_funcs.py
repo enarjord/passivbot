@@ -684,9 +684,9 @@ def analyze_fills_slim(fills_long: list, fills_short: list, stats: list, config:
         adg_short = adgs_short[0]
         adg_weighted_short = np.mean(adgs_short)
 
-    ts_diffs_long = np.diff([x[1] for x in fills_long]) if fills_long else np.array([0.0])
+    ts_diffs_long = np.diff([x[1] for x in fills_long]) if len(fills_long) > 1 else np.array([0.0])
     hrs_stuck_max_long = ts_diffs_long.max() / (1000 * 60 * 60)
-    ts_diffs_short = np.diff([x[1] for x in fills_short]) if fills_short else np.array([0.0])
+    ts_diffs_short = np.diff([x[1] for x in fills_short]) if len(fills_short) > 1 else np.array([0.0])
     hrs_stuck_max_short = ts_diffs_short.max() / (1000 * 60 * 60)
 
     # pa dist
