@@ -593,6 +593,7 @@ def fetch_market_specific_settings(config: dict):
             10 ** (-int(elm["info"]["volumePlace"])), 0.00000001
         )
         settings_from_exchange["min_qty"] = float(elm["info"]["minTradeNum"])
+        settings_from_exchange["min_cost"] = 5.0
         settings_from_exchange["spot"] = elm["spot"]
         settings_from_exchange["inverse"] = not elm["linear"]
     elif exchange == "okx":
@@ -629,11 +630,32 @@ def fetch_market_specific_settings(config: dict):
         settings_from_exchange["spot"] = False
         settings_from_exchange["inverse"] = not elm["linear"]
         settings_from_exchange["min_qty"] = elm["limits"]["amount"]["min"]
+    elif exchange == "kucoin":
+        cc = ccxt.kucoinfutures()
+        markets = cc.fetch_markets()
+        for elm in markets:
+            if elm["id"] == symbol + "M":
+                break
+        else:
+            raise Exception(f"unknown symbol {symbol}")
+        settings_from_exchange["hedge_mode"] = True
+        settings_from_exchange["maker_fee"] = elm["maker"]
+        settings_from_exchange["taker_fee"] = elm["taker"]
+        settings_from_exchange["c_mult"] = elm["contractSize"]
+        settings_from_exchange["qty_step"] = elm["precision"]["amount"]
+        settings_from_exchange["price_step"] = elm["precision"]["price"]
+        settings_from_exchange["spot"] = False
+        settings_from_exchange["inverse"] = not elm["linear"]
+        settings_from_exchange["min_qty"] = (
+            0.0 if elm["limits"]["amount"]["min"] is None else elm["limits"]["amount"]["min"]
+        )
+        settings_from_exchange["min_qty"] = float(elm["info"]["lotSize"])
     else:
         raise Exception(f"unknown exchange {exchange}")
-    settings_from_exchange["min_cost"] = (
-        0.0 if elm["limits"]["cost"]["min"] is None else elm["limits"]["cost"]["min"]
-    )
+    if "min_cost" not in settings_from_exchange:
+        settings_from_exchange["min_cost"] = (
+            0.0 if elm["limits"]["cost"]["min"] is None else elm["limits"]["cost"]["min"]
+        )
     for key in [
         "c_mult",
         "exchange",
@@ -654,7 +676,7 @@ def fetch_market_specific_settings(config: dict):
 
 
 if __name__ == "__main__":
-    for exchange in ["bitget", "binance", "bybit", "okx"]:
-        cfg = {"exchange": exchange, "symbol": "YFIUSDT", "market_type": "futures"}
+    for exchange in ["kucoin", "bitget", "binance", "bybit", "okx"]:
+        cfg = {"exchange": exchange, "symbol": "ETHUSDT", "market_type": "futures"}
         mss = fetch_market_specific_settings(cfg)
         print(mss)
