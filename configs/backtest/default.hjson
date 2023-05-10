@@ -15,6 +15,9 @@
   start_date: 2020-01-01
   end_date: 2023-05-05
 
+  # Reduce disk usage and improve some optimize speed with the slim analysis
+  slim_analysis: false
+
   # non default historical data path
   # defaults to local dir if unspecified
   # historical_data_path: "/media/e/Samsung_T5/"

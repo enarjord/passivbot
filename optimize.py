@@ -24,6 +24,7 @@ from pure_funcs import (
     determine_passivbot_mode,
     get_empty_analysis,
     calc_scores,
+    analyze_fills,
 )
 from procedures import (
     add_argparse_args,
@@ -57,6 +58,7 @@ def backtest_wrap(config_: dict, ticks_caches: dict):
                 "market_type",
                 "config_no",
                 "adg_n_subdivisions",
+                "slim_analysis",
             ]
         },
         **{k: v for k, v in config_["market_specific_settings"].items()},
@@ -68,7 +70,16 @@ def backtest_wrap(config_: dict, ticks_caches: dict):
     try:
         assert "adg_n_subdivisions" in config
         fills_long, fills_short, stats = backtest(config, ticks)
-        analysis = analyze_fills_slim(fills_long, fills_short, stats, config)
+        if config["slim_analysis"]:
+            analysis = analyze_fills_slim(fills_long, fills_short, stats, config)
+        else:
+            longs, shorts, sdf, analysis = analyze_fills(fills_long, fills_short, stats, config)
+            logging.debug(
+                f"backtested {config['symbol']: <12} pa distance long {analysis['pa_distance_mean_long']:.6f} "
+                + f"pa distance short {analysis['pa_distance_mean_short']:.6f} adg long {analysis['adg_long']:.6f} "
+                + f"adg short {analysis['adg_short']:.6f} std long {analysis['pa_distance_std_long']:.5f} "
+                + f"std short {analysis['pa_distance_std_short']:.5f}"
+            )
     except Exception as e:
         analysis = get_empty_analysis()
         logging.error(f'error with {config["symbol"]} {e}')
