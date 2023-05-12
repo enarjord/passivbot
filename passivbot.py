@@ -58,6 +58,8 @@ from njit_clock import (
     calc_clock_entry_short,
     calc_clock_close_long,
     calc_clock_close_short,
+    calc_delay_between_fills_ms_bid,
+    calc_delay_between_fills_ms_ask,
 )
 from typing import Union, Dict, List
 
@@ -216,6 +218,7 @@ class Bot:
             self.init_exchange_config(),
             self.init_order_book(),
             self.update_server_time(),
+            self.update_last_fills_timestamps(),
         )
         await self.init_emas()
         print("done")
@@ -1105,7 +1108,7 @@ class Bot:
         await self.cancel_and_create()
 
     def heartbeat_print(self):
-        logging.info(f"heartbeat {self.symbol}")
+        logging.info(f"heartbeat {self.symbol}  ")
         self.log_position_long()
         self.log_position_short()
         liq_price = self.position["long"]["liquidation_price"]
@@ -1406,13 +1409,84 @@ class Bot:
                 if self.stop_websocket:
                     break
                 if self.countdown:
-                    print(f"\rcountdown: {i} last price: {self.price}      ", end=" ")
+                    line = f"\rcountdown: {i} last price: {self.price}"
+                    do_long = self.do_long or self.position["long"]["size"] != 0.0
+                    do_short = self.do_short or self.position["short"]["size"] != 0.0
+                    if (do_long or do_short) and self.passivbot_mode == "clock":
+                        line += " | mins delay until next: "
+                        try:
+                            res = self.calc_minutes_until_next_orders()
+                            if do_long:
+                                line += f"entry long: {res['entry_long']:.1f}, close long: {res['close_long']:.1f}"
+                            if do_short:
+                                line += f"entry short: {res['entry_short']:.1f}, close short: {res['close_short']:.1f}"
+                        except Exception as e:
+                            print("error computing minutes until next order", e)
+                            traceback.print_exc()
+                    if i == 0:
+                        print("\r" + " " * (len(line) + 10), end=" ")
+                    else:
+                        print(line + "                ", end=" ")
                 await asyncio.sleep(1)
             if self.stop_websocket:
                 break
             await asyncio.sleep(1.0)
             await self.on_minute_mark()
             await asyncio.sleep(1.0)
+
+    def calc_minutes_until_next_orders(self):
+        res = {"entry_long": 0.0, "close_long": 0.0, "entry_short": 0.0, "close_short": 0.0}
+        if self.position["long"]["size"] != 0.0:
+            millis_delay_next_entry_long = calc_delay_between_fills_ms_bid(
+                self.position["long"]["price"],
+                self.price,
+                self.xk["delay_between_fills_ms_entry"][0],
+                self.xk["delay_weight_entry"][0],
+            )
+            millis_since_prev_close_long = (
+                self.server_time - self.last_fills_timestamps["clock_entry_long"]
+            )
+            res["entry_long"] = max(
+                0.0, (millis_delay_next_entry_long - millis_since_prev_close_long) / 1000 / 60
+            )
+        millis_delay_next_close_long = calc_delay_between_fills_ms_ask(
+            self.position["long"]["price"],
+            self.price,
+            self.xk["delay_between_fills_ms_close"][0],
+            self.xk["delay_weight_close"][0],
+        )
+        millis_since_prev_close_long = (
+            self.server_time - self.last_fills_timestamps["clock_close_long"]
+        )
+        res["close_long"] = max(
+            0.0, (millis_delay_next_close_long - millis_since_prev_close_long) / 1000 / 60
+        )
+        if self.position["short"]["size"] != 0.0:
+            millis_delay_next_entry_short = calc_delay_between_fills_ms_ask(
+                self.position["short"]["price"],
+                self.price,
+                self.xk["delay_between_fills_ms_entry"][0],
+                self.xk["delay_weight_entry"][0],
+            )
+            millis_since_prev_close_short = (
+                self.server_time - self.last_fills_timestamps["clock_entry_short"]
+            )
+            res["entry_short"] = max(
+                0.0, (millis_delay_next_entry_short - millis_since_prev_close_short) / 1000 / 60
+            )
+        millis_delay_next_close_short = calc_delay_between_fills_ms_bid(
+            self.position["short"]["price"],
+            self.price,
+            self.xk["delay_between_fills_ms_close"][0],
+            self.xk["delay_weight_close"][0],
+        )
+        millis_since_prev_close_short = (
+            self.server_time - self.last_fills_timestamps["clock_close_short"]
+        )
+        res["close_short"] = max(
+            0.0, (millis_delay_next_close_short - millis_since_prev_close_short) / 1000 / 60
+        )
+        return res
 
     async def on_minute_mark(self):
         # called each whole minute
@@ -1432,7 +1506,7 @@ class Bot:
             ]
             if self.passivbot_mode == "clock":
                 to_update.append(self.update_last_fills_timestamps())
-                to_update.append(self.get_server_time())
+                to_update.append(self.update_server_time())
             res = await asyncio.gather(*to_update)
             self.update_emas(self.ob[0], self.prev_price)
             """
