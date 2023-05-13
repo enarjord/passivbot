@@ -723,6 +723,15 @@ def analyze_fills_slim(fills_long: list, fills_short: list, stats: list, config:
     eqbal_ratio_std_short = np.std(eqbal_ratios_short)
     eqbal_ratio_mean_of_10_worst_short = np.mean(sorted(eqbal_ratios_short)[:10])
 
+    exposure_ratios_long = [
+        qty_to_cost(elm[3], elm[4], config["inverse"], config["c_mult"]) / elm[10] for elm in stats
+    ]
+    exposure_ratios_mean_long = np.mean(exposure_ratios_long)
+    exposure_ratios_short = [
+        qty_to_cost(elm[5], elm[6], config["inverse"], config["c_mult"]) / elm[11] for elm in stats
+    ]
+    exposure_ratios_mean_short = np.mean(exposure_ratios_short)
+
     return {
         "adg_weighted_per_exposure_long": adg_weighted_long / config["long"]["wallet_exposure_limit"],
         "adg_weighted_per_exposure_short": adg_weighted_short
@@ -743,6 +752,8 @@ def analyze_fills_slim(fills_long: list, fills_short: list, stats: list, config:
         "eqbal_ratio_mean_of_10_worst_short": eqbal_ratio_mean_of_10_worst_short,
         "eqbal_ratio_std_long": eqbal_ratio_std_long,
         "eqbal_ratio_std_short": eqbal_ratio_std_short,
+        "exposure_ratios_mean_long": exposure_ratios_mean_long,
+        "exposure_ratios_mean_short": exposure_ratios_mean_short,
     }
 
 
@@ -913,6 +924,11 @@ def analyze_fills(
     eqbal_ratios_sdf_short = sdf.equity_short / sdf.balance_short
     eqbal_ratio_std_short = eqbal_ratios_sdf_short.std()
 
+    exposure_ratios_long = sdf.wallet_exposure_long / config["long"]["wallet_exposure_limit"]
+    exposure_ratios_mean_long = exposure_ratios_long.mean()
+    exposure_ratios_short = sdf.wallet_exposure_short / config["short"]["wallet_exposure_limit"]
+    exposure_ratios_mean_short = exposure_ratios_short.mean()
+
     analysis = {
         "exchange": config["exchange"] if "exchange" in config else "unknown",
         "symbol": config["symbol"] if "symbol" in config else "unknown",
@@ -947,6 +963,8 @@ def analyze_fills(
         else -1.0,
         "adg_per_exposure_short": adg_per_exposure_short,
         "adg_weighted_per_exposure_short": adg_weighted_per_exposure_short,
+        "exposure_ratios_mean_long": exposure_ratios_mean_long,
+        "exposure_ratios_mean_short": exposure_ratios_mean_short,
         "n_days": n_days,
         "n_fills_long": len(fills_long),
         "n_fills_short": len(fills_short),
