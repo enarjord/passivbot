@@ -64,6 +64,7 @@ def make_table(result_):
                 ("Average daily gain", f"adg_{side}", 3, 100, "%"),
                 ("Average daily gain weighted", f"adg_weighted_{side}", 3, 100, "%"),
                 ("Loss to profit ratio", f"loss_profit_ratio_{side}", 4, 1, ""),
+                ("Exposure ratios mean", f"exposure_ratios_mean_{side}", 5, 1, ""),
                 (f"Price action distance mean", f"pa_distance_mean_{side}", 6, 1, ""),
                 (f"Price action distance std", f"pa_distance_std_{side}", 6, 1, ""),
                 (f"Price action distance max", f"pa_distance_max_{side}", 6, 1, ""),
