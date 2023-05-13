@@ -11,13 +11,14 @@ from time import time
 from typing import Tuple
 from urllib.request import urlopen
 from zipfile import ZipFile
+import traceback
 
 import numpy as np
 import pandas as pd
 from dateutil import parser
 from tqdm import tqdm
 
-from njit_funcs import calc_samples
+from njit_funcs import calc_samples, round_up, round_dn, round_
 from procedures import (
     prepare_backtest_config,
     make_get_filepath,
@@ -428,7 +429,7 @@ class Downloader:
                 return match, id_at_match
         raise Exception("unable to make trade ids")
 
-    async def get_csv_gz(self, base_url, symbol, date, df_for_id_matching):
+    async def get_csv_gz_old(self, base_url, symbol, date, df_for_id_matching):
         """
         Fetches a full day of trades from the Bybit repository.
         @param symbol: Symbol to fetch.
@@ -978,6 +979,41 @@ def get_first_ohlcv_ts(symbol: str, spot=False) -> int:
     except Exception as e:
         print(f"error getting first ohlcv ts {e}, returning 0")
         return 0
+
+
+def get_csv_gz(url: str):
+    # from bybit
+    try:
+        resp = urlopen(url)
+        with gzip.open(BytesIO(resp.read())) as f:
+            tdf = pd.read_csv(f)
+        return tdf
+    except Exception as e:
+        print("error fetching bybit trades", e)
+        traceback.print_exc()
+        return pd.DataFrame()
+
+
+def convert_to_ohlcv(df, interval=60000):
+    # bybit data
+    # timestamps are in seconds
+    groups = df.groupby((df.timestamp * 1000) // interval * interval)
+    ohlcvs = pd.DataFrame(
+        {
+            "open": groups.price.first(),
+            "high": groups.price.max(),
+            "low": groups.price.min(),
+            "close": groups.price.last(),
+            "volume": groups["size"].sum(),
+        }
+    )
+    new_index = np.arange(ohlcvs.index[0], ohlcvs.index[-1] + interval, interval)
+    ohlcvs = ohlcvs.reindex(new_index)
+    closes = ohlcvs.close.fillna(method="ffill")
+    for x in ["open", "high", "low", "close"]:
+        ohlcvs[x] = ohlcvs[x].fillna(closes)
+    ohlcvs["volume"] = ohlcvs["volume"].fillna(0.0)
+    return ohlcvs
 
 
 def download_ohlcvs(
