@@ -101,8 +101,14 @@ def generate_yaml(
     sorted_syms = [x[1] for x in sorted_syms]
     current_positions_long = sorted(set(current_positions_long + current_open_orders_long))
     current_positions_short = sorted(set(current_positions_short + current_open_orders_short))
-    ideal_longs = sorted_syms[:n_longs]
-    ideal_shorts = sorted_syms[:n_shorts]
+    if config["approved_symbols_only"]:
+        approved_longs = set(config["live_configs_map_long"]) | set(config["live_configs_map"])
+        approved_shorts = set(config["live_configs_map_short"]) | set(config["live_configs_map"])
+    else:
+        approved_longs = set(sorted_syms)
+        approved_shorts = set(sorted_syms)
+    ideal_longs = [x for x in sorted_syms if x in approved_longs][:n_longs]
+    ideal_shorts = [x for x in sorted_syms if x in approved_shorts][:n_shorts]
 
     free_slots_long = max(0, n_longs - len(current_positions_long))
     active_longs = [sym for sym in ideal_longs if sym in current_positions_long]
@@ -128,42 +134,66 @@ def generate_yaml(
             active_bots.append(elm)
         else:
             bots_on_gs.append(elm)
-    for z in range(0, len(active_bots), config["max_n_panes"]):
-        active_bots_slice = active_bots[z : z + config["max_n_panes"]]
-        yaml += f"- window_name: {config['user']}_normal_{z}\n  layout: "
-        yaml += f"even-vertical\n  shell_command_before:\n    - cd ~/passivbot\n  panes:\n"
-        for sym, long_enabled, short_enabled in active_bots_slice:
-            lm = "n" if long_enabled and lw > 0.0 else "gs"
-            sm = "n" if short_enabled and sw > 0.0 else "gs"
-            conf_path = (
-                config["live_configs_map"][sym] if sym in config["live_configs_map"] else config["default_config_path"]
-            )
-            pane = f"    - shell_command:\n      - python3 passivbot.py {user} {sym} {conf_path} "
+
+    bot_instances = []
+    for sym, long_enabled, short_enabled in active_bots + bots_on_gs:
+        lm = "n" if long_enabled and lw > 0.0 else "gs"
+        sm = "n" if short_enabled and sw > 0.0 else "gs"
+        if sym in config["live_configs_map_long"]:
+            conf_path_long = config["live_configs_map_long"][sym]
+        elif sym in config["live_configs_map"]:
+            conf_path_long = config["live_configs_map"][sym]
+        else:
+            conf_path_long = config["default_config_path"]
+
+        if sym not in (shorts_on_gs + active_shorts):
+            conf_path_short = conf_path_long
+        elif sym in config["live_configs_map_short"]:
+            conf_path_short = config["live_configs_map_short"][sym]
+        elif sym in config["live_configs_map"]:
+            conf_path_short = config["live_configs_map"][sym]
+        else:
+            conf_path_short = config["default_config_path"]
+
+        if sym not in (longs_on_gs + active_longs):
+            conf_path_long = conf_path_short
+
+        if conf_path_long == conf_path_short:
+            pane = f"    - shell_command:\n      - python3 passivbot.py {user} {sym} {conf_path_long} "
             pane += f"-lw {lw} -sw {sw} -lm {lm} -sm {sm} -lev {config['leverage']} -cd -pt {config['price_distance_threshold']}"
-            yaml += pane + "\n"
-    if bots_on_gs:
-        for z in range(0, len(bots_on_gs), config["max_n_panes"]):
-            bots_on_gs_slice = bots_on_gs[z : z + config["max_n_panes"]]
-            yaml += (
-                f"- window_name: {config['user']}_gs_{z}\n  layout: even-vertical\n  shell_command_before:\n    - cd ~/passivbot\n  panes:"
-                + "\n"
-            )
-            gs_lw = lw if config["gs_lw"] is None else config["gs_lw"]
-            gs_sw = lw if config["gs_sw"] is None else config["gs_sw"]
-            for sym, _, _ in bots_on_gs_slice:
-                conf_path = (
-                    config["live_configs_map"][sym]
-                    if sym in config["live_configs_map"]
-                    else config["default_config_path"]
-                )
-                pane = f"    - shell_command:\n      - python3 passivbot.py {user} {sym} {conf_path} -lw {gs_lw} "
-                pane += (
-                    f"-sw {gs_sw} -lm gs -sm gs -lev {config['leverage']} -cd -pt {config['price_distance_threshold']}"
-                )
-                for k0, k1 in [("lmm", "gs_mm"), ("lmr", "gs_mr")]:
-                    if config[k1] is not None:
-                        pane += f" -{k0} {config[k1]}"
-                yaml += pane + "\n"
+            bot_instances.append((sym, pane))
+        else:
+            # long and short use different configs
+            long_active = sym in active_longs or sym in current_positions_long
+            short_active = sym in active_shorts or sym in current_positions_short
+            if long_active and short_active:
+                # two separate bot instances for long & short
+                pane = f"    - shell_command:\n      - python3 passivbot.py {user} {sym} {conf_path_long} "
+                pane += f"-lw {lw} -sw {sw} -lm {lm} -sm m -lev {config['leverage']} -cd -pt {config['price_distance_threshold']}"
+                bot_instances.append((sym, pane))
+                pane = f"    - shell_command:\n      - python3 passivbot.py {user} {sym} {conf_path_short} "
+                pane += f"-lw {lw} -sw {sw} -lm m -sm {sm} -lev {config['leverage']} -cd -pt {config['price_distance_threshold']}"
+                bot_instances.append((sym, pane))
+            elif long_active:
+                pane = f"    - shell_command:\n      - python3 passivbot.py {user} {sym} {conf_path_long} "
+                pane += f"-lw {lw} -sw {sw} -lm {lm} -sm {sm} -lev {config['leverage']} -cd -pt {config['price_distance_threshold']}"
+                bot_instances.append((sym, pane))
+            elif short_active:
+                pane = f"    - shell_command:\n      - python3 passivbot.py {user} {sym} {conf_path_short} "
+                pane += f"-lw {lw} -sw {sw} -lm {lm} -sm {sm} -lev {config['leverage']} -cd -pt {config['price_distance_threshold']}"
+                bot_instances.append((sym, pane))
+
+    both_on_gs = False
+    z = 0
+    for sym, pane in bot_instances:
+        if not both_on_gs and sym not in active_longs and sym not in active_shorts:
+            z = 0
+            both_on_gs = True
+        if z % config["max_n_panes"] == 0:
+            yaml += f"- window_name: {config['user']}_{'gs' if both_on_gs else 'normal'}_{z}\n  layout: "
+            yaml += f"even-vertical\n  shell_command_before:\n    - cd ~/passivbot\n  panes:\n"
+        yaml += pane + "\n"
+        z += 1
     return yaml
 
 
@@ -236,7 +266,12 @@ async def get_current_symbols(cc):
     current_positions_short = sorted(set(current_positions_short))
     current_open_orders_long = sorted(set(current_open_orders_long))
     current_open_orders_short = sorted(set(current_open_orders_short))
-    return current_positions_long, current_positions_short, current_open_orders_long, current_open_orders_short
+    return (
+        current_positions_long,
+        current_positions_short,
+        current_open_orders_long,
+        current_open_orders_short,
+    )
 
 
 async def get_min_costs(cc):
@@ -284,7 +319,15 @@ async def dump_yaml(cc, config):
     approved = sorted(set(approved) - set(config["symbols_to_ignore"]))
     if config["approved_symbols_only"]:
         # only use approved symbols
-        approved = sorted(set(approved) & set(config["live_configs_map"]))
+        approved = sorted(
+            set(approved)
+            & (
+                set(config["live_configs_map"])
+                | set(config["live_configs_map_long"])
+                | set(config["live_configs_map_short"])
+            )
+        )
+
     print("getting current bots...")
     (
         current_positions_long,
@@ -353,6 +396,8 @@ async def main():
         ("ohlcv_interval", "15m"),
         ("leverage", 10),
         ("symbols_to_ignore", []),
+        ("live_configs_map_long", {}),
+        ("live_configs_map_short", {}),
     ]:
         if key not in config:
             config[key] = value
