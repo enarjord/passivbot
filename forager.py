@@ -14,6 +14,7 @@ import argparse
 import traceback
 from procedures import load_exchange_key_secret_passphrase, utc_ms
 from njit_funcs import calc_emas
+from pure_funcs import determine_pos_side_ccxt
 
 
 def score_func_old(ohlcv):
@@ -258,7 +259,8 @@ async def get_current_symbols(cc):
         oos = await cc.fetch_open_orders()
     current_open_orders_long, current_open_orders_short = [], []
     for elm in oos:
-        if elm["side"] == "short":
+        pos_side = determine_pos_side_ccxt(elm)
+        if pos_side == "short":
             current_open_orders_short.append(elm["symbol"])
         else:
             current_open_orders_long.append(elm["symbol"])
