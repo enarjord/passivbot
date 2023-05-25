@@ -1399,6 +1399,7 @@ def calc_scores(config: dict, results: dict):
     # [(key_name, higher_is_better)]
     keys = [
         ("adg_weighted_per_exposure", True),
+        ("exposure_ratios_mean", False),
         ("hrs_stuck_max", False),
         ("pa_distance_mean", False),
         ("pa_distance_std", False),
@@ -1453,73 +1454,6 @@ def calc_scores(config: dict, results: dict):
             else:
                 scores[side] -= means[side][key] * (10 ** i)
         scores[side] *= -1
-    return {
-        "scores": scores,
-        "means": means,
-        "raws": raws,
-        "individual_scores": individual_scores,
-        "keys": keys,
-        "symbols_to_include": symbols_to_include,
-    }
-
-
-def calc_scores_old(config: dict, results: dict):
-    sides = ["long", "short"]
-    keys = [
-        ("adg_realized_per_exposure", True),
-        ("pa_distance_std", False),
-        ("pa_distance_mean", False),
-        ("hrs_stuck_max", False),
-        ("loss_profit_ratio", False),
-        ("eqbal_ratio_min", True),
-    ]
-    means = {side: {} for side in sides}  # adjusted means
-    scores = {side: -1.0 for side in sides}
-    raws = {side: {} for side in sides}  # unadjusted means
-    individual_raws = {side: {sym: {} for sym in results} for side in sides}
-    individual_vals = {side: {sym: {} for sym in results} for side in sides}
-    individual_scores = {side: {sym: -1.0 for sym in results} for side in sides}
-    symbols_to_include = {side: [] for side in sides}
-    for side in sides:
-        for sym in results:
-            for key, mult in keys:
-                key_side = f"{key}_{side}"
-                if key_side not in results[sym]:
-                    results[sym][key_side] = results[sym][key]
-                individual_raws[side][sym][key] = results[sym][key_side]
-                if (max_key := f"maximum_{key}_{side}") in config:
-                    if config[max_key] >= 0.0:
-                        val = max(config[max_key], results[sym][key_side])
-                    else:
-                        val = 1.0
-                elif (min_key := f"minimum_{key}_{side}") in config:
-                    if config[min_key] >= 0.0:
-                        val = min(config[min_key], results[sym][key_side])
-                    else:
-                        val = 1.0
-                else:
-                    val = results[sym][key_side]
-                individual_vals[side][sym][key] = val
-                if mult:
-                    individual_scores[side][sym] *= val
-                else:
-                    individual_scores[side][sym] /= val
-        raws[side] = {
-            key: np.mean([individual_raws[side][sym][key] for sym in results]) for key, _ in keys
-        }
-        symbols_to_include[side] = sorted(
-            individual_scores[side], key=lambda x: individual_scores[side][x]
-        )[: max(1, int(len(individual_scores[side]) * (1 - config["clip_threshold"])))]
-        # print(symbols_to_include, individual_scores[side], config["clip_threshold"])
-        means[side] = {
-            key: np.mean([individual_vals[side][sym][key] for sym in symbols_to_include[side]])
-            for key, _ in keys
-        }
-        for key, mult in keys:
-            if mult:
-                scores[side] *= means[side][key]
-            else:
-                scores[side] /= means[side][key]
     return {
         "scores": scores,
         "means": means,
