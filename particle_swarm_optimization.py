@@ -227,6 +227,7 @@ class ParticleSwarmOptimization:
                     "latency_simulation_ms",
                     "market_type",
                     "adg_n_subdivisions",
+                    "slim_analysis"
                 ]
             },
             **{"symbol": self.symbols[0], "config_no": self.iter_counter},
@@ -326,6 +327,7 @@ class ParticleSwarmOptimization:
                     "latency_simulation_ms",
                     "market_type",
                     "adg_n_subdivisions",
+                    "slim_analysis"
                 ]
             },
             **{
