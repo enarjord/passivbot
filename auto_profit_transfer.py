@@ -89,7 +89,7 @@ async def main():
                 transferred = await bot.transfer_from_derivatives_to_spot(args.quote, to_transfer)
                 logging.info(f"income: {profit} transferred {to_transfer} {args.quote}")
                 if exchange == "bybit":
-                    if "ret_msg" not in transferred or transferred["ret_msg"] != "OK":
+                    if "ret_msg" not in transferred or transferred["ret_msg"] not in ["OK", "success"]:
                         print(f"error with transfer {transferred}")
                         continue
                 logging.info(f"{transferred}")
