@@ -16,7 +16,7 @@
   end_date: 2023-05-05
 
   # Reduce disk usage and improve some optimize speed with the slim analysis
-  slim_analysis: false
+  slim_analysis: true
 
   # non default historical data path
   # defaults to local dir if unspecified
