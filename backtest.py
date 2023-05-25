@@ -226,7 +226,6 @@ async def main():
                 "starting_balance",
                 "start_date",
                 "end_date",
-                "slim_analysis"
                 "maker_fee",
                 "min_qty",
                 "min_cost",
