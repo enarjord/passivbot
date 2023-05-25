@@ -1418,6 +1418,7 @@ class Bot:
                             res = self.calc_minutes_until_next_orders()
                             if do_long:
                                 line += f"entry long: {res['entry_long']:.1f}, close long: {res['close_long']:.1f}"
+                                line += " | " if do_short else ""
                             if do_short:
                                 line += f"entry short: {res['entry_short']:.1f}, close short: {res['close_short']:.1f}"
                         except Exception as e:

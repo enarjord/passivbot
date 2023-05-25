@@ -27,9 +27,13 @@
   // if symbol is missing from live_configs_map, default to this config
   default_config_path: configs/live/clock_mode.example.json
 
-  // if true, allow only symbols present in live_configs_map
+  // if true, allow only symbols present in live_configs_map or live_configs_map_{long/short}
   // if false, will use default_config_path when symbol is missing from live_configs_map
   approved_symbols_only: false
+
+  // if symbol is present in live_configs_map_{long/short}, use that config for {long/short}
+  // elif symbol is present in live_configs_map, use that config for {long/short}
+  // else use default_config_path for {long/short}
 
   live_configs_map: {
     BTCUSDT: configs/live/clock_mode.example.json
@@ -37,12 +41,18 @@
     DOGEUSDT: configs/live/recursive_grid_mode.example.json
   }
 
-  // min markup when -gs
-  gs_mm: null
-  // markup range when -gs
-  gs_mr: null
-  // long WE_limit when -gs
-  gs_lw: null
-  // short WE_limit when -gs
-  gs_sw: null
+  // will override long configs from live_configs_map
+  live_configs_map_long: {
+    BTCUSDT: configs/live/clock_mode.example.json
+    XMRUSDT: configs/live/neat_grid_mode.example.json
+    XRPUSDT: configs/live/recursive_grid_mode.example.json
+  }
+
+  // will override short configs from live_configs_map
+  live_configs_map_short: {
+    BTCUSDT: configs/live/clock_mode.example.json
+    ETHUSDT: configs/live/neat_grid_mode.example.json
+    DOGEUSDT: configs/live/recursive_grid_mode.example.json
+  }
+
 }
