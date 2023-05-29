@@ -1042,17 +1042,21 @@ async def download_ohlcvs_bybit(symbol, start_date, end_date, download_only=Fals
                 )
                 dfs_ = await get_bybit_trades(base_url, symbol, filenames_sublist)
                 dfs_ = {k[-17:-7]: convert_to_ohlcv(v) for k, v in dfs_.items()}
+                dumped = []
+                for day, df in sorted(dfs_.items()):
+                    if day in days_done:
+                        continue
+                    filepath = f"{dirpath}{day}.csv"
+                    df.to_csv(filepath)
+                    dumped.append(day)
+                print("dumped", dirpath, ", ".join(dumped))
                 dfs.update(dfs_)
     for day in ideal_days:
         if day not in days_to_get:
             dfs[day] = pd.read_csv(f"{dirpath}{day}.csv").set_index("timestamp")
-    for day, df in dfs.items():
-        if day in days_done:
-            continue
-        filepath = f"{dirpath}{day}.csv"
-        df.to_csv(filepath)
-        print("dumping", filepath)
     if not download_only:
+        if len(dfs) == 0:
+            return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
         df = pd.concat(dfs.values()).sort_values("timestamp")
         return df
 
