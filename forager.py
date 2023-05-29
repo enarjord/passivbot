@@ -404,11 +404,11 @@ async def main():
         if key not in config:
             config[key] = value
     exchange, key, secret, passphrase = load_exchange_key_secret_passphrase(config["user"])
-    cc = getattr(ccxt, exchange_map[exchange])({"apiKey": key, "secret": secret, "password": passphrase})
     max_n_tries_per_hour = 5
     error_timestamps = []
     while True:
         try:
+            cc = getattr(ccxt, exchange_map[exchange])({"apiKey": key, "secret": secret, "password": passphrase})
             await dump_yaml(cc, config)
             print("waiting one minute to avoid API rate limiting...")
             for i in range(60, -1, -1):
