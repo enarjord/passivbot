@@ -12,6 +12,7 @@ from typing import Tuple
 from urllib.request import urlopen
 from zipfile import ZipFile
 import traceback
+import aiohttp
 
 import numpy as np
 import pandas as pd
@@ -981,11 +982,41 @@ def get_first_ohlcv_ts(symbol: str, spot=False) -> int:
         return 0
 
 
-def get_csv_gz(url: str):
+def findall(string, pattern):
+    """Yields all the positions of
+    the pattern in the string"""
+    i = string.find(pattern)
+    while i != -1:
+        yield i
+        i = string.find(pattern, i + 1)
+
+
+async def get_bybit_monthly(base_url: str, symbol: str, month: str):
+    # month e.g. "2022-03"
+    content = urlopen(f"{base_url}{symbol}/").read().decode()
+    filenames = [
+        content[i : i + content[i:].find("csv.gz") + 6] for i in findall(content, symbol + month)
+    ]
+    async with aiohttp.ClientSession() as session:
+        tasks = []
+        for url in [f"{base_url}{symbol}/{filename}" for filename in filenames]:
+            task = asyncio.ensure_future(get_csv_gz(session, url))
+            tasks.append(task)
+        responses = await asyncio.gather(*tasks)
+    return convert_to_ohlcv(pd.concat(responses).sort_values("timestamp"))
+
+
+async def fetch_url(session, url):
+    async with session.get(url) as response:
+        content = await response.read()
+        return content
+
+
+async def get_csv_gz(session, url: str):
     # from bybit
     try:
-        resp = urlopen(url)
-        with gzip.open(BytesIO(resp.read())) as f:
+        resp = await fetch_url(session, url)
+        with gzip.open(BytesIO(resp)) as f:
             tdf = pd.read_csv(f)
         return tdf
     except Exception as e:
