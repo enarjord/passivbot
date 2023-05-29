@@ -1025,24 +1025,27 @@ async def download_ohlcvs_bybit(symbol, start_date, end_date, download_only=Fals
     start_date, end_date = format_date(start_date), format_date(end_date)
     assert date_to_ts(end_date) >= date_to_ts(start_date), "end_date is older than start_date"
     dirpath = make_get_filepath(f"historical_data/ohlcvs_bybit/{symbol}/")
+    ideal_days = get_days_in_between(start_date, end_date)
     days_done = [filename[:-4] for filename in os.listdir(dirpath) if ".csv" in filename]
-    base_url = "https://public.bybit.com/trading/"
-    webpage_content = await get_bybit_webpage_content(base_url, symbol)
-    days = [day for day in get_days_in_between(start_date, end_date) if day not in days_done]
-    filenames = [cand for day in days if (cand := f"{symbol}{day}.csv.gz") in webpage_content]
+    days_to_get = [day for day in ideal_days if day not in days_done]
     dfs = {}
-    if len(filenames) > 0:
-        n_concurrent_fetches = 10
-        for i in range(0, len(filenames), 10):
-            filenames_sublist = filenames[i : i + n_concurrent_fetches]
-            print(
-                f"fetching trades from {filenames_sublist[0][-17:-7]} to {filenames_sublist[-1][-17:-7]}"
-            )
-            dfs_ = await get_bybit_trades(base_url, symbol, filenames_sublist)
-            dfs_ = {k[-17:-7]: convert_to_ohlcv(v) for k, v in dfs_.items()}
-            dfs.update(dfs_)
-    for day in days_done:
-        dfs[day] = pd.read_csv(f"{dirpath}{day}.csv").set_index("timestamp")
+    if len(days_to_get) > 0:
+        base_url = "https://public.bybit.com/trading/"
+        webpage = await get_bybit_webpage(base_url, symbol)
+        filenames = [cand for day in days_to_get if (cand := f"{symbol}{day}.csv.gz") in webpage]
+        if len(filenames) > 0:
+            n_concurrent_fetches = 10
+            for i in range(0, len(filenames), 10):
+                filenames_sublist = filenames[i : i + n_concurrent_fetches]
+                print(
+                    f"fetching trades from {filenames_sublist[0][-17:-7]} to {filenames_sublist[-1][-17:-7]}"
+                )
+                dfs_ = await get_bybit_trades(base_url, symbol, filenames_sublist)
+                dfs_ = {k[-17:-7]: convert_to_ohlcv(v) for k, v in dfs_.items()}
+                dfs.update(dfs_)
+    for day in ideal_days:
+        if day not in days_to_get:
+            dfs[day] = pd.read_csv(f"{dirpath}{day}.csv").set_index("timestamp")
     for day, df in dfs.items():
         if day in days_done:
             continue
@@ -1054,7 +1057,7 @@ async def download_ohlcvs_bybit(symbol, start_date, end_date, download_only=Fals
         return df
 
 
-async def get_bybit_webpage_content(base_url: str, symbol: str):
+async def get_bybit_webpage(base_url: str, symbol: str):
     return urlopen(f"{base_url}{symbol}/").read().decode()
 
 
