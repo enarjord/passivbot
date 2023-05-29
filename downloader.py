@@ -991,19 +991,84 @@ def findall(string, pattern):
         i = string.find(pattern, i + 1)
 
 
-async def get_bybit_monthly(base_url: str, symbol: str, month: str):
-    # month e.g. "2022-03"
-    content = urlopen(f"{base_url}{symbol}/").read().decode()
-    filenames = [
-        content[i : i + content[i:].find("csv.gz") + 6] for i in findall(content, symbol + month)
-    ]
+def get_days_in_between(start_day, end_day):
+    date_format = "%Y-%m-%d"
+    start_date = datetime.datetime.strptime(start_day, date_format)
+    end_date = datetime.datetime.strptime(end_day, date_format)
+
+    days_in_between = []
+    current_date = start_date
+    while current_date <= end_date:
+        days_in_between.append(current_date.strftime(date_format))
+        current_date += datetime.timedelta(days=1)
+
+    return days_in_between
+
+
+def format_date(date_string):
+    try:
+        date_formats = ["%Y", "%Y-%m", "%Y-%m-%d", "%Y-%m-%dT%H:%M:%S"]
+        for format in date_formats:
+            try:
+                date_obj = datetime.datetime.strptime(date_string, format)
+                formatted_date = date_obj.strftime("%Y-%m-%d")
+                return formatted_date
+            except ValueError:
+                pass
+        raise ValueError("Invalid date format")
+    except Exception as e:
+        print("Error:", e)
+        return None
+
+
+async def download_ohlcvs_bybit(symbol, start_date, end_date, download_only=False):
+    start_date, end_date = format_date(start_date), format_date(end_date)
+    assert date_to_ts(end_date) >= date_to_ts(start_date), "end_date is older than start_date"
+    dirpath = make_get_filepath(f"historical_data/ohlcvs_bybit/{symbol}/")
+    days_done = [filename[:-4] for filename in os.listdir(dirpath) if ".csv" in filename]
+    base_url = "https://public.bybit.com/trading/"
+    webpage_content = await get_bybit_webpage_content(base_url, symbol)
+    days = [day for day in get_days_in_between(start_date, end_date) if day not in days_done]
+    filenames = [cand for day in days if (cand := f"{symbol}{day}.csv.gz") in webpage_content]
+    dfs = {}
+    if len(filenames) > 0:
+        n_concurrent_fetches = 10
+        for i in range(0, len(filenames), 10):
+            filenames_sublist = filenames[i : i + n_concurrent_fetches]
+            print(
+                f"fetching trades from {filenames_sublist[0][-17:-7]} to {filenames_sublist[-1][-17:-7]}"
+            )
+            dfs_ = await get_bybit_trades(base_url, symbol, filenames_sublist)
+            dfs_ = {k[-17:-7]: convert_to_ohlcv(v) for k, v in dfs_.items()}
+            dfs.update(dfs_)
+    for day in days_done:
+        dfs[day] = pd.read_csv(f"{dirpath}{day}.csv").set_index("timestamp")
+    for day, df in dfs.items():
+        if day in days_done:
+            continue
+        filepath = f"{dirpath}{day}.csv"
+        df.to_csv(filepath)
+        print("dumping", filepath)
+    if not download_only:
+        df = pd.concat(dfs.values()).sort_values("timestamp")
+        return df
+
+
+async def get_bybit_webpage_content(base_url: str, symbol: str):
+    return urlopen(f"{base_url}{symbol}/").read().decode()
+
+
+async def get_bybit_trades(base_url: str, symbol: str, filenames: [str]):
+    if len(filenames) == 0:
+        return None
     async with aiohttp.ClientSession() as session:
-        tasks = []
+        tasks = {}
         for url in [f"{base_url}{symbol}/{filename}" for filename in filenames]:
-            task = asyncio.ensure_future(get_csv_gz(session, url))
-            tasks.append(task)
-        responses = await asyncio.gather(*tasks)
-    return convert_to_ohlcv(pd.concat(responses).sort_values("timestamp"))
+            tasks[url] = asyncio.ensure_future(get_csv_gz(session, url))
+        responses = {}
+        for url in tasks:
+            responses[url] = await tasks[url]
+    return {k: v.sort_values("timestamp") for k, v in responses.items()}
 
 
 async def fetch_url(session, url):
