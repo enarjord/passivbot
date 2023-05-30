@@ -18,6 +18,9 @@
 
   max_n_panes: 8
 
+  // forager restarts bots every x minutes
+  update_interval_minutes: 60
+
   // Don't create bots with these symbols
   symbols_to_ignore: [
     SYM1USDT
