@@ -267,7 +267,7 @@ async def run_opt(args, config):
                 args.symbol = symbol
                 tmp_cfg = await prepare_backtest_config(args)
                 if config["ohlcv"]:
-                    data = load_hlc_cache(
+                    data = await load_hlc_cache(
                         symbol,
                         config["inverse"],
                         config["start_date"],
