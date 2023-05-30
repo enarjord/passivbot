@@ -1054,11 +1054,11 @@ async def download_ohlcvs_bybit(symbol, start_date, end_date, download_only=Fals
     if not download_only:
         for day in ideal_days:
             if day not in days_to_get:
-                dfs[day] = pd.read_csv(f"{dirpath}{day}.csv").set_index("timestamp")
+                dfs[day] = pd.read_csv(f"{dirpath}{day}.csv")
         if len(dfs) == 0:
-            return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
-        df = pd.concat(dfs.values()).sort_values("timestamp")
-        return df
+            return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
+        df = pd.concat(dfs.values()).sort_values("timestamp").reset_index()
+        return df[["timestamp", "open", "high", "low", "close", "volume"]]
 
 
 async def get_bybit_webpage(base_url: str, symbol: str):
@@ -1203,7 +1203,7 @@ def count_longest_identical_data(hlc, symbol):
     return longest_consecutive
 
 
-def load_hlc_cache(
+async def load_hlc_cache(
     symbol, inverse, start_date, end_date, base_dir="backtests", spot=False, exchange="binance"
 ):
     cache_fname = (
@@ -1217,7 +1217,10 @@ def load_hlc_cache(
     if os.path.exists(filepath):
         data = np.load(filepath)
     else:
-        df = download_ohlcvs(symbol, inverse, start_date, end_date, spot)
+        if exchange == "bybit":
+            df = await download_ohlcvs_bybit(symbol, start_date, end_date, download_only=False)
+        else:
+            df = download_ohlcvs(symbol, inverse, start_date, end_date, spot)
         df = df[df.timestamp >= date_to_ts(start_date)]
         df = df[df.timestamp <= date_to_ts(end_date)]
         data = df[["timestamp", "high", "low", "close"]].values
@@ -1244,7 +1247,7 @@ async def main():
     args = parser.parse_args()
     config = await prepare_backtest_config(args)
     if config["ohlcv"]:
-        data = load_hlc_cache(
+        data = await load_hlc_cache(
             config["symbol"],
             config["inverse"],
             config["start_date"],
