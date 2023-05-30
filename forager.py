@@ -400,6 +400,7 @@ async def main():
         ("symbols_to_ignore", []),
         ("live_configs_map_long", {}),
         ("live_configs_map_short", {}),
+        ("update_interval_minutes", 60),
     ]:
         if key not in config:
             config[key] = value
@@ -417,7 +418,7 @@ async def main():
             print()
             subprocess.run(["tmux", "kill-session", "-t", config["user"]])
             subprocess.run(["tmuxp", "load", "-d", config["yaml_filepath"]])
-            for i in range(3600, -1, -1):
+            for i in range(config["update_interval_minutes"] * 60, -1, -1):
                 time.sleep(1)
                 print(f"\rcountdown: {i}    ", end=" ")
             print()
