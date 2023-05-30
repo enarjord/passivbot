@@ -238,7 +238,7 @@ async def main():
                 print(f"{k: <{max(map(len, keys)) + 2}} {config[k]}")
         print()
         if config["ohlcv"]:
-            data = load_hlc_cache(
+            data = await load_hlc_cache(
                 symbol,
                 config["inverse"],
                 config["start_date"],
