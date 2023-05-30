@@ -1049,7 +1049,6 @@ async def download_ohlcvs_bybit(symbol, start_date, end_date, download_only=Fals
                     filepath = f"{dirpath}{day}.csv"
                     df.to_csv(filepath)
                     dumped.append(day)
-                print("dumped", dirpath, ", ".join(dumped))
                 if not download_only:
                     dfs.update(dfs_)
     if not download_only:
