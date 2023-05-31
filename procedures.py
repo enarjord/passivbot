@@ -25,7 +25,7 @@ from pure_funcs import (
     ts_to_date_utc,
     get_dummy_settings,
     config_pretty_str,
-    date_to_ts,
+    date_to_ts2,
     get_template_live_config,
     sort_dict_keys,
     make_compatible,
@@ -87,8 +87,8 @@ async def prepare_backtest_config(args) -> dict:
         config["spot"] = False
     else:
         config["spot"] = args.market_type == "spot"
-    config["start_date"] = ts_to_date_utc(date_to_ts(config["start_date"]))[:10]
-    config["end_date"] = ts_to_date_utc(date_to_ts(config["end_date"]))[:10]
+    config["start_date"] = ts_to_date_utc(date_to_ts2(config["start_date"]))[:10]
+    config["end_date"] = ts_to_date_utc(date_to_ts2(config["end_date"]))[:10]
     config["exchange"] = load_exchange_key_secret_passphrase(config["user"])[0]
     config["session_name"] = (
         f"{config['start_date'].replace(' ', '').replace(':', '').replace('.', '')}_"
@@ -458,8 +458,8 @@ def make_tick_samples(config: dict, sec_span: int = 1):
     """
     for key in ["exchange", "symbol", "spot", "start_date", "end_date"]:
         assert key in config
-    start_ts = date_to_ts(config["start_date"])
-    end_ts = date_to_ts(config["end_date"])
+    start_ts = date_to_ts2(config["start_date"])
+    end_ts = date_to_ts2(config["end_date"])
     ticks_filepath = os.path.join(
         "historical_data",
         config["exchange"],
