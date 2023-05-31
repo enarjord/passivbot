@@ -277,6 +277,46 @@ def date_to_ts(d):
     return int(parser.parse(d).replace(tzinfo=datetime.timezone.utc).timestamp() * 1000)
 
 
+def date_to_ts2(datetime_string):
+    try:
+        date_formats = [
+            "%Y",
+            "%Y-%m",
+            "%Y-%m-%d",
+            "%Y-%m-%dT%H",
+            "%Y-%m-%dT%H:%M",
+            "%Y-%m-%dT%H:%M:%S",
+            "%Y-%m-%dT%H:%M:%SZ",
+        ]
+        for format in date_formats:
+            try:
+                date_obj = datetime.datetime.strptime(datetime_string, format)
+                if format == "%Y" or format == "%Y-%m" or format == "%Y-%m-%d":
+                    date_obj = date_obj.replace(hour=0, minute=0, second=0, microsecond=0)
+                timestamp = date_obj.replace(tzinfo=datetime.timezone.utc).timestamp()
+                timestamp_ms = int(timestamp * 1000)
+                return timestamp_ms
+            except ValueError:
+                pass
+        raise ValueError("Invalid datetime format")
+    except Exception as e:
+        print("Error:", e)
+        return None
+
+
+def get_day(date):
+    # date can be str datetime or float/int timestamp
+    try:
+        return ts_to_date_utc(date_to_ts2(date))[:10]
+    except:
+        pass
+    try:
+        return ts_to_date_utc(date)[:10]
+    except:
+        pass
+    raise Exception(f"failed to get day from {date}")
+
+
 def get_utc_now_timestamp() -> int:
     """
     Creates a millisecond based timestamp of UTC now.
