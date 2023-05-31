@@ -30,7 +30,7 @@ from procedures import (
     add_argparse_args,
     utc_ms,
 )
-from pure_funcs import ts_to_date, ts_to_date_utc, date_to_ts, get_dummy_settings
+from pure_funcs import ts_to_date, ts_to_date_utc, date_to_ts2, get_dummy_settings, get_day
 
 
 class Downloader:
@@ -1005,25 +1005,9 @@ def get_days_in_between(start_day, end_day):
     return days_in_between
 
 
-def format_date(date_string):
-    try:
-        date_formats = ["%Y", "%Y-%m", "%Y-%m-%d", "%Y-%m-%dT%H:%M:%S"]
-        for format in date_formats:
-            try:
-                date_obj = datetime.datetime.strptime(date_string, format)
-                formatted_date = date_obj.strftime("%Y-%m-%d")
-                return formatted_date
-            except ValueError:
-                pass
-        raise ValueError("Invalid date format")
-    except Exception as e:
-        print("Error:", e)
-        return None
-
-
 async def download_ohlcvs_bybit(symbol, start_date, end_date, download_only=False):
-    start_date, end_date = format_date(start_date), format_date(end_date)
-    assert date_to_ts(end_date) >= date_to_ts(start_date), "end_date is older than start_date"
+    start_date, end_date = get_day(start_date), get_day(end_date)
+    assert date_to_ts2(end_date) >= date_to_ts2(start_date), "end_date is older than start_date"
     dirpath = make_get_filepath(f"historical_data/ohlcvs_bybit/{symbol}/")
     ideal_days = get_days_in_between(start_date, end_date)
     days_done = [filename[:-4] for filename in os.listdir(dirpath) if ".csv" in filename]
@@ -1126,8 +1110,8 @@ def download_ohlcvs(
     base_url = "https://data.binance.vision/data/"
     base_url += "spot/" if spot else f"futures/{'cm' if inverse else 'um'}/"
     col_names = ["timestamp", "open", "high", "low", "close", "volume"]
-    start_ts = max(get_first_ohlcv_ts(symbol, spot=spot), date_to_ts(start_date))
-    end_ts = date_to_ts(end_date)
+    start_ts = max(get_first_ohlcv_ts(symbol, spot=spot), date_to_ts2(start_date))
+    end_ts = date_to_ts2(end_date)
     days = [ts_to_date_utc(x)[:10] for x in list(range(start_ts, end_ts, 1000 * 60 * 60 * 24))]
     months = sorted({x[:7] for x in days})
     month_now = ts_to_date(time())[:7]
@@ -1207,8 +1191,8 @@ async def load_hlc_cache(
     symbol, inverse, start_date, end_date, base_dir="backtests", spot=False, exchange="binance"
 ):
     cache_fname = (
-        f"{ts_to_date_utc(date_to_ts(start_date))[:10]}_"
-        + f"{ts_to_date_utc(date_to_ts(end_date))[:10]}_ohlcv_cache.npy"
+        f"{ts_to_date_utc(date_to_ts2(start_date))[:10]}_"
+        + f"{ts_to_date_utc(date_to_ts2(end_date))[:10]}_ohlcv_cache.npy"
     )
 
     filepath = make_get_filepath(
@@ -1221,8 +1205,8 @@ async def load_hlc_cache(
             df = await download_ohlcvs_bybit(symbol, start_date, end_date, download_only=False)
         else:
             df = download_ohlcvs(symbol, inverse, start_date, end_date, spot)
-        df = df[df.timestamp >= date_to_ts(start_date)]
-        df = df[df.timestamp <= date_to_ts(end_date)]
+        df = df[df.timestamp >= date_to_ts2(start_date)]
+        df = df[df.timestamp <= date_to_ts2(end_date)]
         data = df[["timestamp", "high", "low", "close"]].values
         np.save(filepath, data)
     try:
@@ -1253,6 +1237,7 @@ async def main():
             config["start_date"],
             config["end_date"],
             spot=config["spot"],
+            exchange=config["exchange"],
         )
     else:
         downloader = Downloader(config)
