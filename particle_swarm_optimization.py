@@ -2,7 +2,6 @@ import os
 
 os.environ["NOJIT"] = "false"
 
-from downloader import Downloader, load_hlc_cache
 import argparse
 import asyncio
 import json

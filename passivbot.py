@@ -1466,8 +1466,8 @@ class Bot:
             millis_delay_next_entry_short = calc_delay_between_fills_ms_ask(
                 self.position["short"]["price"],
                 self.price,
-                self.xk["delay_between_fills_ms_entry"][0],
-                self.xk["delay_weight_entry"][0],
+                self.xk["delay_between_fills_ms_entry"][1],
+                self.xk["delay_weight_entry"][1],
             )
             millis_since_prev_close_short = (
                 self.server_time - self.last_fills_timestamps["clock_entry_short"]
@@ -1478,8 +1478,8 @@ class Bot:
         millis_delay_next_close_short = calc_delay_between_fills_ms_bid(
             self.position["short"]["price"],
             self.price,
-            self.xk["delay_between_fills_ms_close"][0],
-            self.xk["delay_weight_close"][0],
+            self.xk["delay_between_fills_ms_close"][1],
+            self.xk["delay_weight_close"][1],
         )
         millis_since_prev_close_short = (
             self.server_time - self.last_fills_timestamps["clock_close_short"]

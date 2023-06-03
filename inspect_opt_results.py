@@ -51,6 +51,8 @@ def main():
         ("ers", "minimum_eqbal_ratio_mean_of_10_worst_short"),
         ("esl", "maximum_eqbal_ratio_std_long"),
         ("ess", "maximum_eqbal_ratio_std_short"),
+        ("exl", "maximum_exposure_ratios_mean_long"),
+        ("exs", "maximum_exposure_ratios_mean_short"),
         ("ct", "clip_threshold"),
     ]
     for k0, k1 in weights_keys:
