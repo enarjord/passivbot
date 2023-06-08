@@ -53,8 +53,13 @@ https://www.okx.com/join/PASSIVBOT  (20% rebate)
 
 https://www.buymeacoffee.com/enarjord  
 
-Solana Tether USD (USDT):  
-9hUCHBQA261PU6rUSbwgMoxn8nrdcXPAYgbASRgA8dtm
+Tether USD (USDT):  
+- USDT Solana:  
+9hUCHBQA261PU6rUSbwgMoxn8nrdcXPAYgbASRgA8dtm  
+- USDT Binance Smart Chain BEP20:  
+0x574cad69595fe80c6424ea21988ca0e504cd90cc  
+- USDT Matic Polygon:  
+0x574cad69595fe80c6424ea21988ca0e504cd90cc  
 
 Monero (XMR):  
 49gUQ1jasDK23tJTMCvP4mQUUwndeLWAwSgdCFn6ovmRKXZAjQnVp2JZ2K4UuDDdYMNam1HE8ELZoWdeJPRfYEa9QSEK6XZ
