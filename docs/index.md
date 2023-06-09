@@ -32,6 +32,7 @@ Currently the exchanges
 **OKX USDT margined perpetuals**  
 **Kucoin USDT margined perpetuals**  
 **Bybit Derivatives**  
+**Bybit Spot**  
 are implemented and supported.  
 
 Not all functionality is supported on all exchanges, depending on the APIs that exchanges expose and development efforts.
@@ -54,15 +55,12 @@ The following requirements are applicable for installing Passivbot:
 ## Hardware requirements
 
 Passivbot is a very lightweight bot, and can easily be run live on a single-core machine with 1GB of RAM.
+Bots are typically run on a VPS, and even the cheapest ones can run 50+ bots when extra swap space is added.
 While the hardware requirements are very low, you may run into issues when running it on things like a Raspberry Pi.
 In case you do, please let us know so we can help out & improve the bot!
 
-Be aware that running an optimize on a long period may require a lot of memory and CPU power. Since Passivbot acts on
-trade data (ticks) instead of OHLCV data, the amount of memory is dependent on the amount of trades made in the selected time period.
-If you want to optimize on BTC for the last 365 days, it will take significantly more memory than optimizing on a coin
-like BTS for example.
-
-For running the optimizer, a minimum of 8gb of memory is recommended.
+The hardware requirements for the backtester and optimizer are significantly greater than for the live bot, 
+but not greater than what a normal laptop or desktop computer can handle. The optimizer supports parallel execution.
 
 !!! Warning
     It should be very possible to run multiple bots on a single machine. Be aware however that you may run into other
@@ -76,6 +74,29 @@ us at [this Discord server](https://discord.gg/QAF2H2UmzZ) or at [this Telegram 
 [![Discord](https://img.shields.io/badge/Discord-7289DA?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/QAF2H2UmzZ)
 
 [![Telegram](https://img.shields.io/badge/Telegram-2CA5E0?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/passivbot_futures)
+
+## Referrals and Tip Jar
+
+https://accounts.binance.me/en/register?ref=TII4B07C  
+https://partner.bybit.com/b/passivbot  
+https://partner.bitget.com/bg/Y8FU1W  
+https://www.okx.com/join/PASSIVBOT  (20% rebate)
+
+https://www.buymeacoffee.com/enarjord  
+
+Tether USD (USDT):  
+- USDT Solana:  
+9hUCHBQA261PU6rUSbwgMoxn8nrdcXPAYgbASRgA8dtm  
+- USDT Binance Smart Chain BEP20:  
+0x574cad69595fe80c6424ea21988ca0e504cd90cc  
+- USDT Matic Polygon:  
+0x574cad69595fe80c6424ea21988ca0e504cd90cc  
+
+Monero (XMR):  
+49gUQ1jasDK23tJTMCvP4mQUUwndeLWAwSgdCFn6ovmRKXZAjQnVp2JZ2K4UuDDdYMNam1HE8ELZoWdeJPRfYEa9QSEK6XZ
+
+Bitcoin (BTC):  
+bc1qcc3kr9gudg35gnsljg64zeaurt0y24pfej36w6
 
 ## License
 
