@@ -6,10 +6,10 @@
   pitch_adjusting_rate: 0.24
 
   # particle swarm optimization parameters
-  n_particles: 24
+  n_particles: 36
   w: 0.73  # weight of previous velocity
   c0: 1.0  # attraction to local best
-  c1: 0.5  # attraction to global best
+  c1: 0.4  # attraction to global best
 
   # choices: [p/pso/particle_swarm_optimization, h/hs/harmony_search]
   algorithm: p
@@ -32,8 +32,8 @@
   maximum_pa_distance_mean_short: 0.02
 
   # score -= max(maximum_loss_profit_ratio, loss_profit_ratio)
-  maximum_loss_profit_ratio_long: 0.15
-  maximum_loss_profit_ratio_short: 0.15
+  maximum_loss_profit_ratio_long: 0.1
+  maximum_loss_profit_ratio_short: 0.1
 
   # score -= max(maximum_hrs_stuck_max, hrs_stuck_max)
   maximum_hrs_stuck_max_long: 96.0
@@ -41,7 +41,7 @@
 
   # score += min(minimum_eqbal_ratio_min, eqbal_ratio_min)
   # mean of 10 worst eqbal ratios on hourly stats
-  minimum_eqbal_ratio_mean_of_10_worst_long: 0.7  # max 30% drawdown
+  minimum_eqbal_ratio_mean_of_10_worst_long: 0.51  # max 49% drawdown
   minimum_eqbal_ratio_mean_of_10_worst_short: 0.5
 
   # score += max(maximum_eqbal_ratio_std, eqbal_ratio_std)
@@ -49,12 +49,12 @@
   maximum_eqbal_ratio_std_short: 0.025
 
   # score -= max(exposure_ratios_mean, eqbal_ratio_std)
-  maximum_exposure_ratios_mean_long: 0.1
-  maximum_exposure_ratios_mean_short: 0.1
+  maximum_exposure_ratios_mean_long: 0.075
+  maximum_exposure_ratios_mean_short: 0.075
 
   # clip results: compute score on top performers only
   # clip_threshold=0.1 means drop 10% worst performers; clip_threshold=0.0 means include all
-  clip_threshold: 0.5
+  clip_threshold: 0.3
 
   # will override starting configs' parameters
   do_long: true
@@ -78,14 +78,14 @@
     "DEFIUSDT", "YFIUSDT", "BALUSDT", "CRVUSDT", "TRBUSDT",
     "RUNEUSDT", "SUSHIUSDT", "EGLDUSDT", "SOLUSDT", "ICXUSDT",
     "STORJUSDT", "BLZUSDT", "UNIUSDT", "AVAXUSDT", "FTMUSDT",
-    "ENJUSDT", "FLMUSDT", "TOMOUSDT", "RENUSDT","KSMUSDT",
-    "NEARUSDT", "AAVEUSDT", "FILUSDT", "RSRUSDT","LRCUSDT",
-    "MATICUSDT", "OCEANUSDT", "BELUSDT", "CTKUSDT","AXSUSDT",
-    "ALPHAUSDT", "ZENUSDT", "SKLUSDT", "GRTUSDT","1INCHUSDT",
-    "CHZUSDT", "SANDUSDT", "ANKRUSDT", "LITUSDT","UNFIUSDT",
-    "REEFUSDT", "RVNUSDT", "SFPUSDT", "XEMUSDT","COTIUSDT",
-    "CHRUSDT", "MANAUSDT", "ALICEUSDT", "HBARUSDT","ONEUSDT",
-    "LINAUSDT", "STMXUSDT", "DENTUSDT", "CELRUSDT","HOTUSDT",
+    "ENJUSDT", "FLMUSDT", "TOMOUSDT", "RENUSDT", "KSMUSDT",
+    "NEARUSDT", "AAVEUSDT", "FILUSDT", "RSRUSDT", "LRCUSDT",
+    "MATICUSDT", "OCEANUSDT", "BELUSDT", "CTKUSDT", "AXSUSDT",
+    "ALPHAUSDT", "ZENUSDT", "SKLUSDT", "GRTUSDT", "1INCHUSDT",
+    "CHZUSDT", "SANDUSDT", "ANKRUSDT", "LITUSDT", "UNFIUSDT",
+    "REEFUSDT", "RVNUSDT", "SFPUSDT", "XEMUSDT", "COTIUSDT",
+    "CHRUSDT", "MANAUSDT", "ALICEUSDT", "HBARUSDT", "ONEUSDT",
+    "LINAUSDT", "STMXUSDT", "DENTUSDT", "CELRUSDT", "HOTUSDT",
     "MTLUSDT", "OGNUSDT", "NKNUSDT", "DGBUSDT",
   ]
 
@@ -208,18 +208,18 @@
     {
       ema_span_0: [5.0, 1440.0]
       ema_span_1: [5.0, 1440.0]
-      ema_dist_entry: [-0.05, 0.004]
-      ema_dist_close: [-0.05, 0.004]
+      ema_dist_entry: [-0.05, 0.003]
+      ema_dist_close: [-0.01, 0.003]
       qty_pct_entry: [0.01, 0.1]
-      qty_pct_close: [0.01, 0.1]
+      qty_pct_close: [0.01, 0.05]
       we_multiplier_entry: [0.0, 100.0]
-      we_multiplier_close: [0.0, 100.0]
+      we_multiplier_close: [0.0, 0.0]
       delay_weight_entry: [0.0, 100.0]
-      delay_weight_close: [0.0, 100.0]
+      delay_weight_close: [0.0, 0.0]
       delay_between_fills_minutes_entry: [1.0, 1440.0]
-      delay_between_fills_minutes_close: [1.0, 1440.0]
+      delay_between_fills_minutes_close: [540.0, 1440.0]
       min_markup: [0.001, 0.01]
-      markup_range: [0.0, 0.06]
+      markup_range: [0.0, 0.04]
       n_close_orders: [2, 16]
       wallet_exposure_limit: [1.0, 1.0]
     }
@@ -227,18 +227,18 @@
     {
       ema_span_0: [5.0, 1440.0]
       ema_span_1: [5.0, 1440.0]
-      ema_dist_entry: [-0.05, 0.004]
-      ema_dist_close: [-0.05, 0.004]
+      ema_dist_entry: [-0.05, 0.003]
+      ema_dist_close: [-0.01, 0.003]
       qty_pct_entry: [0.01, 0.1]
-      qty_pct_close: [0.01, 0.1]
+      qty_pct_close: [0.01, 0.05]
       we_multiplier_entry: [0.0, 100.0]
-      we_multiplier_close: [0.0, 100.0]
+      we_multiplier_close: [0.0, 0.0]
       delay_weight_entry: [0.0, 100.0]
-      delay_weight_close: [0.0, 100.0]
+      delay_weight_close: [0.0, 0.0]
       delay_between_fills_minutes_entry: [1.0, 1440.0]
-      delay_between_fills_minutes_close: [1.0, 1440.0]
+      delay_between_fills_minutes_close: [540.0, 1440.0]
       min_markup: [0.001, 0.01]
-      markup_range: [0.0, 0.06]
+      markup_range: [0.0, 0.04]
       n_close_orders: [2, 16]
       wallet_exposure_limit: [1.0, 1.0]
     }
