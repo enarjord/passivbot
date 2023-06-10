@@ -235,7 +235,7 @@ async def get_current_symbols(cc):
     current_open_orders = []
     poss = await cc.fetch_positions()
     for elm in poss:
-        if elm["contracts"] != 0.0:
+        if elm["contracts"] is not None and elm["contracts"] != 0.0:
             if elm["side"] == "long":
                 current_positions_long.append(elm["symbol"])
             elif elm["side"] == "short":
@@ -252,6 +252,9 @@ async def get_current_symbols(cc):
                 oos += oosf
                 time.sleep(max(0.0, delay_s - spent))
         print()
+    elif cc.id == "bitget":
+        oos = await cc.private_mix_get_order_margincoincurrent({'productType': 'umcbl'})
+        oos = oos['data']
     elif cc.id == "binanceusdm":
         cc.options["warnOnFetchOpenOrdersWithoutSymbol"] = False
         oos = await cc.fetch_open_orders()
@@ -381,6 +384,7 @@ async def main():
         "okx": "okx",
         "bybit": "bybit",
         "binance": "binanceusdm",
+        "bitget": "bitget",
     }
     parser = argparse.ArgumentParser(prog="forager", description="start forager")
     parser.add_argument("forager_config_path", type=str, help="path to forager config")
