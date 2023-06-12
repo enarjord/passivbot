@@ -121,7 +121,7 @@ class BitgetBot(Bot):
             (10 ** (-int(e["pricePlace"]))) * int(e["priceEndStep"]), 1e-12
         )
         self.price_rounding = int(e["pricePlace"])
-        self.qty_step = self.config["qty_step"] = int(e["sizeMultiplier"])
+        self.qty_step = self.config["qty_step"] = float(e["sizeMultiplier"])
         self.min_qty = self.config["min_qty"] = float(e["minTradeNum"])
         self.margin_coin = self.coin if self.product_type == "dmcbl" else self.quote
         await super()._init()
