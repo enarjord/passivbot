@@ -47,6 +47,7 @@ class BitgetBot(Bot):
             "ticker": "/api/mix/v1/market/ticker",
             "tickers": "/api/mix/v1/market/tickers",
             "open_orders": "/api/mix/v1/order/current",
+            "open_orders_all": "/api/mix/v1/order/marginCoinCurrent",
             "create_order": "/api/mix/v1/order/placeOrder",
             "batch_orders": "/api/mix/v1/order/batch-orders",
             "batch_cancel_orders": "/api/mix/v1/order/cancel-batch-orders",
@@ -120,7 +121,7 @@ class BitgetBot(Bot):
             (10 ** (-int(e["pricePlace"]))) * int(e["priceEndStep"]), 1e-12
         )
         self.price_rounding = int(e["pricePlace"])
-        self.qty_step = self.config["qty_step"] = round_(10 ** (-int(e["volumePlace"])), 1e-12)
+        self.qty_step = self.config["qty_step"] = int(e["sizeMultiplier"])
         self.min_qty = self.config["min_qty"] = float(e["minTradeNum"])
         self.margin_coin = self.coin if self.product_type == "dmcbl" else self.quote
         await super()._init()
@@ -176,6 +177,24 @@ class BitgetBot(Bot):
 
     async def fetch_open_orders(self) -> [dict]:
         fetched = await self.private_get(self.endpoints["open_orders"], {"symbol": self.symbol})
+        return [
+            {
+                "order_id": elm["orderId"],
+                "custom_id": elm["clientOid"],
+                "symbol": elm["symbol"],
+                "price": float(elm["price"]),
+                "qty": float(elm["size"]),
+                "side": "buy" if elm["side"] in ["close_short", "open_long"] else "sell",
+                "position_side": elm["posSide"],
+                "timestamp": float(elm["cTime"]),
+            }
+            for elm in fetched["data"]
+        ]
+
+    async def fetch_open_orders_all(self) -> [dict]:
+        fetched = await self.private_get(
+            self.endpoints["open_orders_all"], {"productType": self.product_type}
+        )
         return [
             {
                 "order_id": elm["orderId"],
