@@ -106,7 +106,6 @@ class BitgetBot(Bot):
             ] = 6.0  # will complain with $5 even if order cost > $5
         else:
             raise NotImplementedError("not yet implemented")
-
     async def _init(self):
         self.init_market_type()
         info = await self.fetch_exchange_info()
