@@ -254,6 +254,7 @@ async def get_current_symbols(cc):
         print()
     elif cc.id == "bitget":
         oos = await cc.private_mix_get_order_margincoincurrent({"productType": "umcbl"})
+        oos = oos["data"]
     elif cc.id == "binanceusdm":
         cc.options["warnOnFetchOpenOrdersWithoutSymbol"] = False
         oos = await cc.fetch_open_orders()
