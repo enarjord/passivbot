@@ -274,7 +274,7 @@ def ts_to_date_utc(timestamp: float) -> str:
 
 
 def date_to_ts(d):
-    return int(parser.parse(d).replace(tzinfo=datetime.timezone.utc).timestamp() * 1000)
+    return int(dateutil.parser.parse(d).replace(tzinfo=datetime.timezone.utc).timestamp() * 1000)
 
 
 def date_to_ts2(datetime_string):
