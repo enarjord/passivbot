@@ -244,7 +244,7 @@ async def get_current_symbols(cc):
         oos = []
         delay_s = 0.5
         for symbol in cc.markets:
-            if symbol.endswith("USDT"):
+            if symbol.endswith(":USDT"):
                 sts = time.time()
                 oosf = await cc.fetch_open_orders(symbol=symbol)
                 spent = time.time() - sts
