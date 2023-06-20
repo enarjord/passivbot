@@ -1706,7 +1706,7 @@ async def main() -> None:
         required=False,
         dest="price_distance_threshold",
         default=0.5,
-        help="only create limit orders closer to price than threshold.  default=0.5 (50%)",
+        help="only create limit orders closer to price than threshold.  default=0.5 (50%%)",
     )
     parser.add_argument(
         "-ak",
