@@ -73,17 +73,6 @@ class BitgetBot(Bot):
             "close_short": "buy",
             "open_short": "sell",
         }
-        self.interval_map = {
-            "1m": "60",
-            "5m": "300",
-            "15m": "900",
-            "30m": "1800",
-            "1h": "3600",
-            "4h": "14400",
-            "12h": "43200",
-            "1d": "86400",
-            "1w": "604800",
-        }
         self.session = aiohttp.ClientSession()
 
     def init_market_type(self):
@@ -106,6 +95,7 @@ class BitgetBot(Bot):
             ] = 6.0  # will complain with $5 even if order cost > $5
         else:
             raise NotImplementedError("not yet implemented")
+
     async def _init(self):
         self.init_market_type()
         info = await self.fetch_exchange_info()
@@ -527,13 +517,29 @@ class BitgetBot(Bot):
 
     async def fetch_ohlcvs(self, symbol: str = None, start_time: int = None, interval="1m"):
         # m -> minutes, h -> hours, d -> days, w -> weeks
-        assert interval in self.interval_map, f"unsupported interval {interval}"
+        interval_map = {
+            "1m": ("1m", 60),
+            "3m": ("3m", 60 * 3),
+            "5m": ("5m", 60 * 5),
+            "15m": ("15m", 60 * 15),
+            "30m": ("30m", 60 * 30),
+            "1h": ("1H", 60 * 60),
+            "2h": ("2H", 60 * 60 * 2),
+            "4h": ("4H", 60 * 60 * 4),
+            "6h": ("6H", 60 * 60 * 4),
+            "12h": ("12H", 60 * 60 * 12),
+            "1d": ("1D", 60 * 60 * 24),
+            "3d": ("3D", 60 * 60 * 24 * 3),
+            "1w": ("1W", 60 * 60 * 24 * 7),
+            "1M": ("1M", 60 * 60 * 24 * 30),
+        }
+        assert interval in interval_map, f"unsupported interval {interval}"
         params = {
             "symbol": self.symbol if symbol is None else symbol,
-            "granularity": self.interval_map[interval],
+            "granularity": interval_map[interval][0],
         }
         limit = 100
-        seconds = float(self.interval_map[interval])
+        seconds = float(interval_map[interval][1])
         if start_time is None:
             server_time = await self.get_server_time()
             params["startTime"] = int(round(float(server_time)) - 1000 * seconds * limit)
