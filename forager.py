@@ -3,6 +3,7 @@ import os
 os.environ["NOJIT"] = "true"
 
 import ccxt.async_support as ccxt
+assert ccxt.__version__ == "3.1.31", f"Currently ccxt {ccxt.__version__} is installed. Please pip reinstall requirements.txt or install ccxt v3.1.31 manually"
 import json
 import hjson
 import pprint
