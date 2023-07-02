@@ -13,7 +13,7 @@
 
   # format YYYY-MM-DD
   start_date: 2020-01-01
-  end_date: 2023-06-10
+  end_date: 2023-07-03
 
   # Reduce disk usage and improve some optimize speed with the slim analysis
   slim_analysis: true
