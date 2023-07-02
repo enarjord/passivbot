@@ -532,6 +532,8 @@ def print_async_exception(coro):
 
 def fetch_market_specific_settings(config: dict):
     import ccxt
+    assert ccxt.__version__ == "3.1.31", f"Currently ccxt {ccxt.__version__} is installed. Please pip reinstall requirements.txt or install ccxt v3.1.31 manually"
+
 
     exchange = config["exchange"]
     symbol = config["symbol"]
@@ -625,8 +627,8 @@ def fetch_market_specific_settings(config: dict):
         settings_from_exchange["maker_fee"] = 0.0001
         settings_from_exchange["taker_fee"] = 0.0006
         settings_from_exchange["c_mult"] = elm["contractSize"]
-        settings_from_exchange["qty_step"] = float(elm["info"]["lot_size_filter"]["qty_step"])
-        settings_from_exchange["price_step"] = float(elm["info"]["price_filter"]["tick_size"])
+        settings_from_exchange["qty_step"] = elm["precision"]["amount"]
+        settings_from_exchange["price_step"] = elm['precision']['price']
         settings_from_exchange["spot"] = False
         settings_from_exchange["inverse"] = not elm["linear"]
         settings_from_exchange["min_qty"] = elm["limits"]["amount"]["min"]
