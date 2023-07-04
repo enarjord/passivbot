@@ -21,7 +21,7 @@ except:
 
 
 def format_float(num):
-    return np.format_float_positional(num, trim="-")
+    return np.format_float_positional(num, trim="0")
 
 
 def compress_float(n: float, d: int) -> str:
