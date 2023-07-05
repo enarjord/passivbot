@@ -464,7 +464,7 @@ class BinanceBot(Bot):
         try:
             cancellations = await self.private_delete(
                 self.endpoints["batch_orders"],
-                {"symbol": symbol, "orderIdList": [order["order_id"] for order in orders]},
+                {"symbol": symbol, "orderIdList": str([order["order_id"] for order in orders])},
                 data_=True,
             )
             return [
