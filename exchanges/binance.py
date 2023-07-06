@@ -41,16 +41,16 @@ class BinanceBot(Bot):
         self, type_: str, base_endpoint: str, url: str, params: dict = {}, data_: bool = False
     ) -> dict:
         def stringify(x):
-            if type(x) == bool:
+            if isinstance(x, bool):
                 return "true" if x else "false"
-            elif type(x) == float:
+            elif isinstance(x, float):
                 return format_float(x)
-            elif type(x) == int:
+            elif isinstance(x, int):
                 return str(x)
-            elif type(x) == list:
+            elif isinstance(x, list):
                 return json.dumps([stringify(y) for y in x]).replace(" ", "")
-            elif type(x) == dict:
-                return json.dumps({k: stringify(v) for k, v in x.items()}).replace(" ", "")
+            elif isinstance(x, dict):
+                return {k: stringify(v) for k, v in x.items()}
             else:
                 return x
 
@@ -59,6 +59,8 @@ class BinanceBot(Bot):
             params.update({"timestamp": timestamp, "recvWindow": 5000})
             for k in params:
                 params[k] = stringify(params[k])
+                if isinstance(params[k], dict):
+                    params[k] = json.dumps(params[k]).replace(" ", "")
             params = sort_dict_keys(params)
             params["signature"] = hmac.new(
                 self.secret.encode("utf-8"),
@@ -462,7 +464,7 @@ class BinanceBot(Bot):
         try:
             cancellations = await self.private_delete(
                 self.endpoints["batch_orders"],
-                {"symbol": symbol, "orderIdList": [order["order_id"] for order in orders]},
+                {"symbol": symbol, "orderIdList": str([order["order_id"] for order in orders])},
                 data_=True,
             )
             return [

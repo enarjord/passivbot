@@ -112,7 +112,9 @@ class BinanceBotSpot(Bot):
             "ticks": "/api/v3/aggTrades",
             "ohlcvs": "/api/v3/klines",
             "listen_key": "/api/v3/userDataStream",
+            "server_time": "/api/v3/time",
         }
+
         self.endpoints["transfer"] = "/sapi/v1/asset/transfer"
         self.endpoints["account"] = "/api/v3/account"
         if self.exchange == "binance_us":
@@ -159,6 +161,10 @@ class BinanceBotSpot(Bot):
         await super()._init()
         await self.init_order_book()
         await self.update_position()
+
+    async def get_server_time(self):
+        now = await self.public_get(self.endpoints["server_time"])
+        return now["serverTime"]
 
     def calc_orders(self):
         default_orders = super().calc_orders()

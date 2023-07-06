@@ -9,11 +9,11 @@
   latency_simulation_ms: 1000
 
   # specify starting balance in terms of margin token (i.e. usdt for usdt-m, coin for inverse coin-m)
-  starting_balance: 1000.0
+  starting_balance: 10000.0
 
   # format YYYY-MM-DD
   start_date: 2020-01-01
-  end_date: 2023-05-05
+  end_date: 2023-07-03
 
   # Reduce disk usage and improve some optimize speed with the slim analysis
   slim_analysis: true

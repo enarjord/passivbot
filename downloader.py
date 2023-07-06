@@ -1110,8 +1110,8 @@ def download_ohlcvs(
     base_url = "https://data.binance.vision/data/"
     base_url += "spot/" if spot else f"futures/{'cm' if inverse else 'um'}/"
     col_names = ["timestamp", "open", "high", "low", "close", "volume"]
-    start_ts = max(get_first_ohlcv_ts(symbol, spot=spot), date_to_ts2(start_date))
-    end_ts = date_to_ts2(end_date)
+    start_ts = int(max(get_first_ohlcv_ts(symbol, spot=spot), date_to_ts2(start_date)))
+    end_ts = int(date_to_ts2(end_date))
     days = [ts_to_date_utc(x)[:10] for x in list(range(start_ts, end_ts, 1000 * 60 * 60 * 24))]
     months = sorted({x[:7] for x in days})
     month_now = ts_to_date(time())[:7]

@@ -4,7 +4,7 @@ from collections import OrderedDict
 
 import json
 import numpy as np
-from dateutil import parser
+import dateutil.parser
 from njit_funcs import round_dynamic, qty_to_cost
 
 try:
@@ -21,7 +21,7 @@ except:
 
 
 def format_float(num):
-    return np.format_float_positional(num, trim="-")
+    return np.format_float_positional(num, trim="0")
 
 
 def compress_float(n: float, d: int) -> str:
@@ -274,10 +274,17 @@ def ts_to_date_utc(timestamp: float) -> str:
 
 
 def date_to_ts(d):
-    return int(parser.parse(d).replace(tzinfo=datetime.timezone.utc).timestamp() * 1000)
+    return int(dateutil.parser.parse(d).replace(tzinfo=datetime.timezone.utc).timestamp() * 1000)
 
 
 def date_to_ts2(datetime_string):
+    return (
+        dateutil.parser.parse(datetime_string).replace(tzinfo=datetime.timezone.utc).timestamp()
+        * 1000
+    )
+
+
+def date_to_ts2_old(datetime_string):
     try:
         date_formats = [
             "%Y",
@@ -287,6 +294,10 @@ def date_to_ts2(datetime_string):
             "%Y-%m-%dT%H:%M",
             "%Y-%m-%dT%H:%M:%S",
             "%Y-%m-%dT%H:%M:%SZ",
+            "%Y-%m-%d %H",
+            "%Y-%m-%d %H:%M",
+            "%Y-%m-%d %H:%M:%S",
+            "%Y-%m-%d %H:%M:%SZ",
         ]
         for format in date_formats:
             try:
@@ -1540,7 +1551,10 @@ def shorten_custom_id(id_: str) -> str:
 
 
 def determine_pos_side_ccxt(open_order: dict) -> str:
-    oo = open_order["info"]
+    if "info" in open_order:
+        oo = open_order["info"]
+    else:
+        oo = open_order
     keys_map = {key.lower().replace("_", ""): key for key in oo}
     for poskey in ["posside", "positionside"]:
         if poskey in keys_map:
