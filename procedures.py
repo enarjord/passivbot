@@ -626,7 +626,7 @@ def fetch_market_specific_settings(config: dict):
         settings_from_exchange["hedge_mode"] = True
         settings_from_exchange["maker_fee"] = 0.0001
         settings_from_exchange["taker_fee"] = 0.0006
-        settings_from_exchange["c_mult"] = elm["contractSize"]
+        settings_from_exchange["c_mult"] = 1.0 if elm["contractSize"] is None else elm["contractSize"]
         settings_from_exchange["qty_step"] = elm["precision"]["amount"]
         settings_from_exchange["price_step"] = elm['precision']['price']
         settings_from_exchange["spot"] = False
