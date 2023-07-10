@@ -106,6 +106,10 @@ class BybitBotSpot(Bot):
             params,
         )
 
+    async def get_server_time(self):
+        now = await self.public_get("/v2/public/time")
+        return float(now["time_now"]) * 1000
+
     def init_market_type(self):
         print("Spot market")
         if "spot" not in self.market_type:
@@ -130,7 +134,6 @@ class BybitBotSpot(Bot):
 
     async def _init(self):
         self.init_market_type()
-        "here"
         exchange_info = await self.public_get(self.endpoints["exchange_info"])
         for e in exchange_info["result"]["list"]:
             if e["name"] == self.symbol:
@@ -144,6 +147,9 @@ class BybitBotSpot(Bot):
                 self.min_cost = self.config["min_cost"] = 0.0
                 self.price_multiplier_up = 5
                 self.price_multiplier_dn = 0.2
+                break
+        else:
+            raise Exception(f"unknown symbol {self.symbol}")
 
         await super()._init()
         await self.init_order_book()
