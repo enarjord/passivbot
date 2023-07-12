@@ -917,9 +917,12 @@ def analyze_fills(
         for i in range(config["adg_n_subdivisions"]):
             idx = round(int(len(sdf) * (1 - 1 / (i + 1))))
             n_days_ = (sdf.timestamp.iloc[-1] - sdf.timestamp.iloc[idx]) / (1000 * 60 * 60 * 24)
-            adgs_long.append(
-                (sdf.balance_long.iloc[-1] / sdf.balance_long.iloc[idx]) ** (1 / n_days_) - 1
-            )
+            if n_days_ == 0.0 or sdf.balance_long.iloc[idx] == 0.0:
+                adgs_long.append(0.0)
+            else:
+                adgs_long.append(
+                    (sdf.balance_long.iloc[-1] / sdf.balance_long.iloc[idx]) ** (1 / n_days_) - 1
+                )
         adg_long = adgs_long[0]
         adg_weighted_long = np.mean(adgs_long)
     if sdf.balance_short.iloc[-1] <= 0.0:
@@ -930,9 +933,12 @@ def analyze_fills(
         for i in range(config["adg_n_subdivisions"]):
             idx = round(int(len(sdf) * (1 - 1 / (i + 1))))
             n_days_ = (sdf.timestamp.iloc[-1] - sdf.timestamp.iloc[idx]) / (1000 * 60 * 60 * 24)
-            adgs_short.append(
-                (sdf.balance_short.iloc[-1] / sdf.balance_short.iloc[idx]) ** (1 / n_days_) - 1
-            )
+            if n_days_ == 0.0 or sdf.balance_short.iloc[idx] == 0.0:
+                adgs_short.append(0.0)
+            else:
+                adgs_short.append(
+                    (sdf.balance_short.iloc[-1] / sdf.balance_short.iloc[idx]) ** (1 / n_days_) - 1
+                )
         adg_short = adgs_short[0]
         adg_weighted_short = np.mean(adgs_short)
     if config["long"]["wallet_exposure_limit"] > 0.0:
