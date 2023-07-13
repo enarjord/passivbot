@@ -200,9 +200,15 @@ class BybitBot(Bot):
         ]
 
     async def public_get(self, url: str, params: dict = {}) -> dict:
+        result = None
         async with self.session.get(self.base_endpoint + url, params=params) as response:
             result = await response.text()
-        return json.loads(result)
+        try:
+            return json.loads(result)
+        except Exception as e:
+            print("error with public_get", e)
+            print(result)
+            raise Exception
 
     async def private_(
         self, type_: str, base_endpoint: str, url: str, params: dict = {}, json_: bool = False
@@ -219,13 +225,19 @@ class BybitBot(Bot):
             urlencode(sort_dict_keys(params)).encode("utf-8"),
             hashlib.sha256,
         ).hexdigest()
+        result = None
         if json_:
             async with getattr(self.session, type_)(base_endpoint + url, json=params) as response:
                 result = await response.text()
         else:
             async with getattr(self.session, type_)(base_endpoint + url, params=params) as response:
                 result = await response.text()
-        return json.loads(result)
+        try:
+            return json.loads(result)
+        except Exception as e:
+            print(f"error with private_{type_}", e)
+            print(result)
+            raise Exception
 
     async def private_get(self, url: str, params: dict = {}, base_endpoint: str = None) -> dict:
         return await self.private_(
