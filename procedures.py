@@ -532,8 +532,10 @@ def print_async_exception(coro):
 
 def fetch_market_specific_settings(config: dict):
     import ccxt
-    assert ccxt.__version__ == "3.1.31", f"Currently ccxt {ccxt.__version__} is installed. Please pip reinstall requirements.txt or install ccxt v3.1.31 manually"
 
+    assert (
+        ccxt.__version__ == "3.1.31"
+    ), f"Currently ccxt {ccxt.__version__} is installed. Please pip reinstall requirements.txt or install ccxt v3.1.31 manually"
 
     exchange = config["exchange"]
     symbol = config["symbol"]
@@ -597,7 +599,7 @@ def fetch_market_specific_settings(config: dict):
         settings_from_exchange["min_qty"] = float(elm["info"]["minTradeNum"])
         settings_from_exchange["min_cost"] = 5.0
         settings_from_exchange["spot"] = elm["spot"]
-        settings_from_exchange["inverse"] = not elm["linear"]
+        settings_from_exchange["inverse"] = elm["linear"] is not None and not elm["linear"]
     elif exchange == "okx":
         cc = ccxt.okx()
         markets = cc.fetch_markets()
@@ -613,13 +615,13 @@ def fetch_market_specific_settings(config: dict):
         settings_from_exchange["qty_step"] = elm["precision"]["amount"]
         settings_from_exchange["price_step"] = elm["precision"]["price"]
         settings_from_exchange["spot"] = elm["spot"]
-        settings_from_exchange["inverse"] = not elm["linear"]
+        settings_from_exchange["inverse"] = elm["linear"] is not None and not elm["linear"]
         settings_from_exchange["min_qty"] = elm["limits"]["amount"]["min"]
     elif exchange == "bybit":
         cc = ccxt.bybit()
         markets = cc.fetch_markets()
         for elm in markets:
-            if elm["id"] == symbol:
+            if elm["id"] == symbol and not elm["spot"]:
                 break
         else:
             raise Exception(f"unknown symbol {symbol}")
@@ -628,9 +630,9 @@ def fetch_market_specific_settings(config: dict):
         settings_from_exchange["taker_fee"] = 0.0006
         settings_from_exchange["c_mult"] = 1.0 if elm["contractSize"] is None else elm["contractSize"]
         settings_from_exchange["qty_step"] = elm["precision"]["amount"]
-        settings_from_exchange["price_step"] = elm['precision']['price']
+        settings_from_exchange["price_step"] = elm["precision"]["price"]
         settings_from_exchange["spot"] = False
-        settings_from_exchange["inverse"] = not elm["linear"]
+        settings_from_exchange["inverse"] = elm["linear"] is not None and not elm["linear"]
         settings_from_exchange["min_qty"] = elm["limits"]["amount"]["min"]
     elif exchange == "kucoin":
         cc = ccxt.kucoinfutures()
@@ -647,7 +649,7 @@ def fetch_market_specific_settings(config: dict):
         settings_from_exchange["qty_step"] = elm["precision"]["amount"]
         settings_from_exchange["price_step"] = elm["precision"]["price"]
         settings_from_exchange["spot"] = False
-        settings_from_exchange["inverse"] = not elm["linear"]
+        settings_from_exchange["inverse"] = elm["linear"] is not None and not elm["linear"]
         settings_from_exchange["min_qty"] = (
             0.0 if elm["limits"]["amount"]["min"] is None else elm["limits"]["amount"]["min"]
         )
@@ -679,6 +681,6 @@ def fetch_market_specific_settings(config: dict):
 
 if __name__ == "__main__":
     for exchange in ["kucoin", "bitget", "binance", "bybit", "okx"]:
-        cfg = {"exchange": exchange, "symbol": "ETHUSDT", "market_type": "futures"}
+        cfg = {"exchange": exchange, "symbol": "DOGEUSDT", "market_type": "futures"}
         mss = fetch_market_specific_settings(cfg)
         print(mss)
