@@ -777,10 +777,16 @@ def analyze_fills_slim(fills_long: list, fills_short: list, stats: list, config:
     exposure_ratios_long = [
         qty_to_cost(elm[3], elm[4], config["inverse"], config["c_mult"]) / elm[10] for elm in stats
     ]
+    time_at_max_exposure_long = (
+        1.0 if len(stats) == 0 else (len([x for x in exposure_ratios_long if x > 0.9]) / len(stats))
+    )
     exposure_ratios_mean_long = np.mean(exposure_ratios_long)
     exposure_ratios_short = [
         qty_to_cost(elm[5], elm[6], config["inverse"], config["c_mult"]) / elm[11] for elm in stats
     ]
+    time_at_max_exposure_short = (
+        1.0 if len(stats) == 0 else (len([x for x in exposure_ratios_short if x > 0.9]) / len(stats))
+    )
     exposure_ratios_mean_short = np.mean(exposure_ratios_short)
 
     return {
@@ -805,6 +811,8 @@ def analyze_fills_slim(fills_long: list, fills_short: list, stats: list, config:
         "eqbal_ratio_std_short": eqbal_ratio_std_short,
         "exposure_ratios_mean_long": exposure_ratios_mean_long,
         "exposure_ratios_mean_short": exposure_ratios_mean_short,
+        "time_at_max_exposure_long": time_at_max_exposure_long,
+        "time_at_max_exposure_short": time_at_max_exposure_short,
     }
 
 
@@ -982,8 +990,14 @@ def analyze_fills(
     eqbal_ratio_std_short = eqbal_ratios_sdf_short.std()
 
     exposure_ratios_long = sdf.wallet_exposure_long / config["long"]["wallet_exposure_limit"]
+    time_at_max_exposure_long = (
+        1.0 if len(sdf) == 0 else (len(exposure_ratios_long[exposure_ratios_long > 0.9]) / len(sdf))
+    )
     exposure_ratios_mean_long = exposure_ratios_long.mean()
     exposure_ratios_short = sdf.wallet_exposure_short / config["short"]["wallet_exposure_limit"]
+    time_at_max_exposure_short = (
+        1.0 if len(sdf) == 0 else (len(exposure_ratios_short[exposure_ratios_short > 0.9]) / len(sdf))
+    )
     exposure_ratios_mean_short = exposure_ratios_short.mean()
 
     analysis = {
@@ -1022,6 +1036,8 @@ def analyze_fills(
         "adg_weighted_per_exposure_short": adg_weighted_per_exposure_short,
         "exposure_ratios_mean_long": exposure_ratios_mean_long,
         "exposure_ratios_mean_short": exposure_ratios_mean_short,
+        "time_at_max_exposure_long": time_at_max_exposure_long,
+        "time_at_max_exposure_short": time_at_max_exposure_short,
         "n_days": n_days,
         "n_fills_long": len(fills_long),
         "n_fills_short": len(fills_short),
