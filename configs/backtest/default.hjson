@@ -12,8 +12,9 @@
   starting_balance: 10000.0
 
   # format YYYY-MM-DD
+  # end_date may be set to "now" or "today" to use current day (UTC) as end_date
   start_date: 2020-01-01
-  end_date: 2023-07-03
+  end_date: 2023-07-24
 
   # Reduce disk usage and improve some optimize speed with the slim analysis
   slim_analysis: true
