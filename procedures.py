@@ -88,7 +88,10 @@ async def prepare_backtest_config(args) -> dict:
     else:
         config["spot"] = args.market_type == "spot"
     config["start_date"] = ts_to_date_utc(date_to_ts2(config["start_date"]))[:10]
-    config["end_date"] = ts_to_date_utc(date_to_ts2(config["end_date"]))[:10]
+    if config["end_date"] in ["today", "now", ""]:
+        config["end_date"] = ts_to_date_utc(utc_ms())[:10]
+    else:
+        config["end_date"] = ts_to_date_utc(date_to_ts2(config["end_date"]))[:10]
     config["exchange"] = load_exchange_key_secret_passphrase(config["user"])[0]
     config["session_name"] = (
         f"{config['start_date'].replace(' ', '').replace(':', '').replace('.', '')}_"
@@ -516,8 +519,11 @@ def local_time() -> float:
 
 
 def print_async_exception(coro):
+    if isinstance(coro, list):
+        for elm in coro:
+            print_async_exception(elm)
     try:
-        print(f"returned: {coro}")
+        print(f"result: {coro.result()}")
     except:
         pass
     try:
@@ -525,7 +531,7 @@ def print_async_exception(coro):
     except:
         pass
     try:
-        print(f"result: {coro.result()}")
+        print(f"returned: {coro}")
     except:
         pass
 
