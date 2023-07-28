@@ -484,35 +484,58 @@ class BinanceBot(Bot):
             traceback.print_exc()
             return []
 
-    async def fetch_latest_fills(self):
-        params = {"symbol": self.symbol, "limit": 100}
+    async def fetch_latest_fills(self, start_time=None):
+        params = {"symbol": self.symbol, "limit": 100 if self.inverse else 1000}
+        if start_time is None:
+            if self.inverse:
+                # fetch for last 24h because inverse has limit of 100 items per call
+                start_time = params["startTime"] = int(self.server_time - 1000 * 60 * 60 * 24)
+        else:
+            params["startTime"] = start_time
         fetched = None
-        try:
-            fetched = await self.private_get(self.endpoints["fills_detailed"], params)
-            fills = [
-                {
-                    "order_id": elm["orderId"],
-                    "symbol": elm["symbol"],
-                    "status": elm["status"].lower(),
-                    "custom_id": elm["clientOrderId"],
-                    "price": float(elm["avgPrice"]),
-                    "qty": float(elm["executedQty"]),
-                    "original_qty": float(elm["origQty"]),
-                    "type": elm["type"].lower(),
-                    "reduce_only": elm["reduceOnly"],
-                    "side": elm["side"].lower(),
-                    "position_side": elm["positionSide"].lower(),
-                    "timestamp": elm["time"],
-                }
-                for elm in fetched
-                if "FILLED" in elm["status"]
-            ]
-        except Exception as e:
-            print("error fetching latest fills", e)
-            print_async_exception(fetched)
-            traceback.print_exc()
-            return []
-        return fills
+        fills = []
+        max_n_fetches = 20
+        k = 0
+        while True:
+            try:
+                if fetched:
+                    params["startTime"] = fills[-1]["timestamp"]
+                fetched = await self.private_get(self.endpoints["fills_detailed"], params)
+                # print('debug', fetched[-1]['time'], len(fetched))
+                fills += [
+                    {
+                        "order_id": elm["orderId"],
+                        "symbol": elm["symbol"],
+                        "status": elm["status"].lower(),
+                        "custom_id": elm["clientOrderId"],
+                        "price": float(elm["avgPrice"]),
+                        "qty": float(elm["executedQty"]),
+                        "original_qty": float(elm["origQty"]),
+                        "type": elm["type"].lower(),
+                        "reduce_only": elm["reduceOnly"],
+                        "side": elm["side"].lower(),
+                        "position_side": elm["positionSide"].lower(),
+                        "timestamp": elm["time"],
+                    }
+                    for elm in fetched
+                ]
+                fillsd = {f["order_id"]: f for f in fills}
+                fills = sorted(fillsd.values(), key=lambda x: x["order_id"])
+            except Exception as e:
+                print("error fetching latest fills", e)
+                print_async_exception(fetched)
+                traceback.print_exc()
+                return []
+            if start_time is None or len(fetched) != int(params["limit"]):
+                break
+            k += 1
+            if k >= max_n_fetches:
+                print(
+                    f"\nwarning: fetched order history more than {max_n_fetches} times. Clock mode timing might not include latest fills and thus be inaccurate"
+                )
+                break
+        # exclude partial fills where qty / original_qty <= 10%
+        return [x for x in fills if x["original_qty"] != 0.0 and x["qty"] / x["original_qty"] > 0.1]
 
     async def fetch_fills(
         self,
