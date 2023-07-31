@@ -148,7 +148,10 @@ def calc_clock_entry_long(
                     c_mult,
                 )
                 if qty_long != 0.0:
-                    qty_long = max(qty_long, min_qty)
+                    qty_long = max(
+                        qty_long,
+                        calc_min_entry_qty(bid_price_long, inverse, qty_step, min_qty, min_cost),
+                    )
                 new_psize_long, new_pprice_long = calc_new_psize_pprice(
                     psize_long, pprice_long, qty_long, bid_price_long, qty_step
                 )
@@ -268,7 +271,10 @@ def calc_clock_entry_short(
                     c_mult,
                 )
                 if qty_short != 0.0:
-                    qty_short = -max(abs(qty_short), min_qty)
+                    qty_short = -max(
+                        abs(qty_short),
+                        calc_min_entry_qty(ask_price_short, inverse, qty_step, min_qty, min_cost),
+                    )
                 new_psize_short, new_pprice_short = calc_new_psize_pprice(
                     -abs(psize_short), pprice_short, qty_short, ask_price_short, qty_step
                 )
