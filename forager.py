@@ -3,7 +3,10 @@ import os
 os.environ["NOJIT"] = "true"
 
 import ccxt.async_support as ccxt
-assert ccxt.__version__ == "3.1.31", f"Currently ccxt {ccxt.__version__} is installed. Please pip reinstall requirements.txt or install ccxt v3.1.31 manually"
+
+assert (
+    ccxt.__version__ == "3.1.31"
+), f"Currently ccxt {ccxt.__version__} is installed. Please pip reinstall requirements.txt or install ccxt v3.1.31 manually"
 import json
 import hjson
 import pprint
@@ -270,6 +273,7 @@ async def get_current_symbols(cc):
             current_open_orders_short.append(elm["symbol"])
         else:
             current_open_orders_long.append(elm["symbol"])
+
     current_positions_long = sorted(set(current_positions_long))
     current_positions_short = sorted(set(current_positions_short))
     current_open_orders_long = sorted(set(current_open_orders_long))
@@ -391,6 +395,9 @@ async def main():
     }
     parser = argparse.ArgumentParser(prog="forager", description="start forager")
     parser.add_argument("forager_config_path", type=str, help="path to forager config")
+    parser.add_argument(
+        "-n", "--noloop", "--no-loop", "--no_loop", dest="no_loop", help="break after first iter", action="store_true"
+    )
     args = parser.parse_args()
     config = hjson.load(open(args.forager_config_path))
     config["yaml_filepath"] = f"{config['user']}.yaml"
@@ -425,6 +432,8 @@ async def main():
             print()
             subprocess.run(["tmux", "kill-session", "-t", config["user"]])
             subprocess.run(["tmuxp", "load", "-d", config["yaml_filepath"]])
+            if args.no_loop:
+                return
             for i in range(config["update_interval_minutes"] * 60, -1, -1):
                 time.sleep(1)
                 print(f"\rcountdown: {i}    ", end=" ")
