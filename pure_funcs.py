@@ -1316,16 +1316,23 @@ def round_values(xs, n: int):
 
 
 def floatify(xs):
-    try:
+    if isinstance(xs, (int, float)):
         return float(xs)
-    except (ValueError, TypeError):
-        if type(xs) == list:
-            return [floatify(x) for x in xs]
-        if type(xs) == dict:
-            return {k: floatify(v) for k, v in xs.items()}
-        if type(xs) == tuple:
-            return tuple([floatify(x) for x in xs])
-    return xs
+    elif isinstance(xs, str):
+        try:
+            return float(xs)
+        except (ValueError, TypeError):
+            return xs
+    elif isinstance(xs, bool):
+        return xs
+    elif isinstance(xs, list):
+        return [floatify(x) for x in xs]
+    elif isinstance(xs, tuple):
+        return tuple(floatify(x) for x in xs)
+    elif isinstance(xs, dict):
+        return {k: floatify(v) for k, v in xs.items()}
+    else:
+        return xs
 
 
 def get_daily_from_income(
