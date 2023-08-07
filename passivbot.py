@@ -44,6 +44,8 @@ from njit_funcs import (
     calc_samples,
     calc_emas_last,
     calc_ema,
+    calc_delay_between_fills_ms_bid,
+    calc_delay_between_fills_ms_ask,
 )
 from njit_funcs_neat_grid import (
     calc_neat_grid_long,
@@ -58,8 +60,6 @@ from njit_clock import (
     calc_clock_entry_short,
     calc_clock_close_long,
     calc_clock_close_short,
-    calc_delay_between_fills_ms_bid,
-    calc_delay_between_fills_ms_ask,
 )
 from typing import Union, Dict, List
 
@@ -115,12 +115,15 @@ class Bot:
             "clock_entry_short": 0,
             "clock_close_long": 0,
             "clock_close_short": 0,
+            "unstuck_close_long": 0,
+            "unstuck_close_short": 0,
         }
         self.price = 0.0
         self.ob = [0.0, 0.0]
         self.emas_long = np.zeros(3)
         self.emas_short = np.zeros(3)
         self.ema_sec = 0
+        self.auto_unstuck_on_timer = True
 
         self.n_orders_per_execution = 2
         self.delay_between_executions = 3
@@ -167,6 +170,14 @@ class Bot:
                 + "It must be greater than zero and less than or equal to one.  Defaulting to 1.0."
             )
             config["cross_wallet_pct"] = 1.0
+        if self.passivbot_mode in ["neat_grid", "recursive_grid"]:
+            self.auto_unstuck_on_timer = any(
+                [
+                    self.config[side][key] != 0.0
+                    for side in ["long", "short"]
+                    for key in ["delay_between_AU_closes_minutes", "qty_pct_AU_close"]
+                ]
+            )
         self.config["do_long"] = config["long"]["enabled"]
         self.config["do_short"] = config["short"]["enabled"]
         self.ema_spans_long = np.array(
@@ -604,32 +615,7 @@ class Bot:
                         self.xk["wallet_exposure_limit"][0],
                         self.xk["auto_unstuck_ema_dist"][0],
                         self.xk["auto_unstuck_wallet_exposure_threshold"][0],
-                    )
-                elif self.passivbot_mode == "static_grid":
-                    entries_long = calc_entry_grid_long(
-                        balance,
-                        psize_long,
-                        pprice_long,
-                        self.ob[0],
-                        min(self.emas_long),
-                        self.xk["inverse"],
-                        self.xk["do_long"],
-                        self.xk["qty_step"],
-                        self.xk["price_step"],
-                        self.xk["min_qty"],
-                        self.xk["min_cost"],
-                        self.xk["c_mult"],
-                        self.xk["grid_span"][0],
-                        self.xk["wallet_exposure_limit"][0],
-                        self.xk["max_n_entry_orders"][0],
-                        self.xk["initial_qty_pct"][0],
-                        self.xk["initial_eprice_ema_dist"][0],
-                        self.xk["eprice_pprice_diff"][0],
-                        self.xk["secondary_allocation"][0],
-                        self.xk["secondary_pprice_diff"][0],
-                        self.xk["eprice_exp_base"][0],
-                        self.xk["auto_unstuck_wallet_exposure_threshold"][0],
-                        self.xk["auto_unstuck_ema_dist"][0],
+                        self.xk["delay_between_AU_closes_minutes"][0] or self.xk["qty_pct_AU_close"][0],
                     )
                 elif self.passivbot_mode == "neat_grid":
                     entries_long = calc_neat_grid_long(
@@ -654,6 +640,7 @@ class Bot:
                         self.xk["eprice_exp_base"][0],
                         self.xk["auto_unstuck_wallet_exposure_threshold"][0],
                         self.xk["auto_unstuck_ema_dist"][0],
+                        self.xk["delay_between_AU_closes_minutes"][0] or self.xk["qty_pct_AU_close"][0],
                     )
                 elif self.passivbot_mode == "clock":
                     entries_long = [
@@ -704,6 +691,8 @@ class Bot:
                     pprice_long,
                     self.ob[1],
                     max(self.emas_long),
+                    self.server_time,
+                    self.last_fills_timestamps["unstuck_close_long"],
                     self.xk["inverse"],
                     self.xk["qty_step"],
                     self.xk["price_step"],
@@ -716,6 +705,8 @@ class Bot:
                     self.xk["n_close_orders"][0],
                     self.xk["auto_unstuck_wallet_exposure_threshold"][0],
                     self.xk["auto_unstuck_ema_dist"][0],
+                    self.xk["delay_between_AU_closes_minutes"][0],
+                    self.xk["qty_pct_AU_close"][0],
                 )
                 if self.passivbot_mode == "clock":
                     clock_close_long = calc_clock_close_long(
@@ -750,6 +741,8 @@ class Bot:
                             pprice_long,
                             self.ob[1],
                             max(self.emas_long),
+                            self.server_time,
+                            self.last_fills_timestamps["unstuck_close_long"],
                             self.xk["inverse"],
                             self.xk["qty_step"],
                             self.xk["price_step"],
@@ -762,6 +755,8 @@ class Bot:
                             self.xk["n_close_orders"][0],
                             self.xk["auto_unstuck_wallet_exposure_threshold"][0],
                             self.xk["auto_unstuck_ema_dist"][0],
+                            self.xk["delay_between_AU_closes_minutes"][0],
+                            self.xk["qty_pct_AU_close"][0],
                         )
                 orders += [
                     {
@@ -812,6 +807,7 @@ class Bot:
                         self.xk["wallet_exposure_limit"][1],
                         self.xk["auto_unstuck_ema_dist"][1],
                         self.xk["auto_unstuck_wallet_exposure_threshold"][1],
+                        self.xk["delay_between_AU_closes_minutes"][1] or self.xk["qty_pct_AU_close"][1],
                     )
                 elif self.passivbot_mode == "neat_grid":
                     entries_short = calc_neat_grid_short(
@@ -836,32 +832,7 @@ class Bot:
                         self.xk["eprice_exp_base"][1],
                         self.xk["auto_unstuck_wallet_exposure_threshold"][1],
                         self.xk["auto_unstuck_ema_dist"][1],
-                    )
-                elif self.passivbot_mode == "static_grid":
-                    entries_short = calc_entry_grid_short(
-                        balance,
-                        psize_short,
-                        pprice_short,
-                        self.ob[1],
-                        max(self.emas_short),
-                        self.xk["inverse"],
-                        self.xk["do_short"],
-                        self.xk["qty_step"],
-                        self.xk["price_step"],
-                        self.xk["min_qty"],
-                        self.xk["min_cost"],
-                        self.xk["c_mult"],
-                        self.xk["grid_span"][1],
-                        self.xk["wallet_exposure_limit"][1],
-                        self.xk["max_n_entry_orders"][1],
-                        self.xk["initial_qty_pct"][1],
-                        self.xk["initial_eprice_ema_dist"][1],
-                        self.xk["eprice_pprice_diff"][1],
-                        self.xk["secondary_allocation"][1],
-                        self.xk["secondary_pprice_diff"][1],
-                        self.xk["eprice_exp_base"][1],
-                        self.xk["auto_unstuck_wallet_exposure_threshold"][1],
-                        self.xk["auto_unstuck_ema_dist"][1],
+                        self.xk["delay_between_AU_closes_minutes"][1] or self.xk["qty_pct_AU_close"][1],
                     )
                 elif self.passivbot_mode == "clock":
                     entries_short = [
@@ -912,6 +883,8 @@ class Bot:
                     pprice_short,
                     self.ob[0],
                     min(self.emas_short),
+                    self.server_time,
+                    self.last_fills_timestamps["unstuck_close_short"],
                     self.xk["inverse"],
                     self.xk["qty_step"],
                     self.xk["price_step"],
@@ -924,6 +897,8 @@ class Bot:
                     self.xk["n_close_orders"][1],
                     self.xk["auto_unstuck_wallet_exposure_threshold"][1],
                     self.xk["auto_unstuck_ema_dist"][1],
+                    self.xk["delay_between_AU_closes_minutes"][1],
+                    self.xk["qty_pct_AU_close"][1],
                 )
                 if self.passivbot_mode == "clock":
                     clock_close_short = calc_clock_close_short(
@@ -961,6 +936,8 @@ class Bot:
                             pprice_short,
                             self.ob[0],
                             min(self.emas_short),
+                            self.server_time,
+                            self.last_fills_timestamps["unstuck_close_short"],
                             self.xk["inverse"],
                             self.xk["qty_step"],
                             self.xk["price_step"],
@@ -973,6 +950,8 @@ class Bot:
                             self.xk["n_close_orders"][1],
                             self.xk["auto_unstuck_wallet_exposure_threshold"][1],
                             self.xk["auto_unstuck_ema_dist"][1],
+                            self.xk["delay_between_fills_ms_close"][1],
+                            self.xk["wallet_exposure_limit"][1],
                         )
                 orders += [
                     {
@@ -1505,7 +1484,7 @@ class Bot:
                 self.update_open_orders(),
                 self.init_order_book(),
             ]
-            if self.passivbot_mode == "clock":
+            if self.passivbot_mode == "clock" or self.auto_unstuck_on_timer:
                 to_update.append(self.update_last_fills_timestamps())
                 to_update.append(self.update_server_time())
             res = await asyncio.gather(*to_update)
@@ -1778,7 +1757,7 @@ async def main() -> None:
         default=None,
         nargs="?",
         const="y",
-        help="if no arg or [y/yes], use 1m ohlcv instead of 1s ticks, overriding param ohlcv from config/backtest/default.hjson",
+        help="if no arg or [y/yes], use 1m ohlcv instead of 1s ticks",
     )
 
     float_kwargs = [
