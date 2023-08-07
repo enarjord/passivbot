@@ -62,7 +62,7 @@
   backwards_tp_long: true
   backwards_tp_short: true
 
-  # choices: [r/recursive_grid, s/static_grid, n/neat_grid, c/clock]
+  # choices: [r/recursive_grid, n/neat_grid, c/clock]
   passivbot_mode: neat_grid
 
   # symbols with data since earlier than 2021-05-01
@@ -89,47 +89,6 @@
     "MTLUSDT", "OGNUSDT", "NKNUSDT", "DGBUSDT",
   ]
 
-  bounds_static_grid:
-  {
-    long:
-    {
-      grid_span: [0.1, 0.7]
-      wallet_exposure_limit: [1.0, 1.0]
-      max_n_entry_orders: [7, 22]
-      ema_span_0: [5.0, 1440.0]
-      ema_span_1: [5.0, 1440.0]
-      initial_qty_pct: [0.01, 0.1]
-      initial_eprice_ema_dist: [-0.1, 0.004]
-      eprice_pprice_diff: [0.002, 0.05]
-      secondary_allocation: [0.0, 0.7]
-      secondary_pprice_diff: [0.05, 0.5]
-      eprice_exp_base: [1.0, 4.0]
-      min_markup: [0.001, 0.01]
-      markup_range: [0.0, 0.06]
-      n_close_orders: [2, 16]
-      auto_unstuck_wallet_exposure_threshold: [0.03, 0.1]
-      auto_unstuck_ema_dist: [-0.1, 0.003]
-    }
-    short:
-    {
-      grid_span: [0.1, 0.7]
-      wallet_exposure_limit: [1.0, 1.0]
-      max_n_entry_orders: [7, 22]
-      ema_span_0: [5.0, 1440.0]
-      ema_span_1: [5.0, 1440.0]
-      initial_qty_pct: [0.01, 0.1]
-      initial_eprice_ema_dist: [-0.1, 0.004]
-      eprice_pprice_diff: [0.002, 0.05]
-      secondary_allocation: [0.0, 0.7]
-      secondary_pprice_diff: [0.05, 0.5]
-      eprice_exp_base: [1.0, 4.0]
-      min_markup: [0.001, 0.01]
-      markup_range: [0.0, 0.06]
-      n_close_orders: [2, 16]
-      auto_unstuck_wallet_exposure_threshold: [0.03, 0.1]
-      auto_unstuck_ema_dist: [-0.1, 0.003]
-    }
-  }
   bounds_recursive_grid:
   {
     long:
@@ -147,6 +106,8 @@
       n_close_orders: [2, 16]
       auto_unstuck_wallet_exposure_threshold: [0.03, 0.1]
       auto_unstuck_ema_dist: [-0.1, 0.003]
+      delay_between_AU_closes_minutes: [1.0, 1440.0]
+      qty_pct_AU_close: [0.01, 0.1]
     }
     short:
     {
@@ -163,6 +124,8 @@
       n_close_orders: [2, 16]
       auto_unstuck_wallet_exposure_threshold: [0.03, 0.1]
       auto_unstuck_ema_dist: [-0.1, 0.003]
+      delay_between_AU_closes_minutes: [1.0, 1440.0]
+      qty_pct_AU_close: [0.01, 0.1]
     }
   }
   bounds_neat_grid:
@@ -183,6 +146,8 @@
       n_close_orders: [2, 16]
       auto_unstuck_wallet_exposure_threshold: [0.03, 0.1]
       auto_unstuck_ema_dist: [-0.1, 0.003]
+      delay_between_AU_closes_minutes: [1.0, 1440.0]
+      qty_pct_AU_close: [0.01, 0.1]
     }
     short:
     {
@@ -200,6 +165,8 @@
       n_close_orders: [2, 16]
       auto_unstuck_wallet_exposure_threshold: [0.03, 0.1]
       auto_unstuck_ema_dist: [-0.1, 0.003]
+      delay_between_AU_closes_minutes: [1.0, 1440.0]
+      qty_pct_AU_close: [0.01, 0.1]
     }
   }
   bounds_clock:
