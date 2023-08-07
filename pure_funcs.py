@@ -46,7 +46,7 @@ def calc_spans(min_span: int, max_span: int, n_spans: int) -> np.ndarray:
     return np.array([min_span, (min_span * max_span) ** 0.5, max_span])
 
 
-def get_xk_keys(passivbot_mode="static_grid"):
+def get_xk_keys(passivbot_mode="neat_grid"):
     if passivbot_mode == "recursive_grid":
         return [
             "inverse",
@@ -71,6 +71,8 @@ def get_xk_keys(passivbot_mode="static_grid"):
             "n_close_orders",
             "auto_unstuck_wallet_exposure_threshold",
             "auto_unstuck_ema_dist",
+            "delay_between_AU_closes_minutes",
+            "qty_pct_AU_close",
         ]
     elif passivbot_mode == "neat_grid":
         return [
@@ -97,6 +99,8 @@ def get_xk_keys(passivbot_mode="static_grid"):
             "initial_eprice_ema_dist",
             "auto_unstuck_wallet_exposure_threshold",
             "auto_unstuck_ema_dist",
+            "delay_between_AU_closes_minutes",
+            "qty_pct_AU_close",
         ]
     elif passivbot_mode == "clock":
         return [
@@ -126,34 +130,6 @@ def get_xk_keys(passivbot_mode="static_grid"):
             "n_close_orders",
             "wallet_exposure_limit",
         ]
-    elif passivbot_mode == "static_grid":
-        return [
-            "inverse",
-            "do_long",
-            "do_short",
-            "backwards_tp",
-            "qty_step",
-            "price_step",
-            "min_qty",
-            "min_cost",
-            "c_mult",
-            "grid_span",
-            "wallet_exposure_limit",
-            "max_n_entry_orders",
-            "initial_qty_pct",
-            "eprice_pprice_diff",
-            "secondary_allocation",
-            "secondary_pprice_diff",
-            "eprice_exp_base",
-            "min_markup",
-            "markup_range",
-            "n_close_orders",
-            "ema_span_0",
-            "ema_span_1",
-            "initial_eprice_ema_dist",
-            "auto_unstuck_wallet_exposure_threshold",
-            "auto_unstuck_ema_dist",
-        ]
     else:
         raise Exception(f"unknown passivbot mode {passivbot_mode}")
 
@@ -168,14 +144,10 @@ def determine_passivbot_mode(config: dict, skip=[]) -> str:
         if k not in skip
     ):
         return "recursive_grid"
-    if all(
+    elif all(
         k in config["long"] for k in get_template_live_config("neat_grid")["long"] if k not in skip
     ):
         return "neat_grid"
-    elif all(
-        k in config["long"] for k in get_template_live_config("static_grid")["long"] if k not in skip
-    ):
-        return "static_grid"
     else:
         raise Exception("unable to determine passivbot mode")
 
@@ -193,9 +165,12 @@ def create_xk(config: dict) -> dict:
     keys = get_xk_keys(config_["passivbot_mode"])
     config_["long"]["n_close_orders"] = int(round(config_["long"]["n_close_orders"]))
     config_["short"]["n_close_orders"] = int(round(config_["short"]["n_close_orders"]))
-    if config_["passivbot_mode"] in ["static_grid", "neat_grid"]:
+    if config_["passivbot_mode"] in ["neat_grid"]:
         config_["long"]["max_n_entry_orders"] = int(round(config_["long"]["max_n_entry_orders"]))
         config_["short"]["max_n_entry_orders"] = int(round(config_["short"]["max_n_entry_orders"]))
+    if config_["passivbot_mode"] in ["clock"]:
+        config_["long"]["delay_between_AU_closes_minutes"] = 0.0
+        config_["short"]["qty_pct_AU_close"] = 0.0
     for k in keys:
         if "long" in config_ and k in config_["long"]:
             xk[k] = (config_["long"][k], config_["short"][k])
@@ -509,7 +484,7 @@ def flatten(lst: list) -> list:
     return [y for x in lst for y in x]
 
 
-def get_template_live_config(passivbot_mode="static_grid"):
+def get_template_live_config(passivbot_mode="neat_grid"):
     if passivbot_mode == "recursive_grid":
         return sort_dict_keys(
             {
@@ -523,11 +498,13 @@ def get_template_live_config(passivbot_mode="static_grid"):
                     "initial_eprice_ema_dist": -0.02,
                     "wallet_exposure_limit": 1.0,
                     "ddown_factor": 0.6,
+                    "delay_between_AU_closes_minutes": 300.0,
                     "rentry_pprice_dist": 0.015,
                     "rentry_pprice_dist_wallet_exposure_weighting": 15,
                     "min_markup": 0.02,
                     "markup_range": 0.02,
                     "n_close_orders": 7,
+                    "qty_pct_AU_close": 0.04,
                     "auto_unstuck_wallet_exposure_threshold": 0.15,
                     "auto_unstuck_ema_dist": 0.02,
                     "backwards_tp": False,
@@ -540,11 +517,13 @@ def get_template_live_config(passivbot_mode="static_grid"):
                     "initial_eprice_ema_dist": -0.02,
                     "wallet_exposure_limit": 1.0,
                     "ddown_factor": 0.6,
+                    "delay_between_AU_closes_minutes": 300.0,
                     "rentry_pprice_dist": 0.015,
                     "rentry_pprice_dist_wallet_exposure_weighting": 15,
                     "min_markup": 0.02,
                     "markup_range": 0.02,
                     "n_close_orders": 7,
+                    "qty_pct_AU_close": 0.04,
                     "auto_unstuck_wallet_exposure_threshold": 0.15,
                     "auto_unstuck_ema_dist": 0.02,
                     "backwards_tp": False,
@@ -574,6 +553,8 @@ def get_template_live_config(passivbot_mode="static_grid"):
                     # e.g. wallet_exposure_limit=0.06 and auto_unstuck_wallet_exposure_threshold=0.1: soft stop when wallet_exposure > 0.06 * (1 - 0.1) == 0.054
                     "auto_unstuck_ema_dist": 0.02,
                     "backwards_tp": False,
+                    "delay_between_AU_closes_minutes": 300.0,
+                    "qty_pct_AU_close": 0.04,
                 },
                 "short": {
                     "enabled": True,
@@ -593,6 +574,8 @@ def get_template_live_config(passivbot_mode="static_grid"):
                     # e.g. wallet_exposure_limit=0.06 and auto_unstuck_wallet_exposure_threshold=0.1: soft stop when wallet_exposure > 0.06 * (1 - 0.1) == 0.054
                     "auto_unstuck_ema_dist": 0.02,
                     "backwards_tp": False,
+                    "delay_between_AU_closes_minutes": 300.0,
+                    "qty_pct_AU_close": 0.04,
                 },
             }
         )
@@ -639,55 +622,6 @@ def get_template_live_config(passivbot_mode="static_grid"):
                     "markup_range": 0.03,
                     "n_close_orders": 10,
                     "backwards_tp": True,
-                },
-            }
-        )
-    elif passivbot_mode == "static_grid":
-        return sort_dict_keys(
-            {
-                "config_name": "static_template",
-                "logging_level": 0,
-                "long": {
-                    "enabled": True,
-                    "ema_span_0": 1440,  # in minutes
-                    "ema_span_1": 4320,
-                    "grid_span": 0.16,
-                    "wallet_exposure_limit": 1.6,
-                    "max_n_entry_orders": 10,
-                    "initial_qty_pct": 0.01,
-                    "initial_eprice_ema_dist": -0.01,  # negative is closer; positive is further away
-                    "eprice_pprice_diff": 0.0025,
-                    "secondary_allocation": 0.5,
-                    "secondary_pprice_diff": 0.35,
-                    "eprice_exp_base": 1.618034,
-                    "min_markup": 0.0045,
-                    "markup_range": 0.0075,
-                    "n_close_orders": 7,
-                    "auto_unstuck_wallet_exposure_threshold": 0.1,  # percentage of wallet_exposure_limit to trigger soft stop.
-                    # e.g. wallet_exposure_limit=0.06 and auto_unstuck_wallet_exposure_threshold=0.1: soft stop when wallet_exposure > 0.06 * (1 - 0.1) == 0.054
-                    "auto_unstuck_ema_dist": 0.02,
-                    "backwards_tp": False,
-                },
-                "short": {
-                    "enabled": True,
-                    "ema_span_0": 1440,  # in minutes
-                    "ema_span_1": 4320,
-                    "grid_span": 0.16,
-                    "wallet_exposure_limit": 1.6,
-                    "max_n_entry_orders": 10,
-                    "initial_qty_pct": 0.01,
-                    "initial_eprice_ema_dist": -0.01,  # negative is closer; positive is further away
-                    "eprice_pprice_diff": 0.0025,
-                    "secondary_allocation": 0.5,
-                    "secondary_pprice_diff": 0.35,
-                    "eprice_exp_base": 1.618034,
-                    "min_markup": 0.0045,
-                    "markup_range": 0.0075,
-                    "n_close_orders": 7,
-                    "auto_unstuck_wallet_exposure_threshold": 0.1,  # percentage of wallet_exposure_limit to trigger soft stop.
-                    # e.g. wallet_exposure_limit=0.06 and auto_unstuck_wallet_exposure_threshold=0.1: soft stop when wallet_exposure > 0.06 * (1 - 0.1) == 0.054
-                    "auto_unstuck_ema_dist": 0.02,
-                    "backwards_tp": False,
                 },
             }
         )
@@ -1395,7 +1329,9 @@ def make_compatible(live_config_: dict) -> dict:
     ]:
         if src in live_config[side]:
             live_config[side][dst] = live_config[side].pop(src)
-    passivbot_mode = determine_passivbot_mode(live_config, skip=["backwards_tp"])
+    passivbot_mode = determine_passivbot_mode(
+        live_config, skip=["backwards_tp", "qty_pct_AU_close", "delay_between_AU_closes_minutes"]
+    )
     for side in ["long", "short"]:
         for k0 in [
             "delay_weight_close",
@@ -1431,15 +1367,12 @@ def make_compatible(live_config_: dict) -> dict:
             ("rentry_pprice_dist", 0.0, 100.0),
             ("rentry_pprice_dist_wallet_exposure_weighting", 0.0, 1000000.0),
             ("eprice_pprice_diff", 0.0, 100.0),
-            ("eprice_exp_base", 0.0, 100.0),
-            ("secondary_allocation", 0.0, 1.0),
-            ("secondary_pprice_diff", 0.0, 100.0),
         ]:
             # keep within bounds
             if k0 in live_config[side]:
                 live_config[side][k0] = min(ub, max(lb, live_config[side][k0]))
 
-        if passivbot_mode in ["recursive_grid", "static_grid", "neat_grid"]:
+        if passivbot_mode in ["recursive_grid", "neat_grid"]:
             if "initial_eprice_ema_dist" not in live_config[side]:
                 live_config[side]["initial_eprice_ema_dist"] = -10.0
             if "auto_unstuck_wallet_exposure_threshold" not in live_config[side]:
@@ -1448,6 +1381,10 @@ def make_compatible(live_config_: dict) -> dict:
                 live_config[side]["auto_unstuck_ema_dist"] = 0.0
             if "backwards_tp" not in live_config[side]:
                 live_config[side]["backwards_tp"] = False
+            if "delay_between_AU_closes_minutes" not in live_config[side]:
+                live_config[side]["delay_between_AU_closes_minutes"] = 0.0
+            if "qty_pct_AU_close" not in live_config[side]:
+                live_config[side]["qty_pct_AU_close"] = 0.0
         elif passivbot_mode == "clock":
             if "backwards_tp" not in live_config[side]:
                 live_config[side]["backwards_tp"] = True
