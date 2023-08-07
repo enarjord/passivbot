@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 
 from downloader import Downloader, load_hlc_cache
-from njit_funcs import backtest_static_grid, round_
+from njit_funcs import round_
 from njit_funcs_recursive_grid import backtest_recursive_grid
 from njit_funcs_neat_grid import backtest_neat_grid
 from njit_clock import backtest_clock
@@ -58,14 +58,6 @@ def backtest(config: dict, data: np.ndarray, do_print=False) -> (list, bool):
         return backtest_clock(
             data,
             config["starting_balance"],
-            config["maker_fee"],
-            **xk,
-        )
-    elif passivbot_mode == "static_grid":
-        return backtest_static_grid(
-            data,
-            config["starting_balance"],
-            config["latency_simulation_ms"],
             config["maker_fee"],
             **xk,
         )
