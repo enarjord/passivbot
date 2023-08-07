@@ -20,6 +20,8 @@ from njit_funcs import (
     calc_diff,
     calc_bankruptcy_price,
     find_entry_qty_bringing_wallet_exposure_to_target,
+    calc_auto_unstuck_entry_long,
+    calc_auto_unstuck_entry_short,
 )
 
 
@@ -63,6 +65,7 @@ def calc_neat_grid_long(
     eprice_exp_base,
     auto_unstuck_wallet_exposure_threshold,
     auto_unstuck_ema_dist,
+    auto_unstuck_on_timer,
 ) -> [(float, float, str)]:
     if wallet_exposure_limit == 0.0:
         return [(0.0, 0.0, "")]
@@ -91,31 +94,25 @@ def calc_neat_grid_long(
     wallet_exposure = qty_to_cost(psize, pprice, inverse, c_mult) / balance
     if wallet_exposure >= wallet_exposure_limit * 0.99:
         return [(0.0, 0.0, "")]
-    if auto_unstuck_wallet_exposure_threshold != 0.0:
+    if not auto_unstuck_on_timer and auto_unstuck_wallet_exposure_threshold != 0.0:
+        # legacy AU mode
         threshold = wallet_exposure_limit * (1 - auto_unstuck_wallet_exposure_threshold)
         if wallet_exposure > threshold * 0.99:
-            auto_unstuck_entry_price = min(
-                highest_bid,
-                round_dn(ema_band_lower * (1 - auto_unstuck_ema_dist), price_step),
-            )
-            auto_unstuck_qty = find_entry_qty_bringing_wallet_exposure_to_target(
-                balance,
-                psize,
-                pprice,
-                wallet_exposure_limit,
-                auto_unstuck_entry_price,
-                inverse,
-                qty_step,
-                c_mult,
-            )
-            min_entry_qty = calc_min_entry_qty(
-                auto_unstuck_entry_price, inverse, qty_step, min_qty, min_cost
-            )
             return [
-                (
-                    max(auto_unstuck_qty, min_entry_qty),
-                    auto_unstuck_entry_price,
-                    "long_unstuck_entry",
+                calc_auto_unstuck_entry_long(
+                    balance,
+                    psize,
+                    pprice,
+                    highest_bid,
+                    ema_band_lower,
+                    inverse,
+                    qty_step,
+                    price_step,
+                    min_qty,
+                    min_cost,
+                    c_mult,
+                    wallet_exposure_limit,
+                    auto_unstuck_ema_dist,
                 )
             ]
     grid = approximate_neat_grid_long(
@@ -176,6 +173,7 @@ def calc_neat_grid_short(
     eprice_exp_base,
     auto_unstuck_wallet_exposure_threshold,
     auto_unstuck_ema_dist,
+    auto_unstuck_on_timer,
 ) -> [(float, float, str)]:
     if wallet_exposure_limit == 0.0:
         return [(0.0, 0.0, "")]
@@ -205,31 +203,25 @@ def calc_neat_grid_short(
     wallet_exposure = qty_to_cost(abs_psize, pprice, inverse, c_mult) / balance
     if wallet_exposure >= wallet_exposure_limit * 0.99:
         return [(0.0, 0.0, "")]
-    if auto_unstuck_wallet_exposure_threshold != 0.0:
+    if not auto_unstuck_on_timer and auto_unstuck_wallet_exposure_threshold != 0.0:
+        # legacy AU mode
         threshold = wallet_exposure_limit * (1 - auto_unstuck_wallet_exposure_threshold)
         if wallet_exposure > threshold * 0.99:
-            auto_unstuck_entry_price = max(
-                lowest_ask,
-                round_up(ema_band_upper * (1 + auto_unstuck_ema_dist), price_step),
-            )
-            auto_unstuck_qty = find_entry_qty_bringing_wallet_exposure_to_target(
-                balance,
-                abs_psize,
-                pprice,
-                wallet_exposure_limit,
-                auto_unstuck_entry_price,
-                inverse,
-                qty_step,
-                c_mult,
-            )
-            min_entry_qty = calc_min_entry_qty(
-                auto_unstuck_entry_price, inverse, qty_step, min_qty, min_cost
-            )
             return [
-                (
-                    -max(auto_unstuck_qty, min_entry_qty),
-                    auto_unstuck_entry_price,
-                    "short_unstuck_entry",
+                calc_auto_unstuck_entry_short(
+                    balance,
+                    psize,
+                    pprice,
+                    lowest_ask,
+                    ema_band_upper,
+                    inverse,
+                    qty_step,
+                    price_step,
+                    min_qty,
+                    min_cost,
+                    c_mult,
+                    wallet_exposure_limit,
+                    auto_unstuck_ema_dist,
                 )
             ]
     grid = approximate_neat_grid_short(
@@ -876,6 +868,8 @@ def backtest_neat_grid(
     wallet_exposure_limit,
     auto_unstuck_ema_dist,
     auto_unstuck_wallet_exposure_threshold,
+    delay_between_AU_closes_minutes,
+    qty_pct_AU_close,
 ):
     if len(ticks[0]) == 3:
         timestamps = ticks[:, 0]
@@ -902,6 +896,9 @@ def backtest_neat_grid(
     next_close_grid_update_ts_long = 0
     next_close_grid_update_ts_short = 0
     next_stats_update = 0
+
+    prev_AU_fill_ts_close_long = 0
+    prev_AU_fill_ts_close_short = 0
 
     closest_bkr_long = closest_bkr_short = 1.0
 
@@ -1012,6 +1009,7 @@ def backtest_neat_grid(
                         eprice_exp_base[0],
                         auto_unstuck_wallet_exposure_threshold[0],
                         auto_unstuck_ema_dist[0],
+                        delay_between_AU_closes_minutes[0] or qty_pct_AU_close[0],
                     )
 
                     next_entry_grid_update_ts_long = timestamps[k] + 1000 * 60 * 5
@@ -1024,6 +1022,8 @@ def backtest_neat_grid(
                         pprice_long,
                         closes[k - 1],
                         max(emas_long),
+                        timestamps[k - 1],
+                        prev_AU_fill_ts_close_long,
                         inverse,
                         qty_step,
                         price_step,
@@ -1036,6 +1036,8 @@ def backtest_neat_grid(
                         n_close_orders[0],
                         auto_unstuck_wallet_exposure_threshold[0],
                         auto_unstuck_ema_dist[0],
+                        delay_between_AU_closes_minutes[0],
+                        qty_pct_AU_close[0],
                     )
                     next_close_grid_update_ts_long = timestamps[k] + 1000 * 60 * 5
 
@@ -1126,6 +1128,8 @@ def backtest_neat_grid(
                     equity_long = balance_long + calc_pnl_long(
                         pprice_long, closes[k], psize_long, inverse, c_mult
                     )
+                    if "unstuck_close" in closes_long[0][2]:
+                        prev_AU_fill_ts_close_long = timestamps[k]
                     fills_long.append(
                         (
                             k,
@@ -1256,6 +1260,7 @@ def backtest_neat_grid(
                         eprice_exp_base[1],
                         auto_unstuck_wallet_exposure_threshold[1],
                         auto_unstuck_ema_dist[1],
+                        delay_between_AU_closes_minutes[1] or qty_pct_AU_close[1],
                     )
 
                     next_entry_grid_update_ts_short = timestamps[k] + 1000 * 60 * 5
@@ -1268,6 +1273,8 @@ def backtest_neat_grid(
                         pprice_short,
                         closes[k - 1],
                         min(emas_short),
+                        timestamps[k - 1],
+                        prev_AU_fill_ts_close_short,
                         inverse,
                         qty_step,
                         price_step,
@@ -1280,6 +1287,8 @@ def backtest_neat_grid(
                         n_close_orders[1],
                         auto_unstuck_wallet_exposure_threshold[1],
                         auto_unstuck_ema_dist[1],
+                        delay_between_AU_closes_minutes[1],
+                        qty_pct_AU_close[1],
                     )
                     next_close_grid_update_ts_short = timestamps[k] + 1000 * 60 * 5
 
@@ -1367,6 +1376,8 @@ def backtest_neat_grid(
                     equity_short = balance_short + calc_pnl_short(
                         pprice_short, closes[k], psize_short, inverse, c_mult
                     )
+                    if "unstuck_close" in closes_short[0][2]:
+                        prev_AU_fill_ts_close_short = timestamps[k]
                     fills_short.append(
                         (
                             k,
