@@ -18,6 +18,9 @@ from njit_funcs import (
     calc_close_grid_short,
     calc_min_entry_qty,
     find_entry_qty_bringing_wallet_exposure_to_target,
+    calc_delay_between_fills_ms_bid,
+    calc_delay_between_fills_ms_ask,
+    calc_clock_qty,
 )
 
 if "NOJIT" in os.environ and os.environ["NOJIT"] == "true":
@@ -45,44 +48,6 @@ def calc_clock_price_bid(lower_ema_band, highest_bid, ema_dist_lower, price_step
 @njit
 def calc_clock_price_ask(upper_ema_band, lowest_ask, ema_dist_upper, price_step):
     return max(lowest_ask, round_up(upper_ema_band * (1 + ema_dist_upper), price_step))
-
-
-@njit
-def calc_clock_qty(
-    balance,
-    wallet_exposure,
-    entry_price,
-    inverse,
-    qty_step,
-    min_qty,
-    min_cost,
-    c_mult,
-    qty_pct,
-    we_multiplier,
-    wallet_exposure_limit,
-):
-    ratio = wallet_exposure / wallet_exposure_limit
-    cost = balance * wallet_exposure_limit * qty_pct * (1 + ratio * we_multiplier)
-    return max(
-        calc_min_entry_qty(entry_price, inverse, qty_step, min_qty, min_cost),
-        round_(cost_to_qty(cost, entry_price, inverse, c_mult), qty_step),
-    )
-
-
-@njit
-def calc_delay_between_fills_ms_bid(pprice, price, delay_between_fills_ms, delay_weight):
-    # lowest delay is 1 minute
-    # reduce delay between bids in some proportion to diff between pos price and market price
-    pprice_diff = (pprice / price - 1) if price > 0.0 else 0.0
-    return max(60000.0, delay_between_fills_ms * min(1.0, (1 - pprice_diff * delay_weight)))
-
-
-@njit
-def calc_delay_between_fills_ms_ask(pprice, price, delay_between_fills_ms, delay_weight):
-    # lowest delay is 1 minute
-    # reduce delay between asks in some proportion to diff between pos price and market price
-    pprice_diff = (price / pprice - 1) if pprice > 0.0 else 0.0
-    return max(60000.0, delay_between_fills_ms * min(1.0, (1 - pprice_diff * delay_weight)))
 
 
 @njit
@@ -206,6 +171,9 @@ def calc_clock_close_long(
                 ),
             )
             if qty_long > 0.0:
+                if round_(psize_long - qty_long, qty_step) < calc_min_entry_qty(ask_price_long, inverse, qty_step, min_qty, min_cost):
+                    # close whole pos; include leftovers
+                    return (-psize_long, ask_price_long, "clock_close_long")
                 return (-qty_long, ask_price_long, "clock_close_long")
     return (0.0, 0.0, "clock_close_long")
 
@@ -339,6 +307,9 @@ def calc_clock_close_short(
                 ),
             )
             if qty_short > 0.0:
+                if round_(psize_short - qty_short, qty_step) < calc_min_entry_qty(bid_price_short, inverse, qty_step, min_qty, min_cost):
+                    # close whole pos; include leftovers
+                    return (psize_short, bid_price_short, "clock_close_short")
                 return (qty_short, bid_price_short, "clock_close_short")
     return (0.0, 0.0, "clock_close_short")
 
