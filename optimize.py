@@ -140,7 +140,7 @@ async def main(algorithm=None):
         required=False,
         dest="passivbot_mode",
         default=None,
-        help="passivbot mode options: [s/static_grid, r/recursive_grid, n/neat_grid, c/clock]",
+        help="passivbot mode options: [r/recursive_grid, n/neat_grid, c/clock]",
     )
     parser.add_argument(
         "-a",
@@ -179,9 +179,7 @@ async def main(algorithm=None):
 async def run_opt(args, config):
     try:
         if args.passivbot_mode is not None:
-            if args.passivbot_mode in ["s", "static_grid", "static"]:
-                config["passivbot_mode"] = "static_grid"
-            elif args.passivbot_mode in ["r", "recursive_grid", "recursive"]:
+            if args.passivbot_mode in ["r", "recursive_grid", "recursive"]:
                 config["passivbot_mode"] = "recursive_grid"
             elif args.passivbot_mode in ["n", "neat_grid", "neat"]:
                 config["passivbot_mode"] = "neat_grid"
@@ -204,7 +202,6 @@ async def run_opt(args, config):
         passivbot_mode = config["passivbot_mode"]
         assert passivbot_mode in [
             "recursive_grid",
-            "static_grid",
             "neat_grid",
             "clock",
         ], f"unknown passivbot mode {passivbot_mode}"
