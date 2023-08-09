@@ -9,7 +9,10 @@ from urllib.parse import urlencode
 import aiohttp
 import numpy as np
 import ccxt.async_support as ccxt
-assert ccxt.__version__ == "3.1.31", f"Currently ccxt {ccxt.__version__} is installed. Please pip reinstall requirements.txt or install ccxt v3.1.31 manually"
+
+assert (
+    ccxt.__version__ == "3.1.31"
+), f"Currently ccxt {ccxt.__version__} is installed. Please pip reinstall requirements.txt or install ccxt v3.1.31 manually"
 import uuid
 
 from passivbot import Bot, logging
