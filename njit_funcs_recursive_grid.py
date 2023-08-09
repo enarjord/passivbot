@@ -402,8 +402,7 @@ def calc_recursive_entries_long(
     wallet_exposure_limit,
     auto_unstuck_ema_dist,
     auto_unstuck_wallet_exposure_threshold,
-    auto_unstuck_delay_minutes,
-    auto_unstuck_qty_pct,
+    auto_unstuck_on_timer,
     whole_grid=False,
 ):
     entries = []
@@ -436,7 +435,7 @@ def calc_recursive_entries_long(
             wallet_exposure_limit,
             auto_unstuck_ema_dist,
             auto_unstuck_wallet_exposure_threshold,
-            auto_unstuck_delay_minutes or auto_unstuck_qty_pct,
+            auto_unstuck_on_timer,
         )
         if entry_qty == 0.0:
             break
@@ -477,8 +476,7 @@ def calc_recursive_entries_short(
     wallet_exposure_limit,
     auto_unstuck_ema_dist,
     auto_unstuck_wallet_exposure_threshold,
-    auto_unstuck_delay_minutes,
-    auto_unstuck_qty_pct,
+    auto_unstuck_on_timer,
     whole_grid=False,
 ):
     entries = []
@@ -511,7 +509,7 @@ def calc_recursive_entries_short(
             wallet_exposure_limit,
             auto_unstuck_ema_dist,
             auto_unstuck_wallet_exposure_threshold,
-            auto_unstuck_delay_minutes or auto_unstuck_qty_pct,
+            auto_unstuck_on_timer,
         )
         if entry_qty == 0.0:
             break
