@@ -10,6 +10,7 @@ import uuid
 from passivbot import Bot, logging
 from procedures import print_, print_async_exception
 from pure_funcs import ts_to_date, sort_dict_keys, format_float, shorten_custom_id
+from njit_funcs import calc_diff
 
 
 class MEXCBot(Bot):
@@ -105,7 +106,7 @@ class MEXCBot(Bot):
             res = await self.mexc.set_position_mode(True)
             logging.info(str(res))
         except Exception as e:
-            print('error setting position mode', e)
+            print("error setting position mode", e)
             print_async_exception(res)
 
     async def init_order_book(self):
@@ -190,12 +191,6 @@ class MEXCBot(Bot):
             print_async_exception(balance)
             traceback.print_exc()
 
-
-
-
-
-
-
     async def execute_orders(self, orders: [dict]) -> [dict]:
         if not orders:
             return []
@@ -222,23 +217,24 @@ class MEXCBot(Bot):
         return results
 
     async def execute_order(self, order: dict) -> dict:
-        side_map = {'buy': {'long': 1, 'short': 2}, 'sell': {'short': 3, 'long': 4}}
-        type_map = {'limit': 2, 'market': 5}
+        side_map = {"buy": {"long": 1, "short": 2}, "sell": {"short": 3, "long": 4}}
+        type_map = {"limit": 2, "market": 5}
         executed = None
         try:
             params = {
                 "symbol": self.symbol,
-                "price": order['price'],
-                "vol": order['qty'],
-                "side": side_map[order['side']][order['position_side']],
-                "type": type_map[order['type']],
-                "openType": 2, # cross
-                "reduceOnly": order['reduce_only'],
+                "price": order["price"],
+                "vol": order["qty"],
+                "side": side_map[order["side"]][order["position_side"]],
+                "type": type_map[order["type"]],
+                "openType": 2,  # cross
+                "reduceOnly": order["reduce_only"],
             }
             custom_id_ = self.broker_code
             if "custom_id" in order:
                 custom_id_ += order["custom_id"]
             params["externalOid"] = shorten_custom_id(f"{custom_id_}{uuid.uuid4().hex}")[:32]
+            # executed = self.mexc.
             return params
             executed = await self.private_post(self.endpoints["create_order"], params)
             if executed["result"]:
@@ -258,62 +254,6 @@ class MEXCBot(Bot):
             print_async_exception(o)
             traceback.print_exc()
             return {}
-
-
-
-
-
-
-    async def execute_orders(self, orders: [dict]) -> [dict]:
-        if len(orders) == 0:
-            return []
-        executed = None
-        try:
-            to_execute = []
-            for order in orders:
-                params = {
-                    "instId": self.inst_id,
-                    "tdMode": "cross",
-                    "side": order["side"],
-                    "posSide": order["position_side"],
-                    "sz": int(order["qty"]),
-                    "reduceOnly": order["reduce_only"],
-                    "tag": self.broker_code,
-                }
-                if order["type"] == "limit":
-                    params["ordType"] = "post_only"
-                    params["px"] = order["price"]
-                custom_id_ = self.broker_code
-                if "custom_id" in order:
-                    custom_id_ += order["custom_id"]
-                params["clOrdId"] = shorten_custom_id(f"{custom_id_}{uuid.uuid4().hex}")[:32]
-                # print('debug client order id', params['clOrdId'])
-                # print('debug execute order', params)
-                to_execute.append(params)
-            executed = await self.mexc.private_post_trade_batch_orders(params=to_execute)
-            to_return = []
-            for elm in executed["data"]:
-                for to_ex in to_execute:
-                    if elm["clOrdId"] == to_ex["clOrdId"] and elm["sCode"] == "0":
-                        to_return.append(
-                            {
-                                "symbol": self.symbol,
-                                "side": to_ex["side"],
-                                "position_side": to_ex["posSide"],
-                                "type": to_ex["ordType"],
-                                "qty": to_ex["sz"],
-                                "order_id": int(elm["ordId"]),
-                                "custom_id": elm["clOrdId"],
-                                "price": to_ex["px"],
-                            }
-                        )
-                        break
-            return to_return
-        except Exception as e:
-            print(f"error executing order {executed} {orders} {e}")
-            print_async_exception(executed)
-            traceback.print_exc()
-            return []
 
     async def execute_cancellations(self, orders: [dict]) -> [dict]:
         if not orders:
