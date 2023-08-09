@@ -175,7 +175,7 @@ class Bot:
                 [
                     self.config[side][key] != 0.0
                     for side in ["long", "short"]
-                    for key in ["delay_between_AU_closes_minutes", "qty_pct_AU_close"]
+                    for key in ["auto_unstuck_delay_minutes", "auto_unstuck_qty_pct"]
                 ]
             )
         self.config["do_long"] = config["long"]["enabled"]
@@ -615,7 +615,7 @@ class Bot:
                         self.xk["wallet_exposure_limit"][0],
                         self.xk["auto_unstuck_ema_dist"][0],
                         self.xk["auto_unstuck_wallet_exposure_threshold"][0],
-                        self.xk["delay_between_AU_closes_minutes"][0] or self.xk["qty_pct_AU_close"][0],
+                        self.xk["auto_unstuck_delay_minutes"][0] or self.xk["auto_unstuck_qty_pct"][0],
                     )
                 elif self.passivbot_mode == "neat_grid":
                     entries_long = calc_neat_grid_long(
@@ -640,7 +640,7 @@ class Bot:
                         self.xk["eprice_exp_base"][0],
                         self.xk["auto_unstuck_wallet_exposure_threshold"][0],
                         self.xk["auto_unstuck_ema_dist"][0],
-                        self.xk["delay_between_AU_closes_minutes"][0] or self.xk["qty_pct_AU_close"][0],
+                        self.xk["auto_unstuck_delay_minutes"][0] or self.xk["auto_unstuck_qty_pct"][0],
                     )
                 elif self.passivbot_mode == "clock":
                     entries_long = [
@@ -705,8 +705,8 @@ class Bot:
                     self.xk["n_close_orders"][0],
                     self.xk["auto_unstuck_wallet_exposure_threshold"][0],
                     self.xk["auto_unstuck_ema_dist"][0],
-                    self.xk["delay_between_AU_closes_minutes"][0],
-                    self.xk["qty_pct_AU_close"][0],
+                    self.xk["auto_unstuck_delay_minutes"][0],
+                    self.xk["auto_unstuck_qty_pct"][0],
                 )
                 if self.passivbot_mode == "clock":
                     clock_close_long = calc_clock_close_long(
@@ -755,8 +755,8 @@ class Bot:
                             self.xk["n_close_orders"][0],
                             self.xk["auto_unstuck_wallet_exposure_threshold"][0],
                             self.xk["auto_unstuck_ema_dist"][0],
-                            self.xk["delay_between_AU_closes_minutes"][0],
-                            self.xk["qty_pct_AU_close"][0],
+                            self.xk["auto_unstuck_delay_minutes"][0],
+                            self.xk["auto_unstuck_qty_pct"][0],
                         )
                 orders += [
                     {
@@ -807,7 +807,7 @@ class Bot:
                         self.xk["wallet_exposure_limit"][1],
                         self.xk["auto_unstuck_ema_dist"][1],
                         self.xk["auto_unstuck_wallet_exposure_threshold"][1],
-                        self.xk["delay_between_AU_closes_minutes"][1] or self.xk["qty_pct_AU_close"][1],
+                        self.xk["auto_unstuck_delay_minutes"][1] or self.xk["auto_unstuck_qty_pct"][1],
                     )
                 elif self.passivbot_mode == "neat_grid":
                     entries_short = calc_neat_grid_short(
@@ -832,7 +832,7 @@ class Bot:
                         self.xk["eprice_exp_base"][1],
                         self.xk["auto_unstuck_wallet_exposure_threshold"][1],
                         self.xk["auto_unstuck_ema_dist"][1],
-                        self.xk["delay_between_AU_closes_minutes"][1] or self.xk["qty_pct_AU_close"][1],
+                        self.xk["auto_unstuck_delay_minutes"][1] or self.xk["auto_unstuck_qty_pct"][1],
                     )
                 elif self.passivbot_mode == "clock":
                     entries_short = [
@@ -897,8 +897,8 @@ class Bot:
                     self.xk["n_close_orders"][1],
                     self.xk["auto_unstuck_wallet_exposure_threshold"][1],
                     self.xk["auto_unstuck_ema_dist"][1],
-                    self.xk["delay_between_AU_closes_minutes"][1],
-                    self.xk["qty_pct_AU_close"][1],
+                    self.xk["auto_unstuck_delay_minutes"][1],
+                    self.xk["auto_unstuck_qty_pct"][1],
                 )
                 if self.passivbot_mode == "clock":
                     clock_close_short = calc_clock_close_short(
