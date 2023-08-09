@@ -1417,6 +1417,7 @@ def calc_scores(config: dict, results: dict):
     keys = [
         ("adg_weighted_per_exposure", True),
         ("exposure_ratios_mean", False),
+        ("time_at_max_exposure", False),
         ("hrs_stuck_max", False),
         ("pa_distance_mean", False),
         ("pa_distance_std", False),
