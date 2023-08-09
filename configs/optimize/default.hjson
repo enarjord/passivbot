@@ -110,8 +110,8 @@
       n_close_orders: [2, 16]
       auto_unstuck_wallet_exposure_threshold: [0.01, 1.0]
       auto_unstuck_ema_dist: [-0.1, 0.0025]
-      delay_between_AU_closes_minutes: [1.0, 1440.0]
-      qty_pct_AU_close: [0.01, 0.1]
+      auto_unstuck_delay_minutes: [1.0, 1440.0]
+      auto_unstuck_qty_pct: [0.01, 0.1]
     }
     short:
     {
@@ -128,8 +128,8 @@
       n_close_orders: [2, 16]
       auto_unstuck_wallet_exposure_threshold: [0.01, 1.0]
       auto_unstuck_ema_dist: [-0.1, 0.0025]
-      delay_between_AU_closes_minutes: [1.0, 1440.0]
-      qty_pct_AU_close: [0.01, 0.1]
+      auto_unstuck_delay_minutes: [1.0, 1440.0]
+      auto_unstuck_qty_pct: [0.01, 0.1]
     }
   }
   bounds_neat_grid:
@@ -150,8 +150,8 @@
       n_close_orders: [2, 16]
       auto_unstuck_wallet_exposure_threshold: [0.01, 1.0]
       auto_unstuck_ema_dist: [-0.1, 0.0025]
-      delay_between_AU_closes_minutes: [1.0, 1440.0]
-      qty_pct_AU_close: [0.01, 0.1]
+      auto_unstuck_delay_minutes: [1.0, 1440.0]
+      auto_unstuck_qty_pct: [0.01, 0.1]
     }
     short:
     {
@@ -169,8 +169,8 @@
       n_close_orders: [2, 16]
       auto_unstuck_wallet_exposure_threshold: [0.01, 1.0]
       auto_unstuck_ema_dist: [-0.1, 0.0025]
-      delay_between_AU_closes_minutes: [1.0, 1440.0]
-      qty_pct_AU_close: [0.01, 0.1]
+      auto_unstuck_delay_minutes: [1.0, 1440.0]
+      auto_unstuck_qty_pct: [0.01, 0.1]
     }
   }
   bounds_clock:
