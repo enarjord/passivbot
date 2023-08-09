@@ -314,8 +314,8 @@ def calc_close_grid_long(
     n_close_orders,
     auto_unstuck_wallet_exposure_threshold,
     auto_unstuck_ema_dist,
-    delay_between_AU_closes_minutes,
-    qty_pct_AU_close,
+    auto_unstuck_delay_minutes,
+    auto_unstuck_qty_pct,
 ):
     if backwards_tp:
         return calc_close_grid_backwards_long(
@@ -338,8 +338,8 @@ def calc_close_grid_long(
             n_close_orders,
             auto_unstuck_wallet_exposure_threshold,
             auto_unstuck_ema_dist,
-            delay_between_AU_closes_minutes,
-            qty_pct_AU_close,
+            auto_unstuck_delay_minutes,
+            auto_unstuck_qty_pct,
         )
     else:
         return calc_close_grid_frontwards_long(
@@ -362,8 +362,8 @@ def calc_close_grid_long(
             n_close_orders,
             auto_unstuck_wallet_exposure_threshold,
             auto_unstuck_ema_dist,
-            delay_between_AU_closes_minutes,
-            qty_pct_AU_close,
+            auto_unstuck_delay_minutes,
+            auto_unstuck_qty_pct,
         )
 
 
@@ -389,8 +389,8 @@ def calc_close_grid_short(
     n_close_orders,
     auto_unstuck_wallet_exposure_threshold,
     auto_unstuck_ema_dist,
-    delay_between_AU_closes_minutes,
-    qty_pct_AU_close,
+    auto_unstuck_delay_minutes,
+    auto_unstuck_qty_pct,
 ):
     if backwards_tp:
         return calc_close_grid_backwards_short(
@@ -413,8 +413,8 @@ def calc_close_grid_short(
             n_close_orders,
             auto_unstuck_wallet_exposure_threshold,
             auto_unstuck_ema_dist,
-            delay_between_AU_closes_minutes,
-            qty_pct_AU_close,
+            auto_unstuck_delay_minutes,
+            auto_unstuck_qty_pct,
         )
     else:
         return calc_close_grid_frontwards_short(
@@ -437,8 +437,8 @@ def calc_close_grid_short(
             n_close_orders,
             auto_unstuck_wallet_exposure_threshold,
             auto_unstuck_ema_dist,
-            delay_between_AU_closes_minutes,
-            qty_pct_AU_close,
+            auto_unstuck_delay_minutes,
+            auto_unstuck_qty_pct,
         )
 
 
@@ -460,8 +460,8 @@ def calc_auto_unstuck_close_long(
     wallet_exposure_limit,
     auto_unstuck_wallet_exposure_threshold,
     auto_unstuck_ema_dist,
-    delay_between_AU_closes_minutes,
-    qty_pct_AU_close,
+    auto_unstuck_delay_minutes,
+    auto_unstuck_qty_pct,
     lowest_normal_close_price,
 ):
     threshold = wallet_exposure_limit * (1 - auto_unstuck_wallet_exposure_threshold)
@@ -474,10 +474,10 @@ def calc_auto_unstuck_close_long(
         )
         if unstuck_close_price < lowest_normal_close_price:
             # auto unstuck price lower than lowest normal close price
-            if delay_between_AU_closes_minutes != 0.0 and qty_pct_AU_close != 0.0:
+            if auto_unstuck_delay_minutes != 0.0 and auto_unstuck_qty_pct != 0.0:
                 # timed AU mode
                 delay = calc_delay_between_fills_ms_ask(
-                    pprice, lowest_ask, delay_between_AU_closes_minutes * 60 * 1000, 0.0
+                    pprice, lowest_ask, auto_unstuck_delay_minutes * 60 * 1000, 0.0
                 )
                 if utc_now_ms - prev_AU_fill_ts_close > delay:
                     # timer is up
@@ -492,7 +492,7 @@ def calc_auto_unstuck_close_long(
                             min_qty,
                             min_cost,
                             c_mult,
-                            qty_pct_AU_close,
+                            auto_unstuck_qty_pct,
                             0.0,
                             wallet_exposure_limit,
                         ),
@@ -536,8 +536,8 @@ def calc_auto_unstuck_close_short(
     wallet_exposure_limit,
     auto_unstuck_wallet_exposure_threshold,
     auto_unstuck_ema_dist,
-    delay_between_AU_closes_minutes,
-    qty_pct_AU_close,
+    auto_unstuck_delay_minutes,
+    auto_unstuck_qty_pct,
     highest_normal_close_price,
 ):
     threshold = wallet_exposure_limit * (1 - auto_unstuck_wallet_exposure_threshold)
@@ -550,10 +550,10 @@ def calc_auto_unstuck_close_short(
         )
         if unstuck_close_price > highest_normal_close_price:
             # auto unstuck price higher than highest normal close price
-            if delay_between_AU_closes_minutes != 0.0 and qty_pct_AU_close != 0.0:
+            if auto_unstuck_delay_minutes != 0.0 and auto_unstuck_qty_pct != 0.0:
                 # timed AU mode
                 delay = calc_delay_between_fills_ms_bid(
-                    pprice, highest_bid, delay_between_AU_closes_minutes * 60 * 1000, 0.0
+                    pprice, highest_bid, auto_unstuck_delay_minutes * 60 * 1000, 0.0
                 )
                 if utc_now_ms - prev_AU_fill_ts_close > delay:
                     # timer is up
@@ -568,7 +568,7 @@ def calc_auto_unstuck_close_short(
                             min_qty,
                             min_cost,
                             c_mult,
-                            qty_pct_AU_close,
+                            auto_unstuck_qty_pct,
                             0.0,
                             wallet_exposure_limit,
                         ),
@@ -615,8 +615,8 @@ def calc_close_grid_backwards_long(
     n_close_orders,
     auto_unstuck_wallet_exposure_threshold,
     auto_unstuck_ema_dist,
-    delay_between_AU_closes_minutes,
-    qty_pct_AU_close,
+    auto_unstuck_delay_minutes,
+    auto_unstuck_qty_pct,
 ):
     psize = psize_ = round_dn(psize, qty_step)  # round down for spot
     if psize == 0.0:
@@ -659,8 +659,8 @@ def calc_close_grid_backwards_long(
             wallet_exposure_limit,
             auto_unstuck_wallet_exposure_threshold,
             auto_unstuck_ema_dist,
-            delay_between_AU_closes_minutes,
-            qty_pct_AU_close,
+            auto_unstuck_delay_minutes,
+            auto_unstuck_qty_pct,
             close_prices[0],
         )
         if auto_unstuck_close[0] != 0.0:
@@ -716,8 +716,8 @@ def calc_close_grid_frontwards_long(
     n_close_orders,
     auto_unstuck_wallet_exposure_threshold,
     auto_unstuck_ema_dist,
-    delay_between_AU_closes_minutes,
-    qty_pct_AU_close,
+    auto_unstuck_delay_minutes,
+    auto_unstuck_qty_pct,
 ):
     psize = psize_ = round_dn(psize, qty_step)  # round down for spot
     if psize == 0.0:
@@ -754,8 +754,8 @@ def calc_close_grid_frontwards_long(
             wallet_exposure_limit,
             auto_unstuck_wallet_exposure_threshold,
             auto_unstuck_ema_dist,
-            delay_between_AU_closes_minutes,
-            qty_pct_AU_close,
+            auto_unstuck_delay_minutes,
+            auto_unstuck_qty_pct,
             close_prices[0],
         )
         if auto_unstuck_close[0] != 0.0:
@@ -807,8 +807,8 @@ def calc_close_grid_backwards_short(
     n_close_orders,
     auto_unstuck_wallet_exposure_threshold,
     auto_unstuck_ema_dist,
-    delay_between_AU_closes_minutes,
-    qty_pct_AU_close,
+    auto_unstuck_delay_minutes,
+    auto_unstuck_qty_pct,
 ):
     psize = psize_ = round_dn(abs(psize), qty_step)  # round down for spot
     if psize == 0.0:
@@ -851,8 +851,8 @@ def calc_close_grid_backwards_short(
             wallet_exposure_limit,
             auto_unstuck_wallet_exposure_threshold,
             auto_unstuck_ema_dist,
-            delay_between_AU_closes_minutes,
-            qty_pct_AU_close,
+            auto_unstuck_delay_minutes,
+            auto_unstuck_qty_pct,
             close_prices[0],
         )
         if auto_unstuck_close[0] != 0.0:
@@ -908,8 +908,8 @@ def calc_close_grid_frontwards_short(
     n_close_orders,
     auto_unstuck_wallet_exposure_threshold,
     auto_unstuck_ema_dist,
-    delay_between_AU_closes_minutes,
-    qty_pct_AU_close,
+    auto_unstuck_delay_minutes,
+    auto_unstuck_qty_pct,
 ):
     abs_psize = abs_psize_ = round_dn(abs(psize), qty_step)  # round down for spot
     if abs_psize == 0.0:
@@ -946,8 +946,8 @@ def calc_close_grid_frontwards_short(
             wallet_exposure_limit,
             auto_unstuck_wallet_exposure_threshold,
             auto_unstuck_ema_dist,
-            delay_between_AU_closes_minutes,
-            qty_pct_AU_close,
+            auto_unstuck_delay_minutes,
+            auto_unstuck_qty_pct,
             close_prices[0],
         )
         if auto_unstuck_close[0] != 0.0:

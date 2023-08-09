@@ -402,8 +402,8 @@ def calc_recursive_entries_long(
     wallet_exposure_limit,
     auto_unstuck_ema_dist,
     auto_unstuck_wallet_exposure_threshold,
-    delay_between_AU_closes_minutes,
-    qty_pct_AU_close,
+    auto_unstuck_delay_minutes,
+    auto_unstuck_qty_pct,
     whole_grid=False,
 ):
     entries = []
@@ -436,7 +436,7 @@ def calc_recursive_entries_long(
             wallet_exposure_limit,
             auto_unstuck_ema_dist,
             auto_unstuck_wallet_exposure_threshold,
-            delay_between_AU_closes_minutes or qty_pct_AU_close,
+            auto_unstuck_delay_minutes or auto_unstuck_qty_pct,
         )
         if entry_qty == 0.0:
             break
@@ -477,8 +477,8 @@ def calc_recursive_entries_short(
     wallet_exposure_limit,
     auto_unstuck_ema_dist,
     auto_unstuck_wallet_exposure_threshold,
-    delay_between_AU_closes_minutes,
-    qty_pct_AU_close,
+    auto_unstuck_delay_minutes,
+    auto_unstuck_qty_pct,
     whole_grid=False,
 ):
     entries = []
@@ -511,7 +511,7 @@ def calc_recursive_entries_short(
             wallet_exposure_limit,
             auto_unstuck_ema_dist,
             auto_unstuck_wallet_exposure_threshold,
-            delay_between_AU_closes_minutes or qty_pct_AU_close,
+            auto_unstuck_delay_minutes or auto_unstuck_qty_pct,
         )
         if entry_qty == 0.0:
             break
@@ -559,8 +559,8 @@ def backtest_recursive_grid(
     n_close_orders,
     auto_unstuck_wallet_exposure_threshold,
     auto_unstuck_ema_dist,
-    delay_between_AU_closes_minutes,
-    qty_pct_AU_close,
+    auto_unstuck_delay_minutes,
+    auto_unstuck_qty_pct,
 ):
     if len(ticks[0]) == 3:
         timestamps = ticks[:, 0]
@@ -678,7 +678,7 @@ def backtest_recursive_grid(
                         wallet_exposure_limit[0],
                         auto_unstuck_ema_dist[0],
                         auto_unstuck_wallet_exposure_threshold[0],
-                        delay_between_AU_closes_minutes[0] or qty_pct_AU_close[0],
+                        auto_unstuck_delay_minutes[0] or auto_unstuck_qty_pct[0],
                     )
                     next_entry_update_ts_long = timestamps[k] + 1000 * 60 * 5  # five mins delay
 
@@ -705,8 +705,8 @@ def backtest_recursive_grid(
                         n_close_orders[0],
                         auto_unstuck_wallet_exposure_threshold[0],
                         auto_unstuck_ema_dist[0],
-                        delay_between_AU_closes_minutes[0],
-                        qty_pct_AU_close[0],
+                        auto_unstuck_delay_minutes[0],
+                        auto_unstuck_qty_pct[0],
                     )
                     next_close_grid_update_ts_long = timestamps[k] + 1000 * 60 * 5  # five mins delay
 
@@ -777,7 +777,7 @@ def backtest_recursive_grid(
                         wallet_exposure_limit[0],
                         auto_unstuck_ema_dist[0],
                         auto_unstuck_wallet_exposure_threshold[0],
-                        delay_between_AU_closes_minutes[0] or qty_pct_AU_close[0],
+                        auto_unstuck_delay_minutes[0] or auto_unstuck_qty_pct[0],
                     )
                     if entry_long[2] == "long_unstuck_entry":
                         break
@@ -928,7 +928,7 @@ def backtest_recursive_grid(
                         wallet_exposure_limit[1],
                         auto_unstuck_ema_dist[1],
                         auto_unstuck_wallet_exposure_threshold[1],
-                        delay_between_AU_closes_minutes[1] or qty_pct_AU_close[1],
+                        auto_unstuck_delay_minutes[1] or auto_unstuck_qty_pct[1],
                     )
                     next_entry_update_ts_short = timestamps[k] + 1000 * 60 * 5  # five mins delay
                 # check if close grid should be updated
@@ -954,8 +954,8 @@ def backtest_recursive_grid(
                         n_close_orders[1],
                         auto_unstuck_wallet_exposure_threshold[1],
                         auto_unstuck_ema_dist[1],
-                        delay_between_AU_closes_minutes[1],
-                        qty_pct_AU_close[1],
+                        auto_unstuck_delay_minutes[1],
+                        auto_unstuck_qty_pct[1],
                     )
                     next_close_grid_update_ts_short = timestamps[k] + 1000 * 60 * 5  # five mins delay
 
@@ -1028,7 +1028,7 @@ def backtest_recursive_grid(
                         wallet_exposure_limit[1],
                         auto_unstuck_ema_dist[1],
                         auto_unstuck_wallet_exposure_threshold[1],
-                        delay_between_AU_closes_minutes[1] or qty_pct_AU_close[1],
+                        auto_unstuck_delay_minutes[1] or auto_unstuck_qty_pct[1],
                     )
                     if entry_short[2] == "short_unstuck_entry":
                         break
