@@ -106,12 +106,12 @@ def generate_yaml(
     sorted_syms = [x[1] for x in sorted_syms]
     current_positions_long = sorted(set(current_positions_long + current_open_orders_long))
     current_positions_short = sorted(set(current_positions_short + current_open_orders_short))
-    if config["approved_symbols_only"]:
-        approved_longs = set(config["live_configs_map_long"]) | set(config["live_configs_map"])
-        approved_shorts = set(config["live_configs_map_short"]) | set(config["live_configs_map"])
-    else:
-        approved_longs = set(sorted_syms)
-        approved_shorts = set(sorted_syms)
+    approved_longs = (
+        set(config["approved_symbols_long"]) if len(config["approved_symbols_long"]) > 0 else set(sorted_syms)
+    )
+    approved_shorts = (
+        set(config["approved_symbols_short"]) if len(config["approved_symbols_short"]) > 0 else set(sorted_syms)
+    )
     ideal_longs = [x for x in sorted_syms if x in approved_longs][:n_longs]
     ideal_shorts = [x for x in sorted_syms if x in approved_shorts][:n_shorts]
 
@@ -329,16 +329,8 @@ async def dump_yaml(cc, config):
     symbols_map_inv = {v: k for k, v in symbols_map.items()}
     approved = [symbols_map[k] for k, v in min_costs.items() if v <= max_min_cost and k in symbols_map]
     approved = sorted(set(approved) - set(config["symbols_to_ignore"]))
-    if config["approved_symbols_only"]:
-        # only use approved symbols
-        approved = sorted(
-            set(approved)
-            & (
-                set(config["live_configs_map"])
-                | set(config["live_configs_map_long"])
-                | set(config["live_configs_map_short"])
-            )
-        )
+    if config["approved_symbols_long"] and config["approved_symbols_short"]:
+        approved = set(approved) & (set(config["approved_symbols_long"]) | set(config["approved_symbols_short"]))
 
     print("getting current bots...")
     (
@@ -418,6 +410,15 @@ async def main():
     ]:
         if key not in config:
             config[key] = value
+    if "approved_symbols_only" in config:
+        for side in ["long", "short"]:
+            if config["approved_symbols_only"]:
+                if f"approved_symbols_{side}" not in config:
+                    config[f"approved_symbols_{side}"] = sorted(
+                        set(config["live_configs_map"]) | set(config[f"live_configs_map_{side}"])
+                    )
+            else:
+                config[f"approved_symbols_{side}"] = []
     exchange, key, secret, passphrase = load_exchange_key_secret_passphrase(config["user"])
     max_n_tries_per_hour = 5
     error_timestamps = []
