@@ -53,6 +53,8 @@ def main():
         ("ess", "maximum_eqbal_ratio_std_short"),
         ("exl", "maximum_exposure_ratios_mean_long"),
         ("exs", "maximum_exposure_ratios_mean_short"),
+        ("tel", "maximum_time_at_max_exposure_long"),
+        ("tes", "maximum_time_at_max_exposure_short"),
         ("ct", "clip_threshold"),
     ]
     for k0, k1 in weights_keys:
