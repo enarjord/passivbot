@@ -1039,7 +1039,7 @@ def backtest_neat_grid(
                         auto_unstuck_delay_minutes[0],
                         auto_unstuck_qty_pct[0],
                     )
-                    next_close_grid_update_ts_long = timestamps[k] + 1000 * 60 * 5
+                    next_close_grid_update_ts_long = timestamps[k] + 1000 * 60 * 15
 
                 # check for long entry fills
                 while entries_long and entries_long[0][0] > 0.0 and lows[k] < entries_long[0][1]:
@@ -1290,7 +1290,7 @@ def backtest_neat_grid(
                         auto_unstuck_delay_minutes[1],
                         auto_unstuck_qty_pct[1],
                     )
-                    next_close_grid_update_ts_short = timestamps[k] + 1000 * 60 * 5
+                    next_close_grid_update_ts_short = timestamps[k] + 1000 * 60 * 15
 
                 while entries_short and entries_short[0][0] < 0.0 and highs[k] > entries_short[0][1]:
                     next_entry_grid_update_ts_short = min(
