@@ -635,9 +635,8 @@ def analyze_fills_slim(fills_long: list, fills_short: list, stats: list, config:
     #  hrs_stuck_max,
     #  pa_distance_mean,
     #  pa_distance_std,
+    #  pa_distance_1pct_worst_mean,
     #  loss_profit_ratio,
-    #  eqbal_ratio_mean_of_10_worst,
-    #  eqbal_ratio_std,
 
     #  plus n_days, starting_balance and adg_per_exposure
 
@@ -681,6 +680,7 @@ def analyze_fills_slim(fills_long: list, fills_short: list, stats: list, config:
         pa_dists_long = np.array([100.0])
     if len(pa_dists_short) == 0:
         pa_dists_short = np.array([100.0])
+
     profit_sum_long, loss_sum_long = 0.0, 0.0
     for elm in fills_long:
         if elm[2] > 0.0:
@@ -699,14 +699,6 @@ def analyze_fills_slim(fills_long: list, fills_short: list, stats: list, config:
     loss_profit_ratio_short = (
         abs(loss_sum_short) / profit_sum_short if profit_sum_short > 0.0 else 1.0
     )
-
-    # eqbal ratio
-    eqbal_ratios_long = [elm[12] / elm[10] for elm in stats]
-    eqbal_ratio_std_long = np.std(eqbal_ratios_long)
-    eqbal_ratio_mean_of_10_worst_long = np.mean(sorted(eqbal_ratios_long)[:10])
-    eqbal_ratios_short = [elm[13] / elm[11] for elm in stats]
-    eqbal_ratio_std_short = np.std(eqbal_ratios_short)
-    eqbal_ratio_mean_of_10_worst_short = np.mean(sorted(eqbal_ratios_short)[:10])
 
     exposure_ratios_long = [
         qty_to_cost(elm[3], elm[4], config["inverse"], config["c_mult"]) / elm[10] for elm in stats
@@ -735,14 +727,12 @@ def analyze_fills_slim(fills_long: list, fills_short: list, stats: list, config:
         "pa_distance_std_short": pa_dists_short.std(),
         "pa_distance_mean_long": pa_dists_long.mean(),
         "pa_distance_mean_short": pa_dists_short.mean(),
+        "pa_distance_1pct_worst_mean_long": np.sort(pa_dists_long)[max(1, len(stats) // 100):].mean(),
+        "pa_distance_1pct_worst_mean_short": np.sort(pa_dists_short)[max(1, len(stats) // 100):].mean(),
         "hrs_stuck_max_long": hrs_stuck_max_long,
         "hrs_stuck_max_short": hrs_stuck_max_short,
         "loss_profit_ratio_long": loss_profit_ratio_long,
         "loss_profit_ratio_short": loss_profit_ratio_short,
-        "eqbal_ratio_mean_of_10_worst_long": eqbal_ratio_mean_of_10_worst_long,
-        "eqbal_ratio_mean_of_10_worst_short": eqbal_ratio_mean_of_10_worst_short,
-        "eqbal_ratio_std_long": eqbal_ratio_std_long,
-        "eqbal_ratio_std_short": eqbal_ratio_std_short,
         "exposure_ratios_mean_long": exposure_ratios_mean_long,
         "exposure_ratios_mean_short": exposure_ratios_mean_short,
         "time_at_max_exposure_long": time_at_max_exposure_long,
@@ -952,6 +942,8 @@ def analyze_fills(
         "pa_distance_std_short": pa_distance_std_short
         if pa_distance_std_short == pa_distance_std_short
         else 1.0,
+        "pa_distance_1pct_worst_mean_long": pa_dists_long.sort_values().iloc[-max(1, len(sdf) // 100):].mean(),
+        "pa_distance_1pct_worst_mean_short": pa_dists_short.sort_values().iloc[-max(1, len(sdf) // 100):].mean(),
         "equity_balance_ratio_mean_long": (sdf.equity_long / sdf.balance_long).mean(),
         "equity_balance_ratio_std_long": eqbal_ratio_std_long,
         "equity_balance_ratio_mean_short": (sdf.equity_short / sdf.balance_short).mean(),
@@ -1421,9 +1413,8 @@ def calc_scores(config: dict, results: dict):
         ("hrs_stuck_max", False),
         ("pa_distance_mean", False),
         ("pa_distance_std", False),
+        ("pa_distance_1pct_worst_mean", False),
         ("loss_profit_ratio", False),
-        ("eqbal_ratio_mean_of_10_worst", True),
-        ("eqbal_ratio_std", False),
     ]
     means = {side: {} for side in sides}  # adjusted means
     scores = {side: 0.0 for side in sides}
