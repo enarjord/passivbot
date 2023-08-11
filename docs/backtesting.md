@@ -84,3 +84,29 @@ and in static grid mode the secondary entry is a larger green dot.
 
 The `auto_unstuck_bands_{long/short}.png` plots show the price thresholds at which auto unstucking orders would fill.  
 `initial_entry_band_{long/short}.png` shows the EMA limited initial entries.
+
+
+## Abbreviations used for some backtest metrics:
+
+- adg_w_per_exp: average daily gain, recent data weighted heavier
+
+- adg_per_exp: average daily gain for whole backtest
+
+- exp_rts_mean: exposure ratios mean: average exposure during backtest
+
+- hrs_stuck_max: how many hours in a stretch there were no fills
+
+- pa_dist_mean: price action distance mean: the average distance between position price and market price
+
+- pa_dist_std: price action distance std: the standard deviation of the distance between position price and market price
+
+- loss_profit_rt: loss to profit ratio: `abs(sum(losses)) / sum(profit)`
+
+- eqbal_rt_10_worst_mean: equity to balance ratio, mean of 10 worst from hourly samples
+
+- eqbal_rt_std: standard deviation of equity to balance ratio
+
+- n_days: backtest number of days
+
+- score: used internally by optimizer
+
