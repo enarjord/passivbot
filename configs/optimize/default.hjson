@@ -24,12 +24,17 @@
   # set any to -1 (less than zero) to disable
 
   # score -= max(maximum_pa_distance_std, pa_distance_std)
-  maximum_pa_distance_std_long: 0.02
-  maximum_pa_distance_std_short: 0.02
+  maximum_pa_distance_std_long: 0.03
+  maximum_pa_distance_std_short: 0.03
 
   # score -= max(maximum_pa_distance_mean, pa_distance_mean)
   maximum_pa_distance_mean_long: 0.02
   maximum_pa_distance_mean_short: 0.02
+
+  # score -= max(maximum_pa_distance_1pct_worst_mean, pa_distance_1pct_worst_mean)
+  # mean of the 1% highest price action distances
+  maximum_pa_distance_1pct_worst_mean_long: 0.15
+  maximum_pa_distance_1pct_worst_mean_short: 0.15
 
   # score -= max(maximum_loss_profit_ratio, loss_profit_ratio)
   maximum_loss_profit_ratio_long: 0.1
@@ -39,22 +44,14 @@
   maximum_hrs_stuck_max_long: 96.0
   maximum_hrs_stuck_max_short: 96.0
 
-  # score += min(minimum_eqbal_ratio_min, eqbal_ratio_min)
-  # mean of 10 worst eqbal ratios on hourly stats
-  minimum_eqbal_ratio_mean_of_10_worst_long: 0.75  # max 25% drawdown
-  minimum_eqbal_ratio_mean_of_10_worst_short: 0.5
-
-  # score += max(maximum_eqbal_ratio_std, eqbal_ratio_std)
-  maximum_eqbal_ratio_std_long: 0.025
-  maximum_eqbal_ratio_std_short: 0.025
-
   # score -= max(exposure_ratios_mean, eqbal_ratio_std)
-  maximum_exposure_ratios_mean_long: 0.07
-  maximum_exposure_ratios_mean_short: 0.07
+  maximum_exposure_ratios_mean_long: 0.15
+  maximum_exposure_ratios_mean_short: 0.15
 
   # score -= max(maximum_time_at_max_exposure, time_at_max_exposure)
-  maximum_time_at_max_exposure_long: 0.02
-  maximum_time_at_max_exposure_short: 0.02
+  # from hourly samples, how often was exposure / exposure_limit > 0.9
+  maximum_time_at_max_exposure_long: 0.1
+  maximum_time_at_max_exposure_short: 0.1
 
   # clip results: compute score on top performers only
   # clip_threshold=0.1 means drop 10% worst performers; clip_threshold=0.0 means include all
@@ -100,7 +97,7 @@
       ema_span_0: [5.0, 1440.0]
       ema_span_1: [5.0, 1440.0]
       initial_qty_pct: [0.01, 0.05]
-      initial_eprice_ema_dist: [-0.1, 0.0025]
+      initial_eprice_ema_dist: [-0.1, 0.003]
       wallet_exposure_limit: [1.0, 1.0]
       ddown_factor: [0.1, 3.0]
       rentry_pprice_dist: [0.005, 0.05]
@@ -109,7 +106,7 @@
       markup_range: [0.0, 0.06]
       n_close_orders: [2, 16]
       auto_unstuck_wallet_exposure_threshold: [0.1, 0.9]
-      auto_unstuck_ema_dist: [-0.1, 0.0025]
+      auto_unstuck_ema_dist: [-0.1, 0.003]
       auto_unstuck_delay_minutes: [120.0, 1440.0]
       auto_unstuck_qty_pct: [0.01, 0.1]
     }
@@ -118,7 +115,7 @@
       ema_span_0: [5.0, 1440.0]
       ema_span_1: [5.0, 1440.0]
       initial_qty_pct: [0.01, 0.05]
-      initial_eprice_ema_dist: [-0.1, 0.0025]
+      initial_eprice_ema_dist: [-0.1, 0.003]
       wallet_exposure_limit: [1.0, 1.0]
       ddown_factor: [0.1, 3.0]
       rentry_pprice_dist: [0.005, 0.05]
@@ -127,7 +124,7 @@
       markup_range: [0.0, 0.06]
       n_close_orders: [2, 16]
       auto_unstuck_wallet_exposure_threshold: [0.1, 0.9]
-      auto_unstuck_ema_dist: [-0.1, 0.0025]
+      auto_unstuck_ema_dist: [-0.1, 0.003]
       auto_unstuck_delay_minutes: [120.0, 1440.0]
       auto_unstuck_qty_pct: [0.01, 0.1]
     }
@@ -142,14 +139,14 @@
       wallet_exposure_limit: [1.0, 1.0]
       max_n_entry_orders: [7, 22]
       initial_qty_pct: [0.01, 0.05]
-      initial_eprice_ema_dist: [-0.1, 0.0025]
+      initial_eprice_ema_dist: [-0.1, 0.003]
       eqty_exp_base: [1.0, 4.0]
       eprice_exp_base: [1.0, 4.0]
       min_markup: [0.001, 0.01]
       markup_range: [0.0, 0.06]
       n_close_orders: [2, 16]
       auto_unstuck_wallet_exposure_threshold: [0.1, 0.9]
-      auto_unstuck_ema_dist: [-0.1, 0.0025]
+      auto_unstuck_ema_dist: [-0.1, 0.003]
       auto_unstuck_delay_minutes: [120.0, 1440.0]
       auto_unstuck_qty_pct: [0.01, 0.1]
     }
@@ -161,14 +158,14 @@
       wallet_exposure_limit: [1.0, 1.0]
       max_n_entry_orders: [7, 22]
       initial_qty_pct: [0.01, 0.05]
-      initial_eprice_ema_dist: [-0.1, 0.0025]
+      initial_eprice_ema_dist: [-0.1, 0.003]
       eqty_exp_base: [1.0, 4.0]
       eprice_exp_base: [1.0, 4.0]
       min_markup: [0.001, 0.01]
       markup_range: [0.0, 0.06]
       n_close_orders: [2, 16]
       auto_unstuck_wallet_exposure_threshold: [0.1, 0.9]
-      auto_unstuck_ema_dist: [-0.1, 0.0025]
+      auto_unstuck_ema_dist: [-0.1, 0.003]
       auto_unstuck_delay_minutes: [120.0, 1440.0]
       auto_unstuck_qty_pct: [0.01, 0.1]
     }
@@ -188,7 +185,7 @@
       delay_weight_entry: [0.0, 100.0]
       delay_weight_close: [0.0, 100.0]
       delay_between_fills_minutes_entry: [1.0, 1440.0]
-      delay_between_fills_minutes_close: [480.0, 1440.0]
+      delay_between_fills_minutes_close: [120.0, 1440.0]
       min_markup: [0.001, 0.01]
       markup_range: [0.0, 0.06]
       n_close_orders: [2, 16]
@@ -207,7 +204,7 @@
       delay_weight_entry: [0.0, 100.0]
       delay_weight_close: [0.0, 100.0]
       delay_between_fills_minutes_entry: [1.0, 1440.0]
-      delay_between_fills_minutes_close: [480.0, 1440.0]
+      delay_between_fills_minutes_close: [120.0, 1440.0]
       min_markup: [0.001, 0.01]
       markup_range: [0.0, 0.06]
       n_close_orders: [2, 16]
