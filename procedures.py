@@ -540,8 +540,8 @@ def fetch_market_specific_settings(config: dict):
     import ccxt
 
     assert (
-        ccxt.__version__ == "3.1.31"
-    ), f"Currently ccxt {ccxt.__version__} is installed. Please pip reinstall requirements.txt or install ccxt v3.1.31 manually"
+        ccxt.__version__ == "4.0.57"
+    ), f"Currently ccxt {ccxt.__version__} is installed. Please pip reinstall requirements.txt or install ccxt v4.0.57 manually"
 
     exchange = config["exchange"]
     symbol = config["symbol"]
