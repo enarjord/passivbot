@@ -30,13 +30,15 @@
   // if symbol is missing from live_configs_map, default to this config
   default_config_path: configs/live/clock_mode.example.json
 
-  // if approved_symbols_{long/short} is empty, all symbols are approved for {longs/shorts}
+  // if approved_symbols_long is empty, all symbols are approved for longs
   approved_symbols_long: [
     BTCUSDT
     XMRUSDT
     XRPUSDT
     BCHUSDT
   ]
+
+  // if approved_symbols_short is empty, all symbols are approved for shorts
   approved_symbols_short: [
     BTCUSDT
     ETHUSDT
