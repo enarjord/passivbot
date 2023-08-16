@@ -615,7 +615,8 @@ class Bot:
                         self.xk["wallet_exposure_limit"][0],
                         self.xk["auto_unstuck_ema_dist"][0],
                         self.xk["auto_unstuck_wallet_exposure_threshold"][0],
-                        self.xk["auto_unstuck_delay_minutes"][0] or self.xk["auto_unstuck_qty_pct"][0],
+                        self.xk["auto_unstuck_delay_minutes"][0]
+                        or self.xk["auto_unstuck_qty_pct"][0],
                     )
                 elif self.passivbot_mode == "neat_grid":
                     entries_long = calc_neat_grid_long(
@@ -640,7 +641,8 @@ class Bot:
                         self.xk["eprice_exp_base"][0],
                         self.xk["auto_unstuck_wallet_exposure_threshold"][0],
                         self.xk["auto_unstuck_ema_dist"][0],
-                        self.xk["auto_unstuck_delay_minutes"][0] or self.xk["auto_unstuck_qty_pct"][0],
+                        self.xk["auto_unstuck_delay_minutes"][0]
+                        or self.xk["auto_unstuck_qty_pct"][0],
                     )
                 elif self.passivbot_mode == "clock":
                     entries_long = [
@@ -807,7 +809,8 @@ class Bot:
                         self.xk["wallet_exposure_limit"][1],
                         self.xk["auto_unstuck_ema_dist"][1],
                         self.xk["auto_unstuck_wallet_exposure_threshold"][1],
-                        self.xk["auto_unstuck_delay_minutes"][1] or self.xk["auto_unstuck_qty_pct"][1],
+                        self.xk["auto_unstuck_delay_minutes"][1]
+                        or self.xk["auto_unstuck_qty_pct"][1],
                     )
                 elif self.passivbot_mode == "neat_grid":
                     entries_short = calc_neat_grid_short(
@@ -832,7 +835,8 @@ class Bot:
                         self.xk["eprice_exp_base"][1],
                         self.xk["auto_unstuck_wallet_exposure_threshold"][1],
                         self.xk["auto_unstuck_ema_dist"][1],
-                        self.xk["auto_unstuck_delay_minutes"][1] or self.xk["auto_unstuck_qty_pct"][1],
+                        self.xk["auto_unstuck_delay_minutes"][1]
+                        or self.xk["auto_unstuck_qty_pct"][1],
                     )
                 elif self.passivbot_mode == "clock":
                     entries_short = [
@@ -1826,6 +1830,15 @@ async def main() -> None:
             config["ohlcv"] = True
         else:
             if args.ohlcv.lower() in ["y", "yes", "t", "true"]:
+                config["ohlcv"] = True
+            elif any(
+                [
+                    config[side][key] != 0.0
+                    for side in ["long", "short"]
+                    for key in ["auto_unstuck_delay_minutes", "auto_unstuck_qty_pct"]
+                ]
+            ):
+                # force ohlcv mode if auto unstuck is on timer
                 config["ohlcv"] = True
             else:
                 config["ohlcv"] = False
