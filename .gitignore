@@ -341,6 +341,7 @@ $RECYCLE.BIN/
 backtests/
 !config/optimize/default.hjson
 !config/backtest/default.hjson
+configs/optimize/myconfig.hjson
 config/
 historical_data/
 results*

@@ -1,22 +1,23 @@
 {
   // supported exchanges: [kucoin, okx, bybit, binance]
-  user: binance_01
+  user: binance_read
   twe_long: 1.6
   twe_short: 0.8
-  n_longs: 6
-  n_shorts: 3
+  n_longs: 8
+  n_shorts: 4
   max_min_cost: 5.0
   n_ohlcvs: 100
-  ohlcv_interval: 1h
+  ohlcv_interval: 15m
   leverage: 10
   price_distance_threshold: 0.3
+  time_to_market_min: 30 // in days
 
   // set to zero to disable
   volume_clip_threshold: 0.51  // include 51% of the highest volume coins
   unilateralness_clip_threshold: 0.49 // include 49% of symbols with lowest unilateralness
   noisiness_clip_threshold: 0.52 // include 52% of symbols with highest noisiness
 
-  max_n_panes: 8
+  max_n_panes: 12
 
   // forager restarts bots every x minutes
   update_interval_minutes: 60

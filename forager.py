@@ -13,6 +13,7 @@ import pprint
 import numpy as np
 import asyncio
 import time
+from datetime import datetime, timedelta
 import subprocess
 import argparse
 import traceback
@@ -92,6 +93,7 @@ def generate_yaml(
     current_positions_short,
     current_open_orders_long,
     current_open_orders_short,
+    coins_list
 ):
     yaml = f"session_name: {config['user']}\nwindows:\n"
     user = config["user"]
@@ -112,6 +114,9 @@ def generate_yaml(
     else:
         approved_longs = set(sorted_syms)
         approved_shorts = set(sorted_syms)
+    if config['time_to_market_min']:
+        approved_longs = [x for x in approved_longs if x in coins_list]
+        # filter out the coins get into market in short time(only for longs)
     ideal_longs = [x for x in sorted_syms if x in approved_longs][:n_longs]
     ideal_shorts = [x for x in sorted_syms if x in approved_shorts][:n_shorts]
 
@@ -232,6 +237,21 @@ async def get_ohlcvs(cc, symbols, config):
         for k, j in enumerate(js):
             ohs[symbols[j]] = fetched[k]
     return ohs
+
+
+async def coins_after_certain_time(cc, sorted_syms: list, numdays: int):
+    current_time_today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    timeframe = current_time_today - timedelta(days=numdays)
+    timestamp = int(timeframe.timestamp() * 1000)
+    coins = [item[1] for item in sorted_syms]
+    candle = await asyncio.gather(
+        *[cc.fetch_ohlcv(sym.replace('USDT', '')+'/USDT:USDT', '1m', timestamp, 1) for sym in coins]
+        )
+    for idx, sym in enumerate(coins):
+        if candle[idx][0][0] > timestamp:
+            coins.remove(sym)
+            print(f'filter out symbol: {sym}!')
+    return coins
 
 
 async def get_current_symbols(cc):
@@ -372,6 +392,8 @@ async def dump_yaml(cc, config):
         for i in range(len(ohs[sym])):
             ohs[sym][i][5] *= c_mults[symbols_map_inv[sym]]
     sorted_syms = sort_symbols(ohs, config)  # sorted best to worst
+    coins_list = await coins_after_certain_time(cc, sorted_syms, config['time_to_market_min'])
+    # time_to_market_min: 30 // unit is days -- which should be added in example_config.hjson
     print(f"generating yaml {config['yaml_filepath']}...")
     yaml = generate_yaml(
         sorted_syms,
@@ -380,6 +402,7 @@ async def dump_yaml(cc, config):
         current_positions_short,
         current_open_orders_long,
         current_open_orders_short,
+        coins_list
     )
     with open(config["yaml_filepath"], "w") as f:
         f.write(yaml)
