@@ -39,8 +39,6 @@ from njit_funcs import (
     calc_close_grid_long,
     calc_close_grid_short,
     calc_upnl,
-    calc_entry_grid_long,
-    calc_entry_grid_short,
     calc_samples,
     calc_emas_last,
     calc_ema,
