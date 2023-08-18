@@ -211,6 +211,8 @@ class Bot:
         if self.passivbot_mode == "clock":
             self.xk["auto_unstuck_ema_dist"] = (0.0, 0.0)
             self.xk["auto_unstuck_wallet_exposure_threshold"] = (0.0, 0.0)
+            self.xk["auto_unstuck_delay_minutes"] = (0.0, 0.0)
+            self.xk["auto_unstuck_qty_pct"] = (0.0, 0.0)
             self.xk["delay_between_fills_ms_entry"] = (
                 self.config["long"]["delay_between_fills_minutes_entry"] * 60 * 1000.0,
                 self.config["short"]["delay_between_fills_minutes_entry"] * 60 * 1000.0,
