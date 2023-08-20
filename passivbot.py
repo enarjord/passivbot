@@ -1393,20 +1393,19 @@ class Bot:
                     break
                 if self.countdown:
                     line = f"\rcountdown: {i} last price: {self.price}"
-                    do_long = self.do_long or self.position["long"]["size"] != 0.0
-                    do_short = self.do_short or self.position["short"]["size"] != 0.0
-                    if (do_long or do_short) and self.passivbot_mode == "clock":
-                        line += " | mins delay until next: "
-                        try:
-                            res = self.calc_minutes_until_next_orders()
-                            if do_long:
-                                line += f"entry long: {res['entry_long']:.1f}, close long: {res['close_long']:.1f}"
-                                line += " | " if do_short else ""
-                            if do_short:
-                                line += f"entry short: {res['entry_short']:.1f}, close short: {res['close_short']:.1f}"
-                        except Exception as e:
-                            print("error computing minutes until next order", e)
-                            traceback.print_exc()
+                    line += " | mins delay until next: "
+                    try:
+                        res = self.calc_minutes_until_next_orders()
+                        if self.passivbot_mode == "clock":
+                            line += f"entry long: {res['entry_long']:.1f}, close long: {res['close_long']:.1f}"
+                            line += " | "
+                            line += f"entry short: {res['entry_short']:.1f}, close short: {res['close_short']:.1f}"
+                        else:
+                            line += f"AU close long: {res['close_long']:.1f} | "
+                            line += f"AU close short: {res['close_short']:.1f}"
+                    except Exception as e:
+                        print("error computing minutes until next order", e)
+                        traceback.print_exc()
                     if i == 0:
                         print("\r" + " " * (len(line) + 10), end=" ")
                     else:
@@ -1420,6 +1419,20 @@ class Bot:
 
     def calc_minutes_until_next_orders(self):
         res = {"entry_long": 0.0, "close_long": 0.0, "entry_short": 0.0, "close_short": 0.0}
+        if self.passivbot_mode in ["recursive_grid", "neat_grid"]:
+            mins_since_prev_AU_close_long = (
+                (self.server_time - self.last_fills_timestamps["unstuck_close_long"]) / 1000 / 60
+            )
+            res["close_long"] = max(
+                0.0, self.xk["auto_unstuck_delay_minutes"][0] - mins_since_prev_AU_close_long
+            )
+            mins_since_prev_AU_close_short = (
+                (self.server_time - self.last_fills_timestamps["unstuck_close_short"]) / 1000 / 60
+            )
+            res["close_short"] = max(
+                0.0, self.xk["auto_unstuck_delay_minutes"][1] - mins_since_prev_AU_close_short
+            )
+            return res
         if self.position["long"]["size"] != 0.0:
             millis_delay_next_entry_long = calc_delay_between_fills_ms_bid(
                 self.position["long"]["price"],
