@@ -727,8 +727,12 @@ def analyze_fills_slim(fills_long: list, fills_short: list, stats: list, config:
         "pa_distance_std_short": pa_dists_short.std(),
         "pa_distance_mean_long": pa_dists_long.mean(),
         "pa_distance_mean_short": pa_dists_short.mean(),
-        "pa_distance_1pct_worst_mean_long": np.sort(pa_dists_long)[-max(1, len(stats) // 100):].mean(),
-        "pa_distance_1pct_worst_mean_short": np.sort(pa_dists_short)[-max(1, len(stats) // 100):].mean(),
+        "pa_distance_1pct_worst_mean_long": np.sort(pa_dists_long)[
+            -max(1, len(stats) // 100) :
+        ].mean(),
+        "pa_distance_1pct_worst_mean_short": np.sort(pa_dists_short)[
+            -max(1, len(stats) // 100) :
+        ].mean(),
         "hrs_stuck_max_long": hrs_stuck_max_long,
         "hrs_stuck_max_short": hrs_stuck_max_short,
         "loss_profit_ratio_long": loss_profit_ratio_long,
@@ -942,8 +946,12 @@ def analyze_fills(
         "pa_distance_std_short": pa_distance_std_short
         if pa_distance_std_short == pa_distance_std_short
         else 1.0,
-        "pa_distance_1pct_worst_mean_long": pa_dists_long.sort_values().iloc[-max(1, len(sdf) // 100):].mean(),
-        "pa_distance_1pct_worst_mean_short": pa_dists_short.sort_values().iloc[-max(1, len(sdf) // 100):].mean(),
+        "pa_distance_1pct_worst_mean_long": pa_dists_long.sort_values()
+        .iloc[-max(1, len(sdf) // 100) :]
+        .mean(),
+        "pa_distance_1pct_worst_mean_short": pa_dists_short.sort_values()
+        .iloc[-max(1, len(sdf) // 100) :]
+        .mean(),
         "equity_balance_ratio_mean_long": (sdf.equity_long / sdf.balance_long).mean(),
         "equity_balance_ratio_std_long": eqbal_ratio_std_long,
         "equity_balance_ratio_mean_short": (sdf.equity_short / sdf.balance_short).mean(),
@@ -1449,9 +1457,14 @@ def calc_scores(config: dict, results: dict):
         raws[side] = {
             key: np.mean([individual_raws[side][sym][key] for sym in results]) for key, _ in keys
         }
+        n_symbols_to_include = (
+            max(1, int(len(individual_scores[side]) * (1 - config["clip_threshold"])))
+            if config["clip_threshold"] < 1.0
+            else int(round(config["clip_threshold"]))
+        )
         symbols_to_include[side] = sorted(
             individual_scores[side], key=lambda x: individual_scores[side][x]
-        )[: max(1, int(len(individual_scores[side]) * (1 - config["clip_threshold"])))]
+        )[:n_symbols_to_include]
         # print(symbols_to_include, individual_scores[side], config["clip_threshold"])
         means[side] = {
             key: np.mean([individual_vals[side][sym][key] for sym in symbols_to_include[side]])
