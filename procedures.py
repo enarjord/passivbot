@@ -130,7 +130,7 @@ async def prepare_backtest_config(args) -> dict:
 async def prepare_optimize_config(args) -> dict:
     config = await prepare_backtest_config(args)
     config.update(load_hjson_config(args.optimize_config_path))
-    for key in ["starting_configs", "iters", "algorithm"]:
+    for key in ["starting_configs", "iters", "algorithm", "clip_threshold"]:
         if hasattr(args, key) and getattr(args, key) is not None:
             config[key] = getattr(args, key)
         elif key not in config:
