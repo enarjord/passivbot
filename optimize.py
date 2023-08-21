@@ -153,6 +153,16 @@ async def main(algorithm=None):
         help="optimization algorithm options: [p/pso/particle_swarm_optimization, h/hs/harmony_search]",
     )
     parser.add_argument(
+        "-ct",
+        "--clip-threshold",
+        "--clip_threshold",
+        type=float,
+        required=False,
+        dest="clip_threshold",
+        default=None,
+        help="clip_threshold (see opt config for details)",
+    )
+    parser.add_argument(
         "-ser", "--serial", help="optimize symbols singly, not multi opt", action="store_true"
     )
     parser = add_argparse_args(parser)
