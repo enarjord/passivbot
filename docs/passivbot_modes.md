@@ -1,9 +1,9 @@
 # Passivbot Modes
 
-Passivbot has four different ways of calculating entries:  
-Recursive Grid Mode, Static Grid Mode, Neat Grid Mode and Clock Mode.
+Passivbot has three different ways of calculating entries:  
+Recursive Grid Mode, Neat Grid Mode and Clock Mode.
 
-Static and Neat grid modes are similar, building a grid with a pre-specified span.  
+Neat grid mode builds a grid with a pre-specified span.  
 Recursive grid mode builds the grid recursively, based on expected new position after previous grid node fill.  
 Clock mode builds no grids, but instead waits a duration of time between entries.
 
@@ -38,64 +38,35 @@ Clock mode builds no grids, but instead waits a duration of time between entries
         - using TP prices from the example above, bot will build the TP grid starting with 105, then 104.g and so on, instead of starting with 102, then 102.5 and so on.
 
 
-## Parameters common to Neat, Static and Recursive grid modes
+## Parameters common to Neat and Recursive grid modes
 - initial_eprice_ema_dist: float
 	- if no pos, initial entry price is
 		- `ema_band_lower * (1 - initial_eprice_ema_dist)` for long
 		- `ema_band_upper * (1 + initial_eprice_ema_dist)` for short
 - initial_qty_pct: float
 	- `initial_entry_cost = balance * wallet_exposure_limit * initial_qty_pct`
-- auto_unstuck_ema_dist: float
-	- per uno distance from EMA band to place auto unstuck orders.
-	- `auto_unstuck_bid_price = lower_EMA_band * (1 - auto_unstuck_ema_dist)`
-	- `auto_unstuck_ask_price = upper_EMA_band * (1 + auto_unstuck_ema_dist)`
-	- See more in `docs/auto_unstuck.md`
-- auto_unstuck_wallet_exposure_threshold: float
-	- if set to 0, auto unstuck is disabled
-	- auto unstuck mode is triggered when `wallet_exposure >= wallet_exposure_limit * (1 - auto_unstuck_wallet_exposure_threshold)`
-	- auto unstuck entry qty will bring wallet_exposure to wallet_exposure_limit
-	- auto unstuck close qty will bring wallet_exposure to `wallet_exposure_limit * (1 - auto_unstuck_wallet_exposure_threshold)`
-	- See more in `docs/auto_unstuck.md`
+- auto_unstuck parameters: float
+	- See `docs/auto_unstuck.md`
 
-
-## Parameters common to Static and Neat modes
-- eprice_exp_base
-	- if 1.0, spacing between all nodes' prices is equal
-	- higher than 1.0 and spacing will increase deeper in the grid
-- grid_span
-	- per uno distance from initial entry price to last node's price
-
-## Static Grid Mode Parameters
-- eprice_pprice_diff
-	- per uno distance from entry price to pos_price if filled
-	- a node's qty is determined such that pos price after fill is equal to `entry price * (1 +/- eprice_pprice_diff)`
-	- e.g. if long and pos_price is greater than 101.5 and `eprice_pprice_diff=0.015` and `entry_price==100` qty will be such that pos price after node fill is 101.5
-	- eprice_pprice_diff is dynamically increased behind the scenes in some proportion to wallet_exposure lest wallet_exposure exceeds wallet_exposure_limit
-- secondary_allocation
-	- per uno allocation of allocated funds to a secondary node which is independent of primary grid
-	- e.g. if 0.25, primary grid gets 75% of funds, secondary node gets 25%
-	- wallet_exposure_limit is always observed
-- secondary_pprice_diff
-	- per uno distance from pos price after last primary grid node is filled to secondary node
-	- e.g. if long and pos price after primary grid's exhaustion is 40 and secondary_pprice_diff is 0.15, secondary grid node's price is `40 * (1 - 0.15) == 34`
-
-It is called static grid mode because the grid is defined as a whole.  
-If there already is a position, the grid is reverse engineered by deducing initial entry price  
-and assuming partial node fills if the guessed grid is not a close match.
 
 ## Neat Grid Mode Parameters
 
+- grid_span
+	- per uno (0.32 == 32%) distance from initial entry price to last node's price
+- eprice_exp_base
+	- if 1.0, spacing between all nodes' prices is equal
+	- higher than 1.0 and spacing will increase deeper in the grid
 - eqty_exp_base
 	- if 1.0, qtys will increase linearly deeper in the grid
 	- if > 1.0, qtys will increase exponentially deeper in the grid
 
-It is called neat grid mode because the grid is made in a "neater" way than in static grid mode.
+It is called neat grid mode because the grid is made in a "neat" way.
 
 ## Recursive Grid Mode Parameters
 
 - ddown_factor
 	- `next_reentry_qty = pos_size * ddown_factor`
-	- in recursive grid mode ddown factor is static; in static grid mode ddown factor becomes dynamic
+	- in recursive grid mode ddown factor is static; in neat grid mode ddown factor becomes dynamic
 - rentry_pprice_dist
 - rentry_pprice_dist_wallet_exposure_weighting
 	- if set to zero, spacing between nodes will be approximately the same
@@ -114,19 +85,15 @@ It is called recursive grid mode because the grid is defined recusively by compu
 	- delay between entries/closes given in minutes
 	- entry delay resets after full pos close
 - delay_weight_entry/close
-	- delay between orders is modified according to: 
-	- `max(1, delay_between_fills_mins * (1 - pprice_diff * delay_weight))`
-	- where pprice_diff is diff between pos price and market price
-
-	- delay between EMA orders may be reduced, but not increased.
+	- delay between clock orders may be reduced, but not increased.
 	- if pos size is zero, the timer is reset for entries, but not for closes.
 
 	- the formula is:
-	- `delay = delay * min(1, (1 - pprice_diff * delay_weight))`
+	- `modified_delay = delay_between_fills * min(1, (1 - pprice_diff * delay_weight))`
 	- where for bids (long entries and short closes):
-	- `pprice_diff = (pprice / price - 1)`
+	- `pprice_diff = (pos_price / market_price - 1)`
 	- and for asks (short entries and long closes):
-	- `pprice_diff = (price / pprice - 1)`
+	- `pprice_diff = (market_price / pos_price - 1)`
 	- this means (given delay_weights > 0):
 	```
 	if market_price > pprice_long (upnl is green):
@@ -141,19 +108,22 @@ It is called recursive grid mode because the grid is defined recusively by compu
 	```
 
 - ema_dist_entry/close
-	- offset lower/upper ema band.  
-	- long entry is lower ema band; short entry is upper ema band.  
-	- `ema_band_lower = min(emas) * (1 - ema_dist_lower)`  
-	- `ema_band_upper = max(emas) * (1 + ema_dist_upper)`  
+	- offset from lower/upper ema band.  
+	- long_entry/short_close price is lower ema band minus offset  
+	- short_entry/long_close price is upper ema band plus offset  
+	- `clock_bid_price = min(emas) * (1 - ema_dist_lower)`  
+	- `clock_ask_price = max(emas) * (1 + ema_dist_upper)`  
 	- See ema_span_0/ema_span_1
 - qty_pct_entry/close  
+	- basic formula is `entry_cost = balance * wallet_exposure_limit * qty_pct`  
 - we_multiplier_entry/close
-	- entry cost is computed according to:
+	- similar in function to Recursive Grid mode's ddown_factor
+	- entry cost is modified according to:
 	- `entry_cost = balance * wallet_exposure_limit * qty_pct * (1 + ratio * we_multiplier)`
 	- where `ratio = wallet_exposure / wallet_exposure_limit`
 
-Clock mode uses the TP grid common to all passivbot modes.  
-There is no entry grid and no separate auto unstucking mechanism (auto unstuck is on all the time, as it were).  
-It is called Clock Mode because entries and cloces are on a timer.
+Clock mode uses the take-profit grid common to the other passivbot modes.  
+There is no entry grid and no separate auto unstucking mechanism for clock mode.  
+It is called Clock Mode because entries and closes are on a timer.
 
 
