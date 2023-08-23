@@ -75,7 +75,7 @@ def main():
         help="inspect particular config of given index",
     )
     parser.add_argument(
-        "-o",
+        "-oc",
         "--optimize_config",
         type=str,
         required=False,

@@ -91,7 +91,7 @@ async def main(algorithm=None):
         prog="Optimize multi symbol", description="Optimize passivbot config multi symbol"
     )
     parser.add_argument(
-        "-o",
+        "-oc",
         "--optimize_config",
         type=str,
         required=False,
