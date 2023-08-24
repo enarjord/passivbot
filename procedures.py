@@ -65,13 +65,15 @@ def load_hjson_config(config_path: str) -> dict:
         raise Exception(f"failed to load config file {config_path} {e}")
 
 
-async def prepare_backtest_config(args) -> dict:
+def prepare_backtest_config(args) -> dict:
     """
-    takes argparse args, returns dict with backtest and optimize config
+    takes argparse args, returns dict with backtest config
     """
     config = load_hjson_config(args.backtest_config_path)
+
+    if args.symbols is not None:
+        config["symbols"] = args.symbols.split(",")
     for key in [
-        "symbol",
         "user",
         "start_date",
         "end_date",
@@ -112,33 +114,51 @@ async def prepare_backtest_config(args) -> dict:
         config["ohlcv"] = True
 
     if config["base_dir"].startswith("~"):
-        raise Exception("error: using the ~ to indicate the user's home directory is not supported")
-
-    base_dirpath = os.path.join(
-        config["base_dir"],
-        f"{config['exchange']}{'_spot' if 'spot' in config['market_type'] else ''}",
-        config["symbol"],
-    )
-    config["caches_dirpath"] = make_get_filepath(os.path.join(base_dirpath, "caches", ""))
-    config["optimize_dirpath"] = make_get_filepath(os.path.join(base_dirpath, "optimize", ""))
-    config["plots_dirpath"] = make_get_filepath(os.path.join(base_dirpath, "plots", ""))
-
-    await add_market_specific_settings(config)
+        raise Exception(
+            "error: using the ~ to indicate the user's home directory is not supported"
+        )
+    if len(config["symbols"]) == 1:
+        config["symbol"] = config["symbols"][0]
+        base_dirpath = os.path.join(
+            config["base_dir"],
+            f"{config['exchange']}{'_spot' if 'spot' in config['market_type'] else ''}",
+            config["symbol"],
+        )
+        config["caches_dirpath"] = make_get_filepath(os.path.join(base_dirpath, "caches", ""))
+        config["plots_dirpath"] = make_get_filepath(os.path.join(base_dirpath, "plots", ""))
+        add_market_specific_settings(config)
     return config
 
 
-async def prepare_optimize_config(args) -> dict:
-    config = await prepare_backtest_config(args)
+def prepare_optimize_config(args) -> dict:
+    config = prepare_backtest_config(args)
     config.update(load_hjson_config(args.optimize_config_path))
     for key in ["starting_configs", "iters", "algorithm", "clip_threshold"]:
         if hasattr(args, key) and getattr(args, key) is not None:
             config[key] = getattr(args, key)
         elif key not in config:
             config[key] = None
+    if args.optimize_output_path is None:
+        algo_map = {
+            "h": "harmony_search",
+            "harmony_search": "harmony_search",
+            "p": "particle_swarm_optimization",
+            "particle_swarm_optimization": "particle_swarm_optimization",
+        }
+        output_base_dir = f"results_{algo_map[config['algorithm']]}_{config['passivbot_mode']}/"
+    else:
+        output_base_dir = args.optimize_output_path
+    identifying_name = (
+        f"{len(config['symbols'])}_symbols" if len(config["symbols"]) > 1 else config["symbols"][0]
+    )
+    now_date = ts_to_date(time())[:19].replace(":", "-")
+    config["results_fpath"] = make_get_filepath(
+        os.path.join(output_base_dir, f"{now_date}_{identifying_name}", "")
+    )
     return config
 
 
-async def add_market_specific_settings(config):
+def add_market_specific_settings(config):
     mss = config["caches_dirpath"] + "market_specific_settings.json"
     symbol = config["symbol"]
     try:
@@ -370,10 +390,10 @@ def add_argparse_args(parser):
     )
     parser.add_argument(
         "-s",
-        "--symbol",
+        "--symbols",
         type=str,
         required=False,
-        dest="symbol",
+        dest="symbols",
         default=None,
         help="specify symbol(s), overriding symbol from backtest config.  "
         + "multiple symbols separated with comma",
@@ -447,51 +467,6 @@ def add_argparse_args(parser):
     return parser
 
 
-def make_tick_samples(config: dict, sec_span: int = 1):
-
-    """
-    makes tick samples from agg_trades
-    tick samples are [(qty, price, timestamp)]
-    config must include parameters
-    - exchange: str
-    - symbol: str
-    - spot: bool
-    - start_date: str
-    - end_date: str
-    """
-    for key in ["exchange", "symbol", "spot", "start_date", "end_date"]:
-        assert key in config
-    start_ts = date_to_ts2(config["start_date"])
-    end_ts = date_to_ts2(config["end_date"])
-    ticks_filepath = os.path.join(
-        "historical_data",
-        config["exchange"],
-        f"agg_trades_{'spot' if config['spot'] else 'futures'}",
-        config["symbol"],
-        "",
-    )
-    if not os.path.exists(ticks_filepath):
-        return
-    ticks_filenames = sorted([f for f in os.listdir(ticks_filepath) if f.endswith(".csv")])
-    ticks = np.empty((0, 3))
-    sts = time()
-    for f in ticks_filenames:
-        _, _, first_ts, last_ts = map(int, f.replace(".csv", "").split("_"))
-        if first_ts > end_ts or last_ts < start_ts:
-            continue
-        print(f"\rloading chunk {ts_to_date(first_ts / 1000)}", end="  ")
-        tdf = pd.read_csv(ticks_filepath + f)
-        tdf = tdf[(tdf.timestamp >= start_ts) & (tdf.timestamp <= end_ts)]
-        ticks = np.concatenate((ticks, tdf[["timestamp", "qty", "price"]].values))
-        del tdf
-    samples = calc_samples(ticks[ticks[:, 0].argsort()], sec_span * 1000)
-    print(
-        f"took {time() - sts:.2f} seconds to load {len(ticks)} ticks, creating {len(samples)} samples"
-    )
-    del ticks
-    return samples
-
-
 def get_starting_configs(config) -> [dict]:
     starting_configs = []
     if config["starting_configs"] is not None:
@@ -534,6 +509,37 @@ def print_async_exception(coro):
         print(f"returned: {coro}")
     except:
         pass
+
+
+async def get_first_ohlcv_timestamps(cc=None, symbols=None, cache=True):
+    if cc is None:
+        import ccxt.async_support as ccxt
+
+        cc = ccxt.binanceusdm()
+    if symbols is None:
+        symbols = sorted(await cc.load_markets())
+    n = 30
+    first_timestamps = {}
+    cache_fname = f"caches/first_ohlcv_timestamps_{cc.id}.json"
+    if cache:
+        if os.path.exists(cache_fname):
+            try:
+                first_timestamps = json.load(open(cache_fname))
+                symbols = [s for s in symbols if s not in first_timestamps]
+            except Exception as e:
+                print(f"error loading ohlcv first ts cache", e)
+    for i in range(0, len(symbols), n):
+        symbols_slice = symbols[i : i + n]
+        sub_res = await asyncio.gather(*[cc.fetch_ohlcv(s, since=0) for s in symbols_slice])
+        for k in range(len(symbols_slice)):
+            first_timestamps[symbols_slice[k]] = sub_res[k][0][0]
+        if cache:
+            try:
+                make_get_filepath(cache_fname)
+                json.dump(first_timestamps, open(cache_fname, "w"), indent=4, sort_keys=True)
+            except Exception as e:
+                print(f"error dumping ohlcv first ts cache", e)
+    return first_timestamps
 
 
 def fetch_market_specific_settings(config: dict):
