@@ -164,17 +164,12 @@ async def main():
         help="disable plotting",
     )
     args = parser.parse_args()
-    if args.symbol is None:
-        tmp_cfg = load_hjson_config(args.backtest_config_path)
-        symbols = (
-            tmp_cfg["symbol"] if type(tmp_cfg["symbol"]) == list else tmp_cfg["symbol"].split(",")
-        )
-    else:
-        symbols = args.symbol.split(",")
-    for symbol in symbols:
-        args = parser.parse_args()
-        args.symbol = symbol
-        config = await prepare_backtest_config(args)
+    config = prepare_backtest_config(args)
+    for symbol in config["symbols"]:
+        if "symbol" not in config or symbol != config["symbol"]:
+            args = parser.parse_args()
+            args.symbols = symbol
+            config = prepare_backtest_config(args)
         config["n_parts"] = args.n_parts
         live_config = load_live_config(args.live_config_path)
         if "spot" in config["market_type"]:
