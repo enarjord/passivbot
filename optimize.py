@@ -100,6 +100,15 @@ async def main(algorithm=None):
         help="optimize config hjson file",
     )
     parser.add_argument(
+        "-o",
+        "--output_path",
+        type=str,
+        required=False,
+        dest="optimize_output_path",
+        default=None,
+        help="optimize results directory. Defaults to 'results_{algorithm}_{passivbot_mode}/",
+    )
+    parser.add_argument(
         "-t",
         "--start",
         type=str,
@@ -167,20 +176,16 @@ async def main(algorithm=None):
     )
     parser = add_argparse_args(parser)
     args = parser.parse_args()
-    if args.symbol is None or "," in args.symbol:
-        args.symbol = "BTCUSDT"  # dummy symbol
-    config = await prepare_optimize_config(args)
+    config = prepare_optimize_config(args)
     args = parser.parse_args()
     if algorithm is not None:
         args.algorithm = algorithm
-    if args.symbol is not None:
-        config["symbols"] = args.symbol.split(",")
     if args.serial:
         all_symbols = config["symbols"].copy()
         print(f"running single coin optimizations serially for symbols {all_symbols}")
         for symbol in all_symbols:
-            args.symbol = symbol
-            config = await prepare_optimize_config(args)
+            args.symbols = symbol
+            config = prepare_optimize_config(args)
             await run_opt(args, config)
     else:
         await run_opt(args, config)
@@ -237,8 +242,8 @@ async def run_opt(args, config):
                 config["short"]["enabled"] = config["do_short"] = False
             else:
                 raise Exception("please specify y/n with kwarg -le/--short")
-        if args.symbol is not None:
-            config["symbols"] = args.symbol.split(",")
+        if args.symbols is not None:
+            config["symbols"] = args.symbols.split(",")
         if args.n_cpus is not None:
             config["n_cpus"] = args.n_cpus
         if args.base_dir is not None:
@@ -271,17 +276,17 @@ async def run_opt(args, config):
                 cache_dirpath + "market_specific_settings.json"
             ):
                 logging.info(f"fetching data {symbol}")
-                args.symbol = symbol
-                tmp_cfg = await prepare_backtest_config(args)
+                args.symbols = symbol
+                tmp_cfg = prepare_backtest_config(args)
                 if config["ohlcv"]:
                     data = await load_hlc_cache(
                         symbol,
-                        config["inverse"],
-                        config["start_date"],
+                        tmp_cfg["inverse"],
+                        tmp_cfg["start_date"],
                         config["end_date"],
                         base_dir=config["base_dir"],
-                        spot=config["spot"],
-                        exchange=config["exchange"],
+                        spot=tmp_cfg["spot"],
+                        exchange=tmp_cfg["exchange"],
                     )
                     """
                     config["shared_memories"][symbol] = shared_memory.SharedMemory(
@@ -383,9 +388,10 @@ async def run_opt(args, config):
             harmony_search = HarmonySearch(config, backtest_wrap)
             harmony_search.run()
     finally:
-        for symbol in config["shared_memories"]:
-            config["shared_memories"][symbol].close()
-            config["shared_memories"][symbol].unlink()
+        if "shared_memories" in config:
+            for symbol in config["shared_memories"]:
+                config["shared_memories"][symbol].close()
+                config["shared_memories"][symbol].unlink()
 
 
 if __name__ == "__main__":
