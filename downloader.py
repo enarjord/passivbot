@@ -1229,7 +1229,7 @@ async def main():
     parser = add_argparse_args(parser)
 
     args = parser.parse_args()
-    config = await prepare_backtest_config(args)
+    config = prepare_backtest_config(args)
     if config["ohlcv"]:
         data = await load_hlc_cache(
             config["symbol"],
