@@ -16,36 +16,9 @@ import time
 import subprocess
 import argparse
 import traceback
-from procedures import load_exchange_key_secret_passphrase, utc_ms, make_get_filepath
+from procedures import load_exchange_key_secret_passphrase, utc_ms, make_get_filepath, get_first_ohlcv_timestamps
 from njit_funcs import calc_emas
 from pure_funcs import determine_pos_side_ccxt
-
-
-async def get_first_ohlcv_timestamps(cc, symbols=None, cache=True):
-    if symbols is None:
-        symbols = sorted(await cc.load_markets())
-    n = 30
-    first_timestamps = {}
-    cache_fname = f"caches/first_ohlcv_timestamps_{cc.id}.json"
-    if cache:
-        if os.path.exists(cache_fname):
-            try:
-                first_timestamps = json.load(open(cache_fname))
-                symbols = [s for s in symbols if s not in first_timestamps]
-            except Exception as e:
-                print(f"error loading ohlcv first ts cache", e)
-    for i in range(0, len(symbols), n):
-        symbols_slice = symbols[i : i + n]
-        sub_res = await asyncio.gather(*[cc.fetch_ohlcv(s, since=0) for s in symbols_slice])
-        for k in range(len(symbols_slice)):
-            first_timestamps[symbols_slice[k]] = sub_res[k][0][0]
-        if cache:
-            try:
-                make_get_filepath(cache_fname)
-                json.dump(first_timestamps, open(cache_fname, "w"), indent=4, sort_keys=True)
-            except Exception as e:
-                print(f"error dumping ohlcv first ts cache", e)
-    return first_timestamps
 
 
 def score_func_old(ohlcv):
