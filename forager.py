@@ -406,12 +406,15 @@ async def main():
         ("symbols_to_ignore", []),
         ("live_configs_map_long", {}),
         ("live_configs_map_short", {}),
+        ("live_configs_dir_long", ""),
+        ("live_configs_dir_short", ""),
         ("update_interval_minutes", 60),
     ]:
         if key not in config:
             config[key] = value
+    sides = ["long", "short"]
     if "approved_symbols_only" in config:
-        for side in ["long", "short"]:
+        for side in sides:
             if config["approved_symbols_only"]:
                 if f"approved_symbols_{side}" not in config:
                     config[f"approved_symbols_{side}"] = sorted(
@@ -419,6 +422,14 @@ async def main():
                     )
             else:
                 config[f"approved_symbols_{side}"] = []
+    for side in sides:
+        if config[f"live_configs_dir_{side}"] and os.path.exists(config[f"live_configs_dir_{side}"]):
+            fnames = sorted([f for f in os.listdir(config[f"live_configs_dir_{side}"]) if f.endswith(".json")])
+            if fnames:
+                for symbol in config[f"approved_symbols_{side}"]:
+                    fnamesf = [f for f in fnames if symbol in f]
+                    if fnamesf and not any([symbol in x for x in [config[f"live_configs_map_{side}"], config["live_configs_map"]]]):
+                        config[f"live_configs_map_{side}"][symbol] = os.path.join(config[f"live_configs_dir_{side}"], fnamesf[0])
     exchange, key, secret, passphrase = load_exchange_key_secret_passphrase(config["user"])
     max_n_tries_per_hour = 5
     error_timestamps = []
