@@ -1,5 +1,5 @@
 {
-  // supported exchanges: [kucoin, okx, bybit, binance]
+  // supported exchanges: [kucoin, okx, bybit, binance, bitget]
   user: binance_01
   twe_long: 1.6
   twe_short: 0.8
@@ -27,9 +27,6 @@
     SYM2USDT
   ]
 
-  // if symbol is missing from live_configs_map, default to this config
-  default_config_path: configs/live/clock_mode.example.json
-
   // if approved_symbols_long is empty, all symbols are approved for longs
   approved_symbols_long: [
     BTCUSDT
@@ -46,10 +43,17 @@
     EOSUSDT
   ]
 
-  // if symbol is present in live_configs_map_{long/short}, use that config for {long/short}
-  // elif symbol is present in live_configs_map, use that config for {long/short}
-  // else use default_config_path for {long/short}
+  // Specify directory containing live configs.
+  // They are sorted alphabetically, then the first config whose filename includes symbol is selected.
+  // For example, if live_configs_dir_long: "configs/live/custom_configs/"
+  // and that dir contains files [BTCUSDT.json, TRXUSDT.json, ATOMUSDT.json],
+  // then they will be added live_configs_map:
+  // {BTCUSDT: configs/live/custom_configs/BTCUSDT.json, TRXUSDT: configs/live/custom_configs/TRXUSDT.json ...etc.}.
+  // Set to "" to disable
+  live_configs_dir_long: ""
+  live_configs_dir_short: ""
 
+  // overrides live_configs_dir
   live_configs_map: {
     BTCUSDT: configs/live/clock_mode.example.json
     ETHUSDT: configs/live/neat_grid_mode.example.json
@@ -58,7 +62,7 @@
     ADAUSDT: configs/live/neat_grid_mode.example.json
   }
 
-  // will override long configs from live_configs_map
+  // overrides long configs from live_configs_map
   live_configs_map_long: {
     BTCUSDT: configs/live/clock_mode.example.json
     XMRUSDT: configs/live/neat_grid_mode.example.json
@@ -67,7 +71,7 @@
     XLMUSDT: configs/live/neat_grid_mode.example.json
   }
 
-  // will override short configs from live_configs_map
+  // overrides short configs from live_configs_map
   live_configs_map_short: {
     BTCUSDT: configs/live/clock_mode.example.json
     ETHUSDT: configs/live/neat_grid_mode.example.json
@@ -75,5 +79,14 @@
     EOSUSDT: configs/live/clock_mode.example.json
     MATICUSDT: configs/live/neat_grid_mode.example.json
   }
+
+  // if symbol is missing from live_configs_map, default to this config
+  default_config_path: configs/live/clock_mode.example.json
+
+  // if symbol is approved:
+  // if symbol is present in live_configs_map_{long/short}, use that config for {long/short}
+  // elif symbol is present in live_configs_map, use that config for {long/short}
+  // elif there is a filename in live_configs_dir_{long/short} containing symbol, use that config for {long/short}
+  // else use default_config_path for {long/short}
 
 }
