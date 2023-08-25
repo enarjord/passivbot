@@ -2,6 +2,7 @@ import glob
 import json
 import os
 import traceback
+import asyncio
 from datetime import datetime
 from time import time
 import numpy as np
@@ -516,29 +517,32 @@ async def get_first_ohlcv_timestamps(cc=None, symbols=None, cache=True):
         import ccxt.async_support as ccxt
 
         cc = ccxt.binanceusdm()
-    if symbols is None:
-        symbols = sorted(await cc.load_markets())
-    n = 30
-    first_timestamps = {}
-    cache_fname = f"caches/first_ohlcv_timestamps_{cc.id}.json"
-    if cache:
-        if os.path.exists(cache_fname):
-            try:
-                first_timestamps = json.load(open(cache_fname))
-                symbols = [s for s in symbols if s not in first_timestamps]
-            except Exception as e:
-                print(f"error loading ohlcv first ts cache", e)
-    for i in range(0, len(symbols), n):
-        symbols_slice = symbols[i : i + n]
-        sub_res = await asyncio.gather(*[cc.fetch_ohlcv(s, since=0) for s in symbols_slice])
-        for k in range(len(symbols_slice)):
-            first_timestamps[symbols_slice[k]] = sub_res[k][0][0]
+    try:
+        if symbols is None:
+            symbols = sorted(await cc.load_markets())
+        n = 30
+        first_timestamps = {}
+        cache_fname = f"caches/first_ohlcv_timestamps_{cc.id}.json"
         if cache:
-            try:
-                make_get_filepath(cache_fname)
-                json.dump(first_timestamps, open(cache_fname, "w"), indent=4, sort_keys=True)
-            except Exception as e:
-                print(f"error dumping ohlcv first ts cache", e)
+            if os.path.exists(cache_fname):
+                try:
+                    first_timestamps = json.load(open(cache_fname))
+                    symbols = [s for s in symbols if s not in first_timestamps]
+                except Exception as e:
+                    print(f"error loading ohlcv first ts cache", e)
+        for i in range(0, len(symbols), n):
+            symbols_slice = symbols[i : i + n]
+            sub_res = await asyncio.gather(*[cc.fetch_ohlcv(s, since=0) for s in symbols_slice])
+            for k in range(len(symbols_slice)):
+                first_timestamps[symbols_slice[k]] = sub_res[k][0][0]
+            if cache:
+                try:
+                    make_get_filepath(cache_fname)
+                    json.dump(first_timestamps, open(cache_fname, "w"), indent=4, sort_keys=True)
+                except Exception as e:
+                    print(f"error dumping ohlcv first ts cache", e)
+    finally:
+        await cc.close()
     return first_timestamps
 
 
