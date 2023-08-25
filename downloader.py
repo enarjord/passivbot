@@ -10,7 +10,7 @@ from io import BytesIO
 from time import time
 from typing import Tuple
 from urllib.request import urlopen
-from zipfile import ZipFile
+import zipfile
 import traceback
 import aiohttp
 
@@ -29,6 +29,7 @@ from procedures import (
     print_,
     add_argparse_args,
     utc_ms,
+    get_first_ohlcv_timestamps,
 )
 from pure_funcs import ts_to_date, ts_to_date_utc, date_to_ts2, get_dummy_settings, get_day
 
@@ -326,6 +327,7 @@ class Downloader:
         """
         print_(["Fetching", symbol, date])
         url = f"{base_url}{symbol.upper()}/{symbol.upper()}-aggTrades-{date}.zip"
+        print(url)
         df = pd.DataFrame(columns=["trade_id", "price", "qty", "timestamp", "is_buyer_maker"])
         column_names = [
             "trade_id",
@@ -348,7 +350,7 @@ class Downloader:
                     fout.write(chunk)
                     file_tmp.write(chunk)
 
-            with ZipFile(file_tmp) as my_zip_file:
+            with zipfile.ZipFile(file_tmp) as my_zip_file:
                 for contained_file in my_zip_file.namelist():
                     tf = pd.read_csv(my_zip_file.open(contained_file), names=column_names)
                     if tf.trade_id.iloc[0] == "agg_trade_id":
@@ -954,7 +956,7 @@ def get_zip(url: str):
                 fout.write(chunk)
                 file_tmp.write(chunk)
         dfs = []
-        with ZipFile(file_tmp) as my_zip_file:
+        with zipfile.ZipFile(file_tmp) as my_zip_file:
             for contained_file in my_zip_file.namelist():
                 df = pd.read_csv(my_zip_file.open(contained_file))
                 df.columns = col_names + [str(i) for i in range(len(df.columns) - len(col_names))]
@@ -962,6 +964,38 @@ def get_zip(url: str):
         return pd.concat(dfs).sort_values("timestamp").reset_index()
     except Exception as e:
         print(e)
+
+
+async def fetch_zips(url):
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as response:
+                response.raise_for_status()
+                zip_content = await response.read()
+        zips = []
+        with zipfile.ZipFile(BytesIO(zip_content), "r") as zip_ref:
+            for contained_file in zip_ref.namelist():
+                zips.append(zip_ref.open(contained_file))
+        return zips
+
+    except aiohttp.ClientError as e:
+        print("Error during HTTP request:", e)
+    except zipfile.BadZipFile:
+        print("Error extracting the zip file. Make sure it contains a valid CSV file.")
+    except pd.errors.EmptyDataError:
+        print("The CSV file is empty or could not be loaded as a DataFrame.")
+
+
+async def get_zip_binance(url):
+    col_names = ["timestamp", "open", "high", "low", "close", "volume"]
+    zips = await fetch_zips(url)
+    dfs = []
+    for zip in zips:
+        df = pd.read_csv(zip, header=None)
+        df.columns = col_names + [str(i) for i in range(len(df.columns) - len(col_names))]
+        dfs.append(df[col_names])
+    dfc = pd.concat(dfs).sort_values("timestamp").reset_index()
+    return dfc[dfc.timestamp != "open_time"]
 
 
 def get_first_ohlcv_ts(symbol: str, spot=False) -> int:
@@ -1103,14 +1137,17 @@ def convert_to_ohlcv(df, interval=60000):
     return ohlcvs
 
 
-def download_ohlcvs(
+async def download_ohlcvs_binance(
     symbol, inverse, start_date, end_date, spot=False, download_only=False
 ) -> pd.DataFrame:
     dirpath = make_get_filepath(f"historical_data/ohlcvs_{'spot' if spot else 'futures'}/{symbol}/")
     base_url = "https://data.binance.vision/data/"
     base_url += "spot/" if spot else f"futures/{'cm' if inverse else 'um'}/"
     col_names = ["timestamp", "open", "high", "low", "close", "volume"]
-    start_ts = int(max(get_first_ohlcv_ts(symbol, spot=spot), date_to_ts2(start_date)))
+    if spot:
+        start_ts = int(max(get_first_ohlcv_ts(symbol, spot=spot), date_to_ts2(start_date)))
+    else:
+        start_ts = (await get_first_ohlcv_timestamps(symbols=[symbol]))[symbol]
     end_ts = int(date_to_ts2(end_date))
     days = [ts_to_date_utc(x)[:10] for x in list(range(start_ts, end_ts, 1000 * 60 * 60 * 24))]
     months = sorted({x[:7] for x in days})
@@ -1128,11 +1165,11 @@ def download_ohlcvs(
         try:
             url = base_url + f"monthly/klines/{symbol}/1m/{symbol}-1m-{month}.zip"
             print("fetching", url)
-            csv = get_zip(url)
+            csv = await get_zip_binance(url)
             csv.to_csv(month_filepath)
             months_done.add(month)
             if not download_only:
-                dfs.append(csv)
+                dfs.append(pd.read_csv(month_filepath))
             for f in os.listdir(dirpath):
                 if month in f and len(f) > 11:
                     print("deleting", dirpath + f)
@@ -1151,15 +1188,23 @@ def download_ohlcvs(
             continue
         try:
             print("fetching", day_filepath)
-            csv = get_zip(base_url + f"daily/klines/{symbol}/1m/{symbol}-1m-{day}.zip")
+            csv = await get_zip_binance(base_url + f"daily/klines/{symbol}/1m/{symbol}-1m-{day}.zip")
             csv.to_csv(day_filepath)
             if not download_only:
-                dfs.append(csv)
+                dfs.append(pd.read_csv(day_filepath))
         except Exception as e:
             print(e)
             break
     if not download_only:
-        df = pd.concat(dfs)[col_names].sort_values("timestamp")
+        try:
+            df = pd.concat(dfs)[col_names].sort_values("timestamp")
+        except:
+            print("debug 2")
+            df = pd.concat(dfs)
+            print(symbol)
+            print(df)
+            print(df.timestamp.dtype)
+            raise Exception
         df = df.drop_duplicates(subset=["timestamp"]).reset_index()
         nindex = np.arange(df.timestamp.iloc[0], df.timestamp.iloc[-1] + 60000, 60000)
         return (
@@ -1204,7 +1249,7 @@ async def load_hlc_cache(
         if exchange == "bybit":
             df = await download_ohlcvs_bybit(symbol, start_date, end_date, download_only=False)
         else:
-            df = download_ohlcvs(symbol, inverse, start_date, end_date, spot)
+            df = await download_ohlcvs_binance(symbol, inverse, start_date, end_date, spot)
         df = df[df.timestamp >= date_to_ts2(start_date)]
         df = df[df.timestamp <= date_to_ts2(end_date)]
         data = df[["timestamp", "high", "low", "close"]].values
