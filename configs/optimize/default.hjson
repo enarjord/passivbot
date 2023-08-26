@@ -67,6 +67,18 @@
   # choices: [r/recursive_grid, n/neat_grid, c/clock]
   passivbot_mode: neat_grid
 
+  # when passing a directory as -t/--start,
+  # exclude starting configs satisfying these conditions
+  # uncomment to activate filter
+  # multicoin configs are assumed to have "symbols" in filename
+  # singlecoin configs are assumed to lack "symbols" in filename and to have given symbol in filename
+  starting_configs_filtering_conditions: [
+    // skip_multicoin
+    // skip_singlecoin
+    // skip_non_matching_single_coin
+    // skip_matching_single_coin
+  ]
+
   bounds_recursive_grid:
   {
     long:
