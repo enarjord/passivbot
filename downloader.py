@@ -1009,7 +1009,6 @@ def get_first_ohlcv_ts(symbol: str, spot=False) -> int:
         )
         first_ohlcvs = json.loads(res.text)
         first_ts = first_ohlcvs[0][0]
-        print(f"first ohlcv at {ts_to_date(first_ts)}")
         return first_ts
     except Exception as e:
         print(f"error getting first ohlcv ts {e}, returning 0")
@@ -1148,6 +1147,8 @@ async def download_ohlcvs_binance(
         start_ts = int(max(get_first_ohlcv_ts(symbol, spot=spot), date_to_ts2(start_date)))
     else:
         start_ts = (await get_first_ohlcv_timestamps(symbols=[symbol]))[symbol]
+    if start_ts != 0:
+        print(f"first ohlcv at {ts_to_date(start_ts)}")
     end_ts = int(date_to_ts2(end_date))
     days = [ts_to_date_utc(x)[:10] for x in list(range(start_ts, end_ts, 1000 * 60 * 60 * 24))]
     months = sorted({x[:7] for x in days})
