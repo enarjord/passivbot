@@ -176,9 +176,7 @@ def prepare_optimize_config(args) -> dict:
         f"{len(config['symbols'])}_symbols" if len(config["symbols"]) > 1 else config["symbols"][0]
     )
     now_date = ts_to_date(time())[:19].replace(":", "-")
-    config["results_fpath"] = make_get_filepath(
-        os.path.join(output_base_dir, f"{now_date}_{identifying_name}", "")
-    )
+    config["results_fpath"] = os.path.join(output_base_dir, f"{now_date}_{identifying_name}", "")
     return config
 
 
