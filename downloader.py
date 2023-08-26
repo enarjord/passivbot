@@ -1136,6 +1136,15 @@ def convert_to_ohlcv(df, interval=60000):
     return ohlcvs
 
 
+async def download_single_ohlcvs_binance(url: str, fpath: str):
+    try:
+        print(f'fetching {url}')
+        csv = await get_zip_binance(url)
+        csv.to_csv(fpath)
+    except Exception as e:
+        print(f"failed to download {url} {e}")
+
+
 async def download_ohlcvs_binance(
     symbol, inverse, start_date, end_date, spot=False, download_only=False
 ) -> pd.DataFrame:
@@ -1144,68 +1153,42 @@ async def download_ohlcvs_binance(
     base_url += "spot/" if spot else f"futures/{'cm' if inverse else 'um'}/"
     col_names = ["timestamp", "open", "high", "low", "close", "volume"]
     if spot:
-        start_ts = int(max(get_first_ohlcv_ts(symbol, spot=spot), date_to_ts2(start_date)))
+        start_ts = get_first_ohlcv_ts(symbol, spot=spot)
     else:
         start_ts = (await get_first_ohlcv_timestamps(symbols=[symbol]))[symbol]
     if start_ts != 0:
         print(f"first ohlcv at {ts_to_date(start_ts)}")
+    start_ts = int(max(start_ts, date_to_ts2(start_date)))
     end_ts = int(date_to_ts2(end_date))
     days = [ts_to_date_utc(x)[:10] for x in list(range(start_ts, end_ts, 1000 * 60 * 60 * 24))]
     months = sorted({x[:7] for x in days})
-    month_now = ts_to_date(time())[:7]
+    month_now = ts_to_date(utc_ms())[:7]
     months = [m for m in months if m != month_now]
-    months_done = set()
-    dfs = []
-    for month in months:
-        month_filepath = dirpath + month + ".csv"
-        if os.path.exists(month_filepath):
-            months_done.add(month)
-            if not download_only:
-                dfs.append(pd.read_csv(month_filepath))
-            continue
-        try:
-            url = base_url + f"monthly/klines/{symbol}/1m/{symbol}-1m-{month}.zip"
-            print("fetching", url)
-            csv = await get_zip_binance(url)
-            csv.to_csv(month_filepath)
-            months_done.add(month)
-            if not download_only:
-                dfs.append(pd.read_csv(month_filepath))
-            for f in os.listdir(dirpath):
-                if month in f and len(f) > 11:
-                    print("deleting", dirpath + f)
-                    os.remove(dirpath + f)
-        except Exception as e:
-            if month != months[-1]:
-                months_done.add(month)
-            print(e)
-    for day in days:
-        if day[:7] in months_done:
-            continue
-        day_filepath = dirpath + day + ".csv"
-        if os.path.exists(day_filepath):
-            if not download_only:
-                dfs.append(pd.read_csv(day_filepath))
-            continue
-        try:
-            print("fetching", day_filepath)
-            csv = await get_zip_binance(base_url + f"daily/klines/{symbol}/1m/{symbol}-1m-{day}.zip")
-            csv.to_csv(day_filepath)
-            if not download_only:
-                dfs.append(pd.read_csv(day_filepath))
-        except Exception as e:
-            print(e)
-            break
+
+    # do months async
+    months_filepaths = {month: os.path.join(dirpath, month + ".csv") for month in months}
+    missing_months = {k: v for k, v in months_filepaths.items() if not os.path.exists(v)}
+    await asyncio.gather(*[download_single_ohlcvs_binance(base_url + f"monthly/klines/{symbol}/1m/{symbol}-1m-{k}.zip", v) for k, v in missing_months.items()])
+    months_done = sorted([x for x in os.listdir(dirpath) if x[:-4] in months_filepaths])
+
+    # do days async
+    days_filepaths = {day: os.path.join(dirpath, day + ".csv") for day in days}
+    missing_days = {k: v for k, v in days_filepaths.items() if not os.path.exists(v) and k[:7] + '.csv' not in months_done}
+    await asyncio.gather(*[download_single_ohlcvs_binance(base_url + f"daily/klines/{symbol}/1m/{symbol}-1m-{k}.zip", v) for k, v in missing_days.items()])
+    days_done = sorted([x for x in os.listdir(dirpath) if x[:-4] in days_filepaths])
+
+    # delete days contained in months
+    fnames = os.listdir(dirpath)
+    for fname in fnames:
+        if fname.endswith(".csv") and len(fname) == 14:
+            if fname[:7] + ".csv" in fnames:
+                print("deleting", os.path.join(dirpath, fname))
+                os.remove(os.path.join(dirpath, fname))
+
     if not download_only:
-        try:
-            df = pd.concat(dfs)[col_names].sort_values("timestamp")
-        except:
-            print("debug 2")
-            df = pd.concat(dfs)
-            print(symbol)
-            print(df)
-            print(df.timestamp.dtype)
-            raise Exception
+        fnames = os.listdir(dirpath)
+        dfs = [pd.read_csv(os.path.join(dirpath, fpath)) for fpath in months_done + days_done if fpath in fnames]
+        df = pd.concat(dfs)[col_names].sort_values("timestamp")
         df = df.drop_duplicates(subset=["timestamp"]).reset_index()
         nindex = np.arange(df.timestamp.iloc[0], df.timestamp.iloc[-1] + 60000, 60000)
         return (
