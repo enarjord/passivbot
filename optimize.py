@@ -15,6 +15,8 @@ from njit_funcs import round_dynamic
 from pure_funcs import (
     analyze_fills_slim,
     denumpyize,
+    numpyize,
+    make_compatible,
     get_template_live_config,
     ts_to_date,
     ts_to_date_utc,
@@ -273,63 +275,26 @@ async def run_opt(args, config):
                 else:
                     downloader = Downloader({**config, **tmp_cfg})
                     await downloader.get_sampled_ticks()
-        if config["algorithm"] == "particle_swarm_optimization":
-            from particle_swarm_optimization import ParticleSwarmOptimization
 
-            # prepare starting configs
-            cfgs = []
-            if args.starting_configs is not None:
-                logging.info("preparing starting configs...")
+
+        # prepare starting configs
+        cfgs = []
+        if args.starting_configs is not None:
+            if os.path.exists(args.starting_configs):
                 if os.path.isdir(args.starting_configs):
-                    for fname in os.listdir(args.starting_configs):
-                        try:
+                    # a directory was passed as starting config
+                    fnames = [f for f in os.listdir(args.starting_configs) if f.endswith(".json")]
 
-                            exclude_non_matching_single_coin_conf = False
-                            exclude_multicoin_conf = False
+                    if "skip_multicoin" in config["starting_configs_filtering_conditions"]:
+                        fnames = [f for f in fnames if "symbols" not in f]
+                    if "skip_singlecoin" in config["starting_configs_filtering_conditions"]:
+                        fnames = [f for f in fnames if "symbols" in f]
+                    if "skip_non_matching_single_coin" in config["starting_configs_filtering_conditions"]:
+                        fnames = [f for f in fnames if "symbols" in f or config["symbols"][0] in f]
+                    if "skip_matching_single_coin" in config["starting_configs_filtering_conditions"]:
+                        fnames = [f for f in fnames if "symbols" in f or config["symbols"][0] not in f]
 
-                            if exclude_multicoin_conf:
-                                if "symbols" in fname:
-                                    # is multicoin conf
-                                    print("skipping", os.path.join(args.starting_configs, fname))
-                                    continue
-
-                            if exclude_non_matching_single_coin_conf:
-                                if "symbols" in fname or (not config["symbols"][0] in fname):
-                                    # is non matching single coin conf
-                                    print("skipping", os.path.join(args.starting_configs, fname))
-                                    continue
-
-                            cfg = load_live_config(os.path.join(args.starting_configs, fname))
-                            assert (
-                                determine_passivbot_mode(cfg) == config["passivbot_mode"]
-                            ), "wrong passivbot mode"
-                            cfgs.append(cfg)
-                            logging.info(f"successfully loaded config {fname}")
-
-                        except Exception as e:
-                            logging.error(f"error loading config {fname}: {e}")
-                elif os.path.exists(args.starting_configs):
-                    try:
-                        cfg = load_live_config(args.starting_configs)
-                        assert (
-                            determine_passivbot_mode(cfg) == config["passivbot_mode"]
-                        ), "wrong passivbot mode"
-                        cfgs.append(cfg)
-                        logging.info(f"successfully loaded config {args.starting_configs}")
-                    except Exception as e:
-                        logging.error(f"error loading config {args.starting_configs}: {e}")
-            config["starting_configs"] = cfgs
-            particle_swarm_optimization = ParticleSwarmOptimization(config, backtest_wrap)
-            particle_swarm_optimization.run()
-        elif config["algorithm"] == "harmony_search":
-            from harmony_search import HarmonySearch
-
-            # prepare starting configs
-            cfgs = []
-            if args.starting_configs is not None:
-                logging.info("preparing starting configs...")
-                if os.path.isdir(args.starting_configs):
-                    for fname in os.listdir(args.starting_configs):
+                    for fname in fnames:
                         try:
                             cfg = load_live_config(os.path.join(args.starting_configs, fname))
                             assert (
@@ -340,7 +305,7 @@ async def run_opt(args, config):
 
                         except Exception as e:
                             logging.error(f"error loading config {fname}: {e}")
-                elif os.path.exists(args.starting_configs):
+                elif args.starting_configs.endswith(".json"):
                     hm_load_failed = True
                     if "hm_" in args.starting_configs:
                         try:
@@ -350,6 +315,7 @@ async def run_opt(args, config):
                                     "long": hm[k]["long"]["config"],
                                     "short": hm[k]["short"]["config"],
                                 }
+                                cfg = sort_dict_keys(numpyize(make_compatible(cfg)))
                                 assert (
                                     determine_passivbot_mode(cfg) == config["passivbot_mode"]
                                 ), "wrong passivbot mode in harmony memory"
@@ -367,9 +333,20 @@ async def run_opt(args, config):
                                 determine_passivbot_mode(cfg) == config["passivbot_mode"]
                             ), "wrong passivbot mode"
                             cfgs.append(cfg)
+                            logging.info(f"successfully loaded config {args.starting_configs}")
                         except Exception as e:
                             logging.error(f"error loading config {args.starting_configs}: {e}")
-            config["starting_configs"] = cfgs
+
+        config["starting_configs"] = cfgs
+
+        if config["algorithm"] == "particle_swarm_optimization":
+            from particle_swarm_optimization import ParticleSwarmOptimization
+
+            particle_swarm_optimization = ParticleSwarmOptimization(config, backtest_wrap)
+            particle_swarm_optimization.run()
+        elif config["algorithm"] == "harmony_search":
+            from harmony_search import HarmonySearch
+
             harmony_search = HarmonySearch(config, backtest_wrap)
             harmony_search.run()
     finally:
