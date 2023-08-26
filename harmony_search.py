@@ -57,7 +57,7 @@ class HarmonySearch:
         self.long_bounds = sort_dict_keys(config[f"bounds_{self.config['passivbot_mode']}"]["long"])
         self.short_bounds = sort_dict_keys(config[f"bounds_{self.config['passivbot_mode']}"]["short"])
         self.symbols = config["symbols"]
-        self.results_fpath = config["results_fpath"]
+        self.results_fpath = make_get_filepath(config["results_fpath"])
         self.exchange_name = config["exchange"] + ("_spot" if config["market_type"] == "spot" else "")
         self.market_specific_settings = {
             s: json.load(
