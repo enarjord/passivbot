@@ -193,7 +193,7 @@ async def main(algorithm=None):
 
 async def run_opt(args, config):
     try:
-        config.update(get_template_live_config(passivbot_mode))
+        config.update(get_template_live_config(config["passivbot_mode"]))
         config["long"]["backwards_tp"] = config["backwards_tp_long"]
         config["short"]["backwards_tp"] = config["backwards_tp_short"]
         config["exchange"] = load_exchange_key_secret_passphrase(config["user"])[0]
@@ -221,7 +221,7 @@ async def run_opt(args, config):
             config["n_cpus"] = args.n_cpus
         if args.base_dir is not None:
             config["base_dir"] = args.base_dir
-        if passivbot_mode == "clock":
+        if config["passivbot_mode"] == "clock":
             config["ohlcv"] = True
         print()
         lines = [
@@ -283,15 +283,25 @@ async def run_opt(args, config):
                 if os.path.isdir(args.starting_configs):
                     for fname in os.listdir(args.starting_configs):
                         try:
-                            """
-                            #  uncomment to skip single starting configs with wrong symbol
-                            if not any(x in os.path.join(args.starting_configs, fname) for x in [config["symbols"][0], "symbols"]):
-                                print("skipping", os.path.join(args.starting_configs, fname))
-                                continue
-                            """
+
+                            exclude_non_matching_single_coin_conf = False
+                            exclude_multicoin_conf = False
+
+                            if exclude_multicoin_conf:
+                                if "symbols" in fname:
+                                    # is multicoin conf
+                                    print("skipping", os.path.join(args.starting_configs, fname))
+                                    continue
+
+                            if exclude_non_matching_single_coin_conf:
+                                if "symbols" in fname or (not config["symbols"][0] in fname):
+                                    # is non matching single coin conf
+                                    print("skipping", os.path.join(args.starting_configs, fname))
+                                    continue
+
                             cfg = load_live_config(os.path.join(args.starting_configs, fname))
                             assert (
-                                determine_passivbot_mode(cfg) == passivbot_mode
+                                determine_passivbot_mode(cfg) == config["passivbot_mode"]
                             ), "wrong passivbot mode"
                             cfgs.append(cfg)
                             logging.info(f"successfully loaded config {fname}")
@@ -301,7 +311,9 @@ async def run_opt(args, config):
                 elif os.path.exists(args.starting_configs):
                     try:
                         cfg = load_live_config(args.starting_configs)
-                        assert determine_passivbot_mode(cfg) == passivbot_mode, "wrong passivbot mode"
+                        assert (
+                            determine_passivbot_mode(cfg) == config["passivbot_mode"]
+                        ), "wrong passivbot mode"
                         cfgs.append(cfg)
                         logging.info(f"successfully loaded config {args.starting_configs}")
                     except Exception as e:
@@ -321,7 +333,7 @@ async def run_opt(args, config):
                         try:
                             cfg = load_live_config(os.path.join(args.starting_configs, fname))
                             assert (
-                                determine_passivbot_mode(cfg) == passivbot_mode
+                                determine_passivbot_mode(cfg) == config["passivbot_mode"]
                             ), "wrong passivbot mode"
                             cfgs.append(cfg)
                             logging.info(f"successfully loaded config {fname}")
@@ -339,7 +351,7 @@ async def run_opt(args, config):
                                     "short": hm[k]["short"]["config"],
                                 }
                                 assert (
-                                    determine_passivbot_mode(cfg) == passivbot_mode
+                                    determine_passivbot_mode(cfg) == config["passivbot_mode"]
                                 ), "wrong passivbot mode in harmony memory"
                                 cfgs.append(cfg)
                             logging.info(f"loaded harmony memory {args.starting_configs}")
@@ -352,7 +364,7 @@ async def run_opt(args, config):
                         try:
                             cfg = load_live_config(args.starting_configs)
                             assert (
-                                determine_passivbot_mode(cfg) == passivbot_mode
+                                determine_passivbot_mode(cfg) == config["passivbot_mode"]
                             ), "wrong passivbot mode"
                             cfgs.append(cfg)
                         except Exception as e:
