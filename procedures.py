@@ -115,9 +115,7 @@ def prepare_backtest_config(args) -> dict:
         config["ohlcv"] = True
 
     if config["base_dir"].startswith("~"):
-        raise Exception(
-            "error: using the ~ to indicate the user's home directory is not supported"
-        )
+        raise Exception("error: using the ~ to indicate the user's home directory is not supported")
     if len(config["symbols"]) == 1:
         config["symbol"] = config["symbols"][0]
         base_dirpath = os.path.join(
@@ -134,19 +132,44 @@ def prepare_backtest_config(args) -> dict:
 def prepare_optimize_config(args) -> dict:
     config = prepare_backtest_config(args)
     config.update(load_hjson_config(args.optimize_config_path))
-    for key in ["starting_configs", "iters", "algorithm", "clip_threshold"]:
+
+    for key in ["starting_configs", "iters", "algorithm", "clip_threshold", "passivbot_mode"]:
         if hasattr(args, key) and getattr(args, key) is not None:
             config[key] = getattr(args, key)
         elif key not in config:
             config[key] = None
+
+    algo_map = {
+        "h": "harmony_search",
+        "hs": "harmony_search",
+        "harmony_search": "harmony_search",
+        "harmony-search": "harmony_search",
+        "p": "particle_swarm_optimization",
+        "pso": "particle_swarm_optimization",
+        "PSO": "particle_swarm_optimization",
+        "particle_swarm_optimization": "particle_swarm_optimization",
+        "particle-swarm-optimization": "particle_swarm_optimization",
+    }
+    assert config["algorithm"] in algo_map, f"unknown algorithm {config['algorithm']}"
+    config["algorithm"] = algo_map[config["algorithm"]]
+
+    pm_map = {
+        "r": "recursive_grid",
+        "recursive": "recursive_grid",
+        "recursive_grid": "recursive_grid",
+        "recursive-grid": "recursive_grid",
+        "n": "neat_grid",
+        "neat": "neat_grid",
+        "neat_grid": "neat_grid",
+        "neat-grid": "neat_grid",
+        "c": "clock",
+        "clock": "clock",
+    }
+    assert config["passivbot_mode"] in pm_map, f"unknown passivbot mode {config['passivbot_mode']}"
+    config["passivbot_mode"] = pm_map[config["passivbot_mode"]]
+
     if args.optimize_output_path is None:
-        algo_map = {
-            "h": "harmony_search",
-            "harmony_search": "harmony_search",
-            "p": "particle_swarm_optimization",
-            "particle_swarm_optimization": "particle_swarm_optimization",
-        }
-        output_base_dir = f"results_{algo_map[config['algorithm']]}_{config['passivbot_mode']}/"
+        output_base_dir = f"results_{config['algorithm']}_{config['passivbot_mode']}/"
     else:
         output_base_dir = args.optimize_output_path
     identifying_name = (

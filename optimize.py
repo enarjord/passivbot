@@ -193,33 +193,6 @@ async def main(algorithm=None):
 
 async def run_opt(args, config):
     try:
-        if args.passivbot_mode is not None:
-            if args.passivbot_mode in ["r", "recursive_grid", "recursive"]:
-                config["passivbot_mode"] = "recursive_grid"
-            elif args.passivbot_mode in ["n", "neat_grid", "neat"]:
-                config["passivbot_mode"] = "neat_grid"
-            elif args.passivbot_mode in ["c", "clock"]:
-                config["passivbot_mode"] = "clock"
-            else:
-                raise Exception(f"unknown passivbot mode {args.passivbot_mode}")
-        algorithm = config["algorithm"] if args.algorithm is None else args.algorithm
-        if algorithm in [
-            "p",
-            "pso",
-            "particle_swarm_optimization",
-            "particle-swarm-optimization",
-        ]:
-            config["algorithm"] = "particle_swarm_optimization"
-        elif algorithm in ["h", "hs", "harmony_search", "harmony-search"]:
-            config["algorithm"] = "harmony_search"
-        else:
-            raise Exception(f"unknown optimization algorithm {algorithm}")
-        passivbot_mode = config["passivbot_mode"]
-        assert passivbot_mode in [
-            "recursive_grid",
-            "neat_grid",
-            "clock",
-        ], f"unknown passivbot mode {passivbot_mode}"
         config.update(get_template_live_config(passivbot_mode))
         config["long"]["backwards_tp"] = config["backwards_tp_long"]
         config["short"]["backwards_tp"] = config["backwards_tp_short"]
