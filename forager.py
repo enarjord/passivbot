@@ -18,7 +18,7 @@ import argparse
 import traceback
 from procedures import load_exchange_key_secret_passphrase, utc_ms, make_get_filepath, get_first_ohlcv_timestamps
 from njit_funcs import calc_emas
-from pure_funcs import determine_pos_side_ccxt
+from pure_funcs import determine_pos_side_ccxt, date_to_ts2
 
 
 def score_func_old(ohlcv):
@@ -244,19 +244,7 @@ async def get_current_symbols(cc):
                 current_positions_long.append(elm["symbol"])
             elif elm["side"] == "short":
                 current_positions_short.append(elm["symbol"])
-    if cc.id == "bybit":
-        oos = []
-        delay_s = 0.5
-        for symbol in cc.markets:
-            if symbol.endswith(":USDT"):
-                sts = time.time()
-                oosf = await cc.fetch_open_orders(symbol=symbol)
-                spent = time.time() - sts
-                print(f"\r fetching open orders for {symbol}     ", end=" ")
-                oos += oosf
-                time.sleep(max(0.0, delay_s - spent))
-        print()
-    elif cc.id == "bitget":
+    if cc.id == "bitget":
         oos = await cc.private_mix_get_order_margincoincurrent({"productType": "umcbl"})
         oos = oos["data"]
         for i in range(len(oos)):
@@ -328,6 +316,22 @@ async def dump_yaml(cc, config):
     symbols_map = {sym: sym.replace(":USDT", "").replace("/", "") for sym in min_costs}
     symbols_map_inv = {v: k for k, v in symbols_map.items()}
     approved = [symbols_map[k] for k, v in min_costs.items() if v <= max_min_cost and k in symbols_map]
+    if config['market_age_threshold'] not in ["0", 0, 0.0]:
+        first_timestamp_threshold = 0
+        try:
+            first_timestamp_threshold = date_to_ts2(config['market_age_threshold'])
+        except Exception as e:
+            print(f"invalid param market_age_threshold: {config['market_age_threshold']} {e}")
+        if first_timestamp_threshold:
+            try:
+                first_timestamps = await get_first_ohlcv_timestamps(symbols=list(symbols_map), cc=cc)
+                if first_timestamps:
+                    new_approved = [s for s in approved if (symbols_map_inv[s] in first_timestamps) and (first_timestamps[symbols_map_inv[s]] < first_timestamp_threshold)]
+                    removed = sorted(set(approved) - set(new_approved))
+                    print(f"symbols younger than {config['market_age_threshold']} disapproved: {removed}")
+                    approved = new_approved
+            except:
+                pass
     approved = sorted(set(approved) - set(config["symbols_to_ignore"]))
     if config["approved_symbols_long"] and config["approved_symbols_short"]:
         approved = set(approved) & (set(config["approved_symbols_long"]) | set(config["approved_symbols_short"]))
@@ -409,6 +413,7 @@ async def main():
         ("live_configs_dir_long", ""),
         ("live_configs_dir_short", ""),
         ("update_interval_minutes", 60),
+        ("market_age_threshold", 0),
     ]:
         if key not in config:
             config[key] = value
