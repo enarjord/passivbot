@@ -1,6 +1,6 @@
 {
   // supported exchanges: [kucoin, okx, bybit, binance, bitget]
-  user: binance_01
+  user: bybit_01
   twe_long: 1.6
   twe_short: 0.8
   n_longs: 6
@@ -15,6 +15,9 @@
   volume_clip_threshold: 0.51  // include 51% of the highest volume coins
   unilateralness_clip_threshold: 0.49 // include 49% of symbols with lowest unilateralness
   noisiness_clip_threshold: 0.52 // include 52% of symbols with highest noisiness
+
+  // don't allow symbols younger than threshold. Format YYYY-MM. Set to 0 to allow all symbols.
+  market_age_threshold: 2021-01
 
   max_n_panes: 8
 
