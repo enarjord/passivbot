@@ -372,6 +372,18 @@ class Bot:
         finally:
             self.ts_released["update_open_orders"] = time.time()
 
+    async def update_ticker(self):
+        try:
+            self.ticker = await self.fetch_ticker()
+            self.ob = [self.ticker['bid'], self.ticker['ask']]
+            self.price = self.ticker['last']
+            return True
+
+        except Exception as e:
+            logging.error(f"error with update open orders {e}")
+            traceback.print_exc()
+            return False
+
     def adjust_wallet_balance(self, balance: float) -> float:
         return (
             balance if self.assigned_balance is None else self.assigned_balance
