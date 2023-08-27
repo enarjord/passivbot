@@ -538,9 +538,15 @@ async def get_first_ohlcv_timestamps(cc=None, symbols=None, cache=True):
         import ccxt.async_support as ccxt
 
         cc = ccxt.binanceusdm()
+    else:
+        supported_exchanges = ["binanceusdm", "bybit", "bitget", "okx"]
+        if cc.id not in supported_exchanges:
+            print(f"get_first_ohlcv_timestamps() currently only supports {supported_exchanges}")
+            return {}
     try:
         if symbols is None:
-            symbols = sorted(await cc.load_markets())
+            markets = await cc.load_markets()
+            symbols = sorted([x for x in markets if markets[x]["swap"]])
         n = 30
         first_timestamps = {}
         cache_fname = f"caches/first_ohlcv_timestamps_{cc.id}.json"
@@ -551,17 +557,29 @@ async def get_first_ohlcv_timestamps(cc=None, symbols=None, cache=True):
                     symbols = [s for s in symbols if s not in first_timestamps]
                 except Exception as e:
                     print(f"error loading ohlcv first ts cache", e)
-        for i in range(0, len(symbols), n):
-            symbols_slice = symbols[i : i + n]
-            sub_res = await asyncio.gather(*[cc.fetch_ohlcv(s, since=0) for s in symbols_slice])
-            for k in range(len(symbols_slice)):
-                first_timestamps[symbols_slice[k]] = sub_res[k][0][0]
-            if cache:
-                try:
-                    make_get_filepath(cache_fname)
-                    json.dump(first_timestamps, open(cache_fname, "w"), indent=4, sort_keys=True)
-                except Exception as e:
-                    print(f"error dumping ohlcv first ts cache", e)
+        fetched = []
+        for i, symbol in enumerate(symbols):
+            if (i + 1) % n == 0 and fetched:
+                for sym, task in fetched:
+                    try:
+                        res = await task
+                        first_timestamps[sym] = res[0][0]
+                    except Exception as e:
+                        print(f"error fetching ohlcvs for {sym} {e}")
+                        if "The symbol has been removed" in str(e):
+                            first_timestamps[sym] = 0
+                if cache:
+                    try:
+                        make_get_filepath(cache_fname)
+                        json.dump(first_timestamps, open(cache_fname, "w"), indent=4, sort_keys=True)
+                        print(
+                            f"dumped first ohlcv timestamp cache for {cc.id} {[x[0] for x in fetched]}"
+                        )
+                    except Exception as e:
+                        print(f"error dumping ohlcv first timestamps cache", e)
+                fetched = []
+                await asyncio.sleep(1)
+            fetched.append((symbol, asyncio.ensure_future(cc.fetch_ohlcv(symbol, timeframe="1M"))))
     finally:
         await cc.close()
     return first_timestamps
