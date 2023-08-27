@@ -348,41 +348,6 @@ class OKXBot(Bot):
         end_time: int = None,
     ):
         return []
-        params = {
-            "symbol": self.symbol if symbol is None else symbol,
-            "limit": min(100, limit) if self.inverse else limit,
-        }
-        if from_id is not None:
-            params["fromId"] = max(0, from_id)
-        if start_time is not None:
-            params["startTime"] = int(start_time)
-        if end_time is not None:
-            params["endTime"] = int(min(end_time, start_time + 1000 * 60 * 60 * 24 * 6.99))
-        try:
-            fetched = await self.private_get(self.endpoints["fills"], params)
-            fills = [
-                {
-                    "symbol": x["symbol"],
-                    "id": int(x["id"]),
-                    "order_id": int(x["orderId"]),
-                    "side": x["side"].lower(),
-                    "price": float(x["price"]),
-                    "qty": float(x["qty"]),
-                    "realized_pnl": float(x["realizedPnl"]),
-                    "cost": float(x["baseQty"]) if self.inverse else float(x["quoteQty"]),
-                    "fee_paid": float(x["commission"]),
-                    "fee_token": x["commissionAsset"],
-                    "timestamp": int(x["time"]),
-                    "position_side": x["positionSide"].lower().replace("short", "short"),
-                    "is_maker": x["maker"],
-                }
-                for x in fetched
-            ]
-        except Exception as e:
-            print("error fetching fills", e)
-            traceback.print_exc()
-            return []
-        return fills
 
     async def get_all_income(
         self,
