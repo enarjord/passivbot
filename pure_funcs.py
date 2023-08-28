@@ -1552,7 +1552,7 @@ def determine_pos_side_ccxt(open_order: dict) -> str:
                 return "long"
             else:
                 return "short"
-    for key in ["order_link_id", "clOrdId", "clientOid"]:
+    for key in ["order_link_id", "clOrdId", "clientOid", "orderLinkId"]:
         if key in oo:
             if "long" in oo[key] or "lng" in oo[key]:
                 return "long"
