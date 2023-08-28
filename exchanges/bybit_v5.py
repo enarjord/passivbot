@@ -26,6 +26,8 @@ class BybitBot(Bot):
         self.market_type = config["market_type"] = "linear_perpetual"
         self.inverse = config["inverse"] = False
 
+        self.max_n_orders_per_batch = 20
+
         super().__init__(config)
         self.cc = getattr(ccxt, "bybit")(
             {
@@ -80,6 +82,7 @@ class BybitBot(Bot):
             return [
                 {
                     "order_id": e["id"],
+                    "custom_id": e["clientOrderId"],
                     "symbol": e["symbol"],
                     "price": e["price"],
                     "qty": e["amount"],
@@ -197,7 +200,25 @@ class BybitBot(Bot):
         return
 
     async def execute_order(self, order: dict) -> dict:
-        return
+        executed = None
+        try:
+            executed = await self.cc.create_limit_order(
+                symbol=order['symbol'] if 'symbol' in order else self.symbol,
+                side=order['side'],
+                amount=abs(order['qty']),
+                price=order['price'],
+                params={
+                    'positionIdx': 1 if order['position_side'] == 'long' else 2,
+                    'timeInForce': 'postOnly',
+                    'orderLinkId': order['custom_id'] + str(uuid4()),
+                }
+            )
+            return executed
+        except Exception as e:
+            logging.error(f"error executing order {order} {e}")
+            print_async_exception(executed)
+            traceback.print_exc()
+            return {}
 
     async def execute_cancellations(self, orders: [dict]) -> [dict]:
         return
