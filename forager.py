@@ -196,7 +196,7 @@ def generate_yaml(
             both_on_gs = True
         if z % config["max_n_panes"] == 0:
             yaml += f"- window_name: {config['user']}_{'gs' if both_on_gs else 'normal'}_{z}\n  layout: "
-            yaml += f"even-vertical\n  shell_command_before:\n    - cd ~/passivbot\n  panes:\n"
+            yaml += f"even-vertical\n  shell_command_before:\n    - cd {config['passivbot_root_dir']}\n  panes:\n"
         yaml += pane + "\n"
         z += 1
     return yaml
@@ -316,17 +316,22 @@ async def dump_yaml(cc, config):
     symbols_map = {sym: sym.replace(":USDT", "").replace("/", "") for sym in min_costs}
     symbols_map_inv = {v: k for k, v in symbols_map.items()}
     approved = [symbols_map[k] for k, v in min_costs.items() if v <= max_min_cost and k in symbols_map]
-    if config['market_age_threshold'] not in ["0", 0, 0.0]:
+    if config["market_age_threshold"] not in ["0", 0, 0.0]:
         first_timestamp_threshold = 0
         try:
-            first_timestamp_threshold = date_to_ts2(config['market_age_threshold'])
+            first_timestamp_threshold = date_to_ts2(config["market_age_threshold"])
         except Exception as e:
             print(f"invalid param market_age_threshold: {config['market_age_threshold']} {e}")
         if first_timestamp_threshold:
             try:
                 first_timestamps = await get_first_ohlcv_timestamps(symbols=list(symbols_map), cc=cc)
                 if first_timestamps:
-                    new_approved = [s for s in approved if (symbols_map_inv[s] in first_timestamps) and (first_timestamps[symbols_map_inv[s]] < first_timestamp_threshold)]
+                    new_approved = [
+                        s
+                        for s in approved
+                        if (symbols_map_inv[s] in first_timestamps)
+                        and (first_timestamps[symbols_map_inv[s]] < first_timestamp_threshold)
+                    ]
                     removed = sorted(set(approved) - set(new_approved))
                     print(f"symbols younger than {config['market_age_threshold']} disapproved: {removed}")
                     approved = new_approved
@@ -414,6 +419,7 @@ async def main():
         ("live_configs_dir_short", ""),
         ("update_interval_minutes", 60),
         ("market_age_threshold", 0),
+        ("passivbot_root_dir", "~/passivbot"),
     ]:
         if key not in config:
             config[key] = value
@@ -433,8 +439,12 @@ async def main():
             if fnames:
                 for symbol in config[f"approved_symbols_{side}"]:
                     fnamesf = [f for f in fnames if symbol in f]
-                    if fnamesf and not any([symbol in x for x in [config[f"live_configs_map_{side}"], config["live_configs_map"]]]):
-                        config[f"live_configs_map_{side}"][symbol] = os.path.join(config[f"live_configs_dir_{side}"], fnamesf[0])
+                    if fnamesf and not any(
+                        [symbol in x for x in [config[f"live_configs_map_{side}"], config["live_configs_map"]]]
+                    ):
+                        config[f"live_configs_map_{side}"][symbol] = os.path.join(
+                            config[f"live_configs_dir_{side}"], fnamesf[0]
+                        )
     exchange, key, secret, passphrase = load_exchange_key_secret_passphrase(config["user"])
     max_n_tries_per_hour = 5
     error_timestamps = []
