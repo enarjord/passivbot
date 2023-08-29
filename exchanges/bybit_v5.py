@@ -1,17 +1,11 @@
 import asyncio
-import json
 import traceback
-from time import time
-from typing import Union, List, Dict
+
 from uuid import uuid4
-
-import numpy as np
-
-from njit_funcs import round_, calc_diff
+from njit_funcs import calc_diff
 from passivbot import Bot, logging
-from procedures import print_async_exception, print_
-from pure_funcs import ts_to_date, sort_dict_keys, date_to_ts, determine_pos_side_ccxt
-
+from procedures import print_async_exception
+from pure_funcs import determine_pos_side_ccxt
 
 import ccxt.async_support as ccxt
 
@@ -26,7 +20,8 @@ class BybitBot(Bot):
         self.market_type = config["market_type"] = "linear_perpetual"
         self.inverse = config["inverse"] = False
 
-        self.max_n_orders_per_batch = 20
+        self.max_n_orders_per_batch = 10
+        self.max_n_cancellations_per_batch = 10
 
         super().__init__(config)
         self.cc = getattr(ccxt, "bybit")(
@@ -197,21 +192,23 @@ class BybitBot(Bot):
             traceback.print_exc()
 
     async def execute_orders(self, orders: [dict]) -> [dict]:
-        return
+        return await self.execute_multiple(
+            orders, self.execute_order, "creations", self.max_n_orders_per_batch
+        )
 
     async def execute_order(self, order: dict) -> dict:
         executed = None
         try:
             executed = await self.cc.create_limit_order(
-                symbol=order['symbol'] if 'symbol' in order else self.symbol,
-                side=order['side'],
-                amount=abs(order['qty']),
-                price=order['price'],
+                symbol=order["symbol"] if "symbol" in order else self.symbol,
+                side=order["side"],
+                amount=abs(order["qty"]),
+                price=order["price"],
                 params={
-                    'positionIdx': 1 if order['position_side'] == 'long' else 2,
-                    'timeInForce': 'postOnly',
-                    'orderLinkId': order['custom_id'] + str(uuid4()),
-                }
+                    "positionIdx": 1 if order["position_side"] == "long" else 2,
+                    "timeInForce": "postOnly",
+                    "orderLinkId": order["custom_id"] + str(uuid4()),
+                },
             )
             return executed
         except Exception as e:
@@ -220,11 +217,55 @@ class BybitBot(Bot):
             traceback.print_exc()
             return {}
 
+    async def execute_multiple(self, orders: [dict], func, type_: str, max_n_executions: int):
+        if not orders:
+            return []
+        executions = []
+        for order in sorted(orders, key=lambda x: calc_diff(x["price"], self.price))[
+            :max_n_executions
+        ]:
+            execution = None
+            try:
+                execution = asyncio.create_task(func(order))
+                executions.append((order, execution))
+            except Exception as e:
+                logging.error(f"error executing {type_} {order} {e}")
+                print_async_exception(execution)
+                traceback.print_exc()
+        results = []
+        for execution in executions:
+            result = None
+            try:
+                result = await execution[1]
+                results.append(result)
+            except Exception as e:
+                print(f"error executing {type_} {execution} {e}")
+                print_async_exception(result)
+                traceback.print_exc()
+        return results
+
     async def execute_cancellations(self, orders: [dict]) -> [dict]:
-        return
+        return await self.execute_multiple(
+            orders, self.execute_cancellation, "cancellations", self.max_n_cancellations_per_batch
+        )
 
     async def execute_cancellation(self, order: dict) -> dict:
-        return
+        executed = None
+        try:
+            executed = await self.cc.cancel_derivatives_order(order["order_id"], symbol=self.symbol)
+            return {
+                "symbol": executed["symbol"],
+                "side": order["side"],
+                "order_id": executed["id"],
+                "position_side": order["position_side"],
+                "qty": order["qty"],
+                "price": order["price"],
+            }
+        except Exception as e:
+            logging.error(f"error cancelling order {order} {e}")
+            print_async_exception(executed)
+            traceback.print_exc()
+            return {}
 
     async def fetch_account(self):
         return
