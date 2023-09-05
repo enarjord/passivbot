@@ -231,7 +231,7 @@ class Bot:
                 self.price_step = self.config["price_step"] = self.xk["price_step"] = new_price_step
         elif (
             "price_precision_multiplier" in self.config
-            and self.config["price_precision_multiplier"] is not None
+            and self.config["price_precision_multiplier"] not in [None, 0.0]
         ):
             new_price_step = max(
                 self.price_step,
