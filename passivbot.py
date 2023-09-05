@@ -1747,7 +1747,7 @@ async def main() -> None:
         required=False,
         dest="price_precision_multiplier",
         default=None,
-        help="Override price step with round_dynamic(market_price * price_precision, 1).  Suggested val 0.0001",
+        help="Override price step with market_price * price_precision_multiplier rounded to one significant digit. Suggested val 0.0001. Set to 0.0 to disable.",
     )
     parser.add_argument(
         "-ps",
@@ -1757,7 +1757,7 @@ async def main() -> None:
         required=False,
         dest="price_step_custom",
         default=None,
-        help="Override price step with custom price step.  Takes precedence over -pp",
+        help="Override price step with custom price step.  Takes precedence over -pp. Set to 0.0 to disable.",
     )
     parser.add_argument(
         "-co",
