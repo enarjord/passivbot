@@ -222,7 +222,7 @@ class Bot:
         )
         await self.init_emas()
         print("done")
-        if "price_step_custom" in self.config and self.config["price_step_custom"] is not None:
+        if "price_step_custom" in self.config and self.config["price_step_custom"] not in [None, 0.0]:
             new_price_step = max(
                 self.price_step, round_(self.config["price_step_custom"], self.price_step)
             )
