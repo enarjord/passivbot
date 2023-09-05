@@ -52,6 +52,13 @@ flags:
       - pp
       - price_precision
 
+  - name: price_step_custom
+    flag: -ps
+    aliases:
+      - ps
+      - price_step
+      - price_step_custom
+
   # ----------------------------------- longs ---------------------------------- #
 
   - name: long_mode
