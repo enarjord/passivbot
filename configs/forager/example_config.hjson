@@ -49,10 +49,6 @@
 
   // Specify directory containing live configs.
   // They are sorted alphabetically, then the first config whose filename includes symbol is selected.
-  // For example, if live_configs_dir_long: "configs/live/custom_configs/"
-  // and that dir contains files [BTCUSDT.json, TRXUSDT.json, ATOMUSDT.json],
-  // then they will be added live_configs_map:
-  // {BTCUSDT: configs/live/custom_configs/BTCUSDT.json, TRXUSDT: configs/live/custom_configs/TRXUSDT.json ...etc.}.
   // Set to "" to disable
   live_configs_dir_long: ""
   live_configs_dir_short: ""
