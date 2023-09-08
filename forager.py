@@ -315,6 +315,21 @@ async def dump_yaml(cc, config):
     min_costs, c_mults = await get_min_costs(cc)
     symbols_map = {sym: sym.replace(":USDT", "").replace("/", "") for sym in min_costs}
     symbols_map_inv = {v: k for k, v in symbols_map.items()}
+
+    for side in ['long', 'short']:
+        if config[f"live_configs_dir_{side}"] and os.path.exists(config[f"live_configs_dir_{side}"]):
+            fnames = sorted([f for f in os.listdir(config[f"live_configs_dir_{side}"]) if f.endswith(".json")])
+            if fnames:
+                for symbol in symbols_map_inv:
+                    fnamesf = [f for f in fnames if symbol in f]
+                    if fnamesf and not any(
+                        [symbol in x for x in [config[f"live_configs_map_{side}"], config["live_configs_map"]]]
+                    ):
+                        config[f"live_configs_map_{side}"][symbol] = os.path.join(
+                            config[f"live_configs_dir_{side}"], fnamesf[0]
+                        )
+
+
     approved = [symbols_map[k] for k, v in min_costs.items() if v <= max_min_cost and k in symbols_map]
     if config["market_age_threshold"] not in ["0", 0, 0.0]:
         first_timestamp_threshold = 0
@@ -433,18 +448,6 @@ async def main():
                     )
             else:
                 config[f"approved_symbols_{side}"] = []
-    for side in sides:
-        if config[f"live_configs_dir_{side}"] and os.path.exists(config[f"live_configs_dir_{side}"]):
-            fnames = sorted([f for f in os.listdir(config[f"live_configs_dir_{side}"]) if f.endswith(".json")])
-            if fnames:
-                for symbol in config[f"approved_symbols_{side}"]:
-                    fnamesf = [f for f in fnames if symbol in f]
-                    if fnamesf and not any(
-                        [symbol in x for x in [config[f"live_configs_map_{side}"], config["live_configs_map"]]]
-                    ):
-                        config[f"live_configs_map_{side}"][symbol] = os.path.join(
-                            config[f"live_configs_dir_{side}"], fnamesf[0]
-                        )
     exchange, key, secret, passphrase = load_exchange_key_secret_passphrase(config["user"])
     max_n_tries_per_hour = 5
     error_timestamps = []
