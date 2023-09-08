@@ -176,6 +176,46 @@ async def main(algorithm=None):
     parser.add_argument(
         "-ser", "--serial", help="optimize symbols singly, not multi opt", action="store_true"
     )
+    parser.add_argument(
+        "-sm",
+        "--skip_multicoin",
+        "--skip-multicoin",
+        type=str,
+        required=False,
+        dest="skip_multicoin",
+        default=None,
+        help="y/n when using --start dir/, skip multicoin configs (see opt config for details)",
+    )
+    parser.add_argument(
+        "-ss",
+        "--skip_singlecoin",
+        "--skip-singlecoin",
+        type=str,
+        required=False,
+        dest="skip_singlecoin",
+        default=None,
+        help="y/n when using --start dir/, skip single coin configs (see opt config for details)",
+    )
+    parser.add_argument(
+        "-sns",
+        "--skip_non_matching_single_coin",
+        "--skip-non-matching-single-coin",
+        type=str,
+        required=False,
+        dest="skip_non_matching_single_coin",
+        default=None,
+        help="y/n when using --start dir/, skip configs of other symbols (see opt config for details)",
+    )
+    parser.add_argument(
+        "-sms",
+        "--skip_matching_single_coin",
+        "--skip-matching-single-coin",
+        type=str,
+        required=False,
+        dest="skip_matching_single_coin",
+        default=None,
+        help="y/n when using --start dir/, skip configs of same symbol (see opt config for details)",
+    )
     parser = add_argparse_args(parser)
     args = parser.parse_args()
     config = prepare_optimize_config(args)
@@ -276,7 +316,6 @@ async def run_opt(args, config):
                     downloader = Downloader({**config, **tmp_cfg})
                     await downloader.get_sampled_ticks()
 
-
         # prepare starting configs
         cfgs = []
         if args.starting_configs is not None:
@@ -289,10 +328,15 @@ async def run_opt(args, config):
                         fnames = [f for f in fnames if "symbols" not in f]
                     if "skip_singlecoin" in config["starting_configs_filtering_conditions"]:
                         fnames = [f for f in fnames if "symbols" in f]
-                    if "skip_non_matching_single_coin" in config["starting_configs_filtering_conditions"]:
+                    if (
+                        "skip_non_matching_single_coin"
+                        in config["starting_configs_filtering_conditions"]
+                    ):
                         fnames = [f for f in fnames if "symbols" in f or config["symbols"][0] in f]
                     if "skip_matching_single_coin" in config["starting_configs_filtering_conditions"]:
-                        fnames = [f for f in fnames if "symbols" in f or config["symbols"][0] not in f]
+                        fnames = [
+                            f for f in fnames if "symbols" in f or config["symbols"][0] not in f
+                        ]
 
                     for fname in fnames:
                         try:
