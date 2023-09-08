@@ -177,6 +177,21 @@ def prepare_optimize_config(args) -> dict:
     )
     now_date = ts_to_date(time())[:19].replace(":", "-")
     config["results_fpath"] = os.path.join(output_base_dir, f"{now_date}_{identifying_name}", "")
+
+    for key in [
+        "skip_multicoin",
+        "skip_singlecoin",
+        "skip_non_matching_single_coin",
+        "skip_matching_single_coin",
+    ]:
+        if getattr(args, key) is not None:
+            if getattr(args, key).lower() in ["y", "t", "yes", "true"]:
+                config["starting_configs_filtering_conditions"].append(key)
+            elif key in config["starting_configs_filtering_conditions"]:
+                config["starting_configs_filtering_conditions"] = [
+                    x for x in config["starting_configs_filtering_conditions"] if x != key
+                ]
+
     return config
 
 
@@ -559,7 +574,8 @@ async def get_first_ohlcv_timestamps(cc=None, symbols=None, cache=True):
                     print(f"error loading ohlcv first ts cache", e)
         fetched = []
         for i, symbol in enumerate(symbols):
-            if (i + 1) % n == 0 and fetched:
+            fetched.append((symbol, asyncio.ensure_future(cc.fetch_ohlcv(symbol, timeframe="1M"))))
+            if i + 1 == len(symbols) or (i + 1) % n == 0:
                 for sym, task in fetched:
                     try:
                         res = await task
@@ -579,7 +595,6 @@ async def get_first_ohlcv_timestamps(cc=None, symbols=None, cache=True):
                         print(f"error dumping ohlcv first timestamps cache", e)
                 fetched = []
                 await asyncio.sleep(1)
-            fetched.append((symbol, asyncio.ensure_future(cc.fetch_ohlcv(symbol, timeframe="1M"))))
     finally:
         await cc.close()
     return first_timestamps
