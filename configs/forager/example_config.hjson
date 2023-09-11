@@ -18,7 +18,7 @@
   noisiness_clip_threshold: 0.52 // include 52% of symbols with highest noisiness
 
   // don't allow symbols younger than threshold. Format YYYY-MM. Set to 0 to allow all symbols.
-  market_age_threshold: 2021-01
+  market_age_threshold: 2021-06
 
   max_n_panes: 8
 
@@ -50,15 +50,15 @@
   // Specify directory containing live configs.
   // They are sorted alphabetically, then the first config whose filename includes symbol is selected.
   // Set to "" to disable
-  live_configs_dir_long: ""
-  live_configs_dir_short: ""
+  live_configs_dir_long: "configs/live/single_symbol_optimizations/recursive_grid/"
+  live_configs_dir_short: "configs/live/single_symbol_optimizations/clock/"
 
   // overrides live_configs_dir
   live_configs_map: {
     BTCUSDT: configs/live/clock_mode.example.json
     ETHUSDT: configs/live/neat_grid_mode.example.json
-    DOGEUSDT: configs/live/recursive_grid_mode.example.json
-    LTCUSDT: configs/live/clock_mode.example.json
+    DOGEUSDT: configs/live/single_symbol_optimizations/recursive_grid/DOGEUSDT.json
+    LTCUSDT: configs/live/single_symbol_optimizations/recursive_grid/LTCUSDT.json
     ADAUSDT: configs/live/neat_grid_mode.example.json
   }
 
@@ -66,7 +66,7 @@
   live_configs_map_long: {
     BTCUSDT: configs/live/clock_mode.example.json
     XMRUSDT: configs/live/neat_grid_mode.example.json
-    XRPUSDT: configs/live/recursive_grid_mode.example.json
+    XRPUSDT: configs/live/single_symbol_optimizations/clock/XRPUSDT.json
     BCHUSDT: configs/live/clock_mode.example.json
     XLMUSDT: configs/live/neat_grid_mode.example.json
   }
@@ -76,7 +76,7 @@
     BTCUSDT: configs/live/clock_mode.example.json
     ETHUSDT: configs/live/neat_grid_mode.example.json
     DOGEUSDT: configs/live/recursive_grid_mode.example.json
-    EOSUSDT: configs/live/clock_mode.example.json
+    EOSUSDT: configs/live/single_symbol_optimizations/clock/EOSUSDT.json
     MATICUSDT: configs/live/neat_grid_mode.example.json
   }
 
