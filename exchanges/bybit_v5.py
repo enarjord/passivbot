@@ -346,7 +346,9 @@ class BybitBot(Bot):
                 params["cursor"] = fetched["result"]["nextPageCursor"]
                 fetched = await self.cc.private_get_v5_position_closed_pnl(params)
                 fetched["result"]["list"] = floatify(fetched["result"]["list"])
-                print("debug", ts_to_date_utc(fetched["result"]["list"][-1]["updatedTime"]))
+                logging.debug(
+                    f"fetching income {ts_to_date_utc(fetched['result']['list'][-1]['updatedTime'])}"
+                )
             return sorted(incomed.values(), key=lambda x: x["updatedTime"])
         except Exception as e:
             logging.error(f"error fetching income {e}")
