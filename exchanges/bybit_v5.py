@@ -5,7 +5,7 @@ from uuid import uuid4
 from njit_funcs import calc_diff
 from passivbot import Bot, logging
 from procedures import print_async_exception
-from pure_funcs import determine_pos_side_ccxt
+from pure_funcs import determine_pos_side_ccxt, floatify, calc_hash, ts_to_date_utc
 
 import ccxt.async_support as ccxt
 
@@ -315,18 +315,43 @@ class BybitBot(Bot):
         income_type: str = "Trade",
         end_time: int = None,
     ):
-        return
+        return await fetch_income(symbol=symbol, start_time=start_time, end_time=end_time)
 
     async def fetch_income(
         self,
         symbol: str = None,
-        income_type: str = None,
-        limit: int = 50,
         start_time: int = None,
         end_time: int = None,
-        page=None,
     ):
-        return
+        fetched = None
+        incomed = {}
+        try:
+            limit = 100
+            params = {"category": "linear", "limit": limit}
+            if symbol is not None:
+                params["symbol"] = symbol
+            if end_time is not None:
+                params["endTime"] = int(end_time)
+            fetched = await self.cc.private_get_v5_position_closed_pnl(params)
+            fetched["result"]["list"] = floatify(fetched["result"]["list"])
+            while True:
+                if fetched["result"]["list"] == []:
+                    break
+                for elm in fetched["result"]["list"]:
+                    incomed[calc_hash(elm)] = elm
+                if start_time is None:
+                    break
+                if fetched["result"]["list"][-1]["updatedTime"] <= start_time:
+                    break
+                params["cursor"] = fetched["result"]["nextPageCursor"]
+                fetched = await self.cc.private_get_v5_position_closed_pnl(params)
+                fetched["result"]["list"] = floatify(fetched["result"]["list"])
+                print("debug", ts_to_date_utc(fetched["result"]["list"][-1]["updatedTime"]))
+            return sorted(incomed.values(), key=lambda x: x["updatedTime"])
+        except Exception as e:
+            logging.error(f"error fetching income {e}")
+            print_async_exception(fetched)
+            traceback.print_exc()
 
     async def fetch_latest_fills(self):
         fetched = None
