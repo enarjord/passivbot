@@ -1,6 +1,7 @@
 import datetime
 import pprint
 from collections import OrderedDict
+from hashlib import sha256
 
 import json
 import numpy as np
@@ -1559,3 +1560,10 @@ def determine_pos_side_ccxt(open_order: dict) -> str:
             if "short" in oo[key] or "shrt" in oo[key]:
                 return "short"
     return "both"
+
+
+def calc_hash(data):
+    # Convert the data to a JSON string and calculate the SHA-256 hash
+    data_string = json.dumps(data, sort_keys=True)
+    data_hash = sha256(data_string.encode("utf-8")).hexdigest()
+    return data_hash
