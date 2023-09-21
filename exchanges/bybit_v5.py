@@ -68,7 +68,7 @@ class BybitBot(Bot):
             return None
 
     async def init_order_book(self):
-        await self.update_ticker()
+        return await self.update_ticker()
 
     async def fetch_open_orders(self) -> [dict]:
         open_orders = None
@@ -316,6 +316,16 @@ class BybitBot(Bot):
         end_time: int = None,
     ):
         return await fetch_income(symbol=symbol, start_time=start_time, end_time=end_time)
+
+    async def transfer_from_derivatives_to_spot(self, coin: str, amount: float):
+        transferred = None
+        try:
+            transferred = await self.cc.transfer(coin, amount, 'CONTRACT', 'SPOT')
+            return transferred
+        except:
+            logging.error(f"error transferring from derivatives to spot {e}")
+            print_async_exception(transferred)
+            traceback.print_exc()
 
     async def fetch_income(
         self,
