@@ -73,7 +73,7 @@ class BybitBot(Bot):
     async def fetch_open_orders(self) -> [dict]:
         open_orders = None
         try:
-            open_orders = await self.cc.fetch_open_orders(symbol=self.symbol)
+            open_orders = await self.cc.fetch_open_orders(symbol=self.symbol, limit=50)
             return [
                 {
                     "order_id": e["id"],
@@ -325,7 +325,7 @@ class BybitBot(Bot):
     async def transfer_from_derivatives_to_spot(self, coin: str, amount: float):
         transferred = None
         try:
-            transferred = await self.cc.transfer(coin, amount, 'CONTRACT', 'SPOT')
+            transferred = await self.cc.transfer(coin, amount, "CONTRACT", "SPOT")
             return transferred
         except:
             logging.error(f"error transferring from derivatives to spot {e}")
