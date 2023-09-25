@@ -210,6 +210,9 @@ class BybitBot(Bot):
                     "orderLinkId": order["custom_id"] + str(uuid4()),
                 },
             )
+            for key in ["symbol", "side", "position_side", "qty", "price"]:
+                if key not in executed or executed[key] is None:
+                    executed[key] = order[key]
             return executed
         except Exception as e:
             logging.error(f"error executing order {order} {e}")
@@ -303,7 +306,7 @@ class BybitBot(Bot):
             )
             keys = ["timestamp", "open", "high", "low", "close", "volume"]
             return [{k: elm[i] for i, k in enumerate(keys)} for elm in ohlcvs]
-        except:
+        except Exception as e:
             logging.error(f"error fetching ohlcv {e}")
             print_async_exception(ohlcvs)
             traceback.print_exc()
