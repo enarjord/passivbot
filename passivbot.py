@@ -311,6 +311,7 @@ class Bot:
             logging.error(f"error with init_emas {e}")
             traceback.print_exc()
             print_async_exception(ohlcvs1m)
+            logging.info("using current market price as starting EMA")
 
             self.emas_long = np.repeat(self.price, 3)
             self.emas_short = np.repeat(self.price, 3)
