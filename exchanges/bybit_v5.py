@@ -74,6 +74,9 @@ class BybitBot(Bot):
         open_orders = None
         try:
             open_orders = await self.cc.fetch_open_orders(symbol=self.symbol, limit=50)
+            if len(open_orders) == 50:
+                # fetch more
+                pass
             return [
                 {
                     "order_id": e["id"],
@@ -250,6 +253,15 @@ class BybitBot(Bot):
         return results
 
     async def execute_cancellations(self, orders: [dict]) -> [dict]:
+        if len(orders) > self.max_n_cancellations_per_batch:
+            # prioritize cancelling reduce-only orders
+            try:
+                reduce_only_orders = [x for x in orders if x["reduce_only"]]
+                rest = [x for x in orders if not x["reduce_only"]]
+                orders = (reduce_only_orders + rest)[:max_n_cancellations_per_batch]
+            except:
+                print("debug filter cancellations")
+                pass
         return await self.execute_multiple(
             orders, self.execute_cancellation, "cancellations", self.max_n_cancellations_per_batch
         )
