@@ -506,7 +506,8 @@ class Bot:
             orders = None
             orders_to_create = [order for order in orders_to_create if self.order_is_valid(order)]
             orders = await self.execute_orders(orders_to_create)
-            for order in sorted(orders, key=lambda x: calc_diff(x["price"], self.price)):
+            orders_f = [x for x in orders if "price" in x]
+            for order in sorted(orders_f, key=lambda x: calc_diff(x["price"], self.price)):
                 if "side" in order:
                     logging.info(
                         f'  created order {order["symbol"]} {order["side"]: <4} '
@@ -522,12 +523,12 @@ class Bot:
             self.ts_released["create_orders"] = time.time()
 
     async def cancel_orders(self, orders_to_cancel: [dict]) -> [dict]:
+        if not orders_to_cancel:
+            return
         if self.ts_locked["cancel_orders"] > self.ts_released["cancel_orders"]:
             return
         self.ts_locked["cancel_orders"] = time.time()
         try:
-            if not orders_to_cancel:
-                return
             deletions, orders_to_cancel_dedup, oo_ids = [], [], set()
             for o in orders_to_cancel:
                 if o["order_id"] not in oo_ids:
