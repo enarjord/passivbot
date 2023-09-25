@@ -20,7 +20,7 @@ class BybitBot(Bot):
         self.market_type = config["market_type"] = "linear_perpetual"
         self.inverse = config["inverse"] = False
 
-        self.max_n_orders_per_batch = 10
+        self.max_n_orders_per_batch = 7
         self.max_n_cancellations_per_batch = 10
 
         super().__init__(config)
@@ -210,7 +210,9 @@ class BybitBot(Bot):
                     "orderLinkId": order["custom_id"] + str(uuid4()),
                 },
             )
-            for key in ["symbol", "side", "position_side", "qty", "price"]:
+            if "symbol" not in executed or executed["symbol"] is None:
+                executed["symbol"] = order["symbol"] if "symbol" in order else self.symbol
+            for key in ["side", "position_side", "qty", "price"]:
                 if key not in executed or executed[key] is None:
                     executed[key] = order[key]
             return executed
