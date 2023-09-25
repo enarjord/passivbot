@@ -240,10 +240,9 @@ class Bot:
             if new_price_step != self.price_step:
                 logging.info(f"changing price step from {self.price_step} to {new_price_step}")
                 self.price_step = self.config["price_step"] = self.xk["price_step"] = new_price_step
-        elif (
-            "price_precision_multiplier" in self.config
-            and self.config["price_precision_multiplier"] not in [None, 0.0]
-        ):
+        elif "price_precision_multiplier" in self.config and self.config[
+            "price_precision_multiplier"
+        ] not in [None, 0.0]:
             new_price_step = max(
                 self.price_step,
                 round_(self.ob[0] * self.config["price_precision_multiplier"], self.price_step),
@@ -375,8 +374,8 @@ class Bot:
     async def update_ticker(self):
         try:
             self.ticker = await self.fetch_ticker()
-            self.ob = [self.ticker['bid'], self.ticker['ask']]
-            self.price = self.ticker['last']
+            self.ob = [self.ticker["bid"], self.ticker["ask"]]
+            self.price = self.ticker["last"]
             return True
 
         except Exception as e:
@@ -1506,6 +1505,9 @@ class Bot:
                 # print heartbeat once an hour
                 self.heartbeat_print()
                 self.heartbeat_ts = time.time()
+        except Exception as e:
+            logging.error(f"error with printing heartbeat {e}")
+        try:
             self.prev_price = self.ob[0]
             prev_pos = self.position.copy()
             to_update = [
