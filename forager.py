@@ -141,7 +141,9 @@ def generate_yaml(
             bots_on_gs.append(elm)
 
     bot_instances = []
+    sleep_duration = -config["sleep_interval"]
     for sym, long_enabled, short_enabled in active_bots + bots_on_gs:
+        sleep_duration += config["sleep_interval"]
         lm = "n" if long_enabled and lw > 0.0 else "gs"
         sm = "n" if short_enabled and sw > 0.0 else "gs"
         if sym in config["live_configs_map_long"]:
@@ -164,7 +166,7 @@ def generate_yaml(
             conf_path_long = conf_path_short
 
         if conf_path_long == conf_path_short:
-            pane = f"    - shell_command:\n      - python3 passivbot.py {user} {sym} {conf_path_long} "
+            pane = f"    - shell_command:\n      - sleep {sleep_duration}; python3 passivbot.py {user} {sym} {conf_path_long} "
             pane += f"-lw {lw} -sw {sw} -lm {lm} -sm {sm} -lev {config['leverage']} -cd -pt {config['price_distance_threshold']}"
             bot_instances.append((sym, pane))
         else:
@@ -173,18 +175,18 @@ def generate_yaml(
             short_active = sym in active_shorts or sym in current_positions_short
             if long_active and short_active:
                 # two separate bot instances for long & short
-                pane = f"    - shell_command:\n      - python3 passivbot.py {user} {sym} {conf_path_long} "
+                pane = f"    - shell_command:\n      - sleep {sleep_duration}; python3 passivbot.py {user} {sym} {conf_path_long} "
                 pane += f"-lw {lw} -sw {sw} -lm {lm} -sm m -lev {config['leverage']} -cd -pt {config['price_distance_threshold']}"
                 bot_instances.append((sym, pane))
-                pane = f"    - shell_command:\n      - python3 passivbot.py {user} {sym} {conf_path_short} "
+                pane = f"    - shell_command:\n      - sleep {sleep_duration}; python3 passivbot.py {user} {sym} {conf_path_short} "
                 pane += f"-lw {lw} -sw {sw} -lm m -sm {sm} -lev {config['leverage']} -cd -pt {config['price_distance_threshold']}"
                 bot_instances.append((sym, pane))
             elif long_active:
-                pane = f"    - shell_command:\n      - python3 passivbot.py {user} {sym} {conf_path_long} "
+                pane = f"    - shell_command:\n      - sleep {sleep_duration}; python3 passivbot.py {user} {sym} {conf_path_long} "
                 pane += f"-lw {lw} -sw {sw} -lm {lm} -sm {sm} -lev {config['leverage']} -cd -pt {config['price_distance_threshold']}"
                 bot_instances.append((sym, pane))
             elif short_active:
-                pane = f"    - shell_command:\n      - python3 passivbot.py {user} {sym} {conf_path_short} "
+                pane = f"    - shell_command:\n      - sleep {sleep_duration}; python3 passivbot.py {user} {sym} {conf_path_short} "
                 pane += f"-lw {lw} -sw {sw} -lm {lm} -sm {sm} -lev {config['leverage']} -cd -pt {config['price_distance_threshold']}"
                 bot_instances.append((sym, pane))
 
@@ -316,7 +318,7 @@ async def dump_yaml(cc, config):
     symbols_map = {sym: sym.replace(":USDT", "").replace("/", "") for sym in min_costs}
     symbols_map_inv = {v: k for k, v in symbols_map.items()}
 
-    for side in ['long', 'short']:
+    for side in ["long", "short"]:
         if config[f"live_configs_dir_{side}"] and os.path.exists(config[f"live_configs_dir_{side}"]):
             fnames = sorted([f for f in os.listdir(config[f"live_configs_dir_{side}"]) if f.endswith(".json")])
             if fnames:
@@ -328,7 +330,6 @@ async def dump_yaml(cc, config):
                         config[f"live_configs_map_{side}"][symbol] = os.path.join(
                             config[f"live_configs_dir_{side}"], fnamesf[0]
                         )
-
 
     approved = [symbols_map[k] for k, v in min_costs.items() if v <= max_min_cost and k in symbols_map]
     if config["market_age_threshold"] not in ["0", 0, 0.0]:
@@ -435,6 +436,7 @@ async def main():
         ("update_interval_minutes", 60),
         ("market_age_threshold", 0),
         ("passivbot_root_dir", "~/passivbot"),
+        ("sleep_interval", 5),
     ]:
         if key not in config:
             config[key] = value
