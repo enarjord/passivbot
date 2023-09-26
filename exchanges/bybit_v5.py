@@ -1,10 +1,12 @@
 import asyncio
 import traceback
+import os
+import json
 
 from uuid import uuid4
 from njit_funcs import calc_diff
 from passivbot import Bot, logging
-from procedures import print_async_exception
+from procedures import print_async_exception, utc_ms, make_get_filepath
 from pure_funcs import determine_pos_side_ccxt, floatify, calc_hash, ts_to_date_utc
 
 import ccxt.async_support as ccxt
@@ -36,8 +38,27 @@ class BybitBot(Bot):
         if not self.symbol.endswith("USDT"):
             raise Exception(f"unsupported symbol {self.symbol}")
 
+    async def fetch_market_info_from_cache(self):
+        fname = make_get_filepath(f"caches/bybit_market_info.json")
+        info = None
+        try:
+            if os.path.exists(fname):
+                info = json.load(open(fname))
+                logging.info("loaded market info from cache")
+            if info is None or utc_ms() - info["dump_ts"] > 1000 * 60 * 60 * 24:
+                info = {"info": await self.cc.fetch_markets(), "dump_ts": utc_ms()}
+                json.dump(info, open(fname, "w"))
+                logging.info("dumped market info to cache")
+        except Exception as e:
+            logging.error(f"failed to load market info from cache {e}")
+            traceback.print_exc()
+            print_async_exception(info)
+            if info is None:
+                info = {"info": await self.cc.fetch_markets(), "dump_ts": utc_ms()}
+        return info["info"]
+
     async def _init(self):
-        info = await self.cc.fetch_markets()
+        info = await self.fetch_market_info_from_cache()
         self.symbol_id = self.symbol
         for elm in info:
             if elm["id"] == self.symbol_id and elm["type"] == "swap":
