@@ -22,6 +22,9 @@
 
   max_n_panes: 8
 
+  // start bots with x seconds delay
+  sleep_interval: 5
+
   // forager restarts bots every x minutes
   update_interval_minutes: 60
 
