@@ -396,11 +396,24 @@ class BybitBot(Bot):
                 logging.debug(
                     f"fetching income {ts_to_date_utc(fetched['result']['list'][-1]['updatedTime'])}"
                 )
+            return [
+                {
+                    "symbol": elm["symbol"],
+                    "income": elm["closedPnl"],
+                    "token": "USDT",
+                    "timestamp": elm["updatedTime"],
+                    "info": elm,
+                    "transaction_id": elm["orderId"],
+                    "trade_id": elm["orderId"],
+                }
+                for elm in sorted(incomed.values(), key=lambda x: x["updatedTime"])
+            ]
             return sorted(incomed.values(), key=lambda x: x["updatedTime"])
         except Exception as e:
             logging.error(f"error fetching income {e}")
             print_async_exception(fetched)
             traceback.print_exc()
+            return []
 
     async def fetch_latest_fills(self):
         fetched = None
