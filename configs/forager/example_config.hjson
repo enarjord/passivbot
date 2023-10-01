@@ -1,6 +1,6 @@
 {
-  // supported exchanges: [kucoin, okx, bybit, binance]
-  user: binance_01
+  // supported exchanges: [kucoin, okx, bybit, binance, bitget]
+  user: bybit_01
   twe_long: 1.6
   twe_short: 0.8
   n_longs: 6
@@ -10,13 +10,20 @@
   ohlcv_interval: 1h
   leverage: 10
   price_distance_threshold: 0.3
+  passivbot_root_dir: "~/passivbot"
 
   // set to zero to disable
   volume_clip_threshold: 0.51  // include 51% of the highest volume coins
   unilateralness_clip_threshold: 0.49 // include 49% of symbols with lowest unilateralness
   noisiness_clip_threshold: 0.52 // include 52% of symbols with highest noisiness
 
+  // don't allow symbols younger than threshold. Format YYYY-MM. Set to 0 to allow all symbols.
+  market_age_threshold: 2021-06
+
   max_n_panes: 8
+
+  // start bots with x seconds delay
+  sleep_interval: 5
 
   // forager restarts bots every x minutes
   update_interval_minutes: 60
@@ -27,35 +34,62 @@
     SYM2USDT
   ]
 
-  // if symbol is missing from live_configs_map, default to this config
-  default_config_path: configs/live/clock_mode.example.json
+  // if approved_symbols_long is empty, all symbols are approved for longs
+  approved_symbols_long: [
+    BTCUSDT
+    XMRUSDT
+    XRPUSDT
+    BCHUSDT
+  ]
 
-  // if true, allow only symbols present in live_configs_map or live_configs_map_{long/short}
-  // if false, will use default_config_path when symbol is missing from live_configs_map
-  approved_symbols_only: false
+  // if approved_symbols_short is empty, all symbols are approved for shorts
+  approved_symbols_short: [
+    BTCUSDT
+    ETHUSDT
+    DOGEUSDT
+    EOSUSDT
+  ]
 
-  // if symbol is present in live_configs_map_{long/short}, use that config for {long/short}
-  // elif symbol is present in live_configs_map, use that config for {long/short}
-  // else use default_config_path for {long/short}
+  // Specify directory containing live configs.
+  // They are sorted alphabetically, then the first config whose filename includes symbol is selected.
+  // Set to "" to disable
+  live_configs_dir_long: "configs/live/single_symbol_optimizations/recursive_grid/"
+  live_configs_dir_short: "configs/live/single_symbol_optimizations/clock/"
 
+  // overrides live_configs_dir
   live_configs_map: {
     BTCUSDT: configs/live/clock_mode.example.json
     ETHUSDT: configs/live/neat_grid_mode.example.json
-    DOGEUSDT: configs/live/recursive_grid_mode.example.json
+    DOGEUSDT: configs/live/single_symbol_optimizations/recursive_grid/DOGEUSDT.json
+    LTCUSDT: configs/live/single_symbol_optimizations/recursive_grid/LTCUSDT.json
+    ADAUSDT: configs/live/neat_grid_mode.example.json
   }
 
-  // will override long configs from live_configs_map
+  // overrides long configs from live_configs_map
   live_configs_map_long: {
     BTCUSDT: configs/live/clock_mode.example.json
     XMRUSDT: configs/live/neat_grid_mode.example.json
-    XRPUSDT: configs/live/recursive_grid_mode.example.json
+    XRPUSDT: configs/live/single_symbol_optimizations/clock/XRPUSDT.json
+    BCHUSDT: configs/live/clock_mode.example.json
+    XLMUSDT: configs/live/neat_grid_mode.example.json
   }
 
-  // will override short configs from live_configs_map
+  // overrides short configs from live_configs_map
   live_configs_map_short: {
     BTCUSDT: configs/live/clock_mode.example.json
     ETHUSDT: configs/live/neat_grid_mode.example.json
     DOGEUSDT: configs/live/recursive_grid_mode.example.json
+    EOSUSDT: configs/live/single_symbol_optimizations/clock/EOSUSDT.json
+    MATICUSDT: configs/live/neat_grid_mode.example.json
   }
+
+  // if symbol is missing from live_configs_map, default to this config
+  default_config_path: configs/live/clock_mode.example.json
+
+  // if symbol is approved:
+  // if symbol is present in live_configs_map_{long/short}, use that config for {long/short}
+  // elif symbol is present in live_configs_map, use that config for {long/short}
+  // elif there is a filename in live_configs_dir_{long/short} containing symbol, use that config for {long/short}
+  // else use default_config_path for {long/short}
 
 }

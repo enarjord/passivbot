@@ -57,13 +57,7 @@ class ParticleSwarmOptimization:
         self.long_bounds = sort_dict_keys(config[f"bounds_{self.config['passivbot_mode']}"]["long"])
         self.short_bounds = sort_dict_keys(config[f"bounds_{self.config['passivbot_mode']}"]["short"])
         self.symbols = config["symbols"]
-        self.identifying_name = (
-            f"{len(self.symbols)}_symbols" if len(self.symbols) > 1 else self.symbols[0]
-        )
-        self.now_date = ts_to_date(time())[:19].replace(":", "-")
-        self.results_fpath = make_get_filepath(
-            f"results_particle_swarm_optimization_{self.config['passivbot_mode']}/{self.now_date}_{self.identifying_name}/"
-        )
+        self.results_fpath = make_get_filepath(config["results_fpath"])
         self.exchange_name = config["exchange"] + ("_spot" if config["market_type"] == "spot" else "")
         self.market_specific_settings = {
             s: json.load(
@@ -226,7 +220,7 @@ class ParticleSwarmOptimization:
                     "latency_simulation_ms",
                     "market_type",
                     "adg_n_subdivisions",
-                    "slim_analysis"
+                    "slim_analysis",
                 ]
             },
             **{"symbol": self.symbols[0], "config_no": self.iter_counter},
@@ -326,7 +320,7 @@ class ParticleSwarmOptimization:
                     "latency_simulation_ms",
                     "market_type",
                     "adg_n_subdivisions",
-                    "slim_analysis"
+                    "slim_analysis",
                 ]
             },
             **{

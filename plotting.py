@@ -69,6 +69,7 @@ def make_table(result_):
                 (f"Price action distance mean", f"pa_distance_mean_{side}", 6, 1, ""),
                 (f"Price action distance std", f"pa_distance_std_{side}", 6, 1, ""),
                 (f"Price action distance max", f"pa_distance_max_{side}", 6, 1, ""),
+                (f"Price action distance mean of 1% worst", f"pa_distance_1pct_worst_mean_{side}", 6, 1, ""),
                 ("Closest bankruptcy", f"closest_bkr_{side}", 4, 100, "%"),
                 ("Lowest equity/balance ratio", f"eqbal_ratio_min_{side}", 4, 1, ""),
                 ("Mean of 10 worst eq/bal ratios", f"eqbal_ratio_mean_of_10_worst_{side}", 4, 1, ""),

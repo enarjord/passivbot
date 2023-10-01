@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 
 from downloader import Downloader, load_hlc_cache
-from njit_funcs import backtest_static_grid, round_
+from njit_funcs import round_
 from njit_funcs_recursive_grid import backtest_recursive_grid
 from njit_funcs_neat_grid import backtest_neat_grid
 from njit_clock import backtest_clock
@@ -58,14 +58,6 @@ def backtest(config: dict, data: np.ndarray, do_print=False) -> (list, bool):
         return backtest_clock(
             data,
             config["starting_balance"],
-            config["maker_fee"],
-            **xk,
-        )
-    elif passivbot_mode == "static_grid":
-        return backtest_static_grid(
-            data,
-            config["starting_balance"],
-            config["latency_simulation_ms"],
             config["maker_fee"],
             **xk,
         )
@@ -172,17 +164,12 @@ async def main():
         help="disable plotting",
     )
     args = parser.parse_args()
-    if args.symbol is None:
-        tmp_cfg = load_hjson_config(args.backtest_config_path)
-        symbols = (
-            tmp_cfg["symbol"] if type(tmp_cfg["symbol"]) == list else tmp_cfg["symbol"].split(",")
-        )
-    else:
-        symbols = args.symbol.split(",")
-    for symbol in symbols:
-        args = parser.parse_args()
-        args.symbol = symbol
-        config = await prepare_backtest_config(args)
+    config = prepare_backtest_config(args)
+    for symbol in config["symbols"]:
+        if "symbol" not in config or symbol != config["symbol"]:
+            args = parser.parse_args()
+            args.symbols = symbol
+            config = prepare_backtest_config(args)
         config["n_parts"] = args.n_parts
         live_config = load_live_config(args.live_config_path)
         if "spot" in config["market_type"]:

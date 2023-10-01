@@ -43,16 +43,16 @@ def main():
         ("pss", "maximum_pa_distance_std_short"),
         ("pml", "maximum_pa_distance_mean_long"),
         ("pms", "maximum_pa_distance_mean_short"),
+        ("pwl", "maximum_pa_distance_1pct_worst_mean_long"),
+        ("pws", "maximum_pa_distance_1pct_worst_mean_short"),
         ("pll", "maximum_loss_profit_ratio_long"),
         ("pls", "maximum_loss_profit_ratio_short"),
         ("hsl", "maximum_hrs_stuck_max_long"),
         ("hss", "maximum_hrs_stuck_max_short"),
-        ("erl", "minimum_eqbal_ratio_mean_of_10_worst_long"),
-        ("ers", "minimum_eqbal_ratio_mean_of_10_worst_short"),
-        ("esl", "maximum_eqbal_ratio_std_long"),
-        ("ess", "maximum_eqbal_ratio_std_short"),
         ("exl", "maximum_exposure_ratios_mean_long"),
         ("exs", "maximum_exposure_ratios_mean_short"),
+        ("tel", "maximum_time_at_max_exposure_long"),
+        ("tes", "maximum_time_at_max_exposure_short"),
         ("ct", "clip_threshold"),
     ]
     for k0, k1 in weights_keys:
@@ -75,6 +75,15 @@ def main():
         help="inspect particular config of given index",
     )
     parser.add_argument(
+        "-oc",
+        "--optimize_config",
+        type=str,
+        required=False,
+        dest="optimize_config_path",
+        default="configs/optimize/default.hjson",
+        help="optimize config hjson file",
+    )
+    parser.add_argument(
         "-d",
         "--dump_live_config",
         action="store_true",
@@ -83,7 +92,7 @@ def main():
 
     args = parser.parse_args()
 
-    opt_config = hjson.load(open("configs/optimize/default.hjson"))
+    opt_config = hjson.load(open(args.optimize_config_path))
     minsmaxs = {}
     for _, k1 in weights_keys:
         minsmaxs[k1] = opt_config[k1] if getattr(args, k1) is None else getattr(args, k1)

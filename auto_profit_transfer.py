@@ -79,6 +79,7 @@ async def main():
             # traceback.print_exc()
             income = []
         income = [e for e in income if e["transaction_id"] not in already_transferred_ids]
+        income = [x for x in income if x['timestamp'] > now - 1000 * 60 * 60 * 24]
         income = [e for e in income if e["token"] == args.quote]
         profit = sum([e["income"] for e in income])
         to_transfer = round_dynamic(profit * args.percentage, 4)
@@ -88,9 +89,6 @@ async def main():
             try:
                 transferred = await bot.transfer_from_derivatives_to_spot(args.quote, to_transfer)
                 logging.info(f"income: {profit} transferred {to_transfer} {args.quote}")
-                if exchange == "bybit":
-                    if "ret_msg" not in transferred or transferred["ret_msg"] not in ["OK", "success"]:
-                        print(f"error with transfer {transferred}")
                 logging.info(f"{transferred}")
                 already_transferred_ids.update([e["transaction_id"] for e in income])
                 json.dump(list(already_transferred_ids), open(transfer_log_fpath, "w"))

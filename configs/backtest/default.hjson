@@ -5,7 +5,29 @@
   # exchange from api-keys.json is used
   user: binance_01
 
-  symbol: specify_symbol
+  # symbols with data since earlier than 2021-05-01
+  symbols: [
+    "BTCUSDT", "ETHUSDT", "BCHUSDT", "XRPUSDT", "EOSUSDT",
+    "LTCUSDT", "TRXUSDT", "ETCUSDT", "LINKUSDT", "XLMUSDT",
+    "ADAUSDT", "XMRUSDT", "DASHUSDT", "ZECUSDT", "XTZUSDT",
+    "BNBUSDT", "ATOMUSDT", "ONTUSDT", "IOTAUSDT", "BATUSDT",
+    "VETUSDT", "NEOUSDT", "QTUMUSDT", "IOSTUSDT", "THETAUSDT",
+    "ALGOUSDT", "ZILUSDT", "KNCUSDT", "ZRXUSDT", "COMPUSDT",
+    "OMGUSDT", "DOGEUSDT", "SXPUSDT", "KAVAUSDT", "BANDUSDT",
+    "RLCUSDT", "WAVESUSDT", "MKRUSDT", "SNXUSDT", "DOTUSDT",
+    "DEFIUSDT", "YFIUSDT", "BALUSDT", "CRVUSDT", "TRBUSDT",
+    "RUNEUSDT", "SUSHIUSDT", "EGLDUSDT", "SOLUSDT", "ICXUSDT",
+    "STORJUSDT", "BLZUSDT", "UNIUSDT", "AVAXUSDT", "FTMUSDT",
+    "ENJUSDT", "FLMUSDT", "TOMOUSDT", "RENUSDT", "KSMUSDT",
+    "NEARUSDT", "AAVEUSDT", "FILUSDT", "RSRUSDT", "LRCUSDT",
+    "MATICUSDT", "OCEANUSDT", "BELUSDT", "CTKUSDT", "AXSUSDT",
+    "ALPHAUSDT", "ZENUSDT", "SKLUSDT", "GRTUSDT", "1INCHUSDT",
+    "CHZUSDT", "SANDUSDT", "ANKRUSDT", "LITUSDT", "UNFIUSDT",
+    "REEFUSDT", "RVNUSDT", "SFPUSDT", "XEMUSDT", "COTIUSDT",
+    "CHRUSDT", "MANAUSDT", "ALICEUSDT", "HBARUSDT", "ONEUSDT",
+    "LINAUSDT", "STMXUSDT", "DENTUSDT", "CELRUSDT", "HOTUSDT",
+    "MTLUSDT", "OGNUSDT", "NKNUSDT", "DGBUSDT",
+  ]
   latency_simulation_ms: 1000
 
   # specify starting balance in terms of margin token (i.e. usdt for usdt-m, coin for inverse coin-m)
@@ -14,7 +36,7 @@
   # format YYYY-MM-DD
   # end_date may be set to "now" or "today" to use current day (UTC) as end_date
   start_date: 2020-01-01
-  end_date: 2023-07-24
+  end_date: now
 
   # Reduce disk usage and improve some optimize speed with the slim analysis
   slim_analysis: true

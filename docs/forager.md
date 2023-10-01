@@ -15,8 +15,10 @@ The script does the following:
 - kill previous tmux session
 - use tmuxp to load new tmux session
 - sleep for one hour
-- repeat
+- repeat  
 
+The script is also useful for starting a static set of bots, similar to the manager (see docs/manager.md).  
+Add kwarg `-n/--noloop` to stop the forager script after one iteration.
 
 
 ## Usage
@@ -25,10 +27,11 @@ python3 forager.py configs/forager/config_file.hjson
 ```
 
 ## Requirements
-In addition to requirements.txt, tmux and tmuxp
+In addition to requirements.txt, tmux and tmuxp are needed. Install with `apt install tmuxp`   
 
 ## Config
 
+A template example config is found in configs/forager/example_config.hjson
 
 | Parameter                     	| Description |
 | ----------------------------------| ------------- |
@@ -46,11 +49,18 @@ In addition to requirements.txt, tmux and tmuxp
 | `unilateralness_clip_threshold`	| Include x% of symbols with lowest unilateralness.
 | `max_n_panes`						| Max number of panes per tmux window.
 | `default_config_path`				| Default config to use.
-| `approved_symbols_only`			| If true, allow only symbols present in live_configs_map.  If false, will use default_config_path when symbol is missing from live_configs_map
+| `symbols_to_ignore`				| Don't create bots for these symbols.
+| `approved_symbols_long`			| If empty, allow all symbols for long.
+| `approved_symbols_short`			| If empty, allow all symbols for short.
+| `live_configs_dir_{long/short}`	| Search this directory for live configs whose filename contains symbol name. Leave as empty string to disable. If multiple matches, the first alphabetically sorted is selected.
 | `live_configs_map`				| Live configs to to use with particular symbols.
-| `gs_mm`							| min_markup to use on bots on -gs
-| `gs_mr`							| markup_range to use on bots on -gs
-| `gs_lw`							| wallet_exposure_limit_long to use on bots on -gs
-| `gs_sw`							| wallet_exposure_limit_short to use on bots on -gs
+| `live_configs_map_{long/short}`	| Overrides symbols from live_configs_map and live_configs_dir.
+
+Configs are chosen in the following priority:  
+- `live_configs_map_{long/short}`,  
+- `live_configs_map`
+- `live_configs_dir_{long/short}`
+- `default_config_path`
+
 
 
