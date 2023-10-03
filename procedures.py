@@ -326,6 +326,13 @@ async def fetch_market_specific_settings_old(config: dict):
         settings_from_exchange["maker_fee"] = 0.0002
         settings_from_exchange["taker_fee"] = 0.0005
         settings_from_exchange["exchange"] = "mexc"
+    elif exchange == "bingx":
+        if "spot" in config["market_type"]:
+            raise Exception("spot not implemented on bingx")
+        bot = await create_mexc_bot(tmp_live_settings)
+        settings_from_exchange["maker_fee"] = 0.0002
+        settings_from_exchange["taker_fee"] = 0.0005
+        settings_from_exchange["exchange"] = "bingx"
     else:
         raise Exception(f"unknown exchange {exchange}")
     if hasattr(bot, "session"):
@@ -410,6 +417,14 @@ async def create_mexc_bot(config: dict):
     from exchanges.mexc import MEXCBot
 
     bot = MEXCBot(config)
+    await bot._init()
+    return bot
+
+
+async def create_bingx_bot(config: dict):
+    from exchanges.bingx import BingXBot
+
+    bot = BingXBot(config)
     await bot._init()
     return bot
 

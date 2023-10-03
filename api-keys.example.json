@@ -37,5 +37,11 @@
         "key": "key",
         "secret": "secret",
         "passphrase": "passphrase"
+    },
+    "bingx_01" : {
+        "exchange": "bingx",
+        "key": "key",
+        "secret": "secret",
+        "passphrase": "passphrase"
     }
 }

@@ -1985,6 +1985,11 @@ async def main() -> None:
 
         config["ohlcv"] = True
         bot = await create_kucoin_bot(config)
+    elif config["exchange"] == "bingx":
+        from procedures import create_bingx_bot
+
+        config["ohlcv"] = True
+        bot = await create_bingx_bot(config)
     else:
         raise Exception("unknown exchange", config["exchange"])
 
@@ -2007,5 +2012,5 @@ if __name__ == "__main__":
         logging.error(f"There was an error starting the bot: {e}")
         traceback.print_exc()
     finally:
-        logging.error("Passivbot was stopped succesfully")
+        logging.info("Passivbot was stopped succesfully")
         os._exit(0)
