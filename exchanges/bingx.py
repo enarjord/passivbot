@@ -139,9 +139,9 @@ class BingXBot(Bot):
         positions, balance = None, None
         try:
             positions, balance = await asyncio.gather(
-                self.cc.fetch_positions(self.symbol), self.cc.fetch_balance()
+                self.cc.fetch_positions(self.symbol_id), self.cc.fetch_balance()
             )
-            positions = [e for e in positions if e["symbol"] == self.symbol]
+            positions = floatify([e for e in positions if e["symbol"] == self.symbol])
             position = {
                 "long": {"size": 0.0, "price": 0.0, "liquidation_price": 0.0},
                 "short": {"size": 0.0, "price": 0.0, "liquidation_price": 0.0},
@@ -152,7 +152,7 @@ class BingXBot(Bot):
                 for p in positions:
                     if p["side"] == "long":
                         position["long"] = {
-                            "size": p["contracts"],
+                            "size": p["notional"],
                             "price": 0.0 if p["entryPrice"] is None else p["entryPrice"],
                             "liquidation_price": p["liquidationPrice"]
                             if p["liquidationPrice"]
@@ -160,7 +160,7 @@ class BingXBot(Bot):
                         }
                     elif p["side"] == "short":
                         position["short"] = {
-                            "size": -abs(p["contracts"]),
+                            "size": -abs(p["notional"]),
                             "price": 0.0 if p["entryPrice"] is None else p["entryPrice"],
                             "liquidation_price": p["liquidationPrice"]
                             if p["liquidationPrice"]
