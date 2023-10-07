@@ -31,7 +31,7 @@ class BingXBot(Bot):
             {
                 "apiKey": self.key,
                 "secret": self.secret,
-                #"headers": {"referer": self.broker_code} if self.broker_code else {},
+                # "headers": {"referer": self.broker_code} if self.broker_code else {},
             }
         )
 
@@ -66,12 +66,14 @@ class BingXBot(Bot):
                 break
         else:
             raise Exception(f"unsupported symbol {self.symbol}")
-        self.symbol_id = elm['id']
+        self.symbol_id = elm["id"]
         self.symbol = elm["symbol"]
         self.max_leverage = elm["limits"]["leverage"]["max"]
         self.coin = elm["base"]
         self.quote = elm["quote"]
-        self.price_step = self.config["price_step"] = round(1.0 / (10 ** elm["precision"]["price"]), 12)
+        self.price_step = self.config["price_step"] = round(
+            1.0 / (10 ** elm["precision"]["price"]), 12
+        )
         self.qty_step = self.config["qty_step"] = round(1.0 / (10 ** elm["precision"]["amount"]), 12)
         self.min_qty = self.config["min_qty"] = elm["contractSize"]
         self.min_cost = self.config["min_cost"] = (
@@ -83,9 +85,14 @@ class BingXBot(Bot):
     async def fetch_ticker(self, symbol=None):
         fetched = None
         try:
-            fetched = await self.cc.swap_v2_public_get_quote_depth(params={'symbol': self.symbol_id, 'limit': 5})
-            ticker = {'bid': sorted(floatify(fetched['data']['bids']))[-1][0], 'ask': sorted(floatify(fetched['data']['asks']))[0][0]}
-            ticker['last'] = np.random.choice([ticker['bid'], ticker['ask']])
+            fetched = await self.cc.swap_v2_public_get_quote_depth(
+                params={"symbol": self.symbol_id, "limit": 5}
+            )
+            ticker = {
+                "bid": sorted(floatify(fetched["data"]["bids"]))[-1][0],
+                "ask": sorted(floatify(fetched["data"]["asks"]))[0][0],
+            }
+            ticker["last"] = np.random.choice([ticker["bid"], ticker["ask"]])
             return ticker
         except Exception as e:
             logging.error(f"error fetching ticker {e}")
@@ -139,7 +146,8 @@ class BingXBot(Bot):
         positions, balance = None, None
         try:
             positions, balance = await asyncio.gather(
-                self.cc.fetch_positions(self.symbol_id), self.cc.fetch_balance()
+                self.cc.fetch_positions(params={"symbol": self.symbol_id}),
+                self.cc.swap_v2_private_get_user_balance(),
             )
             positions = floatify([e for e in positions if e["symbol"] == self.symbol])
             position = {
@@ -166,7 +174,7 @@ class BingXBot(Bot):
                             if p["liquidationPrice"]
                             else 0.0,
                         }
-            position["wallet_balance"] = balance[self.quote]["total"]
+            position["wallet_balance"] = float(balance["data"]["balance"]["balance"])
             return position
         except Exception as e:
             logging.error(f"error fetching pos or balance {e}")
@@ -174,50 +182,6 @@ class BingXBot(Bot):
             print_async_exception(balance)
             traceback.print_exc()
         return
-
-        positions, balance = None, None
-        try:
-            positions, balance = await asyncio.gather(
-                self.cc.fetch_positions(),
-                self.cc.fetch_balance(),
-            )
-            positions = [e for e in positions if e["symbol"] == self.symbol]
-            position = {
-                "long": {"size": 0.0, "price": 0.0, "liquidation_price": 0.0},
-                "short": {"size": 0.0, "price": 0.0, "liquidation_price": 0.0},
-                "wallet_balance": 0.0,
-                "equity": 0.0,
-            }
-            if positions:
-                for p in positions:
-                    if p["side"] == "long":
-                        position["long"] = {
-                            "size": p["contracts"],
-                            "price": p["entryPrice"],
-                            "liquidation_price": p["liquidationPrice"]
-                            if p["liquidationPrice"]
-                            else 0.0,
-                        }
-                    elif p["side"] == "short":
-                        position["short"] = {
-                            "size": p["contracts"],
-                            "price": p["entryPrice"],
-                            "liquidation_price": p["liquidationPrice"]
-                            if p["liquidationPrice"]
-                            else 0.0,
-                        }
-            if balance:
-                for elm in balance["info"]["data"]:
-                    for elm2 in elm["details"]:
-                        if elm2["ccy"] == self.quote:
-                            position["wallet_balance"] = float(elm2["cashBal"])
-                            break
-            return position
-        except Exception as e:
-            logging.error(f"error fetching pos or balance {e}")
-            print_async_exception(positions)
-            print_async_exception(balance)
-            traceback.print_exc()
 
     async def execute_orders(self, orders: [dict]) -> [dict]:
         return await self.execute_multiple(
@@ -229,13 +193,12 @@ class BingXBot(Bot):
         try:
             executed = await self.cc.create_limit_order(
                 symbol=order["symbol"] if "symbol" in order else self.symbol,
-                side=order["side"],
+                side=order["side"].upper(),
                 amount=abs(order["qty"]),
                 price=order["price"],
                 params={
-                    "positionIdx": 1 if order["position_side"] == "long" else 2,
-                    "timeInForce": "postOnly",
-                    "orderLinkId": order["custom_id"] + str(uuid4()),
+                    "positionSide": order["position_side"].upper(),
+                    "clientOrderID": (order["custom_id"] + str(uuid4()))[:40],
                 },
             )
             if "symbol" not in executed or executed["symbol"] is None:
@@ -293,7 +256,7 @@ class BingXBot(Bot):
     async def execute_cancellation(self, order: dict) -> dict:
         executed = None
         try:
-            executed = await self.cc.cancel_derivatives_order(order["order_id"], symbol=self.symbol)
+            executed = await self.cc.cancel_order(id=order["order_id"], symbol=self.symbol)
             return {
                 "symbol": executed["symbol"],
                 "side": order["side"],
