@@ -278,32 +278,39 @@ class BingXBot(Bot):
         return
 
     async def fetch_ohlcvs(
-        self, symbol: str = None, start_time: int = None, interval="1m", limit=1000
+        self, symbol: str = None, start_time: int = None, interval="1m", limit=1440
     ):
         ohlcvs = None
         # m -> minutes; h -> hours; d -> days; w -> weeks; M -> months
-        interval_map = {
-            "1m": 1,
-            "3m": 3,
-            "5m": 5,
-            "15m": 15,
-            "30m": 30,
-            "1h": 60,
-            "2h": 120,
-            "4h": 240,
-            "6h": 360,
-            "12h": 720,
-            "1d": "D",
-            "1w": "W",
-            "1M": "M",
+        interval_set = {
+            "1m",
+            "3m",
+            "5m",
+            "15m",
+            "30m",
+            "1h",
+            "2h",
+            "4h",
+            "6h",
+            "8h",
+            "12h",
+            "1d",
+            "3d",
+            "1w",
+            "1M",
         }
-        assert interval in interval_map, f"unsupported timeframe {interval}"
+        # endTime is respected first
+        assert interval in interval_set, f"unsupported timeframe {interval}"
+        end_time = int(await self.get_server_time() + 1000 * 60)
+        params = {'endTime': end_time}
+        if start_time is not None:
+            params['startTime'] = int(start_time)
         try:
             ohlcvs = await self.cc.fetch_ohlcv(
-                self.symbol if symbol is None else symbol,
-                timeframe=interval_map[interval],
+                symbol=self.symbol if symbol is None else symbol,
+                timeframe=interval,
                 limit=limit,
-                params={} if start_time is None else {"startTime": int(start_time)},
+                params=params,
             )
             keys = ["timestamp", "open", "high", "low", "close", "volume"]
             return [{k: elm[i] for i, k in enumerate(keys)} for elm in ohlcvs]
