@@ -132,6 +132,9 @@ class BingXBot(Bot):
     async def transfer_from_derivatives_to_spot(self, coin: str, amount: float):
         return
 
+    async def fetch_server_time(self):
+        return self.get_server_time()
+
     async def get_server_time(self):
         server_time = None
         try:
@@ -392,22 +395,22 @@ class BingXBot(Bot):
     async def fetch_latest_fills(self):
         fetched = None
         try:
-            fetched = await self.cc.fetch_my_trades(symbol=self.symbol)
+            fetched = await self.cc.swap_v2_private_get_trade_allorders(params={'symbol': self.symbol_id, 'limit': 1000})
             fills = [
                 {
-                    "order_id": elm["id"],
+                    "order_id": elm["orderId"],
                     "symbol": elm["symbol"],
-                    "custom_id": elm["info"]["orderLinkId"],
-                    "price": elm["price"],
-                    "qty": elm["amount"],
-                    "type": elm["type"],
+                    "custom_id": elm["clientOrderId"],
+                    "price": float(elm["avgPrice"]),
+                    "qty": float(elm["executedQty"]),
+                    "type": elm["type"].lower(),
                     "reduce_only": None,
                     "side": elm["side"].lower(),
-                    "position_side": determine_pos_side_ccxt(elm),
-                    "timestamp": elm["timestamp"],
+                    "position_side": elm["positionSide"].lower(),
+                    "timestamp": float(elm["updateTime"]),
                 }
-                for elm in fetched
-                if elm["amount"] != 0.0 and elm["type"] is not None
+                for elm in fetched['data']['orders']
+                if float(elm["executedQty"]) != 0.0
             ]
             return sorted(fills, key=lambda x: x["timestamp"])
         except Exception as e:
