@@ -305,9 +305,9 @@ class BingXBot(Bot):
         # endTime is respected first
         assert interval in interval_set, f"unsupported timeframe {interval}"
         end_time = int(await self.get_server_time() + 1000 * 60)
-        params = {'endTime': end_time}
+        params = {"endTime": end_time}
         if start_time is not None:
-            params['startTime'] = int(start_time)
+            params["startTime"] = int(start_time)
         try:
             ohlcvs = await self.cc.fetch_ohlcv(
                 symbol=self.symbol if symbol is None else symbol,
@@ -395,7 +395,9 @@ class BingXBot(Bot):
     async def fetch_latest_fills(self):
         fetched = None
         try:
-            fetched = await self.cc.swap_v2_private_get_trade_allorders(params={'symbol': self.symbol_id, 'limit': 1000})
+            fetched = await self.cc.swap_v2_private_get_trade_allorders(
+                params={"symbol": self.symbol_id, "limit": 1000}
+            )
             fills = [
                 {
                     "order_id": elm["orderId"],
@@ -409,7 +411,7 @@ class BingXBot(Bot):
                     "position_side": elm["positionSide"].lower(),
                     "timestamp": float(elm["updateTime"]),
                 }
-                for elm in fetched['data']['orders']
+                for elm in fetched["data"]["orders"]
                 if float(elm["executedQty"]) != 0.0
             ]
             return sorted(fills, key=lambda x: x["timestamp"])
@@ -428,21 +430,32 @@ class BingXBot(Bot):
         return []
 
     async def init_exchange_config(self):
-        return
         try:
-            res = await self.cc.set_derivatives_margin_mode(
-                marginMode="cross", symbol=self.symbol, params={"leverage": self.leverage}
+            res = await self.cc.swap_v2_private_post_trade_margintype(
+                params={"symbol": self.symbol_id, "marginType": "CROSSED"}
             )
             logging.info(f"cross mode set {res}")
         except Exception as e:
             logging.error(f"error setting cross mode: {e}")
+        """
+        # no hedge mode with bingx
         try:
             res = await self.cc.set_position_mode(hedged=True)
             logging.info(f"hedge mode set {res}")
         except Exception as e:
             logging.error(f"error setting hedge mode: {e}")
+        """
         try:
-            res = await self.cc.set_leverage(int(self.leverage), symbol=self.symbol)
-            logging.info(f"leverage set {res}")
+            res = await self.cc.swap_v2_private_post_trade_leverage(
+                params={"symbol": self.symbol_id, "side": "LONG", "leverage": 7}
+            )
+            logging.info(f"leverage set long {res}")
         except Exception as e:
-            logging.error(f"error setting leverage: {e}")
+            logging.error(f"error setting leverage long: {e}")
+        try:
+            res = await self.cc.swap_v2_private_post_trade_leverage(
+                params={"symbol": self.symbol_id, "side": "SHORT", "leverage": 7}
+            )
+            logging.info(f"leverage set short {res}")
+        except Exception as e:
+            logging.error(f"error setting leverage short: {e}")
