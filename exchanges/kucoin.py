@@ -110,7 +110,7 @@ class KuCoinBot(Bot):
         self.min_qty = self.config["min_qty"] = 1.0
         self.min_cost = self.config["min_cost"] = 0.0
         self.c_mult = self.config["c_mult"] = float(elm["multiplier"])
-        self.leverage = min(5, self.config["leverage"])  # cannot be greater than 5
+        self.leverage = self.config["leverage"]
         await super()._init()
         await self.init_order_book()
         await self.update_position()
@@ -489,7 +489,7 @@ class KuCoinBot(Bot):
                     "reduce_only": elm["reduceOnly"],
                     "side": elm["side"],
                     "position_side": determine_pos_side(elm),
-                    "timestamp": float(elm["updatedAt"]),
+                    "timestamp": float(elm["createdAt"]),
                 }
                 for elm in fetched["data"]
                 if elm["symbol"] == self.symbol and not elm["cancelExist"] and not elm["isActive"]
@@ -503,23 +503,27 @@ class KuCoinBot(Bot):
 
     async def init_exchange_config(self):
         try:
-            # set cross mode
-            if "inverse_futures" in self.market_type:
-                raise "Not implemented"
-            elif "linear_perpetual" in self.market_type:
-                res = await self.private_post(
-                    "/api/v1/position/risk-limit-level/change",
-                    {
-                        "symbol": self.symbol,
-                        "level": self.leverage,
-                    },
-                )
-                logging.info(f"setting risk level {res}")
-
-            elif "inverse_perpetual" in self.market_type:
-                raise "Not implemented"
+            res = await self.private_post(
+                "/api/v1/position/risk-limit-level/change",
+                {
+                    "symbol": self.symbol,
+                    "level": 1,
+                },
+            )
+            logging.info(f"risk limit level set {res}")
         except Exception as e:
-            logging.error(f"error with init_exchange_config {e}")
+            logging.error(f"error setting risk limit level: {e}")
+        try:
+            res = await self.private_post(
+                "/api/v1/position/margin/auto-deposit-status",
+                {
+                    "symbol": self.symbol,
+                    "status": True,
+                },
+            )
+            logging.info(f"set auto deposit margin {res}")
+        except Exception as e:
+            logging.error(f"error setting auto deposit margin: {e}")
 
     def standardize_market_stream_event(self, data: dict) -> [dict]:
         try:
