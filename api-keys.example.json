@@ -3,7 +3,9 @@
         "binance": "https://accounts.binance.me/en/register?ref=TII4B07C",
         "bybit": "https://partner.bybit.com/b/passivbot",
         "bitget": "https://partner.bitget.com/bg/Y8FU1W",
-        "okx": "https://www.okx.com/join/15429595"
+        "okx": "https://www.okx.com/join/15429595",
+        "kucoin": "https://bingx.com/invite/DFONXA",
+        "bingx": "https://bingx.com/invite/DFONXA"
     },
     "binance_01" : {
         "exchange": "binance",
@@ -41,7 +43,6 @@
     "bingx_01" : {
         "exchange": "bingx",
         "key": "key",
-        "secret": "secret",
-        "passphrase": "passphrase"
+        "secret": "secret"
     }
 }
