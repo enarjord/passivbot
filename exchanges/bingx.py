@@ -13,7 +13,7 @@ from pure_funcs import determine_pos_side_ccxt, floatify, calc_hash, ts_to_date_
 import ccxt.async_support as ccxt
 
 assert (
-    ccxt.__version__ == "4.0.57"
+    ccxt.__version__ == "4.1.13"
 ), f"Currently ccxt {ccxt.__version__} is installed. Please pip reinstall requirements.txt or install ccxt v4.0.57 manually"
 
 
