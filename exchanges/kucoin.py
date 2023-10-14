@@ -85,7 +85,7 @@ class KuCoinBot(Bot):
                 "server_time": "/api/v1/timestamp",
                 "recent_orders": "/api/v1/recentDoneOrders",
             }
-            self.hedge_mode = self.config["hedge_mode"] = True
+            self.hedge_mode = self.config["hedge_mode"] = False
         else:
             raise "Not implemented"
 
