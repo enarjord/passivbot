@@ -2,5 +2,5 @@ websockets==10.1
 aiohttp==3.8.1
 numpy==1.21.5
 python-dateutil==2.8.2
-ccxt==4.0.57
+ccxt==4.1.13
 hjson==3.0.2
