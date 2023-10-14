@@ -619,7 +619,7 @@ def fetch_market_specific_settings(config: dict):
     import ccxt
 
     assert (
-        ccxt.__version__ == "4.0.57"
+        ccxt.__version__ == "4.1.13"
     ), f"Currently ccxt {ccxt.__version__} is installed. Please pip reinstall requirements.txt or install ccxt v4.0.57 manually"
 
     exchange = config["exchange"]
@@ -765,7 +765,10 @@ def fetch_market_specific_settings(config: dict):
 
 
 if __name__ == "__main__":
-    for exchange in ["kucoin", "bitget", "binance", "bybit", "okx"]:
+    for exchange in ["kucoin", "bitget", "binance", "bybit", "okx", "bingx"]:
         cfg = {"exchange": exchange, "symbol": "DOGEUSDT", "market_type": "futures"}
-        mss = fetch_market_specific_settings(cfg)
-        print(mss)
+        try:
+            mss = fetch_market_specific_settings(cfg)
+            print(mss)
+        except:
+            traceback.print_exc()
