@@ -104,28 +104,38 @@ class BingXBot(Bot):
 
     async def fetch_open_orders(self) -> [dict]:
         open_orders = None
+        open_orders_detailed = None
         try:
             open_orders = await self.cc.fetch_open_orders(symbol=self.symbol, limit=50)
             if len(open_orders) == 50:
                 # fetch more
                 pass
+            open_orders_detailed = await asyncio.gather(
+                *[
+                    self.cc.swap_v2_private_get_trade_order(
+                        params={"symbol": oo["info"]["symbol"], "orderId": oo["id"]}
+                    )
+                    for oo in open_orders
+                ]
+            )
             return [
                 {
-                    "order_id": e["id"],
-                    "custom_id": e["clientOrderId"],
-                    "symbol": e["symbol"],
-                    "price": e["price"],
-                    "qty": e["amount"],
-                    "type": e["type"],
-                    "side": e["side"],
-                    "position_side": determine_pos_side_ccxt(e),
-                    "timestamp": e["timestamp"],
+                    "order_id": elm["data"]["order"]["orderId"],
+                    "custom_id": elm["data"]["order"]["clientOrderId"],
+                    "symbol": elm["data"]["order"]["symbol"],
+                    "price": float(elm["data"]["order"]["price"]),
+                    "qty": float(elm["data"]["order"]["origQty"]),
+                    "type": elm["data"]["order"]["type"].lower(),
+                    "side": elm["data"]["order"]["side"].lower(),
+                    "position_side": elm["data"]["order"]["positionSide"].lower(),
+                    "timestamp": float(elm["data"]["order"]["time"]),
                 }
-                for e in open_orders
+                for elm in open_orders_detailed
             ]
         except Exception as e:
             logging.error(f"error fetching open orders {e}")
             print_async_exception(open_orders)
+            print_async_exception(open_orders_detailed)
             traceback.print_exc()
             return False
 
