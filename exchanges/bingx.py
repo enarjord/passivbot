@@ -61,6 +61,7 @@ class BingXBot(Bot):
     async def _init(self):
         info = await self.fetch_market_info_from_cache()
         self.symbol_id = self.symbol
+        self.symbol_id_map = {elm["id"]: elm["symbol"] for elm in info if elm["type"] == "swap"}
         for elm in info:
             if elm["baseId"] + elm["quoteId"] == self.symbol_id and elm["type"] == "swap":
                 break
@@ -122,7 +123,7 @@ class BingXBot(Bot):
                 {
                     "order_id": elm["data"]["order"]["orderId"],
                     "custom_id": elm["data"]["order"]["clientOrderId"],
-                    "symbol": elm["data"]["order"]["symbol"],
+                    "symbol": self.symbol_id_map[elm["data"]["order"]["symbol"]],
                     "price": float(elm["data"]["order"]["price"]),
                     "qty": float(elm["data"]["order"]["origQty"]),
                     "type": elm["data"]["order"]["type"].lower(),
