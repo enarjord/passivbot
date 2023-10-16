@@ -254,6 +254,9 @@ async def get_current_symbols(cc):
     elif cc.id == "binanceusdm":
         cc.options["warnOnFetchOpenOrdersWithoutSymbol"] = False
         oos = await cc.fetch_open_orders()
+    elif cc.id == "bingx":
+        oos = await cc.swap_v2_private_get_trade_openorders()
+        oos = [{**elm, **{"symbol": elm["symbol"].replace("-", "")}} for elm in oos["data"]["orders"]]
     else:
         oos = await cc.fetch_open_orders()
     current_open_orders_long, current_open_orders_short = [], []
@@ -279,7 +282,13 @@ async def get_current_symbols(cc):
 async def get_min_costs(cc):
     exchange = cc.id
     info = await cc.fetch_markets()
-    tickers = await cc.fetch_tickers()
+    if exchange == "kucoinfutures":
+        tickers = {
+            elm["symbol"].replace(":USDT", ""): {**elm, **{"info": {"last": elm["info"]["lastTradePrice"]}}}
+            for elm in info
+        }
+    else:
+        tickers = await cc.fetch_tickers()
     min_costs = {}
     c_mults = {}
     for x in info:
@@ -301,6 +310,8 @@ async def get_min_costs(cc):
                         min_cost = 0.0
                         c_mult = float(x["info"]["multiplier"])
                         last_price = float(tickers[ticker_symbol]["info"]["last"])
+                    elif exchange == "bingx":
+                        pass
                     else:
                         min_cost = 0.0 if x["limits"]["cost"]["min"] is None else x["limits"]["cost"]["min"]
                         c_mult = 1.0 if x["contractSize"] is None else x["contractSize"]
@@ -409,6 +420,7 @@ async def main():
         "bybit": "bybit",
         "binance": "binanceusdm",
         "bitget": "bitget",
+        "bingx": "bingx",
     }
     parser = argparse.ArgumentParser(prog="forager", description="start forager")
     parser.add_argument("forager_config_path", type=str, help="path to forager config")
