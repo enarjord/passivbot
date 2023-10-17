@@ -49,9 +49,9 @@ See also https://www.futuresboard.xyz/guides.html
 https://accounts.binance.me/en/register?ref=TII4B07C  
 https://partner.bybit.com/b/passivbot  
 https://partner.bitget.com/bg/Y8FU1W  
-https://www.okx.com/join/PASSIVBOT  (20% rebate)
-https://www.kucoin.com/r/rf/QBSFZ5HT
-https://bingx.com/invite/DFONXA
+https://www.okx.com/join/PASSIVBOT  (20% rebate)  
+https://www.kucoin.com/r/rf/QBSFZ5HT  
+https://bingx.com/invite/DFONXA  
 
 https://www.buymeacoffee.com/enarjord  
 
