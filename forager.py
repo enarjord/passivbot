@@ -282,11 +282,8 @@ async def get_current_symbols(cc):
 async def get_min_costs(cc):
     exchange = cc.id
     info = await cc.fetch_markets()
-    if exchange == "kucoinfutures":
-        tickers = {
-            elm["symbol"].replace(":USDT", ""): {**elm, **{"info": {"last": elm["info"]["lastTradePrice"]}}}
-            for elm in info
-        }
+    if exchange in ["kucoinfutures"]:
+        tickers = {elm["symbol"].replace(":USDT", ""): {"last": elm["info"]["lastTradePrice"]} for elm in info}
     else:
         tickers = await cc.fetch_tickers()
     min_costs = {}
@@ -295,7 +292,7 @@ async def get_min_costs(cc):
         symbol = x["symbol"]
         if symbol.endswith("USDT"):
             if x["type"] != "spot":
-                if exchange in ["okx", "bitget", "kucoinfutures"]:
+                if exchange in ["okx", "bitget", "kucoinfutures", "bingx"]:
                     ticker_symbol = symbol.replace(":USDT", "")
                 else:
                     ticker_symbol = symbol
@@ -309,9 +306,12 @@ async def get_min_costs(cc):
                         min_qty = 1.0
                         min_cost = 0.0
                         c_mult = float(x["info"]["multiplier"])
-                        last_price = float(tickers[ticker_symbol]["info"]["last"])
+                        last_price = float(tickers[ticker_symbol]["last"])
                     elif exchange == "bingx":
-                        pass
+                        min_cost = 2.0
+                        min_qty = x["contractSize"]
+                        c_mult = 1.0
+                        last_price = tickers[ticker_symbol]["last"]
                     else:
                         min_cost = 0.0 if x["limits"]["cost"]["min"] is None else x["limits"]["cost"]["min"]
                         c_mult = 1.0 if x["contractSize"] is None else x["contractSize"]
