@@ -365,7 +365,9 @@ async def dump_yaml(cc, config):
             except:
                 pass
     approved = sorted(set(approved) - set(config["symbols_to_ignore"]))
-    if config["approved_symbols_long"] and config["approved_symbols_short"]:
+    if (config["approved_symbols_long"] or config["n_longs"] == 0) and (
+        config["approved_symbols_short"] or config["n_shorts"] == 0
+    ):
         approved = set(approved) & (set(config["approved_symbols_long"]) | set(config["approved_symbols_short"]))
 
     print("getting current bots...")
