@@ -279,11 +279,31 @@ async def get_current_symbols(cc):
     )
 
 
-async def get_min_costs(cc):
+async def get_min_costs_and_contract_multipliers(cc):
     exchange = cc.id
     info = await cc.fetch_markets()
-    if exchange in ["kucoinfutures"]:
-        tickers = {elm["symbol"].replace(":USDT", ""): {"last": elm["info"]["lastTradePrice"]} for elm in info}
+
+    # tickers format is {"COIN/USDT:USDT": {"last": float, ...}, ...}
+    if exchange == "kucoinfutures":
+        tickers = {elm["symbol"]: {"last": float(elm["info"]["lastTradePrice"])} for elm in info}
+    elif exchange == "okx":
+        tickers = await cc.fetch_tickers_by_type(type="swap")
+    elif exchange == "bitget":
+        tickers = await cc.public_mix_get_market_tickers(params={"productType": "UMCBL"})
+        bitget_id_map = {elm["id"]: elm["symbol"] for elm in info}
+        tickers = {
+            bitget_id_map[elm["symbol"]]: {"last": float(elm["last"])}
+            for elm in tickers["data"]
+            if elm["symbol"] in bitget_id_map
+        }
+    elif exchange == "bingx":
+        tickers = await cc.swap_v2_public_get_quote_price()
+        bingx_id_map = {elm["id"]: elm["symbol"] for elm in info}
+        tickers = {
+            bingx_id_map[elm["symbol"]]: {"last": float(elm["price"])}
+            for elm in tickers["data"]
+            if elm["symbol"] in bingx_id_map
+        }
     else:
         tickers = await cc.fetch_tickers()
     min_costs = {}
@@ -292,31 +312,27 @@ async def get_min_costs(cc):
         symbol = x["symbol"]
         if symbol.endswith("USDT"):
             if x["type"] != "spot":
-                if exchange in ["okx", "bitget", "kucoinfutures", "bingx"]:
-                    ticker_symbol = symbol.replace(":USDT", "")
-                else:
-                    ticker_symbol = symbol
-                if ticker_symbol in tickers:
+                if symbol in tickers:
                     if exchange == "bitget":
                         min_cost = 5.0
                         c_mult = 1.0
                         min_qty = float(x["info"]["minTradeNum"])
-                        last_price = tickers[ticker_symbol]["last"]
+                        last_price = tickers[symbol]["last"]
                     elif exchange == "kucoinfutures":
                         min_qty = 1.0
                         min_cost = 0.0
                         c_mult = float(x["info"]["multiplier"])
-                        last_price = float(tickers[ticker_symbol]["last"])
+                        last_price = float(tickers[symbol]["last"])
                     elif exchange == "bingx":
                         min_cost = 2.0
                         min_qty = x["contractSize"]
                         c_mult = 1.0
-                        last_price = tickers[ticker_symbol]["last"]
+                        last_price = tickers[symbol]["last"]
                     else:
                         min_cost = 0.0 if x["limits"]["cost"]["min"] is None else x["limits"]["cost"]["min"]
                         c_mult = 1.0 if x["contractSize"] is None else x["contractSize"]
                         min_qty = 0.0 if x["limits"]["amount"]["min"] is None else x["limits"]["amount"]["min"]
-                        last_price = tickers[ticker_symbol]["last"]
+                        last_price = tickers[symbol]["last"]
                     min_costs[symbol] = max(min_cost, min_qty * c_mult * last_price)
                     c_mults[symbol] = c_mult
     return min_costs, c_mults
@@ -325,7 +341,7 @@ async def get_min_costs(cc):
 async def dump_yaml(cc, config):
     max_min_cost = config["max_min_cost"]
     print("getting min costs...")
-    min_costs, c_mults = await get_min_costs(cc)
+    min_costs, c_mults = await get_min_costs_and_contract_multipliers(cc)
     symbols_map = {sym: sym.replace(":USDT", "").replace("/", "") for sym in min_costs}
     symbols_map_inv = {v: k for k, v in symbols_map.items()}
 
