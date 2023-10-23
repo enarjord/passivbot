@@ -10,9 +10,10 @@ import aiohttp
 import numpy as np
 import ccxt.async_support as ccxt
 
+ccxt_version_req = "4.1.13"
 assert (
-    ccxt.__version__ == "4.1.13"
-), f"Currently ccxt {ccxt.__version__} is installed. Please pip reinstall requirements.txt or install ccxt v4.0.57 manually"
+    ccxt.__version__ == ccxt_version_req
+), f"Currently ccxt {ccxt.__version__} is installed. Please pip reinstall requirements.txt or install ccxt v{ccxt_version_req} manually"
 import uuid
 
 from passivbot import Bot, logging
