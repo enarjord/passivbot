@@ -79,7 +79,7 @@ class BingXBot(Bot):
         self.qty_step = self.config["qty_step"] = round(1.0 / (10 ** elm["precision"]["amount"]), 12)
         self.min_qty = self.config["min_qty"] = elm["contractSize"]
         self.min_cost = self.config["min_cost"] = (
-            2.0 if elm["limits"]["cost"]["min"] is None else elm["limits"]["cost"]["min"]
+            2.2 if elm["limits"]["cost"]["min"] is None else elm["limits"]["cost"]["min"]
         )
         self.margin_coin = self.quote
         await super()._init()
