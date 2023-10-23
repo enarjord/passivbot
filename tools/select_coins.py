@@ -91,7 +91,7 @@ def main():
             + longr.adg_w_per_exp.iloc[0]
             + shortr.adg_per_exp.iloc[0]
             + shortr.adg_w_per_exp.iloc[0]
-        )
+        ) / 4
 
     syms_sorted_by_nscores = sorted(nscores.items(), key=lambda x: x[1], reverse=True)
     syms = [
@@ -106,6 +106,7 @@ def main():
     max_len = max([len(k) for k in nscores])
     for k, v in sorted(nscores.items(), key=lambda x: x[1], reverse=True):
         print(f"{k: <{max_len}} {v:.6f}")
+    print(f"n syms adg > {args.adg}: {len(nscores)}")
 
     print("selected syms", sorted(syms))
     print("n syms", len(syms))
