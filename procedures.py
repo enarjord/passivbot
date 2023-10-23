@@ -618,9 +618,10 @@ async def get_first_ohlcv_timestamps(cc=None, symbols=None, cache=True):
 def fetch_market_specific_settings(config: dict):
     import ccxt
 
+    ccxt_version_req = "4.1.13"
     assert (
-        ccxt.__version__ == "4.1.13"
-    ), f"Currently ccxt {ccxt.__version__} is installed. Please pip reinstall requirements.txt or install ccxt v4.0.57 manually"
+        ccxt.__version__ == ccxt_version_req
+    ), f"Currently ccxt {ccxt.__version__} is installed. Please pip reinstall requirements.txt or install ccxt v{ccxt_version_req} manually"
 
     exchange = config["exchange"]
     symbol = config["symbol"]
