@@ -18,7 +18,7 @@
   noisiness_clip_threshold: 0.52 // include 52% of symbols with highest noisiness
 
   // don't allow symbols younger than threshold. Format YYYY-MM. Set to 0 to allow all symbols.
-  market_age_threshold: 2022-06
+  market_age_threshold: 2023-09
 
   max_n_panes: 8
 
