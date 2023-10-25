@@ -102,23 +102,17 @@ def calc_metrics_mean(analyses):
     analysis_combined = {}
     for key in mins:
         if key in analyses[0]:
-            print('mins', key)
             analysis_combined[key] = min([a[key] for a in analyses])
     for key in firsts:
         if key in analyses[0]:
-            print('firsts', key)
             analysis_combined[key] = analyses[0][key]
     for key in maxs:
         if key in analyses[0]:
-            print('maxs', key)
-
             analysis_combined[key] = max([a[key] for a in analyses])
     for key in analyses[0]:
         if key not in analysis_combined:
             try:
                 analysis_combined[key] = np.mean([a[key] for a in analyses])
-                print('means', key)
-
             except:
                 analysis_combined[key] = analyses[0][key]
     return analysis_combined
