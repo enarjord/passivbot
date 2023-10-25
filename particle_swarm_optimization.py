@@ -213,16 +213,7 @@ class ParticleSwarmOptimization:
                 "long": deepcopy(template["long"]),
                 "short": deepcopy(template["short"]),
             },
-            **{
-                k: self.config[k]
-                for k in [
-                    "starting_balance",
-                    "latency_simulation_ms",
-                    "market_type",
-                    "adg_n_subdivisions",
-                    "slim_analysis",
-                ]
-            },
+            **{k: self.config[k] for k in self.config["keys_to_include"]},
             **{"symbol": self.symbols[0], "config_no": self.iter_counter},
         }
         for side in ["long", "short"]:
@@ -313,16 +304,7 @@ class ParticleSwarmOptimization:
                 "long": deepcopy(self.swarm[swarm_key]["long"]["config"]),
                 "short": deepcopy(self.swarm[swarm_key]["short"]["config"]),
             },
-            **{
-                k: self.config[k]
-                for k in [
-                    "starting_balance",
-                    "latency_simulation_ms",
-                    "market_type",
-                    "adg_n_subdivisions",
-                    "slim_analysis",
-                ]
-            },
+            **{k: self.config[k] for k in self.config["keys_to_include"]},
             **{
                 "symbol": self.symbols[0],
                 "initial_eval_key": swarm_key,
