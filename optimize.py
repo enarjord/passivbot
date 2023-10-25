@@ -90,7 +90,7 @@ def backtest_wrap(config_: dict, ticks_caches: dict):
             else:
                 longs, shorts, sdf, analysis = analyze_fills(fills_long, fills_short, stats, config)
             analyses.append(analysis.copy())
-        analysis = {k: get_mean([analyses[i][k] for i in analyses]) for k in analyses[0]}
+        analysis = {k: get_mean([a[k] for a in analyses]) for k in analyses[0]}
     except Exception as e:
         analysis = get_empty_analysis()
         logging.error(f'error with {config["symbol"]} {e}')
