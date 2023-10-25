@@ -45,6 +45,13 @@ import logging.config
 logging.config.dictConfig({"version": 1, "disable_existing_loggers": True})
 
 
+def get_mean(xs):
+    try:
+        return np.mean(xs)
+    except:
+        return xs[0]
+
+
 def backtest_wrap(config_: dict, ticks_caches: dict):
     """
     loads historical data from disk, runs backtest and returns relevant metrics
@@ -60,6 +67,7 @@ def backtest_wrap(config_: dict, ticks_caches: dict):
                 "market_type",
                 "config_no",
                 "adg_n_subdivisions",
+                "n_backtest_slices",
                 "slim_analysis",
             ]
         },
@@ -71,11 +79,18 @@ def backtest_wrap(config_: dict, ticks_caches: dict):
         ticks = np.load(config_["ticks_cache_fname"])
     try:
         assert "adg_n_subdivisions" in config
-        fills_long, fills_short, stats = backtest(config, ticks)
-        if config["slim_analysis"]:
-            analysis = analyze_fills_slim(fills_long, fills_short, stats, config)
-        else:
-            longs, shorts, sdf, analysis = analyze_fills(fills_long, fills_short, stats, config)
+        analyses = []
+        n_slices = max(1, config["n_backtest_slices"])
+        for i in range(n_slices):
+            idx = int(round(len(ticks) * (i / n_slices)))
+            data = ticks[idx:]
+            fills_long, fills_short, stats = backtest(config, data)
+            if config["slim_analysis"]:
+                analysis = analyze_fills_slim(fills_long, fills_short, stats, config)
+            else:
+                longs, shorts, sdf, analysis = analyze_fills(fills_long, fills_short, stats, config)
+            analyses.append(analysis.copy())
+        analysis = {k: get_mean([analyses[i][k] for i in analyses]) for k in analyses[0]}
     except Exception as e:
         analysis = get_empty_analysis()
         logging.error(f'error with {config["symbol"]} {e}')
@@ -382,6 +397,14 @@ async def run_opt(args, config):
                             logging.error(f"error loading config {args.starting_configs}: {e}")
 
         config["starting_configs"] = cfgs
+        config["keys_to_include"] = [
+            "starting_balance",
+            "latency_simulation_ms",
+            "market_type",
+            "adg_n_subdivisions",
+            "n_backtest_slices",
+            "slim_analysis",
+        ]
 
         if config["algorithm"] == "particle_swarm_optimization":
             from particle_swarm_optimization import ParticleSwarmOptimization
