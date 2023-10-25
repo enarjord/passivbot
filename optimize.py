@@ -45,11 +45,83 @@ import logging.config
 logging.config.dictConfig({"version": 1, "disable_existing_loggers": True})
 
 
-def get_mean(xs):
-    try:
-        return np.mean(xs)
-    except:
-        return xs[0]
+def calc_metrics_mean(analyses):
+    mins = [
+        "closest_bkr_long",
+        "closest_bkr_short",
+        "eqbal_ratio_mean_of_10_worst_long",
+        "eqbal_ratio_mean_of_10_worst_short",
+        "eqbal_ratio_min_long",
+        "eqbal_ratio_min_short",
+    ]
+    firsts = [
+        "n_days",
+        "exchange",
+        "fee_sum_long",
+        "fee_sum_short",
+        "final_balance_long",
+        "final_balance_short",
+        "final_equity_long",
+        "final_equity_short",
+        "gain_long",
+        "gain_short",
+        "loss_sum_long",
+        "loss_sum_short",
+        "n_closes_long",
+        "n_closes_short",
+        "n_days",
+        "n_entries_long",
+        "n_entries_short",
+        "n_fills_long",
+        "n_fills_short",
+        "n_ientries_long",
+        "n_ientries_short",
+        "n_normal_closes_long",
+        "n_normal_closes_short",
+        "n_rentries_long",
+        "n_rentries_short",
+        "n_unstuck_closes_long",
+        "n_unstuck_closes_short",
+        "n_unstuck_entries_long",
+        "n_unstuck_entries_short",
+        "net_pnl_plus_fees_long",
+        "net_pnl_plus_fees_short",
+        "pnl_sum_long",
+        "pnl_sum_short",
+        "profit_sum_long",
+        "profit_sum_short",
+        "starting_balance",
+        "symbol",
+        "volume_quote_long",
+        "volume_quote_short",
+    ]
+    maxs = [
+        "hrs_stuck_max_long",
+        "hrs_stuck_max_short",
+    ]
+    analysis_combined = {}
+    for key in mins:
+        if key in analyses[0]:
+            print('mins', key)
+            analysis_combined[key] = min([a[key] for a in analyses])
+    for key in firsts:
+        if key in analyses[0]:
+            print('firsts', key)
+            analysis_combined[key] = analyses[0][key]
+    for key in maxs:
+        if key in analyses[0]:
+            print('maxs', key)
+
+            analysis_combined[key] = max([a[key] for a in analyses])
+    for key in analyses[0]:
+        if key not in analysis_combined:
+            try:
+                analysis_combined[key] = np.mean([a[key] for a in analyses])
+                print('means', key)
+
+            except:
+                analysis_combined[key] = analyses[0][key]
+    return analysis_combined
 
 
 def backtest_wrap(config_: dict, ticks_caches: dict):
@@ -90,7 +162,7 @@ def backtest_wrap(config_: dict, ticks_caches: dict):
             else:
                 longs, shorts, sdf, analysis = analyze_fills(fills_long, fills_short, stats, config)
             analyses.append(analysis.copy())
-        analysis = {k: get_mean([a[k] for a in analyses]) for k in analyses[0]}
+        analysis = calc_metrics_mean(analyses)
     except Exception as e:
         analysis = get_empty_analysis()
         logging.error(f'error with {config["symbol"]} {e}')
