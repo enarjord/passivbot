@@ -46,6 +46,7 @@ logging.config.dictConfig({"version": 1, "disable_existing_loggers": True})
 
 
 def calc_metrics_mean(analyses):
+    # first analysis in analyses is full backtest
     mins = [
         "closest_bkr_long",
         "closest_bkr_short",
@@ -147,9 +148,17 @@ def backtest_wrap(config_: dict, ticks_caches: dict):
         assert "adg_n_subdivisions" in config
         analyses = []
         n_slices = max(1, config["n_backtest_slices"])
-        for i in range(n_slices):
-            idx = int(round(len(ticks) * (i / n_slices)))
-            data = ticks[idx:]
+        slices = [(0, len(ticks))]
+        if n_slices > 2:
+            slices += [
+                (
+                    int(len(ticks) * (i / n_slices)),
+                    min(len(ticks), int(len(ticks) * ((i + 2) / n_slices))),
+                )
+                for i in range(max(1, n_slices - 1))
+            ]
+        for ia, ib in slices:
+            data = ticks[ia:ib]
             fills_long, fills_short, stats = backtest(config, data)
             if config["slim_analysis"]:
                 analysis = analyze_fills_slim(fills_long, fills_short, stats, config)
