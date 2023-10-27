@@ -19,7 +19,14 @@ automatically creating and cancelling limit buy and sell orders.
 Because passivbot's live behavior is deterministic, it may be simulated on historical price data, using the included backtester.  
 Also included is an optimizer, which finds better configurations by iterating thousands of backtests with different candidates.  
 
-The strategy is integrated -- the bot only needs a predefined configuration to run.
+The strategy is integrated -- the bot only needs a predefined configuration to run.  
+
+## Controlling the bot
+
+Passivbot is controlled via terminal commands.  
+There is an integrated manager for controlling multiple bots (see docs/manager.md).  
+There is also a script, forager.py, which uses tmux to manage multiple bot instances (see docs/forager.md).  
+See also https://github.com/msei99/pbgui/ for a web based passivbot GUI.  
 
 ## Requirements
 
