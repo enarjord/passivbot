@@ -1113,7 +1113,7 @@ def backtest_neat_grid(
                         print("warning: long close qty greater than long psize")
                         print("psize_long", psize_long)
                         print("pprice_long", pprice_long)
-                        print("closes_long[0]", closes_long[0])
+                        print("closes_long", closes_long)
                         close_qty_long = -psize_long
                         new_psize_long, pprice_long = 0.0, 0.0
                     psize_long = new_psize_long
