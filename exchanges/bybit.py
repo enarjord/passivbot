@@ -458,7 +458,10 @@ class BybitBot(Bot):
             )
             logging.info(f"cross mode set {res}")
         except Exception as e:
-            logging.error(f"error setting cross mode: {e}")
+            if "margin mode is not modified" in str(e):
+                logging.info(str(e))
+            else:
+                logging.error(f"error setting cross mode: {e}")
         try:
             res = await self.cc.set_position_mode(hedged=True)
             logging.info(f"hedge mode set {res}")
@@ -468,4 +471,7 @@ class BybitBot(Bot):
             res = await self.cc.set_leverage(int(self.leverage), symbol=self.symbol)
             logging.info(f"leverage set {res}")
         except Exception as e:
-            logging.error(f"error setting leverage: {e}")
+            if "leverage not modified" in str(e):
+                logging.info(str(e))
+            else:
+                logging.error(f"error setting leverage: {e}")
