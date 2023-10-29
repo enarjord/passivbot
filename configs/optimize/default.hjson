@@ -17,6 +17,9 @@
   n_cpus: 6
   iters: 4000
 
+  # to reduce overfitting, perform backtest with multiple start dates, taking mean of metrics as final analysis
+  n_backtest_slices: 10
+
   # score = adg per exposure weighted according to adg subdivisions
   # (see configs/backtest/default.hjson)
 
@@ -96,7 +99,7 @@
       n_close_orders: [2, 16]
       auto_unstuck_wallet_exposure_threshold: [0.1, 0.9]
       auto_unstuck_ema_dist: [-0.1, 0.003]
-      auto_unstuck_delay_minutes: [120.0, 1440.0]
+      auto_unstuck_delay_minutes: [1.0, 1440.0]
       auto_unstuck_qty_pct: [0.01, 0.1]
     }
     short:
@@ -114,7 +117,7 @@
       n_close_orders: [2, 16]
       auto_unstuck_wallet_exposure_threshold: [0.1, 0.9]
       auto_unstuck_ema_dist: [-0.1, 0.003]
-      auto_unstuck_delay_minutes: [120.0, 1440.0]
+      auto_unstuck_delay_minutes: [1.0, 1440.0]
       auto_unstuck_qty_pct: [0.01, 0.1]
     }
   }
@@ -136,7 +139,7 @@
       n_close_orders: [2, 16]
       auto_unstuck_wallet_exposure_threshold: [0.1, 0.9]
       auto_unstuck_ema_dist: [-0.1, 0.003]
-      auto_unstuck_delay_minutes: [120.0, 1440.0]
+      auto_unstuck_delay_minutes: [1.0, 1440.0]
       auto_unstuck_qty_pct: [0.01, 0.1]
     }
     short:
@@ -155,7 +158,7 @@
       n_close_orders: [2, 16]
       auto_unstuck_wallet_exposure_threshold: [0.1, 0.9]
       auto_unstuck_ema_dist: [-0.1, 0.003]
-      auto_unstuck_delay_minutes: [120.0, 1440.0]
+      auto_unstuck_delay_minutes: [1.0, 1440.0]
       auto_unstuck_qty_pct: [0.01, 0.1]
     }
   }
@@ -167,9 +170,9 @@
       ema_span_1: [5.0, 1440.0]
       ema_dist_entry: [-0.05, 0.003]
       ema_dist_close: [-0.01, 0.003]
-      qty_pct_entry: [0.01, 0.1]
+      qty_pct_entry: [0.01, 0.05]
       qty_pct_close: [0.01, 0.05]
-      we_multiplier_entry: [0.0, 50.0]
+      we_multiplier_entry: [0.0, 10.0]
       we_multiplier_close: [0.0, 0.0]
       delay_weight_entry: [0.0, 100.0]
       delay_weight_close: [0.0, 100.0]
@@ -186,9 +189,9 @@
       ema_span_1: [5.0, 1440.0]
       ema_dist_entry: [-0.05, 0.003]
       ema_dist_close: [-0.01, 0.003]
-      qty_pct_entry: [0.01, 0.1]
+      qty_pct_entry: [0.01, 0.05]
       qty_pct_close: [0.01, 0.05]
-      we_multiplier_entry: [0.0, 50.0]
+      we_multiplier_entry: [0.0, 10.0]
       we_multiplier_close: [0.0, 0.0]
       delay_weight_entry: [0.0, 100.0]
       delay_weight_close: [0.0, 100.0]

@@ -475,7 +475,7 @@ class KuCoinBot(Bot):
     async def fetch_latest_fills(self):
         fetched = None
         try:
-            fetched = await self.private_get(self.endpoints["recent_orders"])
+            fetched = await self.private_get(self.endpoints["recent_orders"], {"symbol": self.symbol})
             return [
                 {
                     "order_id": elm["id"],

@@ -759,7 +759,7 @@ def calc_close_grid_frontwards_long(
             close_prices[0],
         )
         if auto_unstuck_close[0] != 0.0:
-            psize_ = round_(psize_ - auto_unstuck_close[0], qty_step)
+            psize_ = round_(psize_ - abs(auto_unstuck_close[0]), qty_step)
             if psize_ < calc_min_entry_qty(
                 auto_unstuck_close[1], inverse, qty_step, min_qty, min_cost
             ):
@@ -951,7 +951,7 @@ def calc_close_grid_frontwards_short(
             close_prices[0],
         )
         if auto_unstuck_close[0] != 0.0:
-            abs_psize_ = round_(abs_psize_ - auto_unstuck_close[0], qty_step)
+            abs_psize_ = round_(abs_psize_ - abs(auto_unstuck_close[0]), qty_step)
             if abs_psize_ < calc_min_entry_qty(
                 auto_unstuck_close[1], inverse, qty_step, min_qty, min_cost
             ):

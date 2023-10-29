@@ -45,6 +45,88 @@ import logging.config
 logging.config.dictConfig({"version": 1, "disable_existing_loggers": True})
 
 
+def calc_metrics_mean(analyses):
+    # first analysis in analyses is full backtest
+    mins = [
+        "closest_bkr_long",
+        "closest_bkr_short",
+        "eqbal_ratio_mean_of_10_worst_long",
+        "eqbal_ratio_mean_of_10_worst_short",
+        "eqbal_ratio_min_long",
+        "eqbal_ratio_min_short",
+    ]
+    firsts = [
+        "n_days",
+        "exchange",
+        "adg_long",
+        "adg_per_exposure_long",
+        "adg_weighted_long",
+        "adg_weighted_per_exposure_long",
+        "adg_short",
+        "adg_per_exposure_short",
+        "adg_weighted_short",
+        "adg_weighted_per_exposure_short",
+        "fee_sum_long",
+        "fee_sum_short",
+        "final_balance_long",
+        "final_balance_short",
+        "final_equity_long",
+        "final_equity_short",
+        "gain_long",
+        "gain_short",
+        "loss_sum_long",
+        "loss_sum_short",
+        "n_closes_long",
+        "n_closes_short",
+        "n_days",
+        "n_entries_long",
+        "n_entries_short",
+        "n_fills_long",
+        "n_fills_short",
+        "n_ientries_long",
+        "n_ientries_short",
+        "n_normal_closes_long",
+        "n_normal_closes_short",
+        "n_rentries_long",
+        "n_rentries_short",
+        "n_unstuck_closes_long",
+        "n_unstuck_closes_short",
+        "n_unstuck_entries_long",
+        "n_unstuck_entries_short",
+        "net_pnl_plus_fees_long",
+        "net_pnl_plus_fees_short",
+        "pnl_sum_long",
+        "pnl_sum_short",
+        "profit_sum_long",
+        "profit_sum_short",
+        "starting_balance",
+        "symbol",
+        "volume_quote_long",
+        "volume_quote_short",
+    ]
+    maxs = [
+        "hrs_stuck_max_long",
+        "hrs_stuck_max_short",
+    ]
+    analysis_combined = {}
+    for key in mins:
+        if key in analyses[0]:
+            analysis_combined[key] = min([a[key] for a in analyses])
+    for key in firsts:
+        if key in analyses[0]:
+            analysis_combined[key] = analyses[0][key]
+    for key in maxs:
+        if key in analyses[0]:
+            analysis_combined[key] = max([a[key] for a in analyses])
+    for key in analyses[0]:
+        if key not in analysis_combined:
+            try:
+                analysis_combined[key] = np.mean([a[key] for a in analyses])
+            except:
+                analysis_combined[key] = analyses[0][key]
+    return analysis_combined
+
+
 def backtest_wrap(config_: dict, ticks_caches: dict):
     """
     loads historical data from disk, runs backtest and returns relevant metrics
@@ -60,6 +142,7 @@ def backtest_wrap(config_: dict, ticks_caches: dict):
                 "market_type",
                 "config_no",
                 "adg_n_subdivisions",
+                "n_backtest_slices",
                 "slim_analysis",
             ]
         },
@@ -71,11 +154,26 @@ def backtest_wrap(config_: dict, ticks_caches: dict):
         ticks = np.load(config_["ticks_cache_fname"])
     try:
         assert "adg_n_subdivisions" in config
-        fills_long, fills_short, stats = backtest(config, ticks)
-        if config["slim_analysis"]:
-            analysis = analyze_fills_slim(fills_long, fills_short, stats, config)
-        else:
-            longs, shorts, sdf, analysis = analyze_fills(fills_long, fills_short, stats, config)
+        analyses = []
+        n_slices = max(1, config["n_backtest_slices"])
+        slices = [(0, len(ticks))]
+        if n_slices > 2:
+            slices += [
+                (
+                    int(len(ticks) * (i / n_slices)),
+                    min(len(ticks), int(len(ticks) * ((i + 2) / n_slices))),
+                )
+                for i in range(max(1, n_slices - 1))
+            ]
+        for ia, ib in slices:
+            data = ticks[ia:ib]
+            fills_long, fills_short, stats = backtest(config, data)
+            if config["slim_analysis"]:
+                analysis = analyze_fills_slim(fills_long, fills_short, stats, config)
+            else:
+                longs, shorts, sdf, analysis = analyze_fills(fills_long, fills_short, stats, config)
+            analyses.append(analysis.copy())
+        analysis = calc_metrics_mean(analyses)
     except Exception as e:
         analysis = get_empty_analysis()
         logging.error(f'error with {config["symbol"]} {e}')
@@ -382,6 +480,14 @@ async def run_opt(args, config):
                             logging.error(f"error loading config {args.starting_configs}: {e}")
 
         config["starting_configs"] = cfgs
+        config["keys_to_include"] = [
+            "starting_balance",
+            "latency_simulation_ms",
+            "market_type",
+            "adg_n_subdivisions",
+            "n_backtest_slices",
+            "slim_analysis",
+        ]
 
         if config["algorithm"] == "particle_swarm_optimization":
             from particle_swarm_optimization import ParticleSwarmOptimization

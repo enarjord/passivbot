@@ -127,9 +127,11 @@ def generate_yaml(
     shorts_on_gs = [sym for sym in current_positions_short if sym not in active_shorts]
 
     if config["graceful_stop"]:
-        longs_on_gs = sorted(set(longs_on_gs + active_longs))
+        longs_on_gs = current_positions_long
+        lw = round(twe_long / len(longs_on_gs), 4) if len(longs_on_gs) > 0 else 0.1
         active_longs = []
-        shorts_on_gs = sorted(set(shorts_on_gs + active_shorts))
+        shorts_on_gs = current_positions_short
+        sw = round(twe_short / len(shorts_on_gs), 4) if len(shorts_on_gs) > 0 else 0.1
         active_shorts = []
 
     print("ideal_longs", sorted(ideal_longs))
@@ -457,7 +459,7 @@ async def main():
         "--graceful_stop",
         "--graceful-stop",
         dest="graceful_stop",
-        help="set all bots to graceful stop",
+        help="set all bots to graceful stop; WE_limit = TWE / n_bots",
         action="store_true",
     )
     args = parser.parse_args()

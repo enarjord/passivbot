@@ -249,16 +249,7 @@ class HarmonySearch:
                 "long": deepcopy(template["long"]),
                 "short": deepcopy(template["short"]),
             },
-            **{
-                k: self.config[k]
-                for k in [
-                    "starting_balance",
-                    "latency_simulation_ms",
-                    "market_type",
-                    "adg_n_subdivisions",
-                    "slim_analysis",
-                ]
-            },
+            **{k: self.config[k] for k in self.config["keys_to_include"]},
             **{"symbol": self.symbols[0], "config_no": self.iter_counter},
         }
         for side in ["long", "short"]:
@@ -324,16 +315,7 @@ class HarmonySearch:
                 "long": deepcopy(self.hm[hm_key]["long"]["config"]),
                 "short": deepcopy(self.hm[hm_key]["short"]["config"]),
             },
-            **{
-                k: self.config[k]
-                for k in [
-                    "starting_balance",
-                    "latency_simulation_ms",
-                    "market_type",
-                    "adg_n_subdivisions",
-                    "slim_analysis",
-                ]
-            },
+            **{k: self.config[k] for k in self.config["keys_to_include"]},
             **{"symbol": self.symbols[0], "initial_eval_key": hm_key, "config_no": self.iter_counter},
         }
         line = f"starting new initial eval {config['config_no']} of {self.n_harmonies} "
