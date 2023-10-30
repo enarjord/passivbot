@@ -1056,7 +1056,12 @@ class Bot:
                     elif self.short_mode != "manual":
                         to_create.append(elm)
 
-            to_cancel = sorted(to_cancel, key=lambda x: calc_diff(x["price"], self.price))
+            to_cancel = sorted(
+                to_cancel,
+                key=lambda x: calc_diff(
+                    x["price"] if x["price"] is not None else self.price, self.price
+                ),
+            )
             to_create = sorted(to_create, key=lambda x: calc_diff(x["price"], self.price))
 
             """
