@@ -104,7 +104,7 @@ class BybitBot(Bot):
                     "order_id": e["id"],
                     "custom_id": e["clientOrderId"],
                     "symbol": e["symbol"],
-                    "price": e["price"],
+                    "price": e["price"] if e["price"] is not None else self.price,
                     "qty": e["amount"],
                     "type": e["type"],
                     "side": e["side"],
