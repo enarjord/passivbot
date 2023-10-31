@@ -196,7 +196,7 @@ class BingXBot(Bot):
             print_async_exception(positions)
             print_async_exception(balance)
             traceback.print_exc()
-        return
+            return None
 
     async def execute_orders(self, orders: [dict]) -> [dict]:
         return await self.execute_multiple(

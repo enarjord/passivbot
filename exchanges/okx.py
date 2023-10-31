@@ -178,18 +178,18 @@ class OKXBot(Bot):
                             if p["liquidationPrice"]
                             else 0.0,
                         }
-            if balance:
-                for elm in balance["info"]["data"]:
-                    for elm2 in elm["details"]:
-                        if elm2["ccy"] == self.quote:
-                            position["wallet_balance"] = float(elm2["cashBal"])
-                            break
+            for elm in balance["info"]["data"]:
+                for elm2 in elm["details"]:
+                    if elm2["ccy"] == self.quote:
+                        position["wallet_balance"] = float(elm2["cashBal"])
+                        break
             return position
         except Exception as e:
             logging.error(f"error fetching pos or balance {e}")
             print_async_exception(positions)
             print_async_exception(balance)
             traceback.print_exc()
+            return None
 
     async def execute_orders(self, orders: [dict]) -> [dict]:
         if len(orders) == 0:

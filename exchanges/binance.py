@@ -336,10 +336,10 @@ class BinanceBot(Bot):
             )
             assert all(
                 key in positions[0] for key in ["symbol", "positionAmt", "entryPrice"]
-            ), "bogus position fetch"
+            ), "faulty position fetch"
             assert all(
                 key in balance[0] for key in ["asset", "balance", "crossUnPnl"]
-            ), "bogus balance fetch"
+            ), "faulty balance fetch"
             positions = [e for e in positions if e["symbol"] == self.symbol]
             position = {
                 "long": {"size": 0.0, "price": 0.0, "liquidation_price": 0.0},
@@ -374,6 +374,7 @@ class BinanceBot(Bot):
             print_async_exception(positions)
             print_async_exception(balance)
             traceback.print_exc()
+            return None
 
     async def execute_orders(self, orders: [dict]) -> [dict]:
         if len(orders) == 0:

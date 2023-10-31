@@ -134,17 +134,17 @@ class BybitBot(Bot):
 
     async def fetch_position(self) -> dict:
         positions, balance = None, None
+        position = {
+            "long": {"size": 0.0, "price": 0.0, "liquidation_price": 0.0},
+            "short": {"size": 0.0, "price": 0.0, "liquidation_price": 0.0},
+            "wallet_balance": 0.0,
+            "equity": 0.0,
+        }
         try:
             positions, balance = await asyncio.gather(
                 self.cc.fetch_positions(self.symbol), self.cc.fetch_balance()
             )
             positions = [e for e in positions if e["symbol"] == self.symbol]
-            position = {
-                "long": {"size": 0.0, "price": 0.0, "liquidation_price": 0.0},
-                "short": {"size": 0.0, "price": 0.0, "liquidation_price": 0.0},
-                "wallet_balance": 0.0,
-                "equity": 0.0,
-            }
             if positions:
                 for p in positions:
                     if p["side"] == "long":
@@ -170,51 +170,7 @@ class BybitBot(Bot):
             print_async_exception(positions)
             print_async_exception(balance)
             traceback.print_exc()
-        return
-
-        positions, balance = None, None
-        try:
-            positions, balance = await asyncio.gather(
-                self.cc.fetch_positions(),
-                self.cc.fetch_balance(),
-            )
-            positions = [e for e in positions if e["symbol"] == self.symbol]
-            position = {
-                "long": {"size": 0.0, "price": 0.0, "liquidation_price": 0.0},
-                "short": {"size": 0.0, "price": 0.0, "liquidation_price": 0.0},
-                "wallet_balance": 0.0,
-                "equity": 0.0,
-            }
-            if positions:
-                for p in positions:
-                    if p["side"] == "long":
-                        position["long"] = {
-                            "size": p["contracts"],
-                            "price": p["entryPrice"],
-                            "liquidation_price": p["liquidationPrice"]
-                            if p["liquidationPrice"]
-                            else 0.0,
-                        }
-                    elif p["side"] == "short":
-                        position["short"] = {
-                            "size": p["contracts"],
-                            "price": p["entryPrice"],
-                            "liquidation_price": p["liquidationPrice"]
-                            if p["liquidationPrice"]
-                            else 0.0,
-                        }
-            if balance:
-                for elm in balance["info"]["data"]:
-                    for elm2 in elm["details"]:
-                        if elm2["ccy"] == self.quote:
-                            position["wallet_balance"] = float(elm2["cashBal"])
-                            break
-            return position
-        except Exception as e:
-            logging.error(f"error fetching pos or balance {e}")
-            print_async_exception(positions)
-            print_async_exception(balance)
-            traceback.print_exc()
+            return None
 
     async def execute_orders(self, orders: [dict]) -> [dict]:
         return await self.execute_multiple(

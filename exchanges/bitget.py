@@ -304,48 +304,57 @@ class BitgetBot(Bot):
             "short": {"size": 0.0, "price": 0.0, "liquidation_price": 0.0},
             "wallet_balance": 0.0,
         }
-        fetched_pos, fetched_balance = await asyncio.gather(
-            self.private_get(
-                self.endpoints["position"], {"symbol": self.symbol, "marginCoin": self.margin_coin}
-            ),
-            self.private_get(self.endpoints["balance"], {"productType": self.product_type}),
-        )
-        for elm in fetched_pos["data"]:
-            if elm["holdSide"] == "long":
-                position["long"] = {
-                    "size": round_(float(elm["total"]), self.qty_step),
-                    "price": 0.0
-                    if elm["averageOpenPrice"] is None
-                    else float(elm["averageOpenPrice"]),
-                    "liquidation_price": 0.0
-                    if elm["liquidationPrice"] is None
-                    else float(elm["liquidationPrice"]),
-                }
+        fetched_pos, fetched_balance = None, None
+        try:
+            fetched_pos, fetched_balance = await asyncio.gather(
+                self.private_get(
+                    self.endpoints["position"],
+                    {"symbol": self.symbol, "marginCoin": self.margin_coin},
+                ),
+                self.private_get(self.endpoints["balance"], {"productType": self.product_type}),
+            )
+            for elm in fetched_pos["data"]:
+                if elm["holdSide"] == "long":
+                    position["long"] = {
+                        "size": round_(float(elm["total"]), self.qty_step),
+                        "price": 0.0
+                        if elm["averageOpenPrice"] is None
+                        else float(elm["averageOpenPrice"]),
+                        "liquidation_price": 0.0
+                        if elm["liquidationPrice"] is None
+                        else float(elm["liquidationPrice"]),
+                    }
 
-            elif elm["holdSide"] == "short":
-                position["short"] = {
-                    "size": -abs(round_(float(elm["total"]), self.qty_step)),
-                    "price": 0.0
-                    if elm["averageOpenPrice"] is None
-                    else float(elm["averageOpenPrice"]),
-                    "liquidation_price": 0.0
-                    if elm["liquidationPrice"] is None
-                    else float(elm["liquidationPrice"]),
-                }
-        for elm in fetched_balance["data"]:
-            if elm["marginCoin"] == self.margin_coin:
-                if self.product_type == "dmcbl":
-                    # convert balance to usd using mean of emas as price
-                    all_emas = list(self.emas_long) + list(self.emas_short)
-                    if any(ema == 0.0 for ema in all_emas):
-                        # catch case where any ema is zero
-                        all_emas = self.ob
-                    position["wallet_balance"] = float(elm["available"]) * np.mean(all_emas)
-                else:
-                    position["wallet_balance"] = float(elm["available"])
-                break
+                elif elm["holdSide"] == "short":
+                    position["short"] = {
+                        "size": -abs(round_(float(elm["total"]), self.qty_step)),
+                        "price": 0.0
+                        if elm["averageOpenPrice"] is None
+                        else float(elm["averageOpenPrice"]),
+                        "liquidation_price": 0.0
+                        if elm["liquidationPrice"] is None
+                        else float(elm["liquidationPrice"]),
+                    }
+            for elm in fetched_balance["data"]:
+                if elm["marginCoin"] == self.margin_coin:
+                    if self.product_type == "dmcbl":
+                        # convert balance to usd using mean of emas as price
+                        all_emas = list(self.emas_long) + list(self.emas_short)
+                        if any(ema == 0.0 for ema in all_emas):
+                            # catch case where any ema is zero
+                            all_emas = self.ob
+                        position["wallet_balance"] = float(elm["available"]) * np.mean(all_emas)
+                    else:
+                        position["wallet_balance"] = float(elm["available"])
+                    break
 
-        return position
+            return position
+        except Exception as e:
+            logging.error(f"error fetching pos or balance {e}")
+            print_async_exception(fetched_pos)
+            print_async_exception(fetched_balance)
+            traceback.print_exc()
+            return None
 
     async def execute_orders(self, orders: [dict]) -> [dict]:
         if len(orders) == 0:
