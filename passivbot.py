@@ -425,6 +425,7 @@ class Bot:
         self.ts_locked["update_position"] = time.time()
         try:
             position = await self.fetch_position()
+            assert position is not None
             position["wallet_balance"] = self.adjust_wallet_balance(position["wallet_balance"])
             # isolated equity, not cross equity
             position["equity"] = position["wallet_balance"] + calc_upnl(
