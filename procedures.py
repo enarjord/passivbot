@@ -615,10 +615,21 @@ async def get_first_ohlcv_timestamps(cc=None, symbols=None, cache=True):
     return first_timestamps
 
 
+def load_ccxt_version():
+    try:
+        with open("requirements_liveonly.txt") as f:
+            lines = f.readlines()
+        ccxt_line = [line for line in lines if "ccxt" in line][0].strip()
+        return ccxt_line[ccxt_line.find("==") + 2 :]
+    except Exception as e:
+        print(f"failed to load ccxt version {e}")
+        return None
+
+
 def fetch_market_specific_settings(config: dict):
     import ccxt
 
-    ccxt_version_req = "4.1.13"
+    ccxt_version_req = load_ccxt_version()
     assert (
         ccxt.__version__ == ccxt_version_req
     ), f"Currently ccxt {ccxt.__version__} is installed. Please pip reinstall requirements.txt or install ccxt v{ccxt_version_req} manually"

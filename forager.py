@@ -4,7 +4,8 @@ os.environ["NOJIT"] = "true"
 
 import ccxt.async_support as ccxt
 
-ccxt_version_req = "4.1.13"
+from procedures import load_ccxt_version
+ccxt_version_req = load_ccxt_version()
 assert (
     ccxt.__version__ == ccxt_version_req
 ), f"Currently ccxt {ccxt.__version__} is installed. Please pip reinstall requirements.txt or install ccxt v{ccxt_version_req} manually"
