@@ -8,11 +8,12 @@ from uuid import uuid4
 from njit_funcs import calc_diff
 from passivbot import Bot, logging
 from procedures import print_async_exception, utc_ms, make_get_filepath
-from pure_funcs import determine_pos_side_ccxt, floatify, calc_hash, ts_to_date_utc
+from pure_funcs import determine_pos_side_ccxt, floatify, calc_hash, ts_to_date_utc, date_to_ts2
 
 import ccxt.async_support as ccxt
 
 from procedures import load_ccxt_version
+
 ccxt_version_req = load_ccxt_version()
 assert (
     ccxt.__version__ == ccxt_version_req
@@ -82,7 +83,17 @@ class BingXBot(Bot):
         self.min_cost = self.config["min_cost"] = (
             2.2 if elm["limits"]["cost"]["min"] is None else elm["limits"]["cost"]["min"]
         )
+        min_qty_overrides = [("OCEAN", 8)]
+        for coin, qty in min_qty_overrides:
+            if coin in self.symbol:
+                self.min_qty = self.config["min_qty"] = max(qty, self.min_qty)
         self.margin_coin = self.quote
+        self.cache_path_open_orders = make_get_filepath(
+            f"caches/bingx_cache/open_orders_{self.user}_{self.symbol_id}.json"
+        )
+        self.cache_path_fills = make_get_filepath(
+            f"caches/bingx_cache/fills_{self.user}_{self.symbol_id}.json"
+        )
         await super()._init()
 
     async def fetch_ticker(self, symbol=None):
@@ -105,40 +116,87 @@ class BingXBot(Bot):
     async def init_order_book(self):
         return await self.update_ticker()
 
+    async def fetch_order_details(self, order_ids, cache_path, cache=True, max_n_fetches=10):
+        # fetch order details for given order_ids, using cache
+        if isinstance(order_ids[0], dict):
+            for key in ["id", "orderId", "order_id"]:
+                if key in order_ids[0]:
+                    break
+            order_ids = [elm[key] for elm in order_ids]
+        cached_orders = []
+        if cache:
+            try:
+                if os.path.exists(cache_path):
+                    cached_orders = json.load(open(cache_path))
+            except Exception as e:
+                logging.error(f"error loading cache {cache_path} {e}")
+        ids_cached = set([elm["orderId"] for elm in cached_orders])
+        ids_to_fetch = [id_ for id_ in order_ids if id_ not in ids_cached]
+
+        # split into multiple tasks
+        sublists = [
+            ids_to_fetch[i : i + max_n_fetches]
+            for i in range(0, len(ids_to_fetch), max_n_fetches)
+        ]
+        all_fetched = []
+        order_details = [x for x in cached_orders if x["orderId"] in order_ids]
+        order_details = sorted({x["orderId"]: x for x in order_details}.values(), key=lambda x: float(x["orderId"]))
+        for sublist in sublists:
+            print(f"debug fetch order details sublist {cache_path} n fetches: {len(ids_to_fetch) - len(all_fetched)}")
+            fetched = await asyncio.gather(
+                *[
+                    self.cc.swap_v2_private_get_trade_order(
+                        params={"symbol": self.symbol_id, "orderId": id_}
+                    )
+                    for id_ in sublist
+                ]
+            )
+            fetched = [x["data"]["order"] for x in fetched]
+            fetched = [{**floatify(x), **{"orderId": x["orderId"]}} for x in fetched]
+            all_fetched += fetched
+            order_details = [x for x in order_details + all_fetched if x["orderId"] in order_ids]
+            # dedup
+            order_details = sorted({x["orderId"]: x for x in order_details}.values(), key=lambda x: float(x["orderId"]))
+            if cache:
+                try:
+                    json.dump(order_details, open(cache_path, "w"))
+                except Exception as e:
+                    logging.error(f"error dumping cache {cache_path} {e}")
+        return order_details
+
     async def fetch_open_orders(self) -> [dict]:
         open_orders = None
-        open_orders_detailed = None
         try:
             open_orders = await self.cc.fetch_open_orders(symbol=self.symbol, limit=50)
             if len(open_orders) == 50:
                 # fetch more
                 pass
-            open_orders_detailed = await asyncio.gather(
-                *[
-                    self.cc.swap_v2_private_get_trade_order(
-                        params={"symbol": oo["info"]["symbol"], "orderId": oo["id"]}
-                    )
-                    for oo in open_orders
-                ]
-            )
+            order_details = await self.fetch_order_details(open_orders, self.cache_path_open_orders)
+            order_details = {elm["orderId"]: elm for elm in order_details}
+            for i in range(len(open_orders)):
+                try:
+                    open_orders[i]["clientOrderId"] = order_details[open_orders[i]["id"]][
+                        "clientOrderId"
+                    ]
+                except:
+                    return order_details, open_orders
             return [
                 {
-                    "order_id": elm["data"]["order"]["orderId"],
-                    "custom_id": elm["data"]["order"]["clientOrderId"],
-                    "symbol": self.symbol_id_map[elm["data"]["order"]["symbol"]],
-                    "price": float(elm["data"]["order"]["price"]),
-                    "qty": float(elm["data"]["order"]["origQty"]),
-                    "type": elm["data"]["order"]["type"].lower(),
-                    "side": elm["data"]["order"]["side"].lower(),
-                    "position_side": elm["data"]["order"]["positionSide"].lower(),
-                    "timestamp": float(elm["data"]["order"]["time"]),
+                    "order_id": elm["id"],
+                    "custom_id": elm["clientOrderId"],
+                    "symbol": elm["symbol"],
+                    "price": elm["price"],
+                    "qty": elm["amount"],
+                    "type": elm["type"],
+                    "side": elm["side"],
+                    "position_side": elm["info"]["positionSide"].lower(),
+                    "timestamp": elm["timestamp"],
                 }
-                for elm in open_orders_detailed
+                for elm in open_orders
             ]
         except Exception as e:
             logging.error(f"error fetching open orders {e}")
             print_async_exception(open_orders)
-            print_async_exception(open_orders_detailed)
             traceback.print_exc()
             return False
 
@@ -200,9 +258,29 @@ class BingXBot(Bot):
             return None
 
     async def execute_orders(self, orders: [dict]) -> [dict]:
-        return await self.execute_multiple(
+        executed_orders = await self.execute_multiple(
             orders, self.execute_order, "creations", self.max_n_orders_per_batch
         )
+        # dump to open orders cache
+        to_dump = []
+        for elm in executed_orders:
+            if "info" in elm and "clientOrderID" in elm["info"]:
+                # bingx inconsistent naming: "ID" and "Id"
+                elm["info"]["clientOrderId"] = elm["info"]["clientOrderID"]
+                to_dump.append(elm["info"].copy())
+        if to_dump:
+            try:
+                cached_orders = json.load(open(self.cache_path_open_orders))
+            except Exception as e:
+                logging.error(f"error loading cached open orders {e}")
+                traceback.print_exc()
+            cached_orders.extend(to_dump)
+            try:
+                json.dump(cached_orders, open(self.cache_path_open_orders, 'w'))
+            except Exception as e:
+                logging.error(f"error loading cached open orders {e}")
+                traceback.print_exc()
+        return executed_orders
 
     async def execute_order(self, order: dict) -> dict:
         executed = None
@@ -405,27 +483,29 @@ class BingXBot(Bot):
             traceback.print_exc()
             return []
 
-    async def fetch_latest_fills(self):
+    async def fetch_latest_fills(self, cache=True):
         fetched = None
         try:
-            fetched = await self.cc.swap_v2_private_get_trade_allorders(
-                params={"symbol": self.symbol_id, "limit": 1000}
+            age_limit = int(utc_ms() - 1000 * 60 * 60 * 48)
+            fetched = await self.cc.fetch_my_trades(symbol=self.symbol, since=age_limit)
+            fetched = [elm for elm in fetched if date_to_ts2(elm["info"]["filledTm"]) > age_limit and elm["info"]["symbol"] == self.symbol_id]
+            order_details = await self.fetch_order_details(
+                [elm["info"]["orderId"] for elm in fetched], self.cache_path_fills
             )
             fills = [
                 {
                     "order_id": elm["orderId"],
-                    "symbol": elm["symbol"],
+                    "symbol": self.symbol_id_map[elm["symbol"]],
                     "custom_id": elm["clientOrderId"],
-                    "price": float(elm["avgPrice"]),
-                    "qty": float(elm["executedQty"]),
+                    "price": elm["avgPrice"],
+                    "qty": elm["executedQty"],
                     "type": elm["type"].lower(),
                     "reduce_only": None,
                     "side": elm["side"].lower(),
                     "position_side": elm["positionSide"].lower(),
                     "timestamp": float(elm["updateTime"]),
                 }
-                for elm in fetched["data"]["orders"]
-                if float(elm["executedQty"]) != 0.0
+                for elm in order_details
             ]
             return sorted(fills, key=lambda x: x["timestamp"])
         except Exception as e:
