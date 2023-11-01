@@ -118,6 +118,8 @@ class BingXBot(Bot):
 
     async def fetch_order_details(self, order_ids, cache_path, cache=True, max_n_fetches=10):
         # fetch order details for given order_ids, using cache
+        if len(order_ids) == 0:
+            return []
         if isinstance(order_ids[0], dict):
             for key in ["id", "orderId", "order_id"]:
                 if key in order_ids[0]:
