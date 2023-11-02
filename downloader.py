@@ -1129,7 +1129,7 @@ def convert_to_ohlcv(df, interval=60000):
     )
     new_index = np.arange(ohlcvs.index[0], ohlcvs.index[-1] + interval, interval)
     ohlcvs = ohlcvs.reindex(new_index)
-    closes = ohlcvs.close.fillna(method="ffill")
+    closes = ohlcvs.close.ffill()
     for x in ["open", "high", "low", "close"]:
         ohlcvs[x] = ohlcvs[x].fillna(closes)
     ohlcvs["volume"] = ohlcvs["volume"].fillna(0.0)
@@ -1192,7 +1192,7 @@ async def download_ohlcvs_binance(
         df = df.drop_duplicates(subset=["timestamp"]).reset_index()
         nindex = np.arange(df.timestamp.iloc[0], df.timestamp.iloc[-1] + 60000, 60000)
         return (
-            df[col_names].set_index("timestamp").reindex(nindex).fillna(method="ffill").reset_index()
+            df[col_names].set_index("timestamp").reindex(nindex).ffill().reset_index()
         )
 
 
