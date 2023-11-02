@@ -164,11 +164,11 @@ async def main():
         help="disable plotting",
     )
     args = parser.parse_args()
-    config = prepare_backtest_config(args)
     live_config_paths = args.live_config_path.split(',')
-    for live_config_path in live_config_paths:
+    config = prepare_backtest_config(args)
+    for ix, live_config_path in enumerate(live_config_paths):
         for symbol in config["symbols"]:
-            if "symbol" not in config or symbol != config["symbol"]:
+            if "symbol" not in config or symbol != config["symbol"] or ix > 0:
                 args = parser.parse_args()
                 args.symbols = symbol
                 config = prepare_backtest_config(args)
