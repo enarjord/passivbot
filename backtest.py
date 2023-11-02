@@ -104,7 +104,7 @@ def plot_wrap(config, data):
 
 async def main():
     parser = argparse.ArgumentParser(prog="Backtest", description="Backtest given passivbot config.")
-    parser.add_argument("live_config_path", type=str, help="path to live config to test")
+    parser.add_argument("live_config_path", type=str, help="path to live config to test, comma separated for multiple configs serially")
     parser = add_argparse_args(parser)
     parser.add_argument(
         "-lw",
@@ -165,81 +165,83 @@ async def main():
     )
     args = parser.parse_args()
     config = prepare_backtest_config(args)
-    for symbol in config["symbols"]:
-        if "symbol" not in config or symbol != config["symbol"]:
-            args = parser.parse_args()
-            args.symbols = symbol
-            config = prepare_backtest_config(args)
-        config["n_parts"] = args.n_parts
-        live_config = load_live_config(args.live_config_path)
-        if "spot" in config["market_type"]:
-            live_config = spotify_config(live_config)
-        config.update(live_config)
-        passivbot_mode = determine_passivbot_mode(config)
+    live_config_paths = args.live_config_path.split(',')
+    for live_config_path in live_config_paths:
+        for symbol in config["symbols"]:
+            if "symbol" not in config or symbol != config["symbol"]:
+                args = parser.parse_args()
+                args.symbols = symbol
+                config = prepare_backtest_config(args)
+            config["n_parts"] = args.n_parts
+            live_config = load_live_config(live_config_path)
+            if "spot" in config["market_type"]:
+                live_config = spotify_config(live_config)
+            config.update(live_config)
+            passivbot_mode = determine_passivbot_mode(config)
 
-        if args.long_wallet_exposure_limit is not None:
-            old_val = config["long"]["wallet_exposure_limit"]
-            config["long"]["wallet_exposure_limit"] = args.long_wallet_exposure_limit
-            print(
-                f"overriding long wallet exposure limit ({old_val}) "
-                f"with new value: {args.long_wallet_exposure_limit}"
-            )
-        if args.short_wallet_exposure_limit is not None:
-            old_val = config["short"]["wallet_exposure_limit"]
-            config["short"]["wallet_exposure_limit"] = args.short_wallet_exposure_limit
-            print(
-                f"overriding short wallet exposure limit ({old_val}) "
-                f"with new value: {args.short_wallet_exposure_limit}"
-            )
-        if args.long_enabled is not None:
-            config["long"]["enabled"] = "y" in args.long_enabled.lower()
-        if args.short_enabled is not None:
-            config["short"]["enabled"] = "y" in args.short_enabled.lower()
-        if passivbot_mode == "clock" or config["exchange"] == "okx":
-            config["ohlcv"] = True
-        config["disable_plotting"] = args.disable_plotting
-        if "spot" in config["market_type"]:
-            live_config = spotify_config(live_config)
-        config["passivbot_mode"] = determine_passivbot_mode(config)
-        print()
-        for k in (
-            keys := [
-                "exchange",
-                "spot",
-                "symbol",
-                "market_type",
-                "passivbot_mode",
-                "config_type",
-                "starting_balance",
-                "start_date",
-                "end_date",
-                "maker_fee",
-                "min_qty",
-                "min_cost",
-                "base_dir",
-                "c_mult",
-                "adg_n_subdivisions",
-            ]
-        ):
-            if k in config:
-                print(f"{k: <{max(map(len, keys)) + 2}} {config[k]}")
-        print()
-        if config["ohlcv"]:
-            data = await load_hlc_cache(
-                symbol,
-                config["inverse"],
-                config["start_date"],
-                config["end_date"],
-                base_dir=config["base_dir"],
-                spot=config["spot"],
-                exchange=config["exchange"],
-            )
-        else:
-            downloader = Downloader(config)
-            data = await downloader.get_sampled_ticks()
-        config["n_days"] = round_((data[-1][0] - data[0][0]) / (1000 * 60 * 60 * 24), 0.1)
-        pprint.pprint(denumpyize(candidate_to_live_config(config)))
-        plot_wrap(config, data)
+            if args.long_wallet_exposure_limit is not None:
+                old_val = config["long"]["wallet_exposure_limit"]
+                config["long"]["wallet_exposure_limit"] = args.long_wallet_exposure_limit
+                print(
+                    f"overriding long wallet exposure limit ({old_val}) "
+                    f"with new value: {args.long_wallet_exposure_limit}"
+                )
+            if args.short_wallet_exposure_limit is not None:
+                old_val = config["short"]["wallet_exposure_limit"]
+                config["short"]["wallet_exposure_limit"] = args.short_wallet_exposure_limit
+                print(
+                    f"overriding short wallet exposure limit ({old_val}) "
+                    f"with new value: {args.short_wallet_exposure_limit}"
+                )
+            if args.long_enabled is not None:
+                config["long"]["enabled"] = "y" in args.long_enabled.lower()
+            if args.short_enabled is not None:
+                config["short"]["enabled"] = "y" in args.short_enabled.lower()
+            if passivbot_mode == "clock" or config["exchange"] == "okx":
+                config["ohlcv"] = True
+            config["disable_plotting"] = args.disable_plotting
+            if "spot" in config["market_type"]:
+                live_config = spotify_config(live_config)
+            config["passivbot_mode"] = determine_passivbot_mode(config)
+            print()
+            for k in (
+                keys := [
+                    "exchange",
+                    "spot",
+                    "symbol",
+                    "market_type",
+                    "passivbot_mode",
+                    "config_type",
+                    "starting_balance",
+                    "start_date",
+                    "end_date",
+                    "maker_fee",
+                    "min_qty",
+                    "min_cost",
+                    "base_dir",
+                    "c_mult",
+                    "adg_n_subdivisions",
+                ]
+            ):
+                if k in config:
+                    print(f"{k: <{max(map(len, keys)) + 2}} {config[k]}")
+            print()
+            if config["ohlcv"]:
+                data = await load_hlc_cache(
+                    symbol,
+                    config["inverse"],
+                    config["start_date"],
+                    config["end_date"],
+                    base_dir=config["base_dir"],
+                    spot=config["spot"],
+                    exchange=config["exchange"],
+                )
+            else:
+                downloader = Downloader(config)
+                data = await downloader.get_sampled_ticks()
+            config["n_days"] = round_((data[-1][0] - data[0][0]) / (1000 * 60 * 60 * 24), 0.1)
+            pprint.pprint(denumpyize(candidate_to_live_config(config)))
+            plot_wrap(config, data)
 
 
 if __name__ == "__main__":
