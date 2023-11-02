@@ -100,6 +100,8 @@ def calc_metrics_mean(analyses):
         "profit_sum_long",
         "profit_sum_short",
         "starting_balance",
+        "pa_distance_1pct_worst_mean_long",
+        "pa_distance_1pct_worst_mean_short",
         "symbol",
         "volume_quote_long",
         "volume_quote_short",
