@@ -984,12 +984,12 @@ def analyze_fills_slim(fills_long: list, fills_short: list, stats: list, config:
         "exposure_ratios_mean_short": exposure_ratios_mean_short,
         "time_at_max_exposure_long": time_at_max_exposure_long,
         "time_at_max_exposure_short": time_at_max_exposure_short,
-        "drawdown_max_long": drawdowns_long.min(),
-        "drawdown_max_short": drawdowns_short.min(),
-        "drawdown_1pct_worst_mean_long": drawdowns_long.sort_values()
+        "drawdown_max_long": -drawdowns_long.min(),
+        "drawdown_max_short": -drawdowns_short.min(),
+        "drawdown_1pct_worst_mean_long": -drawdowns_long.sort_values()
         .iloc[: (len(drawdowns_long) // 100)]
         .mean(),
-        "drawdown_1pct_worst_mean_short": drawdowns_short.sort_values()
+        "drawdown_1pct_worst_mean_short": -drawdowns_short.sort_values()
         .iloc[: (len(drawdowns_short) // 100)]
         .mean(),
         "sharpe_ratio_long": sharpe_ratio_long,
@@ -1285,12 +1285,12 @@ def analyze_fills(
         "eqbal_ratio_std_short": eqbal_ratio_std_short,
         "volume_quote_long": volume_quote_long,
         "volume_quote_short": volume_quote_short,
-        "drawdown_max_long": drawdowns_long.min(),
-        "drawdown_max_short": drawdowns_short.min(),
-        "drawdown_1pct_worst_mean_long": drawdowns_long.sort_values()
+        "drawdown_max_long": -drawdowns_long.min(),
+        "drawdown_max_short": -drawdowns_short.min(),
+        "drawdown_1pct_worst_mean_long": -drawdowns_long.sort_values()
         .iloc[: (len(drawdowns_long) // 100)]
         .mean(),
-        "drawdown_1pct_worst_mean_short": drawdowns_short.sort_values()
+        "drawdown_1pct_worst_mean_short": -drawdowns_short.sort_values()
         .iloc[: (len(drawdowns_short) // 100)]
         .mean(),
         "sharpe_ratio_long": sharpe_ratio_long,
@@ -1670,13 +1670,11 @@ def calc_scores(config: dict, results: dict):
     # [(key_name, higher_is_better)]
     keys = [
         ("adg_weighted_per_exposure", True),
-        ("exposure_ratios_mean", False),
-        ("time_at_max_exposure", False),
         ("hrs_stuck_max", False),
-        ("pa_distance_mean", False),
-        ("pa_distance_std", False),
         ("pa_distance_1pct_worst_mean", False),
         ("loss_profit_ratio", False),
+        ("drawdown_1pct_worst_mean", False),
+        ("drawdown_max", False),
     ]
     means = {side: {} for side in sides}  # adjusted means
     scores = {side: 0.0 for side in sides}
