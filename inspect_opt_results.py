@@ -96,6 +96,9 @@ def main():
     minsmaxs = {}
     for _, k1 in weights_keys:
         minsmaxs[k1] = opt_config[k1] if getattr(args, k1) is None else getattr(args, k1)
+    for k in opt_config:
+        if ("maximum_" in k or "minimum_" in k) and k not in minsmaxs:
+            minsmaxs[k] = opt_config[k]
     klen = max([len(k) for k in minsmaxs])
     for k, v in minsmaxs.items():
         print(f"{k: <{klen}} {v}")
