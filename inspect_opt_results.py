@@ -100,7 +100,7 @@ def main():
     for k, v in minsmaxs.items():
         print(f"{k: <{klen}} {v}")
 
-    if not args.results_fpath.endswith("all_results.txt"):
+    if os.path.isdir(args.results_fpath):
         args.results_fpath = os.path.join(args.results_fpath, "all_results.txt")
     with open(args.results_fpath) as f:
         results = [json.loads(x) for x in f.readlines()]
