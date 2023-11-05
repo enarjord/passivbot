@@ -12,6 +12,7 @@ from pure_funcs import determine_pos_side_ccxt, floatify, calc_hash, ts_to_date_
 import ccxt.async_support as ccxt
 
 from procedures import load_ccxt_version
+
 ccxt_version_req = load_ccxt_version()
 assert (
     ccxt.__version__ == ccxt_version_req
@@ -119,9 +120,6 @@ class BybitBot(Bot):
             print_async_exception(open_orders)
             traceback.print_exc()
             return False
-
-    async def transfer_from_derivatives_to_spot(self, coin: str, amount: float):
-        return
 
     async def get_server_time(self):
         server_time = None
@@ -315,9 +313,17 @@ class BybitBot(Bot):
     async def transfer_from_derivatives_to_spot(self, coin: str, amount: float):
         transferred = None
         try:
-            transferred = await self.cc.transfer(coin, amount, "CONTRACT", "SPOT")
+            transferred = await self.cc.private_post_v5_asset_transfer_inter_transfer(
+                params={
+                    "transferId": str(uuid4()),
+                    "coin": coin,
+                    "amount": str(amount),
+                    "fromAccountType": "CONTRACT",
+                    "toAccountType": "SPOT",
+                }
+            )
             return transferred
-        except:
+        except Exception as e:
             logging.error(f"error transferring from derivatives to spot {e}")
             print_async_exception(transferred)
             traceback.print_exc()
