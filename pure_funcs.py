@@ -1560,6 +1560,10 @@ def calc_scores(config: dict, results: dict):
     # [(key_name, higher_is_better)]
     keys = [
         ("adg_weighted_per_exposure", True),
+        ("exposure_ratios_mean", False),
+        ("time_at_max_exposure", False),
+        ("pa_distance_mean", False),
+        ("pa_distance_std", False),
         ("hrs_stuck_max", False),
         ("pa_distance_1pct_worst_mean", False),
         ("loss_profit_ratio", False),
