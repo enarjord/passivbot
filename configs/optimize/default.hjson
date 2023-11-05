@@ -35,11 +35,11 @@
   maximum_drawdown_1pct_worst_mean_long: 0.1
   maximum_drawdown_1pct_worst_mean_short: 0.1
 
-  maximum_pa_distance_std_long: -0.03
-  maximum_pa_distance_std_short: -0.03
+  maximum_pa_distance_std_long: -1.0
+  maximum_pa_distance_std_short: -1.0
 
-  maximum_pa_distance_mean_long: -0.02
-  maximum_pa_distance_mean_short: -0.02
+  maximum_pa_distance_mean_long: -1.0
+  maximum_pa_distance_mean_short: -1.0
 
   # mean of the 1% highest price action distances
   maximum_pa_distance_1pct_worst_mean_long: 0.1
@@ -51,12 +51,12 @@
   maximum_hrs_stuck_max_long: 144.0
   maximum_hrs_stuck_max_short: 144.0
 
-  maximum_exposure_ratios_mean_long: -0.15
-  maximum_exposure_ratios_mean_short: -0.15
+  maximum_exposure_ratios_mean_long: -1.0
+  maximum_exposure_ratios_mean_short: -1.0
 
   # from hourly samples, how often was exposure / exposure_limit > 0.9
-  maximum_time_at_max_exposure_long: -0.1
-  maximum_time_at_max_exposure_short: -0.1
+  maximum_time_at_max_exposure_long: -1.0
+  maximum_time_at_max_exposure_short: -1.0
 
   # clip results: compute score on top performers only
   # clip_threshold=0.1 means drop 10% worst performers; clip_threshold=0.0 means include all
