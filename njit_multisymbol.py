@@ -169,7 +169,7 @@ def get_fills_long(
         fee_paid = -qty_to_cost(entry[0], entry[1], inverse, c_mults[idx]) * maker_fee
         new_balance = max(new_balance * 1e-6, new_balance + fee_paid)
         new_equity = new_balance + calc_pnl_sum(
-            poss_long, poss_short, hlc[:,2], c_mults
+            poss_long, poss_short, hlc[:, 2], c_mults
         )  # compute total equity
         fills.append(
             (
@@ -205,7 +205,7 @@ def get_fills_long(
         new_pos = new_pos_
         new_balance = max(new_balance * 1e-6, new_balance + fee_paid + pnl)
         new_equity = new_balance + calc_pnl_sum(
-            poss_long, poss_short, hlc[:,2], c_mults
+            poss_long, poss_short, hlc[:, 2], c_mults
         )  # compute total equity
         fills.append(
             (
@@ -226,38 +226,18 @@ def get_fills_long(
     return fills, new_pos, new_balance, new_equity
 
 
-def find_last_ts_no_stuck(symbols, WE_limits, fills, poss_long, poss_short, balance):
-    stuck_long = [(i, poss_long[i]) for i in range(len(symbols)) if (poss_long[i][0] * poss_long[i][1] / balance) / WE_limits[i] > 0.9]
-    stuck_short = [(i, poss_short[i]) for i in range(len(symbols)) if (poss_short[i][0] * poss_short[i][1] / balance) / WE_limits[i] > 0.9]
-    if len(stuck_long) == 0 and len(stuck_short) == 0:
-        # no stuck pos
-        return -1
-    stuck_syms = set([symbols[x[0]] for x in stuck_long + stuck_short])
-    for i in range(len(fills) - 1, -1, -1):
-        if fills[i][1] not in stuck_syms:
-            continue
-        for k, x in enumerate(stuck_long):
-            if symbols[x[0]] == fills[i][1] and "long" in fills[i][10]:
-                if "entry" in fills[i][10]:
-                    prev_psize = x[1][0] - fills[i][6]
-                    prev_pprice = (x[1][1] * (prev_psize + fills[i][6]) - fills[i][6] * fills[i][7]) / prev_psize
-                    stuck_long[k] = (x[0], (prev_psize, prev_pprice))
-                    if (prev_psize * prev_pprice / balance) / WE_limits[x[0]] <= 0.9:
-                        # no longer stuck
-                        stuck_syms -= symbols[x[0]]
-                        if len(stuck_syms) == 0:
-                            return fills[i][0]
-                else:
-                    stuck_long[k] = (x[0], x[1][0] + abs(fills[i][6]), x[1][1])
-                continue
-        for x in stuck_short:
-            if symbols[x[0]] == fills[i][1] and "short" in fills[i][10]:
-                if "entry" in fills[i][10]:
-                    pass
-                else:
-                    pass
-                continue
-    return -1
+@njit
+def calc_AU_allowance(pnls, balance, loss_allowance_pct=0.01, drop_since_peak_abs=-1.0):
+    """
+    allow up to 1% drop from balance peak for auto unstuck
+    """
+    if drop_since_peak_abs == -1.0:
+        pnl_cumsum = pnls.cumsum()
+        drop_since_peak_abs = pnl_cumsum.max() - pnl_cumsum[-1]
+    balance_peak = balance + drop_since_peak_abs
+    drop_since_peak_pct = balance / balance_peak - 1
+    AU_allowance = max(0.0, balance_peak * (loss_allowance_pct + drop_since_peak_pct))
+    return AU_allowance
 
 
 @njit
@@ -394,6 +374,8 @@ def backtest_multisymbol_recursive_grid(
     stuck_positions_short.fill(np.nan)
 
     bankrupt = False
+    pnl_cumsum_running = 0.0
+    pnl_cumsum_max = 0.0
 
     for k in range(1, len(hlcs[0])):
         any_fill = False
@@ -429,15 +411,18 @@ def backtest_multisymbol_recursive_grid(
                             any_fill = True
                         if new_equity <= 0.0:
                             bankrupt = True
+                        for fill in new_fills:
+                            pnl_cumsum_running += fill[2]
+                            pnl_cumsum_max = max(pnl_cumsum_max, pnl_cumsum_running)
                         fills.extend(new_fills)
                         poss_long[i] = new_pos_long
                         balance = new_balance
                 except:
-                    print('debug')
-                    print('closes_long', closes_long)
-                    print('poss_long', poss_long)
-                    print('k', k)
-                    print('balance', balance)
+                    print("debug")
+                    print("closes_long", closes_long)
+                    print("poss_long", poss_long)
+                    print("k", k)
+                    print("balance", balance)
                     return fills, stats
             any_stuck = False
             # check if open orders long need to be updated
@@ -483,7 +468,6 @@ def backtest_multisymbol_recursive_grid(
             uside = 0  # 0==long, 1==short
             ui = 0  # index
             lowest_pprice_diff = 100.0
-            stuck_since_ts = len(hlcs[0])
             for i in idxs:
                 if not np.isnan(stuck_positions_long[i]):
                     # long is stuck
@@ -492,8 +476,6 @@ def backtest_multisymbol_recursive_grid(
                         lowest_pprice_diff = pprice_diff
                         ui = i
                         uside = 0
-                    if stuck_positions_long[i] < stuck_since_ts:
-                        stuck_since_ts = stuck_positions_long[i]
                 if not np.isnan(stuck_positions_short[i]):
                     # short is stuck
                     pprice_diff = hlcs[i][k][2] / poss_short[i][1] - 1.0
@@ -501,16 +483,10 @@ def backtest_multisymbol_recursive_grid(
                         lowest_pprice_diff = pprice_diff
                         ui = i
                         uside = 1
-                    if stuck_positions_short[i] < stuck_since_ts:
-                        stuck_since_ts = stuck_positions_short[i]
-            pnl_since_stuck_ts = 0.0  # find pnl sum since first stuck ts
-            for i in range(len(fills) - 1, -1, -1):
-                if fills[i][0] < stuck_since_ts:
-                    break
-                pnl_since_stuck_ts += fills[i][2]
-            #print('debug stuck pnl', stuck_since_ts, pnl_since_stuck_ts)
-            if pnl_since_stuck_ts > 0.0:
-                # print('pos is stuck', symbols[ui], stuck_positions_long[ui], poss_long[ui], pnl_since_stuck_ts)
+            AU_allowance = calc_AU_allowance(
+                np.array([0.0]), balance, drop_since_peak_abs=(pnl_cumsum_max - pnl_cumsum_running)
+            )
+            if AU_allowance > 0.0:
                 # create unstuck close
                 if uside == 0:  # long
                     close_price = emas_long[ui].max()  # upper ema band
@@ -528,17 +504,17 @@ def backtest_multisymbol_recursive_grid(
                         ),
                     )
                     close_qty = round_(
-                        cost_to_qty(pnl_since_stuck_ts, close_price, inverse, c_mults[ui]),
+                        cost_to_qty(AU_allowance, close_price, inverse, c_mults[ui]),
                         qty_steps[ui],
                     )
                     close_qty = max(close_qty_min, min(close_qty_max, close_qty))
                     closes_long[ui] = [(-abs(close_qty), close_price, "unstuck_close_long")]
                 else:  # short
                     pass
-            '''
+            """
             for idx in idxs:
                 if np.isnan(stuck_positions_long)
-            '''
+            """
 
             # TODO: also check if in auto unstuck mode. For now, single coin AU is disabled, in favor of multi sym AU
         if k % 60 == 0:
