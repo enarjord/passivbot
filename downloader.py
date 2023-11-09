@@ -10,6 +10,7 @@ from io import BytesIO
 from time import time
 from typing import Tuple
 from urllib.request import urlopen
+from functools import reduce
 import zipfile
 import traceback
 import aiohttp
@@ -1138,7 +1139,7 @@ def convert_to_ohlcv(df, interval=60000):
 
 async def download_single_ohlcvs_binance(url: str, fpath: str):
     try:
-        print(f'fetching {url}')
+        print(f"fetching {url}")
         csv = await get_zip_binance(url)
         csv.to_csv(fpath)
     except Exception as e:
@@ -1168,13 +1169,31 @@ async def download_ohlcvs_binance(
     # do months async
     months_filepaths = {month: os.path.join(dirpath, month + ".csv") for month in months}
     missing_months = {k: v for k, v in months_filepaths.items() if not os.path.exists(v)}
-    await asyncio.gather(*[download_single_ohlcvs_binance(base_url + f"monthly/klines/{symbol}/1m/{symbol}-1m-{k}.zip", v) for k, v in missing_months.items()])
+    await asyncio.gather(
+        *[
+            download_single_ohlcvs_binance(
+                base_url + f"monthly/klines/{symbol}/1m/{symbol}-1m-{k}.zip", v
+            )
+            for k, v in missing_months.items()
+        ]
+    )
     months_done = sorted([x for x in os.listdir(dirpath) if x[:-4] in months_filepaths])
 
     # do days async
     days_filepaths = {day: os.path.join(dirpath, day + ".csv") for day in days}
-    missing_days = {k: v for k, v in days_filepaths.items() if not os.path.exists(v) and k[:7] + '.csv' not in months_done}
-    await asyncio.gather(*[download_single_ohlcvs_binance(base_url + f"daily/klines/{symbol}/1m/{symbol}-1m-{k}.zip", v) for k, v in missing_days.items()])
+    missing_days = {
+        k: v
+        for k, v in days_filepaths.items()
+        if not os.path.exists(v) and k[:7] + ".csv" not in months_done
+    }
+    await asyncio.gather(
+        *[
+            download_single_ohlcvs_binance(
+                base_url + f"daily/klines/{symbol}/1m/{symbol}-1m-{k}.zip", v
+            )
+            for k, v in missing_days.items()
+        ]
+    )
     days_done = sorted([x for x in os.listdir(dirpath) if x[:-4] in days_filepaths])
 
     # delete days contained in months
@@ -1187,13 +1206,15 @@ async def download_ohlcvs_binance(
 
     if not download_only:
         fnames = os.listdir(dirpath)
-        dfs = [pd.read_csv(os.path.join(dirpath, fpath)) for fpath in months_done + days_done if fpath in fnames]
+        dfs = [
+            pd.read_csv(os.path.join(dirpath, fpath))
+            for fpath in months_done + days_done
+            if fpath in fnames
+        ]
         df = pd.concat(dfs)[col_names].sort_values("timestamp")
         df = df.drop_duplicates(subset=["timestamp"]).reset_index()
         nindex = np.arange(df.timestamp.iloc[0], df.timestamp.iloc[-1] + 60000, 60000)
-        return (
-            df[col_names].set_index("timestamp").reindex(nindex).ffill().reset_index()
-        )
+        return df[col_names].set_index("timestamp").reindex(nindex).ffill().reset_index()
 
 
 def count_longest_identical_data(hlc, symbol):
@@ -1243,6 +1264,40 @@ async def load_hlc_cache(
     except Exception as e:
         print("error checking integrity", e)
     return data
+
+
+async def prepare_multsymbol_data(symbols, start_date, end_date) -> (float, np.ndarray):
+    """
+    returns first timestamp and hlc data in the form
+    [
+        [
+            [sym0_high0, sym0_low0, sym0_close0],
+            [sym0_high1, sym0_low1, sym0_close1],
+            ...
+        ],
+        [
+            [sym1_high0, sym1_low0, sym1_close0],
+            [sym1_high1, sym1_low1, sym1_close1],
+            ...
+        ],
+        ...
+    ]
+    """
+    if end_date in ["today", "now", ""]:
+        end_date = ts_to_date_utc(utc_ms())[:10]
+    hlcs = []
+    for symbol in symbols:
+        data = await load_hlc_cache(symbol, False, start_date, end_date)
+        assert (
+            np.diff(data[:, 0]) == 60000.0
+        ).all(), f"gaps in hlc data {symbol}"  # verify integrous 1m hlcs
+        dft = pd.DataFrame(
+            data, columns=["timestamp"] + [f"{symbol}_{key}" for key in ["high", "low", "close"]]
+        )
+        hlcs.append(dft)
+    df = reduce(lambda left, right: pd.merge(left, right, how="outer"), hlcs)
+    df = df.sort_values("timestamp").set_index("timestamp").fillna(0.0)
+    return df.index[0], np.array([df.values[:, i : i + 3] for i in range(0, len(symbols) * 3, 3)])
 
 
 async def main():
