@@ -87,7 +87,7 @@ def main():
     sides = ["long", "short"]
     for r in results:
         cfg = r["config"].copy()
-        cfg.update(minsmaxs)
+        cfg.update(opt_config)
         ress = r["results"]
         all_scores.append({})
         scores_res = calc_scores(cfg, {s: r["results"][s] for s in symbols})
