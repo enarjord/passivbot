@@ -1759,7 +1759,7 @@ def calc_hash(data):
 def stats_multi_to_df(stats, symbols):
     dicts = []
     for x in stats:
-        d = {"index": x[0], "balance": x[4], "equity": x[5]}
+        d = {"minute": x[0], "balance": x[4], "equity": x[5]}
         for i in range(len(symbols)):
             d[f"{symbols[i]}_psize_l"] = x[1][i][0]
             d[f"{symbols[i]}_pprice_l"] = x[1][i][1]
@@ -1767,7 +1767,7 @@ def stats_multi_to_df(stats, symbols):
             d[f"{symbols[i]}_pprice_s"] = x[2][i][1]
             d[f"{symbols[i]}_price"] = x[3][i]
         dicts.append(d)
-    sdf = pd.DataFrame(dicts).set_index("index")
+    sdf = pd.DataFrame(dicts).set_index("minute")
     for s in symbols:
         sdf_tmp = sdf[[c for c in sdf.columns if s in c or "bal" in c]]
         sdf.loc[:, f"{s}_WE"] = sdf_tmp[f"{s}_psize_l"] * sdf_tmp[f"{s}_pprice_l"] / sdf.balance
@@ -1778,7 +1778,7 @@ def fills_multi_to_df(fills, symbols, c_mults):
     fdf = pd.DataFrame(
         fills,
         columns=[
-            "index",
+            "minute",
             "symbol",
             "pnl",
             "fee_paid",
@@ -1795,4 +1795,4 @@ def fills_multi_to_df(fills, symbols, c_mults):
     c_mults_array = fdf.symbol.apply(lambda s: c_mults[s2i[s]])
     fdf.loc[:, "close_cost"] = (fdf.qty * fdf.price).abs() * c_mults_array
     fdf.loc[:, "WE"] = (fdf.psize * fdf.pprice).abs() * c_mults_array / fdf.balance
-    return fdf.set_index("index")
+    return fdf.set_index("minute")
