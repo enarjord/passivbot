@@ -140,10 +140,14 @@ def determine_passivbot_mode(config: dict, skip=[]) -> str:
     if all(k in config["long"] for k in get_template_live_config("clock")["long"] if k not in skip):
         return "clock"
     elif all(
-        k in config["long"] for k in get_template_live_config("recursive_grid")["long"] if k not in skip
+        k in config["long"]
+        for k in get_template_live_config("recursive_grid")["long"]
+        if k not in skip
     ):
         return "recursive_grid"
-    elif all(k in config["long"] for k in get_template_live_config("neat_grid")["long"] if k not in skip):
+    elif all(
+        k in config["long"] for k in get_template_live_config("neat_grid")["long"] if k not in skip
+    ):
         return "neat_grid"
     else:
         raise Exception("unable to determine passivbot mode")
@@ -250,7 +254,10 @@ def date_to_ts(d):
 
 
 def date_to_ts2(datetime_string):
-    return dateutil.parser.parse(datetime_string).replace(tzinfo=datetime.timezone.utc).timestamp() * 1000
+    return (
+        dateutil.parser.parse(datetime_string).replace(tzinfo=datetime.timezone.utc).timestamp()
+        * 1000
+    )
 
 
 def date_to_ts2_old(datetime_string):
@@ -324,7 +331,9 @@ def candidate_to_live_config(candidate_: dict) -> dict:
             if k in candidate[side]:
                 live_config[side][k] = candidate[side][k]
             else:
-                print(f"warning: {side} {k} missing in config; using default value {live_config[side][k]}")
+                print(
+                    f"warning: {side} {k} missing in config; using default value {live_config[side][k]}"
+                )
         for k in live_config:
             if k not in sides and k in candidate:
                 live_config[k] = candidate[k]
@@ -783,7 +792,9 @@ def analyze_fills_slim(fills_long: list, fills_short: list, stats: list, config:
 
     if config["short"]["wallet_exposure_limit"] > 0.0:
         adg_per_exposure_short = adg_short / config["short"]["wallet_exposure_limit"]
-        adg_weighted_per_exposure_short = adg_weighted_short / config["short"]["wallet_exposure_limit"]
+        adg_weighted_per_exposure_short = (
+            adg_weighted_short / config["short"]["wallet_exposure_limit"]
+        )
     else:
         adg_per_exposure_short = adg_weighted_per_exposure_short = 0.0
 
@@ -806,12 +817,20 @@ def analyze_fills_slim(fills_long: list, fills_short: list, stats: list, config:
 
     ms_diffs_long = longs.timestamp.diff()
     ms_diffs_short = shorts.timestamp.diff()
-    hrs_stuck_max_long = max(
-        ms_diffs_long.max(), (sdf.iloc[-1].timestamp - longs.iloc[-1].timestamp if len(longs) > 0 else 0.0)
-    ) / (1000.0 * 60 * 60)
-    hrs_stuck_max_short = max(
-        ms_diffs_short.max(), (sdf.iloc[-1].timestamp - shorts.iloc[-1].timestamp if len(shorts) > 0 else 0.0)
-    ) / (1000.0 * 60 * 60)
+    hrs_stuck_max_long = (
+        max(
+            ms_diffs_long.max(),
+            (sdf.iloc[-1].timestamp - longs.iloc[-1].timestamp if len(longs) > 0 else 0.0),
+        )
+        / (1000.0 * 60 * 60)
+    )
+    hrs_stuck_max_short = (
+        max(
+            ms_diffs_short.max(),
+            (sdf.iloc[-1].timestamp - shorts.iloc[-1].timestamp if len(shorts) > 0 else 0.0),
+        )
+        / (1000.0 * 60 * 60)
+    )
 
     profit_sum_long = longs[longs.pnl > 0.0].pnl.sum()
     loss_sum_long = longs[longs.pnl < 0.0].pnl.sum()
@@ -843,7 +862,8 @@ def analyze_fills_slim(fills_long: list, fills_short: list, stats: list, config:
 
     return {
         "adg_weighted_per_exposure_long": adg_weighted_long / config["long"]["wallet_exposure_limit"],
-        "adg_weighted_per_exposure_short": adg_weighted_short / config["short"]["wallet_exposure_limit"],
+        "adg_weighted_per_exposure_short": adg_weighted_short
+        / config["short"]["wallet_exposure_limit"],
         "adg_per_exposure_long": adg_long / config["long"]["wallet_exposure_limit"],
         "adg_per_exposure_short": adg_short / config["short"]["wallet_exposure_limit"],
         "n_days": n_days,
@@ -852,7 +872,9 @@ def analyze_fills_slim(fills_long: list, fills_short: list, stats: list, config:
         if pa_distance_mean_long == pa_distance_mean_long
         else 1.0,
         "pa_distance_max_long": pa_dists_long.max(),
-        "pa_distance_std_long": pa_distance_std_long if pa_distance_std_long == pa_distance_std_long else 1.0,
+        "pa_distance_std_long": pa_distance_std_long
+        if pa_distance_std_long == pa_distance_std_long
+        else 1.0,
         "pa_distance_mean_short": pa_distance_mean_short
         if pa_distance_mean_short == pa_distance_mean_short
         else 1.0,
@@ -868,8 +890,12 @@ def analyze_fills_slim(fills_long: list, fills_short: list, stats: list, config:
         .mean(),
         "hrs_stuck_max_long": hrs_stuck_max_long,
         "hrs_stuck_max_short": hrs_stuck_max_short,
-        "loss_profit_ratio_long": abs(loss_sum_long) / profit_sum_long if profit_sum_long > 0.0 else 1.0,
-        "loss_profit_ratio_short": abs(loss_sum_short) / profit_sum_short if profit_sum_short > 0.0 else 1.0,
+        "loss_profit_ratio_long": abs(loss_sum_long) / profit_sum_long
+        if profit_sum_long > 0.0
+        else 1.0,
+        "loss_profit_ratio_short": abs(loss_sum_short) / profit_sum_short
+        if profit_sum_short > 0.0
+        else 1.0,
         "exposure_ratios_mean_long": exposure_ratios_mean_long,
         "exposure_ratios_mean_short": exposure_ratios_mean_short,
         "time_at_max_exposure_long": time_at_max_exposure_long,
@@ -1027,7 +1053,9 @@ def analyze_fills(
         adg_per_exposure_long = adg_weighted_per_exposure_long = 0.0
     if config["short"]["wallet_exposure_limit"] > 0.0:
         adg_per_exposure_short = adg_short / config["short"]["wallet_exposure_limit"]
-        adg_weighted_per_exposure_short = adg_weighted_short / config["short"]["wallet_exposure_limit"]
+        adg_weighted_per_exposure_short = (
+            adg_weighted_short / config["short"]["wallet_exposure_limit"]
+        )
     else:
         adg_per_exposure_short = adg_weighted_per_exposure_short = 0.0
 
@@ -1084,7 +1112,9 @@ def analyze_fills(
         if pa_distance_mean_long == pa_distance_mean_long
         else 1.0,
         "pa_distance_max_long": pa_dists_long.max(),
-        "pa_distance_std_long": pa_distance_std_long if pa_distance_std_long == pa_distance_std_long else 1.0,
+        "pa_distance_std_long": pa_distance_std_long
+        if pa_distance_std_long == pa_distance_std_long
+        else 1.0,
         "pa_distance_mean_short": pa_distance_mean_short
         if pa_distance_mean_short == pa_distance_mean_short
         else 1.0,
@@ -1109,7 +1139,9 @@ def analyze_fills(
         "adg_weighted_per_exposure_long": adg_weighted_per_exposure_long,
         "gain_short": gain_short,
         "adg_short": adg_short if adg_short == adg_short else -1.0,
-        "adg_weighted_short": adg_weighted_short if adg_weighted_short == adg_weighted_short else -1.0,
+        "adg_weighted_short": adg_weighted_short
+        if adg_weighted_short == adg_weighted_short
+        else -1.0,
         "adg_per_exposure_short": adg_per_exposure_short,
         "adg_weighted_per_exposure_short": adg_weighted_per_exposure_short,
         "exposure_ratios_mean_long": exposure_ratios_mean_long,
@@ -1133,13 +1165,17 @@ def analyze_fills(
             longs[longs.type.str.contains("unstuck_close") | longs.type.str.contains("clock_close")]
         ),
         "n_unstuck_closes_short": len(
-            shorts[shorts.type.str.contains("unstuck_close") | shorts.type.str.contains("clock_close")]
+            shorts[
+                shorts.type.str.contains("unstuck_close") | shorts.type.str.contains("clock_close")
+            ]
         ),
         "n_unstuck_entries_long": len(
             longs[longs.type.str.contains("unstuck_entry") | longs.type.str.contains("clock_entry")]
         ),
         "n_unstuck_entries_short": len(
-            shorts[shorts.type.str.contains("unstuck_entry") | shorts.type.str.contains("clock_entry")]
+            shorts[
+                shorts.type.str.contains("unstuck_entry") | shorts.type.str.contains("clock_entry")
+            ]
         ),
         "avg_fills_per_day_long": len(longs) / n_days,
         "avg_fills_per_day_short": len(shorts) / n_days,
@@ -1154,7 +1190,9 @@ def analyze_fills(
         "pnl_sum_long": pnl_sum_long,
         "pnl_sum_short": pnl_sum_short,
         "loss_profit_ratio_long": (abs(loss_sum_long) / profit_sum_long) if profit_sum_long else 1.0,
-        "loss_profit_ratio_short": (abs(loss_sum_short) / profit_sum_short) if profit_sum_short else 1.0,
+        "loss_profit_ratio_short": (abs(loss_sum_short) / profit_sum_short)
+        if profit_sum_short
+        else 1.0,
         "fee_sum_long": (fee_sum_long := longs.fee_paid.sum()),
         "fee_sum_short": (fee_sum_short := shorts.fee_paid.sum()),
         "net_pnl_plus_fees_long": pnl_sum_long + fee_sum_long,
@@ -1417,7 +1455,9 @@ def floatify(xs):
         return xs
 
 
-def get_daily_from_income(income: [dict], balance: float, start_time: int = None, end_time: int = None):
+def get_daily_from_income(
+    income: [dict], balance: float, start_time: int = None, end_time: int = None
+):
     if start_time is None:
         start_time = income[0]["timestamp"]
     if end_time is None:
@@ -1541,7 +1581,9 @@ def make_compatible(live_config_: dict) -> dict:
             live_config[side]["ema_span_1"] = 1.0
         live_config[side]["n_close_orders"] = int(round(live_config[side]["n_close_orders"]))
         if "max_n_entry_orders" in live_config[side]:
-            live_config[side]["max_n_entry_orders"] = int(round(live_config[side]["max_n_entry_orders"]))
+            live_config[side]["max_n_entry_orders"] = int(
+                round(live_config[side]["max_n_entry_orders"])
+            )
     return sort_dict_keys(live_config)
 
 
@@ -1600,15 +1642,17 @@ def calc_scores(config: dict, results: dict):
                 else:
                     individual_scores[side][sym] -= val * (10 ** i)
             individual_scores[side][sym] *= -1
-        raws[side] = {key: np.mean([individual_raws[side][sym][key] for sym in results]) for key, _ in keys}
+        raws[side] = {
+            key: np.mean([individual_raws[side][sym][key] for sym in results]) for key, _ in keys
+        }
         n_symbols_to_include = (
             max(1, int(len(individual_scores[side]) * (1 - config["clip_threshold"])))
             if config["clip_threshold"] < 1.0
             else int(round(config["clip_threshold"]))
         )
-        symbols_to_include[side] = sorted(individual_scores[side], key=lambda x: individual_scores[side][x])[
-            :n_symbols_to_include
-        ]
+        symbols_to_include[side] = sorted(
+            individual_scores[side], key=lambda x: individual_scores[side][x]
+        )[:n_symbols_to_include]
         # print(symbols_to_include, individual_scores[side], config["clip_threshold"])
         means[side] = {
             key: np.mean([individual_vals[side][sym][key] for sym in symbols_to_include[side]])
@@ -1710,3 +1754,45 @@ def calc_hash(data):
     data_string = json.dumps(data, sort_keys=True)
     data_hash = sha256(data_string.encode("utf-8")).hexdigest()
     return data_hash
+
+
+def stats_multi_to_df(stats, symbols):
+    dicts = []
+    for x in stats:
+        d = {"index": x[0], "balance": x[4], "equity": x[5]}
+        for i in range(len(symbols)):
+            d[f"{symbols[i]}_psize_l"] = x[1][i][0]
+            d[f"{symbols[i]}_pprice_l"] = x[1][i][1]
+            d[f"{symbols[i]}_psize_s"] = x[2][i][0]
+            d[f"{symbols[i]}_pprice_s"] = x[2][i][1]
+            d[f"{symbols[i]}_price"] = x[3][i]
+        dicts.append(d)
+    sdf = pd.DataFrame(dicts).set_index("index")
+    for s in symbols:
+        sdf_tmp = sdf[[c for c in sdf.columns if s in c or "bal" in c]]
+        sdf.loc[:, f"{s}_WE"] = sdf_tmp[f"{s}_psize_l"] * sdf_tmp[f"{s}_pprice_l"] / sdf.balance
+    return sdf
+
+
+def fills_multi_to_df(fills, symbols, c_mults):
+    fdf = pd.DataFrame(
+        fills,
+        columns=[
+            "index",
+            "symbol",
+            "pnl",
+            "fee_paid",
+            "balance",
+            "equity",
+            "qty",
+            "price",
+            "psize",
+            "pprice",
+            "type",
+        ],
+    )
+    s2i = {symbol: i for i, symbol in enumerate(symbols)}
+    c_mults_array = fdf.symbol.apply(lambda s: c_mults[s2i[s]])
+    fdf.loc[:, "close_cost"] = (fdf.qty * fdf.price).abs() * c_mults_array
+    fdf.loc[:, "WE"] = (fdf.psize * fdf.pprice).abs() * c_mults_array / fdf.balance
+    return fdf.set_index("index")
