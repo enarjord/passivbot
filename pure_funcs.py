@@ -1793,6 +1793,6 @@ def fills_multi_to_df(fills, symbols, c_mults):
     )
     s2i = {symbol: i for i, symbol in enumerate(symbols)}
     c_mults_array = fdf.symbol.apply(lambda s: c_mults[s2i[s]])
-    fdf.loc[:, "close_cost"] = (fdf.qty * fdf.price).abs() * c_mults_array
+    fdf.loc[:, "cost"] = (fdf.qty * fdf.price).abs() * c_mults_array
     fdf.loc[:, "WE"] = (fdf.psize * fdf.pprice).abs() * c_mults_array / fdf.balance
     return fdf.set_index("minute")
