@@ -16,7 +16,7 @@
           "n_close_orders": 8,
           "rentry_pprice_dist": 0.030262122979023472,
           "rentry_pprice_dist_wallet_exposure_weighting": 2.0255169093401957,
-          "wallet_exposure_limit": 1.0},
+          "wallet_exposure_limit": 1},
  "short": {"auto_unstuck_delay_minutes": 770.6120414764214,
            "auto_unstuck_ema_dist": -0.046254362080772084,
            "auto_unstuck_qty_pct": 0.04938900293504193,
@@ -33,4 +33,4 @@
            "n_close_orders": 5,
            "rentry_pprice_dist": 0.04761675209745763,
            "rentry_pprice_dist_wallet_exposure_weighting": 5.900241743791237,
-           "wallet_exposure_limit": 1.0}}
+           "wallet_exposure_limit": 1}}
