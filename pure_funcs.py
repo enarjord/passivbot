@@ -1770,8 +1770,11 @@ def stats_multi_to_df(stats, symbols):
     sdf = pd.DataFrame(dicts).set_index("minute")
     for s in symbols:
         sdf_tmp = sdf[[c for c in sdf.columns if s in c or "bal" in c]]
-        sdf.loc[:, f"{s}_WE"] = sdf_tmp[f"{s}_psize_l"] * sdf_tmp[f"{s}_pprice_l"] / sdf.balance
-    return sdf
+        sdf.loc[:, f"{s}_WE_l"] = sdf_tmp[f"{s}_psize_l"] * sdf_tmp[f"{s}_pprice_l"] / sdf.balance
+        sdf.loc[:, f"{s}_WE_s"] = (
+            sdf_tmp[f"{s}_psize_s"].abs() * sdf_tmp[f"{s}_pprice_s"] / sdf.balance
+        )
+    return sdf.replace(0.0, np.nan)
 
 
 def fills_multi_to_df(fills, symbols, c_mults):
@@ -1796,3 +1799,91 @@ def fills_multi_to_df(fills, symbols, c_mults):
     fdf.loc[:, "cost"] = (fdf.qty * fdf.price).abs() * c_mults_array
     fdf.loc[:, "WE"] = (fdf.psize * fdf.pprice).abs() * c_mults_array / fdf.balance
     return fdf.set_index("minute")
+
+
+def analyze_fills_multi(sdf, fdf, params):
+    symbols = [c[: c.find("_price")] for c in sdf.columns if "_price" in c]
+    starting_balance = sdf.iloc[0].balance
+    final_balance = sdf.iloc[-1].balance
+    final_equity = sdf.iloc[-1].equity
+    daily_samples = sdf.groupby(sdf.index // (60 * 24)).last()
+    adg = daily_samples.equity.pct_change().mean()
+    pnl_sum = pnl_sum_total = fdf.pnl.sum()
+    longs = fdf[fdf.type.str.contains("long")]
+    shorts = fdf[fdf.type.str.contains("short")]
+    pnl_long = longs.pnl.sum()
+    pnl_short = shorts.pnl.sum()
+    sum_profit_long = longs[longs.pnl > 0.0].pnl.sum()
+    sum_loss_long = longs[longs.pnl < 0.0].pnl.sum()
+    loss_profit_ratio_long = abs(sum_loss_long) / sum_profit_long if sum_profit_long > 0.0 else 1.0
+    sum_profit_short = shorts[shorts.pnl > 0.0].pnl.sum()
+    sum_loss_short = shorts[shorts.pnl < 0.0].pnl.sum()
+    loss_profit_ratio_short = (
+        abs(sum_loss_short) / sum_profit_short if sum_profit_short > 0.0 else 1.0
+    )
+
+    drawdown_max = abs(calc_drawdowns(sdf.equity).min())
+    drawdown_daily = calc_drawdowns(daily_samples.equity)
+    mean_of_10_worst_drawdowns = abs(drawdown_daily.sort_values().iloc[:10].mean())
+
+    is_stuck_long = (
+        sdf[[c for c in sdf.columns if "WE_l" in c]] / (params["TWE_long"] / len(symbols)) > 0.9
+    )
+    is_stuck_short = (
+        sdf[[c for c in sdf.columns if "WE_s" in c]] / (params["TWE_short"] / len(symbols)) > 0.9
+    )
+    any_stuck = pd.concat([is_stuck_long, is_stuck_short], axis=1).any(axis=1)
+    analysis = {
+        "starting_balance": starting_balance,
+        "final_balance": final_balance,
+        "final_equity": final_equity,
+        "drawdown_max": drawdown_max,
+        "mean_of_10_worst_drawdowns": mean_of_10_worst_drawdowns,
+        "adg": adg,
+        "pnl_sum": pnl_sum,
+        "pnl_long": pnl_long,
+        "pnl_short": pnl_short,
+        "sum_profit_long": sum_profit_long,
+        "sum_loss_long": sum_loss_long,
+        "loss_profit_ratio_long": loss_profit_ratio_long,
+        "sum_profit_short": sum_profit_short,
+        "sum_loss_short": sum_loss_short,
+        "loss_profit_ratio_short": loss_profit_ratio_short,
+        "individual_analyses": {},
+    }
+    for symbol in symbols:
+        fdfc = fdf[fdf.symbol == symbol]
+        longs = fdfc[fdfc.type.str.contains("long")]
+        shorts = fdfc[fdfc.type.str.contains("short")]
+        pnl_sum = fdfc.pnl.sum()
+        pnl_long = longs.pnl.sum()
+        pnl_short = shorts.pnl.sum()
+        sum_profit_long = longs[longs.pnl > 0.0].pnl.sum()
+        sum_loss_long = longs[longs.pnl < 0.0].pnl.sum()
+        loss_profit_ratio_long = (
+            abs(sum_loss_long) / sum_profit_long if sum_profit_long > 0.0 else 1.0
+        )
+        sum_profit_short = shorts[shorts.pnl > 0.0].pnl.sum()
+        sum_loss_short = shorts[shorts.pnl < 0.0].pnl.sum()
+        loss_profit_ratio_short = (
+            abs(sum_loss_short) / sum_profit_short if sum_profit_short > 0.0 else 1.0
+        )
+
+        stuck_l = is_stuck_long[f"{symbol}_WE_l"]
+        stuck_time_ratio_long = len(stuck_l[stuck_l]) / len(stuck_l[~stuck_l])
+        stuck_s = is_stuck_short[f"{symbol}_WE_s"]
+        stuck_time_ratio_short = len(stuck_s[stuck_s]) / len(stuck_s[~stuck_s])
+        analysis["individual_analyses"][symbol] = {
+            "pnl_ratio": pnl_sum / pnl_sum_total,
+            "pnl_long": pnl_long,
+            "pnl_short": pnl_short,
+            "sum_profit_long": sum_profit_long,
+            "sum_loss_long": sum_loss_long,
+            "loss_profit_ratio_long": loss_profit_ratio_long,
+            "sum_profit_short": sum_profit_short,
+            "sum_loss_short": sum_loss_short,
+            "loss_profit_ratio_short": loss_profit_ratio_short,
+            "stuck_time_ratio_long": stuck_time_ratio_long,
+            "stuck_time_ratio_short": stuck_time_ratio_short,
+        }
+    return analysis
