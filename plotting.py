@@ -9,7 +9,7 @@ import time
 from colorama import init, Fore
 from prettytable import PrettyTable
 
-from njit_funcs import round_up
+from njit_funcs import round_up, calc_pnl_long, calc_pnl_short
 from procedures import dump_live_config, make_get_filepath
 from pure_funcs import round_dynamic, denumpyize, ts_to_date
 
@@ -179,9 +179,7 @@ def dump_plots(
             print(f"\nplotting balance and equity {side} {result['plots_dirpath']}...")
             plt.clf()
             sdf[f"balance_{side}"].plot()
-            sdf[f"equity_{side}"].plot(
-                title=f"Balance and equity {side.capitalize()}", xlabel="Time", ylabel="Balance"
-            )
+            sdf[f"equity_{side}"].plot(title=f"Balance and equity {side.capitalize()}", xlabel="Time", ylabel="Balance")
             plt.savefig(f"{result['plots_dirpath']}balance_and_equity_sampled_{side}.png")
 
             if result["passivbot_mode"] == "clock":
@@ -263,12 +261,8 @@ def plot_fills(df, fdf_, side: int = 0, plot_whole_df: bool = False, title=""):
         longs[longs.type.str.contains("rentry") | longs.type.str.contains("ientry")].price.plot(style="bo")
         longs[longs.type.str.contains("secondary")].price.plot(style="go")
         longs[longs.type == "long_nclose"].price.plot(style="ro")
-        longs[(longs.type.str.contains("unstuck_entry")) | (longs.type == "clock_entry_long")].price.plot(
-            style="bx"
-        )
-        longs[(longs.type.str.contains("unstuck_close")) | (longs.type == "clock_close_long")].price.plot(
-            style="rx"
-        )
+        longs[(longs.type.str.contains("unstuck_entry")) | (longs.type == "clock_entry_long")].price.plot(style="bx")
+        longs[(longs.type.str.contains("unstuck_close")) | (longs.type == "clock_close_long")].price.plot(style="rx")
 
         lppu = longs[(longs.pprice != longs.pprice.shift(1)) & (longs.pprice != 0.0)]
         for i in range(len(lppu) - 1):
@@ -290,4 +284,76 @@ def plot_fills(df, fdf_, side: int = 0, plot_whole_df: bool = False, title=""):
         for i in range(len(sppu) - 1):
             plt.plot([sppu.index[i], sppu.index[i + 1]], [sppu.pprice.iloc[i], sppu.pprice.iloc[i]], "r--")
 
+    return plt
+
+
+def scale_array(xs, bottom, top):
+    # Calculate the midpoint
+    midpoint = (bottom + top) / 2
+
+    # Scale the array
+    scaled_xs = (xs - np.min(xs)) / (np.max(xs) - np.min(xs))  # Scale between 0 and 1
+    scaled_xs = (
+        scaled_xs * (top - bottom) + midpoint - (top - bottom) / 2
+    )  # Scale to the desired range and shift to the midpoint
+
+    return scaled_xs
+
+
+def plot_fills_multi(symbol, sdf, fdf, start_pct=0.0, end_pct=1.0):
+    plt.clf()
+    start_minute = int(sdf.index[-1] * start_pct)
+    end_minute = int(sdf.index[-1] * end_pct)
+    sdfc = sdf.loc[start_minute:end_minute]
+    fdfc = fdf.loc[start_minute:end_minute]
+    fdfc = fdfc[fdfc.symbol == symbol]
+    longs = fdfc[fdfc.type.str.contains("long")]
+    shorts = fdfc[fdfc.type.str.contains("short")]
+
+    ax = sdfc[f"{symbol}_price"].plot(style="y-")
+    longs[longs.type.str.contains("entry")].price.plot(style="b.")
+    longs[longs.type.str.contains("close")].price.plot(style="r.")
+    sdfc[f"{symbol}_pprice_l"].plot(style="b--")
+
+    shorts[shorts.type.str.contains("entry")].price.plot(style="r.")
+    shorts[shorts.type.str.contains("close")].price.plot(style="b.")
+    sdfc[f"{symbol}_pprice_s"].plot(style="r--")
+
+    ax.legend(
+        ["price", "entries_long", "closes_long", "pprices_long", "entries_short", "closes_short", "pprices_short"]
+    )
+
+    return plt
+
+
+def plot_pnls_multi(sdf, fdf, TWE_long, TWE_short, symbol=None, start_pct=0.0, end_pct=1.0):
+    plt.clf()
+    symbols = [c[: c.find("_price")] for c in sdf.columns if "_price" in c]
+    start_minute = int(sdf.index[-1] * start_pct)
+    end_minute = int(sdf.index[-1] * end_pct)
+    sdfc = sdf.loc[start_minute:end_minute]
+    fdfc = fdf.loc[start_minute:end_minute]
+    if symbol is not None:
+        if isinstance(symbol, str):
+            fdfc = fdfc[fdfc.symbol == symbol]
+            longs = fdfc[fdfc.type.str.contains("long")]
+            shorts = fdfc[fdfc.type.str.contains("short")]
+            ax = fdfc.pnl.cumsum().plot(style="g-")
+            longs.pnl.cumsum().plot(style="b-")
+            shorts.pnl.cumsum().plot(style="r-")
+            ax.legend(["pnl_sum", "pnl_long", "pnl_short"])
+            return plt
+        elif isinstance(symbol, (list, tuple)):
+            for symbol_ in symbol:
+                ax = fdfc[fdfc.symbol == symbol_].pnl.cumsum().plot()
+                ax.legend(symbol)
+            return plt
+
+    is_stuck_long = sdfc[[c for c in sdfc.columns if "WE_l" in c]] / (TWE_long / len(symbols)) > 0.9
+    is_stuck_short = sdfc[[c for c in sdfc.columns if "WE_s" in c]] / (TWE_short / len(symbols)) > 0.9
+    any_stuck = pd.concat([is_stuck_long, is_stuck_short], axis=1).any(axis=1)
+    ax = sdfc.equity.plot()
+    sdfc[any_stuck].balance.plot(style="r.")
+    sdfc[~any_stuck].balance.plot(style="b.")
+    ax.legend(["equity", "balance_with_any_stuck", "balance_with_none_stuck"])
     return plt
