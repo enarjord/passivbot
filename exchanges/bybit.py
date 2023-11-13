@@ -331,24 +331,25 @@ class BybitBot(Bot):
             income = []
             if end_time is None:
                 end_time = int(utc_ms() + 1000 * 60 * 60 * 24)
-            if end_time - start_time > week:
-                # bybit has limit of 7 days per pageinated fetch
-                # fetch multiple times
-                i = 1
-                while i < 52: # limit n fetches to 52 (one year)
-                    sts = end_time - week * i
-                    ets = sts + week
-                    sts = max(sts, start_time)
-                    fetched = await self.fetch_income(symbol=symbol, start_time=sts, end_time=ets)
-                    income.extend(fetched)
-                    if sts <= start_time:
-                        break
-                    i += 1
-            return sorted({calc_hash(elm): elm for elm in income}.values(), key=lambda x: x['timestamp'])
+            # bybit has limit of 7 days per pageinated fetch
+            # fetch multiple times
+            i = 1
+            while i < 52:  # limit n fetches to 52 (one year)
+                sts = end_time - week * i
+                ets = sts + week
+                sts = max(sts, start_time)
+                fetched = await self.fetch_income(symbol=symbol, start_time=sts, end_time=ets)
+                income.extend(fetched)
+                if sts <= start_time:
+                    break
+                i += 1
+                logging.debug(f"fetching income for more than a week {ts_to_date_utc(sts)}")
+                # print(f"fetching income for more than a week {ts_to_date_utc(sts)}")
+            return sorted(
+                {calc_hash(elm): elm for elm in income}.values(), key=lambda x: x["timestamp"]
+            )
         else:
             return await self.fetch_income(symbol=symbol, start_time=start_time, end_time=end_time)
-
-
 
     async def fetch_income(
         self,
@@ -376,7 +377,10 @@ class BybitBot(Bot):
                 logging.debug(
                     f"fetching income {ts_to_date_utc(fetched['result']['list'][-1]['updatedTime'])}"
                 )
-                if calc_hash(fetched["result"]["list"][0]) in income_d and calc_hash(fetched["result"]["list"][-1]) in income_d:
+                if (
+                    calc_hash(fetched["result"]["list"][0]) in income_d
+                    and calc_hash(fetched["result"]["list"][-1]) in income_d
+                ):
                     break
                 for elm in fetched["result"]["list"]:
                     income_d[calc_hash(elm)] = elm
