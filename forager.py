@@ -5,6 +5,7 @@ os.environ["NOJIT"] = "true"
 import ccxt.async_support as ccxt
 
 from procedures import load_ccxt_version
+
 ccxt_version_req = load_ccxt_version()
 assert (
     ccxt.__version__ == ccxt_version_req
@@ -134,6 +135,13 @@ def generate_yaml(
         shorts_on_gs = current_positions_short
         sw = round(twe_short / len(shorts_on_gs), 4) if len(shorts_on_gs) > 0 else 0.1
         active_shorts = []
+    else:
+        if config["graceful_stop_long"]:
+            longs_on_gs = current_positions_long
+            active_longs = []
+        if config["graceful_stop_short"]:
+            shorts_on_gs = current_positions_short
+            active_shorts = []
 
     print("ideal_longs", sorted(ideal_longs))
     print("ideal_shorts", sorted(ideal_shorts))
@@ -463,10 +471,28 @@ async def main():
         help="set all bots to graceful stop; WE_limit = TWE / n_bots",
         action="store_true",
     )
+    parser.add_argument(
+        "-gsl",
+        "--graceful_stop_long",
+        "--graceful-stop-long",
+        dest="graceful_stop_long",
+        help="set all long bots to graceful stop, keeping WE_limit",
+        action="store_true",
+    )
+    parser.add_argument(
+        "-gss",
+        "--graceful_stop_short",
+        "--graceful-stop-short",
+        dest="graceful_stop_short",
+        help="set all short bots to graceful stop, keeping WE_limit",
+        action="store_true",
+    )
     args = parser.parse_args()
     config = hjson.load(open(args.forager_config_path))
     config["yaml_filepath"] = f"{config['user']}.yaml"
     config["graceful_stop"] = args.graceful_stop
+    config["graceful_stop_long"] = args.graceful_stop_long
+    config["graceful_stop_short"] = args.graceful_stop_short
     user = config["user"]
     for key, value in [
         ("volume_clip_threshold", 0.5),
