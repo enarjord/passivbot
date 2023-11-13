@@ -369,6 +369,7 @@ class BybitBot(Bot):
                     "info": elm,
                     "transaction_id": elm["orderId"],
                     "trade_id": elm["orderId"],
+                    "position_side": determine_pos_side_ccxt(elm),
                 }
                 for elm in sorted(incomed.values(), key=lambda x: x["updatedTime"])
             ]
