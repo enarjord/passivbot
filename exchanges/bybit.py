@@ -341,6 +341,8 @@ class BybitBot(Bot):
             params = {"category": "linear", "limit": limit}
             if symbol is not None:
                 params["symbol"] = symbol
+            if start_time is not None:
+                params["startTime"] = int(start_time)
             if end_time is not None:
                 params["endTime"] = int(end_time)
             fetched = await self.cc.private_get_v5_position_closed_pnl(params)
@@ -348,11 +350,15 @@ class BybitBot(Bot):
             while True:
                 if fetched["result"]["list"] == []:
                     break
+                if calc_hash(fetched["result"]["list"][0]) in incomed:
+                    break
                 for elm in fetched["result"]["list"]:
                     incomed[calc_hash(elm)] = elm
                 if start_time is None:
                     break
                 if fetched["result"]["list"][-1]["updatedTime"] <= start_time:
+                    break
+                if not fetched["result"]["nextPageCursor"]:
                     break
                 params["cursor"] = fetched["result"]["nextPageCursor"]
                 fetched = await self.cc.private_get_v5_position_closed_pnl(params)
@@ -366,6 +372,7 @@ class BybitBot(Bot):
                     "income": elm["closedPnl"],
                     "token": "USDT",
                     "timestamp": elm["updatedTime"],
+                    "date": ts_to_date_utc(elm["updatedTime"]),
                     "info": elm,
                     "transaction_id": elm["orderId"],
                     "trade_id": elm["orderId"],
@@ -373,7 +380,6 @@ class BybitBot(Bot):
                 }
                 for elm in sorted(incomed.values(), key=lambda x: x["updatedTime"])
             ]
-            return sorted(incomed.values(), key=lambda x: x["updatedTime"])
         except Exception as e:
             logging.error(f"error fetching income {e}")
             print_async_exception(fetched)
